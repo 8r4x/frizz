@@ -35,6 +35,8 @@ import type {
   SetThreadProfileResult,
   SetThreadRecurringPromptInput,
   SetOwnThreadRecurringPromptInput,
+  SetOwnThreadStopHookInput,
+  SetOwnThreadHeartbeatInput,
   ThreadPluginReloadResult,
   SetThreadSnoozeInput,
   TranscriptMessage,
@@ -138,6 +140,14 @@ export interface Api {
   // Declared here because rpc-contract.ts proves the two procedure NAME SETS are equal — an RPC the
   // client cannot name is one nothing checks the shape of. No browser call site uses it.
   setOwnThreadRecurringPrompt(input: SetOwnThreadRecurringPromptInput): Promise<void>
+  // THE SUPERSEDED WORKER PROCEDURES, declared here only so the drift gate can see them. A worker's MCP
+  // server outlives every fray restart, so a session dispatched before the stop hook and the heartbeat
+  // merged is still POSTing these names; the router aliases them onto the one recurring-prompt row
+  // (`applyLegacyWorkerTrigger`). No browser call site uses them, and none should — the gate proves the
+  // two procedure NAME SETS are equal, so an alias the client cannot name is an alias nothing checks.
+  setOwnThreadStopHook(input: SetOwnThreadStopHookInput): Promise<void>
+  setOwnThreadHeartbeat(input: SetOwnThreadHeartbeatInput): Promise<void>
+  setThreadHeartbeat(input: SetOwnThreadHeartbeatInput): Promise<void>
   // In-place plugin reload for a broker-backed Claude thread — the alternative to a hard restart.
   reloadThreadPlugins(input: { slug: string; sessionId: string }): Promise<ThreadPluginReloadResult>
   // Event-snooze the awaiting-background card: hide it until the thread's own background work returns
@@ -241,6 +251,9 @@ export const PROCEDURES = {
   setThreadSnooze: "mutation",
   setThreadRecurringPrompt: "mutation",
   setOwnThreadRecurringPrompt: "mutation",
+  setOwnThreadStopHook: "mutation",
+  setOwnThreadHeartbeat: "mutation",
+  setThreadHeartbeat: "mutation",
   reloadThreadPlugins: "mutation",
   snoozeAwaitingBackground: "mutation",
   confirmAwaiting: "mutation",

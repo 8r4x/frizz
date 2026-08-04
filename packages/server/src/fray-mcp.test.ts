@@ -71,7 +71,7 @@ test("the fray MCP server identifies as `fray` and exposes its worker tools", as
     assert.deepEqual(list.result.tools[1].inputSchema.required, ["action"])
     assert.deepEqual(
       Object.keys(list.result.tools[1].inputSchema.properties).sort(),
-      ["action", "every_seconds", "on_rest", "prompt"],
+      ["action", "heartbeat_seconds", "prompt", "stop_hook"],
     )
     // An unregistered name is a protocol error, not a crash — the registry routes by name now.
     rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "spawn_fray_thread", arguments: {} } })
@@ -159,7 +159,7 @@ test("`recurring_prompt` arms and disarms the CALLING thread, identified from it
     // a running turn and cannot fire on a thread that has stopped needing it.
     assert.deepEqual(seen.at(-1), {
       url: "/rpc/setOwnThreadRecurringPrompt",
-      body: { slug: "owning-thread", prompt: "keep the migration moving", onRest: true, onSchedule: false },
+      body: { slug: "owning-thread", prompt: "keep the migration moving", stopHook: true, heartbeat: false },
     })
     // The reply must teach how it ENDS, or a worker only knows how to start one — and it must warn
     // about the sentinel rather than merely offering it, since that exit is permanent.
@@ -170,24 +170,24 @@ test("`recurring_prompt` arms and disarms the CALLING thread, identified from it
     // BOTH triggers named on a schedule-only start, and the cadence carried through as seconds.
     rpc.send({
       jsonrpc: "2.0", id: 6, method: "tools/call",
-      params: { name: "recurring_prompt", arguments: { action: "start", prompt: "check the deploy", every_seconds: 600 } },
+      params: { name: "recurring_prompt", arguments: { action: "start", prompt: "check the deploy", heartbeat_seconds: 600 } },
     })
     const scheduled = await rpc.next(6)
     assert.equal(scheduled.result.isError, undefined)
     assert.deepEqual(seen.at(-1), {
       url: "/rpc/setOwnThreadRecurringPrompt",
-      body: { slug: "owning-thread", prompt: "check the deploy", onRest: false, onSchedule: true, intervalSeconds: 600 },
+      body: { slug: "owning-thread", prompt: "check the deploy", stopHook: false, heartbeat: true, intervalSeconds: 600 },
     }, "giving a cadence and nothing else means the schedule trigger alone")
     assert.match(scheduled.result.content[0].text, /every 10 min/)
 
     rpc.send({
       jsonrpc: "2.0", id: 7, method: "tools/call",
-      params: { name: "recurring_prompt", arguments: { action: "start", prompt: "keep going", on_rest: true, every_seconds: 900 } },
+      params: { name: "recurring_prompt", arguments: { action: "start", prompt: "keep going", stop_hook: true, heartbeat_seconds: 900 } },
     })
     await rpc.next(7)
     assert.deepEqual(seen.at(-1), {
       url: "/rpc/setOwnThreadRecurringPrompt",
-      body: { slug: "owning-thread", prompt: "keep going", onRest: true, onSchedule: true, intervalSeconds: 900 },
+      body: { slug: "owning-thread", prompt: "keep going", stopHook: true, heartbeat: true, intervalSeconds: 900 },
     }, "both triggers at once is the ordinary keep-this-moving case")
 
     rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "recurring_prompt", arguments: { action: "stop" } } })
@@ -195,7 +195,7 @@ test("`recurring_prompt` arms and disarms the CALLING thread, identified from it
     assert.equal(stopped.result.isError, undefined)
     assert.deepEqual(seen.at(-1), {
       url: "/rpc/setOwnThreadRecurringPrompt",
-      body: { slug: "owning-thread", prompt: null, onRest: false, onSchedule: false },
+      body: { slug: "owning-thread", prompt: null, stopHook: false, heartbeat: false },
     })
 
     // A `start` with no prompt is refused in the HANDLER, not merely by the schema.
@@ -296,7 +296,7 @@ test("`recurring_prompt` refuses a cadence out of range without contacting the s
 
     rpc.send({
       jsonrpc: "2.0", id: 2, method: "tools/call",
-      params: { name: "recurring_prompt", arguments: { action: "start", prompt: "x", every_seconds: 5 } },
+      params: { name: "recurring_prompt", arguments: { action: "start", prompt: "x", heartbeat_seconds: 5 } },
     })
     const tooFast = await rpc.next(2)
     assert.equal(tooFast.result.isError, true)
@@ -304,7 +304,7 @@ test("`recurring_prompt` refuses a cadence out of range without contacting the s
 
     rpc.send({
       jsonrpc: "2.0", id: 3, method: "tools/call",
-      params: { name: "recurring_prompt", arguments: { action: "start", prompt: "x", every_seconds: 99999 } },
+      params: { name: "recurring_prompt", arguments: { action: "start", prompt: "x", heartbeat_seconds: 99999 } },
     })
     const tooSlow = await rpc.next(3)
     assert.equal(tooSlow.result.isError, true)
@@ -314,11 +314,11 @@ test("`recurring_prompt` refuses a cadence out of range without contacting the s
     // be re-prompted by nothing. Refused, rather than silently writing a row that can never fire.
     rpc.send({
       jsonrpc: "2.0", id: 4, method: "tools/call",
-      params: { name: "recurring_prompt", arguments: { action: "start", prompt: "x", on_rest: false } },
+      params: { name: "recurring_prompt", arguments: { action: "start", prompt: "x", stop_hook: false } },
     })
     const noTrigger = await rpc.next(4)
     assert.equal(noTrigger.result.isError, true)
-    assert.match(noTrigger.result.content[0].text, /at least one trigger is required/)
+    assert.match(noTrigger.result.content[0].text, /at least one is required/)
 
     assert.equal(seen.length, 0, "none of the three reached the server")
   } finally {

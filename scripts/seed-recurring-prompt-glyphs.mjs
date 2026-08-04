@@ -120,7 +120,7 @@ for (const [n, c] of CASES.entries()) {
     const api = createRpcClient(`http://127.0.0.1:${port}/`)
     await api.waitForHealth()
     await api.mutate("setThreadRecurringPrompt", {
-      slug: c.slug, sessionId, prompt: c.hook, onRest: true, onSchedule: true, intervalSeconds: c.beat.seconds,
+      slug: c.slug, sessionId, prompt: c.hook, stopHook: true, heartbeat: true, intervalSeconds: c.beat.seconds,
     })
   }
   console.log(`seeded ${c.slug}`)

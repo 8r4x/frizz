@@ -711,10 +711,10 @@ function sessionThreadView(
     recurringPrompt: row.recurring_prompt && row.recurring_armed_at
       ? {
           prompt: row.recurring_prompt,
-          onRest: row.recurring_on_rest === 1,
-          onSchedule: row.recurring_on_schedule === 1,
-          // Carried whenever a cadence has ever been chosen, INCLUDING while the schedule trigger is
-          // off — the minutes field has to read back what switching it on again would use.
+          stopHook: row.recurring_on_rest === 1,
+          heartbeat: row.recurring_on_schedule === 1,
+          // Carried whenever a cadence has ever been chosen, INCLUDING while the heartbeat is off — the
+          // minutes field has to read back what switching it on again would use.
           intervalSeconds: row.recurring_interval_ms ? Math.round(row.recurring_interval_ms / 1000) : undefined,
           armedAt: row.recurring_armed_at,
           lastRestFiredAt: row.recurring_rest_fired_at ?? undefined,

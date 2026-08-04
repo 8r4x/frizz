@@ -13,12 +13,12 @@ import { Popover, PopoverContent, PopoverTrigger } from "./ui/Popover.tsx"
 // THE RECURRING-PROMPT PANEL: one glyph in the thread footer opening fray's way to re-prompt a thread
 // without the operator typing it again. ONE piece of text, and up to two independent reasons to send it:
 //
-//   WHEN IT STOPS   (scheduler SOURCE 5) — every time the thread comes to REST. No clock, nothing to
-//     tune: if it stopped, it is prompted. This is the one that drives an effort forward.
-//   ON A SCHEDULE   (scheduler SOURCE 4) — every N minutes, consulting nothing about what the thread is
+//   STOP HOOK  (scheduler SOURCE 5) — every time the thread comes to REST. No clock, nothing to tune:
+//     if it stopped, it is prompted. This is the one that drives an effort forward.
+//   HEARTBEAT  (scheduler SOURCE 4) — every N minutes, consulting nothing about what the thread is
 //     doing, and DELIVERED MID-TURN. This is the one that reaches a thread that never stops.
 //
-// NEITHER TRIGGER ON IS THE OFF STATE, and that is why this panel has no third master switch. It used to
+// NEITHER MECHANISM ON IS THE OFF STATE, and that is why this panel has no third master switch. It used to
 // be two separate features with two prompts and two enable toggles; the argument for keeping them apart
 // rested on a delivery rule that no longer holds (while a beat waited for rest, a schedule could only
 // ever fire AT a rest, where the rest trigger had already fired — same words, same instant). Once
@@ -33,9 +33,9 @@ import { Popover, PopoverContent, PopoverTrigger } from "./ui/Popover.tsx"
 export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
   const [open, setOpen] = useState(false)
   const armed = thread.recurringPrompt
-  // COLOURED IF EITHER TRIGGER IS LIVE. The glyph answers one question — "is fray going to re-prompt
-  // this thread on its own?" — and either trigger is a yes.
-  const live = armed?.onRest === true || armed?.onSchedule === true
+  // COLOURED IF EITHER MECHANISM IS LIVE. The glyph answers one question — "is fray going to re-prompt
+  // this thread on its own?" — and either one is a yes.
+  const live = armed?.stopHook === true || armed?.heartbeat === true
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -85,7 +85,7 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
         // ring sitting on "Off" reads as the toggle being SET to off by the act of opening the panel.
         onOpenAutoFocus={(e) => e.preventDefault()}
       >
-        <PromptPanel thread={thread} armed={armed} />
+        <PromptPanel thread={thread} armed={armed} close={() => setOpen(false)} />
       </PopoverContent>
     </Popover>
   )
@@ -104,16 +104,21 @@ const MIN_MINUTES = 1
 const MAX_MINUTES = 24 * 60
 const DEFAULT_INTERVAL_SECONDS = 600
 
-interface Draft { text: string; onRest: boolean; onSchedule: boolean; seconds: number }
+interface Draft { text: string; stopHook: boolean; heartbeat: boolean; seconds: number }
 
-function PromptPanel({ thread, armed }: { thread: ThreadView; armed: ThreadView["recurringPrompt"] }) {
+function PromptPanel({ thread, armed, close }: {
+  thread: ThreadView
+  armed: ThreadView["recurringPrompt"]
+  /** Dismiss the popover — Save's second job, once the write has actually landed. */
+  close: () => void
+}) {
   const [busy, setBusy] = useState(false)
   // The panel's own draft. Seeded from the server row when this MOUNTS (the popover unmounts its content
   // on close, so that is once per open) rather than tracked live, so a board refresh mid-sentence cannot
   // rewrite what the operator is typing or dictating.
   const [text, setText] = useState(armed?.prompt ?? "")
-  const [onRest, setOnRest] = useState(armed?.onRest ?? false)
-  const [onSchedule, setOnSchedule] = useState(armed?.onSchedule ?? false)
+  const [stopHook, setStopHook] = useState(armed?.stopHook ?? false)
+  const [heartbeat, setHeartbeat] = useState(armed?.heartbeat ?? false)
   const [seconds, setSeconds] = useState(armed?.intervalSeconds ?? DEFAULT_INTERVAL_SECONDS)
   // The minutes field is a STRING while it is being typed, so a half-typed value ("", "1" on the way to
   // "120") is not immediately clamped out from under the caret. It becomes a number on commit.
@@ -123,29 +128,32 @@ function PromptPanel({ thread, armed }: { thread: ThreadView; armed: ThreadView[
   // otherwise every stray click through the panel re-arms the row and mints a new generation.
   const sent = useRef({
     prompt: armed?.prompt ?? "",
-    onRest: armed?.onRest ?? false,
-    onSchedule: armed?.onSchedule ?? false,
+    stopHook: armed?.stopHook ?? false,
+    heartbeat: armed?.heartbeat ?? false,
     seconds: armed?.intervalSeconds ?? DEFAULT_INTERVAL_SECONDS,
   })
 
   // Persist on unmount too: closing the popover destroys this subtree, and without this a prompt typed
   // and then dismissed with Escape would be silently lost.
-  const latest = useRef<Draft>({ text, onRest, onSchedule, seconds })
-  latest.current = { text, onRest, onSchedule, seconds }
+  const latest = useRef<Draft>({ text, stopHook, heartbeat, seconds })
+  latest.current = { text, stopHook, heartbeat, seconds }
   useEffect(() => () => { void persistNow(latest.current) }, [])
 
-  async function persistNow(next: Draft): Promise<void> {
+  /** Resolves TRUE when the server row matches this draft — either it already did, or the write landed.
+   *  FALSE only on a failed write, which is what keeps Save from dismissing a panel whose change did not
+   *  stick: the operator needs the text still in front of them to retry. */
+  async function persistNow(next: Draft): Promise<boolean> {
     const prompt = next.text.trim() || null
     const unchanged = prompt === (sent.current.prompt || null)
-      && next.onRest === sent.current.onRest
-      && next.onSchedule === sent.current.onSchedule
+      && next.stopHook === sent.current.stopHook
+      && next.heartbeat === sent.current.heartbeat
       && next.seconds === sent.current.seconds
-    if (unchanged) return
+    if (unchanged) return true
     // Nothing armed and nothing typed — flipping a trigger before writing anything has nothing to
     // persist yet. Keep the local flip and let the first real text carry it up.
     if (prompt === null && !armed) {
-      sent.current = { prompt: "", onRest: next.onRest, onSchedule: next.onSchedule, seconds: next.seconds }
-      return
+      sent.current = { prompt: "", stopHook: next.stopHook, heartbeat: next.heartbeat, seconds: next.seconds }
+      return true
     }
     setBusy(true)
     try {
@@ -153,33 +161,35 @@ function PromptPanel({ thread, armed }: { thread: ThreadView; armed: ThreadView[
         slug: thread.id,
         sessionId: thread.sessionId ?? "",
         prompt,
-        onRest: next.onRest,
-        onSchedule: next.onSchedule,
+        stopHook: next.stopHook,
+        heartbeat: next.heartbeat,
         // ALWAYS sent alongside a prompt, even while the schedule trigger is OFF. Gating this on
-        // `onSchedule` looked right and silently destroyed data: switching the schedule off sent no
+        // `heartbeat` looked right and silently destroyed data: switching the schedule off sent no
         // cadence, storage cleared the column, and reopening the panel showed the 10-minute default —
         // so an operator who parked a 30-minute schedule got 10 back when they switched it on again,
         // with nothing to indicate their number had been discarded. Caught in the browser, not by a
         // test: every unit here asserted on rows that still had a cadence.
         ...(prompt === null ? {} : { intervalSeconds: next.seconds }),
       })
-      sent.current = { prompt: prompt ?? "", onRest: next.onRest, onSchedule: next.onSchedule, seconds: next.seconds }
+      sent.current = { prompt: prompt ?? "", stopHook: next.stopHook, heartbeat: next.heartbeat, seconds: next.seconds }
       // The toast names WHAT WILL HAPPEN, not which switch moved. "On"/"off" was legible when there was
       // one toggle per feature and is ambiguous the moment two triggers share a row.
       showToast(
         prompt === null ? "Recurring prompt cleared"
-          : next.onRest && next.onSchedule ? `Recurring prompt: at every rest, and every ${Math.round(next.seconds / 60)} min`
-          : next.onRest ? "Recurring prompt: at every rest"
-          : next.onSchedule ? `Recurring prompt: every ${Math.round(next.seconds / 60)} min`
+          : next.stopHook && next.heartbeat ? `Recurring prompt: at every rest, and every ${Math.round(next.seconds / 60)} min`
+          : next.stopHook ? "Recurring prompt: at every rest"
+          : next.heartbeat ? `Recurring prompt: every ${Math.round(next.seconds / 60)} min`
           : "Recurring prompt off — no trigger is on",
       )
     } catch (error) {
       showToast((error instanceof Error ? error.message : "Could not save the recurring prompt").slice(0, 100))
+      return false
     } finally {
       setBusy(false)
     }
+    return true
   }
-  const persist = () => void persistNow({ text, onRest, onSchedule, seconds })
+  const persist = () => void persistNow({ text, stopHook, heartbeat, seconds })
   // Clamp on COMMIT, not on keystroke. An out-of-range or empty field snaps back to something legal and
   // the field is rewritten to match, so what the operator sees is always what was actually stored.
   function commitMinutes(): void {
@@ -189,14 +199,14 @@ function PromptPanel({ thread, armed }: { thread: ThreadView; armed: ThreadView[
       : Math.round(seconds / 60)
     setMinutes(String(clamped))
     setSeconds(clamped * 60)
-    void persistNow({ text, onRest, onSchedule, seconds: clamped * 60 })
+    void persistNow({ text, stopHook, heartbeat, seconds: clamped * 60 })
   }
   // Is there anything to save? Compared against what was last SENT, so the button is live exactly when
   // a click would change something on the server — the alternative (always enabled) makes "Save" a
   // button you cannot tell the effect of, which is the complaint it exists to answer.
   const dirty = (text.trim() || null) !== (sent.current.prompt || null)
-    || onRest !== sent.current.onRest
-    || onSchedule !== sent.current.onSchedule
+    || stopHook !== sent.current.stopHook
+    || heartbeat !== sent.current.heartbeat
     || seconds !== sent.current.seconds
 
   // The far end of the header belongs to the reading, not to a control. With two triggers there are two
@@ -245,61 +255,73 @@ function PromptPanel({ thread, armed }: { thread: ThreadView; armed: ThreadView[
         // mounts behind a Radix portal a render later, and never ran again. Chromium ≥123.
         className="field-sizing-content max-h-[28vh] min-h-[4rem] w-full resize-none overflow-y-auto rounded-md border border-border bg-bg px-2 py-1.5 text-[12px] leading-snug text-fg outline-none placeholder:text-muted/50 focus:border-border-strong"
       />
-      {/* THE TRIGGERS, on one row under the text they govern, because that is their relationship: the
-          text is the message and these are the two reasons to send it. `flex-wrap` so the pair drops to
-          a second line on a phone-width panel rather than crushing the minutes field.
+      {/* THE TWO MECHANISMS, one per line under the text they both send. They are NAMED — Stop hook and
+          Heartbeat — rather than described, because those are the names everything else in fray uses for
+          them: the scheduler's two passes, the delivery fence prefixes, the trailer on every delivered
+          message, and the divider the chat renders. A panel that called them anything else would be the
+          only surface with its own vocabulary.
 
-          THE GAP BETWEEN THE TWO GROUPS IS DOUBLE THE GAP INSIDE ONE, and that is the whole reason the
-          row is readable. At an even 1rem throughout, the eye grouped "…it stops [Off|On] every 30 min"
-          — the first toggle read as a separator BETWEEN the two phrases rather than the end of the
-          first, so it was impossible to tell which switch owned which trigger. Measured on the rendered
-          panel, not guessed. */}
-      <div className="mt-2 flex flex-wrap items-center gap-x-8 gap-y-2">
-        <span className="text-muted">Send it:</span>
-        <span className="flex items-center gap-2">
-          <span className={onRest ? "text-fg" : "text-muted"}>when it stops</span>
-          <OnOffToggle
-            kind="rest"
-            value={onRest}
-            disabled={busy}
-            onChange={(next) => {
-              setOnRest(next)
-              void persistNow({ text, onRest: next, onSchedule, seconds })
-              if (next && !text.trim()) requestAnimationFrame(() => textarea.current?.focus())
-            }}
-          />
-        </span>
-        <span className="flex items-center gap-2">
-          <span className={onSchedule ? "text-fg" : "text-muted"}>every</span>
-          {/* "every [N] min" reads as one phrase, so the words sit in the same row as the field rather
-              than becoming a label above it. The input is sized to its content (4ch fits 1440) and its
-              digits are tabular, so the box does not twitch as the number changes. */}
-          <input
-            type="number"
-            data-recurring-minutes
-            inputMode="numeric"
-            min={MIN_MINUTES}
-            max={MAX_MINUTES}
-            disabled={busy}
-            value={minutes}
-            onChange={(e) => setMinutes(e.target.value)}
-            onBlur={commitMinutes}
-            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitMinutes() } }}
-            aria-label="Schedule in minutes"
-            className={`w-[4.5ch] rounded-md border border-border bg-bg px-1 py-[3px] text-center text-[11px] leading-none tabular-nums outline-none focus:border-border-strong disabled:opacity-45 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none ${onSchedule ? "text-fg" : "text-muted"}`}
-          />
-          <span className={onSchedule ? "text-fg" : "text-muted"}>min</span>
-          <OnOffToggle
-            kind="schedule"
-            value={onSchedule}
-            disabled={busy}
-            onChange={(next) => {
-              setOnSchedule(next)
-              void persistNow({ text, onRest, onSchedule: next, seconds })
-              if (next && !text.trim()) requestAnimationFrame(() => textarea.current?.focus())
-            }}
-          />
-        </span>
+          A THREE-COLUMN GRID (name · switch · gloss), not a flex row. Two mechanisms on one line was
+          unreadable — the eye grouped "…it stops [Off|On] every 30 min" and the first switch read as a
+          separator between the two phrases rather than the end of the first. Stacked, the switches line
+          up in their own column and each row says what it is and when it fires.
+
+          `items-center` per row; the grid's own rows are what align the pair, so no nudging. */}
+      <div className="mt-2.5 grid grid-cols-[auto_auto_1fr] items-center gap-x-3 gap-y-1.5">
+        <span className={`font-medium ${stopHook ? "text-fg" : "text-muted"}`}>Stop hook</span>
+        <OnOffToggle
+          kind="stop-hook"
+          value={stopHook}
+          disabled={busy}
+          onChange={(next) => {
+            setStopHook(next)
+            void persistNow({ text, stopHook: next, heartbeat, seconds })
+            if (next && !text.trim()) requestAnimationFrame(() => textarea.current?.focus())
+          }}
+        />
+        <span className="text-muted">every time the agent comes to rest</span>
+
+        <span className={`font-medium ${heartbeat ? "text-fg" : "text-muted"}`}>Heartbeat</span>
+        <OnOffToggle
+          kind="heartbeat"
+          value={heartbeat}
+          disabled={busy}
+          onChange={(next) => {
+            setHeartbeat(next)
+            void persistNow({ text, stopHook, heartbeat: next, seconds })
+            if (next && !text.trim()) requestAnimationFrame(() => textarea.current?.focus())
+          }}
+        />
+        {/* THE CADENCE IS CONDITIONAL: the field exists only while the heartbeat is on, because a number
+            you cannot act on is a number you have to ignore. The gloss it leaves behind is not decoration
+            — without it the row collapses to a name and a switch, the two rows stop being the same shape,
+            and the panel jumps every time this is toggled. Same reason the wording stays parallel:
+            "every … min, even mid-turn" and "on a clock, even mid-turn" are the same sentence with the
+            number removed. */}
+        {heartbeat ? (
+          <span className="flex items-center gap-1.5 text-muted">
+            every
+            {/* Sized to its content (4ch fits 1440) with tabular digits, so the box does not twitch as
+                the number changes. */}
+            <input
+              type="number"
+              data-recurring-minutes
+              inputMode="numeric"
+              min={MIN_MINUTES}
+              max={MAX_MINUTES}
+              disabled={busy}
+              value={minutes}
+              onChange={(e) => setMinutes(e.target.value)}
+              onBlur={commitMinutes}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitMinutes() } }}
+              aria-label="Heartbeat interval in minutes"
+              className="w-[4.5ch] rounded-md border border-border bg-bg px-1 py-[3px] text-center text-[11px] leading-none tabular-nums text-fg outline-none focus:border-border-strong disabled:opacity-45 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+            />
+            min, even mid-turn
+          </span>
+        ) : (
+          <span className="text-muted">on a clock, even mid-turn</span>
+        )}
       </div>
       {/* The explanation and the Save share one row, which is what puts the button at the panel's
           bottom-right without a bar of its own. `items-end` rather than `items-center`: the explainer is
@@ -311,13 +333,13 @@ function PromptPanel({ thread, armed }: { thread: ThreadView; armed: ThreadView[
           they armed sitting silent on a still thread is what looks broken from the outside. */}
       <div className="mt-2 flex items-end gap-3">
         <p className="min-w-0 flex-1 text-muted/70">
-          {/* TWO LINES, not three. The merged explainer originally ran long enough to wrap a third
-              time, and `items-end` then parked Save beside a line holding the word "it." — an orphan
-              next to the panel's only button. Kept short enough that the button lands on a full line. */}
-          {!onRest && !onSchedule
-            ? <>No trigger is on, so nothing is sent — the text stays here for when you want it back.</>
+          {/* ONE LINE. The rows above now carry when-each-fires, so this is only the two ways it ENDS —
+              which is what an operator actually cannot infer from the panel. An earlier version repeated
+              the mid-turn fact here and wrapped to three lines, parking Save beside a line holding the
+              word "it." */}
+          {!stopHook && !heartbeat
+            ? <>Neither is on, so nothing is sent — the text stays here for when you want it back.</>
             : <>
-                A scheduled send reaches the agent mid-turn, without cutting off work in progress.
                 Switch both off to stop it, or the agent can reply{" "}
                 <code className="font-mono font-medium text-fg/85">{ALLDONE_SENTINEL}</code> — which
                 stalls the run until you move it.
@@ -328,7 +350,11 @@ function PromptPanel({ thread, armed }: { thread: ThreadView; armed: ThreadView[
           data-recurring-save
           disabled={busy || !dirty}
           onMouseDown={(e) => e.preventDefault()}
-          onClick={persist}
+          // SAVE CLOSES THE PANEL — but only once the write has landed. Dismissing first would hide the
+          // one surface that can report a failure, and the operator would walk away believing a prompt
+          // was armed that never was. The unmount persist is a no-op by then: `sent.current` already
+          // matches this draft, so it returns early rather than sending the same row twice.
+          onClick={() => { void persistNow({ text, stopHook, heartbeat, seconds }).then((ok) => { if (ok) close() }) }}
           // Small, quiet, and INERT until there is something to save — the disabled state is the whole
           // signal. `shrink-0` so a long explainer can never squeeze the label; `leading-none` + the
           // symmetric py keeps the word optically centred rather than riding high on the default

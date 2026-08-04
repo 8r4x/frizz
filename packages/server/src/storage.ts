@@ -65,8 +65,13 @@ export interface SessionRow {
   // (scheduler.ts SOURCES 4 and 5). `recurring_armed_at` is the GENERATION: editing the text or the
   // cadence mints a new one, so a delivery already queued under the old settings reads as superseded.
   recurring_prompt?: string | null
-  // The two triggers. BOTH 0 is the off state — the text and the cadence are kept so re-arming costs no
-  // retyping, and there is deliberately no third `enabled` column that could disagree with these.
+  // The two mechanisms. BOTH 0 is the off state — the text and the cadence are kept so re-arming costs
+  // no retyping, and there is deliberately no third `enabled` column that could disagree with these.
+  //
+  // NAME MAPPING, stated once: `recurring_on_rest` is the STOP HOOK and `recurring_on_schedule` is the
+  // HEARTBEAT — the names the panel, the API and the MCP tool all use. The columns keep their
+  // trigger-shaped names because renaming them would mean migrating rows that are armed right now, for
+  // no user-visible gain; everything above the storage boundary speaks stopHook/heartbeat.
   recurring_on_rest?: number
   recurring_on_schedule?: number
   // The ON SCHEDULE trigger's cadence. Kept even while that trigger is off, so switching it back on
@@ -419,8 +424,8 @@ export interface Storage {
     sessionId: string,
     generation: number,
     prompt: string | null,
-    onRest: boolean,
-    onSchedule: boolean,
+    stopHook: boolean,
+    heartbeat: boolean,
     intervalMs: number | null,
     armedAt: string,
   ): boolean
@@ -432,8 +437,8 @@ export interface Storage {
   setRecurringPromptBySlug(
     slug: string,
     prompt: string | null,
-    onRest: boolean,
-    onSchedule: boolean,
+    stopHook: boolean,
+    heartbeat: boolean,
     intervalMs: number | null,
     armedAt: string,
   ): boolean
@@ -1129,8 +1134,8 @@ export function createStorage(dbPath: string): Storage {
   // is: writing this argument list twice is how the two paths silently diverge.
   const recurringArgs = (
     prompt: string | null,
-    onRest: boolean,
-    onSchedule: boolean,
+    stopHook: boolean,
+    heartbeat: boolean,
     intervalMs: number | null,
     armedAt: string,
   ) => {
@@ -1140,8 +1145,8 @@ export function createStorage(dbPath: string): Storage {
     return [
       prompt,
       ms, ms,
-      prompt === null ? 0 : onRest ? 1 : 0,
-      prompt === null ? 0 : onSchedule ? 1 : 0,
+      prompt === null ? 0 : stopHook ? 1 : 0,
+      prompt === null ? 0 : heartbeat ? 1 : 0,
       prompt, prompt, ms, armedAt,
       prompt, prompt,
       prompt, prompt, ms,
@@ -1784,13 +1789,13 @@ export function createStorage(dbPath: string): Storage {
       snoozedUntilIfCurrentStmt.run(until, slug, sessionId, generation).changes === 1,
     setBgSnoozeRestedAtIfCurrent: (slug, sessionId, generation, restedAt) =>
       bgSnoozeRestedAtIfCurrentStmt.run(restedAt, slug, sessionId, generation).changes === 1,
-    setRecurringPromptIfCurrent: (slug, sessionId, generation, prompt, onRest, onSchedule, intervalMs, armedAt) =>
+    setRecurringPromptIfCurrent: (slug, sessionId, generation, prompt, stopHook, heartbeat, intervalMs, armedAt) =>
       recurringStmt.run(
-        ...recurringArgs(prompt, onRest, onSchedule, intervalMs, armedAt),
+        ...recurringArgs(prompt, stopHook, heartbeat, intervalMs, armedAt),
         slug, sessionId, generation,
       ).changes === 1,
-    setRecurringPromptBySlug: (slug, prompt, onRest, onSchedule, intervalMs, armedAt) =>
-      recurringBySlugStmt.run(...recurringArgs(prompt, onRest, onSchedule, intervalMs, armedAt), slug).changes === 1,
+    setRecurringPromptBySlug: (slug, prompt, stopHook, heartbeat, intervalMs, armedAt) =>
+      recurringBySlugStmt.run(...recurringArgs(prompt, stopHook, heartbeat, intervalMs, armedAt), slug).changes === 1,
     stampRecurringRestFired: (slug, armedAt, firedAt) =>
       recurringRestFiredStmt.run(firedAt, slug, armedAt).changes === 1,
     stampRecurringScheduleFired: (slug, armedAt, firedAt) =>

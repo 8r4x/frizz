@@ -93,9 +93,9 @@ const RECURRING_PROMPT = {
   description:
     "Arm a RECURRING PROMPT on YOUR OWN thread: one piece of text that fray re-sends you, on either or " +
     "both of two triggers, for as long as it is armed.\n\n" +
-    "  on_rest        — every time you come to REST. Use it to keep a long autonomous effort moving " +
+    "  stop_hook          — every time you come to REST. Use it to keep a long autonomous effort moving " +
     "without the human driving every step, and to rescue yourself from a wait that may never resolve.\n" +
-    "  every_seconds  — on a CLOCK, whatever you are doing. This one reaches you MID-TURN: it arrives as " +
+    "  heartbeat_seconds  — on a CLOCK, whatever you are doing. This one reaches you MID-TURN: it arrives as " +
     "a queued message you read at your next tool boundary rather than waiting for you to stop, and it " +
     "never aborts what you are running. Use it for something that must be revisited on a schedule no " +
     "matter what you happen to believe at the time.\n\n" +
@@ -130,18 +130,18 @@ const RECURRING_PROMPT = {
           "Make it self-contained and ACTIONABLE — say what to do and what would make it right to stop " +
           "— because you may receive it with none of the context you have right now.",
       },
-      on_rest: {
+      stop_hook: {
         type: "boolean",
         description:
-          "Send it every time you come to rest. Defaults to true when `every_seconds` is omitted, so a " +
-          "`start` that names neither trigger still does the obvious thing.",
+          "Send it every time you come to rest. Defaults to true when `heartbeat_seconds` is omitted, so a " +
+          "`start` that names neither mechanism still does the obvious thing.",
       },
-      every_seconds: {
+      heartbeat_seconds: {
         type: "integer",
         description:
-          "Also send it on this clock (minimum 60, maximum 86400). Omit for no schedule. A delivery is " +
-          "read at your next tool boundary, so a sub-minute cadence buys no promptness and only talks " +
-          "over your own work.",
+          "Also send it on this clock, in seconds (minimum 60, maximum 86400). Omit for no heartbeat. A " +
+          "delivery is read at your next tool boundary, so a sub-minute cadence buys no promptness and " +
+          "only talks over your own work.",
       },
     },
     required: ["action"],
@@ -299,8 +299,8 @@ async function recurringPrompt(args) {
   if (action !== "start" && action !== "stop") throw new Error("`action` must be either \"start\" or \"stop\"")
 
   if (action === "stop") {
-    await callRpc("setOwnThreadRecurringPrompt", { slug, prompt: null, onRest: false, onSchedule: false })
-    return "Recurring prompt disarmed and cleared. Neither trigger will fire, and the text is gone from the thread footer."
+    await callRpc("setOwnThreadRecurringPrompt", { slug, prompt: null, stopHook: false, heartbeat: false })
+    return "Recurring prompt disarmed and cleared. Neither the stop hook nor the heartbeat will fire, and the text is gone from the thread footer."
   }
 
   const prompt = typeof args.prompt === "string" ? args.prompt.trim() : ""
@@ -308,36 +308,36 @@ async function recurringPrompt(args) {
     throw new Error("`prompt` is required to start a recurring prompt — it is the text you will be sent on every trigger")
   }
 
-  const hasSchedule = args.every_seconds !== undefined && args.every_seconds !== null
+  const hasHeartbeat = args.heartbeat_seconds !== undefined && args.heartbeat_seconds !== null
   let interval
-  if (hasSchedule) {
-    interval = typeof args.every_seconds === "number" ? Math.round(args.every_seconds) : NaN
-    if (!Number.isFinite(interval)) throw new Error("`every_seconds` must be a number of seconds")
+  if (hasHeartbeat) {
+    interval = typeof args.heartbeat_seconds === "number" ? Math.round(args.heartbeat_seconds) : NaN
+    if (!Number.isFinite(interval)) throw new Error("`heartbeat_seconds` must be a number of seconds")
     if (interval < MIN_INTERVAL_SECONDS || interval > MAX_INTERVAL_SECONDS) {
-      throw new Error(`\`every_seconds\` must be between ${MIN_INTERVAL_SECONDS} and ${MAX_INTERVAL_SECONDS}`)
+      throw new Error(`\`heartbeat_seconds\` must be between ${MIN_INTERVAL_SECONDS} and ${MAX_INTERVAL_SECONDS}`)
     }
   }
   // DEFAULTED, not required: a `start` that names no trigger at all is a model asking to be re-prompted
   // and leaving the mechanism to us, and the rest trigger is the safe reading of that — it cannot talk
   // over a running turn, and it cannot fire on a thread that has stopped needing it.
-  const onRest = typeof args.on_rest === "boolean" ? args.on_rest : !hasSchedule
-  const onSchedule = hasSchedule
-  if (!onRest && !onSchedule) {
-    throw new Error("at least one trigger is required: set `on_rest: true`, or give `every_seconds`, or both")
+  const stopHook = typeof args.stop_hook === "boolean" ? args.stop_hook : !hasHeartbeat
+  const heartbeat = hasHeartbeat
+  if (!stopHook && !heartbeat) {
+    throw new Error("at least one is required: set `stop_hook: true`, or give `heartbeat_seconds`, or both")
   }
 
   await callRpc("setOwnThreadRecurringPrompt", {
     slug,
     prompt,
-    onRest,
-    onSchedule,
-    ...(onSchedule ? { intervalSeconds: interval } : {}),
+    stopHook,
+    heartbeat,
+    ...(heartbeat ? { intervalSeconds: interval } : {}),
   })
 
-  const every = onSchedule ? (interval % 60 === 0 ? `${interval / 60} min` : `${interval}s`) : null
-  const when = onRest && every
-    ? `every time you come to rest AND every ${every} (the scheduled one reaches you mid-turn)`
-    : onRest
+  const every = heartbeat ? (interval % 60 === 0 ? `${interval / 60} min` : `${interval}s`) : null
+  const when = stopHook && every
+    ? `every time you come to rest AND every ${every} (the heartbeat reaches you mid-turn)`
+    : stopHook
       ? "every time you come to rest"
       : `every ${every}, reaching you mid-turn rather than waiting for you to stop`
   return (
