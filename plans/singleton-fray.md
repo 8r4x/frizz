@@ -2,39 +2,42 @@
 
 Design review, 2026-08-04. Prompted by: *"switch fray over to be a singleton, so only a single version of it runs on each computer… top-level interface be a grid of project cards… `localhost:NNNN/fray`, `localhost:NNNN/nub`… converge on a single port."*
 
-**Verdict: the direction is right and cheaper than it looks. Three things in the proposal as stated are wrong or missing, and one of them is load-bearing.** The naming default is backwards; there is no project registry to build a grid from; and the biggest cost is not routing but deciding what happens to a project nobody is looking at.
+**Verdict: the direction is right and cheaper than it looks. The routing and naming are easy; the real work is a project registry that does not exist, and making one process hold N projects without the tailer eating the event loop.**
+
+**Decided by the maintainer, 2026-08-04 — not open questions:**
+
+- **One unified process.** Not a front door proxying to per-project servers. This is a big refactor and that is accepted.
+- **Fray runs from real root repo directories only.** A worktree is not a project. Worktree management is something the *agent* does inside a project, with prompting; Fray has no special handling and needs none.
+- **Registration is automatic and silent.** Running the CLI inside a directory registers that path as a project with no approval step.
 
 ---
 
-## 1. The naming rule is backwards — measured, not argued
+## 1. Naming: the rule matters, the collision *rate* does not
 
-The proposal: *"use the name of the repo by default, then the name of the directory."*
+I originally measured slug collisions across 324 checkouts and reported repo-name-first at 34% versus directory-basename at 15%. **That was the wrong population** — it counted linked worktrees, which are never Fray projects. Corrected, over root checkouts only (a linked worktree has `.git` as a *file*, a real checkout has it as a *directory*):
 
-Measured on this machine over **324 git checkouts** under `~/Documents` + `~/.cache/fray-worktrees` (find `.git`, slugify the basename, read `remote.origin.url` for the repo name):
-
-| slug rule | distinct slugs | colliding names | checkouts affected |
+| slug rule | distinct slugs | colliding names | root checkouts affected |
 | --- | --- | --- | --- |
-| **directory basename** | 296 | 20 | **48 (15%)** |
-| **repo name (git remote)** | 242 | 28 | **110 (34%)** |
+| **directory basename** | 276 | 20 | 48 |
+| **repo name (git remote)** | 239 | 24 | 89 |
 
-Worst repo-name collisions: `dpcweb` ×25, `zod` ×12, `fray` ×11, `scratch` ×8. Worst directory-basename collisions: `scratch` ×5, `app` ×4, then `colinhacks`/`bun`/`opencode` ×3.
+304 real root checkouts, 18 linked worktrees. The direction survives — repo-name still collides roughly twice as much, now driven by same-remote clones (`dpcweb` ×25, `zod` ×9, `scratch` ×8) rather than by worktrees.
 
-The cause is structural, not incidental: **every worktree of a repo shares the repo's name.** `git worktree list` in this checkout alone reports **12 worktrees of `fray`** — `fray`, `fray-codex`, `fray-frizz`, `fray-monorepo`, `fray-pty`, `fray-quota-fix`, `fray-threaddoc`, two under `fray-wt/`, two under `~/.cache/fray-worktrees/`, one under `.claude/worktrees/`. Repo-name-first collapses all twelve to `fray`. Fray's own conventions tell agents to create worktrees freely, so this is the *common* case here, not the tail.
+**But at the real scale this does not carry an argument.** Fray runs from three or four directories, growing to maybe a few dozen. At that size a collision is an edge case, not a rate — and for a root clone the repo name and the directory basename are usually the same string anyway. The original instinct ("repo name, then directory name") is fine. Prefer the **directory basename** on the tiebreak, for two small reasons: it needs no git remote (so it works for the gitless case), and it is the name already in your shell prompt.
 
-**Use the directory basename.** Repo name is a poor default and a fine *fallback* when the basename is generic.
+What actually matters is that collisions are handled *correctly* when they happen, not that they are rare.
 
-### The rule I'd ship
+### The rule to ship
 
 Derive **once at registration**, persist, allow rename. Never re-derive on boot — a directory rename must not silently change a URL.
 
 1. `slug = slugify(basename(realpath(dir)))` — reuse `slugify` from `packages/shared/src/thread-slug.ts`, which already produces exactly the `^[a-z0-9][a-z0-9-]*$` shape a path segment wants.
-2. If the basename is **generic** (`app`, `src`, `web`, `www`, `main`, `repo`, `code`, `server`, `client`, `packages`, `site`, `scratch`, `tmp`, `test`), qualify with the parent: `pullfrog/app` → `pullfrog-app`. This is a live case — `~/Documents/pullfrog/app` is in the registry today.
-3. If the directory is a **linked worktree** and the basename doesn't already start with the main checkout's basename, prefix it: `~/.cache/fray-worktrees/steer-reliability` → `fray-steer-reliability`. This groups worktrees next to their repo in the grid instead of scattering them.
-4. On collision, **the incumbent always keeps its slug** — a URL must never change under someone who bookmarked it. Qualify the newcomer, first match wins: `<remote-owner>-<base>` (`colinhacks-zod`) → `<parent-dir>-<base>` → `<base>-2`, `-3`, …
-5. Lowercase-normalize. On a case-insensitive filesystem two paths differing only in case are already the same project after `realpath`.
-6. Renaming is a first-class registry field from day one. It costs nothing to add now and it is the escape hatch for every rule above.
+2. If the basename is **generic** (`app`, `src`, `web`, `www`, `main`, `repo`, `code`, `server`, `client`, `packages`, `site`, `scratch`, `tmp`, `test`), qualify with the parent: `pullfrog/app` → `pullfrog-app`. This is a live case — `~/Documents/pullfrog/app` is in the registry today, and `app` is the single most likely real collision at small scale.
+3. On collision, **the incumbent always keeps its slug** — a URL must never change under someone who bookmarked it. Qualify the newcomer, first match wins: `<remote-owner>-<base>` (`colinhacks-zod`) → `<parent-dir>-<base>` → `<base>-2`, `-3`, …
+4. Lowercase-normalize. On a case-insensitive filesystem two paths differing only in case are already the same project after `realpath`.
+5. Renaming is a first-class registry field from day one. It costs nothing to add now and it is the escape hatch for every rule above.
 
-Note that the derivation is order-dependent (whoever registers first gets the short name). For a local, per-machine, renameable tool that is fine — but it means slugs are **not reproducible across machines**, so nothing may treat a slug as a stable cross-machine identifier. The `projectId` UUID stays the real key; the slug is a display/URL alias.
+The derivation is order-dependent (whoever registers first gets the short name), so slugs are **not reproducible across machines** and nothing may treat one as a stable cross-machine identifier. The `projectId` UUID stays the real key; the slug is a display and URL alias.
 
 ### Reserve a namespace, or a repo named `settings` will break the app
 
@@ -67,7 +70,7 @@ Beyond the index, a grid needs a lifecycle nobody has had to think about while e
 - **Recency ordering** and search — 42 cards today, 324 candidate checkouts.
 - **Staleness** — the path is gone; offer removal rather than showing a dead card.
 - **Hide / archive** — throwaway `/tmp` repos should not be permanent fixtures.
-- **Grouping worktrees under their main checkout** — otherwise 12 `fray-*` cards dominate the grid.
+- **No worktree cards.** Projects are real root checkouts; a linked worktree (`.git` as a file) is never registered, so the grid stays at the handful of directories you actually launch from.
 
 ---
 
@@ -104,40 +107,45 @@ The **security** delta is smaller than it first appears but not zero. A fixed, w
 
 ---
 
-## 4. Two architectures — and the cheaper one is already written
+## 4. One unified process — decided
 
-### A. One process, multi-tenant (the literal reading of "singleton")
+One node process holds N `AppContext`s keyed by project, routed by path prefix. A front door proxying to per-project child servers was considered and **rejected**: it would have reused `RestartSupervisorProxy` and dodged the hard items below, but it keeps N processes alive, keeps N divergent artifacts, and leaves the cross-project queue to be assembled over a wire instead of read out of one heap. The unified process is the thing worth building even though it is the bigger refactor.
 
-One node process holds N `AppContext`s keyed by project, routed by path prefix.
+What it buys, beyond the stated goals: the machine-global timers currently duplicated per project — the quota refresh (`context.ts:498-505`, per *account*, not per project) and the orphan reaper (`:514-516`, which already reaps the whole machine) — collapse to one each. That is a straight simplification, and today's duplication is pure waste.
 
-Pros: simplest deployment story; a genuinely cross-project queue is trivial because all the data is in one heap; the machine-global timers that are currently duplicated 42× (quota refresh, orphan reaper) collapse to one, which is a real simplification.
+### The four things that must be solved
 
-Cons: needs *all four* hard items — a cross-project tailer budget, per-project activate/deactivate lifecycle, a per-project error boundary, and per-project broker env (`context.ts:604` currently spreads the whole `process.env` into every broker fork). Touches ~12-15 server files, with the genuinely hard work concentrated in `tailer.ts`, `index.ts` and `context.ts` — three of the most carefully-tuned files in the repo.
+1. **A cross-process tailer budget.** `tickWithBudget` runs synchronously on the event loop (`tailer.ts:3991-4009`) and the self-scheduling design bounds it at ~50% duty cycle **per tailer instance, with no cross-instance arbiter** (`:4010-4032`). Two tailers each claim 50%. Either one shared scheduler round-robins all tailers under a single budget, or the tailers move to `worker_threads`, or only active projects tail. **Riskiest single item — worth an experiment before the design is fixed**, since the saturation claim is read from the scheduling logic and its own over-budget warning, not measured.
+2. **Per-project activate/deactivate lifecycle.** `startServer` builds one `AppContext` and tears it down at process exit. Making it a keyed, ref-counted, restartable resource means reworking two shutdown barriers (`index.ts:408-453`, `context.ts:247-274`) and the ownership fence (`index.ts:457-514`) from process lifetime to tenant lifetime. They are well-tested but deeply assume one-shot.
+3. **A per-project error boundary.** `dev-child.ts:19-25` exits the process on any `uncaughtException`. Per-subsystem guards are already good — tailer ticks, board rebuilds, `fs.watch` setup and transcript discovery are each individually caught, and the tailer's guard carries a comment saying its absence *used* to take down the whole server. What is missing is a catch at the `AppContext` seam so one project's corrupt `ui.db` or malformed `.fray/` cannot abort every other project.
+4. **Per-project broker env.** `context.ts:604` spreads the entire `process.env` into every broker fork. That env is project-pinned today via `FRAY_LAUNCH_*`; in a unified process those values would be wrong or absent, and project A's broker would inherit whatever the singleton was launched with.
 
-### B. One front door, N per-project processes (recommended)
+Everything else is mechanical: prefix the routes (`mountRouter` already takes the prefix as an argument), fix the `isApiUrl` allowlist (`index.ts:182-184` — a prefixed request that misses it silently returns the SPA shell with a 200, which is a blank page rather than an error), resize the three CAP-16 caches that would thrash across projects, and pass `installSignalHandlers: false` for all but the owning context.
 
-A single machine-level process owns the fixed port, the project registry, and the grid. Opening `/nub` spawns (or reuses) that project's server on an ephemeral port and proxies to it, stripping the prefix.
-
-**The proxy already exists and is in production.** `RestartSupervisorProxy` (`packages/server/src/restart-supervisor.ts`) holds a durable public port and forwards to a disposable private child: HTTP with `path: req.url` verbatim (`:360`), Host/Origin rewritten to the child's private authority (`:93-94`), forwarded-`*` stripped (`:98`), a hand-rolled WebSocket upgrade line (`:398`) with an explicit comment about why `Connection: Upgrade` must survive, and a recovery page when the child is down. Generalizing it from one child to a `slug → childPort` map is a small change to shipped, tested code.
-
-Pros:
-
-- **Avoids all four hard items.** Crash isolation, lifecycle, tailer budget and broker env are unchanged because each project is still its own process, exactly as today.
-- **Lazy activation is automatic** — a project boots when opened.
-- **Background projects can keep running** if the user wants, because each one is independently startable. This is the escape hatch for §3's biggest consequence.
-- **Per-project artifact selection survives**, so per-project Update & Restart and rollback keep working.
-- Touches roughly four places: the proxy, the supervisor, the launcher, and the web base-URL sites.
-
-Cons: N node processes' RSS when many projects are warm (but that is today's status quo, not a regression); one extra loopback hop per request (already paid in production by the restart supervisor); the grid needs project status without booting children — which is fine, because the board parser is zero-dep and cold-parses in ~100ms, so the front door can read `.fray/` directly for card badges and never touch a child server.
-
-**Recommendation: B.** It delivers every user-visible goal in the proposal — one port, one URL, a grid, subpaths — while leaving the parts of the server that are hard to get right exactly as they are.
+**On background projects (the §3 consequence): decided by the same logic.** Lazy activation is forced by item 1, but it does not have to be all-or-nothing. Split it: a project's **scheduler** — timers, `awaiting` wakes, snooze expiry, PR watches, limit auto-resume — is cheap and stays on for every registered project; its **tailer and file watcher**, which are the expensive parts, activate only for projects with a live viewer. That keeps the promise that matters (nothing goes quiet while you are not looking) without paying 42 tailers' duty cycle. The grid's card badges come from the board parser reading `.fray/` directly, which cold-parses in ~100ms and needs no watcher at all.
 
 ### Alternatives considered and rejected
 
-- **Query param (`/?project=nub`)** — what `code-server` actually does. Sidesteps the reserved-namespace and trailing-slash problems entirely, and is cheaper because `api/rpc.ts` and `api/socket.ts` build from `location.origin`. Rejected: the proposal's pretty URL is the point, and the namespace problem is solved by one reserved prefix.
-- **Subdomains** — real origin isolation. Rejected: Safari.
+- **Front door + per-project processes** — see above.
+- **Query param (`/?project=nub`)** — what `code-server` actually does. Sidesteps the reserved-namespace and trailing-slash problems entirely, and is cheaper because `api/rpc.ts` and `api/socket.ts` build from `location.origin`. Rejected: the pretty URL is the point, and the namespace problem is solved by one reserved prefix.
+- **Subdomains** — real origin isolation. Rejected: Safari does not resolve `*.localhost`.
 - **Opaque short id (`/p/7f3a`)** — kills collisions dead. Rejected: unmemorable, which defeats the purpose.
-- **Redirect hub** (fixed port 302s to the project's own port) — preserves per-project origins *and* crash isolation, and is the cheapest thing on this list. Rejected as the default because the address bar then shows the ugly port, so bookmarks land back on an unstable number. Worth keeping in the back pocket if per-project origin isolation ever becomes a hard requirement.
+
+---
+
+## 4b. Launching: the CLI registers silently and opens the right project
+
+Running the CLI inside a directory must be a one-step, no-prompt path to that project's board:
+
+1. Resolve the directory to its canonical root (`realpath`, then the repo root; for the gitless case, the marker walk-up from [`plans/gitless-projects.md`](gitless-projects.md) §4).
+2. Look that path up in the registry. **If it is unknown, register it immediately — no approval, no prompt, no "add this project?" step.** A path the user just ran the CLI inside is authorization enough; asking would be a dialog whose only sensible answer is yes.
+3. Health-check the machine's Fray. If it is up, do not start anything — just open `http://localhost:<port>/<slug>`. If it is down, start it, then open.
+4. Print the URL either way.
+
+Two consequences worth calling out because they invert today's behavior:
+
+- **`--stop` and Ctrl-C change meaning.** Both are per-workspace today (`src/index.ts:602-747`); under a singleton they stop the machine's Fray and every project's board with it. They need to either grow a scope or refuse to stop a server other projects are using.
+- **`/health` becomes a list.** It currently returns one `{projectId, projectDir, bootId, ownerProof}` and `probeFray` rejects any mismatch (`src/launcher.ts:593-630`) — a good guarantee that a fixed port can never silently serve the wrong project. Preserve it by having the probe assert the *machine* identity and then confirm the specific project is registered, rather than dropping the check.
 
 ---
 
@@ -151,32 +159,32 @@ Cons: N node processes' RSS when many projects are warm (but that is today's sta
 
   The mechanism (community consensus, **not** Microsoft-documented) is that these land low only when the machine's dynamic port range has been reset to ~1024 from its 49152 default. So on a stock Windows box the 3000s are fine; on a clobbered one the entire 2164-9783 span is a minefield — which also takes out Next.js's 3000, Vite's 5173, Postgres's 5432 and adb's 5037. The whole dev ecosystem is exposed to this and mitigates it with fallback, not with port choice.
 
-### The safe band is 10081-32767
+### Shape: four-digit ABAB
 
-Above every browser-blocked port (max 10080), above every Hyper-V block anyone has reported (max ~9783), below Linux's ephemeral floor (32768), below macOS/Windows' (49152). Nothing on any of the three OSes allocates from it automatically. The cost is that it forces five digits.
+Maintainer preference, and it is the right call — a repeating two-digit pair is the most typeable, most memorable shape available, and five-digit numbers are not worth the marginal safety. Constraint set applied: IANA-unassigned on TCP, not on either browser's blocklist (all clear — the highest blocked port anywhere is 10080), not inside any Hyper-V block reported in [WSL#5514](https://github.com/microsoft/WSL/issues/5514), and not a known dev-tool default from a ~60-tool survey.
 
-### Recommendation: **13729** — "1‑FRAY", like a phone number
+**Only nine four-digit ABAB ports survive all four filters:**
 
-`http://localhost:13729` · F=3, R=7, A=2, Y=9 on a phone keypad, with the leading `1` that a dialled number carries anyway. It keeps the only mnemonic worth having while landing inside the safe band.
+`5656` · `5858` · `7373` · `8484` · `8585` · `9393` · `9494` · `9696` · `9797`
 
-- **Not in the IANA registry at all** — genuinely unassigned, not squatting on someone's record.
-- Above 10080, so clear of every browser blocklist.
-- Outside all three OS ephemeral ranges and above every reported Hyper-V exclusion block.
-- Free on this machine, and clear of every default in a 60-tool survey of local dev/database/AI ports (nearest neighbours are Ollama's 11434 and Jaeger's 16686).
-- No malware or C2 association found. This matters more than it sounds: `13337` — an obvious-looking alternative — is listed at high confidence as the default for Empire C2, CrackMapExec, gophish and gtunnel, which is exactly the signature class corporate EDR alerts on, and `23232` is historical Backdoor.Berbew. *Best-effort:* speedguide.net and adminsub.net both refused automated fetches, so this rests on search coverage rather than a direct read of those two port databases.
+All nine are free on this machine. Every other ABAB in 1024-9999 is IANA-assigned, inside a reported Hyper-V block, or both — the whole `2020`-`4747` run is gone, and `9090` (Prometheus) and `8080` never made it.
 
-**There is direct precedent for the keypad mnemonic in this exact ecosystem:** MCP Inspector uses `6274` for its client and `6277` for its proxy — T9 for "MCPI" and "MCPP".
+**Recommendation: `9797`.** It is the only survivor above the highest Hyper-V block anyone has reported (~9783 in [WSL#5306](https://github.com/microsoft/WSL/issues/5306)), so it carries the least Windows risk of the nine; it is unassigned on TCP *and* UDP; and nothing concrete attaches to it. `7373` and `9393` are equally clean on paper and fine if `9797` reads wrong. Avoid `8484` of the nine — it is MapleStory's port and shows up in Metasploitable walkthroughs.
 
-**Rejected, and why — all three of the obvious four-digit picks are inside verified exclusion blocks:**
+*On the "trojan" hits for these ports:* SEO port-lookup sites print "known security risks, trojans" boilerplate for essentially every port number. That is not signal. The genuine cases look different — `13337` is a documented default for Empire C2, CrackMapExec and gophish, and `23232` is Backdoor.Berbew — and none of the nine is one of those.
 
-| Port | Case for | Killed by |
-| --- | --- | --- |
-| **3729** | F-R-A-Y exactly; shorter. | Inside `3699-3798` in the WSL#5514 dump. Also IANA-assigned (`fksp-audit`, a dead 2003 vendor registration). |
-| **4917** | Already Fray's `DEFAULT_PORT` (`packages/shared/src/index.ts:2111`) and the base of its 100-port scan; absent from the IANA registry; zero migration. | Inside `4914-5013`. Also unmemorable, failing the brief's one subjective criterion. |
-| **4242** | Very memorable, IANA-unassigned. | Inside `4214-4313`. Also genuinely occupied: Posit Package Manager's default HTTP port and Orthanc's default DICOM port. |
-| **24729** | Clean on every axis; in the safe band. | No mnemonic — arbitrary, so no better than 4917 once novelty fades. A reasonable pick if `13729` is disliked. |
+### The ones you wanted, and what they actually cost
 
-Note the safe band is a *risk reduction*, not a guarantee: WSL#5306's reported span reaches 9783, and nothing prevents a future reservation landing higher. The band buys margin, and the fallback covers the rest.
+| Port | Status |
+| --- | --- |
+| **6767** | IANA `bmc-perf-agent`, **and** inside the reported block `5940-6979`. |
+| **6969** | IANA `acmsoda`, **and** inside `5940-6979`. |
+| **7777** / **8888** | IANA `cbt` / `ddi-tcp-1`; 8888 is also Jupyter's default. |
+| **1337** | IANA `menandmice-dns`. |
+
+`6767` remains a defensible choice if you want it. Its two problems are exactly the two that Vite (`5173`, inside `5014-5618`) and Next.js (`3000`, inside `2164-3363`) already have — a dead enterprise IANA registration and Hyper-V exposure that only materializes on a Windows box whose dynamic port range has been reset. **It is a real option, not a disqualified one**; it trades a little Windows robustness for the number you actually like. The fallback scan covers the failure either way.
+
+**Rejected from the earlier draft:** `3729` (F-R-A-Y on a keypad, but inside `3699-3798` and IANA `fksp-audit`), `4917` (Fray's current default, inside `4914-5013`, and unmemorable), `4242` (inside `4214-4313`; also Posit Package Manager and Orthanc), and the five-digit safe-band picks `13729`/`24729` — correct on every technical axis and rightly rejected as unmemorable, which was the whole brief.
 
 ### Fallback behavior
 
@@ -189,7 +197,7 @@ Keep the existing scan, re-based on the new default, and **say what happened**. 
 1. **`identity.json` + a project registry.** The reverse index from [`plans/gitless-projects.md`](gitless-projects.md) §3, plus backfill for the 33 orphaned state dirs and staleness detection. Nothing else can start without this.
 2. **Slug derivation + rename**, per §1. Registry field, not a boot-time derivation.
 3. **Move app routes under `/_fray/`**, freeing the top-level namespace. Fix `isFrayRoute` (`markdownTargets.ts:29-32`) in the same change.
-4. **Generalize `RestartSupervisorProxy`** to a machine-level front door with a `slug → childPort` map.
+4. **Multi-tenant the server** — a keyed `AppContext` map with activate/deactivate, the four hard items from §4, and the `AppContext`-seam error boundary. Do the tailer-budget experiment first; it is the one that can invalidate the shape.
 5. **Client base-path awareness** — the ~11 hardcoded absolute paths, plus `currentPath()`/`applyPath()`.
 6. **The grid** as a third root shell at `main.tsx:59`.
 7. **Adopt the port**, and split `fray-dev` onto its own default so source and published installs coexist.
@@ -205,8 +213,8 @@ Pre-existing and orthogonal to the singleton, but they are the same shared-resou
 
 The fix is the one already used correctly for the broker sockets — hash the state dir into the directory name (`packages/server/src/fray-paths.ts:44-52` documents exactly this rationale: "two accounts cannot collide even in a shared `/tmp`").
 
-## 7. Open questions for the human
+## 7. Open question
 
-- **Architecture A or B** (§4) — recommendation is B.
-- **The port** (§5) — recommendation is 13729 ("1‑FRAY"). Five digits is the price of clearing the band where Windows Hyper‑V has actually been observed to reserve ports; the shorter `3729` sits inside a verified exclusion block.
-- **Do background projects keep running?** (§3) Under B this is a genuine choice rather than a constraint: always-on for every registered project (today's behavior, N processes), on-demand only (cheapest, but wakes and PR watches go quiet for closed projects), or a per-project toggle defaulting to on-demand.
+Only one left: **the port number** (§5). Recommendation is `9797` from the nine surviving four-digit ABAB candidates; `6767` is available if you accept the same Windows exposure Vite and Next.js already carry.
+
+Architecture (unified process), project scope (real root repos, no worktrees), and silent auto-registration are settled — see the decisions at the top. Background-project behavior is settled as a consequence: schedulers stay on for every registered project, tailers and watchers activate on view (§4).
