@@ -1074,6 +1074,31 @@ export const UnqueueFollowUpResult = z.object({
 }).strict()
 export type UnqueueFollowUpResult = z.infer<typeof UnqueueFollowUpResult>
 
+// PUSH IT THROUGH NOW — the ↑ on a queued bubble. Carries no message, because there is nothing left to
+// send: the words are already sitting in the provider's queue, and the only thing between the agent and
+// them is the turn it is currently running. So this is the interrupt half of followUp's `interrupt`
+// flag, on its own. Same order-is-the-contract (deliver, THEN interrupt) — here the delivery happened
+// whenever the operator hit Enter, which is precisely why the decision no longer has to be made at send
+// time the way the composer's old ⚡ demanded.
+//
+// It preempts the TURN, not one message: the SDK opens the next turn on everything queued, so with
+// several bubbles waiting this delivers all of them, in order. The button's copy says so.
+export const DeliverQueuedNowInput = z.object({
+  slug: ThreadSlug,
+  // Same staleness guard as unqueueFollowUp: a stale tab must not preempt a re-dispatched session.
+  sessionId: z.string().min(1),
+}).strict()
+export type DeliverQueuedNowInput = z.infer<typeof DeliverQueuedNowInput>
+// `interrupted:false` is an expected outcome, NOT an error: there was no live turn to preempt (the
+// daemon is gone, or the agent is already resting), and the queued message is read the ordinary way.
+// Reported rather than thrown so the surface can say which happened — the same truthfulness rule
+// UnqueueFollowUpResult is built on.
+export const DeliverQueuedNowResult = z.object({
+  interrupted: z.boolean(),
+  reason: z.string().optional(),
+}).strict()
+export type DeliverQueuedNowResult = z.infer<typeof DeliverQueuedNowResult>
+
 export const SetThreadSnoozeInput = z.object({
   slug: ThreadSlug,
   sessionId: z.string().min(1),

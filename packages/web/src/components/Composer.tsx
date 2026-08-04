@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { ArrowUp, FileText, Loader2, Paperclip, X, Zap } from "lucide-react"
+import { ArrowUp, FileText, Loader2, Paperclip, X } from "lucide-react"
 import { ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, isAllowedAttachmentName } from "@fray-ui/shared"
 import { showToast } from "../store.ts"
 import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
@@ -69,14 +69,15 @@ export function Composer({
   // A small action rendered just LEFT of the send button (the dispatch composer's GitHub-picker icon).
   // Only surfaces that pass it get it; reply/queue composers omit it.
   leftAction?: React.ReactNode
-  // INTERRUPT AND SEND. Set only while the thread's worker is mid-turn AND its runtime can be
-  // preempted; the caller owns that policy entirely. Given it, the box grows a ⚡ button in the same
-  // rail slot `leftAction` uses and binds ⌘/Ctrl-Enter to it.
+  // INTERRUPT AND SEND, bound to ⌘/Ctrl-Enter. Set only while the thread's worker is mid-turn AND its
+  // runtime can be preempted; the caller owns that policy entirely.
   //
-  // It shares the rail slot rather than adding a third button because the two callers are disjoint by
-  // construction: `leftAction` is the DISPATCH composer's GitHub picker (NewThreadModal), and there is
-  // no worker to interrupt before a thread exists. If a surface ever needs both, that is the moment to
-  // widen the rail — not to stack two absolutes on one offset.
+  // KEYBOARD ONLY — there is deliberately no button here. It used to render a ⚡ in the rail, and the
+  // bolt was the wrong picture of the thing (maintainer, 2026-08-03: "we need to drop the lightning
+  // bolt icon to mean force push. That doesn't make any sense."). Preempting is now offered where the
+  // waiting message actually IS: a ↑ on the queued bubble itself (UserBubble's push-now control), which
+  // needs no message payload because the send is already in the provider's queue. The shortcut stays
+  // because it is a real send path with muscle memory behind it — only the picture was wrong.
   onInterruptSubmit?: () => void
 }) {
   const taRef = useRef<HTMLTextAreaElement>(null)
@@ -257,26 +258,12 @@ export function Composer({
   }, [busy])
 
   const hasContent = value.trim().length > 0
-  // ONE rail slot, filled by whichever of the two disjoint callers is in play. Reserving it must track
-  // what is actually rendered — the padding/offset classes below key off `railAction`, and a truthy
-  // element that renders null would carve out an empty hole (the bug GithubTrigger's `useGithubTriggerVisible`
-  // exists to prevent).
-  const railAction = leftAction ?? (onInterruptSubmit
-    ? (
-      <button
-        type="button"
-        // Same as Send: never blur the textarea on the click path.
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={onInterruptSubmit}
-        disabled={!hasContent || busy || uploading}
-        title="Interrupt and send (⌘⏎) — stops what the worker is doing now so it reads this immediately"
-        aria-label="Interrupt and send"
-        className="flex h-7 w-7 items-center justify-center rounded-lg text-muted outline-none transition-[color,background-color,box-shadow] enabled:hover:bg-panel-2/70 enabled:hover:text-fg enabled:focus-visible:bg-panel-2/70 enabled:focus-visible:ring-1 enabled:focus-visible:ring-muted/80 enabled:focus-visible:ring-offset-1 enabled:focus-visible:ring-offset-bg enabled:active:bg-elevated disabled:text-muted/35"
-      >
-        <Zap size={15} strokeWidth={2} />
-      </button>
-    )
-    : null)
+  // ONE rail slot. Reserving it must track what is actually rendered — the padding/offset classes below
+  // key off `railAction`, and a truthy element that renders null would carve out an empty hole (the bug
+  // GithubTrigger's `useGithubTriggerVisible` exists to prevent). Its only filler now is `leftAction`
+  // (the dispatch composer's GitHub picker); interrupt-and-send gave up its button here and kept only
+  // ⌘/Ctrl-Enter — see the `onInterruptSubmit` prop doc.
+  const railAction = leftAction ?? null
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     const el = e.currentTarget

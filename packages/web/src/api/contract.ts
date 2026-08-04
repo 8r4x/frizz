@@ -22,6 +22,8 @@ import type {
   FollowUpInput,
   UnqueueFollowUpInput,
   UnqueueFollowUpResult,
+  DeliverQueuedNowInput,
+  DeliverQueuedNowResult,
   ConfirmAwaitingInput,
   RenameThreadInput,
   AiRenameThreadResult,
@@ -110,6 +112,9 @@ export interface Api {
   adoptThread(input: AdoptThreadInput): Promise<AdoptThreadResult>
   followUp(input: FollowUpInput): Promise<void>
   unqueueFollowUp(input: UnqueueFollowUpInput): Promise<UnqueueFollowUpResult>
+  // The ↑ on a queued bubble: stop waiting and make the worker read what is already queued. No message
+  // payload — see DeliverQueuedNowInput.
+  deliverQueuedNow(input: DeliverQueuedNowInput): Promise<DeliverQueuedNowResult>
   setThreadPermission(input: SetThreadPermissionInput): Promise<SetThreadPermissionResult>
   threadProfileOptions(input: ThreadProfileOptionsInput): Promise<ThreadProfileOptionsResult>
   setThreadProfile(input: SetThreadProfileInput): Promise<SetThreadProfileResult>
@@ -225,6 +230,7 @@ export const PROCEDURES = {
   adoptThread: "mutation",
   followUp: "mutation",
   unqueueFollowUp: "mutation",
+  deliverQueuedNow: "mutation",
   setThreadPermission: "mutation",
   threadProfileOptions: "query",
   setThreadProfile: "mutation",

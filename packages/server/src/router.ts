@@ -10,6 +10,8 @@ import {
   FollowUpInput,
   UnqueueFollowUpInput,
   UnqueueFollowUpResult,
+  DeliverQueuedNowInput,
+  DeliverQueuedNowResult,
   SetThreadRecurringPromptInput,
   SetOwnThreadRecurringPromptInput,
   ThreadPluginReloadResult,
@@ -1426,6 +1428,35 @@ export function createRouter(ctx: AppContext) {
         cancelDelivery(ctx.storage, input.slug, input.deliveryId)
         ctx.board.refresh()
         return { unqueued: true }
+      },
+    }),
+
+    // PUSH IT THROUGH NOW — the ↑ that appears left of a queued bubble on hover. The message is already
+    // in the daemon's queue, so this sends nothing: it preempts the turn standing in front of it, which
+    // is the second half of `followUp`'s `interrupt` flag with the delivery half already done. The SDK
+    // interrupt does not discard queued input (see the ORDER IS THE CONTRACT note on interruptTurn), so
+    // the next turn opens on what is queued — which is exactly what the operator is asking for.
+    //
+    // Same gates as unqueueFollowUp, and for the same reason: only a broker-backed Claude row gives fray
+    // a control channel into a live turn. A tmux row and a codex steer have no interrupt fray can send,
+    // and the honest answer is to say so rather than no-op.
+    deliverQueuedNow: mutation({
+      input: DeliverQueuedNowInput,
+      output: DeliverQueuedNowResult,
+      handler: async ({ input }) => {
+        const row = currentOwnedSession(input.slug, input.sessionId)
+        if (!row) throw new Error("This thread is no longer the session this tab is looking at")
+        if (row.backend !== "claude" || row.claude_runtime !== "broker") {
+          return { interrupted: false, reason: "This thread's runtime can't be interrupted from fray" }
+        }
+        const bridge = ctx.claudeBroker
+        if (!bridge) throw new Error("Claude session broker is unavailable; cannot interrupt this turn")
+        // false = no live daemon to interrupt. Not an error and not a lost message: the send is still
+        // queued and gets read the ordinary way, so the refusal says "no faster", never "gone".
+        if (!bridge.interruptTurn({ threadSlug: input.slug, sessionId: row.session_id })) {
+          return { interrupted: false, reason: "Nothing to interrupt — this thread has no turn running" }
+        }
+        return { interrupted: true }
       },
     }),
 

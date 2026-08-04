@@ -1357,6 +1357,51 @@ test("an ordinary follow-up never preempts the turn", async () => {
   h.storage.close()
 })
 
+// ── Pushing an ALREADY-queued message through (the ↑ on the queued bubble) ───────────────────────
+// The same preemption, asked for after the fact instead of at send time. The message is already in the
+// daemon's queue, so this route sends nothing at all — it is the interrupt half on its own, which works
+// only because the SDK's interrupt leaves queued input intact for the next turn to open on.
+test("push-it-now interrupts the turn and delivers no second copy of the message", async () => {
+  const { h, slug, order } = interruptHarness()
+  const result = await h.router.deliverQueuedNow.handler({ input: { slug, sessionId: `sid-${slug}` } })
+  assert.deepEqual(result, { interrupted: true })
+  assert.deepEqual(order, ["interruptTurn"], "no followUp — the words are already queued")
+  h.storage.close()
+})
+
+// "No live daemon" is the ordinary resting case, not a failure: the queued send is still queued and is
+// read at the ordinary time. Reporting it as an error would tell the operator their message was lost.
+test("push-it-now reports a thread with no running turn instead of throwing", async () => {
+  const { h, slug } = interruptHarness()
+  ;(h.ctx as { claudeBroker?: unknown }).claudeBroker = { interruptTurn: () => false }
+  const result = await h.router.deliverQueuedNow.handler({ input: { slug, sessionId: `sid-${slug}` } })
+  assert.equal(result.interrupted, false)
+  assert.match(result.reason ?? "", /no turn running/)
+  h.storage.close()
+})
+
+// A tmux Claude row's follow-up was typed into Claude Code's own TUI composer and a codex steer went
+// straight into the running turn — neither leaves fray a turn it can preempt.
+test("push-it-now refuses a runtime fray holds no control channel into", async () => {
+  const { h, slug } = interruptHarness()
+  h.storage.setClaudeRuntime(slug, "tmux")
+  const result = await h.router.deliverQueuedNow.handler({ input: { slug, sessionId: `sid-${slug}` } })
+  assert.equal(result.interrupted, false)
+  assert.match(result.reason ?? "", /can't be interrupted/)
+  h.storage.close()
+})
+
+// The same staleness guard every session-scoped mutation carries: a tab left open across a re-dispatch
+// must not interrupt whatever now owns the slug.
+test("push-it-now fails closed for a stale session id", async () => {
+  const { h, slug } = interruptHarness()
+  await assert.rejects(
+    () => h.router.deliverQueuedNow.handler({ input: { slug, sessionId: "sid-from-a-dead-session" } }),
+    /replaced; refresh before acting/,
+  )
+  h.storage.close()
+})
+
 // ── Reopening an archived thread by messaging it (every runtime) ─────────────────────────────────
 // There is no Reopen verb in fray: an archived thread's footer states "Done" and the composer under it
 // IS the reopen affordance ("Marked done — send a message to reopen it"). The un-archive that backs that

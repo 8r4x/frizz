@@ -7,10 +7,16 @@ import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
 import "./styles.css"
 
-// Browser QA for inter-QUEUED-message spacing: two successive queued (optimistic) user bubbles must
-// carry the same STEP rhythm as any other pair of messages. Both surfaces that render the queued tail
-// are mounted — the drawer (ThreadView/ChatView) and the queue card (TodosView) — because the pinned
-// queued group is built separately in each.
+// Browser QA for the QUEUED TAIL. Two things live here:
+//  · SPACING — successive queued (optimistic) user bubbles must carry the same STEP rhythm as any other
+//    pair of messages.
+//  · THE PUSH-NOW CONTROL — the ↑ that appears left of a queued bubble on hover and preempts the turn
+//    standing in front of the queue. It needs exactly what this fixture already sets up: `runtime:
+//    "running"` on a claude thread plus queued bubbles. `deliveryId`s are set so the bubbles are also
+//    UNQUEUEABLE, which is the real-app shape and the only way to see that the hover lift still fires
+//    from the group rather than the bubble.
+// Both surfaces that render the queued tail are mounted — the drawer (ThreadView/ChatView) and the
+// queue card (TodosView) — because the pinned queued group is built separately in each.
 
 const SLUG = "queued-spacing"
 const PARAMS = new URLSearchParams(location.search)
@@ -44,6 +50,9 @@ const thread = {
   bgShells: [],
   lastActivityAt: "2026-07-18T10:00:00.000Z",
   spawnedAt: "2026-07-18T09:00:00.000Z",
+  // The push-now click resolves this at CLICK time and refuses without it, so the control is only
+  // driveable here if the fixture thread carries one — same as any live row.
+  sessionId: "sid-queued-spacing",
 } as unknown as ThreadViewModel
 
 store.board = { projectDir: "/fixture/fray", threads: [thread] } as BoardSnapshot
@@ -62,11 +71,11 @@ const messages: TranscriptMessage[] = [
   // no height and no stray gap when nothing is queued.
   ...(QUEUED
     ? ([
-        { sourceId: "q1", role: "user", text: "and  what's the fic", tools: [], parts: [], queued: true },
+        { sourceId: "q1", role: "user", text: "and  what's the fic", tools: [], parts: [], queued: true, deliveryId: "d-q1" },
         // A message that RENDERS NOTHING between two queued sends: the queued pass skips it, so the old
         // "previous array element is queued" margin test failed and the two bubbles butted together.
         ...(INTERLEAVE ? [{ sourceId: "ev1", role: "assistant", kind: "event", text: "", tools: [], parts: [] }] : []),
-        { sourceId: "q2", role: "user", text: "fix", tools: [], parts: [], queued: true },
+        { sourceId: "q2", role: "user", text: "fix", tools: [], parts: [], queued: true, deliveryId: "d-q2" },
         {
           sourceId: "q3",
           role: "user",
@@ -74,6 +83,7 @@ const messages: TranscriptMessage[] = [
           tools: [],
           parts: [],
           queued: true,
+          deliveryId: "d-q3",
         },
       ] as unknown as TranscriptMessage[])
     : []),
@@ -87,6 +97,13 @@ window.fetch = async (input, init) => {
       JSON.stringify({ result: { messages, transcriptKey: `${SLUG}-key`, hasEarlier: false, historyLoaded: true } }),
       { headers: { "content-type": "application/json" } },
     )
+  }
+  // Record the push-now call rather than swallowing it into the generic `{}` below: a control that
+  // renders correctly and asks the server for nothing is the failure this fixture has to be able to see.
+  if (url.pathname === "/rpc/deliverQueuedNow") {
+    const calls = ((window as unknown as { __pushNowCalls?: unknown[] }).__pushNowCalls ??= [])
+    calls.push(JSON.parse(String(init?.body ?? "{}")))
+    return new Response(JSON.stringify({ result: { interrupted: true } }), { headers: { "content-type": "application/json" } })
   }
   if (url.pathname.startsWith("/rpc/")) {
     return new Response(JSON.stringify({ result: {} }), { headers: { "content-type": "application/json" } })

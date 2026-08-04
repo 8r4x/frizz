@@ -4,7 +4,7 @@ import { useSnapshot } from "valtio"
 import * as RadixTabs from "@radix-ui/react-tabs"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
-import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUpRight, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, ShieldCheck, Sparkles, TerminalSquare, X, type LucideIcon } from "lucide-react"
+import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, ArrowUpRight, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, ShieldCheck, Sparkles, TerminalSquare, X, type LucideIcon } from "lucide-react"
 import { parseRecurringPrompt } from "@fray-ui/shared"
 import type { AwaitingHint, BgShellView, NativeInputRequired as NativeInputRequiredData, PendingAsk, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@fray-ui/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
@@ -24,6 +24,7 @@ import { WakeDivider } from "./WakeDivider.tsx"
 import { useLiveAnswering, type LiveAnswering } from "../lib/answering.ts"
 import { sendEagerFollowUp } from "../lib/eagerComposerSubmission.ts"
 import { useUnqueueFollowUp, useUnqueueSupported } from "../lib/unqueueFollowUp.ts"
+import { useDeliverQueuedNow, useDeliverQueuedNowSupported } from "../lib/deliverQueuedNow.ts"
 import { useInnerHtml } from "../lib/innerHtml.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
@@ -2837,6 +2838,22 @@ function UserBubble({ text, rawText, queued, sticky, deliveryUnconfirmed, delive
   const unqueueSupported = useUnqueueSupported(unqueueSlug)
   const { unqueue, pending: unqueuePending } = useUnqueueFollowUp(unqueueSlug)
   const unqueueable = Boolean(queued && deliveryId && unqueueSlug && unqueueSupported)
+  // PUSH IT THROUGH. The other half of what you can do to a message that hasn't been read yet: instead
+  // of taking it back, stop waiting for it. A ↑ appears left of the bubble on hover and preempts the
+  // turn standing in front of the queue (see lib/deliverQueuedNow.ts). It replaces the composer's ⚡,
+  // which asked for the same decision at the wrong moment — before the operator knew how long the
+  // worker would take — and pictured it as a lightning bolt, which meant nothing.
+  //
+  // Gated on `queued` and a running turn, NOT on deliveryId: this addresses the thread's turn, not one
+  // message, so it works for a queued bubble fray did not itself send.
+  // `queued ? slug : null` is a PERF gate, not a correctness one. Unlike unqueue's scalar (backend,
+  // which effectively never changes) this one tracks `runtime`, which flips on every turn boundary —
+  // subscribed unconditionally it would re-render every user bubble in the transcript each time a turn
+  // starts or ends. Passing null makes the snapshot a constant `false` for the historical bubbles, so
+  // they never see a change to re-render for.
+  const pushNowSupported = useDeliverQueuedNowSupported(queued ? unqueueSlug : null)
+  const { deliverNow, pending: pushNowPending } = useDeliverQueuedNow(unqueueSlug)
+  const pushable = Boolean(queued && unqueueSlug && pushNowSupported)
   // The composer parks attached files in the draft as TRAILING standalone absolute-path lines
   // (joinComposerValue) and presents them as chips — so a sent message carries those paths as text, and
   // this bubble reprinted the screenshot the human had just attached as a wall of mono path. Peel them
@@ -2888,6 +2905,11 @@ function UserBubble({ text, rawText, queued, sticky, deliveryUnconfirmed, delive
           is verbatim, so its line breaks must survive. Skipped entirely for an attachment-only send, so the
           picture stands on its own instead of hanging under an empty gray pill. */}
       {prose.trim() !== "" && (
+        // The bubble's own positioning context, and the hover GROUP the ↑ rides on. It has to be the
+        // group rather than the bubble, or moving the pointer off the bubble toward the button would
+        // hide the button before it could be clicked — and would drop the queued bubble back to 50%
+        // while its own control is under the cursor.
+        <div className="group relative">
         <div
           ref={ref}
           {...(unqueueable ? {
@@ -2923,7 +2945,7 @@ function UserBubble({ text, rawText, queued, sticky, deliveryUnconfirmed, delive
           // in the app uses. A KEYBOARD focus ring still has to exist, so it keeps the accent — but
           // OFFSET onto the near-black page, which is the only place this yellow reads clean and is how
           // every other focus ring in the app is drawn.
-          className={`relative ${BLOCK_RADIUS} rounded-br-sm bg-user-bubble px-3.5 py-3 text-[14px] whitespace-pre-wrap [overflow-wrap:anywhere] text-bg ${queued ? "opacity-50" : ""} ${unqueueable ? "cursor-pointer transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg" : ""} ${unqueuePending ? "!opacity-30" : ""} ${sticky ? `transition-[max-height] duration-200 ease-out ${scrollable ? "overflow-y-auto" : "overflow-hidden"}` : ""}`}
+          className={`relative ${BLOCK_RADIUS} rounded-br-sm bg-user-bubble px-3.5 py-3 text-[14px] whitespace-pre-wrap [overflow-wrap:anywhere] text-bg ${queued ? "opacity-50" : ""} ${unqueueable ? "cursor-pointer transition-opacity group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg" : ""} ${unqueuePending ? "!opacity-30" : ""} ${sticky ? `transition-[max-height] duration-200 ease-out ${scrollable ? "overflow-y-auto" : "overflow-hidden"}` : ""}`}
         >
           {prose}
           {/* Fade the last ~2.5rem of text into the bubble colour — keeps the box fully rounded + opaque
@@ -2931,6 +2953,27 @@ function UserBubble({ text, rawText, queued, sticky, deliveryUnconfirmed, delive
           {collapsed && overflows && (
             <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-user-bubble to-transparent" />
           )}
+        </div>
+        {/* SEND IT NOW — icon only, no fill until the pointer is on it, and ABSOLUTE so it costs the
+            bubble no width. Laying it out as a flex sibling would narrow every queued bubble by 36px
+            and re-wrap the text the moment the send landed, which is the class of reflow this file
+            spends most of its comments avoiding.
+            `bottom-0` aligns it with the bubble's BOTTOM edge (maintainer's call), which is also where
+            the composer keeps its send arrow, so the two reads as the same gesture. */}
+        {pushable && (
+          <button
+            type="button"
+            // Same as every submit affordance beside a live input: never blur on the click path.
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={deliverNow}
+            disabled={pushNowPending}
+            title="Send now — interrupts what the worker is doing so it reads the queue immediately"
+            aria-label="Send now"
+            className="absolute bottom-0 right-full mr-2 flex h-7 w-7 items-center justify-center rounded-lg text-muted opacity-0 outline-none transition-[opacity,color,background-color] group-hover:opacity-100 enabled:hover:bg-panel-2/70 enabled:hover:text-fg enabled:focus-visible:opacity-100 enabled:focus-visible:bg-panel-2/70 enabled:focus-visible:ring-1 enabled:focus-visible:ring-muted/80 enabled:focus-visible:ring-offset-1 enabled:focus-visible:ring-offset-bg enabled:active:bg-elevated"
+          >
+            {pushNowPending ? <Loader2 size={15} strokeWidth={2.2} className="animate-spin" /> : <ArrowUp size={15} strokeWidth={2.2} />}
+          </button>
+        )}
         </div>
       )}
       {/* Below the words, mirroring the composer (prose in the textarea, chips along its bottom edge) —
