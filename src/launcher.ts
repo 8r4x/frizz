@@ -31,7 +31,7 @@ import {
 } from "@frizz/server/local-origin";
 import { readBootProgress } from "@frizz/server/boot-progress";
 import { frizzPaths, projectStateDir } from "@frizz/server/frizz-paths";
-import { migrateFrayGlobalRoots, migrateFrayProjectDir } from "@frizz/server/migrate-fray";
+import { migrateFrayGlobalRoots, migrateFrayProjectDir, migrateFrayProjectId } from "@frizz/server/migrate-fray";
 import { defaultLogRoot, latestLogPath } from "@frizz/server/logging";
 import { DEFAULT_PORT } from "@frizz/shared";
 
@@ -417,7 +417,11 @@ export function resolveWorkspace(
     );
   }
   if (migrate) migrateFrayGlobalRoots({ env, home });
-  const identity = resolveGitProjectIdentity(realpathSync(gitRoot), home);
+  const root0 = realpathSync(gitRoot);
+  // Then the id, BEFORE resolveGitProjectIdentity: that call mints a fresh UUID when it finds no
+  // `frizz.id`, and a minted id is an empty board sitting beside every thread this repo ever had.
+  if (migrate) migrateFrayProjectId(root0, { home });
+  const identity = resolveGitProjectIdentity(root0, home);
   const root = identity.root;
   if (migrate) migrateFrayProjectDir(root);
   const id = identity.id;
