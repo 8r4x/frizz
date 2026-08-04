@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import type { ThreadView } from "@fray-ui/shared"
+import type { ThreadView } from "@frizz/shared"
 import { isOptimisticallySteering, optimisticallySteered, STEER_OPTIMISM_MS } from "./steering.ts"
 import { isActivelyRunning, isHeld, orderActive, partitionActive, sectionOf, sessionIndicatorKind } from "../groups.ts"
 

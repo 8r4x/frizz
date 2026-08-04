@@ -37,7 +37,7 @@ import {
   type ProcessPlatformAdapter,
   type ProjectLaunchTarget,
 } from "../packages/server/src/project-launch.ts";
-import { frayPaths, projectStateDir } from "@fray-ui/server/fray-paths";
+import { frizzPaths, projectStateDir } from "@frizz/server/frizz-paths";
 import {
   acquireGlobalLaunchLock,
   allocatePort,
@@ -49,10 +49,10 @@ import {
   parseCliArgs,
   resolveBindSelection,
   prepareBeforeGlobalLaunchLock,
-  probeFray,
+  probeFrizz,
   readPreferredPort,
   waitForWorkspace,
-  requestFrayStop,
+  requestFrizzStop,
   resolveWorkspace,
   sourceWorkspaceDir,
   supervisorNeedsAttention,
@@ -60,11 +60,11 @@ import {
   type Workspace,
 } from "./launcher.ts";
 
-test("artifact re-exec keeps the original canonical Fray source directory", () => {
-  const source = mkdtempSync(join(tmpdir(), "fray-canonical-source-"));
-  const artifactRuntime = join(tmpdir(), "fray-builds", "digest", "runtime", "src");
+test("artifact re-exec keeps the original canonical Frizz source directory", () => {
+  const source = mkdtempSync(join(tmpdir(), "frizz-canonical-source-"));
+  const artifactRuntime = join(tmpdir(), "frizz-builds", "digest", "runtime", "src");
   assert.equal(
-    sourceWorkspaceDir({ FRAY_SOURCE_DIR: source }),
+    sourceWorkspaceDir({ FRIZZ_SOURCE_DIR: source }),
     source,
     "a deployed runtime must not infer its cache path as build source"
   );
@@ -222,15 +222,15 @@ async function runRealCli(
     USERPROFILE: home,
   };
   for (const name of [
-    "FRAY_DEV_CHILD",
-    "FRAY_DIRECT_SUPERVISOR",
-    "FRAY_DAEMON_CHILD",
-    "FRAY_DEV_REEXEC",
-    "FRAY_LAUNCH_OWNER_TOKEN",
-    "FRAY_LAUNCH_PROJECT_ID",
-    "FRAY_LAUNCH_PROJECT_DIR",
-    "FRAY_LAUNCH_STATE_DIR",
-    "FRAY_LAUNCH_IDENTITY_SCOPE",
+    "FRIZZ_DEV_CHILD",
+    "FRIZZ_DIRECT_SUPERVISOR",
+    "FRIZZ_DAEMON_CHILD",
+    "FRIZZ_DEV_REEXEC",
+    "FRIZZ_LAUNCH_OWNER_TOKEN",
+    "FRIZZ_LAUNCH_PROJECT_ID",
+    "FRIZZ_LAUNCH_PROJECT_DIR",
+    "FRIZZ_LAUNCH_STATE_DIR",
+    "FRIZZ_LAUNCH_IDENTITY_SCOPE",
   ])
     delete env[name];
   const child = spawnChild(process.execPath, [cliEntry, ...args], {
@@ -381,7 +381,7 @@ function assertOneIdentity(
     ["repository"]
   );
   assert.deepEqual(
-    execFileSync("git", ["config", "--local", "--get-all", "fray.id"], {
+    execFileSync("git", ["config", "--local", "--get-all", "frizz.id"], {
       cwd: repo,
       encoding: "utf8",
     })
@@ -389,10 +389,10 @@ function assertOneIdentity(
       .split(/\r?\n/u),
     [first.id]
   );
-  assert.deepEqual(readdirSync(join(frayPaths({ home }).data, "projects")).sort(), [
+  assert.deepEqual(readdirSync(join(frizzPaths({ home }).data, "projects")).sort(), [
     first.id,
   ]);
-  assert.equal(existsSync(join(repo, ".fray", "fray.id")), false);
+  assert.equal(existsSync(join(repo, ".frizz", "frizz.id")), false);
   return first.id;
 }
 
@@ -457,8 +457,8 @@ test("CLI options default to immutable mode and make source/HMR explicit", () =>
   assert.match(helpText(), /Only do this on a network you trust/);
   // The command name is a parameter, so no description may hard-code one. `--foreground` did, and
   // read as advice about a different binary whenever the launcher was invoked under another name.
-  assert.doesNotMatch(helpText("frayctl"), /fray-dev/);
-  assert.match(helpText("frayctl"), /--foreground\s+accepted for compatibility; frayctl/);
+  assert.doesNotMatch(helpText("frizzctl"), /frizz-dev/);
+  assert.match(helpText("frizzctl"), /--foreground\s+accepted for compatibility; frizzctl/);
 });
 
 test("help stays readable: one description column, and nothing wider than a terminal", () => {
@@ -499,8 +499,8 @@ test("--host: a bare flag means every interface, and a value must be an address"
 test("--allowed-host: repeatable, comma-splittable, lowercased and deduped", () => {
   assert.deepEqual(parseCliArgs([]).allowedHosts, []);
   assert.deepEqual(
-    parseCliArgs(["--allowed-host", "Fray.local", "--allowed-host=box,fray.local"]).allowedHosts,
-    ["fray.local", "box"]
+    parseCliArgs(["--allowed-host", "Frizz.local", "--allowed-host=box,frizz.local"]).allowedHosts,
+    ["frizz.local", "box"]
   );
   assert.throws(() => parseCliArgs(["--allowed-host"]), /requires a value/);
 });
@@ -512,16 +512,16 @@ test("resolveBindSelection: flags beat the environment, and exposure is derived 
     allowedHosts: [],
   });
   assert.deepEqual(
-    resolveBindSelection({ host: undefined, allowedHosts: [] }, { FRAY_HOST: "0.0.0.0", FRAY_ALLOWED_HOSTS: "a, B" }),
+    resolveBindSelection({ host: undefined, allowedHosts: [] }, { FRIZZ_HOST: "0.0.0.0", FRIZZ_ALLOWED_HOSTS: "a, B" }),
     { host: "0.0.0.0", exposed: true, allowedHosts: ["a", "b"] }
   );
   assert.equal(
-    resolveBindSelection({ host: "10.1.2.3", allowedHosts: [] }, { FRAY_HOST: "0.0.0.0" }).host,
+    resolveBindSelection({ host: "10.1.2.3", allowedHosts: [] }, { FRIZZ_HOST: "0.0.0.0" }).host,
     "10.1.2.3"
   );
   // ::1 and localhost are still loopback: asking for them must not print a network warning.
   assert.equal(resolveBindSelection({ host: "::1", allowedHosts: [] }, {}).exposed, false);
-  assert.throws(() => resolveBindSelection({ host: undefined, allowedHosts: [] }, { FRAY_HOST: "nope" }), /invalid --host/);
+  assert.throws(() => resolveBindSelection({ host: undefined, allowedHosts: [] }, { FRIZZ_HOST: "nope" }), /invalid --host/);
 });
 
 test("networkUrls: nothing for loopback, real interfaces for a wildcard bind", () => {
@@ -545,7 +545,7 @@ test("networkUrls: nothing for loopback, real interfaces for a wildcard bind", (
 });
 
 test("workspace identity canonicalizes a symlink and survives spaces", () => {
-  const base = mkdtempSync(join(tmpdir(), "fray launcher "));
+  const base = mkdtempSync(join(tmpdir(), "frizz launcher "));
   const repo = join(base, "repo with spaces");
   const alias = join(base, "repo alias");
   const home = join(base, "home");
@@ -563,8 +563,8 @@ test("workspace identity canonicalizes a symlink and survives spaces", () => {
   }
 });
 
-test("main and linked worktrees concurrently resolve to three stable isolated Fray instances", async () => {
-  const base = mkdtempSync(join(tmpdir(), "fray linked worktree race "));
+test("main and linked worktrees concurrently resolve to three stable isolated Frizz instances", async () => {
+  const base = mkdtempSync(join(tmpdir(), "frizz linked worktree race "));
   const main = join(base, "main repo with spaces");
   const linkedOne = join(base, "linked worktree one");
   const linkedTwo = join(base, "linked worktree two");
@@ -592,7 +592,7 @@ test("main and linked worktrees concurrently resolve to three stable isolated Fr
       ["worktree", "add", "-q", "-b", "linked-two", linkedTwo],
       { cwd: main }
     );
-    execFileSync("git", ["config", "--local", "--add", "fray.id", legacyId], {
+    execFileSync("git", ["config", "--local", "--add", "frizz.id", legacyId], {
       cwd: main,
     });
     symlinkSync(linkedOne, linkedAlias);
@@ -674,14 +674,14 @@ test("main and linked worktrees concurrently resolve to three stable isolated Fr
       assert.equal(
         execFileSync(
           "git",
-          ["config", "--file", config, "--get-all", "fray.id"],
+          ["config", "--file", config, "--get-all", "frizz.id"],
           { encoding: "utf8" }
         ).trim(),
         result.id
       );
     }
     assert.equal(
-      execFileSync("git", ["config", "--local", "--get-all", "fray.id"], {
+      execFileSync("git", ["config", "--local", "--get-all", "frizz.id"], {
         cwd: main,
         encoding: "utf8",
       }).trim(),
@@ -694,7 +694,7 @@ test("main and linked worktrees concurrently resolve to three stable isolated Fr
           ["config", "--local", "--get", "extensions.worktreeConfig"],
           { cwd: main, stdio: "ignore" }
         ),
-      "Fray does not mutate the repository-wide worktreeConfig extension"
+      "Frizz does not mutate the repository-wide worktreeConfig extension"
     );
   } finally {
     rmSync(base, { recursive: true, force: true });
@@ -702,7 +702,7 @@ test("main and linked worktrees concurrently resolve to three stable isolated Fr
 });
 
 test("linked worktree identity survives moves and is retired on removal", () => {
-  const base = mkdtempSync(join(tmpdir(), "fray worktree lifecycle "));
+  const base = mkdtempSync(join(tmpdir(), "frizz worktree lifecycle "));
   const main = join(base, "main");
   const linked = join(base, "linked old");
   const moved = join(base, "linked moved");
@@ -759,7 +759,7 @@ test("linked worktree identity survives moves and is retired on removal", () => 
 });
 
 test("simultaneous first-run CLI processes commit one project identity", async () => {
-  const base = mkdtempSync(join(tmpdir(), "fray cli identity race "));
+  const base = mkdtempSync(join(tmpdir(), "frizz cli identity race "));
   const repo = join(base, "repo with spaces");
   const home = join(base, "home");
   try {
@@ -777,7 +777,7 @@ test("simultaneous first-run CLI processes commit one project identity", async (
 });
 
 test("simultaneous CLI and direct-server starts share one identity namespace through aliases", async () => {
-  const base = mkdtempSync(join(tmpdir(), "fray mixed identity race "));
+  const base = mkdtempSync(join(tmpdir(), "frizz mixed identity race "));
   const repo = join(base, "canonical repo with spaces");
   const alias = join(base, "symlink repo alias");
   const home = join(base, "home");
@@ -800,14 +800,14 @@ test("simultaneous CLI and direct-server starts share one identity namespace thr
 });
 
 test("invalid or duplicated git-local project ids fail closed before state paths are derived", () => {
-  const base = mkdtempSync(join(tmpdir(), "fray invalid identity "));
+  const base = mkdtempSync(join(tmpdir(), "frizz invalid identity "));
   const repo = join(base, "repo");
   const home = join(base, "home");
   try {
     execFileSync("git", ["init", "-q", repo]);
     execFileSync(
       "git",
-      ["config", "--local", "--add", "fray.id", "../../outside"],
+      ["config", "--local", "--add", "frizz.id", "../../outside"],
       { cwd: repo }
     );
     assert.throws(
@@ -818,9 +818,9 @@ test("invalid or duplicated git-local project ids fail closed before state paths
       () => resolveProject(repo, home),
       /expected exactly one UUID/
     );
-    assert.equal(existsSync(join(frayPaths({ home }).data, "projects")), false);
+    assert.equal(existsSync(join(frizzPaths({ home }).data, "projects")), false);
 
-    execFileSync("git", ["config", "--local", "--unset-all", "fray.id"], {
+    execFileSync("git", ["config", "--local", "--unset-all", "frizz.id"], {
       cwd: repo,
     });
     execFileSync(
@@ -829,7 +829,7 @@ test("invalid or duplicated git-local project ids fail closed before state paths
         "config",
         "--local",
         "--add",
-        "fray.id",
+        "frizz.id",
         "11111111-1111-1111-1111-111111111111",
       ],
       { cwd: repo }
@@ -840,7 +840,7 @@ test("invalid or duplicated git-local project ids fail closed before state paths
         "config",
         "--local",
         "--add",
-        "fray.id",
+        "frizz.id",
         "22222222-2222-2222-2222-222222222222",
       ],
       { cwd: repo }
@@ -853,14 +853,14 @@ test("invalid or duplicated git-local project ids fail closed before state paths
       () => resolveProject(repo, home),
       /expected exactly one UUID/
     );
-    assert.equal(existsSync(join(repo, ".fray", "fray.id")), false);
+    assert.equal(existsSync(join(repo, ".frizz", "frizz.id")), false);
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
 });
 
 test("linked-worktree identity config fails closed and recovers from an interrupted Git config lock", () => {
-  const base = mkdtempSync(join(tmpdir(), "fray linked invalid identity "));
+  const base = mkdtempSync(join(tmpdir(), "frizz linked invalid identity "));
   const main = join(base, "main");
   const linked = join(base, "linked");
   const home = join(base, "home");
@@ -882,7 +882,7 @@ test("linked-worktree identity config fails closed and recovers from an interrup
     });
     execFileSync(
       "git",
-      ["config", "--local", "--add", "fray.id", repositoryId],
+      ["config", "--local", "--add", "frizz.id", repositoryId],
       { cwd: main }
     );
     const config = resolveGitWorktree(linked).identityConfig;
@@ -893,12 +893,12 @@ test("linked-worktree identity config fails closed and recovers from an interrup
       "--file",
       config,
       "--add",
-      "fray.id",
+      "frizz.id",
       "../../outside",
     ]);
     assert.throws(
       () => resolveWorkspace(linked, home),
-      /linked-worktree fray\.id is invalid/
+      /linked-worktree frizz\.id is invalid/
     );
     rmSync(config);
     execFileSync("git", [
@@ -906,7 +906,7 @@ test("linked-worktree identity config fails closed and recovers from an interrup
       "--file",
       config,
       "--add",
-      "fray.id",
+      "frizz.id",
       validWorktreeId,
     ]);
     execFileSync("git", [
@@ -914,12 +914,12 @@ test("linked-worktree identity config fails closed and recovers from an interrup
       "--file",
       config,
       "--add",
-      "fray.id",
+      "frizz.id",
       validWorktreeId,
     ]);
     assert.throws(
       () => resolveWorkspace(linked, home),
-      /linked-worktree fray\.id is invalid/
+      /linked-worktree frizz\.id is invalid/
     );
 
     rmSync(config);
@@ -928,7 +928,7 @@ test("linked-worktree identity config fails closed and recovers from an interrup
       "--file",
       config,
       "--add",
-      "fray.id",
+      "frizz.id",
       repositoryId,
     ]);
     assert.throws(
@@ -942,7 +942,7 @@ test("linked-worktree identity config fails closed and recovers from an interrup
       () => resolveWorkspace(linked, home),
       /unable to persist linked-worktree/
     );
-    assert.equal(existsSync(join(frayPaths({ home }).data, "projects")), false);
+    assert.equal(existsSync(join(frizzPaths({ home }).data, "projects")), false);
     rmSync(`${config}.lock`);
 
     const recovered = resolveWorkspace(linked, home);
@@ -951,7 +951,7 @@ test("linked-worktree identity config fails closed and recovers from an interrup
     assert.equal(
       execFileSync(
         "git",
-        ["config", "--file", config, "--get-all", "fray.id"],
+        ["config", "--file", config, "--get-all", "frizz.id"],
         { encoding: "utf8" }
       ).trim(),
       recovered.id
@@ -962,7 +962,7 @@ test("linked-worktree identity config fails closed and recovers from an interrup
 });
 
 test("an interrupted Git config write fails without inventing an id and recovers cleanly", () => {
-  const base = mkdtempSync(join(tmpdir(), "fray config lock recovery "));
+  const base = mkdtempSync(join(tmpdir(), "frizz config lock recovery "));
   const repo = join(base, "repo");
   const home = join(base, "home");
   try {
@@ -971,17 +971,17 @@ test("an interrupted Git config write fails without inventing an id and recovers
     writeFileSync(configLock, "partial interrupted config\n");
     assert.throws(() => resolveWorkspace(repo, home), /unable to persist/);
     assert.throws(() =>
-      execFileSync("git", ["config", "--local", "--get-all", "fray.id"], {
+      execFileSync("git", ["config", "--local", "--get-all", "frizz.id"], {
         cwd: repo,
         stdio: "ignore",
       })
     );
-    assert.equal(existsSync(join(frayPaths({ home }).data, "projects")), false);
+    assert.equal(existsSync(join(frizzPaths({ home }).data, "projects")), false);
 
     rmSync(configLock);
     const recovered = resolveWorkspace(repo, home);
     assert.match(recovered.id, /^[0-9a-f-]{36}$/u);
-    assert.deepEqual(readdirSync(join(frayPaths({ home }).data, "projects")), [
+    assert.deepEqual(readdirSync(join(frizzPaths({ home }).data, "projects")), [
       recovered.id,
     ]);
   } finally {
@@ -990,7 +990,7 @@ test("an interrupted Git config write fails without inventing an id and recovers
 });
 
 test("a malformed repository config never degrades direct startup into a random namespace", () => {
-  const base = mkdtempSync(join(tmpdir(), "fray malformed config "));
+  const base = mkdtempSync(join(tmpdir(), "frizz malformed config "));
   const repo = join(base, "repo");
   const home = join(base, "home");
   try {
@@ -1005,14 +1005,14 @@ test("a malformed repository config never degrades direct startup into a random 
       () => resolveProject(repo, home),
       /unable to resolve Git repository root/
     );
-    assert.equal(existsSync(join(frayPaths({ home }).data, "projects")), false);
+    assert.equal(existsSync(join(frizzPaths({ home }).data, "projects")), false);
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
 });
 
 test("submodules keep an independent ordinary-repository identity", () => {
-  const base = mkdtempSync(join(tmpdir(), "fray submodule identity "));
+  const base = mkdtempSync(join(tmpdir(), "frizz submodule identity "));
   const upstream = join(base, "submodule upstream");
   const parent = join(base, "parent repo");
   const submodule = join(parent, "modules", "child module");
@@ -1077,7 +1077,7 @@ test("submodules keep an independent ordinary-repository identity", () => {
 });
 
 test("bare and non-Git directories retain their explicit fail-closed/degraded behavior", () => {
-  const base = mkdtempSync(join(tmpdir(), "fray non-worktree identity "));
+  const base = mkdtempSync(join(tmpdir(), "frizz non-worktree identity "));
   const bare = join(base, "bare repo.git");
   const plain = join(base, "plain directory");
   const home = join(base, "home");
@@ -1107,7 +1107,7 @@ test("bare and non-Git directories retain their explicit fail-closed/degraded be
 });
 
 test("an existing id stays lock-free for a source supervisor child", async () => {
-  const base = mkdtempSync(join(tmpdir(), "fray existing identity "));
+  const base = mkdtempSync(join(tmpdir(), "frizz existing identity "));
   const repo = join(base, "repo");
   const alias = join(base, "alias");
   const home = join(base, "home");
@@ -1134,7 +1134,7 @@ test("an existing id stays lock-free for a source supervisor child", async () =>
   }
 });
 
-test("health probes accept only the expected Fray workspace identity", async () => {
+test("health probes accept only the expected Frizz workspace identity", async () => {
   const fetcher = async () =>
     new Response(
       JSON.stringify({
@@ -1147,7 +1147,7 @@ test("health probes accept only the expected Fray workspace identity", async () 
     );
   assert.equal(
     (
-      await probeFray(
+      await probeFrizz(
         5000,
         { projectId: "p1", projectDir: "/tmp/repo" },
         fetcher as typeof fetch
@@ -1157,7 +1157,7 @@ test("health probes accept only the expected Fray workspace identity", async () 
   );
   assert.equal(
     (
-      await probeFray(
+      await probeFrizz(
         5000,
         {
           projectId: "p1",
@@ -1170,7 +1170,7 @@ test("health probes accept only the expected Fray workspace identity", async () 
     "proof"
   );
   assert.equal(
-    await probeFray(
+    await probeFrizz(
       5000,
       {
         projectId: "p1",
@@ -1182,7 +1182,7 @@ test("health probes accept only the expected Fray workspace identity", async () 
     null
   );
   assert.equal(
-    await probeFray(
+    await probeFrizz(
       5000,
       { projectId: "other", projectDir: "/tmp/repo" },
       fetcher as typeof fetch
@@ -1190,7 +1190,7 @@ test("health probes accept only the expected Fray workspace identity", async () 
     null
   );
   assert.equal(
-    await probeFray(
+    await probeFrizz(
       5000,
       { projectId: "p1", projectDir: "/tmp/hostile-other-worktree" },
       fetcher as typeof fetch
@@ -1198,7 +1198,7 @@ test("health probes accept only the expected Fray workspace identity", async () 
     null
   );
   assert.equal(
-    await probeFray(
+    await probeFrizz(
       5000,
       { projectId: "p1", projectDir: "/tmp/repo" },
       (async () => new Response("nope")) as typeof fetch
@@ -1208,7 +1208,7 @@ test("health probes accept only the expected Fray workspace identity", async () 
 });
 
 test("token-bound status and control remain usable when external generation proof is unavailable", async () => {
-  const projectDir = mkdtempSync(join(tmpdir(), "fray-no-process-proof-"));
+  const projectDir = mkdtempSync(join(tmpdir(), "frizz-no-process-proof-"));
   const target: ProjectLaunchTarget = {
     projectId: randomUUID(),
     projectDir,
@@ -1282,13 +1282,13 @@ test("token-bound status and control remain usable when external generation proo
         );
       }
       assert.equal(
-        new Headers(init?.headers).get("x-fray-launch-token"),
+        new Headers(init?.headers).get("x-frizz-launch-token"),
         owner.token
       );
       return new Response(JSON.stringify({ accepted: true }), { status: 202 });
     }) as typeof fetch;
     assert.equal(
-      await requestFrayStop(status.port, expected, owner.token, fetcher),
+      await requestFrizzStop(status.port, expected, owner.token, fetcher),
       true
     );
     assert.equal(requests.length, 2);
@@ -1299,10 +1299,10 @@ test("token-bound status and control remain usable when external generation proo
 });
 
 test(
-  "real fray --stop reaps a dead v2 owner without attempting to signal it",
+  "real frizz --stop reaps a dead v2 owner without attempting to signal it",
   { timeout: 15_000 },
   async () => {
-    const base = mkdtempSync(join(tmpdir(), "fray-real-dead-owner-stop-"));
+    const base = mkdtempSync(join(tmpdir(), "frizz-real-dead-owner-stop-"));
     const repo = join(base, "repo");
     const home = join(base, "home");
     mkdirSync(repo);
@@ -1318,7 +1318,7 @@ test(
       const result = await runRealCli(repo, home, ["--stop", "--no-app"]);
       assert.equal(result.code, 0, result.stderr);
       assert.equal(result.signal, null);
-      assert.match(result.stdout, /stopped Fray UI/u);
+      assert.match(result.stdout, /stopped Frizz/u);
       assert.equal(readProjectLaunchOwner(target.stateDir), null);
     } finally {
       await stopDisposableChild(owner.child);
@@ -1328,11 +1328,11 @@ test(
 );
 
 test(
-  "real fray --stop never falls back to a PID signal when authenticated control fails",
+  "real frizz --stop never falls back to a PID signal when authenticated control fails",
   { timeout: 15_000 },
   async () => {
     const base = mkdtempSync(
-      join(tmpdir(), "fray-real-live-owner-stop-refusal-")
+      join(tmpdir(), "frizz-real-live-owner-stop-refusal-")
     );
     const repo = join(base, "repo");
     const home = join(base, "home");
@@ -1393,11 +1393,11 @@ test(
 );
 
 test(
-  "real fray --stop refuses live opaque and observable weak owners without token control",
+  "real frizz --stop refuses live opaque and observable weak owners without token control",
   { timeout: 20_000 },
   async () => {
     const base = mkdtempSync(
-      join(tmpdir(), "fray-real-unverifiable-owner-stop-")
+      join(tmpdir(), "frizz-real-unverifiable-owner-stop-")
     );
     try {
       for (const [index, kind] of (["opaque", "weak"] as const).entries()) {
@@ -1473,10 +1473,10 @@ test(
 );
 
 test(
-  "real fray --stop drains a dead owner's delegate before removing token status",
+  "real frizz --stop drains a dead owner's delegate before removing token status",
   { timeout: 15_000 },
   async () => {
-    const base = mkdtempSync(join(tmpdir(), "fray-real-delegate-stop-"));
+    const base = mkdtempSync(join(tmpdir(), "frizz-real-delegate-stop-"));
     const repo = join(base, "repo");
     const home = join(base, "home");
     mkdirSync(repo);
@@ -1511,7 +1511,7 @@ test(
       await ownerExit;
       const result = await runRealCli(repo, home, ["--stop", "--no-app"]);
       assert.equal(result.code, 0, result.stderr);
-      assert.match(result.stdout, /stopped Fray UI/u);
+      assert.match(result.stdout, /stopped Frizz/u);
       assert.equal(readProjectLaunchOwner(target.stateDir), null);
       assert.equal(existsSync(statusPath), false);
       await stopDisposableChild(delegate.child);
@@ -1524,7 +1524,7 @@ test(
 );
 
 test("workspace status rejects a reused PID generation without probing a port or signalling", () => {
-  const base = mkdtempSync(join(tmpdir(), "fray-reused-status-generation-"));
+  const base = mkdtempSync(join(tmpdir(), "frizz-reused-status-generation-"));
   const target: ProjectLaunchTarget = {
     projectId: randomUUID(),
     projectDir: base,
@@ -1601,7 +1601,7 @@ test("workspace status rejects a reused PID generation without probing a port or
 });
 
 test("workspace status compares a stored generation with a real disposable process", async (t) => {
-  const base = mkdtempSync(join(tmpdir(), "fray-real-status-generation-"));
+  const base = mkdtempSync(join(tmpdir(), "frizz-real-status-generation-"));
   const child = spawnChild(
     process.execPath,
     ["-e", "setInterval(() => {}, 1_000)"],
@@ -1656,7 +1656,7 @@ test("port selection preserves a free preference, scans conflicts, and fails an 
 });
 
 test("two distinct repositories concurrently reserve different launch ports without sharing tmux ownership", async () => {
-  const base = mkdtempSync(join(tmpdir(), "fray-concurrent-repo-ports-"));
+  const base = mkdtempSync(join(tmpdir(), "frizz-concurrent-repo-ports-"));
   const home = join(base, "home");
   const repos = [join(base, "repo-one"), join(base, "repo-two")];
   for (const repo of repos) {
@@ -1700,7 +1700,7 @@ test("two distinct repositories concurrently reserve different launch ports with
 });
 
 test("concurrent allocators never choose the same port, even while both probe it as free", async () => {
-  const home = mkdtempSync(join(tmpdir(), "fray-port-allocation-"));
+  const home = mkdtempSync(join(tmpdir(), "frizz-port-allocation-"));
   try {
     // Every port answers "free" to BOTH callers. That is exactly the bind-and-close TOCTOU window
     // canBindPort leaves open, and the reason allocation cannot rely on the probe alone once the
@@ -1736,7 +1736,7 @@ test("concurrent allocators never choose the same port, even while both probe it
 });
 
 test("a port reservation is exclusive while its owner lives and reclaimed once it dies", () => {
-  const home = mkdtempSync(join(tmpdir(), "fray-port-reservation-"));
+  const home = mkdtempSync(join(tmpdir(), "frizz-port-reservation-"));
   try {
     const held = tryReservePort(4919, home);
     assert.ok(held);
@@ -1746,7 +1746,7 @@ test("a port reservation is exclusive while its owner lives and reclaimed once i
 
     // A launcher killed mid-boot leaves its claim on disk; the next allocation must reclaim it
     // rather than skipping that port forever.
-    mkdirSync(join(frayPaths({ home }).state, "ports"), { recursive: true });
+    mkdirSync(join(frizzPaths({ home }).state, "ports"), { recursive: true });
     writeFileSync(
       portReservationPath(4919, home),
       JSON.stringify({ pid: 999_999_999 })
@@ -1760,7 +1760,7 @@ test("a port reservation is exclusive while its owner lives and reclaimed once i
 });
 
 test("a booting repository holds only its port reservation, never the machine-global lock", async () => {
-  const home = mkdtempSync(join(tmpdir(), "fray-launch-serialization-"));
+  const home = mkdtempSync(join(tmpdir(), "frizz-launch-serialization-"));
   try {
     const available = async () => true;
     const reserve = (port: number) => tryReservePort(port, home);
@@ -1788,7 +1788,7 @@ test("a booting repository holds only its port reservation, never the machine-gl
 });
 
 test("workspace lock parsing removes stale owners and retains a live supervisor", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-lock-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "frizz-lock-test-"));
   try {
     writeFileSync(
       join(dir, "dev-supervisor.lock"),
@@ -1851,11 +1851,11 @@ test("status treats failed or degraded supervisor truth as actionable even with 
 });
 
 test("global allocation lock is exclusive and recovers stale, partial, and crashed claims", async () => {
-  const home = mkdtempSync(join(tmpdir(), "fray-global-lock-"));
+  const home = mkdtempSync(join(tmpdir(), "frizz-global-lock-"));
   const homeAlias = `${home}-alias`;
   try {
     symlinkSync(home, homeAlias);
-    const lockPath = join(home, ".fray", "dev-launch.lock");
+    const lockPath = join(home, ".frizz", "dev-launch.lock");
     mkdirSync(lockPath, { recursive: true });
     writeFileSync(
       join(lockPath, "owner.json"),
@@ -1895,7 +1895,7 @@ test("global allocation lock is exclusive and recovers stale, partial, and crash
 });
 
 test("separate repositories prepare concurrently while global startup allocation is held", async () => {
-  const home = mkdtempSync(join(tmpdir(), "fray-global-launch-sequencing-"));
+  const home = mkdtempSync(join(tmpdir(), "frizz-global-launch-sequencing-"));
   let first: { prepared: string; release: () => void } | undefined;
   let second: { prepared: string; release: () => void } | undefined;
   try {
@@ -1939,9 +1939,9 @@ test("separate repositories prepare concurrently while global startup allocation
 });
 
 test("global first-id lock rejects a reused PID generation instead of blocking on PID-only liveness", () => {
-  const home = mkdtempSync(join(tmpdir(), "fray-global-generation-lock-"));
-  const lockPath = join(home, ".fray", "dev-launch.lock");
-  mkdirSync(join(home, ".fray"), { recursive: true });
+  const home = mkdtempSync(join(tmpdir(), "frizz-global-generation-lock-"));
+  const lockPath = join(home, ".frizz", "dev-launch.lock");
+  mkdirSync(join(home, ".frizz"), { recursive: true });
   writeFileSync(
     lockPath,
     JSON.stringify({
@@ -1972,34 +1972,34 @@ test("global first-id lock rejects a reused PID generation instead of blocking o
   }
 });
 
-test("installer manages only an executable source-backed immutable fray-dev shim idempotently", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-global-bin-"));
+test("installer manages only an executable source-backed immutable frizz-dev shim idempotently", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-global-bin-"));
   const script = join(import.meta.dirname, "..", "scripts", "install-global-cli.mjs");
   try {
     execFileSync(process.execPath, [script, `--bin-dir=${dir}`], {
       encoding: "utf8",
     });
-    const shim = join(dir, "fray-dev");
+    const shim = join(dir, "frizz-dev");
     const body = readFileSync(shim, "utf8");
-    assert.match(body, /fray-dev-source-launcher:v5/);
+    assert.match(body, /frizz-dev-source-launcher:v5/);
     // Only nub's disk-read `.env*` vars are dropped; a shell-exported key still reaches the worker.
     assert.match(body, /nub --no-env-file/);
-    assert.match(body, /FRAY_SOURCE_COMMAND='fray-dev'/);
+    assert.match(body, /FRIZZ_SOURCE_COMMAND='frizz-dev'/);
     assert.match(body, /\/src\/index\.ts/);
     assert.match(body, /\bnub\b/);
     assert.match(
       execFileSync(shim, ["--help"], { encoding: "utf8" }),
-      /Fray source launcher/
+      /Frizz source launcher/
     );
     assert.match(
       execFileSync(process.execPath, [script, "--help"], { encoding: "utf8" }),
-      /fray-dev:install/
+      /frizz-dev:install/
     );
     assert.match(
       execFileSync(process.execPath, [script, "--check", `--bin-dir=${dir}`], {
         encoding: "utf8",
       }),
-      /installed Fray development source launcher/
+      /installed Frizz development source launcher/
     );
     execFileSync(process.execPath, [script, `--bin-dir=${dir}`], {
       encoding: "utf8",
@@ -2065,14 +2065,14 @@ test("installer upgrades its OWN current-marker shim when the checkout path move
   // Moving the checkout — or moving the CLI inside it, as the root-package layout did — changes the
   // path embedded in the shim. Ownership is the MARKER, so this is an upgrade, not a foreign file:
   // comparing the whole body made the installer refuse to replace a launcher it had written itself,
-  // reporting "is not the Fray source launcher" about a file whose first comment line is that marker.
-  const dir = mkdtempSync(join(tmpdir(), "fray-global-bin-moved-"));
+  // reporting "is not the Frizz source launcher" about a file whose first comment line is that marker.
+  const dir = mkdtempSync(join(tmpdir(), "frizz-global-bin-moved-"));
   const script = join(import.meta.dirname, "..", "scripts", "install-global-cli.mjs");
-  const shim = join(dir, "fray-dev");
+  const shim = join(dir, "frizz-dev");
   try {
     writeFileSync(
       shim,
-      "#!/bin/sh\n# fray-dev-source-launcher:v5\nexec env FRAY_SOURCE_COMMAND='fray-dev' nub --no-env-file '/old/checkout/packages/cli/src/index.ts' \"$@\"\n",
+      "#!/bin/sh\n# frizz-dev-source-launcher:v5\nexec env FRIZZ_SOURCE_COMMAND='frizz-dev' nub --no-env-file '/old/checkout/packages/cli/src/index.ts' \"$@\"\n",
       { mode: 0o755 }
     );
     // No --force: the marker makes it ours to replace.
@@ -2088,13 +2088,13 @@ test("installer upgrades its OWN current-marker shim when the checkout path move
 });
 
 test("installer rejects marker-bearing stale or altered shims", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-global-bin-stale-"));
+  const dir = mkdtempSync(join(tmpdir(), "frizz-global-bin-stale-"));
   const script = join(import.meta.dirname, "..", "scripts", "install-global-cli.mjs");
-  const shim = join(dir, "fray-dev");
+  const shim = join(dir, "frizz-dev");
   try {
     writeFileSync(
       shim,
-      "#!/bin/sh\n# fray-dev-source-launcher:v3\nexec env FRAY_SOURCE_COMMAND='fray-dev' nub '/missing/deleted-index.ts' \"$@\"\n",
+      "#!/bin/sh\n# frizz-dev-source-launcher:v3\nexec env FRIZZ_SOURCE_COMMAND='frizz-dev' nub '/missing/deleted-index.ts' \"$@\"\n",
       { mode: 0o755 }
     );
     assert.throws(
@@ -2127,9 +2127,9 @@ test("installer rejects marker-bearing stale or altered shims", () => {
 });
 
 test("forced install replaces a symlink itself without changing its target", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-global-bin-symlink-"));
+  const dir = mkdtempSync(join(tmpdir(), "frizz-global-bin-symlink-"));
   const script = join(import.meta.dirname, "..", "scripts", "install-global-cli.mjs");
-  const shim = join(dir, "fray-dev");
+  const shim = join(dir, "frizz-dev");
   const protectedTarget = join(dir, "protected-command");
   const protectedBody = "#!/bin/sh\necho protected\n";
   try {
@@ -2148,14 +2148,14 @@ test("forced install replaces a symlink itself without changing its target", () 
       encoding: "utf8",
     });
     assert.equal(readFileSync(protectedTarget, "utf8"), protectedBody);
-    assert.match(readFileSync(shim, "utf8"), /fray-dev-source-launcher:v5/);
+    assert.match(readFileSync(shim, "utf8"), /frizz-dev-source-launcher:v5/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
 test("concurrent installer processes publish only complete shims and clean up temporary files", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-global-bin-atomic-"));
+  const dir = mkdtempSync(join(tmpdir(), "frizz-global-bin-atomic-"));
   const script = join(import.meta.dirname, "..", "scripts", "install-global-cli.mjs");
   try {
     const children = Array.from({ length: 8 }, () =>
@@ -2167,10 +2167,10 @@ test("concurrent installer processes publish only complete shims and clean up te
     for (const [code, signal] of results) {
       assert.equal(code, 0, `installer exited with ${String(signal)}`);
     }
-    const shim = readFileSync(join(dir, "fray-dev"), "utf8");
-    assert.match(shim, /fray-dev-source-launcher:v5/);
+    const shim = readFileSync(join(dir, "frizz-dev"), "utf8");
+    assert.match(shim, /frizz-dev-source-launcher:v5/);
     assert.match(shim, /\/src\/index\.ts/);
-    assert.deepEqual(readdirSync(dir), ["fray-dev"]);
+    assert.deepEqual(readdirSync(dir), ["frizz-dev"]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -2195,7 +2195,7 @@ async function freePort(): Promise<number> {
 // booting behind the failure message. These pin the replacement contract.
 
 test("waitForWorkspace: a boot that keeps reporting progress outlives the stall window", async () => {
-  const stateDir = mkdtempSync(join(tmpdir(), "fray-bootprogress-"));
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-bootprogress-"));
   const port = await freePort();
   try {
     // Advance the published step every 40ms — well inside the 120ms stall window, indefinitely.
@@ -2218,7 +2218,7 @@ test("waitForWorkspace: a boot that keeps reporting progress outlives the stall 
 });
 
 test("waitForWorkspace: a boot that STOPS reporting fails inside the stall window, naming its last step", async () => {
-  const stateDir = mkdtempSync(join(tmpdir(), "fray-bootprogress-"));
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-bootprogress-"));
   const port = await freePort();
   try {
     writeFileSync(

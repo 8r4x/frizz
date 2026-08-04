@@ -1,7 +1,7 @@
 // The consumer for the structured event stream the Claude broker has always received and thrown away.
 //
 // The broker daemon runs the Agent SDK with `persistSession: true`, so the SDK writes the session
-// JSONL to disk AND hands fray the same messages as typed events over the socket. Until now the
+// JSONL to disk AND hands frizz the same messages as typed events over the socket. Until now the
 // bridge forwarded them to a `deps.onEvent` that context.ts never supplied, so every one was dropped
 // and the tailer re-derived the identical state by polling that file from disk on a 1–10 s adaptive
 // tick. This module is the handler that was missing (plans/t3code-adoption-spike.md item 1).
@@ -38,7 +38,7 @@
 //     payload, kept per session; the tailer reads it the same way it reads `liveness()`, as a signal it
 //     may consult, and the prose fold stays exactly where it is for tmux threads that have nothing else.
 import type { ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
-import { createDrainableWorker, type DrainableWorker, type ReceiptBus } from "@fray-ui/shared"
+import { createDrainableWorker, type DrainableWorker, type ReceiptBus } from "@frizz/shared"
 
 /** What the SDK says about the session's turn right now, independent of what is on disk. */
 export type ClaudeRuntimeTurn = "running" | "settled"
@@ -154,7 +154,7 @@ export interface ClaudeRuntimeIngest {
 // permanent shimmer. The old rule assumed a live child implies the parent is blocked inside its Task
 // call — true only for a FOREGROUND dispatch, and there the fold already reads `tool_use` (real
 // evidence, which resolveRuntimeTurn never overrides) so the runtime signal was redundant anyway. The
-// fray worker shape is the opposite: `run_in_background: true`, then rest. Measured on a live broker
+// frizz worker shape is the opposite: `run_in_background: true`, then rest. Measured on a live broker
 // session (_live_bg_rest_turn.mts): the parent's `result` landed at t+9s → settled, and the child's
 // very next assistant event — 40ms later, then 17 more over the next two minutes — flipped it back to
 // "running", which dragged the folded `idle` to `in-flight` for the child's entire lifetime. So the
@@ -170,9 +170,9 @@ function turnSignal(event: ClaudeQueryEvent): ClaudeRuntimeTurn | undefined {
 
 /**
  * Normalize the provider's terminal vocabulary. `stopped` (a manual TaskStop, or a task the previous
- * CLI process left behind) and `killed` are the same thing to fray: the op is over and was not its own
+ * CLI process left behind) and `killed` are the same thing to frizz: the op is over and was not its own
  * idea. Anything else — `pending`, `running`, `paused` — is NOT terminal, and an UNKNOWN status is
- * deliberately not terminal either: a future status fray has never seen must not retire a live child.
+ * deliberately not terminal either: a future status frizz has never seen must not retire a live child.
  */
 function terminalOutcome(status: string | undefined): "completed" | "failed" | "killed" | undefined {
   if (status === "completed") return "completed"
@@ -224,14 +224,14 @@ export function createClaudeRuntimeIngest(deps: ClaudeRuntimeIngestDeps): Claude
   }
 
   /**
-   * Fold ONE task event into the session's table. Defensive throughout: a phase fray does not know, a
+   * Fold ONE task event into the session's table. Defensive throughout: a phase frizz does not know, a
    * missing task id, a status it has never seen — every one of them is a no-op, never a throw and never
    * a state change it cannot justify. This runs inside the drainable worker, whose failure would stall
    * every later nudge.
    */
   function foldTask(slug: string, sessionId: string, event: Extract<ClaudeQueryEvent, { kind: "task" }>, now: number): void {
     // The REPLACE-semantics level signal, and the one place a task can go terminal without an edge.
-    // Deliberately narrow: only a task fray has ALREADY SEEN IN A LEVEL PAYLOAD and that has now
+    // Deliberately narrow: only a task frizz has ALREADY SEEN IN A LEVEL PAYLOAD and that has now
     // dropped out of one is treated as finished. Without that guard, a `task_started` racing ahead of
     // the next level payload would look like a task that "disappeared" and retire a child that is very
     // much alive — the phantom bug in its most damaging direction (the board says done, work continues).

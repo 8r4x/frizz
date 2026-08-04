@@ -1,4 +1,4 @@
-import { isDirectSubAgent, isValidAwaitingTimer, type AwaitingHint, type ThreadView } from "@fray-ui/shared"
+import { isDirectSubAgent, isValidAwaitingTimer, type AwaitingHint, type ThreadView } from "@frizz/shared"
 import { canRetry } from "./lib/status.ts"
 
 // Shared listing logic: the queue definition (needsAction), the sidebar's status-keyed sections
@@ -17,7 +17,7 @@ export function displayTitle(t: Pick<ThreadView, "title" | "aiTitle" | "id" | "t
   // The worker's OWN name for its task wins over whatever the row was seeded with — unless a human has
   // claimed the name, in which case a stale/slug-shaped backend record must never displace it.
   if (t.aiTitle?.trim() && !titleIsHumanOwned(t)) return readableMachineTitle(t.aiTitle)
-  // Codex's TUI has no native automatic naming event. Fray asks the first finalized response for a
+  // Codex's TUI has no native automatic naming event. Frizz asks the first finalized response for a
   // hidden title signal; omission or malformed syntax must stay neutral rather than exposing either
   // the stored legacy prompt heuristic or a provider-recorded raw initial prompt.
   if (t.backend === "codex" && t.titleAuto === true && !t.aiTitle?.trim()) return UNTITLED_THREAD_TITLE
@@ -69,7 +69,7 @@ const CODEX_TITLE_SIGNAL_GRACE_MS = 15_000
 
 // A title is PROVISIONAL when it's the auto-guessed dispatch slug, Claude hasn't named the session yet
 // (titleAuto && no aiTitle), AND the dispatch is still WITHIN the spin-up window. The time bound is
-// load-bearing: a long session that compacts gets a NEW transcript id, so fray (still tracking the
+// load-bearing: a long session that compacts gets a NEW transcript id, so frizz (still tracking the
 // pinned id) loses the transcript and never sees an aiTitle — without the bound the row would stick on
 // "Spinning up…" forever (maintainer 2026-07-10). After the window it falls back to the dispatch title.
 // Root cause of the lost transcript is tracked separately ([[session-transcript-drift]]).
@@ -111,7 +111,7 @@ export function needsAction(t: ThreadView): boolean {
   //     comes to rest — counting it early yields a card with no visible ask.
   //   • A SESSION EXISTS (runtime !== "none"): the queue is strictly "agent work paused on the
   //     human" (maintainer, 2026-07-09: with no agent it makes no sense for a thread to ever show
-  //     up inside the queue). A needs-human thread worked OUTSIDE fray-ui (fray classic, hand
+  //     up inside the queue). A needs-human thread worked OUTSIDE frizz (frizz classic, hand
   //     edits) has no transcript to card — it stays visible in the SIDEBAR (yellow awaiting-you
   //     dot), and its click-through composite (doc + kick-off composer) is where it gets read and
   //     acted on. `exited` still cards: that agent RAN and asked here — the ask is in its transcript.
@@ -240,26 +240,26 @@ export function orderQueue(threads: readonly ThreadView[], direction: QueueDirec
 // ── SESSION-FIRST QUEUE ──────────────────────────────────────────────────────────────────────────
 // The Needs-you queue (the cards surface) is EXACTLY the session threads the SERVER derived as needing
 // the human (t.needsYou — explicit questions, checked/done handoffs, and process-level blocks a view
-// can't clear). Do NOT re-derive it client-side for session rows. Legacy .fray-file rows
+// can't clear). Do NOT re-derive it client-side for session rows. Legacy .frizz-file rows
 // never card anymore. An archived thread is out of the queue regardless (belt-and-suspenders — the
 // server already drops needsYou when archived). Pre-restart snapshots carry no kind/needsYou → false →
 // an empty queue, the accepted degrade.
 export function queued(t: ThreadView): boolean {
   // Foreign (terminal-originated) sessions never queue: their interaction surface is the terminal
-  // the human is already sitting in — fray can't be "awaiting" them here.
+  // the human is already sitting in — frizz can't be "awaiting" them here.
   return t.kind === "session" && t.foreign !== true && t.needsYou === true && t.state !== "archived"
 }
 
-// Foreign sessions — Claude Code sessions discovered in the project's JSONL dir that fray did NOT
+// Foreign sessions — Claude Code sessions discovered in the project's JSONL dir that frizz did NOT
 // originate (the maintainer's own terminals). NOT rail rows (maintainer 2026-07-09: only
-// fray-originated threads belong in the rail) — the Sidebar renders them as a one-line ambient
+// frizz-originated threads belong in the rail) — the Sidebar renders them as a one-line ambient
 // presence strip, preserving the earlier "detect active Claude Code sessions" ask without the noise.
 export function foreignThreads(threads: readonly ThreadView[]): ThreadView[] {
   return threads.filter((t) => t.kind === "session" && t.foreign === true)
 }
 
 // ── SIDEBAR SECTIONS (session-first) ───────────────────────────────────────────────────────────────
-// The rail's THREAD-derived sections, keyed on the session-first model (NOT fray status). Every thread
+// The rail's THREAD-derived sections, keyed on the session-first model (NOT frizz status). Every thread
 // row lands in exactly one of these; the Plans section is separate (from board.plans, not threads).
 //   • active           — open session work: running, needs-you, bare rest, done-fenced, OR owning a
 //                        live sub-agent/background shell/Monitor. Never dimmed as a band.
@@ -268,7 +268,7 @@ export function foreignThreads(threads: readonly ThreadView[]): ThreadView[] {
 //                        Active and Inactive. The glyph and section share isHeld(), so a row can never
 //                        show a clock/hourglass while remaining in Active.
 //   • inactive         — state === "archived" (the only archiver is an explicit Archive / done-card button).
-//   • legacy           — kind !== "session": vestigial .fray-file rows, hidden entirely (null).
+//   • legacy           — kind !== "session": vestigial .frizz-file rows, hidden entirely (null).
 // A FOREIGN session row (a maintainer terminal — no registry row, so no state/needsYou) is dropped
 // entirely (never rows). Order within a section is interaction recency.
 export type SectionKey = "active" | "held" | "inactive"
@@ -368,7 +368,7 @@ export function isHeld(t: ThreadView, nowMs = Date.now()): boolean {
   // prompt—not a wait glyph—so a stale awaiting fence cannot demote them out of Queue.
   if (t.needsYou || t.pendingAsk || t.runtime === "perm-prompt") return false
   if (!atRest(t)) return false
-  // A thread a usage limit cut off, which fray is going to continue itself, has the same shape as an
+  // A thread a usage limit cut off, which frizz is going to continue itself, has the same shape as an
   // ```awaiting timer: park — parked on the clock with a wake already armed. It belongs in the dimmed
   // Held band, not in Active pretending to work. Without that auto-resume promise there is no armed
   // wake, so it is NOT held: it falls through to Queue as work only the human will restart.
@@ -459,7 +459,7 @@ export type SessionIndicatorKind = "archived" | "needs-input" | "working" | "bac
 // "this thread has a hook" could only ever render in the gap where the thread is at REST — and a live
 // hook has almost no such gap: the thread works, stops, and is bumped again within a tick. What it DID
 // render on was the one at-rest state that lasts, the thread whose agent answered AWAITING — where the
-// mark said "fray will act on this" about a loop that had just closed itself. It was invisible when
+// mark said "frizz will act on this" about a loop that had just closed itself. It was invisible when
 // true and wrong when visible.
 //
 // The footer's RecurringPromptControl carries the state instead, where it is legible and editable.
@@ -488,7 +488,7 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
   if (isHeld(t)) return "held"
   if (t.lastFence?.kind === "done" && atRest(t)) return "done"
   // Below the two DECLARED states on purpose. A worker that fenced ```done while a server it never
-  // killed keeps running is a one-click dismissal, not live work (FRAY.md: "name it in the body and
+  // killed keeps running is a one-click dismissal, not live work (FRIZZ.md: "name it in the body and
   // fence anyway"), and a parked ```awaiting is the human's gate — either story outranks "something it
   // launched is still going". In practice neither can collide with this at all, since
   // deriveAwaitingBackground drops any fenced thread; the ordering states the intent rather than
@@ -519,8 +519,8 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
 //
 // Two states earn Retry, and they wear DIFFERENT sidebar marks — the verb is shared, the glyph is not:
 //   • STALLED — the process is gone with the work unfinished (yellow [!]). The classic case.
-//   • HELD by a usage limit fray will auto-resume (the hourglass, NOT [!]). A limit park is a genuine
-//     wait — fray continues it itself once the window resets — so it keeps its held glyph and its
+//   • HELD by a usage limit frizz will auto-resume (the hourglass, NOT [!]). A limit park is a genuine
+//     wait — frizz continues it itself once the window resets — so it keeps its held glyph and its
 //     dimmed Held band. But the operator with capacity elsewhere shouldn't have to wait, so it ALSO
 //     gets the one-click Retry: the same verb, message and RPC as a stall (retrySession sends the very
 //     "Continue exactly where you left off." the in-drawer LimitPauseCard already offers), just a
@@ -539,9 +539,9 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
 export function offersRetry(t: ThreadView): boolean {
   const kind = sessionIndicatorKind(t)
   if (kind === "stalled") return true
-  // A usage-limit park fray will auto-resume — the ONE held state with an obvious manual shortcut.
+  // A usage-limit park frizz will auto-resume — the ONE held state with an obvious manual shortcut.
   // Gated on the RESOLVED "held" kind (not raw isHeld) so a higher-priority state that stole the row
-  // — a fresh ask, live work — never sprouts a Retry, and on non-foreign so it stays a session fray
+  // — a fresh ask, live work — never sprouts a Retry, and on non-foreign so it stays a session frizz
   // can actually restart.
   return kind === "held" && t.foreign !== true && Boolean(t.limitPause?.autoResume)
 }
@@ -551,7 +551,7 @@ export function sectionOf(t: ThreadView): SectionKey | null {
   // or machine-awaiting is simply ACTIVE (the split sections made seen-clearance visibly shuffle rows
   // between Needs-you and Working on click, which read as an unread feature). The needs-you/awaiting
   // distinction still renders — as the row INDICATOR and the queue cards — just not as sections.
-  // Legacy (.fray-file) rows are HIDDEN entirely (null; not even a shelf). Foreign never rows.
+  // Legacy (.frizz-file) rows are HIDDEN entirely (null; not even a shelf). Foreign never rows.
   if (t.kind !== "session") return null
   // Archived → Inactive, UNLESS it's actively running: a live, in-flight session must never sit in
   // Inactive (maintainer, hit 3×). It shows in Active with its spinner while it works, and drops back

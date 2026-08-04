@@ -11,7 +11,7 @@
 // so a real `claude` cannot authenticate) — but everything DOWNSTREAM of the transcript is the shipped
 // code path, which is exactly the part under test.
 //
-// Usage: nub scripts/verify-rail-background-band.mjs --url=http://127.0.0.1:4931/ --home=/tmp/fray-adhoc-home-X --socket=fray-adhoc-4931-1234
+// Usage: nub scripts/verify-rail-background-band.mjs --url=http://127.0.0.1:4931/ --home=/tmp/frizz-adhoc-home-X --socket=frizz-adhoc-4931-1234
 import { execFileSync } from "node:child_process"
 import { mkdirSync, writeFileSync, appendFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
@@ -35,20 +35,20 @@ if (!url || !home || !socket) {
 const RUN = Date.now().toString(36).slice(-6)
 const SLUG = `preview-server-e2e-${RUN}`
 const SESSION_ID = `e2e11111-2222-3333-4444-${RUN.padStart(12, "0")}`
-const TMUX = `fray-${SLUG}`
+const TMUX = `frizz-${SLUG}`
 // THE NEGATIVE CONTROL, and it is not optional: the maintainer scoped this mark with "this should not
 // show up if there are sub-agents". A pass on the shell case alone would not distinguish "the dot
 // appears for a live shell" from "the dot appears for any live background work" — the exact thing the
 // scope forbids. So a second real session rests on a real dispatched CHILD and must keep the spinner.
 const CTRL_SLUG = `subagent-control-e2e-${RUN}`
 const CTRL_SESSION_ID = `e2e99999-8888-7777-6666-${RUN.padStart(12, "0")}`
-const CTRL_TMUX = `fray-${CTRL_SLUG}`
+const CTRL_TMUX = `frizz-${CTRL_SLUG}`
 const failures = []
 
 // The sandbox project dir the stack created, and the Claude transcript dir keyed by the project's cwd
 // slug. Both are discovered rather than guessed: the stack picks the project id, and the slug is the
 // project dir with every non-alphanumeric turned into a dash (Claude Code's own convention).
-const projectsRoot = join(home, ".fray", "projects")
+const projectsRoot = join(home, ".frizz", "projects")
 const projectId = readdirSync(projectsRoot)[0]
 const db = new DatabaseSync(join(projectsRoot, projectId, "ui.db"))
 const projectDir = process.cwd()
@@ -120,7 +120,7 @@ try {
         type: "tool_use",
         id: "toolu_agent_audit",
         name: "Agent",
-        input: { description: "Tracing every broker exit", prompt: "trace them", subagent_type: "fray:opus-high", run_in_background: true },
+        input: { description: "Tracing every broker exit", prompt: "trace them", subagent_type: "frizz:opus-high", run_in_background: true },
       }],
     },
   }))
@@ -197,7 +197,7 @@ try {
       const row = document.querySelector(`[data-sidebar-item="${s}"]`)
       return {
         glyph: row?.querySelector("[data-rail-glyph]")?.getAttribute("data-rail-glyph") ?? null,
-        hasDot: !!row?.querySelector(".fray-rail-dot"),
+        hasDot: !!row?.querySelector(".frizz-rail-dot"),
         hasSpinner: !!row?.querySelector("svg animate"),
       }
     }, slug)
@@ -228,7 +228,7 @@ try {
       const inRunningBand = !!(row && rule && (row.compareDocumentPosition(rule) & Node.DOCUMENT_POSITION_FOLLOWING))
       return {
         glyph: mark?.getAttribute("data-rail-glyph") ?? null,
-        hasDot: !!row?.querySelector(".fray-rail-dot"),
+        hasDot: !!row?.querySelector(".frizz-rail-dot"),
         hasSpinner: !!row?.querySelector("svg animate"),
         inRunningBand,
       }

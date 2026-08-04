@@ -5,7 +5,7 @@ import { PROCEDURES, type Api, type ProcType, type RpcCallOpts } from "./contrac
 export type { Api, ProcType, RpcCallOpts } from "./contract.ts"
 export { PROCEDURES } from "./contract.ts"
 
-export const CONTROL_PLANE_RESTARTING_MESSAGE = "Fray is updating and restarting. Your draft is preserved; wait until it is ready before sending or changing settings."
+export const CONTROL_PLANE_RESTARTING_MESSAGE = "Frizz is updating and restarting. Your draft is preserved; wait until it is ready before sending or changing settings."
 
 // A failure the caller may safely REPLAY, because the request provably took no effect: either the
 // server refused it at a contention gate upstream of any side effect (`retryable` in the error
@@ -40,7 +40,7 @@ export async function parseRpcResponse(res: Response, name: string): Promise<unk
     json = JSON.parse(body) as { result?: unknown; error?: unknown; retryable?: unknown }
   } catch {
     if (res.status === 404 || res.status === 405) {
-      throw new Error("Fray server restart required — this control is newer than the running server")
+      throw new Error("Frizz server restart required — this control is newer than the running server")
     }
     throw new Error(`RPC ${name} returned an invalid response`)
   }
@@ -59,7 +59,7 @@ async function call(name: string, type: ProcType, input?: unknown, opts?: RpcCal
     const url = new URL(`/rpc/${name}`, location.origin)
     if (input !== undefined) url.searchParams.set("input", JSON.stringify(input))
     const res = await fetch(url.toString(), { signal: opts?.signal })
-    noteServerBootId(res.headers.get("x-fray-boot")) // notice a server restart on any RPC roundtrip
+    noteServerBootId(res.headers.get("x-frizz-boot")) // notice a server restart on any RPC roundtrip
     return parseRpcResponse(res, name)
   }
   const res = await fetch(`/rpc/${name}`, {
@@ -68,7 +68,7 @@ async function call(name: string, type: ProcType, input?: unknown, opts?: RpcCal
     body: JSON.stringify(input ?? {}),
     signal: opts?.signal,
   })
-  noteServerBootId(res.headers.get("x-fray-boot"))
+  noteServerBootId(res.headers.get("x-frizz-boot"))
   return parseRpcResponse(res, name)
 }
 

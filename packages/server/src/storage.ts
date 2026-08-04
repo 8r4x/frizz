@@ -1,17 +1,17 @@
 import Database from "./sqlite.ts"
-import { ThreadSlug, slugify, threadIdentityName } from "@fray-ui/shared"
+import { ThreadSlug, slugify, threadIdentityName } from "@frizz/shared"
 import { createInteractionStore, type InteractionStore } from "./interaction-store.ts"
 import { log } from "./logging.ts"
 
-// The UI-state store (never .fray/): session registry + settings. SQLite at
-// stateDir/ui.db, WAL for concurrent read while the watcher writes. Fray thread files stay
+// The UI-state store (never .frizz/): session registry + settings. SQLite at
+// stateDir/ui.db, WAL for concurrent read while the watcher writes. Frizz thread files stay
 // the source of truth for STATUS; this DB holds only runtime overlay (which tmux session
 // backs a thread, unread, last-read) and settings.
 
 export interface SessionRow {
   slug: string
   session_id: string
-  // Legacy column NAME, live column: the thread identity string (`fray-<slug>`). It is not renamed
+  // Legacy column NAME, live column: the thread identity string (`frizz-<slug>`). It is not renamed
   // because every existing ui.db on disk carries it; see threadIdentityName.
   tmux_name: string
   spawned_at: string // ISO8601
@@ -24,10 +24,10 @@ export interface SessionRow {
   // it is what makes the UI show "Spinning up…"/"Untitled thread" instead of an internal-looking slug.
   // It does NOT decide whether a later machine title may land — that is `title_locked` below.
   title_auto: number
-  // 0 | 1 — a HUMAN named this thread (explicit rename, native /rename, or an adopted `.fray/<slug>.md`
+  // 0 | 1 — a HUMAN named this thread (explicit rename, native /rename, or an adopted `.frizz/<slug>.md`
   // heading), so no backend auto-title may ever replace it. A title HARD-CODED by a dispatch CALLER is
   // NOT this: `Investigate acme/app#391` from the GitHub batch, or a parent agent's guess through
-  // `mcp__fray__spawn_thread`, is shown as a real name (title_auto = 0) yet stays replaceable, because
+  // `mcp__frizz__spawn_thread`, is shown as a real name (title_auto = 0) yet stays replaceable, because
   // the worker's own title for the task is nearly always the more informative one. The human-facing
   // new-thread composer has no title field at all, so a dispatch title never means "a human typed this".
   // INVARIANT, relied on by the idempotent boot repair: title_locked = 1 ⇒ title_auto = 0.
@@ -43,7 +43,7 @@ export interface SessionRow {
   // duplicate thread. See tailer.ts / discover.ts. session_id stays the pinned resume/scratchpad key.
   transcript_id: string | null
   // Lifecycle: 'open' | 'archived'. NULL = never explicitly set (pre-migration row) — the board derives
-  // an effective state (archived flag ⇒ archived; paired legacy .fray file with terminal status ⇒
+  // an effective state (archived flag ⇒ archived; paired legacy .frizz file with terminal status ⇒
   // archived; else open) so historical sessions don't flood the working rail. Written ONLY by explicit
   // Archive/Reopen (the done FENCE mutates nothing — maintainer-settled).
   state: string | null
@@ -90,14 +90,14 @@ export interface SessionRow {
   awaiting_confirmed_at?: string | null
   meta: string | null // JSON blob for future annotations (unparsed here)
   seen_at: string | null // ISO8601 — interaction clearance: recorded when the human opens the thread
-  plan_path: string | null // project-relative .fray/plans/*.md this thread was dispatched from
+  plan_path: string | null // project-relative .frizz/plans/*.md this thread was dispatched from
   // Which agent backend serves this session (Codex-support epic). Optional in the TS shape (older rows
   // + the many test-fixture literals predate it); the SQLite column carries a "claude" DEFAULT so every
   // existing row and all current behavior are unchanged. Phase 1 only ever writes "claude".
   backend?: string
-  // The backend's OWN native session id when it differs from the fray-minted session_id (Codex-support
+  // The backend's OWN native session id when it differs from the frizz-minted session_id (Codex-support
   // epic, Phase 2). Claude pins session_id via --session-id, so its native id IS session_id and this
-  // stays NULL. Codex mints its OWN rollout id (discovered post-spawn), so session_id remains the fray
+  // stays NULL. Codex mints its OWN rollout id (discovered post-spawn), so session_id remains the frizz
   // UUID (the sentinel + scratchpad key) and the discovered codex id is pinned HERE — the id the tailer
   // locates the rollout with and resume re-attaches. Readers use `agent_session_id ?? session_id`, so a
   // claude row (NULL) is byte-identical to before.
@@ -105,7 +105,7 @@ export interface SessionRow {
   // The resolved model + reasoning-effort values this session was STARTED with. These are deliberately
   // session metadata, not a live read of Settings: changing the global dispatch defaults later must not
   // relabel an existing thread. Nullable/optional keeps migrated, adopted-old, and foreign sessions honest
-  // when fray never observed a concrete CLI value.
+  // when frizz never observed a concrete CLI value.
   model?: string | null
   effort?: string | null
   // A live profile request is armed as one complete pair. The committed model/effort stay visible
@@ -139,7 +139,7 @@ export interface SessionRow {
   // Durable Claude follow-up delivery ledger (delivery-ledger.ts): small JSON array of not-yet-
   // delivered sends, correlated by the tailer and projected into the rendered transcript.
   delivery_ledger?: string | null
-  // Monotonic process incarnation for this Fray session. Incremented atomically before every
+  // Monotonic process incarnation for this Frizz session. Incremented atomically before every
   // respawn/reattach so output or async completion from an older process cannot mutate the new one.
   runtime_generation?: number
   // Durable, mutually-exclusive native runtime control. The revision prevents ABA when one control
@@ -340,7 +340,7 @@ export interface Storage {
   allAdoptionClaims(): AdoptionClaimRow[]
   allRetiredAdoptionAttempts(): RetiredAdoptionAttemptRow[]
   // INSERT ... WHERE no session owner exists. The slug PK and token UNIQUE constraint serialize
-  // separate Fray processes/connections; a loser never reaches tmux.
+  // separate Frizz processes/connections; a loser never reaches tmux.
   reserveAdoptionClaim(reservation: AdoptionReservation): boolean
   recordAdoptionPane(
     slug: string,
@@ -442,11 +442,11 @@ export interface Storage {
     intervalMs: number | null,
     armedAt: string,
   ): boolean
-  // The WORKER's path to the same row, from `mcp__fray__recurring_prompt`. Deliberately keyed on the
+  // The WORKER's path to the same row, from `mcp__frizz__recurring_prompt`. Deliberately keyed on the
   // slug ALONE, with no session/generation guard, because the MCP server cannot satisfy one: it is
   // spawned with its thread's slug and keeps it across a resume, while the session id and generation
   // bump underneath it — so a guard here would fail exactly on the long-lived thread this exists for.
-  // The slug is stamped into that server's env by fray itself and is not attacker-controlled.
+  // The slug is stamped into that server's env by frizz itself and is not attacker-controlled.
   setRecurringPromptBySlug(
     slug: string,
     prompt: string | null,
@@ -531,7 +531,7 @@ export interface Storage {
   // nothing to the transcript when it stops one (backend/_live_shell_stop_notice.mts) and leaves no
   // disk trace either (backend/_live_shell_stop_trace.mts, whose control shows a normally-finished
   // shell keeps its output file exactly as a killed one does). So the fold has no way to learn the op
-  // ended, and any re-prime — a fray restart above all — re-creates it as LIVE off a tool_use that
+  // ended, and any re-prime — a frizz restart above all — re-creates it as LIVE off a tool_use that
   // will never get a result.
   //
   // That is not hypothetical: the maintainer's own board carried a killed shell reading "57hr 18m",
@@ -671,7 +671,7 @@ export function createStorage(dbPath: string): Storage {
     -- A background op the operator RETIRED (the × on its row), by its dispatch tool_use id.
     --
     -- This has to be durable, and the reason is measured rather than defensive. Killing a background
-    -- shell writes NOTHING anywhere fray can re-read: not a tool_result in the session JSONL (verified
+    -- shell writes NOTHING anywhere frizz can re-read: not a tool_result in the session JSONL (verified
     -- in backend/_live_shell_stop_notice.mts — the transcript gains not one record), and not on disk
     -- (backend/_live_shell_stop_trace.mts — the output file survives the kill exactly as a normally
     -- finished shell's does, so file-absence proves nothing). The tailer's retirement therefore lived
@@ -828,6 +828,20 @@ export function createStorage(dbPath: string): Storage {
   } catch {
     // A database predating the legacy columns has nothing to adopt.
   }
+  // ONE-TIME REBRAND MIGRATION (see migrate-fray.ts, and delete this with it). `tmux_name` holds the
+  // thread identity string, which threadIdentityName() derives as `frizz-<slug>` and validateSessionIdentity
+  // re-derives on every write. Every row written before the rename says `fray-<slug>`, so without this
+  // the FIRST write to any pre-rebrand thread throws "invalid session thread identity" — measured at
+  // 387 of 387 rows on the author's own board.
+  //
+  // Matched against each row's OWN slug rather than a bare `LIKE 'fray-%'` prefix: that is exactly what
+  // the integrity check tests, so a row that genuinely is mis-keyed stays caught instead of being
+  // laundered into a well-formed name here.
+  try {
+    db.exec("UPDATE session SET tmux_name = 'frizz-' || slug WHERE tmux_name = 'fray-' || slug")
+  } catch {
+    // A database with no session table yet has nothing to rename.
+  }
   // One-time idempotent backfill: rows the user already archived under the boolean flag carry that
   // into the new lifecycle column. Only fills NULLs — an explicit later state write always wins.
   try {
@@ -890,7 +904,7 @@ export function createStorage(dbPath: string): Storage {
     // applied the config.toml defaults (`workspace-write` + `on-request`) and the tailer then folded
     // that observation back into permission_mode as if the operator had chosen it. `sandboxFor` reads
     // this column, so the downgrade became self-perpetuating: the thread requested workspace-write on
-    // every later resume and stalled on an approval nobody was watching. Fray workers are dispatched
+    // every later resume and stalled on an approval nobody was watching. Frizz workers are dispatched
     // non-interactively (WORKER_DISPATCH_PERMISSION.codex) and the per-thread picker was removed from
     // the UI, so there is no operator choice left for this rewrite to overwrite.
     db.exec(`
@@ -1298,7 +1312,7 @@ export function createStorage(dbPath: string): Storage {
     db.prepare(`
       UPDATE codex_app_server_session
       SET state = 'detached', current_turn_id = NULL, updated_at = ?
-      WHERE thread_slug = ? AND fray_session_id = ?
+      WHERE thread_slug = ? AND frizz_session_id = ?
     `).run(at, threadSlug, sessionId)
   }
   const forgetOwnedRow = (existing: SessionRow): SessionRow => {

@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
-import type { LimitPause } from "@fray-ui/shared"
+import type { LimitPause } from "@frizz/shared"
 import { LimitPauseCard } from "./components/ChatView.tsx"
 import "./styles.css"
 

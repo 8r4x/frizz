@@ -13,19 +13,19 @@ import {
   type Settings,
   type PermissionMode,
   type ProviderAuth,
-} from "@fray-ui/shared"
+} from "@frizz/shared"
 import { PERM_DIR_ENV, permRequestDir, type Project } from "./project.ts"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { BoardManager } from "./board.ts"
-import type { AgentBackend, BackendKind, BuiltCommand, FrayMcp } from "./backend/types.ts"
-import { CHROME_DEVTOOLS_MCP, CLAUDE_WORKER_ENV, FRAY_MCP, WORKER_DISALLOWED_TOOLS } from "./backend/types.ts"
+import type { AgentBackend, BackendKind, BuiltCommand, FrizzMcp } from "./backend/types.ts"
+import { CHROME_DEVTOOLS_MCP, CLAUDE_WORKER_ENV, FRIZZ_MCP, WORKER_DISALLOWED_TOOLS } from "./backend/types.ts"
 import { buildWorkerPrompt } from "./workerPrompt.ts"
 import { codexSandbox, CODEX_FIRST_OUTPUT_TITLE_DEVELOPER_INSTRUCTIONS } from "./backend/codex.ts"
 import type { CodexAppServerBridge } from "./backend/codex-app-server.ts"
 import { claudeBrokerBridgeEnabled, type ClaudeAgentBrokerBridge } from "./backend/claude-agent-broker-bridge.ts"
 import { claudeUltracodeFlags, resolveClaudeEffort } from "./backend/claude-effort.ts"
 import { ProviderAuthRequiredError } from "./backend/auth-status.ts"
-import { readBoard, type FrayBoard, type FrayThread } from "./fray.ts"
+import { readBoard, type FrizzBoard, type FrizzThread } from "./frizz.ts"
 import { SYSTEM_PROMPT_DIR, cleanupAdoptionSessionFiles, systemPromptPath } from "./session-files.ts"
 import {
   ADOPTION_ATTEMPT_LEASE_MS,
@@ -37,24 +37,24 @@ import {
 
 // Dispatch = provision the thread's scratchpad + compose the full prompt + spawn a detached `claude`
 // in a tmux session + register the session row. Session-first (2026-07-09): a new dispatch writes NO
-// .fray/<slug>.md thread file — the session IS the thread, and its durable working memory is a
-// scratchpad (.fray/threads/<sessionId>/scratch.md). The prompt is the ONLY intelligence: the worker
-// contract + this repo's FRAY.md + scratchpad orientation + the task. Project-specific conventions
-// live in FRAY.md alone — the old settings `dispatchPreamble` was retired in favour of it, so there is
+// .frizz/<slug>.md thread file — the session IS the thread, and its durable working memory is a
+// scratchpad (.frizz/threads/<sessionId>/scratch.md). The prompt is the ONLY intelligence: the worker
+// contract + this repo's FRIZZ.md + scratchpad orientation + the task. Project-specific conventions
+// live in FRIZZ.md alone — the old settings `dispatchPreamble` was retired in favour of it, so there is
 // exactly ONE operator-authored surface.
 
-// title -> slug. The rule itself lives in @fray-ui/shared beside the ThreadSlug contract (the
+// title -> slug. The rule itself lives in @frizz/shared beside the ThreadSlug contract (the
 // registry's boot repair recognises dispatch-minted slugs with it); re-exported here because every
 // caller reaches for it through the dispatcher.
 export { slugify }
 
 // Derive a concrete thread title from the prompt when the human didn't supply one: the first ~6
 // words of the prompt's first line, capped at 48 chars, ellipsized if anything was dropped. The
-// thread FILE always needs a title (fray requires one) and the slug derives from it, so this never
+// thread FILE always needs a title (frizz requires one) and the slug derives from it, so this never
 // returns empty. Claude later renames the session (ai-title), which the UI prefers for display.
 // Leading filler that carries no topic ("also spin up…", "please go ahead and…") and trailing
 // function words a truncation must never end on (the old first-6-words cut produced slugs like
-// "also-spin-up-a-sub-agent-to" — a dangling mid-phrase chop that reads as garbage in .fray/).
+// "also-spin-up-a-sub-agent-to" — a dangling mid-phrase chop that reads as garbage in .frizz/).
 const LEAD_FILLER = new Set(["also", "please", "and", "then", "now", "ok", "okay", "hey", "just", "so", "well", "next", "go", "ahead", "lets", "let's", "can", "you", "could", "would"])
 const TRAIL_STOP = new Set([
   "to", "a", "an", "the", "of", "for", "with", "in", "on", "at", "by", "and", "or", "but", "that",
@@ -79,12 +79,12 @@ export function fallbackTitle(prompt: string): string {
   return t || "thread"
 }
 
-// First free slug: <base>, then <base>-2, -3, … skipping any existing .fray/<slug>.md AND any taken
-// registry slug (session-first: new dispatches have no .fray file, so uniqueness must also clear the
+// First free slug: <base>, then <base>-2, -3, … skipping any existing .frizz/<slug>.md AND any taken
+// registry slug (session-first: new dispatches have no .frizz file, so uniqueness must also clear the
 // storage rows — else two fileless sessions could collide on a slug). `taken` is the row predicate.
-export function resolveSlug(frayDir: string, base: string, taken?: (slug: string) => boolean): string {
+export function resolveSlug(frizzDir: string, base: string, taken?: (slug: string) => boolean): string {
   base = ThreadSlug.parse(base)
-  const isTaken = (slug: string) => existsSync(join(frayDir, `${slug}.md`)) || (taken?.(slug) ?? false)
+  const isTaken = (slug: string) => existsSync(join(frizzDir, `${slug}.md`)) || (taken?.(slug) ?? false)
   if (!isTaken(base)) return base
   for (let n = 2; ; n++) {
     const suffix = `-${n}`
@@ -111,7 +111,7 @@ function sameFileStat(a: LegacyThreadFileIdentity, b: LegacyThreadFileIdentity):
     a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs && a.digest === b.digest
 }
 
-// Resolve an adoption source without ever accepting an indirect path. Both `.fray` and the selected
+// Resolve an adoption source without ever accepting an indirect path. Both `.frizz` and the selected
 // markdown file must be real (not symlink) direct children of the real project root. Reading the file
 // into the identity digest closes replacement/content races across the fresh-board authorization pass.
 export function resolveLegacyThreadFile(projectDir: string, value: unknown): LegacyThreadFileIdentity | null {
@@ -119,17 +119,17 @@ export function resolveLegacyThreadFile(projectDir: string, value: unknown): Leg
   if (!parsed.success) return null
   try {
     const projectRoot = realpathSync(projectDir)
-    const frayPath = join(projectRoot, ".fray")
-    const frayStat = lstatSync(frayPath)
-    if (!frayStat.isDirectory() || frayStat.isSymbolicLink()) return null
-    const realFray = realpathSync(frayPath)
-    if (dirname(realFray) !== projectRoot || basename(realFray) !== ".fray") return null
+    const frizzPath = join(projectRoot, ".frizz")
+    const frizzStat = lstatSync(frizzPath)
+    if (!frizzStat.isDirectory() || frizzStat.isSymbolicLink()) return null
+    const realFrizz = realpathSync(frizzPath)
+    if (dirname(realFrizz) !== projectRoot || basename(realFrizz) !== ".frizz") return null
 
-    const path = join(realFray, `${parsed.data}.md`)
+    const path = join(realFrizz, `${parsed.data}.md`)
     const before = lstatSync(path)
     if (!before.isFile() || before.isSymbolicLink()) return null
     const realPath = realpathSync(path)
-    if (dirname(realPath) !== realFray || basename(realPath) !== `${parsed.data}.md`) return null
+    if (dirname(realPath) !== realFrizz || basename(realPath) !== `${parsed.data}.md`) return null
     let contents: Buffer
     let openedBefore: Stats
     let openedAfter: Stats
@@ -169,7 +169,7 @@ export function resolveLegacyThreadFile(projectDir: string, value: unknown): Leg
 
 const ADOPTABLE_LEGACY_STATUSES = new Set(["planning", "planned", "active", "needs-human", "blocked"])
 
-export function isAdoptableLegacyBoardThread(thread: FrayThread, slug: string): boolean {
+export function isAdoptableLegacyBoardThread(thread: FrizzThread, slug: string): boolean {
   return thread.id === slug &&
     ADOPTABLE_LEGACY_STATUSES.has(thread.status) &&
     thread.owner == null &&
@@ -177,7 +177,7 @@ export function isAdoptableLegacyBoardThread(thread: FrayThread, slug: string): 
     Array.isArray(thread.errors) && thread.errors.length === 0
 }
 
-function boardAuthorizesAdoption(board: FrayBoard, slug: string): boolean {
+function boardAuthorizesAdoption(board: FrizzBoard, slug: string): boolean {
   const matches = board.threads.filter((thread) => thread.id === slug)
   if (matches.length !== 1 || !isAdoptableLegacyBoardThread(matches[0], slug)) return false
   return !board.errorItems.some((item) => item.file === `${slug}.md`)
@@ -205,7 +205,7 @@ function ensureSafeDirectDirectory(parent: string, name: string): string {
 // useful instead of destructive.
 export function scratchpadContent(title: string, kind: BackendKind = "claude"): string {
   const guide = `> Status legend: \`[ ]\` pending · \`[/]\` in progress · \`[x]\` complete · \`[-]\` cancelled · \`[?]\` blocked / needs input
-> Collaboration: re-read before every edit; preserve existing content; keep each agent's updates under its own \`### <agent path>\` subsection in Agent progress. A scoped scratchpad merge is Fray coordination state and remains allowed when a delegated task limits its deliverable paths. Never delete, truncate, reinitialize, move, or replace the whole file.`
+> Collaboration: re-read before every edit; preserve existing content; keep each agent's updates under its own \`### <agent path>\` subsection in Agent progress. A scoped scratchpad merge is Frizz coordination state and remains allowed when a delegated task limits its deliverable paths. Never delete, truncate, reinitialize, move, or replace the whole file.`
   if (kind === "codex") {
     return `# Scratchpad — ${title}
 
@@ -259,16 +259,16 @@ ${guide}
 // shows what this file holds, so a reader that spells the path out separately silently renders every
 // scratchpad as "No scratchpad yet." — which is exactly what it did.
 export function scratchpadRelPath(sessionId: string): string {
-  return `.fray/threads/${sessionId}/scratch.md`
+  return `.frizz/threads/${sessionId}/scratch.md`
 }
 
-// Provision the thread's scratchpad (.fray/threads/<sessionId>/scratch.md), atomic tmp+rename. Returns the
+// Provision the thread's scratchpad (.frizz/threads/<sessionId>/scratch.md), atomic tmp+rename. Returns the
 // project-relative path. sessionId is a fresh UUID at both dispatch and adopt, so this never clobbers.
 export function writeScratchpad(projectDir: string, sessionId: string, title: string, kind: BackendKind = "claude"): string {
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/.test(sessionId)) throw new Error("invalid session id")
   const projectRoot = realpathSync(projectDir)
-  const frayDir = ensureSafeDirectDirectory(projectRoot, ".fray")
-  const threadsDir = ensureSafeDirectDirectory(frayDir, "threads")
+  const frizzDir = ensureSafeDirectDirectory(projectRoot, ".frizz")
+  const threadsDir = ensureSafeDirectDirectory(frizzDir, "threads")
   const dir = ensureSafeDirectDirectory(threadsDir, sessionId)
   const rel = scratchpadRelPath(sessionId)
   const path = join(dir, "scratch.md")
@@ -287,7 +287,7 @@ export function writeScratchpad(projectDir: string, sessionId: string, title: st
 }
 
 // The FIXED worker system prompt for `kind`, compiled in via workerPrompt.ts (single source of truth).
-// Not user-modifiable — project-specific conventions ride FRAY.md (frayConfigBlock), appended
+// Not user-modifiable — project-specific conventions ride FRIZZ.md (frizzConfigBlock), appended
 // separately. Thin adapter kept so existing callers (spawn/adopt/resume builders + tests) are untouched.
 export function loadWorkerPrompt(kind: BackendKind = "claude"): string {
   return buildWorkerPrompt(kind)
@@ -315,7 +315,7 @@ export function codexScratchpadHookConfig(
   sessionId: string
 ): Record<string, unknown> {
   if (!hookScript || !sessionId) return {}
-  // `--session` is mandatory: codex reports its OWN rollout session id to the hook, so without fray's
+  // `--session` is mandatory: codex reports its OWN rollout session id to the hook, so without frizz's
   // thread id the hook would resolve a scratchpad path that does not exist.
   const cmd = (mode: string) => ({
     hooks: [
@@ -337,7 +337,7 @@ export function codexScratchpadHookConfig(
         matcher: "^Bash$",
         hooks: [{
           type: "command",
-          command: `node ${JSON.stringify(bashBackgroundHook)} --fray-ui-thread`,
+          command: `node ${JSON.stringify(bashBackgroundHook)} --frizz-thread`,
         }],
       }],
       // An optional scratchpad-frontmatter reminder can keep a worker from forgetting owned work when
@@ -366,20 +366,20 @@ export function scratchpadHookScript(): string | undefined {
 
 // The first USER message a dispatched agent receives: scratchpad orientation + custom instructions +
 // task. Session-first (2026-07-09) — the old thread-ownership contract is REPLACED by scratchpad
-// orientation (a new dispatch owns no .fray file). The fixed worker prompt (workerPrompt.ts) and the
+// orientation (a new dispatch owns no .frizz file). The fixed worker prompt (workerPrompt.ts) and the
 // same scratchpad line at SYSTEM level travel via --append-system-prompt (see buildClaudeCommand) so
 // they survive compaction and re-apply on resume; this composes the visible-message half.
 export function composePrompt(sessionId: string, prompt: string, kind: BackendKind = "claude"): string {
   const scratch =
     kind === "codex"
-      ? `Your scratchpad is \`.fray/threads/${sessionId}/scratch.md\` — an OPTIONAL scratch file kept for you, not a deliverable. A single direct task usually needs nothing in it, and writing in it never substitutes for doing the work. On a long effort it is useful crash insurance and a shared progress document for native sub-agents: keep the approach, what you rejected, and the human's decisions in it as you go, mid-work, then keep working; re-read it after any compaction or resume before asserting anything. Each native sub-agent should merge its own scoped progress into it rather than leaving the root as its sole writer, but must re-read before each edit, preserve all existing content, and never delete, truncate, reinitialize, move, or replace the whole file.`
-      : `Your scratchpad is \`.fray/threads/${sessionId}/scratch.md\` — an OPTIONAL scratch file kept for you, not a deliverable. A single direct task usually needs nothing in it, and writing in it never substitutes for doing the work. On a long effort it is useful crash insurance and the shared blackboard for your sub-agents: keep the approach, what you rejected, and the human's decisions in it as you go, mid-work, then keep working; re-read it after any compaction or resume, and pass its path to every sub-agent you dispatch. Each sub-agent should merge its own scoped progress into it rather than leaving the root as its sole writer, but must re-read before each edit, preserve all existing content, and never delete, truncate, reinitialize, move, or replace the whole file.`
-  // The banner makes the system→human handoff unmistakable to the worker, and NOTHING of fray's is
+      ? `Your scratchpad is \`.frizz/threads/${sessionId}/scratch.md\` — an OPTIONAL scratch file kept for you, not a deliverable. A single direct task usually needs nothing in it, and writing in it never substitutes for doing the work. On a long effort it is useful crash insurance and a shared progress document for native sub-agents: keep the approach, what you rejected, and the human's decisions in it as you go, mid-work, then keep working; re-read it after any compaction or resume before asserting anything. Each native sub-agent should merge its own scoped progress into it rather than leaving the root as its sole writer, but must re-read before each edit, preserve all existing content, and never delete, truncate, reinitialize, move, or replace the whole file.`
+      : `Your scratchpad is \`.frizz/threads/${sessionId}/scratch.md\` — an OPTIONAL scratch file kept for you, not a deliverable. A single direct task usually needs nothing in it, and writing in it never substitutes for doing the work. On a long effort it is useful crash insurance and the shared blackboard for your sub-agents: keep the approach, what you rejected, and the human's decisions in it as you go, mid-work, then keep working; re-read it after any compaction or resume, and pass its path to every sub-agent you dispatch. Each sub-agent should merge its own scoped progress into it rather than leaving the root as its sole writer, but must re-read before each edit, preserve all existing content, and never delete, truncate, reinitialize, move, or replace the whole file.`
+  // The banner makes the system→human handoff unmistakable to the worker, and NOTHING of frizz's is
   // allowed below it: the framing note goes here, ABOVE, so everything past the banner is the
   // operator's prompt byte for byte. That is also what the transcript projectors cut on
   // (DISPATCH_TASK_BANNER_MARKER), so the first chat bubble shows the operator's words alone.
   const handoff =
-    "\n\nEverything above the banner below is fray system orientation. Everything below it is the human operator's own prompt, verbatim — that, and nothing else, is your task."
+    "\n\nEverything above the banner below is frizz system orientation. Everything below it is the human operator's own prompt, verbatim — that, and nothing else, is your task."
   return `${scratch}${handoff}\n\n\n${DISPATCH_TASK_BANNER_MARKER}${prompt}`
 }
 
@@ -389,16 +389,16 @@ export function composePrompt(sessionId: string, prompt: string, kind: BackendKi
 export function scratchpadOrientation(sessionId: string, planPath?: string | null, kind: BackendKind = "claude"): string {
   const scratch =
     kind === "codex"
-      ? `SCRATCHPAD (optional): .fray/threads/${sessionId}/scratch.md — a scratch file kept FOR YOU, not a deliverable. A single direct task usually needs nothing in it; writing in it is never a substitute for doing the work. Useful on a long effort as crash insurance, and a shared progress document for native sub-agents (write your task list, the approach and what you rejected, and anything that must outlive your context there, as you go; re-read it after any compaction or resume). Each native sub-agent should merge its own scoped progress into it rather than leaving the root as its sole writer, but must re-read before each edit, preserve all existing content, and never delete, truncate, reinitialize, move, or replace the whole file.`
-      : `SCRATCHPAD (optional): .fray/threads/${sessionId}/scratch.md — a scratch file kept FOR YOU, not a deliverable. A single direct task usually needs nothing in it; writing in it is never a substitute for doing the work. Useful on a long effort as crash insurance, and the shared blackboard for your sub-agents (write your task list, the approach and what you rejected, and anything that must outlive your context there, as you go; re-read it after any compaction or resume; pass this path in every sub-agent prompt). Each sub-agent should merge its own scoped progress into it rather than leaving the root as its sole writer, but must re-read before each edit, preserve all existing content, and never delete, truncate, reinitialize, move, or replace the whole file.`
+      ? `SCRATCHPAD (optional): .frizz/threads/${sessionId}/scratch.md — a scratch file kept FOR YOU, not a deliverable. A single direct task usually needs nothing in it; writing in it is never a substitute for doing the work. Useful on a long effort as crash insurance, and a shared progress document for native sub-agents (write your task list, the approach and what you rejected, and anything that must outlive your context there, as you go; re-read it after any compaction or resume). Each native sub-agent should merge its own scoped progress into it rather than leaving the root as its sole writer, but must re-read before each edit, preserve all existing content, and never delete, truncate, reinitialize, move, or replace the whole file.`
+      : `SCRATCHPAD (optional): .frizz/threads/${sessionId}/scratch.md — a scratch file kept FOR YOU, not a deliverable. A single direct task usually needs nothing in it; writing in it is never a substitute for doing the work. Useful on a long effort as crash insurance, and the shared blackboard for your sub-agents (write your task list, the approach and what you rejected, and anything that must outlive your context there, as you go; re-read it after any compaction or resume; pass this path in every sub-agent prompt). Each sub-agent should merge its own scoped progress into it rather than leaving the root as its sole writer, but must re-read before each edit, preserve all existing content, and never delete, truncate, reinitialize, move, or replace the whole file.`
   const lines = [scratch]
   if (planPath) lines.push(`PLAN: ${planPath} — the durable plan artifact this thread works from; read it FIRST.`)
   return lines.join("\n")
 }
 
-// A project can ship a repo-committed `FRAY.md` at its root to steer fray workers with its OWN
-// engineering-PROCESS norms — gates, review depth, commit/PR conventions — which OVERRIDE fray's
-// built-in PROCESS defaults (NOT the fray-mechanical contract: signal fences, scratchpad, sub-agent
+// A project can ship a repo-committed `FRIZZ.md` at its root to steer frizz workers with its OWN
+// engineering-PROCESS norms — gates, review depth, commit/PR conventions — which OVERRIDE frizz's
+// built-in PROCESS defaults (NOT the frizz-mechanical contract: signal fences, scratchpad, sub-agent
 // dispatch and the question handback stay in force — the injected header says so, matching the "Defer"
 // section of the worker contract). When present, its contents are injected into every worker's SYSTEM
 // prompt (dispatch, adopt, AND resume; both backends) under that header, so both see it without relying on the
@@ -406,31 +406,31 @@ export function scratchpadOrientation(sessionId: string, planPath?: string | nul
 // next launch.
 //
 // The read is guarded by statSync BEFORE readFileSync: only a regular file under a size cap is read.
-// That keeps one accidental/hostile FRAY.md from wedging the server's event loop on EVERY dispatch and
+// That keeps one accidental/hostile FRIZZ.md from wedging the server's event loop on EVERY dispatch and
 // resume — a FIFO would make readFileSync block forever, a symlink loop throws, a directory/device
 // isn't a regular file, and a runaway/generated file is rejected by size rather than fully slurped.
 // The surviving content is then clipped to keep token/context cost bounded. Returns "" when
 // absent/oversized/non-regular/empty — the caller drops it from the composed extra-system-prompt.
-const FRAY_MD_MAX_CHARS = 12_000
-const FRAY_MD_MAX_BYTES = 64 * 1024
-export function frayConfigBlock(projectDir: string): string {
-  const path = join(projectDir, "FRAY.md")
+const FRIZZ_MD_MAX_CHARS = 12_000
+const FRIZZ_MD_MAX_BYTES = 64 * 1024
+export function frizzConfigBlock(projectDir: string): string {
+  const path = join(projectDir, "FRIZZ.md")
   let body: string
   try {
     const st = statSync(path) // follows a symlink to its target; ENOENT/ELOOP throw → caught
-    if (!st.isFile() || st.size > FRAY_MD_MAX_BYTES) return "" // not a regular file, or runaway size
+    if (!st.isFile() || st.size > FRIZZ_MD_MAX_BYTES) return "" // not a regular file, or runaway size
     body = readFileSync(path, "utf8").trim()
   } catch {
-    return "" // no FRAY.md, unreadable, symlink loop, etc. → inject nothing
+    return "" // no FRIZZ.md, unreadable, symlink loop, etc. → inject nothing
   }
   if (!body) return ""
-  const clipped = body.length > FRAY_MD_MAX_CHARS ? `${body.slice(0, FRAY_MD_MAX_CHARS)}\n\n[FRAY.md truncated]` : body
-  return `PROJECT FRAY CONFIG (from this repo's FRAY.md) — the project's own conventions for fray workers. They OVERRIDE the fray worker PROCESS defaults above (review depth, gates, git/PR conventions, the quality bar) wherever they conflict; follow them. They do NOT relax the fray-mechanical contract — the signal fences, the scratchpad, sub-agent dispatch and the question handback still bind:\n\n${clipped}`
+  const clipped = body.length > FRIZZ_MD_MAX_CHARS ? `${body.slice(0, FRIZZ_MD_MAX_CHARS)}\n\n[FRIZZ.md truncated]` : body
+  return `PROJECT FRIZZ CONFIG (from this repo's FRIZZ.md) — the project's own conventions for frizz workers. They OVERRIDE the frizz worker PROCESS defaults above (review depth, gates, git/PR conventions, the quality bar) wherever they conflict; follow them. They do NOT relax the frizz-mechanical contract — the signal fences, the scratchpad, sub-agent dispatch and the question handback still bind:\n\n${clipped}`
 }
 
-// A DispatchInput.planPath is honored only when it is a well-formed .fray/plans/*.md path AND the file
+// A DispatchInput.planPath is honored only when it is a well-formed .frizz/plans/*.md path AND the file
 // exists; anything else is ignored (stored as null). Shape check forecloses traversal.
-const PLAN_PATH_RE = /^\.fray\/plans\/[A-Za-z0-9][A-Za-z0-9._ -]*\.md$/
+const PLAN_PATH_RE = /^\.frizz\/plans\/[A-Za-z0-9][A-Za-z0-9._ -]*\.md$/
 export function validPlanPath(projectDir: string, planPath: string | undefined): string | null {
   if (!planPath || !PLAN_PATH_RE.test(planPath)) return null
   return existsSync(join(projectDir, planPath)) ? planPath : null
@@ -439,8 +439,8 @@ export function validPlanPath(projectDir: string, planPath: string | undefined):
 // Workers have NO coherent interactive-plan-mode semantics: plan mode stays read-only until an
 // INTERACTIVE ExitPlanMode approval, which a headless dashboard worker can't satisfy (no one is at
 // the keyboard) and which blocks all edits until then — a softlock. A worker "plans" by writing a
-// plan artifact (.fray/plans/*.md) and asking via a ```question fence, never via interactive plan
-// mode. So a worker is NEVER spawned in plan mode: `plan` is coerced to the safe fray-ui default
+// plan artifact (.frizz/plans/*.md) and asking via a ```question fence, never via interactive plan
+// mode. So a worker is NEVER spawned in plan mode: `plan` is coerced to the safe frizz default
 // (`auto`). Applied inside BOTH spawn builders so dispatch, adopt, AND resume are all covered. (The
 // dispatch UI still OFFERS "plan" in its permission-mode dropdown — dropping it in web/options.ts is
 // a follow-up for UI honesty; this coercion is the actual enforcement + the softlock fix.)
@@ -448,7 +448,7 @@ function workerPermissionMode(m: PermissionMode): PermissionMode {
   return m === "plan" ? "auto" : m
 }
 
-// Every fray-CREATED worker launches maximally non-interactive: an unattended headless worker cannot
+// Every frizz-CREATED worker launches maximally non-interactive: an unattended headless worker cannot
 // answer an interactive prompt, so a RESTRICTIVE dispatch-time permission choice is a footgun, not a
 // feature — it just stalls the thread on a modal nobody is watching. Claude gets `auto`; codex gets
 // `bypassPermissions` (→ `-s danger-full-access`). These are the FLOOR the dispatch/adopt paths stamp
@@ -500,72 +500,72 @@ function systemPromptFlags(sessionId: string, system: string): string[] {
   return ["--append-system-prompt-file", path]
 }
 
-// Resolve the descriptor for the unified fray MCP server: the abs path to the stdio server script
-// (shipped as a sibling of bin/fray in the worker plugin dir, so it rides the SAME ship+resolve path
+// Resolve the descriptor for the unified frizz MCP server: the abs path to the stdio server script
+// (shipped as a sibling of bin/frizz in the worker plugin dir, so it rides the SAME ship+resolve path
 // that already carries the plugin to prod) + the project state dir the script reads server.lock from.
 // Returns undefined when the plugin dir or script can't be found — the worker then simply lacks the
-// fray tools rather than failing to spawn. `env`/`moduleUrl` injectable for tests.
-export function resolveFrayMcp(
+// frizz tools rather than failing to spawn. `env`/`moduleUrl` injectable for tests.
+export function resolveFrizzMcp(
   stateDir: string,
   moduleUrl = import.meta.url,
   env: NodeJS.ProcessEnv = process.env,
   slug?: string,
-): FrayMcp | undefined {
+): FrizzMcp | undefined {
   const pluginDir = resolveWorkerPluginDir(moduleUrl, env)
   if (!pluginDir) return undefined
-  const scriptPath = join(pluginDir, "bin", FRAY_MCP.script)
+  const scriptPath = join(pluginDir, "bin", FRIZZ_MCP.script)
   if (!existsSync(scriptPath)) return undefined
   return { scriptPath, stateDir, ...(slug ? { slug } : {}) }
 }
 
-// Claude flags that mount the fray-injected MCP servers via ONE inline `--mcp-config` JSON and
+// Claude flags that mount the frizz-injected MCP servers via ONE inline `--mcp-config` JSON and
 // PRE-APPROVE their tools (`--allowedTools`) so a headless worker never blocks on a permission prompt
 // it has nobody to answer. execvp runs the argv with NO shell (tmux.ts), so the JSON travels literally.
 // chrome-devtools is ALWAYS mounted (a worker gets a browser out of the box on any
 // machine — parity with the codex backend's `-c` injection, same CHROME_DEVTOOLS_MCP spec); the
-// server-level `mcp__chrome-devtools` rule pre-approves every tool it exposes. The unified `fray`
+// server-level `mcp__chrome-devtools` rule pre-approves every tool it exposes. The unified `frizz`
 // server rides along when its descriptor resolved, pre-approved the same server-level way.
 export interface ClaudeMcpStdioConfig { command: string; args?: string[]; env?: Record<string, string> }
 export interface ClaudeMcpConfig { mcpServers: Record<string, ClaudeMcpStdioConfig>; allowedTools: string[] }
 
-// The structured fray MCP mount, shared by the tmux CLI path (rendered to --mcp-config/--allowedTools
+// The structured frizz MCP mount, shared by the tmux CLI path (rendered to --mcp-config/--allowedTools
 // flags below) AND the broker SDK path (passed straight into query()'s mcpServers/allowedTools). One
 // source of truth so both transports mount the SAME servers with the SAME pre-approvals.
-export function claudeMcpConfig(mcp?: FrayMcp): ClaudeMcpConfig {
+export function claudeMcpConfig(mcp?: FrizzMcp): ClaudeMcpConfig {
   const mcpServers: Record<string, ClaudeMcpStdioConfig> = {
     [CHROME_DEVTOOLS_MCP.name]: { command: CHROME_DEVTOOLS_MCP.command, args: [...CHROME_DEVTOOLS_MCP.args] },
   }
   const allowedTools = [`mcp__${CHROME_DEVTOOLS_MCP.name}`]
   if (mcp) {
-    // command is the ABSOLUTE node path (process.execPath — the node running the fray server), NOT bare
+    // command is the ABSOLUTE node path (process.execPath — the node running the frizz server), NOT bare
     // "node": Claude spawns the MCP-server process itself, and a worker's PATH varies by launch context
     // (a GUI-launched tmux, a login-shell difference) — if `node` isn't on it, the MCP server never
     // starts and the tool silently never appears in the worker. An absolute path removes that dependency.
-    // FRAY_THREAD_SLUG is the MCP server's CALLER IDENTITY — the channel through which a tool could act
+    // FRIZZ_THREAD_SLUG is the MCP server's CALLER IDENTITY — the channel through which a tool could act
     // on its own thread. The MCP server is spawned per worker and nothing in the MCP protocol carries a
     // caller identity, so its env is the only place this can come from; a resume keeps the same slug, so
     // it stays correct for the whole life of the thread. No SHIPPED tool reads it today (the one that
     // did, a worker-armed heartbeat, was removed 2026-08-02 in favour of the operator's stop hook, which
     // the board arms directly). Kept because it costs one line and is the whole prerequisite for any
     // future thread-scoped tool.
-    const env: Record<string, string> = { FRAY_STATE_DIR: mcp.stateDir }
-    if (mcp.slug) env.FRAY_THREAD_SLUG = mcp.slug
-    mcpServers[FRAY_MCP.name] = { command: process.execPath, args: [mcp.scriptPath], env }
-    // Server-level, like chrome-devtools above: every tool the unified fray server exposes (today
-    // `mcp__fray__spawn_thread`) is pre-approved, so adding one never needs an allow-list edit.
-    allowedTools.push(`mcp__${FRAY_MCP.name}`)
+    const env: Record<string, string> = { FRIZZ_STATE_DIR: mcp.stateDir }
+    if (mcp.slug) env.FRIZZ_THREAD_SLUG = mcp.slug
+    mcpServers[FRIZZ_MCP.name] = { command: process.execPath, args: [mcp.scriptPath], env }
+    // Server-level, like chrome-devtools above: every tool the unified frizz server exposes (today
+    // `mcp__frizz__spawn_thread`) is pre-approved, so adding one never needs an allow-list edit.
+    allowedTools.push(`mcp__${FRIZZ_MCP.name}`)
   }
   return { mcpServers, allowedTools }
 }
 
-// Claude flags that mount the fray-injected MCP servers via ONE inline `--mcp-config` JSON and
+// Claude flags that mount the frizz-injected MCP servers via ONE inline `--mcp-config` JSON and
 // PRE-APPROVE their tools (`--allowedTools`) so a headless worker never blocks on a permission prompt
 // it has nobody to answer. execvp runs the argv with NO shell (tmux.ts), so the JSON travels literally.
 // chrome-devtools is ALWAYS mounted (a worker gets a browser out of the box on any
 // machine — parity with the codex backend's `-c` injection, same CHROME_DEVTOOLS_MCP spec); the
-// server-level `mcp__chrome-devtools` rule pre-approves every tool it exposes. The unified `fray`
+// server-level `mcp__chrome-devtools` rule pre-approves every tool it exposes. The unified `frizz`
 // server rides along when its descriptor resolved, pre-approved the same server-level way.
-export function claudeMcpFlags(mcp?: FrayMcp): string[] {
+export function claudeMcpFlags(mcp?: FrizzMcp): string[] {
   const { mcpServers, allowedTools } = claudeMcpConfig(mcp)
   const config = JSON.stringify({ mcpServers })
   // ONE comma-joined `--allowedTools=` in EQUALS form: the flag is VARIADIC, so a space-separated
@@ -576,7 +576,7 @@ export function claudeMcpFlags(mcp?: FrayMcp): string[] {
   return ["--mcp-config", config, `--allowedTools=${allowedTools.join(",")}`]
 }
 
-// A fray worker runs under a dashboard, not a live chat, so a BLOCKING question tool would hang the
+// A frizz worker runs under a dashboard, not a live chat, so a BLOCKING question tool would hang the
 // session invisibly — there is nobody at the keyboard to click it. Remove it at spawn rather than
 // arguing against it in prose: the contract used to spend a paragraph on "NEVER invoke it" AND a
 // PreToolUse hook denied it, three mechanisms for one prohibition. Taking the tool away is the cheap
@@ -607,7 +607,7 @@ export function buildClaudeCommand(opts: {
   // Extra spawn-specific system-prompt text appended AFTER the worker norms (e.g. the adoption
   // orientation) — system-level so the visible transcript carries only the human's own words.
   extraSystemPrompt?: string
-  frayMcp?: FrayMcp
+  frizzMcp?: FrizzMcp
 }): string[] {
   const argv = [opts.claudeBin ?? "claude", "--session-id", opts.sessionId, "--permission-mode", workerPermissionMode(opts.permissionMode)]
   if (opts.model) argv.push("--model", opts.model)
@@ -617,7 +617,7 @@ export function buildClaudeCommand(opts: {
   if (effort.effort) argv.push("--effort", effort.effort)
   argv.push(...claudeUltracodeFlags(effort))
   if (opts.pluginDir) argv.push("--plugin-dir", opts.pluginDir)
-  argv.push(...claudeMcpFlags(opts.frayMcp))
+  argv.push(...claudeMcpFlags(opts.frizzMcp))
   argv.push(...workerDisallowedToolFlags())
   // The fixed worker norms live in the SYSTEM prompt: rebuilt on every invocation (incl. resume)
   // and immune to compaction, unlike a first user message.
@@ -628,7 +628,7 @@ export function buildClaudeCommand(opts: {
   return argv
 }
 
-// The fray-worker plugin (single-thread worker contract + hooks), a sibling of board/ in the Fray
+// The frizz-worker plugin (single-thread worker contract + hooks), a sibling of board/ in the Frizz
 // source tree. Deployed artifacts carry it at runtime/cc-worker, but pnpm may load this module
 // through a nested store rather than the flat node_modules layout. Search module ancestors so the
 // closure remains discoverable in either layout; an explicitly verified artifact path wins.
@@ -636,7 +636,7 @@ export function resolveWorkerPluginDir(
   moduleUrl = import.meta.url,
   env: NodeJS.ProcessEnv = process.env
 ): string | undefined {
-  const override = env.FRAY_WORKER_PLUGIN_DIR
+  const override = env.FRIZZ_WORKER_PLUGIN_DIR
   if (override && existsSync(join(override, ".claude-plugin", "plugin.json")))
     return override
   let current = dirname(fileURLToPath(moduleUrl))
@@ -655,7 +655,7 @@ export function workerPluginDir(): string | undefined {
 
 // Claude Code caps WebSearch at 200 calls per SESSION (verified in the 2.1.220 bundle:
 // `CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION ?? 200`, enforced in the WebSearch tool against a
-// `taskRegistry` counter). A fray worker is long-lived and research-heavy — it burns that budget on
+// `taskRegistry` counter). A frizz worker is long-lived and research-heavy — it burns that budget on
 // work a chat session never would — and past the cap the tool stops searching and merely returns
 // "this session has used its web search budget", which reads to the model as a dead end rather than
 // as a quota. Raise it far enough that a real effort never hits it, while keeping a finite backstop
@@ -668,7 +668,7 @@ export const WORKER_MAX_WEB_SEARCHES = 10000
 //
 //   CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION  default 200 — TOTAL Task spawns for the whole session.
 //     Past it every spawn throws "Subagent spawn limit reached (N of 200 agents spawned)… ask the user
-//     to raise CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION". A fray worker is long-lived and dispatches a
+//     to raise CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION". A frizz worker is long-lived and dispatches a
 //     helper per prong across many turns, so it reaches 200 on work a chat session never would — and
 //     the failure reads to the model as "stop delegating", not as a quota. Lifted like the search
 //     budget: no machine cost to a high ceiling, since this counts spawns over time, not live ones.
@@ -682,7 +682,7 @@ export const WORKER_MAX_WEB_SEARCHES = 10000
 // NOT lifted: CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH. Its default is not a constant at all — it resolves
 // through a server-gated feature value — but the worker contract already tells workers to keep fan-out
 // shallow because a rested sub-agent is not reliably re-woken by grandchildren. Raising the nesting cap
-// would buy depth that fray's own wake path cannot deliver on, so the cap and the contract agree.
+// would buy depth that frizz's own wake path cannot deliver on, so the cap and the contract agree.
 export const WORKER_MAX_SUBAGENTS = 10000
 export const WORKER_MAX_CONCURRENT_SUBAGENTS = 100
 
@@ -695,7 +695,7 @@ function workerCap(name: string, lifted: number, env: NodeJS.ProcessEnv): string
   return String(lifted)
 }
 
-// Claude Code reads these inherited process variables as sub-agent profile defaults. A Fray worker
+// Claude Code reads these inherited process variables as sub-agent profile defaults. A Frizz worker
 // chooses its profile explicitly through the launch argv and plugin agent profiles, so let neither
 // a shell nor a globally configured Claude session silently replace that selection. Empty tmux
 // environment entries override inherited values while preserving every auth/config variable.
@@ -704,7 +704,7 @@ function workerCap(name: string, lifted: number, env: NodeJS.ProcessEnv): string
 // identity, but a cap is operator policy, so an explicitly configured one is passed through rather
 // than overridden. They are always set EXPLICITLY (never left to inheritance) because a tmux pane
 // inherits the tmux SERVER's environment — captured whenever that server first started, which may
-// predate the current fray process by days.
+// predate the current frizz process by days.
 export function claudeWorkerEnvironment(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
   return {
     ...CLAUDE_WORKER_ENV,
@@ -730,8 +730,8 @@ export function buildClaudeResumeCommand(opts: {
   // Extra system-prompt text appended AFTER the worker norms (e.g. the scratchpad orientation) — the
   // system prompt is rebuilt per invocation, so a resume must re-carry it or the scratchpad is forgotten.
   extraSystemPrompt?: string
-  // The fray MCP server must ride resume too (a resumed worker keeps the capability).
-  frayMcp?: FrayMcp
+  // The frizz MCP server must ride resume too (a resumed worker keeps the capability).
+  frizzMcp?: FrizzMcp
 }): string[] {
   const argv = [opts.claudeBin ?? "claude", "--permission-mode", workerPermissionMode(opts.permissionMode)]
   if (opts.model) argv.push("--model", opts.model)
@@ -740,7 +740,7 @@ export function buildClaudeResumeCommand(opts: {
   if (effort.effort) argv.push("--effort", effort.effort)
   argv.push(...claudeUltracodeFlags(effort))
   if (opts.pluginDir) argv.push("--plugin-dir", opts.pluginDir)
-  argv.push(...claudeMcpFlags(opts.frayMcp))
+  argv.push(...claudeMcpFlags(opts.frizzMcp))
   argv.push(...workerDisallowedToolFlags())
   // The system prompt is rebuilt per invocation — the resume must re-carry the worker norms too.
   // Same file-based path as buildClaudeCommand (see systemPromptFlags): inline would blow tmux's
@@ -759,8 +759,8 @@ export interface Dispatcher {
   // DispatchInput.backend through) is byte-identical to before. A codex dispatch pre-arms the cwd trust
   // gate, spawns the codex TUI, then sentinel-discovers + pins the rollout id on the row.
   dispatch(input: DispatchInput, opts?: { backend?: BackendKind }): Promise<{ slug: string; sessionId: string }>
-  // Cold-adopt an EXISTING thread fray-ui didn't originate (e.g. a repo with a pre-existing .fray
-  // board): spawn a fresh worker pointed at the thread file. Fray's contract makes this sound —
+  // Cold-adopt an EXISTING thread frizz didn't originate (e.g. a repo with a pre-existing .frizz
+  // board): spawn a fresh worker pointed at the thread file. Frizz's contract makes this sound —
   // the doc, not the conversation, is the durable context; the worker reads it and continues.
   adopt(slug: string, message?: string): Promise<{ slug: string; sessionId: string }>
 }
@@ -812,7 +812,7 @@ export interface DispatchDeps {
 
 export function createDispatcher(deps: DispatchDeps): Dispatcher {
   const readBoardSource = deps.readBoard ?? readBoard
-  const frayDir = join(deps.project.dir, ".fray")
+  const frizzDir = join(deps.project.dir, ".frizz")
   const adoptionRuntime: AdoptionRecoveryRuntime = deps.adoptionRuntime ?? productionAdoptionRuntime
 
   // Build the detached-spawn command through the backend seam for the chosen `kind` (falling back to
@@ -867,11 +867,11 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       // takes over the display name seconds after the session starts; only the slug is heuristic.)
       const title = input.title?.trim() || fallbackTitle(input.prompt)
       const base = input.slug ?? slugify(title)
-      const slug = resolveSlug(frayDir, base, (s) => deps.storage.getSession(s) !== undefined)
-      // Codex TUI does not reliably emit either a native title or Fray's requested hidden marker.
+      const slug = resolveSlug(frizzDir, base, (s) => deps.storage.getSession(s) !== undefined)
+      // Codex TUI does not reliably emit either a native title or Frizz's requested hidden marker.
       // Keep the already bounded, deterministic dispatch title as the durable automatic fallback.
       // Unlike the full composed prompt, fallbackTitle is capped and topic-oriented; a later valid
-      // provider/Fray signal may still replace it through the title_auto CAS.
+      // provider/Frizz signal may still replace it through the title_auto CAS.
       const registryTitle = title
       const sessionId = randomUUID()
       const permissionMode = workerDispatchPermission(kind, settings)
@@ -882,8 +882,8 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       const effort = input.effort ?? settings.effort
       const planPath = validPlanPath(deps.project.dir, input.planPath)
 
-      // Session-first: provision the scratchpad (the durable working memory) — NO .fray/<slug>.md file.
-      // The scratchpad keys on the fray-minted sessionId, which stays the row's session_id for BOTH
+      // Session-first: provision the scratchpad (the durable working memory) — NO .frizz/<slug>.md file.
+      // The scratchpad keys on the frizz-minted sessionId, which stays the row's session_id for BOTH
       // backends (codex's discovered rollout id is pinned separately on agent_session_id).
       const scratchRel = writeScratchpad(deps.project.dir, sessionId, title, kind)
 
@@ -894,14 +894,14 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       // locates on disk exactly like a discovered rollout (identical filename suffix). This is the SOLE
       // codex transport: the tmux TUI path was retired, so a codex dispatch that can't reach the bridge
       // fails loudly rather than degrading. The worker contract + scratchpad orientation ride
-      // baseInstructions, and the fray title protocol rides developerInstructions.
+      // baseInstructions, and the frizz title protocol rides developerInstructions.
       if (kind === "codex") {
         const bridge = deps.codexAppServer
         if (!bridge) {
           cleanupDispatchFiles(scratchRel, { argv: [], env: {}, prewrite: [] }, sessionId)
           throw new Error("Codex app-server is unavailable; cannot start this thread. Check that `codex` is installed and its app-server protocol matches the pinned revision (re-pin if you upgraded codex).")
         }
-        const extraSystemPrompt = [scratchpadOrientation(sessionId, planPath, kind), frayConfigBlock(deps.project.dir)]
+        const extraSystemPrompt = [scratchpadOrientation(sessionId, planPath, kind), frizzConfigBlock(deps.project.dir)]
           .filter(Boolean).join("\n\n")
         try {
           const spawned = await bridge.spawnDispatch({
@@ -956,9 +956,9 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       }
 
       // Claude session-broker transport: a DETACHED daemon owns the Claude Agent SDK session over a
-      // local socket, so the session OUTLIVES fray — a restart reconnects to the LIVE session instead
+      // local socket, so the session OUTLIVES frizz — a restart reconnects to the LIVE session instead
       // of cold resume-from-disk — while keeping structured TYPED permissions (no tmux pane, no PTY, no
-      // TUI scraping). Gated behind FRAY_CLAUDE_BROKER_BRIDGE until the cutover is proven live; when off
+      // TUI scraping). Gated behind FRIZZ_CLAUDE_BROKER_BRIDGE until the cutover is proven live; when off
       // (or the bridge is absent, e.g. tests), claude falls through to the tmux path below, byte-identical
       // to before. The worker contract + scratchpad orientation ride the appended system prompt, and
       // persistSession makes the daemon write the tailer-readable transcript JSONL — read exactly like
@@ -975,7 +975,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         const appendSystemPrompt = [
           loadWorkerPrompt("claude"),
           scratchpadOrientation(sessionId, planPath, kind),
-          frayConfigBlock(deps.project.dir),
+          frizzConfigBlock(deps.project.dir),
         ].filter(Boolean).join("\n\n")
         try {
           await bridge.spawnDispatch({
@@ -1043,7 +1043,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       // one non-oracular failure and occurs before ensureServer, scratch creation, spawn, or storage.
       const source = resolveLegacyThreadFile(deps.project.dir, slug)
       if (!source) throw unavailable()
-      let freshBoard: FrayBoard
+      let freshBoard: FrizzBoard
       try {
         freshBoard = await readBoardSource(deps.project.dir)
         if (!boardAuthorizesAdoption(freshBoard, slug)) throw unavailable()
@@ -1124,7 +1124,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       // — the worker works session-first from here (scratchpad + end-of-turn fences), leaving the file's
       // frontmatter untouched.
       const adoption =
-        "ADOPTION: this thread predates you and has prior context recorded in `.fray/" +
+        "ADOPTION: this thread predates you and has prior context recorded in `.frizz/" +
         slug +
         ".md` (a previous agent or session worked it — you have no access to that conversation, and you don't need it). READ THAT FILE FIRST for context: `## Goal` is the mission, `## Status`/`## Decisions`/`## Next step` are where things stand. It is CONTEXT, not a contract — do NOT edit its frontmatter. You work session-first from here: keep your working state in your scratchpad and signal end-of-turn with the done/awaiting fences. The human's message below is your steer on top of that context."
       const task = message?.trim() || "Pick up this thread and continue from where the file says things stand."
@@ -1142,7 +1142,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       // pane under a leased attempt token and rebind the pane identity across slow post-create setup —
       // a multi-process protocol whose entire purpose was making a PANE claim safe. There is no pane
       // to claim now: the daemon record plus the session id is the identity, so the attempt token
-      // stays (it still fences two fray processes racing the same slug) and everything pane-shaped goes.
+      // stays (it still fences two frizz processes racing the same slug) and everything pane-shaped goes.
       const bridge = deps.claudeBroker
       if (!bridge) {
         rollback()
@@ -1165,7 +1165,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           appendSystemPrompt: [
             loadWorkerPrompt("claude"),
             scratchpadOrientation(sessionId),
-            frayConfigBlock(deps.project.dir),
+            frizzConfigBlock(deps.project.dir),
             adoption,
           ].filter(Boolean).join("\n\n"),
           model: settings.model,

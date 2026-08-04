@@ -1,7 +1,7 @@
 import { useRef, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Loader2 } from "lucide-react"
-import type { Backend, ProviderAuth, ProviderQuota, QuotaWindow } from "@fray-ui/shared"
+import type { Backend, ProviderAuth, ProviderQuota, QuotaWindow } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { ProviderMark } from "./ProviderMark.tsx"
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/Popover.tsx"

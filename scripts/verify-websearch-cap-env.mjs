@@ -1,14 +1,14 @@
 // Verifies the WebSearch-budget lift END TO END through the REAL spawn path, not through a stand-in.
 //
 // Claude Code stops searching after CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION calls (default 200) and
-// returns "this session has used its web search budget" instead of results. Fray raises that for its
+// returns "this session has used its web search budget" instead of results. Frizz raises that for its
 // workers in claudeWorkerEnvironment(). The seam that matters is the one a unit test cannot see:
 // claudeWorkerEnvironment() -> the backend's BuiltCommand.env -> tmux `new-session -e` -> the actual
 // child process environment -> Claude Code's own parser. Asserting the returned record only proves the
 // first hop, so this harness reads the env of a REAL process spawned by the REAL tmux path, then makes
 // a REAL claude run prove the injected number is the number Claude Code actually enforces.
 //
-// Everything runs on a UNIQUE tmux socket, so it can never touch the maintainer's live fray panes.
+// Everything runs on a UNIQUE tmux socket, so it can never touch the maintainer's live frizz panes.
 import { execFileSync } from "node:child_process"
 import { mkdtempSync, rmSync, readFileSync, existsSync, readdirSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -18,8 +18,8 @@ import { setSocket, spawn, socketName } from "../packages/server/src/tmux.ts"
 import { createClaudeBackend } from "../packages/server/src/backend/claude.ts"
 import { WORKER_MAX_WEB_SEARCHES, WORKER_MAX_SUBAGENTS, WORKER_MAX_CONCURRENT_SUBAGENTS } from "../packages/server/src/dispatch.ts"
 
-const SOCKET = `frayvwsc${process.pid}`
-const work = mkdtempSync(join(tmpdir(), "fray-websearch-cap-"))
+const SOCKET = `frizzvwsc${process.pid}`
+const work = mkdtempSync(join(tmpdir(), "frizz-websearch-cap-"))
 let failures = 0
 const check = (label, ok, detail = "") => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${label}${detail ? ` — ${detail}` : ""}`)
@@ -43,7 +43,7 @@ const originalOverride = process.env.CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION
 try {
   console.log(`socket=${socketName()} work=${work}\n`)
 
-  // ---- A. The env fray builds actually lands in a real child process's environment -------------
+  // ---- A. The env frizz builds actually lands in a real child process's environment -------------
   delete process.env.CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION
   const built = backend.buildSpawn({
     sessionId: randomUUID(), cwd: work, prompt: "noop", workerContract: "", permissionMode: "acceptEdits",
@@ -82,7 +82,7 @@ try {
     childEnv.find((l) => l.startsWith("CLAUDE_CODE_SUBAGENT_MODEL")) ?? "<absent>",
   )
 
-  // ---- B. Claude Code enforces the number fray injected, through that same real path -----------
+  // ---- B. Claude Code enforces the number frizz injected, through that same real path -----------
   // Driven at a cap of 1 (via the operator-override path, exercising that too) because proving the
   // ceiling requires HITTING it — 10000 real searches is not a test. If the transport were broken,
   // Claude Code would fall back to 200 and neither search would be refused.
@@ -124,7 +124,7 @@ try {
 
   check("the real claude worker actually issued both WebSearch calls", searches.length >= 2, `issued ${searches.length}`)
   check(
-    "Claude Code enforced fray's injected cap (refused at 1 of 1, NOT the 200 default)",
+    "Claude Code enforced frizz's injected cap (refused at 1 of 1, NOT the 200 default)",
     capMessages.some((t) => t.includes("(1 of 1 WebSearch calls)")),
     capMessages.length ? capMessages[0].slice(0, 140) : "no budget message seen",
   )
@@ -133,7 +133,7 @@ try {
 } finally {
   if (originalOverride === undefined) delete process.env.CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION
   else process.env.CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION = originalOverride
-  // Scoped to THIS harness's own socket — never a broad kill that could reap a live fray worker.
+  // Scoped to THIS harness's own socket — never a broad kill that could reap a live frizz worker.
   try { tmux("kill-server") } catch {}
   rmSync(work, { recursive: true, force: true })
   console.log(`\ncleanup: killed tmux server on ${SOCKET}, removed ${work}`)

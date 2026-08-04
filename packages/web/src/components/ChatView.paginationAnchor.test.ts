@@ -14,7 +14,7 @@ const wakeDivider = () => readFileSync(new URL("./WakeDivider.tsx", import.meta.
 // data-transcript-row-key / data-transcript-sticky). Stamping the same attribute on each nested
 // MESSAGE root would put non-row nodes into those result sets — and, on a pinned band, would defeat
 // the `data-transcript-sticky` filter that stops a pinned band (invariant top, zero delta) from being
-// chosen as the scroll anchor. A message root's own handle is the SEPARATE `data-fray-msg` attribute.
+// chosen as the scroll anchor. A message root's own handle is the SEPARATE `data-frizz-msg` attribute.
 // Three legitimate sites: the virtual row wrapper, the VIRTUALIZED drawer's own hoisted sticky band,
 // and the shared StickyUserBand (still used by the eager ChatView branch and the queue cards). Every
 // one of the three ALSO carries either data-transcript-row-key or data-transcript-sticky, so none is a
@@ -32,15 +32,15 @@ test("a message root never joins the pagination-anchor attribute", () => {
   assert.match(source, /data-transcript-source-id=\{sourceId\}\s*\n\s*data-transcript-sticky="true"/)
 })
 
-// `data-fray-msg` outlived the hover-revealed debug-id chip it was introduced for (dropped 2026-08-01,
+// `data-frizz-msg` outlived the hover-revealed debug-id chip it was introduced for (dropped 2026-08-01,
 // maintainer: "they're not necessary anymore"). It stays because it is the only per-message handle the
 // e2e suites can select on — workingTailSpacing, metaColumnRhythm and intermediateCollapseDivider all
 // query it to find message roots and read their geometry. Losing it in a later cleanup would take
 // those with it, so the count is pinned here.
-test("every rendered message variant still carries its own data-fray-msg handle", () => {
+test("every rendered message variant still carries its own data-frizz-msg handle", () => {
   const sources = [chatView(), wakeDivider()]
   // assistant turn, user bubble, answers card, event line, reasoning block — plus the wake divider,
   // now in WakeDivider.tsx.
-  const hosts = sources.reduce((n, source) => n + [...source.matchAll(/data-fray-msg=\{(?:m\.)?sourceId\}/g)].length, 0)
+  const hosts = sources.reduce((n, source) => n + [...source.matchAll(/data-frizz-msg=\{(?:m\.)?sourceId\}/g)].length, 0)
   assert.equal(hosts, 6, "each rendered message variant must stamp its own sourceId")
 })

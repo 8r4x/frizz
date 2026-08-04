@@ -17,9 +17,9 @@ import type { ReactNode } from "react"
 // vanish and the picture bleeds into its frame. The lighter mat gives every shot a visible boundary
 // without nesting a second border 6px inside the first.
 //
-// `fray-bash` supplies the chrome AND the typography of the tool-card family (1px border, block radius,
+// `frizz-bash` supplies the chrome AND the typography of the tool-card family (1px border, block radius,
 // mono 12.5px). Carrying the class rather than re-declaring those in Tailwind is what lets
-// `fray-bash-header` sit inside this frame and render identically to a Bash / Read / Edit header.
+// `frizz-bash-header` sit inside this frame and render identically to a Bash / Read / Edit header.
 export function ImageFrame({ header, caption, children }: { header?: ReactNode; caption?: ReactNode; children: ReactNode }) {
   return (
     <figure className={IMAGE_FRAME}>
@@ -35,7 +35,7 @@ export function ImageFrame({ header, caption, children }: { header?: ReactNode; 
 // never into React. It mints the same two boxes around its `<img>` from these exact constants, so the
 // framed picture a worker writes as Markdown and the one it delivers as a bare path are the same object
 // rather than two lookalikes that drift apart on the next change here.
-export const IMAGE_FRAME = "fray-bash max-w-full"
+export const IMAGE_FRAME = "frizz-bash max-w-full"
 export const IMAGE_FRAME_MAT = "flex justify-center bg-panel-2 p-1.5"
 
 // The picture inside the frame: never wider than the mat, never taller than a screenful, always keeping

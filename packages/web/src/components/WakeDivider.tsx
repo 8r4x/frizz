@@ -63,7 +63,7 @@ export function WakeDivider({ icon: Icon, children, sourceId, ariaLabel, marker,
   }
   return (
     <div
-      data-fray-msg={sourceId}
+      data-frizz-msg={sourceId}
       data-wake-divider={marker}
       className="my-1 flex items-center gap-3"
       // A divider carrying an interactive title is not an ARIA `separator` (a separator may not own a

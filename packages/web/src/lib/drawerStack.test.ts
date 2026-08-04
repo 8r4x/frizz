@@ -66,8 +66,8 @@ test("a thread's own doc and sub-agent stack as one family; a plan replaces it a
     { kind: "subagent", slug: "same", subId: "tool-1" },
   ])
 
-  pushPlanDrawer(".fray/plans/same.md", "Plan")
-  assert.deepEqual(shape(), [{ kind: "plan", slug: ".fray/plans/same.md", subId: undefined }])
+  pushPlanDrawer(".frizz/plans/same.md", "Plan")
+  assert.deepEqual(shape(), [{ kind: "plan", slug: ".frizz/plans/same.md", subId: undefined }])
 })
 
 test("rapid open during exit cancels removal of the same layer", () => {
@@ -87,8 +87,8 @@ test("rapid open during exit cancels removal of the same layer", () => {
 
 test("reopening an already open plan or sub-agent reuses its entry", () => {
   resetStore()
-  pushPlanDrawer(".fray/plans/a.md", "A")
-  pushPlanDrawer(".fray/plans/a.md", "A renamed")
+  pushPlanDrawer(".frizz/plans/a.md", "A")
+  pushPlanDrawer(".frizz/plans/a.md", "A renamed")
   assert.equal(store.drawers.length, 1)
   assert.equal(store.drawers[0]?.label, "A renamed")
 

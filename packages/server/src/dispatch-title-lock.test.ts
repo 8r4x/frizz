@@ -28,7 +28,7 @@ import type { PaneIdentity } from "./adoption-recovery.ts"
 // be the default — a fourth transport has to answer the same question before it can ship.
 
 function harness() {
-  const dir = mkdtempSync(join(tmpdir(), "fray-title-lock-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-title-lock-"))
   const storage = createStorage(join(dir, "ui.db"))
   const project: Project = { dir, id: "title-lock", name: "t", label: "o/t", stateDir: dir, cwdSlug: cwdSlug(dir) }
   const board = {
@@ -64,14 +64,14 @@ const CALLER_TITLE = "Investigate acme/app#391"
 
 for (const transport of ["claude-broker", "claude-tmux", "codex"] as const) {
   test(`${transport}: a caller's dispatch title is shown as a name but never locked against the worker's own`, async (t) => {
-    // The broker is the DEFAULT claude transport (opt out with FRAY_CLAUDE_BROKER_BRIDGE=0), so the
+    // The broker is the DEFAULT claude transport (opt out with FRIZZ_CLAUDE_BROKER_BRIDGE=0), so the
     // tmux case has to switch it off for the length of its own dispatch.
     if (transport === "claude-tmux") {
-      const prior = process.env.FRAY_CLAUDE_BROKER_BRIDGE
-      process.env.FRAY_CLAUDE_BROKER_BRIDGE = "0"
+      const prior = process.env.FRIZZ_CLAUDE_BROKER_BRIDGE
+      process.env.FRIZZ_CLAUDE_BROKER_BRIDGE = "0"
       t.after(() => {
-        if (prior === undefined) delete process.env.FRAY_CLAUDE_BROKER_BRIDGE
-        else process.env.FRAY_CLAUDE_BROKER_BRIDGE = prior
+        if (prior === undefined) delete process.env.FRIZZ_CLAUDE_BROKER_BRIDGE
+        else process.env.FRIZZ_CLAUDE_BROKER_BRIDGE = prior
       })
     }
     const { storage, dispatcher } = harness()

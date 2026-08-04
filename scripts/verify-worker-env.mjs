@@ -1,4 +1,4 @@
-// Verifies END TO END that CLAUDE_WORKER_ENV reaches a real fray Claude worker and actually changes
+// Verifies END TO END that CLAUDE_WORKER_ENV reaches a real frizz Claude worker and actually changes
 // Claude Code's behavior — through the REAL spawn path, against the REAL binary, with REAL failing
 // controls. Covers the tmux path; `packages/server/src/backend/_live_sdk_worker_env.mts` is the
 // broker/SDK twin.
@@ -11,7 +11,7 @@
 // each paired with the same run WITHOUT it, because a green result with no failing control is not
 // evidence. See CLAUDE_WORKER_ENV in backend/types.ts for why each variable is set.
 //
-// Everything runs on a UNIQUE tmux socket, so it can never touch the maintainer's live fray panes.
+// Everything runs on a UNIQUE tmux socket, so it can never touch the maintainer's live frizz panes.
 import { execFileSync } from "node:child_process"
 import { mkdtempSync, rmSync, readFileSync, existsSync, readdirSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -21,8 +21,8 @@ import { setSocket, spawn, socketName } from "../packages/server/src/tmux.ts"
 import { createClaudeBackend } from "../packages/server/src/backend/claude.ts"
 import { CLAUDE_WORKER_ENV } from "../packages/server/src/backend/types.ts"
 
-const SOCKET = `frayvenv${process.pid}`
-const work = mkdtempSync(join(tmpdir(), "fray-worker-env-"))
+const SOCKET = `frizzvenv${process.pid}`
+const work = mkdtempSync(join(tmpdir(), "frizz-worker-env-"))
 const REMINDER_KEY = "CLAUDE_CODE_TOTAL_TOKENS_REMINDER"
 const BLOCK = "<total_tokens>Infinite tokens left</total_tokens>"
 
@@ -80,7 +80,7 @@ const backend = createClaudeBackend({ logDir: work, claudeBin: "claude" })
 try {
   console.log(`socket=${socketName()} work=${work}\n`)
 
-  // ---- A. Everything fray builds lands in a real child process's environment ---------------------
+  // ---- A. Everything frizz builds lands in a real child process's environment ---------------------
   const built = backend.buildSpawn({
     sessionId: randomUUID(), cwd: work, prompt: "noop", workerContract: "", permissionMode: "acceptEdits",
   })
@@ -109,7 +109,7 @@ try {
   // nothing. _live_sdk_worker_env.mts guards against that class of bug with explicit preconditions.
   const budgetPrompt = "Run exactly one Bash command: echo hello. Then reply DONE and stop."
   for (const run of [
-    { name: "budget-with", label: "a worker spawned by fray SEES the token budget", env: built.env, want: true },
+    { name: "budget-with", label: "a worker spawned by frizz SEES the token budget", env: built.env, want: true },
     // Byte-identical prompt and flags, the variable REMOVED. Without this a pass proves nothing —
     // the binary could have been emitting the block on its own all along.
     { name: "budget-without", label: "the control WITHOUT the variable sees no block", env: { ...built.env, [REMINDER_KEY]: "" }, want: false },
@@ -127,7 +127,7 @@ try {
   // check here would pass identically with and without the variable. The behavioral assertion lives
   // in _live_sdk_worker_env.mts, against the streaming session a real worker actually runs as.
 } finally {
-  // Scoped to THIS harness's own socket — never a broad kill that could reap a live fray worker.
+  // Scoped to THIS harness's own socket — never a broad kill that could reap a live frizz worker.
   try { tmux("kill-server") } catch {}
   rmSync(work, { recursive: true, force: true })
   console.log(`\ncleanup: killed tmux server on ${SOCKET}, removed ${work}`)

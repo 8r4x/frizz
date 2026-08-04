@@ -4,7 +4,7 @@
 // "about 4px more padding above and below every user message"), 14px horizontal UNCHANGED.
 //
 // It drives the REAL pipeline — JSONL → tailer → transcript → ChatView — with a simulated worker, because
-// a fixture can't: the fray server mounts Vite with appType "custom", so every *.html falls back to
+// a fixture can't: the frizz server mounts Vite with appType "custom", so every *.html falls back to
 // index.html and only the real thread route renders a real transcript. Both surfaces that draw a user
 // bubble are covered: the historical bubbles in the column and the PINNED most-recent ask (StickyUserBand
 // renders the same component, so a padding change that missed one would show as a mismatch here).
@@ -51,12 +51,12 @@ assistant("Both received. This reply gives the pinned bubble something to float 
 
 writeFileSync(join(logDir, `${SESSION_ID}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
 
-const socket = process.env.FRAY_TMUX_SOCKET ?? `fray-adhoc-${port}`
-const tmuxName = `fray-${SLUG}`
+const socket = process.env.FRIZZ_TMUX_SOCKET ?? `frizz-adhoc-${port}`
+const tmuxName = `frizz-${SLUG}`
 try { execFileSync("tmux", ["-L", socket, "kill-session", "-t", tmuxName], { stdio: "ignore" }) } catch {}
 try { execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", tmuxName, "sleep 7200"]) } catch {}
 
-const projects = join(home, ".fray", "projects")
+const projects = join(home, ".frizz", "projects")
 const db = join(projects, readdirSync(projects)[0], "ui.db")
 execFileSync("sqlite3", [db, `DELETE FROM session WHERE slug = '${SLUG}';`])
 execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session
@@ -80,7 +80,7 @@ try {
   // it on so the pinned surface is measured too, not assumed. Seeded before first paint: prefs hydrate
   // from localStorage synchronously so the initial render already reflects it.
   await page.evaluateOnNewDocument(() => {
-    localStorage.setItem("fray.prefs.v1", JSON.stringify({ stickyUserMessage: true, stickyRedefaulted: true }))
+    localStorage.setItem("frizz.prefs.v1", JSON.stringify({ stickyUserMessage: true, stickyRedefaulted: true }))
   })
   await page.goto(`http://127.0.0.1:${port}/thread/${SLUG}`, { waitUntil: "networkidle0" })
   await page.waitForSelector(".bg-user-bubble", { timeout: 20_000 })

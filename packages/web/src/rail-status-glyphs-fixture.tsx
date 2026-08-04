@@ -1,5 +1,5 @@
 import { createRoot } from "react-dom/client"
-import type { ThreadView } from "@fray-ui/shared"
+import type { ThreadView } from "@frizz/shared"
 import { ThreadIndicator } from "./components/Sidebar.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import "./styles.css"

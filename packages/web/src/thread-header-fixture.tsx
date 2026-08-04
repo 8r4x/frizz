@@ -1,7 +1,7 @@
 import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import * as RadixTabs from "@radix-ui/react-tabs"
-import type { BoardSnapshot, ThreadView } from "@fray-ui/shared"
+import type { BoardSnapshot, ThreadView } from "@frizz/shared"
 import { ThreadHeader } from "./components/ChatView.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
@@ -18,7 +18,7 @@ globalThis.fetch = async (input, init) => {
     await new Promise((resolve) => setTimeout(resolve, 500))
   }
   return new Response(JSON.stringify({ result: null }), {
-    headers: { "content-type": "application/json", "x-fray-boot": "thread-header-fixture" },
+    headers: { "content-type": "application/json", "x-frizz-boot": "thread-header-fixture" },
   })
 }
 

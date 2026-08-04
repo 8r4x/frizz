@@ -17,13 +17,13 @@ import {
   type TranscriptPage,
   type TranscriptTodo,
   type TranscriptToolCall,
-} from "@fray-ui/shared"
+} from "@frizz/shared"
 import type { Project } from "./project.ts"
 import type { Storage } from "./storage.ts"
 import type { AgentBackend, NormalizedEvent } from "./backend/types.ts"
 import { parseDeliveryLedger, projectDeliveryLedger, suppressCancelledDeliveries, attachmentPromptText } from "./delivery-ledger.ts"
 import { stripDeliveryMarkers } from "./delivery-marker.ts"
-import { CODEX_FIRST_FINAL_TITLE_TRANSPORT, CODEX_LEGACY_FIRST_FINAL_TITLE_TRANSPORT, parseCodexLine, createCodexBackend, extractCodexFrayTitle } from "./backend/codex.ts"
+import { CODEX_FIRST_FINAL_TITLE_TRANSPORT, CODEX_LEGACY_FIRST_FINAL_TITLE_TRANSPORT, parseCodexLine, createCodexBackend, extractCodexFrizzTitle } from "./backend/codex.ts"
 import { discoverTranscriptId, DISCOVERY_GRACE_MS } from "./discover.ts"
 import { isClaudeAuthErrorText } from "./tailer.ts"
 import { redactCredentialStructure, redactCredentialSyntax } from "./credential-redaction.ts"
@@ -40,9 +40,9 @@ type Raw = Record<string, any>
 export const MAX_MESSAGES = 300
 
 // A user-record that is actually harness plumbing: task-notifications from background children,
-// bare system-reminder wrappers, fray orchestrator pulses. Matched on the LEADING tag so a human
+// bare system-reminder wrappers, frizz orchestrator pulses. Matched on the LEADING tag so a human
 // message that merely quotes one of these somewhere inside still renders.
-const NOISE_PREFIXES = ["<task-notification>", "[SYSTEM NOTIFICATION", "<system-reminder>", "<fray-", "[fray]"]
+const NOISE_PREFIXES = ["<task-notification>", "[SYSTEM NOTIFICATION", "<system-reminder>", "<frizz-", "[frizz]"]
 export function isInjectedNoise(text: string): boolean {
   const t = text.trimStart()
   return NOISE_PREFIXES.some((p) => t.startsWith(p))
@@ -96,7 +96,7 @@ function restMessage(sourceId: string, at: string | undefined): TranscriptMessag
 // into a run-on. Normalizing here fixes every downstream consumer at once (render, the answers-card
 // detection, AND the client's optimistic-vs-server text match, which compares raw strings).
 function normalizeNewlines(s: string): string {
-  // Also drop fray's invisible delivery marker (delivery-marker.ts). Every path that turns a raw record
+  // Also drop frizz's invisible delivery marker (delivery-marker.ts). Every path that turns a raw record
   // into rendered text funnels through here, so stripping once makes the marker unobservable to the
   // human — in the drawer, in search, in copied text — while the correlator upstream still reads it off
   // the RAW record. A no-op (single `includes`) for the overwhelming majority of text, which is unmarked.
@@ -122,9 +122,9 @@ export function githubDispatchDisplayText(text: string): string | undefined {
 // NEW dispatch whose task legitimately contains a "TASK:" line from being truncated at it.
 const LEGACY_TASK_MARKER = "\nTASK:\n"
 const LEGACY_BANNER_PREAMBLE =
-  "Everything ABOVE this line is fray system orientation. Everything BELOW the `TASK:` marker is the human operator's own prompt, verbatim."
+  "Everything ABOVE this line is frizz system orientation. Everything BELOW the `TASK:` marker is the human operator's own prompt, verbatim."
 
-// Display-only projection for the FIRST user turn of a fray dispatch: strip fray's own envelope
+// Display-only projection for the FIRST user turn of a frizz dispatch: strip frizz's own envelope
 // (scratchpad orientation + project instructions + the YOUR TASK banner) so the bubble is the human
 // operator's prompt and nothing else. Everything below DISPATCH_TASK_BANNER_MARKER is verbatim theirs.
 //
@@ -133,7 +133,7 @@ const LEGACY_BANNER_PREAMBLE =
 // resumed one as a `queued_command` attachment. The old cut lived inline in the plain-`user` arm alone,
 // so under the broker the whole composed prompt — orientation, instructions, banner and all — rendered
 // in the chat bubble. Returns undefined when `text` carries no envelope (any turn but the first).
-export function frayDispatchDisplayText(text: string): string | undefined {
+export function frizzDispatchDisplayText(text: string): string | undefined {
   const cut = text.indexOf(DISPATCH_TASK_BANNER_MARKER)
   if (cut === -1) {
     // Pre-banner dispatches carried the bare marker with no banner at all.
@@ -150,26 +150,26 @@ export function frayDispatchDisplayText(text: string): string | undefined {
 
 // The display projection for ONE user turn — undefined when the stored text is already what to show.
 // Three independent reasons a user record can carry machine-facing text, composed in order:
-//   • fray's own dispatch envelope (FIRST turn only — orientation + instructions above the banner);
+//   • frizz's own dispatch envelope (FIRST turn only — orientation + instructions above the banner);
 //   • a generated GitHub dispatch (FIRST turn only — the envelope is what opens the thread). It sits
-//     BELOW fray's banner, so it is peeled from the remainder, not from the raw record;
+//     BELOW frizz's banner, so it is peeled from the remainder, not from the raw record;
 //   • the scheduler's wake-delivery token, which rides ANY turn a wake lands on. That's the case the
 //     old `out.length === 0` gate missed entirely: a wake is by definition a later turn, so its token
-//     reached the pre-wrap user bubble and rendered as literal `<!-- fray-wake:… -->`.
+//     reached the pre-wrap user bubble and rendered as literal `<!-- frizz-wake:… -->`.
 // `text` is never narrowed — the outbox acks a delivery by finding that token in the worker's own
 // record, the queued-bubble map keys on the raw enqueued content, and persistence/search keep the full
 // machine-facing prompt.
 function userDisplayText(text: string, first: boolean): string | undefined {
   let projected = text
   if (first) {
-    projected = frayDispatchDisplayText(projected) ?? projected
+    projected = frizzDispatchDisplayText(projected) ?? projected
     projected = githubDispatchDisplayText(projected) ?? projected
   }
   projected = stripWakeDeliveryToken(projected)
   return projected === text ? undefined : projected
 }
 
-// The full presentation projection for one user turn: its display text, plus whether FRAY wrote it.
+// The full presentation projection for one user turn: its display text, plus whether FRIZZ wrote it.
 // Both derive from the same raw record, and every site that pushes a user message needs both — keeping
 // them in one helper is what stops a new push site from shipping the display projection while silently
 // dropping the wake flag (which would put a scheduler steer back in the human's own bubble).
@@ -357,7 +357,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
   // that re-notifies (see dispatches.delete in completionEvents), which silently took the child's title
   // with it: a child that FINISHES before its upward report is materialized into the parent's context
   // had its report relabelled against an entry that was already gone, so the divider fell back to
-  // `origin.from` and read «fray:opus-high» — the profile, identical across every child sharing that
+  // `origin.from` and read «frizz:opus-high» — the profile, identical across every child sharing that
   // cell. Measured on the maintainer's own thread, 2 of 11 reports landed after their child's
   // notification and lost their titles exactly this way. The two lifetimes are genuinely different —
   // completion correlation is one-shot, a title is wanted for as long as the transcript renders — so
@@ -570,7 +570,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
     // enough that the agent's REPLY routinely renders above a message still styled as "pending", which is
     // the "unnecessarily long delay before it renders as a real message" report. The counts: 1664 tui
     // prompt attachments carry origin.kind "human" and ALL 78 sdk ones carry none, while every sdk one
-    // carries `source_uuid` (the id fray itself passed to sendInput) and no task-notification attachment
+    // carries `source_uuid` (the id frizz itself passed to sendInput) and no task-notification attachment
     // ever does. So an origin-less prompt attachment bearing a source_uuid is the human delivery it says
     // it is. origin.kind "peer" (17 in the corpus) stays excluded from THIS human branch — it is a child's
     // upward SendMessage, not the operator's words — and is handled by its own branch just below.
@@ -619,8 +619,8 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
           // child's id. Stamping it on an unattributed bubble would assert an origin nothing established.
           if (dispatchId && entry.message.peerFrom) entry.message.peerDispatchId = dispatchId
           // RELABEL to the child's DESCRIPTION. `origin.from` is only ever the subagent_type, because
-          // fray's own worker dispatch hook strips `name` — so an upward report rendered as
-          // «fray:opus-xhigh», which names the profile rather than the work and is identical across
+          // frizz's own worker dispatch hook strips `name` — so an upward report rendered as
+          // «frizz:opus-xhigh», which names the profile rather than the work and is identical across
           // every child sharing that cell. `senderTaskId` is the child's agentId, and childDispatchIds
           // already translates that into the DISPATCH tool_use id — the same translation `dispatchId`
           // above performs.
@@ -644,7 +644,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
           // Same relabel as the resolved-bubble arm above, and it has to be repeated here rather than
           // hoisted: this branch BUILDS the message instead of stamping an existing one, so there is no
           // shared assignment to patch. The dispatch's description wins over `origin.from`, which is only
-          // ever the subagent_type once fray's worker dispatch hook has stripped `name`.
+          // ever the subagent_type once frizz's worker dispatch hook has stripped `name`.
           const describedHere = dispatchId ? dispatchLabels.get(dispatchId) : undefined
           const from = describedHere || str(peerOrigin.from) || str(peerOrigin.name) || parsed?.from || ""
           const body = parsed?.body ?? (typeof peerOrigin.body === "string" ? peerOrigin.body : "")
@@ -706,7 +706,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
       }
       let text = userText(rec)
       // Harness/orchestrator injections that arrive as ordinary user records (task-notifications,
-      // system reminders, fray pulses) are ALSO not the human's words — drop them from the chat.
+      // system reminders, frizz pulses) are ALSO not the human's words — drop them from the chat.
       if (text && isInjectedNoise(text)) return
       if (text) {
         // Claude Code 2.1.207's print/SDK path emits enqueue → empty dequeue → the ordinary user
@@ -1061,7 +1061,7 @@ const IMAGE_MEDIA_EXT: Record<string, string> = {
 
 // Directory for decoded tool-result screenshots. Under the OS temp dir so it is already a trusted root
 // for the /local-image route (app.ts) — the client serves these paths without any allowlist change.
-const SCREENSHOT_CACHE_DIR = join(tmpdir(), "fray-tool-images")
+const SCREENSHOT_CACHE_DIR = join(tmpdir(), "frizz-tool-images")
 // Defensive cap on retained decoded images: a long-lived server driving many screenshot QA loops would
 // otherwise grow the cache without bound. Oldest-by-mtime are pruned past this on the rare write path.
 const SCREENSHOT_CACHE_MAX = 200
@@ -1440,7 +1440,7 @@ function toolCalls(block: any): TranscriptToolCall[] {
         desc,
         // A background Bash result only acknowledges that the child was launched. Keep the card live
         // until its later task-notification; no launch result can truthfully mean "done".
-        // Shell job control is visible immediately, even though no lifecycle id exists. Current Fray
+        // Shell job control is visible immediately, even though no lifecycle id exists. Current Frizz
         // workers reject the attempt before execution; historical calls that escaped the guard remain
         // honestly UNKNOWN instead of folding into an opaque "Ran N tool calls" disclosure.
         backgroundState,
@@ -1801,7 +1801,7 @@ interface TranscriptCacheEntry {
 const TRANSCRIPT_CACHE_CAP = 16
 const transcriptCache = new Map<string, TranscriptCacheEntry>()
 // ~1/50 of cache-hit reads are re-parsed from scratch and deep-compared against the incremental result
-// when FRAY_TRANSCRIPT_PARSE_VERIFY=1 — a loud, non-throwing correctness net for the appended-bytes fold.
+// when FRIZZ_TRANSCRIPT_PARSE_VERIFY=1 — a loud, non-throwing correctness net for the appended-bytes fold.
 const PARSE_VERIFY_SAMPLE = 1 / 50
 
 function readAppendedBytes(fd: number, from: number, to: number): Buffer {
@@ -1866,7 +1866,7 @@ export function readTranscript(project: Project, sessionId: string): TranscriptM
     // size == bytesRead → no read, no ingest; the retained projection is already current.
 
     const messages = entry.fold.messages()
-    if (hit && process.env.FRAY_TRANSCRIPT_PARSE_VERIFY === "1" && Math.random() < PARSE_VERIFY_SAMPLE) {
+    if (hit && process.env.FRIZZ_TRANSCRIPT_PARSE_VERIFY === "1" && Math.random() < PARSE_VERIFY_SAMPLE) {
       verifyIncrementalParse(path, identityPrefix, messages)
     }
     // Defensive shallow slice: keeps per-message identity (all that matters downstream) while protecting
@@ -2004,7 +2004,7 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
   // very next telemetry record — 2282/2282 across the corpus) to be rewritten with the real bracket.
   let lastContextTokens: number | undefined
   let openCompaction: { message: TranscriptMessage; preTokens?: number } | null = null
-  // Codex may omit Fray's requested first-final marker, then provide one on a later finalized
+  // Codex may omit Frizz's requested first-final marker, then provide one on a later finalized
   // response. Strip an exact first-line marker from every final so a valid recovery signal never
   // leaks into rendered prose. Ordinary examples remain literal unless they occupy that control slot.
 
@@ -2028,7 +2028,7 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
           // New sessions send the invisible attribute comment in their first commentary message,
           // before any tool call. Strip that transport from every phase. Legacy H1/comment syntax is
           // final-only so normal commentary headings remain ordinary prose.
-          let text = extractCodexFrayTitle(ev.text, ev.final).text
+          let text = extractCodexFrizzTitle(ev.text, ev.final).text
           if (text) {
             const m = openAssistant(ev.at, sourceId)
             pushTextPart(m, text)
@@ -2187,7 +2187,7 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
           sawFinalAnswer = false
           let text = typeof ev.text === "string" ? normalizeNewlines(ev.text).trim() : ""
           // This must run before the general sentinel stripper: the strict complete suffix proves the
-          // title reminder was Fray's append, rather than similarly-worded task prose.
+          // title reminder was Frizz's append, rather than similarly-worded task prose.
           if (out.length === 0) text = stripCodexFirstPromptTitleTransport(text)
           text = stripCodexSentinel(text)
           if (!text || isInjectedNoise(text)) break
@@ -2283,7 +2283,7 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
           // last_agent_message still surfaces it (commentary-only turns). The lastFinalText dedupe keeps
           // the ordinary case — where final_answer already rendered the identical text — from doubling.
           let finalText = ev.finalText
-          if (finalText !== undefined) finalText = extractCodexFrayTitle(finalText).text
+          if (finalText !== undefined) finalText = extractCodexFrizzTitle(finalText).text
           const ft = finalText?.trim()
           if (ft && !sawFinalAnswer && ft !== lastFinalText?.trim()) {
             const m = openAssistant(ev.at, sourceId)
@@ -2549,7 +2549,7 @@ const CAPTION_MAX = 120
 // The body is usually unrecoverable: codex Fernet-encrypts inter-agent `message` payloads (821/821
 // across 386 real rollouts — send_message, followup_task AND spawn_agent alike), and the tool's own
 // result is an empty string, so there is no plaintext anywhere in the parent transcript to render.
-// Say so IN the card rather than leaving an empty row that reads like a fray bug. A message that does
+// Say so IN the card rather than leaving an empty row that reads like a frizz bug. A message that does
 // arrive in the clear (older/unencrypted codex builds) still renders verbatim.
 function codexPeerMessageCall(label: string, target: string | undefined, obj: Record<string, unknown>): TranscriptToolCall {
   // strField has ALREADY run redactToolPayload, so an encrypted body arrives here as the redaction
@@ -2995,18 +2995,18 @@ function patchSummary(patch: string): string {
   return m ? m[1].trim() : "apply_patch"
 }
 
-// Strip the trailing per-dispatch discovery sentinel (`<!-- fray-session:… -->`) buildSpawn appends to
+// Strip the trailing per-dispatch discovery sentinel (`<!-- frizz-session:… -->`) buildSpawn appends to
 // the FIRST codex prompt so post-spawn discovery can pin the rollout — plumbing the human never typed.
 function stripCodexSentinel(text: string): string {
-  return text.replace(/\n*<!--\s*fray-session:[^>]*-->\s*$/, "").replace(/\s+$/, "")
+  return text.replace(/\n*<!--\s*frizz-session:[^>]*-->\s*$/, "").replace(/\s+$/, "")
 }
 
-// The spawn path appends one of these exact contracts plus the Fray-owned discovery sentinel after the
+// The spawn path appends one of these exact contracts plus the Frizz-owned discovery sentinel after the
 // human's task. Strip only that complete suffix from the first projected prompt: similar ordinary prose,
-// or a title-transport sentence without the Fray sentinel, remains the user's text.
+// or a title-transport sentence without the Frizz sentinel, remains the user's text.
 function stripCodexFirstPromptTitleTransport(text: string): string {
   for (const transport of [CODEX_FIRST_FINAL_TITLE_TRANSPORT, CODEX_LEGACY_FIRST_FINAL_TITLE_TRANSPORT]) {
-    const marker = `\n\n${transport}\n\n<!-- fray-session:`
+    const marker = `\n\n${transport}\n\n<!-- frizz-session:`
     const at = text.lastIndexOf(marker)
     if (at === -1) continue
     const sentinel = text.slice(at + marker.length)

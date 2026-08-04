@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { Check, Hourglass, Loader2 } from "lucide-react"
-import type { CompletionHold, ThreadView } from "@fray-ui/shared"
+import type { CompletionHold, ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 import { threadLifecycleAvailability, completionArchivesImmediately, completionHoldSummary } from "../lib/threadLifecycle.ts"
@@ -83,7 +83,7 @@ export function ThreadLifecycleFooter({
 }
 
 // What a completed thread says where its Mark-as-done button used to be. A STATEMENT, not a control:
-// there is deliberately no Reopen verb anywhere in fray — a bump un-archives the thread on its way
+// there is deliberately no Reopen verb anywhere in frizz — a bump un-archives the thread on its way
 // through (server/src/resume.ts un-archives up front on any follow-up), so the composer directly above
 // this readout already IS the reopen affordance and the tooltip points at it rather than adding a
 // second one.

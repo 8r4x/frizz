@@ -1,13 +1,13 @@
-# One Fray per machine — project grid, path routing, one port
+# One Frizz per machine — project grid, path routing, one port
 
-Design review, 2026-08-04. Prompted by: *"switch fray over to be a singleton, so only a single version of it runs on each computer… top-level interface be a grid of project cards… `localhost:NNNN/fray`, `localhost:NNNN/nub`… converge on a single port."*
+Design review, 2026-08-04. Prompted by: *"switch frizz over to be a singleton, so only a single version of it runs on each computer… top-level interface be a grid of project cards… `localhost:NNNN/frizz`, `localhost:NNNN/nub`… converge on a single port."*
 
 **Verdict: the direction is right and cheaper than it looks. The routing and naming are easy; the real work is a project registry that does not exist, and making one process hold N projects without the tailer eating the event loop.**
 
 **Decided by the maintainer, 2026-08-04 — not open questions:**
 
 - **One unified process.** Not a front door proxying to per-project servers. This is a big refactor and that is accepted.
-- **Fray runs from real root repo directories only.** A worktree is not a project. Worktree management is something the *agent* does inside a project, with prompting; Fray has no special handling and needs none.
+- **Frizz runs from real root repo directories only.** A worktree is not a project. Worktree management is something the *agent* does inside a project, with prompting; Frizz has no special handling and needs none.
 - **Registration is automatic and silent.** Running the CLI inside a directory registers that path as a project with no approval step.
 - **The port is `6767`.** Chosen for memorability over robustness, knowingly — see §5 for what it costs and the fallback that has to change because of it.
 
@@ -15,7 +15,7 @@ Design review, 2026-08-04. Prompted by: *"switch fray over to be a singleton, so
 
 ## 1. Naming: the rule matters, the collision *rate* does not
 
-I originally measured slug collisions across 324 checkouts and reported repo-name-first at 34% versus directory-basename at 15%. **That was the wrong population** — it counted linked worktrees, which are never Fray projects. Corrected, over root checkouts only (a linked worktree has `.git` as a *file*, a real checkout has it as a *directory*):
+I originally measured slug collisions across 324 checkouts and reported repo-name-first at 34% versus directory-basename at 15%. **That was the wrong population** — it counted linked worktrees, which are never Frizz projects. Corrected, over root checkouts only (a linked worktree has `.git` as a *file*, a real checkout has it as a *directory*):
 
 | slug rule | distinct slugs | colliding names | root checkouts affected |
 | --- | --- | --- | --- |
@@ -24,7 +24,7 @@ I originally measured slug collisions across 324 checkouts and reported repo-nam
 
 304 real root checkouts, 18 linked worktrees. The direction survives — repo-name still collides roughly twice as much, now driven by same-remote clones (`dpcweb` ×25, `zod` ×9, `scratch` ×8) rather than by worktrees.
 
-**But at the real scale this does not carry an argument.** Fray runs from three or four directories, growing to maybe a few dozen. At that size a collision is an edge case, not a rate — and for a root clone the repo name and the directory basename are usually the same string anyway. The original instinct ("repo name, then directory name") is fine. Prefer the **directory basename** on the tiebreak, for two small reasons: it needs no git remote (so it works for the gitless case), and it is the name already in your shell prompt.
+**But at the real scale this does not carry an argument.** Frizz runs from three or four directories, growing to maybe a few dozen. At that size a collision is an edge case, not a rate — and for a root clone the repo name and the directory basename are usually the same string anyway. The original instinct ("repo name, then directory name") is fine. Prefer the **directory basename** on the tiebreak, for two small reasons: it needs no git remote (so it works for the gitless case), and it is the name already in your shell prompt.
 
 What actually matters is that collisions are handled *correctly* when they happen, not that they are rare.
 
@@ -42,14 +42,14 @@ The derivation is order-dependent (whoever registers first gets the short name),
 
 ### Reserve a namespace, or a repo named `settings` will break the app
 
-Project slugs would share the top-level path namespace with the app's own routes. Today the client already hardcodes `/rpc`, `/events`, `/ws`, `/term/<slug>`, `/attach`, `/local-image`, `/local-visualization`, `/_fray/control/*`, plus root-absolute `/assets/…`, `/favicon*.png`, `/manifest.webmanifest`.
+Project slugs would share the top-level path namespace with the app's own routes. Today the client already hardcodes `/rpc`, `/events`, `/ws`, `/term/<slug>`, `/attach`, `/local-image`, `/local-visualization`, `/_frizz/control/*`, plus root-absolute `/assets/…`, `/favicon*.png`, `/manifest.webmanifest`.
 
-`_fray` is already the convention (`packages/web/src/api/restart.ts:69`). **Formalize it: everything Fray itself serves moves under `/_fray/`, and every other top-level segment is a project slug.** Then the deny-list is one word plus the static asset names, instead of a growing list that breaks whenever a route is added.
+`_frizz` is already the convention (`packages/web/src/api/restart.ts:69`). **Formalize it: everything Frizz itself serves moves under `/_frizz/`, and every other top-level segment is a project slug.** Then the deny-list is one word plus the static asset names, instead of a growing list that breaks whenever a route is added.
 
 Two traps that follow:
 
 - **Trailing slash.** `/<slug>` and `/<slug>/` resolve relative URLs differently. Assets are root-absolute today (`packages/web/vite.config.ts` sets no `base`), so this is survivable — but pick one form and redirect the other, rather than serving both.
-- **`isFrayRoute`** (`packages/web/src/lib/markdownTargets.ts:29-32`) hardcodes the in-app route set. Under a prefix, every in-app link would look like a *filesystem path* to the sanitizer and render as a disabled local-file chip. Silent, and easy to miss.
+- **`isFrizzRoute`** (`packages/web/src/lib/markdownTargets.ts:29-32`) hardcodes the in-app route set. Under a prefix, every in-app link would look like a *filesystem path* to the sanitizer and render as a disabled local-file chip. Silent, and easy to miss.
 
 ---
 
@@ -57,14 +57,14 @@ Two traps that follow:
 
 A grid of project cards needs a list of projects. **That list does not exist.**
 
-- `~/.fray/projects/` holds **42** project directories on this machine.
+- `~/.frizz/projects/` holds **42** project directories on this machine.
 - Only **6** contain a `launcher.json` (the only file recording `projectDir`). **33 have no on-disk record of which repo they belong to at all.**
 - `ui.db` has no column for the project directory — its tables are exactly `session` and `settings`.
 - Two of the six recoverable paths point at dead `/private/tmp/` repos.
 
-The mapping today runs repo → id (`git config --local fray.id`). There is **no reverse index**, no listing function anywhere in `packages/server/src` or `packages/web/src`, and no "open another repo" flow.
+The mapping today runs repo → id (`git config --local frizz.id`). There is **no reverse index**, no listing function anywhere in `packages/server/src` or `packages/web/src`, and no "open another repo" flow.
 
-**The primitive is already designed**, in [`plans/gitless-projects.md`](gitless-projects.md) §3: `~/.fray/projects/<id>/identity.json` recording the minted path plus `(dev, ino)`, with a duplicate-checkout self-heal rule and a move-vs-copy distinction (`mv` preserves the inode on APFS, `cp -R` does not). That plan's §4 also specifies marker walk-up root discovery for non-repo directories — which is the *only* code path that would make "then the name of the directory" meaningful, since `src/launcher.ts:406-410` currently hard-fails outside a Git repo. **These two efforts should land together;** the singleton needs `identity.json`, and gitless needs somewhere to show a non-repo project.
+**The primitive is already designed**, in [`plans/gitless-projects.md`](gitless-projects.md) §3: `~/.frizz/projects/<id>/identity.json` recording the minted path plus `(dev, ino)`, with a duplicate-checkout self-heal rule and a move-vs-copy distinction (`mv` preserves the inode on APFS, `cp -R` does not). That plan's §4 also specifies marker walk-up root discovery for non-repo directories — which is the *only* code path that would make "then the name of the directory" meaningful, since `src/launcher.ts:406-410` currently hard-fails outside a Git repo. **These two efforts should land together;** the singleton needs `identity.json`, and gitless needs somewhere to show a non-repo project.
 
 Beyond the index, a grid needs a lifecycle nobody has had to think about while each project only ever saw itself:
 
@@ -79,32 +79,32 @@ Beyond the index, a grid needs a lifecycle nobody has had to think about while e
 
 Routing is cheap. The web router is 110 hand-rolled lines (`packages/web/src/lib/router.ts`); `currentPath()`/`applyPath()` are the only URL readers/writers, and `main.tsx:59` already branches the root render on pathname, so a `<ProjectGrid/>` is a third shell beside the existing `<App/>` and `<StandaloneThreadPage/>`. Server-side, `mountRouter(app, "/rpc", …)` already takes the prefix as an argument.
 
-The server is also far more multi-tenant-ready than `ARCHITECTURE.md`'s "no cross-repo anything" invariant implies. `AppContext` is a per-call object explicitly documented as *"derived once at boot and threaded through the AppContext — no module reads cwd on its own"* (`packages/server/src/project.ts:13-14`). There are **zero** `process.chdir` calls, **zero** `process.env` mutations, and two `process.cwd()` calls, both defaulted parameters already overridden in production. Every module-level cache is keyed by absolute path or is genuinely machine-global. Broker sockets, `FRAY_PERM_DIR`, and interaction-journal reads are already project-namespaced — the journal even filters foreign `projectId`s with a comment saying why.
+The server is also far more multi-tenant-ready than `ARCHITECTURE.md`'s "no cross-repo anything" invariant implies. `AppContext` is a per-call object explicitly documented as *"derived once at boot and threaded through the AppContext — no module reads cwd on its own"* (`packages/server/src/project.ts:13-14`). There are **zero** `process.chdir` calls, **zero** `process.env` mutations, and two `process.cwd()` calls, both defaulted parameters already overridden in production. Every module-level cache is keyed by absolute path or is genuinely machine-global. Broker sockets, `FRIZZ_PERM_DIR`, and interaction-journal reads are already project-namespaced — the journal even filters foreign `projectId`s with a comment saying why.
 
 **What actually bites:**
 
 - **The tailer's duty cycle.** `tickWithBudget` runs *synchronously on the event loop* (`packages/server/src/tailer.ts:3991-4009`), and the self-scheduling design bounds it at ~50% duty cycle **per tailer instance, with no cross-instance arbiter** (`:4010-4032`). Two tailers each claim 50%. This machine has 42 registered projects and 775 session rows. **Lazy activation is therefore mandatory, not an optimization.**
 - **…and lazy activation has a product consequence.** Timers, `awaiting` wakes, limit auto-resume, snooze expiry, PR watches, and completion notifications are all "always on because that repo's server is running." If a singleton only activates the project you are viewing, **all of that stops for every project you are not viewing.** There is no existing mechanism for "run the scheduler for a project whose UI is closed." This is the single biggest functional consequence of the design and it is a product decision, not an implementation detail.
 - **Blast radius.** `dev-child.ts:19-25` exits the process on any `uncaughtException`. Today that kills one repo's UI; in one shared process it kills all 42. Per-subsystem guards are good (tailer ticks, board rebuilds, transcript discovery are all individually caught) but there is no error boundary at the `AppContext` seam.
-- **One artifact for the whole machine.** Artifact *storage* is already machine-global and content-addressed (`~/.fray/builds`, 87 digests here), but *selection* is per-project via `<stateDir>/stable.json` — and **8 projects are promoted to 8 distinct digests right now**, because each is keyed to the fray source checkout it was launched from. A singleton collapses this to one, which also collapses per-project "Update & Restart" and per-project rollback. For `npx frayui` users that is a simplification; for this repo's own dogfooding it is a real loss.
-- **Two OS users.** The port reservation lock is documented "machine-wide" (`src/launcher.ts:672`) but lives under `~/.fray`, so it is **per-user** — deliberately, because `pidIsAlive` treats `EPERM` as ALIVE and another account's stale lock would read as permanently held. TCP ports are not per-user. Two users launching concurrently both reserve the port, both probe it free, and the loser fails at `listen()`. The 100-port scan hides this today; a fixed port turns it into a hard failure.
-- **`fray-dev` vs published `frayui`.** Both would want the same fixed port on this machine. They need distinct defaults or a takeover protocol.
+- **One artifact for the whole machine.** Artifact *storage* is already machine-global and content-addressed (`~/.frizz/builds`, 87 digests here), but *selection* is per-project via `<stateDir>/stable.json` — and **8 projects are promoted to 8 distinct digests right now**, because each is keyed to the frizz source checkout it was launched from. A singleton collapses this to one, which also collapses per-project "Update & Restart" and per-project rollback. For `npx frizz` users that is a simplification; for this repo's own dogfooding it is a real loss.
+- **Two OS users.** The port reservation lock is documented "machine-wide" (`src/launcher.ts:672`) but lives under `~/.frizz`, so it is **per-user** — deliberately, because `pidIsAlive` treats `EPERM` as ALIVE and another account's stale lock would read as permanently held. TCP ports are not per-user. Two users launching concurrently both reserve the port, both probe it free, and the loser fails at `listen()`. The 100-port scan hides this today; a fixed port turns it into a hard failure.
+- **`frizz-dev` vs published `frizz`.** Both would want the same fixed port on this machine. They need distinct defaults or a takeover protocol.
 - **`--status` / `--stop` semantics invert.** Both mean "this workspace" today. Under a singleton, `--stop` from repo A stops repo B's board too.
 
 ### Same origin: mostly benign, with two real edges
 
 Today each project is a distinct origin (distinct port). One port means one origin.
 
-Benign: the only localStorage keys are `fray.prefs.v1`, `fray-font`, `fray.debugScroll` — all view preferences that are arguably per-machine anyway. `fray-drafts:v1` and `fray-thread-tab:*` are *already* keyed by `projectDir` internally, and `threadTabState.ts:40-42` carries a comment explicitly anticipating this scenario. No IndexedDB, no cookies, no service worker, no `BroadcastChannel`.
+Benign: the only localStorage keys are `frizz.prefs.v1`, `frizz-font`, `frizz.debugScroll` — all view preferences that are arguably per-machine anyway. `frizz-drafts:v1` and `frizz-thread-tab:*` are *already* keyed by `projectDir` internally, and `threadTabState.ts:40-42` carries a comment explicitly anticipating this scenario. No IndexedDB, no cookies, no service worker, no `BroadcastChannel`.
 
 Two things do break:
 
 - **Desktop notifications collapse.** `new Notification(title, { tag: event.slug })` (`packages/web/src/api/board-stream.ts:78`) uses the bare thread slug as the browser's replace-key. Two projects with a thread called `fix-queue-focus` would collapse into one notification, and the click handler runs `openThread` in whichever tab fired it. Needs `tag: project + slug`.
 - **`font` is per-project on the server but per-origin on the client** (`lib/font.ts:28` mirrors it to localStorage for the pre-paint FOUC guard). That is a latent inconsistency today; a singleton makes it visible as the previous project's font flashing on load. `font`, `notifications`, and `localFileOpener` are per-machine concepts currently stored per-project and should move.
 
-The **security** delta is smaller than it first appears but not zero. A fixed, well-known port does *not* meaningfully weaken CSRF: `packages/server/src/local-origin.ts` already requires an exact `Host` + `Origin` match and never trusts `X-Forwarded-*`, so a malicious page's `fetch` fails on Origin regardless of whether the port was guessable. What *is* lost is origin isolation *between projects* — markdown rendered from agent output in project A would execute in the same origin as project B's control plane, which can dispatch agents. Fray sanitizes markdown, so this is a raised stake rather than a new hole, but it should be a stated tradeoff rather than an accident.
+The **security** delta is smaller than it first appears but not zero. A fixed, well-known port does *not* meaningfully weaken CSRF: `packages/server/src/local-origin.ts` already requires an exact `Host` + `Origin` match and never trusts `X-Forwarded-*`, so a malicious page's `fetch` fails on Origin regardless of whether the port was guessable. What *is* lost is origin isolation *between projects* — markdown rendered from agent output in project A would execute in the same origin as project B's control plane, which can dispatch agents. Frizz sanitizes markdown, so this is a raised stake rather than a new hole, but it should be a stated tradeoff rather than an accident.
 
-**Subdomains (`fray.localhost:PORT`) would restore per-project origins — and are dead on arrival: Safari does not resolve `*.localhost`.** Chrome, Firefox and Edge do; Safari on macOS never implemented it. Wildcard-DNS services like `nip.io` would work but require a network round-trip, which is unacceptable for a local-first tool that must work offline.
+**Subdomains (`frizz.localhost:PORT`) would restore per-project origins — and are dead on arrival: Safari does not resolve `*.localhost`.** Chrome, Firefox and Edge do; Safari on macOS never implemented it. Wildcard-DNS services like `nip.io` would work but require a network round-trip, which is unacceptable for a local-first tool that must work offline.
 
 ---
 
@@ -118,12 +118,12 @@ What it buys, beyond the stated goals: the machine-global timers currently dupli
 
 1. **A cross-process tailer budget.** `tickWithBudget` runs synchronously on the event loop (`tailer.ts:3991-4009`) and the self-scheduling design bounds it at ~50% duty cycle **per tailer instance, with no cross-instance arbiter** (`:4010-4032`). Two tailers each claim 50%. Either one shared scheduler round-robins all tailers under a single budget, or the tailers move to `worker_threads`, or only active projects tail. **Riskiest single item — worth an experiment before the design is fixed**, since the saturation claim is read from the scheduling logic and its own over-budget warning, not measured.
 2. **Per-project activate/deactivate lifecycle.** `startServer` builds one `AppContext` and tears it down at process exit. Making it a keyed, ref-counted, restartable resource means reworking two shutdown barriers (`index.ts:408-453`, `context.ts:247-274`) and the ownership fence (`index.ts:457-514`) from process lifetime to tenant lifetime. They are well-tested but deeply assume one-shot.
-3. **A per-project error boundary.** `dev-child.ts:19-25` exits the process on any `uncaughtException`. Per-subsystem guards are already good — tailer ticks, board rebuilds, `fs.watch` setup and transcript discovery are each individually caught, and the tailer's guard carries a comment saying its absence *used* to take down the whole server. What is missing is a catch at the `AppContext` seam so one project's corrupt `ui.db` or malformed `.fray/` cannot abort every other project.
-4. **Per-project broker env.** `context.ts:604` spreads the entire `process.env` into every broker fork. That env is project-pinned today via `FRAY_LAUNCH_*`; in a unified process those values would be wrong or absent, and project A's broker would inherit whatever the singleton was launched with.
+3. **A per-project error boundary.** `dev-child.ts:19-25` exits the process on any `uncaughtException`. Per-subsystem guards are already good — tailer ticks, board rebuilds, `fs.watch` setup and transcript discovery are each individually caught, and the tailer's guard carries a comment saying its absence *used* to take down the whole server. What is missing is a catch at the `AppContext` seam so one project's corrupt `ui.db` or malformed `.frizz/` cannot abort every other project.
+4. **Per-project broker env.** `context.ts:604` spreads the entire `process.env` into every broker fork. That env is project-pinned today via `FRIZZ_LAUNCH_*`; in a unified process those values would be wrong or absent, and project A's broker would inherit whatever the singleton was launched with.
 
 Everything else is mechanical: prefix the routes (`mountRouter` already takes the prefix as an argument), fix the `isApiUrl` allowlist (`index.ts:182-184` — a prefixed request that misses it silently returns the SPA shell with a 200, which is a blank page rather than an error), resize the three CAP-16 caches that would thrash across projects, and pass `installSignalHandlers: false` for all but the owning context.
 
-**On background projects (the §3 consequence): decided by the same logic.** Lazy activation is forced by item 1, but it does not have to be all-or-nothing. Split it: a project's **scheduler** — timers, `awaiting` wakes, snooze expiry, PR watches, limit auto-resume — is cheap and stays on for every registered project; its **tailer and file watcher**, which are the expensive parts, activate only for projects with a live viewer. That keeps the promise that matters (nothing goes quiet while you are not looking) without paying 42 tailers' duty cycle. The grid's card badges come from the board parser reading `.fray/` directly, which cold-parses in ~100ms and needs no watcher at all.
+**On background projects (the §3 consequence): decided by the same logic.** Lazy activation is forced by item 1, but it does not have to be all-or-nothing. Split it: a project's **scheduler** — timers, `awaiting` wakes, snooze expiry, PR watches, limit auto-resume — is cheap and stays on for every registered project; its **tailer and file watcher**, which are the expensive parts, activate only for projects with a live viewer. That keeps the promise that matters (nothing goes quiet while you are not looking) without paying 42 tailers' duty cycle. The grid's card badges come from the board parser reading `.frizz/` directly, which cold-parses in ~100ms and needs no watcher at all.
 
 ### Alternatives considered and rejected
 
@@ -140,13 +140,13 @@ Running the CLI inside a directory must be a one-step, no-prompt path to that pr
 
 1. Resolve the directory to its canonical root (`realpath`, then the repo root; for the gitless case, the marker walk-up from [`plans/gitless-projects.md`](gitless-projects.md) §4).
 2. Look that path up in the registry. **If it is unknown, register it immediately — no approval, no prompt, no "add this project?" step.** A path the user just ran the CLI inside is authorization enough; asking would be a dialog whose only sensible answer is yes.
-3. Health-check the machine's Fray. If it is up, do not start anything — just open `http://localhost:<port>/<slug>`. If it is down, start it, then open.
+3. Health-check the machine's Frizz. If it is up, do not start anything — just open `http://localhost:<port>/<slug>`. If it is down, start it, then open.
 4. Print the URL either way.
 
 Two consequences worth calling out because they invert today's behavior:
 
-- **`--stop` and Ctrl-C change meaning.** Both are per-workspace today (`src/index.ts:602-747`); under a singleton they stop the machine's Fray and every project's board with it. They need to either grow a scope or refuse to stop a server other projects are using.
-- **`/health` becomes a list.** It currently returns one `{projectId, projectDir, bootId, ownerProof}` and `probeFray` rejects any mismatch (`src/launcher.ts:593-630`) — a good guarantee that a fixed port can never silently serve the wrong project. Preserve it by having the probe assert the *machine* identity and then confirm the specific project is registered, rather than dropping the check.
+- **`--stop` and Ctrl-C change meaning.** Both are per-workspace today (`src/index.ts:602-747`); under a singleton they stop the machine's Frizz and every project's board with it. They need to either grow a scope or refuse to stop a server other projects are using.
+- **`/health` becomes a list.** It currently returns one `{projectId, projectDir, bootId, ownerProof}` and `probeFrizz` rejects any mismatch (`src/launcher.ts:593-630`) — a good guarantee that a fixed port can never silently serve the wrong project. Preserve it by having the probe assert the *machine* identity and then confirm the specific project is registered, rather than dropping the check.
 
 ---
 
@@ -196,13 +196,13 @@ So the fallback must **jump out of the block, not walk through it**:
 
 Distinguish the two errors in the message: `EADDRINUSE` means something else is listening and the user can go find it; `EACCES`/WSAEACCES on Windows means an invisible reservation, where `netstat` will show the port free and the honest advice is `netsh int ipv4 show excludedportrange protocol=tcp`. Those need different text — a "port in use" message for a reserved port sends people hunting for a process that does not exist.
 
-**Rejected from the earlier draft:** `3729` (F-R-A-Y on a keypad, but inside `3699-3798` and IANA `fksp-audit`), `4917` (Fray's current default, inside `4914-5013`, and unmemorable), `4242` (inside `4214-4313`; also Posit Package Manager and Orthanc), and the five-digit safe-band picks `13729`/`24729` — correct on every technical axis and rightly rejected as unmemorable, which was the whole brief.
+**Rejected from the earlier draft:** `3729` (F-R-A-Y on a keypad, but inside `3699-3798` and IANA `fksp-audit`), `4917` (Frizz's current default, inside `4914-5013`, and unmemorable), `4242` (inside `4214-4313`; also Posit Package Manager and Orthanc), and the five-digit safe-band picks `13729`/`24729` — correct on every technical axis and rightly rejected as unmemorable, which was the whole brief.
 
 ### Two things the fallback keeps
 
 Degrade, do not refuse. Vite and Jupyter both move to another port; Docker fails hard. A local tool that will not start because something unrelated holds a port is worse than one that prints a different URL — the jump-then-scan above is the same policy, just correct about *where* to jump.
 
-And keep the identity handshake exactly as it is. `/health` returns `ownerProof` = `sha256("fray-project-launch-v2\0" ‖ projectId ‖ projectDir ‖ token)`, and `probeFray` rejects any mismatch (`src/launcher.ts:593-630`). That is what guarantees a well-known port can never *silently* serve the wrong thing — it fails to start instead, which is the right failure. `--port` and `FRAY_PORT` stay explicit-or-fail, with no scan.
+And keep the identity handshake exactly as it is. `/health` returns `ownerProof` = `sha256("frizz-project-launch-v2\0" ‖ projectId ‖ projectDir ‖ token)`, and `probeFrizz` rejects any mismatch (`src/launcher.ts:593-630`). That is what guarantees a well-known port can never *silently* serve the wrong thing — it fails to start instead, which is the right failure. `--port` and `FRIZZ_PORT` stay explicit-or-fail, with no scan.
 
 ---
 
@@ -210,22 +210,22 @@ And keep the identity handshake exactly as it is. `/health` returns `ownerProof`
 
 1. **`identity.json` + a project registry.** The reverse index from [`plans/gitless-projects.md`](gitless-projects.md) §3, plus backfill for the 33 orphaned state dirs and staleness detection. Nothing else can start without this.
 2. **Slug derivation + rename**, per §1. Registry field, not a boot-time derivation.
-3. **Move app routes under `/_fray/`**, freeing the top-level namespace. Fix `isFrayRoute` (`markdownTargets.ts:29-32`) in the same change.
+3. **Move app routes under `/_frizz/`**, freeing the top-level namespace. Fix `isFrizzRoute` (`markdownTargets.ts:29-32`) in the same change.
 4. **Multi-tenant the server** — a keyed `AppContext` map with activate/deactivate, the four hard items from §4, and the `AppContext`-seam error boundary. Do the tailer-budget experiment first; it is the one that can invalidate the shape.
 5. **Client base-path awareness** — the ~11 hardcoded absolute paths, plus `currentPath()`/`applyPath()`.
 6. **The grid** as a third root shell at `main.tsx:59`.
-7. **Adopt the port**, and split `fray-dev` onto its own default so source and published installs coexist.
+7. **Adopt the port**, and split `frizz-dev` onto its own default so source and published installs coexist.
 8. **Move `font` / `notifications` / `localFileOpener`** to machine-level settings; fix the notification `tag` collision.
 
 ### Fold in while you are here: three un-namespaced `/tmp` directories
 
-Pre-existing and orthogonal to the singleton, but they are the same shared-resource bug class as the two-OS-users hazard in §3, and they already collide today between two Fray installs for *one* user. On macOS `$TMPDIR` is a per-user `/var/folders/…` path so these are latent; **on Linux `$TMPDIR` is normally unset, so all three land in a world-shared `/tmp`.**
+Pre-existing and orthogonal to the singleton, but they are the same shared-resource bug class as the two-OS-users hazard in §3, and they already collide today between two Frizz installs for *one* user. On macOS `$TMPDIR` is a per-user `/var/folders/…` path so these are latent; **on Linux `$TMPDIR` is normally unset, so all three land in a world-shared `/tmp`.**
 
-- `tmpdir()/fray-worker-logs/<slug>.stall.log` (`packages/server/src/tailer.ts:132,3555`) — the filename is a **bare thread slug**, no project or user component. Two projects with a thread named `fix-auth` overwrite each other's stall log, which contains up to 4000 chars of captured agent output. The write is `try`/`catch`-wrapped, so it fails silently.
-- `tmpdir()/fray-tool-images` (`packages/server/src/transcript.ts:1064`) — filenames are id-hashed and the temp-file publish is pid-safe, but `pruneScreenshotCache` (`:1086-1101`) `readdirSync`s the whole directory and unlinks the oldest past 200 entries, so **one install's prune deletes another's cached screenshots**. This one collides on every platform, including macOS.
-- `tmpdir()/fray-sysprompts/<sessionId>.md` (`packages/server/src/session-files.ts:5`, written at `dispatch.ts:497-501`) — filenames are UUIDs so content cannot collide, but the *directory* can: on Linux the first OS user creates it at their umask, and a second user's `writeFileSync` then fails EACCES. That write is **not** wrapped in try/catch, so every dispatch for the second user throws. These files are agent system prompts.
+- `tmpdir()/frizz-worker-logs/<slug>.stall.log` (`packages/server/src/tailer.ts:132,3555`) — the filename is a **bare thread slug**, no project or user component. Two projects with a thread named `fix-auth` overwrite each other's stall log, which contains up to 4000 chars of captured agent output. The write is `try`/`catch`-wrapped, so it fails silently.
+- `tmpdir()/frizz-tool-images` (`packages/server/src/transcript.ts:1064`) — filenames are id-hashed and the temp-file publish is pid-safe, but `pruneScreenshotCache` (`:1086-1101`) `readdirSync`s the whole directory and unlinks the oldest past 200 entries, so **one install's prune deletes another's cached screenshots**. This one collides on every platform, including macOS.
+- `tmpdir()/frizz-sysprompts/<sessionId>.md` (`packages/server/src/session-files.ts:5`, written at `dispatch.ts:497-501`) — filenames are UUIDs so content cannot collide, but the *directory* can: on Linux the first OS user creates it at their umask, and a second user's `writeFileSync` then fails EACCES. That write is **not** wrapped in try/catch, so every dispatch for the second user throws. These files are agent system prompts.
 
-The fix is the one already used correctly for the broker sockets — hash the state dir into the directory name (`packages/server/src/fray-paths.ts:44-52` documents exactly this rationale: "two accounts cannot collide even in a shared `/tmp`").
+The fix is the one already used correctly for the broker sockets — hash the state dir into the directory name (`packages/server/src/frizz-paths.ts:44-52` documents exactly this rationale: "two accounts cannot collide even in a shared `/tmp`").
 
 ## 7. No open questions
 

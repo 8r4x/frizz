@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
-import type { BoardSnapshot, ThreadView as ThreadViewModel, TranscriptMessage } from "@fray-ui/shared"
+import type { BoardSnapshot, ThreadView as ThreadViewModel, TranscriptMessage } from "@frizz/shared"
 import { ThreadView } from "./components/ChatView.tsx"
 import { TodosView } from "./components/TodosView.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
@@ -55,7 +55,7 @@ const thread = {
   sessionId: "sid-queued-spacing",
 } as unknown as ThreadViewModel
 
-store.board = { projectDir: "/fixture/fray", threads: [thread] } as BoardSnapshot
+store.board = { projectDir: "/fixture/frizz", threads: [thread] } as BoardSnapshot
 
 const messages: TranscriptMessage[] = [
   { sourceId: "u1", role: "user", text: "Look at the queued-message spacing.", tools: [], parts: [] },

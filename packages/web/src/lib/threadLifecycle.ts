@@ -1,5 +1,5 @@
-import type { CompletionHold, ThreadView } from "@fray-ui/shared"
-import { isDirectSubAgent } from "@fray-ui/shared"
+import type { CompletionHold, ThreadView } from "@frizz/shared"
+import { isDirectSubAgent } from "@frizz/shared"
 
 export interface ThreadLifecycleAvailability {
   // The strip itself renders. TRUE for any owned session thread, done or not — see `done`.

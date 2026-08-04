@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import type { ServerEvent } from "@fray-ui/shared"
+import type { ServerEvent } from "@frizz/shared"
 import { BoardStream } from "./board-stream.ts"
 
 test("BoardStream forwards typed-interaction invalidations without treating them as board deltas", () => {

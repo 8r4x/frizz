@@ -20,7 +20,7 @@ const REAL_CMD_SHIM = [
 ].join("\r\n")
 
 function binDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "fray-claude-bin-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-claude-bin-"))
   // POSIX npm symlinks the bare name to the JS entry; WINDOWS npm cannot, so it writes a shell script
   // by that name instead. Either way the bare name exists — which is exactly why the old scan was
   // fooled into returning it.
@@ -71,7 +71,7 @@ test("posix: the bare name on PATH still resolves, and an absolute bin is passed
 })
 
 test("an unresolvable name fails loudly rather than handing the SDK a bare name", () => {
-  const empty = mkdtempSync(join(tmpdir(), "fray-claude-empty-"))
+  const empty = mkdtempSync(join(tmpdir(), "frizz-claude-empty-"))
   try {
     assert.throws(() => resolveClaudeExecutableAbsolute("definitely-not-installed", { PATH: empty }), /could not resolve/)
   } finally {

@@ -14,7 +14,7 @@ export type LocalImageResult =
   | { status: 200; contentType: string; body: Buffer }
 
 // Screenshot paths in agent markdown can live anywhere on disk. This resolver is deliberately
-// unconfined: the HTTP callers apply Fray's loopback/origin gate before reaching it, while the
+// unconfined: the HTTP callers apply Frizz's loopback/origin gate before reaching it, while the
 // extension allowlist, realpath, and regular-file check keep the response limited to image bytes.
 export function resolveLocalImage(rawPath: string | undefined): LocalImageResult {
   if (!rawPath || !isAbsolute(rawPath)) return { status: 400 }

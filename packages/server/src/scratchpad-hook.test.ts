@@ -23,12 +23,12 @@ const SID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
 
 function newProject(): string {
   const dir = mkdtempSync(join(tmpdir(), "scratchpad-hook-"))
-  mkdirSync(join(dir, ".fray", "threads", SID), { recursive: true })
+  mkdirSync(join(dir, ".frizz", "threads", SID), { recursive: true })
   return dir
 }
 
 function padPath(dir: string): string {
-  return join(dir, ".fray", "threads", SID, "scratch.md")
+  return join(dir, ".frizz", "threads", SID, "scratch.md")
 }
 
 function writePad(dir: string, body: string): void {
@@ -62,8 +62,8 @@ function runHook(
     env: {
       ...process.env,
       CLAUDE_PROJECT_DIR: dir,
-      FRAY_UI_THREAD: "",
-      FRAY_SCRATCHPAD_HOOK: "",
+      FRIZZ_THREAD: "",
+      FRIZZ_SCRATCHPAD_HOOK: "",
       ...env,
     },
   })
@@ -84,7 +84,7 @@ function additionalContext(stdout: string): string {
 
 test("a fresh startup teaches the contract instead of echoing the pad's own skeleton", () => {
   const dir = newProject()
-  // The real skeleton fray writes at dispatch — headings, orientation line, an empty task box.
+  // The real skeleton frizz writes at dispatch — headings, orientation line, an empty task box.
   writePad(dir, scratchpadContent("some effort"))
   const ctx = additionalContext(runHook(dir, ["--mode=session-start"], { session_id: SID, source: "startup" }))
   assert.match(ctx, /⟦scratchpad⟧/)
@@ -103,7 +103,7 @@ test("a written scratchpad's head is injected BYTE-FOR-BYTE after a compaction, 
   assert.match(ctx, /⟦scratchpad — reground here⟧/)
   assert.match(ctx, /RE-GROUND ON IT BEFORE DOING ANYTHING ELSE/, "the pad is the canonical record")
   assert.match(ctx, /re-read the full file/i, "injection is the floor; the pointer is the ceiling")
-  assert.match(ctx, new RegExp(`\\.fray/threads/${SID}/scratch\\.md`))
+  assert.match(ctx, new RegExp(`\\.frizz/threads/${SID}/scratch\\.md`))
   assert.match(ctx, /⟦end scratchpad⟧/)
 })
 
@@ -122,7 +122,7 @@ test("a fresh startup does not pay for the pad — only the context-losing sourc
 // from a previous conversation that ran out of context." It is about the conversation just summarized,
 // but it arrives when the window is emptiest and workers read it as a report on themselves and wind
 // down — nub session 5258ebe4 took its auto-compaction at transcript line 20239 and then declared
-// "I'm out of context" on 13 consecutive turns at fills of 176k-244k. This hook is the only fray text
+// "I'm out of context" on 13 consecutive turns at fills of 176k-244k. This hook is the only frizz text
 // that lands in that exact window, so it is where the preamble gets answered. Pinned on BOTH pad
 // states, because a compacted worker with an empty pad is the one least able to argue with it.
 test("a compaction re-ground contradicts the summary's 'ran out of context' preamble", () => {
@@ -164,25 +164,25 @@ test("an oversized pad is clipped, and says so rather than silently truncating",
   const dir = newProject()
   writePad(dir, "x".repeat(5000))
   const ctx = additionalContext(
-    runHook(dir, ["--mode=session-start"], { session_id: SID, source: "compact" }, { FRAY_SCRATCHPAD_MAX_CHARS: "500" })
+    runHook(dir, ["--mode=session-start"], { session_id: SID, source: "compact" }, { FRIZZ_SCRATCHPAD_MAX_CHARS: "500" })
   )
   assert.match(ctx, /clipped at 500 characters/)
   assert.ok(!ctx.includes("x".repeat(600)), "content past the cap must not be injected")
 })
 
-test("every silence gate holds: project registration under fray, sub-agents, and the kill switch", () => {
+test("every silence gate holds: project registration under frizz, sub-agents, and the kill switch", () => {
   const dir = newProject()
   writePad(dir, "should never appear\n")
   const evt = { session_id: SID, source: "compact" }
-  // The repo-local `.claude/settings.json` copy defers to the plugin one inside a fray worker.
-  assert.equal(runHook(dir, ["--mode=session-start", "--via=project"], evt, { FRAY_UI_THREAD: "t" }), "")
+  // The repo-local `.claude/settings.json` copy defers to the plugin one inside a frizz worker.
+  assert.equal(runHook(dir, ["--mode=session-start", "--via=project"], evt, { FRIZZ_THREAD: "t" }), "")
   assert.notEqual(runHook(dir, ["--mode=session-start", "--via=project"], evt), "")
   // Sub-agents do not get root re-ground/nudge injections; their dedicated start epilogue owns the
   // collaborative editing contract instead.
   assert.equal(runHook(dir, ["--mode=session-start"], { ...evt, agent_id: "sub-1" }), "")
-  assert.equal(runHook(dir, ["--mode=session-start"], evt, { FRAY_SCRATCHPAD_HOOK: "off" }), "")
+  assert.equal(runHook(dir, ["--mode=session-start"], evt, { FRIZZ_SCRATCHPAD_HOOK: "off" }), "")
   // …but a non-off value never disables it: absence means ON now.
-  assert.notEqual(runHook(dir, ["--mode=session-start"], evt, { FRAY_SCRATCHPAD_HOOK: "maybe" }), "")
+  assert.notEqual(runHook(dir, ["--mode=session-start"], evt, { FRIZZ_SCRATCHPAD_HOOK: "maybe" }), "")
   // With no session id there is no key, and an unkeyed pad would bleed across sessions.
   assert.equal(runHook(dir, ["--mode=session-start"], { source: "compact" }, { CLAUDE_CODE_SESSION_ID: "" }), "")
 })
@@ -198,13 +198,13 @@ test("the codex child epilogue permits scoped progress merges but forbids destru
   )
   assert.equal(out.hookSpecificOutput.hookEventName, "SubagentStart")
   const ctx = out.hookSpecificOutput.additionalContext as string
-  assert.match(ctx, new RegExp(`\\.fray/threads/${SID}/scratch\\.md`))
+  assert.match(ctx, new RegExp(`\\.frizz/threads/${SID}/scratch\\.md`))
   assert.match(ctx, /Update your own task progress in it as you work/)
   assert.match(ctx, /rather than leaving the root as its sole writer/)
   assert.match(ctx, /Before every edit, re-read the current file/)
   assert.match(ctx, /patch only your scoped task\/progress entry/)
   assert.match(ctx, /preserving every other agent’s content/)
-  assert.match(ctx, /Fray coordination state, not a project deliverable or source edit/)
+  assert.match(ctx, /Frizz coordination state, not a project deliverable or source edit/)
   assert.match(ctx, /explicit exception to delegated phrases such as “write only <path>”/)
   assert.match(ctx, /never classify that merge as unauthorized or roll it back/)
   assert.match(ctx, /Never delete, truncate, reinitialize, move, or replace the whole file/)
@@ -231,7 +231,7 @@ test("the codex child epilogue tells the child not to spawn agents of its own un
 
 test("the nudge tracks context GROWTH, not an absolute threshold or wall clock", () => {
   const dir = newProject()
-  const stale = { FRAY_SCRATCHPAD_STALE_TOKENS: "60000" }
+  const stale = { FRIZZ_SCRATCHPAD_STALE_TOKENS: "60000" }
   const nudge = (tokens: number) =>
     runHook(dir, ["--mode=nudge"], { session_id: SID, transcript_path: writeTranscript(dir, tokens) }, stale)
 
@@ -259,9 +259,9 @@ test("the mid-turn channel reports itself as PostToolUse so the harness accepts 
     dir,
     ["--mode=nudge", "--event=PostToolUse"],
     { session_id: SID, transcript_path: writeTranscript(dir, 90_000) },
-    { FRAY_SCRATCHPAD_STALE_TOKENS: "60000" }
+    { FRIZZ_SCRATCHPAD_STALE_TOKENS: "60000" }
   )
-  // A fray worker runs enormous autonomous turns; a turn-boundary-only nudge can miss a whole
+  // A frizz worker runs enormous autonomous turns; a turn-boundary-only nudge can miss a whole
   // session's work. The event name must match the firing hook or the payload is rejected.
   assert.equal(JSON.parse(out).hookSpecificOutput.hookEventName, "PostToolUse")
   assert.match(additionalContext(out), /⟦scratchpad empty⟧/)
@@ -269,7 +269,7 @@ test("the mid-turn channel reports itself as PostToolUse so the harness accepts 
 
 test("both nudge channels share one interval, so mid-turn firing does not multiply reminders", () => {
   const dir = newProject()
-  const stale = { FRAY_SCRATCHPAD_STALE_TOKENS: "60000" }
+  const stale = { FRIZZ_SCRATCHPAD_STALE_TOKENS: "60000" }
   const t = (tokens: number) => ({ session_id: SID, transcript_path: writeTranscript(dir, tokens) })
 
   assert.notEqual(runHook(dir, ["--mode=nudge", "--event=PostToolUse"], t(70_000), stale), "", "first fires")
@@ -280,7 +280,7 @@ test("both nudge channels share one interval, so mid-turn firing does not multip
 
 test("the nudge rebases when a human hand-edits the pad mid-session", () => {
   const dir = newProject()
-  const stale = { FRAY_SCRATCHPAD_STALE_TOKENS: "10000" }
+  const stale = { FRIZZ_SCRATCHPAD_STALE_TOKENS: "10000" }
   const nudge = (tokens: number) =>
     runHook(dir, ["--mode=nudge"], { session_id: SID, transcript_path: writeTranscript(dir, tokens) }, stale)
 
@@ -335,7 +335,7 @@ test("hooks.json wires every channel, and no stale carryover registration surviv
 //     the hooks arrive as per-conversation config overrides (with bypass_hook_trust).
 //   • The app-server daemon is SHARED per project, so its environment cannot carry a per-conversation
 //     decision — hence `--enabled` rather than the env var.
-//   • Codex reports its OWN rollout session id to the hook, not fray's thread id — hence `--session`.
+//   • Codex reports its OWN rollout session id to the hook, not frizz's thread id — hence `--session`.
 // Verified live: SessionStart / UserPromptSubmit / Stop all fired through CodexAppServerBridge with
 // the real scratchpad.mjs wired exactly as codexScratchpadHookConfig wires it.
 
@@ -349,7 +349,7 @@ test("re-grounding is UNCONDITIONAL — no setting, no flag, no env var required
   assert.match(ctx, /⟦scratchpad — reground here⟧/)
   assert.match(ctx, /canonical content/)
   // The only escape hatch is an explicit env off — a one-off, not a project posture.
-  assert.equal(runHook(dir, ["--mode=session-start"], { session_id: SID, source: "compact" }, { FRAY_SCRATCHPAD_HOOK: "off" }), "")
+  assert.equal(runHook(dir, ["--mode=session-start"], { session_id: SID, source: "compact" }, { FRIZZ_SCRATCHPAD_HOOK: "off" }), "")
 })
 
 test("an EMPTY pad still re-grounds after compaction, and says the pad is empty", () => {
@@ -361,13 +361,13 @@ test("an EMPTY pad still re-grounds after compaction, and says the pad is empty"
   assert.match(ctx, /⟦scratchpad — reground here⟧/)
   assert.match(ctx, /absent or has nothing substantive in it/)
   assert.match(ctx, /That exact path is authoritative/)
-  assert.match(ctx, /do not search other `\.fray\/threads\/\*\/scratch\.md` files/)
+  assert.match(ctx, /do not search other `\.frizz\/threads\/\*\/scratch\.md` files/)
   assert.match(ctx, /retained compaction summary/)
 })
 
-test("--session overrides the reported id, so a codex worker finds FRAY's pad and not its own", () => {
+test("--session overrides the reported id, so a codex worker finds FRIZZ's pad and not its own", () => {
   const dir = newProject()
-  writePad(dir, "# Scratchpad\n\nfray thread content\n")
+  writePad(dir, "# Scratchpad\n\nfrizz thread content\n")
   // Exactly what codex sends: its own rollout session id, and a transcript under ~/.codex/sessions.
   const codexEvent = {
     session_id: "019fb427-93aa-7ab0-91af-436173f99bc4",
@@ -378,13 +378,13 @@ test("--session overrides the reported id, so a codex worker finds FRAY's pad an
   // Without --session the hook addresses codex's id — a path that does not exist — so it can only
   // fall back to the contract text.
   const derived = additionalContext(runHook(dir, ["--mode=session-start"], codexEvent))
-  assert.doesNotMatch(derived, /fray thread content/)
+  assert.doesNotMatch(derived, /frizz thread content/)
   // With it, the real pad is found and restored.
   const explicit = additionalContext(
     runHook(dir, [`--session=${SID}`, "--mode=session-start"], codexEvent)
   )
-  assert.match(explicit, /fray thread content/)
-  assert.match(explicit, new RegExp(`\\.fray/threads/${SID}/scratch\\.md`))
+  assert.match(explicit, /frizz thread content/)
+  assert.match(explicit, new RegExp(`\\.frizz/threads/${SID}/scratch\\.md`))
 })
 
 test("scratchpad stop_hook frontmatter blocks once, cools down for two minutes, and deregisters by removal", () => {
@@ -395,7 +395,7 @@ test("scratchpad stop_hook frontmatter blocks once, cools down for two minutes, 
   assert.deepEqual(runStopHook(dir), {}, "a forgotten key must not create a tight Stop-hook loop")
 
   writeFileSync(
-    join(dir, ".fray", "threads", SID, ".stop-hook-state.json"),
+    join(dir, ".frizz", "threads", SID, ".stop-hook-state.json"),
     JSON.stringify({ lastFiredAt: Date.now() - 120_001 }),
   )
   assert.deepEqual(runStopHook(dir), { decision: "block", reason }, "the reminder may fire again after two minutes")
@@ -438,12 +438,12 @@ test("the codex hook config is built unconditionally, and carries what codex req
     const cmd = entries[0].hooks[0].command
     if (event === "PreToolUse") {
       assert.match(cmd, /bash-background\.mjs/)
-      assert.match(cmd, /--fray-ui-thread/)
+      assert.match(cmd, /--frizz-thread/)
     } else if (event === "Stop") {
       assert.match(cmd, /scratchpad-stop\.mjs/)
       assert.match(cmd, /--session="sid-1"/)
     } else {
-      assert.match(cmd, /--session="sid-1"/, "fray's thread id must override codex's own reported session id")
+      assert.match(cmd, /--session="sid-1"/, "frizz's thread id must override codex's own reported session id")
       assert.doesNotMatch(cmd, /--enabled/, "there is no opt-in flag any more")
       assert.match(cmd, /scratchpad\.mjs/)
     }

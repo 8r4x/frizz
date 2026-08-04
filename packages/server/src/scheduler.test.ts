@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { wakeDeliveryToken } from "@fray-ui/shared"
+import { wakeDeliveryToken } from "@frizz/shared"
 import { createStorage, type Storage, type SessionRow } from "./storage.ts"
 import { createScheduler, parsePrRef, ghPrViewArgs, evalRollup, parseGithubReviewActivities, isBotGithubActor, type GithubReviewActivity, type PrRef, type PrStatus } from "./scheduler.ts"
 import { createGithubReviewFetcher } from "./github-review.ts"
@@ -77,14 +77,14 @@ test("evalRollup: empty → pending; all-complete → done; in-progress → pend
 // ---- scheduler harness ----
 
 function tmpStorage(): Storage {
-  return createStorage(join(mkdtempSync(join(tmpdir(), "fray-sched-")), "ui.db"))
+  return createStorage(join(mkdtempSync(join(tmpdir(), "frizz-sched-")), "ui.db"))
 }
 
 function row(slug: string, over: Partial<SessionRow> = {}): SessionRow {
   return {
     slug,
     session_id: `sid-${slug}`,
-    tmux_name: `fray-${slug}`,
+    tmux_name: `frizz-${slug}`,
     spawned_at: "2026-07-01T00:00:00.000Z",
     last_read_at: null,
     unread: 0,
@@ -1148,7 +1148,7 @@ test("attempt counts surface only where they inform: the failure, then the deliv
 })
 
 test("two scheduler instances on separate SQLite connections atomically claim one wake", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-sched-concurrent-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-sched-concurrent-"))
   const path = join(dir, "ui.db")
   const firstStorage = createStorage(path)
   const secondStorage = createStorage(path)
@@ -1558,7 +1558,7 @@ test("snooze: a snooze WITHOUT a prompt never wakes the agent (it is a reminder 
 test("snooze: an OVERDUE snooze found at boot does fire — unlike an unregistered timer fence", async () => {
   // The deliberate divergence from the boot-mass-fire guard. A fence hint is only a claim in a
   // transcript, so an already-past one is untrustworthy; a snooze row is an explicit durable promise
-  // the human made, so a deadline that crossed while fray was down is exactly what it is FOR.
+  // the human made, so a deadline that crossed while frizz was down is exactly what it is FOR.
   const h = harness()
   h.storage.upsertSession(snoozeRow("s", iso(h.clock.ms - 3 * 3_600_000), "Pick this back up."))
   h.tele.set("s", tele())

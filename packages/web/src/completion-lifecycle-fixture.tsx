@@ -1,13 +1,13 @@
 import { createRoot } from "react-dom/client"
 import { useEffect, useState } from "react"
-import type { ThreadView } from "@fray-ui/shared"
+import type { ThreadView } from "@frizz/shared"
 import { ThreadLifecycleFooter } from "./components/ThreadLifecycleFooter.tsx"
 import "./styles.css"
 
 const mode = new URLSearchParams(window.location.search).get("mode") === "executing" ? "executing" : "resting"
 const nativeFetch = window.fetch.bind(window)
 const rpcResult = (result: unknown) => new Response(JSON.stringify({ result }), {
-  headers: { "content-type": "application/json", "x-fray-boot": "completion-lifecycle-fixture" },
+  headers: { "content-type": "application/json", "x-frizz-boot": "completion-lifecycle-fixture" },
 })
 
 window.fetch = async (input, init) => {

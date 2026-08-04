@@ -162,21 +162,21 @@ html[data-font="sans"] {
 .card-icon-offset {
   translate: 0 var(--card-icon-offset);
 }
-/* Markdown prose rendered INSIDE a .fray-bash card (the SendMessage peer-message body) is PROSE, not
+/* Markdown prose rendered INSIDE a .frizz-bash card (the SendMessage peer-message body) is PROSE, not
    code — so it must read in the app's prose font (mono by default, sans under the font experiment),
    matching the surrounding assistant messages. Re-assert the body-font rule here so the mono that
-   .fray-bash forces onto its code/command bodies doesn't bleed into this one prose body. */
-.fray-bash .md-body {
+   .frizz-bash forces onto its code/command bodies doesn't bleed into this one prose body. */
+.frizz-bash .md-body {
   font-family: var(--font-mono);
 }
-html[data-font="sans"] .fray-bash .md-body {
+html[data-font="sans"] .frizz-bash .md-body {
   font-family: var(--font-sans);
 }
 
 /* The expanded body of a codex model-reasoning block. The summary is a QUIET secondary aside, so it
    reads one step down from real answer prose: 12px (matching the block's collapsed header) on a tighter
    block step, in the muted color — never the 14px fg body that would compete with the actual answer. */
-.fray-reasoning .md-body {
+.frizz-reasoning .md-body {
   font-size: 12px;
   --md-step: 8px;
   color: var(--color-muted);
@@ -186,7 +186,7 @@ html[data-font="sans"] .fray-bash .md-body {
    wall of loud headers — the opposite of the quiet metadata aside this block wants. Drop the emphasis to
    the body weight so the steps read as a soft train-of-thought list; a detailed-mode header still leads
    its paragraph by position, not by shouting. */
-.fray-reasoning .md-body strong {
+.frizz-reasoning .md-body strong {
   font-weight: inherit;
 }
 
@@ -221,7 +221,7 @@ html[data-font="sans"] .fray-bash .md-body {
 /* Live work is a color-plus-motion cue: the bright dot remains readable in high contrast, while
    reduced-motion users retain the same static ring. CSS-only animation avoids transcript rerenders
    and therefore cannot disturb scroll anchoring. */
-.fray-live-dot {
+.frizz-live-dot {
   display: block;
   width: 6px;
   height: 6px;
@@ -235,13 +235,13 @@ html[data-font="sans"] .fray-bash .md-body {
   /* Keep the motion cue close to the mark. At high browser zoom the former 4px pulse read as a
      second, much larger circle rather than a quiet live-state halo. */
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--live-dot) 28%, transparent);
-  animation: fray-live-pulse 1.25s ease-in-out infinite;
+  animation: frizz-live-pulse 1.25s ease-in-out infinite;
 }
 /* Two runtime concerns, two hues: background shells pulse blue, sub-agents pulse the accent-yellow. */
-.fray-live-dot--shell { --live-dot: var(--color-shell); }
-.fray-live-dot--agent { --live-dot: var(--color-accent); }
+.frizz-live-dot--shell { --live-dot: var(--color-shell); }
+.frizz-live-dot--agent { --live-dot: var(--color-accent); }
 /* THE RAIL's rest-with-live-work mark — a pulsing dot centred in the sidebar's 15px StatusBox. Same
-   hue, same cadence and the same meaning as `.fray-live-dot` above, but it is a mark INSIDE the
+   hue, same cadence and the same meaning as `.frizz-live-dot` above, but it is a mark INSIDE the
    checkbox family's box, so it takes THAT family's geometry rather than the transcript's. Two
    deliberate differences, both measured rather than judged:
      • 0.31 of the box, not 0.4. `.md-task-in-progress` settled this exact question for this exact box
@@ -256,44 +256,44 @@ html[data-font="sans"] .fray-bash .md-body {
    or a sub-agent), and in the sidebar the accent means "awaiting you", so an accent dot would read as
    an ask from a thread that is asking for nothing. Keep the width in sync with STATUS_BOX
    (components/BoxSpinner.tsx) if that ever moves. */
-.fray-rail-dot {
+.frizz-rail-dot {
   width: calc(15px * 0.31);
   height: calc(15px * 0.31);
   border-radius: 9999px;
   background: var(--color-shell);
-  animation: fray-rail-dot-pulse 1.25s ease-in-out infinite;
+  animation: frizz-rail-dot-pulse 1.25s ease-in-out infinite;
 }
 /* Brightness alone — the geometry is what says "this is the same kind of mark", so only tone may move
    (the same ruling the quiet shell dot's breathe follows). */
-@keyframes fray-rail-dot-pulse {
+@keyframes frizz-rail-dot-pulse {
   50% { opacity: 0.45; }
 }
 @media (prefers-reduced-motion: reduce) {
   /* No ring substitution needed: this dot is solid at full opacity already, and the box around it is
      what carries the "there is a mark here" reading. */
-  .fray-rail-dot { animation: none; opacity: 1; }
+  .frizz-rail-dot { animation: none; opacity: 1; }
 }
-/* The armed heartbeat's pulse. Slower than the shell dot's 1.25s and shallower — this mark says "fray
+/* The armed heartbeat's pulse. Slower than the shell dot's 1.25s and shallower — this mark says "frizz
    will nudge this in a few minutes", not "something is happening right now", and a mark that beats as
    urgently as live work would misreport a thread that is simply parked. Tone only, same ruling as
    above: the glyph's geometry is what identifies it. Paused rows render without this class at all. */
-.fray-rail-heartbeat {
-  animation: fray-rail-heartbeat-pulse 2.4s ease-in-out infinite;
+.frizz-rail-heartbeat {
+  animation: frizz-rail-heartbeat-pulse 2.4s ease-in-out infinite;
 }
-@keyframes fray-rail-heartbeat-pulse {
+@keyframes frizz-rail-heartbeat-pulse {
   50% { opacity: 0.5; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .fray-rail-heartbeat { animation: none; opacity: 1; }
+  .frizz-rail-heartbeat { animation: none; opacity: 1; }
 }
-@keyframes fray-live-pulse {
+@keyframes frizz-live-pulse {
   50% { opacity: 0.62; box-shadow: 0 0 0 2px color-mix(in srgb, var(--live-dot) 14%, transparent); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .fray-live-dot { animation: none; background: transparent; border: 2px solid var(--live-dot); box-shadow: none; }
+  .frizz-live-dot { animation: none; background: transparent; border: 2px solid var(--live-dot); box-shadow: none; }
 }
 
-/* NO SPINNER LIVES HERE ANY MORE. `.fray-tool-spinner` was the dispatch card's right-hand indicator for
+/* NO SPINNER LIVES HERE ANY MORE. `.frizz-tool-spinner` was the dispatch card's right-hand indicator for
    a pending call with no child record, on the theory that "we have no record of this child" is the one
    thing elapsed time cannot speak for. It was removed 2026-08-01 ("a right-justified spinner with the
    'running' label that should not show up under any circumstances") because the premise was wrong: the
@@ -308,7 +308,7 @@ html[data-font="sans"] .fray-bash .md-body {
    idle — a flat gray dot mislabels it. So it BREATHES: a slow, soft in/out that reads as a calm,
    resting pulse (distinct from the brighter, faster accent pulse that signals fresh output). Muted
    tone keeps the accent reserved for active work; the motion alone carries "still alive". */
-.fray-live-dot-quiet {
+.frizz-live-dot-quiet {
   display: block;
   width: 6px;
   height: 6px;
@@ -327,16 +327,16 @@ html[data-font="sans"] .fray-bash .md-body {
      "quiet", and the element's own opacity multiplies this ring too, so it stays the quieter of the
      two for free. */
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--quiet-dot) 28%, transparent);
-  animation: fray-live-breathe 2.6s ease-in-out infinite;
+  animation: frizz-live-breathe 2.6s ease-in-out infinite;
 }
-.fray-live-dot-quiet--shell { --live-dot: var(--color-shell); }
+.frizz-live-dot-quiet--shell { --live-dot: var(--color-shell); }
 /* Breathes on OPACITY ALONE. It used to scale 0.82→1 as well, which made the quiet dot read as a
    physically SMALLER mark than the bright one beside it rather than a calmer one — 4.92px against
    6px, and at the same keyframe as the 0.4 opacity trough, so the smallest instant was also the
    faintest (maintainer 2026-07-30: "I don't understand why the blue dot is so small for an idle
    shell… it should be the same size as the other ones"). Size is what says "this is the same kind of
    mark"; tone and motion are what say "quiet". Only the latter two may vary. */
-@keyframes fray-live-breathe {
+@keyframes frizz-live-breathe {
   0%, 100% { opacity: 0.4; }
   50% { opacity: 0.9; }
 }
@@ -344,9 +344,9 @@ html[data-font="sans"] .fray-bash .md-body {
   /* No `transform: none` any more — the keyframes stopped scaling, so there is nothing to undo. The
      halo drops with the same `box-shadow: none` the bright dot uses here: this variant already paints
      a 1.5px ring, and stacking the halo outside it would make the STATIC mark the largest of the three. */
-  .fray-live-dot-quiet { animation: none; opacity: 1; background: transparent; box-shadow: none; border: 1.5px solid var(--quiet-dot); }
+  .frizz-live-dot-quiet { animation: none; opacity: 1; background: transparent; box-shadow: none; border: 1.5px solid var(--quiet-dot); }
 }
-/* NO "FINISHED" DOT EITHER. `.fray-live-dot-done` briefly filled the liveness slot on every settled
+/* NO "FINISHED" DOT EITHER. `.frizz-live-dot-done` briefly filled the liveness slot on every settled
    background/dispatch card so they stayed findable in a scrolled transcript. Removed 2026-08-01
    ("remove the status indicator entirely for a sub-agent or background shell that has completed"): the
    whole column means "something is alive behind this row", so marking finished rows put a glyph on
@@ -1056,18 +1056,18 @@ a[href] {
    bounces the card the reader is watching. Instant removal + the explicit neighbour pin is the classic,
    deterministic answer. Duration MUST stay in sync with QUEUE_EXIT_MS in TodosView.tsx (it keeps the
    card mounted through the fade before unmounting). */
-.fray-card-slot { opacity: 1; }
-.fray-card-slot[data-queue-leaving="true"] { opacity: 0; }
-.fray-card-slot > .fray-card-clip > .fray-card-body { transform-origin: center center; }
-.fray-card-slot[data-queue-leaving="true"] > .fray-card-clip > .fray-card-body { transform: scale(0.94); filter: blur(6px); }
+.frizz-card-slot { opacity: 1; }
+.frizz-card-slot[data-queue-leaving="true"] { opacity: 0; }
+.frizz-card-slot > .frizz-card-clip > .frizz-card-body { transform-origin: center center; }
+.frizz-card-slot[data-queue-leaving="true"] > .frizz-card-clip > .frizz-card-body { transform: scale(0.94); filter: blur(6px); }
 /* Promote to a compositing layer ONLY while dissolving — a permanent will-change on every mounted card
    would pin a GPU layer per queue row for its whole lifetime. */
-.fray-card-slot[data-queue-leaving="true"] > .fray-card-clip > .fray-card-body { will-change: transform, filter; }
+.frizz-card-slot[data-queue-leaving="true"] > .frizz-card-clip > .frizz-card-body { will-change: transform, filter; }
 @media (prefers-reduced-motion: no-preference) {
-  .fray-card-slot[data-queue-leaving="true"] {
+  .frizz-card-slot[data-queue-leaving="true"] {
     transition: opacity 200ms cubic-bezier(0.4, 0, 0.2, 1);
   }
-  .fray-card-slot > .fray-card-clip > .fray-card-body {
+  .frizz-card-slot > .frizz-card-clip > .frizz-card-body {
     transition: transform 200ms cubic-bezier(0.4, 0, 0.2, 1),
                 filter 200ms cubic-bezier(0.4, 0, 0.2, 1);
   }

@@ -8,7 +8,7 @@
 // actions live in a stable footer), `awaiting` = a compact parked human/timer handoff. Distinct
 // from ```question blocks (their own machinery in questionBlocks.ts) — those never match here.
 
-import { insideFence, type AwaitingHint } from "@fray-ui/shared"
+import { insideFence, type AwaitingHint } from "@frizz/shared"
 
 export type FenceKind = "done" | "awaiting"
 

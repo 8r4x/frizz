@@ -28,7 +28,7 @@ test("default browser launch accepts only absolute http(s) URLs", () => {
     args: ["https://example.com/path?a=1"],
   })
   assert.throws(() => defaultBrowserOpenCommand("not a URL", "darwin"), /invalid browser URL/)
-  assert.throws(() => defaultBrowserOpenCommand("file:///tmp/fray", "darwin"), /unsupported browser URL scheme/)
+  assert.throws(() => defaultBrowserOpenCommand("file:///tmp/frizz", "darwin"), /unsupported browser URL scheme/)
   assert.throws(() => defaultBrowserOpenCommand("https://example.com", "aix"), /not supported/)
 })
 
@@ -79,15 +79,15 @@ test("a Chrome-disambiguated shim bundle is the same app, not a stale one", () =
   // Chrome appends " 1", " 2", … when the bundle filename already exists, and that is the COMMON
   // case: manifestIdFor is origin-scoped, so every project's port installs its own bundle. Rejecting
   // the suffix made every project after the first reinstall its shim on each --app launch, which is
-  // how a real machine ended up with Fray.app, Fray 1.app, Fray 2.app and Fray 3.app.
-  assert.equal(bundleNameMatchesManifest("Fray"), true)
-  assert.equal(bundleNameMatchesManifest("Fray 1"), true)
-  assert.equal(bundleNameMatchesManifest("Fray 42"), true)
+  // how a real machine ended up with Frizz.app, Frizz 1.app, Frizz 2.app and Frizz 3.app.
+  assert.equal(bundleNameMatchesManifest("Frizz"), true)
+  assert.equal(bundleNameMatchesManifest("Frizz 1"), true)
+  assert.equal(bundleNameMatchesManifest("Frizz 42"), true)
 
   // A genuine rename must still read as stale so the bundle gets reinstalled under the new name.
-  assert.equal(bundleNameMatchesManifest("Frayed"), false)
-  assert.equal(bundleNameMatchesManifest("Fray Board"), false)
-  assert.equal(bundleNameMatchesManifest("Fray "), false)
-  assert.equal(bundleNameMatchesManifest("Fray 1x"), false)
+  assert.equal(bundleNameMatchesManifest("Frizzed"), false)
+  assert.equal(bundleNameMatchesManifest("Frizz Board"), false)
+  assert.equal(bundleNameMatchesManifest("Frizz "), false)
+  assert.equal(bundleNameMatchesManifest("Frizz 1x"), false)
   assert.equal(bundleNameMatchesManifest(""), false)
 })

@@ -9,7 +9,7 @@ import {
   readClaudeBrokerDiagnostics,
 } from "./claude-broker-diagnostics.ts"
 
-const tmp = () => mkdtempSync(join(tmpdir(), "fray-brokerdiag-"))
+const tmp = () => mkdtempSync(join(tmpdir(), "frizz-brokerdiag-"))
 const meta = { daemonPid: 4242, generation: "gen-1" }
 
 test("the writer creates its directory and appends one JSON line per diagnostic", () => {

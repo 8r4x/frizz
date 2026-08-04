@@ -9,7 +9,7 @@ window.fetch = async (input, init) => {
   if (url.pathname === "/rpc/openLocalFile") {
     ;(window as Window & { __localFileFixtureOpened?: boolean }).__localFileFixtureOpened = true
     return new Response(JSON.stringify({ result: { action: "copy", path: "/fixture/report.md" } }), {
-      headers: { "content-type": "application/json", "x-fray-boot": "local-file-fixture" },
+      headers: { "content-type": "application/json", "x-frizz-boot": "local-file-fixture" },
     })
   }
   return nativeFetch(input, init)

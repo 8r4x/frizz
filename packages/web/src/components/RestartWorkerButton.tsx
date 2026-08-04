@@ -1,34 +1,34 @@
 import { useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { Loader2, RefreshCw } from "lucide-react"
-import type { ThreadView } from "@fray-ui/shared"
+import type { ThreadView } from "@frizz/shared"
 import { restartWorker } from "../lib/restartWorker.ts"
-import { useDevFrayBuild } from "../lib/devBuild.ts"
+import { useDevFrizzBuild } from "../lib/devBuild.ts"
 import { Tooltip } from "./Tooltip.tsx"
 
 // "Restart worker" — replace this thread's live `claude` process, keeping the conversation.
 //
 // The verb exists because a worker reads its plugin (hooks) and its system prompt ONCE, at process
-// start, and cannot pick up a newer fray build in place — so a worker dispatched before a hook shipped
+// start, and cannot pick up a newer frizz build in place — so a worker dispatched before a hook shipped
 // runs without it for the rest of its life, no matter how many turns it takes. See lib/restartWorker.ts
 // for the measurement behind that claim.
 //
-// DEV BUILDS ONLY. It is a niche maintenance verb — it earns its place while fray itself is being
+// DEV BUILDS ONLY. It is a niche maintenance verb — it earns its place while frizz itself is being
 // developed (a worker dispatched an hour ago is routinely a build behind), and it would be clutter in a
-// shipped fray, where the operator has no reason to think about which build their worker booted on.
+// shipped frizz, where the operator has no reason to think about which build their worker booted on.
 //
 // The gate is the LAUNCHER's own answer, fetched at runtime (lib/devBuild.ts), and it has to be. This
 // shipped gated on `import.meta.env.DEV` and was consequently invisible to the one person it was built
-// for: that constant is true only under `vite dev` middleware, while fray-dev's ordinary route builds
+// for: that constant is true only under `vite dev` middleware, while frizz-dev's ordinary route builds
 // an immutable artifact and serves the Vite PRODUCTION bundle — where Vite replaces it with `false` and
 // eliminates this component outright. Grepping the promoted bundle for "Restart worker" found nothing
-// while "Mark as done" beside it was present. Running fray-dev IS running a development build, whether
+// while "Mark as done" beside it was present. Running frizz-dev IS running a development build, whether
 // or not Vite is in the loop, so only the process that chose the launcher can answer this.
 //
 // The trade that buys: the component and its strings now reach a published bundle and are hidden at
 // runtime instead of compiled out. Accepted deliberately — a compile-time gate cannot ever satisfy
 // "show it in the artifact I build from source", which is the entire requirement. The runtime answer
-// is strict (absent field ⇒ not dev), so a published Fray never renders it.
+// is strict (absent field ⇒ not dev), so a published Frizz never renders it.
 //
 // OFFERED only where it is both meaningful and safe:
 //  • a session thread, not a read-only foreign row;
@@ -45,7 +45,7 @@ import { Tooltip } from "./Tooltip.tsx"
 export function RestartWorkerButton({ thread }: { thread: ThreadView }) {
   const queryClient = useQueryClient()
   const [busy, setBusy] = useState(false)
-  const devBuild = useDevFrayBuild()
+  const devBuild = useDevFrizzBuild()
 
   if (!devBuild) return null
   if (thread.kind !== "session" || thread.foreign) return null

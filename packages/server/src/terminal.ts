@@ -2,14 +2,14 @@ import type { IncomingMessage } from "node:http"
 import type { Duplex } from "node:stream"
 import { WebSocket, WebSocketServer, type RawData } from "ws"
 import pty from "node-pty"
-import { ThreadSlug, type TermClientMsg } from "@fray-ui/shared"
+import { ThreadSlug, type TermClientMsg } from "@frizz/shared"
 import { isTrustedLocalWebSocketRequest, rejectWebSocketUpgrade } from "./local-origin.ts"
 import type { LoginAttachment } from "./login-utility.ts"
 
 // The /term/<slug> transport. It serves exactly ONE thing: a provider sign-in attempt, whose pty the
 // login utility owns and shares across every viewing tab.
 //
-// It used to attach each viewer to a `tmux -L <socket> attach-session -t fray-<slug>` so an operator
+// It used to attach each viewer to a `tmux -L <socket> attach-session -t frizz-<slug>` so an operator
 // could watch an agent's TUI. Agents no longer run in panes — the broker drives them over pipes — so
 // there is nothing to attach to, and the whole tmux half of this file (socket resolution, per-viewer
 // attach ptys, and the refresh-client dance that worked around tmux's resize replay) went with it.
@@ -414,7 +414,7 @@ export function createTerminalServer(deps: TerminalServerDeps = {}): TerminalSer
         }
       } catch {
         // A valid message can still race a dead/detached PTY. Contain that failure to this viewer;
-        // the Fray control plane and independent tmux worker must survive.
+        // the Frizz control plane and independent tmux worker must survive.
         beginClose(1011, "terminal unavailable")
       }
     })

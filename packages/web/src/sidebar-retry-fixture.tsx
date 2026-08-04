@@ -1,6 +1,6 @@
 import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import type { BoardSnapshot, ThreadView } from "@fray-ui/shared"
+import type { BoardSnapshot, ThreadView } from "@frizz/shared"
 import { ThreadRow } from "./components/Sidebar.tsx"
 import { Toaster } from "./components/Toaster.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
@@ -8,7 +8,7 @@ import { store } from "./store.ts"
 import "./styles.css"
 
 // The sidebar's one-click recovery verb: a STOPPED row (an exited session) — and a row HELD on a usage
-// limit fray will auto-resume — expose a hover-revealed Retry on the right edge. This fixture renders
+// limit frizz will auto-resume — expose a hover-revealed Retry on the right edge. This fixture renders
 // the REAL ThreadRow for the two stopped rows (a [!] stalled crash AND a […] exited-at-rest) and the
 // usage-limit-held row (which keeps its hourglass mark, not [!]), plus — for contrast — a live working
 // row and a live turn-idle resting row (neither may grow the button). Clicking Retry POSTs the ordinary
@@ -73,7 +73,7 @@ const exitedAtRestThread = {
   needsYou: true,
 } as unknown as ThreadView
 
-// A worker HELD because it hit its session limit, which fray will auto-resume when the window resets.
+// A worker HELD because it hit its session limit, which frizz will auto-resume when the window resets.
 // It keeps the HELD (hourglass) mark — NOT the yellow [!] — yet still gets the same hover Retry, a
 // faster continue than waiting for the reset (maintainer 2026-07-23).
 const limitHeldThread = {

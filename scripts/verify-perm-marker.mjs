@@ -22,12 +22,12 @@ const project = { stateDir: state }
 const permDir = permRequestDir(project)
 const slug = "demo-thread"
 
-// Run the hook the way Claude Code does: JSON payload on stdin, FRAY_UI_THREAD + FRAY_PERM_DIR in env.
+// Run the hook the way Claude Code does: JSON payload on stdin, FRIZZ_THREAD + FRIZZ_PERM_DIR in env.
 function runHook(payload, env = {}) {
   return execFileSync("node", [HOOK], {
     input: JSON.stringify(payload),
     encoding: "utf8",
-    env: { ...process.env, FRAY_UI_THREAD: slug, [PERM_DIR_ENV]: permDir, FRAY_PERM_POLICY: "auto", ...env },
+    env: { ...process.env, FRIZZ_THREAD: slug, [PERM_DIR_ENV]: permDir, FRIZZ_PERM_POLICY: "auto", ...env },
   })
 }
 const marker = () => JSON.parse(readFileSync(permMarkerPath(project, slug), "utf8"))
@@ -73,8 +73,8 @@ try {
   check("defer: the tailer reads this AS a human block", markerDecision(m3) === "defer")
 
   // 5. DEFER — the review-policy escape hatch, without changing how workers launch.
-  const review = runHook(bash("touch z"), { FRAY_PERM_POLICY: "review" })
-  check("defer: FRAY_PERM_POLICY=review emits NOTHING", review === "")
+  const review = runHook(bash("touch z"), { FRIZZ_PERM_POLICY: "review" })
+  check("defer: FRIZZ_PERM_POLICY=review emits NOTHING", review === "")
   check("defer: marker names the review rule", marker().rule === "review-policy", marker().rule)
 
   // 6. Back-compat: an OLD observe-era marker (no `decision`) still reads as a block.
@@ -92,16 +92,16 @@ try {
   check("ExitPlanMode writes NO marker and emits nothing", planWrote === false && plan === "")
 
   // 9. FAIL-SAFE gates. A hook that can APPROVE must fall back to ASKING, never to allowing.
-  const noThread = runHook(bash("touch x"), { FRAY_UI_THREAD: "" })
-  check("no FRAY_UI_THREAD → inert (never decides a foreign session)", noThread === "")
+  const noThread = runHook(bash("touch x"), { FRIZZ_THREAD: "" })
+  check("no FRIZZ_THREAD → inert (never decides a foreign session)", noThread === "")
   const bad = execFileSync("node", [HOOK], {
     input: "{ not json", encoding: "utf8",
-    env: { ...process.env, FRAY_UI_THREAD: slug, [PERM_DIR_ENV]: permDir },
+    env: { ...process.env, FRIZZ_THREAD: slug, [PERM_DIR_ENV]: permDir },
   })
   check("unparseable payload → emits nothing (defers to the human)", bad === "")
   // No marker dir: the decision must still be made and emitted — telemetry loss never stalls a worker.
   const noDir = JSON.parse(runHook(bash("touch x"), { [PERM_DIR_ENV]: "" }) || "{}")
-  check("no FRAY_PERM_DIR → still decides (marker is telemetry, not a gate)", noDir.hookSpecificOutput?.decision?.behavior === "allow")
+  check("no FRIZZ_PERM_DIR → still decides (marker is telemetry, not a gate)", noDir.hookSpecificOutput?.decision?.behavior === "allow")
 
   // 10. Corrupt/half-written marker → reader degrades to undefined (fail-safe), never throws.
   mkdirSync(permDir, { recursive: true })

@@ -1,6 +1,6 @@
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
-import { PermissionMode, wakeDeliveryToken, type Settings } from "@fray-ui/shared"
+import { PermissionMode, wakeDeliveryToken, type Settings } from "@frizz/shared"
 import { Bus, Emitter } from "./bus.ts"
 import { resolveProject, permRequestDir, type Project } from "./project.ts"
 import { createStorage, isBrokerClaudeRow, isHeadlessRow, type Storage } from "./storage.ts"
@@ -9,7 +9,7 @@ import { readQuota } from "./quota.ts"
 import { refreshClaudeQuotaInBackground } from "./backend/claude-quota.ts"
 import { createBoard, type BoardManager } from "./board.ts"
 import { createTailer, defaultLogDir, type Tailer } from "./tailer.ts"
-import { createDispatcher, loadWorkerPrompt, scratchpadOrientation, frayConfigBlock, claudeMcpConfig, resolveFrayMcp, workerPluginDir, type Dispatcher } from "./dispatch.ts"
+import { createDispatcher, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock, claudeMcpConfig, resolveFrizzMcp, workerPluginDir, type Dispatcher } from "./dispatch.ts"
 import { createScheduler, type Scheduler } from "./scheduler.ts"
 import {
 resumeThread,
@@ -50,7 +50,7 @@ import {
   type ShutdownBarrierOptions,
   type ShutdownDiagnostic,
 } from "./shutdown.ts"
-import { log as frayLog } from "./logging.ts"
+import { log as frizzLog } from "./logging.ts"
 
 export const CONTEXT_STARTUP_CLEANUP_TIMEOUT_MS = 4_000
 
@@ -92,7 +92,7 @@ export class ContextStartupError extends Error {
   }) {
     const startupMessage = options.startupError instanceof Error ? options.startupError.message : String(options.startupError)
     const cleanupMessage = options.cleanupError instanceof Error ? options.cleanupError.message : String(options.cleanupError)
-    super(`Fray context initialization failed: ${startupMessage}; partial-context cleanup failed: ${cleanupMessage}`, {
+    super(`Frizz context initialization failed: ${startupMessage}; partial-context cleanup failed: ${cleanupMessage}`, {
       cause: options.startupError,
     })
     this.name = "ContextStartupError"
@@ -106,7 +106,7 @@ export class ContextStartupError extends Error {
 // The wired singletons every request handler shares. Built once at boot in createContext.
 export interface AppContext {
   // Random per-process id minted at boot. It rides every board/board-delta SSE frame and the
-  // `x-fray-boot` header on /rpc responses; a client that sees it CHANGE knows the server restarted
+  // `x-frizz-boot` header on /rpc responses; a client that sees it CHANGE knows the server restarted
   // under a possibly-stale page and hard-reloads once. Closes the stale-bundle / zombie-reconnect class.
   bootId: string
   project: Project
@@ -154,7 +154,7 @@ export interface AppContext {
   // binary so sign-out targets the credential the workers actually use.
   claudeBin?: string
   // Same seam for Codex: the resolved app-server/backend executable, so codex login/logout target
-  // the binary fray actually runs rather than whatever "codex" is first on PATH.
+  // the binary frizz actually runs rather than whatever "codex" is first on PATH.
   codexBin?: string
   // Slice B account utility: the restricted short-lived `claude auth login` terminal behind the
   // sign-in modal's primary action. Attempts ride the /term transport via slug-shaped opaque ids.
@@ -190,7 +190,7 @@ export interface ContextOptions {
 export function reconcileSessions(storage: Storage) {
   for (const row of storage.allSessions()) {
     // A headless thread (codex app-server OR broker Claude) has NO tmux pane by construction — it lives
-    // in a detached daemon that OUTLIVES fray. Sniffing tmux for it would stamp `exited` on every healthy
+    // in a detached daemon that OUTLIVES frizz. Sniffing tmux for it would stamp `exited` on every healthy
     // headless thread at every boot — the exact trap deriveRuntime() in board.ts refuses to fall into, and
     // for the broker it would destroy the whole ownerless-reconnect premise. Its liveness is resolved live
     // on each board build (the bridge's turn state / the daemon record); leave the stored column alone.
@@ -328,7 +328,7 @@ export function deliverClaudeBrokerWake(deps: {
   const appendSystemPrompt = [
     loadWorkerPrompt("claude"),
     scratchpadOrientation(row.session_id, row.plan_path, "claude"),
-    frayConfigBlock(cwd),
+    frizzConfigBlock(cwd),
   ].filter(Boolean).join("\n\n")
   return bridge.followUp({
     threadSlug: slug,
@@ -353,7 +353,7 @@ export function deliverClaudeBrokerWake(deps: {
  * both are the same act: asking a walled-off thread to carry on.
  *
  * A thread with LIVE background work is deliberately exempt. A restart kills the in-memory sub-agents,
- * and fray's completion invariant says an agent runs to its terminal return; a parent whose child is
+ * and frizz's completion invariant says an agent runs to its terminal return; a parent whose child is
  * still producing is not the wedged case this exists for.
  */
 export function needsFreshProcessForLimit(
@@ -415,12 +415,12 @@ export async function createContext(opts: ContextOptions = {}): Promise<AppConte
 
 function createContextUnchecked(opts: ContextOptions, resources: PartialContextResources): AppContext {
   const project = opts.project ?? resolveProject()
-  // Isolate this instance's tmux server by PROJECT (C3): two fray-ui instances sharing one
-  // `tmux -L fray` server would collide on fray-<slug> session names. Derive the socket from the
+  // Isolate this instance's tmux server by PROJECT (C3): two frizz instances sharing one
+  // `tmux -L frizz` server would collide on frizz-<slug> session names. Derive the socket from the
   // stable project id BEFORE any tmux call — reconcileSessions below calls tmux.isLive, and the
   // wrong socket would find no live sessions and wrongly mark them all exited on every boot.
   // The launcher/project resolver performs the crash-safe legacy migration exactly once and pins the
-  // result through supervisor/child/reexec ownership. Never re-read FRAY_TMUX_SOCKET in a disposable
+  // result through supervisor/child/reexec ownership. Never re-read FRIZZ_TMUX_SOCKET in a disposable
   // child: an environment drift must not move live workers to another server mid-run.
   const dbPath = join(project.stateDir, "ui.db")
   const storage = createStorage(dbPath)
@@ -492,10 +492,10 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   // poll, so the sidebar chip (and the scheduler's weekly-reset check) always reads a recent value
   // rather than the multi-minute-stale reading a purely read-driven cache served during a fast
   // fleet burn. One cheap endpoint GET, on the same non-blocking background path a stale read kicks;
-  // the cross-process lock keeps N Fray windows to ~one request every two minutes per account. Gated on the
-  // same FRAY_WAKERS_OFF flag as the scheduler so a disposable adhoc/test stack never touches the real
+  // the cross-process lock keeps N Frizz windows to ~one request every two minutes per account. Gated on the
+  // same FRIZZ_WAKERS_OFF flag as the scheduler so a disposable adhoc/test stack never touches the real
   // account with the real credential.
-  if (process.env.FRAY_WAKERS_OFF !== "1") {
+  if (process.env.FRIZZ_WAKERS_OFF !== "1") {
     void refreshClaudeQuotaInBackground(opts.claudeBin) // warm immediately so the first read is fresh
     const quotaRefreshTimer = setInterval(() => {
       void refreshClaudeQuotaInBackground(opts.claudeBin)
@@ -508,11 +508,11 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   // puppeteer) and MCP/dev servers that daemonized out of a stopped worker's tmux tree, so nothing
   // else ever collects them. A sweep on startup clears accumulated leaks; the interval catches new
   // orphans (a stopped/crashed thread's browsers) within a bounded window. Reaps ONLY processes
-  // whose FRAY_UI_THREAD slug has no live claude/codex root; never a session/tmux/self process.
-  // FRAY_ORPHAN_REAPER_OFF disables it for disposable adhoc/test stacks (mirrors FRAY_WAKERS_OFF) so a
+  // whose FRIZZ_THREAD slug has no live claude/codex root; never a session/tmux/self process.
+  // FRIZZ_ORPHAN_REAPER_OFF disables it for disposable adhoc/test stacks (mirrors FRIZZ_WAKERS_OFF) so a
   // throwaway instance never reaps the real machine's processes.
-  if (!process.env.FRAY_ORPHAN_REAPER_OFF) {
-    contextUnsubscribers.push(startOrphanReaper({ log: (m) => frayLog.info("reaper", m) }))
+  if (!process.env.FRIZZ_ORPHAN_REAPER_OFF) {
+    contextUnsubscribers.push(startOrphanReaper({ log: (m) => frizzLog.info("reaper", m) }))
   }
   opts.startup?.afterPhase?.("orphan reaper")
   reconcileSessions(storage)
@@ -532,11 +532,11 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         projectId: project.id,
         projectDir: project.dir,
         // The detached app-server daemon's socket + record live under the project state dir, so a
-        // later fray generation can find the app-server this one left running.
+        // later frizz generation can find the app-server this one left running.
         stateDir: project.stateDir,
         // Codex's MCP servers mount PROCESS-wide on the app-server, not per thread, so the descriptor
-        // is resolved once here — the codex twin of the per-dispatch resolveFrayMcp on the claude side.
-        frayMcp: resolveFrayMcp(project.stateDir),
+        // is resolved once here — the codex twin of the per-dispatch resolveFrizzMcp on the claude side.
+        frizzMcp: resolveFrizzMcp(project.stateDir),
         dbPath,
         interactions: storage.interactions,
         codexBin: opts.codexBin,
@@ -550,7 +550,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
           const row = storage.getSession(slug)
           return Boolean(row) && row?.state !== "archived" && row?.archived !== 1
         },
-        // The operator's sandbox intent, so a COLD `thread/resume` carries it. fray's registry is the
+        // The operator's sandbox intent, so a COLD `thread/resume` carries it. frizz's registry is the
         // single authority here — `setThreadPermission` persists `permission_mode` on every change,
         // including the ones the eager apply could not deliver — which is what finally makes the
         // "saved for the next resume" copy true. Scoped by session id so a stale binding for a
@@ -606,12 +606,12 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         // InteractionStore; the same store + web cards codex approvals use).
         interactions: storage.interactions,
         projectId: project.id,
-        // The fray worker environment — the SDK equivalent of the tmux path's --plugin-dir / --mcp-config.
+        // The frizz worker environment — the SDK equivalent of the tmux path's --plugin-dir / --mcp-config.
         // Computed ONCE here (constant per project) and applied on every broker fork so a broker worker
-        // gets the fray sub-agent profiles, the fray + chrome-devtools MCP, and the cc-worker hooks.
+        // gets the frizz sub-agent profiles, the frizz + chrome-devtools MCP, and the cc-worker hooks.
         workerEnv: {
           pluginDir: workerPluginDir(),
-          ...claudeMcpConfig(resolveFrayMcp(project.stateDir)),
+          ...claudeMcpConfig(resolveFrizzMcp(project.stateDir)),
           permDir: permRequestDir(project),
         },
         // Which broker threads warmUp() may reattach at boot. Same predicate codex's shouldAutoResume
@@ -622,14 +622,14 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
           storage.allSessions()
             .filter((row) => isBrokerClaudeRow(row) && row.state !== "archived" && row.archived !== 1)
             .map((row) => ({ threadSlug: row.slug, sessionId: row.session_id, cwd: project.dir })),
-        // A broker daemon that died while fray was down is invisible to the live relay — the bridge
+        // A broker daemon that died while frizz was down is invisible to the live relay — the bridge
         // synthesizes the diagnostic from the dead daemon's own exit record, and this is where it
         // becomes readable. The server log is the right surface: it is what an operator (and the next
         // agent debugging a lost thread) already greps when a thread goes quiet, and it costs one line
         // per death rather than a card nobody asked for.
         onDiagnostic: (slug, _sessionId, diagnostic) => {
           if (diagnostic.kind !== "lifecycle" || diagnostic.phase !== "crashed") return
-          frayLog.warn("broker", `claude broker ${slug}: ${diagnostic.message ?? "died without a recorded cause"}`)
+          frizzLog.warn("broker", `claude broker ${slug}: ${diagnostic.message ?? "died without a recorded cause"}`)
         },
       })
     : undefined
@@ -649,7 +649,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   // Rejoin every broker daemon this project left running, now rather than on the next dispatch or
   // follow-up. The broker adopted purely lazily, so after a restart a turn still running inside a
   // detached daemon had nobody observing it: its queued events went unread (no ingest reading, no
-  // tailer nudge), and — the real bug — a tool-permission escalation raised while fray was down stayed
+  // tailer nudge), and — the real bug — a tool-permission escalation raised while frizz was down stayed
   // held in the daemon, so no approval card appeared and the thread read as hung until a human poked
   // it. The daemon re-delivers those pending requests on reconnect; this is what reconnects.
   // Fire-and-forget, exactly like codex's above: a broker being unavailable must never fail or delay a
@@ -658,7 +658,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   opts.startup?.afterPhase?.("Claude broker bridge")
 
   // The tailer derives turn/liveness telemetry and, on a state change, asks the board for an
-  // OVERLAY-ONLY refresh (tailer changes never alter .fray content — the full shell-out rebuild
+  // OVERLAY-ONLY refresh (tailer changes never alter .frizz content — the full shell-out rebuild
   // here was the source of multi-second RPC stalls). Late-bound `board` breaks the cycle.
   // It ALSO reports, per tick, which sessions' JSONL advanced → fanned out on transcriptChange so the
   // /ws transcript producer can push (no board dependency; the two signals are independent).
@@ -739,7 +739,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
       if (row?.backend === "codex") {
         const bridge = codexAppServer
         if (!bridge) {
-          process.stderr.write(`[fray] codex wake for ${slug} dropped: the app-server bridge is unavailable\n`)
+          process.stderr.write(`[frizz] codex wake for ${slug} dropped: the app-server bridge is unavailable\n`)
           return
         }
         return deliverCodexWake({ bridge, storage, cwd: project.dir, row, slug, deliveryMessage, deliveryId })
@@ -748,7 +748,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
       // cold-resume a dead one), exactly like the followUp RPC. Never reaches the tmux resumeThread path.
       if (row?.backend === "claude" && row.claude_runtime === "broker") {
         if (!claudeBroker) {
-          process.stderr.write(`[fray] claude-broker wake for ${slug} dropped: the session broker is unavailable\n`)
+          process.stderr.write(`[frizz] claude-broker wake for ${slug} dropped: the session broker is unavailable\n`)
           return
         }
         return deliverClaudeBrokerWake({

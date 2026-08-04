@@ -1,5 +1,5 @@
 {
-  "name": "@fray-ui/claude-agent-sdk-runtime",
+  "name": "@frizz/claude-agent-sdk-runtime",
   "version": "0.0.1",
   "private": true,
   "type": "module",

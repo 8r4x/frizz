@@ -12,7 +12,7 @@ import {
   codexEffort,
   findRolloutById,
   detectCodexNativeInput,
-  extractCodexFrayTitle,
+  extractCodexFrizzTitle,
 } from "./codex.ts"
 import { newTailState, applyEvent } from "../tailer.ts"
 import type { NormalizedEvent } from "./types.ts"
@@ -122,89 +122,89 @@ test("detectCodexNativeInput: normal activity and prompt-like transcript prose d
 
 // ==== parseCodexLine — the rollout → NormalizedEvent mapping, asserted on REAL fixture lines ====
 
-test("extractCodexFrayTitle: first-line attribute comment is primary; H1 and legacy comments remain compatible", () => {
+test("extractCodexFrizzTitle: first-line attribute comment is primary; H1 and legacy comments remain compatible", () => {
   assert.deepEqual(
-    extractCodexFrayTitle('<!-- fray title="Fix queue focus" -->\nVisible answer'),
+    extractCodexFrizzTitle('<!-- frizz title="Fix queue focus" -->\nVisible answer'),
     { markerFound: true, title: "Fix queue focus", text: "Visible answer" },
   )
   assert.deepEqual(
-    extractCodexFrayTitle('<!-- fray title="Fix &quot;queue&quot; \\&quot;focus\\&quot;" -->\nVisible answer'),
+    extractCodexFrizzTitle('<!-- frizz title="Fix &quot;queue&quot; \\&quot;focus\\&quot;" -->\nVisible answer'),
     { markerFound: true, title: 'Fix "queue" "focus"', text: "Visible answer" },
   )
   assert.deepEqual(
-    extractCodexFrayTitle("# Fix queue focus\nVisible answer"),
+    extractCodexFrizzTitle("# Fix queue focus\nVisible answer"),
     { markerFound: true, title: "Fix queue focus", text: "Visible answer" },
   )
   assert.deepEqual(
-    extractCodexFrayTitle("<!-- fray-title: Fix queue focus -->\nVisible answer"),
+    extractCodexFrizzTitle("<!-- frizz-title: Fix queue focus -->\nVisible answer"),
     { markerFound: true, title: "Fix queue focus", text: "Visible answer" },
   )
   assert.deepEqual(
-    extractCodexFrayTitle("<!-- fray-title: Fix\tqueue\u202e focus -->\r\nVisible"),
+    extractCodexFrizzTitle("<!-- frizz-title: Fix\tqueue\u202e focus -->\r\nVisible"),
     { markerFound: true, title: "Fix queue focus", text: "Visible" },
   )
-  assert.equal(extractCodexFrayTitle(`<!-- fray-title: ${"x".repeat(240)} -->\nBody`).title?.length, 200)
+  assert.equal(extractCodexFrizzTitle(`<!-- frizz-title: ${"x".repeat(240)} -->\nBody`).title?.length, 200)
   assert.deepEqual(
-    extractCodexFrayTitle("<!-- fray-title: <unsafe> -->\nBody"),
+    extractCodexFrizzTitle("<!-- frizz-title: <unsafe> -->\nBody"),
     { markerFound: true, text: "Body" },
   )
-  const quoted = "Answer first\n<!-- fray title=\"Quoted example\" -->"
-  assert.deepEqual(extractCodexFrayTitle(quoted), { markerFound: false, text: quoted })
-  const ordinaryComment = "<!-- fray title=unquoted -->\nBody"
-  assert.deepEqual(extractCodexFrayTitle(ordinaryComment), { markerFound: false, text: ordinaryComment })
-  const malformed = "<!-- fray-title:Missing space -->\nBody"
-  assert.deepEqual(extractCodexFrayTitle(malformed), { markerFound: false, text: malformed })
+  const quoted = "Answer first\n<!-- frizz title=\"Quoted example\" -->"
+  assert.deepEqual(extractCodexFrizzTitle(quoted), { markerFound: false, text: quoted })
+  const ordinaryComment = "<!-- frizz title=unquoted -->\nBody"
+  assert.deepEqual(extractCodexFrizzTitle(ordinaryComment), { markerFound: false, text: ordinaryComment })
+  const malformed = "<!-- frizz-title:Missing space -->\nBody"
+  assert.deepEqual(extractCodexFrizzTitle(malformed), { markerFound: false, text: malformed })
   for (const malformedH1 of ["## Too deep\nBody", "#No space\nBody", " # Indented\nBody"]) {
-    assert.deepEqual(extractCodexFrayTitle(malformedH1), { markerFound: false, text: malformedH1 })
+    assert.deepEqual(extractCodexFrizzTitle(malformedH1), { markerFound: false, text: malformedH1 })
   }
   assert.deepEqual(
-    extractCodexFrayTitle("# H1 wins\n<!-- fray-title: Legacy loses -->\nBody"),
+    extractCodexFrizzTitle("# H1 wins\n<!-- frizz-title: Legacy loses -->\nBody"),
     { markerFound: true, title: "H1 wins", text: "Body" },
     "legacy H1 precedence keeps the prior compatibility pair hidden",
   )
 })
 
-test("extractCodexFrayTitle: strips every Bidi_Control and unsafe default-ignorable character", () => {
+test("extractCodexFrizzTitle: strips every Bidi_Control and unsafe default-ignorable character", () => {
   // Full Unicode Bidi_Control set: ALM, LRM/RLM, embeddings/overrides, and isolates.
   const bidiControls = "\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"
   // Representative non-semantic Default_Ignorable_Code_Point values, including the reported U+200B.
   const invisibleControls = "\u00ad\u034f\u180e\u200b\u2060\ufeff"
   assert.deepEqual(
-    extractCodexFrayTitle(`<!-- fray-title: Fix${bidiControls}${invisibleControls} queue -->\nBody`),
+    extractCodexFrizzTitle(`<!-- frizz-title: Fix${bidiControls}${invisibleControls} queue -->\nBody`),
     { markerFound: true, title: "Fix queue", text: "Body" },
   )
   assert.deepEqual(
-    extractCodexFrayTitle(`<!-- fray-title: ${bidiControls}${invisibleControls} -->\nBody`),
+    extractCodexFrizzTitle(`<!-- frizz-title: ${bidiControls}${invisibleControls} -->\nBody`),
     { markerFound: true, text: "Body" },
     "an all-invisible candidate is stripped but never persisted as a title",
   )
 })
 
-test("extractCodexFrayTitle: preserves emoji and language-shaping default ignorables", () => {
+test("extractCodexFrizzTitle: preserves emoji and language-shaping default ignorables", () => {
   const englandFlag = "\u{1f3f4}\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}"
   const title = `Ship 👩🏽‍💻 and ❤️‍🔥 ${englandFlag} alerts with می‌خواهم, ᠠ\u180b, and 漢\u{e0100}`
   assert.deepEqual(
-    extractCodexFrayTitle(`<!-- fray-title: ${title} -->\nBody`),
+    extractCodexFrizzTitle(`<!-- frizz-title: ${title} -->\nBody`),
     { markerFound: true, title, text: "Body" },
     "ZWJ, ZWNJ, variation selectors, and complete emoji tag sequences carry visible semantics",
   )
   assert.equal(
-    extractCodexFrayTitle("<!-- fray-title: Fix\u{e0061} queue -->\nBody").title,
+    extractCodexFrizzTitle("<!-- frizz-title: Fix\u{e0061} queue -->\nBody").title,
     "Fix queue",
     "a free-standing invisible tag is not an emoji and is stripped",
   )
 })
 
-test("extractCodexFrayTitle: preserves Indic virama sequences before ZWJ and ZWNJ", () => {
+test("extractCodexFrizzTitle: preserves Indic virama sequences before ZWJ and ZWNJ", () => {
   for (const title of ["क्‍ष परीक्षण", "क्‌ष परीक्षण", "á‍b check"]) {
     assert.deepEqual(
-      extractCodexFrayTitle(`<!-- fray-title: ${title} -->\nBody`),
+      extractCodexFrizzTitle(`<!-- frizz-title: ${title} -->\nBody`),
       { markerFound: true, title, text: "Body" },
     )
   }
 })
 
-test("extractCodexFrayTitle: joiners and selectors cannot form invisible or orphan titles", () => {
+test("extractCodexFrizzTitle: joiners and selectors cannot form invisible or orphan titles", () => {
   const invisibleOnly = [
     "\u200d", // ZWJ
     "\u200c", // ZWNJ
@@ -215,7 +215,7 @@ test("extractCodexFrayTitle: joiners and selectors cannot form invisible or orph
   ]
   for (const invisible of invisibleOnly) {
     assert.deepEqual(
-      extractCodexFrayTitle(`<!-- fray-title: ${invisible} -->\nBody`),
+      extractCodexFrizzTitle(`<!-- frizz-title: ${invisible} -->\nBody`),
       { markerFound: true, text: "Body" },
     )
   }
@@ -229,22 +229,22 @@ test("extractCodexFrayTitle: joiners and selectors cannot form invisible or orph
   ]
   for (const candidate of orphanCases) {
     assert.equal(
-      extractCodexFrayTitle(`<!-- fray-title: ${candidate} -->\nBody`).title,
+      extractCodexFrizzTitle(`<!-- frizz-title: ${candidate} -->\nBody`).title,
       "Fix",
       "leading/trailing joiners, selectors, and free-standing tags are stripped",
     )
   }
 })
 
-test("extractCodexFrayTitle: the 200-code-point cap stops at a complete emoji grapheme", () => {
+test("extractCodexFrizzTitle: the 200-code-point cap stops at a complete emoji grapheme", () => {
   const prefix = "x".repeat(198)
   const emoji = "👩🏽‍💻" // four code points and one extended grapheme
-  const signal = extractCodexFrayTitle(`<!-- fray-title: ${prefix}${emoji}tail -->\nBody`)
+  const signal = extractCodexFrizzTitle(`<!-- frizz-title: ${prefix}${emoji}tail -->\nBody`)
   assert.equal(signal.title, prefix)
   assert.equal(Array.from(signal.title ?? "").length, 198)
   assert.doesNotMatch(signal.title ?? "", /\u200d|�/, "the cap cannot retain a dangling joiner or surrogate")
 
-  const persianBoundary = extractCodexFrayTitle(`<!-- fray-title: ${"x".repeat(198)}ی‌خ -->\nBody`).title ?? ""
+  const persianBoundary = extractCodexFrizzTitle(`<!-- frizz-title: ${"x".repeat(198)}ی‌خ -->\nBody`).title ?? ""
   assert.ok(Array.from(persianBoundary).length <= 200)
   assert.doesNotMatch(persianBoundary, /\u200c$/, "post-cap validation cannot leave a trailing ZWNJ")
 })
@@ -276,7 +276,7 @@ test("parseCodexLine: event_msg/task_complete → turn-end carrying last_agent_m
 })
 
 // An INTERRUPTED turn is the one that never reaches task_complete. Its ONLY closing bracket is
-// turn_aborted — captured verbatim from a live rollout after fray issued turn/interrupt (2026-07-23).
+// turn_aborted — captured verbatim from a live rollout after frizz issued turn/interrupt (2026-07-23).
 // Without it the tailer holds the turn in-flight forever, so a thread the operator deliberately
 // STOPPED cards as still running and then as crashed/"Stalled" with a Retry it never earned.
 const TURN_ABORTED_LINE = JSON.stringify({
@@ -332,7 +332,7 @@ test("parseCodexLine: event_msg/user_message → a genuine (non-synthetic) user-
   assert.equal(evs.length, 1)
   assert.equal(evs[0].kind, "user-message")
   assert.equal((evs[0] as any).synthetic, false)
-  assert.match((evs[0] as any).text, /FRAY-SENTINEL/) // the real first prompt carried a sentinel
+  assert.match((evs[0] as any).text, /FRIZZ-SENTINEL/) // the real first prompt carried a sentinel
 })
 
 test("parseCodexLine: response_item/function_call → tool-call with call_id + JSON-parsed arguments", () => {
@@ -705,11 +705,11 @@ test("foldLine: the first commentary title comment is persisted immediately and 
     payload: {
       type: "agent_message",
       phase: "commentary",
-      message: '<!-- fray title="Fix reliable Codex titles" -->\nI’m tracing the launch path.',
+      message: '<!-- frizz title="Fix reliable Codex titles" -->\nI’m tracing the launch path.',
     },
   }))
   assert.equal(state.aiTitle, "Fix reliable Codex titles")
-  assert.equal(state.autoTitleSource, "fray")
+  assert.equal(state.autoTitleSource, "frizz")
   assert.equal(state.lastAssistant, "I’m tracing the launch path.")
 
   backend.foldLine(state, JSON.stringify({
@@ -741,7 +741,7 @@ test("foldLine: legacy H1 compatibility remains first-final-only; omitted primar
   })
 
   // Legacy transcript compatibility only: newly dispatched workers are instructed to emit the
-  // invisible `<!-- fray title="…" -->` transport instead.
+  // invisible `<!-- frizz title="…" -->` transport instead.
   backend.foldLine(state, final("# Fix queue focus\nVisible answer"))
   assert.equal(state.aiTitle, "Fix queue focus")
   assert.equal(state.lastAssistant, "Visible answer", "the hidden marker never enters preview telemetry")
@@ -766,7 +766,7 @@ test("foldLine: legacy H1 compatibility remains first-final-only; omitted primar
   assert.equal(omitted.autoTitleSource, "fallback")
   backend.foldLine(omitted, final("# Too late\nSecond answer"))
   assert.equal(omitted.aiTitle, "Too late", "a later marker repairs only the neutral auto fallback")
-  assert.equal(omitted.autoTitleSource, "fray")
+  assert.equal(omitted.autoTitleSource, "frizz")
 
   backend.foldLine(omitted, final("# Still too late\nThird answer"))
   assert.equal(omitted.aiTitle, "Too late", "a generated title is stable after recovery")
@@ -780,13 +780,13 @@ test("foldLine: task_complete-only finals can title once, while an existing nati
     payload: { type: "task_complete", last_agent_message: text },
   })
   const fallback = newTailState("t", "sid", "/x")
-  backend.foldLine(fallback, completion("<!-- fray-title: Completion fallback -->\nVisible"))
+  backend.foldLine(fallback, completion("<!-- frizz-title: Completion fallback -->\nVisible"))
   assert.equal(fallback.aiTitle, "Completion fallback")
   assert.equal(fallback.lastAssistant, "Visible")
 
   const native = newTailState("t", "sid", "/x")
   applyEvent(native, { kind: "title", title: "Provider native title" })
-  backend.foldLine(native, completion("<!-- fray-title: Fray fallback -->\nVisible"))
+  backend.foldLine(native, completion("<!-- frizz-title: Frizz fallback -->\nVisible"))
   assert.equal(native.aiTitle, "Provider native title")
 })
 
@@ -868,7 +868,7 @@ function writeRollout(codexHome: string, id: string, cwd: string, sentinel: stri
 test("findRolloutById / transcriptPath: locate a rollout by its codex id suffix", () => {
   const home = mkdtempSync(join(tmpdir(), "codexhome-"))
   try {
-    const p = writeRollout(home, "FFFFFFFF-ffff-ffff-ffff-ffffffffffff", "/repo/w", "fray-session:disp-F")
+    const p = writeRollout(home, "FFFFFFFF-ffff-ffff-ffff-ffffffffffff", "/repo/w", "frizz-session:disp-F")
     assert.equal(findRolloutById("FFFFFFFF-ffff-ffff-ffff-ffffffffffff", home), p)
     assert.equal(findRolloutById("does-not-exist", home), undefined)
     const backend = createCodexBackend({ codexHome: home })

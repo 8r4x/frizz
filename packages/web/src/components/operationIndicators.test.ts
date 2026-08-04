@@ -35,7 +35,7 @@ test("a detached call marks instantly; a foreground one marks on elapsed time", 
   assert.equal(isPendingForegroundTool("pending"), true, "…it is the other pending kind")
   assert.equal(isPendingForegroundTool("pending", "background"), false, "a detached op is never both")
 
-  // An orphaned Codex poll is a process fray cannot place — it claims neither liveness nor progress.
+  // An orphaned Codex poll is a process frizz cannot place — it claims neither liveness nor progress.
   assert.equal(hasRunningToolIndicator("pending", "unknown"), false)
   assert.equal(isPendingForegroundTool("pending", "unknown"), false)
 
@@ -53,12 +53,12 @@ test("a detached call marks instantly; a foreground one marks on elapsed time", 
 // is somebody reintroducing a glyph that cannot go false.
 test("no second liveness glyph exists — the left-hand mark is the only one", () => {
   const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8")
-  assert.doesNotMatch(css, /^\.fray-tool-spinner \{/m, "the dispatch spinner must stay removed")
-  assert.doesNotMatch(css, /@keyframes fray-tool-spin\b/, "…along with its animation")
-  assert.doesNotMatch(css, /^\.fray-live-dot-done/m, "a completed op is marked by the ABSENCE of a mark")
+  assert.doesNotMatch(css, /^\.frizz-tool-spinner \{/m, "the dispatch spinner must stay removed")
+  assert.doesNotMatch(css, /@keyframes frizz-tool-spin\b/, "…along with its animation")
+  assert.doesNotMatch(css, /^\.frizz-live-dot-done/m, "a completed op is marked by the ABSENCE of a mark")
   // The genuinely-live glyphs remain: pulsing for running, breathing for alive-but-quiet.
-  assert.match(css, /\.fray-live-dot \{[^}]*animation: fray-live-pulse/)
-  assert.match(css, /\.fray-live-dot-quiet \{[^}]*animation: fray-live-breathe/)
+  assert.match(css, /\.frizz-live-dot \{[^}]*animation: frizz-live-pulse/)
+  assert.match(css, /\.frizz-live-dot-quiet \{[^}]*animation: frizz-live-breathe/)
 })
 
 // THE THRESHOLD is a noise filter: nearly every call resolves in well under a second, and marking those
@@ -107,7 +107,7 @@ test("reduced motion keeps live work visible as a static ring in its own hue", (
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)/)
   // The static ring is recolored through the same --live-dot variable as the animated dot, so a
   // reduced-motion shell keeps its blue ring and a sub-agent its accent-yellow one.
-  assert.match(css, /\.fray-live-dot \{ animation: none; background: transparent; border: 2px solid var\(--live-dot\); box-shadow: none; \}/)
+  assert.match(css, /\.frizz-live-dot \{ animation: none; background: transparent; border: 2px solid var\(--live-dot\); box-shadow: none; \}/)
 })
 
 test("running shells pulse blue and running sub-agents pulse the accent-yellow", () => {
@@ -115,18 +115,18 @@ test("running shells pulse blue and running sub-agents pulse the accent-yellow",
   // A distinct blue token, kept separate from the accent.
   assert.match(css, /--color-shell:\s*#[0-9a-fA-F]{3,8};/)
   // The live dot defaults to the accent-yellow (sub-agent) and the --shell modifier swaps in the blue.
-  assert.match(css, /\.fray-live-dot \{[^}]*--live-dot: var\(--color-accent\)/)
-  assert.match(css, /\.fray-live-dot--shell \{ --live-dot: var\(--color-shell\); \}/)
-  assert.match(css, /\.fray-live-dot--agent \{ --live-dot: var\(--color-accent\); \}/)
+  assert.match(css, /\.frizz-live-dot \{[^}]*--live-dot: var\(--color-accent\)/)
+  assert.match(css, /\.frizz-live-dot--shell \{ --live-dot: var\(--color-shell\); \}/)
+  assert.match(css, /\.frizz-live-dot--agent \{ --live-dot: var\(--color-accent\); \}/)
   // The quiet-but-alive shell dot follows the shell blue too.
-  assert.match(css, /\.fray-live-dot-quiet--shell \{ --live-dot: var\(--color-shell\); \}/)
+  assert.match(css, /\.frizz-live-dot-quiet--shell \{ --live-dot: var\(--color-shell\); \}/)
 })
 
 test("a quiet-but-alive background shell breathes, and stays visible as a static ring under reduced motion", () => {
   const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8")
   // It must ANIMATE (breathe) rather than sit as a dead gray dot…
-  assert.match(css, /\.fray-live-dot-quiet \{[^}]*animation: fray-live-breathe/)
-  assert.match(css, /@keyframes fray-live-breathe/)
+  assert.match(css, /\.frizz-live-dot-quiet \{[^}]*animation: frizz-live-breathe/)
+  assert.match(css, /@keyframes frizz-live-breathe/)
   // …and degrade to a static ring (never fully disappear) when motion is reduced.
-  assert.match(css, /\.fray-live-dot-quiet \{ animation: none;[^}]*border: 1\.5px solid/)
+  assert.match(css, /\.frizz-live-dot-quiet \{ animation: none;[^}]*border: 1\.5px solid/)
 })

@@ -1,9 +1,9 @@
 ---
 name: handoff
-description: The full fray end-of-turn signal reference for a fray-ui worker (invoke as fray:handoff) — every `awaiting` hint kind, the `question` fence tags (`danger`, `multi`), `done` body formatting, and worked examples of each. Your system-prompt contract carries the rules you need for the common case; load this when you are emitting an unusual fence, need a worked example of a tagged question card, or are unsure which fence a situation calls for.
+description: The full frizz end-of-turn signal reference for a frizz worker (invoke as frizz:handoff) — every `awaiting` hint kind, the `question` fence tags (`danger`, `multi`), `done` body formatting, and worked examples of each. Your system-prompt contract carries the rules you need for the common case; load this when you are emitting an unusual fence, need a worked example of a tagged question card, or are unsure which fence a situation calls for.
 ---
 
-# fray handoff reference
+# frizz handoff reference
 
 Your system prompt states the fence rules. This is the elaboration: the exact shapes, the tags, and
 worked examples. Nothing here overrides the contract.
@@ -44,7 +44,7 @@ Do not write a narrative paragraph. Do not fence `done` on work that is not land
 
 Lead the body with one or more `kind: value` lines, then prose naming the exact wake condition.
 
-`pr-watch: owner/repo#NUMBER` — fray polls the PR and resumes you on ANY new activity after the fence:
+`pr-watch: owner/repo#NUMBER` — frizz polls the PR and resumes you on ANY new activity after the fence:
 a review, an approval, or a comment, from a **human or a bot alike** (review agents that post findings
 as a conversation comment count exactly like a human reviewer). Baselined at the fence and durable
 across a server/worker restart. Your thread **stays in the queue** as a visible "PR is up, watching it"
@@ -70,7 +70,7 @@ All three adoption PRs are open and green, in their maintainers' hands. Whicheve
 wakes me and I'll address it.
 ```
 
-`human: <actor + exact review/approval>` — a third party whose action cannot be supplied in this fray
+`human: <actor + exact review/approval>` — a third party whose action cannot be supplied in this frizz
 conversation. **Parks you in the dimmed Held band.** A bot, automated reviewer, CI gate, or merge queue
 is NOT a human wait. Pair with `pr-watch:` when a machine-readable PR exists (the `human:` supplies the
 Held park, the `pr-watch:` supplies the cursor), or with `timer:` when none does.
@@ -81,7 +81,7 @@ pr-watch: dependabot/dependabot-core#15524
 The implementation and actionable checks are complete; address requested changes when review lands.
 ```
 
-`timer: <ISO-8601 instant>` — the durable fray scheduler resumes you at that instant, across process
+`timer: <ISO-8601 instant>` — the durable frizz scheduler resumes you at that instant, across process
 exits and restarts. The prose says exactly what to re-check.
 
 ```awaiting

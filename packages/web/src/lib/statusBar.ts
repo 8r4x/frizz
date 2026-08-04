@@ -1,6 +1,6 @@
 // The one icon-action treatment used by every button in the top-left status bar (settings, reload).
-// It lives here rather than in StatusBar.tsx because RestartFrayButton also needs it, and importing it
-// from StatusBar — which itself renders RestartFrayButton — would be an import cycle.
+// It lives here rather than in StatusBar.tsx because RestartFrizzButton also needs it, and importing it
+// from StatusBar — which itself renders RestartFrizzButton — would be an import cycle.
 //
 // 24px square: the WCAG 2.2 minimum pointer target, and the largest size that still reads as part of a
 // 12px text strip rather than as chrome parked next to it. The old corner button was 32px, which

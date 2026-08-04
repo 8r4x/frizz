@@ -1,12 +1,12 @@
 ---
 name: adhoc-cdp
-description: Ad hoc runtime verification for fray-ui — boot a fully-ISOLATED disposable stack and drive the REAL app (screenshots, console, network) headless in the background, plus focused real-subsystem harnesses for backend behavior the browser can't reach. Load this when your fray-ui change is one you need to SEE work before claiming done — a new or restructured surface, anything judged by eye, behavior you can't predict from the code alone, or anything large or uncertain (the worker RUNTIME RELEASE GATE calls for exactly this). A small, certain fix pinned by a test at the right level does not need a stack boot.
+description: Ad hoc runtime verification for frizz — boot a fully-ISOLATED disposable stack and drive the REAL app (screenshots, console, network) headless in the background, plus focused real-subsystem harnesses for backend behavior the browser can't reach. Load this when your frizz change is one you need to SEE work before claiming done — a new or restructured surface, anything judged by eye, behavior you can't predict from the code alone, or anything large or uncertain (the worker RUNTIME RELEASE GATE calls for exactly this). A small, certain fix pinned by a test at the right level does not need a stack boot.
 version: 0.1.0
 metadata:
   internal: true
 ---
 
-# fray:adhoc-cdp — drive the real app, don't guess
+# frizz:adhoc-cdp — drive the real app, don't guess
 
 When a change is one you need to SEE, this is the fast, repeatable loop for it: a throwaway stack that
 touches nothing real, driven headless so you can screenshot and inspect it in the background while you
@@ -29,12 +29,12 @@ Two layers, use both as the change demands:
 
 ## 1. The isolated disposable stack
 
-`scripts/adhoc-stack.mjs` boots a complete fray-ui instance sandboxed on every axis so it can never
-touch the maintainer's live instance or real `~/.fray` SQLite:
+`scripts/adhoc-stack.mjs` boots a complete frizz instance sandboxed on every axis so it can never
+touch the maintainer's live instance or real `~/.frizz` SQLite:
 
-- `HOME` → a fresh temp dir (the SQLite DB + `server.lock` live in an empty `~/.fray` there)
+- `HOME` → a fresh temp dir (the SQLite DB + `server.lock` live in an empty `~/.frizz` there)
 - `PORT` → a unique high port (never fights the dev server on 5175)
-- `FRAY_WAKERS_OFF=1` → scheduler OFF by default; pass `--wakers` to arm it when testing wake delivery
+- `FRIZZ_WAKERS_OFF=1` → scheduler OFF by default; pass `--wakers` to arm it when testing wake delivery
 
 Boot it in the **background** (never foreground — it stays up until killed) and read back its URL:
 
@@ -48,10 +48,10 @@ nub scripts/adhoc-stack.mjs --port=4930 > /tmp/stack.log 2>&1
 update, and the shared tree is edited constantly), so the reader exits, the pipe closes, and the next
 write kills the server with SIGPIPE — minutes later, mid-verification, looking like an unrelated crash.
 Redirect to a file and poll the file. Take `home` AND `socket` from that json: the socket carries a PID
-suffix (`fray-adhoc-4930-84193`), so guessing `fray-adhoc-4930` seeds your fixture panes onto a socket
+suffix (`frizz-adhoc-4930-84193`), so guessing `frizz-adhoc-4930` seeds your fixture panes onto a socket
 the server isn't watching.
 
-Flags: `--port=N`, `--project=/abs/dir` (defaults to the fray repo — a gh-authed repo with an empty board
+Flags: `--port=N`, `--project=/abs/dir` (defaults to the frizz repo — a gh-authed repo with an empty board
 under the temp HOME), `--wakers` (arm the scheduler), `--keep` (don't delete the temp HOME on exit).
 
 **Cleanup:** send SIGTERM/SIGINT (kill the background Bash task) — it deletes the temp HOME automatically.
@@ -67,7 +67,7 @@ restart before debugging.
 **Removing an injected style: hold the handle.** `page.addStyleTag()` returns an ElementHandle — remove
 THAT (`await tag.evaluate((el) => el.remove())`). Never sweep `querySelectorAll("style")` matching on text
 content: in dev Vite injects the entire app CSS as a `<style>`, so a predicate like "contains
-`.fray-todo-row` and `nowrap`" matches the whole stylesheet and deletes it. The page then renders
+`.frizz-todo-row` and `nowrap`" matches the whole stylesheet and deletes it. The page then renders
 unstyled and every geometry assertion after it fails for a reason that has nothing to do with your change.
 
 ---
@@ -156,21 +156,21 @@ the temp HOME (copying the blob, symlinking `~/Library/Keychains`) is blocked by
 **When you need a real broker worker, keep the real HOME and isolate the PROJECT instead:**
 `--home=$HOME --project=/tmp/<throwaway-git-repo>`. HOME stays real (keychain works, so `dispatch`
 succeeds and a genuine broker session streams SDK events), while the throwaway project dir gets its own
-project id, its own `~/.fray/projects/<id>/` state and its own port — so it never touches a board you
+project id, its own `~/.frizz/projects/<id>/` state and its own port — so it never touches a board you
 care about. `--home` implies `--keep`, so clean up after yourself: kill the stack by
-exact PID, kill the leftover `claude` broker processes (find them by their `FRAY_STATE_DIR=<that project
-id>` in `ps`), then `rm -rf ~/.fray/projects/<id> <throwaway-repo> ~/.claude/projects/<cwd-slug>`.
+exact PID, kill the leftover `claude` broker processes (find them by their `FRIZZ_STATE_DIR=<that project
+id>` in `ps`), then `rm -rf ~/.frizz/projects/<id> <throwaway-repo> ~/.claude/projects/<cwd-slug>`.
 Verified 2026-07-30 driving a real background-dispatch-then-rest worker end to end this way. Do NOT
-write settings through this stack — `~/.fray/ui.db` settings are global and shared with the real boards.
+write settings through this stack — `~/.frizz/ui.db` settings are global and shared with the real boards.
 
 For transcript/board/telemetry flows that don't need a live provider, **simulate a worker** instead —
 the tailer only needs three things, all inside the sandbox:
 1. a JSONL at `<tempHome>/.claude/projects/<cwd-slug>/<sessionId>.jsonl` you append records to
    (copy real record shapes: `user` / `assistant` (+`stop_reason`) / `queue-operation` / `queued_command`
    attachment — `transcript.ts` + `tailer.ts` document what each field drives);
-2. one `session` row in the sandbox DB (`sqlite3 <tempHome>/.fray/projects/*/ui.db "INSERT INTO session
+2. one `session` row in the sandbox DB (`sqlite3 <tempHome>/.frizz/projects/*/ui.db "INSERT INTO session
    (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode) VALUES (…)"`)
-   — `tmux_name` is a legacy COLUMN name holding the thread identity string `fray-<slug>`, not a pane.
+   — `tmux_name` is a legacy COLUMN name holding the thread identity string `frizz-<slug>`, not a pane.
    There is no pane to create: liveness comes from the row's runtime, so a simulated worker needs no
    process at all.
    This is the sanctioned exception to "never hand-write rows": the row is the fixture, and appending
@@ -236,7 +236,7 @@ flex-item baseline-probe bug that inflates a real 1.2px error into a plausible-l
 - Kill every background stack you booted (temp HOME auto-cleans on SIGTERM).
 - Put the **decisive** screenshots (not bulk) into your handoff with **markdown image syntax**
   — `![meaningful alt](/abs/path.png)` — NOT `SendUserFile` (that pushes a file as a deliverable; it is
-  not inline handoff evidence). The fray chat renders a local image only when its real path sits under a
+  not inline handoff evidence). The frizz chat renders a local image only when its real path sits under a
   `/local-image` **trusted root**: `ctx.project.dir`, `os.tmpdir()`, `~/Screenshots`, or the project's
   `attachments/` dir. `.adhoc-shots/` (where `shot.mjs` writes by default) is gitignored and under NONE of
   those, so `![](.adhoc-shots/…)` 403s and renders broken. So: `--out` the shot to (or `cp` the decisive

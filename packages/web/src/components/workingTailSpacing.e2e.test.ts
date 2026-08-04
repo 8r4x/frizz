@@ -3,7 +3,7 @@ import test from "node:test"
 
 // Runtime coverage for the LIVE TAIL's rhythm — the shimmer that closes a running
 // transcript. Skipped unless a Vite URL serving the fixtures is provided (same pattern as the other
-// *.e2e.test.ts here): start `vite` in packages/web and set FRAY_WORKING_TAIL_SPACING_E2E_URL to its
+// *.e2e.test.ts here): start `vite` in packages/web and set FRIZZ_WORKING_TAIL_SPACING_E2E_URL to its
 // origin.
 //
 // The invariant (maintainer 2026-07-31: "there's more space above the working shimmer than there is
@@ -15,7 +15,7 @@ import test from "node:test"
 // Measured in the browser rather than asserted on the tree because this is layout, and specifically
 // because the box gap alone is not the claim — a line box 1.4px shorter than its peers put the shimmer's
 // INK nearer the card above while every box reading said the gaps agreed.
-const baseUrl = process.env.FRAY_WORKING_TAIL_SPACING_E2E_URL
+const baseUrl = process.env.FRIZZ_WORKING_TAIL_SPACING_E2E_URL
 
 // The tight run needs a CARD on at least one side: two bordered blocks 6px apart still read as two.
 // Two bare LABEL rows do not — a label has no inset, so the gap is the only separation there is, and
@@ -48,13 +48,13 @@ async function tailGap(page: import("puppeteer").Page, drawer: boolean) {
       ? document.querySelector("[data-transcript-column]")
       : document.querySelector("[data-virtualized-transcript]")
     if (!scope) return { error: "surface not mounted" }
-    const rows = [...scope.querySelectorAll("[data-fray-msg]")]
+    const rows = [...scope.querySelectorAll("[data-frizz-msg]")]
     const working = scope.querySelector("[data-working-indicator]")
     if (!working || rows.length === 0) return { error: "no live tail" }
     const last = rows[rows.length - 1]
     const round = (n: number) => Math.round(n * 10) / 10
     return {
-      lastRow: last.getAttribute("data-fray-msg"),
+      lastRow: last.getAttribute("data-frizz-msg"),
       aboveWorking: round(working.getBoundingClientRect().top - last.getBoundingClientRect().bottom),
       betweenRows: rows.slice(1).map((r, i) => round(r.getBoundingClientRect().top - rows[i].getBoundingClientRect().bottom)),
     }
@@ -91,13 +91,13 @@ const CAP_WHITE = `(() => {
     while ((n = w.nextNode())) if (/\\S/.test(n.textContent)) return n
     return null
   }
-  const card = document.querySelector('[data-fray-msg="a2"]').getBoundingClientRect()
+  const card = document.querySelector('[data-frizz-msg="a2"]').getBoundingClientRect()
   const white = (el) => {
     if (!el) return null
     const b = baselineOf(firstText(el))
     return Math.round((capTop(b.font, b.baseline) - card.bottom) * 100) / 100
   }
-  const label = [...document.querySelectorAll('[data-fray-msg="m1"] span')].find((s) => s.children.length === 0 && s.textContent.trim() === "Reasoning")
+  const label = [...document.querySelectorAll('[data-frizz-msg="m1"] span')].find((s) => s.children.length === 0 && s.textContent.trim() === "Reasoning")
   return {
     shimmer: white(document.querySelector("[data-working-indicator] .shimmer-text")),
     settledLabel: white(label),
@@ -126,7 +126,7 @@ test("the live shimmer joins the meta run, and matches a settled label's optical
 
     // 2. The PEER reference: a settled meta label in the same slot, under the same cards.
     await page.goto(fixtureUrl("?tail=meta"), { waitUntil: "domcontentloaded" })
-    await page.waitForSelector('[data-fray-msg="m1"]')
+    await page.waitForSelector('[data-frizz-msg="m1"]')
     const refWhite = await page.evaluate(CAP_WHITE) as { shimmer: number; settledLabel: number }
     assert.ok(
       Math.abs(liveWhite.shimmer - refWhite.settledLabel) < 0.5,

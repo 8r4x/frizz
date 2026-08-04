@@ -13,9 +13,9 @@ export interface LaunchPrerequisiteOptions {
 }
 
 /**
- * The Node releases Fray actually runs on, MEASURED rather than derived from dependency manifests.
+ * The Node releases Frizz actually runs on, MEASURED rather than derived from dependency manifests.
  *
- * Fray's database is `node:sqlite`, unflagged in v22.13.0 and v23.4.0. Below those the module does not
+ * Frizz's database is `node:sqlite`, unflagged in v22.13.0 and v23.4.0. Below those the module does not
  * exist at all — the import fails with "No such built-in module" — so the floor is simply the release
  * that shipped it. Verified by running the driver's own suite (`sqlite.test.ts`) on 22.12, 22.13,
  * 22.14, 23.4, 23.6, 24 and 26: every release from 22.13 up passes it whole, and 22.12 is the only
@@ -66,7 +66,7 @@ export function supportedNodeRange(): string {
   ).join(" || ");
 }
 
-/** Is this Node one Fray is known to run on? See SUPPORTED_NODE_LINES for how "known" was decided. */
+/** Is this Node one Frizz is known to run on? See SUPPORTED_NODE_LINES for how "known" was decided. */
 export function nodeVersionIsSupported(major: number, minor: number): boolean {
   if (!Number.isSafeInteger(major) || !Number.isSafeInteger(minor)) return false;
   const line = SUPPORTED_NODE_LINES.find((entry) => entry.major === major);
@@ -81,18 +81,18 @@ export interface ProviderReadiness {
 }
 
 /**
- * The executables every Fray launch shells out to, with the reason each one is needed. `git` is
+ * The executables every Frizz launch shells out to, with the reason each one is needed. `git` is
  * reached before any prerequisite check used to run (`resolveWorkspace` execs `git rev-parse`), so a
  * machine missing it was diagnosed by whichever caller happened to fail first, in that caller's
- * vocabulary — "fray-dev must be run inside a Git repository". Say what is actually wrong, and say it
+ * vocabulary — "frizz-dev must be run inside a Git repository". Say what is actually wrong, and say it
  * before the work starts.
  *
  * `tmux` was here too, for "terminal panes and interactive provider logins". Neither is true any more:
- * agents run in the broker/app-server over pipes, and sign-in runs on node-pty. Requiring it kept Fray
+ * agents run in the broker/app-server over pipes, and sign-in runs on node-pty. Requiring it kept Frizz
  * off Windows, where tmux has no native build, for a dependency nothing used.
  */
 const REQUIRED_EXECUTABLES = [
-  { name: "git", need: "Fray identifies a project by its Git repository" },
+  { name: "git", need: "Frizz identifies a project by its Git repository" },
 ] as const;
 
 export function assertRequiredExecutables(command: CommandProbe = commandIsAvailable): void {
@@ -101,7 +101,7 @@ export function assertRequiredExecutables(command: CommandProbe = commandIsAvail
     throw new Error(
       `required executable \`${name}\` is not available on PATH; ${need}. ` +
         `Install ${name} (\`brew install ${name}\` on macOS, \`apt install ${name}\` on Debian/Ubuntu) ` +
-        `and relaunch Fray`
+        `and relaunch Frizz`
     );
   }
 }
@@ -117,7 +117,7 @@ export function commandIsAvailable(command: string): boolean {
 }
 
 /**
- * Prerequisites shared by every local Fray launch. Provider CLIs are deliberately not included:
+ * Prerequisites shared by every local Frizz launch. Provider CLIs are deliberately not included:
  * a workstation may use one backend while the other is unavailable.
  *
  * The Node floor here is a genuine minimum, not a proxy for the older Node-26 gate: it is the lowest
@@ -134,8 +134,8 @@ export function assertLaunchPrerequisites(
   if (!nodeVersionIsSupported(major!, minor!))
     throw new Error(
       `Node.js ${supportedNodeRange()} is required (found ${version}); ` +
-        `Fray's database is Node's built-in node:sqlite, which older releases do not ship. ` +
-        `Install a newer Node release and relaunch Fray`
+        `Frizz's database is Node's built-in node:sqlite, which older releases do not ship. ` +
+        `Install a newer Node release and relaunch Frizz`
     );
   assertRequiredExecutables(options.command ?? commandIsAvailable);
 }
@@ -154,9 +154,9 @@ export interface NativeHelperOptions {
  *
  * node-pty ships prebuilt `spawn-helper` binaries and relies on its own `post-install` script to set
  * the executable bit. npm 11 blocks dependency install scripts by default (`allow-scripts`), so a
- * plain `npm i frayui` — and `npx frayui`, which installs the same way — leaves the helper at 0644
+ * plain `npm i frizz` — and `npx frizz`, which installs the same way — leaves the helper at 0644
  * and EVERY pty spawn dies with `posix_spawnp failed.`: no terminal panes and no agent sessions at
- * all. The source checkout hides this because `@fray-ui/server` carries a postinstall that chmods it;
+ * all. The source checkout hides this because `@frizz/server` carries a postinstall that chmods it;
  * the registry package cannot rely on a script npm may refuse to run, so the launcher repairs the bit
  * itself before anything spawns a pty. Idempotent, best-effort, and a no-op on Windows (conpty has no
  * helper) — a failure here is left for the pty spawn itself to report.

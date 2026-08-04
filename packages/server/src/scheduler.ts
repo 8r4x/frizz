@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { formatGithubWakeSteer, isValidAwaitingTimer, restPromptMessage, schedulePromptMessage, timerPromptMessage, wakeDeliveryToken, type QuotaSnapshot } from "@fray-ui/shared"
+import { formatGithubWakeSteer, isValidAwaitingTimer, restPromptMessage, schedulePromptMessage, timerPromptMessage, wakeDeliveryToken, type QuotaSnapshot } from "@frizz/shared"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
 import type { FenceView } from "./tailer.ts"
@@ -25,7 +25,7 @@ export {
   parseGithubReviewActivities,
   type GithubReviewActivity,
 } from "./github-review.ts"
-import { log as frayLog } from "./logging.ts"
+import { log as frizzLog } from "./logging.ts"
 
 // ---- DURABLE TIMER WAKER + PR-WATCH + LEGACY COMPATIBILITY ----------------------------------------
 // New workers use `awaiting` for a PR-activity watcher (`pr-watch:`), a specific external HUMAN gate
@@ -355,10 +355,10 @@ function armedSnooze(row: Pick<SessionRow, "snoozed_until" | "snooze_prompt">): 
 // the agent is doing needs this one.
 //
 // It also remains the only recurring wake a worker CAN have. Claude Code's own `CronCreate` /
-// `ScheduleWakeup` cannot fire in the runtime fray spawns: their gate stays shut while ANY background
+// `ScheduleWakeup` cannot fire in the runtime frizz spawns: their gate stays shut while ANY background
 // task is outstanding, so the thread most in need of a nudge — one parked behind a sub-agent that will
 // never report — is exactly the one whose cron is dead (measured 2026-08-01: 3 fires in 150s with no
-// background work, 0 with a background shell alive). Riding fray's outbox sidesteps that entirely.
+// background work, 0 with a background shell alive). Riding frizz's outbox sidesteps that entirely.
 //
 // Its record of intent is the session row, with `recurring_armed_at` as the GENERATION: re-arming mints
 // a new one, so a delivery still in the outbox under the old settings reads as superseded.
@@ -366,7 +366,7 @@ function armedSnooze(row: Pick<SessionRow, "snoozed_until" | "snooze_prompt">): 
 // It never ABORTS the turn it lands in. Both transports accept a mid-turn message as an ordinary
 // queued/steered input, so the running work finishes and the prompt is read at the next sampling
 // boundary — which is what "fires on its cadence" means, and is also the only reading compatible with
-// fray's completion invariant.
+// frizz's completion invariant.
 //
 // THE FENCE PREFIXES ARE THE PRE-MERGE ONES, on purpose. They are internal delivery-id namespaces that
 // nothing outside this file reads, and renaming them would reclassify every delivery already sitting in
@@ -683,7 +683,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const now = deps.now ?? Date.now
   const fetchPr = deps.fetchPr ?? defaultFetchPr
   const fetchGithubReview = deps.fetchGithubReview ?? createGithubReviewFetcher({ now })
-  const log = deps.log ?? ((m: string) => frayLog.info("scheduler", m))
+  const log = deps.log ?? ((m: string) => frizzLog.info("scheduler", m))
   const tickMs = deps.tickMs ?? 10_000
   const pollMs = deps.pollMs ?? 60_000
   const deliveryLeaseMs = Math.max(1, deps.deliveryLeaseMs ?? 30_000)
@@ -915,7 +915,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // first sampling boundary (see the bridge's `interruptTurn` contract for the measured latency); the
   // codex app-server steers the live turn through `turn/steer`. Neither ABORTS what is running, which is
   // the correct reading of "fires on its cadence" — the beat is delivered, the in-flight work is not
-  // cut off, and fray's completion invariant stays intact.
+  // cut off, and frizz's completion invariant stays intact.
   //
   // `unknown` still defers on every source, this one included: telemetry we cannot read is not a thread
   // we can safely address.
@@ -954,7 +954,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // what to do about it is the worker's call. Keep the verb about reading, like the merged/closed/CI
   // steers that just say "Continue."
   //
-  // The FORMAT itself lives in @fray-ui/shared beside its parser, because the chat rebuilds a
+  // The FORMAT itself lives in @frizz/shared beside its parser, because the chat rebuilds a
   // first-party card from this exact string — the structured activity never reaches the transcript.
   //
   // `activities` is chronological and may hold several: one poll interval routinely collects a burst,
@@ -1226,7 +1226,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // worker's transcript under 184 limit records — a self-inflicted context burn on a thread that was
   // already stuck.
   //
-  // In memory on purpose: a fray restart costs one extra attempt per thread, and a durable table for a
+  // In memory on purpose: a frizz restart costs one extra attempt per thread, and a durable table for a
   // guard this cheap would be a migration in exchange for nothing.
   const spentEarlyResume = new Map<string, string>()
 
@@ -1347,7 +1347,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // follow-up — the delivery gate below holds the item until the thread comes to rest instead.
   //
   // Unlike an unregistered legacy timer, an overdue snooze found at boot DOES fire: the DB row is
-  // itself the durable registration, so a deadline that crossed while fray was down is exactly the case
+  // itself the durable registration, so a deadline that crossed while frizz was down is exactly the case
   // this is meant to honor. The blast radius stays bounded by the handful of threads a human snoozed.
   function evalSnoozes(nowMs: number): void {
     for (const row of deps.storage.allSessions()) {
@@ -1375,7 +1375,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // passes do: timers live in their own table precisely because a thread may hold many, and most threads
   // hold none.
   //
-  // Like the snooze pass, an alarm that came due while fray was DOWN still fires when it comes back —
+  // Like the snooze pass, an alarm that came due while frizz was DOWN still fires when it comes back —
   // the row is its own durable registration, and "you asked to be woken at 15:00" does not stop being
   // true because the server restarted at 14:59. Unlike the snooze pass, it does not wait for rest.
   function evalTimers(nowMs: number): void {

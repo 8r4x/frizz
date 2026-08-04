@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react"
 import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import type { AwaitingHint, BoardSnapshot, ThreadView } from "@fray-ui/shared"
+import type { AwaitingHint, BoardSnapshot, ThreadView } from "@frizz/shared"
 import { composeBlockAnswer, parseQuestionBlock, type BlockAnswer } from "./lib/questionBlocks.ts"
 import {
   FenceCard,
@@ -203,7 +203,7 @@ function Fixture() {
             policy={{
               decision: "allow",
               rule: "worker-autonomy",
-              reason: "Unattended fray worker: approved automatically because no human is watching the terminal to answer a prompt.",
+              reason: "Unattended frizz worker: approved automatically because no human is watching the terminal to answer a prompt.",
               tool: "Bash",
               command: "git push origin HEAD:main",
               at: new Date().toISOString(),
@@ -215,7 +215,7 @@ function Fixture() {
             policy={{
               decision: "allow",
               rule: "worker-autonomy",
-              reason: "Unattended fray worker.",
+              reason: "Unattended frizz worker.",
               tool: "Bash",
               command: "cd ~/.cache/nub/worktrees/canary-debug && git fetch origin && git rebase origin/main && git push origin HEAD:main --follow-tags",
               at: new Date().toISOString(),

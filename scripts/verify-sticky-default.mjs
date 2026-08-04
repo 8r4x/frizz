@@ -23,7 +23,7 @@ const PROBE = `(async () => {
   window.scrollTo(0, document.documentElement.scrollHeight); await sleep(700)
   const atBottom = (() => { const el = askEl(); if (!el) return null; const r = el.getBoundingClientRect(); return { viewportTop: Math.round(r.top), onScreen: r.bottom > 0 && r.top < window.innerHeight, sticky: !!el.closest('[data-transcript-sticky="true"]') } })()
   window.scrollTo(0, 0); await sleep(300)
-  return { stored: JSON.parse(localStorage.getItem("fray.prefs.v1") || "null"), pinnedBands: document.querySelectorAll('[data-transcript-sticky="true"]').length, atTop, atBottom }
+  return { stored: JSON.parse(localStorage.getItem("frizz.prefs.v1") || "null"), pinnedBands: document.querySelectorAll('[data-transcript-sticky="true"]').length, atTop, atBottom }
 })()`
 
 // The DRAWER (ChatView) is the other surface the pref drives, and it scrolls its own container rather
@@ -76,7 +76,7 @@ try {
 
   // ---- 2. LEGACY STORED PREFS: what every browser that has used the app already has on disk.
   await page.evaluate(() => {
-    localStorage.setItem("fray.prefs.v1", JSON.stringify({ compactDiffs: true, snoozePreset: "1d", stickyUserMessage: true, queueOrder: "fifo", diffsRedefaulted: true }))
+    localStorage.setItem("frizz.prefs.v1", JSON.stringify({ compactDiffs: true, snoozePreset: "1d", stickyUserMessage: true, queueOrder: "fifo", diffsRedefaulted: true }))
   })
   await page.reload({ waitUntil: "networkidle2", timeout: 60000 })
   await sleep(2500)
@@ -126,7 +126,7 @@ try {
   check("virtualized transcript pins the ask while opted in", drawerOn.drawerFound && drawerOn.pinnedBands === 1 && drawerOn.askAtBottom?.sticky === true && drawerOn.askAtBottom?.onScreen === true, drawerOn)
   await page.screenshot({ path: `${shots}/06-full-opted-in-pinned.png` })
 
-  await page.evaluate(() => localStorage.removeItem("fray.prefs.v1"))
+  await page.evaluate(() => localStorage.removeItem("frizz.prefs.v1"))
   await page.reload({ waitUntil: "networkidle2", timeout: 60000 })
   await sleep(3000)
   const drawerOff = await page.evaluate(DRAWER_PROBE)

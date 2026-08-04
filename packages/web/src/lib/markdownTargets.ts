@@ -1,5 +1,5 @@
 // Markdown is often written by tools that report local artifacts as links. A browser interprets a
-// POSIX absolute path as a same-origin URL path, which both navigates away from Fray and produces a
+// POSIX absolute path as a same-origin URL path, which both navigates away from Frizz and produces a
 // deceptive localhost URL. Identify those targets before DOM sanitization so they can never become
 // navigable anchors. This module deliberately does not decide filesystem authorization: the server's
 // `/local-image` route realpath-checks the requested image against its narrow trusted-root allowlist.
@@ -26,7 +26,7 @@ function decodePath(value: string): string {
 // The SPA's intentionally supported root-relative routes. All other single-slash absolute targets
 // are treated as filesystem paths; ordinary relative links (`docs/foo`), fragments, mailto, and
 // http(s) never reach this classifier.
-function isFrayRoute(href: string): boolean {
+function isFrizzRoute(href: string): boolean {
   return href === "/" || href.startsWith("/?") || href.startsWith("/#")
     || /^\/(?:thread|status)(?:\/|$)/.test(href)
 }
@@ -45,7 +45,7 @@ export function localMarkdownTarget(raw: string | null | undefined): LocalMarkdo
 
   if (WINDOWS_ABSOLUTE_PATH.test(decodedHref)) return { display: decodedHref }
 
-  if (decodedHref.startsWith("/") && !decodedHref.startsWith("//") && !isFrayRoute(decodedHref)) {
+  if (decodedHref.startsWith("/") && !decodedHref.startsWith("//") && !isFrizzRoute(decodedHref)) {
     const path = decodedHref
     return { display: path, posixPath: path }
   }

@@ -59,7 +59,7 @@ function fakePlatform(initial: FakeProcess) {
 }
 
 function fixture(t: TestContext): ProjectLaunchTarget {
-  const projectDir = mkdtempSync(join(tmpdir(), "fray-project-launch-test-"))
+  const projectDir = mkdtempSync(join(tmpdir(), "frizz-project-launch-test-"))
   t.after(() => rmSync(projectDir, { recursive: true, force: true }))
   return { projectId: randomUUID(), projectDir, stateDir: join(projectDir, "state") }
 }
@@ -477,7 +477,7 @@ test("real supervisor SIGKILL waits for its registered child before successor ow
 })
 
 test("real SIGKILL recovery follows canonical main and linked-worktree root moves", { timeout: 20_000 }, async (t) => {
-  const base = mkdtempSync(join(tmpdir(), "fray-project-launch-moved-roots-"))
+  const base = mkdtempSync(join(tmpdir(), "frizz-project-launch-moved-roots-"))
   t.after(() => rmSync(base, { recursive: true, force: true }))
   for (const variant of ["main", "linked"] as const) {
     const originalDir = join(base, `${variant}-original`)

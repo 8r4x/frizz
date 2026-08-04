@@ -23,10 +23,10 @@ const SLUG = "alarmed"
 const T0 = "2026-08-04T12:00:00.000Z"
 
 function fixture(tele: Partial<SessionTelemetry> = {}, opts: { now?: string; archived?: boolean } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "fray-timer-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-timer-"))
   const storage = createStorage(join(dir, "ui.db"))
   storage.upsertSession({
-    slug: SLUG, session_id: "sid", tmux_name: `fray-${SLUG}`, spawned_at: T0,
+    slug: SLUG, session_id: "sid", tmux_name: `frizz-${SLUG}`, spawned_at: T0,
     last_read_at: null, unread: 0, exited: 0, archived: opts.archived ? 1 : 0, rested_at: null,
     title_auto: 1, title: SLUG, state: opts.archived ? "archived" : "open", meta: null, seen_at: null,
     plan_path: null, transcript_id: null,
@@ -56,12 +56,12 @@ function fixture(tele: Partial<SessionTelemetry> = {}, opts: { now?: string; arc
 }
 
 test("storage: timers are many per thread, cancel is slug-scoped, and firing is one-way", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-timer-store-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-timer-store-"))
   const storage = createStorage(join(dir, "ui.db"))
   try {
     for (const slug of ["mine", "yours"]) {
       storage.upsertSession({
-        slug, session_id: `sid-${slug}`, tmux_name: `fray-${slug}`, spawned_at: T0,
+        slug, session_id: `sid-${slug}`, tmux_name: `frizz-${slug}`, spawned_at: T0,
         last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
         title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
       } as SessionRow)
@@ -185,7 +185,7 @@ test("an archived thread is skipped, and its timer is left armed rather than bur
 
 // The snooze pass's rule, for the same reason: the row IS the durable registration, so "you asked to be
 // woken at 15:00" does not stop being true because the server was restarted at 14:59.
-test("an alarm that came due while fray was down still fires when it comes back", async () => {
+test("an alarm that came due while frizz was down still fires when it comes back", async () => {
   const f = fixture({}, { now: "2026-08-05T09:00:00.000Z" })
   try {
     f.arm("tmr_stale", "2026-08-04T12:05:00.000Z", "the deploy finished hours ago")

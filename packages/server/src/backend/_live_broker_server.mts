@@ -1,5 +1,5 @@
 // LIVE end-to-end RUNTIME GATE for the broker CUTOVER through the REAL server wiring (not just the
-// bridge). Run:  FRAY_CLAUDE_BROKER_BRIDGE=1 nub \
+// bridge). Run:  FRIZZ_CLAUDE_BROKER_BRIDGE=1 nub \
 //   packages/server/src/backend/_live_broker_server.mts
 //
 // Unlike _live_broker_bridge.mts (which drives the bridge directly), this exercises the code I wired
@@ -21,7 +21,7 @@ import { createRouter } from "../router.ts"
 import { resolveProject } from "../project.ts"
 import { claudeBrokerRecordPath, readBrokerRecord } from "./claude-broker-host.ts"
 
-process.env.FRAY_CLAUDE_BROKER_BRIDGE = "1"
+process.env.FRIZZ_CLAUDE_BROKER_BRIDGE = "1"
 const claudeBin = execFileSync("which", ["claude"], { encoding: "utf8" }).trim()
 const repo = mkdtempSync(join(tmpdir(), "brk-srv-repo-"))
 execFileSync("git", ["init", "-q", repo])
@@ -38,7 +38,7 @@ const waitFor = async (cond: () => boolean, ms = 120_000, label = "condition") =
 }
 
 // Full canonical context teardown (index.ts order), MINUS anything that kills the broker daemon —
-// broker.close() only DETACHES its sockets, exactly what a real fray process exit does. The daemon lives on.
+// broker.close() only DETACHES its sockets, exactly what a real frizz process exit does. The daemon lives on.
 async function teardown(ctx: Awaited<ReturnType<typeof createContext>>) {
   ctx.tailer.stop()
   ctx.stopSubscriptions()
@@ -84,7 +84,7 @@ try {
   // ---- RESTART: ctx1 down (daemon survives), ctx2 up on the SAME project --------------------------
   await teardown(ctx)
   await sleep(500)
-  ok("broker daemon SURVIVES fray teardown", !!daemonPid && (() => { try { process.kill(daemonPid!, 0); return true } catch { return false } })())
+  ok("broker daemon SURVIVES frizz teardown", !!daemonPid && (() => { try { process.kill(daemonPid!, 0); return true } catch { return false } })())
 
   ctx = await createContext({ project, claudeBin })
   router = createRouter(ctx)

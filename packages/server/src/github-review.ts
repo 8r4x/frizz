@@ -277,7 +277,7 @@ export function createGithubReviewFetcher(deps: GithubReviewFetcherDeps = {}): G
           accept: "application/vnd.github+json",
           authorization: `Bearer ${authToken}`,
           "content-type": "application/json",
-          "user-agent": "fray-ui-pr-watch",
+          "user-agent": "frizz-pr-watch",
           "x-github-api-version": "2022-11-28",
         },
         body: JSON.stringify({ query, variables }),

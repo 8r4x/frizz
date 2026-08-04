@@ -1,23 +1,23 @@
 # cc-worker — design decisions
 
-The **fray** worker-side plugin (dir `cc-worker/`, manifest `name: "fray"` since 2026-07-08) is
-consumed by fray-ui worker sessions: one interactive top-level
-`claude` per `.fray/` thread, loaded via `claude --plugin-dir <repo>/cc-worker`. Each session is a
-**worker bound to ONE thread** (slug in env `FRAY_UI_THREAD` + a `THREAD:` line in its prompt). The
-human + the fray-ui app are the orchestrator; the worker just drives its one thread. This records
+The **frizz** worker-side plugin (dir `cc-worker/`, manifest `name: "frizz"` since 2026-07-08) is
+consumed by frizz worker sessions: one interactive top-level
+`claude` per `.frizz/` thread, loaded via `claude --plugin-dir <repo>/cc-worker`. Each session is a
+**worker bound to ONE thread** (slug in env `FRIZZ_THREAD` + a `THREAD:` line in its prompt). The
+human + the frizz app are the orchestrator; the worker just drives its one thread. This records
 what was ported from the orchestrator `cc/` plugin, what was dropped, and why.
 
 ## Shared source, bundled runtime closure
 
-- **`scripts/fray/config.mjs` and `scripts/fray/agent-bindings.mjs` are THIN SHIMS** that
+- **`scripts/frizz/config.mjs` and `scripts/frizz/agent-bindings.mjs` are THIN SHIMS** that
   `export *` from `../../../board/*.mjs`. cc-worker never copies config/vocab/binding
   logic — there is exactly one source of truth (cc's). This assumes cc is a sibling dir (`../../cc/`
-  from the plugin root), the same assumption fray-ui's server makes (`ARCHITECTURE.md`: it imports
+  from the plugin root), the same assumption frizz's server makes (`ARCHITECTURE.md`: it imports
   the board logic from `../../board/*.mjs`).
-- **`bin/fray` and `bin/fray-update`** are cc's exact shim pattern, resolving cc's real scripts at
+- **`bin/frizz` and `bin/frizz-update`** are cc's exact shim pattern, resolving cc's real scripts at
   `../../board/{index,thread-update}.mjs` relative to the bin file (cwd-independent). They
-  land on the worker's Bash PATH the way cc's do. `fray-update` is the worker's primary tool for
-  owning its one thread file; `fray` lets it read/validate the board.
+  land on the worker's Bash PATH the way cc's do. `frizz-update` is the worker's primary tool for
+  owning its one thread file; `frizz` lets it read/validate the board.
 - **Portable artifact rule:** `src/artifacts.ts` copies the exact sibling
   `board/` module closure to `runtime/board/`, beside `runtime/cc-worker/`.
   The existing shims therefore resolve inside an immutable artifact when the source checkout is gone;
@@ -25,43 +25,43 @@ what was ported from the orchestrator `cc/` plugin, what was dropped, and why.
 - **`agents/*.md`** are copied UNCHANGED from `cc/agents/` (16 profiles) — a worker dispatches its
   own helpers at the same model/effort cells as the orchestrator.
 
-## Hooks ported (all gated on `FRAY_UI_THREAD` — inert if the plugin is loaded anywhere else)
+## Hooks ported (all gated on `FRIZZ_THREAD` — inert if the plugin is loaded anywhere else)
 
 | Hook | Event | Ported from | What it does for a worker |
 | --- | --- | --- | --- |
 | `session-seed.mjs` | SessionStart (startup/resume/clear/compact) | cc `session-seed.mjs` | Injects the single-thread worker contract + the bound slug + its file path; re-grounds on compact. Also writes cc's `off` sentinel defensively (see interplay). |
 | `precompact-instructions.mjs` | PreCompact (auto/manual) | new — no cc equivalent | Steers WHAT SURVIVES compaction: emits an editorial brief asking the summarizer to preserve the high-level approach (plan, alternatives rejected, rationale) at high fidelity, plus a closing "Re-grounding before continuing:" section naming the scratchpad path and the files to re-read. **PLAIN STDOUT is the channel** — cc's usual `hookSpecificOutput` JSON would be handed to the summarizer as its literal instructions. Skips sub-agent contexts (the derived scratchpad path is only guaranteed for the top-level worker). |
-| `scratchpad.mjs` | SessionStart (startup/resume/clear/compact) + PreCompact (auto/manual) + UserPromptSubmit + PostToolUse | new — no cc equivalent | Keeps the ONE per-thread scratchpad (`.fray/threads/<sid>/scratch.md`) written and re-grounded across compaction. `--mode=session-start` injects the pad's HEAD back verbatim on the context-losing sources (compact/resume/clear) plus a re-read pointer, and teaches the contract when the pad is still an unwritten skeleton; `--mode=precompact` (**plain stdout**) hands the head to the summarizer; `--mode=nudge` fires on BOTH UserPromptSubmit and PostToolUse (mid-turn — the one that matters for long autonomous turns) once context has grown past `STALE_TOKENS` since the last write. Both nudge channels share one state file, so mid-turn firing does not multiply reminders. NOT gated on `FRAY_UI_THREAD`; `--via=project` marks the repo-local registration and defers to this one inside a fray worker. |
+| `scratchpad.mjs` | SessionStart (startup/resume/clear/compact) + PreCompact (auto/manual) + UserPromptSubmit + PostToolUse | new — no cc equivalent | Keeps the ONE per-thread scratchpad (`.frizz/threads/<sid>/scratch.md`) written and re-grounded across compaction. `--mode=session-start` injects the pad's HEAD back verbatim on the context-losing sources (compact/resume/clear) plus a re-read pointer, and teaches the contract when the pad is still an unwritten skeleton; `--mode=precompact` (**plain stdout**) hands the head to the summarizer; `--mode=nudge` fires on BOTH UserPromptSubmit and PostToolUse (mid-turn — the one that matters for long autonomous turns) once context has grown past `STALE_TOKENS` since the last write. Both nudge channels share one state file, so mid-turn firing does not multiply reminders. NOT gated on `FRIZZ_THREAD`; `--via=project` marks the repo-local registration and defers to this one inside a frizz worker. |
 | `agent-dispatch.mjs` | PreToolUse(Agent) | cc `agent-dispatch.mjs` | Enforces `run_in_background:true`, strips `name`/`team_name`, appends a worker-flavored orchestration epilogue. |
-| `bash-background.mjs` | PreToolUse(Bash) | new | Denies a local shell job that escapes through `&` without a later `wait` or EXIT trap, including one hidden inside a command-position `bash -c '…'`. Shell job control bypasses Claude's task registry, so Fray cannot track or wake it; self-contained probe concurrency, and a wrapper handed to another program (`ssh`/`docker run`/`limactl shell`), remain allowed. |
-| `agent-bind.mjs` | PostToolUse(Agent) | cc `agent-bind.mjs` (verbatim behavior) | Records `agentId → thread` into `.fray/.agent-bindings.jsonl` in cc's exact format, so a worker's THREAD-tagged helper renders on the fray-ui board's per-thread liveness. |
-| `stop-flush.mjs` | Stop | cc `fray-stop-reminder.mjs` (dirty-check idea only) | If the worker's ONE thread file wasn't edited since the last rest, nudges it to flush its state (mtime dirty-check, cooldown-limited, least-alarming `additionalContext` channel). |
+| `bash-background.mjs` | PreToolUse(Bash) | new | Denies a local shell job that escapes through `&` without a later `wait` or EXIT trap, including one hidden inside a command-position `bash -c '…'`. Shell job control bypasses Claude's task registry, so Frizz cannot track or wake it; self-contained probe concurrency, and a wrapper handed to another program (`ssh`/`docker run`/`limactl shell`), remain allowed. |
+| `agent-bind.mjs` | PostToolUse(Agent) | cc `agent-bind.mjs` (verbatim behavior) | Records `agentId → thread` into `.frizz/.agent-bindings.jsonl` in cc's exact format, so a worker's THREAD-tagged helper renders on the frizz board's per-thread liveness. |
+| `stop-flush.mjs` | Stop | cc `frizz-stop-reminder.mjs` (dirty-check idea only) | If the worker's ONE thread file wasn't edited since the last rest, nudges it to flush its state (mtime dirty-check, cooldown-limited, least-alarming `additionalContext` channel). |
 
 ## cc hooks DROPPED — one line each on why
 
-- **`fray-reminder.mjs` (UserPromptSubmit per-turn pulse)** — DROPPED. It nags the *orchestrator*
+- **`frizz-reminder.mjs` (UserPromptSubmit per-turn pulse)** — DROPPED. It nags the *orchestrator*
   about the whole board (pending-by-status, reconcile-stale, un-drained follow-ups, revalidate-due).
   A worker owns one thread and does not orchestrate a board; a per-turn board pulse is pure noise.
-- **`fray-stop-reminder.mjs` (board-wide Stop reconcile + pop-one decision queue)** — DROPPED as-is;
+- **`frizz-stop-reminder.mjs` (board-wide Stop reconcile + pop-one decision queue)** — DROPPED as-is;
   only its per-thread dirty-check idea is reused in `stop-flush.mjs`. The rest (reconcile every
   rested agent, pop the next human-blocked thread and present it) is orchestrator decision-queue work
-  the fray-ui app + human own, not the worker.
-- **`fray-notify-surface.mjs` (Stop) + `fray-notify` bin/`notify.mjs`** — DROPPED. The durable
-  WIN/DECISION/BLOCKER notification queue is an orchestrator surfacing channel; in fray-ui the UI
+  the frizz app + human own, not the worker.
+- **`frizz-notify-surface.mjs` (Stop) + `frizz-notify` bin/`notify.mjs`** — DROPPED. The durable
+  WIN/DECISION/BLOCKER notification queue is an orchestrator surfacing channel; in frizz the UI
   surfaces "awaiting you" from thread `status: blocked` + `status_text` directly, so the worker needs
   no separate notify queue.
-- **`fray-subagent-rest.mjs` (SubagentStop recorder) + `fray-rest-guard.mjs` (SubagentStop guard)**
+- **`frizz-subagent-rest.mjs` (SubagentStop recorder) + `frizz-rest-guard.mjs` (SubagentStop guard)**
   — DROPPED. These feed the orchestrator's board-wide "reconcile every rested dispatched agent"
   machinery (`.rested-agents.jsonl`, the `.dispatch-count` gate). A worker actively collects its own
   handful of helpers before resting (contract in SKILL.md); it does not need the board-scale
   rest-reconciliation guard. The worker-facing half of the rest-guard's lesson (run long ops inline,
   don't rest on a waiter) is carried in the dispatch epilogue instead.
-- **`fray-thread-edit-steer.mjs` (PostToolUse Edit/Write)** — DROPPED. It's an orchestrator
+- **`frizz-thread-edit-steer.mjs` (PostToolUse Edit/Write)** — DROPPED. It's an orchestrator
   convenience that steers an in-flight agent when the orchestrator hand-edits a thread; a worker edits
   its OWN thread and dispatches its OWN helpers, so there's nothing to cross-steer.
 - **`session-end.mjs` (SessionEnd heartbeat clear)** — DROPPED. It clears the session-ownership
   HEARTBEAT so a dead orchestrator's threads orphan. Workers don't participate in cc's multi-session
-  ownership model (no `owner_session` claims, no heartbeat) — the fray-ui app tracks which session
+  ownership model (no `owner_session` claims, no heartbeat) — the frizz app tracks which session
   drives which thread — so there's no heartbeat to clear.
 - **The `.dispatch-ledger.jsonl` write + THREAD-existence DENY gate + `.dispatch-count` bump**
   (inside cc's `agent-dispatch.mjs`) — DROPPED from the worker's PreToolUse. The ledger is a
@@ -73,44 +73,44 @@ what was ported from the orchestrator `cc/` plugin, what was dropped, and why.
 
 ## Interplay with the orchestrator `cc` plugin (double-hook analysis)
 
-**Question:** if the user has `cc` (the fray orchestrator plugin) enabled globally AND a fray-ui
+**Question:** if the user has `cc` (the frizz orchestrator plugin) enabled globally AND a frizz
 worker session starts in the same repo, do both plugins' hooks fire (double-hook)?
 
 **Finding — NO, not by default. cc is inert in a fresh worker session.** cc's every hook is gated on
-`frayActive(projectDir, sessionId)` (`board/config.mjs`). That gate is **opt-IN per
-session**: it requires `.fray/` to exist AND a per-session sentinel at
-`.fray/.session-state/<session_id>` containing `on` (written by `fray on` / the orchestrator fray
+`frizzActive(projectDir, sessionId)` (`board/config.mjs`). That gate is **opt-IN per
+session**: it requires `.frizz/` to exist AND a per-session sentinel at
+`.frizz/.session-state/<session_id>` containing `on` (written by `frizz on` / the orchestrator frizz
 skill's Step 0). With no sentinel it returns **false** — the documented default:
 
 ```
-// config.mjs frayActive(), final line:
-return false; // DEFAULT: OPT-IN — dormant until this session runs `fray on`
+// config.mjs frizzActive(), final line:
+return false; // DEFAULT: OPT-IN — dormant until this session runs `frizz on`
 ```
 
-A freshly-spawned fray-ui worker has a distinct `CLAUDE_CODE_SESSION_ID` and never runs `fray on`, so
-cc's `frayActive()` is false for it → **all cc hooks are silent no-ops in the worker.** Meanwhile
-cc-worker gates on the orthogonal `FRAY_UI_THREAD` env, so the two plugins key off different signals
+A freshly-spawned frizz worker has a distinct `CLAUDE_CODE_SESSION_ID` and never runs `frizz on`, so
+cc's `frizzActive()` is false for it → **all cc hooks are silent no-ops in the worker.** Meanwhile
+cc-worker gates on the orthogonal `FRIZZ_THREAD` env, so the two plugins key off different signals
 and do not both activate. No double-hook by default.
 
-**Residual risk:** if, inside a worker session, someone runs `fray on` or loads the orchestrator
-`fray` skill (whose Step 0 runs `fray on`), cc's `frayActive()` flips true AND cc-worker is active →
+**Residual risk:** if, inside a worker session, someone runs `frizz on` or loads the orchestrator
+`frizz` skill (whose Step 0 runs `frizz on`), cc's `frizzActive()` flips true AND cc-worker is active →
 both fire (you'd get orchestrator board nags inside a worker — wrong).
 
 **Mitigation implemented (cheap + safe + reversible):** `session-seed.mjs` writes cc's OWN per-session
 `off` sentinel for the worker's session id via cc's shared `setSessionOverride(dir, sid, 'off')` on
-every worker SessionStart. `frayActive()` short-circuits to false on an `off` override
+every worker SessionStart. `frizzActive()` short-circuits to false on an `off` override
 (`if (override === 'off') return false`), so cc is **guaranteed dormant** in a worker session even if
-something later attempts to activate it — unless the human deliberately runs `fray on` afterward
+something later attempts to activate it — unless the human deliberately runs `frizz on` afterward
 (which overwrites the sentinel), the explicit "I want this session to orchestrate too" escape hatch.
-This uses cc's own public API (identical to what `fray off` does), touches only gitignored runtime
+This uses cc's own public API (identical to what `frizz off` does), touches only gitignored runtime
 state keyed on this worker's session id, and does NOT disable cc-worker (which gates on
-`FRAY_UI_THREAD`, not the sentinel). It's the safest cheap option: it neutralizes the other plugin
+`FRIZZ_THREAD`, not the sentinel). It's the safest cheap option: it neutralizes the other plugin
 without a UI-side plugin-disable flag (Claude Code has no per-invocation "disable plugin X" flag), and
-the worker SKILL.md additionally tells the worker not to run `fray on` / load the orchestrator skill.
+the worker SKILL.md additionally tells the worker not to run `frizz on` / load the orchestrator skill.
 
 ## plugin.json
 
-`name: "fray"` (renamed from `fray-worker` on 2026-07-08 — see the follow-up note), `version: "0.1.2"`,
+`name: "frizz"` (renamed from `frizz-worker` on 2026-07-08 — see the follow-up note), `version: "0.1.2"`,
 `license: "MIT"`. Hooks are auto-discovered from `hooks/hooks.json` (same as cc — plugin.json carries
 no explicit hooks reference); every hook command is wired via `${CLAUDE_PLUGIN_ROOT}`.
 
@@ -118,7 +118,7 @@ no explicit hooks reference); every hook command is wired via `${CLAUDE_PLUGIN_R
 
 The portable worker launch passes its per-session plugin with `--plugin-dir` on both spawn and
 resume, and clears only `CLAUDE_CODE_SUBAGENT_MODEL` plus `CLAUDE_CODE_EFFORT_LEVEL`: those inherited
-variables would silently defeat Fray's selected worker/profile. It deliberately does **not** replace
+variables would silently defeat Frizz's selected worker/profile. It deliberately does **not** replace
 `HOME`, `CLAUDE_CONFIG_DIR`, or Claude's settings sources. Doing so would also change authentication,
 user-approved permissions, MCP configuration, and global plugin behavior; that is a product-policy
 decision, not an artifact-portability implementation detail. A future isolation policy must specify
@@ -126,42 +126,42 @@ which settings/auth surfaces are preserved before adding `--settings`, a config-
 global-plugin disable mechanism.
 
 ## 2026-07-02: Stop hook removed
-stop-flush.mjs is no longer wired (script kept for reference). User call: under fray-ui the
+stop-flush.mjs is no longer wired (script kept for reference). User call: under frizz the
 tailer/board already surface worker state live, and the block-until-file-edited nag forced even
 trivial workers into Read/Edit dances that render as noise in the chat UI. Thread-file discipline
 remains a prompt-level contract (worker system prompt + SKILL), not a hook-enforced gate.
 
 ## 2026-07-08: Developer-experience port — doctrine, thread-type presets, dialectic
 Goal: carry the old cc/ plugin's developer experience (minus the orchestrator machinery) into
-fray-ui workers. What landed:
+frizz workers. What landed:
 - **`skills/dialectic/SKILL.md`** — ported from `cc/skills/dialectic/` (self-contained dueling-
   sub-agents methodology; no board/reconcile dependency). Its model-tier references use this
-  plugin's namespace (`fray:opus-high`, etc. — see the naming note below).
+  plugin's namespace (`frizz:opus-high`, etc. — see the naming note below).
 - **`skills/worker/SKILL.md`** — added two sections: "Choosing a helper's model + effort" (the
   full Haiku/Sonnet/Opus tiering doctrine + effort ladder + bias-to-Opus corollary, adapted from
-  `cc/skills/fray/SKILL.md:218-234` for a worker dispatching its OWN helpers) and "Thread-type
+  `cc/skills/frizz/SKILL.md:218-234` for a worker dispatching its OWN helpers) and "Thread-type
   presets" (research / audit / implementation / planning — deliverable shape + "done" bar each,
   derived from that skill's `:92-150`/`:242-317`/`:463` framing). Also added a status-field
   discipline section (later split into `activity` + `status_text` — see the follow-up) and an
   "awaiting your OWN sub-agent is NOT blocked" clarification.
-- **`packages/server/src/workerPrompt.ts`** (fray-ui system prompt, not in this plugin) — carries the terse version
+- **`packages/server/src/workerPrompt.ts`** (frizz system prompt, not in this plugin) — carries the terse version
   of the same three: a "Status discipline" block, the model/effort doctrine in the Sub-agents
   section, and a "Thread types" section. This is the maintainer's explicit ask that the preset
-  vocabulary ride in the SYSTEM prompt passed to every worker. No dispatch.ts change, so no fray-ui
+  vocabulary ride in the SYSTEM prompt passed to every worker. No dispatch.ts change, so no frizz
   server restart is needed — `loadWorkerPrompt()` re-reads the file per dispatch and each spawned
   `claude` rescans this plugin dir fresh.
 
-### Naming: subagent_type is `fray:<model>-<effort>` (plugin renamed to `fray` on 2026-07-08)
+### Naming: subagent_type is `frizz:<model>-<effort>` (plugin renamed to `frizz` on 2026-07-08)
 The plugin's manifest `name` (`.claude-plugin/plugin.json`) drives the subagent-type NAMESPACE, and
 each agent file's frontmatter `name` drives the agent name — verified empirically with a throwaway
-plugin (`name:"fray"` + agent `name:opus-high` → `fray:opus-high`); the plugin DIRECTORY name does
-not matter. So the profiles dispatch as `fray:opus-high` / `fray:sonnet-medium` / `fray:haiku`, and
-the skills as `fray:worker` + `fray:dialectic`. A BARE name (`opus-high`, `haiku`) does NOT resolve
-— the Agent tool returns "Agent type '…' not found. Available agents: … fray:haiku …" — so every
-doctrine/dialectic reference uses the `fray:`-prefixed form (confirmed end-to-end: `subagent_type:
-fray:haiku` returns PONG). See the follow-up note below for why the name is `fray`, not `fray-worker`.
+plugin (`name:"frizz"` + agent `name:opus-high` → `frizz:opus-high`); the plugin DIRECTORY name does
+not matter. So the profiles dispatch as `frizz:opus-high` / `frizz:sonnet-medium` / `frizz:haiku`, and
+the skills as `frizz:worker` + `frizz:dialectic`. A BARE name (`opus-high`, `haiku`) does NOT resolve
+— the Agent tool returns "Agent type '…' not found. Available agents: … frizz:haiku …" — so every
+doctrine/dialectic reference uses the `frizz:`-prefixed form (confirmed end-to-end: `subagent_type:
+frizz:haiku` returns PONG). See the follow-up note below for why the name is `frizz`, not `frizz-worker`.
 
-## 2026-07-08 (follow-up): status split, validation hook, `fray:` namespace rename
+## 2026-07-08 (follow-up): status split, validation hook, `frizz:` namespace rename
 Three maintainer refinements landed on top of the port:
 
 **1. `status_text` split into `activity` + `status_text`.** The single overloaded field became two:
@@ -173,8 +173,8 @@ gerund/≤100 discipline moved OFF `status_text` and ONTO `activity` in `package
 row — is a SIBLING agent's scope; not touched here beyond `packages/server/src/workerPrompt.ts`.)
 
 **2. New PostToolUse validation hook — `hooks/thread-frontmatter-validate.mjs`** (matcher
-`Edit|Write|MultiEdit`, wired in `hooks/hooks.json`). Gated on FRAY_UI_THREAD + a top-level
-`.fray/<slug>.md` path (dotfiles + `.findings/` sidecars skipped via the vendored `threadSlug`). On
+`Edit|Write|MultiEdit`, wired in `hooks/hooks.json`). Gated on FRIZZ_THREAD + a top-level
+`.frizz/<slug>.md` path (dotfiles + `.findings/` sidecars skipped via the vendored `threadSlug`). On
 every thread-file edit it re-reads + validates the frontmatter and, on a HARD violation, returns
 `{"decision":"block","reason":…}` (PostToolUse block — the worker sees the quoted reason and
 re-edits); soft issues warn via `systemMessage`; a clean edit is silent; ANY error fails OPEN
@@ -183,32 +183,32 @@ re-edits); soft issues warn via `systemMessage`; a clean edit is silent; ANY err
 (first word ends in "ing"); `blocked` ⇒ at most ONE of `blocking_threads`/`revalidate_at`, and
 human-blocked (neither) ⇒ `status_text` required; `status_text` >240 chars warns. SELF-CONTAINED: it
 VENDORS minimal copies of cc's frontmatter parser (`index.mjs:82`), path matcher
-(`fray-thread-edit-steer.mjs:67`), and vocab (`config.mjs:291`/`:301`) — cc-worker must not import cc
+(`frizz-thread-edit-steer.mjs:67`), and vocab (`config.mjs:291`/`:301`) — cc-worker must not import cc
 at runtime. Verified: 10 direct unit cases (pass/block/warn/inert) + a real headless worker whose bad
 Write was blocked with the exact quoted reason.
 
-**3. Plugin renamed `fray-worker` → `fray`; worker skill renamed `fray-worker` → `worker`.** The
-maintainer disliked the old worker-prefixed dispatch namespace. Renamed the manifest `name` to `fray` and the 16 agent
-files + their frontmatter from `fray-<model>-<effort>` to `<model>-<effort>` (bare `haiku`), so
-dispatches read `fray:opus-high` etc. Renamed the worker skill dir + frontmatter `fray-worker` →
-`worker` (giving `fray:worker`, not the stutter `fray:fray-worker`). The plugin DIRECTORY stays
+**3. Plugin renamed `frizz-worker` → `frizz`; worker skill renamed `frizz-worker` → `worker`.** The
+maintainer disliked the old worker-prefixed dispatch namespace. Renamed the manifest `name` to `frizz` and the 16 agent
+files + their frontmatter from `frizz-<model>-<effort>` to `<model>-<effort>` (bare `haiku`), so
+dispatches read `frizz:opus-high` etc. Renamed the worker skill dir + frontmatter `frizz-worker` →
+`worker` (giving `frizz:worker`, not the stutter `frizz:frizz-worker`). The plugin DIRECTORY stays
 `cc-worker/` (dispatch.ts points at that path — unchanged, no server restart). Every reference in
 `packages/server/src/workerPrompt.ts`, both skills, the hooks, and this file was updated; a grep for the old prefix token is clean.
 
-**Accepted name collision.** The old GLOBAL orchestrator plugin (`cc/`) is ALSO named `fray`. This is
-accepted as harmless: `cc/` is disabled in `~/.claude/settings.json` (`"fray@fray": false`) and, even
-when enabled, loads only in ORCHESTRATOR sessions (a different process class) — never in a fray-ui
+**Accepted name collision.** The old GLOBAL orchestrator plugin (`cc/`) is ALSO named `frizz`. This is
+accepted as harmless: `cc/` is disabled in `~/.claude/settings.json` (`"frizz@frizz": false`) and, even
+when enabled, loads only in ORCHESTRATOR sessions (a different process class) — never in a frizz
 worker, which loads ONLY this plugin via `--plugin-dir cc-worker`. Verified: the headless worker env
-(same settings.json) registers a clean `fray:*` set with no `cc/` agents present. If a user ever
-loaded BOTH plugins in one session, Claude Code would namespace-collide two `fray` plugins — but that
+(same settings.json) registers a clean `frizz:*` set with no `cc/` agents present. If a user ever
+loaded BOTH plugins in one session, Claude Code would namespace-collide two `frizz` plugins — but that
 combination does not occur on the worker path.
 
 ## 2026-07-08 (campaign): `needs-human` first-class status + interactive-prompt deny hooks
-Part of the board-wide redesign (owned jointly with the fray-ui UI half): `needs-human` becomes a
-first-class fray status — the declared "awaiting a human" state and the queue's definition — while
+Part of the board-wide redesign (owned jointly with the frizz UI half): `needs-human` becomes a
+first-class frizz status — the declared "awaiting a human" state and the queue's definition — while
 `blocked` narrows to MACHINE-waits only. The vocab/parser/validator changes live in the shared cc/
 scripts (`config.mjs` STATUS/STATUS_ALIASES + new `effectiveStatus()`, `index.mjs`, `decisions.mjs`,
-`statusline-fray.mjs`, `thread-update.mjs`, `fray-reminder.mjs`) — consumed by fray-ui's readBoard
+`statusline-frizz.mjs`, `thread-update.mjs`, `frizz-reminder.mjs`) — consumed by frizz's readBoard
 shell-out, so they take effect on the next board rebuild with NO server restart. cc-worker-side:
 
 - **`hooks/thread-frontmatter-validate.mjs`** — vendored vocab bumped: `needs-human` is canonical,
@@ -223,7 +223,7 @@ shell-out, so they take effect on the next board rebuild with NO server restart.
   is pending).
 - **`hooks/deny-ask.mjs`** (existing, PreToolUse `AskUserQuestion`) — deny reason re-pointed at
   `--status needs-human`. `AskUserQuestion` is a real tool → cleanly deniable via PreToolUse; verified
-  by piping the hook its exact payload (deny + reason) and confirming inert when FRAY_UI_THREAD unset.
+  by piping the hook its exact payload (deny + reason) and confirming inert when FRIZZ_THREAD unset.
 - **`hooks/deny-plan.mjs`** (NEW, PermissionRequest `ExitPlanMode`) — denies the plan-approval prompt.
   MECHANISM (per the Claude Code hooks docs): `ExitPlanMode` is a PERMISSION surface, not a plain
   tool, so it is denied via a **PermissionRequest** hook (matcher exactly `ExitPlanMode`), NOT
@@ -232,8 +232,8 @@ shell-out, so they take effect on the next board rebuild with NO server restart.
   **top-level `additionalContext`** (NOT `decision.message`), which Claude injects to the model as a
   plain-text system-reminder; exit 0 with the JSON on stdout (exit 2 makes Claude ignore it). CAVEAT:
   PermissionRequest hooks do NOT fire under `claude -p` (headless print mode), so the `-p` smoke test
-  can't exercise it — but fray-ui workers run as INTERACTIVE tmux `claude` sessions, where they DO
-  fire. Both deny hooks are FRAY_UI_THREAD-gated and fail-open. (`AskUserQuestion` was not surfaced as
+  can't exercise it — but frizz workers run as INTERACTIVE tmux `claude` sessions, where they DO
+  fire. Both deny hooks are FRIZZ_THREAD-gated and fail-open. (`AskUserQuestion` was not surfaced as
   an invokable tool in the `-p` harness either, so both hooks were verified by piping their exact hook
   payloads rather than by driving a live prompt.)
 
@@ -242,7 +242,7 @@ shell-out, so they take effect on the next board rebuild with NO server restart.
 Replaces the observe-only `perm-observe.mjs`. Same registration (PermissionRequest, matcher `*`), but
 it now DECIDES: allow / deny / defer, first match wins.
 
-WHY IT DECIDES. fray dispatches Claude workers at `--permission-mode auto`
+WHY IT DECIDES. frizz dispatches Claude workers at `--permission-mode auto`
 (`WORKER_DISPATCH_PERMISSION`), and `auto` is **not** non-interactive — its classifier still raises a
 prompt for anything it judges risky. With nobody at the keyboard that parks a thread invisibly; one sat
 blocked on a `git push` for over a day. The blunt alternative was dispatching at `bypassPermissions`,
@@ -251,11 +251,11 @@ request again. Keeping `auto` and deciding here preserves the seam — and Claud
 in the pane ("Allowed by PermissionRequest hook"), so an auto-approval stays attributable rather than
 being indistinguishable from bypass.
 
-THE TABLE ships UNIVERSAL rules only; this plugin loads for every project fray drives, so a rule that
+THE TABLE ships UNIVERSAL rules only; this plugin loads for every project frizz drives, so a rule that
 is right for one repo is wrong for the next. `catastrophic-delete` and `raw-disk-write` deny outright
 (strictly safer than bypass, which would have allowed both). `restrictive-mode` DEFERS whenever
 `permission_mode !== "auto"`, which is what makes a genuine lower-permission mode usable: move a thread
-to `default` with the live permission control and its prompts come back. `FRAY_PERM_POLICY=review`
+to `default` with the live permission control and its prompts come back. `FRIZZ_PERM_POLICY=review`
 defers everything. Fail-safe INVERTS the old observer's fail-open — for a hook that can APPROVE, any
 error must fall back to asking, never to allowing.
 
@@ -307,16 +307,16 @@ at the SOURCE instead: `ui/dispatch.ts` `workerPermissionMode()` coerces `--perm
 BOTH command builders (so dispatch, adopt, AND resume never spawn a worker in plan mode). Workers plan
 by writing the plan into the thread + `status: needs-human` (the contract), which has no plan-mode
 requirement — so nothing is lost. deny-plan then denies `ExitPlanMode` UNCONDITIONALLY when gated:
-for a real fray-ui worker (never in plan mode) that is always a spurious call → deny + redirect is
+for a real frizz worker (never in plan mode) that is always a spurious call → deny + redirect is
 correct. RESIDUAL GAP (accepted, documented): the deny could softlock only a FOREIGN session that is
-simultaneously in plan mode AND running with FRAY_UI_THREAD set AND this plugin loaded — a combination
-fray-ui never produces. A normal plan-mode session outside fray-ui is untouched (deny-plan is inert
-without FRAY_UI_THREAD). Follow-up for UI honesty: `web/src/lib/options.ts` still offers "plan" in the
+simultaneously in plan mode AND running with FRIZZ_THREAD set AND this plugin loaded — a combination
+frizz never produces. A normal plan-mode session outside frizz is untouched (deny-plan is inert
+without FRIZZ_THREAD). Follow-up for UI honesty: `web/src/lib/options.ts` still offers "plan" in the
 dispatch permission-mode dropdown (coerced to `auto` at spawn) — the sibling can drop it there.
 
 ### Malformed-thread one-click repair — read-side recovery (2026-07-09)
 INCIDENT: a worker that spawned before the frontmatter-validation write-hook existed wrote
-`nub/.fray/sandbox-windows-backend.md` with its metadata in **bold prose** instead of YAML
+`nub/.frizz/sandbox-windows-backend.md` with its metadata in **bold prose** instead of YAML
 frontmatter. The board banner correctly reported "sandbox-windows-backend.md: no YAML frontmatter",
 but the thread was INVISIBLE to the queue/status system (the parser can't read its title/status →
 `status: ?`) until the orchestrator hand-edited YAML. Maintainer directive: "make sure that doesn't
@@ -334,10 +334,10 @@ MECHANISM:
 - `board/index.mjs` `--json` gains a parallel `errorItems: [{file, kind, message}]`
   (`kind: 'no-frontmatter'` = repairable, else `'other'`). The parser classifies — it knows exactly
   why it rejected the file. The legacy `errors: string[]` array is emitted UNCHANGED alongside it.
-- `errorItems` flows through `readBoard`/`fray.ts` → `board.ts assemble()` → `BoardSnapshot` +
+- `errorItems` flows through `readBoard`/`frizz.ts` → `board.ts assemble()` → `BoardSnapshot` +
   `BoardMeta` (so the repair affordance survives a board delta, not just the keyframe) → the
   TodosView banner, which renders a **Repair** button per `no-frontmatter` item.
-- `repairThread({file})` RPC (`repair.ts`) validates the file is a real `.md` DIRECTLY under `.fray/`
+- `repairThread({file})` RPC (`repair.ts`) validates the file is a real `.md` DIRECTLY under `.frizz/`
   (resolve + dirname===root guard; rejects `../`, `sub/`, absolute paths), refuses any file that
   already has a `---` block (repair is ONLY the missing-frontmatter case), then PREPENDS minimal
   frontmatter: `title` from the first `# H1` (else the filename slug), `status: active`, and a
@@ -347,17 +347,17 @@ CONSERVATIVE ON PURPOSE: repair NEVER infers status from prose. This morning's f
 bold — guessing wrong silently is worse than surfacing. `status: active` makes the thread visible;
 if its agent is gone, the runtime crash-net cards it for human attention — the correct escalation.
 
-RESIDUAL (accepted, documented): a Bash-written `.fray/*.md` bypasses the file-tool hooks by design,
+RESIDUAL (accepted, documented): a Bash-written `.frizz/*.md` bypasses the file-tool hooks by design,
 so the write-side can't prevent it — the read-side repair is the safety net that heals it in one
 click.
 
 ## 2026-07-09: v2 worker contract — the session-first rebuild (fences + scratchpad; thread-file contract DELETED)
-The maintainer settled fray-ui on a SESSION-FIRST model: threads ARE claude sessions and the human's
+The maintainer settled frizz on a SESSION-FIRST model: threads ARE claude sessions and the human's
 dashboard shows the session TRANSCRIPT. Queue membership is explicit: `question` hands off to the
 human, `done` queues a checked completion, process-level blocks surface themselves, `awaiting`
-excuses a machine wait, and bare rest stays quiet. The entire `.fray/<slug>.md` ownership contract is
+excuses a machine wait, and bare rest stays quiet. The entire `.frizz/<slug>.md` ownership contract is
 GONE: no thread files, no frontmatter, no `status`/`activity`/`status_text`, no `needs-human`, no
-`blocked` machine fields, no `hasPlan`/`## Plan`, no `fray-update`. Workers now SIGNAL through their
+`blocked` machine fields, no `hasPlan`/`## Plan`, no `frizz-update`. Workers now SIGNAL through their
 FINAL MESSAGE and PERSIST through a SCRATCHPAD. This is the cc-worker-side realignment.
 
 **The new signal model (taught in `packages/server/src/workerPrompt.ts` §"End-of-turn signals" + `skills/worker/SKILL.md`):**
@@ -374,13 +374,13 @@ FINAL MESSAGE and PERSIST through a SCRATCHPAD. This is the cc-worker-side reali
   `ThreadFence` kind ∈ done|awaiting, `AwaitingHint` kind ∈ pr|ci|timer|session). Opening line is
   exactly ` ```done `/` ```awaiting ` (nothing after the language word); exactly one fence, at the end.
 
-**The scratchpad (`.fray/threads/<session-id>/scratch.md`) — new §"Scratchpad" in both docs:** free-form
+**The scratchpad (`.frizz/threads/<session-id>/scratch.md`) — new §"Scratchpad" in both docs:** free-form
 markdown, NO schema, NO validation. It is the worker's compaction-proof working memory (survive-
 compaction to-do lists / work queues / Ralph-style epic checklists live here, not in ephemeral
 context) AND the shared blackboard for parallel sub-agents (shared state is written into it; its PATH
 is passed into every sub-agent prompt; helpers READ it, the worker folds their results back in). The
 path is server-established convention already wired through `shared` (`scratchpadPath`), `router.ts`
-(reads `.fray/threads/<session_id>/scratch.md`), and `dispatch.ts`.
+(reads `.frizz/threads/<session_id>/scratch.md`), and `dispatch.ts`.
 
 **Hooks changed:**
 - **DELETED `hooks/thread-frontmatter-validate.mjs`** + its `hooks.json` PostToolUse `Edit|Write|
@@ -392,22 +392,22 @@ path is server-established convention already wired through `shared` (`scratchpa
 - **`hooks/session-seed.mjs`** — reseeded to the v2 contract: signal via the final message (bare rest
   is quiet; done queues checked completion; awaiting excuses a machine wait; question asks) + the
   scratchpad, whose concrete path is derived from
-  the SessionStart `session_id` (`currentSessionId(input.session_id)` → `.fray/threads/<sid>/scratch.md`) and
-  named in the seed. FRAY_UI_THREAD gating + the cc double-hook `off`-sentinel defense KEPT verbatim;
+  the SessionStart `session_id` (`currentSessionId(input.session_id)` → `.frizz/threads/<sid>/scratch.md`) and
+  named in the seed. FRIZZ_THREAD gating + the cc double-hook `off`-sentinel defense KEPT verbatim;
   the compact re-grounding now points at the scratchpad, not a thread file.
-- **`hooks/agent-dispatch.mjs`** — epilogue no longer says "don't edit `.fray/` thread files or
-  config.yml"; now "don't edit the dispatcher's scratchpad (`.fray/threads/<session-id>/scratch.md`) — READ it for shared
+- **`hooks/agent-dispatch.mjs`** — epilogue no longer says "don't edit `.frizz/` thread files or
+  config.yml"; now "don't edit the dispatcher's scratchpad (`.frizz/threads/<session-id>/scratch.md`) — READ it for shared
   context if its path is in your prompt, report in your FINAL MESSAGE." Background/name-strip
   enforcement unchanged.
-- **`hooks/deny-ask.mjs`** — redirect retargeted off `fray-update … --status needs-human`: now "ask
+- **`hooks/deny-ask.mjs`** — redirect retargeted off `frizz-update … --status needs-human`: now "ask
   in your FINAL MESSAGE with ```question blocks, then rest; a question IS the handback (no extra
-  fence)." Still PreToolUse(AskUserQuestion), FRAY_UI_THREAD-gated, fail-open.
-- **`hooks/deny-plan.mjs`** — redirect retargeted off "write the plan into your thread `.fray/<slug>.md`
-  + status: needs-human": now "write the plan into `.fray/plans/<topic>.md` and/or the scratchpad;
+  fence)." Still PreToolUse(AskUserQuestion), FRIZZ_THREAD-gated, fail-open.
+- **`hooks/deny-plan.mjs`** — redirect retargeted off "write the plan into your thread `.frizz/<slug>.md`
+  + status: needs-human": now "write the plan into `.frizz/plans/<topic>.md` and/or the scratchpad;
   ask via a ```question approval block." PermissionRequest(ExitPlanMode) mechanism + the plan-mode
   softlock reasoning (dispatch.ts coerces plan→auto) unchanged.
 - **`hooks/agent-bind.mjs`** — UNCHANGED (functionally). It records `agentId → thread` into
-  `.fray/.agent-bindings.jsonl` from a helper's `THREAD: <slug>` tag; that tag still rides the
+  `.frizz/.agent-bindings.jsonl` from a helper's `THREAD: <slug>` tag; that tag still rides the
   per-thread dispatch and references no dead status/frontmatter contract. NOTE for the server/tailer
   verticals: session-first sub-agent liveness is now TAILER-derived (`ThreadView.subAgents`), so the
   `.agent-bindings.jsonl` binding this hook writes may be VESTIGIAL. Left in place (harmless,
@@ -417,18 +417,18 @@ path is server-established convention already wired through `shared` (`scratchpa
 **`skills/worker/SKILL.md`** — rewritten to the same pillars (version 0.2.0): the signal model
 replaces the status-vocabulary sections; a scratchpad section replaces the "own ONE thread file"
 sections; thread-type presets keep the research/audit/implementation/planning taxonomy but strip
-every status reference (planning now delivers a `.fray/plans/<topic>.md` artifact). The sub-agents
+every status reference (planning now delivers a `.frizz/plans/<topic>.md` artifact). The sub-agents
 section adds "pass the scratchpad path into helper prompts." `skills/dialectic` untouched.
 
 **`plugin.json`** description updated: no more "validate thread-file frontmatter"; now fence signals
 + scratchpad blackboard + sub-agent profiles + deny-ask/deny-plan.
 
-**What the server/web verticals must know:** (a) FRAY_UI_THREAD must keep being passed at spawn — every
-hook still gates on it. (b) The scratchpad path convention is `.fray/threads/<session-id>/scratch.md` where
+**What the server/web verticals must know:** (a) FRIZZ_THREAD must keep being passed at spawn — every
+hook still gates on it. (b) The scratchpad path convention is `.frizz/threads/<session-id>/scratch.md` where
 `<session-id>` is the pinned `--session-id` (the same id the SessionStart hook sees as `session_id`);
 the seed hook NAMES that concrete path to the worker, so dispatch must keep pinning `--session-id`.
 (c) `packages/server/src/dispatch.ts` `composePrompt()` STILL emits the dead per-thread contract
-("You own `.fray/<slug>.md` … set `status: blocked` … Set `status: done`") — that is server-vertical
+("You own `.frizz/<slug>.md` … set `status: blocked` … Set `status: done`") — that is server-vertical
 scope (not editable here), but it now CONTRADICTS the v2 WORKER_PROMPT and must be rewritten to the
 fence/scratchpad model (or dropped) by the dispatch owner. Flagged to server-core.
 
@@ -451,7 +451,7 @@ contract is now narrower:
 - Every follow-up clears the old fence. “Back to awaiting” requires a fresh check: re-emit a current
   human/timer fence, or re-arm automation and remain active.
 
-Claude Code 2.1.207 was audited before teaching this. fray-ui does not pass `--tools`,
+Claude Code 2.1.207 was audited before teaching this. frizz does not pass `--tools`,
 `--allowedTools`, or `--disallowedTools`, and its helper profiles only select model/effort, so wait
 tools are available to top-level workers and helpers. `Monitor` defaults to 300,000 ms (maximum
 3,600,000 ms); `persistent:true` runs until `TaskStop` or session end. Background Bash reports an
@@ -462,7 +462,7 @@ the top-level worker owns long-lived CI/PR/merge progression.
 
 ## 2026-07-13: ordinary rest returns to Queue; human Snooze/Archive own triage
 
-The quiet-bare-rest rule above was reversed after live use showed that an owned Fray worker could
+The quiet-bare-rest rule above was reversed after live use showed that an owned Frizz worker could
 come to rest without choosing a fence and disappear from the only surface the operator routinely
 triages. Queue membership is now server-derived from process rest, not dependent on perfect worker
 signaling:
@@ -503,24 +503,24 @@ or report the gate unmet.
 The plugin stops shipping three of its four skills. `skills/worker` is DELETED: it was a second copy
 of the worker contract whose single source is `packages/server/src/workerPrompt.ts` (the system
 prompt, rebuilt on every dispatch/resume and compaction-immune) — every contract edit had to be made
-twice, and the copies drifted. The session-seed pointer sentences that said "Load the `fray:worker`
+twice, and the copies drifted. The session-seed pointer sentences that said "Load the `frizz:worker`
 skill for the full contract" now point at the system-prompt contract only, and the contract tests pin
 the two backend prompts (not a skill copy). `skills/dialectic` is dropped from the plugin (generic
 methodology nobody wired into the seed or prompt; workers on other people's projects never asked for
-it). `skills/adhoc-cdp` MOVED to the fray repo's own `.agents/skills/adhoc-cdp` (agent-neutral; `.claude/skills/adhoc-cdp` is a symlink to it so Claude and Codex share one copy) — its content is
-fray-ui-specific (adhoc-stack.mjs / shot.mjs), so it is a project skill, not global plugin cargo; the
+it). `skills/adhoc-cdp` MOVED to the frizz repo's own `.agents/skills/adhoc-cdp` (agent-neutral; `.claude/skills/adhoc-cdp` is a symlink to it so Claude and Codex share one copy) — its content is
+frizz-specific (adhoc-stack.mjs / shot.mjs), so it is a project skill, not global plugin cargo; the
 generic "verify in a real browser" principle already lives in the prompt's runtime-gate section.
 `skills/gh` remains the ONE injected skill: bulky, conditionally relevant, and its pointer is already
 auth-gated in the seed — exactly the on-demand shape skills are for.
 
 ## 2026-07-22: The no-PR rule now also lives in AGENTS.md (docs, not a hook)
 
-Root cause of "agents keep opening PRs despite FRAY.md": the worker contract + injected FRAY.md are a
+Root cause of "agents keep opening PRs despite FRIZZ.md": the worker contract + injected FRIZZ.md are a
 SNAPSHOT frozen at session creation. The Codex worker that opened PR #17 and #18 (thread `862831cf`,
-born 09:50 Jul 21) spawned minutes before FRAY.md injection first landed and hours before the no-PR
+born 09:50 Jul 21) spawned minutes before FRIZZ.md injection first landed and hours before the no-PR
 rule existed, so it never saw the rule and carried the base contract's "open a PR and report its URL"
-on every turn. Editing FRAY.md does nothing for a session already in flight, and sub-agents never
-receive FRAY.md at all.
+on every turn. Editing FRIZZ.md does nothing for a session already in flight, and sub-agents never
+receive FRIZZ.md at all.
 
 Mitigation (docs only): the no-PR rule was added to `AGENTS.md` — the agent-neutral home Codex
 re-reads FRESH every session and sub-agents load. That reaches NEW sessions of both backends without a
@@ -535,11 +535,11 @@ is where they leaked. The scratchpad survives on disk but only helps if the post
 chooses to read it — a model decision, and it gets skipped. `precompact-instructions.mjs` steers the
 summarizer, but the summary is a lossy retelling by a model that never saw the reasoning, and it is
 regenerated from scratch every time. `carryover.mjs` removes the decision: whatever is in
-`.fray/threads/<sid>/carryover.md` is spliced into the context window by the harness, before the
+`.frizz/threads/<sid>/carryover.md` is spliced into the context window by the harness, before the
 model's first token. The model cannot forget to read it and the summarizer cannot paraphrase it away.
 
 **The file is authored by the AGENT, not by the hook** — it is a plain markdown file written with the
-Write tool. Rejected: a CLI (`fray carryover set …`) and a dedicated MCP tool. Both add something to
+Write tool. Rejected: a CLI (`frizz carryover set …`) and a dedicated MCP tool. Both add something to
 learn and to keep installed, and neither buys anything over a file the agent already knows how to
 write and a human can hand-edit mid-session (an edit is just an mtime change, which the nudge treats
 exactly like an agent's write — pinned by a test).
@@ -547,10 +547,10 @@ exactly like an agent's write — pinned by a test).
 **Keyed by session id**, taken from the hook's stdin `session_id` and falling back to
 `CLAUDE_CODE_SESSION_ID` via the shared `currentSessionId`. Those two are equal (already relied on by
 the activation sentinel), which is what lets the AGENT compute its own path from a Bash/Write call.
-Stored beside the scratchpad rather than under `.fray/.session-state/` because the agent is already
-told the thread dir. `.fray/` is gitignored in full, so a brief never reaches a commit, and nothing
-enumerates `.fray/threads/*` to build the board (threads come from the DB), so writing a directory
-there for a non-fray session cannot conjure a phantom thread card.
+Stored beside the scratchpad rather than under `.frizz/.session-state/` because the agent is already
+told the thread dir. `.frizz/` is gitignored in full, so a brief never reaches a commit, and nothing
+enumerates `.frizz/threads/*` to build the board (threads come from the DB), so writing a directory
+there for a non-frizz session cannot conjure a phantom thread card.
 
 **Staleness is measured in context TOKENS, and as GROWTH, never an absolute.** The transcript's
 newest usage record gives live context fill (`input + cache_creation + cache_read`); the hook reads
@@ -563,13 +563,13 @@ without moving the window much).
 
 **Why a nudge at all.** Without it the file is never written and the whole mechanism is decorative —
 an agent that is never reminded does not stop to journal. It is the one part that is a heuristic, so
-it is the one part with a cheap escape hatch: `FRAY_CARRYOVER_STALE_TOKENS` retunes it and
-`FRAY_CARRYOVER=off` disables every mode.
+it is the one part with a cheap escape hatch: `FRIZZ_CARRYOVER_STALE_TOKENS` retunes it and
+`FRIZZ_CARRYOVER=off` disables every mode.
 
-**Registered twice, deduped deterministically.** The plugin registration ships to every fray worker
+**Registered twice, deduped deterministically.** The plugin registration ships to every frizz worker
 everywhere. The repo's own `.claude/settings.json` carries the same three registrations with
-`--via=project` so plain (non-fray) `claude` sessions in this repo get the behavior too; that flag
-exits when `FRAY_UI_THREAD` is set, because such a session already loads the plugin and would
+`--via=project` so plain (non-frizz) `claude` sessions in this repo get the behavior too; that flag
+exits when `FRIZZ_THREAD` is set, because such a session already loads the plugin and would
 otherwise inject the brief twice. A flag plus an env check — no lock file, no race.
 
 VERIFIED LIVE against cli 2.1.220, in an isolated `/tmp` project, not by proxy:
@@ -602,13 +602,13 @@ deliberate: a bare reminder routes recovery through a decision the model can ski
 failure being fixed. The head is the floor; the pointer is the ceiling. The cap (12k chars, was 24k)
 keeps that floor affordable now that the target is unbounded working memory rather than a bounded brief.
 
-**"Present" no longer means "written".** fray provisions scratch.md with a skeleton, so file-absence
+**"Present" no longer means "written".** frizz provisions scratch.md with a skeleton, so file-absence
 is gone as the unwritten signal. `substanceLength()` strips headings, the provisioned orientation line
 and empty task boxes, and measures what remains. It is a heuristic on purpose — it only decides
 whether to NUDGE, so a wrong call costs one redundant reminder, never correctness.
 
 **The nudge now also fires on PostToolUse, and that is the real fix.** UserPromptSubmit alone only
-fires at turn boundaries, and a fray worker runs enormous autonomous turns — dozens of tool calls
+fires at turn boundaries, and a frizz worker runs enormous autonomous turns — dozens of tool calls
 between human prompts — so a whole session's work could compact unpersisted without a single nudge.
 PostToolUse `additionalContext` was verified live against cli 2.1.220 (a real session quoted a
 sentinel injected after a Bash call, and through the plugin the model received the nudge mid-turn and
@@ -648,7 +648,7 @@ cache-read vs 413 cache-create). `SessionStart` has a `fork` matcher so hooks ca
 Open problems before this could ship: the fork gets a NEW session id, so it must be handed the
 ORIGINAL pad path explicitly (its own hooks would derive a different one); concurrent writes against
 the live worker need an ownership rule; the spawn needs a single-flight lock so one threshold crossing
-cannot fan out into many forks; and fray's discover/tailer must not adopt the fork's transcript as a
+cannot fan out into many forks; and frizz's discover/tailer must not adopt the fork's transcript as a
 board thread.
 
 ### Codex parity gap
@@ -661,7 +661,7 @@ plugin-bundled. SessionStart distinguishes a `compact` source. Codex is BETTER i
 you SET the compaction threshold (`model_auto_compact_token_limit`, with
 `model_auto_compact_token_limit_scope` = `total` | `body_after_prefix`), so compaction can be made
 predictable with headroom rather than merely detected. Wrinkle: codex enforces hook TRUST
-(`--dangerously-bypass-hook-trust` exists for automation). **fray currently wires ZERO hooks for
+(`--dangerously-bypass-hook-trust` exists for automation). **frizz currently wires ZERO hooks for
 codex**, so a codex worker has only prompt-level scratchpad discipline — the largest remaining gap.
 
 ## 2026-07-30 (third pass): reinforcement is OPT-IN, and the two backends are gated differently
@@ -678,7 +678,7 @@ absence means off.
 
 **The two backends cannot be gated in the same place**, which is the whole design constraint here:
 
-- **Claude → a worker ENV VAR.** `hooks.json` is static, so `FRAY_SCRATCHPAD_HOOK=on` is what decides
+- **Claude → a worker ENV VAR.** `hooks.json` is static, so `FRIZZ_SCRATCHPAD_HOOK=on` is what decides
   whether the registered hooks do anything. Stamped on the tmux spawn, and on the broker/SDK path via
   a new per-fork `extraWorkerEnv` on `ClaudeAgentBrokerBridge` — evaluated per fork, so flipping the
   setting reaches the next dispatch or cold-resume without a server restart.
@@ -699,7 +699,7 @@ absence means off.
 - **`bypass_hook_trust` is required** — codex SILENTLY SKIPS untrusted hook definitions, so without it
   the config is delivered and ignored, which looks exactly like a broken feature.
 - **Codex reports its OWN rollout session id to the hook** (e.g. `019fb427-…`, `transcript_path` under
-  `~/.codex/sessions`), NOT fray's thread id. Hence the mandatory `--session=<fray sessionId>`:
+  `~/.codex/sessions`), NOT frizz's thread id. Hence the mandatory `--session=<frizz sessionId>`:
   deriving the path would address a scratchpad that does not exist, and the worker would look
   unreinforced for a reason nobody could see. Codex does send `source` (`"startup"`), same field name
   as Claude, so the compact/resume branch works unchanged.
@@ -726,14 +726,14 @@ the DEFAULT worker — every worker, in practice — got nothing back after a co
 shipped and inert. A feature that is off by default is a feature that does not exist.
 
 Removed entirely: the `scratchpadReinforcement` setting (shared schema, server defaults, Settings
-drawer toggle), the `FRAY_SCRATCHPAD_HOOK=on` env plumbing (`scratchpadHookEnv`, the tmux spawn stamp,
+drawer toggle), the `FRIZZ_SCRATCHPAD_HOOK=on` env plumbing (`scratchpadHookEnv`, the tmux spawn stamp,
 the broker bridge's `extraWorkerEnv` dep), and codex's `--enabled` flag. A dead toggle that gates
 nothing is worse than no toggle; when the fork checkpointer is built it brings its own setting.
 
-What survives: `--session=<fray sessionId>` on the codex path stays MANDATORY (codex reports its own
+What survives: `--session=<frizz sessionId>` on the codex path stays MANDATORY (codex reports its own
 rollout session id, so the derived path would address a scratchpad that does not exist), and
 `bypass_hook_trust` stays required (codex silently skips untrusted hook definitions). The escape hatch
-is now `FRAY_SCRATCHPAD_HOOK=off` — env only, and only an explicit off value disables, because it is
+is now `FRIZZ_SCRATCHPAD_HOOK=off` — env only, and only an explicit off value disables, because it is
 for a one-off session, not a project posture.
 
 Behavior change beyond ungating: **an EMPTY pad now re-grounds too.** Previously a compaction with an
@@ -768,11 +768,11 @@ Rewritten in all four places a worker meets the pad, so the framing is consisten
 - `dispatch.ts` `scratchpadContent()` — the provisioned skeleton's own orientation line.
 - `cc-worker/hooks/session-seed.mjs` — the runtime `SCRATCHPAD:` line.
 
-**Deliberately NOT promised: automatic re-injection.** The prompt says fray "helps by feeding the head
+**Deliberately NOT promised: automatic re-injection.** The prompt says frizz "helps by feeding the head
 of this file back into your context", and the IMPERATIVE it gives is unconditional — re-read the file
 yourself after any compaction or resume. A contract that leans on a runtime guarantee degrades badly
 wherever that channel is absent, and one such gap is known: codex's `thread/resume` does NOT re-send
-the per-conversation `config`, so a COLD-resumed codex thread (fray restart, app-server daemon death)
+the per-conversation `config`, so a COLD-resumed codex thread (frizz restart, app-server daemon death)
 may lose its hooks. Unverified either way — flagged, not assumed.
 
 Fallout fixed in the same change (the hook's own template detector): `substanceLength()` recognised the
@@ -789,13 +789,13 @@ Suite 2413 pass / 0 fail, typecheck clean.
 
 ## 2026-07-30 (sixth pass): keep the helper epilogue universal
 
-`hooks/agent-dispatch.mjs` appends its epilogue to every Claude `Agent` helper launched by a fray-ui
+`hooks/agent-dispatch.mjs` appends its epilogue to every Claude `Agent` helper launched by a frizz
 worker, regardless of the repository or kind of task. That makes it the wrong layer for requirements
 about compilation, shared build locks, build/test ownership, or how long-running operations should
 be managed.
 
 The epilogue keeps only universal coordination: return a useful handoff, do not mutate the owning
-worker's `.fray/` state unless explicitly assigned, and use the always-available `SendMessage`
+worker's `.frizz/` state unless explicitly assigned, and use the always-available `SendMessage`
 upward channel when the dispatcher acting mid-flight could change the outcome. Task-specific
 verification and process-lifecycle instructions belong in the dispatch prompt; repository-specific
 ones belong in the repository's own guidance. Background dispatch enforcement and `name` /
@@ -808,11 +808,11 @@ available directly and therefore drops the old deferred-tool / `ToolSearch` cave
 
 ## 2026-07-30 (sixth pass): the operator's Settings instructions move to the SYSTEM prompt
 
-Question from the maintainer: is FRAY.md eagerly loaded, and did the Settings prompt get replaced by
+Question from the maintainer: is FRIZZ.md eagerly loaded, and did the Settings prompt get replaced by
 it? Answer, from the code: **both exist, neither replaced the other** — and they were being treated
 very differently.
 
-- **FRAY.md** → `frayConfigBlock(projectDir)` → `extraSystemPrompt` at EVERY site (claude dispatch,
+- **FRIZZ.md** → `frizzConfigBlock(projectDir)` → `extraSystemPrompt` at EVERY site (claude dispatch,
   codex dispatch, adopt, resume, broker follow-up, router follow-up). System-level, so it already
   survives compaction and is rebuilt on every resume. Nothing to fix.
 - **The Settings preamble** (drawer label "Subagent instructions", schema field `dispatchPreamble`) →
@@ -820,14 +820,14 @@ very differently.
   message is exactly what compaction replaces with a summary. So the repo's conventions survived while
   the operator's own standing instructions quietly did not.
 
-Fixed by giving it the same treatment as FRAY.md: new `operatorInstructionsBlock(preamble)`, added to
+Fixed by giving it the same treatment as FRIZZ.md: new `operatorInstructionsBlock(preamble)`, added to
 the system-prompt composition at all six sites, and REMOVED from `composePrompt` (which loses its
 `customInstructions` parameter). Moved rather than duplicated — leaving it in both would carry a second
 copy of a potentially long preamble in context for the whole pre-compaction window, and the block sits
 ABOVE the task banner either way, so the visible chat bubble is unchanged.
 
 Two things fall out for free: an edited setting now reaches a thread that is ALREADY RUNNING (the
-system prompt is rebuilt on every resume), and the block states its relationship to FRAY.md — follow
+system prompt is rebuilt on every resume), and the block states its relationship to FRIZZ.md — follow
 both, prefer the more specific where they genuinely conflict — so a worker meeting two operator-authored
 surfaces knows how to reconcile them.
 
@@ -842,21 +842,21 @@ used `PROJECT INSTRUCTIONS` as its above-the-banner anchor; on an ABSENT string 
 passes VACUOUSLY (-1 < banner), so it was re-anchored on the scratchpad line and given an explicit
 `doesNotMatch` instead. Suite 2460 pass / 0 fail, typecheck clean.
 
-## 2026-07-30 (seventh pass): converge on FRAY.md — the Settings preamble is GONE
+## 2026-07-30 (seventh pass): converge on FRIZZ.md — the Settings preamble is GONE
 
 Maintainer's call, one pass after making the preamble durable: rather than maintain two
 operator-authored surfaces, keep the one that is already versioned with the repo. `dispatchPreamble`
 (drawer label "Subagent instructions") is deleted outright — schema, server default, the drawer field
 and its draft plumbing, `operatorInstructionsBlock` and all six of its call sites.
 
-**FRAY.md is now the ONLY place project conventions live.** It was already the better surface and
-needed no work: `frayConfigBlock()` puts it in `extraSystemPrompt` at every site (claude dispatch,
+**FRIZZ.md is now the ONLY place project conventions live.** It was already the better surface and
+needed no work: `frizzConfigBlock()` puts it in `extraSystemPrompt` at every site (claude dispatch,
 codex dispatch, adopt, resume, broker follow-up, router follow-up), so it survives compaction and is
 rebuilt on every resume. It is also reviewable in a diff, travels with a clone, and can differ per
 branch — none of which a value in a local SQLite settings blob can do.
 
 Checked before deleting rather than after: `DEFAULT_PREAMBLE` shipped as `""`, and a read of every
-`~/.fray/projects/*/ui.db` found no project with a non-empty `dispatchPreamble`. So there is nothing to
+`~/.frizz/projects/*/ui.db` found no project with a non-empty `dispatchPreamble`. So there is nothing to
 migrate and no operator text is silently dropped. `Settings` is a plain `z.object`, so an older blob
 that still carries the key parses fine — zod strips the unknown field.
 
@@ -900,7 +900,7 @@ The deliberately prompt-level fix preserves the useful part of that inheritance:
 - Newly provisioned pads recommend a light structure rather than enforce a machine schema: Goal,
   Task list, Decisions, Shared context, per-agent progress, Verification, and Next action. A visible
   legend uses `[ ]` pending, `[/]` in progress, `[x]` complete, `[-]` cancelled, and `[?]` blocked.
-  Fray's Markdown renderer recognizes all five while the source stays readable in Obsidian/plain text.
+  Frizz's Markdown renderer recognizes all five while the source stays readable in Obsidian/plain text.
 - If a pad is unexpectedly absent or empty after compaction/resume, the re-grounding injection says
   the exact path is authoritative, forbids searching neighboring thread pads or broadly reloading repo
   docs, and tells the root to reconstruct from the retained summary plus directly named handoffs.
@@ -920,7 +920,7 @@ blackboard pattern.
 
 The worker contract, dispatch orientation, Codex child hook, and Claude dispatch epilogue now say each
 sub-agent should merge its own scoped progress as it works. Deliverable file ownership never includes
-the Fray scratchpad, and a root must reconcile concurrent scoped updates rather than act as sole
+the Frizz scratchpad, and a root must reconcile concurrent scoped updates rather than act as sole
 writer. The existing merge-safety rules remain unchanged: re-read first, preserve all other content,
 and never delete, truncate, reinitialize, move, or replace the pad.
 
@@ -929,7 +929,7 @@ and never delete, truncate, reinitialize, move, or replace the pad.
 A three-level dispatch tree read, on the board, as one job done three times — root "Improve server
 logging…", child "Researching dev server readouts", grandchild "Survey dev server readouts". The
 topology was actually sound: the root's task had five research prongs, the child kept four (Vite,
-Next and wrangler source, repaint techniques, log-dir conventions, fray's own state-dir convention)
+Next and wrangler source, repaint techniques, log-dir conventions, frizz's own state-dir convention)
 and delegated only the pure-web prong. The grandchild's prompt was a strict subset, not a copy.
 
 What was broken was COLLECTION. The child backgrounded its helper, then hand-rolled a wait loop over
@@ -976,7 +976,7 @@ approach is inelegant and they do not want it. Do not rebuild it. Recorded here 
 does not re-derive the same idea from the same symptom, and because one measurement is worth keeping.
 
 THE MEASUREMENT STANDS, whatever is done about it. A scan of 532 real worker transcripts (session ids
-cross-referenced against every `~/.fray/projects/*/ui.db`), 4,709 rest turns:
+cross-referenced against every `~/.frizz/projects/*/ui.db`), 4,709 rest turns:
 
   rest turn      #1    #2-3   #4-6   #7-10  #11-20  #21+
   ```question    23%    22%    20%     20%     16%    9%
@@ -993,17 +993,17 @@ Two incidental findings worth keeping, since both cost a debugging cycle:
   written ASYNCHRONOUSLY, so at Stop time the message that just ended the turn is often not yet on
   disk — a hook that parses `transcript_path` to read the final message fired on only two of four
   live broker workers. Read the payload.
-- Stop-hook feedback reaches the model but never the human: fray drops `isMeta` user records
+- Stop-hook feedback reaches the model but never the human: frizz drops `isMeta` user records
   (`packages/server/src/transcript.ts`), so a blocked rest shows the worker's original message
   followed by whatever it sends next, with no visible trace of the hook.
 
 ## 2026-08-03: the Runtime QA gate is DELETED, and the settings drawer stops duplicating the composer
 
-Maintainer's call, verbatim: *"This is obviously something that should not be a global setting inside of fray. This is extremely overfit to our specific requirements inside of this repo. Wipe it entirely."*
+Maintainer's call, verbatim: *"This is obviously something that should not be a global setting inside of frizz. This is extremely overfit to our specific requirements inside of this repo. Wipe it entirely."*
 
-Three removals, one theme — Fray's shipped worker contract states fray MECHANICS, and everything else belongs to the repo or to the dispatch that starts the thread.
+Three removals, one theme — Frizz's shipped worker contract states frizz MECHANICS, and everything else belongs to the repo or to the dispatch that starts the thread.
 
-- **`runtimeGate` (setting) + `RUNTIME_GATE` (prompt module) — gone.** The browser-QA loop (drive it in Chrome, screenshot into the handoff, escalate to an adversarial reviewer) was fray-ui's own engineering norm shipped to every worker Fray dispatches anywhere. That is what `FRAY.md` / `CLAUDE.md` are for: `frayConfigBlock` already injects a repo's own conventions into every spawn/adopt/resume, and this repo keeps its full browser-QA section there. What remains in the shipped contract is the repo-agnostic line that was already in the Quality bar — *"Verify behavior end-to-end before calling anything done."* `VISUAL_EVIDENCE` **stays**: it documents Fray's guarded local-image proxy, a platform capability, not a QA policy. `chrome-devtools` also stays always-mounted — giving a worker a browser is a capability, not an opinion about when to use it.
+- **`runtimeGate` (setting) + `RUNTIME_GATE` (prompt module) — gone.** The browser-QA loop (drive it in Chrome, screenshot into the handoff, escalate to an adversarial reviewer) was frizz's own engineering norm shipped to every worker Frizz dispatches anywhere. That is what `FRIZZ.md` / `CLAUDE.md` are for: `frizzConfigBlock` already injects a repo's own conventions into every spawn/adopt/resume, and this repo keeps its full browser-QA section there. What remains in the shipped contract is the repo-agnostic line that was already in the Quality bar — *"Verify behavior end-to-end before calling anything done."* `VISUAL_EVIDENCE` **stays**: it documents Frizz's guarded local-image proxy, a platform capability, not a QA policy. `chrome-devtools` also stays always-mounted — giving a worker a browser is a capability, not an opinion about when to use it.
 - **Model + Effort — removed from the settings drawer.** They are chosen per dispatch in the prompt box (`DispatchPreferences`, one profile per runtime); a second global copy only made it ambiguous which one applied. `Settings.model` / `Settings.effort` survive on the wire: `dispatch-preferences.ts` still seeds the composer's first-run profile from them and `dispatch.ts` still falls back to them for GitHub batch dispatch.
 - **`autoResumeOnLimit` — gone; auto-resume is unconditional.** A thread cut off mid-turn by an exhausted subscription window always gets its own "continue" when the window rolls. `ThreadView.limitPause.autoResume` survives on the wire but is now purely a STALENESS verdict (`resolveLimitPause`): a fault old enough that the wake will never arrive stops promising one.
 

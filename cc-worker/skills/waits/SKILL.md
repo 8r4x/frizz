@@ -1,6 +1,6 @@
 ---
 name: waits
-description: How a fray-ui worker waits on something without going silent or falling out of the board's Active state (invoke as fray:waits) — choosing between a wait-owning sub-agent, background Bash, native Monitor, and a durable timer fence; fray's portable monitor scripts; and the CI/PR/release recipes. Load this when your effort needs to wait on CI, a release, a deploy, a merge, or another long-running condition.
+description: How a frizz worker waits on something without going silent or falling out of the board's Active state (invoke as frizz:waits) — choosing between a wait-owning sub-agent, background Bash, native Monitor, and a durable timer fence; frizz's portable monitor scripts; and the CI/PR/release recipes. Load this when your effort needs to wait on CI, a release, a deploy, a merge, or another long-running condition.
 ---
 
 # Waiting, without going silent
@@ -10,7 +10,7 @@ Your system prompt carries the one rule that decides the mechanism. This is the 
 ## The rule
 
 **Only a live dispatched sub-agent keeps a rested thread out of the human's queue.** A background
-`Bash`/`Monitor` does not: `run_in_background` means "don't block my turn", and fray cannot tell a CI
+`Bash`/`Monitor` does not: `run_in_background` means "don't block my turn", and frizz cannot tell a CI
 watcher that ends in minutes from a `vite` dev server that runs forever, so neither holds a rested
 thread in Active.
 
@@ -36,7 +36,7 @@ children or own cleanup with an EXIT trap before that Bash call returns.
    Prefer it only after validating its absolute command and its terminal event/exit semantics. Invalid
    declared tooling is a visible configuration error to report, not something to silently shadow. Never
    select a monitor merely by filename.
-2. **Otherwise use fray's portable Node scripts** in `monitors/` (zero-dep, NDJSON on stdout, they exit
+2. **Otherwise use frizz's portable Node scripts** in `monitors/` (zero-dep, NDJSON on stdout, they exit
    at a terminal verdict).
 3. **Native `Monitor`** is the Claude adapter for a changing condition — a quiet
    `until ...; do sleep ...; done`, emitting one event per meaningful transition. `persistent: true`
@@ -66,8 +66,8 @@ Give the child, literally, in the prompt:
 also inspect the workflow runs for the exact PR head, and treat `ACTION_REQUIRED` fork gates as pending,
 not passing.
 
-**PR review activity.** Do not build a watcher — emit `awaiting` with `pr-watch: owner/repo#N` and fray
-polls it for you, waking on any new review, approval, or comment, bot or human. See `fray:handoff`.
+**PR review activity.** Do not build a watcher — emit `awaiting` with `pr-watch: owner/repo#N` and frizz
+polls it for you, waking on any new review, approval, or comment, bot or human. See `frizz:handoff`.
 
 **A release or deploy.** Poll the artifact that proves it, not the pipeline that promises it — the
 published version on the registry, the health endpoint, the deployed asset hash.

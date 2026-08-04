@@ -1,6 +1,6 @@
 // Conformance gate for the Codex app-server WIRE CONTRACT.
 //
-// fray hand-writes the params it sends to `codex app-server`. The existing version pin
+// frizz hand-writes the params it sends to `codex app-server`. The existing version pin
 // (CODEX_APP_SERVER_SUPPORTED_VERSION, enforced at connect) proves we are talking to the RIGHT
 // BINARY — it says nothing about whether the FIELD NAMES we send are the ones that binary reads.
 // That gap is dangerous specifically because the app-server has no `deny_unknown_fields`: an unknown
@@ -9,7 +9,7 @@
 // took (verified live, 2026-07-23).
 //
 // The binary describes itself — `codex app-server generate-json-schema` emits the real protocol — so
-// this compares what fray sends against that generated truth instead of against someone's memory.
+// this compares what frizz sends against that generated truth instead of against someone's memory.
 // Same disease as the hand-mirrored web/router contract (see server/src/rpc-contract.ts); same cure.
 //
 // SKIPS when codex is absent or is not the pinned version: the generated schema is only authoritative
@@ -23,11 +23,11 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { CODEX_APP_SERVER_SUPPORTED_VERSION } from "./codex-app-server.ts"
 
-/** Every request fray issues, and the exact param keys it puts on the wire. Kept beside the call
+/** Every request frizz issues, and the exact param keys it puts on the wire. Kept beside the call
  *  sites it mirrors: thread/start :1653, thread/resume :1707 :1748 :2346, turn/start :1803,
  *  turn/steer :1849, turn/interrupt :1875, thread/settings/update :2526 in codex-app-server.ts. This
  *  table is not a second source of truth — it is the CLAIM, and the generated schema is what judges it. */
-const FRAY_SENDS: Record<string, readonly string[]> = {
+const FRIZZ_SENDS: Record<string, readonly string[]> = {
   "thread/start": [
     "cwd", "model", "approvalPolicy", "approvalsReviewer", "sandbox", "permissions",
     "baseInstructions", "developerInstructions", "config", "ephemeral",
@@ -54,7 +54,7 @@ function installedCodexVersion(): string | null {
 
 /** method -> the set of param keys the installed app-server actually accepts. */
 function protocolParams(): Map<string, Set<string>> {
-  const dir = mkdtempSync(join(tmpdir(), "fray-codex-schema-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-codex-schema-"))
   try {
     execFileSync("codex", ["app-server", "generate-json-schema", "--experimental", "--out", dir], {
       encoding: "utf8",
@@ -86,15 +86,15 @@ const skip = installed === null
     ? `installed codex ${installed} is not the pinned ${CODEX_APP_SERVER_SUPPORTED_VERSION}; its schema would judge the wrong protocol`
     : false
 
-test("every param fray sends exists in the pinned app-server's own generated protocol", { skip }, () => {
+test("every param frizz sends exists in the pinned app-server's own generated protocol", { skip }, () => {
   const protocol = protocolParams()
-  for (const [method, fields] of Object.entries(FRAY_SENDS)) {
+  for (const [method, fields] of Object.entries(FRIZZ_SENDS)) {
     const accepted = protocol.get(method)
-    assert.ok(accepted, `the app-server no longer has a '${method}' request — fray calls it`)
+    assert.ok(accepted, `the app-server no longer has a '${method}' request — frizz calls it`)
     for (const field of fields) {
       assert.ok(
         accepted.has(field),
-        `${method} does not accept '${field}' (fray sends it, and an unknown field is SILENTLY IGNORED). ` +
+        `${method} does not accept '${field}' (frizz sends it, and an unknown field is SILENTLY IGNORED). ` +
           `Accepted: ${[...accepted].sort().join(", ")}`,
       )
     }

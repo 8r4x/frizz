@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
-import type { BoardSnapshot, ThreadView as ThreadViewModel, TranscriptMessage } from "@fray-ui/shared"
+import type { BoardSnapshot, ThreadView as ThreadViewModel, TranscriptMessage } from "@frizz/shared"
 import { ThreadView } from "./components/ChatView.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
@@ -44,7 +44,7 @@ document.documentElement.dataset.font = PARAMS.get("font") === "mono" ? "mono" :
 
 const thread = {
   id: SLUG,
-  title: "npx frayui tmux socket ownership failure",
+  title: "npx frizz tmux socket ownership failure",
   status: SETTLED ? "idle" : "running",
   statusText: SETTLED ? "Idle" : "Working",
   mechanism: null,
@@ -72,7 +72,7 @@ const thread = {
   spawnedAt: AGO(400),
 } as unknown as ThreadViewModel
 
-store.board = { projectDir: "/Users/colinmcd94/Documents/projects/fray", threads: [thread] } as BoardSnapshot
+store.board = { projectDir: "/Users/colinmcd94/Documents/projects/frizz", threads: [thread] } as BoardSnapshot
 
 const bash = (desc: string, command: string, status?: string) => ({ name: "Bash", detail: command, command, desc, status })
 
@@ -80,7 +80,7 @@ const messages = [
   {
     sourceId: "m0",
     role: "user",
-    text: "A user hit this on `npx frayui`: a tmux socket ownership failure — the socket exists but is owned by another uid, or a canonical-root collision.",
+    text: "A user hit this on `npx frizz`: a tmux socket ownership failure — the socket exists but is owned by another uid, or a canonical-root collision.",
     tools: [],
     parts: [],
     at: AGO(400),
@@ -88,10 +88,10 @@ const messages = [
   {
     sourceId: "m1",
     role: "assistant",
-    text: "I'll start by understanding this error — a user hit a tmux socket ownership failure on `npx frayui`.",
+    text: "I'll start by understanding this error — a user hit a tmux socket ownership failure on `npx frizz`.",
     tools: [],
     parts: [
-      { kind: "text", text: "I'll start by understanding this error — a user hit a tmux socket ownership failure on `npx frayui`." },
+      { kind: "text", text: "I'll start by understanding this error — a user hit a tmux socket ownership failure on `npx frizz`." },
       {
         kind: "tools",
         tools: [
@@ -103,7 +103,7 @@ const messages = [
     at: AGO(390),
   },
   { sourceId: "m2", role: "assistant", text: "", tools: [], parts: [{ kind: "tools", tools: [bash("Searching for the ownership error string", "grep -rn 'is owned by uid' packages/server/src")] }], at: AGO(380) },
-  { sourceId: "m3", role: "assistant", text: "", tools: [], parts: [{ kind: "tools", tools: [{ name: "Read", detail: "/Users/colinmcd94/Documents/projects/fray/packages/server/src/tmux.ts" }] }], at: AGO(360) },
+  { sourceId: "m3", role: "assistant", text: "", tools: [], parts: [{ kind: "tools", tools: [{ name: "Read", detail: "/Users/colinmcd94/Documents/projects/frizz/packages/server/src/tmux.ts" }] }], at: AGO(360) },
   {
     sourceId: "m5",
     role: "assistant",
@@ -156,7 +156,7 @@ const messages = [
       {
         kind: "tools",
         tools: [
-          bash("Locating the CLI entry point", "ls src/ 2>/dev/null | head -40; grep -rn 'frayui.js' package.json", SETTLED ? "completed" : "pending"),
+          bash("Locating the CLI entry point", "ls src/ 2>/dev/null | head -40; grep -rn 'frizz.js' package.json", SETTLED ? "completed" : "pending"),
           bash("Finding callers of the socket resolver", "grep -rn 'resolveProjectTmuxSocket' --include='*.ts' packages/ | head -30", SETTLED ? "completed" : "pending"),
         ],
       },

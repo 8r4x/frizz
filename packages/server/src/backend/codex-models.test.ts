@@ -8,7 +8,7 @@ import { parseCodexModelsCache, readCodexModels, CODEX_MODELS_FALLBACK } from ".
 // A REAL snippet of ~/.codex/models_cache.json (codex-cli 0.144.1, fields verbatim). Deliberately
 // includes: per-model effort sets (sol → …/ultra, luna → …/max, 5.5 → …/xhigh), OUT-OF-ORDER priorities
 // (5.5 before sol) to prove the ascending sort, a hidden model (codex-auto-review) to prove the
-// visibility filter drops it, and an api=false-but-listed model (spark) to prove it is KEPT (fray spawns
+// visibility filter drops it, and an api=false-but-listed model (spark) to prove it is KEPT (frizz spawns
 // the TUI, not the Responses API). Trimmed of the fat sidecar fields the parser ignores.
 const REAL_CACHE = JSON.stringify({
   fetched_at: "2026-07-12T16:21:05.012098Z",
@@ -97,7 +97,7 @@ test("parseCodexModelsCache: lists visible models priority-ASC with EXACT per-mo
   assert.deepEqual(bySlug["gpt-5.5"]!.efforts, ["low", "medium", "high", "xhigh"])
   assert.equal(bySlug["gpt-5.6-sol"]!.displayName, "GPT-5.6-Sol")
   assert.equal(bySlug["gpt-5.6-sol"]!.defaultEffort, "medium")
-  // An api=false model is TUI-selectable (fray spawns the TUI) — kept, not filtered.
+  // An api=false model is TUI-selectable (frizz spawns the TUI) — kept, not filtered.
   assert.ok(bySlug["gpt-5.3-codex-spark"])
 })
 

@@ -40,8 +40,8 @@ if (!home || !socket || !url) {
 }
 mkdirSync(shotDir, { recursive: true })
 
-const db = globSync(join(home, ".fray/projects/*/ui.db"))[0]
-if (!db) throw new Error(`no ui.db under ${home}/.fray/projects`)
+const db = globSync(join(home, ".frizz/projects/*/ui.db"))[0]
+if (!db) throw new Error(`no ui.db under ${home}/.frizz/projects`)
 const SLUG = "verify-midscroll"
 const SESSION = "midscrol-0000-4000-8000-000000000000"
 const jsonlDir = join(home, ".claude", "projects", cwd.replace(/[/.]/g, "-"))
@@ -60,7 +60,7 @@ const assistant = (text, stop = null) => ({
 const agentDispatch = (id, description, prompt) => ({
   ...base(),
   type: "assistant",
-  message: { model: "claude-opus-5", id: `msg_${n}`, type: "message", role: "assistant", content: [{ type: "tool_use", id, name: "Agent", input: { description, prompt, subagent_type: "fray:opus-high", run_in_background: true } }], usage: { input_tokens: 2, output_tokens: 40 } },
+  message: { model: "claude-opus-5", id: `msg_${n}`, type: "message", role: "assistant", content: [{ type: "tool_use", id, name: "Agent", input: { description, prompt, subagent_type: "frizz:opus-high", run_in_background: true } }], usage: { input_tokens: 2, output_tokens: 40 } },
 })
 const agentResult = (id, content) => ({ ...base(), type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content }] } })
 const prose = (paras, label) => Array.from({ length: paras }, (_, i) =>
@@ -76,9 +76,9 @@ for (let i = 0; i < 8; i++) {
 seed.push(user(`TASK:\n${prose(4, "The standing ask")}`))
 for (let i = 0; i < 14; i++) seed.push(assistant(prose(3 + (i % 4), `Working step ${i + 1}`)))
 writeFileSync(jsonl, seed.map((r) => JSON.stringify(r)).join("\n") + "\n")
-try { execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `fray-${SLUG}`, "sleep 7200"], { stdio: "ignore" }) } catch {}
+try { execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `frizz-${SLUG}`, "sleep 7200"], { stdio: "ignore" }) } catch {}
 execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode)
-  VALUES ('${SLUG}', '${SESSION}', 'fray-${SLUG}', '${now()}', 'Mid-scroll stability', 'claude', 'opus', 'high', 'default')`])
+  VALUES ('${SLUG}', '${SESSION}', 'frizz-${SLUG}', '${now()}', 'Mid-scroll stability', 'claude', 'opus', 'high', 'default')`])
 const append = (record) => appendFileSync(jsonl, JSON.stringify(record) + "\n")
 
 let failures = 0

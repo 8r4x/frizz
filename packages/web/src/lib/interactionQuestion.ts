@@ -20,7 +20,7 @@ import {
   type InteractionRecord,
   type InteractionValue,
   type InteractionValues,
-} from "@fray-ui/shared"
+} from "@frizz/shared"
 import type { BlockAnswer, ParsedQuestion } from "./questionBlocks.ts"
 
 export interface InteractionQuestion {
@@ -59,7 +59,7 @@ function questionFor(optionField: InteractionField | undefined, notesField: Inte
       // answering in the composer refers to options by letter. Without it a native question read as
       // a fence question with its letters missing — the one visible difference left between them.
       options: options.map((option, index) => `${optionLetter(index)} ${option.label}`),
-      // A tool call has no notion of a recommended option — that is a fray fence convention — so the
+      // A tool call has no notion of a recommended option — that is a frizz fence convention — so the
       // badge simply does not appear rather than being faked.
       recommendedIdx: null,
     },

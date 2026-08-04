@@ -11,7 +11,7 @@
 // the tooltip — which SSR cannot see at all, because Radix mounts the content only once it opens.
 //
 // Run against held-rows-fixture.html on a plain Vite dev server (fixtures are NOT servable through the
-// fray stack — its Vite runs in middleware mode and falls back to index.html for every unknown path):
+// frizz stack — its Vite runs in middleware mode and falls back to index.html for every unknown path):
 //   (cd packages/web && nubx vite --port 5421 --strictPort)
 //   nub scripts/verify-held-watch-glyph.mjs --url=http://localhost:5421/held-rows-fixture.html
 import { mkdirSync } from "node:fs"

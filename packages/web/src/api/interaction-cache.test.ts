@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { QueryClient } from "@tanstack/react-query"
-import type { InteractionRecord } from "@fray-ui/shared"
+import type { InteractionRecord } from "@frizz/shared"
 import {
   failClosedAmbiguousInteraction,
   interactionRecordKey,

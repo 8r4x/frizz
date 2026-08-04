@@ -29,7 +29,7 @@ if (!home || !socket || !projectDir) {
   process.exit(1)
 }
 
-const projRoot = join(home, ".fray", "projects")
+const projRoot = join(home, ".frizz", "projects")
 const projId = readdirSync(projRoot)[0]
 const db = join(projRoot, projId, "ui.db")
 const cwdSlug = projectDir.replace(/\//g, "-")
@@ -68,11 +68,11 @@ for (let i = 0; i < count; i++) {
   writeFileSync(join(jsonlDir, `${sessionId}.jsonl`), rows.map((r) => JSON.stringify(r)).join("\n") + "\n")
 
   try {
-    execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `fray-${slug}`, "sleep 7200"], { stdio: "ignore" })
+    execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `frizz-${slug}`, "sleep 7200"], { stdio: "ignore" })
   } catch {}
   sql.push(
     `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, state) ` +
-    `VALUES ('${slug}','${sessionId}','fray-${slug}','${ts(700)}','${title}','claude','opus','high','default','active');`,
+    `VALUES ('${slug}','${sessionId}','frizz-${slug}','${ts(700)}','${title}','claude','opus','high','default','active');`,
   )
 }
 execFileSync("sqlite3", [db, sql.join("\n")], { stdio: "inherit" })

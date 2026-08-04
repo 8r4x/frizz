@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
-import type { BoardSnapshot, ThreadView as ThreadViewModel, TranscriptMessage } from "@fray-ui/shared"
+import type { BoardSnapshot, ThreadView as ThreadViewModel, TranscriptMessage } from "@frizz/shared"
 import { TodosView } from "./components/TodosView.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
@@ -57,12 +57,12 @@ const thread = {
   bgShells: new URLSearchParams(location.search).get("shells") === "0" ? [] : [
     { id: "shell-a", label: "Poll panes for perm-prompt false positives", startedAt: "2026-07-18T09:06:00.000Z", state: "stale" },
     { id: "shell-b", label: "Poll panes for near-miss perm markers", startedAt: "2026-07-18T09:07:00.000Z", state: "running" },
-    { id: "shell-c", label: "Record 5min of fray board SSE", startedAt: "2026-07-18T09:09:00.000Z", state: "running" },
+    { id: "shell-c", label: "Record 5min of frizz board SSE", startedAt: "2026-07-18T09:09:00.000Z", state: "running" },
   ],
   lastActivityAt: "2026-07-18T09:11:00.000Z",
 } as unknown as ThreadViewModel
 
-store.board = { projectDir: "/fixture/fray", threads: [thread] } as BoardSnapshot
+store.board = { projectDir: "/fixture/frizz", threads: [thread] } as BoardSnapshot
 
 const transcriptPage = { messages, transcriptKey: "fixture-key", hasEarlier: false, historyLoaded: false }
 

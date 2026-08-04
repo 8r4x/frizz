@@ -7,7 +7,7 @@
 // schema validates it, and the real InteractionStore writes it to the sandbox DB the server serves.
 // Only the provider event is simulated.
 //
-// Usage: nub scripts/seed-permission-cards.mjs --home=/abs/temp-home --socket=fray-adhoc-NNNN-PID
+// Usage: nub scripts/seed-permission-cards.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID
 import { execFileSync } from "node:child_process"
 import { globSync, mkdirSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
@@ -18,14 +18,14 @@ import { createInteractionStore } from "../packages/server/src/interaction-store
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
 )
-const { home, socket, cwd = "/Users/colinmcd94/Documents/projects/fray" } = flags
+const { home, socket, cwd = "/Users/colinmcd94/Documents/projects/frizz" } = flags
 if (!home || !socket) {
   console.error("usage: nub scripts/seed-permission-cards.mjs --home=/abs/temp-home --socket=<tmux-socket>")
   process.exit(1)
 }
 
-const db = globSync(join(home, ".fray/projects/*/ui.db"))[0]
-if (!db) throw new Error(`no ui.db under ${home}/.fray/projects`)
+const db = globSync(join(home, ".frizz/projects/*/ui.db"))[0]
+if (!db) throw new Error(`no ui.db under ${home}/.frizz/projects`)
 const projectId = dirname(db).split("/").pop()
 const cwdSlug = cwd.replace(/[/.]/g, "-")
 const jsonlDir = join(home, ".claude", "projects", cwdSlug)
@@ -67,14 +67,14 @@ const CARDS = [
     toolName: "Write",
     description: "Writing the release note",
     input: {
-      file_path: "/Users/colinmcd94/Documents/projects/fray/RELEASE.md",
+      file_path: "/Users/colinmcd94/Documents/projects/frizz/RELEASE.md",
       content: "# Release\n\n- The approval card leads with what it is authorizing.\n",
     },
   },
   {
     slug: "perm-bare",
     title: "tool · no arguments",
-    toolName: "mcp__fray__spawn_thread",
+    toolName: "mcp__frizz__spawn_thread",
     input: {},
   },
 ]
@@ -144,7 +144,7 @@ const interactions = createInteractionStore(database)
 
 for (const card of [...CARDS, CODEX_CARD, MCP_CARD]) {
   const sessionId = `${card.slug}-0000-4000-8000-000000000000`.slice(0, 36)
-  const tmuxName = `fray-${card.slug}`
+  const tmuxName = `frizz-${card.slug}`
   const records = [
     {
       parentUuid: null,

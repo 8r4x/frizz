@@ -1,7 +1,7 @@
 import { createRoot } from "react-dom/client"
 import { useSnapshot } from "valtio"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import type { BoardSnapshot, ThreadView } from "@fray-ui/shared"
+import type { BoardSnapshot, ThreadView } from "@frizz/shared"
 import { SubAgentSheet } from "./components/SubAgentSheet.tsx"
 import { pushSubAgentDrawer, store } from "./store.ts"
 import "./styles.css"
@@ -20,7 +20,7 @@ const STATE = new URLSearchParams(location.search).get("state") ?? "rich"
 
 const nativeFetch = window.fetch.bind(window)
 const rpcResult = (result: unknown) =>
-  new Response(JSON.stringify({ result }), { headers: { "content-type": "application/json", "x-fray-boot": "subagent-steer-fixture" } })
+  new Response(JSON.stringify({ result }), { headers: { "content-type": "application/json", "x-frizz-boot": "subagent-steer-fixture" } })
 
 const childMessages = [
   { sourceId: "c1", role: "user", text: "Sweep every call site of the renamed board projection helper and report the stale imports.", tools: [], parts: [{ kind: "text", text: "Sweep every call site of the renamed board projection helper and report the stale imports." }] },
@@ -40,7 +40,7 @@ const RESPONSES: Record<string, { state: string; steerable: boolean; steerNote: 
     steerable: false,
     steerNote: "Codex runs its sub-agents inside its own process and exposes no way to address one, so this child can't be steered from here.",
     stoppable: false,
-    stopNote: "Codex does not expose per-sub-agent interruption to Fray, so this child can't be stopped from here.",
+    stopNote: "Codex does not expose per-sub-agent interruption to Frizz, so this child can't be stopped from here.",
   },
   "note-tmux": {
     state: "running",
@@ -102,7 +102,7 @@ const thread: ThreadView = {
     label: "Sweep the renamed projection helper's call sites",
     startedAt: new Date(Date.now() - 437_000).toISOString(),
     state: STATE === "stale" ? "stale" : "running",
-    subagentType: "fray:opus-high",
+    subagentType: "frizz:opus-high",
     lastActivityAt: new Date(Date.now() - 9_000).toISOString(),
     ...(STATE === "rich"
       ? { activity: "Grep", activityDetail: "Searching for every remaining reference to the old projection helper name across the workspace", toolUses: 148, tokens: 132_000 }
@@ -110,7 +110,7 @@ const thread: ThreadView = {
   }],
 } as unknown as ThreadView
 
-store.board = { projectDir: "/fixture/fray", threads: [thread] } as BoardSnapshot
+store.board = { projectDir: "/fixture/frizz", threads: [thread] } as BoardSnapshot
 
 function Drawers() {
   const snap = useSnapshot(store)
@@ -146,7 +146,7 @@ createRoot(document.getElementById("root")!).render(
         type="button"
         data-open-drawer
         className="mt-4 rounded-md border border-border bg-panel px-3 py-1.5 text-[12px]"
-        onClick={() => pushSubAgentDrawer(SLUG, CHILD_ID, { label: thread.subAgents![0].label, subagentType: "fray:opus-high", startedAt: thread.subAgents![0].startedAt })}
+        onClick={() => pushSubAgentDrawer(SLUG, CHILD_ID, { label: thread.subAgents![0].label, subagentType: "frizz:opus-high", startedAt: thread.subAgents![0].startedAt })}
       >
         Open the sub-agent drawer
       </button>

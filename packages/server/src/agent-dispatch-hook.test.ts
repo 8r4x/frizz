@@ -11,7 +11,7 @@ function decision(toolInput: Record<string, unknown>, worker = true): Record<str
   const result = spawnSync(process.execPath, [hook], {
     input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Agent", tool_input: toolInput }),
     encoding: "utf8",
-    env: { ...process.env, FRAY_UI_THREAD: worker ? "thread-under-test" : "" },
+    env: { ...process.env, FRIZZ_THREAD: worker ? "thread-under-test" : "" },
   })
   assert.equal(result.status, 0, result.stderr)
   return JSON.parse(result.stdout || "{}")
@@ -56,7 +56,7 @@ test("Agent dispatch hook appends the orchestration epilogue exactly once", () =
 // The regression this hook's nested-dispatch paragraph exists for: a depth-1 helper backgrounded its
 // own helper, hand-rolled a `stat`-based wait over the `.output` path — which is a SYMLINK, so the
 // size/mtime it read were the LINK's, frozen forever — declared a live 413KB agent dead, and redid
-// its work. The fray worker contract never reaches a depth-1 helper, so this epilogue is the only
+// its work. The frizz worker contract never reaches a depth-1 helper, so this epilogue is the only
 // place that can tell it how to collect a helper of its own.
 // Nesting is DEFAULT-OFF. The conditional phrasing this replaced ("if you dispatch a helper of your
 // own…") read as neutral permission, so a helper could fan out again purely because it could.
@@ -85,7 +85,7 @@ test("Agent dispatch hook keeps the handoff, scratchpad and upward-channel coord
   assert.match(prompt, /SendMessage\(\{to: "main"/)
 })
 
-test("Agent dispatch hook is inert outside a fray worker session", () => {
+test("Agent dispatch hook is inert outside a frizz worker session", () => {
   assert.deepEqual(decision(dispatch, false), {})
   assert.deepEqual(decision({ prompt: "p" }, false), {})
 })
@@ -94,7 +94,7 @@ test("Agent dispatch hook fails open on unparseable input", () => {
   const result = spawnSync(process.execPath, [hook], {
     input: "not json",
     encoding: "utf8",
-    env: { ...process.env, FRAY_UI_THREAD: "thread-under-test" },
+    env: { ...process.env, FRIZZ_THREAD: "thread-under-test" },
   })
   assert.equal(result.status, 0, result.stderr)
   assert.deepEqual(JSON.parse(result.stdout || "{}"), {})

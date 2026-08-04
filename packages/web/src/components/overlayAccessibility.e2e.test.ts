@@ -1,10 +1,10 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-// Opt-in because this drives a real Fray server and Chrome. Normal unit runs record the regression
+// Opt-in because this drives a real Frizz server and Chrome. Normal unit runs record the regression
 // without requiring a listener; local/live verification supplies a disposable URL and session row.
-const baseUrl = process.env.FRAY_OVERLAY_E2E_URL
-const threadSlug = process.env.FRAY_OVERLAY_E2E_SLUG ?? "overlay-e2e"
+const baseUrl = process.env.FRIZZ_OVERLAY_E2E_URL
+const threadSlug = process.env.FRIZZ_OVERLAY_E2E_SLUG ?? "overlay-e2e"
 
 test("dialog portals, nested Select Escape, and thread tabs keep their keyboard contracts", {
   skip: !baseUrl,

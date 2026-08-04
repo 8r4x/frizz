@@ -6,9 +6,9 @@ import { join } from "node:path"
 // The tailer and the transcript renderer bind a thread to `<session_id>.jsonl` — the pinned id. That
 // binding is reliable in the normal case (proven: neither compaction nor resume re-ids a session), but
 // when the file is ABSENT (a worker that failed to write it) or, hypothetically, MOVED (a `--fork-session`
-// re-id, which fray does not use today), the read side has no recovery and the row strands.
+// re-id, which frizz does not use today), the read side has no recovery and the row strands.
 //
-// Every fray worker's transcript CONTENT carries a built-in discovery key: its scratchpad path
+// Every frizz worker's transcript CONTENT carries a built-in discovery key: its scratchpad path
 // `threads/<pinnedId>/scratch.md`, baked into the first user message (dispatch.ts composePrompt) AND re-injected
 // in the per-turn system prompt (scratchpadOrientation), so it survives compaction and would survive a
 // fork. The pinnedId there is the ORIGINAL session id regardless of any filename drift. So to find a

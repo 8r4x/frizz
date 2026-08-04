@@ -1,7 +1,7 @@
 import { join } from "node:path"
 import { homedir } from "node:os"
 import { readdirSync, statSync } from "node:fs"
-import type { PermissionMode } from "@fray-ui/shared"
+import type { PermissionMode } from "@frizz/shared"
 import { applyEvent } from "../tailer.ts"
 import type { AgentBackend, BuiltCommand, FoldState, NativeInputRequiredData, NormalizedEvent, ResumeOpts, SpawnOpts } from "./types.ts"
 
@@ -30,7 +30,7 @@ function sessionsDir(codexHome: string): string {
 // belt: it is machine metadata, stripped from the chat by the transcript projector, and requests an
 // invisible attribute-style comment rather than a visible Markdown heading.
 export const CODEX_FIRST_FINAL_TITLE_TRANSPORT =
-  'FRAY TITLE TRANSPORT (required): your very first assistant message must begin with one concise `<!-- fray title="Concise thread title" -->` comment before any commentary, acknowledgement, or tool call. Fray removes that comment from chat and uses only its quoted title as this thread\'s automatic title.'
+  'FRIZZ TITLE TRANSPORT (required): your very first assistant message must begin with one concise `<!-- frizz title="Concise thread title" -->` comment before any commentary, acknowledgement, or tool call. Frizz removes that comment from chat and uses only its quoted title as this thread\'s automatic title.'
 
 // Codex exposes no dedicated `--append-system-prompt` flag, but its documented `-c` overrides accept
 // the `developer_instructions` config key for one invocation. Use that higher-priority, non-rendered
@@ -39,13 +39,13 @@ export const CODEX_FIRST_FINAL_TITLE_TRANSPORT =
 // tmux's command-length failure. This instruction is spawn-only: replaying it on `codex resume` would
 // incorrectly request a second title from an existing conversation.
 export const CODEX_FIRST_OUTPUT_TITLE_DEVELOPER_INSTRUCTIONS =
-  'FRAY UI metadata protocol (mandatory): the very first assistant message in this new session, before any commentary, acknowledgement, tool call, or other action, MUST begin on its first line with exactly one `<!-- fray title="..." -->` HTML comment. Replace `...` with a concise human-readable 3-8 word title for the user\'s task. Put no text before the comment. You may continue the message normally after it. Emit this title comment exactly once. Do not explain the protocol. Fray removes the comment before displaying the conversation.'
+  'FRIZZ UI metadata protocol (mandatory): the very first assistant message in this new session, before any commentary, acknowledgement, tool call, or other action, MUST begin on its first line with exactly one `<!-- frizz title="..." -->` HTML comment. Replace `...` with a concise human-readable 3-8 word title for the user\'s task. Put no text before the comment. You may continue the message normally after it. Emit this title comment exactly once. Do not explain the protocol. Frizz removes the comment before displaying the conversation.'
 
 // Historical first prompts used a visible H1 as the transport. It remains a parse-compatible title
 // signal, and the transcript projector recognizes this exact retired trailer so old dispatch metadata
 // never appears as human chat content.
 export const CODEX_LEGACY_FIRST_FINAL_TITLE_TRANSPORT =
-  "FRAY TITLE TRANSPORT (required): on your first final answer, put one concise `# Title` H1 on its first line before the answer. Fray removes that H1 from chat and uses it only as this thread's automatic title."
+  "FRIZZ TITLE TRANSPORT (required): on your first final answer, put one concise `# Title` H1 on its first line before the answer. Frizz removes that H1 from chat and uses it only as this thread's automatic title."
 
 // ---- codex reasoning-effort universe ----
 // Codex reasoning-effort universe (per ~/.codex/models_cache.json): low/medium/high/xhigh/max/ultra.
@@ -61,7 +61,7 @@ export function codexEffort(effort?: string): string | undefined {
   return undefined
 }
 
-// fray permissionMode → codex --sandbox. codex "sandbox" is a different axis than Claude "permission
+// frizz permissionMode → codex --sandbox. codex "sandbox" is a different axis than Claude "permission
 // mode" (§6), so this is a best-effort map, not an isomorphism: plan → read-only (no writes),
 // bypassPermissions → danger-full-access (unrestricted), everything else → workspace-write (edit inside
 // the repo, denied elsewhere). Approvals are ALWAYS `never` so an unattended worker NEVER blocks on an
@@ -114,7 +114,7 @@ export function detectCodexNativeInput(pane: string): NativeInputRequiredData | 
   const options = lines.filter((line) => OPTION.test(line))
   if (options.length < 2 || !lines.some((line) => SELECTED_OPTION.test(line))) return undefined
 
-  // Human-owned `/permissions` menu and its Full Access confirmation. Fray's controller never drives
+  // Human-owned `/permissions` menu and its Full Access confirmation. Frizz's controller never drives
   // these selectors; it reopens only an idle saved conversation with the documented launch flag.
   if (
     footer === "confirm" &&
@@ -173,12 +173,12 @@ export interface CodexBackendOptions {
   codexBin?: string // dispatch executable ("codex" by default); tests use a stand-in
 }
 
-const FRAY_TITLE_MAX = 200
-// The current, invisible title transport. Keep it intentionally strict: a first-line Fray comment
+const FRIZZ_TITLE_MAX = 200
+// The current, invisible title transport. Keep it intentionally strict: a first-line Frizz comment
 // with exactly one quoted title attribute. An ordinary HTML comment must remain ordinary prose.
-const FRAY_TITLE_ATTRIBUTE = /^<!--\s*fray\s+title="((?:[^"\\\r\n]|\\[^\r\n])*)"\s*-->(?:\r?\n|$)/
-const FRAY_TITLE_LINE = /^<!-- fray-title: (.*) -->(?:\r?\n|$)/
-const FRAY_TITLE_H1 = /^# ([^\r\n]*)(?:\r?\n|$)/
+const FRIZZ_TITLE_ATTRIBUTE = /^<!--\s*frizz\s+title="((?:[^"\\\r\n]|\\[^\r\n])*)"\s*-->(?:\r?\n|$)/
+const FRIZZ_TITLE_LINE = /^<!-- frizz-title: (.*) -->(?:\r?\n|$)/
+const FRIZZ_TITLE_H1 = /^# ([^\r\n]*)(?:\r?\n|$)/
 // Unicode's Bidi_Control property includes ALM/LRM/RLM as well as the embedding, override, and
 // isolate ranges; a handwritten range is easy to leave incomplete. Default-ignorables are likewise
 // replaced unless they carry real shaping/emoji semantics (joiners, variation selectors, emoji tags).
@@ -253,7 +253,7 @@ function meaningfulTitleDefaultIgnorable(
   return hasVisibleBaseBeforeAttachedModifiers(chars, index) && isVisibleTitleBase(chars[index + 1])
 }
 
-function sanitizeFrayTitleValue(raw: string): string {
+function sanitizeFrizzTitleValue(raw: string): string {
   const chars = Array.from(raw)
   const semanticEmojiTags = emojiTagIndexes(chars)
   let safe = ""
@@ -276,25 +276,25 @@ function sanitizeFrayTitleValue(raw: string): string {
 // Retain the historical 200-code-point bound, but stop before a whole grapheme that would cross it.
 // The caller sanitizes once more afterward because some scripts place ZWNJ at a grapheme boundary;
 // that second pass removes any joiner/selector/tag that truncation could otherwise orphan.
-function capFrayTitleValue(raw: string): string {
+function capFrizzTitleValue(raw: string): string {
   let count = 0
   let capped = ""
   for (const { segment } of TITLE_GRAPHEME_SEGMENTER.segment(raw)) {
     const size = Array.from(segment).length
-    if (count + size > FRAY_TITLE_MAX) break
+    if (count + size > FRIZZ_TITLE_MAX) break
     capped += segment
     count += size
   }
-  return sanitizeFrayTitleValue(capped)
+  return sanitizeFrizzTitleValue(capped)
 }
 
-export interface CodexFrayTitleSignal {
+export interface CodexFrizzTitleSignal {
   text: string
   title?: string
   markerFound: boolean
 }
 
-function decodeFrayTitleAttribute(value: string): string {
+function decodeFrizzTitleAttribute(value: string): string {
   const backslashDecoded = value.replace(/\\(.)/g, (_whole, escaped: string) => {
     switch (escaped) {
       case "n": return "\n"
@@ -311,25 +311,25 @@ function decodeFrayTitleAttribute(value: string): string {
 }
 
 // New workers emit a first-line attribute comment, which is invisible Markdown and carries a concise
-// display title. H1 and `fray-title:` remain parse-only compatibility for already-running/old sessions.
+// display title. H1 and `frizz-title:` remain parse-only compatibility for already-running/old sessions.
 // Every recognized transport is strict first-line only: ordinary comments and later headings stay prose.
-export function extractCodexFrayTitle(text: string, allowLegacy = true): CodexFrayTitleSignal {
-  const attribute = text.match(FRAY_TITLE_ATTRIBUTE)
-  const h1 = attribute || !allowLegacy ? undefined : text.match(FRAY_TITLE_H1)
-  const comment = attribute || h1 || !allowLegacy ? undefined : text.match(FRAY_TITLE_LINE)
+export function extractCodexFrizzTitle(text: string, allowLegacy = true): CodexFrizzTitleSignal {
+  const attribute = text.match(FRIZZ_TITLE_ATTRIBUTE)
+  const h1 = attribute || !allowLegacy ? undefined : text.match(FRIZZ_TITLE_H1)
+  const comment = attribute || h1 || !allowLegacy ? undefined : text.match(FRIZZ_TITLE_LINE)
   const match = attribute ?? h1 ?? comment
   if (!match) return { text, markerFound: false }
   let visible = text.slice(match[0].length)
   // During the prior H1 transition a worker could emit an H1 followed by the old sidecar. Keep that
   // compatibility pair hidden; the new comment transport is fully self-contained.
   if (h1) {
-    const compatibility = visible.match(FRAY_TITLE_LINE)
+    const compatibility = visible.match(FRIZZ_TITLE_LINE)
     if (compatibility) visible = visible.slice(compatibility[0].length)
   }
-  let title = sanitizeFrayTitleValue(attribute ? decodeFrayTitleAttribute(match[1]) : match[1])
+  let title = sanitizeFrizzTitleValue(attribute ? decodeFrizzTitleAttribute(match[1]) : match[1])
   // Angle brackets would make the supposedly one-line value look like markup on another surface.
   if (!title || /[<>]/.test(title)) return { text: visible, markerFound: true }
-  title = capFrayTitleValue(title)
+  title = capFrizzTitleValue(title)
   return { text: visible, title: title || undefined, markerFound: true }
 }
 
@@ -351,8 +351,8 @@ export function extractCodexFrayTitle(text: string, allowLegacy = true): CodexFr
 //                                    echo (role=user/developer). Counting it would double the assistant
 //                                    text / fabricate user turns. The SEMANTIC events live in event_msg.
 //   response_item/reasoning        — the raw chain-of-thought (`encrypted_content`) is opaque and
-//                                    stays dropped, BUT the plaintext `summary[]` (present because Fray
-//                                    launches codex with model_reasoning_summary; see FRAY_CODEX_OUTPUT_DEFAULTS) is
+//                                    stays dropped, BUT the plaintext `summary[]` (present because Frizz
+//                                    launches codex with model_reasoning_summary; see FRIZZ_CODEX_OUTPUT_DEFAULTS) is
 //                                    surfaced as a `reasoning` event → an expandable summary block.
 //   event_msg/token_count, thread_settings_applied, session_meta, turn_context, world_state — sidecar
 //   for the renderable event stream. turn_context's model/effort are folded separately as session
@@ -459,7 +459,7 @@ export function parseCodexLine(line: string): NormalizedEvent[] {
       // Per-request usage telemetry. `last_token_usage.total_tokens` is what the LAST request actually
       // carried — i.e. the size of the context at that moment — which is the reading codex's own TUI
       // uses for its remaining-context meter. `model_context_window` rides the same event and is the
-      // DENOMINATOR for the footer's fullness readout: codex names the window itself, so fray never
+      // DENOMINATOR for the footer's fullness readout: codex names the window itself, so frizz never
       // has to keep a per-model table that would go stale the moment a model ships a bigger context.
       // Consumed by the compaction bracket and by the fold's contextTokens/contextWindow.
       case "token_count": {
@@ -509,7 +509,7 @@ export function parseCodexLine(line: string): NormalizedEvent[] {
     if (pt === "reasoning") {
       // The raw CoT (`encrypted_content`) is opaque, but codex also emits a plaintext `summary`: an
       // array of {type:"summary_text", text} items (the gray reasoning headers its TUI shows), present
-      // because Fray sets model_reasoning_summary. Join the items into one markdown body and surface it
+      // because Frizz sets model_reasoning_summary. Join the items into one markdown body and surface it
       // as a reasoning event. An empty/absent summary (encryption-only) yields no event — unchanged.
       const summary = Array.isArray(p.summary) ? p.summary : []
       const text = summary
@@ -870,7 +870,7 @@ export function createCodexBackend(opts: CodexBackendOptions = {}): AgentBackend
     },
 
     // Codex's id is minted by codex and not known until it writes session_meta, so there is no
-    // deterministic path from the fray-advisory sessionId. Once the DISCOVERED id is pinned on the row,
+    // deterministic path from the frizz-advisory sessionId. Once the DISCOVERED id is pinned on the row,
     // the tailer calls this with that id and we locate the (date-sharded) rollout by filename suffix.
     transcriptPath(sessionId: string): string | undefined {
       return findRolloutById(sessionId, codexHome)
@@ -896,13 +896,13 @@ export function createCodexBackend(opts: CodexBackendOptions = {}): AgentBackend
         state.permissionModeAt = profile.permissionModeAt
         state.permissionModeRevision = (state.permissionModeRevision ?? 0) + 1
       }
-      const applyTitleSignal = (signal: CodexFrayTitleSignal, firstFinal: boolean) => {
+      const applyTitleSignal = (signal: CodexFrizzTitleSignal, firstFinal: boolean) => {
         // Native provider events always win. A valid later signal may repair only the bounded dispatch
         // fallback created after an omitted/malformed first signal; it cannot churn a good title.
         if (state.autoTitleSource === "native") return
         if (signal.title && (!state.aiTitle || state.autoTitleSource === "fallback")) {
           applyEvent(state, { kind: "title", title: signal.title })
-          state.autoTitleSource = "fray"
+          state.autoTitleSource = "frizz"
           return
         }
         // The dispatcher already persisted a bounded, topic-oriented automatic title. Record only
@@ -915,7 +915,7 @@ export function createCodexBackend(opts: CodexBackendOptions = {}): AgentBackend
           // which is normally commentary emitted before the first tool call. Attribute comments are
           // therefore recognized and hidden on every assistant phase. H1/legacy transports remain
           // final-only so an ordinary commentary heading can never be mistaken for metadata.
-          const signal = extractCodexFrayTitle(ev.text, ev.final)
+          const signal = extractCodexFrizzTitle(ev.text, ev.final)
           applyEvent(state, { ...ev, text: signal.text })
           applyTitleSignal(signal, false)
           if (!ev.final) continue
@@ -930,7 +930,7 @@ export function createCodexBackend(opts: CodexBackendOptions = {}): AgentBackend
         if (ev.kind === "turn-end" && ev.finalText !== undefined && !state.titleCandidateFinalSeen) {
           state.titleCandidateFinalSeen = true
           state.titleCandidateFinalText = ev.finalText
-          const signal = extractCodexFrayTitle(ev.finalText)
+          const signal = extractCodexFrizzTitle(ev.finalText)
           applyEvent(state, { ...ev, finalText: signal.text })
           applyTitleSignal(signal, true)
           continue
@@ -942,11 +942,11 @@ export function createCodexBackend(opts: CodexBackendOptions = {}): AgentBackend
         ) {
           // task_complete repeats the same first final_answer. Hide its transport line as part of the
           // same response, but never extract another candidate from a later, different final answer.
-          applyEvent(state, { ...ev, finalText: extractCodexFrayTitle(ev.finalText).text })
+          applyEvent(state, { ...ev, finalText: extractCodexFrizzTitle(ev.finalText).text })
           continue
         }
         if (ev.kind === "turn-end" && ev.finalText !== undefined) {
-          const signal = extractCodexFrayTitle(ev.finalText)
+          const signal = extractCodexFrizzTitle(ev.finalText)
           applyEvent(state, { ...ev, finalText: signal.text })
           applyTitleSignal(signal, false)
           continue

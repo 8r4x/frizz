@@ -87,7 +87,7 @@ test("public restart supervisor preserves routes, does not restart initial/subre
     await proxy.listen()
     assert.equal((await get(port, "/thread/demo?tab=terminal")).body, "one:/thread/demo?tab=terminal")
     assert.equal((await get(port, "/assets/app.css")).body, "one:/assets/app.css")
-    assert.equal(restarts, 0, "ordinary initial and subresource requests never restart Fray")
+    assert.equal(restarts, 0, "ordinary initial and subresource requests never restart Frizz")
 
     assert.equal((await get(port, SUPERVISOR_RESTART_PATH, "POST")).status, 202)
     assert.equal((await get(port, "/thread/demo?tab=terminal")).body, "generation-2:/thread/demo?tab=terminal")
@@ -106,7 +106,7 @@ test("public restart supervisor preserves routes, does not restart initial/subre
 
 test("public supervisor serves local images without entering or requiring the disposable child", async () => {
   const image = Buffer.from("89504e470d0a1a0a", "hex")
-  const imageDir = mkdtempSync(join(tmpdir(), "fray-supervisor-image-"))
+  const imageDir = mkdtempSync(join(tmpdir(), "frizz-supervisor-image-"))
   const imagePath = join(imageDir, "handoff.png")
   writeFileSync(imagePath, image)
 
@@ -203,7 +203,7 @@ test("update-and-restart is explicit and never falls through to an ordinary rest
     await proxy.listen()
     const response = await get(port, SUPERVISOR_UPDATE_RESTART_PATH, "POST")
     assert.equal(response.status, 409)
-    assert.match(response.body, /immutable Fray artifact/)
+    assert.match(response.body, /immutable Frizz artifact/)
     assert.equal(ordinary, 0)
     assert.match((await get(port, SUPERVISOR_STATUS_PATH)).body, /"updateRestart":false/)
   } finally {
@@ -231,13 +231,13 @@ test("status advertises Update & Restart only when the durable supervisor owns t
 })
 
 // The launcher is the ONLY thing that can answer "is this a development build". The client used to
-// guess with `import.meta.env.DEV`, which is false in every artifact fray-dev builds — so the dev-only
+// guess with `import.meta.env.DEV`, which is false in every artifact frizz-dev builds — so the dev-only
 // Restart-worker verb was compiled out of the build its author ran all day. Absent must keep meaning
-// "no", so a published Fray never grows a dev affordance.
+// "no", so a published Frizz never grows a dev affordance.
 test("status reports a development build only when the launcher says so", async () => {
   for (const [name, dev, expected] of [
-    ["fray-dev / pnpm dev", true, /"dev":true/],
-    ["the published frayui bin", undefined, /^(?!.*"dev")/s],
+    ["frizz-dev / pnpm dev", true, /"dev":true/],
+    ["the published frizz bin", undefined, /^(?!.*"dev")/s],
   ] as [string, boolean | undefined, RegExp][]) {
     const current = await child(`dev-${String(dev)}`)
     const port = await freePort()
@@ -323,7 +323,7 @@ test("the proxy refuses a foreign Origin instead of laundering it into the child
       assert.equal((await proxied(port, "/rpc/x", { host, origin }, "POST")).status, 403, origin)
     }
     // A Host naming somebody else is refused too, which is what stops DNS rebinding.
-    assert.equal((await proxied(port, "/rpc/x", { host: `fray.evil:${port}` }, "POST")).status, 403)
+    assert.equal((await proxied(port, "/rpc/x", { host: `frizz.evil:${port}` }, "POST")).status, 403)
     assert.equal((await proxied(port, "/rpc/x", { host, "x-forwarded-host": "evil.example" }, "POST")).status, 403)
   } finally {
     await proxy.close().catch(() => undefined)
@@ -338,13 +338,13 @@ test("--host: a non-loopback bind accepts IP-literal authorities, and loopback s
   const proxy = new RestartSupervisorProxy({
     port,
     host: "0.0.0.0",
-    allowedHosts: ["fray.local"],
+    allowedHosts: ["frizz.local"],
     childPort: () => current.port,
     restart: async () => ({ state: "ready" }),
   })
   try {
     await proxy.listen()
-    for (const authority of [`192.168.1.5:${port}`, `10.0.0.4:${port}`, `fray.local:${port}`, `127.0.0.1:${port}`]) {
+    for (const authority of [`192.168.1.5:${port}`, `10.0.0.4:${port}`, `frizz.local:${port}`, `127.0.0.1:${port}`]) {
       const status = (await proxied(port, "/rpc/x", { host: authority, origin: `http://${authority}` }, "POST")).status
       assert.equal(status, 200, authority)
     }
@@ -359,7 +359,7 @@ test("--host: a non-loopback bind accepts IP-literal authorities, and loopback s
 
 test("an exposed board supplies the Sec-Fetch stamp a LAN browser cannot send", async () => {
   // Chrome sends Sec-Fetch-* only to a potentially-trustworthy origin, which http://192.168.1.5 is
-  // not. Fray's missing-Origin rules ask for `sec-fetch-site: same-origin`, so without the proxy
+  // not. Frizz's missing-Origin rules ask for `sec-fetch-site: same-origin`, so without the proxy
   // vouching, --host served the shell and then 403'd every /rpc read the app made. Measured in
   // Chrome 151: the LAN request carried neither an origin nor a sec-fetch-site header.
   const seen: Array<Record<string, string | string[] | undefined>> = []
@@ -419,7 +419,7 @@ test("a loopback-bound proxy rejects the LAN authority an exposed one would acce
   try {
     await proxy.listen()
     assert.equal((await proxied(port, "/rpc/x", { host: `192.168.1.5:${port}` }, "POST")).status, 403)
-    assert.equal((await proxied(port, "/rpc/x", { host: `fray.local:${port}` }, "POST")).status, 403)
+    assert.equal((await proxied(port, "/rpc/x", { host: `frizz.local:${port}` }, "POST")).status, 403)
   } finally {
     await proxy.close().catch(() => undefined)
     await current.close().catch(() => undefined)
@@ -461,7 +461,7 @@ async function upgrade(port: number, headers: Record<string, string>): Promise<"
 
 test("a WebSocket upgrade is gated at the proxy, where a browser Origin is mandatory", async () => {
   // The child requires an Origin on every upgrade, but proxyHeaders manufactures one, so the child
-  // can never enforce that itself. The terminal socket is the most privileged surface Fray has.
+  // can never enforce that itself. The terminal socket is the most privileged surface Frizz has.
   const upstream = await listen((_req, res) => res.end())
   // An upgraded socket is DETACHED from the http server, so closeAllConnections() cannot reach it and
   // the server never emits 'close'. Hold them here and destroy them explicitly, or teardown hangs.
@@ -486,7 +486,7 @@ test("a WebSocket upgrade is gated at the proxy, where a browser Origin is manda
     assert.equal(await upgrade(port, { host: `evil.example:${port}`, origin: `http://evil.example:${port}` }), "refused")
 
     // Regression: an upgraded socket is detached from the http server, so closeAllConnections() never
-    // reaches it and close() waited on it forever. Fray always has live WebSockets once a browser is
+    // reaches it and close() waited on it forever. Frizz always has live WebSockets once a browser is
     // open, so this hung every shutdown that followed a real page load.
     await assert.doesNotReject(
       Promise.race([
@@ -531,7 +531,7 @@ test("--public-origin: a tunnelled request is accepted and reaches the child wit
   const port = await freePort()
   const proxy = new RestartSupervisorProxy({
     port,
-    publicOrigin: "https://fray.example.com",
+    publicOrigin: "https://frizz.example.com",
     childPort: () => current.port,
     restart: async () => ({ state: "ready" }),
   })
@@ -541,11 +541,11 @@ test("--public-origin: a tunnelled request is accepted and reaches the child wit
     // `x-forwarded-host` is Tailscale Serve's addition rather than cloudflared's — both are supported
     // fronts, so the accepted shape covers the union rather than one vendor's subset.
     const tunnelled = {
-      host: "fray.example.com",
-      origin: "https://fray.example.com",
+      host: "frizz.example.com",
+      origin: "https://frizz.example.com",
       "x-forwarded-for": "203.0.113.7",
       "x-forwarded-proto": "https",
-      "x-forwarded-host": "fray.example.com",
+      "x-forwarded-host": "frizz.example.com",
       "sec-fetch-site": "same-origin",
     }
     assert.equal((await proxied(port, "/rpc/x", tunnelled, "POST")).status, 200)
@@ -560,8 +560,8 @@ test("--public-origin: a tunnelled request is accepted and reaches the child wit
 
     // The widening is exactly one origin wide. A neighbouring name, a scheme downgrade, and the
     // loopback caller trying to borrow the tunnel's forwarding licence are all still refused.
-    assert.equal((await proxied(port, "/rpc/x", { ...tunnelled, host: "fray.example.com.evil", origin: "https://fray.example.com.evil" }, "POST")).status, 403)
-    assert.equal((await proxied(port, "/rpc/x", { ...tunnelled, origin: "http://fray.example.com" }, "POST")).status, 403)
+    assert.equal((await proxied(port, "/rpc/x", { ...tunnelled, host: "frizz.example.com.evil", origin: "https://frizz.example.com.evil" }, "POST")).status, 403)
+    assert.equal((await proxied(port, "/rpc/x", { ...tunnelled, origin: "http://frizz.example.com" }, "POST")).status, 403)
     assert.equal(
       (await proxied(port, "/rpc/x", { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}`, "x-forwarded-for": "203.0.113.7" }, "POST")).status,
       403,

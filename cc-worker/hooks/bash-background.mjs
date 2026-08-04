@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 // @ts-check
-// PreToolUse hook on `Bash` (fray-worker). Claude's native `run_in_background` flag registers a
+// PreToolUse hook on `Bash` (frizz-worker). Claude's native `run_in_background` flag registers a
 // task, output file, terminal notification, and wake. Shell job control (`cmd &`) does none of those:
-// the child can survive after the Bash tool returns, but Claude and fray have no lifecycle identity
+// the child can survive after the Bash tool returns, but Claude and frizz have no lifecycle identity
 // for it. A worker can then rest forever waiting for a notification that cannot exist.
 //
 // Block only an ESCAPING local background job. Self-contained shell concurrency remains valid when
 // the command explicitly waits for its children or owns them with an EXIT trap before Bash returns.
 //
-// GATE: inert unless FRAY_UI_THREAD is set (ordinary Claude sessions keep their native behavior).
+// GATE: inert unless FRIZZ_THREAD is set (ordinary Claude sessions keep their native behavior).
 // FAIL OPEN: malformed hook input allows the command rather than wedging a worker.
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
@@ -197,7 +197,7 @@ export function hasEscapingBackgroundJob(raw, depth = 0) {
 }
 
 export function evaluateBashBackgroundHook(input, env = process.env) {
-  if (!String(env.FRAY_UI_THREAD ?? '').trim()) return {};
+  if (!String(env.FRIZZ_THREAD ?? '').trim()) return {};
   const command = input && typeof input === 'object'
     ? String(input.tool_input?.command ?? '')
     : '';
@@ -209,8 +209,8 @@ export function evaluateBashBackgroundHook(input, env = process.env) {
       permissionDecision: 'deny',
       permissionDecisionReason:
         codex
-          ? 'Fray blocked an untracked shell background job (`&`). Shell job control can return without a Codex lifecycle handle, so Fray cannot report completion or wake this agent. For work that must continue while you do something else, remove `&` and use the managed unified exec pattern: start `tools.exec_command(...)`, call `yield_control()`, then await and fully drain that same process. A returned `session_id` alone is only foreground continuation. For bounded parallel work inside one shell call, finish with `wait` (after `kill`, if used) or own cleanup with an EXIT trap.'
-          : 'Fray blocked an untracked shell background job (`&`). Shell job control can return from Bash without a Claude task ID, so Fray cannot report completion or wake this agent. For a long-running local command, remove `&` and call Bash with `run_in_background:true`. For bounded parallel work inside one Bash call, finish with `wait` (after `kill`, if used) or own cleanup with an EXIT trap.',
+          ? 'Frizz blocked an untracked shell background job (`&`). Shell job control can return without a Codex lifecycle handle, so Frizz cannot report completion or wake this agent. For work that must continue while you do something else, remove `&` and use the managed unified exec pattern: start `tools.exec_command(...)`, call `yield_control()`, then await and fully drain that same process. A returned `session_id` alone is only foreground continuation. For bounded parallel work inside one shell call, finish with `wait` (after `kill`, if used) or own cleanup with an EXIT trap.'
+          : 'Frizz blocked an untracked shell background job (`&`). Shell job control can return from Bash without a Claude task ID, so Frizz cannot report completion or wake this agent. For a long-running local command, remove `&` and call Bash with `run_in_background:true`. For bounded parallel work inside one Bash call, finish with `wait` (after `kill`, if used) or own cleanup with an EXIT trap.',
     },
   };
 }
@@ -226,8 +226,8 @@ export function isDirectHookExecution(argv1, moduleUrl) {
 // mistake the whole server for this executable and block startup reading hook JSON from stdin.
 if (isDirectHookExecution(process.argv[1], import.meta.url)) {
   try {
-    const env = process.argv.includes('--fray-ui-thread')
-      ? { ...process.env, FRAY_UI_THREAD: process.env.FRAY_UI_THREAD || 'codex-worker' }
+    const env = process.argv.includes('--frizz-thread')
+      ? { ...process.env, FRIZZ_THREAD: process.env.FRIZZ_THREAD || 'codex-worker' }
       : process.env;
     emit(evaluateBashBackgroundHook(JSON.parse(readFileSync(0, 'utf8')), env));
   } catch {

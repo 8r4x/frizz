@@ -1,4 +1,4 @@
-import type { TranscriptMessage, TranscriptToolCall } from "@fray-ui/shared"
+import type { TranscriptMessage, TranscriptToolCall } from "@frizz/shared"
 import type { ChatMessage } from "../hooks.ts"
 
 export interface ToolActivityMessage {
@@ -373,19 +373,19 @@ function gerundDescription(description: string | undefined, fallback: string): s
  * Rewrite absolute in-project paths as project-relative ones for display.
  *
  * `detail` carries the provider's raw input, and every Claude/Codex file tool passes an ABSOLUTE path,
- * so the shimmer reads `Editing /Users/me/Documents/projects/fray/packages/web/src/App.tsx` — one
+ * so the shimmer reads `Editing /Users/me/Documents/projects/frizz/packages/web/src/App.tsx` — one
  * short row whose only identifying part is pushed off the end by a home prefix that never varies.
  * Stripping the project root leaves `Editing packages/web/src/App.tsx`.
  *
  * The root is the board's `projectDir`, which is the git toplevel of the dir the server was launched in
- * — so when Fray runs on a linked worktree that IS the worktree root, and no separate detection is
+ * — so when Frizz runs on a linked worktree that IS the worktree root, and no separate detection is
  * needed. A worktree a worker created underneath the project keeps its own directory in the relative
  * path (`wt-fix/ui/…`), which is exactly the disambiguation you want. Paths outside the project are left
  * absolute: there is no root that makes them both shorter and honest.
  *
  * Applied to the finished label rather than to `detail` alone so a Bash description's arguments shorten
  * too, and every occurrence is replaced because a command line can name several paths. The trailing
- * slash is part of the needle, so a sibling checkout (`…/fray-old/a.ts`) never matches.
+ * slash is part of the needle, so a sibling checkout (`…/frizz-old/a.ts`) never matches.
  *
  * A path outside the project still gets its home prefix collapsed to `~` — `~/.claude/CLAUDE.md` says
  * the same thing in a quarter of the width. The browser can't read $HOME, so it comes from the project

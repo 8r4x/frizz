@@ -4,13 +4,13 @@ import {
   RECURRING_PROMPT_MAX,
   ALLDONE_SENTINEL,
   type ThreadView,
-} from "@fray-ui/shared"
+} from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { formatAgo } from "../lib/durationLabels.ts"
 import { showToast } from "../store.ts"
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/Popover.tsx"
 
-// THE RECURRING-PROMPT PANEL: one glyph in the thread footer opening fray's way to re-prompt a thread
+// THE RECURRING-PROMPT PANEL: one glyph in the thread footer opening frizz's way to re-prompt a thread
 // without the operator typing it again. ONE piece of text, and up to two independent reasons to send it:
 //
 //   STOP HOOK  (scheduler SOURCE 5) — every time the thread comes to REST. No clock, nothing to tune:
@@ -33,7 +33,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "./ui/Popover.tsx"
 export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
   const [open, setOpen] = useState(false)
   const armed = thread.recurringPrompt
-  // COLOURED IF EITHER MECHANISM IS LIVE. The glyph answers one question — "is fray going to re-prompt
+  // COLOURED IF EITHER MECHANISM IS LIVE. The glyph answers one question — "is frizz going to re-prompt
   // this thread on its own?" — and either one is a yes.
   const live = armed?.stopHook === true || armed?.heartbeat === true
 
@@ -256,7 +256,7 @@ function PromptPanel({ thread, armed, close }: {
         className="field-sizing-content max-h-[28vh] min-h-[4rem] w-full resize-none overflow-y-auto rounded-md border border-border bg-bg px-2 py-1.5 text-[12px] leading-snug text-fg outline-none placeholder:text-muted/50 focus:border-border-strong"
       />
       {/* THE TWO MECHANISMS, one per line under the text they both send. They are NAMED — Stop hook and
-          Heartbeat — rather than described, because those are the names everything else in fray uses for
+          Heartbeat — rather than described, because those are the names everything else in frizz uses for
           them: the scheduler's two passes, the delivery fence prefixes, the trailer on every delivered
           message, and the divider the chat renders. A panel that called them anything else would be the
           only surface with its own vocabulary.

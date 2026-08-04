@@ -17,14 +17,14 @@ import { createRpcClient } from "./lib/rpc-client.mjs"
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
 )
-const { home, port, cwd = "/Users/colinmcd94/Documents/projects/fray" } = flags
+const { home, port, cwd = "/Users/colinmcd94/Documents/projects/frizz" } = flags
 if (!home || !port) {
   console.error("usage: nub scripts/seed-recurring-prompt-glyphs.mjs --home=/abs/temp-home --port=NNNN")
   process.exit(1)
 }
 
-const db = globSync(join(home, ".fray/projects/*/ui.db"))[0]
-if (!db) throw new Error(`no ui.db under ${home}/.fray/projects — is the stack booted?`)
+const db = globSync(join(home, ".frizz/projects/*/ui.db"))[0]
+if (!db) throw new Error(`no ui.db under ${home}/.frizz/projects — is the stack booted?`)
 const jsonlDir = join(home, ".claude", "projects", cwd.replace(/[/.]/g, "-"))
 mkdirSync(jsonlDir, { recursive: true })
 
@@ -112,7 +112,7 @@ for (const [n, c] of CASES.entries()) {
   execFileSync("sqlite3", [
     db,
     `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
-     VALUES ('${c.slug}', '${sessionId}', 'fray-${c.slug}', '${at}', '${c.title}', 'claude', 'opus', 'high', 'default', '${at}')`,
+     VALUES ('${c.slug}', '${sessionId}', 'frizz-${c.slug}', '${at}', '${c.title}', 'claude', 'opus', 'high', 'default', '${at}')`,
   ])
 
   // Arm through the REAL RPC the panel itself calls, so the rows are shaped exactly as production makes them.

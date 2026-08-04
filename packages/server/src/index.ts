@@ -3,7 +3,7 @@ export type { AppRouter } from "./router.ts"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { readFileSync, existsSync } from "node:fs"
 import { join, resolve, extname, normalize } from "node:path"
-import { DEFAULT_PORT } from "@fray-ui/shared"
+import { DEFAULT_PORT } from "@frizz/shared"
 import {
 ContextStartupError,
   createContext,
@@ -37,7 +37,7 @@ import {
   type ProcessGeneration,
 } from "./project-launch.ts"
 import { createBootProgressPublisher } from "./boot-progress.ts"
-import { log as frayLog } from "./logging.ts"
+import { log as frizzLog } from "./logging.ts"
 
 export const SERVER_SHUTDOWN_TIMEOUT_MS = 4_000
 export const SERVER_FORCE_EXIT_MS = 5_000
@@ -136,7 +136,7 @@ export class ServerStartupError extends Error {
   }) {
     const startupMessage = options.startupError instanceof Error ? options.startupError.message : String(options.startupError)
     const cleanupMessage = options.cleanupError instanceof Error ? `; rollback failed: ${options.cleanupError.message}` : ""
-    super(`Fray server startup failed during ${options.phase}: ${startupMessage}${cleanupMessage}`, {
+    super(`Frizz server startup failed during ${options.phase}: ${startupMessage}${cleanupMessage}`, {
       cause: options.startupError,
     })
     this.name = "ServerStartupError"
@@ -278,7 +278,7 @@ export function createShutdownSignalHandler(options: ShutdownSignalHandlerOption
       options.exit(code)
     }
     force = scheduleForce(() => {
-      options.error?.(`[fray-ui] shutdown force deadline exceeded after ${forceAfterMs}ms`)
+      options.error?.(`[frizz] shutdown force deadline exceeded after ${forceAfterMs}ms`)
       decide(1)
     }, forceAfterMs)
     if (decided) clearTimeout(force)
@@ -286,7 +286,7 @@ export function createShutdownSignalHandler(options: ShutdownSignalHandlerOption
     void options.close().then(
       () => decide(0),
       (error) => {
-        options.error?.(`[fray-ui] shutdown failed: ${error instanceof Error ? error.stack ?? error.message : error}`)
+        options.error?.(`[frizz] shutdown failed: ${error instanceof Error ? error.stack ?? error.message : error}`)
         decide(1)
       },
     )
@@ -357,7 +357,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     diagnostics.push(event)
     if (opts.shutdownDiagnostic) opts.shutdownDiagnostic(event)
     else {
-      frayLog.warn(
+      frizzLog.warn(
         "shutdown",
         `${event.phase}: ${event.message}${event.error instanceof Error ? ` — ${event.error.message}` : ""}`,
       )
@@ -495,7 +495,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     },
     whenSafe() {
       if (finalized) return Promise.resolve()
-      return activeSafety ?? Promise.reject(new Error("Fray server shutdown has not started"))
+      return activeSafety ?? Promise.reject(new Error("Frizz server shutdown has not started"))
     },
     recover() {
       if (finalized) return Promise.resolve()
@@ -600,7 +600,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     await phase("tailer producer", () => ctx!.tailer.start((done, total) => {
       bootProgress(`tailer producer ${done}/${total}`)
     }))
-    if (process.env.FRAY_WAKERS_OFF !== "1") {
+    if (process.env.FRIZZ_WAKERS_OFF !== "1") {
       await phase("wake scheduler", () => ctx!.scheduler.start())
     } else {
       await phase("wake scheduler", () => undefined)
@@ -620,7 +620,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
         })
       } catch (error) {
         if (opts.requireDevWeb) throw error
-        frayLog.warn(
+        frizzLog.warn(
           "server",
           `vite dev middleware unavailable — serving API only: ${error instanceof Error ? error.message : error}`,
         )
@@ -713,7 +713,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     // The launcher owns what the operator sees; this is the control plane's PRIVATE port behind the
     // supervisor proxy, and printing it beside the real one left two addresses on screen with no way
     // to tell which to open. It belongs in the log.
-    frayLog.info(
+    frizzLog.info(
       "server",
       `control plane listening on 127.0.0.1:${port} (${opts.dev ? "dev" : "prod"}) — project ${ctx.project.name}`,
     )

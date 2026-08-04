@@ -5,8 +5,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Hono } from "hono"
-import { mountRouter } from "@fray-ui/rpc/server"
-import type { BoardSnapshot, Settings, ThreadView } from "@fray-ui/shared"
+import { mountRouter } from "@frizz/rpc/server"
+import type { BoardSnapshot, Settings, ThreadView } from "@frizz/shared"
 import type { BoardManager } from "./board.ts"
 import { appendDelivery, parseDeliveryLedger } from "./delivery-ledger.ts"
 import { createClaudeBackend } from "./backend/claude.ts"
@@ -35,9 +35,9 @@ import { writeScratchpad } from "./dispatch.ts"
 import { providerResumeCommand, shellQuote } from "./external-terminal.ts"
 
 test("provider resume command is shell-safe", () => {
-  assert.equal(shellQuote("fray's socket"), "'fray'\"'\"'s socket'")
-  assert.equal(providerResumeCommand("codex", "/work/it's fray", "session-id"), "cd '/work/it'\"'\"'s fray' && codex resume 'session-id' --dangerously-bypass-approvals-and-sandbox")
-  assert.equal(providerResumeCommand("claude", "/work/fray", "session-id"), "cd '/work/fray' && claude --resume 'session-id' --dangerously-skip-permissions")
+  assert.equal(shellQuote("frizz's socket"), "'frizz'\"'\"'s socket'")
+  assert.equal(providerResumeCommand("codex", "/work/it's frizz", "session-id"), "cd '/work/it'\"'\"'s frizz' && codex resume 'session-id' --dangerously-bypass-approvals-and-sandbox")
+  assert.equal(providerResumeCommand("claude", "/work/frizz", "session-id"), "cd '/work/frizz' && claude --resume 'session-id' --dangerously-skip-permissions")
 })
 
 const noopTailer: Tailer = {
@@ -120,7 +120,7 @@ function row(slug: string): SessionRow {
   return {
     slug,
     session_id: `sid-${slug}`,
-    tmux_name: `fray-${slug}`,
+    tmux_name: `frizz-${slug}`,
     spawned_at: "2026-07-12T00:00:00.000Z",
     last_read_at: null,
     unread: 0,
@@ -139,7 +139,7 @@ function row(slug: string): SessionRow {
 }
 
 function harness(tailer: Tailer = noopTailer) {
-  const dir = mkdtempSync(join(tmpdir(), "fray-router-permission-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-router-permission-"))
   const project: Project = { dir, id: "router-permission", name: "test", label: "test", stateDir: dir, cwdSlug: "test" }
   const storage = createStorage(join(dir, "ui.db"))
   const snapshot: BoardSnapshot = {
@@ -240,7 +240,7 @@ test("threadTerminalCommand offers the verified provider resume command in every
       "an exited row yields the resume command",
     )
 
-    // Codex before its rollout id is discovered has no resumable native id — the Fray UUID would not
+    // Codex before its rollout id is discovered has no resumable native id — the Frizz UUID would not
     // resume it, so fail closed with an explanatory reason rather than a broken command.
     h.storage.upsertSession(row("codex-pending"))
     h.storage.setBackend("codex-pending", "codex")
@@ -257,7 +257,7 @@ test("threadTerminalCommand offers the verified provider resume command in every
 
     await assert.rejects(
       h.router.threadTerminalCommand.handler({ input: { slug: "foreign-or-legacy" } }),
-      /No Fray-owned terminal session is available/,
+      /No Frizz-owned terminal session is available/,
     )
   } finally {
     h.storage.close()
@@ -271,14 +271,14 @@ test("threadTerminalCommand offers the verified provider resume command in every
 // worker sends the human to a terminal that cannot show the in-flight turn or the permission prompt
 // the worker is parked on (that prompt is never written to the transcript at all).
 // The Doc tab is gated on the scratchpad file existing and filled by this RPC, so the reader must read
-// exactly what the writer wrote. It once read a path of its own (.fray/scratch/<id>.md) that dispatch
+// exactly what the writer wrote. It once read a path of its own (.frizz/scratch/<id>.md) that dispatch
 // never wrote, so every thread's Doc tab rendered "No scratchpad yet." Round-trip the real writer.
 test("threadScratchpad reads the scratchpad the dispatcher actually writes", async () => {
   const h = harness()
   try {
     h.storage.upsertSession(row("scratch-thread"))
     const rel = writeScratchpad(h.dir, "sid-scratch-thread", "Scratch thread")
-    assert.equal(rel, ".fray/threads/sid-scratch-thread/scratch.md")
+    assert.equal(rel, ".frizz/threads/sid-scratch-thread/scratch.md")
     writeFileSync(join(h.dir, rel), "# Scratchpad\n\nreal worker notes\n")
 
     assert.deepEqual(await h.router.threadScratchpad.handler({ input: { slug: "scratch-thread" } }), {
@@ -297,7 +297,7 @@ test("threadScratchpad reads the scratchpad the dispatcher actually writes", asy
 
 test("planBody RPC returns only a securely resolved direct plan file", async () => {
   const h = harness()
-  const plans = join(h.dir, ".fray", "plans")
+  const plans = join(h.dir, ".frizz", "plans")
   const outside = join(h.dir, "outside.md")
   try {
     mkdirSync(plans, { recursive: true })
@@ -306,13 +306,13 @@ test("planBody RPC returns only a securely resolved direct plan file", async () 
     symlinkSync(outside, join(plans, "linked.md"))
 
     assert.deepEqual(
-      await h.router.planBody.handler({ input: { path: ".fray/plans/safe.md" } }),
+      await h.router.planBody.handler({ input: { path: ".frizz/plans/safe.md" } }),
       { markdown: "# Safe plan\n" },
     )
     for (const path of [
-      ".fray/plans/linked.md",
-      ".fray/plans/../../outside.md",
-      ".fray/plans/nested/safe.md",
+      ".frizz/plans/linked.md",
+      ".frizz/plans/../../outside.md",
+      ".frizz/plans/nested/safe.md",
       "/absolute.md",
     ]) {
       assert.deepEqual(await h.router.planBody.handler({ input: { path } }), { markdown: "" }, path)
@@ -325,14 +325,14 @@ test("planBody RPC returns only a securely resolved direct plan file", async () 
 
 test("auto-titled sessions never read or mutate a same-slug legacy file through RPCs", async () => {
   const h = harness()
-  const fray = join(h.dir, ".fray")
-  const regular = join(fray, "auto-file.md")
-  const repair = join(fray, "auto-repair.md")
+  const frizz = join(h.dir, ".frizz")
+  const regular = join(frizz, "auto-file.md")
+  const repair = join(frizz, "auto-repair.md")
   const external = join(h.dir, "outside.md")
-  const linked = join(fray, "auto-link.md")
+  const linked = join(frizz, "auto-link.md")
   const regularBody = "---\ntitle: Planted\nstatus: active\n---\nregular sentinel\n"
   try {
-    mkdirSync(fray)
+    mkdirSync(frizz)
     writeFileSync(regular, regularBody)
     writeFileSync(repair, "repair sentinel\n")
     writeFileSync(external, "external sentinel\n")
@@ -544,7 +544,7 @@ test("followUp yields to a live external writer but still answers a thread whose
       subAgents: [],
       bgShells: [],
       pendingQuestion: false,
-      // The external writer is still appending; the stalled one froze before fray took the thread.
+      // The external writer is still appending; the stalled one froze before frizz took the thread.
       lastActivityAt: slug === external ? new Date().toISOString() : "2026-07-09T09:59:00.000Z",
     }),
   }
@@ -555,7 +555,7 @@ test("followUp yields to a live external writer but still answers a thread whose
     h.router.followUp.handler({ input: { slug: external, sessionId: `sid-${external}`, message: "hello" } }),
     /running in your terminal/,
   )
-  assert.deepEqual(yielded, [], "fray must not race a second writer onto a live external turn")
+  assert.deepEqual(yielded, [], "frizz must not race a second writer onto a live external turn")
 
   const delivered: string[] = []
   install({ bridgeTurn: false, ownedSince }, delivered)
@@ -935,7 +935,7 @@ test("legacy teardown retains name behavior while an absent finalized owner is a
 })
 
 test("router teardown never downgrades a stale replaced row to reusable-name control", () => {
-  const storage = createStorage(join(mkdtempSync(join(tmpdir(), "fray-router-aba-")), "ui.db"))
+  const storage = createStorage(join(mkdtempSync(join(tmpdir(), "frizz-router-aba-")), "ui.db"))
   const slug = "router-stale-row"
   const stale = row(slug)
   storage.upsertSession(stale)
@@ -947,7 +947,7 @@ test("router teardown never downgrades a stale replaced row to reusable-name con
 })
 
 test("rowless reserved/spawned adoption claims fail closed without a name or exact kill", async () => {
-  const storage = createStorage(join(mkdtempSync(join(tmpdir(), "fray-rowless-adopt-")), "ui.db"))
+  const storage = createStorage(join(mkdtempSync(join(tmpdir(), "frizz-rowless-adopt-")), "ui.db"))
   const slug = "rowless-adoption"
   assert.equal(storage.reserveAdoptionClaim({
     slug,
@@ -994,7 +994,7 @@ test("rowless adoption claim blocks kill, dismiss-status, and forget RPC handler
 })
 
 test("stale forget loses to a finalized successor token and preserves its row and pane binding", async () => {
-  const storage = createStorage(join(mkdtempSync(join(tmpdir(), "fray-forget-rotation-")), "ui.db"))
+  const storage = createStorage(join(mkdtempSync(join(tmpdir(), "frizz-forget-rotation-")), "ui.db"))
   const slug = "forget-successor"
   const original = finalizedClaim(slug)
   const saved = row(slug)
@@ -1055,10 +1055,10 @@ test("stale forget loses to a finalized successor token and preserves its row an
 
 // ── Stopping an app-server Codex thread (2026-07-23) ───────────────────────────────────────────────
 // An app-server Codex thread has NO tmux pane: its worker is a turn inside the shared codex
-// app-server, which now lives in a DETACHED daemon that outlives the fray runtime. Routed through the
+// app-server, which now lives in a DETACHED daemon that outlives the frizz runtime. Routed through the
 // tmux terminator every stop verb took stopRegisteredRuntime's `unbound` branch, issued kill-session
 // for a session that never existed, and reported "stopped" — while the turn kept running, burning
-// tokens and touching the repo with no fray-side owner. Before the daemon worked this was masked,
+// tokens and touching the repo with no frizz-side owner. Before the daemon worked this was masked,
 // because the app-server died with the runtime.
 function codexSessionRow(
   storage: ReturnType<typeof createStorage>,
@@ -1134,7 +1134,7 @@ test("stopping a Codex thread with no active turn is a no-op, not an error", asy
 })
 
 test("a LEGACY tmux Codex row keeps the tmux terminator and never reaches the bridge", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-legacy-codex-stop-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-legacy-codex-stop-"))
   const storage = createStorage(join(dir, "ui.db"))
   const slug = "legacy-codex"
   // Dispatched pre-cutover: backend=codex but codex_runtime is NULL, so it really does own a pane and
@@ -1207,8 +1207,8 @@ test("dismissing a Codex thread stops its turn through the bridge", async () => 
   const h = harness()
   const slug = "codex-dismiss"
   codexSessionRow(h.storage, slug, "app-server")
-  mkdirSync(join(h.dir, ".fray"), { recursive: true })
-  writeFileSync(join(h.dir, ".fray", `${slug}.md`), `---\nstatus: active\n---\n\n# ${slug}\n`)
+  mkdirSync(join(h.dir, ".frizz"), { recursive: true })
+  writeFileSync(join(h.dir, ".frizz", `${slug}.md`), `---\nstatus: active\n---\n\n# ${slug}\n`)
   const stub = bridgeStub({ turnLive: true })
   ;(h.ctx as { codexAppServer?: unknown }).codexAppServer = stub.bridge
 
@@ -1220,7 +1220,7 @@ test("dismissing a Codex thread stops its turn through the bridge", async () => 
 
 // ── Restart worker (the operator-driven freshProcess) ────────────────────────────────────────────
 // A worker reads its plugin (hooks) and system prompt ONCE, at process start, so the only way to move a
-// running one onto a newer fray build is to replace the process. `freshProcess` is how the operator
+// running one onto a newer frizz build is to replace the process. `freshProcess` is how the operator
 // asks; these pin the two refusals, because a restart that quietly degrades to an ordinary follow-up is
 // worse than an error — the operator would believe their worker came back on the new build when it is
 // still the old process.
@@ -1294,8 +1294,8 @@ test("an ordinary follow-up leaves earlier outstanding sends queued", async () =
 // 2026-08-01: the completion invariant (an agent runs to its terminal return) was read as covering an
 // explicit human instruction, so the verb threw whenever a child was live — which fenced off the one
 // recovery affordance in exactly the state that motivates reaching for it, a worker stuck behind
-// background work that will not finish. The invariant governs fray's own initiative
-// (needsFreshProcessForLimit still spares a live child when FRAY chooses the restart); an operator
+// background work that will not finish. The invariant governs frizz's own initiative
+// (needsFreshProcessForLimit still spares a live child when FRIZZ chooses the restart); an operator
 // asking outright is not that.
 test("Restart worker proceeds even while sub-agents are still running", async () => {
   const { h, slug, calls } = restartHarness([{ state: "running" }])
@@ -1381,8 +1381,8 @@ test("push-it-now reports a thread with no running turn instead of throwing", as
 })
 
 // A tmux Claude row's follow-up was typed into Claude Code's own TUI composer and a codex steer went
-// straight into the running turn — neither leaves fray a turn it can preempt.
-test("push-it-now refuses a runtime fray holds no control channel into", async () => {
+// straight into the running turn — neither leaves frizz a turn it can preempt.
+test("push-it-now refuses a runtime frizz holds no control channel into", async () => {
   const { h, slug } = interruptHarness()
   h.storage.setClaudeRuntime(slug, "tmux")
   const result = await h.router.deliverQueuedNow.handler({ input: { slug, sessionId: `sid-${slug}` } })
@@ -1403,7 +1403,7 @@ test("push-it-now fails closed for a stale session id", async () => {
 })
 
 // ── Reopening an archived thread by messaging it (every runtime) ─────────────────────────────────
-// There is no Reopen verb in fray: an archived thread's footer states "Done" and the composer under it
+// There is no Reopen verb in frizz: an archived thread's footer states "Done" and the composer under it
 // IS the reopen affordance ("Marked done — send a message to reopen it"). The un-archive that backs that
 // promise lived inside resumeThread, which ONLY the tmux path reaches — so a broker-backed Claude row
 // and an app-server Codex row resumed their WORKER and left their ROW archived. The thread then executed
@@ -1480,7 +1480,7 @@ test("Restart worker is refused on a thread that is not a broker-backed Claude w
 })
 
 // ---- The superseded worker procedures ------------------------------------------------------------
-// A worker's `fray-mcp.mjs` is spawned once from the build its session was dispatched with and outlives
+// A worker's `frizz-mcp.mjs` is spawned once from the build its session was dispatched with and outlives
 // every server restart, so `/rpc` is a versioned contract between two independently-updated processes.
 // Merging the old `stop_hook` + `heartbeat` tools into `recurring_prompt` renamed the procedure and gave
 // every in-flight worker a bare 404 from the one tool that keeps a long effort moving. These pin that
@@ -1586,7 +1586,7 @@ test("an unknown RPC procedure answers 404 NAMING it, so the next version skew d
     const body = await res.json() as { error: string }
     // A bare `404 Not Found` naming nothing is what cost a live worker three silent retries.
     assert.match(body.error, /setOwnThreadPreviousName/)
-    assert.match(body.error, /different version of fray/)
+    assert.match(body.error, /different version of frizz/)
 
     // And the catch-all must not shadow a real procedure registered before it.
     const real = await app.request("/rpc/setOwnThreadStopHook", {

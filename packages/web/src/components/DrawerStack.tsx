@@ -15,7 +15,7 @@ import { ErrorBoundary, DrawerErrorSheet } from "./ErrorBoundary.tsx"
 // The side-drawer STACK, and the Escape chain that unwinds it. Lives in its own component because
 // BOTH page shells need it: the queue (App) and the standalone `/thread/<slug>/full` page. It used to
 // be inlined in App, which made every drawer affordance a DEAD CLICK on /full — the sub-agent rows,
-// the background-shell rows and the fray-doc button all pushed a layer onto `store.drawers` that
+// the background-shell rows and the frizz-doc button all pushed a layer onto `store.drawers` that
 // nothing was mounted to render.
 //
 // Two DIFFERENT depths: `depth` = the layer's true stack position (array index) drives z-index — it must

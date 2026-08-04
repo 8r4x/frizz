@@ -19,8 +19,8 @@ const cwdSlug = projectDir.replace(/[/.]/g, "-")
 const transcriptDir = path.join(home, ".claude", "projects", cwdSlug)
 fs.mkdirSync(transcriptDir, { recursive: true })
 
-const dbDir = fs.readdirSync(path.join(home, ".fray", "projects"))[0]
-const db = path.join(home, ".fray", "projects", dbDir, "ui.db")
+const dbDir = fs.readdirSync(path.join(home, ".frizz", "projects"))[0]
+const db = path.join(home, ".frizz", "projects", dbDir, "ui.db")
 
 const T = (n) => new Date(Date.UTC(2026, 6, 30, 4, n, 0)).toISOString()
 
@@ -74,11 +74,11 @@ for (const t of threads) {
   fs.writeFileSync(path.join(transcriptDir, `${t.sessionId}.jsonl`), records(t))
   fs.mkdirSync(path.join(home, "tasks"), { recursive: true })
   fs.writeFileSync(path.join(home, "tasks", "bhlfxzwg1.output"), "scanning…\n")
-  execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `fray-${t.slug}`, "sleep 7200"])
+  execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `frizz-${t.slug}`, "sleep 7200"])
   execFileSync("sqlite3", [
     db,
     `INSERT INTO session (slug, session_id, tmux_name, spawned_at, title, title_auto, backend, model, effort, permission_mode, state, unread, exited, archived)
-     VALUES ('${t.slug}', '${t.sessionId}', 'fray-${t.slug}', '${T(0)}', '${t.title}', 0, 'claude', 'opus', 'high', 'auto', 'open', 0, 0, 0)`,
+     VALUES ('${t.slug}', '${t.sessionId}', 'frizz-${t.slug}', '${T(0)}', '${t.title}', 0, 'claude', 'opus', 'high', 'auto', 'open', 0, 0, 0)`,
   ])
   console.log(`seeded ${t.slug} (${t.sessionId})`)
 }

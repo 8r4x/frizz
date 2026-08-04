@@ -21,16 +21,16 @@ import { dirname, join, resolve } from "node:path";
 import { createServer } from "node:net";
 import { test } from "node:test";
 import {
-  buildFrayArtifact,
-  captureFraySourceSnapshot,
+  buildFrizzArtifact,
+  captureFrizzSourceSnapshot,
   assertArtifactHostCompatible,
   currentArtifactHost,
-  ensureStableFrayArtifact,
-  findReusableFrayArtifact,
+  ensureStableFrizzArtifact,
+  findReusableFrizzArtifact,
   promoteCurrentSourceArtifact,
-  promoteFrayArtifact,
-  publishFrayArtifactStaging,
-  readFrayArtifact,
+  promoteFrizzArtifact,
+  publishFrizzArtifactStaging,
+  readFrizzArtifact,
   readStableArtifact,
   relevantSourceFingerprint,
 } from "./artifacts.ts";
@@ -89,12 +89,12 @@ function fixture(root: string, content: string): string {
   );
   writeFileSync(
     join(dir, "runtime", "cc-worker", ".claude-plugin", "plugin.json"),
-    '{"name":"fray"}'
+    '{"name":"frizz"}'
   );
   writeFileSync(join(dir, "runtime", "cc-worker", "hooks", "session-seed.mjs"), "seed");
   writeFileSync(join(dir, "runtime", "cc-worker", "hooks", "agent-bind.mjs"), "bind");
-  writeFileSync(join(dir, "runtime", "cc-worker", "bin", "fray"), "board");
-  writeFileSync(join(dir, "runtime", "cc-worker", "bin", "fray-update"), "update");
+  writeFileSync(join(dir, "runtime", "cc-worker", "bin", "frizz"), "board");
+  writeFileSync(join(dir, "runtime", "cc-worker", "bin", "frizz-update"), "update");
   writeFileSync(join(dir, "runtime", "board", "config.mjs"), "config");
   writeFileSync(join(dir, "runtime", "board", "agent-bindings.mjs"), "bindings");
   writeFileSync(join(dir, "runtime", "board", "index.mjs"), "index");
@@ -113,11 +113,11 @@ function fixture(root: string, content: string): string {
       },
       runtimeFiles: {
         "src/index.js": hash("console.log('runtime')"),
-        "cc-worker/.claude-plugin/plugin.json": hash('{"name":"fray"}'),
+        "cc-worker/.claude-plugin/plugin.json": hash('{"name":"frizz"}'),
         "cc-worker/hooks/session-seed.mjs": hash("seed"),
         "cc-worker/hooks/agent-bind.mjs": hash("bind"),
-        "cc-worker/bin/fray": hash("board"),
-        "cc-worker/bin/fray-update": hash("update"),
+        "cc-worker/bin/frizz": hash("board"),
+        "cc-worker/bin/frizz-update": hash("update"),
         "board/config.mjs": hash("config"),
         "board/agent-bindings.mjs": hash("bindings"),
         "board/index.mjs": hash("index"),
@@ -141,7 +141,7 @@ test("artifact host compatibility accepts the host that built it", () => {
 test("artifact host compatibility fails closed for a pre-portability manifest", () => {
   assert.throws(
     () => assertArtifactHostCompatible({ digest: "a".repeat(64), manifest: {} } as any),
-    /does not record host compatibility; stop Fray and rerun fray-dev/
+    /does not record host compatibility; stop Frizz and rerun frizz-dev/
   );
 });
 
@@ -151,7 +151,7 @@ for (const field of ["platform", "arch", "nodeMajor", "nodeModules"] as const) {
     const artifactHost = { ...host, [field]: `${host[field]}-other` };
     assert.throws(
       () => assertArtifactHostCompatible({ digest: "a".repeat(64), manifest: { host: artifactHost } } as any, host),
-      /incompatible with this host.*stop Fray and rerun fray-dev/
+      /incompatible with this host.*stop Frizz and rerun frizz-dev/
     );
   });
 }
@@ -230,16 +230,16 @@ function sourceFixture(root: string): string {
 }
 
 test("verified artifacts are selected atomically with a retained rollback digest", () => {
-  const root = mkdtempSync(join(tmpdir(), "fray-artifacts-"));
+  const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-"));
   const state = join(root, "state");
   const first = fixture(root, "first");
   const second = fixture(root, "second");
   assert.equal(
-    readFrayArtifact(first, root).runtimeDir,
+    readFrizzArtifact(first, root).runtimeDir,
     join(root, first, "runtime")
   );
-  assert.equal(promoteFrayArtifact(state, first, root).current, first);
-  const promoted = promoteFrayArtifact(state, second, root);
+  assert.equal(promoteFrizzArtifact(state, first, root).current, first);
+  const promoted = promoteFrizzArtifact(state, second, root);
   assert.equal(promoted.current, second);
   assert.equal(promoted.previous, first);
   assert.equal(readStableArtifact(state, root)?.digest, second);
@@ -250,12 +250,12 @@ test("verified artifacts are selected atomically with a retained rollback digest
 });
 
 test("artifact verification rejects modified web or runtime files before a stable pointer can select them", () => {
-  const root = mkdtempSync(join(tmpdir(), "fray-artifacts-corrupt-"));
+  const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-corrupt-"));
   const webDigest = fixture(root, "known-good");
   writeFileSync(join(root, webDigest, "web", "index.html"), "tampered");
-  assert.throws(() => readFrayArtifact(webDigest, root), /changed or missing/);
+  assert.throws(() => readFrizzArtifact(webDigest, root), /changed or missing/);
   assert.throws(
-    () => promoteFrayArtifact(join(root, "state"), webDigest, root),
+    () => promoteFrizzArtifact(join(root, "state"), webDigest, root),
     /changed or missing/
   );
 
@@ -265,27 +265,27 @@ test("artifact verification rejects modified web or runtime files before a stabl
     "tampered"
   );
   assert.throws(
-    () => readFrayArtifact(runtimeDigest, root),
+    () => readFrizzArtifact(runtimeDigest, root),
     /changed or missing/
   );
   assert.throws(
-    () => promoteFrayArtifact(join(root, "state"), runtimeDigest, root),
+    () => promoteFrizzArtifact(join(root, "state"), runtimeDigest, root),
     /changed or missing/
   );
 });
 
 test("artifact verification rejects a worker closure omitted from the runtime manifest", () => {
-  const root = mkdtempSync(join(tmpdir(), "fray-artifacts-worker-manifest-"));
+  const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-worker-manifest-"));
   const digest = fixture(root, "known-good");
   const manifestPath = join(root, digest, "manifest.json");
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   delete manifest.runtimeFiles["board/index.mjs"];
   writeFileSync(manifestPath, JSON.stringify(manifest));
-  assert.throws(() => readFrayArtifact(digest, root), /failed manifest validation/);
+  assert.throws(() => readFrizzArtifact(digest, root), /failed manifest validation/);
 });
 
 test("reuse skips a host-incompatible candidate and rebuilds it", () => {
-  const root = mkdtempSync(join(tmpdir(), "fray-artifacts-host-reuse-"));
+  const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-host-reuse-"));
   const source = sourceFixture(root);
   let stale = fixture(root, "shared");
   stale = markReusableArtifact(root, stale, source);
@@ -293,12 +293,12 @@ test("reuse skips a host-incompatible candidate and rebuilds it", () => {
     manifest.host.arch = `${manifest.host.arch}-other`;
   });
   let builds = 0;
-  const selected = ensureStableFrayArtifact(join(root, "state"), source, root, {
+  const selected = ensureStableFrizzArtifact(join(root, "state"), source, root, {
     build: () => {
       builds++;
       let fresh = fixture(root, "fresh");
       fresh = markReusableArtifact(root, fresh, source);
-      return readFrayArtifact(fresh, root);
+      return readFrizzArtifact(fresh, root);
     },
   });
   assert.equal(builds, 1);
@@ -306,7 +306,7 @@ test("reuse skips a host-incompatible candidate and rebuilds it", () => {
 });
 
 test("canonical checkout identity prevents same-content artifact collisions", () => {
-  const root = mkdtempSync(join(tmpdir(), "fray-artifacts-source-identity-"));
+  const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-source-identity-"));
   const firstSource = sourceFixture(root);
   const secondSource = join(root, "second-source");
   cpSync(firstSource, secondSource, { recursive: true });
@@ -315,38 +315,38 @@ test("canonical checkout identity prevents same-content artifact collisions", ()
   let second = fixture(root, "shared");
   second = markReusableArtifact(root, second, secondSource);
   assert.notEqual(first, second);
-  assert.equal(findReusableFrayArtifact(firstSource, root)?.digest, first);
-  assert.equal(findReusableFrayArtifact(secondSource, root)?.digest, second);
+  assert.equal(findReusableFrizzArtifact(firstSource, root)?.digest, first);
+  assert.equal(findReusableFrizzArtifact(secondSource, root)?.digest, second);
 });
 
 test("manifest paths and root identity are validated before an artifact is selected", () => {
-  const root = mkdtempSync(join(tmpdir(), "fray-artifacts-manifest-schema-"));
+  const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-manifest-schema-"));
   let traversal = fixture(root, "traversal");
   traversal = rewriteFixtureManifest(root, traversal, (manifest) => {
     manifest.webFiles["../outside"] = manifest.webFiles["index.html"];
   });
-  assert.throws(() => readFrayArtifact(traversal, root), /failed manifest validation/);
+  assert.throws(() => readFrizzArtifact(traversal, root), /failed manifest validation/);
 
   const rootTamper = fixture(root, "root-tamper");
   const path = join(root, rootTamper, "manifest.json");
   const manifest = JSON.parse(readFileSync(path, "utf8"));
   manifest.sourceRevision = "changed-without-changing-directory";
   writeFileSync(path, JSON.stringify(manifest));
-  assert.throws(() => readFrayArtifact(rootTamper, root), /failed root digest validation/);
+  assert.throws(() => readFrizzArtifact(rootTamper, root), /failed root digest validation/);
 });
 
 test("an EEXIST publish race re-reads the verified winner", () => {
-  const root = mkdtempSync(join(tmpdir(), "fray-artifacts-publish-race-"));
+  const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-publish-race-"));
   const winner = fixture(root, "winner");
   const staging = join(root, ".staging-race");
   mkdirSync(staging);
-  const selected = publishFrayArtifactStaging(staging, winner, root);
+  const selected = publishFrizzArtifactStaging(staging, winner, root);
   assert.equal(selected.digest, winner);
   assert.equal(existsSync(staging), false);
 });
 
 test("a first workspace launch reuses and promotes a verified canonical-source artifact", () => {
-  const root = mkdtempSync(join(tmpdir(), "fray-artifacts-first-launch-"));
+  const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-first-launch-"));
   const state = join(root, "project-state");
   const source = join(root, "source");
   mkdirSync(join(source, ".git"), { recursive: true });
@@ -355,7 +355,7 @@ test("a first workspace launch reuses and promotes a verified canonical-source a
 
   let built = false;
   const progress: string[] = [];
-  const selected = ensureStableFrayArtifact(state, source, root, {
+  const selected = ensureStableFrizzArtifact(state, source, root, {
     onProgress: (message) => progress.push(message),
     build: () => {
       built = true;
@@ -371,30 +371,30 @@ test("a first workspace launch reuses and promotes a verified canonical-source a
     "Reusing cached immutable artifact",
     "Promoting verified immutable artifact",
   ]);
-  assert.equal(findReusableFrayArtifact(source, root)?.digest, digest);
+  assert.equal(findReusableFrizzArtifact(source, root)?.digest, digest);
 });
 
 test("a same-HEAD tracked source edit does not reuse a stale artifact", () => {
-  const root = mkdtempSync(join(tmpdir(), "fray-artifacts-dirty-tracked-"));
+  const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-dirty-tracked-"));
   const source = sourceFixture(root);
   let digest = fixture(root, "shared");
   digest = markReusableArtifact(root, digest, source);
-  assert.equal(findReusableFrayArtifact(source, root)?.digest, digest);
+  assert.equal(findReusableFrizzArtifact(source, root)?.digest, digest);
   writeFileSync(
     join(source, "packages", "server", "src", "entry.ts"),
     "export const version = 2\n"
   );
-  assert.equal(findReusableFrayArtifact(source, root), null);
+  assert.equal(findReusableFrizzArtifact(source, root), null);
 });
 
 test("a stopped workspace refreshes its stable pointer to the current source fingerprint", () => {
-  const root = mkdtempSync(join(tmpdir(), "fray-artifacts-refresh-stopped-"));
+  const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-refresh-stopped-"));
   const state = join(root, "project-state");
   const source = sourceFixture(root);
   let stale = fixture(root, "stale");
   let current: string;
   stale = markReusableArtifact(root, stale, source);
-  promoteFrayArtifact(state, stale, root);
+  promoteFrizzArtifact(state, stale, root);
 
   writeFileSync(
     join(source, "packages", "server", "src", "entry.ts"),
@@ -404,7 +404,7 @@ test("a stopped workspace refreshes its stable pointer to the current source fin
   current = markReusableArtifact(root, current, source);
 
   let built = false;
-  const selected = ensureStableFrayArtifact(state, source, root, {
+  const selected = ensureStableFrizzArtifact(state, source, root, {
     build: () => {
       built = true;
       throw new Error("the current verified artifact should be reused");
@@ -416,11 +416,11 @@ test("a stopped workspace refreshes its stable pointer to the current source fin
 });
 
 test("Update & Restart promotes even when the artifact it replaces no longer verifies", () => {
-  const root = mkdtempSync(join(tmpdir(), "fray-artifacts-update-unverifiable-"));
+  const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-update-unverifiable-"));
   const state = join(root, "state");
   const source = sourceFixture(root);
   const stale = fixture(root, "stale");
-  promoteFrayArtifact(state, stale, root);
+  promoteFrizzArtifact(state, stale, root);
 
   // Exactly how a live instance goes stale: source tightened WORKER_PLUGIN_REQUIRED_FILES after this
   // artifact was built, so its manifest no longer lists a now-required board closure entry. The
@@ -433,7 +433,7 @@ test("Update & Restart promotes even when the artifact it replaces no longer ver
 
   const built = fixture(root, "candidate");
   const { candidate, previous } = promoteCurrentSourceArtifact(state, source, root, {
-    build: () => readFrayArtifact(built, root),
+    build: () => readFrizzArtifact(built, root),
   });
 
   // No rollback target survives an unverifiable predecessor, but the update itself must land — it is
@@ -444,15 +444,15 @@ test("Update & Restart promotes even when the artifact it replaces no longer ver
 });
 
 test("Update & Restart hands back the verified artifact it replaced as the rollback target", () => {
-  const root = mkdtempSync(join(tmpdir(), "fray-artifacts-update-rollback-"));
+  const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-update-rollback-"));
   const state = join(root, "state");
   const source = sourceFixture(root);
   const current = fixture(root, "current");
-  promoteFrayArtifact(state, current, root);
+  promoteFrizzArtifact(state, current, root);
 
   const built = fixture(root, "candidate");
   const { candidate, previous } = promoteCurrentSourceArtifact(state, source, root, {
-    build: () => readFrayArtifact(built, root),
+    build: () => readFrizzArtifact(built, root),
   });
 
   assert.equal(candidate.digest, built);
@@ -461,7 +461,7 @@ test("Update & Restart hands back the verified artifact it replaced as the rollb
 });
 
 test("a relevant untracked source file does not reuse a stale artifact", () => {
-  const root = mkdtempSync(join(tmpdir(), "fray-artifacts-dirty-untracked-"));
+  const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-dirty-untracked-"));
   const source = sourceFixture(root);
   let digest = fixture(root, "shared");
   digest = markReusableArtifact(root, digest, source);
@@ -469,11 +469,11 @@ test("a relevant untracked source file does not reuse a stale artifact", () => {
     join(source, "packages", "server", "src", "local-untracked.ts"),
     "export const local = true\n"
   );
-  assert.equal(findReusableFrayArtifact(source, root), null);
+  assert.equal(findReusableFrizzArtifact(source, root), null);
 });
 
 test("an unchanged dirty source reuses the same verified artifact", () => {
-  const root = mkdtempSync(join(tmpdir(), "fray-artifacts-dirty-reuse-"));
+  const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-dirty-reuse-"));
   const source = sourceFixture(root);
   writeFileSync(
     join(source, "packages", "server", "src", "local-untracked.ts"),
@@ -481,12 +481,12 @@ test("an unchanged dirty source reuses the same verified artifact", () => {
   );
   let digest = fixture(root, "shared");
   digest = markReusableArtifact(root, digest, source);
-  assert.equal(findReusableFrayArtifact(source, root)?.digest, digest);
+  assert.equal(findReusableFrizzArtifact(source, root)?.digest, digest);
 });
 
 test("generated outputs and artifact evidence do not invalidate a reusable dirty-source artifact", () => {
   const root = mkdtempSync(
-    join(tmpdir(), "fray-artifacts-fingerprint-ignore-")
+    join(tmpdir(), "frizz-artifacts-fingerprint-ignore-")
   );
   const source = sourceFixture(root);
   let digest = fixture(root, "shared");
@@ -503,19 +503,19 @@ test("generated outputs and artifact evidence do not invalidate a reusable dirty
     "generated"
   );
   assert.equal(relevantSourceFingerprint(source), before);
-  assert.equal(findReusableFrayArtifact(source, root)?.digest, digest);
+  assert.equal(findReusableFrizzArtifact(source, root)?.digest, digest);
 });
 
 test("a captured source snapshot remains usable after the checkout changes", () => {
-  const root = mkdtempSync(join(tmpdir(), "fray-artifacts-snapshot-mutation-"));
+  const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-snapshot-mutation-"));
   const source = sourceFixture(root);
   mkdirSync(join(source, "node_modules"));
   for (const file of [
     "cc-worker/.claude-plugin/plugin.json",
     "cc-worker/hooks/session-seed.mjs",
     "cc-worker/hooks/agent-bind.mjs",
-    "cc-worker/bin/fray",
-    "cc-worker/bin/fray-update",
+    "cc-worker/bin/frizz",
+    "cc-worker/bin/frizz-update",
     "board/config.mjs",
     "board/agent-bindings.mjs",
     "board/index.mjs",
@@ -526,7 +526,7 @@ test("a captured source snapshot remains usable after the checkout changes", () 
     mkdirSync(dirname(join(source, file)), { recursive: true });
     writeFileSync(join(source, file), "snapshot fixture\n");
   }
-  const snapshot = captureFraySourceSnapshot(source, root);
+  const snapshot = captureFrizzSourceSnapshot(source, root);
   try {
     const entry = join(source, "packages", "server", "src", "entry.ts");
     writeFileSync(entry, "export const version = 2\n");
@@ -538,13 +538,13 @@ test("a captured source snapshot remains usable after the checkout changes", () 
 });
 
 test("artifact creation typechecks the coherent source snapshot before either build", () => {
-  const root = mkdtempSync(join(tmpdir(), "fray-artifacts-typecheck-order-"));
+  const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-typecheck-order-"));
   const source = resolve(import.meta.dirname, "..");
   const calls: Array<{ args: string[]; source: string }> = [];
 
   assert.throws(
     () =>
-      buildFrayArtifact(source, root, {
+      buildFrizzArtifact(source, root, {
         runCommand: (args, snapshotSource) => {
           calls.push({ args, source: snapshotSource });
           throw new Error("typecheck sentinel");
@@ -625,15 +625,15 @@ async function stopArtifactChild(
 }
 
 test("a real Nub/esbuild artifact boots its WebSocket-capable server and loads its immutable native cell", async () => {
-  const root = mkdtempSync(join(tmpdir(), "fray-artifacts-real-bundle-"));
+  const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-real-bundle-"));
   const source = resolve(import.meta.dirname, "..");
   let child: ReturnType<typeof spawnChild> | undefined;
   let releaseOwner: (() => boolean) | undefined;
   try {
-    const artifact = buildFrayArtifact(source, root);
+    const artifact = buildFrizzArtifact(source, root);
     assert.match(
       execFileSync(process.execPath, [join(artifact.runtimeDir, "src", "index.js"), "--help"], { encoding: "utf8" }),
-      /Fray source launcher/
+      /Frizz source launcher/
     );
     assert.ok(artifact.manifest.dependencyCell, "runtime binds an immutable dependency cell");
     const modules = join(artifact.runtimeDir, "node_modules");
@@ -643,7 +643,7 @@ test("a real Nub/esbuild artifact boots its WebSocket-capable server and loads i
     // must reach ITS OWN guard and refuse; MODULE_NOT_FOUND means it was never emitted, which is
     // precisely what silently killed every Codex turn on 2026-07-23.
     //
-    // The guards differ (the daemons want their FRAY_* config, dev-bootstrap wants a live project
+    // The guards differ (the daemons want their FRIZZ_* config, dev-bootstrap wants a live project
     // launch owner), so assert the SHAPE rather than one message: it must fail from inside the emitted
     // file itself. A wrong-but-plausible message would otherwise pass a laxer check.
     for (const entry of DETACHED_DAEMON_ENTRIES) {
@@ -672,12 +672,12 @@ test("a real Nub/esbuild artifact boots its WebSocket-capable server and loads i
         {
           ...process.env,
           HOME: join(root, "home"),
-          FRAY_DEV_CHILD: "1",
-          FRAY_DEV_PORT: String(port),
-          FRAY_STABLE_ARTIFACT: artifact.digest,
-          FRAY_STABLE_WEB_DIST: artifact.webDir,
-          FRAY_SCRIPTS_DIR: join(artifact.runtimeDir, "board"),
-          FRAY_WORKER_PLUGIN_DIR: join(artifact.runtimeDir, "cc-worker"),
+          FRIZZ_DEV_CHILD: "1",
+          FRIZZ_DEV_PORT: String(port),
+          FRIZZ_STABLE_ARTIFACT: artifact.digest,
+          FRIZZ_STABLE_WEB_DIST: artifact.webDir,
+          FRIZZ_SCRIPTS_DIR: join(artifact.runtimeDir, "board"),
+          FRIZZ_WORKER_PLUGIN_DIR: join(artifact.runtimeDir, "cc-worker"),
         },
         target,
         owner.token
@@ -705,7 +705,7 @@ test("a real Nub/esbuild artifact boots its WebSocket-capable server and loads i
       const db = new DatabaseSync(":memory:"); db.exec("create table t(x); insert into t values (1)"); if (db.prepare("select x from t").get().x !== 1) throw new Error("sqlite"); db.close();
       const child = pty.spawn(process.execPath, ["-e", "process.exit(0)"], { name: "xterm-color", cols: 80, rows: 24, cwd: process.cwd(), env: process.env });
       await new Promise((resolve, reject) => child.onExit(({ exitCode }) => exitCode === 0 ? resolve() : reject(new Error("node-pty exited " + exitCode))));
-      const dir = mkdtempSync(join(tmpdir(), "fray-watch-")); const sub = await watcher.subscribe(dir, () => {}); await sub.unsubscribe(); rmSync(dir, { recursive: true, force: true });
+      const dir = mkdtempSync(join(tmpdir(), "frizz-watch-")); const sub = await watcher.subscribe(dir, () => {}); await sub.unsubscribe(); rmSync(dir, { recursive: true, force: true });
     `;
     execFileSync(process.execPath, ["--input-type=module", "-e", nativeSmoke], { encoding: "utf8" });
   } finally {
@@ -719,7 +719,7 @@ test("a real Nub/esbuild artifact boots its WebSocket-capable server and loads i
 });
 
 test.skip("legacy deploy snapshot harness is superseded by the real bundled-artifact smoke", () => {
-  const root = mkdtempSync(join(tmpdir(), "fray-artifacts-source-snapshot-"));
+  const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-source-snapshot-"));
   const source = join(root, "ui");
   const versionFile = join(source, "packages", "web", "src", "version.txt");
   const bin = join(root, "bin");
@@ -727,12 +727,12 @@ test.skip("legacy deploy snapshot harness is superseded by the real bundled-arti
   mkdirSync(join(source, "src"), { recursive: true });
   mkdirSync(join(source, "packages", "shared"), { recursive: true });
   mkdirSync(join(source, "node_modules"), { recursive: true });
-  mkdirSync(join(source, "packages", "web", "node_modules", "@fray-ui"), {
+  mkdirSync(join(source, "packages", "web", "node_modules", "@frizz"), {
     recursive: true,
   });
   symlinkSync(
     "../../../shared",
-    join(source, "packages", "web", "node_modules", "@fray-ui", "shared")
+    join(source, "packages", "web", "node_modules", "@frizz", "shared")
   );
   writeFileSync(versionFile, "before\n");
   writeFileSync(join(source, "packages", "shared", "version.txt"), "snapshot workspace\n");
@@ -740,8 +740,8 @@ test.skip("legacy deploy snapshot harness is superseded by the real bundled-arti
     "cc-worker/.claude-plugin/plugin.json",
     "cc-worker/hooks/session-seed.mjs",
     "cc-worker/hooks/agent-bind.mjs",
-    "cc-worker/bin/fray",
-    "cc-worker/bin/fray-update",
+    "cc-worker/bin/frizz",
+    "cc-worker/bin/frizz-update",
     "board/config.mjs",
     "board/agent-bindings.mjs",
     "board/index.mjs",
@@ -756,11 +756,11 @@ test.skip("legacy deploy snapshot harness is superseded by the real bundled-arti
     pnpm,
     `#!/bin/sh
 if [ "$5" = "build" ]; then
-  test -L "$2/packages/web/node_modules/@fray-ui/shared" || exit 21
-  test "$(cat "$2/packages/web/node_modules/@fray-ui/shared/version.txt")" = "snapshot workspace" || exit 22
+  test -L "$2/packages/web/node_modules/@frizz/shared" || exit 21
+  test "$(cat "$2/packages/web/node_modules/@frizz/shared/version.txt")" = "snapshot workspace" || exit 22
   version=$(cat "$2/packages/web/src/version.txt")
-  if [ "$FRAY_TEST_MUTATE_LIVE" = "1" ]; then
-    printf 'after\\n' > "$FRAY_TEST_LIVE_SOURCE/packages/web/src/version.txt"
+  if [ "$FRIZZ_TEST_MUTATE_LIVE" = "1" ]; then
+    printf 'after\\n' > "$FRIZZ_TEST_LIVE_SOURCE/packages/web/src/version.txt"
     sleep 1
   fi
   mkdir -p "$2/packages/web/dist"
@@ -769,30 +769,30 @@ if [ "$5" = "build" ]; then
 fi
 mkdir -p "$6/src" "$6/node_modules/.pnpm/node_modules"
 printf 'export const artifact = true\\n' > "$6/src/index.ts"
-ln -s "$2/packages/cli" "$6/node_modules/.pnpm/node_modules/frayui"
+ln -s "$2/packages/cli" "$6/node_modules/.pnpm/node_modules/frizz"
 `
   );
   chmodSync(pnpm, 0o755);
   const oldPath = process.env.PATH;
-  const oldMutate = process.env.FRAY_TEST_MUTATE_LIVE;
-  const oldLiveSource = process.env.FRAY_TEST_LIVE_SOURCE;
+  const oldMutate = process.env.FRIZZ_TEST_MUTATE_LIVE;
+  const oldLiveSource = process.env.FRIZZ_TEST_LIVE_SOURCE;
   process.env.PATH = `${bin}:${oldPath ?? ""}`;
-  process.env.FRAY_TEST_MUTATE_LIVE = "1";
-  process.env.FRAY_TEST_LIVE_SOURCE = source;
+  process.env.FRIZZ_TEST_MUTATE_LIVE = "1";
+  process.env.FRIZZ_TEST_LIVE_SOURCE = source;
   const beforeFingerprint = relevantSourceFingerprint(source);
   try {
-    const first = buildFrayArtifact(source, root);
+    const first = buildFrizzArtifact(source, root);
     assert.equal(readFileSync(join(first.webDir, "index.html"), "utf8"), "before\n");
     assert.equal(readFileSync(versionFile, "utf8"), "after\n");
     assert.equal(first.manifest.sourceFingerprint, beforeFingerprint);
-    const selfLink = join(first.runtimeDir, "node_modules", ".pnpm", "node_modules", "frayui");
+    const selfLink = join(first.runtimeDir, "node_modules", ".pnpm", "node_modules", "frizz");
     assert.equal(
       resolve(dirname(selfLink), readlinkSync(selfLink)),
       first.runtimeDir,
       "the deploy self-link is sealed inside the immutable artifact"
     );
-    process.env.FRAY_TEST_MUTATE_LIVE = "0";
-    const second = buildFrayArtifact(source, root);
+    process.env.FRIZZ_TEST_MUTATE_LIVE = "0";
+    const second = buildFrizzArtifact(source, root);
     assert.notEqual(second.digest, first.digest);
     assert.equal(readFileSync(join(second.webDir, "index.html"), "utf8"), "after\n");
     assert.equal(second.manifest.sourceFingerprint, relevantSourceFingerprint(source));
@@ -802,15 +802,15 @@ ln -s "$2/packages/cli" "$6/node_modules/.pnpm/node_modules/frayui"
     );
   } finally {
     process.env.PATH = oldPath;
-    if (oldMutate === undefined) delete process.env.FRAY_TEST_MUTATE_LIVE;
-    else process.env.FRAY_TEST_MUTATE_LIVE = oldMutate;
-    if (oldLiveSource === undefined) delete process.env.FRAY_TEST_LIVE_SOURCE;
-    else process.env.FRAY_TEST_LIVE_SOURCE = oldLiveSource;
+    if (oldMutate === undefined) delete process.env.FRIZZ_TEST_MUTATE_LIVE;
+    else process.env.FRIZZ_TEST_MUTATE_LIVE = oldMutate;
+    if (oldLiveSource === undefined) delete process.env.FRIZZ_TEST_LIVE_SOURCE;
+    else process.env.FRIZZ_TEST_LIVE_SOURCE = oldLiveSource;
   }
 });
 
 test("an older verified manifest without a source fingerprint fails closed for new workspace reuse", () => {
-  const root = mkdtempSync(join(tmpdir(), "fray-artifacts-old-manifest-"));
+  const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-old-manifest-"));
   const source = sourceFixture(root);
   const digest = fixture(root, "shared");
   const path = join(root, digest, "manifest.json");
@@ -819,24 +819,24 @@ test("an older verified manifest without a source fingerprint fails closed for n
   manifest.digest = legacy;
   writeFileSync(path, JSON.stringify(manifest));
   renameSync(join(root, digest), join(root, legacy));
-  assert.equal(readFrayArtifact(legacy, root).digest, legacy);
-  assert.equal(findReusableFrayArtifact(source, root), null);
+  assert.equal(readFrizzArtifact(legacy, root).digest, legacy);
+  assert.equal(findReusableFrizzArtifact(source, root), null);
 });
 
 test("a zero-artifact first launch builds then promotes only a complete verified candidate", () => {
-  const root = mkdtempSync(join(tmpdir(), "fray-artifacts-zero-launch-"));
+  const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-zero-launch-"));
   const state = join(root, "project-state");
   const source = join(root, "source");
   mkdirSync(source);
   let digest = "";
   let builds = 0;
   const progress: string[] = [];
-  const selected = ensureStableFrayArtifact(state, source, root, {
+  const selected = ensureStableFrizzArtifact(state, source, root, {
     onProgress: (message) => progress.push(message),
     build: () => {
       builds++;
       digest = fixture(root, "built");
-      return readFrayArtifact(digest, root);
+      return readFrizzArtifact(digest, root);
     },
   });
   assert.equal(builds, 1);
@@ -851,21 +851,21 @@ test("a zero-artifact first launch builds then promotes only a complete verified
 });
 
 test("a stale source pointer reports an actual immutable rebuild before promotion", () => {
-  const root = mkdtempSync(join(tmpdir(), "fray-artifacts-stale-progress-"));
+  const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-stale-progress-"));
   const state = join(root, "project-state");
   const source = sourceFixture(root);
   let stale = fixture(root, "stale");
   let rebuilt = "";
   stale = markReusableArtifact(root, stale, source);
-  promoteFrayArtifact(state, stale, root);
+  promoteFrizzArtifact(state, stale, root);
   writeFileSync(join(source, "packages", "server", "src", "entry.ts"), "export const version = 2\n");
   const progress: string[] = [];
-  const selected = ensureStableFrayArtifact(state, source, root, {
+  const selected = ensureStableFrizzArtifact(state, source, root, {
     onProgress: (message) => progress.push(message),
     build: () => {
       rebuilt = fixture(root, "rebuilt");
       rebuilt = markReusableArtifact(root, rebuilt, source);
-      return readFrayArtifact(rebuilt, root);
+      return readFrizzArtifact(rebuilt, root);
     },
   });
   assert.equal(selected.digest, rebuilt);
@@ -878,13 +878,13 @@ test("a stale source pointer reports an actual immutable rebuild before promotio
 });
 
 test("a failed first-launch build never writes a partial candidate to workspace selection", () => {
-  const root = mkdtempSync(join(tmpdir(), "fray-artifacts-build-rollback-"));
+  const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-build-rollback-"));
   const state = join(root, "project-state");
   const source = join(root, "source");
   mkdirSync(source);
   assert.throws(
     () =>
-      ensureStableFrayArtifact(state, source, root, {
+      ensureStableFrizzArtifact(state, source, root, {
         build: () => {
           throw new Error("build failed");
         },
@@ -896,7 +896,7 @@ test("a failed first-launch build never writes a partial candidate to workspace 
 });
 
 test.skip("legacy deploy cleanup harness is superseded by the bundled-artifact smoke", () => {
-  const root = mkdtempSync(join(tmpdir(), "fray-artifacts-build-cleanup-"));
+  const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-build-cleanup-"));
   const source = join(root, "source");
   const plugin = join(root, "cc-worker");
   const bin = join(root, "bin");
@@ -907,8 +907,8 @@ test.skip("legacy deploy cleanup harness is superseded by the bundled-artifact s
   for (const file of [
     "hooks/session-seed.mjs",
     "hooks/agent-bind.mjs",
-    "bin/fray",
-    "bin/fray-update",
+    "bin/frizz",
+    "bin/frizz-update",
   ]) {
     mkdirSync(dirname(join(plugin, file)), { recursive: true });
     writeFileSync(join(plugin, file), "export {}\n");
@@ -935,7 +935,7 @@ exit 12
   const oldPath = process.env.PATH;
   process.env.PATH = `${bin}:${oldPath ?? ""}`;
   try {
-    assert.throws(() => buildFrayArtifact(source, root), /Command failed/);
+    assert.throws(() => buildFrizzArtifact(source, root), /Command failed/);
   } finally {
     process.env.PATH = oldPath;
   }
@@ -950,7 +950,7 @@ exit 12
 });
 
 test.skip("legacy deploy worker harness is superseded by the bundled-artifact smoke", () => {
-  const root = mkdtempSync(join(tmpdir(), "fray-artifacts-worker-plugin-"));
+  const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-worker-plugin-"));
   const source = join(root, "ui");
   const plugin = join(root, "cc-worker");
   const bin = join(root, "bin");
@@ -961,35 +961,35 @@ test.skip("legacy deploy worker harness is superseded by the bundled-artifact sm
   mkdirSync(join(plugin, "skills", "gh", "scripts"), { recursive: true });
   mkdirSync(join(plugin, "hooks"), { recursive: true });
   mkdirSync(join(plugin, "bin"), { recursive: true });
-  mkdirSync(join(plugin, "scripts", "fray"), { recursive: true });
+  mkdirSync(join(plugin, "scripts", "frizz"), { recursive: true });
   mkdirSync(join(root, "board"), { recursive: true });
   mkdirSync(bin);
-  writeFileSync(join(plugin, ".claude-plugin", "plugin.json"), '{"name":"fray"}\n');
+  writeFileSync(join(plugin, ".claude-plugin", "plugin.json"), '{"name":"frizz"}\n');
   writeFileSync(join(plugin, "skills", "worker", "SKILL.md"), "worker\n");
   writeFileSync(join(plugin, "skills", "gh", "SKILL.md"), "gh\n");
   writeFileSync(join(plugin, "skills", "gh", "scripts", "ci-watch.mjs"), "watch\n");
   writeFileSync(
     join(plugin, "hooks", "session-seed.mjs"),
     `import { readFileSync } from "node:fs";
-import { currentSessionId, setSessionOverride } from "../scripts/fray/config.mjs";
+import { currentSessionId, setSessionOverride } from "../scripts/frizz/config.mjs";
 const input = JSON.parse(readFileSync(0, "utf8"));
 const sessionId = currentSessionId(input.session_id);
 setSessionOverride(process.env.CLAUDE_PROJECT_DIR, sessionId, "off");
-process.stdout.write(JSON.stringify({ scratch: ".fray/threads/" + sessionId + "/scratch.md" }));
+process.stdout.write(JSON.stringify({ scratch: ".frizz/threads/" + sessionId + "/scratch.md" }));
 `
   );
   writeFileSync(join(plugin, "hooks", "agent-bind.mjs"), "bind\n");
-  writeFileSync(join(plugin, "scripts", "fray", "config.mjs"), `export * from "../../../board/config.mjs";\n`);
-  writeFileSync(join(plugin, "scripts", "fray", "agent-bindings.mjs"), `export * from "../../../board/agent-bindings.mjs";\n`);
-  writeFileSync(join(plugin, "bin", "fray"), `await import(new URL("../../board/index.mjs", import.meta.url));\n`);
-  writeFileSync(join(plugin, "bin", "fray-update"), `await import(new URL("../../board/thread-update.mjs", import.meta.url));\n`);
+  writeFileSync(join(plugin, "scripts", "frizz", "config.mjs"), `export * from "../../../board/config.mjs";\n`);
+  writeFileSync(join(plugin, "scripts", "frizz", "agent-bindings.mjs"), `export * from "../../../board/agent-bindings.mjs";\n`);
+  writeFileSync(join(plugin, "bin", "frizz"), `await import(new URL("../../board/index.mjs", import.meta.url));\n`);
+  writeFileSync(join(plugin, "bin", "frizz-update"), `await import(new URL("../../board/thread-update.mjs", import.meta.url));\n`);
   writeFileSync(
     join(root, "board", "config.mjs"),
     `import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 export const currentSessionId = (explicit) => explicit || process.env.CLAUDE_CODE_SESSION_ID || null;
 export const setSessionOverride = (project, sessionId, state) => {
-  const dir = join(project, ".fray", ".session-state");
+  const dir = join(project, ".frizz", ".session-state");
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, sessionId), state + "\\n");
 };
@@ -1007,16 +1007,16 @@ if [ "$5" = "build" ]; then
   printf '<!doctype html>' > "$2/packages/web/dist/index.html"
   exit 0
 fi
-mkdir -p "$6/src" "$6/node_modules/@fray-ui/server/src"
+mkdir -p "$6/src" "$6/node_modules/@frizz/server/src"
 printf 'export const artifact = true\\n' > "$6/src/index.ts"
-printf 'export const dispatch = true\\n' > "$6/node_modules/@fray-ui/server/src/dispatch.ts"
+printf 'export const dispatch = true\\n' > "$6/node_modules/@frizz/server/src/dispatch.ts"
 `
   );
   chmodSync(pnpm, 0o755);
   const oldPath = process.env.PATH;
   process.env.PATH = `${bin}:${oldPath ?? ""}`;
   try {
-    const artifact = buildFrayArtifact(source, root);
+    const artifact = buildFrizzArtifact(source, root);
     const bundled = join(artifact.runtimeDir, "cc-worker");
     assert.equal(existsSync(join(bundled, ".claude-plugin", "plugin.json")), true);
     assert.equal(existsSync(join(bundled, "skills", "worker", "SKILL.md")), true);
@@ -1024,7 +1024,7 @@ printf 'export const dispatch = true\\n' > "$6/node_modules/@fray-ui/server/src/
     assert.equal(existsSync(join(bundled, "hooks", "session-seed.mjs")), true);
     assert.equal(existsSync(join(artifact.runtimeDir, "board", "config.mjs")), true);
     assert.equal(
-      resolve(dirname(join(artifact.runtimeDir, "node_modules", "@fray-ui", "server", "src", "dispatch.js")), "../../../../cc-worker"),
+      resolve(dirname(join(artifact.runtimeDir, "node_modules", "@frizz", "server", "src", "dispatch.js")), "../../../../cc-worker"),
       bundled,
       "the deployed workerPluginDir() resolver reaches the bundled plugin"
     );
@@ -1040,17 +1040,17 @@ printf 'export const dispatch = true\\n' > "$6/node_modules/@fray-ui/server/src/
     );
     const cleanHome = join(root, "clean-home")
     const project = join(root, "project")
-    mkdirSync(join(project, ".fray", "threads", "portable-session"), { recursive: true })
-    writeFileSync(join(project, ".fray", "threads", "portable-session", "scratch.md"), "# scratch\n")
+    mkdirSync(join(project, ".frizz", "threads", "portable-session"), { recursive: true })
+    writeFileSync(join(project, ".frizz", "threads", "portable-session", "scratch.md"), "# scratch\n")
     // Erase the checkout closure before invoking the copied artifact. The hook and both executable
-    // shims must resolve only runtime/{cc-worker,board}, with no global Fray config/plugin to help.
+    // shims must resolve only runtime/{cc-worker,board}, with no global Frizz config/plugin to help.
     rmSync(source, { recursive: true, force: true })
     rmSync(plugin, { recursive: true, force: true })
     rmSync(join(root, "board"), { recursive: true, force: true })
     const cleanEnv = {
       PATH: process.env.PATH ?? "",
       HOME: cleanHome,
-      FRAY_UI_THREAD: "portable-thread",
+      FRIZZ_THREAD: "portable-thread",
       CLAUDE_PROJECT_DIR: project,
       CLAUDE_CODE_SESSION_ID: "portable-session",
       CLAUDE_CODE_SUBAGENT_MODEL: "foreign-model",
@@ -1062,10 +1062,10 @@ printf 'export const dispatch = true\\n' > "$6/node_modules/@fray-ui/server/src/
       input: JSON.stringify({ session_id: "portable-session" }),
       encoding: "utf8",
     })
-    assert.deepEqual(JSON.parse(hook), { scratch: ".fray/threads/portable-session/scratch.md" })
-    assert.equal(readFileSync(join(project, ".fray", ".session-state", "portable-session"), "utf8"), "off\n")
-    assert.equal(execFileSync(process.execPath, [join(bundled, "bin", "fray")], { cwd: project, env: cleanEnv, encoding: "utf8" }), "portable-board\n")
-    assert.equal(execFileSync(process.execPath, [join(bundled, "bin", "fray-update")], { cwd: project, env: cleanEnv, encoding: "utf8" }), "portable-update\n")
+    assert.deepEqual(JSON.parse(hook), { scratch: ".frizz/threads/portable-session/scratch.md" })
+    assert.equal(readFileSync(join(project, ".frizz", ".session-state", "portable-session"), "utf8"), "off\n")
+    assert.equal(execFileSync(process.execPath, [join(bundled, "bin", "frizz")], { cwd: project, env: cleanEnv, encoding: "utf8" }), "portable-board\n")
+    assert.equal(execFileSync(process.execPath, [join(bundled, "bin", "frizz-update")], { cwd: project, env: cleanEnv, encoding: "utf8" }), "portable-update\n")
   } finally {
     process.env.PATH = oldPath;
   }

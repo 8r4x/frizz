@@ -13,7 +13,7 @@ test("queue cards show BOTH running and stale child work, and no model+effort ta
         label: "Complete GVS fix differential repro",
         startedAt: "2026-07-22T16:00:00.000Z",
         state: "running",
-        subagentType: "fray:opus-xhigh",
+        subagentType: "frizz:opus-xhigh",
       },
       {
         id: "stale-child",
@@ -31,7 +31,7 @@ test("queue cards show BOTH running and stale child work, and no model+effort ta
   // to the prompt box's own control one line above, not repeated on every child line beneath it.
   assert.doesNotMatch(html, /data-agent-profile/)
   assert.doesNotMatch(html, /opus › xhigh/)
-  assert.doesNotMatch(html, /fray:opus-xhigh/)
+  assert.doesNotMatch(html, /frizz:opus-xhigh/)
   // A STALE child now renders on the card too (maintainer ruling 2026-07-24): a stale child is
   // unresolved work, not gone, and hiding it made the card claim "done underneath" while the rail
   // still showed it. It gets the flat stale dot, not the pulsing running indicator.

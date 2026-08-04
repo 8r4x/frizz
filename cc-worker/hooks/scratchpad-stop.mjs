@@ -6,7 +6,7 @@
 // cooldown prevents a forgotten reminder from creating a tight stop/block loop.
 import { readFileSync, writeFileSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { currentSessionId } from '../scripts/fray/config.mjs';
+import { currentSessionId } from '../scripts/frizz/config.mjs';
 
 const COOLDOWN_MS = 2 * 60 * 1000;
 const MAX_MESSAGE_CHARS = 8_000;
@@ -74,7 +74,7 @@ export function scratchpadStopMessage(source) {
  */
 export function evaluateScratchpadStop(input, context) {
   if (!input || typeof input !== 'object' || !context.sessionId) return {};
-  const threadDir = join(context.projectDir, '.fray', 'threads', context.sessionId);
+  const threadDir = join(context.projectDir, '.frizz', 'threads', context.sessionId);
   let message;
   try {
     message = scratchpadStopMessage(readFileSync(join(threadDir, 'scratch.md'), 'utf8'));

@@ -79,7 +79,7 @@ class FakeHttpServer extends EventEmitter {
 }
 
 function fixture(t: TestContext, controls: FixtureControls = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "fray-startup-transaction-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-startup-transaction-"))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const project: Project = {
     id: randomUUID(),

@@ -1,6 +1,6 @@
 import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import type { BoardSnapshot, ThreadView } from "@fray-ui/shared"
+import type { BoardSnapshot, ThreadView } from "@frizz/shared"
 import { SectionHeader, ThreadRow } from "./components/Sidebar.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
@@ -67,7 +67,7 @@ const snoozeThread = {
   snoozedUntil: snoozeAt,
 } as unknown as ThreadView
 
-// Row C — a worker whose turn was cut off by the subscription SESSION limit; fray will auto-resume it
+// Row C — a worker whose turn was cut off by the subscription SESSION limit; frizz will auto-resume it
 // when the window resets. It keeps the held hourglass, but (unlike A and B) it carries the same
 // hover-revealed Retry as a stalled row, so an operator with capacity elsewhere can continue it now.
 const limitAt = Math.floor((Date.now() + 42 * 60_000) / 1000) // "resets in ~42 min"
@@ -102,7 +102,7 @@ const runningSnoozed = {
   snoozedUntil: snoozeAt,
 } as unknown as ThreadView
 
-// Row E — snoozed with a BUMP armed (a follow-up fray sends at the deadline), still waiting on a live
+// Row E — snoozed with a BUMP armed (a follow-up frizz sends at the deadline), still waiting on a live
 // sub-agent. Same excusal, and it is the row that used to read "BUMPS · …".
 const bumpingSnoozed = {
   ...base,

@@ -2,9 +2,9 @@
 // answer decides whether scratchpad reinforcement can reach a Codex worker at all:
 //
 //   Do Codex lifecycle hooks fire when they are delivered through the per-conversation `config`
-//   override that fray's CodexAppServerBridge already supports?
+//   override that frizz's CodexAppServerBridge already supports?
 //
-// This matters because fray drives Codex over `codex app-server`, NOT `codex exec`. Measured first:
+// This matters because frizz drives Codex over `codex app-server`, NOT `codex exec`. Measured first:
 // in codex-cli 0.144.6 `codex exec` runs NO hooks at all — not from `<repo>/.codex/hooks.json`, not
 // from `$CODEX_HOME/hooks.json`, not from `-c hooks.…` overrides, with or without
 // `bypass_hook_trust=true`, in a git repo or out of one, even though the `hooks` feature flag reports
@@ -26,7 +26,7 @@ import { createInteractionStore } from "../interaction-store.ts"
 import { CodexAppServerBridge, type CodexAppServerSpawn } from "./codex-app-server.ts"
 
 const CODEX_BIN = process.env.CODEX_BIN || "codex"
-const dir = mkdtempSync(join(tmpdir(), "fray-live-codex-hooks-"))
+const dir = mkdtempSync(join(tmpdir(), "frizz-live-codex-hooks-"))
 const marker = join(dir, "RAN.log")
 const hook = join(dir, "hook.sh")
 const REAL_HOOK = join(process.cwd(), "../cc-worker/hooks/scratchpad.mjs")
@@ -47,9 +47,9 @@ chmodSync(hook, 0o755)
 const oneHook = { hooks: [{ type: "command", command: hook }] }
 
 // A REAL scratchpad for the REAL hook, carrying a sentinel the model can only know from injection.
-mkdirSync(join(dir, ".fray", "threads", SID), { recursive: true })
+mkdirSync(join(dir, ".frizz", "threads", SID), { recursive: true })
 writeFileSync(
-  join(dir, ".fray", "threads", SID, "scratch.md"),
+  join(dir, ".frizz", "threads", SID, "scratch.md"),
   "# Scratchpad — codex probe\n\nThe agreed rollback token is MARIGOLD-SABLE-7734.\n"
 )
 const realCmd = (mode: string) => ({
@@ -114,7 +114,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
       await sleep(250)
     }
 
-    console.log("\n=== PHASE 2: the REAL scratchpad.mjs, wired exactly as fray wires it ===")
+    console.log("\n=== PHASE 2: the REAL scratchpad.mjs, wired exactly as frizz wires it ===")
     await bridge.startDisposableSession({
       threadSlug: "real-probe", sessionId: SID, cwd: dir, sandbox: "read-only", ephemeral: false,
       config: {
@@ -131,7 +131,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
       if (bridge.binding("real-probe", SID)?.currentTurnId == null) break
       await sleep(250)
     }
-    const rollout2 = readFileSync(join(dir, ".fray", "threads", SID, "scratch.md"), "utf8")
+    const rollout2 = readFileSync(join(dir, ".frizz", "threads", SID, "scratch.md"), "utf8")
     console.log("  pad still intact:", rollout2.includes("MARIGOLD-SABLE-7734"))
 
     console.log("\n=== DID ANY HOOK RUN? ===")

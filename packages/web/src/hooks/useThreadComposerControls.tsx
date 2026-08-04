@@ -10,7 +10,7 @@ import { threadProfileControlState } from "../lib/threadProfile.ts"
 // One control strip for every place a registered thread can be steered. This lives outside the
 // component module so exporting the hook does not invalidate Vite Fast Refresh for ThreadActionBar.
 //
-// The per-thread permission/sandbox picker was REMOVED from this strip (2026-07-23). Fray workers run
+// The per-thread permission/sandbox picker was REMOVED from this strip (2026-07-23). Frizz workers run
 // non-interactively (`-a never` codex / auto claude), so no restrictive mode has an interactive-approval
 // story to satisfy — a narrowed sandbox just wedges the thread on a prompt nobody is watching, and a
 // codex `workspace-write` the operator never chose kept leaking in from terminal `codex resume`
@@ -31,7 +31,7 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
   })
   const localBusy = profile.isPending
 
-  // Legacy/rowless and foreign transcripts have no Fray-owned runtime profile to mutate. Keep their
+  // Legacy/rowless and foreign transcripts have no Frizz-owned runtime profile to mutate. Keep their
   // existing composer behavior, but never render a misleading disabled control.
   if (!thread || thread.foreign || thread.kind !== "session") return { busy: localBusy, footer: null, status: null }
 

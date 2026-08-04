@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto"
 import pty from "node-pty"
-import type { Backend } from "@fray-ui/shared"
+import type { Backend } from "@frizz/shared"
 
 // A restricted, short-lived provider ACCOUNT utility — the terminal behind the sign-in modal's
 // primary "Sign in" action. This is NOT the agent-thread terminal: it never resumes or mutates a
@@ -8,7 +8,7 @@ import type { Backend } from "@fray-ui/shared"
 // the provider's own login argv (`claude auth login`) and nothing else, spawned WITHOUT an
 // intervening shell.
 //
-// Runs on node-pty DIRECTLY. It used to run inside a tmux pane, which was the last piece of fray that
+// Runs on node-pty DIRECTLY. It used to run inside a tmux pane, which was the last piece of frizz that
 // genuinely needed tmux — every agent transport had already moved to the broker/app-server (pipes and
 // JSON-RPC, no PTY at all), so a whole terminal multiplexer was being required at launch for one
 // sign-in flow. node-pty was already a direct dependency (the /term transport uses it) and works on
@@ -59,7 +59,7 @@ export interface LoginAttachment {
 
 export interface LoginUtility {
   // Starts (or returns the existing) login attempt for a provider. At most ONE live attempt per
-  // provider per fray server — a second Sign in click attaches to the same terminal rather than
+  // provider per frizz server — a second Sign in click attaches to the same terminal rather than
   // racing two OAuth flows against one credential store.
   start(backend: Backend): { attemptId: string }
   /** Non-null iff this slug-shaped id addresses a live attempt (the /term transport's gate). */

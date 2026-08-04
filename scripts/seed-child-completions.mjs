@@ -6,7 +6,7 @@
 //
 // Follows the adhoc-cdp recipe: a session row + a live dummy tmux pane + a JSONL the tailer reads.
 //
-// Usage: node scripts/seed-child-completions.mjs --home=/abs/temp-home --socket=fray-adhoc-NNNN-PID
+// Usage: node scripts/seed-child-completions.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID
 import { execFileSync } from "node:child_process"
 import { globSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -20,14 +20,14 @@ if (!home || !socket) {
   process.exit(1)
 }
 
-const db = globSync(join(home, ".fray/projects/*/ui.db"))[0]
-if (!db) throw new Error(`no ui.db under ${home}/.fray/projects`)
+const db = globSync(join(home, ".frizz/projects/*/ui.db"))[0]
+if (!db) throw new Error(`no ui.db under ${home}/.frizz/projects`)
 const jsonlDir = join(home, ".claude", "projects", cwd.replace(/[/.]/g, "-"))
 mkdirSync(jsonlDir, { recursive: true })
 
 const SLUG = "child-completions"
 const SESSION = "c41ld-c0mp-4let-8000-000000000001"
-const TMUX = `fray-${SLUG}`
+const TMUX = `frizz-${SLUG}`
 const AGENT_ID = "toolu_audit"
 const SHELL_ID = "toolu_vite"
 // A fixed timeline so the elapsed readings are stable across runs; ending "now" so the thread reads live.
@@ -58,7 +58,7 @@ const records = [
   // The sub-agent dispatch, plus the launch ACK that tells the tailer this child is detached.
   assistant("msg_dispatch", at(2), [{
     type: "tool_use", name: "Agent", id: AGENT_ID,
-    input: { description: "Audit the pricing parser for edge cases", prompt: "Audit the pricing parser for edge cases.\nReport every tier boundary that rounds the wrong way.", run_in_background: true, subagent_type: "fray:opus-high" },
+    input: { description: "Audit the pricing parser for edge cases", prompt: "Audit the pricing parser for edge cases.\nReport every tier boundary that rounds the wrong way.", run_in_background: true, subagent_type: "frizz:opus-high" },
   }]),
   toolResult(AGENT_ID, `Async agent launched successfully with ID: ${AGENT_ID}`, at(2)),
   // A run of ORDINARY tool cards — the "big sea of tool call blocks" the divider has to stand out from.
@@ -67,7 +67,7 @@ const records = [
     { type: "tool_use", name: "Grep", id: "t2", input: { pattern: "roundHalfEven", path: `${cwd}/packages` } },
     { type: "tool_use", name: "Bash", id: "t3", input: { command: "pnpm test pricing", description: "Run the pricing suite" } },
   ]),
-  toolResult("t1", "# fray", at(3)),
+  toolResult("t1", "# frizz", at(3)),
   toolResult("t2", "no matches", at(3)),
   toolResult("t3", "3 passed", at(4)),
   // A BACKGROUND shell + its ack, so its own wake divider lands later in the same timeline.
@@ -103,10 +103,10 @@ console.log(`seeded ${SLUG} → ${SESSION} (one sub-agent completion + one backg
 // notification, so the tailer keeps them in the live set and the board pushes them as rows.
 const LIVE_SLUG = "live-children"
 const LIVE_SESSION = "11ve-c41d-4ren-8000-000000000002"
-const LIVE_TMUX = `fray-${LIVE_SLUG}`
+const LIVE_TMUX = `frizz-${LIVE_SLUG}`
 const LIVE = [
-  { id: "toolu_live1", label: "Sweep every call site of the renamed board projection helper", type: "fray:opus-xhigh" },
-  { id: "toolu_live2", label: "Harvest the fixture inventory", type: "fray:haiku" },
+  { id: "toolu_live1", label: "Sweep every call site of the renamed board projection helper", type: "frizz:opus-xhigh" },
+  { id: "toolu_live2", label: "Harvest the fixture inventory", type: "frizz:haiku" },
   { id: "toolu_live3", label: "Explore the resume path", type: "general-purpose" },
 ]
 const liveRecords = [

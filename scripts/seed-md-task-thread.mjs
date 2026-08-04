@@ -61,7 +61,7 @@ for (const [i, f] of ["src/resolver.ts", "src/jail.ts"].entries()) {
   toolCall(`t${i}`, "Read", { file_path: `${cwd}/${f}` })
   toolResult(`t${i}`, "…file contents…")
 }
-assistant("Fray correction is complete and the sandbox policy is rebuilding.")
+assistant("Frizz correction is complete and the sandbox policy is rebuilding.")
 user("Show me the list.")
 assistant(TASKS)
 // A user message whose LAST rendered thing is an image — the extra space belongs under the screenshot.
@@ -78,10 +78,10 @@ assistant("Got it — that matches what I measured.")
 
 writeFileSync(join(logDir, `${SESSION_ID}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
 
-const socket = process.env.FRAY_TMUX_SOCKET ?? `fray-adhoc-${port}`
-const projects = join(home, ".fray", "projects")
+const socket = process.env.FRIZZ_TMUX_SOCKET ?? `frizz-adhoc-${port}`
+const projects = join(home, ".frizz", "projects")
 const db = join(projects, readdirSync(projects)[0], "ui.db")
-const tmuxName = `fray-${SLUG}`
+const tmuxName = `frizz-${SLUG}`
 try { execFileSync("tmux", ["-L", socket, "kill-session", "-t", tmuxName], { stdio: "ignore" }) } catch {}
 try { execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", tmuxName, "sleep 7200"]) } catch {}
 execFileSync("sqlite3", [db, `DELETE FROM session WHERE slug = '${SLUG}';`])

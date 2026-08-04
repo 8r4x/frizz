@@ -1,13 +1,13 @@
 import { execFile, spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 
-export const PRODUCTION_REEXEC_FLAG = "--_fray-production-reexec";
+export const PRODUCTION_REEXEC_FLAG = "--_frizz-production-reexec";
 
 export interface RegistryReleaseAdapter {
   latestVersion(packageName: string): Promise<string>;
   spawnNpmExec(request: {
     packageSpec: string;
-    /** Bin to invoke from the resolved package. Defaults to the package name (frayui). */
+    /** Bin to invoke from the resolved package. Defaults to the package name (frizz). */
     bin: string;
     args: string[];
     cwd: string;
@@ -54,7 +54,7 @@ export async function planRegistryUpdate(
   const latestVersion = (await adapter.latestVersion(packageName)).trim();
   const comparison = compareReleaseVersions(currentVersion, latestVersion);
   if (comparison === null)
-    throw new Error(`cannot safely compare installed Fray version ${currentVersion} with registry version ${latestVersion}`);
+    throw new Error(`cannot safely compare installed Frizz version ${currentVersion} with registry version ${latestVersion}`);
   if (comparison >= 0) return null;
   return { packageName, currentVersion, latestVersion, packageSpec: `${packageName}@${latestVersion}` };
 }
@@ -71,15 +71,15 @@ export function handoffToRegistrySuccessor(
 ): void {
   const child = adapter.spawnNpmExec({
     packageSpec: plan.packageSpec,
-    // The published bin name tracks the package name (frayui). Never hardcode a stale bin here or
+    // The published bin name tracks the package name (frizz). Never hardcode a stale bin here or
     // a renamed release would resolve the new package but invoke a bin that no longer exists.
     bin: plan.packageName,
     args: [PRODUCTION_REEXEC_FLAG, "--port", String(request.port), request.projectDir],
     cwd: request.cwd,
     env: {
       ...request.env,
-      FRAY_REGISTRY_PACKAGE: plan.packageName,
-      FRAY_REGISTRY_VERSION: plan.latestVersion,
+      FRIZZ_REGISTRY_PACKAGE: plan.packageName,
+      FRIZZ_REGISTRY_VERSION: plan.latestVersion,
     },
   });
   child.once("error", () => {});

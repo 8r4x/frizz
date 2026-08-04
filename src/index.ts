@@ -12,15 +12,15 @@ import {
   runLogPath,
   setAmbientLogger,
   type Logger,
-} from "@fray-ui/server/logging";
+} from "@frizz/server/logging";
 import {
-  buildFrayArtifact,
+  buildFrizzArtifact,
   assertArtifactHostCompatible,
   defaultArtifactRoot,
-  ensureStableFrayArtifact,
+  ensureStableFrizzArtifact,
   promoteCurrentSourceArtifact,
-  promoteFrayArtifact,
-  readFrayArtifact,
+  promoteFrizzArtifact,
+  readFrizzArtifact,
   readStableArtifact,
 } from "./artifacts.ts";
 import { assertLaunchPrerequisites, assertRequiredExecutables } from "./preflight.ts";
@@ -36,10 +36,10 @@ import {
   networkUrls,
   parseCliArgs,
   persistLauncher,
-  probeFray,
+  probeFrizz,
   prepareBeforeGlobalLaunchLock,
   readPreferredPort,
-  requestFrayStop,
+  requestFrizzStop,
   resolveBindSelection,
   resolveWorkspace,
   sourceLabel,
@@ -61,10 +61,10 @@ import {
   tryAcquireProjectLaunchOwner,
   verifyProjectLaunchDelegate,
   type ProjectLaunchLease,
-} from "@fray-ui/server/project-launch";
+} from "@frizz/server/project-launch";
 
 function fail(error: unknown): never {
-  console.error(`fray: ${error instanceof Error ? error.message : error}`);
+  console.error(`frizz: ${error instanceof Error ? error.message : error}`);
   process.exit(1);
 }
 
@@ -76,8 +76,8 @@ function printFarewell(code: number): void {
   const suffix = logger.file ? `\n  log: ${tildePath(logger.file, homedir())}` : "";
   process.stdout.write(
     code === 0
-      ? `\n  Fray stopped. Agent sessions in tmux keep running.${suffix}\n\n`
-      : `\n  Fray stopped with errors (exit ${code}).${suffix}\n\n`
+      ? `\n  Frizz stopped. Agent sessions in tmux keep running.${suffix}\n\n`
+      : `\n  Frizz stopped with errors (exit ${code}).${suffix}\n\n`
   );
 }
 
@@ -94,7 +94,7 @@ function sourceVersion(): string | undefined {
 }
 
 const argv = process.argv.slice(2);
-const sourceCommand = process.env.FRAY_SOURCE_COMMAND ?? "fray-dev";
+const sourceCommand = process.env.FRIZZ_SOURCE_COMMAND ?? "frizz-dev";
 const command = ["build", "promote", "restart"].includes(argv[0] ?? "")
   ? argv[0]
   : undefined;
@@ -114,10 +114,10 @@ if (argv.includes("--prod"))
   fail("--prod is not available from the source-backed development launcher");
 
 const internalLaunch =
-  process.env.FRAY_DIRECT_SUPERVISOR === "1" ||
-  process.env.FRAY_DAEMON_CHILD === "1" ||
-  process.env.FRAY_DEV_REEXEC === "1" ||
-  process.env.FRAY_DEV_CHILD === "1";
+  process.env.FRIZZ_DIRECT_SUPERVISOR === "1" ||
+  process.env.FRIZZ_DAEMON_CHILD === "1" ||
+  process.env.FRIZZ_DEV_REEXEC === "1" ||
+  process.env.FRIZZ_DEV_CHILD === "1";
 const interactiveLaunch =
   !internalLaunch &&
   !options.stop &&
@@ -141,16 +141,16 @@ let workspace: Workspace;
 try {
   const pinned = projectLaunchTargetFromEnvironment(process.env);
   const internal =
-    process.env.FRAY_DEV_CHILD === "1" ||
-    process.env.FRAY_DIRECT_SUPERVISOR === "1" ||
-    process.env.FRAY_DAEMON_CHILD === "1" ||
-    process.env.FRAY_DEV_REEXEC === "1";
+    process.env.FRIZZ_DEV_CHILD === "1" ||
+    process.env.FRIZZ_DIRECT_SUPERVISOR === "1" ||
+    process.env.FRIZZ_DAEMON_CHILD === "1" ||
+    process.env.FRIZZ_DEV_REEXEC === "1";
   if (internal && !pinned)
     throw new Error("internal launch is missing its pinned project identity");
   // Resolving a workspace already shells out to `git` and to `tmux` and opens this project's
   // database, so check first and name what is wrong. The Node floor is part of it for a real launch:
   // on an unsupported release SQLite SEGFAULTS rather than erroring, and a segfault mid-boot reads as
-  // "Fray is broken" instead of "upgrade Node". `--stop`/`--status` and the repair commands keep the
+  // "Frizz is broken" instead of "upgrade Node". `--stop`/`--status` and the repair commands keep the
   // executables-only check, since they only read a status file and signal a process.
   if (!internal) {
     if (interactiveLaunch) assertLaunchPrerequisites();
@@ -182,13 +182,13 @@ process.chdir(workspace.root);
 // per-project artifact a reader debugging this board already looks at. A forked child inherits the
 // parent's path through the environment instead of opening its own.
 const logger: Logger = setAmbientLogger(
-  process.env.FRAY_LOG_FILE
-    ? createLogger({ file: process.env.FRAY_LOG_FILE, owner: false })
+  process.env.FRIZZ_LOG_FILE
+    ? createLogger({ file: process.env.FRIZZ_LOG_FILE, owner: false })
     : createLogger({ file: runLogPath(workspace.stateDir) })
 );
-attachTerminalMirror(logger, options.debug || process.env.FRAY_DEBUG === "1");
+attachTerminalMirror(logger, options.debug || process.env.FRIZZ_DEBUG === "1");
 // Only the OPERATOR's invocation announces itself. The control-plane child re-enters this same entry
-// point with FRAY_DEV_CHILD=1 before reaching its own branch below, so without this guard every run
+// point with FRIZZ_DEV_CHILD=1 before reaching its own branch below, so without this guard every run
 // logged the launcher banner twice — once for the real launch and once for the child.
 if (!internalLaunch) {
   logger.info("launcher", `${sourceCommand} starting in ${options.dev ? "source" : "artifact"} mode`);
@@ -207,12 +207,12 @@ const bind = (() => {
 
 // The supervisor validates every generation by forking this same source entry with a private marker.
 // That disposable child boots only the HTTP/Vite control plane; it must never recursively supervise.
-if (process.env.FRAY_DEV_CHILD === "1") {
+if (process.env.FRIZZ_DEV_CHILD === "1") {
   const token = projectLaunchOwnerTokenFromEnvironment(process.env);
   if (!token) throw new Error("dev child is missing project launch ownership");
   verifyProjectLaunchDelegate(workspaceLaunchTarget(workspace), token);
   const { runDevControlPlaneChild } = await import(
-    "@fray-ui/server/dev-supervisor"
+    "@frizz/server/dev-supervisor"
   );
   await runDevControlPlaneChild();
   await new Promise<never>(() => {});
@@ -234,30 +234,30 @@ async function runSupervisor(
   const supervisorEnv = projectLaunchEnvironment(
     {
       ...process.env,
-      FRAY_DIRECT_SUPERVISOR: "1",
+      FRIZZ_DIRECT_SUPERVISOR: "1",
       // Every descendant appends to THIS run's log. That is what lets the control-plane child stay
       // silent on the terminal without its records being lost.
       ...logEnvironment(logger, options.debug ? "debug" : "info"),
-      ...(options.debug ? { FRAY_DEBUG: "1" } : {}),
+      ...(options.debug ? { FRIZZ_DEBUG: "1" } : {}),
     },
     target,
     launchOwner.token
   );
   const selectedArtifact = options.dev
     ? undefined
-    : pinnedArtifactDigest ?? process.env.FRAY_STABLE_ARTIFACT
-    ? readFrayArtifact(
-        pinnedArtifactDigest ?? process.env.FRAY_STABLE_ARTIFACT!,
+    : pinnedArtifactDigest ?? process.env.FRIZZ_STABLE_ARTIFACT
+    ? readFrizzArtifact(
+        pinnedArtifactDigest ?? process.env.FRIZZ_STABLE_ARTIFACT!,
         defaultArtifactRoot()
       )
-    : ensureStableFrayArtifact(
+    : ensureStableFrizzArtifact(
         workspace.stateDir,
         sourceWorkspaceDir(),
         defaultArtifactRoot()
       );
   if (selectedArtifact) assertArtifactHostCompatible(selectedArtifact);
   const { createSupervisorShutdownHandler, startDevSupervisor } = await import(
-    "@fray-ui/server/dev-supervisor"
+    "@frizz/server/dev-supervisor"
   );
   let supervisor: Awaited<ReturnType<typeof startDevSupervisor>>;
   const stableOptions = selectedArtifact
@@ -274,17 +274,17 @@ async function runSupervisor(
           firstChildLaunch = false;
           if (!artifact)
             throw new Error(
-              "the currently promoted Fray artifact is missing or failed verification"
+              "the currently promoted Frizz artifact is missing or failed verification"
             );
           assertArtifactHostCompatible(artifact);
           return {
             entry: join(artifact.runtimeDir, "src", "index.js"),
             environment: {
-              FRAY_STABLE_WEB_DIST: artifact.webDir,
-              FRAY_STABLE_ARTIFACT: artifact.digest,
-              FRAY_SCRIPTS_DIR: join(artifact.runtimeDir, "board"),
+              FRIZZ_STABLE_WEB_DIST: artifact.webDir,
+              FRIZZ_STABLE_ARTIFACT: artifact.digest,
+              FRIZZ_SCRIPTS_DIR: join(artifact.runtimeDir, "board"),
               // The bundled runtime resolves its worker plugin from the verified artifact closure.
-              FRAY_WORKER_PLUGIN_DIR: join(artifact.runtimeDir, "cc-worker"),
+              FRIZZ_WORKER_PLUGIN_DIR: join(artifact.runtimeDir, "cc-worker"),
             },
           };
         };
@@ -312,7 +312,7 @@ async function runSupervisor(
           },
           rollbackUpdate: () => {
             if (!updateRollbackArtifact) return;
-            promoteFrayArtifact(
+            promoteFrizzArtifact(
               workspace.stateDir,
               updateRollbackArtifact.digest,
               defaultArtifactRoot()
@@ -333,21 +333,21 @@ async function runSupervisor(
                   );
                   if (!artifact)
                     throw new Error(
-                      "the promoted Fray artifact is missing or failed verification"
+                      "the promoted Frizz artifact is missing or failed verification"
                     );
                   assertArtifactHostCompatible(artifact);
                   const env = projectLaunchEnvironment(
                     {
                       ...supervisorEnv,
-                      FRAY_DEV_REEXEC: "1",
-                      FRAY_SOURCE_DIR: sourceLabel(),
-                      FRAY_STABLE_ARTIFACT: artifact.digest,
+                      FRIZZ_DEV_REEXEC: "1",
+                      FRIZZ_SOURCE_DIR: sourceLabel(),
+                      FRIZZ_STABLE_ARTIFACT: artifact.digest,
                     },
                     target,
                     launchOwner.token
                   );
-                  delete env.FRAY_DEV_CHILD;
-                  delete env.FRAY_DEV_PORT;
+                  delete env.FRIZZ_DEV_CHILD;
+                  delete env.FRIZZ_DEV_PORT;
                   process.execve!(
                     process.execPath,
                     [
@@ -380,8 +380,8 @@ async function runSupervisor(
       launchTarget: target,
       launchOwnerToken: launchOwner.token,
       ...stableOptions,
-      // This file IS fray-dev: it only ever runs from a source checkout, and the published bin is
-      // src/production.ts (scripts/build-package.mjs maps "frayui.js" to it). So reaching here means
+      // This file IS frizz-dev: it only ever runs from a source checkout, and the published bin is
+      // src/production.ts (scripts/build-package.mjs maps "frizz.js" to it). So reaching here means
       // a development build, on BOTH routes — the artifact one as much as `--dev`. The web client
       // cannot work that out for itself, because the artifact route serves a Vite PRODUCTION bundle
       // where `import.meta.env.DEV` is statically false. Stated after the spread so no launch-mode
@@ -406,7 +406,7 @@ async function runSupervisor(
       process.exit(code);
     },
     error: (line) =>
-      logger.error("supervisor", line.startsWith("[fray-ui] ") ? line.slice(10) : line),
+      logger.error("supervisor", line.startsWith("[frizz] ") ? line.slice(10) : line),
   });
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
@@ -419,9 +419,9 @@ async function runSupervisor(
 // A legacy detached supervisor or durable re-exec re-enters here after launcher source changes. It must rebuild
 // its watcher in-place without competing with its own global lock or trying to open another window.
 if (
-  process.env.FRAY_DIRECT_SUPERVISOR === "1" ||
-  process.env.FRAY_DAEMON_CHILD === "1" ||
-  process.env.FRAY_DEV_REEXEC === "1"
+  process.env.FRIZZ_DIRECT_SUPERVISOR === "1" ||
+  process.env.FRIZZ_DAEMON_CHILD === "1" ||
+  process.env.FRIZZ_DEV_REEXEC === "1"
 ) {
   if (!options.port) fail("internal supervisor launch is missing --port");
   await runSupervisor(
@@ -432,13 +432,13 @@ if (
 
 if (command === "build") {
   try {
-    const artifact = buildFrayArtifact(
+    const artifact = buildFrizzArtifact(
       sourceWorkspaceDir(),
       defaultArtifactRoot(),
       { onProgress: (message) => logger.info("artifact", message) }
     );
     logger.info("artifact", `built ${artifact.digest}`);
-    console.log(`built Fray artifact ${artifact.digest}`);
+    console.log(`built Frizz artifact ${artifact.digest}`);
     console.log(`web: ${artifact.webDir}`);
     process.exit(0);
   } catch (error) {
@@ -453,14 +453,14 @@ if (command === "build") {
 if (command === "promote") {
   try {
     const digest = argv[1];
-    if (!digest) throw new Error("usage: fray-dev promote <artifact-digest>");
-    const pointer = promoteFrayArtifact(
+    if (!digest) throw new Error("usage: frizz-dev promote <artifact-digest>");
+    const pointer = promoteFrizzArtifact(
       workspace.stateDir,
       digest,
       defaultArtifactRoot()
     );
     console.log(
-      `promoted Fray artifact ${pointer.current}${
+      `promoted Frizz artifact ${pointer.current}${
         pointer.previous ? ` (rollback ${pointer.previous})` : ""
       }`
     );
@@ -491,7 +491,7 @@ async function existingHealth() {
   const preferred = readPreferredPort(workspace.stateDir);
   if (preferred) ports.add(preferred);
   for (const port of ports) {
-    const health = await probeFray(port, expected);
+    const health = await probeFrizz(port, expected);
     if (health) return { port, health, owner, launchOwner: authoritative };
   }
   return { port: undefined, health: null, owner, launchOwner: authoritative };
@@ -514,7 +514,7 @@ async function claimProjectLaunch(): Promise<
         ? `${lastOwner.role} pid ${lastOwner.pid} owns startup but did not become ready`
         : "another launcher is still publishing project ownership";
       throw new Error(
-        `${detail}; retry, inspect fray-dev --status, or stop the exact owner with fray-dev --stop`
+        `${detail}; retry, inspect frizz-dev --status, or stop the exact owner with frizz-dev --stop`
       );
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -531,7 +531,7 @@ async function claimProjectLaunch(): Promise<
 async function openOrPrint(port: number, reused: boolean): Promise<void> {
   const url = `http://127.0.0.1:${port}`;
   const home = homedir();
-  logger.info("launcher", `${reused ? "reusing" : "started"} Fray at ${url} for ${workspace.root}`);
+  logger.info("launcher", `${reused ? "reusing" : "started"} Frizz at ${url} for ${workspace.root}`);
   if (reused) {
     // Nothing was built and nothing was started. Settle those steps for what they are, or a reuse
     // paints as a cold boot whose artifact and server rows simply never happened.
@@ -544,7 +544,7 @@ async function openOrPrint(port: number, reused: boolean): Promise<void> {
     try {
       if (options.appMode) {
         await launchApp(url, { dataPath: join(workspace.stateDir, "browser-profile") });
-        browser = reused ? "focused the Fray app window" : "opened the Fray app window";
+        browser = reused ? "focused the Frizz app window" : "opened the Frizz app window";
       } else {
         await launchBrowserTab(url);
         browser = "opened in your default browser";
@@ -568,7 +568,7 @@ async function openOrPrint(port: number, reused: boolean): Promise<void> {
   ];
   if (!readout) {
     // `--status`, internal launches and pipes keep the plain, parseable records.
-    console.log(`${reused ? "reusing" : "started"} Fray for ${workspace.root}`);
+    console.log(`${reused ? "reusing" : "started"} Frizz for ${workspace.root}`);
     console.log(`source: ${sourceLabel()}`);
     console.log(url);
     for (const address of network) console.log(address);
@@ -603,14 +603,14 @@ async function stopWorkspace(): Promise<void> {
   const target = launchTarget;
   const owner = readProjectLaunchOwner(workspace.stateDir);
   if (!owner) {
-    console.log(`Fray is not running for ${workspace.root}`);
+    console.log(`Frizz is not running for ${workspace.root}`);
     return;
   }
   const status = liveWorkspaceOwner(workspace.stateDir, target);
   const healthy = status ? null : await existingHealth();
   const controlPort = status?.port ?? healthy?.port;
   const controlled = controlPort
-    ? await requestFrayStop(
+    ? await requestFrizzStop(
         controlPort,
         expectedOwnerHealth(target, owner),
         owner.token
@@ -621,14 +621,14 @@ async function stopWorkspace(): Promise<void> {
   // below while registered children self-exit on supervisor IPC disconnect.
   if (!controlled && !processGenerationIsStale(owner)) {
     throw new Error(
-      "Fray refused to stop a live owner without authenticated token-bound control; the owner was left untouched"
+      "Frizz refused to stop a live owner without authenticated token-bound control; the owner was left untouched"
     );
   }
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
     if (!readProjectLaunchOwner(workspace.stateDir)) {
       console.log(
-        `stopped Fray UI for ${workspace.root}; tmux agent sessions were preserved`
+        `stopped Frizz for ${workspace.root}; tmux agent sessions were preserved`
       );
       return;
     }
@@ -640,7 +640,7 @@ async function stopWorkspace(): Promise<void> {
     if (reaped.kind === "acquired") {
       reaped.lease.release();
       console.log(
-        `stopped Fray UI for ${workspace.root}; tmux agent sessions were preserved`
+        `stopped Frizz for ${workspace.root}; tmux agent sessions were preserved`
       );
       return;
     }
@@ -653,7 +653,7 @@ async function stopWorkspace(): Promise<void> {
   const lateOwner = readProjectLaunchOwner(workspace.stateDir);
   if (!lateOwner) {
     console.log(
-      `stopped Fray UI for ${workspace.root}; tmux agent sessions were preserved`
+      `stopped Frizz for ${workspace.root}; tmux agent sessions were preserved`
     );
     return;
   }
@@ -664,7 +664,7 @@ async function stopWorkspace(): Promise<void> {
     if (reaped.kind === "acquired") {
       reaped.lease.release();
       console.log(
-        `stopped Fray UI for ${workspace.root}; tmux agent sessions were preserved`
+        `stopped Frizz for ${workspace.root}; tmux agent sessions were preserved`
       );
       return;
     }
@@ -680,9 +680,9 @@ try {
 
   let before = await existingHealth();
   if (command === "restart") {
-    if (!before.port) throw new Error("Fray is not running for this workspace");
+    if (!before.port) throw new Error("Frizz is not running for this workspace");
     const response = await fetch(
-      `http://127.0.0.1:${before.port}/_fray/control/restart`,
+      `http://127.0.0.1:${before.port}/_frizz/control/restart`,
       {
         method: "POST",
         headers: { origin: `http://127.0.0.1:${before.port}` },
@@ -694,10 +694,10 @@ try {
     };
     if (!response.ok || result.state !== "ready")
       throw new Error(
-        result.message ?? "Fray did not become ready after restart"
+        result.message ?? "Frizz did not become ready after restart"
       );
     console.log(
-      `restarted Fray artifact ${
+      `restarted Frizz artifact ${
         readStableArtifact(workspace.stateDir)?.digest ?? "unknown"
       }`
     );
@@ -768,7 +768,7 @@ try {
         owner.state ?? "unknown"
       }: ${
         owner.message ?? "no detail"
-      }); fix the source or run fray-dev --stop`
+      }); fix the source or run frizz-dev --stop`
     );
   }
 
@@ -781,7 +781,7 @@ try {
   const target = workspaceLaunchTarget(workspace);
   // This preparation is local to the project. Keep it outside the machine-global port/start lock
   // so independent repositories can perform cold source/artifact work concurrently.
-  let pinnedArtifact: ReturnType<typeof ensureStableFrayArtifact> | undefined;
+  let pinnedArtifact: ReturnType<typeof ensureStableFrizzArtifact> | undefined;
   let release: (() => void) | undefined;
   let portReservation: (() => void) | undefined;
   try {
@@ -795,7 +795,7 @@ try {
           ? undefined
           : (() => {
               readout?.begin("artifact", "checking for a verified build");
-              const artifact = ensureStableFrayArtifact(
+              const artifact = ensureStableFrizzArtifact(
                 workspace.stateDir,
                 sourceWorkspaceDir(),
                 defaultArtifactRoot(),
@@ -840,7 +840,7 @@ try {
     }
     if (after.owner)
       throw new Error(
-        `supervisor pid ${after.owner.pid} became unhealthy during launch; run fray-dev --status`
+        `supervisor pid ${after.owner.pid} became unhealthy during launch; run frizz-dev --status`
       );
 
     const allocation = await allocatePort(

@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { ThreadSlug } from "@fray-ui/shared"
+import { ThreadSlug } from "@frizz/shared"
 import { createLoginUtility } from "./login-utility.ts"
 
 // A fake node-pty. Enough surface for the utility: data/exit subscriptions, write, resize, kill.

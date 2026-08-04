@@ -260,7 +260,7 @@ function SubAgentSteerFooter({
     rpc.subAgentStop({ slug, id: subId })
       .then(({ descendantsStopped, note: subtree }) => {
         // The subtree is the part the drawer cannot show: this sheet renders ONE child's transcript,
-        // so its own fan-out ending is only ever visible here. A descendant fray could not stop is
+        // so its own fan-out ending is only ever visible here. A descendant frizz could not stop is
         // live work and gets the longer toast.
         if (subtree) showToast(`Sub-agent stopped. ${subtree}`, { duration: 7000 })
         else showToast(descendantsStopped > 0 ? `Sub-agent and ${descendantsStopped} descendant${descendantsStopped === 1 ? "" : "s"} stopped` : "Sub-agent stopped")

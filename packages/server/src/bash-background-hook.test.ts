@@ -12,7 +12,7 @@ function decision(command: string, worker = true, extra: Record<string, unknown>
   const result = spawnSync(process.execPath, [hook], {
     input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command, ...extra } }),
     encoding: "utf8",
-    env: { ...process.env, FRAY_UI_THREAD: worker ? "thread-under-test" : "" },
+    env: { ...process.env, FRIZZ_THREAD: worker ? "thread-under-test" : "" },
   })
   assert.equal(result.status, 0, result.stderr)
   return JSON.parse(result.stdout || "{}")
@@ -89,20 +89,20 @@ test("Bash background hook preserves self-contained concurrency and non-job ampe
   ]) assert.deepEqual(output(command), {}, command)
 })
 
-test("Bash background hook is inert outside a Fray worker", () => {
+test("Bash background hook is inert outside a Frizz worker", () => {
   assert.deepEqual(decision("cargo test &", false), {})
 })
 
 test("Bash denial tells the worker the tracked replacement", () => {
   const reason = decision("cargo test & disown").hookSpecificOutput?.permissionDecisionReason ?? ""
-  assert.match(reason, /^Fray blocked an untracked shell background job/)
+  assert.match(reason, /^Frizz blocked an untracked shell background job/)
   assert.match(reason, /run_in_background:true/)
   assert.match(reason, /Claude task ID/)
   assert.match(reason, /finish with `wait`/)
 })
 
 test("Codex Bash denial points at the managed yield_control lifecycle", () => {
-  const result = spawnSync(process.execPath, [hook, "--fray-ui-thread"], {
+  const result = spawnSync(process.execPath, [hook, "--frizz-thread"], {
     input: JSON.stringify({
       hook_event_name: "PreToolUse",
       tool_name: "Bash",
@@ -110,7 +110,7 @@ test("Codex Bash denial points at the managed yield_control lifecycle", () => {
       model: "gpt-5.6-sol",
     }),
     encoding: "utf8",
-    env: { ...process.env, FRAY_UI_THREAD: "" },
+    env: { ...process.env, FRIZZ_THREAD: "" },
   })
   assert.equal(result.status, 0, result.stderr)
   const reason = JSON.parse(result.stdout).hookSpecificOutput?.permissionDecisionReason ?? ""
@@ -119,7 +119,7 @@ test("Codex Bash denial points at the managed yield_control lifecycle", () => {
   assert.doesNotMatch(reason, /run_in_background/)
 })
 
-test("bundling the detector into Fray cannot turn the server entry into the hook executable", () => {
+test("bundling the detector into Frizz cannot turn the server entry into the hook executable", () => {
   const serverEntry = "/artifact/runtime/src/index.js"
   assert.equal(isDirectHookExecution(serverEntry, "file:///artifact/runtime/src/index.js"), false)
   assert.equal(isDirectHookExecution(hook, pathToFileURL(hook).href), true)

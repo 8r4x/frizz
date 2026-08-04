@@ -5,13 +5,13 @@ import { createServer } from "node:http"
 import { mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { resolveFrayMcp } from "./dispatch.ts"
-import { FRAY_MCP } from "./backend/types.ts"
+import { resolveFrizzMcp } from "./dispatch.ts"
+import { FRIZZ_MCP } from "./backend/types.ts"
 
-// Drives the REAL cc-worker/bin/fray-mcp.mjs over its real stdio JSON-RPC transport (no mocks, no
+// Drives the REAL cc-worker/bin/frizz-mcp.mjs over its real stdio JSON-RPC transport (no mocks, no
 // re-implementation of the protocol) and — for the tool call — against a REAL http server standing in
-// for fray's /rpc/dispatch. This is what proves the unified server actually answers as `fray` with a
-// `spawn_thread` tool, i.e. that a worker sees `mcp__fray__spawn_thread`.
+// for frizz's /rpc/dispatch. This is what proves the unified server actually answers as `frizz` with a
+// `spawn_thread` tool, i.e. that a worker sees `mcp__frizz__spawn_thread`.
 
 interface Rpc {
   send(msg: unknown): void
@@ -20,8 +20,8 @@ interface Rpc {
 }
 
 function startServer(env: Record<string, string>): Rpc {
-  const descriptor = resolveFrayMcp("/unused")
-  assert.ok(descriptor, "the packaged fray MCP script must be resolvable")
+  const descriptor = resolveFrizzMcp("/unused")
+  assert.ok(descriptor, "the packaged frizz MCP script must be resolvable")
   const child = spawn(process.execPath, [descriptor.scriptPath], {
     stdio: ["pipe", "pipe", "inherit"],
     env: { ...process.env, ...env },
@@ -48,14 +48,14 @@ function startServer(env: Record<string, string>): Rpc {
   }
 }
 
-test("the fray MCP server identifies as `fray` and exposes its worker tools", async () => {
-  const rpc = startServer({ FRAY_STATE_DIR: mkdtempSync(join(tmpdir(), "fray-mcp-")) })
+test("the frizz MCP server identifies as `frizz` and exposes its worker tools", async () => {
+  const rpc = startServer({ FRIZZ_STATE_DIR: mkdtempSync(join(tmpdir(), "frizz-mcp-")) })
   try {
     rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } })
     const init = await rpc.next(1)
     // The mounted server NAME (dispatch.ts) is what forms the tool id the worker sees; serverInfo must
-    // agree with it, or the two halves of `mcp__fray__spawn_thread` drift apart.
-    assert.equal(init.result.serverInfo.name, FRAY_MCP.name)
+    // agree with it, or the two halves of `mcp__frizz__spawn_thread` drift apart.
+    assert.equal(init.result.serverInfo.name, FRIZZ_MCP.name)
 
     rpc.send({ jsonrpc: "2.0", method: "notifications/initialized" })
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
@@ -81,9 +81,9 @@ test("the fray MCP server identifies as `fray` and exposes its worker tools", as
       ["action", "at", "id", "in_seconds", "prompt"],
     )
     // An unregistered name is a protocol error, not a crash — the registry routes by name now.
-    rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "spawn_fray_thread", arguments: {} } })
+    rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "spawn_frizz_thread", arguments: {} } })
     const gone = await rpc.next(3)
-    assert.match(gone.error.message, /unknown tool: spawn_fray_thread/)
+    assert.match(gone.error.message, /unknown tool: spawn_frizz_thread/)
   } finally {
     rpc.kill()
   }
@@ -102,9 +102,9 @@ test("`spawn_thread` POSTs the real dispatch RPC and returns the thread's drawer
   })
   await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
   const port = (http.address() as { port: number }).port
-  const stateDir = mkdtempSync(join(tmpdir(), "fray-mcp-"))
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
   writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
-  const rpc = startServer({ FRAY_STATE_DIR: stateDir })
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir })
   try {
     rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
     await rpc.next(1)
@@ -148,9 +148,9 @@ test("`recurring_prompt` arms and disarms the CALLING thread, identified from it
   })
   await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
   const port = (http.address() as { port: number }).port
-  const stateDir = mkdtempSync(join(tmpdir(), "fray-mcp-"))
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
   writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
-  const rpc = startServer({ FRAY_STATE_DIR: stateDir, FRAY_THREAD_SLUG: "owning-thread" })
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "owning-thread" })
   try {
     rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
     await rpc.next(1)
@@ -241,9 +241,9 @@ test("`timer` resolves in_seconds/at into one exact instant and POSTs the callin
   })
   await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
   const port = (http.address() as { port: number }).port
-  const stateDir = mkdtempSync(join(tmpdir(), "fray-mcp-"))
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
   writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
-  const rpc = startServer({ FRAY_STATE_DIR: stateDir, FRAY_THREAD_SLUG: "owning-thread" })
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "owning-thread" })
   try {
     rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
     await rpc.next(1)
@@ -303,9 +303,9 @@ test("`timer` refuses a bad delay, a missing/doubled instant and a missing id wi
   })
   await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
   const port = (http.address() as { port: number }).port
-  const stateDir = mkdtempSync(join(tmpdir(), "fray-mcp-"))
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
   writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
-  const rpc = startServer({ FRAY_STATE_DIR: stateDir, FRAY_THREAD_SLUG: "owning-thread" })
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "owning-thread" })
   try {
     rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
     await rpc.next(1)
@@ -349,9 +349,9 @@ test("`recurring_prompt` ignores any thread the caller tries to name — the slu
   })
   await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
   const port = (http.address() as { port: number }).port
-  const stateDir = mkdtempSync(join(tmpdir(), "fray-mcp-"))
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
   writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
-  const rpc = startServer({ FRAY_STATE_DIR: stateDir, FRAY_THREAD_SLUG: "owning-thread" })
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "owning-thread" })
   try {
     rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
     await rpc.next(1)
@@ -370,10 +370,10 @@ test("`recurring_prompt` ignores any thread the caller tries to name — the slu
 // Without a slug the tool must FAIL rather than guess — arming one on the wrong thread is worse than
 // not arming one, and a silent no-op would read to the worker as success.
 test("`recurring_prompt` refuses to act when its thread identity was never stamped into its env", async () => {
-  const stateDir = mkdtempSync(join(tmpdir(), "fray-mcp-"))
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
   writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port: 1 }))
-  // FRAY_UI_THREAD is the documented fallback, so both vars have to be absent for this to hold.
-  const rpc = startServer({ FRAY_STATE_DIR: stateDir, FRAY_THREAD_SLUG: "", FRAY_UI_THREAD: "" })
+  // FRIZZ_THREAD is the documented fallback, so both vars have to be absent for this to hold.
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "", FRIZZ_THREAD: "" })
   try {
     rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
     await rpc.next(1)
@@ -403,9 +403,9 @@ test("`recurring_prompt` refuses a cadence out of range without contacting the s
   })
   await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
   const port = (http.address() as { port: number }).port
-  const stateDir = mkdtempSync(join(tmpdir(), "fray-mcp-"))
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
   writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
-  const rpc = startServer({ FRAY_STATE_DIR: stateDir, FRAY_THREAD_SLUG: "owning-thread" })
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "owning-thread" })
   try {
     rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
     await rpc.next(1)

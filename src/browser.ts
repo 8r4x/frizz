@@ -24,7 +24,7 @@ export interface BrowserTabLaunchOptions {
 /**
  * Build the shell-free platform command that asks the OS default browser to open a normal tab.
  * Keeping this separate from app-mode browser discovery is deliberate: the user's configured
- * browser owns ordinary Fray launches, while `launchApp` remains an explicit compatibility mode.
+ * browser owns ordinary Frizz launches, while `launchApp` remains an explicit compatibility mode.
  */
 export function defaultBrowserOpenCommand(
   rawUrl: string,
@@ -50,7 +50,7 @@ export function defaultBrowserOpenCommand(
   throw new Error(`Opening the default browser is not supported on ${platform}`)
 }
 
-/** Ask the OS default URL handler to open Fray, and await acceptance of that request. */
+/** Ask the OS default URL handler to open Frizz, and await acceptance of that request. */
 export async function launchBrowserTab(
   rawUrl: string,
   options: BrowserTabLaunchOptions = {},
@@ -222,7 +222,7 @@ export async function launchApp(
       // Launch the shim bundle itself (what the Dock/Finder would do). The shim's app_mode_loader
       // is a universal Mach-O, so LaunchServices runs it native arm64 (verified: LSArchitecture=
       // arm64); it boots Chrome on this profile by itself when Chrome isn't running, and that Chrome
-      // holds the "Fray" identity (own Dock tile/icon) for the window's lifetime.
+      // holds the "Frizz" identity (own Dock tile/icon) for the window's lifetime.
       const shim = await ensureAppShim(browser.path, url, dataPath)
       // `open` is fire-and-forget and CAN silently no-op: a still-live register-only instance can
       // swallow it (LaunchServices "activates" the running instance instead of launching), the shim
@@ -253,8 +253,8 @@ export async function launchApp(
 //  · Bundle NAME: the .app filename and CFBundleName are both the manifest `name` — but only for the
 //    FIRST bundle of that name. Chrome disambiguates a collision by appending " 1", " 2", … and
 //    collisions are routine here, since manifestIdFor is origin-scoped and every project runs on its
-//    own port (verified on a real machine: Fray.app/4917, Fray 1.app/4918, Fray 2.app/4920,
-//    Fray 3.app/4921). EXPECTED_BUNDLE_NAME must therefore track
+//    own port (verified on a real machine: Frizz.app/4917, Frizz 1.app/4918, Frizz 2.app/4920,
+//    Frizz 3.app/4921). EXPECTED_BUNDLE_NAME must therefore track
 //    packages/web/public/manifest.webmanifest `name`, and the comparison must tolerate that numeric
 //    suffix — see bundleNameMatchesManifest. findAppShim matches on URL + data-dir (NOT name), so a
 //    bundle installed under an old name keeps launching under it forever; a name that is neither the
@@ -263,7 +263,7 @@ export async function launchApp(
 //  · SUCCESS SENTINEL: PWA.install and the standalone flip are two separate CDP calls; if install
 //    lands but the flip doesn't, the bundle exists in open-in-a-tab mode and would brand every
 //    window as Chrome forever (findAppShim would keep matching it). So after — and only after —
-//    changeAppUserSettings(standalone) succeeds we drop a `<dataPath>/.fray-pwa-standalone` marker.
+//    changeAppUserSettings(standalone) succeeds we drop a `<dataPath>/.frizz-pwa-standalone` marker.
 //    A found shim is trusted only if that marker exists; a shim without it is a POISONED partial
 //    install and is reinstalled (see ensureAppShim). Both staleness conditions share one heal path.
 //  · FIRST-RUN seeding: a shim launch boots Chrome ITSELF, so our --no-first-run/--no-default-
@@ -283,23 +283,23 @@ const CHROME_APPS_DIR = join(homedir(), "Applications", "Chrome Apps.localized")
 // here (not fetched from the manifest) because this launcher only ever has the origin URL, not the
 // manifest body — so KEEP THESE TWO IN LOCKSTEP: renaming the app means editing both, and the
 // mismatch drives the stale-shim reinstall that migrates an already-installed bundle to the new name.
-const EXPECTED_BUNDLE_NAME = "Fray"
+const EXPECTED_BUNDLE_NAME = "Frizz"
 
 /**
  * Does this bundle's CFBundleName belong to the CURRENT manifest name?
  *
  * Chrome DISAMBIGUATES a colliding bundle by appending " 1", " 2", … — and collisions are the norm
  * here, not the exception, because `manifestIdFor` is scoped to the ORIGIN and every project gets its
- * own port. So the second project to install a shim becomes "Fray 1", the third "Fray 2", and so on.
+ * own port. So the second project to install a shim becomes "Frizz 1", the third "Frizz 2", and so on.
  *
  * A bare `=== EXPECTED_BUNDLE_NAME` therefore judged every project after the first permanently STALE:
  * each `--app` launch uninstalled and reinstalled the shim, Chrome handed back the next number, and
  * the bundle count grew without the Dock identity ever sticking. Observed on a real machine as
- * Fray.app / Fray 1.app / Fray 2.app / Fray 3.app — four ports, four bundles, one working shim.
+ * Frizz.app / Frizz 1.app / Frizz 2.app / Frizz 3.app — four ports, four bundles, one working shim.
  *
  * Accepting the suffix costs nothing: findAppShim already matched this bundle on the AUTHORITATIVE
  * pair (shortcut URL + user-data-dir), so the name is a rename check, not an identity check. A real
- * manifest rename ("Fray" → something else) still fails this test and still heals by reinstalling.
+ * manifest rename ("Frizz" → something else) still fails this test and still heals by reinstalling.
  */
 export function bundleNameMatchesManifest(bundleName: string): boolean {
   if (bundleName === EXPECTED_BUNDLE_NAME) return true
@@ -307,7 +307,7 @@ export function bundleNameMatchesManifest(bundleName: string): boolean {
 }
 
 // The file that marks a shim install as fully completed (bundle generated AND flipped to standalone).
-const STANDALONE_SENTINEL = ".fray-pwa-standalone"
+const STANDALONE_SENTINEL = ".frizz-pwa-standalone"
 
 function manifestIdFor(url: string): string {
   // The web manifest declares `"id": "/"`, which resolves to origin + "/". This assumes callers pass
@@ -360,7 +360,7 @@ async function findAppShim(
 }
 
 // pgrep -f matches its pattern as an EXTENDED REGULAR EXPRESSION, so regex-special chars in a
-// filesystem path (the dots in ".localized"/".app"/".fray", "+", parens, …) would otherwise match
+// filesystem path (the dots in ".localized"/".app"/".frizz", "+", parens, …) would otherwise match
 // too loosely and risk false hits. Escape them so the path matches as a literal substring.
 function escapeERE(s: string): string {
   return s.replace(/[.^$*+?()[\]{}|\\]/g, "\\$&")

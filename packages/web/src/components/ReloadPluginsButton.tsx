@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { Plug } from "lucide-react"
-import type { ThreadView } from "@fray-ui/shared"
+import type { ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 import { Tooltip } from "./Tooltip.tsx"
@@ -17,7 +17,7 @@ import { Tooltip } from "./Tooltip.tsx"
 // OFFERED only where it can actually work, on the same discipline as RestartWorkerButton — a button
 // that throws is worse than an absent one:
 //  • a session thread, not a read-only foreign row;
-//  • a BROKER-backed Claude thread. The tmux path has no control channel to ask, and fray's codex
+//  • a BROKER-backed Claude thread. The tmux path has no control channel to ask, and frizz's codex
 //    app-server client speaks no reload method at all.
 //  • a live process. On an exited thread the next follow-up already cold-starts on current tooling.
 export function ReloadPluginsButton({ thread }: { thread: ThreadView }) {

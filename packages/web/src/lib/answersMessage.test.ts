@@ -104,7 +104,7 @@ test("parseAnswersCard accepts either wire form", () => {
 const user = (text: string): MsgLike => ({ role: "user", text })
 const asst = (text: string): MsgLike => ({ role: "assistant", text })
 const event = (text = "Agent finished"): MsgLike => ({ role: "assistant", kind: "event", text })
-// An assistant message carrying one ```question block per body, in the fray worker convention
+// An assistant message carrying one ```question block per body, in the frizz worker convention
 // (context prose, then trailing lettered options).
 const qmsg = (...bodies: string[]): MsgLike => asst(bodies.map((b) => "```question\n" + b + "\n```").join("\n\n"))
 

@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { InteractionRequest, type BoardSnapshot } from "@fray-ui/shared"
+import { InteractionRequest, type BoardSnapshot } from "@frizz/shared"
 import { createRouter } from "./router.ts"
 import { createStorage, type SessionRow } from "./storage.ts"
 import type { AppContext } from "./context.ts"
@@ -25,7 +25,7 @@ function session(): SessionRow {
   return {
     slug: "owned-thread",
     session_id: "owned-session",
-    tmux_name: "fray-owned-thread",
+    tmux_name: "frizz-owned-thread",
     spawned_at: "2026-07-13T12:00:00.000Z",
     last_read_at: null,
     unread: 0,
@@ -73,7 +73,7 @@ function interaction(projectId = "project-owned") {
 }
 
 function harness() {
-  const dir = mkdtempSync(join(tmpdir(), "fray-interaction-router-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-interaction-router-"))
   const project: Project = { dir, id: "project-owned", name: "test", label: "test", stateDir: dir, cwdSlug: "test" }
   const storage = createStorage(join(dir, "ui.db"))
   storage.upsertSession(session())

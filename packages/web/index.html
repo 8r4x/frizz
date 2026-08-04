@@ -3,10 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>fray</title>
+    <title>frizz</title>
     <!-- Own Dock/tab identity. The SVG favicon is preferred by modern browsers; the PNGs are the
          fallback + the source Chrome rasterizes into the macOS app icon when the app is installed
-         ("Install fray…" / Create Shortcut → Open as window), which is the only way a Chrome-hosted
+         ("Install frizz…" / Create Shortcut → Open as window), which is the only way a Chrome-hosted
          window gets its own Dock name+icon (a plain --app window is owned by Chrome). -->
     <!-- ?v= is a cache-buster: Chrome caches favicons per-URL for a long time, so an icon EDIT at the
          same path keeps showing the stale cached copy (a hard-quit doesn't clear it). Bump this whenever
@@ -21,7 +21,7 @@
          first paint — apply the last-known value synchronously from localStorage so the page never
          flashes mono before swapping to sans (font.ts confirms/corrects once settings load). -->
     <script>
-      try { document.documentElement.dataset.font = localStorage.getItem("fray-font") === "mono" ? "mono" : "sans" } catch {}
+      try { document.documentElement.dataset.font = localStorage.getItem("frizz-font") === "mono" ? "mono" : "sans" } catch {}
     </script>
   </head>
   <body>

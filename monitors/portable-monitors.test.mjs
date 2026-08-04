@@ -24,7 +24,7 @@ test("portable monitor guidance requires declared-project precedence and explici
   assert.match(guide, /do not silently fall back[\s\S]*shadow it/)
 })
 
-// The codex ORCHESTRATOR skill is retired, but Codex is still a live fray-ui worker BACKEND, so its
+// The codex ORCHESTRATOR skill is retired, but Codex is still a live frizz worker BACKEND, so its
 // golden worker prompt keeps the same guidance bar the Claude one does.
 test("worker guidance prefers declared tooling and makes no Luna child mandatory", () => {
   const claude = readFileSync(join(root, "cc-worker/skills/gh/SKILL.md"), "utf8")

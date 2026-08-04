@@ -1,4 +1,4 @@
-# Unstarted Fray work: handoff
+# Unstarted Frizz work: handoff
 
 Last classified: 2026-07-13
 
@@ -6,13 +6,13 @@ This document contains only user-discussed work for which no implementation is e
 
 ## Classification caveat
 
-The repository is heavily modified and contains both staged and unstaged work. A changed source file, test, artifact, or live-runtime result can prove that an effort has started, even when an old `.fray` planning file still says otherwise. The reverse is not true: absence from `git status` or a text search cannot prove that nobody started an effort elsewhere. Re-audit the worktree, live board, and current maintainer intent immediately before dispatch.
+The repository is heavily modified and contains both staged and unstaged work. A changed source file, test, artifact, or live-runtime result can prove that an effort has started, even when an old `.frizz` planning file still says otherwise. The reverse is not true: absence from `git status` or a text search cannot prove that nobody started an effort elsewhere. Re-audit the worktree, live board, and current maintainer intent immediately before dispatch.
 
 ## 1. Slash-command strategy and reliable terminal escape hatch
 
 ### User-facing problem and outcome
 
-Interactive slash commands do not map cleanly onto Fray's rendered thread UI. The maintainer asked for a separate investigation of Conductor's approach, a recommendation for the smallest useful slash-command set Fray should support directly, and a credible terminal-view escape hatch for commands that remain native to Claude Code or Codex. The result should be a decision document first, not an assumed implementation.
+Interactive slash commands do not map cleanly onto Frizz's rendered thread UI. The maintainer asked for a separate investigation of Conductor's approach, a recommendation for the smallest useful slash-command set Frizz should support directly, and a credible terminal-view escape hatch for commands that remain native to Claude Code or Codex. The result should be a decision document first, not an assumed implementation.
 
 ### Evidence that it is unstarted
 
@@ -24,7 +24,7 @@ Interactive slash commands do not map cleanly onto Fray's rendered thread UI. Th
 ### Scoped acceptance criteria
 
 1. Produce a short research/decision document grounded in the current Conductor product and the installed Claude Code and Codex command surfaces.
-2. Inventory native commands by backend and classify each as: useful as a first-class Fray action, safe only in Terminal, already represented by existing UI, or unsuitable for Fray.
+2. Inventory native commands by backend and classify each as: useful as a first-class Frizz action, safe only in Terminal, already represented by existing UI, or unsuitable for Frizz.
 3. Recommend a minimal first-class set and explain why every included command earns dedicated UI. Treat the existing Claude AI rename action and `Cmd+K` palette as inputs, not blank-slate designs.
 4. Define the invocation model, discoverability, keyboard behavior, backend capability handling, error states, and the fallback when a command is unavailable.
 5. Specify what “switch to Terminal” must guarantee before it can be advertised as the escape hatch: visible repaint without scrolling, keyboard/focus correctness, paste/submit correctness, and faithful command output.
@@ -45,7 +45,7 @@ Interactive slash commands do not map cleanly onto Fray's rendered thread UI. Th
 
 ### Required verification for any later implementation
 
-- Run provider-real E2E sessions for both Claude Code and Codex in a disposable Fray stack, not transcript-only fixtures.
+- Run provider-real E2E sessions for both Claude Code and Codex in a disposable Frizz stack, not transcript-only fixtures.
 - Exercise keyboard invocation, mouse selection, unavailable-command behavior, focus return, normal and Command-click link behavior where relevant, and the Terminal fallback.
 - In Terminal, verify live line painting without a scroll/repaint nudge, resize/reflow, paste, Enter, Escape, and at least one real native slash command at desktop and narrow widths; capture screenshots and console/network errors.
 - Confirm unsupported commands cannot be submitted to the wrong backend and that a failed command never presents a false success state.
@@ -67,7 +67,7 @@ Questions embedded in a thread are currently positional: only the latest substan
 
 ### Evidence that it is unstarted
 
-- `.fray/question-stacking.md` records root-cause analysis and proposed forks with `status: planning`; every implementation step remains unchecked.
+- `.frizz/question-stacking.md` records root-cause analysis and proposed forks with `status: planning`; every implementation step remains unchecked.
 - `packages/web/src/lib/answering.ts` still exposes one `liveMsg`, walks backward to one trailing assistant message, and returns no questions after the first later user message.
 - `packages/server/src/tailer.ts` still derives `pendingQuestion` from `lastAssistantHasQuestion` while the turn is idle.
 - Searches found no addressed-question store, stable `(message, block)` question identity, per-question dismiss action, or persisted open-question collection.
@@ -82,7 +82,7 @@ The exact scope is uncertain because the planning file records recommendations b
 3. Render all open questions answerable in place. Decide with the maintainer whether a compact “N open questions” navigation affordance is also required.
 4. Keep queue truth and thread-view truth consistent: the thread remains in Queue while any actionable question is open and leaves only when all are addressed or another higher-priority lifecycle action applies.
 5. When answering a non-trailing question, send enough question identity/context for a worker that has moved on to associate the reply correctly.
-6. Persist addressed state durably and scope it to the Fray-owned thread/session generation so stale or foreign records cannot mutate a current thread.
+6. Persist addressed state durably and scope it to the Frizz-owned thread/session generation so stale or foreign records cannot mutate a current thread.
 7. Decide explicitly whether the first cut covers only fenced markdown questions or also backend-native question interactions. Do not silently broaden it.
 
 ### Likely relevant modules
@@ -115,13 +115,13 @@ The exact scope is uncertain because the planning file records recommendations b
 
 ## Explicitly not carried forward as unstarted
 
-The current worktree contains implementation, tests, artifacts, active review, or an assigned in-flight task for the following discussed areas, so they do not belong in this handoff: queue/rest/done/held behavior; the bottom Archive action on Done cards; the enabled bottom Snooze action on Awaiting cards; removal of the header Dismiss action; composer profile controls; `↳` sub-agent lines; sidebar `?` versus ellipsis classification; icon iteration; board provenance filtering; tmux socket migration; normal-browser default and `--app` opt-in; Fray skill migration and the scope-escalation guardrail; model/effort placement and persistence; select alignment; live thread permissions and provider prompts; rename behavior; dispatch-message hiding; tool-call/Exec rendering; queue focus; terminal/render investigations; server hot reload; global CLI/project launch; and the currently running read-only audits.
+The current worktree contains implementation, tests, artifacts, active review, or an assigned in-flight task for the following discussed areas, so they do not belong in this handoff: queue/rest/done/held behavior; the bottom Archive action on Done cards; the enabled bottom Snooze action on Awaiting cards; removal of the header Dismiss action; composer profile controls; `↳` sub-agent lines; sidebar `?` versus ellipsis classification; icon iteration; board provenance filtering; tmux socket migration; normal-browser default and `--app` opt-in; Frizz skill migration and the scope-escalation guardrail; model/effort placement and persistence; select alignment; live thread permissions and provider prompts; rename behavior; dispatch-message hiding; tool-call/Exec rendering; queue focus; terminal/render investigations; server hot reload; global CLI/project launch; and the currently running read-only audits.
 
 Several stale planning records also must not be dispatched blindly:
 
-- `.fray/codex-discovery-race.md` says the race is planned, but the dirty worktree already has sentinel-authoritative discovery and concurrent same-directory regression tests in `backend/codex.ts`, `dispatch.ts`, and `backend/codex.test.ts`.
-- `.fray/ci-await-mechanism.md` proposes a custom MCP await server, but the current product direction is already implemented differently: native blocking/background waits for automated work plus a durable `github-review:`/`timer:` scheduler for human or scheduled waits. A custom MCP server is not an unstarted requirement unless the maintainer explicitly reopens that design.
-- `.fray/fenceless-rest-nudge.md` is superseded by the later product decision that ordinary bare rest belongs in Queue. Do not revive mandatory fencing or a nudge hook without a new decision.
+- `.frizz/codex-discovery-race.md` says the race is planned, but the dirty worktree already has sentinel-authoritative discovery and concurrent same-directory regression tests in `backend/codex.ts`, `dispatch.ts`, and `backend/codex.test.ts`.
+- `.frizz/ci-await-mechanism.md` proposes a custom MCP await server, but the current product direction is already implemented differently: native blocking/background waits for automated work plus a durable `github-review:`/`timer:` scheduler for human or scheduled waits. A custom MCP server is not an unstarted requirement unless the maintainer explicitly reopens that design.
+- `.frizz/fenceless-rest-nudge.md` is superseded by the later product decision that ordinary bare rest belongs in Queue. Do not revive mandatory fencing or a nudge hook without a new decision.
 - A global permanent in-flight sub-agent readout is not listed: current sidebar child rows and background-operation strips already implement a persistent readout path. Audit its UX as existing work rather than dispatching a new feature.
 
 ## Evidence checks used for this classification
@@ -129,5 +129,5 @@ Several stale planning records also must not be dispatched blindly:
 - `git status --short` across the repository, including all current staged, unstaged, and untracked UI/backend work.
 - `rg` searches for slash commands, Conductor, provider command handling, question identity/addressed state, live sub-agent surfaces, wait tooling, and relevant TODO/deferred markers.
 - Direct inspection of `CommandPalette.tsx`, `rename-controller.ts`, `Sidebar.tsx`, `answering.ts`, `tailer.ts`, `scheduler.ts`, and the backend-specific worker prompts.
-- Direct inspection of `.fray/ci-await-mechanism.md`, `.fray/plans/ci-await-mechanism.md`, `.fray/codex-discovery-race.md`, `.fray/fenceless-rest-nudge.md`, `.fray/question-stacking.md`, and `.fray/worker-contract-backend-aware.md`.
-- Live-audit evidence supplied by the orchestrator: Nub health was OK; 30 Fray-owned threads were present with no board errors/warnings; representative Codex tool calls and long dispatch fixtures existed; permission values were initialized; and the listener, boot identity, tmux panes, and sessions were preserved. Browser-rendered behavior was not used to classify an item as unstarted unless static evidence independently proved that no implementation existed.
+- Direct inspection of `.frizz/ci-await-mechanism.md`, `.frizz/plans/ci-await-mechanism.md`, `.frizz/codex-discovery-race.md`, `.frizz/fenceless-rest-nudge.md`, `.frizz/question-stacking.md`, and `.frizz/worker-contract-backend-aware.md`.
+- Live-audit evidence supplied by the orchestrator: Nub health was OK; 30 Frizz-owned threads were present with no board errors/warnings; representative Codex tool calls and long dispatch fixtures existed; permission values were initialized; and the listener, boot identity, tmux panes, and sessions were preserved. Browser-rendered behavior was not used to classify an item as unstarted unless static evidence independently proved that no implementation existed.

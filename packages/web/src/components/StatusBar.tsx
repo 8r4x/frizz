@@ -3,7 +3,7 @@ import { store, type ConnectionState } from "../store.ts"
 import { STATUS_BAR_ACTION, STATUS_BAR_ICON } from "../lib/statusBar.ts"
 import { IdentityMark, type ProjectIdentity } from "./Sidebar.tsx"
 import { QuotaChips } from "./QuotaBar.tsx"
-import { RestartFrayButton } from "./RestartFrayButton.tsx"
+import { RestartFrizzButton } from "./RestartFrizzButton.tsx"
 
 // THE STATUS BAR — one horizontal strip pinned to the page's upper-left, reading left to right:
 //
@@ -65,7 +65,7 @@ export function StatusBar({
         <SettingsIcon size={STATUS_BAR_ICON} aria-hidden="true" />
       </button>
       {/* Renders null on a supervisor that can't restart — the gap collapses and the bar stays even. */}
-      <RestartFrayButton />
+      <RestartFrizzButton />
       <Divider />
       <QuotaChips />
     </div>

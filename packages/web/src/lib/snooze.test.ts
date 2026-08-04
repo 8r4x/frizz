@@ -117,7 +117,7 @@ test("a snooze carrying a prompt reads as the AUTO variant and names the follow-
     // Without a prompt it is still the reminder it always was — YOU act at the deadline.
     assert.equal(formatUserSnooze(wednesday, undefined, now.getTime()), "Snoozed until Wednesday at 9:00 PM")
     assert.equal(formatUserSnooze(wednesday, "   ", now.getTime()), "Snoozed until Wednesday at 9:00 PM")
-    // With one, fray resolves the park by resuming the agent — the same thing "Auto-snoozed" already
+    // With one, frizz resolves the park by resuming the agent — the same thing "Auto-snoozed" already
     // means for a worker `timer:` park, so it must not sprout a third vocabulary.
     assert.equal(
       formatUserSnooze(wednesday, "Check CI", now.getTime()),

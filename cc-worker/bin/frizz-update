@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // @ts-check
 /**
- * fray-update — the structured thread updater, on the worker's Bash PATH while the fray-worker
+ * frizz-update — the structured thread updater, on the worker's Bash PATH while the frizz-worker
  * plugin is enabled. This is the worker's PRIMARY tool for owning its one thread file: it writes
- * `.fray/<slug>.md` through the same code path fray-ui uses (never hand-rolled markdown edits).
+ * `.frizz/<slug>.md` through the same code path frizz uses (never hand-rolled markdown edits).
  * Execs the repo board's bundled updater directly (NOT a copy) — cc-worker never forks updater logic.
  *
- * Resolving the script: this file is <plugin>/bin/fray-update, board/ is a sibling of the plugin root,
+ * Resolving the script: this file is <plugin>/bin/frizz-update, board/ is a sibling of the plugin root,
  * so the updater is at ../../board/thread-update.mjs relative to THIS file. Imported via
  * a file:// URL so argv/process.env flow straight through.
  */

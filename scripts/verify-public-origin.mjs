@@ -10,7 +10,7 @@
 // on the app's own reads. TLS here is real, so the browser genuinely reports a secure context.
 //
 // Usage — start a board with the matching origin first, then run this:
-//   nub src/index.ts --dev --no-app --port 5902 --public-origin https://fray.local.test:8443 /path/to/repo
+//   nub src/index.ts --dev --no-app --port 5902 --public-origin https://frizz.local.test:8443 /path/to/repo
 //   nub scripts/verify-public-origin.mjs 5902 8443
 import puppeteer from "puppeteer"
 import { createServer } from "node:https"
@@ -21,7 +21,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-const HOSTNAME = "fray.local.test"
+const HOSTNAME = "frizz.local.test"
 const originPort = Number(process.argv[2] ?? 5902)
 const frontPort = Number(process.argv[3] ?? 8443)
 const ORIGIN = `https://${HOSTNAME}:${frontPort}`
@@ -37,7 +37,7 @@ const CLOUDFLARED_ADDS = {
   "cf-worker": "trycloudflare.com",
 }
 
-const certDir = mkdtempSync(join(tmpdir(), "fray-public-origin-"))
+const certDir = mkdtempSync(join(tmpdir(), "frizz-public-origin-"))
 execFileSync("openssl", [
   "req", "-x509", "-newkey", "rsa:2048", "-nodes",
   "-keyout", join(certDir, "key.pem"), "-out", join(certDir, "cert.pem"),
@@ -139,11 +139,11 @@ try {
   })).status)
   check("RPC write cleared the origin gate", rpcWrite !== 403, String(rpcWrite))
 
-  await page.screenshot({ path: join(tmpdir(), "fray-public-origin-desktop.png") })
+  await page.screenshot({ path: join(tmpdir(), "frizz-public-origin-desktop.png") })
   await page.setViewport({ width: 420, height: 880 })
   await new Promise((settle) => setTimeout(settle, 1_200))
-  await page.screenshot({ path: join(tmpdir(), "fray-public-origin-narrow.png") })
-  console.log(`shots: ${join(tmpdir(), "fray-public-origin-desktop.png")} ${join(tmpdir(), "fray-public-origin-narrow.png")}`)
+  await page.screenshot({ path: join(tmpdir(), "frizz-public-origin-narrow.png") })
+  console.log(`shots: ${join(tmpdir(), "frizz-public-origin-desktop.png")} ${join(tmpdir(), "frizz-public-origin-narrow.png")}`)
 } finally {
   await browser.close()
   front.closeAllConnections()

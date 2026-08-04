@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-const baseUrl = process.env.FRAY_AGENT_ROW_INDICATORS_E2E_URL
+const baseUrl = process.env.FRIZZ_AGENT_ROW_INDICATORS_E2E_URL
 
 // An agent row is the ONE card family with two independent status sources — its own state reading (which
 // carries its own mark) and the shared right-hand meta slot — so it is the only one that can render the
@@ -37,9 +37,9 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
   try {
     await page.setViewport({ width: 1000, height: 1500, deviceScaleFactor: 1 })
     await page.goto(`${baseUrl}/operation-indicators-fixture.html`, { waitUntil: "networkidle0" })
-    const rows = await page.$$eval("[data-agent-rows] .fray-bash", (cards) =>
+    const rows = await page.$$eval("[data-agent-rows] .frizz-bash", (cards) =>
       cards.map((card) => {
-        const header = card.querySelector<HTMLElement>(".fray-bash-header")!
+        const header = card.querySelector<HTMLElement>(".frizz-bash-header")!
         const [left, right] = Array.from(header.children) as HTMLElement[]
         const marks = card.querySelectorAll("[title='stale — no recent output'], [title^='rested —']")
         return {
@@ -51,13 +51,13 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
           // The left group's element order IS the mirrored shape: the mark slot (when the child has a
           // liveness reading at all), the kind label, then the title. `-1` for the slot means no slot
           // exists in the DOM — which is REQUIRED of a resolved child and a failure for a live one.
-          markSlotIndex: Array.from(left.children).findIndex((child) => child.classList.contains("fray-tool-mark")),
-          labelIndex: Array.from(left.children).findIndex((child) => child.classList.contains("fray-bash-label")),
+          markSlotIndex: Array.from(left.children).findIndex((child) => child.classList.contains("frizz-tool-mark")),
+          labelIndex: Array.from(left.children).findIndex((child) => child.classList.contains("frizz-bash-label")),
           // How far "Agent" sits from the header's own left edge. This is the number the reader SEES as
           // the gap: an empty reserved slot pushed it out ~13px on a card whose child had finished, which
           // is the whole defect. A marked row is allowed that offset (a dot is standing in it); a
           // resolved row must be flush at 0.
-          labelOffset: Math.round(left.querySelector(".fray-bash-label")!.getBoundingClientRect().left - left.getBoundingClientRect().left),
+          labelOffset: Math.round(left.querySelector(".frizz-bash-label")!.getBoundingClientRect().left - left.getBoundingClientRect().left),
           quietMark: marks.length > 0 ? marks[0].getAttribute("title") : null,
           // The right-hand group holds the reading AND the chevron, in that order, flush to one edge —
           // except on a row with NOTHING honest to report, where the chevron stands alone. The typography
@@ -95,7 +95,7 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
     assert.equal(rows.length, 9, "the fixture must cover live/stale/rested/finished/stopped/failed agent rows, plus the three with no child record")
 
     // THE SHAPE. A child with a LIVE record leads with its mark, then "Agent"; every other row — resolved,
-    // or pending with no record fray can point at — has no mark and NO SLOT for one, so "Agent" leads and
+    // or pending with no record frizz can point at — has no mark and NO SLOT for one, so "Agent" leads and
     // sits flush at the header's left edge. The empty reservation was a real, reported defect ("a weird
     // gap … to the left of the word Agent"), so the absence is pinned as hard as the presence.
     //
@@ -119,7 +119,7 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
 
     // The model+effort profile is gone from the card entirely (it lives in the prompt box's own control
     // and in this row's tooltip) — no row may render it as a bracketed tag again.
-    for (const row of rows) assert.doesNotMatch(row.text, /fray:|\[.*\]/)
+    for (const row of rows) assert.doesNotMatch(row.text, /frizz:|\[.*\]/)
 
     // ONE READING, EIGHT ROWS. The slot is a single renderer (ChatView's ToolMetaReading, fed by
     // lib/agentReading.ts), so every row reports identical type metrics and the whole column draws from a
@@ -180,7 +180,7 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
 
     // NO CHILD RECORD — the reading is the only status surface, so terminal state + duration must still
     // render (the regression the one-indicator rule must never cause). And it must be INDISTINGUISHABLE
-    // from the tracked equivalent above: losing the correlation to a child is fray's problem, not the
+    // from the tracked equivalent above: losing the correlation to a child is frizz's problem, not the
     // reader's, so an interrupted dispatch says "stopped" here too — never the raw "cancelled", and never
     // in amber, which was saying "caution" about something somebody deliberately stopped.
     assert.equal(rows[6].indicators, 0)
@@ -240,17 +240,17 @@ test("a background shell card marks its liveness in the same slot as a dispatch 
     const read = (selector: string) =>
       page.$$eval(selector, (cards) =>
         cards.map((card) => {
-          const header = card.querySelector<HTMLElement>(".fray-bash-header")!
+          const header = card.querySelector<HTMLElement>(".frizz-bash-header")!
           const [left, right] = Array.from(header.children) as HTMLElement[]
-          const slot = left.querySelector<HTMLElement>(".fray-tool-mark")
+          const slot = left.querySelector<HTMLElement>(".frizz-tool-mark")
           const dot = slot?.firstElementChild
           const headerBox = header.getBoundingClientRect()
           const slotBox = slot?.getBoundingClientRect()
           return {
-            label: left.querySelector<HTMLElement>(".fray-bash-label")!.innerText.trim(),
-            markSlotIndex: Array.from(left.children).findIndex((child) => child.classList.contains("fray-tool-mark")),
-            labelIndex: Array.from(left.children).findIndex((child) => child.classList.contains("fray-bash-label")),
-            labelOffset: Math.round(left.querySelector(".fray-bash-label")!.getBoundingClientRect().left - left.getBoundingClientRect().left),
+            label: left.querySelector<HTMLElement>(".frizz-bash-label")!.innerText.trim(),
+            markSlotIndex: Array.from(left.children).findIndex((child) => child.classList.contains("frizz-tool-mark")),
+            labelIndex: Array.from(left.children).findIndex((child) => child.classList.contains("frizz-bash-label")),
+            labelOffset: Math.round(left.querySelector(".frizz-bash-label")!.getBoundingClientRect().left - left.getBoundingClientRect().left),
             // The slot's own geometry inside the header, to a tenth of a pixel: this is what "the same
             // slot" means, and it is the number that a stray margin or a lost ink correction would move.
             markLeft: slotBox ? Math.round((slotBox.left - headerBox.left) * 10) / 10 : null,
@@ -276,8 +276,8 @@ test("a background shell card marks its liveness in the same slot as a dispatch 
           }
         }),
       )
-    const shells = await read("[data-shell-rows] .fray-bash")
-    const agents = await read("[data-agent-rows] .fray-bash")
+    const shells = await read("[data-shell-rows] .frizz-bash")
+    const agents = await read("[data-agent-rows] .frizz-bash")
     assert.equal(shells.length, 8, "the fixture must cover live / quiet / untracked-detached / long-foreground / fresh-foreground / done / failed foreground rows, plus a RESOLVED background task")
 
     // THE SHAPE, row by row. Rows 0-3 are running — three detached, plus the FOREGROUND command that has
@@ -312,7 +312,7 @@ test("a background shell card marks its liveness in the same slot as a dispatch 
     // This is the row the whole 2026-07-30 change is about, so it is asserted against the detached row
     // beside it rather than on its own.
     assert.equal(shells[3].markLeft, shells[0].markLeft, "a foreground shell marks itself in the detached shell's slot")
-    assert.match(String(shells[3].markClass), /fray-live-dot--shell/)
+    assert.match(String(shells[3].markClass), /frizz-live-dot--shell/)
     assert.deepEqual(shells[3].markRgb, shells[0].markRgb, "…in the same blue")
     // A LIVE duration, not a bare verb: a pending foreground Bash ticks from the call's own timestamp
     // (useBashDuration), and this fixture row starts 42s in the past. The literal "running" this pinned
@@ -327,8 +327,8 @@ test("a background shell card marks its liveness in the same slot as a dispatch 
     assert.equal(shells[0].labelOffset, agents[0].labelOffset, "both labels must clear the slot by the same gap")
 
     // …and differ on exactly ONE axis: the hue. Blue is the shell's, and it is not the dispatch accent.
-    assert.match(String(shells[0].markClass), /fray-live-dot--shell/)
-    assert.match(String(agents[0].markClass), /fray-live-dot--agent/)
+    assert.match(String(shells[0].markClass), /frizz-live-dot--shell/)
+    assert.match(String(agents[0].markClass), /frizz-live-dot--agent/)
     const [r, g, b] = shells[0].markRgb!
     assert.ok(b > r && b > g, `a live shell marks itself blue, got rgb(${shells[0].markRgb})`)
     assert.notDeepEqual(shells[0].markRgb, agents[0].markRgb, "the two runtimes keep their two hues")
@@ -336,7 +336,7 @@ test("a background shell card marks its liveness in the same slot as a dispatch 
     // A tracked-but-QUIET shell (a dev server waiting, a Monitor with no output file) breathes rather
     // than pulses — and its mark must agree with its own reading. It shipped drawing the full-brightness
     // live dot beside the word "stale", which is the row contradicting itself.
-    assert.match(String(shells[1].markClass), /fray-live-dot-quiet--shell/)
+    assert.match(String(shells[1].markClass), /frizz-live-dot-quiet--shell/)
     assert.equal(shells[1].rightText, "stale")
     // The two detached-and-live readings: correlated to a live op, and merely flagged background.
     assert.equal(shells[0].rightText, "running")
@@ -347,10 +347,10 @@ test("a background shell card marks its liveness in the same slot as a dispatch 
     // timer is the only part of the rule a pure unit test cannot reach.
     assert.equal(shells[4].markSlotIndex, -1, "the fresh call starts unmarked")
     await page.waitForFunction(
-      () => document.querySelectorAll("[data-shell-rows] .fray-bash")[4]?.querySelector(".fray-tool-mark") !== null,
+      () => document.querySelectorAll("[data-shell-rows] .frizz-bash")[4]?.querySelector(".frizz-tool-mark") !== null,
       { timeout: 30_000, polling: 250 },
     )
-    const late = await read("[data-shell-rows] .fray-bash")
+    const late = await read("[data-shell-rows] .frizz-bash")
     assert.equal(late[4].markSlotIndex, 0, "a call that keeps running marks itself once it passes the threshold")
     assert.equal(late[4].markLeft, shells[0].markLeft, "…into the same slot as every other mark")
     assert.equal(late[5].markSlotIndex, -1, "and a RESOLVED row never grows a mark, however long the page is open")

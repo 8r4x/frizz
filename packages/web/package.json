@@ -1,5 +1,5 @@
 {
-  "name": "@fray-ui/web",
+  "name": "@frizz/web",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -8,7 +8,7 @@
     "build": "vite build"
   },
   "dependencies": {
-    "@fray-ui/shared": "workspace:*",
+    "@frizz/shared": "workspace:*",
     "@radix-ui/react-dialog": "^1.1.18",
     "@radix-ui/react-dropdown-menu": "^2.1.19",
     "@radix-ui/react-popover": "^1.1.19",

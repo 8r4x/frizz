@@ -12,10 +12,10 @@ import { appendDelivery, cancelDelivery, hasDelivery, parseDeliveryLedger } from
 const T0 = "2026-07-28T10:00:00.000Z"
 
 function ledger(over: Partial<SessionRow> = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "fray-cancel-ledger-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-cancel-ledger-"))
   const storage = createStorage(join(dir, "ui.db"))
   storage.upsertSession({
-    slug: "t", session_id: "s", tmux_name: "fray-t", spawned_at: T0, last_read_at: null,
+    slug: "t", session_id: "s", tmux_name: "frizz-t", spawned_at: T0, last_read_at: null,
     unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0, title: null,
     state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null, ...over,
   })
@@ -62,7 +62,7 @@ test("a cancelled id is still a delivery on record, so a replayed send stays ded
   } finally { l.dispose() }
 })
 
-test("cancelling an id fray never sent changes nothing", () => {
+test("cancelling an id frizz never sent changes nothing", () => {
   const l = ledger()
   try {
     appendDelivery(l.storage, "t", { id: "d-1", text: "still going", state: "enqueued" })

@@ -4,7 +4,7 @@
 // `ai-title` transcript record — and that the tailer surfaces it as the board's `aiTitle`.
 //
 // The bug this guards: Claude Code's automatic titling is suppressed on the Agent-SDK transport
-// whenever a SessionStart hook is registered, which is always true for a fray broker worker. With no
+// whenever a SessionStart hook is registered, which is always true for a frizz broker worker. With no
 // `ai-title` record the board shows "Spinning up a thread…" for SPIN_UP_MS and then falls back to a
 // truncation of the raw dispatch prompt, forever. The broker therefore ASKS for the title explicitly
 // (claude-agent-broker.ts → seedSessionTitle → generate_session_title with persist).
@@ -18,7 +18,7 @@ import { createContext } from "../context.ts"
 import { resolveProject } from "../project.ts"
 import { claudeBrokerRecordPath, readBrokerRecord } from "./claude-broker-host.ts"
 
-process.env.FRAY_CLAUDE_BROKER_BRIDGE = "1"
+process.env.FRIZZ_CLAUDE_BROKER_BRIDGE = "1"
 const claudeBin = execFileSync("which", ["claude"], { encoding: "utf8" }).trim()
 const repo = mkdtempSync(join(tmpdir(), "brk-title-repo-"))
 execFileSync("git", ["init", "-q", repo]); execFileSync("git", ["-C", repo, "commit", "-q", "--allow-empty", "-m", "init"])

@@ -1,12 +1,12 @@
-// Disposable, fully-ISOLATED fray-ui stack for ad hoc CDP / manual verification.
+// Disposable, fully-ISOLATED frizz stack for ad hoc CDP / manual verification.
 //
-// Why this exists: verifying a fray-ui change means driving the REAL app end-to-end, but you must never
-// touch the maintainer's live instance or real ~/.fray SQLite. This boots a
+// Why this exists: verifying a frizz change means driving the REAL app end-to-end, but you must never
+// touch the maintainer's live instance or real ~/.frizz SQLite. This boots a
 // throwaway stack that is sandboxed on every axis:
-//   • HOME              → a fresh temp dir, so the SQLite DB + server.lock live in an empty ~/.fray
+//   • HOME              → a fresh temp dir, so the SQLite DB + server.lock live in an empty ~/.frizz
 //   • PORT              → a unique high port, so it never fights the dev server on 5175
-//   • FRAY_WAKERS_OFF=1 → scheduler OFF by default (no wake side effects); pass --wakers to arm it
-// The project defaults to the fray repo itself (a gh-authed repo, an empty board under the temp HOME).
+//   • FRIZZ_WAKERS_OFF=1 → scheduler OFF by default (no wake side effects); pass --wakers to arm it
+// The project defaults to the frizz repo itself (a gh-authed repo, an empty board under the temp HOME).
 //
 // Usage:
 //   nub scripts/adhoc-stack.mjs [--port=4930] [--project=/abs/dir] [--claude-bin=/abs/bin] [--wakers] [--reaper] [--keep] [--home=/abs] [--seed]
@@ -26,7 +26,7 @@ const opt = (k, d) => {
 }
 
 const port = Number(opt("port", "4930"))
-const projectDir = opt("project", process.cwd()) // default: the fray repo root
+const projectDir = opt("project", process.cwd()) // default: the frizz repo root
 const claudeBin = opt("claude-bin", undefined)
 // --home=/abs reuses a sandbox a previous `--keep` run left behind, which is the only way to verify
 // anything that happens at BOOT against state that already exists — a schema migration, a registry
@@ -35,22 +35,22 @@ const reuseHome = opt("home", undefined)
 const keep = flag("keep") || reuseHome !== undefined
 
 // Sandbox HOME first — resolveProject() reads homedir() lazily, so setting it now redirects the whole
-// state tree (~/.fray/projects/<id>/) into the throwaway dir before the server derives any path.
-const home = reuseHome ?? mkdtempSync(join(tmpdir(), "fray-adhoc-home-"))
-mkdirSync(join(home, ".fray"), { recursive: true })
+// state tree (~/.frizz/projects/<id>/) into the throwaway dir before the server derives any path.
+const home = reuseHome ?? mkdtempSync(join(tmpdir(), "frizz-adhoc-home-"))
+mkdirSync(join(home, ".frizz"), { recursive: true })
 process.env.HOME = home
-if (!flag("wakers")) process.env.FRAY_WAKERS_OFF = "1"
+if (!flag("wakers")) process.env.FRIZZ_WAKERS_OFF = "1"
 // A disposable stack must never reap the real machine's leaked worker processes (the orphan reaper
 // enumerates ALL processes, not just this stack's). Off by default, exactly like the scheduler; pass
 // --reaper to arm it when verifying the reaper itself.
-if (!flag("reaper")) process.env.FRAY_ORPHAN_REAPER_OFF = "1"
+if (!flag("reaper")) process.env.FRIZZ_ORPHAN_REAPER_OFF = "1"
 process.chdir(projectDir)
 
 // Optional: drop a tiny fixture note so the board isn't stone empty when eyeballing the shell. Off by
 // default — most verification wants a known clean board and seeds its own rows through the RPC surface.
 if (flag("seed")) {
   try {
-    writeFileSync(join(home, ".fray", "ADHOC_SEED"), "adhoc stack seed marker\n")
+    writeFileSync(join(home, ".frizz", "ADHOC_SEED"), "adhoc stack seed marker\n")
   } catch {}
 }
 

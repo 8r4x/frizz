@@ -1,4 +1,4 @@
-import type { BoardSnapshot } from "@fray-ui/shared"
+import type { BoardSnapshot } from "@frizz/shared"
 
 export type SidebarPresence = {
   projectDir: string | null
@@ -6,7 +6,7 @@ export type SidebarPresence = {
 }
 
 // A board keyframe is a point-in-time transport snapshot, not a declaration that the workspace lost
-// its navigation. In particular, a reconnect/rebuild can briefly report no Fray-owned rows while a
+// its navigation. In particular, a reconnect/rebuild can briefly report no Frizz-owned rows while a
 // live delta or the next keyframe repopulates them. Keep the desktop rail mounted after this project
 // has had something to navigate; only a genuinely fresh project retains the centered first-task view.
 export function nextSidebarPresence(

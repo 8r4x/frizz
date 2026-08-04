@@ -8,7 +8,8 @@ import {
   type GitProjectIdentityScope,
 } from "./project-identity.ts"
 import type { ProjectLaunchTarget } from "./project-launch.ts"
-import { projectStateDir } from "./fray-paths.ts"
+import { projectStateDir } from "./frizz-paths.ts"
+import { migrateFrayGlobalRoots, migrateFrayProjectDir } from "./migrate-fray.ts"
 
 // Workspace resolution + on-disk locations. Everything here is derived once at boot and
 // threaded through the AppContext — no module reads cwd on its own.
@@ -18,7 +19,7 @@ export interface Project {
   id: string // stable checkout UUID; common config for main, private Git metadata for linked worktrees
   name: string // basename of dir, for display
   label: string // "owner/repo" from the git origin remote, else name (repos with no remote)
-  stateDir: string // ~/.fray/projects/<id>/ — SQLite + server.lock live here
+  stateDir: string // ~/.frizz/projects/<id>/ — SQLite + server.lock live here
   cwdSlug: string // ~/.claude/projects/<slug>/ session-log dir name
   // Present for linked worktrees; ordinary/main worktrees use the repository-scoped identity.
   identityScope?: Extract<GitProjectIdentityScope, "worktree">
@@ -30,7 +31,7 @@ export interface Project {
 // defense-in-depth gate that keeps those endpoints from becoming arbitrary file read. Both temp trees are
 // trusted, not just the per-user one (os.tmpdir() → /var/folders on macOS): agents write screenshots into
 // the shared temp tree too — Claude Code's own per-session scratchpad lives at /tmp/claude-<uid>/…, and
-// fray's disposable-stack scratch under /tmp/fray-* — so `/tmp` (realpath-normalized by the caller's
+// frizz's disposable-stack scratch under /tmp/frizz-* — so `/tmp` (realpath-normalized by the caller's
 // isUnder check, e.g. → /private/tmp on macOS) covers every worker + subagent scratchpad without coupling
 // to Claude Code's internal path convention. Intentionally permissive within the temp/screenshot space.
 export function trustedLocalFileRoots(project: Pick<Project, "dir" | "stateDir">): string[] {
@@ -144,8 +145,12 @@ export function resolveProjectLabel(dir: string): string | null {
 }
 
 export function resolveProject(cwd = process.cwd(), home = homedir(), env: NodeJS.ProcessEnv = process.env): Project {
+  // Opening a project is the moment a fray-era install gets adopted (migrate-fray.ts). The global
+  // roots go first and MUST precede projectStateDir below, which resolves — and then memoizes — them.
+  migrateFrayGlobalRoots({ env, home })
   const identity = resolveProjectIdentity(resolveProjectDir(cwd), home)
   const dir = identity.root
+  migrateFrayProjectDir(dir)
   const id = identity.id
   const stateDir = projectStateDir(id, home)
   mkdirSync(stateDir, { recursive: true })
@@ -170,11 +175,11 @@ export function resolveProject(cwd = process.cwd(), home = homedir(), env: NodeJ
 // Where a worker's PermissionRequest hook (cc-worker/hooks/perm-policy.mjs) drops its durable
 // permission-request marker — the policy decision plus the request it decided about — and where the
 // tailer reads it (only a DEFERRED decision counts as a human block). Injected to the worker as env
-// `FRAY_PERM_DIR` at spawn; the hook appends `<slug>.json`. Co-located under the per-project stateDir
+// `FRIZZ_PERM_DIR` at spawn; the hook appends `<slug>.json`. Co-located under the per-project stateDir
 // (server-owned, worktree-independent) so the exact dir the server scans is the exact dir the worker
 // writes. The CONTRACT with the plugin hook is only (env var name, `<slug>.json` filename) — the hook
 // cannot import this module.
-export const PERM_DIR_ENV = "FRAY_PERM_DIR"
+export const PERM_DIR_ENV = "FRIZZ_PERM_DIR"
 export function permRequestDir(project: Pick<Project, "stateDir">): string {
   return join(project.stateDir, "perm-requests")
 }
@@ -200,9 +205,9 @@ export function projectFromLaunchTarget(
   try {
     dir = realpathSync(target.projectDir)
   } catch {
-    throw new Error("pinned Fray project directory is no longer available")
+    throw new Error("pinned Frizz project directory is no longer available")
   }
-  if (dir !== target.projectDir) throw new Error("pinned Fray project directory is not canonical")
+  if (dir !== target.projectDir) throw new Error("pinned Frizz project directory is not canonical")
   const name = basename(dir) || dir
   return {
     dir,

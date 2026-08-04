@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { codexMcpConfigArgs } from "./codex-mcp.ts"
-import { CHROME_DEVTOOLS_MCP, FRAY_MCP } from "./types.ts"
+import { CHROME_DEVTOOLS_MCP, FRIZZ_MCP } from "./types.ts"
 
 // These pin the SHAPE of the `-c` overrides. The shape is otherwise only observable by running a real
 // codex app-server (see _live_codex_mcp_inject.mts), so a refactor could silently stop mounting the
@@ -18,23 +18,23 @@ function values(args: string[]): string[] {
   return out
 }
 
-test("codexMcpConfigArgs: chrome-devtools is mounted even with no fray descriptor", () => {
+test("codexMcpConfigArgs: chrome-devtools is mounted even with no frizz descriptor", () => {
   const vals = values(codexMcpConfigArgs(undefined))
   const chrome = vals.find((v) => v.startsWith(`mcp_servers.${CHROME_DEVTOOLS_MCP.name}=`))
   assert.ok(chrome, "chrome-devtools override missing")
   // The runtime release gate needs a browser on any machine; this must not be conditional.
   assert.match(chrome, /command="npx"/)
   for (const arg of CHROME_DEVTOOLS_MCP.args) assert.ok(chrome.includes(JSON.stringify(arg)), `missing ${arg}`)
-  assert.ok(!vals.some((v) => v.startsWith(`mcp_servers.${FRAY_MCP.name}=`)), "fray must not be mounted without a descriptor")
+  assert.ok(!vals.some((v) => v.startsWith(`mcp_servers.${FRIZZ_MCP.name}=`)), "frizz must not be mounted without a descriptor")
 })
 
-test("codexMcpConfigArgs: the fray server carries an ABSOLUTE node path and its FRAY_STATE_DIR", () => {
-  const vals = values(codexMcpConfigArgs({ scriptPath: "/abs/plugin/bin/fray-mcp.mjs", stateDir: "/abs/state" }, "/abs/node"))
-  const fray = vals.find((v) => v.startsWith(`mcp_servers.${FRAY_MCP.name}=`))
-  assert.ok(fray, "fray override missing")
-  assert.match(fray, /command="\/abs\/node"/)
-  assert.match(fray, /args=\["\/abs\/plugin\/bin\/fray-mcp\.mjs"\]/)
-  assert.match(fray, /env=\{FRAY_STATE_DIR="\/abs\/state"\}/)
+test("codexMcpConfigArgs: the frizz server carries an ABSOLUTE node path and its FRIZZ_STATE_DIR", () => {
+  const vals = values(codexMcpConfigArgs({ scriptPath: "/abs/plugin/bin/frizz-mcp.mjs", stateDir: "/abs/state" }, "/abs/node"))
+  const frizz = vals.find((v) => v.startsWith(`mcp_servers.${FRIZZ_MCP.name}=`))
+  assert.ok(frizz, "frizz override missing")
+  assert.match(frizz, /command="\/abs\/node"/)
+  assert.match(frizz, /args=\["\/abs\/plugin\/bin\/frizz-mcp\.mjs"\]/)
+  assert.match(frizz, /env=\{FRIZZ_STATE_DIR="\/abs\/state"\}/)
 })
 
 test("codexMcpConfigArgs: approvals are pre-answered — a headless worker cannot click a prompt", () => {
@@ -44,11 +44,11 @@ test("codexMcpConfigArgs: approvals are pre-answered — a headless worker canno
 })
 
 test("codexMcpConfigArgs: values are TOML-quoted so a path with a space or quote cannot break parsing", () => {
-  const vals = values(codexMcpConfigArgs({ scriptPath: '/has space/and"quote/fray-mcp.mjs', stateDir: "/s" }, "/node"))
-  const fray = vals.find((v) => v.startsWith(`mcp_servers.${FRAY_MCP.name}=`))!
+  const vals = values(codexMcpConfigArgs({ scriptPath: '/has space/and"quote/frizz-mcp.mjs', stateDir: "/s" }, "/node"))
+  const frizz = vals.find((v) => v.startsWith(`mcp_servers.${FRIZZ_MCP.name}=`))!
   // An unquoted/naively-quoted path would terminate the TOML string early and the whole override would
-  // fail to parse — codex then starts with NO fray server and nothing says so.
-  assert.ok(fray.includes('"/has space/and\\"quote/fray-mcp.mjs"'), `not escaped: ${fray}`)
+  // fail to parse — codex then starts with NO frizz server and nothing says so.
+  assert.ok(frizz.includes('"/has space/and\\"quote/frizz-mcp.mjs"'), `not escaped: ${frizz}`)
 })
 
 test("codexMcpConfigArgs: every emitted value is a well-formed `key=value` override", () => {

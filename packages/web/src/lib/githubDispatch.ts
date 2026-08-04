@@ -2,7 +2,7 @@ import type {
   CodexModel,
   DispatchProfileSnapshot,
   GithubBatchInput,
-} from "@fray-ui/shared"
+} from "@frizz/shared"
 import { CLAUDE_MODELS, claudeEfforts } from "./options.ts"
 
 // Validate the picker's live model/effort pair immediately before the final mutation. A Codex cache

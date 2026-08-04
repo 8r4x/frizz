@@ -58,7 +58,7 @@ test("formatDuration reads naturally at every magnitude", () => {
 });
 
 test("paths under home are shortened so the block stays narrow", () => {
-  assert.equal(tildePath("/Users/x/code/fray", "/Users/x"), "~/code/fray");
+  assert.equal(tildePath("/Users/x/code/frizz", "/Users/x"), "~/code/frizz");
   assert.equal(tildePath("/Users/x", "/Users/x"), "~");
   assert.equal(tildePath("/opt/other", "/Users/x"), "/opt/other");
   assert.equal(tildePath("/Users/xanadu/thing", "/Users/x"), "/Users/xanadu/thing");
@@ -72,14 +72,14 @@ test("a TTY boot repaints one region rather than accumulating rows", () => {
     { key: "server", label: "Server" },
   ]);
   readout.begin("workspace");
-  readout.settle("workspace", "done", "fray");
+  readout.settle("workspace", "done", "frizz");
   readout.begin("server", "starting");
 
   const shown = out.rendered;
   // Each step appears EXACTLY once on screen despite many repaints — that is the whole point.
   assert.equal(shown.match(/Workspace/g)?.length, 1, shown);
   assert.equal(shown.match(/Server/g)?.length, 1, shown);
-  assert.match(shown, /✓ {2}Workspace\s+fray/);
+  assert.match(shown, /✓ {2}Workspace\s+frizz/);
   assert.match(shown, /Server\s+starting/);
   // The repaint really is a rewind, not just newlines.
   assert.match(out.raw, /\x1b\[\d+A/);
@@ -113,15 +113,15 @@ test("the ready block names one address, and it is the one to open", () => {
   readout.ready(
     [
       { label: "Local", value: "http://127.0.0.1:4923/", accent: true },
-      { label: "Project", value: "fray — ~/code/fray" },
-      { label: "Logs", value: "~/.fray/projects/abc/logs/fray-1.log" },
+      { label: "Project", value: "frizz — ~/code/frizz" },
+      { label: "Logs", value: "~/.frizz/projects/abc/logs/frizz-1.log" },
     ],
     "press ctrl-c to stop"
   );
   const shown = out.rendered;
-  assert.match(shown, /FRAY v0\.1\.2\s+ready in/);
+  assert.match(shown, /FRIZZ v0\.1\.2\s+ready in/);
   assert.match(shown, /➜ {2}Local:\s+http:\/\/127\.0\.0\.1:4923\//);
-  assert.match(shown, /➜ {2}Logs:\s+~\/\.fray/);
+  assert.match(shown, /➜ {2}Logs:\s+~\/\.frizz/);
   assert.match(shown, /press ctrl-c to stop/);
   // Exactly one address — the child's private port must never appear beside it.
   assert.equal(shown.match(/http:\/\//g)?.length, 1, shown);
@@ -136,17 +136,17 @@ test("reopening an already-running server reports what it found, not a boot time
   readout.begin("server");
   readout.ready(
     [{ label: "Local", value: "http://127.0.0.1:4923/", accent: true }],
-    "reopened the server already running for this project · run fray-dev --stop to stop it",
+    "reopened the server already running for this project · run frizz-dev --stop to stop it",
     { status: "already running on port 4923" }
   );
   const shown = tty.rendered;
-  assert.match(shown, /FRAY v0\.1\.2\s+already running on port 4923/);
+  assert.match(shown, /FRIZZ v0\.1\.2\s+already running on port 4923/);
   // "ready in 0ms" beside a reused server reads as an implausibly fast cold boot.
   assert.equal(/ready in/.test(shown), false, shown);
   // Ctrl-C would not stop a server this launch does not own.
   assert.equal(shown.includes("press ctrl-c"), false, shown);
   assert.match(shown, /reopened the server already running for this project/);
-  assert.match(shown, /run fray-dev --stop to stop it/);
+  assert.match(shown, /run frizz-dev --stop to stop it/);
 
   // The piped/non-TTY records carry the same distinction.
   const piped = new Capture(false);
@@ -154,8 +154,8 @@ test("reopening an already-running server reports what it found, not a boot time
   plain.ready([{ label: "Local", value: "http://127.0.0.1:4923/" }], undefined, {
     status: "already running on port 4923",
   });
-  assert.match(piped.rendered, /fray: already running on port 4923/);
-  assert.equal(/fray: ready in/.test(piped.rendered), false, piped.rendered);
+  assert.match(piped.rendered, /frizz: already running on port 4923/);
+  assert.equal(/frizz: ready in/.test(piped.rendered), false, piped.rendered);
 });
 
 test("labels in the ready block align on one column regardless of length", () => {
@@ -177,11 +177,11 @@ test("a failure names the step it died in and where to read the whole story", ()
   readout.plan([{ key: "server", label: "Server" }]);
   readout.begin("server");
   assert.equal(readout.activeStep()?.key, "server");
-  readout.fail("server: port 4923 is already in use", "/tmp/logs/fray-1.log");
+  readout.fail("server: port 4923 is already in use", "/tmp/logs/frizz-1.log");
   const shown = out.rendered;
-  assert.match(shown, /✗ {2}Fray could not start/);
+  assert.match(shown, /✗ {2}Frizz could not start/);
   assert.match(shown, /port 4923 is already in use/);
-  assert.match(shown, /Full log: \/tmp\/logs\/fray-1\.log/);
+  assert.match(shown, /Full log: \/tmp\/logs\/frizz-1\.log/);
 });
 
 test("a note scrolls above the region instead of landing inside it", () => {
@@ -207,10 +207,10 @@ test("a pipe gets newline-delimited records and never an escape sequence", () =>
   readout.ready([{ label: "Local", value: "http://127.0.0.1:4923/" }]);
   const raw = out.raw;
   assert.equal(raw.includes("\x1b"), false, "a pipe must never receive terminal control codes");
-  assert.match(raw, /fray: ··· server — starting\n/);
-  assert.match(raw, /fray: done server\n/);
-  assert.match(raw, /fray: ready in /);
-  assert.match(raw, /fray: local: http:\/\/127\.0\.0\.1:4923\/\n/);
+  assert.match(raw, /frizz: ··· server — starting\n/);
+  assert.match(raw, /frizz: done server\n/);
+  assert.match(raw, /frizz: ready in /);
+  assert.match(raw, /frizz: local: http:\/\/127\.0\.0\.1:4923\/\n/);
 });
 
 test("--debug streams records, suppresses the repaint, and does not duplicate the feed", () => {
@@ -218,15 +218,15 @@ test("--debug streams records, suppresses the repaint, and does not duplicate th
   const readout = new Readout({ output: out, color: false, debug: true, tickMs: 60_000 });
   readout.plan([{ key: "server", label: "Server" }]);
   readout.begin("server", "starting");
-  readout.note("12:00:00 INFO  supervisor   starting Fray");
+  readout.note("12:00:00 INFO  supervisor   starting Frizz");
   assert.equal(out.raw.includes("\x1b["), false, "debug mode must not repaint");
-  assert.match(out.raw, /12:00:00 INFO {2}supervisor {3}starting Fray/);
+  assert.match(out.raw, /12:00:00 INFO {2}supervisor {3}starting Frizz/);
   // The log feed is the authoritative account under --debug; the step rows would restate it in a
   // second format right beside it.
-  assert.equal(out.raw.includes("fray: ··· server"), false, out.raw);
+  assert.equal(out.raw.includes("frizz: ··· server"), false, out.raw);
   // The final summary still prints — it carries the URL, which the feed does not present as such.
   readout.ready([{ label: "Local", value: "http://127.0.0.1:4923/" }]);
-  assert.match(out.raw, /fray: local: http:\/\/127\.0\.0\.1:4923\//);
+  assert.match(out.raw, /frizz: local: http:\/\/127\.0\.0\.1:4923\//);
 });
 
 test("colour is suppressed when asked, and emitted when not", () => {

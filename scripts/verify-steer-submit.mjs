@@ -1,5 +1,5 @@
-// End-to-end proof that a Claude follow-up fray injects is actually SUBMITTED — driven against a REAL
-// `claude` TUI in a REAL tmux pane, through fray's REAL resumeThread + REAL delivery confirmer.
+// End-to-end proof that a Claude follow-up frizz injects is actually SUBMITTED — driven against a REAL
+// `claude` TUI in a REAL tmux pane, through frizz's REAL resumeThread + REAL delivery confirmer.
 //
 //   node scripts/verify-steer-submit.mjs [sends=10] [--legacy]
 //
@@ -35,8 +35,8 @@ const SENDS = Number(args.find((a) => /^\d+$/.test(a)) ?? 10)
 const GAP_MS = 700 // deliberately tighter than an operator types, to stress the accumulation path
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const SLUG = "steer-submit-probe"
-const SOCKET = `fray-steer-verify-${process.pid}`
-const TARGET = `=fray-${SLUG}:`
+const SOCKET = `frizz-steer-verify-${process.pid}`
+const TARGET = `=frizz-${SLUG}:`
 const failures = []
 const ok = (cond, label, detail = "") => {
   console.log(`${cond ? "PASS" : "FAIL"}  ${label}${detail ? ` — ${detail}` : ""}`)
@@ -44,7 +44,7 @@ const ok = (cond, label, detail = "") => {
 }
 
 // ── real, isolated project + storage ─────────────────────────────────────────────────────────────
-const root = mkdtempSync(join(tmpdir(), "fray-steer-verify-"))
+const root = mkdtempSync(join(tmpdir(), "frizz-steer-verify-"))
 mkdirSync(join(root, "project"), { recursive: true })
 // realpath: on macOS os.tmpdir() is a /var symlink and Claude Code keys its per-project transcript dir
 // on the RESOLVED cwd. Reading the unresolved spelling looks for the JSONL where nothing writes it.
@@ -88,8 +88,8 @@ function readRecords() {
   return out
 }
 
-// ── a REAL claude TUI in the pane fray addresses by slug ─────────────────────────────────────────
-tmuxRaw("new-session", "-d", "-s", `fray-${SLUG}`, "-x", "160", "-y", "45", "-c", projectDir,
+// ── a REAL claude TUI in the pane frizz addresses by slug ─────────────────────────────────────────
+tmuxRaw("new-session", "-d", "-s", `frizz-${SLUG}`, "-x", "160", "-y", "45", "-c", projectDir,
   "claude", "--session-id", claudeSessionId, "--dangerously-skip-permissions", "--model", "haiku")
 await waitFor((t) => /trust this folder|bypass permissions|for shortcuts/i.test(t), 60_000, "boot")
 if (/trust this folder/i.test(capture())) {
@@ -103,7 +103,7 @@ tmux.invalidateLiveness()
 storage.upsertSession({
   slug: SLUG,
   session_id: claudeSessionId,
-  tmux_name: `fray-${SLUG}`,
+  tmux_name: `frizz-${SLUG}`,
   spawned_at: new Date().toISOString(),
   last_read_at: null,
   unread: 0,
@@ -194,8 +194,8 @@ ok(missing.length === 0, `all ${SENDS} follow-ups reached Claude Code`, `${missi
 if (!LEGACY) {
   const outstanding = "STEER-HUMAN a follow-up that will sit unsent"
   const draft = "HUMAN-DRAFT do not send this on my behalf"
-  // A follow-up fray injected AND an operator draft typed after it: the composer is no longer
-  // exclusively fray's, so both the confirmer and the pre-inject flush must keep hands off entirely.
+  // A follow-up frizz injected AND an operator draft typed after it: the composer is no longer
+  // exclusively frizz's, so both the confirmer and the pre-inject flush must keep hands off entirely.
   appendDelivery(storage, SLUG, { id: "deliv-human", text: outstanding })
   tmuxRaw("send-keys", "-t", TARGET, "-l", `${outstanding} ${draft}`)
   const before = readRecords().length

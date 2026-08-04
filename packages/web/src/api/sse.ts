@@ -1,4 +1,4 @@
-import type { ServerEvent } from "@fray-ui/shared"
+import type { ServerEvent } from "@frizz/shared"
 import type { QueryClient } from "@tanstack/react-query"
 import { store } from "../store.ts"
 import { BoardStream } from "./board-stream.ts"

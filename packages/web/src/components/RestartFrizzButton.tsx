@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react"
 import { useSnapshot } from "valtio"
 import { AlertTriangle, RefreshCw, X } from "lucide-react"
-import { canRestart, canUpdateRestart, FRAY_SUPERVISOR_STATUS_WAKE_EVENT, getFraySupervisorStatus, requestFrayRestart, requestFrayUpdateRestart } from "../api/restart.ts"
+import { canRestart, canUpdateRestart, FRIZZ_SUPERVISOR_STATUS_WAKE_EVENT, getFrizzSupervisorStatus, requestFrizzRestart, requestFrizzUpdateRestart } from "../api/restart.ts"
 import { showToast, store } from "../store.ts"
 import { STATUS_BAR_ACTION, STATUS_BAR_ICON } from "../lib/statusBar.ts"
 
@@ -9,8 +9,8 @@ import { STATUS_BAR_ACTION, STATUS_BAR_ICON } from "../lib/statusBar.ts"
 // Keep this exported contract covered by the focused component test when either icon or animation changes.
 export const UPDATE_RESTART_ICON_ROTATION = "clockwise"
 
-const updateCopy = "Install the latest version of Fray. Your running threads will not be affected."
-const restartCopy = "Restart the Fray UI. Your running threads will not be affected."
+const updateCopy = "Install the latest version of Frizz. Your running threads will not be affected."
+const restartCopy = "Restart Frizz. Your running threads will not be affected."
 
 // The one anchor both panels that hang off this button use. Narrow: a full-width strip pinned under
 // the status bar. Desktop: anchored to the button's LEFT edge and opening rightward — this control
@@ -48,7 +48,7 @@ export function UpdateRestartPopover({
   update: boolean
 }) {
   if (!open) return null
-  const action = update ? "Update Fray" : "Restart Fray"
+  const action = update ? "Update Frizz" : "Restart Frizz"
   return (
     <div
       id="update-restart-popover"
@@ -69,7 +69,7 @@ export function UpdateRestartPopover({
   )
 }
 
-const failureCopy = "Fray kept running the previous version, and your threads are unaffected."
+const failureCopy = "Frizz kept running the previous version, and your threads are unaffected."
 
 /**
  * The failure panel, built on the SAME opaque card as the popover it replaces — an error is the one
@@ -135,7 +135,7 @@ export function RestartActionButton({
     <button
       type="button"
       aria-describedby="update-restart-popover"
-      aria-label={update ? "Update Fray" : "Restart Fray"}
+      aria-label={update ? "Update Frizz" : "Restart Frizz"}
       disabled={busy}
       aria-busy={busy || undefined}
       className={STATUS_BAR_ACTION}
@@ -149,7 +149,7 @@ export function RestartActionButton({
 }
 
 /** Global recovery action. It stays mounted in App chrome even when the app child is unhealthy. */
-export function RestartFrayButton() {
+export function RestartFrizzButton() {
   const snap = useSnapshot(store)
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -165,7 +165,7 @@ export function RestartFrayButton() {
 
   useEffect(() => {
     let active = true
-    void getFraySupervisorStatus().then((status) => {
+    void getFrizzSupervisorStatus().then((status) => {
       if (!active) return
       setAvailable(canRestart(status))
       setUpdateAvailable(canUpdateRestart(status))
@@ -181,7 +181,7 @@ export function RestartFrayButton() {
   // read as "the modal flashed and nothing happened". Once this session has asked for an update,
   // keep the supervisor's own reason on screen. It clears itself when the state leaves "failed".
   const reportedFailure = requested.current && snap.controlPlaneState === "failed"
-    ? snap.controlPlaneMessage ?? "Fray did not become ready"
+    ? snap.controlPlaneMessage ?? "Frizz did not become ready"
     : undefined
   const failure = error ?? reportedFailure
   const shownError = failure && failure !== dismissed ? failure : undefined
@@ -205,8 +205,8 @@ export function RestartFrayButton() {
       store.controlPlaneRestartPending = true
     }
     try {
-      if (updateAvailable) await requestFrayUpdateRestart()
-      else await requestFrayRestart()
+      if (updateAvailable) await requestFrizzUpdateRestart()
+      else await requestFrizzRestart()
       // Do not reload onto the same old child while an immutable candidate is still building. App's
       // supervisor monitor reloads this exact route only after the durable owner reports readiness.
       if (updateAvailable) {
@@ -214,8 +214,8 @@ export function RestartFrayButton() {
         // `restartPending` is deliberately NOT cleared here: it must outlive the ack until a poll
         // OBSERVES the server-confirmed transition (a non-"ready" status), so a stale in-flight poll
         // that captured the pre-flip "ready" can't slip past the guard and reload onto the old child.
-        sessionStorage.setItem("fray:reload-after-update-restart", destination)
-        window.dispatchEvent(new Event(FRAY_SUPERVISOR_STATUS_WAKE_EVENT))
+        sessionStorage.setItem("frizz:reload-after-update-restart", destination)
+        window.dispatchEvent(new Event(FRIZZ_SUPERVISOR_STATUS_WAKE_EVENT))
         setBusy(false)
       } else {
         window.location.replace(destination)
@@ -230,7 +230,7 @@ export function RestartFrayButton() {
       setBusy(false)
       setError(message)
       // The reason goes in the failure panel, not the toast — see the same call in App.tsx.
-      showToast(`${updateAvailable ? "Update & Restart" : "Restart Fray"} failed`)
+      showToast(`${updateAvailable ? "Update & Restart" : "Restart Frizz"} failed`)
     }
   }
 

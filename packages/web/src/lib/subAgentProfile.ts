@@ -9,7 +9,7 @@ function splitEffort(value: string, separator: "/" | "-"): { model: string; effo
 }
 
 // The provider records one opaque dispatch cell, not separate profile fields:
-//   Claude: fray:opus-high / fray:fray-opus-high
+//   Claude: frizz:opus-high / frizz:frizz-opus-high
 //   Codex:  explorer gpt-5.6-terra/high
 // Preserve an agent role when one exists, but present the model/effort with the same separators the
 // normal prompt-box selector uses. Unknown/custom cells remain verbatim rather than being guessed.
@@ -17,8 +17,8 @@ export function subAgentProfileLabel(subagentType?: string): string {
   const raw = subagentType?.trim()
   if (!raw) return "Profile unknown"
 
-  if (raw.startsWith("fray:")) {
-    const routed = raw.slice("fray:".length).replace(/^fray-/, "")
+  if (raw.startsWith("frizz:")) {
+    const routed = raw.slice("frizz:".length).replace(/^frizz-/, "")
     const { model, effort } = splitEffort(routed, "-")
     return effort ? `${model} › ${effort}` : model
   }

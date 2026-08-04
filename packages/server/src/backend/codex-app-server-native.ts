@@ -1,14 +1,14 @@
 // The NATIVE transport: host the Codex app-server on its own unix-socket listener
-// (`codex app-server --listen unix://PATH`) instead of inside fray's hand-written daemon.
+// (`codex app-server --listen unix://PATH`) instead of inside frizz's hand-written daemon.
 //
 // This is a drop-in `CodexAppServerHost` — same seam as `daemonCodexAppServerHost`, same
-// `CodexAppServerProcess` shape out the other end — but there is no fray-authored daemon process in
-// the middle. fray spawns the codex binary DETACHED and talks to it over a WebSocket on a socket path
-// fray chose. What the daemon was hand-building, the app-server already does:
+// `CodexAppServerProcess` shape out the other end — but there is no frizz-authored daemon process in
+// the middle. frizz spawns the codex binary DETACHED and talks to it over a WebSocket on a socket path
+// frizz chose. What the daemon was hand-building, the app-server already does:
 //
 //   - lifetime      codex is spawned `detached` + `stdio:"ignore"` + `unref()`, so it outlives this
 //                   runtime. Verified: the listener survives a SIGKILL of the process that spawned it.
-//   - reattachment  the socket keeps accepting after every client goes away, so the next fray
+//   - reattachment  the socket keeps accepting after every client goes away, so the next frizz
 //                   generation just connects again.
 //   - handshake     `initialize` is per-CONNECTION here, not per-process. The daemon had to perform
 //                   the handshake itself and replay a cached response to every reattaching client;
@@ -18,8 +18,8 @@
 //                   already in use", so the binary itself enforces one-per-project.
 //
 // Deliberately NOT `codex app-server daemon start`: that uses a MACHINE-GLOBAL socket
-// (`~/.codex/app-server-control/app-server-control.sock`) shared by every project and every fray, and
-// a codex-managed binary version. Spawning the listener ourselves keeps fray's per-project socket
+// (`~/.codex/app-server-control/app-server-control.sock`) shared by every project and every frizz, and
+// a codex-managed binary version. Spawning the listener ourselves keeps frizz's per-project socket
 // path, its audited env allowlist, and its pinned `CODEX_APP_SERVER_SUPPORTED_VERSION`.
 //
 // KNOWN TRADE-OFF vs the daemon: while NO client is attached the app-server DROPS server->client
@@ -40,11 +40,11 @@ import { WebSocket } from "ws"
 import { codexAppServerArgv } from "./codex-mcp.ts"
 import type { CodexAppServerProcess } from "./codex-app-server.ts"
 import type { CodexAppServerAttachment, CodexAppServerHost, CodexAppServerHostOptions } from "./codex-app-server-host.ts"
-import { log as frayLog } from "../logging.ts"
+import { log as frizzLog } from "../logging.ts"
 
 export interface NativeListenerRecord {
   projectId: string
-  /** Identity of the app-server PROCESS — stable across a fray restart, new only when the listener
+  /** Identity of the app-server PROCESS — stable across a frizz restart, new only when the listener
    *  itself was replaced. Drives the bridge's `sameProcess` check. */
   generation: string
   listenerPid: number
@@ -66,8 +66,8 @@ export function nativeRecordPath(stateDir: string, projectId: string): string {
  *  hosts do; this function was the only one of the three that had been left POSIX-only. */
 export function nativeListenSocketPath(stateDir: string, projectId: string): string {
   const key = createHash("sha256").update(stateDir).update("\0").update(projectId).digest("hex").slice(0, 16)
-  if (process.platform === "win32") return `\\\\.\\pipe\\fray-codex-native-${key}`
-  return join(process.env.TMPDIR ?? "/tmp", `fray-codex-native-${key}.sock`)
+  if (process.platform === "win32") return `\\\\.\\pipe\\frizz-codex-native-${key}`
+  return join(process.env.TMPDIR ?? "/tmp", `frizz-codex-native-${key}.sock`)
 }
 
 function pidAlive(pid: number): boolean {
@@ -106,7 +106,7 @@ export function liveNativeRecord(stateDir: string, projectId: string): NativeLis
 }
 
 /** Terminate the listener. Only for an explicit teardown — never for a restart: this transport's
- *  entire value is that the listener OUTLIVES fray, so nothing on the shutdown path may call this.
+ *  entire value is that the listener OUTLIVES frizz, so nothing on the shutdown path may call this.
  *  Inert when there is no record, which is every project not on this transport. */
 export function killNativeListener(stateDir: string, projectId: string): void {
   const record = liveNativeRecord(stateDir, projectId)
@@ -166,7 +166,7 @@ function socketAccepting(socketPath: string): Promise<boolean> {
  * message per WebSocket frame, so this adapter is purely a framing translation.
  *
  * `kill()` DETACHES. It closes this WebSocket and leaves the app-server — and every turn running
- * inside it — alone. That one line is what makes quitting fray leave Codex running.
+ * inside it — alone. That one line is what makes quitting frizz leave Codex running.
  */
 function attach(record: NativeListenerRecord, timeoutMs: number): Promise<CodexAppServerProcess> {
   return new Promise((resolve, reject) => {
@@ -264,7 +264,7 @@ async function startListener(options: CodexAppServerHostOptions): Promise<Native
   }
 
   const generation = randomUUID()
-  const child = spawn(options.codexBin, codexAppServerArgv(["--listen", `unix://${socketPath}`], options.frayMcp), {
+  const child = spawn(options.codexBin, codexAppServerArgv(["--listen", `unix://${socketPath}`], options.frizzMcp), {
     cwd: options.cwd,
     env: options.env,
     detached: true,
@@ -350,7 +350,7 @@ export const nativeListenCodexAppServerHost: CodexAppServerHost = async (options
       droppedWhileDetached: 0,
     }
   } catch (error) {
-    // A concurrent fray may have won the bind between our probe and our spawn ("app-server control
+    // A concurrent frizz may have won the bind between our probe and our spawn ("app-server control
     // socket is already in use"). Its record is authoritative; join it rather than fighting for it.
     const raced = liveNativeRecord(options.stateDir, options.projectId)
     if (raced) {
@@ -362,8 +362,8 @@ export const nativeListenCodexAppServerHost: CodexAppServerHost = async (options
         droppedWhileDetached: PRESUMED_LOSSY_REJOIN,
       }
     }
-    frayLog.error("codex", `codex app-server native listener unavailable (${(error as Error).message}); falling back to an in-process app-server — turns will NOT survive a fray restart`)
-    const child = spawn(options.codexBin, codexAppServerArgv(["--stdio"], options.frayMcp), { cwd: options.cwd, env: options.env, stdio: ["pipe", "pipe", "pipe"] })
+    frizzLog.error("codex", `codex app-server native listener unavailable (${(error as Error).message}); falling back to an in-process app-server — turns will NOT survive a frizz restart`)
+    const child = spawn(options.codexBin, codexAppServerArgv(["--stdio"], options.frizzMcp), { cwd: options.cwd, env: options.env, stdio: ["pipe", "pipe", "pipe"] })
     return { process: child as unknown as CodexAppServerProcess, generation: randomUUID(), reattached: false, daemonPid: process.pid, droppedWhileDetached: 0 }
   }
 }

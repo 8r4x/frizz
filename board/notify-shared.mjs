@@ -1,9 +1,9 @@
 // @ts-check
-// Shared storage + rendering for the fray durable notification queue. Imported by both the
-// CLI (`notify.mjs`) and the Stop hook (`fray-notify-surface.mjs`) so the on-disk shape and
+// Shared storage + rendering for the frizz durable notification queue. Imported by both the
+// CLI (`notify.mjs`) and the Stop hook (`frizz-notify-surface.mjs`) so the on-disk shape and
 // the human-facing markdown render are defined in ONE place and can't drift.
 //
-// Queue item shape (one JSON object per line in `.fray/notify-queue.jsonl`):
+// Queue item shape (one JSON object per line in `.frizz/notify-queue.jsonl`):
 //   { id, ts, kind, title, body, status: "open"|"dismissed", surfaced: bool }
 // `title` is a short heading; `body` is the prose context the human reads to decide.
 // Legacy items carry a single `text` field instead of title/body — the renderer degrades

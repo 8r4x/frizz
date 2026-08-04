@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import type { SubAgentView } from "@fray-ui/shared"
+import type { SubAgentView } from "@frizz/shared"
 import { runningQueueSubAgents } from "./queueSubAgents.ts"
 
 const agents: SubAgentView[] = [

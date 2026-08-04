@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { Terminal } from "@xterm/xterm"
 import { FitAddon } from "@xterm/addon-fit"
-import type { TermClientMsg } from "@fray-ui/shared"
+import type { TermClientMsg } from "@frizz/shared"
 import { queuedTerminalInputBytes, terminalCloseKind, terminalReconnectDelay } from "../lib/terminalConnection.ts"
 
 // One xterm + WebSocket per selected thread. Remounts on slug change (keyed by

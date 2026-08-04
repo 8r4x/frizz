@@ -6,7 +6,7 @@
 // code block stays code (see the fence tracking below). Detection happens on the raw markdown BEFORE
 // the sanitizer runs, so nothing loosens the HTML allowlist.
 
-import { ATTACHMENT_DOC_EXTENSIONS } from "@fray-ui/shared"
+import { ATTACHMENT_DOC_EXTENSIONS } from "@frizz/shared"
 import { parseCodexHostDirective, type CodexHostDirective } from "./codexHostDirectives.ts"
 
 export type ProsePart =

@@ -1,18 +1,18 @@
 import { cpSync, lstatSync, mkdirSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, isAbsolute, join, resolve } from "node:path"
-import { frayPaths } from "./fray-paths.ts"
+import { frizzPaths } from "./frizz-paths.ts"
 
 // THE STABLE WORKER PLUGIN PATH — the one thing that makes a live plugin reload useful.
 //
 // A worker is launched against a plugin directory and reads its HOOKS from there. The Claude Agent
 // SDK can re-read that directory on demand (`query.reloadPlugins()`), but the request takes NO
-// arguments: it re-reads whatever path the session started with. Fray's paths are the problem —
-// dev workers point at `~/.fray/builds/<sha>/runtime/cc-worker` and production workers at
+// arguments: it re-reads whatever path the session started with. Frizz's paths are the problem —
+// dev workers point at `~/.frizz/builds/<sha>/runtime/cc-worker` and production workers at
 // `<npm package>/runtime/cc-worker`, and BOTH are immutable and version-specific. Reloading one
 // re-reads the same old bytes, so the reload is a no-op and a worker can never move forward.
 //
-// So fray stages each version's plugin under its own directory and publishes ONE stable path that
+// So frizz stages each version's plugin under its own directory and publishes ONE stable path that
 // points at the current one. A worker launched against the stable path can then be moved onto a newer
 // plugin by repointing the link and asking it to reload — no restart, no lost context, no lost
 // in-memory sub-agents. Measured: repointing this link mid-session and calling reloadPlugins() arms a
@@ -23,14 +23,14 @@ import { frayPaths } from "./fray-paths.ts"
 // dangling plugin path would break every hook at once. The tree is ~300K, so the copy is cheap
 // insurance. It is also what makes the stable path outlive the build that produced it.
 
-/** `~/.fray/plugins` — one subdirectory per staged version, siblings of `builds/`. */
+/** `~/.frizz/plugins` — one subdirectory per staged version, siblings of `builds/`. */
 export function defaultPluginStageRoot(home = homedir()): string {
-  return join(frayPaths({ home }).cache, "plugins")
+  return join(frizzPaths({ home }).cache, "plugins")
 }
 
-/** `~/.fray/current` — where the stable, repointable links live. */
+/** `~/.frizz/current` — where the stable, repointable links live. */
 export function defaultStablePluginRoot(home = homedir()): string {
-  return join(frayPaths({ home }).cache, "current")
+  return join(frizzPaths({ home }).cache, "current")
 }
 
 export type SymlinkOutcome = "created" | "repointed" | "unchanged"

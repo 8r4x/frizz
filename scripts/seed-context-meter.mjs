@@ -14,7 +14,7 @@
 //   context-none  — a claude row with a numerator and NO window ⇒ must render NOTHING, not an empty ring
 //
 // Follows the adhoc-cdp recipe: a session row + a live dummy tmux pane + a transcript the tailer reads.
-// Usage: node scripts/seed-context-meter.mjs --home=/abs/temp-home --socket=fray-adhoc-NNNN-PID
+// Usage: node scripts/seed-context-meter.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID
 import { execFileSync } from "node:child_process"
 import { globSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -28,14 +28,14 @@ if (!home || !socket) {
   process.exit(1)
 }
 
-const db = globSync(join(home, ".fray/projects/*/ui.db"))[0]
-if (!db) throw new Error(`no ui.db under ${home}/.fray/projects`)
+const db = globSync(join(home, ".frizz/projects/*/ui.db"))[0]
+if (!db) throw new Error(`no ui.db under ${home}/.frizz/projects`)
 
 const T0 = Date.now() - 25 * 60_000
 const at = (m) => new Date(T0 + m * 60_000).toISOString()
 
 function row({ slug, sessionId, agentSessionId, title, backend, restedAt }) {
-  const tmuxName = `fray-${slug}`
+  const tmuxName = `frizz-${slug}`
   try {
     execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", tmuxName, "sleep 7200"], { stdio: "ignore" })
   } catch { /* already up */ }

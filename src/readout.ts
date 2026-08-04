@@ -1,9 +1,9 @@
 // ── The launcher's terminal readout ────────────────────────────────────────────────────────────────
-// What the operator sees while Fray starts, and the block that stays on screen once it has.
+// What the operator sees while Frizz starts, and the block that stays on screen once it has.
 //
 // This replaces a single animated line that had to switch itself off (`beginConcurrentLogs`) as soon
 // as the forked control-plane child began writing to the same TTY — the launcher cannot clear another
-// process' output, so the interesting half of every boot degraded into interleaved `[fray-ui] …` rows.
+// process' output, so the interesting half of every boot degraded into interleaved `[frizz] …` rows.
 // The child is silent on the terminal now (its records go to the run log; `--debug` opens the tap
 // again), which leaves exactly one writer here and makes a real repaint safe.
 //
@@ -214,7 +214,7 @@ export class Readout {
   }
 
   private header(): string[] {
-    const name = this.c(`${ANSI.bold}${ANSI.magenta}`, "FRAY")
+    const name = this.c(`${ANSI.bold}${ANSI.magenta}`, "FRIZZ")
     const version = this.version ? ` ${this.c(ANSI.dim, `v${this.version}`)}` : ""
     return ["", `  ${name}${version}`, ""]
   }
@@ -237,7 +237,7 @@ export class Readout {
    * Non-TTY transcript: one settled, parseable row per state change, so a pipe still sees progress.
    *
    * Silent under `--debug`, where the log feed is the authoritative account and these rows were
-   * duplicating it in a second format ("fray: ··· artifact — checking …" immediately beside
+   * duplicating it in a second format ("frizz: ··· artifact — checking …" immediately beside
    * "INFO artifact Checking …"). The final ready/fail summary still prints in both modes.
    */
   private emitPlain(step: Step): void {
@@ -245,7 +245,7 @@ export class Readout {
     const mark =
       step.state === "done" ? "done" : step.state === "failed" ? "failed" : step.state === "skipped" ? "skipped" : "···"
     const detail = step.detail ? ` — ${step.detail}` : ""
-    const line = `fray: ${mark} ${step.label.toLowerCase()}${detail}`
+    const line = `frizz: ${mark} ${step.label.toLowerCase()}${detail}`
     if (line === this.lastPlainLine) return
     this.lastPlainLine = line
     this.out.write(`${line}\n`)
@@ -285,15 +285,15 @@ export class Readout {
     const status = options.status ?? `ready in ${elapsed}`
     this.stop()
     if (!this.tty || this.debug) {
-      this.out.write(`fray: ${status}\n`)
-      for (const entry of entries) this.out.write(`fray: ${entry.label.toLowerCase()}: ${entry.value}\n`)
-      if (options.warning) this.out.write(`fray: warning: ${options.warning}\n`)
+      this.out.write(`frizz: ${status}\n`)
+      for (const entry of entries) this.out.write(`frizz: ${entry.label.toLowerCase()}: ${entry.value}\n`)
+      if (options.warning) this.out.write(`frizz: warning: ${options.warning}\n`)
       return
     }
     const width = entries.reduce((max, entry) => Math.max(max, entry.label.length), 0) + 1
     const lines = [
       "",
-      `  ${this.c(`${ANSI.bold}${ANSI.magenta}`, "FRAY")}${
+      `  ${this.c(`${ANSI.bold}${ANSI.magenta}`, "FRIZZ")}${
         this.version ? ` ${this.c(ANSI.dim, `v${this.version}`)}` : ""
       }  ${this.c(ANSI.dim, status)}`,
       "",
@@ -325,13 +325,13 @@ export class Readout {
     if (active) this.settle(active.key, "failed")
     this.stop()
     if (!this.tty || this.debug) {
-      this.out.write(`fray: failed: ${message}\n`)
-      if (logPath) this.out.write(`fray: log: ${logPath}\n`)
+      this.out.write(`frizz: failed: ${message}\n`)
+      if (logPath) this.out.write(`frizz: log: ${logPath}\n`)
       return
     }
     const lines = [
       "",
-      `  ${this.c(ANSI.red, "✗")}  ${this.c(ANSI.bold, "Fray could not start")}`,
+      `  ${this.c(ANSI.red, "✗")}  ${this.c(ANSI.bold, "Frizz could not start")}`,
       "",
       // Not truncated, for the same reason as `ready()`: the operator has to be able to read the whole
       // error and copy the whole path, and nothing repaints after this.

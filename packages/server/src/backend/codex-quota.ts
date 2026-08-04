@@ -1,7 +1,7 @@
 import { join } from "node:path"
 import { readdirSync, statSync, openSync, readSync, fstatSync, closeSync } from "node:fs"
 import { spawn } from "node:child_process"
-import type { ProviderQuota, QuotaWindow } from "@fray-ui/shared"
+import type { ProviderQuota, QuotaWindow } from "@frizz/shared"
 import { defaultCodexHome } from "./codex.ts"
 // The SAME handshake identity the dispatch path uses, so the app-server sees one consistent client.
 import { CLIENT_INFO, CLIENT_CAPABILITIES } from "./codex-app-server.ts"
@@ -15,7 +15,7 @@ import { CLIENT_INFO, CLIENT_CAPABILITIES } from "./codex-app-server.ts"
 //
 // The fallback ordering is not cosmetic: rollouts carry NO account identity (verified — `session_meta`
 // has session_id/cwd/originator/cli_version/git and nothing about the account), so after `codex login`
-// switches accounts, every rollout on disk still describes the OLD one. That is exactly how fray came
+// switches accounts, every rollout on disk still describes the OLD one. That is exactly how frizz came
 // to show "1% remaining" from an exhausted previous account while `codex` in a terminal reported a
 // fresh 100% (2026-07-31). Nothing local can re-attribute those files, so the live read has to be
 // primary and the tail only a degradation path for when the app-server can't be reached.
@@ -197,7 +197,7 @@ export function readCodexQuotaFromRollouts(codexHome = defaultCodexHome()): Prov
 //     "primary":{"usedPercent":0,"windowDurationMins":10080,"resetsAt":1786130265},
 //     "secondary":null,"credits":{…}}, "rateLimitsByLimitId":{…}, "rateLimitResetCredits":{…}}}
 //
-// `rateLimitsByLimitId` additionally breaks the account down per model family; fray shows the account
+// `rateLimitsByLimitId` additionally breaks the account down per model family; frizz shows the account
 // aggregate, so only the top-level `rateLimits` is read.
 
 // The camelCase (app-server) spelling of a window.
@@ -234,7 +234,7 @@ export function queryCodexRateLimits(
     let child: ReturnType<typeof spawn>
     try {
       // DELIBERATELY BARE — no codexAppServerArgv here. This is a short-lived read of the quota
-      // endpoint, not a worker: mounting fray's MCP servers would make every quota poll fork an
+      // endpoint, not a worker: mounting frizz's MCP servers would make every quota poll fork an
       // `npx chrome-devtools-mcp` launch for tools nothing in this path can call.
       child = spawn(codexBin, ["app-server"], {
         stdio: ["pipe", "pipe", "ignore"],

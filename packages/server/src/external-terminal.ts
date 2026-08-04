@@ -21,13 +21,13 @@ export function providerResumeCommand(backend: "claude" | "codex", projectDir: s
   return `cd ${shellQuote(projectDir)} && ${resume}`
 }
 
-// ATTACH — for a thread fray is still driving. This joins the EXACT pane the worker is running in, so
+// ATTACH — for a thread frizz is still driving. This joins the EXACT pane the worker is running in, so
 // the human sees the live screen: an in-flight turn, and critically any permission prompt the worker
 // is parked on. That is the whole reason to prefer it over a resume, which cannot show either.
 //
 // The `=` prefix forces EXACT session-name resolution and is not optional. tmux otherwise resolves a
-// bare name by prefix, and fray's slug allocator mints `<slug>-2` for a repeated prompt, so
-// `fray-X` and `fray-X-2` routinely coexist. Verified here 2026-07-25 against a live socket: a bare
-// `-t fray-set-up-a-canary-build-system` (no such session) silently PREFIX-MATCHED into the running
+// bare name by prefix, and frizz's slug allocator mints `<slug>-2` for a repeated prompt, so
+// `frizz-X` and `frizz-X-2` routinely coexist. Verified here 2026-07-25 against a live socket: a bare
+// `-t frizz-set-up-a-canary-build-system` (no such session) silently PREFIX-MATCHED into the running
 // `…-2` pane, while the `=` form correctly refused. Attaching a human to the wrong agent's terminal
 // is exactly the class of bug the rest of tmux.ts already guards with this spelling.

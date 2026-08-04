@@ -6,7 +6,7 @@
 //                             the reading can be watched climbing;
 //   2. a SILENT watcher     — an output file that exists and is EMPTY. This is the wedged case, and the
 //                             row must read "0 lines" rather than showing nothing;
-//   3. an UNREADABLE shell  — its launch ack names a path that does not exist (fray's stand-in for a
+//   3. an UNREADABLE shell  — its launch ack names a path that does not exist (frizz's stand-in for a
 //                             codex exec, whose output never reaches a file at all). No counter.
 //
 // A SECOND thread seeds the PRE-ACK window — the seconds between a shell's `tool_use` (its row
@@ -60,8 +60,8 @@ const transcriptDir = path.join(home, ".claude", "projects", cwdSlug)
 fs.mkdirSync(transcriptDir, { recursive: true })
 fs.mkdirSync(path.join(home, "tasks"), { recursive: true })
 
-const dbDir = fs.readdirSync(path.join(home, ".fray", "projects"))[0]
-const db = path.join(home, ".fray", "projects", dbDir, "ui.db")
+const dbDir = fs.readdirSync(path.join(home, ".frizz", "projects"))[0]
+const db = path.join(home, ".frizz", "projects", dbDir, "ui.db")
 
 const base = Date.now() - 14 * 60_000
 const T = (ms) => new Date(base + ms).toISOString()
@@ -99,11 +99,11 @@ const preackRecords = [
 
 function seed({ slug, sessionId, title, records }) {
   fs.writeFileSync(path.join(transcriptDir, `${sessionId}.jsonl`), records.map((r) => JSON.stringify({ ...r, sessionId })).join("\n") + "\n")
-  execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `fray-${slug}`, "sleep 7200"])
+  execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `frizz-${slug}`, "sleep 7200"])
   execFileSync("sqlite3", [
     db,
     `INSERT INTO session (slug, session_id, tmux_name, spawned_at, title, title_auto, backend, model, effort, permission_mode, state, unread, exited, archived)
-     VALUES ('${slug}', '${sessionId}', 'fray-${slug}', '${T(0)}', '${title}', 0, 'claude', 'opus', 'high', 'auto', 'open', 0, 0, 0)`,
+     VALUES ('${slug}', '${sessionId}', 'frizz-${slug}', '${T(0)}', '${title}', 0, 'claude', 'opus', 'high', 'auto', 'open', 0, 0, 0)`,
   ])
   console.log(`seeded ${slug} (${sessionId})`)
 }

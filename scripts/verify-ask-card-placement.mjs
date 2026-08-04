@@ -19,7 +19,7 @@ const [home, socket, port, slugArg] = process.argv.slice(2)
 if (!home || !socket || !port) throw new Error("usage: <tempHome> <socket> <port> [slug] [--no-ask]")
 const withAsk = !process.argv.includes("--no-ask")
 
-const projectDir = "/Users/colinmcd94/Documents/projects/fray"
+const projectDir = "/Users/colinmcd94/Documents/projects/frizz"
 const cwdSlug = projectDir.replaceAll("/", "-")
 const sessionId = randomUUID()
 const slug = slugArg && !slugArg.startsWith("--") ? slugArg : "ask-placement-probe"
@@ -67,17 +67,17 @@ mkdirSync(transcriptDir, { recursive: true })
 writeFileSync(join(transcriptDir, `${sessionId}.jsonl`), `${lines.join("\n")}\n`)
 
 // ---- 2. a live pane so the row reads as a running session ------------------------------------------
-execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `fray-${slug}`, "sleep 7200"])
+execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `frizz-${slug}`, "sleep 7200"])
 
 // ---- 3. the session row + the pending interaction --------------------------------------------------
-const projectsRoot = join(home, ".fray", "projects")
+const projectsRoot = join(home, ".frizz", "projects")
 const projectId = readdirSync(projectsRoot)[0]
 if (!projectId) throw new Error("the stack has not created its project state dir yet")
 const db = join(projectsRoot, projectId, "ui.db")
 const sql = (text) => execFileSync("sqlite3", [db, text], { encoding: "utf8" })
 
 sql(`INSERT INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, state)
-     VALUES ('${slug}', '${sessionId}', 'fray-${slug}', '${t(0)}', 'Ask card placement probe', 'claude', 'opus', 'xhigh', 'auto', 'open')`)
+     VALUES ('${slug}', '${sessionId}', 'frizz-${slug}', '${t(0)}', 'Ask card placement probe', 'claude', 'opus', 'xhigh', 'auto', 'open')`)
 
 if (!withAsk) {
   console.log(JSON.stringify({ slug, sessionId, projectId, ask: false, url: `http://127.0.0.1:${port}/thread/${slug}/full` }))

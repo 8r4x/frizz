@@ -1,29 +1,29 @@
-export interface RestartFrayResult {
+export interface RestartFrizzResult {
   protocol: 1
   state: "ready" | "restarting" | "failed"
   message?: string
 }
 
-export interface FraySupervisorStatus {
+export interface FrizzSupervisorStatus {
   protocol: 1
   state: "ready" | "restarting" | "failed"
   message?: string
   artifactDigest?: string
-  /** Only fray-dev's durable supervisor can safely build and promote a replacement artifact. */
+  /** Only frizz-dev's durable supervisor can safely build and promote a replacement artifact. */
   updateRestart?: boolean
   /**
    * Is a newer artifact actually available? Sent only by a launcher that can answer it (the registry
    * launcher, which knows its own version and the registry's latest). ABSENT means "cannot tell —
-   * assume yes", which is right for fray-dev, where an update rebuilds from source and is always
+   * assume yes", which is right for frizz-dev, where an update rebuilds from source and is always
    * meaningful.
    */
   updateAvailable?: boolean
   /**
-   * Is this Fray a DEVELOPMENT build — launched from a source checkout by `fray-dev` or `pnpm dev`,
-   * rather than the published `frayui` bin? Sent only when true, so absent means "no".
+   * Is this Frizz a DEVELOPMENT build — launched from a source checkout by `frizz-dev` or `pnpm dev`,
+   * rather than the published `frizz` bin? Sent only when true, so absent means "no".
    *
    * The client cannot answer this itself. `import.meta.env.DEV` is a Vite COMPILE-TIME constant, true
-   * only under `vite dev` middleware — and fray-dev's ordinary route builds an immutable artifact and
+   * only under `vite dev` middleware — and frizz-dev's ordinary route builds an immutable artifact and
    * serves the Vite PRODUCTION bundle, where it is statically `false`. Gating a dev-only affordance on
    * it therefore eliminated that affordance from the build the maintainer runs all day. Only the
    * launcher knows, so it says so here.
@@ -32,10 +32,10 @@ export interface FraySupervisorStatus {
 }
 
 /** Wakes the app-level status monitor immediately after a control action is accepted. */
-export const FRAY_SUPERVISOR_STATUS_WAKE_EVENT = "fray:supervisor-status-wake"
+export const FRIZZ_SUPERVISOR_STATUS_WAKE_EVENT = "frizz:supervisor-status-wake"
 
 /** Every supervisor that speaks the control protocol can restart its disposable application child. */
-export function canRestart(status: FraySupervisorStatus | null): boolean {
+export function canRestart(status: FrizzSupervisorStatus | null): boolean {
   return status !== null
 }
 
@@ -45,63 +45,63 @@ export function canRestart(status: FraySupervisorStatus | null): boolean {
  * Two conditions, and conflating them was a real shipped bug: `updateRestart` says the verb is WIRED
  * (legacy/static supervisors omit it, so their recovery endpoint is never surfaced as an update), while
  * `updateAvailable` says a newer artifact actually EXISTS. With only the first, a fully up-to-date
- * production Fray still read "Update Fray" and a click reinstalled its own version and restarted the
+ * production Frizz still read "Update Frizz" and a click reinstalled its own version and restarted the
  * app for nothing — measured end-to-end against the published package.
  *
- * `updateAvailable` absent ⇒ treated as available, so fray-dev (which can always rebuild from source,
+ * `updateAvailable` absent ⇒ treated as available, so frizz-dev (which can always rebuild from source,
  * and has no "already current" notion) is unchanged.
  */
-export function canUpdateRestart(status: FraySupervisorStatus | null): boolean {
+export function canUpdateRestart(status: FrizzSupervisorStatus | null): boolean {
   return status?.updateRestart === true && status.updateAvailable !== false
 }
 
 /**
- * Is Fray itself running as a development build? Deliberately strict: an unreachable supervisor, a
- * legacy one that predates the field, and a published Fray all read the same — NOT a dev build — so a
- * dev-only verb can never appear for someone who merely installed Fray.
+ * Is Frizz itself running as a development build? Deliberately strict: an unreachable supervisor, a
+ * legacy one that predates the field, and a published Frizz all read the same — NOT a dev build — so a
+ * dev-only verb can never appear for someone who merely installed Frizz.
  */
-export function isDevFrayBuild(status: FraySupervisorStatus | null): boolean {
+export function isDevFrizzBuild(status: FrizzSupervisorStatus | null): boolean {
   return status?.dev === true
 }
 
-export async function getFraySupervisorStatus(fetcher: typeof fetch = fetch): Promise<FraySupervisorStatus | null> {
+export async function getFrizzSupervisorStatus(fetcher: typeof fetch = fetch): Promise<FrizzSupervisorStatus | null> {
   try {
-    const response = await fetcher("/_fray/control/status", { headers: { "cache-control": "no-store" } })
+    const response = await fetcher("/_frizz/control/status", { headers: { "cache-control": "no-store" } })
     if (!response.ok || !response.headers.get("content-type")?.includes("application/json")) return null
-    const status = await response.json() as Partial<FraySupervisorStatus>
-    return status.protocol === 1 && (status.state === "ready" || status.state === "restarting" || status.state === "failed") ? status as FraySupervisorStatus : null
+    const status = await response.json() as Partial<FrizzSupervisorStatus>
+    return status.protocol === 1 && (status.state === "ready" || status.state === "restarting" || status.state === "failed") ? status as FrizzSupervisorStatus : null
   } catch {
     return null
   }
 }
 
-async function requestFrayRestartAction(path: "/_fray/control/restart" | "/_fray/control/update-restart", fetcher: typeof fetch): Promise<RestartFrayResult> {
+async function requestFrizzRestartAction(path: "/_frizz/control/restart" | "/_frizz/control/update-restart", fetcher: typeof fetch): Promise<RestartFrizzResult> {
   const response = await fetcher(path, {
     method: "POST",
     headers: { "cache-control": "no-store" },
   })
-  let result: RestartFrayResult | undefined
+  let result: RestartFrizzResult | undefined
   try {
-    result = await response.json() as RestartFrayResult
+    result = await response.json() as RestartFrizzResult
   } catch {
     // Keep the failure leg actionable even if an old/non-supervised server returned HTML.
   }
   if (!response.headers.get("content-type")?.includes("application/json") || !result || result.protocol !== 1 || (result.state !== "ready" && result.state !== "restarting" && result.state !== "failed")) {
-    throw new Error("Fray restart controls are unavailable for this server")
+    throw new Error("Frizz restart controls are unavailable for this server")
   }
   if (!response.ok) {
     throw new Error(result.message ?? `Restart request failed (${response.status})`)
   }
-  if (result.state === "failed") throw new Error(result.message ?? "Fray did not become ready")
+  if (result.state === "failed") throw new Error(result.message ?? "Frizz did not become ready")
   return result
 }
 
 /** Restarts the currently promoted artifact through any protocol-compatible supervisor. */
-export function requestFrayRestart(fetcher: typeof fetch = fetch): Promise<RestartFrayResult> {
-  return requestFrayRestartAction("/_fray/control/restart", fetcher)
+export function requestFrizzRestart(fetcher: typeof fetch = fetch): Promise<RestartFrizzResult> {
+  return requestFrizzRestartAction("/_frizz/control/restart", fetcher)
 }
 
-/** Reaches the durable fray-dev supervisor, never the disposable Fray application child directly. */
-export function requestFrayUpdateRestart(fetcher: typeof fetch = fetch): Promise<RestartFrayResult> {
-  return requestFrayRestartAction("/_fray/control/update-restart", fetcher)
+/** Reaches the durable frizz-dev supervisor, never the disposable Frizz application child directly. */
+export function requestFrizzUpdateRestart(fetcher: typeof fetch = fetch): Promise<RestartFrizzResult> {
+  return requestFrizzRestartAction("/_frizz/control/update-restart", fetcher)
 }

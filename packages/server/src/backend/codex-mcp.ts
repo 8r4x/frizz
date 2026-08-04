@@ -1,7 +1,7 @@
-import { CHROME_DEVTOOLS_MCP, FRAY_MCP, type FrayMcp } from "./types.ts"
+import { CHROME_DEVTOOLS_MCP, FRIZZ_MCP, type FrizzMcp } from "./types.ts"
 
 // ---- Codex MCP injection -------------------------------------------------------------------------
-// The codex twin of dispatch.ts's `claudeMcpFlags`. Claude mounts fray's MCP servers via one inline
+// The codex twin of dispatch.ts's `claudeMcpFlags`. Claude mounts frizz's MCP servers via one inline
 // `--mcp-config` JSON on the worker's argv; codex has no such flag, so they ride `-c` TOML overrides
 // on the APP-SERVER's argv instead.
 //
@@ -16,7 +16,7 @@ import { CHROME_DEVTOOLS_MCP, FRAY_MCP, type FrayMcp } from "./types.ts"
 // here.
 //
 // The app-server is PER-PROJECT (its socket key is sha256(stateDir + projectId)), so one process-level
-// mount serves every codex thread in that project with the right FRAY_STATE_DIR. Note the app-server
+// mount serves every codex thread in that project with the right FRIZZ_STATE_DIR. Note the app-server
 // is long-lived: a change here only reaches NEWLY spawned ones.
 //
 // `default_tools_approval_mode="approve"` is not optional. Under a restrictive approval policy with no
@@ -47,29 +47,29 @@ function serverTable(command: string, args: readonly string[], env?: Record<stri
 }
 
 /**
- * The `-c` overrides that mount fray's MCP servers into a codex app-server.
+ * The `-c` overrides that mount frizz's MCP servers into a codex app-server.
  *
  * chrome-devtools is ALWAYS mounted (a worker gets a browser out of the box on any
  * machine — the same CHROME_DEVTOOLS_MCP spec claude uses, which is what keeps the two backends in
- * lockstep). The unified `fray` server rides along when its descriptor resolved; absent ⇒ the worker
+ * lockstep). The unified `frizz` server rides along when its descriptor resolved; absent ⇒ the worker
  * simply lacks those tools, exactly as on the claude side.
  *
  * Returns a flat argv fragment: ["-c", "…", "-c", "…"]. Pure and exported so a regression cannot
  * silently stop mounting them — the shape is unit-pinned rather than only observable by running codex.
  */
-export function codexMcpConfigArgs(frayMcp?: FrayMcp, nodeBin: string = process.execPath): string[] {
+export function codexMcpConfigArgs(frizzMcp?: FrizzMcp, nodeBin: string = process.execPath): string[] {
   const args: string[] = [
     "-c",
     `mcp_servers.${CHROME_DEVTOOLS_MCP.name}=${serverTable(CHROME_DEVTOOLS_MCP.command, CHROME_DEVTOOLS_MCP.args)}`,
   ]
-  if (frayMcp) {
+  if (frizzMcp) {
     // The ABSOLUTE node path, never bare "node": the app-server spawns this itself and its PATH varies
     // by launch context (a GUI-launched app, a login-shell difference). The claude side pins the same
     // thing for the same reason — a bare "node" that is not on PATH makes the server silently never
     // start, so the tool merely never appears.
     args.push(
       "-c",
-      `mcp_servers.${FRAY_MCP.name}=${serverTable(nodeBin, [frayMcp.scriptPath], { FRAY_STATE_DIR: frayMcp.stateDir })}`,
+      `mcp_servers.${FRIZZ_MCP.name}=${serverTable(nodeBin, [frizzMcp.scriptPath], { FRIZZ_STATE_DIR: frizzMcp.stateDir })}`,
     )
   }
   // Headless workers cannot answer an approval prompt, and an unapproved MCP call is cancelled at the
@@ -88,7 +88,7 @@ export function codexMcpConfigArgs(frayMcp?: FrayMcp, nodeBin: string = process.
  */
 export function codexAppServerArgv(
   transport: readonly string[],
-  frayMcp?: FrayMcp,
+  frizzMcp?: FrizzMcp,
 ): string[] {
-  return ["app-server", ...codexMcpConfigArgs(frayMcp), ...transport]
+  return ["app-server", ...codexMcpConfigArgs(frizzMcp), ...transport]
 }

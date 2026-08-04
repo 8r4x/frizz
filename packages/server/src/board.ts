@@ -5,8 +5,8 @@ import {
 } from "node:fs"
 import { join } from "node:path"
 import watcher from "@parcel/watcher"
-import type { BoardSnapshot, ThreadView, RuntimeState, PlanView } from "@fray-ui/shared"
-import { BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isDirectSubAgent, isValidAwaitingTimer, type PermissionMode as PermissionModeValue } from "@fray-ui/shared"
+import type { BoardSnapshot, ThreadView, RuntimeState, PlanView } from "@frizz/shared"
+import { BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isDirectSubAgent, isValidAwaitingTimer, type PermissionMode as PermissionModeValue } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import type { Project } from "./project.ts"
 import { isHeadlessRow, isBrokerClaudeRow, sessionTitleLocked } from "./storage.ts"
@@ -14,7 +14,7 @@ import type { Storage, SessionRow } from "./storage.ts"
 import { normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
 import type { Tailer, SessionTelemetry } from "./tailer.ts"
 import type { InteractionChange } from "./interaction-store.ts"
-import { frayDirExists } from "./fray.ts"
+import { frizzDirExists } from "./frizz.ts"
 import { parseDeliveryLedger } from "./delivery-ledger.ts"
 import { effectivePermissionMode, resolveLegacyThreadFile, scratchpadRelPath } from "./dispatch.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
@@ -24,7 +24,7 @@ import { limitPauseIsStale, textResetInstant } from "./backend/usage-limit.ts"
 import { getSettings } from "./settings.ts"
 
 // The read model is provenance-bound to the durable session registry. A session row exists only after
-// Fray UI dispatches or explicitly adopts a thread, so unrelated legacy `.fray/*.md` files and raw
+// Frizz dispatches or explicitly adopts a thread, so unrelated legacy `.frizz/*.md` files and raw
 // terminal transcripts never enter this board (or its queue/error surface). The tailer contributes
 // telemetry only for registered rows. Plan documents remain project artifacts and are read separately.
 
@@ -40,11 +40,11 @@ const RECONCILE_MS = 15_000
 // when the app-server process dies mid-turn it simply stops, so the folded turn stays "in-flight"
 // forever and the thread spins on `running` — never at rest, so never queued, so invisible (four
 // threads sat like this for hours on 2026-07-22). The bridge is the authority on whether a turn is
-// actually running; a rollout that has not advanced since fray took the thread onto its current
+// actually running; a rollout that has not advanced since frizz took the thread onto its current
 // connection is being driven by nobody at all.
 //
 // Rollout activity AFTER that instant means some OTHER writer is driving the thread — the operator
-// running `codex resume` in their own terminal — which is a real live turn fray is mirroring. Keep it.
+// running `codex resume` in their own terminal — which is a real live turn frizz is mirroring. Keep it.
 //
 // The grace exists because the two signals are read from different places: the bridge clears its turn
 // on `turn/completed` while the rollout's matching record still has to reach the tailer's next tick.
@@ -57,7 +57,7 @@ export function appServerTurnStalled(
   lastActivityAt: string | undefined,
   nowMs: number,
 ): boolean {
-  // Not bridge-owned — fray has never held this thread, so it has no standing to call the turn dead.
+  // Not bridge-owned — frizz has never held this thread, so it has no standing to call the turn dead.
   if (!liveness) return false
   if (liveness.bridgeTurn) return false
   const ownedSince = Date.parse(liveness.ownedSince)
@@ -132,7 +132,7 @@ function capLine(s: string | undefined | null, cap = LINE_CAP): string | undefin
 }
 
 // ---- Session threads (2026-07-09): the working rail's unit — exactly one ThreadView per durable
-// registry row. The legacy fray status vocabulary does not apply: `status` is synthesized "active"
+// registry row. The legacy frizz status vocabulary does not apply: `status` is synthesized "active"
 // (the field is required but display keys on kind/state/needsYou), and block/dep fields are inert.
 
 // Parse an ISO time to epoch-ms, or -Infinity when absent/unparseable (a missing clearance never
@@ -152,7 +152,7 @@ function effectiveSessionState(row: SessionRow, registeredLegacyTerminal: boolea
   return "open"
 }
 
-// Pre-session-first Fray UI rows may have state=NULL and derive their archived state from a paired
+// Pre-session-first Frizz rows may have state=NULL and derive their archived state from a paired
 // terminal thread document. Preserve that migration behavior without scanning the directory: open
 // only the canonical filename selected by a durable session row, reject symlinks at open time, and
 // read only whether status is `done`/`dismissed`. Malformed or missing files fail open as an active session and never
@@ -228,7 +228,7 @@ function stampStoppable(agents: ThreadView["subAgents"], row: SessionRow): Threa
 }
 
 // The same question for a background SHELL, and it is deliberately the other way round: the tailer has
-// already said whether fray holds a handle for each shell (BgShellView.stoppable), so all this adds is
+// already said whether frizz holds a handle for each shell (BgShellView.stoppable), so all this adds is
 // the TRANSPORT half — and on a thread with no control channel it must REVOKE the tailer's half rather
 // than merely decline to add one. A shell on a TMUX thread carries a task id in its launch ack just the
 // same; nothing can be done with it from outside that pane.
@@ -296,10 +296,10 @@ function hasParkedExternalWait(tele: SessionTelemetry | undefined, nowMs: number
 // to rest. A user-owned snooze temporarily suppresses every queue reason—including a concrete ask,
 // permission prompt, or crash—then the exact deadline restores the still-current reason. Truthful
 // external waits place ordinary rest in Held without writing lifecycle state.
-// A Claude follow-up fray has delivered but the transcript has not yet reflected: it lives in the
+// A Claude follow-up frizz has delivered but the transcript has not yet reflected: it lives in the
 // delivery ledger as `pending` (injected, no JSONL evidence yet) or `enqueued` (positively receipted by
 // Claude Code's own queue). Both mean the human's message is handled and in flight. `unconfirmed` is
-// NOT fresh — fray could not confirm that send, so it must stay visible for the human to re-drive.
+// NOT fresh — frizz could not confirm that send, so it must stay visible for the human to re-drive.
 function hasFreshDelivery(row: SessionRow): boolean {
   return parseDeliveryLedger(row.delivery_ledger).some((d) => d.state === "pending" || d.state === "enqueued")
 }
@@ -341,7 +341,7 @@ export function deriveNeedsYou(
   // interaction-clearance would bury it forever after one view). The legacy needsAction had this net
   // (active/planning + exited/none); deriveNeedsYou dropped it — restored here (found 2026-07-09).
   if (runtime === "exited" && tele?.turn === "in-flight") return true
-  // A human follow-up fray has DELIVERED but the transcript has not YET reflected — the tailer folds
+  // A human follow-up frizz has DELIVERED but the transcript has not YET reflected — the tailer folds
   // JSONL on a poll that runs seconds behind under load — sits in the delivery ledger as pending or
   // enqueued. The human has already responded, so the thread is NOT awaiting them: suppress it here,
   // from SERVER TRUTH, so a card the operator just steered leaves the queue and STAYS gone until the
@@ -349,7 +349,7 @@ export function deriveNeedsYou(
   // "reappears after ~10s, then leaves again" flicker). This is the durable, reload-safe complement to
   // the client's optimistic steer. Placed AFTER the crash net (a delivered follow-up to a worker that
   // then died must still surface) and the hard live asks, but before the at-rest reasons a steer
-  // resolves (a question, a done handoff, bare rest). `unconfirmed` is excluded on purpose: a send fray
+  // resolves (a question, a done handoff, bare rest). `unconfirmed` is excluded on purpose: a send frizz
   // could not confirm is one the human may need to re-drive, so the ledger's own aging re-surfaces it.
   if (hasFreshDelivery(row)) return false
   // An unanswered ```question fence in the last assistant message is an EXPLICIT ask — a hard queue
@@ -363,7 +363,7 @@ export function deriveNeedsYou(
   // promised, stays held even if a child of its is still live (it explicitly said what it is waiting on).
   if (hasParkedExternalWait(tele, nowMs)) return false
   // A thread parked by an exhausted subscription window is waiting on the clock, not on the human —
-  // exactly like a timer wait — SO LONG AS fray is actually going to continue it. Excusing it keeps a
+  // exactly like a timer wait — SO LONG AS frizz is actually going to continue it. Excusing it keeps a
   // limit event from dumping the entire running fleet into the queue at once. When auto-resume is off
   // (or the pause aged out), the promise is gone and it falls through to the ordinary handoff below,
   // which is the honest place for work only the human will restart.
@@ -482,7 +482,7 @@ export function deriveAwaitingBackground(
 }
 
 // The scratchpad path for a session, iff the file exists under the project dir (else undefined so the
-// client offers no doc tab). Convention: .fray/threads/<session_id>/scratch.md.
+// client offers no doc tab). Convention: .frizz/threads/<session_id>/scratch.md.
 function scratchpadPathIfExists(projectDir: string, sessionId: string): string | undefined {
   const rel = scratchpadRelPath(sessionId)
   return existsSync(join(projectDir, rel)) ? rel : undefined
@@ -557,7 +557,7 @@ export function resolvePendingPermission(row: Pick<SessionRow, "permission_pendi
 }
 
 // Project a fold-observed limit fault onto the wire view: which window blew, when, when it comes back,
-// and whether fray will deliver its own "continue". `resumesAt` is present only when the provider's
+// and whether frizz will deliver its own "continue". `resumesAt` is present only when the provider's
 // own reset clock resolves it (a weekly clock never does — see textResetInstant); its ABSENCE does not
 // cancel the auto-resume promise, because the scheduler can still resolve a weekly instant from the
 // usage endpoint. The card then says "when the window resets" rather than naming a time known nowhere.
@@ -776,7 +776,7 @@ function sessionThreadView(
   }
 }
 
-// Plan artifacts (.fray/plans/*.md): title from the first markdown heading in the securely resolved
+// Plan artifacts (.frizz/plans/*.md): title from the first markdown heading in the securely resolved
 // bytes (else the filename stem), mtime, and registered session slugs dispatched from it. Discovery and
 // reading share one stable no-follow resolver; indirect or raced files are omitted.
 function readPlans(projectDir: string, rows: SessionRow[]): PlanView[] {
@@ -803,7 +803,7 @@ export interface BoardManager {
   // Overlay-only: reuses file-backed caches; cheap + sync. Use for tailer/session changes.
   refresh(): BoardSnapshot
   // A durable typed-interaction transition changes queue membership independently of transcript or
-  // .fray files. The board caches per-session presence and refreshes on the journal's post-commit edge.
+  // .frizz files. The board caches per-session presence and refreshes on the journal's post-commit edge.
   interactionChanged?(change: InteractionChange): void
   start(): Promise<void>
   stop(): Promise<void>
@@ -885,12 +885,12 @@ export function createBoard(
     notifyPrimed = true
   }
 
-  // File-backed migration/plan caches are recomputed only on a full rebuild (the recursive .fray
+  // File-backed migration/plan caches are recomputed only on a full rebuild (the recursive .frizz
   // watcher catches changes). Overlay-only refreshes remain filesystem-free.
   let legacyTerminalCache = new Set<string>()
   let plansCache: PlanView[] = []
 
-  // Build exactly the session-backed threads recorded by Fray UI. The registry is the provenance
+  // Build exactly the session-backed threads recorded by Frizz. The registry is the provenance
   // boundary: historical rows remain valid after migration/restart, and both Claude and Codex use the
   // same durable shape. Raw tailer discoveries never confer ownership.
   function buildSessionThreads(nowMs: number): ThreadView[] {
@@ -945,7 +945,7 @@ export function createBoard(
 
   // Assemble a snapshot from registered sessions + plan artifacts. Unregistered legacy files and
   // foreign transcripts are excluded before any legacy parser is invoked, so they cannot contribute a
-  // row, queue card, warning, or error. `.fray/` presence is deliberately NOT reported: it gates only
+  // row, queue card, warning, or error. `.frizz/` presence is deliberately NOT reported: it gates only
   // plan/scratchpad storage (probed locally where that matters), never whether this project has a board.
   function assemble(): BoardSnapshot {
     // One clock sample owns every snooze decision in this snapshot: expiry clearing, visibility,
@@ -1005,9 +1005,9 @@ export function createBoard(
     snoozeTimer.unref?.()
   }
 
-  // Recompute the plans cache (full-read grade). Called on rebuild; empty when .fray/ is absent.
+  // Recompute the plans cache (full-read grade). Called on rebuild; empty when .frizz/ is absent.
   function recomputePlans(): void {
-    plansCache = frayDirExists(project.dir) ? readPlans(project.dir, storage.allSessions()) : []
+    plansCache = frizzDirExists(project.dir) ? readPlans(project.dir, storage.allSessions()) : []
   }
 
   function recomputeLegacyTerminalState(): void {
@@ -1057,7 +1057,7 @@ export function createBoard(
     return task
   }
 
-  // OVERLAY-ONLY rebuild: reuse the cached fray data. For tailer/session-registry changes.
+  // OVERLAY-ONLY rebuild: reuse the cached frizz data. For tailer/session-registry changes.
   function refresh(): BoardSnapshot {
     if (stopped) throw new ProducerStoppedError("board")
     cached = assemble()
@@ -1089,11 +1089,11 @@ export function createBoard(
     debounce = setTimeout(() => void rebuild().catch(() => {}), DEBOUNCE_MS)
   }
 
-  function watchFrayDir(): Promise<void> {
+  function watchFrizzDir(): Promise<void> {
     if (parcelSub || stopped) return Promise.resolve()
     if (watchSetup) return watchSetup
     const setup = (async () => {
-      const next = await subscribe(join(project.dir, ".fray"), () => scheduleRebuild())
+      const next = await subscribe(join(project.dir, ".frizz"), () => scheduleRebuild())
       if (stopped) {
         await next.unsubscribe()
         return
@@ -1125,17 +1125,17 @@ export function createBoard(
       // edge (watcher event, SSE push, mutation hook) is missed or fails — the UI can lag one period,
       // never forever. Edge-triggered paths above make it feel instant; this makes it CORRECT.
       reconcileTimer = setInterval(() => void rebuild().catch(() => {}), RECONCILE_MS)
-      if (frayDirExists(project.dir)) {
-        await watchFrayDir()
+      if (frizzDirExists(project.dir)) {
+        await watchFrizzDir()
       } else {
-        // .fray/ not created yet — watch the repo root (non-recursive) for its appearance,
-        // then hand off to the recursive .fray watcher. Avoids recursively watching the whole repo.
+        // .frizz/ not created yet — watch the repo root (non-recursive) for its appearance,
+        // then hand off to the recursive .frizz watcher. Avoids recursively watching the whole repo.
         try {
           bootstrapWatch = fsWatch(project.dir, (_e, name) => {
-            if (name === ".fray" && frayDirExists(project.dir)) {
+            if (name === ".frizz" && frizzDirExists(project.dir)) {
               bootstrapWatch?.close()
               bootstrapWatch = null
-              void watchFrayDir().catch(() => {})
+              void watchFrizzDir().catch(() => {})
               scheduleRebuild()
             }
           })

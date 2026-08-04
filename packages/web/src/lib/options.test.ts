@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import type { CodexModel } from "@fray-ui/shared"
+import type { CodexModel } from "@frizz/shared"
 import {
   backendForModel,
   CLAUDE_DISPATCH_PERMISSION_OPTIONS,

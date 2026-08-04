@@ -26,7 +26,7 @@ export function installLocalFileLinkInterceptor(): () => void {
 
 // A markdown screenshot whose file is gone — a /tmp shot that was cleaned up, a removed worktree,
 // a path from another machine. `/local-image` 404s, and Chrome then paints its own broken-image glyph
-// beside the alt text, which reads as a rendering fault in Fray rather than as a missing file. Swap the
+// beside the alt text, which reads as a rendering fault in Frizz rather than as a missing file. Swap the
 // dead <img> for the plain path, exactly as BlockImage's onError fallback does for the React-rendered
 // case — nothing is silently swallowed, and the replacement holds one stable line instead of the
 // zero-height-then-glyph box that made the whole message reflow.

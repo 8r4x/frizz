@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // @ts-check
-// PermissionRequest hook (fray worker), matcher "*" — the worker's permission POLICY, and the durable
+// PermissionRequest hook (frizz worker), matcher "*" — the worker's permission POLICY, and the durable
 // structured signal the tailer reads instead of scraping the tmux pane.
 //
-// WHY THIS DECIDES (it used to only observe): a fray worker runs under a dashboard with nobody at the
-// keyboard, so a tool-approval prompt parks the thread invisibly until a human happens to look. fray
+// WHY THIS DECIDES (it used to only observe): a frizz worker runs under a dashboard with nobody at the
+// keyboard, so a tool-approval prompt parks the thread invisibly until a human happens to look. frizz
 // dispatches Claude workers at `--permission-mode auto` (dispatch.ts WORKER_DISPATCH_PERMISSION), and
 // `auto` is NOT non-interactive — its classifier still raises a prompt for anything it deems risky
 // (a `git push`, a publish), which is exactly how a worker silently wedges for hours.
@@ -22,7 +22,7 @@
 //   defer  — emit NOTHING; the normal prompt is raised and a human answers it. This is the ONLY
 //            outcome the tailer treats as a human block (see permMarkerBlocks in tailer.ts).
 //
-// SCOPE: this plugin loads for EVERY project fray drives, so the built-in table carries only
+// SCOPE: this plugin loads for EVERY project frizz drives, so the built-in table carries only
 // UNIVERSAL rules. Nothing repo-specific belongs here — a rule that is right for one repo (e.g. "never
 // open a PR") is wrong for the next.
 //
@@ -35,14 +35,14 @@
 // settings carry `ask` rules can still park a worker, and the fix for that repo is to relax its own
 // rule, not to change this file. Mode-driven asks (the `default`-mode prompt) ARE overridden.
 //
-// GATE: inert unless FRAY_UI_THREAD is set, so a foreign/non-fray session is never affected.
+// GATE: inert unless FRIZZ_THREAD is set, so a foreign/non-frizz session is never affected.
 // FAIL-SAFE: any error at all → emit nothing → the prompt is raised and the human decides. Note this
 // inverts the old observer's "fail open": for a hook that can APPROVE, the safe failure is to fall
 // back to asking, never to allow.
 import { readFileSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 
-const slug = process.env.FRAY_UI_THREAD;
+const slug = process.env.FRIZZ_THREAD;
 if (!slug) process.exit(0);
 
 // Top-level targets whose recursive deletion is unrecoverable. `/tmp/x` and `./build` are NOT here —
@@ -72,7 +72,7 @@ function isDiskWrite(cmd) {
 }
 
 // The ordered policy table: FIRST MATCH WINS. Each rule returns a decision plus the `rule` id and
-// `reason` that get recorded on the marker, so fray can always say WHICH rule decided and WHY.
+// `reason` that get recorded on the marker, so frizz can always say WHICH rule decided and WHY.
 // `deny` reasons are written to be read by the MODEL (they become additionalContext).
 const RULES = [
   {
@@ -90,7 +90,7 @@ const RULES = [
       'Refused: this formats a filesystem or writes directly to a raw block device, which destroys data irrecoverably and is never required of an unattended worker.',
   },
   {
-    // Respect a DELIBERATELY restrictive mode. fray dispatches workers at `auto`; a thread sitting at
+    // Respect a DELIBERATELY restrictive mode. frizz dispatches workers at `auto`; a thread sitting at
     // `default`/`plan` got there because a human moved it there (the live per-thread permission
     // control), and auto-approving would silently overrule that intent. This is what makes a genuine
     // lower-permission mode usable today: switch a thread to `default` and its prompts come back.
@@ -102,15 +102,15 @@ const RULES = [
   {
     // Escape hatch for review-style operation without changing how workers launch.
     id: 'review-policy',
-    test: () => (process.env.FRAY_PERM_POLICY ?? 'auto').toLowerCase() === 'review',
+    test: () => (process.env.FRIZZ_PERM_POLICY ?? 'auto').toLowerCase() === 'review',
     decision: 'defer',
-    reason: 'FRAY_PERM_POLICY=review — every request is left for a human to answer.',
+    reason: 'FRIZZ_PERM_POLICY=review — every request is left for a human to answer.',
   },
   {
     id: 'worker-autonomy',
     test: () => true,
     decision: 'allow',
-    reason: 'Unattended fray worker: approved automatically because no human is watching the terminal to answer a prompt.',
+    reason: 'Unattended frizz worker: approved automatically because no human is watching the terminal to answer a prompt.',
   },
 ];
 
@@ -134,7 +134,7 @@ try {
   process.exit(0); // unparseable payload → defer to the human
 }
 
-// ExitPlanMode is always auto-denied by the sibling deny-plan.mjs (a fray worker is never in plan
+// ExitPlanMode is always auto-denied by the sibling deny-plan.mjs (a frizz worker is never in plan
 // mode), so it never becomes a real human block — leave it entirely alone, marker included.
 if (input.tool_name === 'ExitPlanMode') process.exit(0);
 
@@ -144,7 +144,7 @@ if (input.tool_name === 'ExitPlanMode') process.exit(0);
 // tells the model "The user did not answer the questions." So the auto-approval that keeps a worker
 // moving for every other tool is, for this one, a guaranteed wasted turn.
 //
-// Fray's broker intercepts this call at canUseTool and renders it as a real question card the
+// Frizz's broker intercepts this call at canUseTool and renders it as a real question card the
 // operator answers (claude-permission-interactions.ts), so the right move here is to say NOTHING —
 // no decision AND no marker. A `defer` verdict would write a marker the tailer reads as a human
 // permission block, stacking a second "needs you" surface on top of the card already asking.
@@ -156,11 +156,11 @@ if (input.tool_name === 'AskUserQuestion') process.exit(0);
 
 const verdict = evaluate(input);
 
-// Record the decision BEFORE acting on it, best-effort. The marker is fray's only structured view of
+// Record the decision BEFORE acting on it, best-effort. The marker is frizz's only structured view of
 // what happened here: `decision` tells the tailer whether a human is actually blocked, and
 // rule/reason/command are what the dashboard shows the human afterwards. A failed write must not
 // hold up the worker, so this swallows its own errors — telemetry loss, not a stall.
-const dir = process.env.FRAY_PERM_DIR;
+const dir = process.env.FRIZZ_PERM_DIR;
 if (dir) {
   try {
     const command = input.tool_name === 'Bash' ? String(input.tool_input?.command ?? '') : '';

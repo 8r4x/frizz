@@ -1,4 +1,4 @@
-import type { FrayStatus } from "@fray-ui/shared"
+import type { FrizzStatus } from "@frizz/shared"
 import { pushDrawer } from "../store.ts"
 import { useBoard, asThreads } from "../hooks.ts"
 import { sortThreads, displayTitle } from "../groups.ts"
@@ -14,12 +14,12 @@ const STATUS_LABEL: Record<string, string> = {
   archived: "Done",
 }
 
-// Workpane view for a status-count nav row: the full thread list in that fray status ("archived"
+// Workpane view for a status-count nav row: the full thread list in that frizz status ("archived"
 // is the UI-level pseudo-status — the session flag, not frontmatter).
 export function StatusListView({ status }: { status: string }) {
   const board = useBoard()
   const threads = sortThreads(asThreads(board?.threads ?? [])).filter((t) =>
-    status === "archived" ? t.archived : t.status === (status as FrayStatus),
+    status === "archived" ? t.archived : t.status === (status as FrizzStatus),
   )
 
   return (

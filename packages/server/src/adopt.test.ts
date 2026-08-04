@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { AdoptThreadInput, DispatchInput, THREAD_SLUG_MAX_CHARS, ThreadSlug, threadIdentityName } from "@fray-ui/shared"
+import { AdoptThreadInput, DispatchInput, THREAD_SLUG_MAX_CHARS, ThreadSlug, threadIdentityName } from "@frizz/shared"
 import { createDispatcher, resolveLegacyThreadFile, resolveSlug, slugify } from "./dispatch.ts"
 import { createStorage, type SessionRow, type Storage } from "./storage.ts"
 import { defaultSettings } from "./settings.ts"
@@ -12,7 +12,7 @@ import { cwdSlug, type Project } from "./project.ts"
 import type { BoardManager } from "./board.ts"
 import type { ClaudeAgentBrokerBridge } from "./backend/claude-agent-broker-bridge.ts"
 import { type PaneIdentity } from "./adoption-recovery.ts"
-import { readBoard, type FrayBoard, type FrayThread } from "./fray.ts"
+import { readBoard, type FrizzBoard, type FrizzThread } from "./frizz.ts"
 import {
   ADOPTION_ATTEMPT_LEASE_MS,
   reconcileAdoptionClaims,
@@ -23,7 +23,7 @@ function sessionRow(slug: string, over: Partial<SessionRow> = {}): SessionRow {
   return {
     slug,
     session_id: `${slug}-owner`,
-    tmux_name: `fray-${slug}`,
+    tmux_name: `frizz-${slug}`,
     spawned_at: "2026-07-13T00:00:00.000Z",
     last_read_at: null,
     unread: 0,
@@ -57,12 +57,12 @@ interface SpawnRecord {
 function harness(options: {
   hasSession?: (slug: string) => boolean
   onSpawn?: (storage: Storage, spawn: SpawnRecord) => void
-  readBoard?: (threads: readonly FrayThread[], dir: string) => FrayBoard | Promise<FrayBoard>
+  readBoard?: (threads: readonly FrizzThread[], dir: string) => FrizzBoard | Promise<FrizzBoard>
   adoptionRuntime?: AdoptionRecoveryRuntime
   preflightAuth?: (kind: string) => Promise<"authed" | "signed-out" | "unknown">
   preflightCodexBinary?: () => Promise<"present" | "missing" | "unknown">
 } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "fray-adopt-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-adopt-"))
   const storage = createStorage(join(dir, "ui.db"))
   const project: Project = {
     dir,
@@ -79,7 +79,7 @@ function harness(options: {
   let hasSessionCalls = 0
   let rebuilds = 0
   let boardReads = 0
-  const legacyThreads = new Map<string, FrayThread>()
+  const legacyThreads = new Map<string, FrizzThread>()
   const board = {
     snapshot: async () => ({}),
     currentSeq: () => 0,
@@ -128,7 +128,7 @@ function harness(options: {
     preflightCodexBinary: options.preflightCodexBinary,
   })
 
-  const discoverLegacy = (slug: string, over: Partial<FrayThread> = {}) => {
+  const discoverLegacy = (slug: string, over: Partial<FrizzThread> = {}) => {
     legacyThreads.set(slug, {
       id: slug,
       title: slug,
@@ -140,10 +140,10 @@ function harness(options: {
       ...over,
     })
   }
-  const addLegacyFile = (slug: string, over: Partial<FrayThread> = {}) => {
-    mkdirSync(join(dir, ".fray"), { recursive: true })
+  const addLegacyFile = (slug: string, over: Partial<FrizzThread> = {}) => {
+    mkdirSync(join(dir, ".frizz"), { recursive: true })
     writeFileSync(
-      join(dir, ".fray", `${slug}.md`),
+      join(dir, ".frizz", `${slug}.md`),
       `---\ntitle: ${slug}\nstatus: active\n---\n\n## Goal\n\nContinue ${slug}.\n`,
     )
     discoverLegacy(slug, over)
@@ -192,7 +192,7 @@ test("one canonical thread slug contract rejects path, control, option, Unicode,
     assert.equal(ThreadSlug.safeParse(valid).success, true, valid)
     assert.equal(DispatchInput.safeParse({ prompt: "safe", slug: valid }).success, true, valid)
     assert.equal(AdoptThreadInput.safeParse({ slug: valid }).success, true, valid)
-    assert.equal(threadIdentityName(valid), `fray-${valid}`)
+    assert.equal(threadIdentityName(valid), `frizz-${valid}`)
   }
   for (const invalid of HOSTILE_SLUGS) {
     assert.equal(ThreadSlug.safeParse(invalid).success, false, JSON.stringify(invalid))
@@ -208,7 +208,7 @@ test("derived and collision slugs remain canonical at the maximum length", () =>
   const max = slugify("a".repeat(THREAD_SLUG_MAX_CHARS + 50))
   assert.equal(max.length, THREAD_SLUG_MAX_CHARS)
   assert.equal(ThreadSlug.safeParse(max).success, true)
-  const dir = mkdtempSync(join(tmpdir(), "fray-slug-bound-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-slug-bound-"))
   writeFileSync(join(dir, `${max}.md`), "taken")
   const collision = resolveSlug(dir, max)
   assert.equal(collision.length, THREAD_SLUG_MAX_CHARS)
@@ -225,33 +225,33 @@ test("direct dispatcher entry points reject hostile slugs before board, tmux, sc
   assert.equal(h.boardReads(), 0)
   assert.equal(h.spawned.length, 0)
   assert.equal(h.storage.allSessions().length, 0)
-  assert.equal(existsSync(join(h.dir, ".fray")), false)
+  assert.equal(existsSync(join(h.dir, ".frizz")), false)
 })
 
 test("storage rejects a noncanonical thread/tmux identity at its direct mutation boundary", () => {
   const h = harness()
   assert.throws(() => h.storage.insertSessionIfAbsent(sessionRow("../escape")))
   assert.throws(() => h.storage.upsertSession(sessionRow("-option")))
-  assert.throws(() => h.storage.upsertSession(sessionRow("safe", { tmux_name: "fray-someone-else" })))
+  assert.throws(() => h.storage.upsertSession(sessionRow("safe", { tmux_name: "frizz-someone-else" })))
   assert.equal(h.storage.allSessions().length, 0)
 })
 
 test("the real board reader omits unsafe ids and never follows markdown symlinks", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-board-safe-"))
-  mkdirSync(join(dir, ".fray"))
-  writeFileSync(join(dir, ".fray", "safe.md"), "---\ntitle: safe\nstatus: active\n---\n\n## Goal\n\nsafe\n")
-  writeFileSync(join(dir, ".fray", "Upper.md"), "---\ntitle: Upper\nstatus: active\n---\n")
-  const outside = join(mkdtempSync(join(tmpdir(), "fray-board-outside-")), "outside.md")
+  const dir = mkdtempSync(join(tmpdir(), "frizz-board-safe-"))
+  mkdirSync(join(dir, ".frizz"))
+  writeFileSync(join(dir, ".frizz", "safe.md"), "---\ntitle: safe\nstatus: active\n---\n\n## Goal\n\nsafe\n")
+  writeFileSync(join(dir, ".frizz", "Upper.md"), "---\ntitle: Upper\nstatus: active\n---\n")
+  const outside = join(mkdtempSync(join(tmpdir(), "frizz-board-outside-")), "outside.md")
   writeFileSync(outside, "---\ntitle: linked\nstatus: active\n---\n")
-  symlinkSync(outside, join(dir, ".fray", "linked.md"))
+  symlinkSync(outside, join(dir, ".frizz", "linked.md"))
 
   const board = await readBoard(dir)
   assert.deepEqual(board.threads.map((thread) => thread.id), ["safe"])
   assert.ok(board.errors.some((error) => error.includes("unsafe filename stem") && error.includes("Upper")))
 
-  const linkedRoot = mkdtempSync(join(tmpdir(), "fray-board-linked-root-"))
-  symlinkSync(join(dir, ".fray"), join(linkedRoot, ".fray"))
-  await assert.rejects(readBoard(linkedRoot), /unsafe or missing \.fray directory/)
+  const linkedRoot = mkdtempSync(join(tmpdir(), "frizz-board-linked-root-"))
+  symlinkSync(join(dir, ".frizz"), join(linkedRoot, ".frizz"))
+  await assert.rejects(readBoard(linkedRoot), /unsafe or missing \.frizz directory/)
 })
 
 test("a file that is absent from the fresh board is stale and cannot be adopted", async () => {
@@ -264,11 +264,11 @@ test("a file that is absent from the fresh board is stale and cannot be adopted"
   assert.equal(h.boardReads(), 1)
   assert.equal(h.spawned.length, 0)
   assert.equal(h.storage.getSession("stale"), undefined)
-  assert.equal(existsSync(join(h.dir, ".fray", "threads")), false)
+  assert.equal(existsSync(join(h.dir, ".frizz", "threads")), false)
 })
 
 test("fresh-board ownership, agents, errors, and terminal or unknown statuses all fail closed", async () => {
-  const cases: [string, Partial<FrayThread>][] = [
+  const cases: [string, Partial<FrizzThread>][] = [
     ["owned", { owner: "another-session" }],
     ["agent-bound", { agents: [{ id: "agent-1", state: "working" }] }],
     ["invalid", { errors: ["invalid frontmatter"] }],
@@ -291,14 +291,14 @@ test("fresh-board ownership, agents, errors, and terminal or unknown statuses al
   }
 })
 
-test("legacy source resolution rejects a symlinked file and a symlinked .fray root", async () => {
-  const externalDir = mkdtempSync(join(tmpdir(), "fray-adopt-outside-"))
+test("legacy source resolution rejects a symlinked file and a symlinked .frizz root", async () => {
+  const externalDir = mkdtempSync(join(tmpdir(), "frizz-adopt-outside-"))
   const externalFile = join(externalDir, "outside.md")
   writeFileSync(externalFile, "---\ntitle: outside\nstatus: active\n---\n")
 
   const fileLink = harness()
-  mkdirSync(join(fileLink.dir, ".fray"))
-  symlinkSync(externalFile, join(fileLink.dir, ".fray", "linked.md"))
+  mkdirSync(join(fileLink.dir, ".frizz"))
+  symlinkSync(externalFile, join(fileLink.dir, ".frizz", "linked.md"))
   fileLink.discoverLegacy("linked")
   assert.equal(resolveLegacyThreadFile(fileLink.dir, "linked"), null)
   await assert.rejects(fileLink.dispatcher.adopt("linked"), /thread is not available for adoption/)
@@ -306,24 +306,24 @@ test("legacy source resolution rejects a symlinked file and a symlinked .fray ro
   assert.equal(fileLink.ensureCalls(), 0)
   assert.equal(fileLink.spawned.length, 0)
 
-  const frayLink = harness()
-  const externalFray = join(externalDir, "fray-root")
-  mkdirSync(externalFray)
-  writeFileSync(join(externalFray, "linked-root.md"), "---\ntitle: linked-root\nstatus: active\n---\n")
-  symlinkSync(externalFray, join(frayLink.dir, ".fray"))
-  frayLink.discoverLegacy("linked-root")
-  assert.equal(resolveLegacyThreadFile(frayLink.dir, "linked-root"), null)
-  await assert.rejects(frayLink.dispatcher.adopt("linked-root"), /thread is not available for adoption/)
-  assert.equal(frayLink.boardReads(), 0)
-  assert.equal(frayLink.ensureCalls(), 0)
-  assert.equal(frayLink.spawned.length, 0)
+  const frizzLink = harness()
+  const externalFrizz = join(externalDir, "frizz-root")
+  mkdirSync(externalFrizz)
+  writeFileSync(join(externalFrizz, "linked-root.md"), "---\ntitle: linked-root\nstatus: active\n---\n")
+  symlinkSync(externalFrizz, join(frizzLink.dir, ".frizz"))
+  frizzLink.discoverLegacy("linked-root")
+  assert.equal(resolveLegacyThreadFile(frizzLink.dir, "linked-root"), null)
+  await assert.rejects(frizzLink.dispatcher.adopt("linked-root"), /thread is not available for adoption/)
+  assert.equal(frizzLink.boardReads(), 0)
+  assert.equal(frizzLink.ensureCalls(), 0)
+  assert.equal(frizzLink.spawned.length, 0)
 })
 
 test("a threads directory symlink cannot redirect adoption writes outside the project", async () => {
   const h = harness()
   h.addLegacyFile("scratch-link")
-  const external = mkdtempSync(join(tmpdir(), "fray-scratch-outside-"))
-  symlinkSync(external, join(h.dir, ".fray", "threads"))
+  const external = mkdtempSync(join(tmpdir(), "frizz-scratch-outside-"))
+  symlinkSync(external, join(h.dir, ".frizz", "threads"))
 
   await assert.rejects(h.dispatcher.adopt("scratch-link"), /thread is not available for adoption/)
   assert.deepEqual(readdirSync(external), [])
@@ -334,7 +334,7 @@ test("a threads directory symlink cannot redirect adoption writes outside the pr
 test("a source replaced while its fresh board is read fails the identity recheck", async () => {
   const h = harness({
     readBoard: (threads, dir) => {
-      writeFileSync(join(dir, ".fray", "changed.md"), "---\ntitle: changed\nstatus: active\n---\n\nchanged during scan\n")
+      writeFileSync(join(dir, ".frizz", "changed.md"), "---\ntitle: changed\nstatus: active\n---\n\nchanged during scan\n")
       return { config: {}, threads: [...threads], errors: [], warnings: [], errorItems: [] }
     },
   })
@@ -344,7 +344,7 @@ test("a source replaced while its fresh board is read fails the identity recheck
   assert.equal(h.boardReads(), 1)
   assert.equal(h.spawned.length, 0)
   assert.equal(h.storage.getSession("changed"), undefined)
-  assert.equal(existsSync(join(h.dir, ".fray", "threads")), false)
+  assert.equal(existsSync(join(h.dir, ".frizz", "threads")), false)
 })
 
 test("adopt claims a fresh slug once and stores an exact Claude identity", async () => {
@@ -376,7 +376,7 @@ test("adopt claims a fresh slug once and stores an exact Claude identity", async
   // argv: there is no argv, because there is no pane to spawn one into.
   const systemPrompt = h.spawned[0].appendSystemPrompt ?? ""
   assert.match(systemPrompt, /ADOPTION: this thread predates you/)
-  assert.match(systemPrompt, /\.fray\/fresh\.md/)
+  assert.match(systemPrompt, /\.frizz\/fresh\.md/)
   assert.doesNotMatch(systemPrompt, /\.\.\//)
   assert.equal(h.boardReads(), 1)
   assert.equal(h.rebuilds(), 1)
@@ -413,7 +413,7 @@ test("an unexpired durable adoption reservation blocks retry before tmux or file
 
   await assert.rejects(h.dispatcher.adopt("reserved"), /thread is not available for adoption/)
   assert.equal(h.spawned.length, 0)
-  assert.equal(existsSync(join(h.dir, ".fray", "threads")), false)
+  assert.equal(existsSync(join(h.dir, ".frizz", "threads")), false)
 })
 
 
@@ -487,7 +487,7 @@ test("signed-out preflight rejects dispatch before scratch, tmux, and storage", 
   assert.deepEqual(seen, ["claude"])
   assert.equal(h.spawned.length, 0)
   // Zero trace: no scratchpad tree, no registry row.
-  assert.equal(existsSync(join(h.dir, ".fray")), false)
+  assert.equal(existsSync(join(h.dir, ".frizz")), false)
 })
 
 test("a missing codex binary rejects a codex dispatch early, before any thread state", async () => {
@@ -503,7 +503,7 @@ test("a missing codex binary rejects a codex dispatch early, before any thread s
   assert.equal(probed.length, 1, "the binary was probed")
   assert.equal(h.spawned.length, 0)
   // Zero trace, exactly like the signed-out gate: no scratchpad, no registry row.
-  assert.equal(existsSync(join(h.dir, ".fray")), false)
+  assert.equal(existsSync(join(h.dir, ".frizz")), false)
 })
 
 test("codex dispatch proceeds when the binary probe is uncertain — fail OPEN, never trap a working user", async () => {

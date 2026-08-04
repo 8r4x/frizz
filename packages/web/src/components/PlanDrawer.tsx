@@ -18,8 +18,8 @@ import {
   PLAN_DRAWER_FOOTER_STYLE,
 } from "./planDrawerAction.ts"
 
-// The PLAN drawer: a RIGHT side sheet (same slide/backdrop family as the fray-document and Open-thread
-// sheets) rendering a plan artifact's markdown (.fray/plans/*.md — no schema, prompted into existence).
+// The PLAN drawer: a RIGHT side sheet (same slide/backdrop family as the frizz-document and Open-thread
+// sheets) rendering a plan artifact's markdown (.frizz/plans/*.md — no schema, prompted into existence).
 // A footer affordance "Implement this" opens the New-thread modal seeded with this plan's path, so
 // the dispatch carries planPath and the worker is oriented to the plan. Plan content is
 // agent-written and thus only semi-trusted — rendered through the shared allowlist sanitizer.
@@ -41,7 +41,7 @@ export function PlanDrawerAction({ onClick }: { onClick: () => void }) {
 }
 
 // A quiet Delete affordance sitting left of "Implement this". Deleting a plan is irreversible, so it
-// confirms through a Dialog before the mutation; on success it closes the drawer (the .fray watcher
+// confirms through a Dialog before the mutation; on success it closes the drawer (the .frizz watcher
 // drops the plan from the board).
 export function PlanDeleteAction({ path, onDeleted }: { path: string; onDeleted: () => void }) {
   const [busy, setBusy] = useState(false)

@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useState } from "react"
 import { useSnapshot } from "valtio"
-import type { TranscriptEdit } from "@fray-ui/shared"
+import type { TranscriptEdit } from "@frizz/shared"
 import { renderDiff, type DiffHunk } from "../lib/diff/index.ts"
 import "../lib/diff/diff.css"
 import { prefs } from "../lib/prefs.ts"
@@ -53,9 +53,9 @@ export function DiffBlock({ edits, meta }: { edits: TranscriptEdit[]; meta?: Rea
   const open = override ?? !compactDiffs
 
   return (
-    <div className="fray-diff">
+    <div className="frizz-diff">
       <ToolDisclosureHeader
-        className="fray-diff-header"
+        className="frizz-diff-header"
         controls={bodyId}
         expanded={open}
         label={`${open ? "Collapse" : "Expand"} Edit diff: ${file}`}
@@ -65,18 +65,18 @@ export function DiffBlock({ edits, meta }: { edits: TranscriptEdit[]; meta?: Rea
       >
         {/* Left group: petite-caps "Edit" label (sibling of Bash/Read), file path, +N −M summary. The
             chevron is pushed to the far right by the header's space-between (aligns the three families). */}
-        <span className="petite-caps fray-bash-label shrink-0">Edit</span>
-        <span className="fray-diff-file">
+        <span className="petite-caps frizz-bash-label shrink-0">Edit</span>
+        <span className="frizz-diff-file">
           <PathLink path={file} className="text-inherit no-underline">
             {basename(file)}
           </PathLink>
         </span>
-        {additions > 0 && <span className="fray-diff-add tabular-nums shrink-0">+{additions}</span>}
-        {deletions > 0 && <span className="fray-diff-del tabular-nums shrink-0">−{deletions}</span>}
+        {additions > 0 && <span className="frizz-diff-add tabular-nums shrink-0">+{additions}</span>}
+        {deletions > 0 && <span className="frizz-diff-del tabular-nums shrink-0">−{deletions}</span>}
       </ToolDisclosureHeader>
-      <div id={bodyId} className="fray-diff-body" hidden={!open}>
+      <div id={bodyId} className="frizz-diff-body" hidden={!open}>
         {open && diffs.map((d, i) => (
-          <div key={i} className={i > 0 ? "fray-diff-editsep" : undefined}>
+          <div key={i} className={i > 0 ? "frizz-diff-editsep" : undefined}>
             <DiffBody hunks={d.hunks} collapsedAfter={d.collapsedAfter} />
           </div>
         ))}
@@ -97,10 +97,10 @@ function DiffBody({ hunks, collapsedAfter }: { hunks: DiffHunk[]; collapsedAfter
       const num = l.type === "del" ? l.oldLine : l.newLine
       const sign = l.type === "add" ? "+" : l.type === "del" ? "-" : " "
       rows.push(
-        <div key={`${hi}:${l.oldLine}:${l.newLine}`} className="fray-diff-line" data-type={l.type}>
-          <span className="fray-diff-gutter">{num}</span>
-          <span className="fray-diff-sign">{sign}</span>
-          <span className="fray-diff-code">
+        <div key={`${hi}:${l.oldLine}:${l.newLine}`} className="frizz-diff-line" data-type={l.type}>
+          <span className="frizz-diff-gutter">{num}</span>
+          <span className="frizz-diff-sign">{sign}</span>
+          <span className="frizz-diff-code">
             {l.tokens.map((t, i) => (
               <span key={i} className={`ftk-${t.kind}`}>{t.text}</span>
             ))}
@@ -115,5 +115,5 @@ function DiffBody({ hunks, collapsedAfter }: { hunks: DiffHunk[]; collapsedAfter
 }
 
 function Sep({ n }: { n: number }) {
-  return <div className="fray-diff-sep">{n} unchanged line{n === 1 ? "" : "s"}</div>
+  return <div className="frizz-diff-sep">{n} unchanged line{n === 1 ? "" : "s"}</div>
 }

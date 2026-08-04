@@ -1,4 +1,4 @@
-// The ONE node-side client for fray's RPC surface. Every harness and verify script must use this
+// The ONE node-side client for frizz's RPC surface. Every harness and verify script must use this
 // instead of hand-rolling `fetch`.
 //
 // Two pieces of knowledge live here and nowhere else, because getting either wrong produces a
@@ -26,7 +26,7 @@ export class RpcError extends Error {
   }
 }
 
-/** A client bound to one running fray server. `query`/`mutate` return the UNWRAPPED result. */
+/** A client bound to one running frizz server. `query`/`mutate` return the UNWRAPPED result. */
 export function createRpcClient(baseUrl) {
   const origin = new URL(baseUrl).origin
 

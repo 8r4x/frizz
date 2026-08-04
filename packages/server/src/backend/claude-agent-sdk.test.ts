@@ -5,7 +5,7 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import * as claudeRuntime from "@fray-ui/claude-agent-sdk-runtime"
+import * as claudeRuntime from "@frizz/claude-agent-sdk-runtime"
 import {
   CLAUDE_AGENT_SDK_FOUNDATION_FLAG,
   createClaudeDiagnosticRedactor,
@@ -127,9 +127,9 @@ test("real SDK + fake executable: init owns the requested session, input streams
     assert.ok(argv.includes("--setting-sources=project,local"), `argv had: ${argv.filter((a) => a.startsWith("--setting-sources")).join(",") || "no --setting-sources flag"}`)
     assert.equal(argv[argv.indexOf("--session-id") + 1], SESSION_ID)
     assert.deepEqual(startup.environment, {
-      frayFakeInheritedPresent: false,
-      frayFakeOverridePresent: false,
-      clientApp: "fray/claude-agent-sdk-foundation",
+      frizzFakeInheritedPresent: false,
+      frizzFakeOverridePresent: false,
+      clientApp: "frizz/claude-agent-sdk-foundation",
       entrypoint: "sdk-ts",
       pathPresent: true,
       homePresent: true,
@@ -141,7 +141,7 @@ test("real SDK + fake executable: init owns the requested session, input streams
       githubTokenPresent: false,
       openaiApiKeyPresent: false,
       awsSecretAccessKeyPresent: false,
-      fraySecretPresent: false,
+      frizzSecretPresent: false,
       arbitrarySecretPresent: false,
     })
     assert.deepEqual(records.find((row) => row.kind === "user-input"), {
@@ -149,7 +149,7 @@ test("real SDK + fake executable: init owns the requested session, input streams
       uuid: INPUT_ID,
       text: "hello from streaming input",
       // An ordinary send is a MAIN-THREAD turn and must stay one. `null` here is the whole guarantee
-      // that adding sub-agent addressing did not quietly re-route every follow-up fray sends.
+      // that adding sub-agent addressing did not quietly re-route every follow-up frizz sends.
       parentToolUseId: null,
     })
   } finally {
@@ -221,7 +221,7 @@ test("a same-session re-init is RELAYED (real claude re-emits init every turn) a
     // only frame that names the session's resolved model, and that alias is what picks this thread's row
     // out of `result.modelUsage` — the sole source of the context meter's denominator. It used to be
     // swallowed here, which announced the alias once per DAEMON lifetime; a broker daemon outlives the
-    // fray server, so every reattached thread lost its context readout permanently.
+    // frizz server, so every reattached thread lost its context readout permanently.
     const reinit = await harness.handle.next()
     assert.equal(reinit.value?.kind, "init")
     assert.equal(reinit.value?.kind === "init" && reinit.value.model, "claude-sonnet-test")
@@ -309,7 +309,7 @@ test("canUseTool request and structured allow response traverse the real SDK con
       observedRequest = request
       return {
         behavior: "allow",
-        updatedInput: { ...request.input, approvedBy: "fray-test" },
+        updatedInput: { ...request.input, approvedBy: "frizz-test" },
         updatedPermissions: [{
           type: "addRules",
           rules: [{ toolName: "Bash", ruleContent: "printf *" }],
@@ -341,7 +341,7 @@ test("canUseTool request and structured allow response traverse the real SDK con
     const response = records.find((row) => row.kind === "host-response")?.response as Record<string, unknown>
     assert.deepEqual(response.response, {
       behavior: "allow",
-      updatedInput: { command: "printf safe", approvedBy: "fray-test" },
+      updatedInput: { command: "printf safe", approvedBy: "frizz-test" },
       updatedPermissions: [{ type: "addRules", rules: [{ toolName: "Bash", ruleContent: "printf *" }], behavior: "allow", destination: "session" }],
       toolUseID: "tool-use-permission-1",
     })
@@ -508,7 +508,7 @@ test("provider-consumed input cannot bypass UUID backpressure or duplicate prote
 // A SUB-AGENT STEER is one addressed input frame and nothing else — there is no per-agent control
 // request in the SDK (`stopTask` / `backgroundTasks` are the whole per-task surface). So the ONE thing
 // the adapter must get right is which value lands in `parent_tool_use_id`: null keeps the message on
-// the session's main thread (every follow-up fray has ever sent, which must stay byte-identical), and
+// the session's main thread (every follow-up frizz has ever sent, which must stay byte-identical), and
 // the child's dispatch tool_use id routes it into that child's own conversation. Asserted on the wire
 // frame the CLI actually reads, because that is where the routing decision is consumed.
 test("addressing an input routes it to the sub-agent; omitting it stays a main-thread turn", { timeout: 10_000 }, async () => {
@@ -933,23 +933,23 @@ test("a provider event flood trips the bounded output queue instead of retaining
   }
 })
 
-// A worker INHERITS the operator's environment and is denied only fray's own control plane. This
+// A worker INHERITS the operator's environment and is denied only frizz's own control plane. This
 // reverses the allowlist this test used to pin (it asserted GITHUB_TOKEN / OPENAI_API_KEY /
 // AWS_SECRET_ACCESS_KEY / an arbitrary secret were all withheld); worker-env.ts carries the full
 // reasoning, but the short version is that the allowlists had drifted apart between backends — proxy
 // and CA variables reached codex workers and not claude ones — while withholding a token from a
 // process that can read ~/.config/gh/hosts.yml was never a real boundary.
 //
-// What this test still guards is the part that IS load-bearing: FRAY_* never crosses, so a worker
-// dispatched to work on fray cannot read the broker's daemon payload or the launch identity, and the
+// What this test still guards is the part that IS load-bearing: FRIZZ_* never crosses, so a worker
+// dispatched to work on frizz cannot read the broker's daemon payload or the launch identity, and the
 // cc-worker hooks cannot pick up the SERVER's thread identity instead of their own.
-test("child environment inherits ambient variables and withholds only fray's own control plane", { timeout: 10_000 }, async () => {
+test("child environment inherits ambient variables and withholds only frizz's own control plane", { timeout: 10_000 }, async () => {
   const ambient = {
     GITHUB_TOKEN: "github-should-cross",
     OPENAI_API_KEY: "openai-should-cross",
     AWS_SECRET_ACCESS_KEY: "aws-should-cross",
     ARBITRARY_SECRET: "arbitrary-should-cross",
-    FRAY_SHOULD_NOT_LEAK: "fray-must-not-cross",
+    FRIZZ_SHOULD_NOT_LEAK: "frizz-must-not-cross",
   } as const
   const previous = Object.fromEntries(Object.keys(ambient).map((key) => [key, process.env[key]]))
   Object.assign(process.env, ambient)
@@ -965,7 +965,7 @@ test("child environment inherits ambient variables and withholds only fray's own
     assert.equal(environment.awsSecretAccessKeyPresent, true)
     assert.equal(environment.arbitrarySecretPresent, true)
     // The one thing that must never cross.
-    assert.equal(environment.fraySecretPresent, false, "FRAY_* is fray's control plane, not the operator's environment")
+    assert.equal(environment.frizzSecretPresent, false, "FRIZZ_* is frizz's control plane, not the operator's environment")
   } finally {
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key]
@@ -1058,9 +1058,9 @@ test("input, JSON, environment, and executable boundaries reject unsafe payloads
       session: { kind: "new", sessionId: SESSION_ID },
       env: { "INVALID=KEY": "value" },
     }), /invalid key/)
-    // No "not allowlisted" case any more: overrides are fray's own, and the worker inherits the
+    // No "not allowlisted" case any more: overrides are frizz's own, and the worker inherits the
     // operator's environment by design (worker-env.ts). The remaining guards below are the ones that
-    // still catch a fray BUG rather than an operator's choice — a malformed key, and a sensitive value
+    // still catch a frizz BUG rather than an operator's choice — a malformed key, and a sensitive value
     // too short to redact safely.
     assert.throws(() => factory.start({
       cwd: harness.dir,
@@ -1093,7 +1093,7 @@ function startHarness(
   callbacks: Pick<Parameters<ReturnType<typeof createClaudeQueryFactory>["start"]>[0], "canUseTool" | "onElicitation"> = {},
   session: Parameters<ReturnType<typeof createClaudeQueryFactory>["start"]>[0]["session"] = { kind: "new", sessionId: SESSION_ID },
 ): Harness {
-  const dir = mkdtempSync(join(tmpdir(), "fray-claude-sdk-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-claude-sdk-"))
   const capturePath = join(dir, "capture.jsonl")
   const executablePath = join(dir, `fake-claude--${scenario}.mjs`)
   copyFileSync(fakeExecutable, executablePath)
@@ -1203,7 +1203,7 @@ test("a tool input with a control character DEGRADES instead of killing the sess
   assert.equal(event.kind, "assistant")
   assert.equal(event.toolUses.length, 1, "the tool call is still reported")
   assert.equal(event.toolUses[0]!.name, "Bash", "id and name survive — only the arguments degrade")
-  assert.ok("__frayUnrepresentable" in event.toolUses[0]!.input, `input was ${JSON.stringify(event.toolUses[0]!.input)}`)
+  assert.ok("__frizzUnrepresentable" in event.toolUses[0]!.input, `input was ${JSON.stringify(event.toolUses[0]!.input)}`)
 })
 
 test("an ordinary tool input is untouched by the degrade path", () => {
@@ -1254,7 +1254,7 @@ test("an unrepresentable PERMISSION input is denied, not thrown — content vs p
   // calls, which is exactly where Bash commands (and therefore ANSI escapes) live.
   //
   // The validator stays strict — this decides whether authority is granted, so sanitizing the bytes
-  // the provider will act on would be a security bug. What changed is the CONSEQUENCE: an input fray
+  // the provider will act on would be a security bug. What changed is the CONSEQUENCE: an input frizz
   // cannot represent denies that one call instead of rejecting the SDK callback, which is how a
   // formatting problem used to become a dead session.
   const esc = String.fromCharCode(27)
@@ -1282,7 +1282,7 @@ test("mapTask carries the whole sub-agent payload, not just two strings", () => 
     task_id: "task_abc",
     tool_use_id: "toolu_child",
     description: "Audit the tailer fold",
-    subagent_type: "fray:opus-high",
+    subagent_type: "frizz:opus-high",
     last_tool_name: "Bash",
     summary: "running the live harness",
     usage: { total_tokens: 40123, tool_uses: 18, duration_ms: 92_000 },
@@ -1292,7 +1292,7 @@ test("mapTask carries the whole sub-agent payload, not just two strings", () => 
   assert.equal(event.taskId, "task_abc")
   assert.equal(event.toolUseId, "toolu_child")
   assert.equal(event.description, "Audit the tailer fold")
-  assert.equal(event.subagentType, "fray:opus-high")
+  assert.equal(event.subagentType, "frizz:opus-high")
   assert.equal(event.lastToolName, "Bash")
   assert.equal(event.summary, "running the live harness")
   assert.deepEqual(event.usage, { totalTokens: 40123, toolUses: 18, durationMs: 92_000 })

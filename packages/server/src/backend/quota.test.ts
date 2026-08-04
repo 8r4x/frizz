@@ -74,7 +74,7 @@ test("codex: no rate_limits anywhere → undefined", () => {
 // ---- Codex live app-server (account/rateLimits/read) parsing ----
 
 test("codex live: camelCase rateLimits → windows labeled by windowDurationMins", () => {
-  // Captured verbatim from codex-cli 0.146.0 (fields fray ignores trimmed).
+  // Captured verbatim from codex-cli 0.146.0 (fields frizz ignores trimmed).
   const q = parseCodexQuotaFromRateLimits({
     rateLimits: {
       limitId: "codex",
@@ -121,7 +121,7 @@ test("codex live: snake_case rollout spelling is NOT accepted here", () => {
 
 test("codex: a failed live read degrades to the rollout tail, labeled as unconfirmed", async () => {
   // `codexBin` points at a binary that cannot answer, so the live path resolves undefined.
-  const dir = await mkdtemp(join(tmpdir(), "fray-codex-quota-"))
+  const dir = await mkdtemp(join(tmpdir(), "frizz-codex-quota-"))
   try {
     const day = join(dir, "sessions", "2026", "07", "31")
     await mkdir(day, { recursive: true })
@@ -144,7 +144,7 @@ test("codex: a failed live read degrades to the rollout tail, labeled as unconfi
 })
 
 test("codex: a failed live read with no rollouts stays a clean unavailable", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "fray-codex-quota-"))
+  const dir = await mkdtemp(join(tmpdir(), "frizz-codex-quota-"))
   try {
     resetCodexQuotaMemo()
     const q = await readCodexQuota(dir, join(dir, "definitely-not-a-real-codex-binary"))
@@ -285,7 +285,7 @@ test("claude CLI usage: a year-less date label crossing New Year resolves forwar
 })
 
 async function withCache(run: (cacheDir: string) => Promise<void>) {
-  const cacheDir = await mkdtemp(join(tmpdir(), "fray-quota-test-"))
+  const cacheDir = await mkdtemp(join(tmpdir(), "frizz-quota-test-"))
   try {
     await run(cacheDir)
   } finally {

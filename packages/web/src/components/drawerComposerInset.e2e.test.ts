@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-const baseUrl = process.env.FRAY_DRAWER_COMPOSER_INSET_E2E_URL
+const baseUrl = process.env.FRIZZ_DRAWER_COMPOSER_INSET_E2E_URL
 
 test("thread drawer keeps the prompt box inset evenly while safe-area padding stays below lifecycle actions", {
   skip: !baseUrl,

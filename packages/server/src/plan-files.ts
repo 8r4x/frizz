@@ -13,7 +13,7 @@ import {
 import { createHash } from "node:crypto"
 import { basename, dirname, join } from "node:path"
 
-const PLAN_PATH_RE = /^\.fray\/plans\/([A-Za-z0-9][A-Za-z0-9._ -]*\.md)$/
+const PLAN_PATH_RE = /^\.frizz\/plans\/([A-Za-z0-9][A-Za-z0-9._ -]*\.md)$/
 
 interface DirectoryIdentity {
   path: string
@@ -22,7 +22,7 @@ interface DirectoryIdentity {
 }
 
 interface PlanDirectoryIdentity {
-  fray: DirectoryIdentity
+  frizz: DirectoryIdentity
   plans: DirectoryIdentity
 }
 
@@ -67,10 +67,10 @@ function directDirectory(parentRealPath: string, name: string): DirectoryIdentit
 function planDirectory(projectDir: string): PlanDirectoryIdentity | null {
   try {
     const projectRoot = realpathSync(projectDir)
-    const fray = directDirectory(projectRoot, ".fray")
-    if (!fray) return null
-    const plans = directDirectory(fray.realPath, "plans")
-    return plans ? { fray, plans } : null
+    const frizz = directDirectory(projectRoot, ".frizz")
+    if (!frizz) return null
+    const plans = directDirectory(frizz.realPath, "plans")
+    return plans ? { frizz, plans } : null
   } catch {
     return null
   }
@@ -81,7 +81,7 @@ function sameDirectory(a: DirectoryIdentity, b: DirectoryIdentity): boolean {
 }
 
 function samePlanDirectory(a: PlanDirectoryIdentity, b: PlanDirectoryIdentity | null): boolean {
-  return b !== null && sameDirectory(a.fray, b.fray) && sameDirectory(a.plans, b.plans)
+  return b !== null && sameDirectory(a.frizz, b.frizz) && sameDirectory(a.plans, b.plans)
 }
 
 function filenameFromPlanPath(value: unknown): string | null {
@@ -137,7 +137,7 @@ export function resolvePlanFile(
     return {
       path,
       realPath,
-      relativePath: `.fray/plans/${filename}`,
+      relativePath: `.frizz/plans/${filename}`,
       filename,
       contents,
       dev: after.dev,
@@ -157,7 +157,7 @@ export function resolvePlanFile(
 // of the stable plans directory is unlinked. Returns false when there is nothing to delete (the plan is
 // absent or the path is refused) so the caller can stay idempotent, but a genuine filesystem failure
 // (e.g. EACCES/EPERM) is RE-THROWN rather than swallowed, so a "deleted" result never masks a live file.
-// A lost resolve→unlink race (ENOENT) is treated as an idempotent success. `.fray` watcher fans the drop.
+// A lost resolve→unlink race (ENOENT) is treated as an idempotent success. `.frizz` watcher fans the drop.
 export function deletePlanFile(projectDir: string, value: unknown): boolean {
   const resolved = resolvePlanFile(projectDir, value)
   if (!resolved) return false
@@ -183,7 +183,7 @@ export function listPlanFiles(
     hooks.afterDirectoryCheck?.()
     const names = readdirSync(directoryBefore.plans.realPath).sort()
     const files = names.flatMap((filename) => {
-      const relativePath = `.fray/plans/${filename}`
+      const relativePath = `.frizz/plans/${filename}`
       if (!filenameFromPlanPath(relativePath)) return []
       const resolved = resolvePlanFile(projectDir, relativePath)
       return resolved ? [resolved] : []

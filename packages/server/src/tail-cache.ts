@@ -86,7 +86,7 @@ let foldSchemaMemo: string | null = null
  */
 export function foldSchemaDigest(dir = import.meta.dirname): string {
   if (foldSchemaMemo) return foldSchemaMemo
-  const hash = createHash("sha256").update("fray-tail-state-v1\0")
+  const hash = createHash("sha256").update("frizz-tail-state-v1\0")
   let read = 0
   for (const name of FOLD_SOURCES) {
     try {
@@ -97,7 +97,7 @@ export function foldSchemaDigest(dir = import.meta.dirname): string {
       hash.update(name).update("\0missing\0")
     }
   }
-  foldSchemaMemo = read === 0 ? "fray-tail-state-v1-unreadable" : hash.digest("hex").slice(0, 32)
+  foldSchemaMemo = read === 0 ? "frizz-tail-state-v1-unreadable" : hash.digest("hex").slice(0, 32)
   return foldSchemaMemo
 }
 

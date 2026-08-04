@@ -11,8 +11,8 @@ import { createInterface } from "node:readline"
 const args = process.argv.slice(2)
 const executablePath = process.argv[1] ?? ""
 const pathScenario = /^fake-claude--([a-z0-9-]+)(?:\.mjs)?$/i.exec(basename(executablePath))?.[1]
-const scenario = process.env.FRAY_FAKE_CLAUDE_SCENARIO ?? pathScenario ?? "basic"
-const capturePath = process.env.FRAY_FAKE_CLAUDE_CAPTURE ?? (pathScenario ? join(dirname(executablePath), "capture.jsonl") : undefined)
+const scenario = process.env.FRIZZ_FAKE_CLAUDE_SCENARIO ?? pathScenario ?? "basic"
+const capturePath = process.env.FRIZZ_FAKE_CLAUDE_CAPTURE ?? (pathScenario ? join(dirname(executablePath), "capture.jsonl") : undefined)
 const requestedSessionId = optionValue("--session-id") ?? optionValue("--resume") ?? "00000000-0000-4000-8000-000000000001"
 const sessionId = scenario === "mismatch" ? "00000000-0000-4000-8000-000000000099" : requestedSessionId
 const eventSessionId = scenario === "late-mismatch" ? "00000000-0000-4000-8000-000000000098" : sessionId
@@ -48,8 +48,8 @@ record({
   argv: args,
   cwd: process.cwd(),
   environment: {
-    frayFakeInheritedPresent: process.env.FRAY_FAKE_INHERITED !== undefined,
-    frayFakeOverridePresent: process.env.FRAY_FAKE_OVERRIDE !== undefined,
+    frizzFakeInheritedPresent: process.env.FRIZZ_FAKE_INHERITED !== undefined,
+    frizzFakeOverridePresent: process.env.FRIZZ_FAKE_OVERRIDE !== undefined,
     clientApp: process.env.CLAUDE_AGENT_SDK_CLIENT_APP,
     entrypoint: process.env.CLAUDE_CODE_ENTRYPOINT,
     pathPresent: typeof process.env.PATH === "string" && process.env.PATH.length > 0,
@@ -62,7 +62,7 @@ record({
     githubTokenPresent: process.env.GITHUB_TOKEN !== undefined,
     openaiApiKeyPresent: process.env.OPENAI_API_KEY !== undefined,
     awsSecretAccessKeyPresent: process.env.AWS_SECRET_ACCESS_KEY !== undefined,
-    fraySecretPresent: process.env.FRAY_SHOULD_NOT_LEAK !== undefined,
+    frizzSecretPresent: process.env.FRIZZ_SHOULD_NOT_LEAK !== undefined,
     arbitrarySecretPresent: process.env.ARBITRARY_SECRET !== undefined,
   },
 })
@@ -156,7 +156,7 @@ function handleHostControl(message) {
     return
   }
   // Real claude names the session from `description` and, when `persist` is set, appends the
-  // `ai-title` transcript record fray reads. The fake only needs to prove the REQUEST is made once,
+  // `ai-title` transcript record frizz reads. The fake only needs to prove the REQUEST is made once,
   // with the dispatch prompt and persistence on, so it records and echoes a derived title.
   if (request.subtype === "generate_session_title") {
     record({ kind: "session-title", description: request.description, persist: request.persist })

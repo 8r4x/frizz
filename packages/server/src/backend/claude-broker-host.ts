@@ -1,5 +1,5 @@
 // The parent side of the Claude session broker: derive its socket/record paths, fork it as a detached
-// daemon, and — after a fray restart — ADOPT an already-running one instead of cold-starting. Mirrors
+// daemon, and — after a frizz restart — ADOPT an already-running one instead of cold-starting. Mirrors
 // codex-app-server-host.ts (fork/record/adopt), keyed per Claude session id (one broker per thread).
 import { spawn } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
@@ -65,8 +65,8 @@ export function resolveClaudeExecutableAbsolute(bin: string | undefined, env: No
 /** Short, collision-resistant socket path (unix sockets cap ~104 bytes on macOS/BSD). */
 export function claudeBrokerSocketPath(stateDir: string, sessionId: string): string {
   const key = createHash("sha256").update(stateDir).update("\0").update(sessionId).digest("hex").slice(0, 16)
-  if (process.platform === "win32") return `\\\\.\\pipe\\fray-claude-${key}`
-  return join(process.env.TMPDIR ?? "/tmp", `fray-claude-${key}.sock`)
+  if (process.platform === "win32") return `\\\\.\\pipe\\frizz-claude-${key}`
+  return join(process.env.TMPDIR ?? "/tmp", `frizz-claude-${key}.sock`)
 }
 
 /** The discovery record lives under the project state dir (long paths are fine here). */
@@ -91,7 +91,7 @@ export function liveBrokerRecord(recordPath: string): BrokerRecord | null {
   return null
 }
 
-/** Every broker daemon under this state dir that is still running — the set a booting fray can adopt.
+/** Every broker daemon under this state dir that is still running — the set a booting frizz can adopt.
  *
  *  Enumerates the record DIRECTORY rather than probing one path per registry row: the record filename
  *  is a hash of the session id and cannot be inverted, and at boot the live set (a handful of daemons)
@@ -123,7 +123,7 @@ export interface ForkBrokerOptions {
   effort?: string
   /** Resume the on-disk session instead of starting fresh (dead-daemon follow-up cold start). */
   resume?: boolean
-  /** The fray worker environment (plugin + MCP + per-thread fray vars) — see ClaudeBrokerConfig. */
+  /** The frizz worker environment (plugin + MCP + per-thread frizz vars) — see ClaudeBrokerConfig. */
   pluginDir?: string
   mcpServers?: Record<string, { type?: "stdio"; command: string; args?: string[]; env?: Record<string, string> }>
   allowedTools?: string[]
@@ -152,7 +152,7 @@ export function forkBroker(options: ForkBrokerOptions): Promise<BrokerRecord> {
   const entry = options.daemonEntry ?? resolveDetachedDaemonEntry(import.meta.url, "claude-agent-broker")
   const child = spawn(process.execPath, [entry], {
     cwd: options.cwd,
-    env: { ...process.env, FRAY_CLAUDE_BROKER: JSON.stringify(config) },
+    env: { ...process.env, FRIZZ_CLAUDE_BROKER: JSON.stringify(config) },
     detached: true,
     stdio: "ignore",
   })
@@ -171,7 +171,7 @@ export function forkBroker(options: ForkBrokerOptions): Promise<BrokerRecord> {
   })
 }
 
-/** Reattach to a live broker if one exists (fray restart), else fork a fresh one. */
+/** Reattach to a live broker if one exists (frizz restart), else fork a fresh one. */
 export async function adoptOrForkBroker(options: ForkBrokerOptions): Promise<{ record: BrokerRecord; reattached: boolean }> {
   const existing = liveBrokerRecord(claudeBrokerRecordPath(options.stateDir, options.sessionId))
   if (existing) return { record: existing, reattached: true }

@@ -1,4 +1,4 @@
-import { PermissionMode, type Backend, type CodexModel } from "@fray-ui/shared"
+import { PermissionMode, type Backend, type CodexModel } from "@frizz/shared"
 import type { SelectOption, SelectGroup } from "../components/ui/Select.tsx"
 
 // Shared option sets for the permission / model / effort selects, used by both the New-thread

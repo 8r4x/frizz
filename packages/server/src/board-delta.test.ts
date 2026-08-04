@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import type { BoardSnapshot, ThreadView } from "@fray-ui/shared"
-import { BoardDiffer, applyBoardDelta, deltaAction, bootReloadDecision } from "@fray-ui/shared"
+import type { BoardSnapshot, ThreadView } from "@frizz/shared"
+import { BoardDiffer, applyBoardDelta, deltaAction, bootReloadDecision } from "@frizz/shared"
 
 // ---- fixtures ----
 

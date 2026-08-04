@@ -37,7 +37,7 @@ const logDir = join(home, ".claude", "projects", cwdSlug)
 mkdirSync(logDir, { recursive: true })
 const at = (offsetSec) => new Date(Date.now() + offsetSec * 1000).toISOString()
 
-const dbs = globSync(join(home, ".fray", "projects", "*", "ui.db"))
+const dbs = globSync(join(home, ".frizz", "projects", "*", "ui.db"))
 if (dbs.length !== 1) { console.error("expected exactly one sandbox ui.db, got", dbs); process.exit(1) }
 const db = dbs[0]
 
@@ -48,8 +48,8 @@ function seed({ slug, session, title, records, ageSec }) {
   mkdirSync(join(sessionDir, "subagents"), { recursive: true })
   const rows = records(join(sessionDir, "subagents"))
   writeFileSync(join(logDir, `${session}.jsonl`), `${rows.map((r) => JSON.stringify(r)).join("\n")}\n`)
-  execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `fray-${slug}`, "sleep 7200"])
-  execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, state, backend, model, effort, permission_mode, title_auto, unread, exited, archived) VALUES ('${slug}', '${session}', 'fray-${slug}', '${at(ageSec)}', '${title}', 'open', 'claude', 'opus', 'high', 'bypassPermissions', 0, 0, 0, 0)`])
+  execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `frizz-${slug}`, "sleep 7200"])
+  execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, state, backend, model, effort, permission_mode, title_auto, unread, exited, archived) VALUES ('${slug}', '${session}', 'frizz-${slug}', '${at(ageSec)}', '${title}', 'open', 'claude', 'opus', 'high', 'bypassPermissions', 0, 0, 0, 0)`])
 }
 
 const assistant = (content, ts, stop = "end_turn") => ({ type: "assistant", timestamp: ts, message: { id: `m${Math.random().toString(36).slice(2)}`, role: "assistant", stop_reason: stop, content } })
@@ -65,7 +65,7 @@ seed({
     liveChild(dir, "aLive")
     return [
       user([{ type: "text", text: "Refactor the pricing parser and cover the tier edges." }], at(-900)),
-      assistant([{ type: "tool_use", id: "toolu_a", name: "Agent", input: { description: "Audit the parser for edge cases", subagent_type: "fray:opus-high", run_in_background: true, prompt: "Audit the pricing parser for unhandled tier edges and report each one." } }], at(-870)),
+      assistant([{ type: "tool_use", id: "toolu_a", name: "Agent", input: { description: "Audit the parser for edge cases", subagent_type: "frizz:opus-high", run_in_background: true, prompt: "Audit the pricing parser for unhandled tier edges and report each one." } }], at(-870)),
       user([{ type: "tool_result", tool_use_id: "toolu_a", content: [{ type: "text", text: `Async agent launched successfully.\nagentId: aLive\noutput_file: ${join(dir, "agent-aLive.jsonl")}` }] }], at(-869)),
       // The parent's OWN turn then ends — it is at rest while the child keeps going.
       assistant([{ type: "text", text: "Audit lane is out. I'll fold its findings in when it returns." }], at(-860)),
@@ -103,7 +103,7 @@ seed({
     liveChild(dir, "dLive")
     return [
       user([{ type: "text", text: "Sweep the tailer nudge regressions." }], at(-300)),
-      assistant([{ type: "tool_use", id: "toolu_d", name: "Agent", input: { description: "Reproduce the nudge on a live tail", subagent_type: "fray:sonnet-medium", run_in_background: true, prompt: "Reproduce the tailer nudge on a live tail and report the exact record that triggers it." } }], at(-280)),
+      assistant([{ type: "tool_use", id: "toolu_d", name: "Agent", input: { description: "Reproduce the nudge on a live tail", subagent_type: "frizz:sonnet-medium", run_in_background: true, prompt: "Reproduce the tailer nudge on a live tail and report the exact record that triggers it." } }], at(-280)),
       user([{ type: "tool_result", tool_use_id: "toolu_d", content: [{ type: "text", text: `Async agent launched successfully.\nagentId: dLive\noutput_file: ${join(dir, "agent-dLive.jsonl")}` }] }], at(-279)),
       // No end_turn after this tool_use → the parent's own turn is still IN FLIGHT.
       assistant([{ type: "tool_use", id: "toolu_d2", name: "Read", input: { file_path: "/tmp/tailer.ts" } }], at(-270), null),

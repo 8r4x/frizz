@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useSnapshot } from "valtio"
 import { ChevronsUpDown, Hourglass, Inbox } from "lucide-react"
-import type { ThreadView, BoardSnapshot, TranscriptMessage, TranscriptToolCall } from "@fray-ui/shared"
+import type { ThreadView, BoardSnapshot, TranscriptMessage, TranscriptToolCall } from "@frizz/shared"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { queueCardTargetY, showToast } from "../store.ts"
 import { rpc } from "../api/rpc.ts"
@@ -49,7 +49,7 @@ import type { TranscriptData } from "../hooks.ts"
 // navigation/diagnostic actions remain in that header. Snooze and Archive have one compact,
 // persistent footer row so completion hydration never moves or duplicates them.
 //
-// The exit budget (styles.css .fray-card-slot). A resolved card FADES + recedes (scale/blur) at full
+// The exit budget (styles.css .frizz-card-slot). A resolved card FADES + recedes (scale/blur) at full
 // height, then TodosView UNMOUNTS it and adjusts the viewport (user dismissal → auto-scroll the next
 // card to the top; board departure → pin a visible neighbour so nothing on screen shifts). There is
 // no height-collapse phase (it drifted the neighbour — see styles.css). Keep in sync with the CSS fade.
@@ -191,7 +191,7 @@ function AwaitingBackgroundBanner({ thread, onSnooze, onSnoozeFailed }: {
 // sidebar. The header buttons are mouse-driven (always visible atop each card).
 export function TodosView() {
   const board = useBoard()
-  // The queue is EXACTLY the server-derived Needs-you session threads (t.needsYou) — legacy .fray rows
+  // The queue is EXACTLY the server-derived Needs-you session threads (t.needsYou) — legacy .frizz rows
   // never card anymore. One strictly time-ordered list (no priority band): every card orders by
   // last-active alone, FIFO (oldest-first) by default or LIFO per the queueOrder preference.
   const items = orderQueue(asThreads(board?.threads ?? []).filter(queued), useSnapshot(prefs).queueOrder)
@@ -495,7 +495,7 @@ export function TodosView() {
   // Only a BRAND-NEW board — zero threads of ANY status (a board with only done/dismissed threads is
   // NOT a new user) — centers the prompt box as the whole screen; App hides the sidebar in lockstep
   // on this same predicate, so the fresh-user experience is just the prompt + corner chrome.
-  // Foreign (terminal) sessions don't count — only fray-originated threads/plans make a board "real".
+  // Foreign (terminal) sessions don't count — only frizz-originated threads/plans make a board "real".
   const nothingAtAll = !board?.threads.some((t) => t.foreign !== true) && (board?.plans?.length ?? 0) === 0
 
   return (
@@ -606,7 +606,7 @@ function RepairButton({ file }: { file: string }) {
 // One card's row in the list. On exit the card FADES + recedes (content blurs + scales from its centre,
 // fading out AT FULL HEIGHT), then TodosView unmounts it. There is no height-collapse phase: the row is
 // removed instantly and TodosView's one-shot unmount effect adjusts the viewport (auto-scroll next card
-// to top, or hold a neighbour in place). The `.fray-card-slot` rules in styles.css carry the
+// to top, or hold a neighbour in place). The `.frizz-card-slot` rules in styles.css carry the
 // fade/scale/blur. `data-queue-card=<slug>` is the anchor a sidebar row uses to jump to its queue card
 // instead of opening a drawer (scrollToQueueCard in store.ts), and the unmount anchors use it too;
 // `data-queue-leaving` drives the fade CSS.
@@ -616,12 +616,12 @@ function CardSlot({ leaving, slug, children }: { leaving: boolean; slug: string;
     // diff line inside a card would otherwise widen the whole queue column and make it pan sideways
     // (~346px of horizontal overflow before this) instead of letting the diff body's own
     // overflow-x:auto engage.
-    <div data-queue-card={slug} data-queue-leaving={leaving} className="fray-card-slot min-w-0">
-      {/* .fray-card-clip: a plain min-h-0/min-w-0 wrapper (no overflow:hidden — an overflow ancestor at
+    <div data-queue-card={slug} data-queue-leaving={leaving} className="frizz-card-slot min-w-0">
+      {/* .frizz-card-clip: a plain min-h-0/min-w-0 wrapper (no overflow:hidden — an overflow ancestor at
           rest would establish a scroll container that neuters the sticky header). */}
-      <div className="fray-card-clip min-h-0 min-w-0">
-        {/* .fray-card-body carries the fade's blur/scale (transform-origin: centre — it recedes uniformly). */}
-        <div className="fray-card-body min-w-0">
+      <div className="frizz-card-clip min-h-0 min-w-0">
+        {/* .frizz-card-body carries the fade's blur/scale (transform-origin: centre — it recedes uniformly). */}
+        <div className="frizz-card-body min-w-0">
           {children}
           {/* Generous inter-card space with a hairline rule; removed with the card on exit. The
               list container hides the LAST card's rule. */}
@@ -1106,9 +1106,9 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
             standalone thread page and opens it in a NEW TAB (maintainer 2026-08-03) — it used to slide
             the side drawer over the card, re-painting the panel you were already reading. Either way
             the queue's own scroll position is untouched. */}
-        {/* Every Fray-owned card carries the copy-resume-command affordance: queue cards are at rest
+        {/* Every Frizz-owned card carries the copy-resume-command affordance: queue cards are at rest
             by default, so opening the same session in your own terminal is entirely safe (and both CLIs
-            allow it live too). Foreign/legacy rows have no Fray-owned provider session to resume. */}
+            allow it live too). Foreign/legacy rows have no Frizz-owned provider session to resume. */}
         {thread.kind === "session" && thread.foreign !== true && <CopyTerminalCommandButton slug={thread.id} />}
         <HeaderActions
           thread={thread}
@@ -1145,7 +1145,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
             knows exactly what's asked without opening anything; it takes precedence over the generic
             perm banner. Otherwise a permission-blocked agent has NO message to show (turn parked
             mid-tool_use) — say so explicitly. Both route the answer to the terminal tab. */}
-        {/* Stands down when fray OWNS the question: a broker-path AskUserQuestion is journaled as an
+        {/* Stands down when frizz OWNS the question: a broker-path AskUserQuestion is journaled as an
             answerable interaction and already rendered by InteractionStack above, so pointing the
             operator at a terminal here would duplicate it with worse advice. */}
         {(thread.pendingInteraction ? undefined : thread.pendingAsk) ? (
@@ -1161,7 +1161,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
             <PermPromptBanner onTerminal={copyTerminalCommand} />
           </div>
         ) : null}
-        {/* What fray's permission policy decided on the worker's behalf. Sits BELOW the gates above:
+        {/* What frizz's permission policy decided on the worker's behalf. Sits BELOW the gates above:
             those are things waiting on the human, this is something already handled for them. */}
         {thread.permPolicy ? (
           <div className="mb-4">

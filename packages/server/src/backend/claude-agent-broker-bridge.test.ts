@@ -54,7 +54,7 @@ async function runCase(decisionId: string, expectBehavior: "allow" | "deny") {
     const [rec] = store.listPending(scope)
     assert.equal(rec.provider.kind, "claude", "interaction is attributed to the claude broker")
     assert.equal(rec.payload.kind, "permission-approval", "escalation renders as an approval card")
-    // The IDs must be the fray web's canonical permission verbs, else the approval buttons don't render.
+    // The IDs must be the frizz web's canonical permission verbs, else the approval buttons don't render.
     assert.ok(rec.allowedDecisions.some((d) => d.id === "grant-turn" && d.semantic === "approve"))
     assert.ok(rec.allowedDecisions.some((d) => d.id === "deny" && d.semantic === "deny"))
     // The daemon must NOT have proceeded before the human decides.
@@ -134,7 +134,7 @@ test("followUp: freshProcess retires the live daemon and cold-resumes; a plain f
     const second = recordOf()
     assert.ok(second, "a replacement daemon is published")
     assert.notEqual(second.daemonPid, first.daemonPid, "freshProcess must hand the message to a NEW process, not the latched one")
-    assert.notEqual(second.generation, first.generation, "a new generation is what tells fray the runtime was swapped")
+    assert.notEqual(second.generation, first.generation, "a new generation is what tells frizz the runtime was swapped")
     assert.equal(second.sessionId, sessionId, "the thread keeps its identity — this is a restart, not a new thread")
 
     // …and it RESUMED rather than starting blank, so every turn banked before the limit comes back

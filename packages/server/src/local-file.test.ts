@@ -6,7 +6,7 @@ import { test } from "node:test"
 import { openLocalFile, resolveLocalFile, resolveOpenableFile } from "./local-file.ts"
 
 test("local opener canonicalizes a regular file inside its trusted root and uses fixed argv", () => {
-  const root = mkdtempSync(join(tmpdir(), "fray-local-file-"))
+  const root = mkdtempSync(join(tmpdir(), "frizz-local-file-"))
   const file = join(root, "space ; $(not-a-command).md")
   writeFileSync(file, "safe")
   const calls: Array<{ command: string; args: readonly string[]; shell: unknown }> = []
@@ -21,8 +21,8 @@ test("local opener canonicalizes a regular file inside its trusted root and uses
 })
 
 test("local opener refuses relative, outside, directory, and escaping symlink paths", () => {
-  const root = mkdtempSync(join(tmpdir(), "fray-local-file-root-"))
-  const outside = mkdtempSync(join(tmpdir(), "fray-local-file-outside-"))
+  const root = mkdtempSync(join(tmpdir(), "frizz-local-file-root-"))
+  const outside = mkdtempSync(join(tmpdir(), "frizz-local-file-outside-"))
   const outsideFile = join(outside, "secret.txt")
   writeFileSync(outsideFile, "no")
   const link = join(root, "escape.txt")
@@ -34,15 +34,15 @@ test("local opener refuses relative, outside, directory, and escaping symlink pa
 })
 
 test("copy preference returns only the canonical trusted path without spawning", () => {
-  const root = mkdtempSync(join(tmpdir(), "fray-local-file-copy-"))
+  const root = mkdtempSync(join(tmpdir(), "frizz-local-file-copy-"))
   const file = join(root, "artifact.txt")
   writeFileSync(file, "safe")
   assert.deepEqual(openLocalFile(file, "copy", [root], { spawn: () => { throw new Error("must not spawn") } }), { action: "copy", path: realpathSync(file) })
 })
 
 test("resolveOpenableFile classifies references: home (~), project-relative, absolute, :line, and misses", () => {
-  const home = realpathSync(mkdtempSync(join(tmpdir(), "fray-openable-home-")))
-  const project = realpathSync(mkdtempSync(join(tmpdir(), "fray-openable-proj-")))
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "frizz-openable-home-")))
+  const project = realpathSync(mkdtempSync(join(tmpdir(), "frizz-openable-proj-")))
   const roots = [home, project]
   writeFileSync(join(home, "CLAUDE.md"), "cfg")
   mkdirSync(join(project, "packages", "web", "src"), { recursive: true })

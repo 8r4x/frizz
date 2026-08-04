@@ -1,11 +1,11 @@
 import { join } from "node:path"
-import { frayRoots } from "../fray-paths.ts"
+import { frizzRoots } from "../frizz-paths.ts"
 import { homedir, platform } from "node:os"
 import { createHash } from "node:crypto"
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
-import type { ProviderQuota, QuotaWindow } from "@fray-ui/shared"
+import type { ProviderQuota, QuotaWindow } from "@frizz/shared"
 
 const execFileAsync = promisify(execFile)
 
@@ -38,7 +38,7 @@ const STALE_MAX_AGE_MS = 24 * 60 * 60_000
 // past 12s, and a too-tight bound here is indistinguishable from a broken credential.
 const CLI_TIMEOUT_MS = 30_000
 // The lock must outlive the slowest refresh (the 30s CLI fallback), and followers must be willing to
-// wait through most of that bound. Otherwise a merely slow first process would make every other Fray
+// wait through most of that bound. Otherwise a merely slow first process would make every other Frizz
 // window give up early.
 const LOCK_STALE_MS = 40_000
 const LOCK_WAIT_MS = 15_000
@@ -316,7 +316,7 @@ const MONTH_INDEX: Record<string, number> = {
 
 function parseResetLabel(label: string | undefined, now: number): number | undefined {
   if (!label) return undefined
-  // Claude Code and Fray run on the same machine, so its explicit IANA suffix names the local timezone
+  // Claude Code and Frizz run on the same machine, so its explicit IANA suffix names the local timezone
   // already in effect here. Remove only that redundant suffix; never reinterpret it as UTC.
   const text = label.replace(/\s+\([^)]+\)\s*$/, "").trim()
   // The live label shapes: "3pm", "Jul 23 at 3pm", "Jul 27 at 12:59am", optionally with a year.
@@ -353,7 +353,7 @@ function parseResetLabel(label: string | undefined, now: number): number | undef
 }
 
 // Claude Code intentionally formats this output as a small line-oriented contract for non-interactive
-// callers. Preserve its percentages and turn its local reset labels back into the unix instants Fray's
+// callers. Preserve its percentages and turn its local reset labels back into the unix instants Frizz's
 // display and subscription-limit scheduler already consume.
 export function parseClaudeUsageOutput(stdout: string, now = Date.now()): ProviderQuota {
   let text = stdout
@@ -436,13 +436,13 @@ export async function claudeQuotaRefreshSettled(): Promise<void> {
 // keeps the cache genuinely warm so every read is recent.
 //
 // It uses the SAME non-blocking background path a stale read kicks — endpoint-first, one in-flight
-// refresh per process, cross-process lock so N Fray windows make ~one request every two minutes per account,
+// refresh per process, cross-process lock so N Frizz windows make ~one request every two minutes per account,
 // and the CLI fallback only for the 401/403 token-refresh case it already owned. It NEVER blocks the
 // caller and swallows every failure (the last known-good reading rides until the next success).
 export async function refreshClaudeQuotaInBackground(claudeBin = "claude", deps: ClaudeQuotaDeps = {}): Promise<void> {
   const now = (deps.now ?? Date.now)()
   const configDir = claudeConfigDir()
-  const cacheDir = deps.cacheDir ?? join(frayRoots().cache, "quota-cache")
+  const cacheDir = deps.cacheDir ?? join(frizzRoots().cache, "quota-cache")
   try {
     await mkdir(cacheDir, { recursive: true, mode: 0o700 })
   } catch {
@@ -451,7 +451,7 @@ export async function refreshClaudeQuotaInBackground(claudeBin = "claude", deps:
   refreshSharedInBackground(cachePaths(cacheDir, configDir), claudeBin, deps, now)
 }
 
-// The healthy cache is shared under ~/.fray so three project windows make one Claude Code request,
+// The healthy cache is shared under ~/.frizz so three project windows make one Claude Code request,
 // not three simultaneous requests to the same account. A failed refresh serves the last known-good
 // reading (clearly labeled in the popover) for at most one day instead of erasing useful data.
 //
@@ -467,7 +467,7 @@ export async function readClaudeQuota(
 ): Promise<ProviderQuota> {
   const now = (deps.now ?? Date.now)()
   const configDir = claudeConfigDir()
-  const cacheDir = deps.cacheDir ?? join(frayRoots().cache, "quota-cache")
+  const cacheDir = deps.cacheDir ?? join(frizzRoots().cache, "quota-cache")
   const paths = cachePaths(cacheDir, configDir)
   try {
     await mkdir(cacheDir, { recursive: true, mode: 0o700 })
@@ -494,7 +494,7 @@ export async function readClaudeQuota(
   try {
     release = await acquireLock(paths.lock)
     const afterLock = await readShared(paths.data)
-    // Another Fray process may have completed the requested refresh while this process waited.
+    // Another Frizz process may have completed the requested refresh while this process waited.
     if (afterLock && afterLock.at !== initial?.at && now - afterLock.at < OK_TTL_MS) return afterLock.quota
 
     const quota = await refreshQuota(claudeBin, deps, now)

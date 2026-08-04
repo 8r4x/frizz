@@ -1,4 +1,4 @@
-import type { SubAgentView } from "@fray-ui/shared"
+import type { SubAgentView } from "@frizz/shared"
 import { pushSubAgentDrawer } from "../store.ts"
 import { visibleChildOps } from "../lib/childOps.ts"
 import { childOpDismisser } from "../lib/dismissChildOp.ts"

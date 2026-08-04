@@ -11,7 +11,7 @@ import {
   type InteractionSource,
   type InteractionValue,
   type InteractionValues as InteractionValuesType,
-} from "@fray-ui/shared"
+} from "@frizz/shared"
 
 export interface InteractionDeliveryPresentation {
   actionsEnabled: boolean
@@ -172,7 +172,7 @@ export function interactionProviderLabel(kind: InteractionProvider["kind"]): str
   switch (kind) {
     case "claude": return "Claude"
     case "codex": return "Codex"
-    case "fray": return "Fray"
+    case "frizz": return "Frizz"
   }
 }
 
@@ -182,7 +182,7 @@ export function interactionSourceLabel(kind: InteractionSource["kind"]): string 
     case "agent": return "Agent"
     case "tool": return "Tool"
     case "mcp-server": return "MCP server"
-    case "fray": return "Fray"
+    case "frizz": return "Frizz"
   }
 }
 
@@ -230,7 +230,7 @@ export function parseInteractionDraft(fields: readonly InteractionField[], draft
   if (fields.some((field) => field.secret)) {
     return {
       errors: {},
-      formError: "Secret responses cannot be sent through this Fray connection.",
+      formError: "Secret responses cannot be sent through this Frizz connection.",
     }
   }
   const values: Record<string, InteractionValue> = Object.create(null) as Record<string, InteractionValue>

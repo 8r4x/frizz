@@ -6,7 +6,7 @@
 // Follows the adhoc-cdp recipe: a session row + a live dummy tmux pane + a JSONL the tailer reads.
 // Nothing here writes board state directly; the Agent tool_use records drive it.
 //
-// Usage: node scripts/seed-subagent-profiles.mjs --home=/abs/temp-home --socket=fray-adhoc-NNNN-PID
+// Usage: node scripts/seed-subagent-profiles.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID
 import { execFileSync } from "node:child_process"
 import { globSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -20,25 +20,25 @@ if (!home || !socket) {
   process.exit(1)
 }
 
-const db = globSync(join(home, ".fray/projects/*/ui.db"))[0]
-if (!db) throw new Error(`no ui.db under ${home}/.fray/projects`)
+const db = globSync(join(home, ".frizz/projects/*/ui.db"))[0]
+if (!db) throw new Error(`no ui.db under ${home}/.frizz/projects`)
 const jsonlDir = join(home, ".claude", "projects", cwd.replace(/[/.]/g, "-"))
 mkdirSync(jsonlDir, { recursive: true })
 
 const SLUG = "subagent-profiles"
 const SESSION = "5ubagen7-9r0f-4ile-8000-000000000001"
-const TMUX = `fray-${SLUG}`
+const TMUX = `frizz-${SLUG}`
 const now = () => new Date().toISOString()
 let n = 0
 const uuid = () => `00000000-0000-4000-8000-${String(++n).padStart(12, "0")}`
 
-// One dispatch per shape the tag has to survive: a fray cell with an effort, the older doubled
+// One dispatch per shape the tag has to survive: a frizz cell with an effort, the older doubled
 // namespace, a profile with no effort axis, and a named agent type that carries NO profile (which must
 // render no tag at all rather than a guessed one).
 const DISPATCHES = [
-  { id: "toolu_p1", type: "fray:opus-xhigh", label: "Audit the resume path for lost wakes" },
-  { id: "toolu_p2", type: "fray:fray-sonnet-medium", label: "Sweep every call site of the renamed projection helper" },
-  { id: "toolu_p3", type: "fray:haiku", label: "Harvest the fixture inventory" },
+  { id: "toolu_p1", type: "frizz:opus-xhigh", label: "Audit the resume path for lost wakes" },
+  { id: "toolu_p2", type: "frizz:frizz-sonnet-medium", label: "Sweep every call site of the renamed projection helper" },
+  { id: "toolu_p3", type: "frizz:haiku", label: "Harvest the fixture inventory" },
   { id: "toolu_p4", type: "general-purpose", label: "Explore how the board signature is derived" },
 ]
 

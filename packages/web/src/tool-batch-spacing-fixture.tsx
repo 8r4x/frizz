@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { useEffect } from "react"
 import { createRoot } from "react-dom/client"
 import { useSnapshot } from "valtio"
-import type { BoardSnapshot, ThreadView as ThreadViewModel, TranscriptMessage } from "@fray-ui/shared"
+import type { BoardSnapshot, ThreadView as ThreadViewModel, TranscriptMessage } from "@frizz/shared"
 import { ThreadView } from "./components/ChatView.tsx"
 import { SubAgentSheet } from "./components/SubAgentSheet.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
@@ -15,7 +15,7 @@ import "./styles.css"
 // chunks a burst of calls arbitrarily, so the chunking must be invisible.
 //
 // The transcript below deliberately mixes every chunking shape in one column, so a single measurement
-// pass over `.fray-bash` cards catches any boundary that reads wider than the intra-batch run:
+// pass over `.frizz-bash` cards catches any boundary that reads wider than the intra-batch run:
 //   • a 3-call batch in ONE message (intra-batch pitch, the reference)
 //   • a following message that is ONE call (batch boundary)
 //   • a following message that is a 2-call batch (batch boundary + intra)
@@ -56,7 +56,7 @@ const thread = {
   spawnedAt: "2026-07-27T09:00:00.000Z",
 } as unknown as ThreadViewModel
 
-store.board = { projectDir: "/fixture/fray", threads: [thread] } as BoardSnapshot
+store.board = { projectDir: "/fixture/frizz", threads: [thread] } as BoardSnapshot
 
 const call = (over: Record<string, unknown>) => ({ name: "Bash", status: "completed", durationMs: 1200, ...over })
 
@@ -151,7 +151,7 @@ const messages: TranscriptMessage[] = [
             textPart("   "),
             toolsPart([call({
               name: "Bash",
-              command: "cd /fixture/fray && actionlint .github/workflows/release.yml .github/workflows/ci.yml",
+              command: "cd /fixture/frizz && actionlint .github/workflows/release.yml .github/workflows/ci.yml",
               // Noun-phrase descriptions occur in real Claude Bash calls. The authored description
               // must still beat the command fallback even though it is not already a gerund.
               desc: "Final workflow validation",

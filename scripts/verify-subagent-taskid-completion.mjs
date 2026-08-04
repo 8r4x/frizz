@@ -36,7 +36,7 @@ if (!home || !socket) throw new Error("--home and --socket are required (take bo
 
 const SLUG = `subagent-taskid-${Date.now().toString(36)}`
 const SESSION = randomUUID()
-const CWD = "/Users/colinmcd94/Documents/projects/fray"
+const CWD = "/Users/colinmcd94/Documents/projects/frizz"
 const projectDir = join(home, ".claude", "projects", CWD.replace(/[/.]/g, "-"))
 const transcript = join(projectDir, `${SESSION}.jsonl`)
 
@@ -44,7 +44,7 @@ const transcript = join(projectDir, `${SESSION}.jsonl`)
 // Record shapes copied from the real bytes of nub session 0bb9560b (2026-07-30).
 const rec = (o) => `${JSON.stringify(o)}\n`
 const dispatch = (id, description, at) =>
-  rec({ type: "assistant", timestamp: at, message: { id: `m-${id}`, role: "assistant", content: [{ type: "tool_use", id, name: "Agent", input: { description, prompt: `do ${description}`, subagent_type: "fray:opus-high", run_in_background: true } }] } })
+  rec({ type: "assistant", timestamp: at, message: { id: `m-${id}`, role: "assistant", content: [{ type: "tool_use", id, name: "Agent", input: { description, prompt: `do ${description}`, subagent_type: "frizz:opus-high", run_in_background: true } }] } })
 const ack = (id, agentId, at) =>
   rec({
     type: "user",
@@ -74,9 +74,9 @@ appendFileSync(transcript, notifyByToolUse("toolu_ctl", "2026-07-30T17:52:00.000
 appendFileSync(transcript, notifyByTaskId("aab99c3e7b670a3ae", "Survey bun-compiled OSS projects", "2026-07-30T18:00:39.000Z"))
 
 // ── the session row + a live pane, so the board tails it for real ─────────────────────────────────
-const dbPath = execFileSync("bash", ["-lc", `ls ${home}/.fray/projects/*/ui.db`]).toString().trim()
-execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `fray-${SLUG}`, "sleep 7200"])
-execFileSync("sqlite3", [dbPath, `INSERT INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode) VALUES ('${SLUG}', '${SESSION}', 'fray-${SLUG}', '${new Date().toISOString()}', 'Sub-agent task-id completion', 'claude', 'opus', 'high', 'auto')`])
+const dbPath = execFileSync("bash", ["-lc", `ls ${home}/.frizz/projects/*/ui.db`]).toString().trim()
+execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `frizz-${SLUG}`, "sleep 7200"])
+execFileSync("sqlite3", [dbPath, `INSERT INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode) VALUES ('${SLUG}', '${SESSION}', 'frizz-${SLUG}', '${new Date().toISOString()}', 'Sub-agent task-id completion', 'claude', 'opus', 'high', 'auto')`])
 
 const api = createRpcClient(`http://127.0.0.1:${port}/`)
 await api.waitForHealth()

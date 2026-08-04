@@ -1,4 +1,4 @@
-import type { TranscriptMessage } from "@fray-ui/shared"
+import type { TranscriptMessage } from "@frizz/shared"
 
 // A transcript message that may carry the client-only/queued flag (server pending OR local optimistic).
 export type QueuedMessage = TranscriptMessage & { queued?: boolean }
@@ -112,7 +112,7 @@ function retainOptimistic(message: QueuedMessage, serverNow: number, atSend: num
     return retainOptimistic(message, serverNow, atSend)
   }
   if (serverNow - anchor <= GHOST_GRACE_MS) return true
-  console.warn("[fray] retiring a stranded optimistic send: the transcript advanced past it without ever recording it", {
+  console.warn("[frizz] retiring a stranded optimistic send: the transcript advanced past it without ever recording it", {
     text: message.text.slice(0, 120),
     advancedMs: serverNow - anchor,
   })

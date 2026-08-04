@@ -16,7 +16,7 @@ test("provider labels are human-facing names", () => {
 })
 
 // The alias boundary: ONLY the complete, exact spelling invokes an account action; everything else —
-// arguments, other slash-words, mid-text mentions — remains an ordinary prompt fray must not confiscate.
+// arguments, other slash-words, mid-text mentions — remains an ordinary prompt frizz must not confiscate.
 test("parseAccountAlias: exact complete input only", () => {
   assert.equal(parseAccountAlias("/login"), "login")
   assert.equal(parseAccountAlias("  /logout \n"), "logout")

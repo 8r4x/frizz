@@ -24,8 +24,8 @@ const cwdSlug = projectDir.replace(/[/.]/g, "-")
 const transcriptDir = path.join(home, ".claude", "projects", cwdSlug)
 fs.mkdirSync(transcriptDir, { recursive: true })
 
-const dbDir = fs.readdirSync(path.join(home, ".fray", "projects"))[0]
-const db = path.join(home, ".fray", "projects", dbDir, "ui.db")
+const dbDir = fs.readdirSync(path.join(home, ".frizz", "projects"))[0]
+const db = path.join(home, ".frizz", "projects", dbDir, "ui.db")
 
 const slug = "tool-liveness-marks"
 const sessionId = "33333333-3333-4333-8333-333333333333"
@@ -77,17 +77,17 @@ const records = [
         // FOREGROUND, still pending: marks itself on elapsed time once past the threshold. This record's
         // own timestamp is the clock, and it is minutes old, so it renders marked on first paint.
         call("toolu_fg", "Bash", { command: "npm run build", description: "Build the workspace" }),
-        call("toolu_agent", "Agent", { prompt: "Sweep every call site of the renamed helper.", subagent_type: "fray:opus-high", description: "Sweep the renamed helper" }),
+        call("toolu_agent", "Agent", { prompt: "Sweep every call site of the renamed helper.", subagent_type: "frizz:opus-high", description: "Sweep the renamed helper" }),
       ],
     },
   },
 ]
 
 fs.writeFileSync(path.join(transcriptDir, `${sessionId}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
-execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `fray-${slug}`, "sleep 7200"])
+execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `frizz-${slug}`, "sleep 7200"])
 execFileSync("sqlite3", [
   db,
   `INSERT INTO session (slug, session_id, tmux_name, spawned_at, title, title_auto, backend, model, effort, permission_mode, state, unread, exited, archived)
-   VALUES ('${slug}', '${sessionId}', 'fray-${slug}', '${T(0)}', 'Tool liveness marks', 0, 'claude', 'opus', 'high', 'auto', 'open', 0, 0, 0)`,
+   VALUES ('${slug}', '${sessionId}', 'frizz-${slug}', '${T(0)}', 'Tool liveness marks', 0, 'claude', 'opus', 'high', 'auto', 'open', 0, 0, 0)`,
 ])
 console.log(`seeded ${slug} (${sessionId})`)

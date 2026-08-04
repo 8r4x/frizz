@@ -2,11 +2,11 @@
 // changes behavior there.
 //   nub packages/server/src/backend/_live_sdk_worker_env.mts
 //
-// WHY THIS IS THE HARNESS THAT MATTERS: fray dispatches on the broker path by default, and both
+// WHY THIS IS THE HARNESS THAT MATTERS: frizz dispatches on the broker path by default, and both
 // observed early-quit sessions ran on it (`entrypoint: "sdk-ts"`). It is also a DIFFERENT chain from
 // tmux, with one extra gate that can silently drop a variable — the bridge's `workerEnv` map.
 // (buildEnvironment's EXPLICIT_CLAUDE_ENV_KEYS allowlist was the second gate until 2026-08-02; a
-// worker now inherits fray's environment minus fray's own control plane — see worker-env.ts.)
+// worker now inherits frizz's environment minus frizz's own control plane — see worker-env.ts.)
 //
 // It asserts only what it can actually demonstrate — see the NOT ASSERTED note below for the
 // Bash-timeout half, which no harness on this machine reproduces.
@@ -23,7 +23,7 @@ import { CLAUDE_WORKER_ENV } from "./types.ts"
 import type { ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
 
 const claudeBin = execFileSync("which", ["claude"], { encoding: "utf8" }).trim()
-const cwd = mkdtempSync(join(tmpdir(), "fray-sdk-worker-env-"))
+const cwd = mkdtempSync(join(tmpdir(), "frizz-sdk-worker-env-"))
 execFileSync("git", ["init", "-q", cwd])
 const BLOCK = "<total_tokens>Infinite tokens left</total_tokens>"
 const BASH_TIMEOUT_KEY = "BASH_DEFAULT_TIMEOUT_MS"

@@ -204,7 +204,7 @@ export function MermaidDiagram({ source }: { source: string }) {
       setState({ error: "Diagram source exceeds the 50 KB rendering limit" })
       return () => { live = false }
     }
-    const id = `fray-mermaid-${reactId.replace(/[^a-zA-Z0-9]/g, "")}`
+    const id = `frizz-mermaid-${reactId.replace(/[^a-zA-Z0-9]/g, "")}`
     void loadMermaid()
       .then((mermaid) => mermaid.render(id, source))
       .then(({ svg }) => { if (live) setState({ html: svg }) })

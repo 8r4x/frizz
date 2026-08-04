@@ -1,4 +1,4 @@
-import type { LimitWindow } from "@fray-ui/shared"
+import type { LimitWindow } from "@frizz/shared"
 // Type-only, so this never becomes a runtime cycle (types.ts reaches back here through tailer.ts).
 import type { LimitFault } from "./types.ts"
 

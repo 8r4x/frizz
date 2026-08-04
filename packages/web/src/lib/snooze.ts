@@ -154,4 +154,4 @@ export function formatAutoSnoozedUntil(until: string, nowMs = Date.now()): strin
   const wake = wakePhrase(until, nowMs)
   return wake ? `Auto-snoozed until ${wake}` : null
 }
-import { isValidAwaitingTimer } from "@fray-ui/shared"
+import { isValidAwaitingTimer } from "@frizz/shared"

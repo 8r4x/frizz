@@ -1,7 +1,7 @@
 import { useId, useMemo, useState } from "react"
 import { useSnapshot } from "valtio"
 import { ChevronDown, Clock, Loader2 } from "lucide-react"
-import { SNOOZE_PROMPT_MAX, type ThreadView } from "@fray-ui/shared"
+import { SNOOZE_PROMPT_MAX, type ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { futureSnoozedUntil } from "../groups.ts"
 import {
@@ -216,7 +216,7 @@ export function SnoozeButton({ thread, onSnoozed }: { thread: ThreadView; onSnoo
           />
           <p className="min-h-4 text-[10.5px] text-muted/65">
             {promptValue.trim()
-              ? "fray will resume this thread with the prompt at the wake time."
+              ? "frizz will resume this thread with the prompt at the wake time."
               : "Leave empty to just bring the card back to your queue."}
           </p>
           {customError && <p role="alert" className="text-[11px] text-red-400">{customError}</p>}

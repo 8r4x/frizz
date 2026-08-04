@@ -1,7 +1,7 @@
 {
-  "name": "Fray",
-  "short_name": "Fray",
-  "description": "fray — local agent orchestration surface",
+  "name": "Frizz",
+  "short_name": "Frizz",
+  "description": "frizz — local agent orchestration surface",
   "id": "/",
   "start_url": "/",
   "scope": "/",

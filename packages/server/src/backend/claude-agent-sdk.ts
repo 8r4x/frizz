@@ -10,7 +10,7 @@ import {
   type SDKControlInitializeResponse,
   type SDKMessage,
   type SDKUserMessage,
-} from "@fray-ui/claude-agent-sdk-runtime"
+} from "@frizz/claude-agent-sdk-runtime"
 import { claudeUltracodeSettings, resolveClaudeEffort } from "./claude-effort.ts"
 import {
   CLAUDE_AGENT_SDK_MAX_DIAGNOSTIC_BYTES,
@@ -50,8 +50,8 @@ import {
 import { inheritWorkerEnvironment } from "./worker-env.ts"
 import { redactCredentialSyntax } from "../credential-redaction.ts"
 
-export const CLAUDE_AGENT_SDK_FOUNDATION_FLAG = "FRAY_CLAUDE_AGENT_SDK_FOUNDATION"
-export const CLAUDE_AGENT_SDK_CLIENT_APP = "fray/claude-agent-sdk-foundation"
+export const CLAUDE_AGENT_SDK_FOUNDATION_FLAG = "FRIZZ_CLAUDE_AGENT_SDK_FOUNDATION"
+export const CLAUDE_AGENT_SDK_CLIENT_APP = "frizz/claude-agent-sdk-foundation"
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
@@ -86,14 +86,14 @@ export interface ClaudeQueryStartOptions {
   // exact file the tailer reads for liveness + the UI transcript. The broker sets this; the default
   // stays false so nothing that used this as a standalone foundation starts persisting unexpectedly.
   persistSession?: boolean
-  // Text APPENDED to Claude's default (preset) system prompt — how the fray worker contract rides the
+  // Text APPENDED to Claude's default (preset) system prompt — how the frizz worker contract rides the
   // SDK path, the equivalent of the tmux path's --append-system-prompt-file.
   appendSystemPrompt?: string
   model?: string
   effort?: string
-  // The fray WORKER ENVIRONMENT — the SDK equivalents of the tmux path's --plugin-dir / --mcp-config /
-  // --allowedTools. Without these a broker session is a bare SDK worker: no fray:<model>-<effort>
-  // sub-agent profiles, no fray MCP (spawn_thread), no chrome-devtools (the browser gate), and none of
+  // The frizz WORKER ENVIRONMENT — the SDK equivalents of the tmux path's --plugin-dir / --mcp-config /
+  // --allowedTools. Without these a broker session is a bare SDK worker: no frizz:<model>-<effort>
+  // sub-agent profiles, no frizz MCP (spawn_thread), no chrome-devtools (the browser gate), and none of
   // the cc-worker hooks (deny-ask/deny-plan/agent-bind). `pluginDir` loads the local cc-worker plugin
   // (agents + hooks); `mcpServers` mounts the stdio MCP servers; `allowedTools` pre-approves them so a
   // headless worker never blocks on a tool it has nobody to approve.
@@ -108,7 +108,7 @@ export interface ClaudeQueryStartOptions {
   // Which of Claude Code's own settings layers the session loads — and, critically, whether it reads
   // the PROJECT's `CLAUDE.md` / `AGENTS.md` and `.claude/skills` at all.
   //
-  // Default `["project", "local"]`: the repo fray is dispatched INTO gets its own conventions in front
+  // Default `["project", "local"]`: the repo frizz is dispatched INTO gets its own conventions in front
   // of the worker, which is what every one of those files assumes ("This binds EVERY agent that
   // touches this repo"). Deliberately NOT `"user"` — the operator's personal `~/.claude` config is
   // theirs, not something a dispatched worker should silently inherit.
@@ -143,7 +143,7 @@ export interface ClaudeQueryHandle extends AsyncIterable<ClaudeQueryEvent> {
   reloadPlugins(): Promise<ClaudePluginReload>
   setPermissionMode(mode: ClaudePermissionMode): Promise<void>
   // Ask the provider to name the session from `description` and PERSIST the name as the `ai-title`
-  // record fray's tailer reads. See CLAUDE_TITLE_NEEDS_EXPLICIT_REQUEST below for why the broker has
+  // record frizz's tailer reads. See CLAUDE_TITLE_NEEDS_EXPLICIT_REQUEST below for why the broker has
   // to ask instead of letting Claude title the session on its own.
   generateSessionTitle(description: string): Promise<string | undefined>
   close(): Promise<void>
@@ -424,7 +424,7 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
   async reloadPlugins(): Promise<ClaudePluginReload> {
     this.assertOpen()
     if (typeof this.sdkQuery.reloadPlugins !== "function") {
-      throw new Error("this Claude Agent SDK build has no reloadPlugins(); fray cannot reload plugins in place")
+      throw new Error("this Claude Agent SDK build has no reloadPlugins(); frizz cannot reload plugins in place")
     }
     await this.ready()
     this.assertOpen()
@@ -479,7 +479,7 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
       throw new ClaudeAgentSdkProtocolError("Claude queued-input cancellation is unavailable")
     }
     const answer = await this.awaitOpenControl(provider[CLAUDE_SDK_CANCEL_METHOD](messageUuid))
-    // STRICT, and never coerced. Anything but a boolean means fray cannot tell whether the provider
+    // STRICT, and never coerced. Anything but a boolean means frizz cannot tell whether the provider
     // dropped the message, and the two readings have opposite consequences — so refuse to guess and
     // let the caller surface a failure instead of inventing a verdict.
     if (typeof answer !== "boolean") {
@@ -556,7 +556,7 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
   private async pump(): Promise<void> {
     try {
       for await (const raw of this.sdkQuery) {
-        // MAPPING is not OWNERSHIP. A frame fray cannot represent in its typed shape is a TELEMETRY
+        // MAPPING is not OWNERSHIP. A frame frizz cannot represent in its typed shape is a TELEMETRY
         // loss; a frame that names someone else's session is a breach. Only the second may be fatal.
         //
         // These were conflated, and the conflation cost hours of live work. `mapSdkMessage` throwing
@@ -570,7 +570,7 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
         // here: by the time an error surfaces to it, this catch has already closed the query. The
         // chokepoint is here, so the repair belongs here — drop the frame and keep going.
         //
-        // Dropping is cheap precisely because this stream is not fray's system of record: the tailer
+        // Dropping is cheap precisely because this stream is not frizz's system of record: the tailer
         // reads the session JSONL directly, so the board still sees what the agent did. Ownership
         // checks below stay fatal, unchanged.
         let event: ClaudeQueryEvent
@@ -598,11 +598,11 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
           // only place the session's resolved model is named — and that alias is what picks this thread's
           // row out of `result.modelUsage`, the sole source of the context meter's denominator
           // (claude-runtime-ingest.ts pickWindow). Swallowing it announced the alias exactly ONCE per
-          // DAEMON lifetime, to whichever fray process happened to be attached at the time; since a broker
-          // daemon OUTLIVES the fray server, every thread fray reattached after a restart could never
+          // DAEMON lifetime, to whichever frizz process happened to be attached at the time; since a broker
+          // daemon OUTLIVES the frizz server, every thread frizz reattached after a restart could never
           // relearn it, and a turn that bills more than one model (any sub-agent on another model) then has
           // no denominator that pickWindow is willing to name. Measured on the maintainer's own board:
-          // 42 of 323 claude threads carried a reading, and the split was exactly which fray process had
+          // 42 of 323 claude threads carried a reading, and the split was exactly which frizz process had
           // forked the daemon. `sessionModel` is a plain overwrite of an unchanged value, so relaying it
           // every turn costs one map write per turn.
           if (this.initialized) {
@@ -746,7 +746,7 @@ function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptio
       // Fail closed AND alive. It also matches what the bridge already does one layer up when it
       // cannot build an approval card: deny with a plain message rather than take anything down.
       // CONTENT vs PROTOCOL, and the distinction is the whole point:
-      //  - an INPUT fray cannot represent is a content problem. Deny this one call; the session lives.
+      //  - an INPUT frizz cannot represent is a content problem. Deny this one call; the session lives.
       //  - a malformed control frame (no requestId, no toolUseId) is a protocol violation. There is no
       //    correlation id to answer against, so a deny would go nowhere — that still fails hard, and
       //    the "without requestId" test pins it.
@@ -766,7 +766,7 @@ function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptio
         // No correlation id to answer against ⇒ a deny would go nowhere; that stays fatal, and the
         // ORIGINAL error is re-thrown so the diagnostic still names the actual missing field.
         if (!context.requestId || !context.toolUseID) throw error
-        return { behavior: "deny", message: "This tool call could not be represented for approval, so fray denied it." } as SdkPermissionResult
+        return { behavior: "deny", message: "This tool call could not be represented for approval, so frizz denied it." } as SdkPermissionResult
       }
       const fingerprint = canonicalFingerprint(request)
       return permissionRequests.resolve(request.requestId, fingerprint, async () => {
@@ -816,19 +816,19 @@ function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptio
       // PROJECT + LOCAL by default — see ClaudeQueryStartOptions.settingSources. `[]` was correct while
       // this was a standalone foundation nothing dispatched through; once the broker became the DEFAULT
       // Claude transport it silently stopped every worker from seeing the repo's own `CLAUDE.md` /
-      // `AGENTS.md` and its `.claude/skills`. Measured differential in the fray repo, one variable:
+      // `AGENTS.md` and its `.claude/skills`. Measured differential in the frizz repo, one variable:
       // this factory answered `NO-CLAUDE-MD` where a plain `claude -p` in the same cwd answered
       // "# No pull requests — land on local `main`". `"user"` stays OUT on purpose (see the field docs).
       settingSources: options.settingSources ?? ["project", "local"],
-      // The fray worker environment (see ClaudeQueryStartOptions): load the local cc-worker plugin so a
-      // broker session gets the fray sub-agent profiles + hooks, mount the MCP servers (fray +
+      // The frizz worker environment (see ClaudeQueryStartOptions): load the local cc-worker plugin so a
+      // broker session gets the frizz sub-agent profiles + hooks, mount the MCP servers (frizz +
       // chrome-devtools), and pre-approve them.
       ...(options.pluginDir ? { plugins: [{ type: "local" as const, path: options.pluginDir }] } : {}),
       ...(options.mcpServers ? { mcpServers: options.mcpServers } : {}),
       ...(options.allowedTools ? { allowedTools: options.allowedTools } : {}),
       ...(options.disallowedTools?.length ? { disallowedTools: [...options.disallowedTools] } : {}),
       persistSession: options.persistSession ?? false,
-      // Keep Claude's default (preset) system prompt and APPEND the fray worker contract, the SDK
+      // Keep Claude's default (preset) system prompt and APPEND the frizz worker contract, the SDK
       // equivalent of the tmux path's --append-system-prompt-file.
       ...(options.appendSystemPrompt ? { systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: options.appendSystemPrompt } } : {}),
       ...(options.model ? { model: options.model } : {}),
@@ -1274,7 +1274,7 @@ function finiteNumber(value: unknown): number | undefined {
  * strict validators still run (they are what bounds what reaches the wire); a rejection just drops
  * that ONE field to `undefined` instead of taking the frame, and therefore the session, down with it.
  *
- * Note the deliberate absence of `boundedId`. A task id / tool_use id whose shape fray's opaque-id
+ * Note the deliberate absence of `boundedId`. A task id / tool_use id whose shape frizz's opaque-id
  * pattern rejects costs this event its CORRELATION — the board shows an unenriched child — and not one
  * thing more. `boundedId` throws, so it must not be on this path.
  */
@@ -1347,9 +1347,9 @@ function mapSessionInit(raw: Record<string, unknown>): ClaudeSessionInitEvent {
   // string, a tool list, a mode name — and is degraded rather than allowed to take the session down.
   //
   // Two triggers were proven against the real daemon before this was written, each with a one-variable
-  // control: `init.tools` of 129 entries (the default boundedStringArray cap is 128, and fray dispatches
+  // control: `init.tools` of 129 entries (the default boundedStringArray cap is 128, and frizz dispatches
   // into arbitrary repos where one MCP server of the Neon/better-stack size clears it on its own), and a
-  // permissionMode string outside the six fray currently knows — `dontAsk` and `auto` are recent
+  // permissionMode string outside the six frizz currently knows — `dontAsk` and `auto` are recent
   // additions to that list, so the NEXT one claude ships would otherwise be a fleet-wide outage on
   // upgrade. That is the same failure mode as the codex version pin, on the Claude side.
   const soft = <T,>(read: () => T, fallback: T): T => { try { return read() } catch { return fallback } }
@@ -1361,7 +1361,7 @@ function mapSessionInit(raw: Record<string, unknown>): ClaudeSessionInitEvent {
     claudeCodeVersion: soft(() => safeText(raw.claude_code_version, "init.claudeCodeVersion", 512), ""),
     cwd: soft(() => safeText(raw.cwd, "init.cwd", 8 * 1024), ""),
     model: soft(() => safeText(raw.model, "init.model", 512), ""),
-    // An unknown mode reports as "default" rather than killing the session. fray never ACTS on this
+    // An unknown mode reports as "default" rather than killing the session. frizz never ACTS on this
     // value — it sends the mode it wants; this is the provider's echo, for display.
     permissionMode: soft(() => validatePermissionMode(raw.permissionMode), "default"),
     tools: soft(() => boundedStringArray(raw.tools, "init.tools", 4096), []),
@@ -1388,8 +1388,8 @@ export function mapAssistant(raw: Record<string, unknown>): ClaudeQueryEvent {
       if (textBytes > CLAUDE_AGENT_SDK_MAX_EVENT_TEXT_BYTES) throw new ClaudeAgentSdkProtocolError("assistant text exceeds its aggregate limit")
       text.push(value)
     } else if (block.type === "tool_use") {
-      // A tool input fray cannot REPRESENT must never be a fatal error. This is outbound TELEMETRY —
-      // fray's own view of what the agent is doing — and the agent's actual tool call has already been
+      // A tool input frizz cannot REPRESENT must never be a fatal error. This is outbound TELEMETRY —
+      // frizz's own view of what the agent is doing — and the agent's actual tool call has already been
       // made either way. Throwing here propagates out of the event iterator, and the broker daemon's
       // pump treats any iterator error as terminal (claude-agent-broker.ts), so it kills the daemon,
       // the `claude` process, and every in-flight sub-agent with it.
@@ -1408,7 +1408,7 @@ export function mapAssistant(raw: Record<string, unknown>): ClaudeQueryEvent {
       try {
         input = boundedJsonObject(block.input, `assistant.content[${index}].input`)
       } catch (error) {
-        input = { __frayUnrepresentable: error instanceof Error ? safeText(error.message, "unrepresentable", 512) : "tool input could not be represented" }
+        input = { __frizzUnrepresentable: error instanceof Error ? safeText(error.message, "unrepresentable", 512) : "tool input could not be represented" }
       }
       toolUses.push({
         id: boundedId(block.id, `assistant.content[${index}].id`),
@@ -1519,9 +1519,9 @@ function mapControlInitialization(raw: SDKControlInitializeResponse): ClaudeCont
     }
   })
   // The init `agents` array shape varies by claude version: newer builds emit a bare string per agent
-  // name (e.g. "fray:haiku"), older ones an object {name, description, model}. Handle both, or a
+  // name (e.g. "frizz:haiku"), older ones an object {name, description, model}. Handle both, or a
   // string-shaped build silently reports 16 empty-name agents (which is exactly what masked the loaded
-  // fray sub-agent profiles during the broker worker-environment bring-up).
+  // frizz sub-agent profiles during the broker worker-environment bring-up).
   const agents: ClaudeAgentCapability[] = boundedArray(raw.agents, "initialization.agents", 128).map((entry, index) => {
     if (typeof entry === "string") {
       return { name: safeText(entry, `initialization.agents[${index}]`, 512), description: "", model: undefined }
@@ -1556,7 +1556,7 @@ function mapControlInitialization(raw: SDKControlInitializeResponse): ClaudeCont
 }
 
 function buildEnvironment(overrides: Readonly<Record<string, string | undefined>> | undefined): Record<string, string | undefined> {
-  // Inherit fray's environment minus fray's own control plane — see worker-env.ts for why this is a
+  // Inherit frizz's environment minus frizz's own control plane — see worker-env.ts for why this is a
   // denylist rather than the allowlist it replaced. The caps below DEGRADE (skip the offending entry)
   // instead of throwing: this runs inside the broker daemon during startup, and a throw here kills it
   // before it publishes its record, which the operator sees only as every dispatch timing out "did not
@@ -1571,10 +1571,10 @@ function buildEnvironment(overrides: Readonly<Record<string, string | undefined>
     budget -= cost
     env[key] = value
   }
-  // Fray's OWN overrides are applied unconditionally and after the caps: they are a bounded handful
+  // Frizz's OWN overrides are applied unconditionally and after the caps: they are a bounded handful
   // (the plugin dir, this thread's slug, the perm dir) and a worker that silently lost one is broken in
   // ways far harder to diagnose than a dropped ambient variable. A malformed KEY still throws — that is
-  // a fray bug, not operator input, and it should be loud.
+  // a frizz bug, not operator input, and it should be loud.
   const overrideEntries = Object.entries(overrides ?? {})
   if (overrideEntries.length > MAX_ENV_ENTRIES) throw new ClaudeAgentSdkProtocolError("Claude environment has too many overrides")
   for (const [key, value] of overrideEntries) {

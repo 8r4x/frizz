@@ -1,5 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query"
-import type { Settings } from "@fray-ui/shared"
+import type { Settings } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 
 // Literal font stacks — mirror styles.css @theme --font-mono / --font-sans. Duplicated here ON
@@ -25,7 +25,7 @@ function apply(font: Settings["font"] | undefined) {
   if (document.body) document.body.style.fontFamily = v === "sans" ? SANS_STACK : MONO_STACK
   // Mirror for index.html's pre-paint FOUC guard (settings arrive an RPC after first paint).
   try {
-    localStorage.setItem("fray-font", v)
+    localStorage.setItem("frizz-font", v)
   } catch {
     // storage unavailable — the guard just defaults to mono next load
   }

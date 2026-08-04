@@ -15,7 +15,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { sweepStaleSockets } from "./stale-socket-sweep.ts"
 
-const PREFIX = "fray-swtest-"
+const PREFIX = "frizz-swtest-"
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -29,7 +29,7 @@ async function until(predicate: () => boolean, timeoutMs = 15_000): Promise<bool
 }
 
 test("the real sweep unlinks a killed daemon's socket and never touches a live one", { skip: process.platform === "win32" }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "fray-sweep-"))
+  const dir = mkdtempSync(join(tmpdir(), "frizz-sweep-"))
   const deadPath = join(dir, `${PREFIX}dead.sock`)
   const livePath = join(dir, `${PREFIX}live.sock`)
 
@@ -111,7 +111,7 @@ test("no lsof evidence sweeps nothing at all", () => {
 test("only this family's .sock files are candidates, and `keep` is absolute", () => {
   const keep = `/sockets/${PREFIX}mine.sock`
   const out = run(
-    [`${PREFIX}mine.sock`, `${PREFIX}other.sock`, `${PREFIX}notasocket.json`, "fray-codex-x.sock", "unrelated"],
+    [`${PREFIX}mine.sock`, `${PREFIX}other.sock`, `${PREFIX}notasocket.json`, "frizz-codex-x.sock", "unrelated"],
     new Set(),
     { keep: [keep] },
   )

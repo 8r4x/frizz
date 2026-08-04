@@ -1,6 +1,6 @@
 import { createElement } from "react"
 import { createRoot } from "react-dom/client"
-import type { ThreadView } from "@fray-ui/shared"
+import type { ThreadView } from "@frizz/shared"
 import "./styles.css"
 import { Message } from "./components/ChatView.tsx"
 import { ThreadRow } from "./components/Sidebar.tsx"

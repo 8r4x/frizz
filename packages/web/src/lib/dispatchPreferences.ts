@@ -3,7 +3,7 @@ import type {
   CodexModel,
   DispatchPreferences,
   SetDispatchPreferenceInput,
-} from "@fray-ui/shared"
+} from "@frizz/shared"
 import type { SelectGroup, SelectOption } from "../components/ui/Select.tsx"
 import type { ProfileGridGroup } from "./profileGrid.ts"
 import {

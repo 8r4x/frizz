@@ -1,7 +1,7 @@
-// The fray SIDE of the Claude session broker: a typed client that connects to a broker daemon's
+// The frizz SIDE of the Claude session broker: a typed client that connects to a broker daemon's
 // socket (see claude-agent-broker.ts) and speaks the same newline-delimited typed protocol. It
 // auto-reconnects — both while the daemon is still binding right after spawn, and if the connection
-// drops — which is exactly what lets fray reattach to a LIVE session after fray itself restarts.
+// drops — which is exactly what lets frizz reattach to a LIVE session after frizz itself restarts.
 import net from "node:net"
 import type {
   ClaudeDiagnostic,

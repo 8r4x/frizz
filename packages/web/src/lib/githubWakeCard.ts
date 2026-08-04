@@ -1,4 +1,4 @@
-// Presentation helpers for the GitHub wake card. The PARSING lives in @fray-ui/shared beside the
+// Presentation helpers for the GitHub wake card. The PARSING lives in @frizz/shared beside the
 // scheduler's formatter (so the two can't drift); this is only about how the parsed shape reads.
 
 // A compact relative age for a wake item: the divider already carries the exact ISO instant in a

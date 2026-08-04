@@ -29,8 +29,8 @@ const cwdSlug = projectDir.replace(/[/.]/g, "-")
 const transcriptDir = path.join(home, ".claude", "projects", cwdSlug)
 fs.mkdirSync(transcriptDir, { recursive: true })
 
-const dbDir = fs.readdirSync(path.join(home, ".fray", "projects"))[0]
-const db = path.join(home, ".fray", "projects", dbDir, "ui.db")
+const dbDir = fs.readdirSync(path.join(home, ".frizz", "projects"))[0]
+const db = path.join(home, ".frizz", "projects", dbDir, "ui.db")
 
 const T = (n) => new Date(Date.UTC(2026, 7, 3, 4, n, 0)).toISOString()
 const file = (p) => `${projectDir}/${p}`
@@ -91,12 +91,12 @@ const human = (sessionId, text) => [{ type: "user", timestamp: at(), sessionId, 
 function write(slug, sessionId, title, records) {
   fs.writeFileSync(path.join(transcriptDir, `${sessionId}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
   try {
-    execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `fray-${slug}`, "sleep 7200"], { stdio: "ignore" })
+    execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `frizz-${slug}`, "sleep 7200"], { stdio: "ignore" })
   } catch { /* already exists */ }
   execFileSync("sqlite3", [
     db,
     `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, title_auto, backend, model, effort, permission_mode, state, unread, exited, archived, rested_at)
-     VALUES ('${slug}', '${sessionId}', 'fray-${slug}', '${T(0)}', '${title}', 0, 'claude', 'opus', 'high', 'default', 'open', 0, 0, 0, '${T(59)}')`,
+     VALUES ('${slug}', '${sessionId}', 'frizz-${slug}', '${T(0)}', '${title}', 0, 'claude', 'opus', 'high', 'default', 'open', 0, 0, 0, '${T(59)}')`,
   ])
   console.log(`seeded ${slug} (${sessionId})`)
 }

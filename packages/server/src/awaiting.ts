@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { isValidAwaitingTimer, type AwaitingHint } from "@fray-ui/shared"
+import { isValidAwaitingTimer, type AwaitingHint } from "@frizz/shared"
 
 // The PR-reference vocabulary shared by the pr-watch scheduler and the awaiting-confirmation RPC.
 // It lives here rather than in scheduler.ts so the router can validate a confirmation without pulling
