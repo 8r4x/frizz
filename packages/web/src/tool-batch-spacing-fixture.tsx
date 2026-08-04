@@ -26,6 +26,11 @@ import "./styles.css"
 const SLUG = "tool-batch-spacing"
 const PARAMS = new URLSearchParams(location.search)
 const SETTLED = PARAMS.get("state") === "settled"
+// The INTER-CALL GAP: the turn is still running, but the last call's result has landed and the model is
+// reasoning over it. Same transcript as the live state save for that one status, so the pair isolates
+// exactly what the tail's status decides — the bottom slot reverts to the generic `Thinking…` reading
+// while history still shows no digest for the run (lib/toolActivity.liveToolActivityTail).
+const GAP = PARAMS.get("state") === "gap"
 
 const thread = {
   id: SLUG,
@@ -155,9 +160,11 @@ const messages: TranscriptMessage[] = [
               // Noun-phrase descriptions occur in real Claude Bash calls. The authored description
               // must still beat the command fallback even though it is not already a gerund.
               desc: "Final workflow validation",
-              // Deliberately completed in BOTH states. The live fixture models the inter-call gap:
-              // the turn is still running, so this remains the bottom gerund until a real boundary.
-              status: "completed",
+              // The run's tail, and therefore whatever the bottom slot reads. Pending in the live state
+              // (the gerund owns the slot), completed in `settled` AND in `gap` — the latter is the whole
+              // point of that state: a landed result while the turn runs on hands the slot back to
+              // `Thinking…` without letting the run's digest into history.
+              status: SETTLED || GAP ? "completed" : "pending",
             })]),
           ],
         },

@@ -186,13 +186,42 @@ export function coalesceToolActivityMessages(messages: readonly ChatMessage[]): 
   return out
 }
 
-/** The newest ordinary call in the landed assistant tail, regardless of its individual status. */
+/** A call whose result has landed — it is no longer occupying the runtime, whatever its outcome. */
+function settledToolCall(tool: Pick<TranscriptToolCall, "status">): boolean {
+  return tool.status === "completed" || tool.status === "failed" || tool.status === "cancelled"
+}
+
+/**
+ * The newest ordinary call in the landed assistant tail, while ANY call in that tail is STILL RUNNING.
+ *
+ * The gerund is a claim that a tool is executing right now, so it has to stop the moment the last result
+ * lands: from there until the next call appears, the model is reading what came back and deciding what to
+ * do with it, which is what the bottom slot's `Thinking…` says (returning undefined is how the caller
+ * gets it). Without this the label pinned the last call's gerund across the whole inter-call gap, and a
+ * model that spends thirty seconds reasoning over a returned file reads as `Reading foo.ts` that has hung
+ * — the tool finished in 18ms (maintainer 2026-08-04: "it seems like a tool call is hanging for a long
+ * time, but it's only because the tool call has already completed and the agent is thinking about the
+ * results").
+ *
+ * ANY, not the newest one specifically: a parallel batch returns out of order, and the newest call
+ * settling first must not blank the label while its siblings are still executing. The newest call still
+ * NAMES the activity in that case (3386b01) — one of several concurrent gerunds has to win, and the
+ * newest is the stable pick, because an earlier call finishing cannot then shuffle the label.
+ *
+ * A call with NO status at all is a pre-restart transcript, where completion is simply not observable —
+ * those keep the previous always-name-the-newest reading rather than falling to a permanent `Thinking…`.
+ *
+ * This is the LABEL half only. History still hides the whole run until a visible block or the turn's end
+ * (see historicalToolActivityMessages): the digest must not flash in the same gap, which is the other
+ * half of what 3386b01 fixed and stays fixed.
+ */
 export function liveToolActivityTail(messages: readonly ChatMessage[]): TranscriptToolCall | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]
     // Optimistic queued user bubbles are pinned separately and have not interrupted the active turn.
     if (message.queued) continue
-    return messageToolTail(message)?.at(-1)
+    const tail = messageToolTail(message)
+    return tail?.some((tool) => !settledToolCall(tool)) ? tail.at(-1) : undefined
   }
   return undefined
 }
@@ -202,9 +231,11 @@ function withoutLiveToolTail(message: ChatMessage): ChatMessage {
   if (!tail) return message
 
   // `message.tools` is the flattened provider view while `parts` preserves exact render order.
-  // Remove the whole live run from both. A completed latest call is still live while the turn is
-  // running: revealing its digest during the inter-call gap makes the row jump to `Ran N` +
-  // `Working…`, only to disappear again when the next call lands.
+  // Remove the whole live run from both. A settled run is still LIVE HISTORY while the turn is running:
+  // revealing its digest during the inter-call gap makes the row jump to `Ran N` + a generic shimmer,
+  // only to disappear again when the next call lands. Deliberately NOT keyed on status, unlike the label
+  // (liveToolActivityTail) — the label switching to `Thinking…` in that gap is a word changing inside one
+  // span, whereas revealing the digest here moves rows.
   const tools = message.tools.length >= tail.length
     ? message.tools.slice(0, message.tools.length - tail.length)
     : message.tools.filter((tool) => !tail.includes(tool))

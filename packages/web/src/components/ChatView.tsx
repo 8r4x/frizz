@@ -4204,9 +4204,13 @@ function Dots() {
 // mount time. Ticks once a second — cheap, and unmounts with the banner.
 //
 // The generic reading is "Thinking…", not "Working…". It shows exactly when the turn is running and
-// liveToolActivityTail names nothing — the model is generating and has not called a tool yet: the
-// opening of a turn, the pause after it wrote prose, the step after a dispatch or background op (those
-// keep their own card and are excluded from the run — see isToolActivityException). "Working" described
+// liveToolActivityTail names nothing — the model is generating and no tool is executing: the opening of
+// a turn, the pause after it wrote prose, the step after a dispatch or background op (those keep their
+// own card and are excluded from the run — see isToolActivityException), and the INTER-CALL GAP, where
+// the last result has landed and the model is reasoning over it. That last one is the long one, and it
+// used to keep showing the finished call's gerund, so a 20-second think read as a 20-second tool call
+// (maintainer 2026-08-04: "it seems like a tool call is hanging for a long time, but it's only because
+// the tool call has already completed and the agent is thinking about the results"). "Working" described
 // the SESSION, which is the one thing the reader can already see from the thread being active; the
 // model composing its next move is what the slot is actually reporting, and it is what every gerund
 // beside it reports too (maintainer 2026-08-01: "Do you think it makes more sense to change it to

@@ -196,7 +196,7 @@ test("a prose tool tail absorbs ordinary calls, and a background launch is what 
   assert.deepEqual(compact[2].message.tools.map((call) => call.name), ["Bash"])
 })
 
-test("the latest tool stays at the runtime tail across the completed inter-call gap", () => {
+test("the runtime gerund ends with its call; only the digest stays hidden across the inter-call gap", () => {
   const settled = toolMessage("settled", [tool("Read", { status: "completed" })])
   const pending = toolMessage("pending", [tool("Bash", { desc: "Running focused tests", status: "pending" })])
   const queued: ChatMessage = {
@@ -220,7 +220,11 @@ test("the latest tool stays at the runtime tail across the completed inter-call 
 
   pending.tools[0].status = "completed"
   const completed = coalesceToolActivityMessages([settled, pending])
-  assert.equal(liveToolActivityTail(completed.map((entry) => entry.message)), pending.tools[0])
+  assert.equal(
+    liveToolActivityTail(completed.map((entry) => entry.message)),
+    undefined,
+    "with the last result landed nothing is executing — the slot reverts to the generic Thinking reading",
+  )
   assert.deepEqual(
     historicalToolActivityMessages(completed),
     [],
@@ -350,6 +354,30 @@ test("the newest call drives the live gerund even when an earlier call remains p
   const compact = coalesceToolActivityMessages([toolMessage("parallel", [earlier, newest])])
   assert.equal(liveToolActivityTail(compact.map((entry) => entry.message)), newest)
   assert.equal(toolActivityLabel(newest), "Inspecting PR review state and comments")
+
+  // …and when that straggler lands too, nothing in the batch is executing any more.
+  earlier.status = "completed"
+  const drained = coalesceToolActivityMessages([toolMessage("parallel", [earlier, newest])])
+  assert.equal(liveToolActivityTail(drained.map((entry) => entry.message)), undefined)
+})
+
+test("a failed or cancelled result ends the gerund exactly like a completed one", () => {
+  for (const status of ["failed", "cancelled"] as const) {
+    const compact = coalesceToolActivityMessages([toolMessage(status, [tool("Bash", { detail: "nub test", status })])])
+    assert.equal(
+      liveToolActivityTail(compact.map((entry) => entry.message)),
+      undefined,
+      `a ${status} call is no longer executing`,
+    )
+  }
+})
+
+test("a pre-restart transcript with no statuses keeps naming its newest call", () => {
+  // Completion is simply not observable on this data, so the gerund is the best reading available —
+  // falling to a permanent `Thinking…` for the whole turn would be strictly worse.
+  const newest = tool("Grep", { detail: "resolver" })
+  const compact = coalesceToolActivityMessages([toolMessage("legacy", [tool("Read", { detail: "src/a.ts" }), newest])])
+  assert.equal(liveToolActivityTail(compact.map((entry) => entry.message)), newest)
 })
 
 test("the newest pending call drives the live label, then the final call drives settled history", () => {

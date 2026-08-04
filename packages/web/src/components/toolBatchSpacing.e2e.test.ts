@@ -88,12 +88,23 @@ for (const [surface, query, column] of [
   }, async () => {
     const { browser, page, errors } = await launch()
     try {
-      const fixtureUrl = (state: "live" | "settled") => {
+      const fixtureUrl = (state: "live" | "gap" | "settled") => {
         const url = new URL("/tool-batch-spacing-fixture.html", baseUrl)
         if (query) url.searchParams.set("surface", "child")
-        if (state === "settled") url.searchParams.set("state", "settled")
+        if (state !== "live") url.searchParams.set("state", state)
         return url.href
       }
+
+      // The bottom slot, read out of whichever column this surface owns.
+      const readWorkingSlot = (idx: number) => page.evaluate((i) => {
+        const scope = document.querySelectorAll("[data-transcript-column]")[i]
+        const working = scope.querySelector<HTMLElement>("[data-working-indicator]")
+        return {
+          workingActivity: working?.dataset.workingActivity,
+          shimmerText: working?.querySelector<HTMLElement>(".shimmer-text")?.textContent ?? "",
+          digests: scope.querySelectorAll("[data-tool-activity] button").length,
+        }
+      }, idx)
 
       await page.goto(fixtureUrl("live"), { waitUntil: "networkidle0" })
       await page.waitForFunction((n) => document.querySelectorAll("[data-transcript-column]").length > n, {}, column)
@@ -121,7 +132,7 @@ for (const [surface, query, column] of [
       // behind its disclosure; a detached process is the exception, because its card is the reader's
       // only handle on something still running (lib/toolActivity.isToolActivityException).
       assert.equal(live.visibleCards, 1, "only the ejected background launch renders a card before any disclosure is expanded")
-      assert.equal(live.labels.length, 2, "the background launch splits the run it lands in; the completed inter-call run still stays out of history")
+      assert.equal(live.labels.length, 2, "the background launch splits the run it lands in; the live run itself stays out of history")
       assert.match(live.labels[0], /Expand 4 tool calls: Ran 4 tool calls/, "the earlier settled run digests everything up to the background launch")
       assert.match(live.labels[1], /Expand 2 tool calls: Ran 2 tool calls/, "…and resumes as its own digest below it")
       assert.equal(live.workingActivity, "tool", "the ordinary Working slot identifies its tool-label state")
@@ -131,6 +142,22 @@ for (const [surface, query, column] of [
       assert.equal(live.shimmerText, "Final workflow validation", "an authored noun-phrase description beats the raw Bash command in the bottom shimmer")
       assert.doesNotMatch(live.workingText, /Working…/, "the gerund replaces rather than accompanies generic Working")
       assert.equal(live.pendingDisclosures, 0, "no historical disclosure may carry live state")
+
+      // The INTER-CALL GAP — the same transcript with that one call's result landed, the turn still
+      // running. The gerund is a claim that a tool is executing, so it has to end with the call: what the
+      // reader is waiting on now is the model reasoning over what came back, and a stale `Final workflow
+      // validation` sat there reading as a tool that had hung (maintainer 2026-08-04). History must NOT
+      // move in the same beat — the digest count is unchanged from the live pass.
+      await page.goto(fixtureUrl("gap"), { waitUntil: "networkidle0" })
+      await page.waitForFunction((n) => document.querySelectorAll("[data-transcript-column]").length > n, {}, column)
+      await page.waitForFunction((idx) => {
+        const scope = document.querySelectorAll("[data-transcript-column]")[idx]
+        return scope?.querySelector("[data-working-indicator]") !== null
+      }, {}, column)
+      const gap = await readWorkingSlot(column)
+      assert.equal(gap.shimmerText, "Thinking…", "a landed result hands the bottom slot back to the generic reading")
+      assert.equal(gap.workingActivity, "generic", "…and the slot reports that it is no longer naming a tool")
+      assert.equal(gap.digests, live.labels.length, "the run's digest must not appear in history during the gap")
 
       await page.goto(fixtureUrl("settled"), { waitUntil: "networkidle0" })
       await page.waitForFunction((n) => document.querySelectorAll("[data-transcript-column]").length > n, {}, column)
