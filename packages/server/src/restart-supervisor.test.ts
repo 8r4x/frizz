@@ -538,11 +538,14 @@ test("--public-origin: a tunnelled request is accepted and reaches the child wit
   try {
     await proxy.listen()
     // Exactly what cloudflared sends: the browser's Host and Origin verbatim, plus its own forwarding.
+    // `x-forwarded-host` is Tailscale Serve's addition rather than cloudflared's — both are supported
+    // fronts, so the accepted shape covers the union rather than one vendor's subset.
     const tunnelled = {
       host: "fray.example.com",
       origin: "https://fray.example.com",
       "x-forwarded-for": "203.0.113.7",
       "x-forwarded-proto": "https",
+      "x-forwarded-host": "fray.example.com",
       "sec-fetch-site": "same-origin",
     }
     assert.equal((await proxied(port, "/rpc/x", tunnelled, "POST")).status, 200)
