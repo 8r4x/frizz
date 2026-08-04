@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
+import { randomUUID } from "node:crypto"
 import { z } from "zod"
 import { query, mutation } from "@fray-ui/rpc/server"
 import {
@@ -16,6 +17,14 @@ import {
   SetOwnThreadRecurringPromptInput,
   SetOwnThreadStopHookInput,
   SetOwnThreadHeartbeatInput,
+  SetOwnThreadTimerInput,
+  SetOwnThreadTimerResult,
+  CancelOwnThreadTimerInput,
+  CancelOwnThreadTimerResult,
+  ListOwnThreadTimersInput,
+  OwnThreadTimersResult,
+  TIMER_MAX_ARMED,
+  type ThreadTimerView,
   ThreadPluginReloadResult,
   SetThreadSnoozeInput,
   ConfirmAwaitingInput,
@@ -507,6 +516,19 @@ export function createRouter(ctx: AppContext) {
   function recurringIntervalMs(input: RecurringPromptWrite): number | null {
     if (input.prompt === null || input.intervalSeconds === undefined) return null
     return input.intervalSeconds * 1000
+  }
+
+  // A thread's ARMED one-off timers, in the shape the worker's tool reads back. Instants are epoch ms in
+  // the table and ISO on the wire, converted here so the row, the delivered trailer and the tool's own
+  // output all name the same string.
+  function armedTimerViews(slug: string): ThreadTimerView[] {
+    return ctx.storage.listThreadTimers(slug, { armedOnly: true }).map((t) => ({
+      id: t.id,
+      prompt: t.prompt,
+      fireAt: new Date(t.fire_at).toISOString(),
+      state: t.state,
+      createdAt: new Date(t.created_at).toISOString(),
+    }))
   }
 
   // Fold ONE superseded single-trigger worker write onto the merged recurring-prompt row, PRESERVING the
@@ -1779,6 +1801,62 @@ export function createRouter(ctx: AppContext) {
         }
         ctx.board.refresh()
       },
+    }),
+
+    // ---- THE WORKER'S ONE-OFF TIMERS (scheduler SOURCE 6) ----------------------------------------
+    // Three mutations, from `mcp__fray__timer`. Same caller as the recurring prompt above and therefore
+    // the same guard: keyed on the slug alone, because the MCP server keeps its slug across every resume
+    // while the session id underneath it bumps.
+    //
+    // `listOwnThreadTimers` is a MUTATION despite reading nothing, and that is transport, not taxonomy:
+    // the worker's MCP server POSTs every call through one `callRpc` helper, and a procedure declared as
+    // a query answers only GET. It is also the shape that ages best — that helper ships inside every
+    // dispatched session and cannot be updated under a live worker.
+    //
+    // All three answer with the thread's CURRENT armed set, so a worker never needs a second call to see
+    // what it now holds.
+    setOwnThreadTimer: mutation({
+      input: SetOwnThreadTimerInput,
+      output: SetOwnThreadTimerResult,
+      handler: async ({ input }) => {
+        const row = ctx.storage.getSession(input.slug)
+        if (!row) throw new Error(`thread ${input.slug} is not registered`)
+        if (row.state === "archived" || row.archived === 1) {
+          throw new Error("Reopen this thread before setting a timer on it")
+        }
+        const armed = ctx.storage.listThreadTimers(input.slug, { armedOnly: true })
+        // The cap is what makes "arbitrarily many" safe to offer: a tool call in a loop cannot fill the
+        // table, and the refusal names the ceiling so the worker cancels rather than retrying.
+        if (armed.length >= TIMER_MAX_ARMED) {
+          throw new Error(`this thread already has ${armed.length} armed timers (the limit is ${TIMER_MAX_ARMED}) — cancel one first`)
+        }
+        const id = `tmr_${randomUUID().replace(/-/g, "").slice(0, 12)}`
+        ctx.storage.armThreadTimer({
+          id,
+          slug: input.slug,
+          prompt: input.prompt,
+          fireAtMs: Date.parse(input.fireAt),
+          createdAtMs: Date.now(),
+        })
+        return { id, fireAt: input.fireAt, timers: armedTimerViews(input.slug) }
+      },
+    }),
+
+    cancelOwnThreadTimer: mutation({
+      input: CancelOwnThreadTimerInput,
+      output: CancelOwnThreadTimerResult,
+      handler: async ({ input }) => {
+        // Scoped to the caller's own slug in storage, so an id belonging to another thread cannot be
+        // cancelled even if a worker somehow learned it.
+        const cancelled = ctx.storage.cancelThreadTimer(input.slug, input.id, Date.now())
+        return { cancelled, timers: armedTimerViews(input.slug) }
+      },
+    }),
+
+    listOwnThreadTimers: mutation({
+      input: ListOwnThreadTimersInput,
+      output: OwnThreadTimersResult,
+      handler: async ({ input }) => ({ timers: armedTimerViews(input.slug) }),
     }),
 
     // The SUPERSEDED worker procedures, aliased onto the row above — see SetOwnThreadStopHookInput for

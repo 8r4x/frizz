@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { formatGithubWakeSteer, isValidAwaitingTimer, restPromptMessage, schedulePromptMessage, wakeDeliveryToken, type QuotaSnapshot } from "@fray-ui/shared"
+import { formatGithubWakeSteer, isValidAwaitingTimer, restPromptMessage, schedulePromptMessage, timerPromptMessage, wakeDeliveryToken, type QuotaSnapshot } from "@fray-ui/shared"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
 import type { FenceView } from "./tailer.ts"
@@ -459,6 +459,40 @@ function armedRest(row: RecurringRow): ArmedRest | undefined {
   return { prompt, armedAt }
 }
 
+// ---- SOURCE 6: THE WORKER'S ONE-OFF TIMERS -------------------------------------------------------
+// The heartbeat with the repetition taken out: text the worker asked to be handed back at ONE instant,
+// once. A thread may hold arbitrarily many, so unlike every other source here the record of intent is a
+// TABLE (`thread_timer`) rather than a column on the session row — a row can hold one arrangement, and
+// "check the deploy in 10 min AND re-read the spec in an hour" is two.
+//
+// It inherits the SCHEDULE trigger's delivery gate rather than the snooze's, deliberately: a timer set
+// for 15:00 that a busy thread only hears at 15:50 has not kept the promise it made, and "in ten
+// minutes" is the instruction being obeyed. See `isDeliverableNow`.
+//
+// It does NOT inherit the ALLDONE opt-out. That sentinel exists because a recurring trigger is an
+// infinite bump generator with no terminating condition; a one-off has exactly one delivery in it, and a
+// worker that scheduled an alarm and then said "nothing further right now" still wants the alarm.
+//
+// The GENERATION is the timer id itself — each row is armed once and never edited, so a delivery can
+// only be superseded by the row leaving the `armed` state (the worker cancelled it, or it already
+// fired). That is also what makes the row's own state, not the outbox, the durable "never twice" guard:
+// terminal outbox rows are pruned past a cap, while `state = 'fired'` is permanent.
+const TIMER_FENCE_PREFIX = "timer"
+const TIMER_HINT_PREFIX = "timer:"
+
+// Safe against the awaiting-fence namespace even though `timer:` is also an awaiting HINT kind: an
+// awaiting fence id is `<fence instant><kind>:<value>…` (see fenceIdentity), so it can never begin
+// with this prefix.
+function timerFenceId(timerId: string): string {
+  return `${TIMER_FENCE_PREFIX}:${timerId}`
+}
+function isTimerFenceId(fenceId: string): boolean {
+  return fenceId.startsWith(`${TIMER_FENCE_PREFIX}:`)
+}
+function timerIdOf(fenceId: string): string {
+  return fenceId.slice(TIMER_FENCE_PREFIX.length + 1)
+}
+
 // A single hint's verdict this tick: met? + the steer to send when it fires. `undefined` = indeterminate
 // (a PR fetch we couldn't complete) → neither arm nor fire; try again next poll.
 interface Verdict {
@@ -836,6 +870,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (tele.lastAssistantAllDone) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
+    // A one-off timer is bound to its own row still being ARMED. The worker cancelling it, and a
+    // previous attempt having already settled it as fired, both read as supersession here — which is
+    // what makes "exactly once" hold even after the outbox has pruned this delivery's terminal row.
+    if (isTimerFenceId(item.fenceId)) {
+      if (deps.storage.getThreadTimer(timerIdOf(item.fenceId))?.state !== "armed") return "superseded"
+      return tele.turn === "idle" ? "current-idle" : "current-busy"
+    }
     // A report repair is bound to a report that is STILL missing from the model's context. If the
     // runtime delivered it late — between the tick that queued this repair and the tick that would
     // send it — the fold drops it out of `droppedReports` and the repair reads as superseded here.
@@ -852,12 +893,17 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     return tele.turn === "idle" ? "current-idle" : "current-busy"
   }
 
-  // May this item go out RIGHT NOW? Every source but one waits for the thread to come to rest, because
-  // every other source is answering a question about a thread that has stopped — a fired timer, a PR
-  // review, a bump for a worker that just rested. Delivering those mid-turn would interrupt work the
-  // worker is already doing about the very thing that woke it.
+  // May this item go out RIGHT NOW? Most sources wait for the thread to come to rest, because they are
+  // answering a question about a thread that has stopped — an elapsed awaiting fence, a PR review, a bump
+  // for a worker that just rested. Delivering those mid-turn would interrupt work the worker is already
+  // doing about the very thing that woke it.
   //
-  // THE HEARTBEAT IS THE EXCEPTION, and it is the whole point of the feature: it fires on its cadence
+  // THE CLOCK-DRIVEN PAIR ARE THE EXCEPTION — the recurring prompt's SCHEDULE trigger and the worker's
+  // own ONE-OFF TIMER — and it is the whole point of both. What follows is written about the heartbeat
+  // because that is where the behavior was settled; a timer is the same promise made once, so holding one
+  // until rest would break it in exactly the same way.
+  //
+  // It fires on its cadence
   // regardless of what the thread is doing (maintainer 2026-08-03 — "my intention was for the heartbeat
   // to fire on its regular cadence, regardless of whether the agent is currently running or not"). It
   // used to be held here like everything else, which quietly made it a second rest trigger: one due at
@@ -875,7 +921,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // we can safely address.
   function isDeliverableNow(item: WakeDelivery, context: DeliveryContext): boolean {
     if (context === "current-idle") return true
-    return context === "current-busy" && isHeartbeatFenceId(item.fenceId)
+    return context === "current-busy" && (isHeartbeatFenceId(item.fenceId) || isTimerFenceId(item.fenceId))
   }
 
   // Name the activity for the bump steer. A review carries a GitHub `state`, so an APPROVAL or a
@@ -1324,6 +1370,55 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   }
 
+  // ---- The one-off TIMER pass ----------------------------------------------------------------------
+  // One indexed read for every due alarm on every thread, rather than the row-per-session walk the other
+  // passes do: timers live in their own table precisely because a thread may hold many, and most threads
+  // hold none.
+  //
+  // Like the snooze pass, an alarm that came due while fray was DOWN still fires when it comes back —
+  // the row is its own durable registration, and "you asked to be woken at 15:00" does not stop being
+  // true because the server restarted at 14:59. Unlike the snooze pass, it does not wait for rest.
+  function evalTimers(nowMs: number): void {
+    for (const timer of deps.storage.dueThreadTimers(nowMs)) {
+      const row = deps.storage.getSession(timer.thread_slug)
+      // No thread, or a shelved one: nothing to wake. The row is left armed rather than settled — an
+      // archived thread can be reopened, and the alarm is still the worker's own outstanding intent.
+      if (!row || row.state === "archived" || row.archived === 1) continue
+      const fenceId = timerFenceId(timer.id)
+      const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
+      if (outbox.get(deliveryId)) continue // this alarm already has its one wake
+      const fireAt = new Date(timer.fire_at).toISOString()
+      const item = outbox.enqueue({
+        id: deliveryId,
+        slug: row.slug,
+        sessionId: row.session_id,
+        fenceId,
+        hintKey: `${TIMER_HINT_PREFIX}${timer.id}`,
+        message: timerPromptMessage(timer.prompt, fireAt),
+        reason: `one-off timer elapsed (${fireAt})`,
+      }, nowMs).delivery
+      log(`waker: queued ${row.slug} — ${item.reason}`)
+      checkpoint("after-enqueue", item)
+    }
+  }
+
+  // Settle the timer a wake came from — the row's OWN "never again" record, which outlives the pruning
+  // of the terminal outbox row that would otherwise dedupe it.
+  //
+  // Called from every terminal path EXCEPT SUPERSESSION, which is the one distinction that matters here.
+  // A timer supersedes for two reasons: its row already left `armed` (the worker cancelled it, or a
+  // previous attempt settled it) — where this would be a no-op anyway, since the write is guarded on
+  // `armed` — or the SESSION moved underneath the queued delivery. In that second case the alarm has not
+  // rung and the thread still exists, so leaving the row armed is what lets the next tick re-queue it
+  // against the current session. Settling there would silently swallow the alarm mid-resume.
+  //
+  // A delivery that exhausted its attempts or was abandoned DOES settle: it has had its one shot, and an
+  // alarm resurrected days later when the outbox prunes is worse than one that failed.
+  function settleTimer(item: WakeDelivery): void {
+    if (!isTimerFenceId(item.fenceId)) return
+    deps.storage.markThreadTimerFired(timerIdOf(item.fenceId), now())
+  }
+
   // ---- The ON SCHEDULE pass -----------------------------------------------------------------
   // Like the snooze pass, this does NOT filter on `turn === "idle"`. Unlike the snooze pass, the
   // delivery gate does not hold the result either: a beat due mid-turn goes out mid-turn
@@ -1478,6 +1573,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         settleSnooze(item)
         settleSchedulePrompt(item)
         settleRestPrompt(item)
+        settleTimer(item)
         continue
       }
       if (context === "superseded") {
@@ -1505,6 +1601,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       )
       if (recovered?.state === "exhausted") {
         settleSnooze(item)
+        settleTimer(item)
         log(`waker: delivery EXHAUSTED for ${item.slug} after ${recovered.attempts} attempts — ${recovered.lastError ?? "unknown error"}`)
       }
     }
@@ -1526,6 +1623,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         settleSnooze(item)
         settleSchedulePrompt(item)
         settleRestPrompt(item)
+        settleTimer(item)
         continue
       }
       if (context === "superseded") {
@@ -1558,6 +1656,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         if ((error as { terminalDelivery?: unknown })?.terminalDelivery === true) {
           outbox.supersede(item.id, failedAt, message)
           settleSnooze(item)
+          settleTimer(item)
           log(`waker: delivery ABANDONED for ${item.slug} (terminal, no retry): ${message}`)
           continue
         }
@@ -1590,6 +1689,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       settleSnooze(item)
       settleSchedulePrompt(item)
       settleRestPrompt(item)
+      settleTimer(item)
       const acknowledged = outbox.get(item.id)
       if (acknowledged) checkpoint("after-ack", acknowledged)
     }
@@ -1654,6 +1754,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     } catch (err) {
       if (err instanceof InjectedSchedulerCrash) throw err
       log(`waker: recurring-prompt rest pass failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    try {
+      evalTimers(now())
+    } catch (err) {
+      if (err instanceof InjectedSchedulerCrash) throw err
+      log(`waker: one-off timer pass failed: ${err instanceof Error ? err.message : String(err)}`)
     }
     try {
       repairDroppedReports(now())

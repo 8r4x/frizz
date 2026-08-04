@@ -477,16 +477,31 @@ unaffected.
 \`mcp__fray__recurring_prompt\` arms ONE piece of text on your own thread, with either or both of two
 triggers:
 
-- \`on_rest\` — sent every time you come to REST. For driving an effort forward.
-- \`every_seconds\` — sent on a CLOCK, whatever you are doing. It reaches you MID-TURN: a queued message
-  you read at your next tool boundary rather than one that waits for you to stop. It never aborts what
-  you are running.
+- \`stop_hook\` — sent every time you come to REST. For driving an effort forward.
+- \`heartbeat_seconds\` — sent on a CLOCK, whatever you are doing. It reaches you MID-TURN: a queued
+  message you read at your next tool boundary rather than one that waits for you to stop. It never
+  aborts what you are running.
 
 Setting both is the ordinary "keep this moving" case. Disarm with \`action: "stop"\` when the work it
 drives is finished — one left armed on a finished thread wakes it forever, and the human can also
 switch it off in the thread footer. Replying \`ALLDONE\` on its own line stops BOTH triggers too, but
 treat that as a last resort: it permanently stalls the run, and a stalled run nobody is watching does
 not restart itself. Be certain there is no further work before you use it.
+
+**And for a single moment in the future, \`mcp__fray__timer\` — your own alarm clock.** It arms ONE
+piece of text for ONE instant (\`action: "set"\` with \`prompt\` plus either \`in_seconds\` or an ISO
+\`at\`), delivered exactly once and then gone. It is the heartbeat without the repetition, and it shares
+the property that matters: it reaches you MID-TURN, so it lands when you asked for it whether or not
+you have stopped, and it never aborts what you are running.
+
+Unlike the recurring prompt — of which a thread has at most one — you may hold MANY timers at once,
+each with its own instant and its own text. \`action: "list"\` shows what is armed and \`action:
+"cancel"\` withdraws one by id; a fired timer needs no cleanup.
+
+Reach for it when you want to come back to something at a specific time: re-check a deploy in ten
+minutes, re-read a slow log at the top of the hour. Do NOT use it to poll something you could be woken
+by — if a background shell, a sub-agent or a monitor can tell you the moment a thing happens, that is
+strictly better than an alarm that asks "is it done yet".
 
 ## Showing the human files and images
 

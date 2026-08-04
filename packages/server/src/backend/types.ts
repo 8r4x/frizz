@@ -203,10 +203,10 @@ export interface BuiltCommand {
 }
 
 // The ONE unified fray MCP server every worker gets: mounted under the name `fray`, so its tools are
-// addressed as `mcp__fray__<tool>` (today just `mcp__fray__spawn_thread` — new worker-facing fray
-// capabilities join the same server's registry in cc-worker/bin/fray-mcp.mjs rather than mounting a
-// second server). The dispatch layer pre-approves it at SERVER level (`mcp__fray`), so a tool added
-// there needs no allow-list change here.
+// addressed as `mcp__fray__<tool>` (`spawn_thread`, `recurring_prompt` and `timer` today — new
+// worker-facing fray capabilities join the same server's registry in cc-worker/bin/fray-mcp.mjs rather
+// than mounting a second server). The dispatch layer pre-approves it at SERVER level (`mcp__fray`), so a
+// tool added there needs no allow-list change here.
 export const FRAY_MCP = {
   name: "fray",
   script: "fray-mcp.mjs", // resolved under <worker plugin dir>/bin/

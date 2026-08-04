@@ -520,6 +520,54 @@ export function parseRecurringPrompt(text: string | undefined): RecurringPrompt 
     : { kind: "rest", prompt }
 }
 
+// ---- ONE-OFF TIMERS (scheduler SOURCE 6) ---------------------------------------------------------
+// A worker's own alarm clock: text it asks fray to hand back at ONE instant, once. It is the recurring
+// prompt's ON SCHEDULE trigger with the repetition taken out — same durable outbox, same mid-turn
+// delivery — and a thread may hold ARBITRARILY MANY at a time, which is the whole reason they are rows
+// of their own rather than another set of `recurring_*` columns on the session (one row can hold one
+// arrangement; a worker that wants "check the deploy in 10 min AND re-read the spec in an hour" needs
+// two).
+//
+// MID-TURN, like the heartbeat and unlike the human's snooze. A timer set for 15:00 that a busy thread
+// only hears at 15:50 has not kept its promise, and "in ten minutes" is the instruction being obeyed.
+// Both transports take a queued mid-turn message without aborting the work in flight.
+//
+// NO ALLDONE OPT-OUT, and no trailer teaching one. That sentinel exists because a RECURRING trigger is
+// an infinite bump generator with no terminating condition; a one-off has exactly one delivery in it, so
+// the only thing worth saying in the trailer is that this was a timer and it will not fire again.
+export const TIMER_PROMPT_MAX = SNOOZE_PROMPT_MAX
+// Ten seconds is the scheduler's own tick, so a shorter delay would promise a precision the delivery
+// cannot have. Thirty days is far past any real "come back to this later" while still rejecting a
+// mistyped epoch. The armed CAP is what makes "arbitrarily many" safe: a looping tool call cannot fill
+// the table, and 64 outstanding alarms is well beyond what any real effort schedules.
+export const TIMER_MIN_DELAY_SECONDS = 10
+export const TIMER_MAX_DELAY_SECONDS = 30 * 24 * 60 * 60
+export const TIMER_MAX_ARMED = 64
+export const TimerPromptText = z.string().trim().min(1).max(TIMER_PROMPT_MAX)
+
+/** What fray delivers when a one-off timer fires: the worker's own words VERBATIM, then a one-line
+ *  trailer naming the INSTANT — with several timers armed at once, the instant is the only thing that
+ *  says WHICH one this is.
+ *
+ *  Deliberately NOT parsed back out for a bespoke transcript line, unlike a recurring delivery. That
+ *  parser exists because a recurring prompt repeats the same paragraph down the whole transcript and has
+ *  to collapse to a divider; a one-off is said once, so the chat's generic first-party wake card — the
+ *  one already written for "a CI/timer/limit wake" — shows it correctly with no new component. */
+export function timerPromptMessage(prompt: string, fireAt: string): string {
+  return `${prompt.trim()}\n\n(One-off timer, set for ${fireAt}. It has fired and will not repeat.)`
+}
+
+/** One armed (or just-settled) timer, as the worker's own tool reads it back. */
+export const ThreadTimerView = z.object({
+  id: z.string(),
+  prompt: z.string(),
+  /** The exact UTC instant it fires — the same string the delivered trailer names. */
+  fireAt: z.string(),
+  state: z.enum(["armed", "fired", "cancelled"]),
+  createdAt: z.string(),
+}).strict()
+export type ThreadTimerView = z.infer<typeof ThreadTimerView>
+
 // The signal fence on a thread's FINAL assistant message — the fence language IS the state, the
 // body is the message. `done` = checked success card in the queue until the human Archives it (the
 // fence itself MUTATES NOTHING — maintainer-settled); `awaiting` = a parked human/timer wait.
@@ -1157,6 +1205,52 @@ export const SetOwnThreadRecurringPromptInput = z.object({
   intervalSeconds: RecurringIntervalSeconds.optional(),
 }).strict()
 export type SetOwnThreadRecurringPromptInput = z.infer<typeof SetOwnThreadRecurringPromptInput>
+
+// ---- THE ONE-OFF TIMER's three worker procedures -------------------------------------------------
+// Same caller and therefore the same rules as the recurring prompt above: no session guard (the MCP
+// server outlives the session ids underneath it), and no thread parameter a model could aim elsewhere.
+//
+// `fireAt` is an exact UTC instant, resolved by the TOOL from whichever of "in N seconds" / "at this
+// instant" the worker gave it — one representation reaches the server, so the row, the trailer and the
+// scheduler all name the same string.
+export const SetOwnThreadTimerInput = z.object({
+  slug: ThreadSlug,
+  prompt: TimerPromptText,
+  fireAt: SnoozeUntil,
+}).strict()
+export type SetOwnThreadTimerInput = z.infer<typeof SetOwnThreadTimerInput>
+
+export const CancelOwnThreadTimerInput = z.object({
+  slug: ThreadSlug,
+  id: z.string().min(1).max(64),
+}).strict()
+export type CancelOwnThreadTimerInput = z.infer<typeof CancelOwnThreadTimerInput>
+
+export const ListOwnThreadTimersInput = z.object({
+  slug: ThreadSlug,
+}).strict()
+export type ListOwnThreadTimersInput = z.infer<typeof ListOwnThreadTimersInput>
+
+// Every one of the three answers with the thread's CURRENT armed set, so a worker never has to make a
+// second call to see what it now holds — and so a `set` that lands while an earlier timer is still armed
+// shows both.
+export const OwnThreadTimersResult = z.object({
+  timers: z.array(ThreadTimerView),
+}).strict()
+export type OwnThreadTimersResult = z.infer<typeof OwnThreadTimersResult>
+
+export const SetOwnThreadTimerResult = z.object({
+  id: z.string(),
+  fireAt: z.string(),
+  timers: z.array(ThreadTimerView),
+}).strict()
+export type SetOwnThreadTimerResult = z.infer<typeof SetOwnThreadTimerResult>
+
+export const CancelOwnThreadTimerResult = z.object({
+  cancelled: z.boolean(),
+  timers: z.array(ThreadTimerView),
+}).strict()
+export type CancelOwnThreadTimerResult = z.infer<typeof CancelOwnThreadTimerResult>
 
 // ---- The SUPERSEDED worker shapes, kept alive for MCP servers already in flight -----------------
 //

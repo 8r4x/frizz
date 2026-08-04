@@ -60,7 +60,7 @@ test("the fray MCP server identifies as `fray` and exposes its worker tools", as
     rpc.send({ jsonrpc: "2.0", method: "notifications/initialized" })
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
     const list = await rpc.next(2)
-    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "recurring_prompt"])
+    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "recurring_prompt", "timer"])
     for (const required of ["prompt", "model", "effort"]) {
       assert.ok(list.result.tools[0].inputSchema.required.includes(required))
     }
@@ -72,6 +72,13 @@ test("the fray MCP server identifies as `fray` and exposes its worker tools", as
     assert.deepEqual(
       Object.keys(list.result.tools[1].inputSchema.properties).sort(),
       ["action", "heartbeat_seconds", "prompt", "stop_hook"],
+    )
+    // `timer` is the same shape of tool and takes the same care: `action` alone is required, everything
+    // else depends on which action, and it too exposes NO THREAD parameter.
+    assert.deepEqual(list.result.tools[2].inputSchema.required, ["action"])
+    assert.deepEqual(
+      Object.keys(list.result.tools[2].inputSchema.properties).sort(),
+      ["action", "at", "id", "in_seconds", "prompt"],
     )
     // An unregistered name is a protocol error, not a crash — the registry routes by name now.
     rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "spawn_fray_thread", arguments: {} } })
@@ -212,6 +219,115 @@ test("`recurring_prompt` arms and disarms the CALLING thread, identified from it
     assert.equal(bogus.result.isError, true)
     assert.match(bogus.result.content[0].text, /`action` must be either/)
     assert.equal(seen.length, before)
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
+
+// The ONE-OFF TIMER, over the same real transport. What this pins is the CONVERSION the tool owns: a
+// worker names a delay or an instant, and exactly one representation — the exact UTC instant — reaches
+// the server, so the row, the delivered trailer and the tool's own reply can never name three times.
+test("`timer` resolves in_seconds/at into one exact instant and POSTs the calling thread's slug", async () => {
+  const seen: Array<{ url: string; body: any }> = []
+  const http = createServer((req, res) => {
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      seen.push({ url: req.url ?? "", body: JSON.parse(body || "{}") })
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ result: { id: "tmr_abc", fireAt: "2026-08-04T15:00:00.000Z", timers: [] } }))
+    })
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "fray-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const rpc = startServer({ FRAY_STATE_DIR: stateDir, FRAY_THREAD_SLUG: "owning-thread" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+
+    const before = Date.now()
+    rpc.send({
+      jsonrpc: "2.0", id: 2, method: "tools/call",
+      params: { name: "timer", arguments: { action: "set", prompt: "re-check the deploy", in_seconds: 600 } },
+    })
+    const set = await rpc.next(2)
+    assert.equal(set.result.isError, undefined)
+    assert.equal(seen.at(-1)!.url, "/rpc/setOwnThreadTimer")
+    assert.equal(seen.at(-1)!.body.slug, "owning-thread")
+    assert.equal(seen.at(-1)!.body.prompt, "re-check the deploy")
+    const fired = Date.parse(seen.at(-1)!.body.fireAt)
+    assert.ok(fired >= before + 600_000 && fired <= Date.now() + 600_000, `fireAt ${seen.at(-1)!.body.fireAt} must be ~10 min out`)
+    // The reply has to carry the id (there is no other way to cancel) and say that it fires once.
+    assert.match(set.result.content[0].text, /tmr_abc/)
+    assert.match(set.result.content[0].text, /ONCE/)
+
+    // An absolute instant is normalized to the same UTC form, so a worker cannot arm a row the trailer
+    // and the scheduler would print differently.
+    const at = new Date(Date.now() + 3_600_000).toISOString().replace(/\.\d{3}Z$/, "Z")
+    rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "timer", arguments: { action: "set", prompt: "x", at } } })
+    await rpc.next(3)
+    assert.equal(seen.at(-1)!.body.fireAt, new Date(Date.parse(at)).toISOString())
+
+    rpc.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "timer", arguments: { action: "list" } } })
+    await rpc.next(4)
+    assert.deepEqual(seen.at(-1), { url: "/rpc/listOwnThreadTimers", body: { slug: "owning-thread" } })
+
+    rpc.send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "timer", arguments: { action: "cancel", id: "tmr_abc" } } })
+    await rpc.next(5)
+    assert.deepEqual(seen.at(-1), { url: "/rpc/cancelOwnThreadTimer", body: { slug: "owning-thread", id: "tmr_abc" } })
+
+    // …and an invented thread argument never reaches the server, exactly as for `recurring_prompt`.
+    rpc.send({
+      jsonrpc: "2.0", id: 6, method: "tools/call",
+      params: { name: "timer", arguments: { action: "list", slug: "someone-else", thread: "someone-else" } },
+    })
+    await rpc.next(6)
+    assert.deepEqual(seen.at(-1)!.body, { slug: "owning-thread" })
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
+
+// Every one of these is refused in the HANDLER, before any HTTP call — the same bar the cadence gets,
+// and for the same reason: a lenient client must not be able to slip a nonsense alarm past the schema.
+test("`timer` refuses a bad delay, a missing/doubled instant and a missing id without contacting the server", async () => {
+  const seen: unknown[] = []
+  const http = createServer((_req, res) => {
+    seen.push(1)
+    res.writeHead(200, { "content-type": "application/json" })
+    res.end(JSON.stringify({ result: null }))
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "fray-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const rpc = startServer({ FRAY_STATE_DIR: stateDir, FRAY_THREAD_SLUG: "owning-thread" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+
+    const refused = async (id: number, args: Record<string, unknown>, pattern: RegExp) => {
+      rpc.send({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "timer", arguments: args } })
+      const reply = await rpc.next(id)
+      assert.equal(reply.result.isError, true, JSON.stringify(args))
+      assert.match(reply.result.content[0].text, pattern)
+    }
+
+    await refused(2, { action: "set", prompt: "x", in_seconds: 3 }, /must be between 10 and 2592000/)
+    await refused(3, { action: "set", prompt: "x", in_seconds: 99_999_999 }, /must be between 10 and 2592000/)
+    await refused(4, { action: "set", prompt: "x" }, /give either `in_seconds`/)
+    await refused(5, { action: "set", prompt: "x", in_seconds: 60, at: "2026-08-04T15:00:00Z" }, /not both/)
+    await refused(6, { action: "set", in_seconds: 60 }, /`prompt` is required/)
+    await refused(7, { action: "set", prompt: "x", at: "2020-01-01T00:00:00Z" }, /at least 10s in the future/)
+    await refused(8, { action: "set", prompt: "x", at: "next tuesday" }, /must be an ISO-8601 instant/)
+    await refused(9, { action: "cancel" }, /`id` is required/)
+    await refused(10, { action: "snooze" }, /`action` must be one of/)
+
+    assert.equal(seen.length, 0, "none of them reached the server")
   } finally {
     rpc.kill()
     http.close()

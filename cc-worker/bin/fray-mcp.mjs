@@ -2,11 +2,15 @@
 // @ts-check
 /**
  * fray-mcp — THE fray MCP server: one unified, dependency-free MCP stdio server (mounted as `fray`,
- * so its tools are `mcp__fray__<tool>`) carrying every capability fray hands its own WORKERS. Today
- * that is exactly one tool, `spawn_thread`, which dispatches a brand-new TOP-LEVEL fray board thread
- * (its own session + scratchpad + independent drive — NOT an in-session Agent/Task helper). Future
- * worker-facing fray tools join the TOOLS registry below rather than mounting a second server: one
- * server keeps the worker's tool namespace coherent and the server-level pre-approval single.
+ * so its tools are `mcp__fray__<tool>`) carrying every capability fray hands its own WORKERS:
+ *
+ *   spawn_thread     — dispatch a brand-new TOP-LEVEL fray board thread (its own session + scratchpad +
+ *                      independent drive — NOT an in-session Agent/Task helper).
+ *   recurring_prompt — arm ONE piece of text fray re-sends the caller, at every rest and/or on a clock.
+ *   timer            — arm a ONE-OFF prompt for a single instant; a thread may hold many at once.
+ *
+ * Future worker-facing fray tools join the TOOLS registry below rather than mounting a second server:
+ * one server keeps the worker's tool namespace coherent and the server-level pre-approval single.
  *
  * spawn_thread wraps fray's own dispatch RPC: it reads the running server's port from
  * `<state-dir>/server.lock` and POSTs `/rpc/dispatch`. The `/rpc` surface has no token auth — only a
@@ -148,6 +152,71 @@ const RECURRING_PROMPT = {
   },
 }
 
+// The ONE-OFF TIMER's bounds, mirrored from @fray-ui/shared (this file is dependency-free by design and
+// ships as a loose .mjs, so it cannot import them). The server validates the same numbers; these exist so
+// a wrong delay is refused HERE, with an explanation, instead of coming back as an HTTP 400.
+const TIMER_MIN_DELAY_SECONDS = 10
+const TIMER_MAX_DELAY_SECONDS = 30 * 24 * 60 * 60
+
+const TIMER = {
+  name: "timer",
+  description:
+    "Set a ONE-OFF timer on YOUR OWN thread: a piece of text fray hands back to you at ONE instant, " +
+    "ONCE. Your own alarm clock.\n\n" +
+    "It is `recurring_prompt`'s heartbeat with the repetition taken out, and it shares the property that " +
+    "matters: the delivery reaches you MID-TURN — a queued message you read at your next tool boundary — " +
+    "so it arrives when you asked for it whether or not you have stopped, and it never aborts what you " +
+    "are running. Unlike a recurring prompt it fires exactly once and then is gone, so there is nothing " +
+    "to switch off afterwards and no ALLDONE involved.\n\n" +
+    "You may have MANY armed at the same time, each with its own instant and its own text — they are " +
+    "independent, unlike the single recurring prompt this thread can hold.\n\n" +
+    "USE IT for anything you want to come back to at a specific time: re-check a deploy in ten minutes, " +
+    "re-read a slow log at the top of the hour, revisit a decision after a build finishes. USE " +
+    "`recurring_prompt` instead when the thing must repeat, and remember that Claude Code's own " +
+    "`CronCreate`/`ScheduleWakeup` cannot fire in the runtime fray runs you in.\n\n" +
+    "IT IS NOT A WAY TO POLL SOMETHING YOU COULD WAIT ON. If a background shell, a sub-agent or a " +
+    "monitor can tell you the moment a thing happens, use that — an alarm every N seconds asking \"is it " +
+    "done yet\" is strictly worse than being woken when it is.\n\n" +
+    "The text arrives VERBATIM as an ordinary user turn, so write it as an instruction to your future " +
+    "self — self-contained and actionable, because you may receive it with none of the context you have " +
+    "now. Give exactly one of `in_seconds` or `at`. You can only ever set a timer on your OWN thread.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      action: {
+        type: "string",
+        enum: ["set", "cancel", "list"],
+        description:
+          "`set` arms a new one-off timer (it never replaces an existing one); `cancel` withdraws one by " +
+          "`id`; `list` returns the timers currently armed on this thread. Every action answers with the " +
+          "resulting armed list.",
+      },
+      prompt: {
+        type: "string",
+        description: "Required for `set`. The text delivered to you when it fires, verbatim, as a user turn.",
+      },
+      in_seconds: {
+        type: "integer",
+        description:
+          `For \`set\`: fire this many seconds from now (minimum ${TIMER_MIN_DELAY_SECONDS}, maximum ` +
+          `${TIMER_MAX_DELAY_SECONDS} — thirty days). Give this OR \`at\`, not both. Sub-minute precision ` +
+          "is not real: the delivery is read at your next tool boundary.",
+      },
+      at: {
+        type: "string",
+        description:
+          "For `set`: fire at this exact instant, as an ISO-8601 timestamp (e.g. `2026-08-04T15:00:00Z`). " +
+          "Give this OR `in_seconds`, not both. Must be in the future and within thirty days.",
+      },
+      id: {
+        type: "string",
+        description: "Required for `cancel`. The timer id returned by `set` (or listed by `list`).",
+      },
+    },
+    required: ["action"],
+  },
+}
+
 // The unified server's tool registry: `tools/list` returns these and `tools/call` routes by name.
 // Adding a worker-facing fray tool = one entry here + one handler in `HANDLERS` — never a second
 // MCP server, so every fray tool stays under the same `mcp__fray__*` namespace and the same
@@ -155,12 +224,13 @@ const RECURRING_PROMPT = {
 const MIN_INTERVAL_SECONDS = 60
 const MAX_INTERVAL_SECONDS = 24 * 60 * 60
 
-const TOOLS = [SPAWN_THREAD, RECURRING_PROMPT]
+const TOOLS = [SPAWN_THREAD, RECURRING_PROMPT, TIMER]
 
 /** @type {Record<string, (args: Record<string, unknown>) => Promise<string>>} */
 const HANDLERS = {
   [SPAWN_THREAD.name]: spawnThread,
   [RECURRING_PROMPT.name]: recurringPrompt,
+  [TIMER.name]: timer,
 }
 
 /** @param {unknown} obj */
@@ -347,6 +417,84 @@ async function recurringPrompt(args) {
     "a finished thread wakes it forever. The human can also edit or switch it off in the thread footer. " +
     "Replying ALLDONE stops it too, but only use that when there is genuinely nothing left: it " +
     "permanently stalls the run."
+  )
+}
+
+/** How a timer reads back to the worker: its id, when it fires, and enough of its text to tell two apart.
+ * @param {{ id: string, fireAt: string, prompt: string }} t */
+function timerLine(t) {
+  const words = t.prompt.replace(/\s+/g, " ").trim()
+  return `  ${t.id} — ${t.fireAt} — ${words.length > 72 ? `${words.slice(0, 72)}…` : words}`
+}
+
+/** @param {{ timers?: { id: string, fireAt: string, prompt: string }[] }|null} payload */
+function armedList(payload) {
+  const timers = payload?.timers ?? []
+  if (!timers.length) return "No timers are armed on this thread."
+  return `Armed timers (${timers.length}):\n${timers.map(timerLine).join("\n")}`
+}
+
+/** The `timer` handler: set / cancel / list this thread's ONE-OFF timers.
+ * @param {Record<string, unknown>} args @returns {Promise<string>} */
+async function timer(args) {
+  const slug = threadSlug()
+  const action = typeof args.action === "string" ? args.action.trim() : ""
+  if (action !== "set" && action !== "cancel" && action !== "list") {
+    throw new Error("`action` must be one of \"set\", \"cancel\" or \"list\"")
+  }
+
+  if (action === "list") {
+    return armedList((await callRpc("listOwnThreadTimers", { slug }))?.result)
+  }
+
+  if (action === "cancel") {
+    const id = typeof args.id === "string" ? args.id.trim() : ""
+    if (!id) throw new Error("`id` is required to cancel a timer — take it from `set`'s reply or from `action: \"list\"`")
+    const result = (await callRpc("cancelOwnThreadTimer", { slug, id }))?.result
+    const head = result?.cancelled
+      ? `Timer ${id} cancelled — it will not fire.`
+      : `No ARMED timer ${id} on this thread (it may have already fired, or already been cancelled).`
+    return `${head}\n\n${armedList(result)}`
+  }
+
+  const prompt = typeof args.prompt === "string" ? args.prompt.trim() : ""
+  if (!prompt) throw new Error("`prompt` is required to set a timer — it is the text you will be sent when it fires")
+
+  // Exactly one of the two ways to name the instant. Accepting both would mean silently preferring one,
+  // and a worker that gave two different times meant something by each of them.
+  const hasIn = args.in_seconds !== undefined && args.in_seconds !== null
+  const hasAt = typeof args.at === "string" && args.at.trim() !== ""
+  if (hasIn && hasAt) throw new Error("give `in_seconds` OR `at`, not both")
+  if (!hasIn && !hasAt) throw new Error("give either `in_seconds` (fire N seconds from now) or `at` (an ISO-8601 instant)")
+
+  const nowMs = Date.now()
+  let fireMs
+  if (hasIn) {
+    const seconds = typeof args.in_seconds === "number" ? Math.round(args.in_seconds) : NaN
+    if (!Number.isFinite(seconds)) throw new Error("`in_seconds` must be a number of seconds")
+    if (seconds < TIMER_MIN_DELAY_SECONDS || seconds > TIMER_MAX_DELAY_SECONDS) {
+      throw new Error(`\`in_seconds\` must be between ${TIMER_MIN_DELAY_SECONDS} and ${TIMER_MAX_DELAY_SECONDS} (thirty days)`)
+    }
+    fireMs = nowMs + seconds * 1000
+  } else {
+    fireMs = Date.parse(String(args.at))
+    if (!Number.isFinite(fireMs)) throw new Error("`at` must be an ISO-8601 instant, e.g. `2026-08-04T15:00:00Z`")
+    const delta = Math.round((fireMs - nowMs) / 1000)
+    if (delta < TIMER_MIN_DELAY_SECONDS) {
+      throw new Error(`\`at\` must be at least ${TIMER_MIN_DELAY_SECONDS}s in the future (it reads as ${delta}s from now)`)
+    }
+    if (delta > TIMER_MAX_DELAY_SECONDS) throw new Error("`at` must be within thirty days")
+  }
+
+  // ONE representation crosses the wire — the exact UTC instant — so the stored row, the trailer on the
+  // delivered message and this reply all name the same string.
+  const fireAt = new Date(fireMs).toISOString()
+  const result = (await callRpc("setOwnThreadTimer", { slug, prompt, fireAt }))?.result
+  const id = result?.id ?? "(unknown)"
+  return (
+    `Timer ${id} set for ${fireAt} (${Math.round((fireMs - nowMs) / 1000)}s from now). It fires ONCE and ` +
+    "then is gone — it may reach you mid-turn, so receiving it does not mean you had stopped. Cancel it " +
+    `with \`action: "cancel", id: "${id}"\` if it stops being useful.\n\n${armedList(result)}`
   )
 }
 

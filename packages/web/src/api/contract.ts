@@ -37,6 +37,12 @@ import type {
   SetOwnThreadRecurringPromptInput,
   SetOwnThreadStopHookInput,
   SetOwnThreadHeartbeatInput,
+  SetOwnThreadTimerInput,
+  SetOwnThreadTimerResult,
+  CancelOwnThreadTimerInput,
+  CancelOwnThreadTimerResult,
+  ListOwnThreadTimersInput,
+  OwnThreadTimersResult,
   ThreadPluginReloadResult,
   SetThreadSnoozeInput,
   TranscriptMessage,
@@ -148,6 +154,14 @@ export interface Api {
   setOwnThreadStopHook(input: SetOwnThreadStopHookInput): Promise<void>
   setOwnThreadHeartbeat(input: SetOwnThreadHeartbeatInput): Promise<void>
   setThreadHeartbeat(input: SetOwnThreadHeartbeatInput): Promise<void>
+  // THE ONE-OFF TIMERS, called by `mcp__fray__timer` rather than by this client. Declared here for the
+  // same reason as the worker procedures above — the drift gate proves the two procedure NAME SETS are
+  // equal, so an RPC the client cannot name is one nothing checks the shape of. All three are mutations
+  // because the worker's MCP server POSTs every call; `listOwnThreadTimers` reads nothing and is one
+  // anyway. No browser call site uses them.
+  setOwnThreadTimer(input: SetOwnThreadTimerInput): Promise<SetOwnThreadTimerResult>
+  cancelOwnThreadTimer(input: CancelOwnThreadTimerInput): Promise<CancelOwnThreadTimerResult>
+  listOwnThreadTimers(input: ListOwnThreadTimersInput): Promise<OwnThreadTimersResult>
   // In-place plugin reload for a broker-backed Claude thread — the alternative to a hard restart.
   reloadThreadPlugins(input: { slug: string; sessionId: string }): Promise<ThreadPluginReloadResult>
   // Event-snooze the awaiting-background card: hide it until the thread's own background work returns
@@ -254,6 +268,9 @@ export const PROCEDURES = {
   setOwnThreadStopHook: "mutation",
   setOwnThreadHeartbeat: "mutation",
   setThreadHeartbeat: "mutation",
+  setOwnThreadTimer: "mutation",
+  cancelOwnThreadTimer: "mutation",
+  listOwnThreadTimers: "mutation",
   reloadThreadPlugins: "mutation",
   snoozeAwaitingBackground: "mutation",
   confirmAwaiting: "mutation",

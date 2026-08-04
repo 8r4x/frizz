@@ -307,6 +307,19 @@ export type AdoptionSpawnFenceResult<T> =
   | { acquired: false }
   | { acquired: true; value: T }
 
+/** One row of `thread_timer` — a worker's one-off alarm. Instants are epoch ms in the table (they are
+ *  only ever compared against `Date.now()`); the ISO string the worker and the delivered trailer see is
+ *  derived at the boundary. */
+export interface ThreadTimerRow {
+  id: string
+  thread_slug: string
+  prompt: string
+  fire_at: number
+  state: "armed" | "fired" | "cancelled"
+  created_at: number
+  settled_at: number | null
+}
+
 export interface Storage {
   db: Database
   interactions: InteractionStore
@@ -442,6 +455,22 @@ export interface Storage {
     intervalMs: number | null,
     armedAt: string,
   ): boolean
+  // ---- ONE-OFF TIMERS (scheduler SOURCE 6) -------------------------------------------------------
+  // Arm one. `id` is minted by the caller so the row and the scheduler's delivery id agree without a
+  // read-back. Slug-keyed for the same reason the recurring prompt's worker path is.
+  armThreadTimer(timer: { id: string; slug: string; prompt: string; fireAtMs: number; createdAtMs: number }): void
+  // A thread's timers, newest deadline last. `armedOnly` is what the worker's tool reads back; the full
+  // set is for tests and diagnostics.
+  listThreadTimers(slug: string, opts?: { armedOnly?: boolean }): ThreadTimerRow[]
+  getThreadTimer(id: string): ThreadTimerRow | undefined
+  // Every armed timer that is due, across all threads — the scheduler's one read per tick.
+  dueThreadTimers(nowMs: number): ThreadTimerRow[]
+  // Withdraw one. Scoped to the slug so a worker can only ever cancel its OWN, and only an ARMED timer
+  // moves: cancelling one that already fired is a no-op, not a rewrite of history.
+  cancelThreadTimer(slug: string, id: string, settledAtMs: number): boolean
+  // Terminal for the scheduler: this timer's delivery has settled, so it must never be queued again.
+  // Guarded on `armed` so a cancel that raced the delivery keeps its own verdict.
+  markThreadTimerFired(id: string, settledAtMs: number): boolean
   // Stamp a delivered ON REST prompt, guarded on the generation so one settling after an edit cannot
   // write onto words it no longer describes.
   stampRecurringRestFired(slug: string, armedAt: string, firedAt: string): boolean
@@ -659,6 +688,32 @@ export function createStorage(dbPath: string): Storage {
       retired_at TEXT NOT NULL,
       PRIMARY KEY (slug, session_id, op_id)
     );
+    -- A worker's ONE-OFF TIMERS (scheduler SOURCE 6): text to hand back at one instant, once.
+    --
+    -- A TABLE rather than more recurring_* columns on the session, because the feature's whole premise
+    -- is that a thread may hold ARBITRARILY MANY at a time — a row can hold one arrangement, and "check
+    -- the deploy in 10 min AND re-read the spec in an hour" is two.
+    --
+    -- Keyed by SLUG, not by session: a timer is armed by the worker's MCP server, which keeps its slug
+    -- across every resume while the session id underneath it bumps (the same reason
+    -- setRecurringPromptBySlug is slug-keyed). A resumed thread is still the thread that set the alarm.
+    --
+    -- state is the whole lifecycle: 'armed' until the scheduler's delivery reaches a terminal state,
+    -- then 'fired' — which is what stops a second delivery once the outbox has pruned the terminal row
+    -- that would otherwise dedupe it — or 'cancelled' when the worker withdraws it.
+    CREATE TABLE IF NOT EXISTS thread_timer (
+      id          TEXT PRIMARY KEY,
+      thread_slug TEXT NOT NULL,
+      prompt      TEXT NOT NULL,
+      fire_at     INTEGER NOT NULL,
+      state       TEXT NOT NULL CHECK (state IN ('armed', 'fired', 'cancelled')),
+      created_at  INTEGER NOT NULL,
+      settled_at  INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS thread_timer_due
+      ON thread_timer(state, fire_at);
+    CREATE INDEX IF NOT EXISTS thread_timer_slug
+      ON thread_timer(thread_slug, state, fire_at);
   `)
   // Best-effort inline migration for older DBs. Session-first/profile columns are nullable ADDs
   // (except the existing boolean/backend defaults) — additive + idempotent, safe while another server
@@ -1163,6 +1218,30 @@ export function createStorage(dbPath: string): Storage {
     UPDATE session SET recurring_schedule_fired_at = ?
     WHERE slug = ? AND recurring_armed_at = ?
   `)
+  // ---- ONE-OFF TIMERS ----------------------------------------------------------------------------
+  const armTimerStmt = db.prepare(`
+    INSERT INTO thread_timer (id, thread_slug, prompt, fire_at, state, created_at, settled_at)
+    VALUES (@id, @slug, @prompt, @fireAtMs, 'armed', @createdAtMs, NULL)
+  `)
+  const timersBySlugStmt = db.prepare<[string], ThreadTimerRow>(
+    "SELECT * FROM thread_timer WHERE thread_slug = ? ORDER BY fire_at, id",
+  )
+  const armedTimersBySlugStmt = db.prepare<[string], ThreadTimerRow>(
+    "SELECT * FROM thread_timer WHERE thread_slug = ? AND state = 'armed' ORDER BY fire_at, id",
+  )
+  const timerByIdStmt = db.prepare<[string], ThreadTimerRow>("SELECT * FROM thread_timer WHERE id = ?")
+  const dueTimersStmt = db.prepare<[number], ThreadTimerRow>(
+    "SELECT * FROM thread_timer WHERE state = 'armed' AND fire_at <= ? ORDER BY fire_at, id",
+  )
+  const cancelTimerStmt = db.prepare(`
+    UPDATE thread_timer SET state = 'cancelled', settled_at = ?
+    WHERE id = ? AND thread_slug = ? AND state = 'armed'
+  `)
+  const fireTimerStmt = db.prepare(`
+    UPDATE thread_timer SET state = 'fired', settled_at = ?
+    WHERE id = ? AND state = 'armed'
+  `)
+  const delThreadTimers = db.prepare("DELETE FROM thread_timer WHERE thread_slug = ?")
   const confirmAwaitingWaitStmt = db.prepare(`
     UPDATE session
     SET awaiting_fence_id = ?, awaiting_confirmed_at = ?, snoozed_until = ?
@@ -1238,6 +1317,9 @@ export function createStorage(dbPath: string): Storage {
     // table from growing forever across re-dispatches of a busy slug; the (slug, session_id) key means
     // a replacement session could never have read them anyway.
     delRetiredOps.run(existing.slug)
+    // Same reasoning for the thread's one-off timers: an alarm set for a thread that no longer exists
+    // has nothing to wake, and the scheduler would otherwise carry the armed row for up to thirty days.
+    delThreadTimers.run(existing.slug)
     delSession.run(existing.slug)
     return existing
   }
@@ -1796,6 +1878,14 @@ export function createStorage(dbPath: string): Storage {
       ).changes === 1,
     setRecurringPromptBySlug: (slug, prompt, stopHook, heartbeat, intervalMs, armedAt) =>
       recurringBySlugStmt.run(...recurringArgs(prompt, stopHook, heartbeat, intervalMs, armedAt), slug).changes === 1,
+    armThreadTimer: (timer) => void armTimerStmt.run(timer),
+    listThreadTimers: (slug, opts) =>
+      (opts?.armedOnly ? armedTimersBySlugStmt : timersBySlugStmt).all(slug),
+    getThreadTimer: (id) => timerByIdStmt.get(id),
+    dueThreadTimers: (nowMs) => dueTimersStmt.all(nowMs),
+    cancelThreadTimer: (slug, id, settledAtMs) =>
+      cancelTimerStmt.run(settledAtMs, id, slug).changes === 1,
+    markThreadTimerFired: (id, settledAtMs) => fireTimerStmt.run(settledAtMs, id).changes === 1,
     stampRecurringRestFired: (slug, armedAt, firedAt) =>
       recurringRestFiredStmt.run(firedAt, slug, armedAt).changes === 1,
     stampRecurringScheduleFired: (slug, armedAt, firedAt) =>
