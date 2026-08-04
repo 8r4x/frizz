@@ -846,6 +846,18 @@ export function createRouter(ctx: AppContext) {
   // resolved yet) OR an unauthed-at-boot detection (`gh repo view` needs auth), so fall back to a live
   // ghRepo and WARM the cache on success — this makes a post-boot `gh auth login` light up the feature
   // without a server restart. Never throws (ghRepo swallows failures → null).
+  // `installed` is boot-cached like the repo — and, like the repo, a cached NEGATIVE is not trusted.
+  // A `gh --version` that timed out at boot (busy machine, cold keyring), or a gh installed after
+  // frizz started, would otherwise hide the whole GitHub feature for the process lifetime with no way
+  // back but a restart. A positive is stable, so this re-probes only while the answer is still no —
+  // and a missing binary fails as an instant ENOENT spawn, not a network call.
+  async function resolveInstalled(): Promise<boolean> {
+    if (ctx.github?.installed) return true
+    const live = await ghInstalled()
+    if (live) ctx.github = { inRepo: false, nameWithOwner: null, ...ctx.github, installed: true }
+    return live
+  }
+
   async function resolveRepo(): Promise<string | null> {
     const cached = ctx.github?.nameWithOwner
     if (cached) return cached
@@ -2351,14 +2363,15 @@ export function createRouter(ctx: AppContext) {
 
     // ---- GitHub-first batch dispatch ----
 
-    // gh availability: installed (cached, else live) + inRepo/nameWithOwner (cache-warmed resolveRepo)
-    // + a LIVE authed re-check (never cached — a mid-session `gh auth login` reflects on the next
-    // query). The repo is resolved only when authed (gh repo view needs auth), so a cached-negative
-    // inRepo from an unauthed/racy boot never sticks. Never throws (all probes degrade to false/null).
+    // gh availability: installed (cache-warmed resolveInstalled) + inRepo/nameWithOwner (cache-warmed
+    // resolveRepo) + a LIVE authed re-check (never cached — a mid-session `gh auth login` reflects on
+    // the next query). The repo is resolved only when authed (gh repo view needs auth), so a
+    // cached-negative inRepo from an unauthed/racy boot never sticks; neither does a cached-negative
+    // installed. Never throws (all probes degrade to false/null).
     githubStatus: query({
       output: GithubStatus,
       handler: async () => {
-        const installed = ctx.github?.installed ?? (await ghInstalled())
+        const installed = await resolveInstalled()
         if (!installed) return { installed: false, inRepo: false, nameWithOwner: null, authed: false }
         const authed = await ghAuthed()
         const nameWithOwner = authed ? await resolveRepo() : (ctx.github?.nameWithOwner ?? null)

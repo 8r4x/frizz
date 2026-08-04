@@ -10,6 +10,7 @@ import { useDispatchProfile } from "../hooks/useDispatchProfile.ts"
 import { dispatchProfileGroups } from "../lib/dispatchPreferences.ts"
 import { OPAQUE_PORTAL_SURFACE_ABOVE_DIALOG_Z } from "../lib/overlaySurface.ts"
 import { buildGithubBatchInput, dispatchProfileError } from "../lib/githubDispatch.ts"
+import { useGithubStatus } from "./GithubTrigger.tsx"
 import { applyRowSelection } from "../lib/rowRangeSelection.ts"
 
 type Kind = "issues" | "prs"
@@ -28,7 +29,7 @@ const PAGE_SIZE = 30
 // flow; the new sidebar rows paint via the board SSE. The trigger that opens this is auth-gated, so
 // the RPCs are guaranteed serviceable when it's mounted.
 export function GithubPickerModal({ onClose }: { onClose: () => void }) {
-  const status = useQuery({ queryKey: ["githubStatus"], queryFn: () => rpc.githubStatus() })
+  const status = useGithubStatus()
   // The batch dispatches with the SAME durable new-thread profile the prompt box uses — the selector
   // below writes it, so choosing here also becomes the composer's next default (one profile, not a
   // picker-local copy that silently diverges). A Codex cache refresh can invalidate the saved pair

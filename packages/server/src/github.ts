@@ -34,10 +34,33 @@ export async function ghInstalled(): Promise<boolean> {
 }
 
 // `gh auth status --active` exit 0 → signed in. Re-checked live on each githubStatus query (cheap).
+//
+// Its FAILURE, though, is NOT a reliable "signed out", so it is never trusted on its own. Two ways a
+// genuinely signed-in user lands in the catch:
+//  • `auth status` VALIDATES the token against the API, so any network trouble — offline, VPN, proxy,
+//    rate limit, a GitHub outage — exits 1, and gh even blames the credential ("The token in keyring
+//    is invalid"). Measured against a dead proxy 2026-08-04.
+//  • `--active` only exists in gh ≥ 2.57.0 (checked against pkg/cmd/auth/status/status.go at v2.40 …
+//    v2.57). An older distro-packaged gh — apt still ships 2.4.x — exits 1 with "unknown flag".
+// Both hide the whole GitHub feature with no explanation anywhere in the UI, which is the worst
+// outcome available. So a failure falls back to `gh auth token` (gh ≥ 2.17): purely LOCAL, no network,
+// no version-new flag, and holding a credential is the question this gate is really asking. The cost
+// of the false positive is small and self-explaining — a revoked token shows the icon, and the picker
+// surfaces gh's own error when it's opened.
 export async function ghAuthed(): Promise<boolean> {
   try {
     await gh(["auth", "status", "--active"])
     return true
+  } catch {
+    return await ghHasToken()
+  }
+}
+
+// Does gh hold a credential for the active host? stdout here is the TOKEN ITSELF — only its emptiness
+// is ever read; never log it, never fold it into an error message.
+async function ghHasToken(): Promise<boolean> {
+  try {
+    return (await gh(["auth", "token"])).trim().length > 0
   } catch {
     return false
   }

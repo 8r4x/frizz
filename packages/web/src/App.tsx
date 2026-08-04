@@ -14,6 +14,7 @@ import { DrawerStack } from "./components/DrawerStack.tsx"
 import { TodosView } from "./components/TodosView.tsx"
 import { NewThreadDialog } from "./components/NewThreadModal.tsx"
 import { GithubPickerModal } from "./components/GithubPickerModal.tsx"
+import { useGithubStatus } from "./components/GithubTrigger.tsx"
 import { SettingsDrawer } from "./components/SettingsDrawer.tsx"
 import { CommandPalette } from "./components/CommandPalette.tsx"
 import { StatusListView } from "./components/StatusListView.tsx"
@@ -151,7 +152,7 @@ export function App() {
   // signed in — ONE subtle, self-fading hint on app open nudging the user to `gh auth login`. The hint
   // fires at most once per page load (a module flag survives re-renders / StrictMode double-invoke),
   // stays a beat longer than a normal toast so it's readable, and never nags again.
-  const github = useQuery({ queryKey: ["githubStatus"], queryFn: () => rpc.githubStatus() })
+  const github = useGithubStatus()
   useEffect(() => {
     if (github.data?.inRepo && !github.data.authed) maybeShowSignInHint()
   }, [github.data?.inRepo, github.data?.authed])

@@ -3,12 +3,32 @@ import { Github } from "lucide-react"
 import { rpc } from "../api/rpc.ts"
 import { openGithubPicker } from "../store.ts"
 
+// THE one query definition every gh-gated surface shares (this trigger, App's sign-in hint, the
+// picker) so their options can't drift apart.
+//
+// It deliberately overrides the app-wide `refetchOnWindowFocus: false` (main.tsx). This is the one
+// query whose answer changes OUTSIDE the app: the user leaves for a terminal, runs `gh auth login`,
+// and comes back. Nothing else re-asks — App's observer stays mounted for the life of the page, so
+// the cache entry never goes inactive — and with focus-refetch off the Prompt Box kept the page-load
+// answer FOREVER. Measured 2026-08-04 against a live stack: server flipped to authed:true, the icon
+// stayed absent for 15s and through focus/visibility events, and only a reload brought it back.
+// `staleTime` throttles the refetch so a burst of tab switches can't spawn a `gh` per switch.
+// (Signing in from frizz's OWN terminal never blurs the window — that one still needs a reload.)
+export function useGithubStatus() {
+  return useQuery({
+    queryKey: ["githubStatus"],
+    queryFn: () => rpc.githubStatus(),
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
+  })
+}
+
 // Whether the GitHub trigger will render at all. Callers that RESERVE LAYOUT for the trigger (the
 // Composer's `leftAction` slot shifts the paperclip over to make room) must gate on this and pass
 // nothing when it's false — a `<GithubTrigger />` element is truthy even when it renders null, so
 // passing it unconditionally reserves an empty hole where the icon would be.
 export function useGithubTriggerVisible(): boolean {
-  const status = useQuery({ queryKey: ["githubStatus"], queryFn: () => rpc.githubStatus() })
+  const status = useGithubStatus()
   return Boolean(status.data?.inRepo && status.data.authed)
 }
 

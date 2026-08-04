@@ -1,5 +1,8 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { GITHUB_DISPATCH_UI_BOUNDARY } from "@frizz/shared"
 import {
   reactionCount,
@@ -13,6 +16,7 @@ import {
   truncateBody,
   renderGithubPrompt,
   effectiveTemplate,
+  ghAuthed,
   DEFAULT_ISSUE_PROMPT,
   DEFAULT_PR_PROMPT,
   PROMPT_TOKENS,
@@ -20,7 +24,9 @@ import {
   type HydratedPr,
 } from "./github.ts"
 
-// All tests inject gh output (no real gh shell-out) — the parsing/scoring/templating fns are pure.
+// The parsing/scoring/templating fns are pure, so those tests inject gh output rather than shelling
+// out. The ghAuthed tests at the bottom are the exception: that probe IS a subprocess, so they run it
+// against a stub `gh` prepended to PATH.
 
 // ---- reactionCount ----
 
@@ -422,4 +428,71 @@ test("effectiveTemplate: unset/blank falls back to the shipped default", () => {
 test("effectiveTemplate: a non-blank override is used verbatim (per kind)", () => {
   assert.equal(effectiveTemplate("issue", "my custom {title}"), "my custom {title}")
   assert.equal(effectiveTemplate("pr", "review {n}"), "review {n}")
+})
+
+// ---- ghAuthed (the ONLY tests here that shell out — through a stub `gh` on PATH) ----
+//
+// This gate decides whether the whole GitHub feature is visible, and its historic failure mode was a
+// FALSE NEGATIVE that hid everything with no explanation. So it is exercised against a real execFile
+// against a real (stubbed) binary rather than a mock: the seam under test IS the subprocess.
+
+// Write a `gh` stub whose behavior per subcommand is driven by GH_STUB_MODE, prepend it to PATH, run
+// the probe, restore PATH. POSIX-only (a shell script isn't executable via execFile on Windows).
+async function withStubGh<T>(mode: string, run: () => Promise<T>): Promise<T> {
+  const dir = mkdtempSync(join(tmpdir(), "gh-stub-"))
+  writeFileSync(
+    join(dir, "gh"),
+    `#!/bin/sh
+case "$GH_STUB_MODE:$1 $2" in
+  *":auth status")
+    case "$GH_STUB_MODE" in
+      status-ok) exit 0 ;;
+      old-gh) echo "unknown flag: --active" >&2; exit 1 ;;
+      *) echo "not logged in" >&2; exit 1 ;;
+    esac ;;
+  *":auth token")
+    case "$GH_STUB_MODE" in
+      old-gh|offline) echo "gho_stubtoken"; exit 0 ;;
+      blank-token) echo "   "; exit 0 ;;
+      *) echo "no oauth token" >&2; exit 1 ;;
+    esac ;;
+esac
+exit 1
+`,
+    { mode: 0o755 },
+  )
+  const path = process.env.PATH
+  process.env.PATH = `${dir}:${path ?? ""}`
+  process.env.GH_STUB_MODE = mode
+  try {
+    return await run()
+  } finally {
+    process.env.PATH = path
+    delete process.env.GH_STUB_MODE
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+const posixOnly = { skip: process.platform === "win32" ? "the stub is a POSIX shell script" : false }
+
+test("ghAuthed: `gh auth status --active` exit 0 → signed in", posixOnly, async () => {
+  assert.equal(await withStubGh("status-ok", ghAuthed), true)
+})
+
+test("ghAuthed: an older gh with no --active flag still reads as signed in (falls back to `gh auth token`)", posixOnly, async () => {
+  // --active landed in gh 2.57.0; apt still ships 2.4.x. The credential is right there in the keyring.
+  assert.equal(await withStubGh("old-gh", ghAuthed), true)
+})
+
+test("ghAuthed: a network-failed `auth status` (offline/VPN/rate limit) still reads as signed in", posixOnly, async () => {
+  // `auth status` VALIDATES the token against the API and blames the credential when it can't reach it.
+  assert.equal(await withStubGh("offline", ghAuthed), true)
+})
+
+test("ghAuthed: genuinely signed out — both probes fail → false", posixOnly, async () => {
+  assert.equal(await withStubGh("signed-out", ghAuthed), false)
+})
+
+test("ghAuthed: a blank `gh auth token` is NOT a credential → false", posixOnly, async () => {
+  assert.equal(await withStubGh("blank-token", ghAuthed), false)
 })
