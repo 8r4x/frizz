@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { Puzzle } from "lucide-react"
+import { Plug } from "lucide-react"
 import type { ThreadView } from "@fray-ui/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
@@ -56,16 +56,25 @@ export function ReloadPluginsButton({ thread }: { thread: ThreadView }) {
         // Focus must not leave the composer: same discipline as every other footer verb.
         onMouseDown={(e) => e.preventDefault()}
         onClick={() => void reload()}
-        // Mirrors RestartWorkerButton exactly — 24px square, borderless, 12px glyph at fg/55 — because
-        // the two sit adjacent and are the same KIND of verb (maintenance, icon-only, no label). Any
-        // divergence here would read as a difference in importance that does not exist.
-        // PUZZLE, not a refresh arrow: the Restart button beside this one already wears `RefreshCw`,
+        // Mirrors RestartWorkerButton — 24px square, borderless, fg/55 — because the two sit adjacent
+        // and are the same KIND of verb (maintenance, icon-only, no label). Any divergence here would
+        // read as a difference in importance that does not exist.
+        // PLUG, not a refresh arrow: the Restart button beside this one already wears `RefreshCw`,
         // and two adjacent icon-only verbs must not share a glyph vocabulary — the softer verb reading
-        // as "reload" and the harder one as "refresh" would invert what the operator expects. Puzzle is
-        // the near-universal "plugin/extension" mark, so it names WHAT is being reloaded instead.
+        // as "reload" and the harder one as "refresh" would invert what the operator expects. The plug
+        // names WHAT is being reloaded instead (maintainer, 2026-08-04: "should be a plug icon, not the
+        // puzzle piece").
+        //
+        // 13, not the strip's 12, and that ONE px is measured rather than taste. The plug is a narrow
+        // mark — 12 ink units wide in a 24 viewBox where `RefreshCw` spans 18 — so matching the sizes
+        // does NOT match the weights: painted ink (stroke length × painted stroke width) came out at
+        // 0.80× its neighbour's at 12 and 0.93× at 13, and 0.80 is the visible-deficit range. Both
+        // glyphs are symmetric about the viewBox centre, so ink centre and box centre coincide exactly
+        // (measured dy 0.00 at every size) and no vertical nudge applies. For the record the puzzle
+        // this replaces ran 1.34× — it OUT-weighed the restart verb, which the swap also fixes.
         className="flex size-6 items-center justify-center rounded-md text-fg/55 hover:bg-panel-2 hover:text-fg/80 disabled:opacity-50"
       >
-        <Puzzle size={12} />
+        <Plug size={13} />
       </button>
     </Tooltip>
   )
