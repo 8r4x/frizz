@@ -145,26 +145,35 @@ Cons: N node processes' RSS when many projects are warm (but that is today's sta
 
 ### Constraints, verified
 
-- **Browser-blocked ports.** Chromium's `kRestrictedPorts` (`net/base/port_util.cc`) and Firefox's `gBadPortList` (`netwerk/base/nsIOService.cpp`) were read at source. Both block a similar ~80-entry set topping out at `6000` (X11), `6566`, `6665-6669`, `6679`, `6697` (IRC), `10080` (Amanda). Nothing between 1024 and 6000 except `1719`, `1720`, `1723`, `2049`, `3659`, `4045`, `4190`, `5060`, `5061`.
-- **Ephemeral ranges.** Windows default is **49152-65535** (Microsoft Learn, KB929851 — changed from 1025-5000 at Vista). macOS is **49152-65535** (`sysctl net.inet.ip.portrange.hifirst` on this machine). Linux default is **32768-60999**. ⇒ **the band clean on all three is 1024-32767**, which rules out the IANA Dynamic/Private range (49152+) despite it being the "correct" range for unregistered use. This is why every popular dev tool sits in the registered range.
-- **Windows Hyper-V/WSL is the spoiler.** HNS reserves semi-random port blocks at boot for NAT forwarding; [microsoft/WSL#5514](https://github.com/microsoft/WSL/issues/5514) shows 100-port exclusion blocks spanning roughly **2164-5618** on one machine, and some reservations do not even appear in `netsh interface ipv4 show excludedportrange`. **No fixed port in the low range is reliably bindable on a Windows box with WSL or Hyper-V enabled.** This is a constraint on the *fallback*, not on the choice: whatever port is picked, Fray must degrade gracefully and say what it did.
+- **Browser-blocked ports.** Chromium's `kRestrictedPorts` (`net/base/port_util.cc`) and Firefox's `gBadPortList` (`netwerk/base/nsIOService.cpp`) were read at source. The union is 83 ports and **the highest is `10080`** (Amanda) — so anything above 10080 is clear of browser blocking entirely. One caveat: Chromium's `kRestrictAbusePortsOnLocalhost` is `ENABLED_BY_DEFAULT` and its contents come from a server-side Finch config rather than source, so Chrome retains the ability to block additional *localhost* ports at any time. No port is permanently guaranteed; this is one more reason the fallback is not optional.
+- **Ephemeral ranges.** Windows default is **49152-65535** (Microsoft Learn, KB929851 — changed from 1025-5000 at Vista). macOS is **49152-65535** (`sysctl net.inet.ip.portrange.hifirst` on this machine; note `rapportd` has already taken exactly 49152 here). Linux default is **32768-60999** (kernel.org IP Sysctl, `ip_local_port_range`). ⇒ **never hard-code above 32767**, which rules out the IANA Dynamic/Private range (49152+) despite it being the "correct" range for unregistered use.
+- **Windows Hyper-V/WSL is the spoiler, and it reaches down into the 3000s.** HNS reserves 100-port blocks at boot for NAT forwarding. The `netsh` dump in [microsoft/WSL#5514](https://github.com/microsoft/WSL/issues/5514) was **read at source via `gh api`** and contains, verbatim, blocks including `3699-3798`, `4214-4313`, `4714-4813`, `4914-5013`, `5014-5113` and on up to `6880-6979`; [microsoft/WSL#5306](https://github.com/microsoft/WSL/issues/5306) independently reports blocks spanning **4294-9783**. A reserved port is not *listening*, so `netstat` shows it free and `bind()` still fails with WSAEACCES/10013 — and Microsoft documents that `SO_REUSEADDR` does not rescue you. The blocks move between reboots.
 
-### Recommendation: **3729** — F‑R‑A‑Y on a phone keypad
+  The mechanism (community consensus, **not** Microsoft-documented) is that these land low only when the machine's dynamic port range has been reset to ~1024 from its 49152 default. So on a stock Windows box the 3000s are fine; on a clobbered one the entire 2164-9783 span is a minefield — which also takes out Next.js's 3000, Vite's 5173, Postgres's 5432 and adb's 5037. The whole dev ecosystem is exposed to this and mitigates it with fallback, not with port choice.
 
-`http://localhost:3729` · F=3, R=7, A=2, Y=9. It explains itself in one line of README and it is the only candidate with a real mnemonic.
+### The safe band is 10081-32767
 
-- In the safe **1024-32767** band; outside every default ephemeral range.
-- On **neither** browser's blocked list.
-- IANA: registered as `fksp-audit` ("Fireking Audit Port"), an individual's 2003 vendor registration. Assigned on paper, dead in practice — nothing ships on it.
-- Free on this machine right now, as are all the alternates.
+Above every browser-blocked port (max 10080), above every Hyper-V block anyone has reported (max ~9783), below Linux's ephemeral floor (32768), below macOS/Windows' (49152). Nothing on any of the three OSes allocates from it automatically. The cost is that it forces five digits.
 
-**Runners-up:**
+### Recommendation: **13729** — "1‑FRAY", like a phone number
 
-| Port | Case for | Case against |
+`http://localhost:13729` · F=3, R=7, A=2, Y=9 on a phone keypad, with the leading `1` that a dialled number carries anyway. It keeps the only mnemonic worth having while landing inside the safe band.
+
+- **Not in the IANA registry at all** — genuinely unassigned, not squatting on someone's record.
+- Above 10080, so clear of every browser blocklist.
+- Outside all three OS ephemeral ranges and above every reported Hyper-V exclusion block.
+- Free on this machine.
+
+**Rejected, and why — all three of the obvious four-digit picks are inside verified exclusion blocks:**
+
+| Port | Case for | Killed by |
 | --- | --- | --- |
-| **4917** | Already Fray's `DEFAULT_PORT` (`packages/shared/src/index.ts:2111`) and already the base of its 100-port scan. Genuinely **absent from the IANA registry**. Zero migration. | Unmemorable — fails the brief's one subjective criterion. |
-| **4242** | Very memorable, IANA-unassigned. | Genuinely occupied in practice: Posit Package Manager's default HTTP port, Orthanc's default DICOM port, a folk-favorite "just pick something" port. |
-| **5959 / 6565 / 4994** | Rhythmic, IANA-unassigned (from a full sweep of 1024-32767 for unassigned repdigit/ABAB/palindrome ports). | Arbitrary — no connection to Fray, so no better than 4917 on memorability once the novelty wears off. |
+| **3729** | F-R-A-Y exactly; shorter. | Inside `3699-3798` in the WSL#5514 dump. Also IANA-assigned (`fksp-audit`, a dead 2003 vendor registration). |
+| **4917** | Already Fray's `DEFAULT_PORT` (`packages/shared/src/index.ts:2111`) and the base of its 100-port scan; absent from the IANA registry; zero migration. | Inside `4914-5013`. Also unmemorable, failing the brief's one subjective criterion. |
+| **4242** | Very memorable, IANA-unassigned. | Inside `4214-4313`. Also genuinely occupied: Posit Package Manager's default HTTP port and Orthanc's default DICOM port. |
+| **24729** | Clean on every axis; in the safe band. | No mnemonic — arbitrary, so no better than 4917 once novelty fades. A reasonable pick if `13729` is disliked. |
+
+Note the safe band is a *risk reduction*, not a guarantee: WSL#5306's reported span reaches 9783, and nothing prevents a future reservation landing higher. The band buys margin, and the fallback covers the rest.
 
 ### Fallback behavior
 
@@ -183,8 +192,18 @@ Keep the existing scan, re-based on the new default, and **say what happened**. 
 7. **Adopt the port**, and split `fray-dev` onto its own default so source and published installs coexist.
 8. **Move `font` / `notifications` / `localFileOpener`** to machine-level settings; fix the notification `tag` collision.
 
+### Fold in while you are here: three un-namespaced `/tmp` directories
+
+Pre-existing and orthogonal to the singleton, but they are the same shared-resource bug class as the two-OS-users hazard in §3, and they already collide today between two Fray installs for *one* user. On macOS `$TMPDIR` is a per-user `/var/folders/…` path so these are latent; **on Linux `$TMPDIR` is normally unset, so all three land in a world-shared `/tmp`.**
+
+- `tmpdir()/fray-worker-logs/<slug>.stall.log` (`packages/server/src/tailer.ts:132,3555`) — the filename is a **bare thread slug**, no project or user component. Two projects with a thread named `fix-auth` overwrite each other's stall log, which contains up to 4000 chars of captured agent output. The write is `try`/`catch`-wrapped, so it fails silently.
+- `tmpdir()/fray-tool-images` (`packages/server/src/transcript.ts:1064`) — filenames are id-hashed and the temp-file publish is pid-safe, but `pruneScreenshotCache` (`:1086-1101`) `readdirSync`s the whole directory and unlinks the oldest past 200 entries, so **one install's prune deletes another's cached screenshots**. This one collides on every platform, including macOS.
+- `tmpdir()/fray-sysprompts/<sessionId>.md` (`packages/server/src/session-files.ts:5`, written at `dispatch.ts:497-501`) — filenames are UUIDs so content cannot collide, but the *directory* can: on Linux the first OS user creates it at their umask, and a second user's `writeFileSync` then fails EACCES. That write is **not** wrapped in try/catch, so every dispatch for the second user throws. These files are agent system prompts.
+
+The fix is the one already used correctly for the broker sockets — hash the state dir into the directory name (`packages/server/src/fray-paths.ts:44-52` documents exactly this rationale: "two accounts cannot collide even in a shared `/tmp`").
+
 ## 7. Open questions for the human
 
 - **Architecture A or B** (§4) — recommendation is B.
-- **The port** (§5) — recommendation is 3729.
+- **The port** (§5) — recommendation is 13729 ("1‑FRAY"). Five digits is the price of clearing the band where Windows Hyper‑V has actually been observed to reserve ports; the shorter `3729` sits inside a verified exclusion block.
 - **Do background projects keep running?** (§3) Under B this is a genuine choice rather than a constraint: always-on for every registered project (today's behavior, N processes), on-demand only (cheapest, but wakes and PR watches go quiet for closed projects), or a per-project toggle defaulting to on-demand.
