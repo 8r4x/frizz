@@ -828,6 +828,20 @@ export function createStorage(dbPath: string): Storage {
   } catch {
     // A database predating the legacy columns has nothing to adopt.
   }
+  // ONE-TIME REBRAND MIGRATION (see migrate-fray.ts, and delete this with it). `tmux_name` holds the
+  // thread identity string, which threadIdentityName() derives as `frizz-<slug>` and validateSessionIdentity
+  // re-derives on every write. Every row written before the rename says `fray-<slug>`, so without this
+  // the FIRST write to any pre-rebrand thread throws "invalid session thread identity" — measured at
+  // 387 of 387 rows on the author's own board.
+  //
+  // Matched against each row's OWN slug rather than a bare `LIKE 'fray-%'` prefix: that is exactly what
+  // the integrity check tests, so a row that genuinely is mis-keyed stays caught instead of being
+  // laundered into a well-formed name here.
+  try {
+    db.exec("UPDATE session SET tmux_name = 'frizz-' || slug WHERE tmux_name = 'fray-' || slug")
+  } catch {
+    // A database with no session table yet has nothing to rename.
+  }
   // One-time idempotent backfill: rows the user already archived under the boolean flag carry that
   // into the new lifecycle column. Only fills NULLs — an explicit later state write always wins.
   try {

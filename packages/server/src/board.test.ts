@@ -1142,7 +1142,7 @@ test("board provenance excludes legacy files and foreign transcripts while regis
   storage.upsertSession(row({
     slug: "ui-claude",
     session_id: "claude-session",
-    tmux_name: "frizz-claude",
+    tmux_name: "frizz-ui-claude",
     title: "Claude UI thread",
     title_auto: 0,
     state: null,
@@ -1151,7 +1151,7 @@ test("board provenance excludes legacy files and foreign transcripts while regis
   storage.upsertSession(row({
     slug: "ui-codex",
     session_id: "codex-session",
-    tmux_name: "frizz-codex",
+    tmux_name: "frizz-ui-codex",
     title: "Codex UI thread",
     backend: "codex",
     state: "archived",

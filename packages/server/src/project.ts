@@ -9,6 +9,7 @@ import {
 } from "./project-identity.ts"
 import type { ProjectLaunchTarget } from "./project-launch.ts"
 import { projectStateDir } from "./frizz-paths.ts"
+import { migrateFrayGlobalRoots, migrateFrayProjectDir } from "./migrate-fray.ts"
 
 // Workspace resolution + on-disk locations. Everything here is derived once at boot and
 // threaded through the AppContext — no module reads cwd on its own.
@@ -144,8 +145,12 @@ export function resolveProjectLabel(dir: string): string | null {
 }
 
 export function resolveProject(cwd = process.cwd(), home = homedir(), env: NodeJS.ProcessEnv = process.env): Project {
+  // Opening a project is the moment a fray-era install gets adopted (migrate-fray.ts). The global
+  // roots go first and MUST precede projectStateDir below, which resolves — and then memoizes — them.
+  migrateFrayGlobalRoots({ env, home })
   const identity = resolveProjectIdentity(resolveProjectDir(cwd), home)
   const dir = identity.root
+  migrateFrayProjectDir(dir)
   const id = identity.id
   const stateDir = projectStateDir(id, home)
   mkdirSync(stateDir, { recursive: true })

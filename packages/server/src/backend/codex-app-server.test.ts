@@ -1887,6 +1887,39 @@ test("bridge persistence refuses malformed or future authority schemas before sp
   futureDb.close()
 })
 
+// The rebrand renamed this column. A database written before it still says `fray_session_id`, and
+// CREATE TABLE IF NOT EXISTS will not touch an existing table — so without the rename in the bridge
+// constructor the required-column assertion rejects the whole bridge and the machine loses every live
+// Codex binding. Simulated by renaming a real schema backwards, which is exactly its pre-rebrand shape.
+test("a bridge database written before the rebrand is migrated, not rejected", () => {
+  const h = harness()
+  h.bridge.close()
+  h.db.prepare(`
+    INSERT INTO codex_app_server_session (
+      frizz_session_id, thread_slug, codex_thread_id, codex_session_id, session_epoch,
+      capability_revision, connection_epoch, current_turn_id, cwd, ephemeral, state,
+      created_at, updated_at, auto_resume_count
+    ) VALUES ('session-legacy', 'slug-legacy', 'codex-thread-legacy', 'codex-session-legacy', 1,
+      1, 1, NULL, ?, 0, 'detached', '2026-07-13T12:00:00.000Z', '2026-07-13T12:00:00.000Z', 0)
+  `).run(h.dir)
+  h.db.exec("ALTER TABLE codex_app_server_session RENAME COLUMN frizz_session_id TO fray_session_id")
+
+  h.newBridge() // must not throw
+
+  const columns = h.db.prepare<[], { name: string }>("PRAGMA table_info(codex_app_server_session)")
+    .all().map((column) => column.name)
+  assert.ok(columns.includes("frizz_session_id"), "renamed forward")
+  assert.ok(!columns.includes("fray_session_id"), "the old name is gone")
+  assert.equal(
+    h.db.prepare<[], { frizz_session_id: string }>(
+      "SELECT frizz_session_id FROM codex_app_server_session WHERE thread_slug = 'slug-legacy'",
+    ).get()?.frizz_session_id,
+    "session-legacy",
+    "the binding survived the rename",
+  )
+  h.close()
+})
+
 // ---- daemon lifecycle: what an attachment REPORTS about the stream it just joined ------------------
 
 /** A bridge harness whose host is scripted attachment-by-attachment: it decides `reattached`, the

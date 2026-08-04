@@ -31,6 +31,7 @@ import {
 } from "@frizz/server/local-origin";
 import { readBootProgress } from "@frizz/server/boot-progress";
 import { frizzPaths, projectStateDir } from "@frizz/server/frizz-paths";
+import { migrateFrayGlobalRoots, migrateFrayProjectDir } from "@frizz/server/migrate-fray";
 import { defaultLogRoot, latestLogPath } from "@frizz/server/logging";
 import { DEFAULT_PORT } from "@frizz/shared";
 
@@ -370,18 +371,18 @@ Options:
   -h, --help             show this help
 
 Environment:
-  FRIZZ_HOST              same as --host
-  FRIZZ_ALLOWED_HOSTS     same as --allowed-host, comma separated
-  FRIZZ_PUBLIC_ORIGIN     same as --public-origin
+  FRIZZ_HOST             same as --host
+  FRIZZ_ALLOWED_HOSTS    same as --allowed-host, comma separated
+  FRIZZ_PUBLIC_ORIGIN    same as --public-origin
 
 Commands:
   build                  build a new immutable candidate from the configured Frizz source checkout
   promote <digest>       explicitly select a verified candidate for this workspace
   restart                restart the currently promoted artifact without building
 
---host puts a board that can run shell commands as you on the network, and Frizz has no login: anyone
-who reaches the port controls it. Only do this on a network you trust. An IP address works as-is; to
-reach the board by DNS name you must list that name with --allowed-host ("*" allows any).
+--host puts a board that can run shell commands as you on the network, and Frizz has no login:
+anyone who reaches the port controls it. Only do this on a network you trust. An IP address works
+as-is; to reach the board by DNS name you must list that name with --allowed-host ("*" allows any).
 
 --public-origin serves the board through a tunnel or reverse proxy without putting it on the LAN
 at all — Frizz stays on loopback and the tunnel dials it. Frizz still has no login, so require
@@ -408,8 +409,12 @@ export function resolveWorkspace(
       `frizz-dev must be run inside a Git repository (cwd: ${cwd})`
     );
   }
+  // The launcher opens a project before any server does, so a fray-era install gets adopted here
+  // first (migrate-fray.ts). Both calls are idempotent — whichever entry point runs first wins.
+  migrateFrayGlobalRoots({ env, home });
   const identity = resolveGitProjectIdentity(realpathSync(gitRoot), home);
   const root = identity.root;
+  migrateFrayProjectDir(root);
   const id = identity.id;
   const stateDir = projectStateDir(id, home);
   mkdirSync(stateDir, { recursive: true });
