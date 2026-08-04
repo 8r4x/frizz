@@ -13,7 +13,7 @@
 <a href="https://github.com/colinhacks/fray" rel="nofollow"><img src="https://img.shields.io/github/stars/colinhacks/fray" alt="stars"></a>
 </p>
 
-<h2 align="center">Fray is for you if you have any of these opinions</h2>
+Fray is for you if you have any of these opinions:
 
 - **Terminal UIs are dated** and have fundamental limitations that are incompatible with good user experience.
 - **Orchestrator-style apps** feel overly complex.
