@@ -162,7 +162,10 @@ Above every browser-blocked port (max 10080), above every Hyper-V block anyone h
 - **Not in the IANA registry at all** — genuinely unassigned, not squatting on someone's record.
 - Above 10080, so clear of every browser blocklist.
 - Outside all three OS ephemeral ranges and above every reported Hyper-V exclusion block.
-- Free on this machine.
+- Free on this machine, and clear of every default in a 60-tool survey of local dev/database/AI ports (nearest neighbours are Ollama's 11434 and Jaeger's 16686).
+- No malware or C2 association found. This matters more than it sounds: `13337` — an obvious-looking alternative — is listed at high confidence as the default for Empire C2, CrackMapExec, gophish and gtunnel, which is exactly the signature class corporate EDR alerts on, and `23232` is historical Backdoor.Berbew. *Best-effort:* speedguide.net and adminsub.net both refused automated fetches, so this rests on search coverage rather than a direct read of those two port databases.
+
+**There is direct precedent for the keypad mnemonic in this exact ecosystem:** MCP Inspector uses `6274` for its client and `6277` for its proxy — T9 for "MCPI" and "MCPP".
 
 **Rejected, and why — all three of the obvious four-digit picks are inside verified exclusion blocks:**
 
