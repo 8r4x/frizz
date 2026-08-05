@@ -15,7 +15,6 @@
     "./dev-child": "./src/dev-child.ts",
     "./boot-progress": "./src/boot-progress.ts",
     "./frizz-paths": "./src/frizz-paths.ts",
-    "./migrate-fray": "./src/migrate-fray.ts",
     "./logging": "./src/logging.ts"
   },
   "scripts": {

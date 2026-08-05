@@ -31,7 +31,6 @@ import {
 } from "@frizz/server/local-origin";
 import { readBootProgress } from "@frizz/server/boot-progress";
 import { frizzPaths, projectStateDir } from "@frizz/server/frizz-paths";
-import { migrateFrayGlobalRoots, migrateFrayProjectDir, migrateFrayProjectId } from "@frizz/server/migrate-fray";
 import { discoverProjectRoot, ensureProjectIdFile, isNotAGitWorktree } from "@frizz/server/project-root";
 import { defaultLogRoot, latestLogPath } from "@frizz/server/logging";
 import { DEFAULT_PORT } from "@frizz/shared";
@@ -396,14 +395,7 @@ An immutable artifact is the default. --dev is the only explicit unsafe source w
 export function resolveWorkspace(
   cwd = process.cwd(),
   home = homedir(),
-  env: NodeJS.ProcessEnv = process.env,
-  // Adopting a fray-era install belongs to OPENING one, and nothing else (migrate-fray.ts). Every
-  // command resolves a workspace — `--stop` and `--status` included — but only a launch may move the
-  // state tree, because a rename is exactly what a still-running fray-era server must not have done
-  // underneath it: it holds descriptors into `~/.fray`, and any path it resolves afterwards would
-  // recreate the old root beside the new one. Off by default so a new caller cannot migrate by
-  // accident; the launch path opts in.
-  { migrate = false }: { migrate?: boolean } = {}
+  env: NodeJS.ProcessEnv = process.env
 ): Workspace {
   // A repository still gets its root from Git — that is what makes `frizz` in a sub-directory open the
   // repo's board. Outside one (including a non-colocated jj checkout, which has no `.git` at all, and
@@ -423,14 +415,9 @@ export function resolveWorkspace(
     if (!isNotAGitWorktree(error)) throw new Error("unable to resolve Git repository root");
     gitRoot = undefined;
   }
-  if (migrate) migrateFrayGlobalRoots({ env, home });
   const root0 = realpathSync(gitRoot ?? discoverProjectRoot(cwd, home));
-  // Then the id, BEFORE resolveGitProjectIdentity: that call mints a fresh UUID when it finds no
-  // `frizz.id`, and a minted id is an empty board sitting beside every thread this repo ever had.
-  if (migrate) migrateFrayProjectId(root0, { home });
   const identity = gitRoot ? resolveGitProjectIdentity(root0, home) : undefined;
   const root = identity?.root ?? root0;
-  if (migrate) migrateFrayProjectDir(root);
   // The id lives at `.frizz/.id`; a repository's existing `git config frizz.id` seeds it, so an
   // established board keeps its exact id and nothing is ever removed from the old store.
   const id = ensureProjectIdFile(root, home, identity?.id);

@@ -1786,16 +1786,6 @@ export class CodexAppServerBridge {
         throw new InteractionStoreError("schema-version", `Codex app-server bridge could not add ${table}.${column}`)
       }
     }
-    // The rebrand renamed this column. Same one-time-migration rule as the ALTERs below: a database
-    // written before the rename still calls it `fray_session_id`, CREATE TABLE IF NOT EXISTS won't
-    // touch it, and the required-column assertion below would reject the whole bridge. Delete this
-    // alongside migrate-fray.ts.
-    if (columns("codex_app_server_session").has("fray_session_id")) {
-      try { this.db.exec("ALTER TABLE codex_app_server_session RENAME COLUMN fray_session_id TO frizz_session_id") } catch {
-        this.db.close()
-        throw new InteractionStoreError("schema-version", "Codex app-server bridge could not rename fray_session_id")
-      }
-    }
     addColumn("codex_app_server_meta", "daemon_generation", "TEXT NOT NULL DEFAULT ''")
     addColumn("codex_app_server_session", "auto_resumed_turn_id", "TEXT")
     addColumn("codex_app_server_session", "auto_resume_count", "INTEGER NOT NULL DEFAULT 0")

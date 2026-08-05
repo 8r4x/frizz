@@ -1008,32 +1008,3 @@ test("setProfile stamps the operator set-time; the observed write-back never tou
   assert.equal(s.getSession("pf")?.profile_set_at, setAt, "observed write-back leaves profile_set_at untouched")
 })
 
-// The rebrand changed threadIdentityName's prefix from `fray-` to `frizz-`, and validateSessionIdentity
-// re-derives that name from the row's own slug on EVERY write. Without the one-time UPDATE in
-// createStorage, the first write to any thread that existed before the rename throws "invalid session
-// thread identity" — 387 of 387 rows on the author's own board. Delete this with migrate-fray.ts.
-test("pre-rebrand thread identity names are migrated forward, and a genuinely mis-keyed row still fails", () => {
-  const dir = mkdtempSync(join(tmpdir(), "frizz-storage-rebrand-"))
-  const path = join(dir, "ui.db")
-  const seed = createStorage(path)
-  seed.upsertSession(row({ slug: "old-thread" }))
-  seed.upsertSession(row({ slug: "tampered" }))
-  seed.close()
-
-  // Exactly what a pre-rebrand ui.db holds: the identity derived under the old brand.
-  const raw = new Database(path)
-  raw.exec("UPDATE session SET tmux_name = 'fray-' || slug WHERE slug = 'old-thread'")
-  raw.exec("UPDATE session SET tmux_name = 'fray-someone-elses-thread' WHERE slug = 'tampered'")
-  raw.close()
-
-  const migrated = createStorage(path)
-  assert.equal(migrated.getSession("old-thread")?.tmux_name, "frizz-old-thread")
-  // The whole point: the row is writable again rather than throwing on its next update.
-  migrated.upsertSession(row({ slug: "old-thread", title: "still here" }))
-  assert.equal(migrated.getSession("old-thread")?.title, "still here")
-
-  // A name that never re-derived from its own slug is not laundered into a well-formed one — the
-  // integrity check exists to catch exactly that, and it must still catch it after the rebrand.
-  assert.equal(migrated.getSession("tampered")?.tmux_name, "fray-someone-elses-thread")
-  migrated.close()
-})

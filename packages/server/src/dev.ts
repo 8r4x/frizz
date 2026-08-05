@@ -21,11 +21,7 @@ if (process.env.FRIZZ_DEV_CHILD === "1") {
 } else {
   const inheritedTarget = projectLaunchTargetFromEnvironment(process.env)
   const inheritedToken = projectLaunchOwnerTokenFromEnvironment(process.env)
-  // No inherited target means a human ran this directly (`pnpm dev`) rather than the launcher spawning
-  // it — so this IS the open, and the one place the server-side entry adopts a fray-era install.
-  const project = inheritedTarget && inheritedToken
-    ? projectFromLaunchTarget(inheritedTarget)
-    : resolveProject(undefined, undefined, undefined, { migrate: true })
+  const project = inheritedTarget && inheritedToken ? projectFromLaunchTarget(inheritedTarget) : resolveProject()
   const target = projectLaunchTarget(project)
   const launchOwner = inheritedToken
     ? adoptProjectLaunchOwner(target, inheritedToken, "supervisor")

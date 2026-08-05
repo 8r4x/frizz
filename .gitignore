@@ -1,9 +1,5 @@
 /scratch/
 .frizz/
-# Transitional: a checkout that has not been opened by Frizz yet still has its pre-rebrand `.fray/`
-# (hundreds of thread scratchpads). Un-ignoring it would let the next `git add -A` commit the lot.
-# Delete this line with migrate-fray.ts.
-.fray/
 
 # per-user Claude Code overrides
 .claude/settings.local.json

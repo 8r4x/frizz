@@ -10,7 +10,6 @@ import {
 import type { ProjectLaunchTarget } from "./project-launch.ts"
 import { discoverProjectRoot, ensureProjectIdFile } from "./project-root.ts"
 import { projectStateDir } from "./frizz-paths.ts"
-import { migrateFrayGlobalRoots, migrateFrayProjectDir, migrateFrayProjectId } from "./migrate-fray.ts"
 
 // Workspace resolution + on-disk locations. Everything here is derived once at boot and
 // threaded through the AppContext — no module reads cwd on its own.
@@ -176,24 +175,9 @@ export function resolveProject(
   cwd = process.cwd(),
   home = homedir(),
   env: NodeJS.ProcessEnv = process.env,
-  // Adopting a fray-era install is something OPENING one does, and nothing else (migrate-fray.ts).
-  //
-  // Off by default because injecting `home` does NOT sandbox this: the project directory comes from
-  // `cwd`, so a caller that redirects HOME to a temp dir but still runs inside the checkout — every
-  // integration test does — would leave the global roots alone and then migrate the developer's REAL
-  // repository. That is not hypothetical; it is how this repo's own `.fray/` got moved mid-rebrand.
-  { migrate = false }: { migrate?: boolean } = {},
 ): Project {
-  // The global roots go first and MUST precede projectStateDir below, which resolves — and then
-  // memoizes — them.
-  if (migrate) migrateFrayGlobalRoots({ env, home })
-  const projectDir = resolveProjectDir(cwd)
-  // Then the id, BEFORE resolveProjectIdentity: that call mints a fresh UUID when it finds no
-  // `frizz.id`, and a minted id is an empty board sitting beside every thread this repo ever had.
-  if (migrate) migrateFrayProjectId(projectDir, { home })
-  const identity = resolveProjectIdentity(projectDir, home)
+  const identity = resolveProjectIdentity(resolveProjectDir(cwd), home)
   const dir = identity.root
-  if (migrate) migrateFrayProjectDir(dir)
   const id = identity.id
   const stateDir = projectStateDir(id, home)
   mkdirSync(stateDir, { recursive: true })
