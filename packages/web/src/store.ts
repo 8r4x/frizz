@@ -75,9 +75,11 @@ export const store = proxy({
   // as dispatch.planPath so the worker is oriented to the plan. Null for an ordinary new thread. Cleared
   // when the modal closes.
   newThreadPlanPath: null as string | null,
-  // Left-sidebar section collapse (true = collapsed). Needs-you + Working lead expanded; Awaiting,
-  // Plans, Archive, Legacy start collapsed. Session-scoped UI state (deliberately not persisted).
-  sidebarCollapsed: { active: false, inactive: true, plans: true } as Record<"active" | "inactive" | "plans", boolean>,
+  // Left-sidebar section collapse (true = collapsed). Only Active leads expanded — it is the live
+  // work and has no header to collapse from. Held, Done and Plans all start collapsed: each is a band
+  // whose header count already says how much is parked there, so the rail opens on what is running.
+  // Session-scoped UI state (deliberately not persisted).
+  sidebarCollapsed: { active: false, held: true, inactive: true, plans: true } as Record<"active" | "held" | "inactive" | "plans", boolean>,
   // The SIDE-DRAWER STACK — arbitrary depth. `thread` layers are full thread views (the Open-thread
   // sheet); `doc` layers are the frizz-document markdown; `subagent` and `shell` layers are read-only
   // operation drill-ins that overlay a thread. A drill-in within one thread's family

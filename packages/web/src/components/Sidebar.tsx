@@ -35,8 +35,8 @@ import type { ReactElement, ReactNode } from "react"
 // frizz doc.
 //
 // Sections: THREE bands top→bottom — Active, then a labeled DIMMED Held band (every declared
-// clock/hourglass/timed wait), then the collapsible
-// Done — each split by a bare <hr>. A thread merely awaiting its OWN sub-agents is INTERNAL work
+// clock/hourglass/timed wait), then Done — each split by a bare <hr>, and Held and Done both
+// collapsible. A thread merely awaiting its OWN sub-agents is INTERNAL work
 // and stays in Active undimmed; only external waiters drop into the dimmed band (see groups.ts
 // isHeld). Needs-you renders as the row INDICATOR + the queue; awaiting as the hint gloss.
 // Plans from board.plans; Done = explicitly completed. Legacy .frizz rows and foreign terminal
@@ -207,19 +207,26 @@ export function Sidebar() {
             <div className="py-1 pl-5 pr-1.5 text-[11.5px] text-muted/50">No active threads</div>
           )}
           {/* HELD — every deliberate clock/hourglass/timed wait, visibly de-emphasized and labeled so
-              it cannot read as active work. Always expanded; held work must remain glanceable. */}
+              it cannot read as active work. COLLAPSIBLE, and collapsed by default (maintainer
+              2026-08-04): nothing here is waiting on the rail's reader right now, so it opens as a
+              labeled count and expands on demand — the count is the glance. */}
           {heldThreads.length > 0 && (
             <section aria-label="Held">
               <hr className="my-3 border-border/50" />
-              {/* Non-collapsible: held work must stay glanceable. Same header component as Done/Plans
-                  so it matches them exactly (color, label position, count beside the label). */}
-              <SectionHeader label="Held" count={heldThreads.length} />
-              {heldThreads.map((t) => (
-                <div key={t.id}>
-                  <ThreadRow t={t} active={activeId === t.id} onQueueNavigate={navigateToQueueCard} />
-                  <SubAgentRows t={t} />
-                </div>
-              ))}
+              {/* Same header component as Done/Plans so the three bands can never visually drift. */}
+              <SectionHeader
+                label="Held"
+                count={heldThreads.length}
+                collapsed={collapsed.held}
+                onToggle={() => (store.sidebarCollapsed.held = !store.sidebarCollapsed.held)}
+              />
+              {!collapsed.held &&
+                heldThreads.map((t) => (
+                  <div key={t.id}>
+                    <ThreadRow t={t} active={activeId === t.id} onQueueNavigate={navigateToQueueCard} />
+                    <SubAgentRows t={t} />
+                  </div>
+                ))}
             </section>
           )}
           {/* DONE — collapsible, OMITTED entirely (with its rule) when empty. */}
@@ -261,9 +268,9 @@ export function Sidebar() {
 }
 
 // A section header: an optional collapse caret, the label, and the count. ONE source of truth for
-// every band header (Held, Done, Plans) so they can never visually drift apart again. Omit onToggle
-// for a NON-collapsible section (Held): it renders as a static div with a caret-width spacer so its
-// label still aligns with the collapsible sections below it.
+// every band header (Held, Done, Plans) so they can never visually drift apart again. Every band in
+// the real rail is collapsible; omitting onToggle renders a static div with a caret-width spacer, so
+// a header without a toggle (the QA fixtures' Active/Held bands) still aligns with the rest.
 export function SectionHeader({ label, count, collapsed, onToggle }: { label: string; count: number; collapsed?: boolean; onToggle?: () => void }) {
   const inner = (
     <>
