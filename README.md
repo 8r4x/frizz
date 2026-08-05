@@ -31,7 +31,7 @@ Then run it inside any Git repo.
 $ cd ~/taskly
 $ npx frizz
 
-  FRIZZ v0.1.6  ready in 4.0s
+  FRIZZ v0.1.0  ready in 4.0s
 
   ➜  Local:    http://127.0.0.1:4922/
   ➜  Project:  taskly — ~/taskly
@@ -187,7 +187,7 @@ The address you pass must be the exact origin your browser shows — scheme and 
 
 **What platforms does it run on?**
 
-macOS, Linux, and Windows. Windows support arrived in 0.1.6, once the last dependency that had no native Windows build was removed.
+macOS, Linux, and Windows. Windows support landed once the last dependency that had no native Windows build was removed.
 
 **How is this different from the other orchestrator apps?**
 
