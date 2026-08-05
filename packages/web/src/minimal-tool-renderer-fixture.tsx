@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ChatMessage } from "./hooks.ts"
 import { Message, VSpace, WorkingIndicator, withMessageSpacers } from "./components/ChatView.tsx"
-import { coalesceToolActivityMessages, historicalToolActivityMessages, liveToolActivityTail, toolActivityLabel } from "./lib/toolActivity.ts"
+import { coalesceToolActivityMessages, historicalToolActivityMessages, liveToolActivityRun, liveToolActivityTail, toolActivityLabel } from "./lib/toolActivity.ts"
 import "./styles.css"
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -56,6 +56,7 @@ const FIXTURE_PROJECT_DIR = "/Users/fixture/Documents/projects/frizz"
 function Transcript({ messages, running = false }: { messages: ChatMessage[]; running?: boolean }) {
   const coalesced = useMemo(() => coalesceToolActivityMessages(messages), [messages])
   const liveTool = running ? liveToolActivityTail(coalesced.map((entry) => entry.message)) : undefined
+  const liveRun = running ? liveToolActivityRun(coalesced.map((entry) => entry.message)) : undefined
   const activityLabel = liveTool ? toolActivityLabel(liveTool, FIXTURE_PROJECT_DIR) : undefined
   const display = useMemo(
     () => running ? historicalToolActivityMessages(coalesced) : coalesced,
@@ -67,7 +68,7 @@ function Transcript({ messages, running = false }: { messages: ChatMessage[]; ru
       {running && (
         <>
           {messages.length > 0 && <VSpace />}
-          <WorkingIndicator activityLabel={activityLabel} />
+          <WorkingIndicator activityLabel={activityLabel} run={liveRun} />
         </>
       )}
     </div>

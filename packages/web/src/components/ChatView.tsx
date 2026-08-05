@@ -75,7 +75,7 @@ import { PROVIDER_LABEL } from "../lib/signIn.ts"
 import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
 import { prependEarlierPage } from "../lib/transcriptPagination.ts"
 import { buildVirtualTranscriptMessageRows, earlierLoadGate, nextTailFollow, TAIL_FOLLOW_PX, USER_TAIL_EXTRA, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
-import { coalesceToolActivityMessages, editedFileCount, historicalToolActivityMessages, isToolActivityException, liveToolActivityTail, settledToolActivityLabel, toolActivityLabel } from "../lib/toolActivity.ts"
+import { coalesceToolActivityMessages, editedFileCount, historicalToolActivityMessages, isToolActivityException, liveToolActivityRun, liveToolActivityTail, settledToolActivityLabel, toolActivityLabel } from "../lib/toolActivity.ts"
 import { CodexDirectiveCard, MermaidDiagram } from "./CodexRichOutput.tsx"
 
 // Answer types moved to lib/questionBlocks.ts (shared by the queue card, the thread view, and the
@@ -239,6 +239,11 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
   // Original indices ride beside the display message so sticky asks and paired answers continue to
   // address server truth, never the compacted array.
   const coalescedActivityMessages = useMemo(() => coalesceToolActivityMessages(presentationMessages), [presentationMessages])
+  // The run the shimmer stands for, and its newest call (the one it NAMES). The run is what expanding
+  // the shimmer opens — the same calls history is withholding.
+  const liveToolRun = running
+    ? liveToolActivityRun(coalescedActivityMessages.map((entry) => entry.message))
+    : undefined
   const liveToolActivity = running
     ? liveToolActivityTail(coalescedActivityMessages.map((entry) => entry.message))
     : undefined
@@ -506,7 +511,7 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
             ) : thread?.runtime === "perm-prompt" ? (
               <PermPromptBanner onTerminal={copyTerminalCommand} />
             ) : showWorking ? (
-              <WorkingIndicator since={thread?.lastUserAt} activityLabel={liveActivityLabel} />
+              <WorkingIndicator since={thread?.lastUserAt} activityLabel={liveActivityLabel} run={liveToolRun} />
             ) : thread?.awaitingBackground ? (
               // The rest itself, stated. Last in the chain because every branch above is a HARDER
               // reading of the same slot; this one is the benign case and never outranks them. It can
@@ -659,6 +664,10 @@ function VirtualizedThreadTranscript({
 }) {
   const projectDir = useProjectDir()
   const coalescedActivityMessages = useMemo(() => coalesceToolActivityMessages(messages), [messages])
+  // See the drawer's copy above: the run backs the shimmer's expansion, its newest call names it.
+  const liveToolRun = running
+    ? liveToolActivityRun(coalescedActivityMessages.map((entry) => entry.message))
+    : undefined
   const liveToolActivity = running
     ? liveToolActivityTail(coalescedActivityMessages.map((entry) => entry.message))
     : undefined
@@ -1250,7 +1259,7 @@ function VirtualizedThreadTranscript({
                 ) : thread?.runtime === "perm-prompt" ? (
                   <PermPromptBanner onTerminal={copyTerminalCommand} />
                 ) : showWorking ? (
-                  <WorkingIndicator since={thread?.lastUserAt} activityLabel={liveActivityLabel} />
+                  <WorkingIndicator since={thread?.lastUserAt} activityLabel={liveActivityLabel} run={liveToolRun} />
                 ) : thread?.awaitingBackground ? (
                   // See the non-virtualized chain above: last branch, benign case, no Snooze here.
                   <AwaitingBackgroundCard thread={thread} />
@@ -4215,38 +4224,95 @@ function Dots() {
 // model composing its next move is what the slot is actually reporting, and it is what every gerund
 // beside it reports too (maintainer 2026-08-01: "Do you think it makes more sense to change it to
 // 'thinking'?").
-export function WorkingIndicator({ since, activityLabel }: { since?: string; activityLabel?: string }) {
+export function WorkingIndicator({ since, activityLabel, run }: { since?: string; activityLabel?: string; run?: { tools: readonly TranscriptToolCall[]; at?: string } }) {
   const [baseline] = useState(() => {
     const t = Date.parse(since ?? "")
     return Number.isFinite(t) && t <= Date.now() ? t : Date.now()
   })
   const [now, setNow] = useState(() => Date.now())
+  const [expanded, setExpanded] = useState(false)
+  const cardsId = useId()
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(id)
   }, [])
   const s = Math.max(0, Math.floor((now - baseline) / 1000))
   const durationLabel = s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`
+  // The run the shimmer is standing in for (lib/toolActivity.liveToolActivityRun) — the calls history is
+  // withholding until the run settles into its `Ran N tool calls` digest. Same collapse and same cards as
+  // that digest, so drilling into a run mid-flight shows exactly what it will show afterwards.
+  const collapsed = useMemo(() => collapseTools([...(run?.tools ?? [])]), [run])
+  const total = collapsed.reduce((n, t) => n + t.count, 0)
+  const expandable = total > 0
+  // `leading-5` is the meta label's line box (TRANSCRIPT_META_LABEL_CLASS), not decoration: this row
+  // is the LIVE member of that column, and a shorter line box put its ink 1px nearer the card above
+  // than a settled "Thought for Ns" in the same slot. Sharing the box is what makes the alternation
+  // between them read as one rhythm — the tone stays the shimmer's own.
+  const rowClass = `group flex min-w-0 items-baseline gap-2 rounded text-left outline-none focus-visible:ring-1 focus-visible:ring-fg/60 ${TRANSCRIPT_META_LABEL_CLASS}`
+  // ONE LINE, always — the row is a live status reading, and a status reading that changes height
+  // as a path gets longer makes the whole tail jump. The label TRUNCATES (maintainer 2026-07-31:
+  // "prevent the actual gerund from ever breaking onto two lines. It should get truncated
+  // instead"); it used to wrap instead, on the argument that breaking a path mid-segment beat
+  // clipping it. That trade no longer has to be made: the label is a project-relative path
+  // now (see relativeToolPaths), so at any realistic width there is nothing left to clip.
+  // The duration keeps `shrink-0 whitespace-nowrap` — it is one value and must never break at its
+  // own space, which is exactly how `828m 49s` used to put the minutes outside the panel.
+  const row = (
+    <>
+      {/* The chevron is the LABEL's control, so it rides in the label's own group at the digest's `gap-1`
+          — on the row's `gap-2` it sat equidistant between the gerund and the clock and read as a third,
+          unrelated mark rather than the disclosure's handle. */}
+      <span className="flex min-w-0 items-baseline gap-1">
+        <span className="min-w-0 truncate shimmer-text">{activityLabel ?? "Thinking…"}</span>
+        {/* Only when there is a run to open, and placed exactly where the settled digest keeps its own —
+            the two rows are one disclosure at two moments of its life, and they stand in the same column,
+            so the live chevron takes that row's maintainer-tuned offset verbatim (1771fbe, then be2fd38
+            "lower digest chevron one pixel"). Measured: both land 2.90px below the 14px label's cap-band
+            centre, i.e. identical. `self-center` rather than the row's baseline — an SVG's baseline is its
+            BOTTOM margin edge, which would hang the whole glyph above the text's ink; both rows are one
+            20px line box, so centring reproduces the peer exactly. */}
+        {expandable && (
+          <ChevronRight
+            data-working-chevron
+            aria-hidden="true"
+            size={13}
+            className={`relative top-[calc(0.032em+1px)] size-[1em] shrink-0 self-center text-muted/70 transition-transform group-hover:text-fg ${expanded ? "rotate-90" : ""}`}
+          />
+        )}
+      </span>
+      <span className="shrink-0 whitespace-nowrap tabular-nums text-[12px] text-muted/60">{durationLabel}</span>
+    </>
+  )
   return (
     <div
       data-working-indicator
       data-working-activity={activityLabel ? "tool" : "generic"}
-      // `leading-5` is the meta label's line box (TRANSCRIPT_META_LABEL_CLASS), not decoration: this row
-      // is the LIVE member of that column, and a shorter line box put its ink 1px nearer the card above
-      // than a settled "Thought for Ns" in the same slot. Sharing the box is what makes the alternation
-      // between them read as one rhythm — the tone stays the shimmer's own.
-      className={`flex items-baseline gap-2 ${TRANSCRIPT_META_LABEL_CLASS}`}
+      className="flex min-w-0 flex-col"
     >
-      {/* ONE LINE, always — the row is a live status reading, and a status reading that changes height
-          as a path gets longer makes the whole tail jump. The label TRUNCATES (maintainer 2026-07-31:
-          "prevent the actual gerund from ever breaking onto two lines. It should get truncated
-          instead"); it used to wrap instead, on the argument that breaking a path mid-segment beat
-          clipping it. That trade no longer has to be made: the label is a project-relative path
-          now (see relativeToolPaths), so at any realistic width there is nothing left to clip.
-          The duration keeps `shrink-0 whitespace-nowrap` — it is one value and must never break at its
-          own space, which is exactly how `828m 49s` used to put the minutes outside the panel. */}
-      <span className="min-w-0 truncate shimmer-text">{activityLabel ?? "Thinking…"}</span>
-      <span className="shrink-0 whitespace-nowrap tabular-nums text-[12px] text-muted/60">{durationLabel}</span>
+      {expandable
+        ? (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              onMouseDown={(e) => e.preventDefault()}
+              aria-controls={cardsId}
+              aria-expanded={expanded}
+              aria-label={`${expanded ? "Collapse" : "Expand"} ${total} tool ${total === 1 ? "call" : "calls"}${activityLabel ? `: ${activityLabel}` : ""}`}
+              className={`${rowClass} w-full`}
+            >
+              {row}
+            </button>
+          )
+        : <div className={rowClass}>{row}</div>}
+      {expandable && expanded && (
+        <div id={cardsId} className="mt-1.5 flex flex-col">
+          {/* `at` is the emitting batch's timestamp — the clock a pending card times itself against, and
+              every card in a LIVE run is pending, so it matters more here than in the settled digest. */}
+          {withSpacers(collapsed.map((tool, i) => <ToolCardRouter key={i} t={tool} startedAt={run?.at} />), 6)}
+        </div>
+      )}
+      {/* `aria-controls` must resolve even while collapsed — see MinimalToolActivity. */}
+      {expandable && !expanded && <div id={cardsId} hidden />}
     </div>
   )
 }

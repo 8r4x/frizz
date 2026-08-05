@@ -7,6 +7,7 @@ import {
   currentToolActivity,
   historicalToolActivityMessages,
   isToolActivityException,
+  liveToolActivityRun,
   liveToolActivityTail,
   editedFileCount,
   settledToolActivityLabel,
@@ -234,6 +235,45 @@ test("the runtime gerund ends with its call; only the digest stays hidden across
     completed[0].message.tools.map((call) => call.name),
     ["Read", "Bash"],
     "the idle caller can reveal the unmodified coalesced digest",
+  )
+})
+
+test("expanding the shimmer opens exactly the run history is withholding, gap included", () => {
+  const first = tool("Read", { detail: "src/a.ts", status: "completed" })
+  const second = tool("Grep", { detail: "renderActivity", status: "pending" })
+  const settled = toolMessage("batch-a", [first])
+  const pending = toolMessage("batch-b", [second], "2026-07-30T12:00:02.000Z")
+
+  const compact = coalesceToolActivityMessages([settled, pending])
+  assert.deepEqual(
+    liveToolActivityRun(compact.map((entry) => entry.message)),
+    { tools: [first, second], at: "2026-07-30T12:00:02.000Z" },
+    "the whole coalesced run backs the disclosure, not just the call the shimmer names — and the newest batch's clock rides with it, so an expanded pending card times itself",
+  )
+
+  // The INTER-CALL GAP: the label reverts to `Thinking…`, but history is still withholding the run, so
+  // an expanded panel must keep showing it rather than emptying and refilling on the next call.
+  second.status = "completed"
+  const idle = coalesceToolActivityMessages([settled, pending])
+  assert.equal(liveToolActivityTail(idle.map((entry) => entry.message)), undefined)
+  assert.deepEqual(
+    liveToolActivityRun(idle.map((entry) => entry.message))?.tools,
+    [first, second],
+    "a settled-but-still-hidden run stays open across the gap",
+  )
+
+  // Prose ends the run, and with it the shimmer's claim on those calls — they return as history's own
+  // digest, so the live disclosure must not also hold them.
+  const prose: ChatMessage = {
+    sourceId: "prose",
+    role: "assistant",
+    text: "Found it.",
+    tools: [],
+    parts: [{ kind: "text", text: "Found it." }],
+  }
+  assert.equal(
+    liveToolActivityRun(coalesceToolActivityMessages([settled, pending, prose]).map((entry) => entry.message)),
+    undefined,
   )
 })
 

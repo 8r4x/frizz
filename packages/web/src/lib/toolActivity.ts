@@ -216,12 +216,29 @@ function settledToolCall(tool: Pick<TranscriptToolCall, "status">): boolean {
  * half of what 3386b01 fixed and stays fixed.
  */
 export function liveToolActivityTail(messages: readonly ChatMessage[]): TranscriptToolCall | undefined {
+  const run = liveToolActivityRun(messages)
+  return run?.tools.some((tool) => !settledToolCall(tool)) ? run.tools.at(-1) : undefined
+}
+
+/**
+ * The WHOLE run the shimmer stands for — every call historicalToolActivityMessages is withholding —
+ * with the emitting message's `at`, so an expanded pending card can time itself like any other.
+ *
+ * The shimmer names one call; expanding it has to show all of them, so this returns the run rather than
+ * its newest member. Deliberately NOT status-gated, unlike liveToolActivityTail: history withholds the
+ * tail for as long as the turn runs, settled or not, and an expanded panel that emptied itself in every
+ * inter-call gap and refilled on the next call would be the same row-jumping flicker withoutLiveToolTail
+ * exists to prevent. So the label falls to `Thinking…` in that gap while the calls stay put underneath.
+ */
+export function liveToolActivityRun(
+  messages: readonly ChatMessage[],
+): { tools: TranscriptToolCall[]; at?: string } | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]
     // Optimistic queued user bubbles are pinned separately and have not interrupted the active turn.
     if (message.queued) continue
-    const tail = messageToolTail(message)
-    return tail?.some((tool) => !settledToolCall(tool)) ? tail.at(-1) : undefined
+    const tools = messageToolTail(message)
+    return tools ? { tools, at: message.at } : undefined
   }
   return undefined
 }

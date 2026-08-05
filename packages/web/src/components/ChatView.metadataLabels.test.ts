@@ -52,6 +52,31 @@ test("the current gerund replaces Thinking in the exact bottom shimmer span", ()
   assert.match(block, /<span className="shrink-0 whitespace-nowrap [^"]*">\{durationLabel\}<\/span>/, "the elapsed reading never breaks mid-value or shrinks")
 })
 
+test("the live shimmer is the same disclosure as the settled digest, one moment earlier", () => {
+  const source = readFileSync(new URL("./ChatView.tsx", import.meta.url), "utf8")
+  const live = source.match(/export function WorkingIndicator[\s\S]*?\n}/)?.[0]
+  const settled = source.match(/function MinimalToolActivity[\s\S]*?\n}/)?.[0]
+  assert.ok(live && settled, "both disclosures must exist")
+
+  // Clicking the shimmer opens the run it is standing in for — the calls history withholds while the
+  // turn runs, rendered through the SAME router the settled digest uses, so the reader sees mid-flight
+  // exactly what the digest will show afterwards.
+  assert.match(live, /aria-expanded=\{expanded\}/, "the live row is a real disclosure control")
+  assert.match(live, /ToolCardRouter/, "and opens onto the run's individual tool cards")
+  assert.match(live, /data-working-chevron/, "with a chevron marking it as openable")
+  // Only when there IS a run: at the opening of a turn nothing has been called yet, and a chevron over
+  // an empty panel is a control that does nothing.
+  assert.match(live, /\{expandable && \(/, "the chevron appears only when a run exists")
+
+  // ONE height for both chevrons. They alternate in a single quiet column — a settled digest directly
+  // above the live row — so a drifting offset reads as two misaligned marks. The value is the
+  // maintainer's own (1771fbe, then be2fd38 "lower digest chevron one pixel"); measured 2026-08-05,
+  // both land 2.90px below the 14px label's cap-band centre.
+  const offsetOf = (block: string) => block.match(/top-\[calc\(0\.032em\+1px\)\]/)?.[0]
+  assert.ok(offsetOf(settled), "the settled chevron keeps its tuned offset")
+  assert.equal(offsetOf(live), offsetOf(settled), "the live chevron must sit at the settled one's height")
+})
+
 test("codex reasoning toggle is a peer of quiet metadata labels", () => {
   const source = readFileSync(new URL("./ChatView.tsx", import.meta.url), "utf8")
   const block = source.match(/function ReasoningBlock[\s\S]*?\n}/)?.[0]
