@@ -33,7 +33,7 @@ Then run it in any directory — a repo, a jj checkout, or a folder of scripts. 
 $ cd path/to/project
 $ npx frizz
 
-  FRIZZ v0.1.0  ready in 4.0s
+  FRIZZ v0.2.0  ready in 4.0s
 
   ➜  Local:    http://127.0.0.1:4922/
   ➜  Project:  project — path/to/project
