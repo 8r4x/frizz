@@ -68,6 +68,11 @@ const MAX_PERMISSION_REQUESTS = 128
 const MAX_ELICITATION_CALLBACKS = 128
 const MAX_SESSION_TITLE_DESCRIPTION_BYTES = 64 * 1024
 const MAX_SESSION_TITLE_BYTES = 2 * 1024
+// How many completed main-thread turns must pass under an unechoed input before its outstanding slot
+// is presumed dead and reclaimed. ONE is the honest floor — an input sent mid-turn is consumed at that
+// turn's end, so its echo lands after exactly one `result` — and TWO leaves a whole turn of slack for
+// an echo frizz simply failed to match, which is a cheaper mistake than reclaiming a live slot.
+const UNECHOABLE_AFTER_RESULTS = 2
 const NUB_NODE_SHIM_PATH_SEGMENT = /(?:^|[\\/])nub-node-shim-[^\\/]+$/
 
 export type ClaudeSessionSelection =
@@ -322,8 +327,12 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
   private readonly input: ClaudeInputQueue
   private readonly diagnostic?: (event: ClaudeDiagnostic) => void
   private readonly lifecycleAbort: AbortController
-  private readonly outstandingInputs = new Set<string>()
-  private readonly outstandingInputOrder: string[] = []
+  // id → the main-thread turn count at the moment it was sent. A Map rather than a Set plus a
+  // parallel order array because insertion order IS send order, which is all the oldest-first
+  // fallback release ever wanted, and the recorded turn count is what makes the bound reclaimable
+  // (see pruneUnechoableInputs).
+  private readonly outstandingInputs = new Map<string, number>()
+  private mainThreadResults = 0
   private providerProgressCovered = false
   private closePromise: Promise<void> | undefined
 
@@ -361,11 +370,19 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
     const parsed = validateInputMessage(message)
     if (!UUID_PATTERN.test(parsed.id)) throw new ClaudeAgentSdkProtocolError("input.id must be a UUID")
     if (this.outstandingInputs.has(parsed.id)) throw new ClaudeAgentSdkProtocolError("input UUID is already outstanding")
+    // Prune HERE, not on an incoming event, and that placement is the whole fix. Every release path
+    // this class had ran out of `observeProviderProgress`, so a session whose set had filled could
+    // only drain by receiving an event — and it could only receive an event by running a turn, which
+    // it could only do by accepting an input. Measured on the maintainer's own board 2026-08-05
+    // (thread `are-taking-over-an-in-flight-epic`): the set filled at 19:25:05Z, the agent finished
+    // its last turn at 19:56:48Z, and every input after that — 21 heartbeats and the operator's own
+    // messages alike — was refused, silently, for the rest of the daemon's life. Draining at send
+    // time is the only point in the cycle that deadlock leaves reachable.
+    if (this.outstandingInputs.size >= CLAUDE_AGENT_SDK_MAX_QUEUED_INPUTS) this.pruneUnechoableInputs()
     if (this.outstandingInputs.size >= CLAUDE_AGENT_SDK_MAX_QUEUED_INPUTS) {
       throw new ClaudeAgentSdkProtocolError("Claude outstanding input limit exceeded")
     }
-    this.outstandingInputs.add(parsed.id)
-    this.outstandingInputOrder.push(parsed.id)
+    this.outstandingInputs.set(parsed.id, this.mainThreadResults)
     try {
       this.input.push({
         type: "user",
@@ -377,8 +394,6 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
       })
     } catch (error) {
       this.outstandingInputs.delete(parsed.id)
-      const orderIndex = this.outstandingInputOrder.indexOf(parsed.id)
-      if (orderIndex >= 0) this.outstandingInputOrder.splice(orderIndex, 1)
       throw error
     }
   }
@@ -488,11 +503,7 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
     // A cancelled input will never be echoed back, so observeProviderProgress can never release its
     // slot — without this it would hold one of the 64 outstanding-input slots for the life of the
     // session, and a thread the operator unqueues from often would eventually refuse new sends.
-    if (answer) {
-      this.outstandingInputs.delete(messageUuid)
-      const orderIndex = this.outstandingInputOrder.indexOf(messageUuid)
-      if (orderIndex >= 0) this.outstandingInputOrder.splice(orderIndex, 1)
-    }
+    if (answer) this.outstandingInputs.delete(messageUuid)
     return answer
   }
 
@@ -674,8 +685,6 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
       event.messageId &&
       this.outstandingInputs.delete(event.messageId)
     ) {
-      const orderIndex = this.outstandingInputOrder.indexOf(event.messageId)
-      if (orderIndex >= 0) this.outstandingInputOrder.splice(orderIndex, 1)
       this.providerProgressCovered = true
       return
     }
@@ -685,21 +694,57 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
     const mainThreadProgress = (event.kind === "assistant" && event.parentToolUseId === undefined) || event.kind === "result"
     if (mainThreadProgress) {
       if (!this.providerProgressCovered && this.releaseOldestOutstandingInput()) this.providerProgressCovered = true
-      if (event.kind === "result") this.providerProgressCovered = false
+      // A `result` carries no parentToolUseId (see ClaudeResultEvent) — it is the END OF A MAIN-THREAD
+      // TURN and nothing else, which is what makes it the clock pruneUnechoableInputs counts in.
+      if (event.kind === "result") {
+        this.providerProgressCovered = false
+        this.mainThreadResults += 1
+      }
     }
   }
 
   private releaseOldestOutstandingInput(): boolean {
-    while (this.outstandingInputOrder.length > 0) {
-      const id = this.outstandingInputOrder.shift()!
-      if (this.outstandingInputs.delete(id)) return true
+    const oldest = this.outstandingInputs.keys().next()
+    if (oldest.done === true) return false
+    this.outstandingInputs.delete(oldest.value)
+    return true
+  }
+
+  /**
+   * Reclaim the slots of inputs the provider can no longer echo.
+   *
+   * The CLI consumes a queued input at a TURN BOUNDARY: send it to an idle session and the echo comes
+   * back on the turn that starts immediately; send it mid-turn and it is consumed when that turn ends.
+   * So an input still unechoed after TWO main-thread `result` frames have passed under it was either
+   * consumed without an echo frizz could match or lost outright — either way its echo is never coming,
+   * and holding its slot for the life of the session is a pure leak. Measured on the session in the
+   * `send` comment: 349 inputs accepted in one daemon generation, 36 of them never echoed.
+   *
+   * Deliberately NOT a "just evict the oldest to make room" eviction, which would also throw away the
+   * genuinely-queued. A flood of 64 sends inside a single turn prunes nothing and still rejects, which
+   * is the backpressure this bound exists for: `ClaudeInputQueue` cannot supply it, because the SDK
+   * drains that queue eagerly and its buffer therefore sits near empty however hard the host sends.
+   */
+  private pruneUnechoableInputs(): void {
+    let reclaimed = 0
+    for (const [id, resultsAtSend] of this.outstandingInputs) {
+      if (this.mainThreadResults - resultsAtSend < UNECHOABLE_AFTER_RESULTS) continue
+      this.outstandingInputs.delete(id)
+      reclaimed += 1
     }
-    return false
+    if (reclaimed === 0) return
+    // Worth a line even though it is recovery rather than failure: an unechoed input is a message the
+    // agent may never have read, and the count is the only trace that it happened.
+    this.diagnostic?.({
+      kind: "stderr",
+      message: `reclaimed ${reclaimed} outstanding input slot(s) the provider never echoed`,
+      truncated: false,
+    })
   }
 
   private clearOutstandingInputs(): void {
     this.outstandingInputs.clear()
-    this.outstandingInputOrder.splice(0)
+    this.mainThreadResults = 0
     this.providerProgressCovered = false
   }
 

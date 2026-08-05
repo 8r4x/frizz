@@ -505,6 +505,49 @@ test("provider-consumed input cannot bypass UUID backpressure or duplicate prote
   }
 })
 
+// The counterpart to the test above, and the reason it has to stay narrow. That one pins the bound
+// against a flood inside ONE turn, which is real backpressure; this one pins that the same bound can
+// never become a LIFETIME budget, which is what it silently was.
+//
+// A provider that accepts an input without ever echoing it leaks the slot, and enough leaks wedge the
+// session for good: no input → no turn → no `assistant`/`result` → no release → no input. Measured on
+// the maintainer's own board 2026-08-05 on thread `are-taking-over-an-in-flight-epic` — the set filled
+// at 19:25:05Z and every delivery after it, 21 heartbeats and the operator's own messages alike, was
+// refused for the remaining life of the daemon while frizz recorded each one as delivered.
+test("inputs the provider will never echo cannot wedge the session for good", { timeout: 20_000 }, async () => {
+  const harness = startHarness("unechoed-inputs")
+  try {
+    await harness.handle.ready()
+    // 62 leaked slots: accepted by the provider, never echoed, never releasable by any event.
+    for (let index = 0; index < 62; index += 1) {
+      await harness.handle.send({ id: inputId(index), text: "hold" })
+    }
+    // Two completed main-thread turns pass under them. An input queued before a turn boundary is
+    // consumed at that boundary, so after two of them an unechoed input's echo is never coming.
+    for (const index of [62, 63]) {
+      await harness.handle.send({ id: inputId(index), text: "turn" })
+      await collectThrough(harness.handle, "result")
+    }
+    // Each turn's assistant frame released exactly one oldest slot, so the set refills almost at once.
+    await harness.handle.send({ id: inputId(64), text: "hold" })
+    await harness.handle.send({ id: inputId(65), text: "hold" })
+    // Full again — and before the fix this was the send that never came back, for the rest of the
+    // session. The stale slots are reclaimed here instead, at SEND time, which is the only point in
+    // the cycle the deadlock leaves reachable.
+    await harness.handle.send({ id: inputId(66), text: "hold" })
+    const reclaimed = harness.diagnostics.find(
+      (event) => event.kind === "stderr" && /reclaimed \d+ outstanding input slot/.test(event.message),
+    )
+    assert.ok(reclaimed, "reclaiming a dead slot is reported, since an unechoed input may never have been read")
+    // …and it stays reachable: the recovered budget is the real one, not a single extra send.
+    for (let index = 67; index < 100; index += 1) {
+      await harness.handle.send({ id: inputId(index), text: "hold" })
+    }
+  } finally {
+    await harness.close()
+  }
+})
+
 // A SUB-AGENT STEER is one addressed input frame and nothing else — there is no per-agent control
 // request in the SDK (`stopTask` / `backgroundTasks` are the whole per-task surface). So the ONE thing
 // the adapter must get right is which value lands in `parent_tool_use_id`: null keeps the message on

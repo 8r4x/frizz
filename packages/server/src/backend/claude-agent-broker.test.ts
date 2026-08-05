@@ -11,7 +11,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { runClaudeBroker } from "./claude-agent-broker.ts"
 import { connectClaudeBroker, type ClaudeBrokerClient } from "./claude-broker-client.ts"
-import type { ClaudePermissionRequest, ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
+import { CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX, type ClaudeDiagnostic, type ClaudePermissionRequest, type ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
 
 const fakeCli = fileURLToPath(new URL("./claude-agent-sdk.fixtures/fake-claude-cli.mjs", import.meta.url))
 
@@ -20,15 +20,16 @@ function shortSocket(): string {
   return join(tmpdir(), `cbt-${createHash("sha256").update(randomUUID()).digest("hex").slice(0, 16)}.sock`)
 }
 
-interface Captured { events: ClaudeQueryEvent[]; perms: { requestId: string; request: ClaudePermissionRequest }[]; hellos: string[] }
+interface Captured { events: ClaudeQueryEvent[]; perms: { requestId: string; request: ClaudePermissionRequest }[]; hellos: string[]; diagnostics: ClaudeDiagnostic[] }
 function clientWith(socketPath: string): { client: ClaudeBrokerClient; cap: Captured; waitPerm: (ms?: number) => Promise<{ requestId: string; request: ClaudePermissionRequest }>; waitEvent: (pred: (e: ClaudeQueryEvent) => boolean, ms?: number) => Promise<ClaudeQueryEvent> } {
-  const cap: Captured = { events: [], perms: [], hellos: [] }
+  const cap: Captured = { events: [], perms: [], hellos: [], diagnostics: [] }
   const permWaiters: ((v: any) => void)[] = []
   const eventWaiters: { pred: (e: ClaudeQueryEvent) => boolean; resolve: (e: ClaudeQueryEvent) => void }[] = []
   const client = connectClaudeBroker(socketPath, {
     onHello: (sid) => cap.hellos.push(sid),
     onEvent: (e) => { cap.events.push(e); for (let i = eventWaiters.length - 1; i >= 0; i--) if (eventWaiters[i].pred(e)) { eventWaiters[i].resolve(e); eventWaiters.splice(i, 1) } },
     onPermissionRequest: (requestId, request) => { const p = { requestId, request }; cap.perms.push(p); const w = permWaiters.shift(); if (w) w(p) },
+    onDiagnostic: (diagnostic) => cap.diagnostics.push(diagnostic),
   })
   return {
     client, cap,
@@ -93,6 +94,37 @@ test("the daemon records every input frame on receipt, without the message text"
   } finally {
     await b.close()
     rmSync(logDir, { recursive: true, force: true })
+  }
+})
+
+// A refused input has to reach the ATTACHED CLIENT, not just the diagnostics file on disk. The `input`
+// frame carries no reply by design, so this relay is the only channel by which the frizz server can
+// ever learn that a message it recorded as delivered was in fact thrown away — and until 2026-08-05 the
+// server's own handler discarded every diagnostic that was not a daemon crash, so the channel ran into
+// a wall. Thread `are-taking-over-an-in-flight-epic` refused every input for over two hours and said
+// nothing anywhere an operator would look. Both ends are pinned here: the daemon emits the shared
+// prefix, and a live client receives it.
+test("a refused input is relayed to the attached client, not just written to the diagnostics file", { timeout: 15_000 }, async () => {
+  // `hold-inputs` never answers, so the first send's uuid stays outstanding and the second is refused
+  // as a duplicate — the cheapest way to make `handle.send` reject over the real socket.
+  const b = startBroker("hold-inputs")
+  try {
+    const c = clientWith(b.socketPath)
+    await new Promise((r) => setTimeout(r, 300))
+    const id = randomUUID()
+    c.client.sendInput({ id, text: "the first send holds the uuid outstanding" })
+    await new Promise((r) => setTimeout(r, 300))
+    c.client.sendInput({ id, text: "the second send is refused" })
+    const isDrop = (d: ClaudeDiagnostic): boolean => d.kind === "stderr" && d.message.startsWith(CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX)
+    for (let waited = 0; waited < 5_000 && !c.cap.diagnostics.some(isDrop); waited += 50) {
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    const drop = c.cap.diagnostics.find(isDrop)
+    assert.ok(drop, "the client is told its message never reached the agent")
+    assert.match(drop.kind === "stderr" ? drop.message : "", /already outstanding/, "the diagnostic names the refusal")
+    c.client.close()
+  } finally {
+    await b.close()
   }
 })
 

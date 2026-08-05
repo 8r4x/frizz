@@ -27,7 +27,7 @@ import { fileURLToPath } from "node:url"
 import { createClaudeQueryFactory } from "./claude-agent-sdk.ts"
 import { inheritWorkerEnvironment } from "./worker-env.ts"
 import { createClaudeBrokerDiagnosticWriter, createClaudeBrokerExitWriter, type ClaudeBrokerExitReason } from "./claude-broker-diagnostics.ts"
-import { CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_RELOAD_PLUGINS, CLAUDE_BROKER_CAPABILITY_RENAME, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER } from "./claude-agent-sdk-protocol.ts"
+import { CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_RELOAD_PLUGINS, CLAUDE_BROKER_CAPABILITY_RENAME, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX } from "./claude-agent-sdk-protocol.ts"
 import type {
   ClaudeDiagnostic,
   ClaudeInputMessage,
@@ -286,7 +286,7 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
           // closing under the frame) on the same diagnostic channel every other drop site here uses.
           void handle.send(message).catch((error: unknown) => {
             const detail = error instanceof Error ? error.message : String(error)
-            const diagnostic = { kind: "stderr" as const, message: `input dropped, the agent never received it: ${detail}`, truncated: false }
+            const diagnostic = { kind: "stderr" as const, message: `${CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX}: ${detail}`, truncated: false }
             // Persist FIRST, then relay — same order and reasoning as the SDK's onDiagnostic above: a
             // drop is worth attributing even when no frizz is attached to hear it right now.
             writeDiagnostic?.(diagnostic)

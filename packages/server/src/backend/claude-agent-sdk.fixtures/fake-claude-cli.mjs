@@ -452,6 +452,16 @@ function handleUserMessage(message) {
     }
     return
   }
+  // A provider that NEVER echoes an input, but does still run turns — the shape the maintainer's own
+  // board produced on 2026-08-05, where 36 of 349 accepted inputs were never echoed back. The text is
+  // the switch so a test can interleave leaked inputs and completed turns deterministically.
+  if (scenario === "unechoed-inputs") {
+    if (extractText(message.message?.content) === "turn") {
+      emitAssistant("turn without an echo")
+      emitResult("turn complete")
+    }
+    return
+  }
   if (scenario === "missing-session") {
     emitUserEcho(message, true)
     return

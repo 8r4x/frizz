@@ -348,6 +348,14 @@ export type ClaudeDiagnostic =
   | { kind: "stderr"; message: string; truncated: boolean }
   | { kind: "lifecycle"; phase: "started" | "closed" | "crashed"; message?: string }
 
+/**
+ * The opening of the daemon's refused-input diagnostic. A `stderr` diagnostic is otherwise ordinary
+ * provider noise, so this prefix is the only thing that distinguishes "the agent never saw the
+ * operator's message" from a log line — and the daemon that writes it and the server that logs it are
+ * different processes, which is exactly why it is a shared constant rather than a string in each.
+ */
+export const CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX = "input dropped, the agent never received it"
+
 export type ClaudeCanUseTool = (
   request: ClaudePermissionRequest,
   context: { signal: AbortSignal },
