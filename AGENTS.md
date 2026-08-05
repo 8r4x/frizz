@@ -93,8 +93,10 @@ real error. Two non-negotiables from it:
 **And load the `optical-spacing` skill whenever you set or judge the spacing of a ROW of controls** —
 an icon strip, a button rail, a footer of mixed glyphs and pills. The same law sideways: `gap` spaces
 boxes, so a bare glyph in a hover square and a bordered pill on one uniform `gap` drew ink distances
-from 5.78px to 20.50px on a single strip. It carries `scripts/ink-gaps.mjs`, the negative-margin fix,
-and the pen-width rule for matching perceived weight — which no colour token can fix.
+from 5.78px to 20.50px on a single strip. It carries the ink-gap instrument (this repo's copy is
+`scripts/ink-gaps.mjs`), the negative-margin fix, and the pen-width rule for matching perceived weight
+— which no colour token can fix. It is a GLOBAL skill, not one of this repo's, so it needs no entry in
+`.agents/skills/`.
 
 Do not ship "it renders" and wait to be told it looks wrong. If the pattern exists in a real product
 (GitHub, Linear, this app's own components), measure the real one and mirror it instead of designing
@@ -113,6 +115,17 @@ dispatches a worker", never "frizz dispatches a worker". Lowercase survives only
 identifiers, where it is part of the name: `npx frizz`, `FRIZZ.md`, `.frizz/`, `~/.frizz/`,
 `frizz-<slug>` session names, the `frizz`/`frizz-update` CLIs, and the `frizz:*` skill and sub-agent profile names.
 
+# Board nomenclature: "active" means SPINNING, and nothing else
+
+The sidebar's row groups have names the maintainer uses precisely (2026-08-05: *"when I say active, I'm only referring to the things that are currently spinning; the things beneath that, I would refer to as rested, or just items in the queue"*). Use them in code, comments, copy and when reporting back:
+
+- **Active** — only the rows currently spinning, above the rule. Never carries a queue card.
+- **Rested** — everything below that rule; the same set as **"the queue"** / "items in the queue", one row per card.
+- **Held** — the dimmed, labeled park band (a `human:` gate, a future `timer:`, a wall-clock snooze, an auto-resumed limit pause).
+- **Done** — the collapsed archived section.
+
+The trap is that `groups.ts` `sectionOf` returns `"active"` for Active AND Rested rows alike — that key names the `<section>` holding both bands, not the maintainer's word. `partitionActive` splits it (`.running` = Active, `.rested` = Rested), and `inActiveBand` is the one predicate that means Active exactly. Full detail, including why the archived key is `"inactive"` while its label reads Done, in `ARCHITECTURE.md` § Board nomenclature.
+
 # "Shipped" means merged into the primary branch
 
 Never describe a created, opened, or pushed PR as "shipped." An open PR is implemented, pushed,
@@ -130,6 +143,13 @@ so Claude Code discovers the identical content. When adding a skill, create it u
 it through the symlink, `codex exec` resolves it at `.agents/skills/adhoc-cdp/SKILL.md`). Shared
 tooling scripts follow the same rule: one copy in an agent-neutral location (e.g. `scripts/`),
 referenced from skills — never duplicated into agent-specific config trees.
+
+**A GLOBAL skill takes the identical shape one level up**: canonical in `~/.agents/skills/<name>/`,
+with relative symlinks at `~/.claude/skills/<name>` and `~/.codex/skills/<name>` (both `../../.agents/…`
+— `~/.codex/skills` is two levels deep, not one, and getting that wrong yields a dangling link that
+still `ls`es fine). A global skill must BUNDLE any script it needs beside its `SKILL.md`; it cannot
+reach into a repo's `scripts/`. And a skill belongs in exactly one scope — never a project copy AND a
+global copy of the same name, or they drift and the agent lists it twice.
 
 # Use Nub for the Node toolchain
 

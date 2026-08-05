@@ -274,9 +274,10 @@ hover square carries several px of dead space that a bordered or filled button d
 
 **Load `optical-spacing` whenever you set or judge the spacing of a ROW of controls** — an icon strip,
 a button rail, a footer of mixed glyphs and pills, or any "the spacing looks inconsistent" report on a
-strip whose CSS is provably uniform. It carries `scripts/ink-gaps.mjs` (this file's `ink-pixels.mjs`
-scans one centre row and cannot measure gaps), the negative-margin fix, and the pen-width rule for
-matching perceived WEIGHT, which no colour token can fix.
+strip whose CSS is provably uniform. It carries the ink-gap instrument (this file's `ink-pixels.mjs`
+scans one centre row and cannot measure gaps — the repo's copy is `scripts/ink-gaps.mjs`), the
+negative-margin fix, and the pen-width rule for matching perceived WEIGHT, which no colour token can
+fix. It is a GLOBAL skill, so it is available outside this repo too.
 
 ---
 
