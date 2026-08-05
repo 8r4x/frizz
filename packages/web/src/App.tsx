@@ -217,11 +217,13 @@ export function App() {
   // Window title carries the project identity. In the INSTALLED APP window (display-mode:
   // standalone) Chrome prefixes the title bar with the app name itself ("Frizz - <title>"), so the
   // page title must NOT repeat the wordmark — just the repo label ("Frizz - nubjs/nub"). In an
-  // ordinary browser tab there's no prefix, so the title carries the wordmark ("frizz · nubjs/nub").
+  // ordinary browser tab there's no prefix, so the title carries it as a trailing mark
+  // ("nubjs/nub | Frizz") — the repo LEADS because a tab truncates from the end, and it is the repo
+  // that tells two open boards apart. StandaloneThreadPage uses the same trailing mark.
   const projectLabel = board?.projectLabel ?? board?.projectName
   useEffect(() => {
     const standalone = window.matchMedia?.("(display-mode: standalone)").matches
-    document.title = standalone ? (projectLabel ?? "frizz") : projectLabel ? `frizz · ${projectLabel}` : "frizz"
+    document.title = standalone ? (projectLabel ?? "Frizz") : projectLabel ? `${projectLabel} | Frizz` : "Frizz"
   }, [projectLabel])
 
   // NOTE: there is deliberately NO "this repo has no .frizz/" branch here. Threads are session-first
