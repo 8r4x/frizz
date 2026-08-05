@@ -34,11 +34,14 @@ import type { ReactElement, ReactNode } from "react"
 // drawer (chat / doc via store.openThread); a plan row opens the plan drawer; a legacy row opens its
 // frizz doc.
 //
-// Sections: THREE bands top→bottom — Active, then a labeled DIMMED Held band (every declared
-// clock/hourglass/timed wait), then Done — each split by a bare <hr>, and Held and Done both
-// collapsible. A thread merely awaiting its OWN sub-agents is INTERNAL work
-// and stays in Active undimmed; only external waiters drop into the dimmed band (see groups.ts
-// isHeld). Needs-you renders as the row INDICATOR + the queue; awaiting as the hint gloss.
+// Sections: FOUR bands top→bottom, in the names ARCHITECTURE.md § Board nomenclature fixes — ACTIVE
+// (the rows currently spinning), RESTED (everything at rest = the queue's own rows), then a labeled
+// DIMMED HELD band (every declared clock/hourglass/timed wait), then DONE — each split by a bare <hr>,
+// and Held and Done both collapsible. Active and Rested are ONE uncollapsible <section> (you can't hide
+// your live work or your queue); the <hr> between them is the whole distinction, so never describe a
+// rested row as active. A thread merely awaiting its OWN sub-agents is INTERNAL work and stays spinning
+// in Active undimmed; only external waiters drop into the dimmed band (see groups.ts isHeld).
+// Needs-you renders as the row INDICATOR + the queue; awaiting as the hint gloss.
 // Plans from board.plans; Done = explicitly completed. Legacy .frizz rows and foreign terminal
 // sessions do not render at all.
 
@@ -177,11 +180,11 @@ export function Sidebar() {
           <DispatchForm />
         </div>
         <div ref={railRef} data-sidebar-rail className="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden max-[800px]:overflow-y-visible">
-          {/* ACTIVE — always shown, NEVER collapsible (you can't hide your live work), no label. Split
-              into two rule-separated bands (see groups.ts orderActive/partitionActive): live work that
-              isn't waiting on you on TOP, then everything at rest below, in the EXACT Needs-you queue
-              order so scrolling the queue walks the scroll marker straight down this rail (running
-              agents have no queue card — the maintainer's ask: they don't render in the queue). */}
+          {/* ACTIVE + RESTED — always shown, NEVER collapsible (you can't hide your live work or your
+              queue), no label. Two rule-separated bands (see groups.ts orderActive/partitionActive):
+              ACTIVE — live work that isn't waiting on you — on TOP, then RESTED below, in the EXACT
+              queue order so scrolling the queue walks the scroll marker straight down this rail (an
+              Active row has no queue card — the maintainer's ask: they don't render in the queue). */}
           {activeThreads.length > 0 ? (
             (() => {
               const { running, rested } = partitionActive(activeThreads)
@@ -204,7 +207,10 @@ export function Sidebar() {
             // placeholder starts exactly where the rows it stands in for would — and lands within a
             // pixel of the Held/Done/Plans labels, which clear the same width for their chevron. A
             // bare px-1.5 left it hanging 14px out at the rail's raw edge, alone against everything.
-            <div className="py-1 pl-5 pr-1.5 text-[11.5px] text-muted/50">No active threads</div>
+            // "open", not "active": this stands in for the Active AND Rested bands together, and it
+            // renders only when BOTH are empty. Saying "no active threads" over a hidden queue would be
+            // the same conflation the vocabulary above exists to stop.
+            <div className="py-1 pl-5 pr-1.5 text-[11.5px] text-muted/50">No open threads</div>
           )}
           {/* HELD — every deliberate clock/hourglass/timed wait, visibly de-emphasized and labeled so
               it cannot read as active work. COLLAPSIBLE, and collapsed by default (maintainer

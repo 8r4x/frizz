@@ -95,6 +95,22 @@ need no install or provider CLI; the full suite is local-only by design.
   Answers compose into one follow-up numbered by ORIGINAL block position ("Answers:\n2. …"), a ONE-block ask included — the numbering is what the renderer keys on to card the reply up instead of dropping it into a flat bubble. The
   contract lives in packages/server/src/workerPrompt.ts + cc-worker's SKILL/deny-ask hook — keep all three aligned.
 
+## Board nomenclature (the maintainer's words — write code, comments and copy in them)
+
+These are the names for the sidebar's four row groups, top to bottom. They are the MAINTAINER's vocabulary (2026-08-05), so they win over whatever a symbol happens to be called; when a comment and this list disagree, the comment is wrong.
+
+- **Active** — ONLY the rows that are currently SPINNING. The top band, above the rule. An Active row NEVER carries a queue card, and that invariant runs both ways: nothing above the rule has a card, and every card has a row below it.
+- **Rested** — everything below that rule, and the same set as **"the queue"** / **"items in the queue"**: one rested row per queue card, in the identical order. Say "rested" or "in the queue"; do NOT say "active" about these rows just because they share a `<section>` with the Active band.
+- **Held** — the dimmed, labeled band under Rested: a declared `human:` gate, a valid future `timer:`, a user wall-clock snooze, or a limit pause frizz will auto-resume. Parked, not asking.
+- **Done** — the collapsed archived section, last of the thread groups (the Plans section renders below it).
+
+Where the CODE disagrees, and it does in two places worth knowing before reading `web/src/groups.ts`:
+
+- `sectionOf` returns `"active"` for Active AND Rested rows alike. That key names the `<section>` that holds both bands, not the maintainer's "Active". `partitionActive` splits it: `.running` is Active, `.rested` is Rested.
+- The archived section's `SectionKey` is `"inactive"`, but its rendered label is **Done**.
+
+Neither name is worth a rename sweep — but every new comment says Active / Rested / Held / Done in the sense above, and `inActiveBand` (the predicate for "is this row spinning AND cardless") is the one function that means "Active" exactly.
+
 ## Packages
 
 - `shared` — zod schemas + types + constants. THE contract; read `src/index.ts` first.
@@ -191,10 +207,12 @@ plugin directory. The published package does this for you.
   horizontal overflow impossible by width discipline: min-w-0 everywhere + break-words titles).
   Width scales `clamp(240px, 30vw, 600px)`; it and the 720px workpane sit as a centered pair with
   one fixed 40px gutter, and the workpane itself vertically centers while shorter than the viewport
-  (`my-auto`). THREE collapsible sections keyed on STATUS (`web/src/groups.ts` `sectionOf`): Active
-  (active/blocked/needs-human, expanded), Plans (planning/planned — the design-phase statuses ARE
-  the plans; collapsed), Inactive (done/dismissed/archived; collapsed; rows carry a status chip).
-  Rows order by most-recent USER interaction (`orderByInteraction` — agent churn never reorders).
+  (`my-auto`). Row groups keyed on the session-first model (`web/src/groups.ts` `sectionOf`), in the
+  vocabulary above: Active then Rested (one uncollapsible `<section>`, split by a bare rule), then a
+  labeled collapsible Held band, then Done (archived; collapsed), with Plans interleaved after the
+  thread groups. Rows order by most-recent USER interaction (`orderByInteraction` — agent churn never
+  reorders), except the Rested band, which uses the EXACT queue comparator (`orderQueue`) so the rail
+  and the cards read in one order.
   Titles WRAP, never truncate. ONE derived indicator per row (spinner running, blue ● needs-action,
   clock/dashed-circle machine-waits, faint · idle); a petite-caps PLAN tag marks a doc with a
   `## Plan` section (derived `hasPlan`). ENTIRELY MOUSE-DRIVEN — no arrow-walk, no chevron, no focus

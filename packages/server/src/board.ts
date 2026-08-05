@@ -369,12 +369,12 @@ export function deriveNeedsYou(
   // which is the honest place for work only the human will restart.
   if (limitPause?.autoResume) return false
   // A top-level turn that came to rest while a dispatched SUB-AGENT is still running is EXCUSED from
-  // the queue for exactly as long as that holds. The rail already shows it in the Active section's
-  // RUNNING band, and the two surfaces must not both claim it (maintainer 2026-08-01: "if something is
-  // listed as currently running, then it should never show up in the queue"). That invariant is what
-  // `groups.inActiveRunningBand` is written against — it bands on `isActivelyRunning && !needsYou`, so
-  // this excusal is the ONLY thing that puts a rested-with-live-work row in the running band, and
-  // nothing can land there carrying a card.
+  // the queue for exactly as long as that holds. The rail already shows it in the ACTIVE band (the
+  // spinning rows above the rule — see ARCHITECTURE.md § Board nomenclature), and the two surfaces must
+  // not both claim it (maintainer 2026-08-01: "if something is listed as currently running, then it
+  // should never show up in the queue"). That invariant is what `groups.inActiveBand` is written
+  // against — it bands on `isActivelyRunning && !needsYou`, so this excusal is the ONLY thing that puts
+  // a rested-with-live-work row in the Active band, and nothing can land there carrying a card.
   //
   // The reason it is a sub-agent excusal (maintainer 2026-07-30): queueing them made the rail row drop
   // out of the running band into the rested band and bounce straight back up when the child returned —

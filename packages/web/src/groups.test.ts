@@ -237,7 +237,7 @@ test("sessionIndicatorKind: an armed recurring prompt changes NO rail mark", () 
 
 // THE INVARIANT, stated once and checked over every shape the rail can produce (maintainer 2026-08-01:
 // "if something is listed as currently running, then it should never show up in the queue"). It holds by
-// CONSTRUCTION — inActiveRunningBand is `isActivelyRunning && !needsYou`, and `queued` is `needsYou` —
+// CONSTRUCTION — inActiveBand is `isActivelyRunning && !needsYou`, and `queued` is `needsYou` —
 // so this test is really guarding the construction: any future clause that bands a row on something
 // OTHER than the absence of a queue card breaks it here.
 test("partitionActive: NOTHING in the running band has a queue card, and every card has a rested-band row", () => {
@@ -429,11 +429,12 @@ test("lastActiveLabelAt: at-rest shows REST time, running shows live activity, s
 
 // ---- sidebar sections: session-first partition ----
 
-test("sectionOf: running/needs-you stay Active; only truthful human/future-timer waits are Held", () => {
+test("sectionOf: running/needs-you land in the Active+Rested section; only truthful human/future-timer waits are Held", () => {
   // Legacy / absent-kind rows are HIDDEN entirely (null), any status.
   assert.equal(sectionOf(thread({ status: "active" })), null)
   assert.equal(sectionOf(thread({ kind: "legacy", status: "done" })), null)
-  // Open in-play work remains Active: running, at-rest bare, needs-you, done-fenced.
+  // Open in-play work stays in the Active+Rested section: running, at-rest bare, needs-you, done-fenced.
+  // Which BAND each lands in is partitionActive's job, not this key's — a needs-you row is RESTED, not Active.
   assert.equal(sectionOf(thread({ kind: "session", state: "open", runtime: "running" })), "active")
   assert.equal(sectionOf(thread({ kind: "session", state: "open", runtime: "turn-idle" })), "active")
   assert.equal(sectionOf(thread({ kind: "session", state: "open", needsYou: true })), "active")
@@ -607,7 +608,7 @@ test("isHeld: live work, mid-turn, settled, bare, archived, and non-timer blocke
   assert.equal(isHeld(thread({ pendingAsk: { questions: [] }, runtime: "turn-idle", lastFence: awaitingHuman })), false)
 })
 
-test("sectionOf: human/future-timer waits and canonical timers are Held; machine waits stay Active", () => {
+test("sectionOf: human/future-timer waits and canonical timers are Held; machine waits stay out of Held", () => {
   assert.equal(sectionOf(thread({ kind: "session", state: "open", runtime: "turn-idle", lastFence: awaitingHuman })), "held")
   assert.equal(sectionOf(thread({ kind: "session", state: "open", runtime: "turn-idle", lastFence: awaitingTimer })), "held")
   assert.equal(sectionOf(thread({ kind: "session", state: "open", runtime: "turn-idle", lastFence: awaitingPr })), "active")
@@ -627,7 +628,7 @@ test("sectionOf: human/future-timer waits and canonical timers are Held; machine
   assert.equal(sectionOf(thread({ kind: "session", state: "archived", runtime: "turn-idle", lastFence: awaitingHuman })), "inactive")
 })
 
-test("sectionThreads: only human/future-timer waits partition into Held; live and machine waits stay Active", () => {
+test("sectionThreads: only human/future-timer waits partition into Held; live and machine waits stay out of it", () => {
   const s = sectionThreads([
     thread({ id: "human-new", kind: "session", state: "open", runtime: "turn-idle", lastFence: awaitingHuman, lastUserAt: "2026-07-09T05:00:00.000Z" }),
     thread({ id: "live-old", kind: "session", state: "open", runtime: "running", lastUserAt: "2026-07-08T01:00:00.000Z" }),
@@ -686,7 +687,7 @@ test("displayTitle: a machine-generated session slug is never presented as a suc
   )
 })
 
-test("a legacy session/hintless declared wait remains Active", () => {
+test("a legacy session/hintless declared wait is never Held — at rest it is simply a rested/queued row", () => {
   const sessWait = { kind: "awaiting" as const, body: "", hints: [{ kind: "session" as const, value: "s1" }] }
   const s = sectionThreads([
     thread({ id: "wait-new", kind: "session", state: "open", runtime: "turn-idle", lastFence: sessWait, lastUserAt: "2026-07-09T05:00:00.000Z" }),

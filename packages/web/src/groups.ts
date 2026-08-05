@@ -259,15 +259,27 @@ export function foreignThreads(threads: readonly ThreadView[]): ThreadView[] {
 }
 
 // ── SIDEBAR SECTIONS (session-first) ───────────────────────────────────────────────────────────────
+// THE VOCABULARY, because the `"active"` key below does NOT mean what the maintainer means by Active
+// (2026-08-05: "when I say active, I'm only referring to the things that are currently spinning; the
+// things beneath that I would refer to as rested, or just items in the queue"). Written out in full in
+// ARCHITECTURE.md § Board nomenclature; the short form, top of the rail to the bottom:
+//   ACTIVE   — the rows currently SPINNING, above the rule. Never carries a queue card.
+//   RESTED   — everything below the rule; the same set as "the queue", one row per card.
+//   HELD     — the dimmed, labeled park band.
+//   DONE     — the collapsed archived section.
+// Say "rested" or "in the queue" for a card's row. NEVER call it active merely because this key does.
+//
 // The rail's THREAD-derived sections, keyed on the session-first model (NOT frizz status). Every thread
 // row lands in exactly one of these; the Plans section is separate (from board.plans, not threads).
-//   • active           — open session work: running, needs-you, bare rest, done-fenced, OR owning a
+//   • active           — the SECTION holding the Active AND Rested bands (partitionActive splits it):
+//                        open session work — running, needs-you, bare rest, done-fenced, OR owning a
 //                        live sub-agent/background shell/Monitor. Never dimmed as a band.
 //   • held             — open, AT REST behind ANY declared ```awaiting fence (or the canonical
 //                        blocked+timer status) AND no live background op. Its own DIMMED band between
-//                        Active and Inactive. The glyph and section share isHeld(), so a row can never
-//                        show a clock/hourglass while remaining in Active.
-//   • inactive         — state === "archived" (the only archiver is an explicit Archive / done-card button).
+//                        the rested rows and Done. The glyph and section share isHeld(), so a row can
+//                        never show a clock/hourglass while sitting in the Active/Rested section.
+//   • inactive         — state === "archived" (the only archiver is an explicit Archive / done-card
+//                        button). Rendered under the label DONE — the key and the label differ.
 //   • legacy           — kind !== "session": vestigial .frizz-file rows, hidden entirely (null).
 // A FOREIGN session row (a maintainer terminal — no registry row, so no state/needsYou) is dropped
 // entirely (never rows). Order within a section is interaction recency.
@@ -316,7 +328,7 @@ function hasLiveSubAgents(t: ThreadView): boolean {
 // into the RESTED band, which is the queue-ordered band, with nothing behind it: the exact 2026-07-29
 // report, "showing up as a rested thread in my sidebar, yet there's no card for it". (An UNsnoozed
 // shell-only rest DOES card since 2026-08-04, and `needsYou` then bands it below the rule regardless —
-// see inActiveRunningBand. This flag decides nothing for it beyond keeping it out of Held.)
+// see inActiveBand. This flag decides nothing for it beyond keeping it out of Held.)
 //
 // It does NOT re-spin finished threads. What the row reads as is a separate decision made downstream in
 // sessionIndicatorKind, and a shell-only rest gets the quiet pulsing dot there, never the spinner — the
@@ -352,17 +364,17 @@ export function futureSnoozedUntil(
 
 // HELD: one semantic predicate owns both classification and presentation. Only a specific external
 // human/review gate or a valid FUTURE timestamp belongs in the dimmed Held band. Legacy automated
-// waits (pr/ci/session), malformed/elapsed timers, and hintless fences stay Active so they cannot hide
-// work an agent should own through an in-band watcher. A canonical blocked+timer status remains a
-// compatibility path only when it carries the same explicit future ISO instant. A live child/Monitor
-// wins, and archived rows remain Inactive/done.
+// waits (pr/ci/session), malformed/elapsed timers, and hintless fences stay OUT of it — rested (in the
+// queue) if their turn is over, Active if it isn't — so they cannot hide work an agent should own
+// through an in-band watcher. A canonical blocked+timer status remains a compatibility path only when
+// it carries the same explicit future ISO instant. A live child/Monitor wins, and archived rows go Done.
 export function isHeld(t: ThreadView, nowMs = Date.now()): boolean {
   const userSnooze = futureSnoozedUntil(t, nowMs) !== undefined
   if (t.state === "archived" || hasLiveOps(t)) return false
   // A user-owned snooze deliberately wins over a concrete ask, permission prompt, or crash. Those
   // states still exist in the transcript/runtime and re-enter Queue at the exact wake deadline; the
-  // snooze merely parks their presentation until then. Mid-turn work keeps running in Active, while
-  // a provider permission prompt is itself parked and may therefore move to Held.
+  // snooze merely parks their presentation until then. Mid-turn work keeps spinning in the Active band,
+  // while a provider permission prompt is itself parked and may therefore move to Held.
   if (userSnooze) return t.runtime !== "running" && t.runtime !== "spawning"
   // Without an explicit user snooze, higher-priority attention states render ?, !, or a native
   // prompt—not a wait glyph—so a stale awaiting fence cannot demote them out of Queue.
@@ -370,8 +382,9 @@ export function isHeld(t: ThreadView, nowMs = Date.now()): boolean {
   if (!atRest(t)) return false
   // A thread a usage limit cut off, which frizz is going to continue itself, has the same shape as an
   // ```awaiting timer: park — parked on the clock with a wake already armed. It belongs in the dimmed
-  // Held band, not in Active pretending to work. Without that auto-resume promise there is no armed
-  // wake, so it is NOT held: it falls through to Queue as work only the human will restart.
+  // Held band, not sitting among the rested rows as though the human could pick it up. Without that
+  // auto-resume promise there is no armed wake, so it is NOT held: it falls through to the queue as
+  // work only the human will restart.
   if (t.limitPause?.autoResume) return true
   const declaredWait = t.lastFence?.kind === "awaiting" && parkedAwaitingHint(t.lastFence.hints, nowMs) !== undefined
   const timedStatus =
@@ -383,10 +396,12 @@ export function isHeld(t: ThreadView, nowMs = Date.now()): boolean {
   return userSnooze || declaredWait || timedStatus
 }
 
-// ACTIVELY RUNNING: a live session with work in flight — exactly the states the sidebar renders with a
-// spinner (running/spawning, or turn-idle while a dispatched sub-agent is still going). A running thread
-// must NEVER be filed under Inactive, even when its row is archived (maintainer 2026-07-10, hit 3×: a
-// bumped-then-resumed archived thread showed a spinner under Inactive).
+// ACTIVELY RUNNING: a live session with work in flight — running/spawning, or turn-idle while a
+// dispatched sub-agent is still going. NOT the same as the ACTIVE band, and the gap is the whole reason
+// `inActiveBand` exists: this is true of a queued thread too, and a queued thread belongs to Rested no
+// matter how much live work it has out. Read this as "has motion", and `inActiveBand` as "is Active".
+// A running thread must NEVER be filed under Done, even when its row is archived (maintainer
+// 2026-07-10, hit 3×: a bumped-then-resumed archived thread showed a spinner under the archived band).
 export function isActivelyRunning(t: ThreadView): boolean {
   if (t.runtime === "running" || t.runtime === "spawning") return true
   return t.runtime === "turn-idle" && hasLiveOps(t)
@@ -547,40 +562,42 @@ export function offersRetry(t: ThreadView): boolean {
 }
 
 export function sectionOf(t: ThreadView): SectionKey | null {
-  // MAINTAINER 2026-07-09 (v2 sections): ONE Active section — anything running, awaiting the human,
-  // or machine-awaiting is simply ACTIVE (the split sections made seen-clearance visibly shuffle rows
-  // between Needs-you and Working on click, which read as an unread feature). The needs-you/awaiting
-  // distinction still renders — as the row INDICATOR and the queue cards — just not as sections.
+  // MAINTAINER 2026-07-09 (v2 sections): ONE section for open work — anything running, awaiting the
+  // human, or machine-awaiting lands here (the split sections made seen-clearance visibly shuffle rows
+  // between Needs-you and Working on click, which read as an unread feature). It is the Active AND
+  // Rested bands together; the rule between them is drawn downstream (partitionActive), and the
+  // needs-you/awaiting distinction renders as the row INDICATOR and the queue cards, not as sections.
   // Legacy (.frizz-file) rows are HIDDEN entirely (null; not even a shelf). Foreign never rows.
   if (t.kind !== "session") return null
-  // Archived → Inactive, UNLESS it's actively running: a live, in-flight session must never sit in
-  // Inactive (maintainer, hit 3×). It shows in Active with its spinner while it works, and drops back
-  // to Inactive only once it comes to rest still-archived. (A user BUMP un-archives it for good via
+  // Archived → Done, UNLESS it's actively running: a live, in-flight session must never sit under Done
+  // (maintainer, hit 3×). It shows in the Active band with its spinner while it works, and drops back
+  // to Done only once it comes to rest still-archived. (A user BUMP un-archives it for good via
   // resume; this is the display safety net for a running-yet-archived session.)
   if (t.state === "archived" && !isActivelyRunning(t)) return "inactive"
-  // Only truthful human/future-timer waiters split into the labeled, dimmed Held band.
-  // Everything else open — running, needs-you, bare rest, done-fenced, awaiting-its-own-subs, or an
-  // awaiting `session`/hintless wait — is Active.
+  // Only truthful human/future-timer waiters split into the labeled, dimmed Held band. Everything else
+  // open — running, needs-you, bare rest, done-fenced, awaiting-its-own-subs, or an awaiting
+  // `session`/hintless wait — belongs to the Active/Rested section, which band decided downstream.
   if (isHeld(t)) return "held"
   return "active"
 }
 
-// The Active section is TWO rule-separated bands (the Sidebar draws the rule): actively-running work
-// on top, then everything at rest BELOW — and the rested band is ordered by the EXACT queue comparator
-// (orderQueue), so the sidebar's rested rows and the Needs-you queue cards share ONE order. That shared
-// order is what makes the scroll-position marker monotonic: scrolling the queue down walks the marker
-// straight down the rail instead of hopping around (maintainer 2026-07-15: the queue/sidebar mismatch
-// "totally defeats the purpose of the scroll position indicator"; running agents "should not render in
-// the queue at all"). Running threads have no queue card, so their interaction-recency order never
+// This section is TWO rule-separated bands (the Sidebar draws the rule): the ACTIVE band — the rows
+// currently spinning — on top, then the RESTED band (a.k.a. the queue) BELOW. Rested is ordered by the
+// EXACT queue comparator (orderQueue), so the rested rows and the queue cards share ONE order. That
+// shared order is what makes the scroll-position marker monotonic: scrolling the queue down walks the
+// marker straight down the rail instead of hopping around (maintainer 2026-07-15: the queue/sidebar
+// mismatch "totally defeats the purpose of the scroll position indicator"; running agents "should not
+// render in the queue at all"). Active rows have no queue card, so their interaction-recency order never
 // affects the marker — grouping them on top just keeps live work glanceable and out of the rested run.
 export function orderActive(threads: readonly ThreadView[], direction: QueueDirection = "fifo"): ThreadView[] {
-  const running = threads.filter(inActiveRunningBand)
-  const rested = threads.filter((t) => !inActiveRunningBand(t))
+  const running = threads.filter(inActiveBand)
+  const rested = threads.filter((t) => !inActiveBand(t))
   return [...orderByInteraction(running), ...orderQueue(rested, direction)]
 }
 
-// The running band is strictly live work that ISN'T waiting on the human, and that conjunction is the
-// load-bearing part: a queued thread ALWAYS belongs to the rested band, so its queue card maps to a
+// ACTIVE, in the maintainer's exact sense: currently SPINNING. This one predicate is what that word
+// means in this codebase — strictly live work that ISN'T waiting on the human, and the conjunction is
+// the load-bearing part: a queued thread ALWAYS belongs to the rested band, so its queue card maps to a
 // rested-band row and the scroll marker walks straight down the rail.
 //
 // THE INVARIANT, both directions (maintainer 2026-08-01: "if something is listed as currently running,
@@ -591,21 +608,24 @@ export function orderActive(threads: readonly ThreadView[], direction: QueueDire
 // shell-only rest. A brief attempt to band a shell-only rest here regardless of `needsYou` is what
 // produced the card-and-running-row pair the maintainer then reported; the fix belonged upstream, not
 // here — and it is why re-queueing shells on 2026-08-04 needed no change in this file at all.
-function inActiveRunningBand(t: ThreadView): boolean {
+function inActiveBand(t: ThreadView): boolean {
   return isActivelyRunning(t) && t.needsYou !== true
 }
 
-// Split an ALREADY-ordered Active list (see orderActive) into its running/rested bands WITHOUT
-// re-sorting — filter() preserves orderActive's order — so the Sidebar can render the separating rule.
+// Split an ALREADY-ordered list (see orderActive) into its Active/Rested bands WITHOUT re-sorting —
+// filter() preserves orderActive's order — so the Sidebar can render the separating rule. `.running` is
+// the ACTIVE band (the spinning rows); `.rested` is the queue's rows. The key is named for the spinner,
+// the band is named for the maintainer's word — see the vocabulary at the top of this section.
 export function partitionActive(active: readonly ThreadView[]): { running: ThreadView[]; rested: ThreadView[] } {
   return {
-    running: active.filter(inActiveRunningBand),
-    rested: active.filter((t) => !inActiveRunningBand(t)),
+    running: active.filter(inActiveBand),
+    rested: active.filter((t) => !inActiveBand(t)),
   }
 }
 
-// Partition threads into the thread-derived sidebar sections. Active sinks its leftover declared-waiting
-// Held and inactive/archived are plain interaction recency.
+// Partition threads into the thread-derived sidebar sections. `active` is the Active+Rested section and
+// is banded by orderActive (spinning rows first, then the queue's own order); Held and Done are plain
+// interaction recency.
 export type SectionedThreads = Record<SectionKey, ThreadView[]>
 export function sectionThreads(threads: readonly ThreadView[], direction: QueueDirection = "fifo"): SectionedThreads {
   const out: SectionedThreads = { active: [], held: [], inactive: [] }
