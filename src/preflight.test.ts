@@ -67,25 +67,20 @@ test("core launch preflight rejects an old 22.x minor below the floor", () => {
   );
 });
 
-test("core launch preflight gives an actionable error for a missing executable", () => {
-  assert.throws(
-    () => assertLaunchPrerequisites({ nodeVersion: "22.13.0", command: (name) => name !== "git" }),
-    /required executable `git` is not available on PATH; Frizz identifies a project by its Git repository\. Install git \(`brew install git` on macOS, `apt install git` on Debian\/Ubuntu\) and relaunch Frizz/
+// Git USED to be the one required executable, because a project was defined as a Git repository.
+// A project is now a directory (project-root.ts), so a machine with no git launches fine.
+test("a missing git no longer blocks a launch", () => {
+  assert.doesNotThrow(() =>
+    assertLaunchPrerequisites({ nodeVersion: "22.13.0", command: (name) => name !== "git" })
   );
 });
 
 // The launchers probe for these BEFORE resolving a workspace, which is what makes the diagnosis
 // eager: resolving one execs `git`, which used
 // to report the absence in its own unrelated vocabulary.
-test("the eager executable probe names each missing tool and why Frizz wants it", () => {
-  assert.throws(
-    () => assertRequiredExecutables((name) => name !== "git"),
-    /required executable `git` is not available on PATH; Frizz identifies a project by its Git repository\./
-  );
-  assert.throws(
-    () => assertRequiredExecutables((name) => name !== "git"),
-    /required executable `git` is not available on PATH; Frizz identifies a project/
-  );
+test("the eager probe requires nothing now, git included", () => {
+  assert.doesNotThrow(() => assertRequiredExecutables((name) => name !== "git"));
+  assert.doesNotThrow(() => assertRequiredExecutables(() => false));
   assert.doesNotThrow(() => assertRequiredExecutables(() => true));
 });
 

@@ -91,9 +91,10 @@ export interface ProviderReadiness {
  * agents run in the broker/app-server over pipes, and sign-in runs on node-pty. Requiring it kept Frizz
  * off Windows, where tmux has no native build, for a dependency nothing used.
  */
-const REQUIRED_EXECUTABLES = [
-  { name: "git", need: "Frizz identifies a project by its Git repository" },
-] as const;
+// Nothing here any more. Git was the only entry, and a project is no longer defined as a Git
+// repository — the root comes from marker walk-up and the id from `.frizz/.id` (project-root.ts), so
+// a plain directory never shells out to git at all. Kept as the seam for the next hard dependency.
+const REQUIRED_EXECUTABLES: readonly { name: string; need: string }[] = [];
 
 export function assertRequiredExecutables(command: CommandProbe = commandIsAvailable): void {
   for (const { name, need } of REQUIRED_EXECUTABLES) {

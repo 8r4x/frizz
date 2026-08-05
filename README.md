@@ -25,24 +25,24 @@ Frizz is for you if you have any of these opinions:
 
 <h2 align="center">Getting started</h2>
 
-**Requirements.** Node 22.13+, Git, and the [Claude Code](https://claude.com/claude-code) or [Codex](https://developers.openai.com/codex) CLI installed and signed in — Frizz drives the subscription you already pay for.
+**Requirements.** Node 22.13+, and the [Claude Code](https://claude.com/claude-code) or [Codex](https://developers.openai.com/codex) CLI installed and signed in — Frizz drives the subscription you already pay for.
 
-Then run it inside your repo.
+Then run it in any directory — a repo, a jj checkout, or a folder of scripts. Frizz has no opinion about version control and does not require Git.
 
 ```sh
-$ cd path/to/repo
+$ cd path/to/project
 $ npx frizz
 
   FRIZZ v0.1.0  ready in 4.0s
 
   ➜  Local:    http://127.0.0.1:4922/
-  ➜  Project:  repo — path/to/repo
+  ➜  Project:  project — path/to/project
   ➜  Logs:     ~/.frizz/projects/979dae3c-fe15-4038-817e-11d0e7491959/logs/frizz-2026-08-01T13-44-43-16931.log
 
   press ctrl-c to stop · run with --debug for the full event feed
 ```
 
-A browser tab opens on localhost — a dedicated workspace for this repo. **One tab per repo!** Runs on macOS, Linux, and Windows.
+A browser tab opens on localhost — a dedicated workspace for this directory. **One tab per project!** Runs on macOS, Linux, and Windows.
 
 <p align="center">
   <img src="assets/board.png" alt="Frizz running in a browser tab at 127.0.0.1:4921: a sidebar of threads on the left, and on the right a card where an agent is asking an answerable question with lettered options, above Snooze and Mark as done." width="100%">

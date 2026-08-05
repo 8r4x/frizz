@@ -999,7 +999,7 @@ test("a malformed repository config never degrades direct startup into a random 
     writeFileSync(config, `${readFileSync(config, "utf8")}\n[unterminated\n`);
     assert.throws(
       () => resolveWorkspace(repo, home),
-      /must be run inside a Git repository/
+      /unable to resolve Git repository root/
     );
     assert.throws(
       () => resolveProject(repo, home),
@@ -1084,18 +1084,17 @@ test("bare and non-Git directories retain their explicit fail-closed/degraded be
   try {
     execFileSync("git", ["init", "-q", "--bare", bare]);
     mkdirSync(plain);
-    assert.throws(
-      () => resolveWorkspace(bare, home),
-      /must be run inside a Git repository/
-    );
+    // No worktree is not a broken repository: it resolves as a plain directory now.
+    const bareWorkspace = resolveWorkspace(bare, home);
+    assert.match(bareWorkspace.id, /^[0-9a-f-]{36}$/u);
     assert.throws(
       () => resolveProject(bare, home),
       /unable to resolve Git repository root/
     );
-    assert.throws(
-      () => resolveWorkspace(plain, home),
-      /must be run inside a Git repository/
-    );
+    // Git is not required to launch. A plain directory gets a DURABLE id, not a fresh one per run.
+    const plainWorkspace = resolveWorkspace(plain, home);
+    assert.match(plainWorkspace.id, /^[0-9a-f-]{36}$/u);
+    assert.equal(resolveWorkspace(plain, home).id, plainWorkspace.id, "the id survives the next launch");
 
     const degraded = resolveProject(plain, home);
     assert.equal(degraded.dir, realpathSync(plain));
@@ -2290,24 +2289,4 @@ test("only an open adopts a fray-era install; --stop and --status resolve withou
   }
 });
 
-// An `npx frizz` user told to run "frizz-dev" inside a repo goes looking for a command they do not
-// have. The source shim exports FRIZZ_SOURCE_COMMAND; the published launcher exports nothing.
-test("the not-a-repo error names the command the operator actually typed", () => {
-  const plain = mkdtempSync(join(tmpdir(), "frizz-notrepo-"));
-  const home = mkdtempSync(join(tmpdir(), "frizz-notrepo-home-"));
-  try {
-    assert.throws(
-      () => resolveWorkspace(plain, home, {}),
-      /^Error: frizz must be run inside a Git repository/,
-      "published launcher: no FRIZZ_SOURCE_COMMAND set"
-    );
-    assert.throws(
-      () => resolveWorkspace(plain, home, { FRIZZ_SOURCE_COMMAND: "frizz-dev" }),
-      /^Error: frizz-dev must be run inside a Git repository/,
-      "source checkout: the shim names itself"
-    );
-  } finally {
-    rmSync(plain, { recursive: true, force: true });
-    rmSync(home, { recursive: true, force: true });
-  }
-});
+

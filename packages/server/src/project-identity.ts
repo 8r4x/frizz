@@ -321,7 +321,7 @@ export async function acquireGlobalLaunchLock(
   }
 }
 
-function acquireNamedLaunchLockSync(
+export function acquireNamedLaunchLockSync(
   home: string,
   name: string,
   timeoutMs = 10_000,

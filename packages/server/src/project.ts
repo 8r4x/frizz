@@ -8,6 +8,7 @@ import {
   type GitProjectIdentityScope,
 } from "./project-identity.ts"
 import type { ProjectLaunchTarget } from "./project-launch.ts"
+import { discoverProjectRoot, ensureProjectIdFile } from "./project-root.ts"
 import { projectStateDir } from "./frizz-paths.ts"
 import { migrateFrayGlobalRoots, migrateFrayProjectDir, migrateFrayProjectId } from "./migrate-fray.ts"
 
@@ -67,22 +68,43 @@ export function resolveProjectDir(cwd = process.cwd()): string {
     // A malformed config, unsafe ownership, missing Git binary, or other repository failure must not
     // silently turn a real repo into a fresh random namespace. Only Git's explicit non-repo result is
     // eligible for the historical degraded fallback.
-    if (!isNotGitRepositoryError(error)) throw new Error("unable to resolve Git repository root")
+    // A malformed config or unsafe ownership still fails closed — those mean a REAL repository we
+    // could not read, and inventing a namespace for it would strand its board. "Not a repository" and
+    // "git is not installed" are the two that legitimately mean there is no Git here, and both now
+    // fall through to marker-based discovery (project-root.ts) instead of ending the launch.
+    if (!isNotGitRepositoryError(error) && !isMissingGitBinary(error)) {
+      throw new Error("unable to resolve Git repository root")
+    }
+    const root = discoverProjectRoot(cwd)
     try {
-      return realpathSync(cwd)
+      return realpathSync(root)
     } catch {
-      return resolve(cwd)
+      return resolve(root)
     }
   }
 }
 
-// Main/ordinary UUIDs live in local Git config; linked-worktree UUIDs live in that worktree's private
-// Git administrative directory. The CLI reads the same identity. Git failures are closed; non-Git
-// directories retain the historical process-local fallback UUID.
+/** `git` itself is absent — spawning it failed rather than the command reporting anything. */
+function isMissingGitBinary(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code
+  return code === "ENOENT" || code === "EACCES"
+}
+
+// THE ID LIVES IN THE PROJECT, at `.frizz/.id` (project-root.ts), for a repository and a plain
+// directory alike. Git is still consulted when it is there, for two things a file cannot answer:
+// which directory is the repository root, and whether this is a LINKED WORKTREE — worktree isolation
+// is a Git concept, so reading it needs Git.
+//
+// A repository that predates the file keeps its exact id: `git config frizz.id` SEEDS the file, and
+// stays readable forever. Nothing migrates away from it, so a board cannot be lost by this.
+//
+// A plain directory used to get `randomUUID()` per launch — a fresh, empty board every time you ran
+// Frizz there. That is what made a non-repo unusable rather than merely unsupported.
 function resolveProjectIdentity(
   dir: string,
   home = homedir(),
 ): { id: string; scope: GitProjectIdentityScope; root: string } {
+  let insideWorktree = false
   try {
     const inside = execFileSync("git", ["rev-parse", "--is-inside-work-tree"], {
       cwd: dir,
@@ -91,12 +113,18 @@ function resolveProjectIdentity(
       stdio: ["ignore", "pipe", "pipe"],
     }).trim()
     if (inside !== "true") throw new Error("Git directory is not a worktree")
+    insideWorktree = true
   } catch (error) {
-    if (!isNotGitRepositoryError(error)) throw new Error("unable to inspect Git repository identity")
-    return { id: randomUUID(), scope: "repository", root: dir }
+    if (!isNotGitRepositoryError(error) && !isMissingGitBinary(error)) {
+      throw new Error("unable to inspect Git repository identity")
+    }
   }
-  const identity = resolveGitProjectIdentity(dir, home)
-  return { id: identity.id, scope: identity.scope, root: identity.root }
+  // Deliberately OUTSIDE the probe's catch. This call fails closed with a precise message — a
+  // duplicated or malformed `frizz.id` must surface as itself, not be flattened into "unable to
+  // inspect", and must never fall through to minting a fresh id beside a real board.
+  const git = insideWorktree ? resolveGitProjectIdentity(dir, home) : undefined
+  const root = git?.root ?? dir
+  return { id: ensureProjectIdFile(root, home, git?.id), scope: git?.scope ?? "repository", root }
 }
 
 // Claude Code's per-project session-log dir name: the absolute cwd with every '/' and '.'

@@ -32,6 +32,7 @@ import {
 import { readBootProgress } from "@frizz/server/boot-progress";
 import { frizzPaths, projectStateDir } from "@frizz/server/frizz-paths";
 import { migrateFrayGlobalRoots, migrateFrayProjectDir, migrateFrayProjectId } from "@frizz/server/migrate-fray";
+import { discoverProjectRoot, ensureProjectIdFile, isNotAGitWorktree } from "@frizz/server/project-root";
 import { defaultLogRoot, latestLogPath } from "@frizz/server/logging";
 import { DEFAULT_PORT } from "@frizz/shared";
 
@@ -404,36 +405,42 @@ export function resolveWorkspace(
   // accident; the launch path opts in.
   { migrate = false }: { migrate?: boolean } = {}
 ): Workspace {
-  let gitRoot: string;
+  // A repository still gets its root from Git — that is what makes `frizz` in a sub-directory open the
+  // repo's board. Outside one (including a non-colocated jj checkout, which has no `.git` at all, and
+  // a machine with no `git` installed) the root comes from marker walk-up instead of the launch dying.
+  let gitRoot: string | undefined;
   try {
     gitRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
       cwd,
       encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
+      // stderr is CAPTURED, not ignored: it is the only thing that distinguishes "no worktree here"
+      // from "this repository is broken", and those two must not be handled the same way.
+      stdio: ["ignore", "pipe", "pipe"],
     }).trim();
-  } catch {
-    // Name the command the operator actually typed. The source shim exports
-    // FRIZZ_SOURCE_COMMAND=frizz-dev; the published launcher sets nothing, and telling an `npx frizz`
-    // user that "frizz-dev" must be run in a repo sends them looking for a command they do not have.
-    const command = env.FRIZZ_SOURCE_COMMAND?.trim() || "frizz";
-    throw new Error(`${command} must be run inside a Git repository (cwd: ${cwd})`);
+  } catch (error) {
+    // A broken REAL repository still fails closed — inventing a namespace for it would strand its
+    // board. Only "there is no worktree here" falls through to marker discovery.
+    if (!isNotAGitWorktree(error)) throw new Error("unable to resolve Git repository root");
+    gitRoot = undefined;
   }
   if (migrate) migrateFrayGlobalRoots({ env, home });
-  const root0 = realpathSync(gitRoot);
+  const root0 = realpathSync(gitRoot ?? discoverProjectRoot(cwd, home));
   // Then the id, BEFORE resolveGitProjectIdentity: that call mints a fresh UUID when it finds no
   // `frizz.id`, and a minted id is an empty board sitting beside every thread this repo ever had.
   if (migrate) migrateFrayProjectId(root0, { home });
-  const identity = resolveGitProjectIdentity(root0, home);
-  const root = identity.root;
+  const identity = gitRoot ? resolveGitProjectIdentity(root0, home) : undefined;
+  const root = identity?.root ?? root0;
   if (migrate) migrateFrayProjectDir(root);
-  const id = identity.id;
+  // The id lives at `.frizz/.id`; a repository's existing `git config frizz.id` seeds it, so an
+  // established board keeps its exact id and nothing is ever removed from the old store.
+  const id = ensureProjectIdFile(root, home, identity?.id);
   const stateDir = projectStateDir(id, home);
   mkdirSync(stateDir, { recursive: true });
   const target = {
     projectId: id,
     projectDir: root,
     stateDir,
-    ...(identity.scope === "worktree"
+    ...(identity?.scope === "worktree"
       ? { identityScope: "worktree" as const }
       : {}),
   };
@@ -442,7 +449,7 @@ export function resolveWorkspace(
     id,
     stateDir,
     name: basename(root),
-    identityScope: identity.scope,
+    identityScope: identity?.scope ?? "repository",
   };
 }
 

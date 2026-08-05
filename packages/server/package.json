@@ -8,6 +8,7 @@
     "./router": "./src/router.ts",
     "./detached-daemons": "./src/detached-daemons.ts",
     "./project-identity": "./src/project-identity.ts",
+    "./project-root": "./src/project-root.ts",
     "./project-launch": "./src/project-launch.ts",
     "./local-origin": "./src/local-origin.ts",
     "./dev-supervisor": "./src/dev-supervisor.ts",
