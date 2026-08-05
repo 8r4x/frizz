@@ -7,6 +7,7 @@ import { threadLifecycleAvailability, completionArchivesImmediately, completionH
 import { futureSnoozedUntil } from "../groups.ts"
 import { formatSnoozeWake } from "../lib/snooze.ts"
 import { CHILD_ARROW, CHILD_ARROW_CLASS } from "../lib/childOps.ts"
+import { INK_TRIM_HOURGLASS, STRIP_INK_GAP } from "../lib/iconRhythm.ts"
 import { SnoozeButton } from "./SnoozeButton.tsx"
 import { RestartWorkerButton } from "./RestartWorkerButton.tsx"
 import { ReloadPluginsButton } from "./ReloadPluginsButton.tsx"
@@ -54,14 +55,20 @@ export function ThreadLifecycleFooter({
       // border, so it takes the shell's INNER corner (BLOCK_RADIUS_INNER_BOTTOM) — anything squarer
       // paints out through the arc and erases the border there. The sticky variant sits at the bottom
       // of a drawer whose own chrome carries the corners, so it stays square.
-      className={`${sticky ? "z-20" : BLOCK_RADIUS_INNER_BOTTOM} flex min-h-10 shrink-0 flex-wrap items-center justify-end gap-1.5 border-t border-border/70 bg-panel/95 px-3 pt-2 text-[12px] ${safeArea ? "pb-[max(0.5rem,env(safe-area-inset-bottom))]" : "pb-2"} backdrop-blur-sm`}
+      //
+      // The gap is `STRIP_INK_GAP`, and it means 12px of INK — not 12px of box. Every child below
+      // carries a negative margin that collapses its layout box onto its own painted mark, because a
+      // bare 12px glyph in a 24px hover square and a bordered pill share no relationship between the
+      // two (lib/iconRhythm.ts has the measurements, and the strip this replaced drew 5.78px between
+      // its two pills against 20.5px between its two icons on one uniform `gap-1.5`).
+      className={`${sticky ? "z-20" : BLOCK_RADIUS_INNER_BOTTOM} flex min-h-10 shrink-0 flex-wrap items-center justify-end ${STRIP_INK_GAP} border-t border-border/70 bg-panel/95 px-3 pt-2 text-[12px] ${safeArea ? "pb-[max(0.5rem,env(safe-area-inset-bottom))]" : "pb-2"} backdrop-blur-sm`}
     >
       {/* Bottom-LEFT cluster: background readings and presence markers, held away from the lifecycle
           buttons by the one `mr-auto` on this group. The readings render nothing when they have nothing
           to say — an empty flex box is zero-width, which is what keeps the strip laid out as it was
           before any of this existed. RecurringPromptControl is the one CONTROL here and therefore the one
           permanent child: a button that only appears once its feature is armed cannot arm it. */}
-      <span className="mr-auto flex items-center gap-1.5">
+      <span className={`mr-auto flex items-center ${STRIP_INK_GAP}`}>
         <ContextMeter thread={thread} />
         <PendingSnooze thread={thread} />
         <RecurringPromptControl thread={thread} />
@@ -138,7 +145,10 @@ function PendingSnooze({ thread }: { thread: ThreadView }) {
     : `Snoozed until ${formatSnoozeWake(until)}`
   return (
     <Tooltip label={detail} side="top" multiline={!!prompt}>
-      <span data-pending-snooze aria-label={detail} className="flex items-center px-0.5 text-muted/60">
+      {/* `INK_TRIM_HOURGLASS` because this glyph is the strip's most inset mark — lucide's `Hourglass`
+          paints 8px of its 12px box, so with `px-0.5` it carries 4px of dead space a side and would
+          otherwise sit 8px further from its neighbours than the strip's other marks do. */}
+      <span data-pending-snooze aria-label={detail} className={`flex items-center px-0.5 text-muted/60 ${INK_TRIM_HOURGLASS}`}>
         <Hourglass size={12} />
       </span>
     </Tooltip>

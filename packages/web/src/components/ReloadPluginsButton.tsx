@@ -3,6 +3,7 @@ import { Plug } from "lucide-react"
 import type { ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
+import { INK_TRIM_PLUG } from "../lib/iconRhythm.ts"
 import { Tooltip } from "./Tooltip.tsx"
 
 // Re-read this worker's plugin closure — hooks, skills, agent profiles, MCP servers — INTO the running
@@ -72,7 +73,13 @@ export function ReloadPluginsButton({ thread }: { thread: ThreadView }) {
         // glyphs are symmetric about the viewBox centre, so ink centre and box centre coincide exactly
         // (measured dy 0.00 at every size) and no vertical nudge applies. For the record the puzzle
         // this replaces ran 1.34× — it OUT-weighed the restart verb, which the swap also fixes.
-        className="flex size-6 items-center justify-center rounded-md text-fg/55 hover:bg-panel-2 hover:text-fg/80 disabled:opacity-50"
+        //
+        // The narrowness has a SPACING cost the 24px square hides, which is what `INK_TRIM_PLUG` pays:
+        // 8px of ink centred in a 24px box leaves ~8px of dead space a side, so on the strip's flat
+        // `gap-1.5` this mark sat 20.5px of clear space from the restart verb while the two pills
+        // beside them sat 5.78px apart. The trim collapses the layout box onto the ink so the footer's
+        // one gap governs this mark exactly as it governs a bordered pill (lib/iconRhythm.ts).
+        className={`flex size-6 items-center justify-center rounded-md text-fg/55 hover:bg-panel-2 hover:text-fg/80 disabled:opacity-50 ${INK_TRIM_PLUG}`}
       >
         <Plug size={13} />
       </button>

@@ -4,6 +4,7 @@ import { Loader2, RefreshCw } from "lucide-react"
 import type { ThreadView } from "@frizz/shared"
 import { restartWorker } from "../lib/restartWorker.ts"
 import { useDevFrizzBuild } from "../lib/devBuild.ts"
+import { INK_TRIM_REFRESH } from "../lib/iconRhythm.ts"
 import { Tooltip } from "./Tooltip.tsx"
 
 // "Restart worker" — replace this thread's live `claude` process, keeping the conversation.
@@ -72,14 +73,26 @@ export function RestartWorkerButton({ thread }: { thread: ThreadView }) {
         //
         // 24px square, mirroring this app's OWN icon-action size (lib/statusBar.ts: "the WCAG 2.2
         // minimum pointer target, and the largest size that still reads as part of a 12px text strip
-        // rather than as chrome parked next to it"). Measured against 28px in the running footer: a
-        // padded icon can never sit at the 6px the pills keep between each other, but 24px spends 12px
-        // from ink to the Snooze pill where 28px spent 14px, and the tighter one holds the strip's
-        // rhythm. The glyph stays at the strip's own 12px so the one verb WITHOUT a label does not
-        // out-weigh the two with them, and the tone sits a step below theirs (fg/55) to keep saying
-        // "maintenance verb". Ink measures 0.20px off the labels' cap band — under the ~0.3px floor
-        // where a nudge only blurs it, and tighter than the Check beside it (0.45px), so no correction.
-        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-fg/55 outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60 disabled:cursor-not-allowed disabled:opacity-45"
+        // rather than as chrome parked next to it"). The glyph stays at the strip's own 12px so the
+        // one verb WITHOUT a label does not out-weigh the two with them, and the tone sits a step
+        // below theirs (fg/55) to keep saying "maintenance verb". Ink measures 0.20px off the labels'
+        // cap band — under the ~0.3px floor where a nudge only blurs it, and tighter than the Check
+        // beside it (0.45px), so no vertical correction.
+        //
+        // The square is the HOVER TARGET, not the mark, and `INK_TRIM_REFRESH` is what keeps the two
+        // from being confused: 10px of ink in a 24px box carries 7px of dead space a side, so this
+        // button used to sit 13px of clear space from the Snooze pill while the pills sat 5.78px from
+        // each other. Sizing the box against the strip's rhythm was the old attempt at that (24px was
+        // picked over 28px for spending 12px rather than 14px to the pill) and it could never work —
+        // no square is small enough to space a 10px glyph like a bordered pill AND large enough to
+        // click. The trim separates the two questions: the box stays 24px, its layout footprint
+        // becomes the ink, and one gap spaces the whole strip (lib/iconRhythm.ts).
+        //
+        // Consequence worth knowing: the trims pull this box and the plug's into a ~2.5px overlap.
+        // Invisible, because only one of the two can ever paint a hover fill at a time, and the
+        // overlap is empty padding on both sides — the ink stays 12px apart. The later element in the
+        // DOM (this one) wins the pointer there.
+        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-fg/55 outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60 disabled:cursor-not-allowed disabled:opacity-45 ${INK_TRIM_REFRESH}`}
       >
         {busy ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
       </button>

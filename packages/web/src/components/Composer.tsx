@@ -5,6 +5,7 @@ import { showToast } from "../store.ts"
 import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
 import { shouldInterruptSubmitComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
 import { queueComposerHandlesOptionEnter } from "../lib/queueComposerKeyboard.ts"
+import { RAIL_ACTION_OFFSET, RAIL_PAPERCLIP_OFFSET, RAIL_PAPERCLIP_PLAIN_OFFSET, RAIL_RESERVE_PLAIN, RAIL_RESERVE_WITH_ACTION, RAIL_SEND_OFFSET } from "../lib/iconRhythm.ts"
 
 // The shared prompt composer (the pattern the user called "perfect"): ONE rounded bordered box
 // holding a borderless auto-growing textarea plus a small round accent send button hovering INSIDE
@@ -387,14 +388,14 @@ export function Composer({
         // vertical band the floating buttons occupy, so the text runs FULL width (no right rail carved
         // out of every line). Without a footer the box is a single compact row and the right padding is
         // what keeps text from sliding under the floating paperclip/send buttons.
-        className={`block w-full resize-none bg-transparent px-3.5 ${footer ? "py-2.5 pb-3" : `py-2.5 ${railAction ? "pr-[7.25rem]" : "pr-20"}`} text-[13px] leading-relaxed text-fg outline-none placeholder:text-muted scrollbar-none disabled:opacity-60`}
+        className={`block w-full resize-none bg-transparent px-3.5 ${footer ? "py-2.5 pb-3" : `py-2.5 ${railAction ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN}`} text-[13px] leading-relaxed text-fg outline-none placeholder:text-muted scrollbar-none disabled:opacity-60`}
       />
       {/* Attachment chips along the bottom row — one square tile per attached file (image thumbnail or
           file-type icon), each removable. The paths still live in `value`; these tiles just render them
           instead of the raw absolute-path text. Reserve the right rail so tiles never slip under the
           paperclip/send buttons on the last row. */}
       {attachments.length > 0 && (
-        <div className={`flex flex-wrap gap-1.5 px-3 pb-2 ${railAction ? "pr-[7.25rem]" : "pr-20"}`}>
+        <div className={`flex flex-wrap gap-1.5 px-3 pb-2 ${railAction ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN}`}>
           {attachments.map((a, i) => (
             <AttachmentChip
               key={`${a.path}-${i}`}
@@ -412,15 +413,17 @@ export function Composer({
           inside the box arc and read misaligned. */}
       {/* Reserve the right-side action rail. Without this, three shrinkable readouts can extend under
           the absolutely positioned GitHub/send buttons on narrow composers. */}
-      {footer && <div className={`flex min-w-0 flex-wrap items-center gap-1 pl-1.5 pb-1.5 ${railAction ? "pr-[7.25rem]" : "pr-20"}`}>{footer}</div>}
-      {/* THE RIGHT RAIL, right to left: send at 8px, then one 28px button every 36px (28 + an 8px gap).
-          So send 8, railAction 44 (right-11), paperclip 80 (right-20) — and the text/footer/chip rows
-          reserve 108 + 8 = 116px (pr-[7.25rem]) so prose keeps the same 8px clearance off the leftmost
-          button that it has with no rail action (pr-20 against a paperclip ending at 72).
-          The paperclip's offset was `right-[4.625rem]` (74px) until 2026-08-01, which left a 2px gap
-          beside the rail button and 8px on the other side — measured, not eyeballed, the first time a
-          rail action appeared in the THREAD composer beside the send arrow. */}
-      {railAction && <div className="absolute bottom-2 right-11 flex items-center">{railAction}</div>}
+      {footer && <div className={`flex min-w-0 flex-wrap items-center gap-1 pl-1.5 pb-1.5 ${railAction ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN}`}>{footer}</div>}
+      {/* THE RIGHT RAIL, right to left: send, then the optional rail action, then the paperclip. The
+          offsets are NOT an even 36px pitch any more — they are derived from each button's INK, which
+          is the only thing the eye measures the rail by. Send is a FILLED square, so its ink is its
+          whole 28px box; the paperclip paints 13px of its 28 and the GitHub mark 12.75, so an even
+          pitch put 22.25px of clear space between the two icons against 15.75px between the GitHub
+          mark and send — "the attachment icon and the GitHub icon feel further apart than the GitHub
+          icon and the up arrow" (maintainer 2026-08-04). The derivation and the residual are in
+          lib/iconRhythm.ts; the rows above reserve the leftmost button's box edge + 8px so prose keeps
+          its clearance off the rail either way. */}
+      {railAction && <div className={`absolute bottom-2 ${RAIL_ACTION_OFFSET} flex items-center`}>{railAction}</div>}
       {/* Attach: a hidden file input driven by the paperclip. Sits in the right rail LEFT of the send
           button (and left of any railAction), so it never overlaps the mode/model footer or the send
           affordance. Accept is the shared safe-tier allowlist; the /attach route re-validates. */}
@@ -441,7 +444,9 @@ export function Composer({
         disabled={busy || uploading}
         title="Attach files"
         aria-label="Attach files"
-        className={`absolute bottom-2 ${railAction ? "right-20" : "right-11"} flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-[color,background-color] enabled:hover:bg-panel-2/70 enabled:hover:text-fg disabled:opacity-50`}
+        // With no rail action the paperclip TAKES the rail-action slot — at its OWN offset, not the
+        // rail action’s, because it paints 1px less dead space on that side (lib/iconRhythm.ts).
+        className={`absolute bottom-2 ${railAction ? RAIL_PAPERCLIP_OFFSET : RAIL_PAPERCLIP_PLAIN_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-[color,background-color] enabled:hover:bg-panel-2/70 enabled:hover:text-fg disabled:opacity-50`}
       >
         {uploading ? <Loader2 size={15} strokeWidth={2} className="animate-spin" /> : <Paperclip size={15} strokeWidth={2} />}
       </button>
@@ -456,7 +461,7 @@ export function Composer({
         disabled={!hasContent || busy || uploading}
         title="Send (Enter)"
         aria-label="Send"
-        className={`absolute bottom-2 right-2 flex h-7 w-7 items-center justify-center rounded-lg transition-all ${
+        className={`absolute bottom-2 ${RAIL_SEND_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg transition-all ${
           // Active = neutral-bright (light-on-dark) primary, NOT accent — yellow stays the focus motif.
           hasContent && !busy && !uploading
             ? "bg-fg text-bg hover:opacity-90 active:scale-95"

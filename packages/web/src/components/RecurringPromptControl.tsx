@@ -7,6 +7,7 @@ import {
 } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { formatAgo } from "../lib/durationLabels.ts"
+import { INK_TRIM_HEARTBEAT } from "../lib/iconRhythm.ts"
 import { showToast } from "../store.ts"
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/Popover.tsx"
 
@@ -49,7 +50,7 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
           data-recurring-prompt
           data-recurring-prompt-on={live ? "true" : "false"}
           aria-label={live ? "Recurring prompt (on)" : "Recurring prompt"}
-          className="flex items-center rounded-md px-0.5 py-0.5 outline-none"
+          className={`flex items-center rounded-md px-0.5 py-0.5 outline-none ${INK_TRIM_HEARTBEAT}`}
         >
           {/* A HEART WITH A PULSE THROUGH IT, and the ONLY surface that says this exists (the rail
               deliberately carries no mark — see groups.ts).
@@ -69,8 +70,15 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
               GREY by default and coloured only while something is actually armed: the footer's left
               cluster is a status strip first, so a control with nothing to report has to read as quiet
               as the empty slot it would otherwise leave. Amber, not the app's accent yellow, so it
-              reads as a state rather than the focus motif. */}
-          <HeartPulse size={12} className={live ? "text-amber-400/90" : "text-muted/45 hover:text-muted"} />
+              reads as a state rather than the focus motif.
+
+              QUIET, NOT DIMMER THAN ITS NEIGHBOURS. This was `text-muted/45` against the meter's and
+              the hourglass's `text-muted/60`, and the left cluster consequently read as three marks
+              from three different families (maintainer 2026-08-04: "the icon brightnesses and spacing
+              look absolutely terrible"). The cluster is one status group, so it takes one tone — the
+              armed/idle distinction is carried by the amber, which is the state worth seeing, and not
+              by holding the resting glyph a step below the readouts beside it. */}
+          <HeartPulse size={12} className={live ? "text-amber-400/90" : "text-muted/60 hover:text-muted"} />
         </button>
       </PopoverTrigger>
       <PopoverContent

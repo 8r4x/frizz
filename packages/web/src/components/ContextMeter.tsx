@@ -28,8 +28,17 @@ import { Tooltip } from "./Tooltip.tsx"
 
 // Geometry for a 16-unit viewBox donut. r + half the stroke is the OUTER edge, held at 7.5 so the ring
 // sits fully inside the box — thinning the stroke therefore RAISES r rather than shrinking the glyph.
-const R = 6.5
-const STROKE = 2
+//
+// STROKE IS MATCHED TO THE CLUSTER, not chosen. This dial sits between two lucide glyphs (Hourglass,
+// HeartPulse) that draw at 12px with strokeWidth 2 in a 24-unit viewBox = a 1.0px line. A 16-unit
+// viewBox rendered at the footer's 1.05em (12.6px) scales by 0.7875, so the old strokeWidth 2 painted
+// a 1.575px line — HALF AGAIN as heavy as either neighbour, which is what made a three-glyph status
+// cluster read as three different families (maintainer 2026-08-04: "the icon brightnesses and spacing
+// look absolutely terrible"). 1.25 paints 0.98px and lands the dial in the same weight as the marks
+// beside it. Colour was never the whole story here: two marks in one tone still read as mismatched
+// when one of them is drawn with a fatter pen.
+const STROKE = 1.25
+const R = 7.5 - STROKE / 2
 const CIRCUMFERENCE = 2 * Math.PI * R
 
 /** Percent for the tooltip: floored, so it only reads 100% when the context genuinely is full. */
