@@ -2289,3 +2289,25 @@ test("only an open adopts a fray-era install; --stop and --status resolve withou
     rmSync(repo, { recursive: true, force: true });
   }
 });
+
+// An `npx frizz` user told to run "frizz-dev" inside a repo goes looking for a command they do not
+// have. The source shim exports FRIZZ_SOURCE_COMMAND; the published launcher exports nothing.
+test("the not-a-repo error names the command the operator actually typed", () => {
+  const plain = mkdtempSync(join(tmpdir(), "frizz-notrepo-"));
+  const home = mkdtempSync(join(tmpdir(), "frizz-notrepo-home-"));
+  try {
+    assert.throws(
+      () => resolveWorkspace(plain, home, {}),
+      /^Error: frizz must be run inside a Git repository/,
+      "published launcher: no FRIZZ_SOURCE_COMMAND set"
+    );
+    assert.throws(
+      () => resolveWorkspace(plain, home, { FRIZZ_SOURCE_COMMAND: "frizz-dev" }),
+      /^Error: frizz-dev must be run inside a Git repository/,
+      "source checkout: the shim names itself"
+    );
+  } finally {
+    rmSync(plain, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});

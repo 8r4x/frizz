@@ -412,9 +412,11 @@ export function resolveWorkspace(
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
   } catch {
-    throw new Error(
-      `frizz-dev must be run inside a Git repository (cwd: ${cwd})`
-    );
+    // Name the command the operator actually typed. The source shim exports
+    // FRIZZ_SOURCE_COMMAND=frizz-dev; the published launcher sets nothing, and telling an `npx frizz`
+    // user that "frizz-dev" must be run in a repo sends them looking for a command they do not have.
+    const command = env.FRIZZ_SOURCE_COMMAND?.trim() || "frizz";
+    throw new Error(`${command} must be run inside a Git repository (cwd: ${cwd})`);
   }
   if (migrate) migrateFrayGlobalRoots({ env, home });
   const root0 = realpathSync(gitRoot);
