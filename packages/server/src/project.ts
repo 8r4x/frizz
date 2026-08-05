@@ -8,7 +8,8 @@ import {
   type GitProjectIdentityScope,
 } from "./project-identity.ts"
 import type { ProjectLaunchTarget } from "./project-launch.ts"
-import { discoverProjectRoot, ensureProjectIdFile } from "./project-root.ts"
+import { discoverProjectRoot, ensureProjectIdFile, writeProjectIdFile } from "./project-root.ts"
+import { registerProject } from "./project-registry.ts"
 import { projectStateDir } from "./frizz-paths.ts"
 
 // Workspace resolution + on-disk locations. Everything here is derived once at boot and
@@ -64,9 +65,6 @@ export function resolveProjectDir(cwd = process.cwd()): string {
     }).trim()
     return realpathSync(root)
   } catch (error) {
-    // A malformed config, unsafe ownership, missing Git binary, or other repository failure must not
-    // silently turn a real repo into a fresh random namespace. Only Git's explicit non-repo result is
-    // eligible for the historical degraded fallback.
     // A malformed config or unsafe ownership still fails closed — those mean a REAL repository we
     // could not read, and inventing a namespace for it would strand its board. "Not a repository" and
     // "git is not installed" are the two that legitimately mean there is no Git here, and both now
@@ -171,6 +169,30 @@ export function resolveProjectLabel(dir: string): string | null {
   }
 }
 
+/**
+ * Record this project in the machine's registry, silently — running the CLI inside a directory IS the
+ * authorization, so there is no prompt (plan §4b).
+ *
+ * The one case that needs a decision is a COPIED checkout: `cp -R` brings `.frizz/.id` along, so two
+ * directories claim one id. The registry spots it (the id is registered at another path that still
+ * exists) and refuses; the copy then gets a fresh id of its own rather than adopting the original's
+ * threads. That is the duplicate self-heal the id-in-the-tree design cannot do unaided.
+ */
+function registerAndReconcile(dir: string, id: string, home: string): string {
+  const remoteOwner = resolveProjectLabel(dir)?.split("/")[0]
+  try {
+    const first = registerProject({ dir, id, remoteOwner }, home)
+    if (first.action !== "duplicate") return id
+    const minted = writeProjectIdFile(dir, randomUUID())
+    registerProject({ dir, id: minted, remoteOwner }, home)
+    return minted
+  } catch {
+    // The registry is an INDEX. Failing to write it must never stop a project from opening — the
+    // worst case is a missing card, and the next open re-registers.
+    return id
+  }
+}
+
 export function resolveProject(
   cwd = process.cwd(),
   home = homedir(),
@@ -178,7 +200,7 @@ export function resolveProject(
 ): Project {
   const identity = resolveProjectIdentity(resolveProjectDir(cwd), home)
   const dir = identity.root
-  const id = identity.id
+  const id = registerAndReconcile(dir, identity.id, home)
   const stateDir = projectStateDir(id, home)
   mkdirSync(stateDir, { recursive: true })
   const name = basename(dir) || dir

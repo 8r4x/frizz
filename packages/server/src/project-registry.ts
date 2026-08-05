@@ -1,0 +1,244 @@
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { homedir } from "node:os"
+import { basename, dirname, join } from "node:path"
+import { slugify } from "@frizz/shared"
+import { frizzPaths } from "./frizz-paths.ts"
+
+// THE MACHINE'S LIST OF PROJECTS.
+//
+// One Frizz per machine needs something no per-project server ever did: a list of every project, to
+// draw a grid of them and to route `/<slug>` at one of them. That list did not exist — the mapping
+// only ever ran repo → id, with no reverse index, and 38 of this machine's 46 state directories have
+// no on-disk record of which repo they belong to at all.
+//
+// THIS FILE IS AN INDEX, NOT IDENTITY. The id lives in the project, at `.frizz/.id` (project-root.ts),
+// and that stays the source of truth. Everything here is derived from it and rebuildable by opening a
+// project again — which is what makes a machine-level file acceptable at all after the deliberate
+// choice to keep identity local. Delete registry.json and you lose card ordering and URL slugs, not
+// a single thread.
+//
+// Keying on the id rather than the path is what makes a project SURVIVE BEING MOVED: `~/.frizz/
+// projects/<id>/` already holds every thread, log and attachment, so a path-keyed registry would have
+// to re-key all of that on a `mv` or keep a path → id map anyway. The id is already the spine.
+//
+// It also buys back the duplicate-checkout self-heal that went out with `identity.json`: an id found
+// at a path the registry does not know, while the path it DOES know still exists, means someone
+// `cp -R`'d a project. Copying is the one case the id-in-the-tree design cannot distinguish on its
+// own, and the registry sees it for free.
+
+export interface RegistryEntry {
+  /** The project id — the same UUID in that project's `.frizz/.id`. */
+  id: string
+  /** Canonical root, as resolved when it was last opened. */
+  path: string
+  /** URL alias: `/<slug>`. Derived once at registration and never re-derived — see §1 of the plan. */
+  slug: string
+  /** Operator's display override, if they renamed it. */
+  name?: string
+  lastOpenedAt: string
+  /** Hidden from the grid without forgetting it — throwaway repos should not be permanent fixtures. */
+  archived?: boolean
+}
+
+export interface Registry {
+  version: 1
+  projects: RegistryEntry[]
+}
+
+export type RegisterAction = "created" | "reopened" | "moved" | "rekeyed" | "duplicate"
+
+const EMPTY: Registry = { version: 1, projects: [] }
+
+/**
+ * Basenames too generic to be a useful URL on their own — `~/x/app` and `~/y/app` are both `app`.
+ * Qualified with the parent directory at registration (`pullfrog/app` → `pullfrog-app`).
+ */
+const GENERIC = new Set([
+  "app", "src", "web", "www", "main", "repo", "code", "server", "client",
+  "packages", "site", "scratch", "tmp", "test",
+])
+
+/**
+ * Segments a project may never take, because Frizz itself answers on them. `_frizz` is the formal
+ * namespace; the rest are today's hardcoded routes and static assets, kept until they move under it.
+ */
+const RESERVED = new Set([
+  "_frizz", "rpc", "events", "ws", "term", "attach", "local-image", "local-visualization",
+  "assets", "favicon", "manifest", "index", "api", "health",
+])
+
+export function registryPath(home = homedir()): string {
+  return join(frizzPaths({ home }).data, "registry.json")
+}
+
+export function readRegistry(home = homedir()): Registry {
+  let raw: string
+  try {
+    raw = readFileSync(registryPath(home), "utf8")
+  } catch {
+    return { ...EMPTY, projects: [] }
+  }
+  try {
+    const parsed = JSON.parse(raw) as Registry
+    if (parsed?.version !== 1 || !Array.isArray(parsed.projects)) return { ...EMPTY, projects: [] }
+    // A malformed entry is dropped rather than poisoning the whole list — this is an index, and the
+    // cost of forgetting one card is that opening that project re-registers it.
+    return {
+      version: 1,
+      projects: parsed.projects.filter(
+        (p) => p && typeof p.id === "string" && typeof p.path === "string" && typeof p.slug === "string",
+      ),
+    }
+  } catch {
+    return { ...EMPTY, projects: [] }
+  }
+}
+
+/** open(wx) → fsync → rename, the same shape project-launch.ts uses: a reader never sees a half file. */
+export function writeRegistry(registry: Registry, home = homedir()): void {
+  const path = registryPath(home)
+  mkdirSync(dirname(path), { recursive: true })
+  const temp = `${path}.${process.pid}.tmp`
+  let fd: number | undefined
+  try {
+    fd = openSync(temp, "w", 0o600)
+    writeFileSync(fd, `${JSON.stringify(registry, null, 2)}\n`, "utf8")
+    fsyncSync(fd)
+    closeSync(fd)
+    fd = undefined
+    renameSync(temp, path)
+  } catch (error) {
+    if (fd !== undefined) { try { closeSync(fd) } catch {} }
+    try { rmSync(temp, { force: true }) } catch {}
+    throw error
+  }
+}
+
+function slugifyProject(value: string): string {
+  const s = slugify(value)
+  return s === "thread" ? "project" : s // slugify's own fallback is thread-shaped
+}
+
+/**
+ * The URL alias, derived ONCE at registration.
+ *
+ * Never re-derived on boot: renaming a directory must not silently change a bookmarked URL. The
+ * incumbent always keeps its slug for the same reason — a newcomer is what gets qualified.
+ */
+export function deriveSlug(
+  dir: string,
+  taken: ReadonlySet<string>,
+  options: { remoteOwner?: string } = {},
+): string {
+  const base = slugifyProject(basename(dir))
+  const parent = slugifyProject(basename(dirname(dir)))
+  const qualified = GENERIC.has(base) && parent ? `${parent}-${base}` : base
+
+  const candidates = [
+    qualified,
+    ...(options.remoteOwner ? [`${slugifyProject(options.remoteOwner)}-${base}`] : []),
+    ...(parent && parent !== qualified ? [`${parent}-${base}`] : []),
+  ]
+  for (const candidate of candidates) {
+    if (candidate && !taken.has(candidate) && !RESERVED.has(candidate)) return candidate
+  }
+  const root = candidates[0] || "project"
+  for (let n = 2; ; n++) {
+    const candidate = `${root}-${n}`
+    if (!taken.has(candidate) && !RESERVED.has(candidate)) return candidate
+  }
+}
+
+/**
+ * Record that `id` lives at `dir`, reconciling whatever the registry believed before.
+ *
+ * `duplicate` is the one the caller must act on: the id is registered at a DIFFERENT path that still
+ * exists, so this directory is a copy of that one rather than the same project moved. Nothing is
+ * written in that case — the caller mints a fresh id for the copy and calls again.
+ */
+export function registerProject(
+  input: { dir: string; id: string; remoteOwner?: string; now?: () => Date },
+  home = homedir(),
+): { entry?: RegistryEntry; action: RegisterAction } {
+  const registry = readRegistry(home)
+  const at = (input.now ?? (() => new Date()))().toISOString()
+  const byId = registry.projects.find((p) => p.id === input.id)
+
+  if (byId) {
+    if (byId.path === input.dir) {
+      byId.lastOpenedAt = at
+      writeRegistry(registry, home)
+      return { entry: byId, action: "reopened" }
+    }
+    // The id is claimed by a path that is still there ⇒ this directory is a COPY of it, not the same
+    // project relocated. Refuse rather than stealing the original's threads.
+    if (existsSync(join(byId.path, ".frizz", ".id"))) return { action: "duplicate" }
+    byId.path = input.dir
+    byId.lastOpenedAt = at
+    writeRegistry(registry, home)
+    return { entry: byId, action: "moved" }
+  }
+
+  // A known path whose id changed — the directory was replaced. The file in the tree wins.
+  const byPath = registry.projects.find((p) => p.path === input.dir)
+  if (byPath) {
+    byPath.id = input.id
+    byPath.lastOpenedAt = at
+    writeRegistry(registry, home)
+    return { entry: byPath, action: "rekeyed" }
+  }
+
+  const taken = new Set(registry.projects.map((p) => p.slug))
+  const entry: RegistryEntry = {
+    id: input.id,
+    path: input.dir,
+    slug: deriveSlug(input.dir, taken, { remoteOwner: input.remoteOwner }),
+    lastOpenedAt: at,
+  }
+  registry.projects.push(entry)
+  writeRegistry(registry, home)
+  return { entry, action: "created" }
+}
+
+/** Most recently opened first — the order a grid wants. `stale` marks a path that is gone. */
+export function listProjects(home = homedir()): (RegistryEntry & { stale: boolean })[] {
+  return readRegistry(home)
+    .projects.map((p) => ({ ...p, stale: !existsSync(p.path) }))
+    .sort((a, b) => (a.lastOpenedAt < b.lastOpenedAt ? 1 : a.lastOpenedAt > b.lastOpenedAt ? -1 : 0))
+}
+
+export function findBySlug(slug: string, home = homedir()): RegistryEntry | undefined {
+  return readRegistry(home).projects.find((p) => p.slug === slug)
+}
+
+/** Rename is the escape hatch for every derivation rule above, so it exists from day one. */
+export function renameProject(
+  id: string,
+  update: { slug?: string; name?: string; archived?: boolean },
+  home = homedir(),
+): RegistryEntry | undefined {
+  const registry = readRegistry(home)
+  const entry = registry.projects.find((p) => p.id === id)
+  if (!entry) return undefined
+  if (update.slug !== undefined) {
+    const slug = slugifyProject(update.slug)
+    if (RESERVED.has(slug)) throw new Error(`"${slug}" is reserved by Frizz itself`)
+    if (registry.projects.some((p) => p.id !== id && p.slug === slug)) {
+      throw new Error(`another project already uses "${slug}"`)
+    }
+    entry.slug = slug
+  }
+  if (update.name !== undefined) entry.name = update.name
+  if (update.archived !== undefined) entry.archived = update.archived
+  writeRegistry(registry, home)
+  return entry
+}
+
+export function forgetProject(id: string, home = homedir()): boolean {
+  const registry = readRegistry(home)
+  const before = registry.projects.length
+  registry.projects = registry.projects.filter((p) => p.id !== id)
+  if (registry.projects.length === before) return false
+  writeRegistry(registry, home)
+  return true
+}
