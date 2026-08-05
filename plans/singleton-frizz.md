@@ -236,8 +236,44 @@ Pre-existing and orthogonal to the singleton, but they are the same shared-resou
 
 The fix is the one already used correctly for the broker sockets — hash the state dir into the directory name (`packages/server/src/frizz-paths.ts:44-52` documents exactly this rationale: "two accounts cannot collide even in a shared `/tmp`").
 
+## 6b. MEASURED, 2026-08-05: the tailer claim was wrong, and the real hazard is boot
+
+§7 asked for this experiment before any lifecycle code. It was run against COPIES of this machine's
+real project databases, reading the real transcripts, timing `tailer.tick()` directly.
+
+| board | rows | cold first tick | warm p50 | warm p95 | duty @ p50 |
+| --- | --- | --- | --- | --- | --- |
+| frizz | 398 | **6875 ms** | 17.5 ms | 28.2 ms | 1.75 % |
+| nub | 245 | **7547 ms** | 8.7 ms | 15.7 ms | 0.87 % |
+| pullfrog/app | 82 | **1489 ms** | 3.9 ms | 8.6 ms | 0.39 % |
+
+**Steady state is a non-issue.** `scheduleTick` delays the next tick by `clamp(lastTickMs, 1000,
+10_000)`, so the ~50 % bound only BINDS once a tick already costs a full second — and real warm ticks
+are 40-250× under that. All three real boards running in one process demand **3 % of the event loop**,
+not 150 %. Even 42 boards at the measured median extrapolate to ~42 %, and most of those 42 are dead
+or tiny. **"Two tailers each claim 50 %" (§3, §4 item 1) is false**, and with it the claim that lazy
+activation is *mandatory*.
+
+**The hazard is the cold prime, which nobody had named.** The first tick costs 1.5-7.5 s, and
+`start()` runs it SYNCHRONOUSLY (`tailer.ts:4127-4137` — `onPrimeProgress` only observes it, it does
+not chunk it). Activating N projects therefore blocks the loop for the SUM of their primes: ten
+projects is over a minute of a completely stalled server. Cost does not track row count — nub primes
+slower at 245 rows than frizz does at 398 — so it is transcript volume, not board size.
+
+Production logs corroborate the shape: across 52 real runs, **28 never logged an over-budget tick at
+all** and 19 logged exactly one; only 5 ran sustained (peaking at occurrences 30, 240, 300, 360). The
+worst single tick was 8565 ms, and one 3739 ms tick had **4 sessions** — consistent with cold prime and
+pathological transcripts, not with steady-state saturation.
+
+**So §4 item 1 changes shape.** It is not a cross-tenant *budget* problem needing an arbiter,
+round-robin scheduler, or `worker_threads`. It is a *boot* problem: make the prime incremental and
+yielding, so activating a project never blocks the loop for seconds. That is a smaller and much better
+defined change than the one the plan feared, and it is the actual prerequisite for the tenant
+lifecycle. Lazy activation survives on its own merits — priming a board nobody is looking at is
+waste — but it is now an optimization, not a load-bearing constraint.
+
 ## 7. No open questions
 
 Everything is decided: unified process, real root repos only (no worktrees), silent auto-registration, port `9393` falling back to `19393`, and — as a consequence of the unified process — schedulers stay on for every registered project while tailers and watchers activate on view (§4).
 
-The one thing to settle with an experiment rather than a decision is **item 1 of §4**: whether N tailers genuinely saturate the event loop. That claim is read from the scheduling logic and its own over-budget warning, not measured, and it is the assumption the whole activation design rests on. Run it before writing the lifecycle code.
+~~The one thing to settle with an experiment rather than a decision is **item 1 of §4**.~~ **Run, 2026-08-05 — see §6b.** The saturation claim was false: real warm ticks are 4-18 ms, so three real boards want 3% of the event loop, not 150%. The real hazard is the SYNCHRONOUS cold prime (1.5-7.5 s per project), which makes activation — not steady state — the thing to fix. Item 1 of §4 is a boot problem, not a budget problem.
