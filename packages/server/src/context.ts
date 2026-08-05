@@ -35,7 +35,8 @@ import {
   type ClaudeAgentBrokerBridge,
 } from "./backend/claude-agent-broker-bridge.ts"
 import { createClaudeRuntimeIngest, type ClaudeRuntimeIngest } from "./backend/claude-runtime-ingest.ts"
-import { CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX, type ClaudePermissionMode } from "./backend/claude-agent-sdk-protocol.ts"
+import type { ClaudePermissionMode } from "./backend/claude-agent-sdk-protocol.ts"
+import { describeClaudeBrokerDiagnostic } from "./backend/claude-broker-diagnostics.ts"
 import {
   ADOPTION_RECONCILE_INTERVAL_MS,
   adoptionRuntimeBinding,
@@ -622,28 +623,14 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
           storage.allSessions()
             .filter((row) => isBrokerClaudeRow(row) && row.state !== "archived" && row.archived !== 1)
             .map((row) => ({ threadSlug: row.slug, sessionId: row.session_id, cwd: project.dir })),
-        // A broker daemon that died while frizz was down is invisible to the live relay — the bridge
-        // synthesizes the diagnostic from the dead daemon's own exit record, and this is where it
-        // becomes readable. The server log is the right surface: it is what an operator (and the next
-        // agent debugging a lost thread) already greps when a thread goes quiet, and it costs one line
-        // per death rather than a card nobody asked for.
-        //
-        // A DROPPED INPUT earns the same line, and learning that cost a whole afternoon. The daemon
-        // relays it here as a `stderr` diagnostic, and this handler used to discard everything that
-        // was not a crash — so on 2026-08-05 thread `are-taking-over-an-in-flight-epic` refused every
-        // input from 19:25:05Z onward, 21 heartbeats and the operator's own messages alike, and said
-        // nothing anywhere frizz could see. The scheduler had already marked each delivery `delivered`
-        // (the `input` frame carries no reply by design), so the board showed a healthy heartbeat on a
-        // thread that could no longer hear a word. This is deliberately a keyword match on the daemon's
-        // own drop message rather than a widening to all stderr: ordinary provider stderr is noise, and
-        // a line per drop is what turns that afternoon into one grep.
+        // The server log is the right surface for the two diagnostics worth a line — a daemon that died
+        // (invisible to the live relay, so the bridge synthesizes it from the dead daemon's own exit
+        // record) and an input the daemon threw away. It is what an operator, and the next agent
+        // debugging a lost thread, already greps when a thread goes quiet. Which diagnostics qualify and
+        // how they read is describeClaudeBrokerDiagnostic's business, so it stays testable on its own.
         onDiagnostic: (slug, _sessionId, diagnostic) => {
-          if (diagnostic.kind === "stderr" && diagnostic.message.startsWith(CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX)) {
-            frizzLog.warn("broker", `claude broker ${slug}: ${diagnostic.message}`)
-            return
-          }
-          if (diagnostic.kind !== "lifecycle" || diagnostic.phase !== "crashed") return
-          frizzLog.warn("broker", `claude broker ${slug}: ${diagnostic.message ?? "died without a recorded cause"}`)
+          const line = describeClaudeBrokerDiagnostic(diagnostic)
+          if (line) frizzLog.warn("broker", `claude broker ${slug}: ${line}`)
         },
       })
     : undefined

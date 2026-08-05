@@ -13,7 +13,8 @@ import Database from "../sqlite.ts"
 import { createInteractionStore } from "../interaction-store.ts"
 import { createClaudeAgentBrokerBridge } from "./claude-agent-broker-bridge.ts"
 import { claudeBrokerRecordPath, readBrokerRecord } from "./claude-broker-host.ts"
-import type { ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
+import { describeClaudeBrokerDiagnostic } from "./claude-broker-diagnostics.ts"
+import { CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX, type ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
 
 const fakeCli = fileURLToPath(new URL("./claude-agent-sdk.fixtures/fake-claude-cli.mjs", import.meta.url))
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -148,6 +149,51 @@ test("followUp: freshProcess retires the live daemon and cold-resumes; a plain f
     bridge.releaseSession(slug, sessionId, "session-deleted")
     bridge.close()
     try { const r = recordOf(); if (r) process.kill(r.daemonPid, "SIGKILL") } catch {}
+    await rmEventually(dir)
+  }
+})
+
+// THE HANDLER `context.ts` INSTALLS IS THIS ONE, so this is where a refused input has to arrive. The
+// `input` frame carries no reply by design, so `deps.onDiagnostic` is the only channel by which the
+// frizz server can ever learn that a message the scheduler already recorded as `delivered` was thrown
+// away — and until 2026-08-05 the server's end of it discarded everything that was not a daemon crash.
+// Thread `are-taking-over-an-in-flight-epic` refused every input for over two hours in total silence.
+test("a refused input reaches the bridge's onDiagnostic — the server's only view of a lost message", { timeout: 25_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cbrk-drop-"))
+  // `hold-inputs` never answers, so the first uuid stays outstanding and re-using it is refused — the
+  // cheapest way to make the daemon's `handle.send` reject through the bridge's own public surface.
+  const exe = join(dir, "fake-claude--hold-inputs.mjs")
+  copyFileSync(fakeCli, exe); chmodSync(exe, 0o700)
+  const seen: { slug: string; message: string }[] = []
+  const bridge = createClaudeAgentBrokerBridge({
+    stateDir: dir, executablePath: exe,
+    env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" },
+    interactions: createInteractionStore(new Database(":memory:")), projectId: "proj-1",
+    onEvent: () => {},
+    onDiagnostic: (slug, _sid, d) => { if (d.kind === "stderr") seen.push({ slug, message: d.message }) },
+  })
+  const sessionId = randomUUID()
+  const deliveryId = randomUUID()
+  const slug = "drop-thread"
+  try {
+    await bridge.spawnDispatch({ threadSlug: slug, sessionId, cwd: dir, prompt: "start the session", permissionMode: "default" })
+    await bridge.followUp({ threadSlug: slug, sessionId, cwd: dir, text: "this one holds the uuid", deliveryId })
+    await sleep(300)
+    await bridge.followUp({ threadSlug: slug, sessionId, cwd: dir, text: "this one is refused", deliveryId })
+    const deadline = Date.now() + 10_000
+    while (!seen.some((s) => s.message.startsWith(CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX))) {
+      if (Date.now() > deadline) throw new Error("the drop never reached onDiagnostic")
+      await sleep(100)
+    }
+    const drop = seen.find((s) => s.message.startsWith(CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX))!
+    assert.equal(drop.slug, slug, "the line names the thread whose message was lost")
+    assert.match(drop.message, /already outstanding/, "…and why it was refused")
+    // The mapping the server applies to it is describeClaudeBrokerDiagnostic's, tested beside it.
+    assert.equal(describeClaudeBrokerDiagnostic({ kind: "stderr", message: drop.message, truncated: false }), drop.message)
+  } finally {
+    bridge.releaseSession(slug, sessionId, "session-deleted")
+    bridge.close()
+    try { const r = readBrokerRecord(claudeBrokerRecordPath(dir, sessionId)); if (r) process.kill(r.daemonPid, "SIGKILL") } catch {}
     await rmEventually(dir)
   }
 })

@@ -18,7 +18,7 @@
 // Deliberately synchronous and best-effort — a logging failure must never perturb the session.
 import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync } from "node:fs"
 import { join } from "node:path"
-import type { ClaudeDiagnostic } from "./claude-agent-sdk-protocol.ts"
+import { CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX, type ClaudeDiagnostic } from "./claude-agent-sdk-protocol.ts"
 
 // Rotate at 4 MB and keep exactly one previous file — forensics want recent history, not an archive.
 const MAX_BYTES = 4 * 1024 * 1024
@@ -163,6 +163,27 @@ export function describeClaudeBrokerExit(record: ClaudeBrokerExitRecord | null):
   if (!record) return "the broker daemon is gone and left no exit record (killed outright, or it predates exit breadcrumbs)"
   const detail = record.exit.detail ? `: ${record.exit.detail}` : ""
   return `the broker daemon exited (${record.exit.reason}${detail}) at ${record.at}`
+}
+
+/**
+ * The one operator-facing line a relayed diagnostic is worth, or `undefined` for the ones that are not.
+ *
+ * Exactly two clear the bar, and the second was learned the hard way. A daemon DEATH has always been
+ * here. A DROPPED INPUT joined it on 2026-08-05, after thread `are-taking-over-an-in-flight-epic`
+ * refused every input for over two hours — 21 heartbeats and the operator's own messages alike — while
+ * the server's handler discarded every diagnostic that was not a crash. The `input` frame carries no
+ * reply by design (see claude-agent-broker-bridge.ts), so this relay is the ONLY way frizz can learn
+ * that a message it already recorded as `delivered` was in fact thrown away.
+ *
+ * The rest of `stderr` is ordinary provider noise, which is why this matches the daemon's own drop
+ * prefix rather than widening to the kind. A line per drop is what turns that afternoon into one grep.
+ */
+export function describeClaudeBrokerDiagnostic(diagnostic: ClaudeDiagnostic): string | undefined {
+  if (diagnostic.kind === "stderr") {
+    return diagnostic.message.startsWith(CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX) ? diagnostic.message : undefined
+  }
+  if (diagnostic.phase !== "crashed") return undefined
+  return diagnostic.message ?? "died without a recorded cause"
 }
 
 /** Read back a session's diagnostics, newest last. Missing/garbage lines are skipped, never thrown —

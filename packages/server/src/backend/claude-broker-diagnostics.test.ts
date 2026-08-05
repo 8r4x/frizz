@@ -6,8 +6,10 @@ import { join, dirname } from "node:path"
 import {
   claudeBrokerDiagnosticLogPath,
   createClaudeBrokerDiagnosticWriter,
+  describeClaudeBrokerDiagnostic,
   readClaudeBrokerDiagnostics,
 } from "./claude-broker-diagnostics.ts"
+import { CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX } from "./claude-agent-sdk-protocol.ts"
 
 const tmp = () => mkdtempSync(join(tmpdir(), "frizz-brokerdiag-"))
 const meta = { daemonPid: 4242, generation: "gen-1" }
@@ -72,4 +74,22 @@ test("a write failure never throws back into the session it is observing", () =>
   writeFileSync(join(dir, "claude-broker"), "not a directory")
   const write = createClaudeBrokerDiagnosticWriter(claudeBrokerDiagnosticLogPath(dir, "sess"), meta)
   assert.doesNotThrow(() => write({ kind: "lifecycle", phase: "crashed", message: "boom" }))
+})
+
+// The two diagnostics worth waking an operator for, and the noise floor between them. The DROP case is
+// here because its absence cost over two hours of silence on 2026-08-05: the daemon relayed the drop,
+// the server discarded it as "not a crash", and the board went on showing a healthy heartbeat for a
+// thread that could no longer receive a single message.
+test("a dropped input and a daemon death earn a log line; ordinary provider stderr does not", () => {
+  const drop = `${CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX}: Claude outstanding input limit exceeded`
+  assert.equal(describeClaudeBrokerDiagnostic({ kind: "stderr", message: drop, truncated: false }), drop)
+  assert.equal(describeClaudeBrokerDiagnostic({ kind: "lifecycle", phase: "crashed", message: "boom" }), "boom")
+  assert.equal(
+    describeClaudeBrokerDiagnostic({ kind: "lifecycle", phase: "crashed" }),
+    "died without a recorded cause",
+    "a death with no cause still reports — the silence IS the finding",
+  )
+  assert.equal(describeClaudeBrokerDiagnostic({ kind: "stderr", message: "npm warn deprecated", truncated: false }), undefined)
+  assert.equal(describeClaudeBrokerDiagnostic({ kind: "lifecycle", phase: "started" }), undefined)
+  assert.equal(describeClaudeBrokerDiagnostic({ kind: "lifecycle", phase: "closed" }), undefined)
 })
