@@ -1,106 +1,14 @@
 #!/usr/bin/env node
-// Generates the Frizz logo concept sheet: one SVG per concept, rendered to real
-// PNGs at 512/128/64/32/16 so every idea is judged at the size it has to survive.
-//
-// The 16px rule that shapes every mark: 512 units -> 16px, so 1px = 32 units.
-// A stroke below ~50 units dissolves; an ink gap below ~56 units closes up.
+// Fifteen directions for the mark after the fray -> frizz rename, drawn as real
+// geometry and rendered at 512/128/64/32/16 so each is judged at the size it has
+// to survive. Shared geometry and rendering live in ./lib.mjs.
 
-import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { spawnSync } from "node:child_process"
+import { CASING, bowedRay, buildAll, corkscrew, fit, sineY, smooth, braid } from "./lib.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const outDir = join(here, "out")
-
-const SIZES = [512, 128, 64, 32, 16]
-const CASING = "#131519" // matches the tile so an over/under break reads as depth
-
-// ---------------------------------------------------------------- path helpers
-
-/** Catmull-Rom through the points, emitted as cubic beziers. */
-function smooth(points) {
-  const p = points
-  let d = `M${p[0][0].toFixed(1)} ${p[0][1].toFixed(1)}`
-  for (let i = 0; i < p.length - 1; i += 1) {
-    const p0 = p[i - 1] ?? p[i]
-    const p1 = p[i]
-    const p2 = p[i + 1]
-    const p3 = p[i + 2] ?? p[i + 1]
-    const c1 = [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6]
-    const c2 = [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6]
-    d += `C${c1[0].toFixed(1)} ${c1[1].toFixed(1)} ${c2[0].toFixed(1)} ${c2[1].toFixed(1)} ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`
-  }
-  return d
-}
-
-/** A vertical sine strand: x oscillates as y descends. */
-function sineY({ y0, y1, cx, amp, period, phase = 0, steps = 48 }) {
-  const points = []
-  for (let i = 0; i <= steps; i += 1) {
-    const y = y0 + ((y1 - y0) * i) / steps
-    points.push([cx + amp * Math.sin((2 * Math.PI * (y - y0)) / period + phase), y])
-  }
-  return smooth(points)
-}
-
-/**
- * Two strands wound into a braid. Strand A is laid over B everywhere, then the
- * short segments of B that belong on top are redrawn with a casing. At 16px the
- * casings close up and the pair reads as one thick cord, which is the point.
- */
-function braid({ y0, y1, cx, amp, period, width }) {
-  const a = { y0, y1, cx, amp, period, phase: 0 }
-  const b = { ...a, phase: Math.PI }
-  const cased = (d) => `<path d="${d}" stroke="${CASING}" stroke-width="${width + 16}"/>
-      <path d="${d}" stroke-width="${width}"/>`
-  const parts = [`<path d="${sineY(b)}" stroke-width="${width}"/>`, cased(sineY(a))]
-  // Crossings sit a quarter period in, then every half period. Put B over A at
-  // every other one so the weave alternates.
-  for (let k = 1; y0 + period / 4 + (k * period) / 2 < y1; k += 2) {
-    const yc = y0 + period / 4 + (k * period) / 2
-    const span = period * 0.34
-    parts.push(cased(sineY({ ...b, y0: Math.max(y0, yc - span), y1: Math.min(y1, yc + span), steps: 20 })))
-  }
-  return parts.join("\n      ")
-}
-
-/** A ray from the centre that bows tangentially, so it reads as a fibre not a spike. */
-function bowedRay({ cx, cy, angleDeg, length, bow, steps = 12 }) {
-  const a = (angleDeg * Math.PI) / 180
-  const points = []
-  for (let i = 0; i <= steps; i += 1) {
-    const t = i / steps
-    const r = length * t
-    const off = bow * Math.sin(Math.PI * t) * t
-    points.push([cx + r * Math.cos(a) - off * Math.sin(a), cy + r * Math.sin(a) + off * Math.cos(a)])
-  }
-  return smooth(points)
-}
-
-/**
- * A curly-cord corkscrew. `a > c` makes dy/dt change sign, so the strand doubles
- * back into real loops instead of degenerating into a sine wave.
- */
-function corkscrew({ r, c, a, turns, steps = 140 }) {
-  const points = []
-  for (let i = 0; i <= steps; i += 1) {
-    const t = (turns * 2 * Math.PI * i) / steps
-    points.push([r * Math.sin(t), c * t - a * Math.cos(t)])
-  }
-  return points
-}
-
-/** Scale and centre a point list into a box, preserving aspect. */
-function fit(points, { left, top, right, bottom }) {
-  const xs = points.map((p) => p[0])
-  const ys = points.map((p) => p[1])
-  const [minX, maxX, minY, maxY] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)]
-  const k = Math.min((right - left) / (maxX - minX), (bottom - top) / (maxY - minY))
-  const dx = (left + right) / 2 - ((minX + maxX) / 2) * k
-  const dy = (top + bottom) / 2 - ((minY + maxY) / 2) * k
-  return smooth(points.map(([x, y]) => [x * k + dx, y * k + dy]))
-}
 
 // ------------------------------------------------------------------- concepts
 // `mark` is the inner SVG for the glyph. Stroked paths inherit the gradient and
@@ -244,7 +152,7 @@ const concepts = [
     idea: "A curly-cord corkscrew — two real loops, not a wave. The most literal picture of the word, and the least literal about the product.",
     small: "Fails, and it is the only outright failure in the set. Two loops inside 288 units leaves ~30 units of counter — under 1px — so at 16px the holes fill and it becomes a lump. Shown unfudged.",
     risk: "The arithmetic kills it: any coil with more than one turn cannot clear the 2px counter floor at favicon size. This direction is off the table unless the favicon is allowed to be a different, simpler mark than the logo.",
-    mark: `<path d="${fit(corkscrew({ r: 76, c: 30, a: 92, turns: 2 }), { left: 132, top: 104, right: 380, bottom: 408 })}" stroke-width="54"/>`,
+    mark: `<path d="${smooth(fit(corkscrew({ r: 76, c: 30, a: 92, turns: 2 }), { left: 132, top: 104, right: 380, bottom: 408 }))}" stroke-width="54"/>`,
   },
   {
     id: "serpentine",
@@ -279,57 +187,6 @@ const concepts = [
   },
 ]
 
-// --------------------------------------------------------------------- render
-
-function svg(concept) {
-  return `<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#191a20"/>
-      <stop offset="1" stop-color="#0d0e10"/>
-    </linearGradient>
-    <radialGradient id="glow" cx="0.5" cy="0.44" r="0.5">
-      <stop offset="0" stop-color="#e8b923" stop-opacity="0.14"/>
-      <stop offset="1" stop-color="#e8b923" stop-opacity="0"/>
-    </radialGradient>
-    <!-- userSpaceOnUse, not the default objectBoundingBox: a purely vertical or
-         horizontal path has a zero-area bounding box, which makes a bbox
-         gradient undefined and drops the element entirely. -->
-    <linearGradient id="ink" gradientUnits="userSpaceOnUse" x1="120" y1="80" x2="400" y2="430">
-      <stop offset="0" stop-color="#ffdf7f"/>
-      <stop offset="0.52" stop-color="#e8b923"/>
-      <stop offset="1" stop-color="#c2870f"/>
-    </linearGradient>
-  </defs>
-  <rect x="16" y="16" width="480" height="480" rx="116" fill="url(#bg)"/>
-  <rect x="16.5" y="16.5" width="479" height="479" rx="115.5" fill="none" stroke="#2b2e35"/>
-  <circle cx="256" cy="228" r="205" fill="url(#glow)"/>
-  <g fill="none" stroke="url(#ink)" stroke-linecap="round" stroke-linejoin="round">
-      ${concept.mark.trim()}
-  </g>
-</svg>
-`
-}
-
-function render(source, output, size) {
-  const result = spawnSync("rsvg-convert", ["-w", String(size), "-h", String(size), source, "-o", output], { encoding: "utf8" })
-  if (result.status !== 0) throw new Error(result.stderr || `rsvg-convert exited ${result.status}`)
-}
-
-rmSync(outDir, { recursive: true, force: true })
-mkdirSync(outDir, { recursive: true })
-
-for (const concept of concepts) {
-  const source = join(outDir, `${concept.id}.svg`)
-  writeFileSync(source, svg(concept))
-  for (const size of SIZES) render(source, join(outDir, `${concept.id}-${size}.png`), size)
-}
-
-// The outgoing mark, rendered through the same pipeline so the before/after
-// comparison in the artifact is like for like.
-const currentIcon = join(here, "../../packages/web/public/favicon.svg")
-for (const size of SIZES) render(currentIcon, join(outDir, `current-${size}.png`), size)
-
-writeFileSync(join(outDir, "concepts.json"), JSON.stringify(concepts, null, 2))
-console.log(`${concepts.map((c) => c.id).join(" ")}`)
-console.log(`generated ${concepts.length} concepts x ${SIZES.length} sizes`)
+const count = buildAll(concepts, outDir, [["current", join(here, "../../packages/web/public/favicon.svg")]])
+console.log(concepts.map((c) => c.id).join(" "))
+console.log(`generated ${count} concepts`)
