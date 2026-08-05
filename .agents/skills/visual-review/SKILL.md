@@ -265,6 +265,21 @@ DOM, not by reasoning about it.
 
 ---
 
+## Rule 4b — HORIZONTAL rhythm is the same problem, and it has its own skill
+
+Everything above measures ink to place a mark VERTICALLY against text. The identical box-vs-ink gap
+opens sideways the moment two marks sit next to each other: `gap` spaces boxes, and a bare glyph in a
+hover square carries several px of dead space that a bordered or filled button does not. One uniform
+`gap-1.5` drew ink distances from 5.78px to 20.50px on a single footer strip.
+
+**Load `optical-spacing` whenever you set or judge the spacing of a ROW of controls** — an icon strip,
+a button rail, a footer of mixed glyphs and pills, or any "the spacing looks inconsistent" report on a
+strip whose CSS is provably uniform. It carries `scripts/ink-gaps.mjs` (this file's `ink-pixels.mjs`
+scans one centre row and cannot measure gaps), the negative-margin fix, and the pen-width rule for
+matching perceived WEIGHT, which no colour token can fix.
+
+---
+
 ## Rule 5 — geometry decides occlusion; the eye decides balance
 
 Both passes, every time. Geometry catches what the eye cannot (z-index, `overflow: hidden`, clipping,
@@ -294,6 +309,7 @@ Useful geometry assertions to run alongside the ink measurement:
 - [ ] Screenshot captured at a scale where the detail is judgeable, and **read back and critiqued by you**
 - [ ] Narrow-width shot too; no overlap, clipping, or escape
 - [ ] Every icon-beside-text pair ink-measured, corrected per glyph, residual re-measured to ~0
+- [ ] If the change is a ROW of marks, its horizontal rhythm measured too — `optical-spacing`
 - [ ] Corrections in `em`, proven to scale by re-measuring at a different size
 - [ ] New glyph tone/size compared against the sibling it sits beside (computed values, not eyeball)
 - [ ] If the pattern exists in a real product, the real one was measured and mirrored

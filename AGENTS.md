@@ -90,6 +90,12 @@ real error. Two non-negotiables from it:
   its path falls inside its viewBox, an emoji ignores your font size — so one shared nudge cannot fix a
   cluster. Measure each glyph, correct each in `em`, then re-measure and confirm the residual is ~0.
 
+**And load the `optical-spacing` skill whenever you set or judge the spacing of a ROW of controls** —
+an icon strip, a button rail, a footer of mixed glyphs and pills. The same law sideways: `gap` spaces
+boxes, so a bare glyph in a hover square and a bordered pill on one uniform `gap` drew ink distances
+from 5.78px to 20.50px on a single strip. It carries `scripts/ink-gaps.mjs`, the negative-margin fix,
+and the pen-width rule for matching perceived weight — which no colour token can fix.
+
 Do not ship "it renders" and wait to be told it looks wrong. If the pattern exists in a real product
 (GitHub, Linear, this app's own components), measure the real one and mirror it instead of designing
 from taste.
