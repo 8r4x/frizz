@@ -398,8 +398,34 @@ cross-check as a mitigation, no `(dev, ino)` duplicate-vs-moved heuristic, no pr
 
 What remains is genuinely small: walk up for a root (§4, needed regardless for sub-directory
 equivalence), read/write `.frizz/frizz.id` atomically under the existing named lock, and one
-migration off `git config`. `identity.json` may still earn its place as the recovery path for a
-deleted `.frizz/` (§3) — but that is a separate, smaller job, and no longer load-bearing.
+migration off `git config`.
+
+### And then `identity.json` goes too — nothing about identity is global
+
+The last global piece survived only to answer "what if someone deletes `.frizz/`?", and that question
+is asked by one sentence in the README FAQ: *"Everything durable lives outside your checkout in
+`~/.frizz/projects/<id>/`, so you can delete `.frizz/` and keep every thread and setting."* Honour
+that and the id cannot live solely in the project — you need a global record keyed by path and
+`(dev, ino)` so an orphaned directory can rejoin its board.
+
+**Amend the promise instead.** Once the id lives there, `.frizz/` IS load-bearing, and a FAQ calling
+it disposable is false whether or not the recovery record exists — the record only papers over it
+with a guess. And the guess is genuinely ambiguous: the `mv`-preserves-inode / `cp -R`-does-not
+distinction exists precisely because "moved" and "duplicated" are otherwise indistinguishable. Today
+proved what a mis-resolved pointer costs; the fix is pointers that do not get lost, not heuristics
+that reconstruct them.
+
+Nothing is destroyed by the change: delete `.frizz/` and the threads are still in
+`~/.frizz/projects/<id>/`, the directory has just forgotten which board is its. Nobody expects
+`rm -rf .git` to be a no-op. The honest sentence is that `.frizz/` holds the scratchpads and the
+project's id, the heavy state still lives outside the checkout, and deleting it starts a fresh board.
+
+One clause of the FAQ gets *better*: "Frizz does not touch your `.gitignore`, so add `.frizz/`
+yourself" stops being needed, because `.frizz/.gitignore` self-ignores. Note that promise was never
+in tension with it — the file goes inside Frizz's own directory, not in the user's `.gitignore`.
+
+End state: **no global identity state at all.** `~/.frizz/projects/<id>/` remains where the heavy
+state lives, but it is keyed BY the id, never a source of truth ABOUT it.
 
 ## Open questions for the human
 
