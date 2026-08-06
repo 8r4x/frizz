@@ -247,11 +247,26 @@ export interface FrizzMcp {
 // from this constant is what keeps the two backends' browser tooling in lockstep — edit HERE, never in
 // one backend alone. (The codex half was DESCRIBED here long before it was written: for a while this
 // paragraph was the only place it existed, and codex threads had no browser — read codex-mcp.ts.)
-// `--isolated` gives each worker a disposable browser profile (never the operator's own Chrome).
+// `--isolated` gives each worker a disposable browser profile (never the operator's own Chrome), and
+// `--headless` keeps the window off the operator's screen. BOTH are required and both default to
+// false upstream: this is the same pair `.mcp.json` pins for agents working in THIS repo, and the
+// same policy `.agents/skills/adhoc-cdp` states in as many words — "NEVER put a browser window on the
+// maintainer's screen … a verification run must be invisible". That rule was written for agents
+// editing frizz and never reached the workers frizz DISPATCHES, which is how the 2026-07-28 complaint
+// ("it keeps opening tabs in my actual real Chrome") came back on 2026-08-06 from a worker doing
+// ordinary browser QA in someone else's repo. A worker shares the desktop exactly as a fray agent
+// does, so it gets the same two flags.
 export const CHROME_DEVTOOLS_MCP = {
   name: "chrome-devtools",
   command: "npx",
-  args: ["-y", "chrome-devtools-mcp@latest", "--experimentalPageIdRouting", "--isolated", "--no-usage-statistics"],
+  args: [
+    "-y",
+    "chrome-devtools-mcp@latest",
+    "--experimentalPageIdRouting",
+    "--headless",
+    "--isolated",
+    "--no-usage-statistics",
+  ],
   startupTimeoutSec: 120,
 } as const
 
