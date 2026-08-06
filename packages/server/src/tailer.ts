@@ -86,6 +86,15 @@ const MAX_PRIME_ROWS_PER_TICK = 25
 // pathological transcript can still overrun it — that row is a pre-existing pathology, not something
 // the bound introduces — but it can no longer be followed by 24 more like it in the same tick.
 const PRIME_BUDGET_MS = 200
+/**
+ * Bytes converted to a string at once while reading a transcript.
+ *
+ * Anything comfortably under Node's ~512 MB string cap works; 16 MB keeps the transient allocation
+ * small on a cold prime of a huge file while still being one single read for the ordinary delta.
+ */
+const TRANSCRIPT_READ_WINDOW = 16 * 1024 * 1024
+/** Shared empty carry — allocating one per window read is pure garbage. */
+const EMPTY_BUFFER = Buffer.alloc(0)
 // Ceiling on the adaptive poll (see scheduleTick). A tick this expensive means something is badly
 // wrong, but the tailer is still the only source of turn/liveness telemetry — it must keep running.
 const MAX_POLL_MS = 10_000
@@ -3581,26 +3590,52 @@ export function createTailer(deps: TailerDeps): Tailer {
       state.partial = ""
     }
     if (size <= state.offset) return
-    let chunk = ""
+    // SPLIT ON THE BUFFER; only a single LINE is ever turned into a string.
+    //
+    // The read used to do `buf.toString()` over the whole delta. Fine for the incremental case it was
+    // written for — a few KB a tick — and silently fatal for a cold prime of a big transcript: Node
+    // caps a string at ~512 MB (buffer.constants.MAX_STRING_LENGTH), so a 565 MB file threw
+    // ERR_STRING_TOO_LONG, the catch below swallowed it, and the row NEVER primed. Not once, not on a
+    // later tick — no ai-title, no sub-agents, no background shells, forever, on the busiest thread on
+    // the machine. It hid because a long-lived server primes a transcript while it is still small and
+    // only reads the delta afterwards; only a restart re-primes from zero and meets the real size.
+    //
+    // Splitting on the BUFFER removes the cap entirely rather than working around it: the largest
+    // string this function now builds is one JSONL record. Scanning for 0x0A is safe on UTF-8 without
+    // any decoder, because every byte of a multi-byte sequence is >= 0x80 — a newline byte can only
+    // ever BE a newline, never part of a character. The carry between windows is a Buffer for the same
+    // reason, and it is copied because `buf` is reused by the next read.
+    let carry = state.partial ? Buffer.from(state.partial, "utf8") : EMPTY_BUFFER
     try {
       const fd = openSync(state.path, "r")
       try {
-        const buf = Buffer.allocUnsafe(size - state.offset)
-        const read = readSync(fd, buf, 0, buf.length, state.offset)
-        chunk = buf.toString("utf8", 0, read)
-        state.offset += read
+        const buf = Buffer.allocUnsafe(Math.min(TRANSCRIPT_READ_WINDOW, size - state.offset))
+        while (state.offset < size) {
+          const read = readSync(fd, buf, 0, Math.min(buf.length, size - state.offset), state.offset)
+          if (read <= 0) break
+          state.offset += read
+          const view = carry.length ? Buffer.concat([carry, buf.subarray(0, read)]) : buf.subarray(0, read)
+          let start = 0
+          for (;;) {
+            const nl = view.indexOf(0x0a, start)
+            if (nl === -1) break
+            const line = view.toString("utf8", start, nl)
+            backend.foldLine(state, line)
+            onLine?.(line)
+            start = nl + 1
+          }
+          carry = start < view.length ? Buffer.from(view.subarray(start)) : EMPTY_BUFFER
+        }
       } finally {
         closeSync(fd)
       }
     } catch {
-      return // read raced with a write/unlink — try again next tick
+      // A read that raced a write/unlink stops here. Whatever was folded stays folded and
+      // `state.offset` matches it exactly, so the next tick resumes rather than repeating.
+      state.partial = carry.toString("utf8")
+      return
     }
-    const lines = (state.partial + chunk).split("\n")
-    state.partial = lines.pop() ?? "" // last element is the (possibly empty) trailing partial
-    for (const line of lines) {
-      backend.foldLine(state, line)
-      onLine?.(line)
-    }
+    state.partial = carry.toString("utf8") // the (possibly empty) trailing partial line
   }
 
   // Every OTHER row's pinned + discovered id — the exclude set so discovery never steals a transcript
