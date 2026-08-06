@@ -682,7 +682,14 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
           // Falls back to the profile when the dispatch was never folded at all (an older or truncated
           // session), which is strictly what it rendered before.
           const described = dispatchId ? dispatchLabels.get(dispatchId) : undefined
-          if (described && entry.message.peerFrom) entry.message.peerFrom = described
+          if (entry.message.peerFrom) {
+            // Resolved → the description IS the name. Unresolved → say so, rather than leaving the
+            // profile cell standing in as one; see TranscriptMessage.peerUnnamed. The sender's own agent
+            // id rides along either way, so a later pass can resolve what this bounded fold could not.
+            if (described) entry.message.peerFrom = described
+            else entry.message.peerUnnamed = true
+            if (senderTaskId) entry.message.peerSenderTaskId = senderTaskId
+          }
           lastAssistantId = null // …so it breaks the assistant-record merge chain too
         } else {
           // ATTACHMENT-ONLY: the enqueue scrolled out of the render window, or an older session never
@@ -706,6 +713,10 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
               text: prompt || body, // raw when we have it — it is the key a later removal matches on
               displayText: body,
               peerFrom: from,
+              // Unresolved ⇒ `from` is the profile cell (or a raw wrapper attribute), which is not a
+              // name — see the resolved arm above and TranscriptMessage.peerUnnamed.
+              ...(describedHere ? {} : { peerUnnamed: true as const }),
+              ...(senderTaskId ? { peerSenderTaskId: senderTaskId } : {}),
               ...(dispatchId ? { peerDispatchId: dispatchId } : {}),
               tools: [],
               parts: [],
@@ -4009,11 +4020,46 @@ export function projectRetiredBackgroundOps(
   return out
 }
 
+// A child's upward report names its sender by RUNTIME agent id; the fold turns that into the child's
+// dispatch description only when the dispatch's launch ack sits inside the same window it folded. The
+// paged RPC folds a BOUNDED window, so a report near the tail whose dispatch scrolled above the page
+// start came back with no title — and read as the profile cell, which names the model and not the work
+// and is identical across every sibling in that cell. The socket's full-transcript read has always
+// resolved it, which is why the same line "later resolves into the actual title" (maintainer
+// 2026-08-06).
+//
+// This closes that gap from the other side: the TAILER holds agentId → (dispatch id, label) for as long
+// as it tracks the child at all — live, retired, or a descendant — so it can answer what the page could
+// not. It only ever ADDS a resolution: a message the fold already named is returned untouched, and an id
+// the tailer cannot place stays unnamed rather than gaining an invented title or a dead drill-in link.
+export function projectTranscriptPeerNames(
+  messages: readonly TranscriptMessage[],
+  lookup: (taskId: string) => { id: string; label: string } | undefined,
+): TranscriptMessage[] {
+  const cache = new Map<string, { id: string; label: string } | undefined>()
+  let changed = false
+  const out = messages.map((message) => {
+    if (!message.peerUnnamed || !message.peerSenderTaskId) return message
+    const key = message.peerSenderTaskId
+    if (!cache.has(key)) cache.set(key, lookup(key))
+    const resolved = cache.get(key)
+    // A tracked child with no description of its own resolves to the fold's own placeholder, which is no
+    // better a title than the profile — leave the line unnamed rather than promoting "sub-agent".
+    if (!resolved || !resolved.label.trim() || resolved.label === "sub-agent") return message
+    changed = true
+    const { peerUnnamed: _dropped, ...rest } = message
+    return { ...rest, peerFrom: resolved.label, peerDispatchId: message.peerDispatchId ?? resolved.id }
+  })
+  return changed ? out : (messages as TranscriptMessage[])
+}
+
 export function projectTranscriptPageAgentLifecycles(
   page: TranscriptPage,
   lookup: (id: string) => AgentLifecycleProjection | undefined,
+  peerLookup?: (taskId: string) => { id: string; label: string } | undefined,
 ): TranscriptPage {
-  return { ...page, messages: projectTranscriptAgentLifecycles(page.messages, lookup) }
+  const named = peerLookup ? projectTranscriptPeerNames(page.messages, peerLookup) : page.messages
+  return { ...page, messages: projectTranscriptAgentLifecycles(named, lookup) }
 }
 
 // Parse a transcript from an ABSOLUTE file path (vs. project+session_id). Used for a sub-agent's own

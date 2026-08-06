@@ -3033,7 +3033,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
     // server's own tell (it parsed the <agent-message> wrapper and put the body in displayText, which
     // `text` above already carries), never a text guess made here. It renders as a wake divider rather
     // than any kind of bubble — see SubAgentReportLine.
-    if (m.peerFrom) return <SubAgentReportLine from={m.peerFrom} dispatchId={m.peerDispatchId} sourceId={m.sourceId} />
+    if (m.peerFrom) return <SubAgentReportLine from={m.peerFrom} unnamed={m.peerUnnamed} dispatchId={m.peerDispatchId} sourceId={m.sourceId} />
     // `rawText` rides alongside the presentation text because the two differ: the bubble shows the
     // stripped/normalized copy, while the optimistic cache entry an unqueue has to evict is keyed on
     // the message's own raw text.
@@ -3978,42 +3978,70 @@ function AgentCompletionLine({ call, sourceId }: { call: TranscriptToolCall; sou
 // in a drawer."). A 30-character window onto a report is too little to act on and too much to ignore, so
 // the line states only THAT a child reported, and the TITLE is the affordance: it opens the child's own
 // drawer, where the message is rendered in full alongside the work it came out of.
-function SubAgentReportLine({ from, dispatchId, sourceId }: { from: string; dispatchId?: string; sourceId?: string }) {
+function SubAgentReportLine({ from, unnamed, dispatchId, sourceId }: { from: string; unnamed?: boolean; dispatchId?: string; sourceId?: string }) {
   const slug = useChildDrillSlug()
   // `dispatchId` is the child's Agent DISPATCH tool_use id, NOT its agentId — that is the only key
   // pushSubAgentDrawer/tailer.subAgent resolve against, and handing over the agentId (which is what the
   // report's delivery record actually names) opens an "unavailable" drawer. The server does the
   // translation; see peerDispatchId. No id ⇒ plain text, never a dead link.
   const canDrill = !!(slug && dispatchId)
+  // A PROFILE IS NOT A NAME. When the parser could not resolve the sender's dispatch description, `from`
+  // is only the subagent_type — identical across every child dispatched at that model+effort cell — and
+  // the divider used to promote it to a title, so two siblings reporting read as the same agent and the
+  // line named the MODEL where the reader expected the work (maintainer 2026-08-06: "I'm also still
+  // occasionally seeing things like 'Agent <OPUS:HIGH> rested'. Sometimes these later resolve into the
+  // actual title"). It resolves later because the description lives on the DISPATCH record, which the
+  // window may not have reached yet — so the honest reading in the meantime is no name at all, not a
+  // borrowed one. The cell stays in the tooltip, where it is a fact about the child rather than its
+  // identity, and the drill-in survives: the word "Sub-agent" carries the link.
+  const label = unnamed ? undefined : from
+  const openTitle = unnamed && from ? `${CHILD_OPEN_TITLE.AGENT} — ${from}` : CHILD_OPEN_TITLE.AGENT
   return (
-    <WakeDivider icon={Bot} sourceId={sourceId} marker="agent-report" ariaLabel={canDrill ? undefined : `Sub-agent ${from} reported`}>
-      <span className="shrink-0">Sub-agent</span>
+    <WakeDivider icon={Bot} sourceId={sourceId} marker="agent-report" ariaLabel={canDrill ? undefined : `Sub-agent ${label ?? ""} reported`.replace(/\s+/g, " ")}>
+      {label === undefined && canDrill ? (
+        <button
+          type="button"
+          data-subagent-report-open
+          title={openTitle}
+          aria-label={`${CHILD_OPEN_TITLE.AGENT}${from ? `: ${from}` : ""}`}
+          onClick={() => pushSubAgentDrawer(slug!, dispatchId!, { label: "Sub-agent", subagentType: from })}
+          onMouseDown={(e) => e.preventDefault()}
+          className="shrink-0 rounded-sm underline decoration-muted/30 underline-offset-2 outline-none transition-colors hover:text-fg hover:decoration-fg/60 focus-visible:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
+        >
+          Sub-agent
+        </button>
+      ) : (
+        <span className="shrink-0" title={label === undefined ? from || undefined : undefined}>Sub-agent</span>
+      )}
       {/* Guillemets OUTSIDE the truncating element, per the completion line: a title clipped at a narrow
           width still closes its quote. The TITLE is the only part allowed to shrink (`min-w-0 truncate`
           on it and on its flex host) — a `shrink-0` wrapper here let a long name push the whole divider
           past the pane at 420px, losing its left hairline, while the completion line beside it clipped
           cleanly. Codex task names are long snake_case identifiers, so that is the common case, not the
-          edge. `from` is the child's label — its codex task name, or on Claude its subagent_type, since
-          the dispatch hook strips `name`. */}
-      <span className="flex min-w-0 items-center">
-        <span className="shrink-0">«</span>
-        {canDrill ? (
-          <button
-            type="button"
-            data-subagent-report-open
-            title={CHILD_OPEN_TITLE.AGENT}
-            aria-label={`${CHILD_OPEN_TITLE.AGENT}: ${from}`}
-            onClick={() => pushSubAgentDrawer(slug!, dispatchId!, { label: from, subagentType: from })}
-            onMouseDown={(e) => e.preventDefault()}
-            className="min-w-0 truncate rounded-sm underline decoration-muted/30 underline-offset-2 outline-none transition-colors hover:text-fg hover:decoration-fg/60 focus-visible:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
-          >
-            {from}
-          </button>
-        ) : (
-          <span className="min-w-0 truncate">{from}</span>
-        )}
-        <span className="shrink-0">»</span>
-      </span>
+          edge. `label` is the child's real title: its codex task name, or on Claude the dispatch
+          description the parser resolved. Absent ⇒ the whole quoted slot is dropped, never filled with
+          the profile. */}
+      {label !== undefined && (
+        <span className="flex min-w-0 items-center">
+          <span className="shrink-0">«</span>
+          {canDrill ? (
+            <button
+              type="button"
+              data-subagent-report-open
+              title={CHILD_OPEN_TITLE.AGENT}
+              aria-label={`${CHILD_OPEN_TITLE.AGENT}: ${label}`}
+              onClick={() => pushSubAgentDrawer(slug!, dispatchId!, { label, subagentType: from })}
+              onMouseDown={(e) => e.preventDefault()}
+              className="min-w-0 truncate rounded-sm underline decoration-muted/30 underline-offset-2 outline-none transition-colors hover:text-fg hover:decoration-fg/60 focus-visible:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
+            >
+              {label}
+            </button>
+          ) : (
+            <span className="min-w-0 truncate">{label}</span>
+          )}
+          <span className="shrink-0">»</span>
+        </span>
+      )}
       <span className="shrink-0">reported</span>
     </WakeDivider>
   )

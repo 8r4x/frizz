@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { appendFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir, homedir } from "node:os"
 import { join } from "node:path"
-import { projectRetiredBackgroundOps } from "./transcript.ts"
+import { projectRetiredBackgroundOps, projectTranscriptPeerNames } from "./transcript.ts"
 import { relayMessage } from "./completion-relay.ts"
 import type { TranscriptMessage } from "@frizz/shared"
 import { DISPATCH_TASK_BANNER_MARKER, formatGithubWakeSteer, GITHUB_DISPATCH_UI_BOUNDARY, parseRecurringPrompt, restPromptMessage, wakeDeliveryToken, type GithubWakeSteer } from "@frizz/shared"
@@ -2010,6 +2010,7 @@ test("a child's upward message is attributed to the child, with the wrapper unwr
   assert.equal(users.length, 1, "exactly one bubble — the delivery must not push a second copy")
   const m = users[0]
   assert.equal(m.peerFrom, "frizz:opus-high", "the sender label comes off the wrapper")
+  assert.equal(m.peerUnnamed, true, "…and is flagged UNNAMED, because a profile cell is not a title")
   assert.equal(m.displayText, "Phase 1 is green. Moving to the migration.", "the BODY is what a human reads")
   assert.equal(m.text, raw, "…while `text` stays RAW — it is the key the removal/delivery match against")
   assert.equal(m.queued, false, "the content-bearing removal un-grays it")
@@ -2032,7 +2033,10 @@ test("a report becomes a DRAWER LINK by translating the sender's agentId to its 
   const noAck = parseTranscript([enqueueLine(raw), removeLine(raw), peerDeliverLine("frizz:sonnet-high", body, "a52fb9b476bb380c4")].join("\n"))
   const unlinked = noAck.filter((u) => u.role === "user" && u.peerFrom)[0]
   assert.equal(unlinked.peerFrom, "frizz:sonnet-high")
+  assert.equal(unlinked.peerUnnamed, true, "no dispatch folded ⇒ no title, and the profile must not pose as one")
   assert.equal(unlinked.peerDispatchId, undefined, "absent evidence is not an invented id")
+  // A RESOLVED one carries no such flag — that is the whole point of the distinction.
+  assert.equal(linked.peerUnnamed, undefined, "a report wearing its dispatch description is named")
   // …and an ack for a DIFFERENT child must not lend its dispatch id to this report.
   const wrongChild = parseTranscript([
     ...dispatchLines("toolu_OTHER", "bbbbbbbbbbbbbbbbb"),
@@ -2052,6 +2056,7 @@ test("an attachment-only peer delivery still renders — a child's report never 
   // profile once frizz's worker dispatch hook has stripped `name`, so the render prefers the folded
   // dispatch's own description. The profile remains the fallback when no dispatch was folded.
   assert.equal(users[0].peerFrom, "probe")
+  assert.equal(users[0].peerUnnamed, undefined, "resolved to a real description, so not unnamed")
   assert.equal(users[0].peerDispatchId, "toolu_ONLY")
   assert.equal(users[0].displayText, "Blocked: the fixture needs a token I don't have.")
 })
@@ -2083,6 +2088,48 @@ test("a report that lands AFTER its child finished still wears the child's title
   // ATTACHMENT-ONLY delivery takes the same relabel and must survive the same race.
   const attachmentOnly = ordered([notified, peerDeliverLine("frizz:opus-high", body, "a030397e040165a66")])
   assert.equal(attachmentOnly.peerFrom, "Reconcile host-prep list and root-cause python")
+})
+
+// THE PAGED-WINDOW RESIDUE. The fold can only name a sender whose dispatch it actually folded, and the
+// `threadTranscript` RPC folds a BOUNDED window — so a report near the tail whose dispatch scrolled above
+// the page start came back wearing its profile cell while the socket's full read named it properly. Same
+// child, two producers, two labels; this pass is what makes them agree.
+test("an unnamed report is resolved from the tailer by the sender's runtime agent id", () => {
+  const body = "Halfway through the sweep."
+  const raw = peerWrap("frizz:opus-high", body)
+  // No dispatch lines at all — exactly what a page that starts after the dispatch looks like.
+  const paged = parseTranscript([enqueueLine(raw), removeLine(raw), peerDeliverLine("frizz:opus-high", body, "a030397e040165a66")].join("\n"))
+  const unnamed = paged.filter((m) => m.role === "user" && m.peerFrom)[0]
+  assert.equal(unnamed.peerUnnamed, true)
+  assert.equal(unnamed.peerSenderTaskId, "a030397e040165a66", "the sender's own id has to survive the fold, or nothing can finish the job")
+
+  const resolved = projectTranscriptPeerNames(paged, (taskId) =>
+    taskId === "a030397e040165a66" ? { id: "toolu_TRACKED", label: "Sweep the migration sites" } : undefined)
+  const named = resolved.filter((m) => m.role === "user" && m.peerFrom)[0]
+  assert.equal(named.peerFrom, "Sweep the migration sites", "the tailer's label finishes what the page could not")
+  assert.equal(named.peerUnnamed, undefined, "…and the line is no longer unnamed")
+  assert.equal(named.peerDispatchId, "toolu_TRACKED", "a resolution also recovers the drill-in the page lacked")
+
+  // NEVER an invented resolution: an id the tailer cannot place leaves the line exactly as it was.
+  const unresolvable = projectTranscriptPeerNames(paged, () => undefined)
+  assert.equal(unresolvable, paged, "nothing resolved ⇒ the same array, not a rebuilt copy")
+  // …and a tracked child with no description of its own resolves to the fold's placeholder, which is no
+  // better a title than the profile. Left unnamed rather than promoted.
+  const placeholder = projectTranscriptPeerNames(paged, () => ({ id: "toolu_X", label: "sub-agent" }))
+  assert.equal(placeholder.filter((m) => m.role === "user" && m.peerFrom)[0].peerUnnamed, true)
+})
+
+test("a report the fold already named is left untouched by the peer-name pass", () => {
+  const body = "Found it."
+  const raw = peerWrap("frizz:opus-high", body)
+  const folded = parseTranscript([
+    ...dispatchLines("toolu_INPAGE", "a030397e040165a66", "Chase the resolver leak"),
+    enqueueLine(raw), removeLine(raw), peerDeliverLine("frizz:opus-high", body, "a030397e040165a66"),
+  ].join("\n"))
+  // A lookup that would happily rename it — the pass must never consult one for an already-named report.
+  const after = projectTranscriptPeerNames(folded, () => ({ id: "toolu_WRONG", label: "SOMETHING ELSE" }))
+  assert.equal(after, folded)
+  assert.equal(after.filter((m) => m.role === "user" && m.peerFrom)[0].peerFrom, "Chase the resolver leak")
 })
 
 test("a steer to a child that already finished still names the child, not its agentId", () => {

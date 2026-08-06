@@ -9,7 +9,7 @@ import type { Emitter } from "./bus.ts"
 import type { Project } from "./project.ts"
 import type { Storage } from "./storage.ts"
 import type { AgentBackend } from "./backend/types.ts"
-import { projectRetiredBackgroundOps, retiredOpsFor, projectTranscriptAgentLifecycles, readThreadTranscript, type AgentLifecycleProjection } from "./transcript.ts"
+import { projectRetiredBackgroundOps, retiredOpsFor, projectTranscriptAgentLifecycles, projectTranscriptPeerNames, readThreadTranscript, type AgentLifecycleProjection } from "./transcript.ts"
 import { isTrustedLocalWebSocketRequest, rejectWebSocketUpgrade } from "./local-origin.ts"
 
 // Stage-2 multiplex: a SECOND noServer WebSocket at /ws (beside the terminal WS) carrying the board
@@ -140,13 +140,20 @@ export function makeTranscriptReader(
   storage: Storage,
   backendFor?: (kind?: string) => AgentBackend,
   lifecycleFor?: (slug: string, id: string) => AgentLifecycleProjection | undefined,
+  // Resolve an upward report's sender by its runtime agent id. This producer reads the WHOLE transcript,
+  // so the fold usually names the child itself; this covers the residue the fold cannot see — a
+  // grandchild whose dispatch lives in an ancestor's transcript, or a session resumed past its own
+  // dispatch records. Same lookup the paged RPC uses, so the two producers cannot label one child two
+  // ways (which is exactly how the profile-as-title reading survived).
+  peerNameFor?: (slug: string, taskId: string) => { id: string; label: string } | undefined,
   // "The process that owned this thread's background ops is gone." Absent (tests / a bridge-less
   // server) ⇒ never gone, so nothing is retired that the × did not retire — the pre-existing behaviour.
   ownerGone?: (slug: string) => boolean,
 ): (slug: string) => TranscriptMessage[] {
   return (slug: string) => {
     const messages = readThreadTranscript(project, storage, slug, backendFor)
-    const projected = lifecycleFor ? projectTranscriptAgentLifecycles(messages, (id) => lifecycleFor(slug, id)) : messages
+    const named = peerNameFor ? projectTranscriptPeerNames(messages, (taskId) => peerNameFor(slug, taskId)) : messages
+    const projected = lifecycleFor ? projectTranscriptAgentLifecycles(named, (id) => lifecycleFor(slug, id)) : named
     // The operator's × has to reach THIS producer too, and it is the one that matters most: the live UI
     // renders from the /ws push, so projecting only the RPC left the killed shell's card reading
     // "RUNNING · 1 MIN 34 SEC" on screen while the RPC returned "cancelled". A dead OWNER retires the

@@ -443,6 +443,9 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       c.storage,
       c.backendFor,
       (slug, id) => c.tailer.subAgent(slug, id),
+      // Same reason, same lesson: an upward report's title has to be resolved by BOTH producers or one
+      // of them shows the child's profile cell where the other shows its work.
+      (slug, taskId) => c.tailer.subAgentByTaskId?.(slug, taskId),
       // The /ws producer is the one the live UI actually renders, so a dead owner has to reach it
       // too — projecting only the RPC is the exact half-fix the × already had to correct once.
       (slug) => c.tailer.ownerGone?.(slug) ?? false,

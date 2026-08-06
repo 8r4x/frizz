@@ -2011,6 +2011,11 @@ export interface Tailer {
   // `taskId` is the provider's session-wide background-task handle. Unlike `direct`, which controls
   // steer safety, it is available for descendants too and is what the SDK's stopTask accepts.
   subAgent(slug: string, id: string): SubAgentLookup | undefined
+  // Resolve a child by its RUNTIME agent id — the identity an upward report names its sender with. The
+  // paged transcript RPC folds a bounded window and therefore cannot always translate that id itself;
+  // this answers for as long as the tailer tracks the child. Optional so a narrow test stub may omit it
+  // (the projection then leaves the report unnamed, exactly as it would with nothing to resolve).
+  subAgentByTaskId?(slug: string, taskId: string): { id: string; label: string } | undefined
   // The LIVE descendants of one sub-agent, deepest-first, as the `stopTask` handles that end them.
   // A stop names one task, so ending a sub-agent's work means naming its whole subtree — see the
   // implementation for the orphan-and-report-to-root failure this exists to close. Empty when the id
@@ -3114,6 +3119,38 @@ export function createTailer(deps: TailerDeps): Tailer {
       // to the root thread.
       taskId: descendant.agentId,
     }
+  }
+
+  // Resolve a child by its RUNTIME agent id (Claude's `agentId`) rather than by its dispatch tool_use
+  // id — the identity an upward `SendMessage({to:"main"})` names itself with, and the one the transcript
+  // fold can only translate when the dispatch's launch ack happens to sit inside the page it folded.
+  //
+  // That gap is why this exists. The paged `threadTranscript` RPC folds a BOUNDED window, so a report
+  // near the tail whose dispatch scrolled above the page start has no description to wear and reads as
+  // its profile cell instead of its work — while the socket's full-transcript read, seeing everything,
+  // names it correctly. Same child, two producers, two different labels, which is precisely the
+  // "sometimes these later resolve into the actual title" the maintainer saw (2026-08-06). The tailer
+  // keeps the pairing for as long as it tracks the child at all, so it can answer where the page cannot.
+  //
+  // Live map first, then the retained ring, then the descendant sidecars — the same order and the same
+  // never-invent-a-resolution rule as subAgentLookup above.
+  function subAgentByTaskId(slug: string, taskId: string): { id: string; label: string } | undefined {
+    const state = states.get(slug)
+    if (!state || !registeredStateIsCurrent(state) || !taskId) return undefined
+    for (const entry of state.subAgents.values()) {
+      if (entry.kind === "agent" && entry.taskId === taskId) return { id: entry.toolUseId, label: entry.label }
+    }
+    for (const dead of state.retiredSubAgents.values()) {
+      if (dead.taskId === taskId) return { id: dead.toolUseId, label: dead.label }
+    }
+    // A GRANDCHILD reporting past its own dispatcher: its dispatch lives in an ancestor's transcript, so
+    // neither map above holds it, but its sidecar is filed under exactly this agent id.
+    for (const meta of descendantSidecars(state)) {
+      if (meta.agentId === taskId && meta.toolUseId && meta.description) {
+        return { id: meta.toolUseId, label: meta.description }
+      }
+    }
+    return undefined
   }
 
   function backgroundShellLookup(slug: string, id: string): { command?: string; outputFile?: string; state: "running" | "done" } | undefined {
@@ -4268,6 +4305,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     // as the last scan's result — recomputed at most every FOREIGN_SCAN_EVERY ticks.
     foreignIds: () => foreignFresh.map((f) => f.id),
     subAgent: subAgentLookup,
+    subAgentByTaskId,
     subAgentDescendantTasks,
     backgroundShell: backgroundShellLookup,
     // Registered rows only. A FOREIGN thread (a maintainer's own terminal) is not frizz's to declare
