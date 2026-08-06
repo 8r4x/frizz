@@ -1211,7 +1211,10 @@ export const SetThreadRecurringPromptInput = z.object({
   postCompaction: z.boolean().default(false),
   intervalSeconds: RecurringIntervalSeconds.optional(),
 }).strict()
-export type SetThreadRecurringPromptInput = z.infer<typeof SetThreadRecurringPromptInput>
+// z.input, not z.infer: `postCompaction` is `.default(false)`, so the parsed OUTPUT has it
+// required while the wire INPUT does not — and rpc-contract.ts compares the client type against
+// z.input. Inferring the output here is what made the drift gate fire.
+export type SetThreadRecurringPromptInput = z.input<typeof SetThreadRecurringPromptInput>
 
 // The WORKER half, through `mcp__frizz__recurring_prompt` (which POSTs the same `/rpc/*` surface the
 // board uses). A worker has no other way to keep a long effort moving — Claude Code's own in-session
@@ -1239,7 +1242,10 @@ export const SetOwnThreadRecurringPromptInput = z.object({
   postCompaction: z.boolean().default(false),
   intervalSeconds: RecurringIntervalSeconds.optional(),
 }).strict()
-export type SetOwnThreadRecurringPromptInput = z.infer<typeof SetOwnThreadRecurringPromptInput>
+// z.input, not z.infer: `postCompaction` is `.default(false)`, so the parsed OUTPUT has it
+// required while the wire INPUT does not — and rpc-contract.ts compares the client type against
+// z.input. Inferring the output here is what made the drift gate fire.
+export type SetOwnThreadRecurringPromptInput = z.input<typeof SetOwnThreadRecurringPromptInput>
 
 // ---- THE ONE-OFF TIMER's three worker procedures -------------------------------------------------
 // Same caller and therefore the same rules as the recurring prompt above: no session guard (the MCP

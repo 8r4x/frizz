@@ -94,7 +94,14 @@ const RECURRING_TEXT = [
 
 /** Arm (or re-arm) the ON REST trigger as of NOW, which also drops its last-fired stamp. */
 const arm = (): void => {
-  storage.setRecurringPromptIfCurrent(slug, sessionId, 0, RECURRING_TEXT, true, false, null, new Date().toISOString())
+  storage.setRecurringPromptIfCurrent(slug, sessionId, 0, {
+    prompt: RECURRING_TEXT,
+    stopHook: true,
+    heartbeat: false,
+    postCompaction: false,
+    intervalMs: null,
+    armedAt: new Date().toISOString(),
+  })
 }
 /** Drive the real scheduler until it has delivered `want` bumps, or the window closes. */
 const pump = async (want: number, windowMs: number): Promise<void> => {
