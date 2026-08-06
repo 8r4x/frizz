@@ -78,8 +78,25 @@ test("the live shimmer is the same disclosure as the settled digest, one moment 
     assert.match(block, /transcriptMetaChevronClass\(/, `the ${name} chevron must consume the shared treatment`)
     // A hand-placed nudge beside it is the drift coming back: the correction belongs in the constant,
     // where the measurement that justifies it lives.
-    assert.doesNotMatch(block, /(-)?translate-y-\[|top-\[calc/, `the ${name} chevron must not re-place itself by hand`)
+    assert.doesNotMatch(block, /(-)?translate-y-\[|top-\[calc|self-center/, `the ${name} chevron must not re-place itself by hand`)
+    // `align-self: baseline` has nothing to align against in an `items-center` row, and lands ~1px off
+    // in silence. Every row carrying this chevron aligns on the baseline.
+    assert.match(block, /items-baseline/, `the ${name} row must give the chevron a baseline to sit on`)
   }
+})
+
+test("the chevron's vertical correction is derived from the font, not fitted to one", () => {
+  const source = readFileSync(new URL("../lib/transcriptMetaLabels.ts", import.meta.url), "utf8")
+  // The prose font is a SETTING (html[data-font]), so this column ships against two different cap
+  // heights. `1cap` is whatever the resolved font's cap height is, which is why the correction survives
+  // the flip; a hand-fitted em constant measured under mono rode visibly high under sans.
+  assert.match(source, /translate-y-\[calc\(0\.5em_-_0\.5cap\)\]/, "the lift must be 0.5em - 0.5cap, computed per font")
+  assert.match(source, /self-baseline/, "…measured from the text baseline the glyph synthesises")
+  assert.doesNotMatch(source, /-translate-y-\[0\.\d+em\]/, "no hand-fitted vertical constant may come back")
+  // The horizontal trims are pure viewBox geometry (8/24 units of paint across, 14/24 when rotated), so
+  // they are font-independent and stay literal — one per orientation, never one shared.
+  assert.match(source, /-mx-\[0\.333em\]/, "closed: a third of the box is dead space per side")
+  assert.match(source, /-mx-\[0\.208em\]/, "open: the rotated ink is wider, so less of the box is dead")
 })
 
 test("codex reasoning toggle is a peer of quiet metadata labels", () => {

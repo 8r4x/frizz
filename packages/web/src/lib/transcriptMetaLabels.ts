@@ -14,34 +14,44 @@ export const TRANSCRIPT_META_LABEL_CLASS = "text-[14px] leading-5 text-muted"
 // two different vertical offsets, two different tones, and a horizontal rhythm nobody had measured at
 // all (maintainer 2026-08-05: "fix the fucking optical spacing on that chevron").
 //
-// Both corrections are in `em`, so they track the `1em` glyph rather than pinning to today's 14px. They
-// are EXACT at the size that ships (residual −0.01px at 14px, in every row and both chevron states) and
-// hold to about a pixel elsewhere: forced to 28px the vertical residual reads +0.98px, because the
-// browser rounds a font's used ascent per size — the baseline lands 27px into the doubled line box where
-// 26px would be proportional. Nothing renders this column at any other size, so that is recorded rather
-// than chased (see `visual-review`: correct for the size that ships, and say so).
+// VERTICAL — `items-center` centres the glyph's BOX on the flex line; the eye reads INK, and the two are
+// never the same. The correction is DERIVED, not measured, because a measured one cannot survive this
+// column: the prose font is a SETTING (`html[data-font]`), so these rows ship in a mono stack AND a sans
+// stack whose cap heights differ, and a constant hand-fitted to one rides visibly high in the other —
+// which is exactly what shipped (2026-08-05: "this is awful", under sans, from a correction measured at
+// a 0.00px residual under mono).
 //
-//  · VERTICAL — `items-center` centres the glyph's BOX on the flex line; the eye reads INK. Measured
-//    2026-08-05 at 14px/leading-5: lucide's chevron paints 4.67 × 8.33 of its 14px box, and its ink
-//    centre lands 1.45px BELOW the label's cap band (baseline → cap height — the string-independent
-//    reference, because a descender moves the string's own ink box by >1px; see the `visual-review`
-//    skill). The digest's hand-set `top-[calc(0.032em+1px)]` pushed it a further 1.45px DOWN, for a
-//    2.90px error. `-0.104em` lifts the ink to a ~0px residual.
-//  · HORIZONTAL — `gap` spaces BOXES, and this glyph wears 4.67px of dead space on EACH side, a third
-//    of its box per side. So on `gap-1` beside its label and `gap-2` before the shimmer's clock, the
-//    row drew 9.06px and 13.00px of INK where the CSS claimed 4 and 8 — the chevron floated almost
-//    equidistant between the two and read as a third, unrelated mark instead of the label's handle.
-//    A negative margin sized to that measured dead space collapses the box onto the ink; after it, a
-//    container's `gap` IS the optical distance.
+//   `self-baseline` puts the glyph's bottom margin edge on the text baseline — a flex item with no
+//   baseline of its own synthesises one there. Its ink centre is then `0.5em` above the baseline (the
+//   lucide path is symmetric about its 24-unit box centre, in both orientations). The target is the
+//   CAP BAND's centre, `0.5cap` above the baseline — the string-independent reference, because a
+//   descender moves the string's own ink box by >1px. So the shift is exactly `0.5em - 0.5cap`, and
+//   `1cap` is the BROWSER's cap height for whatever font actually resolved. Nothing to re-measure when
+//   the font setting flips, the type scale changes, or a stack gains a fallback.
 //
-// The trim is STATE-DEPENDENT because rotating the glyph rotates its ink box: 4.67px wide pointing
-// right, 8.33px wide pointing down, so an open chevron wears only 2.83px of dead space a side. One
-// constant for both would over-collapse the open state by 1.8px, which is well above the instrument's
-// ±0.75px noise floor. The ink CENTRE is invariant under the rotation (lucide's `m9 18 6-6-6-6` is
-// symmetric about the 24-unit box centre), so the vertical correction is shared.
+//   The negative TOP margin is what stops that from disturbing the column: a 1em box whose bottom sits
+//   on the baseline reaches higher above it than the text's own ascent does, so it grew the row and
+//   pushed the label down a pixel — enough to break the "shimmer reads as a peer of a settled meta
+//   label" rhythm this column is measured on. Trimming the contributed height to `1cap` (never more
+//   than the ascent) leaves the glyph exactly where baseline alignment put it while the TEXT goes back
+//   to driving the line box. Margin-top does not move a baseline-aligned item; it only shortens what it
+//   contributes above.
+//
+// HORIZONTAL — `gap` spaces BOXES, and this glyph is mostly empty box: lucide's chevron paints 8 of its
+// 24 viewBox units across (6 of path + 1 of stroke either side), so a third of its 1em box is dead space
+// on EACH side. On `gap-1` beside its label and `gap-2` before the shimmer's clock, the row therefore
+// drew 9.06px and 13.00px of INK where the CSS claimed 4 and 8 — the chevron floated almost equidistant
+// between the two and read as a third, unrelated mark instead of the label's handle (2026-08-05: "fix
+// the fucking optical spacing on that chevron"). A negative margin sized to that dead space collapses
+// the box onto the ink; after it, a container's `gap` IS the optical distance.
+//
+// The trim is STATE-DEPENDENT because rotating the glyph rotates its ink box — 8/24 units wide pointing
+// right, 14/24 pointing down — so an open chevron wears only 0.208em of dead space a side. One constant
+// for both would over-collapse the open state by ~1.8px, well above the instrument's ±0.75px noise floor.
+// Both trims are pure viewBox geometry, so unlike the vertical they are font-independent.
 const TRANSCRIPT_META_CHEVRON_BASE =
-  "size-[1em] shrink-0 -translate-y-[0.104em] text-muted/70 transition-transform group-hover:text-fg"
+  "size-[1em] shrink-0 self-baseline -mt-[calc(1em_-_1cap)] translate-y-[calc(0.5em_-_0.5cap)] text-muted/70 transition-transform group-hover:text-fg"
 
 export function transcriptMetaChevronClass(open: boolean): string {
-  return `${TRANSCRIPT_META_CHEVRON_BASE} ${open ? "-mx-[0.202em] rotate-90" : "-mx-[0.333em]"}`
+  return `${TRANSCRIPT_META_CHEVRON_BASE} ${open ? "-mx-[0.208em] rotate-90" : "-mx-[0.333em]"}`
 }

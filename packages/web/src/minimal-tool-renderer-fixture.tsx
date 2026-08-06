@@ -8,6 +8,14 @@ import "./styles.css"
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
 
+// The prose/UI font is a SETTING (`html[data-font]`, see styles.css and lib/font.ts), so this column
+// ships in TWO stacks and any glyph measured beside it has to be checked in both. index.html applies
+// the stored value before first paint; a fixture that skips it silently renders the mono default, which
+// is how a chevron measured at a 0.00px residual here still rode high in a maintainer's sans window
+// (2026-08-05: "this is awful"). `?font=sans` selects the other one.
+document.documentElement.dataset.font =
+  new URLSearchParams(location.search).get("font") === "sans" ? "sans" : "mono"
+
 function callMessage(sourceId: string, tools: ChatMessage["tools"]): ChatMessage {
   return { sourceId, role: "assistant", text: "", tools, parts: [{ kind: "tools", tools }] }
 }
