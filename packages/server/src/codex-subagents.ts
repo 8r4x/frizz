@@ -299,6 +299,9 @@ function agentLabel(path: string): string {
   return tail || path
 }
 
+/** Bytes read per call. Well under Node's ~512MB string cap, and a whole rollout in one go. */
+const ROLLOUT_READ_WINDOW = 16 * 1024 * 1024
+
 // Read everything appended after `offset`, mirroring the tailer's own `consume`: ENOENT/unreadable →
 // undefined (retry next tick), a shrunken file → re-read from the top.
 function defaultReadAppended(path: string, offset: number): { text: string; offset: number; restarted: boolean } | undefined {
@@ -314,9 +317,24 @@ function defaultReadAppended(path: string, offset: number): { text: string; offs
   try {
     const fd = openSync(path, "r")
     try {
-      const buf = Buffer.allocUnsafe(size - from)
-      const read = readSync(fd, buf, 0, buf.length, from)
-      return { text: buf.toString("utf8", 0, read), offset: from + read, restarted }
+      // BOUNDED PER CALL. This used to read `size - from` and stringify it whole — the exact shape
+      // that cost the tailer (4a920a6) and both transcript readers (c71cb4d) their rows: Node caps a
+      // string at ~512MB, so a large enough rollout would throw ERR_STRING_TOO_LONG into the
+      // `catch { return undefined }` below, whose "retry next tick" is a lie for a permanent error.
+      // The largest rollout on this machine is 129MB, so it does not fire today — this is the same
+      // defect with headroom, fixed while the pattern is fresh rather than when it reaches the cap.
+      //
+      // Returning a WINDOW rather than everything is safe without any caller change: the offset comes
+      // back advanced by exactly what was returned, and this reader is already called every tick until it
+      // catches up. Cutting at the last newline keeps whole records, so a caller that does not buffer
+      // a trailing partial cannot see a torn one; a window with no newline at all (a single record
+      // longer than the window) yields the whole window, which is what guarantees forward progress.
+      const want = Math.min(ROLLOUT_READ_WINDOW, size - from)
+      const buf = Buffer.allocUnsafe(want)
+      const read = readSync(fd, buf, 0, want, from)
+      const lastNl = buf.lastIndexOf(0x0a, read - 1)
+      const end = read < size - from && lastNl >= 0 ? lastNl + 1 : read
+      return { text: buf.toString("utf8", 0, end), offset: from + end, restarted }
     } finally {
       closeSync(fd)
     }
