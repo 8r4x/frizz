@@ -230,6 +230,9 @@ export interface Api {
   // The rail's manual order: the whole list of ids, because the client has just laid the squares out
   // and an index pair would have to be replayed against a server order that may already differ.
   projectsReorder(input: { ids: string[] }): Promise<ProjectCard[]>
+  // Opens the machine's native image picker ALREADY IN the project's directory, then stores what
+  // comes back. The browser input cannot be aimed anywhere, which is the whole reason this exists.
+  projectIconPick(input: { id: string }): Promise<DirectoryPickResult>
   projectIconSet(input: { id: string; name: string; data: string }): Promise<ProjectCard>
   projectIconClear(input: { id: string }): Promise<ProjectCard>
   settingsGet(): Promise<Settings>
@@ -322,6 +325,7 @@ export const PROCEDURES = {
   projectPick: "mutation",
   projectAdd: "mutation",
   projectsReorder: "mutation",
+  projectIconPick: "mutation",
   projectIconSet: "mutation",
   projectIconClear: "mutation",
   settingsGet: "query",

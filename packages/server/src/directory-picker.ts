@@ -31,6 +31,53 @@ const PICKER_TIMEOUT_MS = 5 * 60_000
 const OSASCRIPT = (prompt: string) =>
   `POSIX path of (choose folder with prompt ${JSON.stringify(prompt)})`
 
+/**
+ * Choose an IMAGE, with the dialog already standing in `startIn`.
+ *
+ * The rail used a browser `<input type="file">`, which cannot be aimed anywhere — the OS decides,
+ * and it lands wherever you last were. A project's icon almost always lives in the project (a logo in
+ * the repo, a screenshot you just took of it), so opening the picker anywhere else means navigating
+ * back to a directory Frizz already knows the path of.
+ *
+ * `default location` is a hint, not a jail: the operator can still browse anywhere, which is why
+ * a missing or unreadable startIn simply falls back to the OS default rather than failing.
+ */
+export async function pickImageFile(
+  startIn: string | undefined,
+  prompt = "Choose an image for this project",
+  platform: NodeJS.Platform = process.platform,
+): Promise<DirectoryPick> {
+  if (platform === "darwin") {
+    // `of type` takes UTIs; public.image covers every format the rail accepts and nothing else.
+    const location = startIn ? ` default location POSIX file ${JSON.stringify(startIn)}` : ""
+    const script = `POSIX path of (choose file with prompt ${JSON.stringify(prompt)} of type {"public.image"}${location})`
+    try {
+      const { stdout } = await run("osascript", ["-e", script], { timeout: PICKER_TIMEOUT_MS })
+      const path = stdout.trim().replace(/\/+$/u, "")
+      return path ? { kind: "picked", path } : { kind: "cancelled" }
+    } catch (error) {
+      if (/User canceled|-128/u.test(stderrOf(error))) return { kind: "cancelled" }
+      return { kind: "unavailable", reason: firstLine(stderrOf(error)) || "the image picker did not open" }
+    }
+  }
+  if (platform === "linux") {
+    for (const [bin, args] of [
+      ["zenity", ["--file-selection", `--title=${prompt}`, ...(startIn ? [`--filename=${startIn}/`] : [])]],
+      ["kdialog", ["--getopenfilename", startIn ?? ".", "image/png image/svg+xml image/webp image/jpeg image/gif"]],
+    ] as const) {
+      try {
+        const { stdout } = await run(bin, [...args], { timeout: PICKER_TIMEOUT_MS })
+        const path = stdout.trim()
+        return path ? { kind: "picked", path } : { kind: "cancelled" }
+      } catch (error) {
+        if ((error as { code?: unknown }).code === 1) return { kind: "cancelled" }
+      }
+    }
+    return { kind: "unavailable", reason: "install zenity or kdialog for an image picker" }
+  }
+  return { kind: "unavailable", reason: `no image picker on ${platform}` }
+}
+
 export async function pickDirectory(
   prompt = "Choose a folder to open in Frizz",
   platform: NodeJS.Platform = process.platform,

@@ -81,7 +81,19 @@ export function projectIconSrc(project: ProjectCard): string {
  */
 export function ProjectSquare({ project, size }: { project: ProjectCard; size: number }) {
   const [loaded, setLoaded] = useState(false)
+  // A near-square mark fills the tile; a genuinely letterboxed one is contained and padded. Measured:
+  // a 372x368 screenshot is 1.1% off square and looked WRONG contained — object-contain letterboxed
+  // it and the 6% padding inset it again, so a full-bleed square read as a stamp with a gap around it.
+  // A real logo (.github/logo.webp, 300x331) is 9.4% off, so 5% separates the two cleanly.
+  const [fills, setFills] = useState(false)
   const hue = monogramHue(project.id)
+  // The server already knows whether this project HAS an icon (iconVersion is stamped when one is
+  // stored), so the monogram is no longer a placeholder for one that is about to arrive — it is the
+  // answer for a project that has none. Rendering it unconditionally is what made every iconned
+  // project flash its initials and then swap: a flash of WRONG content, not of missing content.
+  const hasIcon = Boolean(project.iconVersion)
+  const [failed, setFailed] = useState(false)
+  const showMonogram = !hasIcon || failed
   return (
     <span
       className="relative block overflow-hidden rounded-[30%] bg-elevated"
@@ -91,10 +103,10 @@ export function ProjectSquare({ project, size }: { project: ProjectCard; size: n
         // Low saturation and lightness: these sit against a near-black rail and must read as a
         // surface with a letter on it, not as a colour chip. The letter carries the same hue at full
         // brightness so the pairing stays legible at any hue.
-        background: loaded ? undefined : `hsl(${hue} 32% 24%)`,
+        background: hasIcon && !failed ? undefined : `hsl(${hue} 32% 24%)`,
       }}
     >
-      {!loaded && (
+      {showMonogram && (
         <span
           aria-hidden
           className="absolute inset-0 flex items-center justify-center font-semibold leading-none"
@@ -119,21 +131,33 @@ export function ProjectSquare({ project, size }: { project: ProjectCard; size: n
           </span>
         </span>
       )}
+      {hasIcon && !failed && (
       <img
         src={projectIconSrc(project)}
         alt=""
         width={size}
         height={size}
-        loading="lazy"
+        // Not lazy: a rail is a handful of squares, all of them on screen, and deferring them is
+        // half of what the swap looked like.
+        loading="eager"
         decoding="async"
-        onLoad={() => setLoaded(true)}
-        onError={() => setLoaded(false)}
+        onLoad={(event) => {
+          const img = event.currentTarget
+          if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+            setFills(Math.abs(img.naturalWidth / img.naturalHeight - 1) <= 0.05)
+          }
+          setLoaded(true)
+        }}
+        onError={() => setFailed(true)}
         // object-contain, never cover: a logo cropped to fill its square is a mangled logo, and the
         // scan admits some non-square marks (a 300×331 `.github/logo.webp` is a real case). The
         // padding keeps a full-bleed icon off the rounded corners without shrinking a letterboxed one
         // into a stamp.
-        className={`relative h-full w-full object-contain p-[6%] transition-opacity ${loaded ? "opacity-100" : "opacity-0"}`}
+        className={`relative h-full w-full transition-opacity ${
+          fills ? "object-cover" : "object-contain p-[6%]"
+        } ${loaded ? "opacity-100" : "opacity-0"}`}
       />
+      )}
     </span>
   )
 }
@@ -263,6 +287,24 @@ export function ProjectIconMenu({
     mutationFn: () => rpc.projectIconClear({ id: project.id }),
     onSuccess: () => { setError(null); void invalidate() },
   })
+  /**
+   * The NATIVE picker, opened standing in the project's own directory.
+   *
+   * A browser file input cannot be aimed anywhere — the OS decides, and it lands wherever you last
+   * were, which for an icon that almost always lives inside the project means navigating back to a
+   * path Frizz already knows. The hidden input below stays as the fallback for a platform with no
+   * native dialog, so the menu item never becomes a dead end.
+   */
+  const pick = useMutation({
+    mutationFn: () => rpc.projectIconPick({ id: project.id }),
+    onSuccess: (result) => {
+      if (result.kind === "cancelled") return
+      if (result.kind === "unavailable") { input.current?.click(); return }
+      setError(null)
+      void invalidate()
+    },
+    onError: () => input.current?.click(),
+  })
 
   const item = "cursor-default rounded px-2 py-1.5 text-[12.5px] text-fg outline-none data-[highlighted]:bg-panel-2"
   return (
@@ -288,7 +330,7 @@ export function ProjectIconMenu({
             sideOffset={6}
             className="z-[220] min-w-[190px] rounded-lg border border-border bg-panel p-1 shadow-xl shadow-black/40"
           >
-            <RadixDropdown.Item className={item} onSelect={() => input.current?.click()}>
+            <RadixDropdown.Item className={item} onSelect={() => pick.mutate()}>
               {set.isPending ? "Uploading…" : "Choose an icon…"}
             </RadixDropdown.Item>
             <RadixDropdown.Item className={item} onSelect={() => clear.mutate()}>

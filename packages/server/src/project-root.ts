@@ -51,6 +51,16 @@ export function projectIdPath(root: string): string {
 }
 
 /** The id recorded in this exact directory, or undefined. A malformed file is refused, never guessed at. */
+/**
+ * The id in `.frizz/.id`, and ONLY there.
+ *
+ * This is a FILE reader, not the answer to "what id does this project have" — use existingProjectId
+ * for that. The distinction is not pedantic: a repository that predates the gitless change carries
+ * its id in `git config frizz.id` and has no file at all, so asking this one and treating `undefined`
+ * as "no project" makes an established board look like a brand-new directory. That mistake shipped
+ * three times in one change (registry backfill, launch intent, and the grid's add path) and made two
+ * of the maintainer's four live projects invisible.
+ */
 export function readProjectIdFile(root: string): string | undefined {
   let raw: string
   try {

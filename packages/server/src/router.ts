@@ -119,7 +119,7 @@ import { homedir } from "node:os"
 import { discoverProjectRoot, ensureProjectIdFile, existingProjectId, writeProjectIdFile } from "./project-root.ts"
 import { resolveProjectLabel } from "./project-identity.ts"
 import { registerProject } from "./project-registry.ts"
-import { pickDirectory } from "./directory-picker.ts"
+import { pickDirectory, pickImageFile } from "./directory-picker.ts"
 import Database from "./sqlite.ts"
 import { projectStateDir } from "./frizz-paths.ts"
 
@@ -528,6 +528,53 @@ function addProjectAtPath(input: string): ProjectCard {
   }
   if (!registered.entry) throw new Error("Could not register that folder.")
   return projectCard(registered.entry, false)
+}
+
+/**
+ * Store an icon's BYTES for a project, whatever chose them.
+ *
+ * Shared by the browser file input (projectIconSet) and the native picker (projectIconPick) so the
+ * validation cannot drift between the two ways in — the magic-byte check especially, which is what
+ * keeps a file the browser will not render from becoming a permanently broken square.
+ */
+function storeProjectIcon(id: string, name: string, bytes: Buffer): ProjectCard {
+  const extension = name.toLowerCase().match(/\.([a-z0-9]+)$/u)?.[1]
+  if (!extension || !(PROJECT_ICON_EXTENSIONS as readonly string[]).includes(extension)) {
+    throw new Error(`Choose a ${PROJECT_ICON_EXTENSIONS.join(", ")} image.`)
+  }
+  const entry = listProjects().find((project) => project.id === id)
+  if (!entry) throw new Error("No such project.")
+  if (bytes.length === 0) throw new Error("That file is empty.")
+  const path = customIconPath(id, `.${extension}`)
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, bytes)
+  if (!imageDimensions(path)) {
+    rmSync(path, { force: true })
+    throw new Error("That file does not look like an image Frizz can draw.")
+  }
+  // A previous upload in a DIFFERENT format would otherwise sit beside this one and win nothing, but
+  // it would linger forever; the registry only ever points at the newest.
+  for (const stale of PROJECT_ICON_EXTENSIONS) {
+    const other = customIconPath(id, `.${stale}`)
+    if (other !== path) rmSync(other, { force: true })
+  }
+  const updated = setProjectIcon(id, path)
+  if (!updated) throw new Error("No such project.")
+  return projectCard(updated, entry.stale)
+}
+
+/** The picked FILE's bytes, read from disk — the native picker hands back a path, not an upload. */
+function setProjectIconFromFile(id: string, file: string): ProjectCard {
+  let bytes: Buffer
+  try {
+    bytes = readFileSync(file)
+  } catch {
+    throw new Error("That file could not be read.")
+  }
+  // The upload path's cap is in base64 CHARS; 4 of those encode 3 bytes, so the same ceiling in
+  // raw bytes keeps the two entry points on one limit rather than two that drift.
+  if (bytes.length > (PROJECT_ICON_MAX_BASE64_CHARS / 4) * 3) throw new Error("That image is too large.")
+  return storeProjectIcon(id, file, bytes)
 }
 
 export function createRouter(ctx: AppContext) {
@@ -2423,6 +2470,29 @@ export function createRouter(ctx: AppContext) {
      * ours rather than the client's. `icon<ext>` is a fixed name, so re-uploading replaces rather than
      * accumulating; the registry's version stamp is what makes the new bytes visible past the cache.
      */
+    /**
+     * Choose this project's icon from a native dialog ALREADY STANDING IN THE PROJECT.
+     *
+     * A browser file input cannot be aimed anywhere — the OS picks, and it lands wherever you last
+     * were. A project's icon is nearly always inside the project (a logo in the repo, a screenshot of
+     * it), so the picker should open where Frizz already knows the project lives. The browser input
+     * stays as the fallback for a platform with no native dialog.
+     */
+    projectIconPick: mutation({
+      input: z.object({ id: z.string().min(1) }),
+      output: DirectoryPickResult,
+      handler: async ({ input }) => {
+        const entry = listProjects().find((project) => project.id === input.id)
+        if (!entry) throw new Error("No such project.")
+        // A directory that has since been moved or deleted is not a reason to refuse the dialog —
+        // it just opens wherever the OS would have opened it anyway.
+        const startIn = entry.stale ? undefined : entry.path
+        const picked = await pickImageFile(startIn, `Choose an icon for ${entry.name ?? entry.slug}`)
+        if (picked.kind !== "picked") return picked
+        return { kind: "picked" as const, project: setProjectIconFromFile(input.id, picked.path) }
+      },
+    }),
+
     projectIconSet: mutation({
       input: z.object({
         id: z.string().min(1),
@@ -2431,34 +2501,8 @@ export function createRouter(ctx: AppContext) {
         data: z.string().max(PROJECT_ICON_MAX_BASE64_CHARS),
       }),
       output: ProjectCard,
-      handler: async ({ input }) => {
-        const extension = input.name.toLowerCase().match(/\.([a-z0-9]+)$/u)?.[1]
-        if (!extension || !(PROJECT_ICON_EXTENSIONS as readonly string[]).includes(extension)) {
-          throw new Error(`Choose a ${PROJECT_ICON_EXTENSIONS.join(", ")} image.`)
-        }
-        const entry = listProjects().find((project) => project.id === input.id)
-        if (!entry) throw new Error("No such project.")
-        const bytes = Buffer.from(input.data, "base64")
-        if (bytes.length === 0) throw new Error("That file is empty.")
-        // Refuse anything whose bytes are not the image its name claims — the same magic-byte check
-        // the scan ranks by. A file the browser will not render is a permanently broken square.
-        const path = customIconPath(input.id, `.${extension}`)
-        mkdirSync(dirname(path), { recursive: true })
-        writeFileSync(path, bytes)
-        if (!imageDimensions(path)) {
-          rmSync(path, { force: true })
-          throw new Error("That file does not look like an image Frizz can draw.")
-        }
-        // A previous upload in a DIFFERENT format would otherwise sit beside this one and win nothing,
-        // but it would linger forever; the registry only ever points at the newest.
-        for (const stale of PROJECT_ICON_EXTENSIONS) {
-          const other = customIconPath(input.id, `.${stale}`)
-          if (other !== path) rmSync(other, { force: true })
-        }
-        const updated = setProjectIcon(input.id, path)
-        if (!updated) throw new Error("No such project.")
-        return projectCard(updated, entry.stale)
-      },
+      handler: async ({ input }) =>
+        storeProjectIcon(input.id, input.name, Buffer.from(input.data, "base64")),
     }),
 
     /**
