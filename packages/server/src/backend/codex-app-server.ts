@@ -1786,6 +1786,24 @@ export class CodexAppServerBridge {
         throw new InteractionStoreError("schema-version", `Codex app-server bridge could not add ${table}.${column}`)
       }
     }
+    // THE REBRAND LEFT THIS COLUMN BEHIND (2026-08-06). The rename swept the CREATE TABLE, so a
+    // database that first used the Codex bridge AFTER the rebrand has `frizz_session_id` and one that
+    // used it BEFORE still has `fray_session_id` — and the required-columns guard below turns that
+    // into a hard "schema is missing required columns" on open. Ten of this machine's sixteen project
+    // databases were in that state, which is to say: unopenable, with no way for the operator to tell
+    // why. Renaming is the whole fix; the column's contents were always frizz session ids.
+    //
+    // Runs before addColumn on purpose — otherwise addColumn would add an EMPTY frizz_session_id
+    // beside the populated fray_session_id and the rename would then fail on a duplicate name.
+    if (columns("codex_app_server_session").has("fray_session_id") &&
+      !columns("codex_app_server_session").has("frizz_session_id")) {
+      try {
+        this.db.exec("ALTER TABLE codex_app_server_session RENAME COLUMN fray_session_id TO frizz_session_id")
+      } catch {
+        this.db.close()
+        throw new InteractionStoreError("schema-version", "Codex app-server bridge could not adopt fray_session_id")
+      }
+    }
     addColumn("codex_app_server_meta", "daemon_generation", "TEXT NOT NULL DEFAULT ''")
     addColumn("codex_app_server_session", "auto_resumed_turn_id", "TEXT")
     addColumn("codex_app_server_session", "auto_resume_count", "INTEGER NOT NULL DEFAULT 0")

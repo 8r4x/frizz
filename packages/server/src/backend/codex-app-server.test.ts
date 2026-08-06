@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events"
-import { mkdtempSync } from "node:fs"
+import { rmSync, mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { PassThrough } from "node:stream"
@@ -1833,6 +1833,51 @@ test("bridge close detaches persisted bindings and makes pending delivery rows n
   assert.deepEqual(persisted, { state: "detached", current_turn_id: turnId })
   assert.equal(h.interactions.providerDelivery(scope, pending.id)?.state, "awaiting-user")
   h.close()
+})
+
+// THE REBRAND'S HARDEST-EDGED LEFTOVER. The rename swept the CREATE TABLE, so a database that first
+// used the Codex bridge before it kept `fray_session_id` — and the required-columns guard below turns
+// that into a hard "schema is missing required columns" on open. Ten of the sixteen project databases
+// on the maintainer's machine were in exactly that state: unopenable, with nothing saying why.
+test("bridge persistence adopts a pre-rebrand fray_session_id instead of refusing the database", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-codex-app-server-rebrand-"))
+  const dbPath = join(dir, "ui.db")
+
+  // Build the schema the current code writes, then put the one column back to its old name.
+  const seed = new Database(dbPath)
+  const seedInteractions = createInteractionStore(seed)
+  new CodexAppServerBridge({
+    projectId: "project-1",
+    projectDir: dir,
+    dbPath,
+    interactions: seedInteractions,
+    spawn: () => new FakeAppServerProcess(),
+  }).close()
+  seedInteractions.dispose()
+  seed.close()
+
+  const legacy = new Database(dbPath)
+  legacy.exec("ALTER TABLE codex_app_server_session RENAME COLUMN frizz_session_id TO fray_session_id")
+  legacy.close()
+
+  const db = new Database(dbPath)
+  const interactions = createInteractionStore(db)
+  const bridge = new CodexAppServerBridge({
+    projectId: "project-1",
+    projectDir: dir,
+    dbPath,
+    interactions,
+    spawn: () => new FakeAppServerProcess(),
+  })
+  const columns = new Set(
+    db.prepare("PRAGMA table_info(codex_app_server_session)").all().map((c) => (c as { name: string }).name),
+  )
+  assert.ok(columns.has("frizz_session_id"), "the column was renamed, not re-added")
+  assert.equal(columns.has("fray_session_id"), false, "and the old name is gone")
+  bridge.close()
+  interactions.dispose()
+  db.close()
+  rmSync(dir, { recursive: true, force: true })
 })
 
 test("bridge persistence refuses malformed or future authority schemas before spawning Codex", () => {

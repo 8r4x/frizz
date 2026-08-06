@@ -807,6 +807,21 @@ export function createStorage(dbPath: string): Storage {
       // column already exists
     }
   }
+  // THE REBRAND LEFT THESE ROWS BEHIND (2026-08-06). `tmux_name` is re-derived as
+  // `frizz-<slug>` and checked on EVERY write by validateSessionIdentity, so a row still holding
+  // `fray-<slug>` is a row whose next write is rejected. The one-time migration that fixed this was
+  // deleted once the projects in use had been converted — but ten project databases had simply not
+  // been opened since, carrying fourteen threads between them, and a project nobody opened for a week
+  // is exactly what a machine-wide project grid now invites you to open.
+  //
+  // It lives here rather than in a migration module because it is idempotent and self-limiting: the
+  // LIKE matches nothing once a database has been through it, so it costs one no-op scan per boot and
+  // there is nothing left to delete later.
+  try {
+    db.exec("UPDATE session SET tmux_name = 'frizz-' || substr(tmux_name, 6) WHERE tmux_name LIKE 'fray-%'")
+  } catch {
+    // A pre-schema database, or one without the column yet. The ALTERs above own that case.
+  }
   // ONE-SHOT ADOPTION of the pre-merge two-feature rows (2026-08-03). A thread that had a stop hook, a
   // heartbeat, or both keeps working across the upgrade instead of silently going quiet.
   //

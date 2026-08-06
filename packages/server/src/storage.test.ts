@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync } from "node:fs"
+import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
@@ -1008,3 +1008,32 @@ test("setProfile stamps the operator set-time; the observed write-back never tou
   assert.equal(s.getSession("pf")?.profile_set_at, setAt, "observed write-back leaves profile_set_at untouched")
 })
 
+// The rebrand's one-time migration was deleted once the projects in use had been converted — but ten
+// project databases on this machine had simply not been opened since, and `tmux_name` is re-derived
+// and checked on every write, so the next write to one of those rows would have been rejected.
+test("opening a database adopts a pre-rebrand tmux_name, and leaves a current one alone", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-rebrand-rows-"))
+  const path = join(dir, "ui.db")
+  try {
+    const first = createStorage(path)
+    first.upsertSession(row({ slug: "old-thread" }))
+    first.upsertSession(row({ slug: "new-thread" }))
+    first.close()
+
+    // Put one row back exactly the way the pre-rebrand code wrote it.
+    const raw = new Database(path)
+    raw.exec("UPDATE session SET tmux_name = 'fray-old-thread' WHERE slug = 'old-thread'")
+    raw.close()
+
+    // Opening IS the migration — there is nothing else to run.
+    const reopened = createStorage(path)
+    try {
+      assert.equal(reopened.getSession("old-thread")?.tmux_name, "frizz-old-thread")
+      assert.equal(reopened.getSession("new-thread")?.tmux_name, "frizz-new-thread")
+    } finally {
+      reopened.close()
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
