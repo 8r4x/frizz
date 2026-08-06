@@ -1072,3 +1072,23 @@ a[href] {
                 filter 200ms cubic-bezier(0.4, 0, 0.2, 1);
   }
 }
+
+/* The project rail's scrolling band. A 57px column cannot spend 8-15px of itself on a scrollbar
+   track, so the track is hidden and a FADE says what it would have said. Without the mask a rail of
+   29 projects clips hard against the divider and reads as the end of the list rather than the middle
+   of it. The mask is unconditional — at the top of the scroll the first 10px fade into the rule above
+   them, which costs nothing, and a JS-driven conditional mask would repaint on every scroll frame. */
+.frizz-rail-scroll {
+  scrollbar-width: none;
+  --rail-fade: 14px;
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--rail-fade),
+    #000 calc(100% - var(--rail-fade)),
+    transparent 100%
+  );
+}
+.frizz-rail-scroll::-webkit-scrollbar {
+  display: none;
+}

@@ -114,9 +114,11 @@ import { resolvePlanFile, deletePlanFile } from "./plan-files.ts"
 import { providerResumeCommand } from "./external-terminal.ts"
 import { backgroundShellLineCount, readBackgroundShellOutput } from "./background-shell-output.ts"
 import { projectRetiredBackgroundOps, retiredOpsFor } from "./transcript.ts"
-import { listProjects } from "./project-registry.ts"
-import { basename } from "node:path"
-import { ProjectCard } from "@frizz/shared"
+import { clearProjectIcon, customIconPath, listProjects, setProjectIcon, type RegistryEntry } from "./project-registry.ts"
+import { basename, dirname } from "node:path"
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { ProjectCard, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS } from "@frizz/shared"
+import { imageDimensions } from "./image-header.ts"
 import { homedir } from "node:os"
 import { discoverProjectRoot, ensureProjectIdFile, writeProjectIdFile } from "./project-root.ts"
 import { resolveProjectLabel } from "./project-identity.ts"
@@ -480,6 +482,26 @@ export async function stopAndForgetRegisteredRuntime(
  * mint or adopt `.frizz/.id`, write the index. It dispatches nothing, which is what makes it a
  * strictly smaller authority than running `frizz` in that directory.
  */
+/**
+ * A registry entry as the grid and the rail see it.
+ *
+ * One mapper for all four routes that return a card (`projectsList`, `projectAdd`, `projectPick`, and
+ * both icon mutations): they went out of sync the moment the icon fields arrived, and a card whose
+ * `iconVersion` is missing is a square that silently keeps showing the icon it just replaced.
+ */
+function projectCard(entry: RegistryEntry, stale: boolean): ProjectCard {
+  return {
+    id: entry.id,
+    slug: entry.slug,
+    name: entry.name ?? basename(entry.path) ?? entry.path,
+    path: entry.path,
+    lastOpenedAt: entry.lastOpenedAt,
+    stale,
+    iconVersion: entry.iconScannedAt,
+    iconIsCustom: entry.iconSource === "custom" ? true : undefined,
+  }
+}
+
 function addProjectAtPath(input: string): ProjectCard {
   const typed = input.trim()
   if (!typed) throw new Error("Enter a folder path.")
@@ -504,15 +526,7 @@ function addProjectAtPath(input: string): ProjectCard {
     registered = registerProject({ dir: root, id: writeProjectIdFile(root, randomUUID()), remoteOwner })
   }
   if (!registered.entry) throw new Error("Could not register that folder.")
-  const entry = registered.entry
-  return {
-    id: entry.id,
-    slug: entry.slug,
-    name: entry.name ?? basename(entry.path) ?? entry.path,
-    path: entry.path,
-    lastOpenedAt: entry.lastOpenedAt,
-    stale: false,
-  }
+  return projectCard(registered.entry, false)
 }
 
 export function createRouter(ctx: AppContext) {
@@ -2446,14 +2460,75 @@ export function createRouter(ctx: AppContext) {
     projectsList: query({
       output: z.array(ProjectCard),
       handler: async () =>
-        listProjects().map((entry) => ({
-          id: entry.id,
-          slug: entry.slug,
-          name: entry.name ?? basename(entry.path) ?? entry.path,
-          path: entry.path,
-          lastOpenedAt: entry.lastOpenedAt,
-          stale: entry.stale,
-        })),
+        listProjects().map((entry) => projectCard(entry, entry.stale)),
+    }),
+
+    /**
+     * Give a project an icon of the operator's choosing.
+     *
+     * The bytes land in the project's STATE DIR, never in the repository: a picture chosen for a rail
+     * square is Frizz's business, and writing one into someone's working tree would show up in their
+     * `git status` for a UI preference they set in another app.
+     *
+     * Same trust gates as `/attach` — an extension allowlist and a size cap, and the on-disk name is
+     * ours rather than the client's. `icon<ext>` is a fixed name, so re-uploading replaces rather than
+     * accumulating; the registry's version stamp is what makes the new bytes visible past the cache.
+     */
+    projectIconSet: mutation({
+      input: z.object({
+        id: z.string().min(1),
+        /** The file's name, for its extension only. */
+        name: z.string().min(1),
+        data: z.string().max(PROJECT_ICON_MAX_BASE64_CHARS),
+      }),
+      output: ProjectCard,
+      handler: async ({ input }) => {
+        const extension = input.name.toLowerCase().match(/\.([a-z0-9]+)$/u)?.[1]
+        if (!extension || !(PROJECT_ICON_EXTENSIONS as readonly string[]).includes(extension)) {
+          throw new Error(`Choose a ${PROJECT_ICON_EXTENSIONS.join(", ")} image.`)
+        }
+        const entry = listProjects().find((project) => project.id === input.id)
+        if (!entry) throw new Error("No such project.")
+        const bytes = Buffer.from(input.data, "base64")
+        if (bytes.length === 0) throw new Error("That file is empty.")
+        // Refuse anything whose bytes are not the image its name claims — the same magic-byte check
+        // the scan ranks by. A file the browser will not render is a permanently broken square.
+        const path = customIconPath(input.id, `.${extension}`)
+        mkdirSync(dirname(path), { recursive: true })
+        writeFileSync(path, bytes)
+        if (!imageDimensions(path)) {
+          rmSync(path, { force: true })
+          throw new Error("That file does not look like an image Frizz can draw.")
+        }
+        // A previous upload in a DIFFERENT format would otherwise sit beside this one and win nothing,
+        // but it would linger forever; the registry only ever points at the newest.
+        for (const stale of PROJECT_ICON_EXTENSIONS) {
+          const other = customIconPath(input.id, `.${stale}`)
+          if (other !== path) rmSync(other, { force: true })
+        }
+        const updated = setProjectIcon(input.id, path)
+        if (!updated) throw new Error("No such project.")
+        return projectCard(updated, entry.stale)
+      },
+    }),
+
+    /**
+     * Drop the operator's icon and let the scan decide again.
+     *
+     * One action, not two: "remove this picture" and "go and look for one" are the same wish, because
+     * a project with no icon at all falls back to its monogram either way.
+     */
+    projectIconClear: mutation({
+      input: z.object({ id: z.string().min(1) }),
+      output: ProjectCard,
+      handler: async ({ input }) => {
+        for (const extension of PROJECT_ICON_EXTENSIONS) {
+          rmSync(customIconPath(input.id, `.${extension}`), { force: true })
+        }
+        const updated = clearProjectIcon(input.id)
+        if (!updated) throw new Error("No such project.")
+        return projectCard(updated, !existsSync(updated.path))
+      },
     }),
 
     /**

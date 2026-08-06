@@ -221,6 +221,11 @@ export interface Api {
   // withholds absolute paths on purpose, and a project is a path — so the picker cannot live here.
   projectPick(input: Record<never, never>): Promise<DirectoryPickResult>
   projectAdd(input: { path: string }): Promise<ProjectCard>
+  // The rail's squares. `projectIconSet` takes base64 from a browser file input (the bytes land in the
+  // project's state dir, never in its working tree); clearing hands the square back to the automatic
+  // scan, which is also what draws it in the first place — see server/project-icon.ts.
+  projectIconSet(input: { id: string; name: string; data: string }): Promise<ProjectCard>
+  projectIconClear(input: { id: string }): Promise<ProjectCard>
   settingsGet(): Promise<Settings>
   settingsSet(input: Settings): Promise<Settings>
   // Takes an empty object, not nothing: the router declares `input: z.object({})` (a mutation always
@@ -310,6 +315,8 @@ export const PROCEDURES = {
   projectsList: "query",
   projectPick: "mutation",
   projectAdd: "mutation",
+  projectIconSet: "mutation",
+  projectIconClear: "mutation",
   settingsGet: "query",
   settingsSet: "mutation",
   settingsReset: "mutation",

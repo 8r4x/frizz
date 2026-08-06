@@ -9,10 +9,13 @@
 import * as RadixDialog from "@radix-ui/react-dialog"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
+import { ImagePlus } from "lucide-react"
 import type { ProjectCard } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { relativeAge } from "../lib/activityTime.ts"
 import { projectHref } from "../lib/base-path.ts"
+import { TooltipProvider } from "./Tooltip.tsx"
+import { ProjectIconMenu, ProjectRail, ProjectSquare, RAIL_INSET_CLASS } from "./ProjectRail.tsx"
 
 /**
  * The mark, at the size where it is legible AS a mark.
@@ -31,34 +34,60 @@ function shortPath(path: string, home: string | undefined): string {
 const CARD_BASE =
   "flex flex-col gap-1 rounded-lg border px-4 py-3 outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60"
 
+/** The card's icon is the rail's square at card size, and the one place to change it. */
+const CARD_ICON = 38
+
 function Card({ project, home }: { project: ProjectCard; home: string | undefined }) {
   const opened = relativeAge(project.lastOpenedAt)
   return (
-    <a
-      href={projectHref(project.slug)}
-      className={`${CARD_BASE} border-border bg-panel hover:border-border-strong hover:bg-panel-2 ${
-        project.stale ? "opacity-60" : ""
-      }`}
-    >
-      {/* min-w-0 is what makes truncate real: a flex item will not shrink below its content
-          without it, so a long name would push its slug straight through the card border. */}
-      <div className="flex min-w-0 items-baseline gap-2">
-        <span className="min-w-0 truncate text-[13px] font-medium text-fg">{project.name}</span>
-        {/* Shown only when it is not simply the name: a directory called "app" under "pullfrog"
-            lives at /pullfrog-app and that is worth saying, while "nub" would just repeat itself. */}
-        {project.slug !== project.name ? (
-          <span className="max-w-[45%] shrink-0 truncate font-mono text-[11px] text-muted/70">
-            /{project.slug}
+    // A relatively-positioned WRAPPER, not a bordered card of its own: the icon menu's trigger has to
+    // sit OUTSIDE the <a> (a button nested in a link is invalid, and clicking it would navigate), so
+    // the link fills the wrapper and the trigger overlays a corner of it.
+    <div className="group/card relative">
+      <a
+        href={projectHref(project.slug)}
+        className={`${CARD_BASE} flex-row items-center gap-3 border-border bg-panel hover:border-border-strong hover:bg-panel-2 ${
+          project.stale ? "opacity-60" : ""
+        }`}
+      >
+        <span className={`shrink-0 ${project.stale ? "grayscale" : ""}`}>
+          <ProjectSquare project={project} size={CARD_ICON} />
+        </span>
+        {/* min-w-0 is what makes truncate real: a flex item will not shrink below its content
+            without it, so a long name would push its slug straight through the card border. */}
+        <span className="flex min-w-0 flex-1 flex-col gap-1">
+          <span className="flex min-w-0 items-baseline gap-2">
+            <span className="min-w-0 truncate text-[13px] font-medium text-fg">{project.name}</span>
+            {/* Shown only when it is not simply the name: a directory called "app" under "pullfrog"
+                lives at /pullfrog-app and that is worth saying, while "nub" would just repeat itself. */}
+            {project.slug !== project.name ? (
+              <span className="max-w-[45%] shrink-0 truncate font-mono text-[11px] text-muted/70">
+                /{project.slug}
+              </span>
+            ) : null}
           </span>
-        ) : null}
+          <span className="truncate text-[11px] text-muted" title={project.path}>
+            {shortPath(project.path, home)}
+          </span>
+          {/* pr-6 keeps the longest of these clear of the icon button in the corner. */}
+          <span className="truncate pr-6 text-[11px] text-muted/70">
+            {project.stale ? "Directory is missing" : opened ? `Opened ${opened}` : "Never opened"}
+          </span>
+        </span>
+      </a>
+      {/* Revealed on hover over the card, and permanently for keyboard users once focused. */}
+      <div className="absolute bottom-2 right-2 opacity-0 transition-opacity focus-within:opacity-100 group-hover/card:opacity-100">
+        <ProjectIconMenu project={project}>
+          <button
+            type="button"
+            aria-label={`Icon for ${project.name}`}
+            className="flex h-6 w-6 items-center justify-center rounded-md text-muted outline-none hover:bg-elevated hover:text-fg focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-fg/60"
+          >
+            <ImagePlus size={13} />
+          </button>
+        </ProjectIconMenu>
       </div>
-      <span className="truncate text-[11px] text-muted" title={project.path}>
-        {shortPath(project.path, home)}
-      </span>
-      <span className="text-[11px] text-muted/70">
-        {project.stale ? "Directory is missing" : opened ? `Opened ${opened}` : "Never opened"}
-      </span>
-    </a>
+    </div>
   )
 }
 
@@ -195,7 +224,12 @@ export function ProjectGrid() {
     // m-auto rather than justify-center: a centred flex column CLIPS its overflow at the top once
     // the content is taller than the viewport, and forty projects will be. Auto margins centre while
     // still letting the page scroll from its real top.
-    <div className="flex min-h-dvh w-full flex-col px-6 py-14">
+    // Its OWN provider: this is a root shell beside <App/> (main.tsx), not a subtree of it, so the
+    // one App mounts is not in scope here. The rail's tooltips render in both, and without this the
+    // grid throws "`Tooltip` must be used within `TooltipProvider`" the moment the rail mounts.
+    <TooltipProvider>
+    <ProjectRail />
+    <div className={`flex min-h-dvh w-full flex-col px-6 py-14 ${RAIL_INSET_CLASS}`}>
       <div className="m-auto flex w-full flex-col items-center">
       <div className="mb-8 flex flex-col items-center gap-2.5 text-center">
         <img src="/favicon.svg" width={MARK_PX} height={MARK_PX} alt="" className="rounded-[17px]" />
@@ -243,5 +277,6 @@ export function ProjectGrid() {
         <AddProjectDialog reason={fallback.reason} onClose={() => setFallback(null)} />
       ) : null}
     </div>
+    </TooltipProvider>
   )
 }

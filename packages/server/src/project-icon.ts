@@ -1,0 +1,438 @@
+import { readFileSync, readdirSync, realpathSync, statSync } from "node:fs"
+import { homedir } from "node:os"
+import { basename, dirname, extname, join, relative, sep } from "node:path"
+import { imageDimensions, MEASURABLE_IMAGE_EXTENSIONS, type ImageDimensions } from "./image-header.ts"
+import { projectStateDir } from "./frizz-paths.ts"
+import { readRegistry, resolveProjectIcon } from "./project-registry.ts"
+
+// FINDING A PROJECT'S OWN ICON, in the project.
+//
+// The rail draws one square per project, and a machine with forty of them is unreadable as forty
+// identical monograms. Almost every project already ships the picture it wants to be known by — a
+// favicon, an apple-touch-icon, a logo in `public/` — so the icon is nearly always THERE, sitting in
+// a handful of conventional places, and the only reason it isn't on screen is that nobody looked.
+//
+// NOTHING ON NPM DOES THIS. Searched 2026-08-06: every "favicon" package is one of two other things —
+// a fetcher that takes a URL and hits the live site (`favicon-fetch`, `get-website-favicon`,
+// `parse-favicon`) or a generator that takes one source image and produces an icon set (`favicons`).
+// Neither knows a thing about where a checkout keeps its logo, which is the entire question here.
+//
+// TWO PROPERTIES SHAPE THE WHOLE FILE, and both come from the scale:
+//
+//   · It must be CHEAP. Forty projects × a recursive walk is not a thing to do while someone waits,
+//     so this never recurses. It reads a fixed table of directories one level deep (plus one level of
+//     monorepo expansion) and stops after a bounded number of files. A repo with 200k files under
+//     `node_modules` costs exactly as much as an empty one.
+//   · It must PREFER THE BIG SQUARE ONE. `favicon.ico` is usually 16px and looks like mud at 32; the
+//     512px `apple-touch-icon.png` sitting beside it is the icon a person would have picked. So the
+//     favicon is a WAYFINDER rather than the answer — finding one marks its directory as this
+//     project's icon home and lifts everything in it, which is how the larger sibling wins.
+//
+// The output is a path. Serving it, caching it, and letting the operator override it belong to
+// project-registry.ts and the `/_frizz/project-icon` route.
+
+/** Bounded work: a pathological tree must not turn a rail render into a filesystem crawl. */
+const MAX_CANDIDATES = 400
+
+/**
+ * Where projects actually keep icons, one level deep each.
+ *
+ * Assembled by reading the real conventions rather than guessing: `public/` (Vite, CRA, Next's pages
+ * router), `src/app/` (Next's app router, where `favicon.ico` is a ROUTE file), `static/` (SvelteKit,
+ * Hugo, Docusaurus), `assets/` (Expo, Angular), `resources/` (Capacitor, Laravel), `build/` (electron-
+ * builder), `.github/` (the README's logo, which for a library is very often the only icon that
+ * exists).
+ */
+const ICON_DIRECTORIES = [
+  "",
+  "public",
+  "static",
+  "assets",
+  "resources",
+  "app",
+  "src",
+  "src/app",
+  "src/assets",
+  "src/public",
+  "app/assets",
+  "app/public",
+  "www",
+  "web",
+  "site",
+  "docs",
+  "doc",
+  "website",
+  "images",
+  "img",
+  "media",
+  "icons",
+  "brand",
+  "design",
+  "build",
+  "build/icons",
+  "electron",
+  "extension",
+  "extension/icons",
+  ".github",
+  "public/images",
+  "public/img",
+  "public/icons",
+  "public/assets",
+  "public/static",
+  "static/img",
+  "static/images",
+  "static/icons",
+  "assets/images",
+  "assets/icons",
+  "assets/img",
+  "resources/icons",
+  "docs/public",
+  "docs/assets",
+  "docs/static/img",
+  "website/static/img",
+]
+
+/** Monorepo containers. One level of children each, then the usual asset dirs inside them. */
+const WORKSPACE_CONTAINERS = ["apps", "packages", "sites"]
+const WORKSPACE_SUBDIRECTORIES = ["", "public", "static", "assets", "src/app", "src/assets"]
+
+/** Web app manifests, whose `icons[]` is a project stating its icons outright. */
+const MANIFEST_NAMES = ["manifest.json", "site.webmanifest", "manifest.webmanifest", "manifest.json5"]
+
+/**
+ * Name → how much it looks like an app icon.
+ *
+ * `favicon` scores LOW on purpose. It is the most reliable signal that a directory holds icons and
+ * the least reliable icon itself — the 16px one browsers ask for — so it earns its keep through the
+ * directory bonus below, not by winning outright.
+ */
+const NAME_SCORES: [RegExp, number, string][] = [
+  [/^logomark$|^logo-?mark$|^app-?icon$|^icon-?square$/u, 20, "an app icon"],
+  [/^logo$|^icon$|^mark$|^brand$|^symbol$/u, 18, "the project logo"],
+  [/^apple-?touch-?icon$|^apple-?icon$|^maskable(-?icon)?$/u, 16, "the touch icon"],
+  [/^android-?chrome$|^mstile$|^ms-?icon$|^web-?app-?icon$|^pwa-?icon$/u, 14, "the web app icon"],
+  // Qualified rather than bare, and the qualifier is usually somebody ELSE's name: a personal site's
+  // `public/` holds `trpc-logo.svg` and `zod-logo.svg` next to its own `icon.png`, and scoring these
+  // level with a bare `logo` handed that site a logo it does not own. Low enough that any unqualified
+  // icon in the same directory beats it.
+  [/^logo-|^icon-|-logo$|-icon$/u, 6, "a logo file"],
+  [/^favicon$/u, 6, "the favicon"],
+]
+
+/** Build output. The same icon is in the source tree, and that copy is the one that survives a clean. */
+const GENERATED_DIRECTORIES = new Set(["build", "dist", "out", ".next", ".output", "coverage", "target"])
+
+/**
+ * Names that are images a project ships but never its icon.
+ *
+ * A social card is the trap worth naming: `og-image.png` is 1200×630, lives in `public/` beside the
+ * favicon, and is the largest image in most repos — so without this it would beat the real icon on
+ * size alone in a very large number of projects. The aspect gate catches most of them; this catches
+ * the square ones and saves measuring the rest.
+ */
+const NEVER_AN_ICON = /^(og|twitter|social|banner|hero|cover|preview|screenshot|sprite|placeholder|avatar-default|background|bg)([-_.]|$)/u
+
+/** A wordmark is not a square. Anything outside this band is a banner, not an icon. */
+const MIN_ASPECT = 0.8
+const MAX_ASPECT = 1.25
+/** Below this the image cannot survive being drawn at 32px, whatever else it has going for it. */
+const MIN_EDGE = 24
+
+export interface ProjectIconCandidate {
+  /** Absolute path to the image. */
+  path: string
+  score: number
+  dimensions: ImageDimensions
+  /** Plain-language account of why this one, shown to the operator so the scan is not a black box. */
+  reason: string
+}
+
+/** Theme and weight suffixes. Stripping them is what lets `mark-light` be recognised as a mark. */
+const VARIANT_SUFFIX = /[-_](light|dark|white|black|inverse|inverted|mono|color|colour|full|solid|outline|small|large|sm|lg|md)$/u
+
+/**
+ * The comparable form of a filename stem, and whether it was a VARIANT of one.
+ *
+ * Two kinds of suffix get stripped, for the same reason — they describe a rendition, not a different
+ * picture. Sizes (`icon-192x192`, `logo@2x`, `mstile-150`) are how every icon toolchain writes its
+ * output, and themes (`mark-light`) are how a project ships one mark twice. Without stripping them
+ * none of those names matches anything and a project's entire icon set scores zero.
+ *
+ * The variant flag exists because stripping alone would then TIE `mark-light.svg` with `mark.svg`,
+ * and alphabetical order handed the rail the light-background mark — the wrong one against dark
+ * chrome. Where a project ships both, the unqualified file is the one it means.
+ */
+function normalizeStem(stem: string): { normalized: string; variant: boolean } {
+  const sized = stem
+    .toLowerCase()
+    .replace(/[@-]\d+(\.\d+)?x(\d+)?$/u, "")
+    .replace(/[-_]\d{2,4}$/u, "")
+  const normalized = sized.replace(VARIANT_SUFFIX, "")
+  return { normalized, variant: normalized !== sized }
+}
+
+function nameScore(normalized: string): { score: number; reason: string } | undefined {
+  for (const [pattern, score, reason] of NAME_SCORES) {
+    if (pattern.test(normalized)) return { score, reason }
+  }
+  return undefined
+}
+
+/**
+ * Size, on a log scale, saturating at 512.
+ *
+ * Linear would make a 1024px PNG twice the icon a 512px one is, which is not how any of this reads on
+ * a 32px square — past a couple of hundred pixels the extra resolution is invisible and what matters
+ * is that it is not the 16px favicon. Doubling from 24px is worth 8 points each time until it stops
+ * mattering: 24→0, 48→8, 96→16, 192→24, 384→32, 512+→40.
+ */
+function sizeScore(dimensions: ImageDimensions): number {
+  // A scalable mark is worth the top of the scale at any nominal box: it is sharp at every size the
+  // rail could ever draw it, which is the property the whole scale is a proxy for.
+  if (dimensions.scalable) return 40
+  const edge = Math.max(dimensions.width, dimensions.height)
+  return Math.max(0, Math.min(40, Math.round((Math.log2(edge / 24)) * 8)))
+}
+
+const FORMAT_SCORES: Record<string, number> = {
+  ".svg": 12, // scales, and is what a designer handed the project
+  ".png": 10, // transparency, universally decodable
+  ".webp": 8,
+  ".ico": 4, // a container of small images, and the only one browsers demand
+  ".gif": 2,
+  ".jpg": 1, // no transparency: a square photo on the rail's background
+  ".jpeg": 1,
+}
+
+/** `~/code/nub` + `public` → `~/code/nub/public`, with `""` meaning the root itself. */
+function under(root: string, relativeDirectory: string): string {
+  return relativeDirectory ? join(root, relativeDirectory) : root
+}
+
+function listFiles(directory: string): string[] {
+  try {
+    return readdirSync(directory, { withFileTypes: true })
+      .filter((entry) => entry.isFile() || entry.isSymbolicLink())
+      .map((entry) => entry.name)
+  } catch {
+    return [] // absent, unreadable, or not a directory — all mean "no icons here"
+  }
+}
+
+/**
+ * The directories to look in: the fixed table, plus one level inside each monorepo container.
+ *
+ * The expansion is what makes this work on the repos it is most needed for. A monorepo's web app
+ * keeps its favicon in `apps/web/public/`, which no fixed table can name in advance because the
+ * package is called whatever it is called.
+ */
+export function iconDirectories(root: string): string[] {
+  const directories = ICON_DIRECTORIES.map((relativeDirectory) => under(root, relativeDirectory))
+  for (const container of WORKSPACE_CONTAINERS) {
+    let children: string[]
+    try {
+      children = readdirSync(join(root, container), { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+        .map((entry) => entry.name)
+    } catch {
+      continue
+    }
+    for (const child of children) {
+      for (const sub of WORKSPACE_SUBDIRECTORIES) directories.push(under(join(root, container, child), sub))
+    }
+  }
+  return [...new Set(directories)]
+}
+
+/** `icons[]` out of a web app manifest, as absolute paths. Bad JSON is simply no icons. */
+function manifestIcons(manifestPath: string): string[] {
+  let parsed: { icons?: { src?: unknown }[] }
+  try {
+    parsed = JSON.parse(readFileSync(manifestPath, "utf8")) as typeof parsed
+  } catch {
+    return []
+  }
+  if (!Array.isArray(parsed?.icons)) return []
+  const directory = dirname(manifestPath)
+  return parsed.icons
+    .map((icon) => (typeof icon?.src === "string" ? icon.src : undefined))
+    .filter((src): src is string => !!src && !/^(https?:)?\/\//u.test(src) && !src.startsWith("data:"))
+    // A manifest's src is relative to the manifest, and a leading `/` means the site root — which for
+    // a static site is the directory the manifest itself sits in.
+    .map((src) => join(directory, src.replace(/^\//u, "")))
+}
+
+/**
+ * Every icon this project might be represented by, best first.
+ *
+ * Exported for the test and for the "why did it pick that" affordance; callers who just want the
+ * answer use `detectProjectIcon`.
+ */
+export function projectIconCandidates(root: string): ProjectIconCandidate[] {
+  const projectStem = normalizeStem(basename(root)).normalized
+  const candidates: ProjectIconCandidate[] = []
+  const seen = new Set<string>()
+  /** Directories that hold a favicon: this project's icon home, per the wayfinder rule up top. */
+  const iconHomes = new Set<string>()
+  const measured = new Map<string, ImageDimensions | undefined>()
+  const measure = (path: string) => {
+    if (!measured.has(path)) measured.set(path, imageDimensions(path))
+    return measured.get(path)
+  }
+
+  const files: { path: string; directory: string }[] = []
+  const fromManifest = new Set<string>()
+
+  for (const directory of iconDirectories(root)) {
+    if (files.length >= MAX_CANDIDATES) break
+    for (const name of listFiles(directory)) {
+      const extension = extname(name).toLowerCase()
+      if (MANIFEST_NAMES.includes(name.toLowerCase())) {
+        for (const icon of manifestIcons(join(directory, name))) {
+          if (MEASURABLE_IMAGE_EXTENSIONS.has(extname(icon).toLowerCase())) {
+            fromManifest.add(icon)
+            files.push({ path: icon, directory: dirname(icon) })
+          }
+        }
+        continue
+      }
+      if (!MEASURABLE_IMAGE_EXTENSIONS.has(extension)) continue
+      const stem = name.slice(0, name.length - extension.length)
+      if (normalizeStem(stem).normalized === "favicon") iconHomes.add(directory)
+      files.push({ path: join(directory, name), directory })
+      if (files.length >= MAX_CANDIDATES) break
+    }
+  }
+
+  for (const { path, directory } of files) {
+    if (seen.has(path)) continue
+    seen.add(path)
+    const extension = extname(path).toLowerCase()
+    const { normalized, variant } = normalizeStem(basename(path, extname(path)))
+    if (NEVER_AN_ICON.test(normalized)) continue
+
+    const named = nameScore(normalized)
+    const isProjectNamed = normalized === projectStem && projectStem.length > 1
+    const viaManifest = fromManifest.has(path)
+    // Something has to vouch for the file: its name, the project's name, or a manifest listing it.
+    // Without this, `public/team-photo.png` is a candidate in every repo that has one.
+    if (!named && !isProjectNamed && !viaManifest) continue
+
+    const dimensions = measure(path)
+    if (!dimensions) continue
+    const edge = Math.max(dimensions.width, dimensions.height)
+    if (edge < MIN_EDGE) continue
+    const aspect = dimensions.width / dimensions.height
+    if (aspect < MIN_ASPECT || aspect > MAX_ASPECT) continue
+
+    const home = iconHomes.has(directory)
+    const segments = directory === root ? [] : relative(root, directory).split(sep)
+    const generated = segments.some((segment) => GENERATED_DIRECTORIES.has(segment))
+    const score =
+      sizeScore(dimensions)
+      + (FORMAT_SCORES[extension] ?? 0)
+      + (named?.score ?? 0)
+      + (isProjectNamed ? 16 : 0)
+      + (viaManifest ? 8 : 0)
+      // The wayfinder payoff: everything sharing a directory with a favicon is lifted, so the big
+      // sibling beats the favicon itself while both still beat an icon from some unrelated folder.
+      + (home ? 10 : 0)
+      // A `logo.svg` sitting in the project root is the most deliberate identity statement a repo
+      // makes — it is there for the README, which is to say for people. Without this, zod's root
+      // `logo.svg` lost to an `android-chrome-512x512.png` three levels down in a docs site, which is
+      // a build artifact of the logo rather than the logo.
+      + (segments.length === 0 ? 8 : 0)
+      - (variant ? 3 : 0)
+      - (generated ? 6 : 0)
+      - Math.min(8, segments.length * 2)
+
+    const where = directory === root ? "the project root" : relative(root, directory)
+    const size = dimensions.scalable
+      ? "scalable"
+      : `${Math.round(dimensions.width)}×${Math.round(dimensions.height)}`
+    const why = isProjectNamed && !named ? "named after the project" : named?.reason ?? "listed in the web manifest"
+    candidates.push({ path, score, dimensions, reason: `${size}, ${why}, in ${where}` })
+  }
+
+  // Ties break towards the SHORTER path, which in practice means the less qualified filename: where
+  // `.github/` holds both `logo.webp` and `logo-original.png` at the same score, `logo` is the one the
+  // project maintains and `logo-original` is the artwork it was cut from.
+  return candidates.sort(
+    (a, b) => b.score - a.score || a.path.length - b.path.length || a.path.localeCompare(b.path),
+  )
+}
+
+/** The one icon to represent this project, or undefined if it does not ship anything usable. */
+export function detectProjectIcon(root: string): ProjectIconCandidate | undefined {
+  return projectIconCandidates(root)[0]
+}
+
+const MEDIA_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+  ".webp": "image/webp",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+}
+
+/** The content type to serve a detected or uploaded icon as, or undefined if we would not serve it. */
+export function iconMediaType(path: string): string | undefined {
+  return MEDIA_TYPES[extname(path).toLowerCase()]
+}
+
+export type ProjectIconResult =
+  | { status: 400 | 404 }
+  | { status: 200; contentType: string; body: Buffer }
+
+/**
+ * Serve a project's icon by project id — the whole of what `/_frizz/project-icon` does.
+ *
+ * SVG IS SERVED HERE AND REFUSED BY `/local-image`, which is worth being explicit about because it
+ * looks like an inconsistency. The two routes trust different inputs. `/local-image` takes an
+ * arbitrary absolute path out of agent-authored markdown, so an SVG there is a script the agent chose
+ * the contents of. This route takes a project id and answers with a file inside that project — and
+ * the rail renders it through `<img src>`, where every browser disables scripting outright. The
+ * `default-src 'none'` CSP applied at the route is the belt to that braces. Refusing SVG here instead
+ * would throw away the single best icon format, and the one a favicon scan finds most often.
+ *
+ * CONFINED to the project's own tree or its state dir. `/local-image` is deliberately unconfined and
+ * says so; this one has no reason to be, since it only ever answers with a file it found itself.
+ */
+export function resolveProjectIconResponse(
+  id: string | undefined,
+  options: { home?: string } = {},
+): ProjectIconResult {
+  if (!id) return { status: 400 }
+  const home = options.home ?? homedir()
+  const entry = readRegistry(home).projects.find((project) => project.id === id)
+  if (!entry) return { status: 404 }
+
+  const path = resolveProjectIcon(id, (root) => detectProjectIcon(root)?.path, { home })
+  if (!path) return { status: 404 }
+  const contentType = iconMediaType(path)
+  if (!contentType) return { status: 404 }
+
+  let real: string
+  try {
+    real = realpathSync(path)
+    if (!statSync(real).isFile()) return { status: 404 }
+  } catch {
+    return { status: 404 }
+  }
+  const roots = [entry.path, projectStateDir(id, home)].map((root) => {
+    try {
+      return realpathSync(root)
+    } catch {
+      return root
+    }
+  })
+  if (!roots.some((root) => real === root || real.startsWith(root + sep))) return { status: 404 }
+
+  try {
+    return { status: 200, contentType, body: readFileSync(real) }
+  } catch {
+    return { status: 404 }
+  }
+}

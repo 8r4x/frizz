@@ -10,6 +10,7 @@ import { createRouter } from "./router.ts"
 import type { AppContext } from "./context.ts"
 import { allowedLocalCorsOrigin, isTrustedLocalHttpRequest } from "./local-origin.ts"
 import { resolveLocalImage } from "./local-image.ts"
+import { resolveProjectIconResponse } from "./project-icon.ts"
 import { resolveLocalVisualization } from "./local-visualization.ts"
 
 export { resolveLocalImage } from "./local-image.ts"
@@ -102,6 +103,26 @@ export function createApp(ctx: AppContext, options: AppOptions = {}) {
     if (r.status !== 200) return c.text(String(r.status), r.status)
     // Copy into a plain Uint8Array<ArrayBuffer> — Hono's body type rejects Node's Buffer union.
     return c.body(Uint8Array.from(r.body), 200, { "content-type": r.contentType, "cache-control": "private, max-age=60" })
+  })
+
+  // MACHINE-SCOPED, not this project's: the rail draws every project on the machine, so it asks for
+  // icons by project id and the answer must not depend on which board's app happens to answer. There
+  // is no `<slug>` segment in the URL for exactly that reason, which also means it lands here on the
+  // launching project's app (splitTenantRequest finds no known slug and falls through).
+  //
+  // Cached hard on the client — a 404 included. Forty squares is forty requests on a cold load and
+  // none at all thereafter, and the icons of a project on this machine do not change under anyone.
+  app.get(frizzRoute("/project-icon"), (c) => {
+    const r = resolveProjectIconResponse(c.req.query("id"))
+    if (r.status !== 200) return c.text(String(r.status), r.status)
+    return c.body(Uint8Array.from(r.body), 200, {
+      "content-type": r.contentType,
+      "cache-control": "private, max-age=300",
+      // An SVG icon is a file out of somebody's repository. It renders through <img>, where scripting
+      // is already off; this makes that unconditional rather than a property of how it is embedded.
+      "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+      "x-content-type-options": "nosniff",
+    })
   })
 
   app.get(frizzRoute("/local-visualization"), (c) => {

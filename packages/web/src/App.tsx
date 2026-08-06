@@ -8,6 +8,7 @@ import { startRouter } from "./lib/router.ts"
 import { nextSidebarPresence, type SidebarPresence } from "./lib/sidebarPresence.ts"
 import { rpc } from "./api/rpc.ts"
 import { Sidebar, projectIdentity } from "./components/Sidebar.tsx"
+import { ProjectRail, RAIL_INSET_CLASS } from "./components/ProjectRail.tsx"
 import { StatusBar } from "./components/StatusBar.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { DrawerStack } from "./components/DrawerStack.tsx"
@@ -244,6 +245,13 @@ export function App() {
           now — the settings/reload pair used to live there, a screen's width away from the identity
           they describe. Everything else flows; the PAGE is the one and only scroll container — a tall
           card simply runs off both edges. */}
+      {/* The permanent project switcher, fixed to the viewport's left edge. It is a SIBLING of the
+          centered pair rather than a column in it: the pair centers in the page, and a rail inside
+          that flow would drag the centre right by half its width on every screen. The container
+          below reserves the width instead. */}
+      <ErrorBoundary label="the project rail">
+        <ProjectRail />
+      </ErrorBoundary>
       <StatusBar identity={identity} connection={snap.connection} boardFallback={snap.socketBoardFallback} />
       {/* (The old fixed "New thread" pill moved INTO the sidebar's top — one entry point, same modal
           flow; the ⌘K palette's "New thread" item and the always-visible dispatch box are the
@@ -265,7 +273,7 @@ export function App() {
               there is leftover space anyway and the padding stops binding.
             · the gutter scales clamp(28px → 3.4vw → 52px): ~28px where space is scarce, back to the
               tuned 52px by ~1530px, where the pair has margins to spare. Wide layouts are unchanged. */}
-      <div className="flex min-h-screen justify-center gap-[clamp(28px,3.4vw,52px)] px-5 max-[800px]:flex-col max-[800px]:justify-start max-[800px]:gap-0 max-[800px]:px-3">
+      <div className={`flex min-h-screen justify-center gap-[clamp(28px,3.4vw,52px)] px-5 max-[800px]:flex-col max-[800px]:justify-start max-[800px]:gap-0 max-[800px]:px-3 ${RAIL_INSET_CLASS}`}>
         {/* A genuinely fresh project keeps its centered first-task view. Once this project has had a
             Frizz-owned thread or plan, the sidebar remains mounted through transient empty keyframes;
             navigation must not vanish while the live board stream reconnects or catches up. */}

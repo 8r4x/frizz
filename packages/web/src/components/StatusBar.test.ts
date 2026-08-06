@@ -41,7 +41,11 @@ test("the bar is one fixed upper-left strip, not per-item corner chrome", () => 
   assert.match(html, /data-status-bar/)
   // One line pinned top-left. The reload button is absent in a static render (it only appears
   // once the supervisor status resolves), which is why the order test above pins settings, not it.
-  assert.match(html, /class="fixed top-2\.5 left-3 z-20 flex h-7/)
+  //
+  // The left inset CLEARS THE PROJECT RAIL (57px + the 12px gutter `left-3` used to give it). At
+  // `left-3` the bar's own project mark rendered on top of the rail's home mark — measured, not
+  // theorised. Below 800px the rail is hidden and the original inset comes back.
+  assert.match(html, /class="fixed top-2\.5 left-\[69px\] max-\[800px\]:left-3 z-20 flex h-7/)
   assert.doesNotMatch(html, /top-3 right-3/)
 })
 

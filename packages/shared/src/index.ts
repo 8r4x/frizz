@@ -2223,8 +2223,28 @@ export const ProjectCard = z.object({
   lastOpenedAt: z.string(),
   /** The directory is gone — moved or deleted. The card stays so it can be reopened or forgotten. */
   stale: z.boolean(),
+  /**
+   * When this project's icon was last established, or absent if it never has been.
+   *
+   * Carried purely so the client can hang it off the `/_frizz/project-icon` URL: the icon bytes are
+   * cached hard (a rail of forty squares is forty requests, and none of them should recur), which
+   * means a newly uploaded icon would otherwise stay invisible behind the cached old one. A changed
+   * version is a changed URL, so the swap is immediate without weakening the caching for everyone.
+   *
+   * Deliberately NOT "does this project have an icon". Answering that for a project nobody has
+   * scanned yet would mean scanning it, and this list is one file read on purpose.
+   */
+  iconVersion: z.string().optional(),
+  /** An operator's uploaded icon, rather than one the scan found. Drives what the menu offers. */
+  iconIsCustom: z.boolean().optional(),
 })
 export type ProjectCard = z.infer<typeof ProjectCard>
+
+/** Formats the icon route will serve — a browser renders each of these in an `<img>`. */
+export const PROJECT_ICON_EXTENSIONS = ["png", "svg", "ico", "webp", "jpg", "jpeg", "gif"] as const
+
+/** 4 MB of base64. An app icon that does not fit in this is not an app icon. */
+export const PROJECT_ICON_MAX_BASE64_CHARS = 4 * 1024 * 1024
 
 /**
  * What the machine's folder picker came back with.

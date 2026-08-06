@@ -39,6 +39,16 @@ export interface RegistryEntry {
   lastOpenedAt: string
   /** Hidden from the grid without forgetting it — throwaway repos should not be permanent fixtures. */
   archived?: boolean
+  /**
+   * Absolute path to this project's icon — inside the project when detected, inside its state dir
+   * when the operator uploaded one. Cached here so drawing a rail of forty squares is one file read;
+   * `resolveProjectIcon` owns filling it in.
+   */
+  icon?: string
+  /** `custom` is an operator's choice and is never overwritten by a scan. */
+  iconSource?: "custom" | "detected"
+  /** When the scan last ran. Its absence — not a missing `icon` — is what asks for another one. */
+  iconScannedAt?: string
 }
 
 export interface Registry {
@@ -65,7 +75,7 @@ const GENERIC = new Set([
  */
 const RESERVED = new Set([
   "_frizz", "rpc", "events", "ws", "term", "attach", "local-image", "local-visualization",
-  "assets", "favicon", "manifest", "index", "api", "health",
+  "project-icon", "assets", "favicon", "manifest", "index", "api", "health",
 ])
 
 export function registryPath(home = homedir()): string {
@@ -275,6 +285,100 @@ export function listProjects(home = homedir()): (RegistryEntry & { stale: boolea
 
 export function findBySlug(slug: string, home = homedir()): RegistryEntry | undefined {
   return readRegistry(home).projects.find((p) => p.slug === slug)
+}
+
+// ── ICONS ───────────────────────────────────────────────────────────────────────────────────────
+//
+// The rail draws one square per project, and the icon behind each square is DERIVED — a path found by
+// scanning the project (project-icon.ts), or one the operator uploaded. Both live here for the same
+// reason the rest of this file does: the rail needs forty of them at once, and opening forty projects
+// to answer is exactly what lazy activation exists to avoid.
+//
+// Losing this cache costs one rescan, like losing anything else in the index.
+
+/** Where an uploaded icon lands: the project's own state dir, never inside the repository. */
+export function customIconPath(id: string, extension: string, home = homedir()): string {
+  return join(frizzPaths({ home }).data, "projects", id, `icon${extension}`)
+}
+
+function updateEntry(
+  id: string,
+  apply: (entry: RegistryEntry) => void,
+  home: string,
+): RegistryEntry | undefined {
+  const registry = readRegistry(home)
+  const entry = registry.projects.find((p) => p.id === id)
+  if (!entry) return undefined
+  apply(entry)
+  writeRegistry(registry, home)
+  return entry
+}
+
+/**
+ * Record the operator's own icon for a project. `custom` is a floor, not a preference: no later scan
+ * overwrites it, because a person choosing a picture outranks anything a heuristic finds.
+ */
+export function setProjectIcon(id: string, path: string, home = homedir()): RegistryEntry | undefined {
+  return updateEntry(id, (entry) => {
+    entry.icon = path
+    entry.iconSource = "custom"
+    entry.iconScannedAt = new Date().toISOString()
+  }, home)
+}
+
+/** Forget whatever we hold, so the next resolve scans the project again. */
+export function clearProjectIcon(id: string, home = homedir()): RegistryEntry | undefined {
+  return updateEntry(id, (entry) => {
+    delete entry.icon
+    delete entry.iconSource
+    delete entry.iconScannedAt
+  }, home)
+}
+
+/**
+ * This project's icon path, scanning for one the first time it is asked and caching what it finds.
+ *
+ * RESOLVED LAZILY, which is the whole design. Scanning at registration would leave every project
+ * registered before this feature shipped without an icon forever, and scanning inside `listProjects`
+ * would turn the grid's one file read into forty directory walks. Instead the icon ROUTE calls this,
+ * once per project, and the answer is cached from then on.
+ *
+ * A remembered path that has since been deleted — someone reorganised `public/` — triggers a rescan
+ * rather than a broken image. So does a project with no icon at all, but only after `rescanAfterMs`,
+ * so forty icon-less projects do not re-walk their trees on every page load.
+ */
+export function resolveProjectIcon(
+  id: string,
+  detect: (root: string) => string | undefined,
+  options: { home?: string; rescanAfterMs?: number; now?: () => number } = {},
+): string | undefined {
+  const home = options.home ?? homedir()
+  const rescanAfterMs = options.rescanAfterMs ?? 12 * 60 * 60 * 1000
+  const now = options.now ?? Date.now
+  const entry = readRegistry(home).projects.find((p) => p.id === id)
+  if (!entry) return undefined
+
+  if (entry.icon && existsSync(entry.icon)) return entry.icon
+  // An operator's chosen file that has gone missing is a broken square, not an invitation to pick a
+  // different picture for them — leave the choice recorded and let them fix it.
+  if (entry.iconSource === "custom") return undefined
+  if (!entry.icon && entry.iconScannedAt && now() - Date.parse(entry.iconScannedAt) < rescanAfterMs) {
+    return undefined
+  }
+  if (!existsSync(entry.path)) return undefined
+
+  const found = detect(entry.path)
+  updateEntry(id, (target) => {
+    if (found) {
+      target.icon = found
+      target.iconSource = "detected"
+    } else {
+      delete target.icon
+      delete target.iconSource
+    }
+    target.iconScannedAt = new Date(now()).toISOString()
+  }, home)
+  return found
 }
 
 /** Rename is the escape hatch for every derivation rule above, so it exists from day one. */
