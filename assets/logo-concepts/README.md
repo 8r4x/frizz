@@ -4,7 +4,7 @@ Three sheets of directions for the mark after the `fray` → `frizz` rename, eac
 
 | Sheet | Open | What it covers |
 | --- | --- | --- |
-| The cursive f | [`frizz-signature-f.html`](frizz-signature-f.html) | The written signature f from [`reference/reference-brief.png`](reference/reference-brief.png) — two loops crossing at a waist, with a crossbar. Eight weights and treatments. |
+| The cursive f | [`frizz-signature-f.html`](frizz-signature-f.html) | The written signature f from [`reference/reference-brief.png`](reference/reference-brief.png) — two loops crossing at a waist, with a crossbar. **Every mark is exactly 180° rotationally symmetric, and measured.** Eight weights and treatments. |
 | The hooked f | [`frizz-cursive-f.html`](frizz-cursive-f.html) | Eight lowercase `f`s built from hooks rather than loops — the favicon-viable family. |
 | Icon concepts | [`frizz-logo-concepts.html`](frizz-logo-concepts.html) | The original fifteen non-letterform directions: fan, curl, spark, lanes, knot and the rest. |
 
@@ -30,4 +30,6 @@ A 512-unit canvas maps to 16 px, so **one pixel is 32 units**:
 
 The outgoing fraying-rope mark draws its fibres at stroke-width 16–19, which is half a pixel at favicon size. They do not thin out; they disappear.
 
-**The main finding.** A genuinely written cursive `f` cannot also be the favicon — its line runs about 0.69 px and its loop counters about 1.4 px at 16 px, and bolding it until the arithmetic works widens the loops until the letter reads as an `8`. The resolution is two drawings: the signature as the logo, and the hooked `ƒ` as the icon.
+**Rotational symmetry.** The cursive f is C2 by nature — two loops crossing once at a waist are point reflections of each other. Every mark on that sheet is derived from one half and rotated, never drawn twice, then checked: render, rotate 180°, take the RMSE. Controls set the scale — a perfect centred circle scores `1.3e-3` (the rasteriser's floor) and a circle just 4 units off centre scores `9.3e-2`, 75x higher. All eight marks land at or under the floor.
+
+**The size finding.** A genuinely written cursive `f` cannot also be the favicon — its line runs about 0.69 px and its loop counters about 1.4 px at 16 px, and bolding it until the arithmetic works widens the loops until the letter reads as an `8`. The resolution is two drawings: the signature as the logo, and the hooked `ƒ` as the icon.

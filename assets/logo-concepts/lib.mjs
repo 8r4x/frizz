@@ -126,6 +126,25 @@ export function chain(...segments) {
   return out
 }
 
+/** Rotate a point list 180 degrees about a centre. */
+export function rotate180(points, cx = 256, cy = 256) {
+  return points.map(([x, y]) => [2 * cx - x, 2 * cy - y])
+}
+
+/**
+ * Build a 180-degree rotationally symmetric stroke from one half.
+ *
+ * `half` must START at the centre of symmetry and run outwards. The returned
+ * spine is the half's own 180-degree image, reversed, then the half itself — one
+ * continuous curve through the centre that maps onto itself under C2. Deriving
+ * the second half rather than hand-placing it is the only way to be sure: an
+ * eyeballed opposite end is always a little off, and a little off is exactly
+ * what reads as "not symmetric".
+ */
+export function c2(half, cx = 256, cy = 256) {
+  return [...rotate180(half, cx, cy).slice(1).reverse(), ...half]
+}
+
 /** Scale and centre a point list into a box, preserving aspect. */
 export function fit(points, { left, top, right, bottom }) {
   const xs = points.map((p) => p[0])
@@ -145,7 +164,7 @@ export function fit(points, { left, top, right, bottom }) {
  * it. `wMin` is a floor the physical model does not have — without it the thins
  * go to zero, and a zero-width thin is invisible long before 16px.
  */
-export function nibRibbon(points, { penAngle = -35, wMax = 100, wMin = 54, taper = 12 }) {
+export function nibRibbon(points, { penAngle = -35, wMax = 100, wMin = 54, taper = 12, closed = false }) {
   const pen = rad(penAngle)
   const left = []
   const right = []
@@ -153,18 +172,31 @@ export function nibRibbon(points, { penAngle = -35, wMax = 100, wMin = 54, taper
   // the width jitter wherever the spine's point spacing changes, which is what
   // turns a nib stroke into a lumpy ribbon.
   const span = 3
+  // On a CLOSED spine the window has to wrap. Clamping it at the ends treats the
+  // spine's first point differently from every other point, and on a symmetric
+  // curve that one discrepancy sits opposite an ordinary point — enough to make
+  // a mark that is symmetric by construction measure asymmetric.
+  const n = closed ? points.length - 1 : points.length
+  const at = (j) => (closed ? points[((j % n) + n) % n] : points[Math.min(points.length - 1, Math.max(0, j))])
   for (let i = 0; i < points.length; i += 1) {
-    const prev = points[Math.max(0, i - span)]
-    const next = points[Math.min(points.length - 1, i + span)]
+    const prev = at(i - span)
+    const next = at(i + span)
     const theta = Math.atan2(next[1] - prev[1], next[0] - prev[0])
     const w = wMin + (wMax - wMin) * Math.abs(Math.sin(theta - pen))
-    // Ease the ends into a pen lift over `taper` samples rather than 5.
-    const t = Math.min(1, Math.min(i, points.length - 1 - i) / taper)
+    // Ease the ends into a pen lift over `taper` samples. taper = 0 means no
+    // lift at all, which is what a CLOSED spine wants — it has no ends, and
+    // dividing by zero here NaNs every coordinate and silently empties the path.
+    const t = taper > 0 ? Math.min(1, Math.min(i, points.length - 1 - i) / taper) : 1
     const scale = 0.42 + 0.58 * (1 - Math.cos((t * Math.PI) / 2))
     const nx = -Math.sin(theta) * ((w * scale) / 2)
     const ny = Math.cos(theta) * ((w * scale) / 2)
     left.push([points[i][0] + nx, points[i][1] + ny])
     right.push([points[i][0] - nx, points[i][1] - ny])
+  }
+  if (closed) {
+    // Two closed rings — the outer and inner edges of the ribbon — filled with
+    // the even-odd rule so the counters stay open.
+    return `${smooth(left)} Z ${smooth(right.reverse())} Z`
   }
   const tail = right[right.length - 1]
   return `${smooth(left)} L${tail[0].toFixed(1)} ${tail[1].toFixed(1)} ${smooth(right.reverse()).slice(1)} Z`
@@ -193,22 +225,43 @@ export function resample(points, step = 6) {
 export function svg(concept) {
   return `<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+    <!-- The tile's own top-to-bottom gradient reverses under a half turn just as
+         the ink's does. A symmetric mark on an asymmetric tile still measures
+         asymmetric, so the tile gets a centred radial too. -->
+    ${
+      concept.symmetric
+        ? `<radialGradient id="bg" cx="0.5" cy="0.5" r="0.62">
       <stop offset="0" stop-color="#191a20"/>
       <stop offset="1" stop-color="#0d0e10"/>
-    </linearGradient>
-    <radialGradient id="glow" cx="0.5" cy="0.44" r="0.5">
+    </radialGradient>`
+        : `<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#191a20"/>
+      <stop offset="1" stop-color="#0d0e10"/>
+    </linearGradient>`
+    }
+    <radialGradient id="glow" cx="0.5" cy="${concept.symmetric ? "0.5" : "0.44"}" r="0.5">
       <stop offset="0" stop-color="#e8b923" stop-opacity="0.14"/>
       <stop offset="1" stop-color="#e8b923" stop-opacity="0"/>
     </radialGradient>
     <!-- userSpaceOnUse, not the default objectBoundingBox: a purely vertical or
          horizontal path has a zero-area bounding box, which makes a bbox
-         gradient undefined and drops the element entirely. -->
-    <linearGradient id="ink" gradientUnits="userSpaceOnUse" x1="120" y1="80" x2="400" y2="430">
+         gradient undefined and drops the element entirely.
+         A linear gradient reverses under a 180-degree rotation, so a mark that
+         claims rotational symmetry cannot wear one — it gets a radial fill
+         centred on the canvas instead, which is C2 by construction. -->
+    ${
+      concept.symmetric
+        ? `<radialGradient id="ink" gradientUnits="userSpaceOnUse" cx="256" cy="256" r="230">
+      <stop offset="0" stop-color="#ffdf7f"/>
+      <stop offset="0.62" stop-color="#eabe2c"/>
+      <stop offset="1" stop-color="#cf9412"/>
+    </radialGradient>`
+        : `<linearGradient id="ink" gradientUnits="userSpaceOnUse" x1="120" y1="80" x2="400" y2="430">
       <stop offset="0" stop-color="#ffdf7f"/>
       <stop offset="0.52" stop-color="#e8b923"/>
       <stop offset="1" stop-color="#c2870f"/>
-    </linearGradient>
+    </linearGradient>`
+    }
   </defs>
   ${
     concept.invert
@@ -218,7 +271,7 @@ export function svg(concept) {
   </g>`
       : `<rect x="16" y="16" width="480" height="480" rx="116" fill="url(#bg)"/>
   <rect x="16.5" y="16.5" width="479" height="479" rx="115.5" fill="none" stroke="#2b2e35"/>
-  <circle cx="256" cy="228" r="205" fill="url(#glow)"/>
+  <circle cx="256" cy="${concept.symmetric ? 256 : 228}" r="205" fill="url(#glow)"/>
   <g fill="none" stroke="url(#ink)" stroke-linecap="round" stroke-linejoin="round">
       ${concept.mark.trim()}
   </g>`
@@ -232,6 +285,25 @@ export function render(source, output, size) {
   if (result.status !== 0) throw new Error(result.stderr || `rsvg-convert exited ${result.status}`)
 }
 
+/**
+ * Measure how rotationally symmetric a render actually is: RMSE between the
+ * image and its own 180-degree rotation, normalised to 0..1. A mark built to be
+ * C2 should come back at essentially zero, and anything that only looks
+ * symmetric will not. Claiming symmetry is worthless; this is checkable.
+ */
+export function symmetryError(png) {
+  const rotated = `${png}.rot180.png`
+  const turn = spawnSync("magick", [png, "-rotate", "180", rotated], { encoding: "utf8" })
+  if (turn.status !== 0) throw new Error(turn.stderr || "rotate failed")
+  // `compare` exits non-zero when the images differ, which is the normal case
+  // here — read the metric off stderr rather than trusting the exit status.
+  const cmp = spawnSync("magick", ["compare", "-metric", "RMSE", png, rotated, "null:"], { encoding: "utf8" })
+  rmSync(rotated, { force: true })
+  const match = /\(([\d.eE+-]+)\)/.exec(cmp.stderr ?? "")
+  if (!match) throw new Error(`could not parse RMSE from: ${cmp.stderr}`)
+  return Number(match[1])
+}
+
 /** Render every concept at every size into a fresh directory, plus concepts.json. */
 export function buildAll(concepts, outDir, extras = []) {
   rmSync(outDir, { recursive: true, force: true })
@@ -240,6 +312,7 @@ export function buildAll(concepts, outDir, extras = []) {
     const source = join(outDir, `${concept.id}.svg`)
     writeFileSync(source, svg(concept))
     for (const size of SIZES) render(source, join(outDir, `${concept.id}-${size}.png`), size)
+    concept.symmetryError = symmetryError(join(outDir, `${concept.id}-512.png`))
   }
   for (const [name, source] of extras) {
     for (const size of SIZES) render(source, join(outDir, `${name}-${size}.png`), size)

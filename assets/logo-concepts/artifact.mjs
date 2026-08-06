@@ -40,19 +40,21 @@ const SHEETS = {
   "signature-f": {
     dir: "out-sig",
     file: "frizz-signature-f.html",
-    title: "Frizz — the cursive f",
-    lede: `The written f, built as real geometry from the reference below. A cursive f is a lucky letterform here — it is already a curl, already one continuous thread, and already the first letter of the name. What it is not is a favicon, and this sheet is organised around that: <b>how fine can the line be before 16px eats it, and what do you keep when it does.</b>`,
+    title: "Frizz — the cursive f, rotationally symmetric",
+    lede: `The written f, built as real geometry from the reference below and <b>exactly symmetric under a half turn</b>. That is not an ornament bolted on: two loops crossing once at a waist already ARE point reflections of each other through that crossing, so the letterform wants C2 — the previous draft simply broke it. Every mark here is derived from one half and rotated, never drawn twice, and every render is <b>measured</b> against its own 180-degree rotation.`,
     reference: "reference-brief.png",
+    symmetry: true,
     referenceCaption:
       "The brief. Two narrow loops crossing once at the waist, thrown right at the top and left at the bottom, with a long crossbar — and real weight variation, heavy on the outside of the loops and fine through the crossings. Everything below is built from that description rather than traced over it.",
     footer: [
-      `<b>The finding, and it is not a close call.</b> A written f cannot be the favicon. The reference's line is about 22 units on a 512 canvas, which is <b>0.69px</b> at 16px, and its loops are narrow enough that their counters land at 1.4px. Both are under the floor. Bolding fixes the arithmetic and breaks the letter — the loops have to widen to keep their counters, and a widened figure-eight reads as an <b>8</b>. Every bold variant above shows that happening.`,
+      `<b>On symmetry.</b> Every mark on this page is exactly 180-degree symmetric, verified by measurement above rather than by eye. Four separate things had to be fixed to get there, and all four were wrong in the previous draft: an ascender/descender size difference, a crossbar whose halves were not exact rotations, a linear ink gradient (which reverses under rotation), and a background glow centred 28 units above the middle of the canvas. A mark can be perfect and still measure asymmetric if the tile under it is not.`,
+      `<b>The size finding, unchanged.</b> A written f cannot be the favicon. The reference's line is about 22 units on a 512 canvas, which is <b>0.69px</b> at 16px, and its loops are narrow enough that their counters land at 1.4px. Both are under the floor. Bolding fixes the arithmetic and breaks the letter — the loops have to widen to keep their counters, and a widened figure-eight reads as an <b>8</b>. Every bold variant above shows that happening.`,
       `<b>The way out is two drawings, not one compromise.</b> A detailed logo plus a reduced icon is ordinary brand practice. The best reduction is not a bolder signature — it is the hooked ƒ from the companion sheet, which is structurally sound at 16px and still visibly the same letter in the same hand.`,
       `<b>One caveat on "16px", worth checking before you decide.</b> The renders above are true 16&nbsp;px. On a hi-dpi screen a browser fills the 16&nbsp;px tab slot from the <b>32&nbsp;px</b> asset instead — and the signature is legible at 32&nbsp;px, as its second evidence tile shows. So the verdict above is firm for a 1x display and may be too harsh for a 2x one. That is an assumption about favicon selection, not something measured here; test it in a real tab on a real Retina display before letting it change the decision.`,
       `<b>What is not decided here.</b> Colour is carried over from the existing mark (<code>#e8b923</code> on <code>#0d0e10</code>) so the variants compare on form alone. The dark rounded tile is a contrast guarantee, not part of any mark.`,
     ],
     pairing: {
-      logo: ["out-sig", "sig-fine"],
+      logo: ["out-sig", "sig-c2"],
       icon: ["out-f", "f-florin"],
       note: "Left: the signature, at the size it is meant for. Right: the hooked ƒ carrying the same letter at 16px, where the signature cannot go. Same hand, same amber, same tile — one is the logo, the other is the tab.",
     },
@@ -93,6 +95,7 @@ const card = (sheet, c) => {
       <p class="line"><b>At 16px.</b> ${esc(c.small)}</p>
       <p class="line"><b>Risk.</b> ${esc(c.risk)}</p>
       <p class="line verdict"><b>Verdict.</b> ${esc(verdict)}</p>
+      ${c.symmetryError === undefined ? "" : `<p class="line sym"><b>Rotational symmetry.</b> error <code>${c.symmetryError.toExponential(2)}</code> — ${c.symmetryError <= 1.3e-3 ? "at or below the rasteriser's own floor, i.e. exact" : "above the floor; not symmetric"}.</p>`}
     </div>
     <div class="evidence">
       <div class="row">
@@ -175,6 +178,12 @@ const CSS = `
   .pair span { font-size: 10.5px; color: var(--muted); font-family: var(--mono); }
   .pair p { margin: 0; color: var(--muted); font-size: 14px; }
 
+  .sym b { color: var(--live); }
+  .ctrl { border-collapse: collapse; margin: 18px 0 22px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .ctrl td { padding: 10px 18px; border-bottom: 1px solid var(--border); font-size: 13.5px; color: var(--muted); }
+  .ctrl tr:last-child td { border-bottom: none; }
+  .ctrl td:last-child { font-family: var(--mono); color: var(--fg); text-align: right; white-space: nowrap; }
+
   .foot { margin-top: 56px; border-top: 1px solid var(--border); padding-top: 24px; color: var(--muted); font-size: 13.5px; max-width: 72ch; }
   .foot b { color: var(--fg); }
 `
@@ -207,6 +216,26 @@ function build(key) {
 
 `
     : ""
+
+  const controlsPath = join(here, sheet.dir, "controls.json")
+  const symmetryBlock =
+    sheet.symmetry && existsSync(controlsPath)
+      ? (() => {
+          const controls = JSON.parse(readFileSync(controlsPath, "utf8"))
+          return `  <h2>Symmetry, measured</h2>
+  <p class="lede">Claiming a mark is symmetric is worthless, so each one is checked: render it, rotate the render 180 degrees, and take the RMSE between the two. <b>Controls first</b>, because the number means nothing without them — a rasteriser never reproduces a rotated edge exactly, so even a perfect shape scores above zero.</p>
+  <table class="ctrl">
+    ${controls.map((c) => `<tr><td>${esc(c.label)}</td><td><code>${c.error.toExponential(2)}</code></td></tr>`).join("\n    ")}
+  </table>
+  <p class="lede">So <b>~1.3e-3 is the floor</b>, and moving a shape just <b>4 units</b> off centre — barely a tenth of a stroke width — costs 75&times; that. Every mark below lands at or under the floor. Here is the headline mark beside its own 180-degree rotation:</p>
+  <div class="pair">
+    <div class="side"><img src="${uri(sheet.dir, "sig-c2-512.png")}" width="200" height="200" alt="The symmetric signature f"><span>as drawn</span></div>
+    <div class="side"><img src="${uri(sheet.dir, "sig-c2-rotated-512.png")}" width="200" height="200" alt="The same mark rotated 180 degrees"><span>rotated 180&deg;</span></div>
+  </div>
+
+`
+        })()
+      : ""
 
   const pairingBlock = sheet.pairing
     ? `  <h2>The pairing this points to</h2>
@@ -246,7 +275,7 @@ function build(key) {
     <div><b>3</b><span>elements across the width. That is the whole budget — 288 usable units buys no more.</span></div>
   </div>
 
-${referenceBlock}${beforeBlock}  <h2>Concepts</h2>
+${referenceBlock}${symmetryBlock}${beforeBlock}  <h2>Concepts</h2>
 ${sorted.map((c) => card(sheet, c)).join("\n")}
 
 ${pairingBlock}  <div class="foot">
