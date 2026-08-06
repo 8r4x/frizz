@@ -386,6 +386,12 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       await tenantCtx.board.start()
       await tenantCtx.tailer.start()
       if (process.env.FRIZZ_WAKERS_OFF !== "1") await tenantCtx.scheduler.start()
+      // detectGithub reads THIS project's directory, so the cache is per project too. The
+      // githubStatus handler live-detects and back-fills when it is missing, which is why the gap
+      // hides while `gh` is authed — but unauthed it has nothing to fall back to and reports the
+      // project as not being in a repo at all. Boot does this for the launching project; do not make
+      // it block, for the same reason boot does not.
+      void runtime.initGithub(tenantCtx).catch(() => undefined)
     },
   })
   const appOptionsFor = (c: AppContext) => ({

@@ -811,7 +811,18 @@ try {
         );
       }
       process.exitCode = 1;
-    } else console.log(`stopped: ${workspace.root}`);
+    } else {
+      // Under one server per machine, "this project has no server of its own" and "this project is
+      // not being served" stopped being the same statement. A project that joined holds no launch
+      // lease and never writes a server.lock, so every check above misses it and the honest answer
+      // is the one the join path already knows how to get.
+      const joined = await joinRunningFrizz();
+      if (joined) {
+        console.log(`running: http://127.0.0.1:${joined.port}/${joined.slug}`);
+        console.log(`workspace: ${workspace.root}`);
+        console.log(`served by the frizz running on this machine, which this project did not start`);
+      } else console.log(`stopped: ${workspace.root}`);
+    }
     process.exit();
   }
   if (before.health && before.port) {
