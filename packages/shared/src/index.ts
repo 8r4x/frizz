@@ -786,9 +786,6 @@ export const ThreadView = z.object({
   // ISO8601 read/seen telemetry (threadSeen RPC — recorded when the human opens the thread). Kept for
   // compatibility and analytics only; viewing never acknowledges or removes a queue handoff.
   seenAt: z.string().optional(),
-  // Project-relative scratchpad path (.frizz/threads/<session-id>/scratch.md) once provisioned — the worker's
-  // compaction-proof working memory, rendered as the thread's doc tab.
-  scratchpadPath: z.string().optional(),
   // Project-relative plan artifact this thread was dispatched from (.frizz/plans/*.md), if any.
   planPath: z.string().optional(),
   // Which agent backend runs this thread (Codex-support epic, Phase 3) — drives the subtle per-row

@@ -1,7 +1,6 @@
 import { createContext, Fragment, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react"
 import { createPortal } from "react-dom"
 import { useSnapshot } from "valtio"
-import * as RadixTabs from "@radix-ui/react-tabs"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, ArrowUpRight, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, ShieldCheck, Sparkles, TerminalSquare, X, type LucideIcon } from "lucide-react"
@@ -174,38 +173,23 @@ export function withoutLiveTranscriptBackgroundTools(messages: readonly ChatMess
 // A thread's full view — the shared composition used BOTH by the main workpane (App, terminal driven by
 // the focus machine) and the Open-thread side drawer (ThreadSheet, terminal driven by its own local
 // state). Chat is a single scroll column (sticky header + composer); terminal is a fixed-box pane.
-// The thread's active surface tab: the conversation, the raw terminal (⌘T power-user), or the
-// scratch-directory doc (a session thread's own working files — read-only).
-export type ThreadTab = "chat" | "scratch"
-
-export function ThreadView({ slug, tab, onTab, onStatusApplied, onClose, virtualized = false, showReturnToQueue = false }: { slug: string; tab: ThreadTab; onTab: (t: ThreadTab) => void; onStatusApplied?: () => void; onClose?: () => void; virtualized?: boolean; showReturnToQueue?: boolean }) {
+// ONE SURFACE. There was a Chat|Doc toggle here until 2026-08-06, where Doc rendered the thread's
+// canonical `scratch.md`. That document is gone (see dispatch.ts), and a tab strip whose only job was
+// to reach it is a control that now points at nothing — so the toggle, the Radix tab shell it needed,
+// and the per-thread persisted tab preference all go with it. The thread is its conversation.
+export function ThreadView({ slug, onStatusApplied, onClose, virtualized = false, showReturnToQueue = false }: { slug: string; onStatusApplied?: () => void; onClose?: () => void; virtualized?: boolean; showReturnToQueue?: boolean }) {
   const board = useBoard()
   const thread = threadBySlug(board, slug)
   return (
-    <RadixTabs.Root
-      value={tab}
-      onValueChange={(value) => onTab(value as ThreadTab)}
-      activationMode="automatic"
-      className="flex-1 min-h-0 flex flex-col"
-    >
-      <ThreadHeader slug={slug} tab={tab} onStatusApplied={onStatusApplied} onClose={onClose} showReturnToQueue={showReturnToQueue} />
-      {tab === "scratch" ? (
-        <RadixTabs.Content value="scratch" className="flex-1 min-h-0 flex flex-col outline-none">
-        <InteractionStack
-          thread={thread}
-          className="mx-4 mt-3 max-h-[45vh] shrink-0 overflow-y-auto"
-        />
-        <ScratchpadPane slug={slug} />
-        </RadixTabs.Content>
-      ) : (
-        <ChatView slug={slug} onTab={onTab} virtualized={virtualized} />
-      )}
+    <div className="flex-1 min-h-0 flex flex-col">
+      <ThreadHeader slug={slug} onStatusApplied={onStatusApplied} onClose={onClose} showReturnToQueue={showReturnToQueue} />
+      <ChatView slug={slug} virtualized={virtualized} />
       {thread && <ThreadLifecycleFooter thread={thread} sticky safeArea onArchived={onStatusApplied} />}
-    </RadixTabs.Root>
+    </div>
   )
 }
 
-function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: ThreadTab) => void; virtualized: boolean }) {
+function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean }) {
   const board = useBoard()
   const thread = threadBySlug(board, slug)
   const running = thread?.runtime === "running" || thread?.runtime === "spawning"
@@ -323,8 +307,7 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
 
   return (
     <ThreadSlugContext.Provider value={slug}>
-    <RadixTabs.Content
-      value="chat"
+    <div
       data-drawer-scroll-ready={q.isPending ? "false" : "true"}
       className="flex-1 min-h-0 flex flex-col overflow-hidden outline-none"
     >
@@ -577,7 +560,7 @@ function ChatView({ slug, onTab, virtualized }: { slug: string; onTab: (t: Threa
           ops={<BackgroundOpsStrip slug={slug} transcriptShells={liveTranscriptShells} className="px-1 pt-1.5" />}
         />
       </div>
-    </RadixTabs.Content>
+    </div>
     </ThreadSlugContext.Provider>
   )
 }
@@ -1305,11 +1288,10 @@ function JumpToLatest({ overlay, hidden, onJump }: { overlay: HTMLElement | null
   )
 }
 
-// The thread's top bar: title, the Chat/Doc tab toggle, and — at the far right — the shared actions.
-// non-lifecycle HeaderActions. Snooze and Archive stay in the persistent thread footer. The tab is CONTROLLED
-// (tab/onTab) so the drawer drives its own copy. Owned sessions expose a command-copy icon; foreign
-// rows do not. The Doc tab appears only when the thread's scratch directory actually holds something.
-export function ThreadHeader({ slug, tab, onStatusApplied, onClose, showReturnToQueue = false }: { slug: string; tab: ThreadTab; onStatusApplied?: () => void; onClose?: () => void; showReturnToQueue?: boolean }) {
+// The thread's top bar: title and — at the far right — the shared non-lifecycle HeaderActions. Snooze
+// and Archive stay in the persistent thread footer. Owned sessions expose a command-copy icon; foreign
+// rows do not. It carried a Chat|Doc tab strip until 2026-08-06; see ThreadView for why that went.
+export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue = false }: { slug: string; onStatusApplied?: () => void; onClose?: () => void; showReturnToQueue?: boolean }) {
   const board = useBoard()
   const thread = threadBySlug(board, slug)
   const markComplete = useMutation({ mutationFn: () => rpc.markComplete({ slug }) })
@@ -1337,7 +1319,7 @@ export function ThreadHeader({ slug, tab, onStatusApplied, onClose, showReturnTo
     setTitleDraft("")
   }, [slug])
   // The "Frizz document" header affordance opens .frizz/<slug>.md (threadBody). Many session threads have
-  // no such file — their working files live in the scratch directory (the Doc tab) — so it would dead-end on
+  // no such file — a session thread's working files are its own business — so it would dead-end on
   // "No thread file found". Gate it on the doc actually having body content (same stripFrontmatter the
   // drawer renders through), so it shows iff there's a real doc to open. Shares the drawer's cached query
   // (identical key), so opening the drawer adds no extra round-trip.
@@ -1345,7 +1327,6 @@ export function ThreadHeader({ slug, tab, onStatusApplied, onClose, showReturnTo
   const hasDoc = stripFrontmatter(docQ.data?.markdown ?? "").trim().length > 0
   if (!thread) return null
   const showTerminalCommand = thread.kind === "session" && thread.foreign !== true
-  const showScratch = !!thread.scratchpadPath
   // Manual rename is registry metadata for either backend. Claude additionally owns a native AI
   // rename; Codex has no equivalent and must never be shown a fake slash-command affordance.
   const isForeign = thread.foreign === true
@@ -1474,10 +1455,6 @@ export function ThreadHeader({ slug, tab, onStatusApplied, onClose, showReturnTo
           clickable title and its activity stamp readable instead of competing with fixed-width
           tabs/actions, while the control row itself remains a single unbroken cluster. */}
       <div className={THREAD_HEADER_CONTROLS_CLASS}>
-        <RadixTabs.List aria-label="Thread view" className="flex shrink-0 items-center gap-1 rounded-lg bg-panel-2 p-0.5 text-[11px]">
-          <Tab value="chat" label="Chat" />
-          {showScratch && <Tab value="scratch" label="Doc" />}
-        </RadixTabs.List>
         <div className="flex shrink-0 items-center">
           {showTerminalCommand && <CopyTerminalCommandButton slug={slug} />}
           <HeaderActions
@@ -1521,39 +1498,9 @@ export function ThreadHeader({ slug, tab, onStatusApplied, onClose, showReturnTo
   )
 }
 
-// Chat | Doc — the segmented toggle in the thread header.
-function Tab({ value, label }: { value: ThreadTab; label: string }) {
-  return (
-    <RadixTabs.Trigger
-      value={value}
-      className="rounded-md px-2.5 py-1 text-muted outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60 data-[state=active]:bg-elevated data-[state=active]:text-fg data-[state=active]:shadow-sm data-[state=active]:shadow-black/20"
-    >
-      {label}
-    </RadixTabs.Trigger>
-  )
-}
 
-// The Doc tab: everything in a session thread's scratch DIRECTORY (.frizz/threads/<id>/), concatenated
-// server-side under a heading per file and rendered read-only as markdown. Refetched on open (a simple
-// query); the worker rewrites those files as it works, so a re-open picks up the latest. Empty when the
-// directory is empty — which since 2026-08-06 is the state every fresh dispatch starts in, because
-// nothing is provisioned into it.
-function ScratchpadPane({ slug }: { slug: string }) {
-  const q = useQuery({ queryKey: ["threadScratchpad", slug], queryFn: () => rpc.threadScratchpad({ slug }) })
-  const html = useMemo(() => mdToHtml(q.data?.markdown ?? ""), [q.data?.markdown])
-  const inner = useInnerHtml(html)
-  return (
-    <div className="flex-1 min-h-0 overflow-y-auto px-6 py-5">
-      {q.isLoading ? (
-        <div className="text-[13px] text-muted">Loading…</div>
-      ) : html ? (
-        <div className="md-body" dangerouslySetInnerHTML={inner} />
-      ) : (
-        <div className="text-[13px] text-muted">Nothing in this thread's scratch directory yet.</div>
-      )}
-    </div>
-  )
-}
+
+
 
 // BETWEEN-BLOCK RHYTHM is expressed as explicit spacer ELEMENTS, never margins/padding/gap on the
 // blocks themselves. An explicit element is visible in the tree, one uniform size, and can't collapse

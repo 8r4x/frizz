@@ -1,7 +1,7 @@
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 
-// One delegated listener covers every sanitized markdown surface (chat, the Doc tab, plans, and
+// One delegated listener covers every sanitized markdown surface (chat, plans, the doc drawer, and
 // drawers). It never follows file:// or an accidental same-origin pathname: only explicit data
 // attributes emitted by markdown.ts reach the server's canonical-path allowlist gate.
 export function installLocalFileLinkInterceptor(): () => void {
@@ -32,7 +32,7 @@ export function installLocalFileLinkInterceptor(): () => void {
 // zero-height-then-glyph box that made the whole message reflow.
 //
 // One delegated listener for the same reason the click handler is delegated: prose is injected as raw
-// sanitized HTML on several surfaces (chat, question cards, fence cards, Doc-tab and plan drawers),
+// sanitized HTML on several surfaces (chat, question cards, fence cards, doc and plan drawers),
 // so there is no React element to hang an onError on.
 //
 // SCOPED TO THOSE SURFACES ON PURPOSE. `data-local-image` is also carried by BlockImage's <img>, which

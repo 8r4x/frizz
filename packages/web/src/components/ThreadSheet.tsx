@@ -8,17 +8,10 @@ import { displayTitle } from "../groups.ts"
 import { registerDrawerFocus } from "../lib/overlays.ts"
 import { useSheetLayer } from "./ui/Sheet.tsx"
 import { SHEET_PANEL_CLASS, SHEET_SCRIM_CLASS, sheetWidth } from "../lib/sheet.ts"
-import {
-  clampThreadTab,
-  readThreadTab,
-  resolveThreadTabCapabilities,
-  writeThreadTab,
-  type ScopedThreadTabCapabilities,
-} from "../lib/threadTabState.ts"
 import { resolveThreadRoute } from "../lib/threadRouteState.ts"
 import { handleDialogEscape } from "../lib/selectOverlay.ts"
 import { DrawerInitialScrollCoordinator } from "../lib/drawerInitialScroll.ts"
-import { ThreadView, type ThreadTab } from "./ChatView.tsx"
+import { ThreadView } from "./ChatView.tsx"
 
 // One THREAD layer of the side-drawer stack: a right sheet (same slide/backdrop family as settings)
 // showing a thread's FULL view as an OVERLAY — the queue (and any layers below) keep their scroll and
@@ -73,18 +66,6 @@ export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id
   const route = resolveThreadRoute(board, slug)
   const t = route.kind === "found" ? route.thread : undefined
   const projectDir = board?.projectDir
-  const capabilityScope = projectDir ? `${projectDir}\0${slug}` : undefined
-  const currentCapabilities = t
-    ? { scratch: Boolean(t.scratchpadPath) }
-    : undefined
-  const rememberedCapabilitiesRef = useRef<ScopedThreadTabCapabilities | undefined>(undefined)
-  const resolvedCapabilities = resolveThreadTabCapabilities(
-    capabilityScope,
-    currentCapabilities,
-    rememberedCapabilitiesRef.current,
-  )
-  rememberedCapabilitiesRef.current = resolvedCapabilities.remembered
-  const allowScratch = resolvedCapabilities.capabilities.scratch
   const atRestNow = t ? t.runtime === "turn-idle" || t.runtime === "exited" || t.runtime === "none" : false
   const activityAt = atRestNow ? t?.lastActivityAt : undefined
   useEffect(() => {
@@ -152,49 +133,6 @@ export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id
   useEffect(() => {
     initialScrollRef.current?.activationChanged()
   }, [isTopDrawer])
-  // Layer-local Chat/Doc tab (independent of any other layer).
-  // A server replacement hard-reloads the client so its protocol/bundle matches the new child. Keep
-  // the user's surface intent in sessionStorage: a Terminal user reconnects to Terminal instead of
-  // being silently ejected to Chat (which looked exactly like a blank/dead terminal in dogfood).
-  const loadedScopeRef = useRef<string | null>(projectDir && t ? capabilityScope ?? null : null)
-  const [tab, setTabState] = useState<ThreadTab>(() => {
-    // Do not read-and-clamp persisted intent until the concrete row establishes capabilities. During
-    // boot, project metadata can precede that row; treating the gap as foreign destroyed `terminal`.
-    if (!projectDir || !t) return "chat"
-    return readThreadTab(projectDir, slug)
-  })
-  // Clamp only for rendering. `tab` remains the user's requested surface, so a temporary or
-  // ownership-driven fallback cannot silently rewrite Terminal intent to Chat. Do not let an old
-  // scope's request flash in a newly opened project/thread while its saved request is loading.
-  const requestedTab = loadedScopeRef.current === capabilityScope ? tab : "chat"
-  const effectiveTab = clampThreadTab(requestedTab, { scratch: allowScratch })
-  const setTab = useCallback(
-    (next: ThreadTab) => {
-      // ThreadView only offers surfaces the current row owns. Persist explicit user choices; never
-      // persist an automatic capability fallback.
-      if (projectDir) writeThreadTab(projectDir, slug, next)
-      setTabState(next)
-    },
-    [projectDir, slug],
-  )
-
-  useEffect(() => {
-    // UNKNOWN capability (initial keyframe/delta gap) is deliberately inert: keep requested state and
-    // a same-scope active xterm mounted. A concrete new scope restores its own requested tab. Concrete
-    // foreign/legacy rows affect `effectiveTab` only; they do not mutate user intent in storage.
-    if (!projectDir || !capabilityScope || !resolvedCapabilities.authoritative) return
-    const scopeChanged = loadedScopeRef.current !== capabilityScope
-    if (!scopeChanged) return
-    loadedScopeRef.current = capabilityScope
-    const requested = readThreadTab(projectDir, slug)
-    if (requested !== tab) setTabState(requested)
-  }, [
-    projectDir,
-    slug,
-    capabilityScope,
-    resolvedCapabilities.authoritative,
-    tab,
-  ])
 
   // Defer the heavy body (ChatView) one frame past the shell's own slide-in (useSheetLayer flips
   // `shown` on the first frame) so click→visible isn't gated on rendering a 100KB+ transcript. Same
@@ -307,7 +245,7 @@ export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id
             // one the standalone page uses) instead of mounting all ~300 messages eagerly. Opening a
             // long chat used to build 6k+ DOM nodes and burn a ~300ms long task on the main thread
             // before the sheet was usable.
-            <ThreadView slug={slug} tab={effectiveTab} onTab={setTab} onStatusApplied={close} onClose={close} virtualized />
+            <ThreadView slug={slug} onStatusApplied={close} onClose={close} virtualized />
           ) : bodyReady && route.kind === "missing" ? (
             <MissingThread slug={slug} onClose={close} />
           ) : (

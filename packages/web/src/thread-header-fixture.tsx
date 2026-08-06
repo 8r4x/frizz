@@ -64,7 +64,7 @@ store.board = { projectDir: "/fixture", threads: [claudeThread, codexThread] } a
 function HeaderFixture({ slug }: { slug: string }) {
   return (
     <RadixTabs.Root value="chat" className="flex min-h-0 flex-1 flex-col">
-      <ThreadHeader slug={slug} tab="chat" onStatusApplied={() => {}} onClose={() => {}} />
+      <ThreadHeader slug={slug} onStatusApplied={() => {}} onClose={() => {}} />
       <div className="flex min-h-28 flex-1 items-center justify-center px-5 text-center text-[12px] text-muted">
         Drawer body — title controls remain in the header title line.
       </div>

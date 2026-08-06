@@ -181,8 +181,6 @@ export interface Api {
   planBody(input: { path: string }): Promise<{ markdown: string }>
   // Hard-delete a plan artifact (.frizz/plans/*.md). Secure-resolver gated server-side; idempotent.
   planDelete(input: { path: string }): Promise<void>
-  // A session thread's scratch directory (.frizz/threads/<session-id>/), concatenated — read-only doc tab.
-  threadScratchpad(input: { slug: string }): Promise<{ markdown: string }>
   // Server-authoritative, shell-safe provider resume command for a registered Frizz-owned session.
   // A live Frizz-owned runtime is deliberately unavailable: a second provider client is uncoordinated.
   threadTerminalCommand(input: { slug: string }): Promise<{ command: string | null; mode: "attach" | "resume" | "unavailable"; reason: string | null }>
@@ -300,7 +298,6 @@ export const PROCEDURES = {
   forgetThread: "mutation",
   planBody: "query",
   planDelete: "mutation",
-  threadScratchpad: "query",
   threadTerminalCommand: "query",
   openExternal: "mutation",
   openLocalFile: "mutation",

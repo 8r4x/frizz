@@ -166,17 +166,16 @@ window.__fx = {
 }
 
 function Harness() {
-  const [tab, setTab] = useState<"chat" | "scratch">("chat")
   if (surface === "drawer") {
     return (
       <div className="mx-auto my-8 flex h-[640px] w-[460px] flex-col overflow-hidden rounded-lg border border-border bg-panel shadow-2xl">
-        <ThreadView slug={SLUG} tab={tab} onTab={setTab} virtualized />
+        <ThreadView slug={SLUG} virtualized />
       </div>
     )
   }
   return (
     <div className="mx-auto flex h-screen w-full max-w-[900px] flex-col overflow-hidden border-x border-border bg-panel">
-      <ThreadView slug={SLUG} tab={tab} onTab={setTab} virtualized />
+      <ThreadView slug={SLUG} virtualized />
     </div>
   )
 }

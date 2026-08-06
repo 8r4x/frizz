@@ -93,11 +93,10 @@ window.fetch = async (input, init) => {
 }
 
 function DrawerHarness() {
-  const [tab, setTab] = useState<"chat" | "scratch">("chat")
   // A fixed-height flex column mimicking the drawer's shell so ChatView's single scroll region engages.
   return (
     <div className="mx-auto my-8 flex h-[640px] w-[460px] flex-col overflow-hidden rounded-lg border border-border bg-panel shadow-2xl">
-      <ThreadView slug={SLUG} tab={tab} onTab={setTab} />
+      <ThreadView slug={SLUG} />
     </div>
   )
 }

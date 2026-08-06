@@ -196,7 +196,7 @@ function Fixture() {
     <div className="relative h-screen bg-bg text-fg text-sm">
       <div className="mx-auto flex h-screen w-full max-w-full flex-col border-x border-border">
         {/* The PRODUCTION path: both real ThreadView callers virtualize. */}
-        <ThreadView slug={SLUG} tab="chat" onTab={() => {}} virtualized />
+        <ThreadView slug={SLUG} virtualized />
       </div>
     </div>
   )

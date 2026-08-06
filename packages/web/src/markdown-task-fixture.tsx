@@ -8,7 +8,7 @@ import { mdToHtml } from "./lib/markdown.ts"
 // sanitizer drops `<svg>` with its subtree, so this fixture is the only place they can be JUDGED.
 //
 // Panels mirror the three real hosts at their real type sizes: a transcript message (14px), the
-// thread-drawer Doc tab, and a queue-wrapped question card (12px), so a correction that only
+// thread doc drawer, and a queue-wrapped question card (12px), so a correction that only
 // works at one size shows up here.
 
 const LIST = `- [x] Confine reads on Windows — unconfined is fatal

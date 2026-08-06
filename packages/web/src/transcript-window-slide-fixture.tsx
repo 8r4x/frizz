@@ -209,11 +209,10 @@ window.__ws = {
 }
 
 function Harness() {
-  const [tab, setTab] = useState<"chat" | "scratch">("chat")
   // The same box StandaloneThreadPage gives /full: a full-height, max-w-[900px] column.
   return (
     <div className="mx-auto flex h-dvh w-full max-w-[900px] min-w-0 flex-col overflow-hidden border-x border-border bg-panel">
-      <ThreadView slug={SLUG} tab={tab} onTab={setTab} virtualized showReturnToQueue />
+      <ThreadView slug={SLUG} virtualized showReturnToQueue />
     </div>
   )
 }

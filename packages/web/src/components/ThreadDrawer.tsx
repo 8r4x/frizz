@@ -78,8 +78,8 @@ export function ThreadDrawer({ id, slug, title, depth, widthDepth }: { id: numbe
     // drawer it landed at depth+1 → 692px vs the chat's 720px). `widthOffset={1}` renders it at the
     // width of the drawer BENEATH it (depth-1) so it matches the chat drawer exactly; at depth 0 (a
     // runtime-none thread opened straight to its doc, nothing beneath) it's the base 720px. Preferred
-    // long-term fix per the audit was a real third Chat|Terminal|Doc tab, deferred this pass: it
-    // collides with the existing scratch-directory "Doc" tab (DIFFERENT files) and the runtime-none entry
+    // long-term fix per the audit was a real Chat|Terminal tab strip, deferred this pass: the thread
+    // header carries no tabs at all since 2026-08-06 (see ChatView.ThreadView) and the runtime-none entry
     // path — a design call left for the maintainer.
     <Sheet id={id} depth={depth} widthDepth={widthDepth} widthOffset={1}>
       {(close) => (
