@@ -3,12 +3,12 @@ import "./styles.css"
 import { mdToHtml } from "./lib/markdown.ts"
 
 // Drives the REAL render path (mdToHtml → marked → the DOM sanitizer) over the five Obsidian task
-// states the shared scratchpad's legend teaches — `[ ]` pending, `[/]` in progress, `[x]` complete,
+// states agents write in their own markdown — `[ ]` pending, `[/]` in progress, `[x]` complete,
 // `[-]` cancelled, `[?]` blocked. The glyphs are pure CSS (`.md-task*` in styles.css) because the
 // sanitizer drops `<svg>` with its subtree, so this fixture is the only place they can be JUDGED.
 //
 // Panels mirror the three real hosts at their real type sizes: a transcript message (14px), the
-// thread-drawer scratchpad, and a queue-wrapped question card (12px), so a correction that only
+// thread-drawer Doc tab, and a queue-wrapped question card (12px), so a correction that only
 // works at one size shows up here.
 
 const LIST = `- [x] Confine reads on Windows — unconfined is fatal
@@ -38,7 +38,7 @@ const MIXED = `Here is where things stand.
 1. A numbered item
 2. Another numbered item`
 
-// The scratchpad skeleton dispatch.ts writes ships a BARE `- [ ]`, so the empty item is a real shape.
+// An agent filling in a task list leaves a BARE `- [ ]`, so the empty item is a real shape.
 const EMPTY = `## Task list
 
 - [ ]
@@ -56,7 +56,7 @@ const CASES: { id: string; label: string; md: string }[] = [
   { id: "legend", label: "The legend as authored (inline code, not task items)", md: LEGEND },
   { id: "mixed", label: "Beside ordinary bullets and numbers", md: MIXED },
   { id: "loose", label: "Loose list", md: LOOSE },
-  { id: "empty", label: "Empty items (the scratchpad skeleton)", md: EMPTY },
+  { id: "empty", label: "Empty items (an unfilled task list)", md: EMPTY },
 ]
 
 const Panel = ({ title, className, style }: { title: string; className?: string; style?: React.CSSProperties }) => (

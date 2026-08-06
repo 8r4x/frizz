@@ -42,7 +42,7 @@ for (const project of readdirSync(root)) {
 console.log(`scanning ${files.length} session transcripts modified in the last ${days} day(s)\n`)
 
 const norm = (s) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, 160)
-const HARNESS = /^(<task-notification>|<system-reminder>|<local-command|Your scratchpad is|\[Request interrupted)/
+const HARNESS = /^(<task-notification>|<system-reminder>|<local-command|Your scratch directory is|Your scratchpad is|\[Request interrupted)/
 const samples = []
 let removed = 0
 let unmatched = 0

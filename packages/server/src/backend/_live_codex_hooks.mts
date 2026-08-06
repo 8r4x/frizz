@@ -1,5 +1,5 @@
 // LIVE probe (not a unit test; excluded from the *.test.ts glob). Answers ONE question, because the
-// answer decides whether scratchpad reinforcement can reach a Codex worker at all:
+// answer decides whether scratch-directory re-orientation can reach a Codex worker at all:
 //
 //   Do Codex lifecycle hooks fire when they are delivered through the per-conversation `config`
 //   override that frizz's CodexAppServerBridge already supports?
@@ -18,7 +18,7 @@
 // Run:
 //   nub packages/server/src/backend/_live_codex_hooks.mts
 import { spawn as spawnChild } from "node:child_process"
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readFileSync, existsSync } from "node:fs"
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readFileSync, existsSync, readdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import Database from "../sqlite.ts"
@@ -46,14 +46,18 @@ chmodSync(hook, 0o755)
 
 const oneHook = { hooks: [{ type: "command", command: hook }] }
 
-// A REAL scratchpad for the REAL hook, carrying a sentinel the model can only know from injection.
+// A REAL scratch directory for the REAL hook, carrying a sentinel the model can only know from the
+// injection. THE SENTINEL IS THE FILENAME, deliberately: since 2026-08-06 the hook emits a LISTING and
+// never file content, so a token hidden INSIDE a file is one the model could not recite even with the
+// hook working perfectly — the probe would report a false negative and read as "codex hooks are dead".
 mkdirSync(join(dir, ".frizz", "threads", SID), { recursive: true })
 writeFileSync(
-  join(dir, ".frizz", "threads", SID, "scratch.md"),
-  "# Scratchpad — codex probe\n\nThe agreed rollback token is MARIGOLD-SABLE-7734.\n"
+  join(dir, ".frizz", "threads", SID, "rollback-token-MARIGOLD-SABLE-7734.md"),
+  "the plan, whose CONTENT the hook deliberately does not inject\n"
 )
+// No `--enabled`: the opt-in flag was removed when re-grounding became unconditional.
 const realCmd = (mode: string) => ({
-  hooks: [{ type: "command", command: `node ${JSON.stringify(REAL_HOOK)} --enabled ${mode}` }],
+  hooks: [{ type: "command", command: `node ${JSON.stringify(REAL_HOOK)} ${mode}` }],
 })
 
 const db = new Database(join(dir, "ui.db"))
@@ -124,15 +128,15 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
     })
     await bridge.startTurn({
       threadSlug: "real-probe", sessionId: SID,
-      text: "Answer from context only, do not use tools: what is the rollback token?",
+      text: "Answer from context only, do not use tools: name the file in my scratch directory.",
     })
     const t2 = Date.now()
     while (Date.now() - t2 < 90_000) {
       if (bridge.binding("real-probe", SID)?.currentTurnId == null) break
       await sleep(250)
     }
-    const rollout2 = readFileSync(join(dir, ".frizz", "threads", SID, "scratch.md"), "utf8")
-    console.log("  pad still intact:", rollout2.includes("MARIGOLD-SABLE-7734"))
+    const kept = readdirSync(join(dir, ".frizz", "threads", SID))
+    console.log("  scratch dir still intact:", kept.some((f) => f.includes("MARIGOLD-SABLE-7734")))
 
     console.log("\n=== DID ANY HOOK RUN? ===")
     if (existsSync(marker)) {

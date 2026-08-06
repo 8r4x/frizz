@@ -6,7 +6,7 @@ import { openThread } from "../store.ts"
 // button. This one delegated listener intercepts a plain left-click on any such anchor and opens the
 // thread IN THE DRAWER (openThread — dedupes/raises if already open) instead of letting the browser
 // navigate a new tab. A modified click (⌘/ctrl/shift/alt) is left alone so the same href still works
-// as a real deep-link opened in a new tab. Covers every sanitized markdown surface (chat, scratchpad,
+// as a real deep-link opened in a new tab. Covers every sanitized markdown surface (chat, the Doc tab,
 // plans, drawers) since it delegates from document.
 const THREAD_HREF = /^\/thread\/([a-z0-9][a-z0-9-]*)\/?$/
 

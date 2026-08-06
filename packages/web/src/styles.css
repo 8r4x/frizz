@@ -634,7 +634,7 @@ a[href] {
 .md-body li:has(> p > .md-task) {
   list-style: none;
   position: relative;
-  /* An EMPTY item (`- [ ]`, which every new scratchpad ships) has no in-flow content once the box is
+  /* An EMPTY item (`- [ ]`, an unfilled task-list entry) has no in-flow content once the box is
      positioned out, so its `<li>` would collapse to zero height and hide the box. One line's worth. */
   min-height: 1.7em;
 }

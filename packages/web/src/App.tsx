@@ -227,7 +227,7 @@ export function App() {
   }, [projectLabel])
 
   // NOTE: there is deliberately NO "this repo has no .frizz/" branch here. Threads are session-first
-  // (the registry in ui.db IS the board); `.frizz/` only holds scratchpads and plans, and dispatch
+  // (the registry in ui.db IS the board); `.frizz/` only holds thread scratch dirs and plans, and dispatch
   // creates it on the way (writeScratchDir → ensureSafeDirectDirectory). Gating the shell on it
   // inverted the fresh-repo experience: a repo with an EMPTY `.frizz/` got the real first-run view,
   // while a repo without one got a dead end that said "dispatch a first thread" with no composer to

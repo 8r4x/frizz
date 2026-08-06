@@ -64,7 +64,7 @@ test("a task item's own text is wrapped, and a nested sub-list stays outside tha
 })
 
 // GFM needs a space AFTER the bracket, so Marked reads a bare `- [ ]` as the literal text "[ ]" — and
-// that is exactly what server/dispatch.ts writes into every new thread's scratchpad Task list.
+// that is exactly the shape an agent leaves in a task list it has not filled in yet.
 test("an empty task item is a checkbox, not the literal text", () => {
   const html = renderBlock("- [ ]\n- [x]\n- [/]")
   assert.match(html, /<span class="md-task" title="To do"><\/span>/)

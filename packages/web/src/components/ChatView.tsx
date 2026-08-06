@@ -175,7 +175,7 @@ export function withoutLiveTranscriptBackgroundTools(messages: readonly ChatMess
 // the focus machine) and the Open-thread side drawer (ThreadSheet, terminal driven by its own local
 // state). Chat is a single scroll column (sticky header + composer); terminal is a fixed-box pane.
 // The thread's active surface tab: the conversation, the raw terminal (⌘T power-user), or the
-// scratchpad doc (a session thread's compaction-proof working memory — read-only).
+// scratch-directory doc (a session thread's own working files — read-only).
 export type ThreadTab = "chat" | "scratch"
 
 export function ThreadView({ slug, tab, onTab, onStatusApplied, onClose, virtualized = false, showReturnToQueue = false }: { slug: string; tab: ThreadTab; onTab: (t: ThreadTab) => void; onStatusApplied?: () => void; onClose?: () => void; virtualized?: boolean; showReturnToQueue?: boolean }) {
@@ -1308,7 +1308,7 @@ function JumpToLatest({ overlay, hidden, onJump }: { overlay: HTMLElement | null
 // The thread's top bar: title, the Chat/Doc tab toggle, and — at the far right — the shared actions.
 // non-lifecycle HeaderActions. Snooze and Archive stay in the persistent thread footer. The tab is CONTROLLED
 // (tab/onTab) so the drawer drives its own copy. Owned sessions expose a command-copy icon; foreign
-// rows do not. The Doc tab appears only when the thread has a provisioned scratchpad.
+// rows do not. The Doc tab appears only when the thread's scratch directory actually holds something.
 export function ThreadHeader({ slug, tab, onStatusApplied, onClose, showReturnToQueue = false }: { slug: string; tab: ThreadTab; onStatusApplied?: () => void; onClose?: () => void; showReturnToQueue?: boolean }) {
   const board = useBoard()
   const thread = threadBySlug(board, slug)
@@ -1337,7 +1337,7 @@ export function ThreadHeader({ slug, tab, onStatusApplied, onClose, showReturnTo
     setTitleDraft("")
   }, [slug])
   // The "Frizz document" header affordance opens .frizz/<slug>.md (threadBody). Many session threads have
-  // no such file — their working doc is the scratchpad (the Doc tab) — so the button would dead-end on
+  // no such file — their working files live in the scratch directory (the Doc tab) — so it would dead-end on
   // "No thread file found". Gate it on the doc actually having body content (same stripFrontmatter the
   // drawer renders through), so it shows iff there's a real doc to open. Shares the drawer's cached query
   // (identical key), so opening the drawer adds no extra round-trip.
@@ -1533,9 +1533,11 @@ function Tab({ value, label }: { value: ThreadTab; label: string }) {
   )
 }
 
-// The scratchpad doc tab: a session thread's compaction-proof working memory (.frizz/threads/<id>/scratch.md),
-// rendered read-only as markdown. Refetched on open (a simple query); the worker rewrites the file as
-// it works, so a re-open picks up the latest. Empty when never provisioned.
+// The Doc tab: everything in a session thread's scratch DIRECTORY (.frizz/threads/<id>/), concatenated
+// server-side under a heading per file and rendered read-only as markdown. Refetched on open (a simple
+// query); the worker rewrites those files as it works, so a re-open picks up the latest. Empty when the
+// directory is empty — which since 2026-08-06 is the state every fresh dispatch starts in, because
+// nothing is provisioned into it.
 function ScratchpadPane({ slug }: { slug: string }) {
   const q = useQuery({ queryKey: ["threadScratchpad", slug], queryFn: () => rpc.threadScratchpad({ slug }) })
   const html = useMemo(() => mdToHtml(q.data?.markdown ?? ""), [q.data?.markdown])
@@ -1547,7 +1549,7 @@ function ScratchpadPane({ slug }: { slug: string }) {
       ) : html ? (
         <div className="md-body" dangerouslySetInnerHTML={inner} />
       ) : (
-        <div className="text-[13px] text-muted">No scratchpad yet.</div>
+        <div className="text-[13px] text-muted">Nothing in this thread's scratch directory yet.</div>
       )}
     </div>
   )

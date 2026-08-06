@@ -26,7 +26,7 @@ test("thread tab storage is scoped to both the project and thread slug", () => {
 test("clampThreadTab refuses surfaces the current row cannot own", () => {
   const owned = { scratch: true }
   assert.equal(clampThreadTab("scratch", owned), "scratch")
-  assert.equal(clampThreadTab("scratch", { scratch: false }), "chat", "rows without a scratchpad cannot inherit Doc")
+  assert.equal(clampThreadTab("scratch", { scratch: false }), "chat", "rows with an empty scratch directory cannot inherit Doc")
   assert.equal(clampThreadTab("bogus", owned), "chat")
 })
 

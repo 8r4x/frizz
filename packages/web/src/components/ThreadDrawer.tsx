@@ -79,7 +79,7 @@ export function ThreadDrawer({ id, slug, title, depth, widthDepth }: { id: numbe
     // width of the drawer BENEATH it (depth-1) so it matches the chat drawer exactly; at depth 0 (a
     // runtime-none thread opened straight to its doc, nothing beneath) it's the base 720px. Preferred
     // long-term fix per the audit was a real third Chat|Terminal|Doc tab, deferred this pass: it
-    // collides with the existing scratchpad "Doc" tab (a DIFFERENT file) and the runtime-none entry
+    // collides with the existing scratch-directory "Doc" tab (DIFFERENT files) and the runtime-none entry
     // path — a design call left for the maintainer.
     <Sheet id={id} depth={depth} widthDepth={widthDepth} widthOffset={1}>
       {(close) => (

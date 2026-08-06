@@ -86,7 +86,7 @@ test("the markdown sanitizer keeps authored meaning and blocks every scripted es
     assert.ok(seen.nestedStaysOutside, "a nested sub-list must be a SIBLING of the text wrapper, never inside it")
     assert.equal(seen.nestedChildText, "still live", "the live sub-task keeps its own text")
     assert.deepEqual(seen.emptyBoxes, ["md-task", "md-task md-task-checked"],
-      "a bare `- [ ]` — what every new scratchpad ships — is a checkbox, not literal text")
+      "a bare `- [ ]` — an unfilled task-list item — is a checkbox, not literal text")
     assert.equal(seen.emptyText, "", "and it leaves no marker text behind")
     assert.equal(seen.olStart, "17", "a list that starts at 17 keeps its numbering")
     assert.deepEqual(seen.headAlign, ["left", "center", "right"], "GFM column alignment is honored")

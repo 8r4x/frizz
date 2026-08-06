@@ -5,7 +5,7 @@ import { test } from "node:test";
 
 /**
  * The published package is the REPO ROOT, so `files` is the only thing standing between npm and the
- * whole checkout — `plans/`, `attachments/`, `scratch/`, `.frizz/`, agent scratchpads, every worktree
+ * whole checkout — `plans/`, `attachments/`, `scratch/`, `.frizz/`, agent scratch directories, every worktree
  * under `.claude/`. When the package lived in `packages/cli` a mistake here shipped a few stray files;
  * now it can ship the repository. npm excludes `.git` and `node_modules` on its own and nothing else.
  *

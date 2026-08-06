@@ -113,7 +113,7 @@ const headerlessTableExtension: TokenizerAndRendererExtension = {
   },
 }
 
-// Obsidian-flavoured task states used by the shared scratchpad. GFM only recognizes `[ ]` and `[x]`;
+// Obsidian-flavoured task states agents write in their own markdown. GFM only recognizes `[ ]` and `[x]`;
 // Marked therefore tokenizes `[/]`, `[-]`, and `[?]` as ordinary list-item text. Promote ONLY a
 // marker at the start of a list item — never the same bracket sequence in prose or code — into an
 // inert status mark. Keeping this as a token transform rather than a raw-Markdown regex means fenced
@@ -133,7 +133,7 @@ type FrizzTaskStatusToken = {
 
 // GFM requires a SPACE after the bracket, so a bare `- [ ]` with nothing after it is not a task item
 // to Marked and rendered as the literal text "[ ]". That shape is not hypothetical: it is what the
-// scratchpad skeleton in server/dispatch.ts writes into every new thread's Task list. `[ ]` and `[x]`
+// empty item an agent leaves in a task list it is still filling in. `[ ]` and `[x]`
 // are therefore accepted here too, but ONLY at end-of-item — with trailing text they are still
 // Marked's to tokenize, and `item.task` is already true by the time this runs.
 const CUSTOM_TASK_STATUS = /^\[([ xX/\-?])\](?:[ \t]+|[ \t]*$)/

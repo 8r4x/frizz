@@ -73,6 +73,7 @@ import type {
   CancelInteractionResult,
   CompletionHold,
   ProjectCard,
+  DirectoryPickResult,
 } from "@frizz/shared"
 
 // Per-call transport options — declared here (not in rpc.ts) only because two procedures name it in
@@ -179,7 +180,7 @@ export interface Api {
   planBody(input: { path: string }): Promise<{ markdown: string }>
   // Hard-delete a plan artifact (.frizz/plans/*.md). Secure-resolver gated server-side; idempotent.
   planDelete(input: { path: string }): Promise<void>
-  // A session thread's scratchpad (.frizz/threads/<session-id>/scratch.md) — read-only doc tab.
+  // A session thread's scratch directory (.frizz/threads/<session-id>/), concatenated — read-only doc tab.
   threadScratchpad(input: { slug: string }): Promise<{ markdown: string }>
   // Server-authoritative, shell-safe provider resume command for a registered Frizz-owned session.
   // A live Frizz-owned runtime is deliberately unavailable: a second provider client is uncoordinated.
@@ -214,6 +215,12 @@ export interface Api {
   accountLoginCancel(input: AccountLoginStatusInput): Promise<Record<never, never>>
   // Machine-scoped: the registry is one file, so the grid reads the same from every project.
   projectsList(): Promise<ProjectCard[]>
+  // Registering a folder as a project — the grid phantom card. Same authority as running `frizz`
+  // there and strictly less: it resolves an id and writes the index, and dispatches nothing.
+  // Opens the machine NATIVE folder picker, server-side, and adds what comes back. The browser API
+  // withholds absolute paths on purpose, and a project is a path — so the picker cannot live here.
+  projectPick(input: Record<never, never>): Promise<DirectoryPickResult>
+  projectAdd(input: { path: string }): Promise<ProjectCard>
   settingsGet(): Promise<Settings>
   settingsSet(input: Settings): Promise<Settings>
   // Takes an empty object, not nothing: the router declares `input: z.object({})` (a mutation always
@@ -301,6 +308,8 @@ export const PROCEDURES = {
   accountLoginStatus: "query",
   accountLoginCancel: "mutation",
   projectsList: "query",
+  projectPick: "mutation",
+  projectAdd: "mutation",
   settingsGet: "query",
   settingsSet: "mutation",
   settingsReset: "mutation",

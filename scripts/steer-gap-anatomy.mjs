@@ -16,7 +16,7 @@ const args = process.argv.slice(2)
 const days = Number(args[args.indexOf('--days') + 1]) || 14
 const minGap = (Number(args[args.indexOf('--min') + 1]) || 20) * 1000
 const since = Date.now() - days * 86_400_000
-const HARNESS = /^(<task-notification>|<system-reminder>|<local-command|Your scratchpad is|\[Request interrupted)/
+const HARNESS = /^(<task-notification>|<system-reminder>|<local-command|Your scratch directory is|Your scratchpad is|\[Request interrupted)/
 const norm = (s) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, 160)
 
 const root = join(homedir(), '.claude', 'projects')
