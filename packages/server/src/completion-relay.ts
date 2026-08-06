@@ -215,6 +215,75 @@ export function relayMessage(report: QueuedReport): string {
   ].join(" ")
 }
 
+// ── THE TIMELINE'S SIDE OF THE REPAIR ──────────────────────────────────────────────────────────────
+// A relayed completion is the SAME real event as a delivered one — a background op finished and
+// re-invoked the agent — so the transcript owes the reader the same three things: a wake divider naming
+// the cause, a back-filled terminal state on the launch card, and a broken merge chain. It owed all
+// three and paid none, because the repair is PROSE rather than a `<task-notification>`: completionEvents
+// skipped it and isInjectedNoise then swallowed the record whole.
+//
+// Measured on a fixture against the delivered control, changing only how the completion arrived: three
+// messages with a `completed` card became ONE message whose card was stuck on `pending`, the post-wake
+// turn folded into the launch bubble, and nothing anywhere named the cause. That is what a maintainer
+// hit on 2026-08-05 — "it looks like the agent came to rest, then re-triggered with no external event
+// triggering" — after the only visible wake source on the thread had been switched off, leaving 55
+// relays as the sole driver and every one of them silent.
+//
+// The comment at RELAY_MARKER is still right that frizz should not NARRATE its own plumbing at the
+// human. Showing that a background task finished is not narrating plumbing: that event is already a
+// first-class divider when the runtime delivers it, and hiding it only when frizz is the one carrying it
+// makes the timeline lie about why the agent moved.
+//
+// Rather than grow a second projection path, a relay is translated BACK into the notification it stands
+// for and handed to the one that already exists. The delimiters below are the ones `relayMessage` writes
+// a few lines up — parsed and written in the same file precisely so they cannot drift apart.
+const SHELL_SUMMARY_END = " — but that completion never reached you"
+const AGENT_SUMMARY_END = ", but its report never reached you."
+
+/** Rides the synthesized block so the wake label can say the completion was RECOVERED rather than
+ * delivered — the one fact a reader cannot infer from the event itself, and the tell that the runtime
+ * dropped something. */
+export const RELAYED_MARKER = "<frizz-relayed/>"
+
+/** The terminal status a summary implies. The corpus is narrow — 362 `Background command "…" completed
+ * (exit code 0)`, 60 `Agent "…" finished`, 4 `Monitor "…" stream ended` across every relay in the logs —
+ * but a non-zero exit is read properly rather than assumed away, because a FAILING op is exactly the one
+ * a reader most needs the divider for. */
+function relayedStatus(summary: string): "completed" | "failed" | "killed" {
+  const code = summary.match(/exit code (\d+)/)?.[1]
+  if (code !== undefined) return code === "0" ? "completed" : "failed"
+  if (/\b(stopped|killed)\b/i.test(summary)) return "killed"
+  if (/\bfailed\b/i.test(summary)) return "failed"
+  return "completed"
+}
+
+/**
+ * The `<task-notification>` a relay message stands for, or undefined if this text is not a relay.
+ *
+ * Correlation rides `<task-id>`, not `<tool-use-id>`: the tag carries the background TASK id, which the
+ * projection already maps back to the launch's tool-use id. That is the same key the delivered path
+ * falls back to, so a repaired completion lands on exactly the same card.
+ */
+export function relayNotificationBlock(text: string): string | undefined {
+  const tag = text.match(new RegExp(`^\\s*<${RELAY_MARKER}:([A-Za-z0-9_-]+)>\\s*`))
+  if (!tag) return undefined
+  const body = text.slice(tag[0].length)
+  const shellCut = body.indexOf(SHELL_SUMMARY_END)
+  const cut = shellCut >= 0 ? shellCut : body.indexOf(AGENT_SUMMARY_END)
+  // A relay whose prose this cannot parse must NOT silently vanish the way every relay used to — fall
+  // back to the leading sentence so the divider still names something real.
+  const summary = (cut > 0 ? body.slice(0, cut) : (body.split(". ")[0] ?? "")).trim()
+  if (!summary) return undefined
+  return [
+    "<task-notification>",
+    `<task-id>${tag[1]}</task-id>`,
+    `<status>${relayedStatus(summary)}</status>`,
+    `<summary>${summary}</summary>`,
+    RELAYED_MARKER,
+    "</task-notification>",
+  ].join("\n")
+}
+
 /**
  * Which tracked reports are due for repair?
  *

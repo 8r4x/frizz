@@ -23,6 +23,7 @@ import type { Storage } from "./storage.ts"
 import type { AgentBackend, NormalizedEvent } from "./backend/types.ts"
 import { parseDeliveryLedger, projectDeliveryLedger, suppressCancelledDeliveries, attachmentPromptText } from "./delivery-ledger.ts"
 import { stripDeliveryMarkers } from "./delivery-marker.ts"
+import { RELAYED_MARKER, relayNotificationBlock } from "./completion-relay.ts"
 import { CODEX_FIRST_FINAL_TITLE_TRANSPORT, CODEX_LEGACY_FIRST_FINAL_TITLE_TRANSPORT, parseCodexLine, createCodexBackend, extractCodexFrizzTitle } from "./backend/codex.ts"
 import { discoverTranscriptId, DISCOVERY_GRACE_MS } from "./discover.ts"
 import { isClaudeAuthErrorText } from "./tailer.ts"
@@ -347,6 +348,11 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
   // launchTaskId). Needed because two terminal signals carry NO <tool-use-id>: the Monitor-timeout
   // notification (task-id only) and a manual TaskStop result (task_id only).
   const backgroundTaskIds = new Map<string, string>()
+  // Relay task-ids whose uncorrelated divider has already been drawn. The correlated paths dedupe by
+  // DELETING the map entry they matched ("the same completion arriving via two carriers is a no-op"), and
+  // the uncorrelated one has no entry to delete — so it needs its own memory or it draws twice. It does:
+  // frizz writes each repair as BOTH a queue-operation and a user record, which is exactly two carriers.
+  const relayedWakesDrawn = new Set<string>()
   // A CHILD's own agentId → the tool_use id of the Agent dispatch that spawned it, captured from the
   // launch ack (see attachToolResults). An upward report names its sender by agentId but every drawer
   // lookup is keyed by the dispatch id, so this is the translation the peer arm needs. Forward-only, and
@@ -476,7 +482,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
     // notificationCarrierText) re-render each finished dispatch's AgentBlock card inline at this
     // position (clickable into the run-log drawer), back-fill the original launch cards' terminal
     // state, and emit a boundary line per woken shell.
-    const evs = completionEvents(rec, agentDispatches, backgroundShells, backgroundTaskIds)
+    const evs = completionEvents(rec, agentDispatches, backgroundShells, backgroundTaskIds, relayedWakesDrawn)
     if (evs.length > 0) {
       // A user-record carrier can in principle also carry tool_result blocks — never skip their back-fill.
       attachToolResults(rec, pendingTools, backgroundShells, backgroundTaskIds, childDispatchIds)
@@ -1666,7 +1672,28 @@ function backgroundWakeLabel(call: TranscriptToolCall, status: string, raw: stri
     const code = raw.match(/exit code (\d+)/)?.[1]
     outcome = code ? `exited ${code}` : "failed"
   }
-  return `Background task «${desc}» ${outcome}`
+  // A RECOVERED completion says so. The event is the same one either way, but "frizz had to carry this"
+  // is the tell that the runtime dropped a notification (upstream anthropics/claude-code#20754) — and it
+  // is the difference between a reader trusting the timeline and hunting a log for why the agent moved.
+  const relayed = raw.includes(RELAYED_MARKER) ? " (completion relayed)" : ""
+  return `Background task «${desc}» ${outcome}${relayed}`
+}
+
+// The same label for a wake with NO card to correlate to, built from the notification's own summary.
+// Split from backgroundWakeLabel rather than folded into it because that one reads a TranscriptToolCall
+// for its description and here there is, by definition, no call to read.
+function uncorrelatedWakeLabel(rawDesc: string, status: string, raw: string): string {
+  const desc = rawDesc.length > 64 ? `${rawDesc.slice(0, 63)}…` : rawDesc
+  let outcome: string
+  if (raw.includes("<event>[Monitor timed out")) outcome = "timed out"
+  else if (status === "completed") outcome = "finished"
+  else if (status === "killed") outcome = "stopped"
+  else {
+    const code = raw.match(/exit code (\d+)/)?.[1]
+    outcome = code ? `exited ${code}` : "failed"
+  }
+  const relayed = raw.includes(RELAYED_MARKER) ? " (completion relayed)" : ""
+  return `Background task «${desc}» ${outcome}${relayed}`
 }
 
 // The text carrier of a completion <task-notification>, mirroring the tailer's notificationText:
@@ -1713,8 +1740,14 @@ function completionEvents(
   dispatches: Map<string, { at?: string; call: TranscriptToolCall }>,
   backgroundShells: Map<string, { at?: string; call: TranscriptToolCall }>,
   backgroundTaskIds: Map<string, string>,
+  relayedWakesDrawn: Set<string>,
 ): TranscriptMessage[] {
-  const raw = notificationCarrierText(rec)
+  const carrier = notificationCarrierText(rec)
+  // A completion frizz REPAIRED arrives as prose, not as a notification (see relayNotificationBlock).
+  // Translating it back here — rather than teaching this function a second shape — is what makes a
+  // relayed completion project identically to a delivered one: same divider, same card back-fill, same
+  // broken merge chain, all from the code below that already does it.
+  const raw = carrier === undefined ? undefined : (relayNotificationBlock(carrier) ?? carrier)
   if (!raw || !raw.includes("<task-notification>")) return []
   const at = typeof rec.timestamp === "string" ? rec.timestamp : undefined
   const out: TranscriptMessage[] = []
@@ -1740,11 +1773,37 @@ function completionEvents(
       const toolUseId = backgroundTaskIds.get(m[1])
       if (toolUseId) ids.add(toolUseId)
     }
+    // A RELAY that correlates to nothing still has to draw its divider, and this is the case that sent a
+    // maintainer digging through server logs on 2026-08-05. An op adopted from an earlier process — or one
+    // whose launch simply is not in this file — has no card here at all: the measured example's tool-use id
+    // (`toolu_01CGAQsRn1rB5xjtNBNcWuKt`) appears ONLY in its own two queue-operation records, never as a
+    // `tool_use` block. Correlation therefore cannot succeed, and both paths fall silent — so the ONE wake
+    // the reader most needs explained is the one guaranteed to render as nothing.
+    //
+    // Scoped deliberately to relays. An uncorrelated notification on the DELIVERED path is usually an
+    // unrelated process or an already-consumed child (see below), and drawing dividers for those would add
+    // noise and risk double-rendering. A relay is different by construction: frizz only relays an op it was
+    // tracking, and only after the agent came to rest without it — so it is always a real wake, and the
+    // summary alone carries enough to name it.
+    const relayedFallback = (): void => {
+      if (!block.includes(RELAYED_MARKER)) return
+      const relayId = block.match(/<task-id>([^<]*)<\/task-id>/)?.[1]?.trim()
+      if (!relayId || relayedWakesDrawn.has(relayId)) return
+      relayedWakesDrawn.add(relayId)
+      const summary = block.match(/<summary>([\s\S]*?)<\/summary>/)?.[1]?.trim()
+      if (!summary) return
+      const desc = summary.match(/"([^"]+)"/)?.[1] ?? summary
+      out.push({ role: "assistant", kind: "event", boundary: "wake", text: uncorrelatedWakeLabel(desc, status, block), tools: [], parts: [], at })
+    }
+    if (ids.size === 0) relayedFallback()
     for (const id of ids) {
       const d = dispatches.get(id)
       if (!d) {
         const shell = backgroundShells.get(id)
-        if (!shell) continue // an unrelated process, or an already-consumed child
+        if (!shell) {
+          relayedFallback()
+          continue // an unrelated process, or an already-consumed child
+        }
         backgroundShells.delete(id)
         const elapsedMs = elapsedBetween(shell.at, rec.timestamp)
         shell.call.status = status === "completed" ? "completed" : status === "killed" ? "cancelled" : "failed"

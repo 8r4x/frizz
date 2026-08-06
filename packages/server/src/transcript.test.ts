@@ -4,6 +4,7 @@ import { appendFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rm
 import { tmpdir, homedir } from "node:os"
 import { join } from "node:path"
 import { projectRetiredBackgroundOps } from "./transcript.ts"
+import { relayMessage } from "./completion-relay.ts"
 import type { TranscriptMessage } from "@frizz/shared"
 import { DISPATCH_TASK_BANNER_MARKER, formatGithubWakeSteer, GITHUB_DISPATCH_UI_BOUNDARY, wakeDeliveryToken, type GithubWakeSteer } from "@frizz/shared"
 import {
@@ -408,6 +409,73 @@ test("boundary wake label reads 'finished' on a clean exit and 'stopped' when ki
   assert.equal(done.text, "Background task «sleep 1» finished") // desc falls back to the command summary
   const killed = parseTranscript([launch("s2"), taskNotification("s2", "killed", "2026-07-01T00:00:02.000Z")].join("\n"))[1]
   assert.match(killed.text, /» stopped$/)
+})
+
+// ---- a completion frizz had to REPAIR ----
+// When the runtime drops a completion notification (upstream anthropics/claude-code#20754), frizz injects
+// a prose repair that re-invokes the agent. That is the SAME real event as a delivered completion, so it
+// owes the reader the same divider, the same card back-fill, and the same broken merge chain — and it paid
+// none of them, because the repair is not a `<task-notification>`. The thread just resumed with nothing
+// saying why (maintainer 2026-08-05: "it looks like the agent came to rest, then re-triggered with no
+// external event triggering").
+const bgLaunch = JSON.stringify({
+  type: "assistant",
+  timestamp: "2026-07-01T00:00:00.000Z",
+  message: { id: "m-bg", content: [{ type: "tool_use", id: "bash-bg", name: "Bash", input: { command: "poll ssh", description: "Poll VM SSH until reachable", run_in_background: true } }] },
+})
+// The launch ACK is what registers taskId → tool_use_id; without it nothing can correlate by task-id.
+const bgAck = JSON.stringify({
+  type: "user",
+  timestamp: "2026-07-01T00:00:00.500Z",
+  message: { role: "user", content: [{ type: "tool_result", tool_use_id: "bash-bg", content: "Command running in background with ID: b9em1sxxw" }] },
+})
+const bgAfterWake = JSON.stringify({
+  type: "assistant",
+  timestamp: "2026-07-01T00:00:06.000Z",
+  message: { id: "m-bg", content: [{ type: "text", text: "Picking the build back up." }] },
+})
+const relayRecord = (summary: string, type = "user") =>
+  type === "user"
+    ? JSON.stringify({ type: "user", timestamp: "2026-07-01T00:00:05.000Z", message: { role: "user", content: relayMessage({ taskId: "b9em1sxxw", kind: "shell", outputFile: "/tmp/b9em1sxxw.output", summary, chars: 0 }) } })
+    : JSON.stringify({ type: "queue-operation", operation: "enqueue", timestamp: "2026-07-01T00:00:04.900Z", content: relayMessage({ taskId: "b9em1sxxw", kind: "shell", outputFile: "/tmp/b9em1sxxw.output", summary, chars: 0 }) })
+
+test("a RELAYED completion projects exactly like a delivered one, and says it was relayed", () => {
+  const summary = 'Background command "Poll VM SSH until reachable" completed (exit code 0)'
+  const msgs = parseTranscript([bgLaunch, bgAck, relayRecord(summary), bgAfterWake].join("\n"))
+  // The launch card is back-filled with its terminal state — it used to sit on "pending" forever…
+  assert.equal(msgs[0].tools[0].status, "completed")
+  // …a divider rides the wake point, naming the cause AND that frizz was the one carrying it…
+  assert.equal(msgs[1].kind, "event")
+  assert.equal(msgs[1].boundary, "wake")
+  assert.equal(msgs[1].text, "Background task «Poll VM SSH until reachable» finished (completion relayed)")
+  // …and the post-wake turn stays its OWN message instead of folding into the launch bubble.
+  assert.equal(msgs.length, 3)
+  assert.equal(msgs[2].text, "Picking the build back up.")
+})
+
+test("a relayed completion reads a NON-ZERO exit rather than assuming success", () => {
+  const summary = 'Background command "Poll VM SSH until reachable" failed with exit code 143'
+  const msgs = parseTranscript([bgLaunch, bgAck, relayRecord(summary), bgAfterWake].join("\n"))
+  assert.equal(msgs[0].tools[0].status, "failed")
+  assert.equal(msgs[1].text, "Background task «Poll VM SSH until reachable» exited 143 (completion relayed)")
+})
+
+test("a relay that correlates to NO card still draws its divider", () => {
+  // The measured real case: an op adopted from an earlier process, whose launch is not in this file at
+  // all. Correlation cannot succeed, so the wake most in need of explaining was the one guaranteed to
+  // render as nothing. Note there is no launch and no ack here — only the repair.
+  const summary = 'Background command "Poll VM SSH until reachable" completed (exit code 0)'
+  const msgs = parseTranscript([relayRecord(summary), bgAfterWake].join("\n"))
+  const divider = msgs.find((m) => m.boundary === "wake")
+  assert.ok(divider, "an uncorrelated relay must still explain why the agent moved")
+  assert.equal(divider.text, "Background task «Poll VM SSH until reachable» finished (completion relayed)")
+})
+
+test("frizz writes each repair as TWO carriers — the divider is drawn exactly once", () => {
+  const summary = 'Background command "Poll VM SSH until reachable" completed (exit code 0)'
+  // queue-operation AND user record, which is what a real repair looks like on disk.
+  const msgs = parseTranscript([relayRecord(summary, "queue-operation"), relayRecord(summary), bgAfterWake].join("\n"))
+  assert.equal(msgs.filter((m) => m.boundary === "wake").length, 1)
 })
 
 // ---- the agent came to rest ----
