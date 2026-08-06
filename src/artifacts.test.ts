@@ -537,6 +537,46 @@ test("a captured source snapshot remains usable after the checkout changes", () 
   }
 });
 
+// The artifact root lives under `~/.frizz`, which carries a `.gitignore` of `*` so the scratch tree
+// stays out of any repo inited above it. Tailwind's scanner honours ancestor ignore files, so
+// without a repository boundary of its own the snapshot's `.tsx` is invisible to it and the web
+// build emits a stylesheet with zero utility classes — Vite exits 0 and the whole UI ships unstyled.
+// Measured on Tailwind 4.3.2: 114,660 bytes of CSS at a neutral path, 28,849 under `~/.frizz`.
+test("a captured source snapshot is its own scan root, so an ancestor .gitignore cannot starve the web build", () => {
+  const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-snapshot-scan-root-"));
+  // Reproduce the real ancestry: the artifact root sits inside a tree that ignores everything.
+  writeFileSync(join(root, ".gitignore"), "*\n");
+  const source = sourceFixture(root);
+  mkdirSync(join(source, "node_modules"));
+  for (const file of [
+    "cc-worker/.claude-plugin/plugin.json",
+    "cc-worker/hooks/session-seed.mjs",
+    "cc-worker/hooks/agent-bind.mjs",
+    "cc-worker/bin/frizz",
+    "cc-worker/bin/frizz-update",
+    "board/config.mjs",
+    "board/agent-bindings.mjs",
+    "board/index.mjs",
+    "board/thread-update.mjs",
+  ]) {
+    mkdirSync(dirname(join(source, file)), { recursive: true });
+    writeFileSync(join(source, file), "snapshot fixture\n");
+  }
+  const snapshot = captureFrizzSourceSnapshot(source, root);
+  try {
+    const marker = join(snapshot.sourceDir, ".git");
+    assert.ok(existsSync(marker), "the snapshot must carry a .git marker to root the class scan");
+    // Empty on purpose. A directory holding `.git` is a repository root to the scanner, but without
+    // HEAD git's own discovery walks straight past it — so no build step can read a revision here.
+    assert.deepEqual(readdirSync(marker), []);
+    // .git is fingerprint-ignored, so the marker cannot fork the digest off the checkout's.
+    assert.equal(relevantSourceFingerprint(snapshot.sourceDir), snapshot.sourceFingerprint);
+  } finally {
+    rmSync(snapshot.dir, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("artifact creation typechecks the coherent source snapshot before either build", () => {
   const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-typecheck-order-"));
   const source = resolve(import.meta.dirname, "..");

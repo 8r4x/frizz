@@ -504,6 +504,40 @@ function attachInstalledDependencyClosure(source: string, snapshot: string): voi
   }
 }
 
+/**
+ * Stop the snapshot from inheriting an ancestor's ignore rules, or the web build silently ships a
+ * stylesheet with NO Tailwind utilities in it.
+ *
+ * The snapshot is built inside the artifact root, which lives under `~/.frizz` — and `~/.frizz`
+ * carries a `.gitignore` of `*` on purpose, the `.venv/.gitignore` trick that keeps this scratch
+ * tree out of any repo a user happens to init above it (see project-root.ts). Tailwind v4 finds its
+ * class names by SCANNING the source tree, and its scanner honours ancestor `.gitignore` files, so
+ * that one `*` makes every `.tsx` in the snapshot invisible to it. Nothing fails: Vite exits 0, the
+ * bundle is complete, and the emitted CSS still holds `@theme` variables, xterm's stylesheet and
+ * every hand-written component rule — just not one utility class. The app is entirely Tailwind, so
+ * the whole UI renders unstyled.
+ *
+ * Measured on 4.3.2, one variable, same tree: 114,660 bytes at a neutral path, 28,849 under
+ * `~/.frizz`, 114,660 again with the ancestor `.gitignore` moved aside.
+ *
+ * An empty `.git` DIRECTORY is enough — the scanner treats a directory holding one as a repository
+ * root and stops walking up for ignore files, which restores auto-detection to byte-identical output
+ * (verified: same content hash as a build at a neutral path). It is deliberately not a real `git
+ * init`: with no `HEAD` inside, git's own discovery does not accept it as a repository and keeps
+ * walking up exactly as it does today, so no build step can mistake the snapshot for a checkout and
+ * read a revision out of it. It also needs no subprocess, and cannot fire a user's init templates or
+ * hooks.
+ *
+ * `@source` does not substitute for this. The directory form is filtered by the same ignore rules
+ * (28,849 bytes, unchanged); the glob form does bypass them but only covers what it is spelled to
+ * cover, and re-deriving Tailwind's own auto-detection by hand got 46,190 of the 114,660 bytes.
+ *
+ * `.git` is in SOURCE_FINGERPRINT_IGNORED_DIRECTORIES, so this marker cannot move the fingerprint.
+ */
+function markSnapshotAsScanRoot(snapshot: string): void {
+  mkdirSync(join(snapshot, ".git"), { recursive: true, mode: 0o700 });
+}
+
 /** Capture a coherent launch-owned source closure before any slow build command starts. */
 export function captureFrizzSourceSnapshot(
   sourceDir: string,
@@ -542,6 +576,7 @@ export function captureFrizzSourceSnapshot(
         rmSync(dir, { recursive: true, force: true });
         continue;
       }
+      markSnapshotAsScanRoot(snapshotSource);
       attachInstalledDependencyClosure(source, snapshotSource);
       return {
         dir,
