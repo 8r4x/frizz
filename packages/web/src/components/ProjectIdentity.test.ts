@@ -26,20 +26,30 @@ test("cold project loading reserves a quiet identity measure without guessing fr
   assert.doesNotMatch(html, /animate-/)
 })
 
-test("the first verified board identity renders the full owner/repo", () => {
+test("the verified board identity renders the repo, with the way back beside it", () => {
   const html = render("openai/frizz", "open")
 
   assert.match(html, /data-project-identity-state="verified"/)
   assert.match(html, /aria-label="Project: openai\/frizz; connected"/)
   assert.match(html, /<span class="font-semibold text-fg\/90">frizz<\/span>/)
-  // The OWNER is back. A home crumb briefly stood to the left of this line and pushed it out, on the
-  // grounds that `home / owner / repo` had only two segments you could actually go to. The project
-  // RAIL is the way back to the grid now, so the crumb is gone from here and the owner has its place
-  // again — it is what tells two same-named repos apart on a machine serving many.
-  assert.match(html, /<span class="text-muted">openai<\/span>/)
-  assert.doesNotMatch(html, /aria-label="All projects"/)
+  // NO OWNER. It is not somewhere you can go and it is not what tells you which board you are on —
+  // the repo name is (maintainer 2026-08-06: hide it "regardless of whether the sidebar is hidden").
+  assert.doesNotMatch(html, />openai</)
+  // It survives where it costs nothing: the tooltip and the accessible label.
   assert.match(html, /title="openai\/frizz"/)
+  // And with the rail hidden — the shipped default — the home crumb is the way back to the grid.
+  assert.match(html, /aria-label="All projects"/)
   assert.doesNotMatch(html, /identity-placeholder/)
+})
+
+test("the home crumb steps aside when the project rail is showing", () => {
+  const identity = projectIdentity(board("openai/frizz"))
+  const html = renderToStaticMarkup(
+    createElement(IdentityMark, { identity, state: "open" as const, railVisible: true }),
+  )
+  // Two ways back to the same page is one too many; the rail IS the way back when it is there.
+  assert.doesNotMatch(html, /aria-label="All projects"/)
+  assert.match(html, /<span class="font-semibold text-fg\/90">frizz<\/span>/)
 })
 
 test("a reconnect retains the currently adopted verified identity", () => {

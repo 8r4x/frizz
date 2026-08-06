@@ -10,6 +10,7 @@ import { applyPath } from "./lib/router.ts"
 import { innerPath } from "./lib/base-path.ts"
 import { rebindProject } from "./api/socket.ts"
 import { resetProjectState } from "./store.ts"
+import { useProjectRailVisible } from "./lib/projectRail.ts"
 
 // THE ROUTE TREE — and, more to the point, the LAYOUT that outlives a navigation.
 //
@@ -39,8 +40,11 @@ export const PROJECT_PATH = "/project/:slug"
 function RootLayout() {
   return (
     <TooltipProvider>
-      {/* Outside the <Outlet/> on purpose: this is the element that must survive the navigation. */}
-      <ProjectRail />
+      {/* Outside the <Outlet/> on purpose: this is the element that must survive the navigation.
+          OPT-IN: a permanent column of every project is a standing invitation to leave the thread
+          you are in, so it is off unless asked for. Hidden, the way back is the status bar's home
+          crumb (Sidebar's IdentityMark), which costs a click exactly when you meant to switch. */}
+      {useProjectRailVisible() ? <ProjectRail /> : null}
       <Outlet />
     </TooltipProvider>
   )

@@ -24,7 +24,7 @@ const SETTINGS_KEY = "settings"
  * hypothetical: the first run of this change wrote `notifications: false` into the maintainer's own
  * settings, which would have quietly turned their desktop notifications off.
  */
-const MACHINE_KEYS = ["font", "notifications", "localFileOpener"] as const
+const MACHINE_KEYS = ["font", "notifications", "localFileOpener", "projectRail"] as const
 type MachineSettings = Pick<Settings, (typeof MACHINE_KEYS)[number]>
 
 export function machineSettingsPath(home: string): string {
@@ -87,6 +87,8 @@ export const defaultSettings = (): Settings => ({
   notifications: true,
   font: "sans",
   localFileOpener: "system",
+  // Hidden until asked for — see the schema for why.
+  projectRail: false,
 })
 
 // Settings persist as one JSON blob under settings['settings']. Read merges over defaults

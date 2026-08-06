@@ -25,6 +25,7 @@ export const SETTINGS_HELP = {
   stickyUserMessage: "Keeps your most recent message stuck to the top of a thread while the reply scrolls underneath. It stays collapsed to a small card (hover to expand it) so a long message never blocks much of the view. Applies immediately in this browser.",
   queueOrder: "Orders the Needs-you queue and the sidebar's rested threads by when each was last active. Oldest first (FIFO, default) surfaces the longest-waiting item first so you cycle through everything; Newest first (LIFO) keeps the most recently active on top. Applies immediately in this browser.",
   notifications: "Shows a desktop notification when work needs attention while this window is hidden.",
+  projectRail: "Shows a permanent column of every project on this machine down the left edge. Off by default: Frizz's home is one board, and a standing list of the others is an easy way to leave the thread you were in. With it off, the home crumb in the status bar is the way back to the projects page.",
 } as const
 function currentPerm(): NotifPerm {
   if (typeof Notification === "undefined") return "unsupported"
@@ -138,6 +139,20 @@ export function SettingsDrawer() {
 
             <SettingsField label="Font" help={SETTINGS_HELP.font}>
               <FontToggle value={draft.font ?? "mono"} onChange={(font) => setTrackedDraft({ ...draft, font })} />
+            </SettingsField>
+
+            <SettingsField label="Project sidebar" help={SETTINGS_HELP.projectRail}>
+              <Select
+                variant="bordered"
+                value={draft.projectRail ? "shown" : "hidden"}
+                onValueChange={(v) => setTrackedDraft({ ...draft, projectRail: v === "shown" })}
+                options={[
+                  { value: "hidden", label: "Hidden" },
+                  { value: "shown", label: "Always shown" },
+                ]}
+                indicatorPosition="right"
+                ariaLabel="Project sidebar"
+              />
             </SettingsField>
 
             <SettingsField label="Local file links" help={SETTINGS_HELP.localFileOpener}>

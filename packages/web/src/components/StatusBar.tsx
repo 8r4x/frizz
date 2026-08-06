@@ -4,6 +4,7 @@ import { STATUS_BAR_ACTION, STATUS_BAR_ICON } from "../lib/statusBar.ts"
 import { IdentityMark, type ProjectIdentity } from "./Sidebar.tsx"
 import { QuotaChips } from "./QuotaBar.tsx"
 import { RestartFrizzButton } from "./RestartFrizzButton.tsx"
+import { useProjectRailVisible } from "../lib/projectRail.ts"
 
 // THE STATUS BAR — one horizontal strip pinned to the page's upper-left, reading left to right:
 //
@@ -40,6 +41,7 @@ export function StatusBar({
   connection: ConnectionState
   boardFallback?: { actualBytes: number; maxBytes: number } | null
 }) {
+  const railVisible = useProjectRailVisible()
   return (
     <div
       data-status-bar
@@ -56,7 +58,7 @@ export function StatusBar({
       // the bar's own project mark rendered ON TOP of the rail's home mark.
       className="fixed top-2.5 left-[69px] max-[800px]:left-3 z-20 flex h-7 max-w-[calc(100vw-1.5rem)] items-center gap-2 rounded-lg border border-border bg-panel px-2 text-[12px] shadow-sm shadow-black/30"
     >
-      <IdentityMark identity={identity} state={connection} boardFallback={boardFallback} />
+      <IdentityMark identity={identity} state={connection} boardFallback={boardFallback} railVisible={railVisible} />
       <Divider />
       <button
         type="button"

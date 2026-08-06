@@ -997,6 +997,17 @@ export const Settings = z.object({
   // presents it; resolveClaudeEffort (server/backend/claude-effort.ts) translates it at the spawn edge.
   effort: z.enum(["low", "medium", "high", "xhigh", "max", "ultra", "ultracode"]).optional(),
   notifications: z.boolean(),
+  /**
+   * The permanent column of project icons. OFF by default, on purpose.
+   *
+   * A rail of every project on the machine is a standing invitation to leave the thread you are in —
+   * "just too tempting" (maintainer 2026-08-06). Frizz's home is one board; the grid is a page you go
+   * to, not furniture you sit beside. Hidden, the way back is a breadcrumb in the status bar, which
+   * costs a click exactly when you meant to switch and nothing when you did not.
+   *
+   * Machine-level, like the font: which chrome you want is a property of the person, not the repo.
+   */
+  projectRail: z.boolean(),
   // UI type family. `mono` (default) is the mono-forward system; `sans` swaps prose/UI chrome to a
   // sans stack while code / tool lines / the terminal stay mono. Optional so an old settings blob
   // parses; defaultSettings pins "mono".

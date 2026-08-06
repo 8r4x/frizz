@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
-import { Check, ChevronRight, CircleDashed, Clock, Ellipsis, FileText, Github, Hourglass, Loader2, RotateCcw, Timer } from "lucide-react"
+import { Check, ChevronRight, CircleDashed, Clock, Ellipsis, FileText, Github, Hourglass, House, Loader2, RotateCcw, Timer } from "lucide-react"
 import type { AwaitingHint, BoardSnapshot, PlanView, ThreadView } from "@frizz/shared"
 import { store, openThread, scrollToQueueCard, pushSubAgentDrawer, pushPlanDrawer, QUEUE_CARD_VIEWPORT_TOP, type ConnectionState } from "../store.ts"
 import { useBoard, asThreads } from "../hooks.ts"
@@ -22,6 +22,7 @@ import { prWatchRefs } from "../lib/awaitingPresentation.ts"
 import { useOptimisticallySteered } from "../lib/steering.ts"
 import { activeSidebarSection, queueNavigationSettled, railRevealDelta, type SidebarSectionGeometry } from "../lib/sidebarScrollspy.ts"
 import type { ReactElement, ReactNode } from "react"
+import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 
 // THE LEFT SIDEBAR — the thread list as a FLOATING column (no border, no fill: it floats in the
 // page's whitespace the way the old ToC nav did). App centers the sidebar + workpane as a PAIR with
@@ -834,10 +835,18 @@ export function IdentityMark({
   identity,
   state,
   boardFallback,
+  railVisible = false,
 }: {
   identity: ProjectIdentity
   state: ConnectionState
   boardFallback?: { actualBytes: number; maxBytes: number } | null
+  /**
+   * Whether the project rail is showing. A PROP, not a hook: this component is presentational and its
+   * tests render it standalone with renderToStaticMarkup, outside any QueryClientProvider — reading
+   * the setting in here made six of them throw. Defaults to hidden, which is also the shipped default,
+   * so the crumb is present unless something says otherwise.
+   */
+  railVisible?: boolean
 }) {
   const map = {
     open: { cls: "bg-live", word: "connected" },
@@ -859,6 +868,29 @@ export function IdentityMark({
       aria-label={accessibleLabel}
       aria-busy={identity.state === "loading" || undefined}
     >
+      {/* THE WAY BACK, when the rail is not there to be it.
+          `home / repo` says where you are as well as where you can go, and it costs a click exactly
+          when you meant to switch projects and nothing when you did not. Rendered only while the rail
+          is hidden, so the two never both vanish and never both offer the same thing twice. 12px
+          lucide beside a 12px label is the pairing ICON_LABEL_NUDGE was measured for. */}
+      {!railVisible && (
+        <>
+          <a
+            href="/"
+            title="All projects"
+            aria-label="All projects"
+            className="shrink-0 rounded-sm text-muted/70 outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
+          >
+            <House size={12} className={`shrink-0 ${ICON_LABEL_NUDGE}`} />
+          </a>
+          {/* The separator belongs to the NAME, not to the crumb: a project with no verified
+              owner/repo renders nothing after it, and `home /` with a dangling slash reads as a
+              broken breadcrumb rather than a quiet one. */}
+          {identity.state === "verified" && (
+            <span className="-ml-1 shrink-0 text-muted/60">/</span>
+          )}
+        </>
+      )}
       <span className={`identity-slot ${identity.state === "verified" ? "identity-slot--resolved" : "identity-slot--placeholder"}`}>
         {/* The FULL owner/repo. A home crumb briefly stood here and pushed the owner out — the header
             read `home / owner / repo`, where only two of the three were somewhere you could go. The
@@ -866,9 +898,9 @@ export function IdentityMark({
             owner has its place back: it is the left half of a verified identity, and on a machine
             serving many projects it is what tells two same-named repos apart. */}
         {identity.state === "verified" ? (
+          // The REPO alone. The owner is not somewhere you can go, and it is not what tells you which
+          // board you are on — the repo name is. It stays in the tooltip and the accessible label.
           <span className="block min-w-0 truncate" title={identity.label}>
-            <span className="text-muted">{identity.owner}</span>
-            <span className="text-muted/60 ml-0.5 mr-1">/</span>
             <span className="font-semibold text-fg/90">{identity.repo}</span>
           </span>
         ) : (
