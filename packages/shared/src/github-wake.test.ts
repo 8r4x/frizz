@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import {
   formatGithubWakeSteer,
   parseGithubWakeSteer,
+  splitWakeDeliveries,
   stripWakeDeliveryToken,
   wakeDeliveryToken,
   type GithubWakeSteer,
@@ -158,4 +159,40 @@ test("ordinary prose never masquerades as a wake card", () => {
   ]) {
     assert.equal(parseGithubWakeSteer(text), null, JSON.stringify(text))
   }
+})
+
+// The runtime merges deliveries that land while the worker is mid-turn into ONE user record. Every
+// anchored projection in this file then reads the LAST delivery only, and the ones above it — token,
+// trailer and all — are stranded mid-text where nothing can see them. Splitting first is what restores
+// each one's own presentation; the boundary is the token alone on its line, which is exactly how the
+// runtime joins them and is never how prose quotes one.
+test("a coalesced record splits into its deliveries, and a quoted token is not a boundary", () => {
+  const a = "KEEP GOING.\n\n(Recurring prompt — sent each time you come to rest. …)"
+  const b = `<frizz-relay:b7xm5f1db> Background command "trace" completed (exit code 0).`
+  const ta = wakeDeliveryToken("a".repeat(64))
+  const tb = wakeDeliveryToken("b".repeat(64))
+  assert.deepEqual(splitWakeDeliveries(`${a}\n\n${ta}\n${b}\n\n${tb}`), [`${a}\n\n${ta}`, `${b}\n\n${tb}`])
+  // A trailing segment the runtime appended with no token of its own (a human follow-up merged onto a
+  // wake) is still its own message — it must not ride along inside the wake's card.
+  assert.deepEqual(splitWakeDeliveries(`${a}\n\n${ta}\nand one more thing`), [`${a}\n\n${ta}`, "and one more thing"])
+  // One delivery, or none, is the overwhelming case and must come back untouched.
+  assert.deepEqual(splitWakeDeliveries(`${a}\n\n${ta}`), [`${a}\n\n${ta}`])
+  assert.deepEqual(splitWakeDeliveries("just a follow-up"), ["just a follow-up"])
+  // …and the human asking about a token mid-sentence keeps one bubble, as stripWakeDeliveryToken does.
+  const quoting = `Why is ${ta} showing up in the bubble?`
+  assert.deepEqual(splitWakeDeliveries(quoting), [quoting])
+})
+
+// The display strip is the BACKSTOP the split leans on. The split has to model how the RUNTIME joins
+// coalesced deliveries, which is not frizz's format to pin — so if a joiner change ever defeats it, a
+// token must still never reach the human's eyes. On its own line it is plumbing wherever it sits; only
+// a token quoted mid-sentence is the human's own words.
+test("a token on its own line is stripped from anywhere, quoted prose is not", () => {
+  const t = wakeDeliveryToken("a".repeat(64))
+  assert.equal(stripWakeDeliveryToken(`steer\n\n${t}`), "steer")
+  assert.equal(stripWakeDeliveryToken(`steer\n\n${t}\nand a stranded tail`), "steer\n\nand a stranded tail")
+  assert.equal(stripWakeDeliveryToken(`${t}\nplumbing led this one`), "plumbing led this one")
+  const quoting = `Why is ${t} showing up in the bubble?`
+  assert.equal(stripWakeDeliveryToken(quoting), quoting)
+  assert.equal(stripWakeDeliveryToken("ordinary text\n"), "ordinary text\n", "no token, no rewrite")
 })

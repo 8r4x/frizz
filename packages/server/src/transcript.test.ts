@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { projectRetiredBackgroundOps } from "./transcript.ts"
 import { relayMessage } from "./completion-relay.ts"
 import type { TranscriptMessage } from "@frizz/shared"
-import { DISPATCH_TASK_BANNER_MARKER, formatGithubWakeSteer, GITHUB_DISPATCH_UI_BOUNDARY, wakeDeliveryToken, type GithubWakeSteer } from "@frizz/shared"
+import { DISPATCH_TASK_BANNER_MARKER, formatGithubWakeSteer, GITHUB_DISPATCH_UI_BOUNDARY, parseRecurringPrompt, restPromptMessage, wakeDeliveryToken, type GithubWakeSteer } from "@frizz/shared"
 import {
   createTranscriptFold,
   frizzDispatchDisplayText,
@@ -144,6 +144,50 @@ test("a wake token is projected out only from the delivery tail, never from quot
   assert.equal(asked.text, quoting)
   assert.equal(asked.displayText, undefined, "a mid-sentence token is the human's own words — leave the bubble alone")
   assert.equal(asked.wake, undefined, "and it must not be laundered into a first-party frizz card either")
+})
+
+// A COALESCED record — two deliveries the runtime merged into one user turn because they landed while
+// the worker was mid-turn. Measured on this machine's corpus: 14 of 380 real wake deliveries arrived
+// this way, and every one lost its own presentation. The record ENDS in a token, so the old projection
+// saw one wake, stripped the LAST token and handed the chat the whole run as a single blob: a recurring
+// prompt whose trailer was no longer at the end could not parse, so its `Recurring prompt · at rest`
+// divider became a generic bell card carrying a relay notice and an interior `<!-- frizz-wake:… -->`.
+test("a coalesced user record splits back into the deliveries the scheduler actually sent", () => {
+  const rest = restPromptMessage("KEEP GOING.")
+  const relay = `<frizz-relay:b7xm5f1db> Background command "Trace the packages" completed (exit code 0) — its output is at /tmp/b7xm5f1db.output.`
+  // Byte for byte the shape from the corpus: each delivery keeps its own token, joined by one newline.
+  const coalesced = `${rest}\n\n${wakeDeliveryToken(wakeId)}\n${relay}\n\n${wakeDeliveryToken("b".repeat(64))}`
+  const raw = [
+    JSON.stringify({ type: "user", timestamp: "2026-07-01T00:00:00.000Z", message: { content: "orientation\n\nTASK:\nthe original task" } }),
+    JSON.stringify({ type: "assistant", timestamp: "2026-07-01T00:00:05.000Z", message: { id: "m1", content: [{ type: "text", text: "on it" }] } }),
+    JSON.stringify({ type: "user", timestamp: "2026-07-01T00:00:10.000Z", message: { content: coalesced } }),
+  ].join("\n")
+  const msgs = parseTranscript(raw)
+  const wakes = msgs.filter((m) => m.wake)
+  assert.equal(wakes.length, 1, "the relay is plumbing the chat drops, exactly as when it arrives alone")
+  assert.equal(wakes[0].displayText, rest)
+  assert.ok(parseRecurringPrompt(wakes[0].displayText), "…and the trailer is at the end again, so the divider parses")
+  assert.notEqual(wakes[0].sourceId, msgs[0].sourceId, "every rendered message keeps its own scroll anchor")
+  assert.doesNotMatch(msgs.map((m) => m.displayText ?? m.text).join("\n"), /frizz-wake|frizz-relay/, "no machine-facing marker survives into the chat")
+  // The relay does not merely vanish: it gets the same wake divider it would have drawn arriving alone.
+  // `relayNotificationBlock` anchors to the start of the text, so a relay merged UNDER another delivery
+  // used to match nothing at all — it lost its divider AND showed up as prose in the card above it.
+  assert.match(msgs.map((m) => m.text).join("\n"), /Background task «Trace the packages» finished \(completion relayed\)/)
+
+  // ORDER REVERSED — the relay arrives first. The whole-record noise gate used to answer this with a
+  // prefix test, so a plumbing lead swallowed the real delivery underneath it and the prompt vanished
+  // from the transcript entirely. The gate now asks per segment.
+  const relayFirst = `${relay}\n\n${wakeDeliveryToken("c".repeat(64))}\n${rest}\n\n${wakeDeliveryToken(wakeId)}`
+  const led = parseTranscript([
+    JSON.stringify({ type: "user", timestamp: "2026-07-01T00:00:00.000Z", message: { content: "orientation\n\nTASK:\nthe original task" } }),
+    JSON.stringify({ type: "assistant", timestamp: "2026-07-01T00:00:05.000Z", message: { id: "m1", content: [{ type: "text", text: "on it" }] } }),
+    JSON.stringify({ type: "user", timestamp: "2026-07-01T00:00:10.000Z", message: { content: relayFirst } }),
+  ].join("\n"))
+  const ledWakes = led.filter((m) => m.wake)
+  assert.equal(ledWakes.length, 1, "the delivery under the plumbing still renders")
+  assert.equal(ledWakes[0].displayText, rest)
+  assert.doesNotMatch(led.map((m) => m.displayText ?? m.text).join("\n"), /frizz-wake|frizz-relay/)
+  assert.match(led.map((m) => m.text).join("\n"), /Background task «Trace the packages» finished \(completion relayed\)/)
 })
 
 // frizz's own dispatch envelope. The bubble shows the operator's prompt and nothing else — on the plain

@@ -11,6 +11,7 @@ import {
   isWakeDelivery,
   parseAgentMessage,
   parseGithubWakeSteer,
+  splitWakeDeliveries,
   stripWakeDeliveryToken,
   type GithubWakeSteer,
   type TranscriptMessage,
@@ -194,6 +195,34 @@ function userProjection(text: string, first: boolean): { displayText?: string; w
   // parse — never worse than before.
   const steer = parseGithubWakeSteer(displayText ?? text)
   return { ...(displayText ? { displayText } : {}), wake: true as const, ...(steer ? { wakeSteer: steer } : {}) }
+}
+
+// Push ONE user record as the message(s) it actually carries.
+//
+// Normally that is one message and this is `out.push` with a projection. But the runtime merges
+// deliveries that land while the worker is mid-turn into a single record (see splitWakeDeliveries), and
+// a merged record must not render as one blob: its parts are separate frizz messages that happened to
+// arrive together, and each has its own presentation — a recurring prompt collapses to a divider, a
+// relay is plumbing the chat drops, a GitHub wake gets its card. Every segment therefore takes the
+// SAME route a lone delivery takes, `isInjectedNoise` included, so a coalesced thread reads exactly
+// like one where the same messages arrived a second apart.
+//
+// `#i` on the later sourceIds for the reason the event-line loop does it: a sourceId is the chat's
+// per-message handle (scroll anchor, `data-frizz-msg`), so two rendered messages must never share one.
+function pushUserRecord(out: TranscriptMessage[], sourceId: string, text: string, at: string | undefined): void {
+  for (const [i, segment] of splitWakeDeliveries(text).entries()) {
+    if (isInjectedNoise(segment)) continue
+    const projection = userProjection(segment, out.length === 0)
+    out.push({ sourceId: i === 0 ? sourceId : `${sourceId}#${i}`, role: "user", text: segment, ...projection, tools: [], parts: [], at })
+  }
+}
+
+// Is this whole record plumbing? The prefix check above answers that for ONE message, and the caller's
+// gate has to ask it of a record that may hold several — a coalesced record LED by a relay is plumbing
+// in its first segment and a real delivery in its second, and dropping it whole (the pre-split gate)
+// would silently swallow the delivery. Per segment, both parts land where they belong.
+function isAllInjectedNoise(text: string): boolean {
+  return splitWakeDeliveries(text).every(isInjectedNoise)
 }
 
 // Append a text block to a message's ordered parts, coalescing into a trailing text part (so several
@@ -492,7 +521,10 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
         out.push(ev)
       })
       lastAssistantId = null // the completion card breaks the assistant-record merge chain
-      return
+      // A coalesced record can be BOTH at once: relay plumbing that draws these dividers AND a real
+      // delivery merged in beside it. Bail out only when the plumbing is all there was — otherwise fall
+      // through so the delivery underneath still reaches the chat, below its own dividers.
+      if (isAllInjectedNoise(notificationCarrierText(rec) ?? "")) return
     }
 
     // A long THINKING window used to be surfaced here as a `Thought for Ns` event line. It is not any
@@ -714,7 +746,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
       let text = userText(rec)
       // Harness/orchestrator injections that arrive as ordinary user records (task-notifications,
       // system reminders, frizz pulses) are ALSO not the human's words — drop them from the chat.
-      if (text && isInjectedNoise(text)) return
+      if (text && isAllInjectedNoise(text)) return
       if (text) {
         // Claude Code 2.1.207's print/SDK path emits enqueue → empty dequeue → the ordinary user
         // record (no queued_command attachment). Resolve an identical pending bubble in place; adding
@@ -755,8 +787,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
         // The first user message is the composed dispatch prompt (scratchpad orientation + project
         // instructions + banner + TASK). Only what sits below the banner is the human's words — that
         // narrowing is a DISPLAY projection (userDisplayText), never a rewrite of the stored text.
-        const projection = userProjection(text, out.length === 0)
-        out.push({ sourceId, role: "user", text, ...projection, tools: [], parts: [], at: rec.timestamp })
+        pushUserRecord(out, sourceId, text, rec.timestamp)
         lastAssistantId = null
       }
       return
@@ -1751,7 +1782,12 @@ function completionEvents(
   // Translating it back here — rather than teaching this function a second shape — is what makes a
   // relayed completion project identically to a delivered one: same divider, same card back-fill, same
   // broken merge chain, all from the code below that already does it.
-  const raw = carrier === undefined ? undefined : (relayNotificationBlock(carrier) ?? carrier)
+  // …and per SEGMENT, because a relay is one of the deliveries the runtime coalesces (splitWakeDeliveries):
+  // `relayNotificationBlock` anchors its tag to the start of the text, so a relay merged UNDER another
+  // delivery matched nothing and its divider was simply never drawn. Segments that are not relays are
+  // rejoined untouched — the guard below still requires a real `<task-notification>`.
+  const raw =
+    carrier === undefined ? undefined : splitWakeDeliveries(carrier).map((s) => relayNotificationBlock(s) ?? s).join("\n")
   if (!raw || !raw.includes("<task-notification>")) return []
   const at = typeof rec.timestamp === "string" ? rec.timestamp : undefined
   const out: TranscriptMessage[] = []
@@ -2253,14 +2289,11 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
           // title reminder was Frizz's append, rather than similarly-worded task prose.
           if (out.length === 0) text = stripCodexFirstPromptTitleTransport(text)
           text = stripCodexSentinel(text)
-          if (!text || isInjectedNoise(text)) break
+          if (!text || isAllInjectedNoise(text)) break
           // The first user message is the composed dispatch prompt (orientation + banner + TASK +
           // sentinel). Only what sits below the banner is the human's words, and — as in parseTranscript
           // — that narrowing is a DISPLAY projection, so the stored text keeps the machine-facing prompt.
-          if (text) {
-            const projection = userProjection(text, out.length === 0)
-            out.push({ sourceId, role: "user", text, ...projection, tools: [], parts: [], at: ev.at })
-          }
+          if (text) pushUserRecord(out, sourceId, text, ev.at)
           break
         }
         case "agent-report": {
