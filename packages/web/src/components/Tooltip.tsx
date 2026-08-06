@@ -9,7 +9,7 @@ import { OVERLAY_Z_CLASS } from "../lib/overlaySurface.ts"
 
 export function TooltipProvider({ children }: { children: ReactNode }) {
   return (
-    <RT.Provider delayDuration={0} skipDelayDuration={0}>
+    <RT.Provider delayDuration={0} skipDelayDuration={0} disableHoverableContent>
       {children}
     </RT.Provider>
   )
