@@ -35,11 +35,11 @@ import {
   productionRuntime as productionAdoptionRuntime,
 } from "./adoption-recovery.ts"
 
-// Dispatch = provision the thread's scratchpad + compose the full prompt + spawn a detached `claude`
-// in a tmux session + register the session row. Session-first (2026-07-09): a new dispatch writes NO
-// .frizz/<slug>.md thread file — the session IS the thread, and its durable working memory is a
-// scratchpad (.frizz/threads/<sessionId>/scratch.md). The prompt is the ONLY intelligence: the worker
-// contract + this repo's FRIZZ.md + scratchpad orientation + the task. Project-specific conventions
+// Dispatch = provision the thread's scratch DIRECTORY + compose the full prompt + spawn a detached
+// `claude` in a tmux session + register the session row. Session-first (2026-07-09): a new dispatch
+// writes NO .frizz/<slug>.md thread file — the session IS the thread, and it gets an empty folder
+// (.frizz/threads/<sessionId>/) to use as it likes. The prompt is the ONLY intelligence: the worker
+// contract + this repo's FRIZZ.md + the scratch orientation + the task. Project-specific conventions
 // live in FRIZZ.md alone — the old settings `dispatchPreamble` was retired in favour of it, so there is
 // exactly ONE operator-authored surface.
 
@@ -235,11 +235,11 @@ export function loadWorkerPrompt(kind: BackendKind = "claude"): string {
   return buildWorkerPrompt(kind)
 }
 
-// ---- scratchpad reinforcement (always on) ----
-// Deliberately NOT settings-gated. The scratchpad is the canonical document for a thread, so
-// re-grounding on it after a compaction is what makes the pad worth writing — not a posture a project
-// opts into. Claude needs no plumbing at all here (the plugin's hooks.json is always registered);
-// codex does, because its hooks can only arrive as per-conversation config.
+// ---- scratch-directory re-orientation (always on) ----
+// Deliberately NOT settings-gated. A worker that has just lost its context should always be told what
+// it left itself, and that is not a posture a project opts into. Claude needs no plumbing at all here
+// (the plugin's hooks.json is always registered); codex does, because its hooks can only arrive as
+// per-conversation config.
 //
 // Measured against codex-cli 0.144.6, and the reason this is config rather than argv or a file:
 // `codex exec` runs NO hooks from ANY discovery path (repo `.codex/hooks.json`,
@@ -281,8 +281,9 @@ export function codexScratchpadHookConfig(
           command: `node ${JSON.stringify(bashBackgroundHook)} --frizz-thread`,
         }],
       }],
-      // Native Codex children inherit the root scratchpad mandate even with `fork_turns:"none"`.
-      // Constrain it structurally at child start: shared writes, but only merge-style scoped edits.
+      // Native Codex children inherit the root scratch-directory instruction even with
+      // `fork_turns:"none"`. Constrain it structurally at child start: its OWN file, never another
+      // agent's.
       SubagentStart: [cmd("--mode=subagent-start")],
       SessionStart: [cmd("--mode=session-start")],
       UserPromptSubmit: [cmd("--mode=nudge")],

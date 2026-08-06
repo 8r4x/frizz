@@ -297,6 +297,10 @@ body is one line ("Answered inline — conversational prompt, nothing to ship.")
 needs a reply, ask with a \` \`\`\`question \` instead. Do not manufacture scope, restate the "task", or ask
 clarifying questions to seem busy.`
 
+// LEGACY NAME, current behaviour. This block, `scratchpadOrientation`, `ThreadView.scratchpadPath` and
+// the `threadScratchpad` RPC all still say "scratchpad"; they all describe the scratch DIRECTORY now.
+// The names stay because `threadScratchpad` is a wire RPC name and renaming the set would be a breaking
+// contract change for no behavioural gain.
 const SCRATCHPAD: Record<BackendKind, string> = {
   claude: `## Your scratch directory
 
