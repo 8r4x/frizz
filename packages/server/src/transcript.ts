@@ -1912,6 +1912,42 @@ const transcriptCache = new Map<string, TranscriptCacheEntry>()
 // when FRIZZ_TRANSCRIPT_PARSE_VERIFY=1 — a loud, non-throwing correctness net for the appended-bytes fold.
 const PARSE_VERIFY_SAMPLE = 1 / 50
 
+/** Bytes decoded to a string at once. Any value well under Node's ~512MB string cap will do. */
+const TRANSCRIPT_DECODE_WINDOW = 16 * 1024 * 1024
+
+/**
+ * Feed `[entry.bytesRead, to)` into the retained fold in BOUNDED WINDOWS.
+ *
+ * Both readers used to do one `decoder.write()` over the whole unread range. On a warm cache that is
+ * a few KB and fine; on a COLD fold of a large transcript it is the entire file, and Node caps a
+ * string at ~512MB — so a 566MB transcript threw ERR_STRING_TOO_LONG and readTranscript's
+ * `catch { return [] }` (annotated for the transient "file not written yet" case) turned it into an
+ * EMPTY CHAT, silently and permanently.
+ *
+ * Worse, `bytesRead` was advanced BEFORE the decode, so the throw left the shared cache entry parked
+ * at EOF with an empty fold: every later call saw nothing left to read and returned nothing, in 0ms,
+ * without touching the file. Measured on the real file — call #1 113ms, calls #2 and #3 0ms, all zero
+ * messages, while a 68MB control returned 300.
+ *
+ * So: advance `bytesRead` only AFTER a window has been ingested. A partial failure then costs the
+ * unread tail, not the whole thread. Windowing is safe without any line alignment because both layers
+ * already handle their own boundaries — StringDecoder buffers a split UTF-8 sequence, and the fold
+ * buffers a trailing partial LINE (see ingest: "preserved exactly across chunk boundaries").
+ */
+function ingestBounded(
+  entry: { bytesRead: number; decoder: { write(buf: Buffer): string }; fold: { ingest(chunk: string): void } },
+  to: number,
+  read: (from: number, length: number) => Buffer,
+): void {
+  while (entry.bytesRead < to) {
+    const buf = read(entry.bytesRead, Math.min(TRANSCRIPT_DECODE_WINDOW, to - entry.bytesRead))
+    if (buf.length === 0) break
+    const chunk = entry.decoder.write(buf)
+    entry.bytesRead += buf.length
+    if (chunk) entry.fold.ingest(chunk)
+  }
+}
+
 function readAppendedBytes(fd: number, from: number, to: number): Buffer {
   const buf = Buffer.allocUnsafe(to - from)
   let filled = 0
@@ -1965,12 +2001,7 @@ export function readTranscript(project: Project, sessionId: string): TranscriptM
 
     const { entry, hit } = retainedFoldEntry(path, identityPrefix, fileId, size)
 
-    if (size > entry.bytesRead) {
-      const buf = readAppendedBytes(fd, entry.bytesRead, size)
-      entry.bytesRead += buf.length
-      const chunk = entry.decoder.write(buf)
-      if (chunk) entry.fold.ingest(chunk)
-    }
+    ingestBounded(entry, size, (from, length) => readAppendedBytes(fd!, from, from + length))
     // size == bytesRead → no read, no ingest; the retained projection is already current.
 
     const messages = entry.fold.messages()
@@ -3521,11 +3552,7 @@ function projectSnapshot(snapshot: FixedTranscriptSnapshot): TranscriptMessage[]
   if (snapshot.backend === "codex") return retireStaleQueuedBubbles(projectCodexTranscript(snapshot.raw, prefix))
 
   const { entry } = retainedFoldEntry(snapshot.path, prefix, snapshot.fileKey, snapshot.bytes.length)
-  if (snapshot.bytes.length > entry.bytesRead) {
-    const chunk = entry.decoder.write(snapshot.bytes.subarray(entry.bytesRead))
-    entry.bytesRead = snapshot.bytes.length
-    if (chunk) entry.fold.ingest(chunk)
-  }
+  ingestBounded(entry, snapshot.bytes.length, (from, length) => snapshot.bytes.subarray(from, from + length))
   // Deliberately NO finalize(): it is the one-shot path's trailing-partial flush and advances the fold
   // past bytes a later ingest would then re-fold, duplicating messages. A complete final record that
   // simply lacks its newline is still projected — the fold consumes it optimistically (tryConsumePartial)
