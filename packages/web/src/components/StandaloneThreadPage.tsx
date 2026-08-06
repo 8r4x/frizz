@@ -27,13 +27,13 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
     rpc.threadSeen({ slug }).catch(() => {})
   }, [atRest, slug, thread?.lastActivityAt])
 
-  // "<thread> · owner/repo | Frizz". The thread title LEADS because a tab truncates from the end and
+  // "<thread> · owner/repo — Frizz". The thread title LEADS because a tab truncates from the end and
   // several of these are usually open on the same repo at once — the thread is what tells them apart.
-  // The workspace identity trails as "owner/repo | Frizz", the same mark the installed app window uses.
+  // The workspace identity trails as "owner/repo — Frizz", the same mark the installed app window uses.
   useEffect(() => {
     const projectLabel = board?.projectLabel ?? board?.projectName
     const threadLabel = thread ? displayTitle(thread) : slug
-    document.title = projectLabel ? `${threadLabel} · ${projectLabel} | Frizz` : `${threadLabel} · Frizz`
+    document.title = projectLabel ? `${threadLabel} · ${projectLabel} — Frizz` : `${threadLabel} · Frizz`
   }, [board?.projectLabel, board?.projectName, slug, thread])
 
   return (
