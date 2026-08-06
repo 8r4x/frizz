@@ -4,6 +4,7 @@ import { FitAddon } from "@xterm/addon-fit"
 import type { TermClientMsg } from "@frizz/shared"
 import { queuedTerminalInputBytes, terminalCloseKind, terminalReconnectDelay } from "../lib/terminalConnection.ts"
 import { FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
+import { apiBase } from "../lib/base-path.ts"
 
 // One xterm + WebSocket per selected thread. Remounts on slug change (keyed by
 // the parent), so mount = attach and unmount = detach. The server kills only the
@@ -57,7 +58,7 @@ export function TerminalPane({ slug }: { slug: string }) {
     }
 
     const proto = location.protocol === "https:" ? "wss" : "ws"
-    const url = `${proto}://${location.host}${FRIZZ_ROUTE_PREFIX}/term/${slug}`
+    const url = `${proto}://${location.host}${apiBase()}/term/${slug}`
     let ws: WebSocket | null = null
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined
     let disposed = false

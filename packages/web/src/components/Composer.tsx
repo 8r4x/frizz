@@ -6,6 +6,7 @@ import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
 import { shouldInterruptSubmitComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
 import { queueComposerHandlesOptionEnter } from "../lib/queueComposerKeyboard.ts"
 import { RAIL_ACTION_OFFSET, RAIL_PAPERCLIP_OFFSET, RAIL_PAPERCLIP_PLAIN_OFFSET, RAIL_RESERVE_PLAIN, RAIL_RESERVE_WITH_ACTION, RAIL_SEND_OFFSET } from "../lib/iconRhythm.ts"
+import { apiBase } from "../lib/base-path.ts"
 
 // The shared prompt composer (the pattern the user called "perfect"): ONE rounded bordered box
 // holding a borderless auto-growing textarea plus a small round accent send button hovering INSIDE
@@ -25,7 +26,7 @@ async function uploadAttachment(file: File, name: string): Promise<string | null
   let bin = ""
   const bytes = new Uint8Array(buf)
   for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
-  const res = await fetch(frizzRoute("/attach"), {
+  const res = await fetch(`${apiBase()}/attach`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ name, data: btoa(bin) }),
