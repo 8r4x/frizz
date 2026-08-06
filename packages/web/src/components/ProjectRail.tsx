@@ -1,11 +1,12 @@
 import * as RadixDropdown from "@radix-ui/react-dropdown-menu"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { useRef, useState, type CSSProperties, type ReactNode } from "react"
-import { Plus } from "lucide-react"
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react"
+import { House, Plus } from "lucide-react"
 import type { ProjectCard } from "@frizz/shared"
 import { PROJECT_ICON_EXTENSIONS } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { projectHref, projectSlug } from "../lib/base-path.ts"
+import { dropIndex, edgeScrollVelocity, moveItem, shiftFor } from "../lib/railReorder.ts"
 import { Tooltip } from "./Tooltip.tsx"
 
 // THE PROJECT RAIL — every project on this machine as one icon square, always on screen.
@@ -144,13 +145,61 @@ const SQUARE = 40
  * Discord's indicator, because the alternative — marking the square itself — competes with the icon
  * it is drawn on top of. The pill lives in the gutter, where nothing else does.
  */
-function RailLink({ project, current }: { project: ProjectCard; current: boolean }) {
+function RailLink({
+  project,
+  current,
+  index,
+  drag,
+  onPointerDown,
+  onKeyDown,
+}: {
+  project: ProjectCard
+  current: boolean
+  index: number
+  drag: DragState | null
+  onPointerDown: (event: React.PointerEvent<HTMLAnchorElement>, index: number) => void
+  onKeyDown: (event: React.KeyboardEvent<HTMLAnchorElement>, index: number) => void
+}) {
+  const held = drag?.fromIndex === index
+  // The held square follows the pointer; everything between its old slot and its new one slides one
+  // step to open the gap. `shiftFor` owns which is which — see lib/railReorder.ts.
+  const offset = drag
+    ? held
+      ? drag.deltaY
+      : shiftFor(index, drag.fromIndex, drag.toIndex)
+    : 0
   return (
-    <Tooltip side="right" label={project.stale ? `${project.name} — directory is missing` : project.name}>
+    // Suppressed while ANY square is held: the pointer is necessarily inside the square it is
+    // dragging, so a delayDuration-0 tooltip would open on grab and then chase the square down the
+    // rail. Passing a prop rather than unmounting the wrapper — remounting mid-drag would destroy the
+    // element holding pointer capture.
+    <Tooltip
+      side="right"
+      disabled={drag !== null}
+      label={project.stale ? `${project.name} — directory is missing` : project.name}
+    >
       <a
         href={projectHref(project.slug)}
         aria-current={current ? "page" : undefined}
-        className="group relative flex h-10 w-full items-center justify-center outline-none"
+        // The rail is a reorderable list, and a link is not one. `listitem` + `aria-grabbed` is the
+        // most a native anchor can say about it; the keyboard path below is what makes it true.
+        aria-grabbed={held || undefined}
+        onPointerDown={(event) => onPointerDown(event, index)}
+        onKeyDown={(event) => onKeyDown(event, index)}
+        onClick={(event) => {
+          // A drag ENDS over a link, so the browser fires a click on release. Without this, every
+          // reorder also navigated to whatever square you dropped on.
+          if (drag || justDragged()) event.preventDefault()
+        }}
+        onDragStart={(event) => event.preventDefault()} // native image-drag would fight the pointer drag
+        className={`group relative flex h-10 w-full items-center justify-center outline-none ${
+          held ? "z-10 cursor-grabbing" : ""
+        }`}
+        style={{
+          transform: offset ? `translateY(${offset}px)` : undefined,
+          // The held square must track the pointer exactly; its neighbours are the ones that animate.
+          transition: held ? "none" : "transform 160ms ease",
+        }}
       >
         {/* 28 of the square's 40px — 70%. Discord runs 40 of 48 (83%) and 24 of 40 read as a stub
             against the square beside it; 28 is the same confident mark at this size. The hover stub
@@ -162,8 +211,10 @@ function RailLink({ project, current }: { project: ProjectCard; current: boolean
           }`}
         />
         <span
-          className={`transition-[transform,opacity] duration-150 group-hover:scale-[1.06] group-focus-visible:ring-1 group-focus-visible:ring-fg/60 rounded-[30%] ${
-            current ? "" : "opacity-75 group-hover:opacity-100"
+          className={`rounded-[30%] transition-[transform,opacity,box-shadow] duration-150 group-focus-visible:ring-1 group-focus-visible:ring-fg/60 ${
+            held
+              ? "scale-[1.12] opacity-100 shadow-lg shadow-black/50"
+              : `group-hover:scale-[1.06] ${current ? "" : "opacity-75 group-hover:opacity-100"}`
           } ${project.stale ? "grayscale" : ""}`}
         >
           <ProjectSquare project={project} size={SQUARE} />
@@ -248,10 +299,41 @@ export function ProjectIconMenu({
   )
 }
 
+/** A drag in flight. `toIndex` is derived from `deltaY` every move — see lib/railReorder.ts. */
+interface DragState {
+  id: string
+  fromIndex: number
+  toIndex: number
+  deltaY: number
+}
+
+/**
+ * A pointer-down that has not yet travelled far enough to BE a drag.
+ *
+ * The threshold is the whole reason this is separate state: a rail square is a link first, and
+ * starting a drag on contact would mean every click landed a reorder before it navigated.
+ */
+const DRAG_THRESHOLD_PX = 4
+
+/**
+ * A click fires on the element a drag ENDED over, after pointerup. This flag swallows exactly that
+ * one, and nothing later — a module-scoped stamp rather than state, so it survives the re-render the
+ * drop causes without adding one of its own.
+ */
+let lastDragEndedAt = 0
+function justDragged(): boolean {
+  return Date.now() - lastDragEndedAt < 250
+}
+
 export function ProjectRail() {
+  const queryClient = useQueryClient()
   const { data } = useQuery({ queryKey: ["projectsList"], queryFn: () => rpc.projectsList() })
   const current = projectSlug()
   const [adding, setAdding] = useState(false)
+  const [drag, setDrag] = useState<DragState | null>(null)
+  /** The order the operator is looking at, which leads the server for the whole round trip. */
+  const [optimistic, setOptimistic] = useState<ProjectCard[] | null>(null)
+  const bandRef = useRef<HTMLDivElement>(null)
   const pick = useMutation({
     mutationFn: () => rpc.projectPick({}),
     onSuccess: (result) => {
@@ -262,29 +344,180 @@ export function ProjectRail() {
     },
     onSettled: () => setAdding(false),
   })
+  const reorder = useMutation({
+    mutationFn: (ids: string[]) => rpc.projectsReorder({ ids }),
+    // Hold the operator's arrangement on screen until the refetch that CONFIRMS it has landed.
+    // Clearing on success instead would drop back to the previous server order for the frame between
+    // the mutation resolving and the query settling — a visible snap-back on every drop.
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["projectsList"] })
+      setOptimistic(null)
+    },
+    onError: () => setOptimistic(null), // the server order is the truth if we could not write ours
+  })
 
-  const projects = data ?? []
+  const projects = optimistic ?? data ?? []
+
+  /**
+   * Fade the band's bottom edge ONLY while something is actually below it.
+   *
+   * An unconditional mask dims the LAST square once you have scrolled to the end — which is the same
+   * artifact, at the other end, as the top fade that was mistaken for a shadow falling on the first
+   * icon. A fade means "there is more"; against the true end of the list it is just a dimmed square.
+   */
+  const [overflowing, setOverflowing] = useState(false)
+  useEffect(() => {
+    const band = bandRef.current
+    if (!band) return
+    const sync = () => setOverflowing(band.scrollTop + band.clientHeight < band.scrollHeight - 1)
+    sync()
+    band.addEventListener("scroll", sync, { passive: true })
+    // The list itself changes height as projects arrive, and the band changes with the window.
+    const observer = new ResizeObserver(sync)
+    observer.observe(band)
+    window.addEventListener("resize", sync)
+    return () => {
+      band.removeEventListener("scroll", sync)
+      observer.disconnect()
+      window.removeEventListener("resize", sync)
+    }
+  }, [projects.length])
+
+  const startDrag = useCallback((event: React.PointerEvent<HTMLAnchorElement>, index: number) => {
+    // Left button only, and never on a modified click — ⌘/ctrl-click opens a new tab and must not be
+    // hijacked into a reorder.
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+    const anchor = event.currentTarget
+    const startY = event.clientY
+    const list = projects
+    let started = false
+    let latest: DragState | null = null
+    let frame = 0
+
+    const apply = (clientY: number) => {
+      const band = bandRef.current
+      // Auto-scroll near the band's edges, and FOLD the scroll into the delta: without it, dragging
+      // to the top of a 29-project rail is impossible, because the slot you want is never on screen
+      // at the same time as the square you are holding.
+      let scrolled = 0
+      if (band) {
+        const bounds = band.getBoundingClientRect()
+        const velocity = edgeScrollVelocity(clientY, bounds)
+        if (velocity) {
+          const before = band.scrollTop
+          band.scrollTop += velocity
+          scrolled = band.scrollTop - before
+        }
+      }
+      scrollAccumulated += scrolled
+      const deltaY = clientY - startY + scrollAccumulated
+      latest = { id: list[index]!.id, fromIndex: index, toIndex: dropIndex(index, deltaY, list.length), deltaY }
+      setDrag(latest)
+    }
+
+    let scrollAccumulated = 0
+    const onMove = (moveEvent: PointerEvent) => {
+      if (!started) {
+        if (Math.abs(moveEvent.clientY - startY) < DRAG_THRESHOLD_PX) return
+        started = true
+        anchor.setPointerCapture(moveEvent.pointerId)
+      }
+      moveEvent.preventDefault()
+      const clientY = moveEvent.clientY
+      // Coalesce to one update per frame: the edge auto-scroll must also keep running while the
+      // pointer is HELD STILL inside the zone, which a move-driven loop alone would never do.
+      cancelAnimationFrame(frame)
+      const tick = () => {
+        apply(clientY)
+        if (bandRef.current && edgeScrollVelocity(clientY, bandRef.current.getBoundingClientRect())) {
+          frame = requestAnimationFrame(tick)
+        }
+      }
+      frame = requestAnimationFrame(tick)
+    }
+
+    const onUp = () => {
+      cancelAnimationFrame(frame)
+      window.removeEventListener("pointermove", onMove)
+      window.removeEventListener("pointerup", onUp)
+      window.removeEventListener("pointercancel", onUp)
+      setDrag(null)
+      if (!started || !latest) return
+      lastDragEndedAt = Date.now()
+      const next = moveItem(list, latest.fromIndex, latest.toIndex)
+      if (latest.fromIndex === latest.toIndex) return
+      setOptimistic(next)
+      reorder.mutate(next.map((project) => project.id))
+    }
+
+    window.addEventListener("pointermove", onMove, { passive: false })
+    window.addEventListener("pointerup", onUp)
+    window.addEventListener("pointercancel", onUp)
+  }, [projects, reorder])
+
+  /**
+   * The keyboard path, because a drag-only reorder is no reorder at all for anyone not using a mouse.
+   *
+   * Alt+Arrow rather than bare arrows: a bare ArrowUp on a focused link is how you SCROLL, and taking
+   * it would make the rail a trap to tab through.
+   */
+  const onKeyDown = useCallback((event: React.KeyboardEvent<HTMLAnchorElement>, index: number) => {
+    if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return
+    const to = index + (event.key === "ArrowUp" ? -1 : 1)
+    if (to < 0 || to >= projects.length) return
+    event.preventDefault()
+    const next = moveItem(projects, index, to)
+    setOptimistic(next)
+    reorder.mutate(next.map((project) => project.id))
+    // Focus follows the square, not the slot — otherwise a second press moves whatever landed here.
+    requestAnimationFrame(() => {
+      bandRef.current?.querySelectorAll("a")[to]?.focus()
+    })
+  }, [projects, reorder])
 
   return (
     <nav
       aria-label="Projects"
       className={`fixed inset-y-0 left-0 z-[60] flex flex-col items-center border-r border-border bg-panel/60 py-3 max-[800px]:hidden ${RAIL_WIDTH_CLASS}`}
     >
+      {/* A HOME GLYPH, not the Frizz mark. Two reasons, and the second is why it stopped being the
+          mark: this slot is a destination ("all projects"), and the wordmark said whose app you are
+          in — which the rail's own presence already says. And `favicon.svg` carries an feDropShadow
+          inside a 512 viewBox with 16px of bleed around a 480 tile, so at 26px it cast a soft shadow
+          DOWN onto the first project square. A stroke glyph paints only its own strokes. */}
       <Tooltip side="right" label="All projects">
-        <a href="/" aria-current={current ? undefined : "page"} className="shrink-0 rounded-lg outline-none focus-visible:ring-1 focus-visible:ring-fg/60">
-          <img src="/favicon.svg" width={26} height={26} alt="All projects" className="opacity-80 transition-opacity hover:opacity-100" />
+        <a
+          href="/"
+          aria-label="All projects"
+          aria-current={current ? undefined : "page"}
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted/70 outline-none transition-colors hover:bg-elevated hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
+        >
+          <House size={17} />
         </a>
       </Tooltip>
-      <hr className="my-3 w-6 shrink-0 border-0 border-t border-border" />
+      <hr className="my-2.5 w-6 shrink-0 border-0 border-t border-border" />
 
       {/* The scrolling band. `min-h-0` is what lets it actually scroll inside a flex column, and the
-          hidden scrollbar keeps a 56px column from spending 8px of itself on a track. */}
-      <div // The fade mask is the only thing that says "there is more": with 29 projects the band scrolls
-        // 1328px inside 773px, and a hard clip at the divider reads as the end of the list. 8px between
-        // squares mirrors what Discord runs at 48px and Slack at 36px; 6 read tight at 40.
-        className="frizz-rail-scroll flex w-full min-h-0 flex-1 flex-col items-center gap-2 overflow-y-auto">
-        {projects.map((project) => (
-          <RailLink key={project.id} project={project} current={project.slug === current} />
+          hidden scrollbar keeps a 57px column from spending 8px of itself on a track (the bottom fade
+          in styles.css says "there is more" in its place). 8px between squares mirrors what Discord
+          runs at 48px and Slack at 36px; 6 read tight at 40.
+          `overflow-x` stays visible-ish via the mask rather than a clip so the held square's shadow
+          and the current-page pill are not shaved off at the column's edge. */}
+      <div
+        ref={bandRef}
+        data-overflowing={overflowing || undefined}
+        className="frizz-rail-scroll flex w-full min-h-0 flex-1 flex-col items-center gap-2 overflow-y-auto"
+      >
+        {projects.map((project, index) => (
+          <RailLink
+            key={project.id}
+            project={project}
+            index={index}
+            current={project.slug === current}
+            drag={drag}
+            onPointerDown={startDrag}
+            onKeyDown={onKeyDown}
+          />
         ))}
       </div>
 
@@ -294,7 +527,11 @@ export function ProjectRail() {
           disabled={adding}
           onClick={() => { setAdding(true); pick.mutate() }}
           aria-label="Add a project"
-          className="mt-3 flex h-10 w-10 shrink-0 items-center justify-center rounded-[30%] border border-dashed border-border-strong text-muted outline-none transition-colors hover:border-accent hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-50"
+          // A DOTTED squircle, matching the project squares' own `rounded-[30%]` so it reads as an empty
+          // slot in the same list rather than a control bolted under it. Dotted and not dashed: at 40px
+          // a dashed border resolves into four long strokes that read as a frame, where dots read as
+          // "nothing here yet" — which is what it is.
+          className="mt-3 flex h-10 w-10 shrink-0 items-center justify-center rounded-[30%] border-[1.5px] border-dotted border-border-strong text-muted/80 outline-none transition-colors hover:border-accent hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-50"
         >
           <Plus size={16} />
         </button>

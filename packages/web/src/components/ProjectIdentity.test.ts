@@ -26,18 +26,18 @@ test("cold project loading reserves a quiet identity measure without guessing fr
   assert.doesNotMatch(html, /animate-/)
 })
 
-test("the first verified board identity renders the repo, with a way back to the grid", () => {
+test("the first verified board identity renders the full owner/repo", () => {
   const html = render("openai/frizz", "open")
 
   assert.match(html, /data-project-identity-state="verified"/)
   assert.match(html, /aria-label="Project: openai\/frizz; connected"/)
   assert.match(html, /<span class="font-semibold text-fg\/90">frizz<\/span>/)
-  // The home crumb is the reason the owner went: `home / owner / repo` had only two segments you
-  // could actually go to, so the owner became chrome beside a real link.
-  assert.match(html, /href="\/"/)
-  assert.match(html, /aria-label="All projects"/)
-  // It survives in the tooltip and the accessible label, so the identity is still discoverable.
-  assert.doesNotMatch(html, />openai</)
+  // The OWNER is back. A home crumb briefly stood to the left of this line and pushed it out, on the
+  // grounds that `home / owner / repo` had only two segments you could actually go to. The project
+  // RAIL is the way back to the grid now, so the crumb is gone from here and the owner has its place
+  // again — it is what tells two same-named repos apart on a machine serving many.
+  assert.match(html, /<span class="text-muted">openai<\/span>/)
+  assert.doesNotMatch(html, /aria-label="All projects"/)
   assert.match(html, /title="openai\/frizz"/)
   assert.doesNotMatch(html, /identity-placeholder/)
 })

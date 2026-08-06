@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
-import { backfillRegistry, deriveSlug, findBySlug, forgetProject, listProjects, readRegistry, registerProject, renameProject } from "./project-registry.ts"
+import { backfillRegistry, deriveSlug, findBySlug, forgetProject, listProjects, readRegistry, registerProject, renameProject, reorderProjects } from "./project-registry.ts"
 
 const A = "029a30af-f126-40e3-b04c-d80e74e3e090"
 const B = "50577e5e-802f-4567-bd0e-cf7cbf3d2ed5"
@@ -248,6 +248,58 @@ test("backfill recovers projects from existing state dirs, and refuses to guess"
     // Idempotent: a second pass adds nothing and disturbs nothing.
     assert.equal(backfillRegistry(home, (root) => claims[root]), 0)
     assert.deepEqual(listProjects(home).map((p) => p.slug).sort(), ["alpha", "beta"])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("recency is the default order, and the operator's arrangement replaces it", () => {
+  const home = sandbox()
+  try {
+    const ids = [A, B, "7c1a0000-0000-4000-8000-000000000003"]
+    ids.forEach((id, index) => {
+      registerProject({ dir: project(home, `code/p${index}`, id), id, now: () => new Date(2026, 0, index + 1) }, home)
+    })
+    // Newest first while nobody has arranged anything.
+    assert.deepEqual(listProjects(home).map((p) => p.id), [ids[2], ids[1], ids[0]])
+
+    reorderProjects([ids[0], ids[2], ids[1]], home)
+    assert.deepEqual(listProjects(home).map((p) => p.id), [ids[0], ids[2], ids[1]])
+    // EVERY project is pinned, not only the one that moved — a half-ordered list falls back to
+    // recency for the rest, and then the tail keeps rearranging itself under the operator.
+    assert.deepEqual(readRegistry(home).projects.map((p) => p.order).sort(), [0, 1, 2])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("a project registered after an arrangement lands at the end rather than jumping to the top", () => {
+  const home = sandbox()
+  try {
+    registerProject({ dir: project(home, "code/a", A), id: A, now: () => new Date(2026, 0, 1) }, home)
+    registerProject({ dir: project(home, "code/b", B), id: B, now: () => new Date(2026, 0, 2) }, home)
+    reorderProjects([A, B], home)
+
+    const C = "7c1a0000-0000-4000-8000-00000000000c"
+    registerProject({ dir: project(home, "code/c", C), id: C, now: () => new Date(2026, 0, 9) }, home)
+    // Newest by a mile, and still last: the operator arranged this list and a newcomer does not get
+    // to displace the top of it.
+    assert.deepEqual(listProjects(home).map((p) => p.id), [A, B, C])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("reordering a subset keeps the projects it did not name, after the ones it did", () => {
+  const home = sandbox()
+  try {
+    const ids = [A, B, "7c1a0000-0000-4000-8000-000000000003"]
+    ids.forEach((id, index) => {
+      registerProject({ dir: project(home, `code/p${index}`, id), id, now: () => new Date(2026, 0, index + 1) }, home)
+    })
+    // A client that was mid-drag when a third project appeared sends only the two it knew about.
+    reorderProjects([ids[1], ids[0]], home)
+    assert.deepEqual(listProjects(home).map((p) => p.id), [ids[1], ids[0], ids[2]])
   } finally {
     rmSync(home, { recursive: true, force: true })
   }

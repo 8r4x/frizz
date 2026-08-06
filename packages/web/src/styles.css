@@ -1080,14 +1080,18 @@ a[href] {
    them, which costs nothing, and a JS-driven conditional mask would repaint on every scroll frame. */
 .frizz-rail-scroll {
   scrollbar-width: none;
+  /* BOTTOM ONLY. A symmetric fade dimmed the top of the FIRST square permanently — it sits flush
+     against the band's top edge — and a gradient darkening the top of a tile reads as a shadow
+     falling on it, which is exactly what it was mistaken for. Nothing is needed up there anyway: the
+     divider rule above already says where the list begins, so a hard clip there reads as an edge
+     rather than as truncation. The bottom genuinely runs under the add button and still fades. */
   --rail-fade: 14px;
-  mask-image: linear-gradient(
-    to bottom,
-    transparent 0,
-    #000 var(--rail-fade),
-    #000 calc(100% - var(--rail-fade)),
-    transparent 100%
-  );
+}
+/* Only while there is genuinely more below. Against the true end of the list a fade is not a hint,
+   it is a dimmed square — the same artifact, at the other end, as the top fade that read as a shadow
+   falling on the first icon. ProjectRail sets the attribute from the band's own scroll geometry. */
+.frizz-rail-scroll[data-overflowing] {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - var(--rail-fade)), transparent 100%);
 }
 .frizz-rail-scroll::-webkit-scrollbar {
   display: none;

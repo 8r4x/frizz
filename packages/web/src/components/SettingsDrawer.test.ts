@@ -60,7 +60,11 @@ test("Prompts uses one centered divider without a duplicate section rule", () =>
 })
 
 test("help tooltip uses custom accessible, touch-capable paragraph layout", () => {
-  assert.match(tooltipSource, /<RT\.Root open=\{open\} onOpenChange=\{setOpen\}>/)
+  // `&& !disabled` is the project rail's drag suppression: the pointer is necessarily inside the
+  // square it is dragging, so a delayDuration-0 tooltip would open on grab and chase it down the
+  // rail. It forces the tooltip SHUT without unmounting the trigger, which mid-drag would destroy
+  // the element holding pointer capture. Hover behaviour is unchanged whenever nothing is dragging.
+  assert.match(tooltipSource, /<RT\.Root open=\{open && !disabled\} onOpenChange=\{setOpen\}>/)
   assert.match(tooltipSource, /clickable = false/)
   assert.match(tooltipSource, /cloneElement\(clickableChild, \{ "aria-describedby": contentId \}\)/)
   assert.match(tooltipSource, /onClick=\{\(\) => setOpen\(\(wasOpen\) => !wasOpen\)\}/)
