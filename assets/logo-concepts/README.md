@@ -4,6 +4,7 @@ Three sheets of directions for the mark after the `fray` → `frizz` rename, eac
 
 | Sheet | Open | What it covers |
 | --- | --- | --- |
+| Parametric grid | [`frizz-grid.html`](frizz-grid.html) | 144 variants of one construction, swept across blob size, tilt, axis, distance, wrap, origin side and tail length. Every one is exactly 180° rotationally symmetric. |
 | The cursive f | [`frizz-signature-f.html`](frizz-signature-f.html) | The written signature f from [`reference/reference-brief.png`](reference/reference-brief.png) — two loops crossing at a waist, with a crossbar. **Every mark is exactly 180° rotationally symmetric, and measured.** Eight weights and treatments. |
 | The hooked f | [`frizz-cursive-f.html`](frizz-cursive-f.html) | Eight lowercase `f`s built from hooks rather than loops — the favicon-viable family. |
 | Icon concepts | [`frizz-logo-concepts.html`](frizz-logo-concepts.html) | The original fifteen non-letterform directions: fan, curl, spark, lanes, knot and the rest. |
@@ -11,6 +12,8 @@ Three sheets of directions for the mark after the `fray` → `frizz` rename, eac
 ## Regenerating
 
 ```sh
+nub build-grid.mjs        # the parametric sweep        -> out-grid/
+nub artifact-grid.mjs     # out-grid/ -> frizz-grid.html
 nub build.mjs             # the fifteen icon concepts  -> out/
 nub build-cursive-f.mjs   # the hooked f family        -> out-f/
 nub build-signature-f.mjs # the written signature f    -> out-sig/
