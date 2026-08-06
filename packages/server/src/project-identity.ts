@@ -539,3 +539,41 @@ export function resolveGitProjectIdentity(dir: string, home = homedir()): GitPro
     release()
   }
 }
+
+// Parse "owner/repo" out of a git remote URL. Handles the two forms git prints:
+//   git@github.com:owner/repo.git   (scp-like ssh)
+//   https://github.com/owner/repo(.git)   (https, optional .git, optional trailing slash)
+// Also tolerates ssh://git@host/owner/repo.git. Returns null when it can't find an owner/repo pair.
+export function parseRepoLabel(remoteUrl: string): string | null {
+  const url = remoteUrl.trim()
+  if (!url) return null
+  // scp-like: [user@]host:owner/repo(.git)
+  const scp = url.match(/^[^/@]+@[^:/]+:(.+?)(?:\.git)?\/?$/)
+  if (scp) return normalizeOwnerRepo(scp[1])
+  // url form: scheme://[user@]host[:port]/owner/repo(.git)
+  const m = url.match(/^[a-z][a-z0-9+.-]*:\/\/[^/]+\/(.+?)(?:\.git)?\/?$/i)
+  if (m) return normalizeOwnerRepo(m[1])
+  return null
+}
+
+// Keep only the final two path segments (owner/repo); some hosts nest groups (gitlab) — the last
+// two are the ones that read as "owner/repo". Reject if we can't get two non-empty segments.
+function normalizeOwnerRepo(path: string): string | null {
+  const parts = path.split("/").filter(Boolean)
+  if (parts.length < 2) return null
+  return parts.slice(-2).join("/")
+}
+
+// The origin remote's "owner/repo", or null when there's no remote (fresh/scratch repos have none).
+export function resolveProjectLabel(dir: string): string | null {
+  try {
+    const url = execFileSync("git", ["remote", "get-url", "origin"], {
+      cwd: dir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim()
+    return parseRepoLabel(url)
+  } catch {
+    return null // no origin remote, or not a git repo
+  }
+}

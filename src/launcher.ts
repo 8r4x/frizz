@@ -33,7 +33,7 @@ import { readBootProgress } from "@frizz/server/boot-progress";
 import { frizzPaths, projectStateDir } from "@frizz/server/frizz-paths";
 import { discoverProjectRoot, ensureProjectIdFile, isNotAGitWorktree } from "@frizz/server/project-root";
 import { defaultLogRoot, latestLogPath } from "@frizz/server/logging";
-import { DEFAULT_PORT, FRIZZ_ROUTE_PREFIX } from "@frizz/shared";
+import { DEFAULT_PORT, fallbackPort, FRIZZ_ROUTE_PREFIX } from "@frizz/shared";
 
 export { acquireGlobalLaunchLock, pidIsAlive };
 
@@ -108,6 +108,14 @@ export interface ExpectedFrizzHealth {
   projectId: string;
   projectDir: string;
   ownerProof?: string;
+  /**
+   * Ask a SPECIFIC project's health on a shared server: `/_frizz/nub/health`.
+   *
+   * One Frizz serves N projects, so "is Frizz on this port" and "is Frizz serving MY project on this
+   * port" stopped being the same question. Probing the slug answers the second one, and — because
+   * the route activates a project on first use — asking is also how a project gets opened.
+   */
+  slug?: string;
 }
 
 export const PORT_SCAN_COUNT = 100;
@@ -609,7 +617,8 @@ export async function probeFrizz(
   const timeout = setTimeout(() => controller.abort(), 1000);
   timeout.unref?.();
   try {
-    const response = await fetcher(`http://127.0.0.1:${port}${FRIZZ_ROUTE_PREFIX}/health`, {
+    const scope = expected.slug ? `${FRIZZ_ROUTE_PREFIX}/${expected.slug}` : FRIZZ_ROUTE_PREFIX;
+    const response = await fetcher(`http://127.0.0.1:${port}${scope}/health`, {
       signal: controller.signal,
     });
     if (!response.ok) return null;
@@ -681,49 +690,87 @@ export function expectedOwnerHealth(
  * another interface, so probing 127.0.0.1 and then binding 0.0.0.0 hands the launcher a port that
  * fails at listen() time — after it has already reserved it machine-wide.
  */
+export async function probeBindPort(
+  port: number,
+  host: string = LOOPBACK_BIND_HOST
+): Promise<string | undefined> {
+  return new Promise<string | undefined>((resolveBind) => {
+    const server = createServer();
+    server.unref();
+    server.once("error", (error: NodeJS.ErrnoException) =>
+      resolveBind(error.code ?? "EADDRINUSE")
+    );
+    server.listen(port, host, () => server.close(() => resolveBind(undefined)));
+  });
+}
+
 export async function canBindPort(
   port: number,
   host: string = LOOPBACK_BIND_HOST
 ): Promise<boolean> {
-  const bind = (candidate: number) =>
-    new Promise<boolean>((resolveBind) => {
-      const server = createServer();
-      server.unref();
-      server.once("error", () => resolveBind(false));
-      server.listen(candidate, host, () => server.close(() => resolveBind(true)));
-    });
-  return bind(port);
+  return (await probeBindPort(port, host)) === undefined;
+}
+
+/**
+ * The two bind failures need different advice, and a boolean cannot tell them apart.
+ *
+ * EADDRINUSE means something is LISTENING and the user can go find it. EACCES means an invisible
+ * reservation — on Windows `netstat` shows the port free and bind() still fails, and SO_REUSEADDR
+ * does not rescue you — so "already in use" sends people hunting a process that does not exist.
+ */
+export function portUnavailableMessage(port: number, code?: string): string {
+  if (code === "EACCES" || code === "EPERM")
+    return `port ${port} is reserved by the system, not held by a process (bind returned ${code}); on Windows list the reservations with: netsh int ipv4 show excludedportrange protocol=tcp`;
+  return `port ${port} is already in use`;
 }
 
 export async function choosePort(
   explicit: number | undefined,
   preferred: number | undefined,
-  available = canBindPort
+  available = canBindPort,
+  base = DEFAULT_PORT
 ): Promise<number> {
   if (explicit !== undefined) {
     if (!(await available(explicit)))
-      throw new Error(`port ${explicit} is already in use`);
+      throw new Error(
+        portUnavailableMessage(explicit, await probeBindPort(explicit))
+      );
     return explicit;
   }
-  for (const port of portCandidates(preferred)) {
+  for (const port of portCandidates(preferred, base)) {
     if (await available(port)) return port;
   }
-  throw new Error(noFreePortMessage());
+  throw new Error(noFreePortMessage(base));
 }
 
-function portCandidates(preferred: number | undefined): number[] {
+/**
+ * The well-known port, then a JUMP, then a scan from where it landed.
+ *
+ * A `+1` scan does not work. Windows reservations come in contiguous 100-port blocks and the
+ * reported unions contain unbroken runs of 2,400 ports, so scanning PORT_SCAN_COUNT candidates up
+ * from the primary burns every one of them INSIDE THE SAME RESERVATION and then reports "no free
+ * port" while tens of thousands are free. Jumping first puts the scan in a band the reservations do
+ * not reach.
+ *
+ * Degrade, do not refuse: Vite and Jupyter both move to another port, Docker fails hard, and a local
+ * tool that will not start because something unrelated holds a port is the worse of the two.
+ */
+function portCandidates(
+  preferred: number | undefined,
+  base = DEFAULT_PORT
+): number[] {
+  const fallback = fallbackPort(base);
   return [
     preferred,
-    ...Array.from(
-      { length: PORT_SCAN_COUNT },
-      (_, index) => DEFAULT_PORT + index
-    ),
+    base,
+    ...Array.from({ length: PORT_SCAN_COUNT }, (_, index) => fallback + index),
   ].filter((port): port is number => !!port && port <= 65535);
 }
 
-function noFreePortMessage(): string {
-  return `no free Frizz development port found in ${DEFAULT_PORT}-${
-    DEFAULT_PORT + PORT_SCAN_COUNT - 1
+function noFreePortMessage(base = DEFAULT_PORT): string {
+  const fallback = fallbackPort(base);
+  return `no free Frizz port: ${base} is taken, and so is every port in ${fallback}-${
+    fallback + PORT_SCAN_COUNT - 1
   }`;
 }
 
@@ -750,6 +797,8 @@ export async function allocatePort(
     reserve?: (port: number) => (() => void) | undefined;
     /** Address the caller will actually bind; the probe has to match it. */
     host?: string;
+    /** The well-known port to try first. `frizz-dev` has its own so it never fights the singleton. */
+    base?: number;
   } = {}
 ): Promise<PortAllocation> {
   const host = options.host ?? LOOPBACK_BIND_HOST;
@@ -764,14 +813,17 @@ export async function allocatePort(
   };
   if (explicit !== undefined) {
     const allocated = await claim(explicit);
-    if (!allocated) throw new Error(`port ${explicit} is already in use`);
+    if (!allocated)
+      throw new Error(
+        portUnavailableMessage(explicit, await probeBindPort(explicit, host))
+      );
     return allocated;
   }
-  for (const port of portCandidates(preferred)) {
+  for (const port of portCandidates(preferred, options.base)) {
     const allocated = await claim(port);
     if (allocated) return allocated;
   }
-  throw new Error(noFreePortMessage());
+  throw new Error(noFreePortMessage(options.base));
 }
 
 export interface WaitForWorkspaceOptions {
