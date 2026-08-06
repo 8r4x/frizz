@@ -2226,6 +2226,19 @@ export const ProjectCard = z.object({
 })
 export type ProjectCard = z.infer<typeof ProjectCard>
 
+/**
+ * What the machine's folder picker came back with.
+ *
+ * `cancelled` is not an error — it is the commonest outcome after a mis-click, and rendering it as
+ * one would put a red message on screen every time someone changed their mind.
+ */
+export const DirectoryPickResult = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("picked"), project: ProjectCard }),
+  z.object({ kind: z.literal("cancelled") }),
+  z.object({ kind: z.literal("unavailable"), reason: z.string() }),
+])
+export type DirectoryPickResult = z.infer<typeof DirectoryPickResult>
+
 export const FRIZZ_ROUTE_PREFIX = "/_frizz"
 export function frizzRoute(path: string): string {
   return `${FRIZZ_ROUTE_PREFIX}${path.startsWith("/") ? path : `/${path}`}`

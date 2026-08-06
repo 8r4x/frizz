@@ -77,6 +77,7 @@ import {
   type ThreadView,
   ThreadSlug,
   isDirectSubAgent,
+  DirectoryPickResult,
 } from "@frizz/shared"
 import { needsFreshProcessForLimit, type AppContext } from "./context.ts"
 import { appServerTurnStalled } from "./board.ts"
@@ -120,6 +121,7 @@ import { homedir } from "node:os"
 import { discoverProjectRoot, ensureProjectIdFile, writeProjectIdFile } from "./project-root.ts"
 import { resolveProjectLabel } from "./project-identity.ts"
 import { registerProject } from "./project-registry.ts"
+import { pickDirectory } from "./directory-picker.ts"
 
 const SlugInput = z.object({ slug: ThreadSlug }).strict()
 
@@ -471,6 +473,48 @@ export async function stopAndForgetRegisteredRuntime(
 
 // The typed RPC surface. Every handler is thin: state mutations go through frizz scripts
 // (thread files) or tmux (agents), then rebuild the board so a fresh snapshot fans out on SSE.
+/**
+ * Register a folder as a project: the one implementation behind both the picker and a typed path.
+ *
+ * Everything it does is what the CLI already does on every launch — walk up to the project root,
+ * mint or adopt `.frizz/.id`, write the index. It dispatches nothing, which is what makes it a
+ * strictly smaller authority than running `frizz` in that directory.
+ */
+function addProjectAtPath(input: string): ProjectCard {
+  const typed = input.trim()
+  if (!typed) throw new Error("Enter a folder path.")
+  // `~` is what a person types; it is not a path any filesystem call understands.
+  const expanded = typed === "~" || typed.startsWith("~/") ? join(homedir(), typed.slice(1)) : typed
+  const absolute = resolve(expanded)
+  let stats: Stats
+  try {
+    stats = statSync(absolute)
+  } catch {
+    throw new Error(`No folder at ${absolute}`)
+  }
+  if (!stats.isDirectory()) throw new Error(`That is a file, not a folder: ${absolute}`)
+  // Walk up exactly as the CLI does, so adding ~/repo/packages/web adds ~/repo.
+  const root = discoverProjectRoot(absolute)
+  const id = ensureProjectIdFile(root)
+  const remoteOwner = resolveProjectLabel(root)?.split("/")[0]
+  let registered = registerProject({ dir: root, id, remoteOwner })
+  if (registered.action === "duplicate") {
+    // A copied checkout brought another project's `.frizz/.id` with it; give it one of its own
+    // rather than letting it adopt the original's threads.
+    registered = registerProject({ dir: root, id: writeProjectIdFile(root, randomUUID()), remoteOwner })
+  }
+  if (!registered.entry) throw new Error("Could not register that folder.")
+  const entry = registered.entry
+  return {
+    id: entry.id,
+    slug: entry.slug,
+    name: entry.name ?? basename(entry.path) ?? entry.path,
+    path: entry.path,
+    lastOpenedAt: entry.lastOpenedAt,
+    stale: false,
+  }
+}
+
 export function createRouter(ctx: AppContext) {
   const frizzDir = join(ctx.project.dir, ".frizz")
   // Roots for the file-OPEN action + the inline-code path classifier (see openableFileRoots): shared so
@@ -2413,6 +2457,23 @@ export function createRouter(ctx: AppContext) {
     }),
 
     /**
+     * Open the machine's own folder picker, and add whatever comes back.
+     *
+     * The SERVER opens it. That is not a shortcut: the browser's File System Access API deliberately
+     * withholds the absolute path, and a project IS a path (see directory-picker.ts). One round trip
+     * rather than pick-then-add, because someone who has chosen a folder has already said yes.
+     */
+    projectPick: mutation({
+      input: z.object({}),
+      output: DirectoryPickResult,
+      handler: async () => {
+        const picked = await pickDirectory()
+        if (picked.kind !== "picked") return picked
+        return { kind: "picked" as const, project: addProjectAtPath(picked.path) }
+      },
+    }),
+
+    /**
      * Register a directory as a project, from the grid's phantom card.
      *
      * The same authority as running `frizz` in that directory, and strictly less: this registers and
@@ -2422,40 +2483,7 @@ export function createRouter(ctx: AppContext) {
     projectAdd: mutation({
       input: z.object({ path: z.string().min(1) }),
       output: ProjectCard,
-      handler: async ({ input }) => {
-        const typed = input.path.trim()
-        if (!typed) throw new Error("Enter a folder path.")
-        // `~` is what a person types; it is not a path any filesystem call understands.
-        const expanded = typed === "~" || typed.startsWith("~/") ? join(homedir(), typed.slice(1)) : typed
-        const absolute = resolve(expanded)
-        let stats: Stats
-        try {
-          stats = statSync(absolute)
-        } catch {
-          throw new Error(`No folder at ${absolute}`)
-        }
-        if (!stats.isDirectory()) throw new Error(`That is a file, not a folder: ${absolute}`)
-        // Walk up exactly as the CLI does, so adding ~/repo/packages/web adds ~/repo.
-        const root = discoverProjectRoot(absolute)
-        const id = ensureProjectIdFile(root)
-        const remoteOwner = resolveProjectLabel(root)?.split("/")[0]
-        let registered = registerProject({ dir: root, id, remoteOwner })
-        if (registered.action === "duplicate") {
-          // A copied checkout brought another project's `.frizz/.id` with it; give it one of its own
-          // rather than letting it adopt the original's threads.
-          registered = registerProject({ dir: root, id: writeProjectIdFile(root, randomUUID()), remoteOwner })
-        }
-        if (!registered.entry) throw new Error("Could not register that folder.")
-        const entry = registered.entry
-        return {
-          id: entry.id,
-          slug: entry.slug,
-          name: entry.name ?? basename(entry.path) ?? entry.path,
-          path: entry.path,
-          lastOpenedAt: entry.lastOpenedAt,
-          stale: false,
-        }
-      },
+      handler: async ({ input }) => addProjectAtPath(input.path),
     }),
 
     settingsGet: query({

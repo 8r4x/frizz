@@ -1,0 +1,764 @@
+<!doctype html>
+<html lang="en" data-font="sans">
+<head>
+<meta charset="utf-8" />
+<title>Frizz — project selector mockups</title>
+<style>
+  :root {
+    --bg:#0d0e10; --panel:#131519; --panel-2:#181b20; --elevated:#1c1f25;
+    --border:#26282d; --border-strong:#33363c; --fg:#e6e7e9; --muted:#8b8f96; --accent:#e8b923;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:#08090a; color:var(--fg);
+    font-family:system-ui,-apple-system,"Segoe UI",sans-serif; font-size:13px;
+    padding:32px; display:flex; flex-direction:column; gap:34px;
+  }
+  h1 { font-size:19px; font-weight:600; margin:0; letter-spacing:-0.01em; }
+  .panel-label { font-size:12px; color:var(--muted); margin-bottom:9px; display:flex; align-items:center; gap:8px; }
+  .panel-id { display:inline-block; min-width:18px; height:18px; line-height:18px; text-align:center;
+    border-radius:4px; background:var(--elevated); color:var(--fg); font-size:10.5px; font-weight:600; }
+  .panel-note { color:#5f636a; font-size:11.5px; }
+  .frame { border:1px solid var(--border); border-radius:12px; background:var(--bg); overflow:hidden; }
+  .page { padding:52px 40px 60px; display:flex; flex-direction:column; align-items:center; }
+  .hero { display:flex; flex-direction:column; align-items:center; gap:10px; margin-bottom:30px; text-align:center; }
+  .mark { display:block; border-radius:13px; }
+  .sub { margin:0; color:var(--muted); font-size:13px; max-width:420px; line-height:1.5; }
+  .grid { width:100%; max-width:720px; display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .grid-empty { max-width:360px; grid-template-columns:1fr; }
+  .card { display:flex; flex-direction:column; gap:4px; align-items:flex-start; text-align:left;
+    border:1px solid var(--border); background:var(--panel); border-radius:10px; padding:13px 16px;
+    text-decoration:none; color:inherit; font:inherit; cursor:pointer; }
+  .card-head { display:flex; align-items:baseline; gap:8px; min-width:0; width:100%; }
+  .card-name { font-size:13px; font-weight:500; color:var(--fg); }
+  .card-slug { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; color:#6f747b; }
+  .card-path { font-size:11px; color:var(--muted); }
+  .card-meta { font-size:11px; color:#6f747b; }
+  .phantom { align-items:center; justify-content:center; gap:6px; border-style:dashed;
+    border-color:var(--border-strong); background:transparent; color:var(--muted); min-height:74px; }
+  .phantom:hover { border-color:var(--accent); color:var(--fg); }
+  .plus { font-size:17px; line-height:1; color:#6f747b; }
+  .phantom-label { font-size:12.5px; }
+  .phantom-hero { min-height:118px; }
+  .phantom-sub { font-size:11px; color:#5f636a; }
+  .cli { margin-top:22px; font-size:11.5px; color:#5f636a; text-align:center; }
+  .cli code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--muted);
+    background:var(--panel); border:1px solid var(--border); border-radius:5px; padding:1.5px 6px; }
+  /* the dialog panel */
+  .dialog-wrap { position:relative; padding:52px 40px; display:flex; justify-content:center; background:var(--bg); }
+  .scrim { position:absolute; inset:0; background:rgba(0,0,0,.42); backdrop-filter:blur(3px); }
+  .dialog { position:relative; width:440px; border:1px solid var(--border); background:var(--panel);
+    border-radius:12px; padding:19px; box-shadow:0 24px 60px rgba(0,0,0,.55); }
+  .dialog h2 { margin:0 0 4px; font-size:14px; font-weight:500; }
+  .dialog p { margin:0 0 14px; font-size:12.5px; color:var(--muted); line-height:1.5; }
+  .field { width:100%; background:var(--bg); border:1px solid var(--border-strong); border-radius:7px;
+    padding:8px 10px; color:var(--fg); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; }
+  .field.err { border-color:#b4453f; }
+  .err-msg { margin:7px 0 0; font-size:11.5px; color:#d9736c; }
+  .row { display:flex; justify-content:flex-end; gap:8px; margin-top:15px; }
+  .btn { border:1px solid var(--border-strong); background:var(--elevated); color:var(--fg);
+    border-radius:7px; padding:6px 13px; font-size:12.5px; cursor:pointer; }
+  .btn-primary { background:var(--accent); border-color:var(--accent); color:#1b1500; font-weight:500; }
+</style>
+</head>
+<body>
+
+
+  <section class="panel">
+    <div class="panel-label"><span class="panel-id">A</span> First run — nothing registered yet<span class="panel-note">the only state with no cards; the phantom IS the page</span></div>
+    <div class="frame">
+      <div class="page">
+        <div class="hero">
+          <svg class="mark" width="56" height="56" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <clipPath id="tile-1">
+      <rect x="16" y="16" width="480" height="480" rx="116"/>
+    </clipPath>
+    <clipPath id="bundle-clip-1">
+      <path d="M202 524C204 491 211 463 205 433C200 403 203 376 214 350C237 342 267 326 293 309C303 334 308 376 303 407C298 438 307 475 310 524Z"/>
+    </clipPath>
+    <linearGradient id="background-1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#191a20"/>
+      <stop offset="1" stop-color="#0d0e10"/>
+    </linearGradient>
+    <radialGradient id="glow-1" cx="0.5" cy="0.44" r="0.5">
+      <stop offset="0" stop-color="#f0bd2f" stop-opacity="0.13"/>
+      <stop offset="1" stop-color="#f0bd2f" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="strand-left-1" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffe078"/>
+      <stop offset="0.55" stop-color="#f2c13f"/>
+      <stop offset="1" stop-color="#ca9016"/>
+    </linearGradient>
+    <linearGradient id="strand-middle-1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffe487"/>
+      <stop offset="0.58" stop-color="#f4c747"/>
+      <stop offset="1" stop-color="#d39a1b"/>
+    </linearGradient>
+    <linearGradient id="strand-right-1" x1="1" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd45e"/>
+      <stop offset="0.58" stop-color="#eeb72f"/>
+      <stop offset="1" stop-color="#bf8110"/>
+    </linearGradient>
+    <linearGradient id="bundle-1" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8cf50"/>
+      <stop offset="0.48" stop-color="#e6aa20"/>
+      <stop offset="1" stop-color="#bd790c"/>
+    </linearGradient>
+    <linearGradient id="wrap-1" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffe17a"/>
+      <stop offset="0.52" stop-color="#f3c444"/>
+      <stop offset="1" stop-color="#d29215"/>
+    </linearGradient>
+    <filter id="soft-shadow-1" x="-30%" y="-20%" width="160%" height="150%">
+      <feDropShadow dx="0" dy="5" stdDeviation="6" flood-color="#000" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+
+  <rect id="icon-background" x="16" y="16" width="480" height="480" rx="116" fill="url(#background-1)"/>
+  <rect id="icon-border" x="16.5" y="16.5" width="479" height="479" rx="115.5" fill="none" stroke="#2b2e35"/>
+  <circle id="icon-glow" cx="256" cy="228" r="205" fill="url(#glow-1)"/>
+
+  <g id="icon-mark" clip-path="url(#tile-1)" filter="url(#soft-shadow-1)">
+    <!-- Five loose fibers. Every root extends well into the intact bundle, so no
+         strand can read as a detached accent when the icon is downsampled. -->
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M236 378C230 342 214 311 196 284C180 260 171 239 173 220C174 213 177 208 182 204" stroke="url(#strand-left-1)" stroke-width="19"/>
+      <path d="M247 369C250 323 241 277 229 231C220 198 214 171 213 151" stroke="url(#strand-left-1)" stroke-width="16"/>
+      <path d="M257 363C256 329 259 294 263 262C267 231 268 207 266 188" stroke="url(#strand-middle-1)" stroke-width="17"/>
+      <path d="M269 369C276 320 289 274 301 232C312 194 316 160 313 134" stroke="url(#strand-right-1)" stroke-width="16"/>
+      <path d="M280 378C300 344 321 315 337 289C353 264 360 241 356 221C355 214 352 209 348 205" stroke="url(#strand-right-1)" stroke-width="19"/>
+    </g>
+
+    <!-- The intact rope has a gentle alternating silhouette and a few broad,
+         curved wraps. Broad wraps survive at favicon scale without becoming a
+         striped pole. -->
+    <path d="M202 524C204 491 211 463 205 433C200 403 203 376 214 350C237 342 267 326 293 309C303 334 308 376 303 407C298 438 307 475 310 524Z" fill="url(#bundle-1)"/>
+    <g clip-path="url(#bundle-clip-1)">
+      <path d="M179 526C219 506 267 479 327 433L329 472C278 510 233 534 188 550Z" fill="url(#wrap-1)"/>
+      <path d="M177 445C219 428 267 401 321 359L324 398C275 435 229 460 183 477Z" fill="url(#wrap-1)"/>
+      <path d="M184 367C226 351 270 326 311 295L315 333C275 365 232 388 190 402Z" fill="url(#wrap-1)"/>
+      <g fill="none" stroke-linecap="round">
+        <path d="M181 526C224 507 273 477 329 435" stroke="#8f5809" stroke-opacity="0.52" stroke-width="7"/>
+        <path d="M180 445C223 427 271 398 323 359" stroke="#8f5809" stroke-opacity="0.52" stroke-width="7"/>
+        <path d="M186 367C228 350 271 325 313 294" stroke="#8f5809" stroke-opacity="0.52" stroke-width="7"/>
+        <path d="M226 532C224 481 224 431 230 383C233 358 239 340 248 329" stroke="#fff0a4" stroke-opacity="0.2" stroke-width="5"/>
+      </g>
+    </g>
+  </g>
+</svg>
+
+          <h1>Welcome to Frizz</h1>
+          <p class="sub">A project is a folder on this machine. Frizz keeps one board of threads per project, and serves them all from here.</p>
+        </div>
+        <div class="grid grid-empty">
+      <button class="card phantom phantom-hero">
+        <span class="plus">+</span>
+        <span class="phantom-label">Add a project</span>
+        <span class="phantom-sub">Point Frizz at a folder on this machine</span>
+      </button></div>
+      </div><div style="margin:-38px 0 0;padding:0 40px 34px;"><p class="cli">Or run <code>frizz</code> inside any folder — it registers itself and opens.</p></div></div>
+  </section>
+
+
+  <section class="panel">
+    <div class="panel-label"><span class="panel-id">B</span> First run — one project, just opened from the CLI<span class="panel-note">teaches the grid exists without nagging</span></div>
+    <div class="frame">
+      <div class="page">
+        <div class="hero">
+          <svg class="mark" width="56" height="56" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <clipPath id="tile-2">
+      <rect x="16" y="16" width="480" height="480" rx="116"/>
+    </clipPath>
+    <clipPath id="bundle-clip-2">
+      <path d="M202 524C204 491 211 463 205 433C200 403 203 376 214 350C237 342 267 326 293 309C303 334 308 376 303 407C298 438 307 475 310 524Z"/>
+    </clipPath>
+    <linearGradient id="background-2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#191a20"/>
+      <stop offset="1" stop-color="#0d0e10"/>
+    </linearGradient>
+    <radialGradient id="glow-2" cx="0.5" cy="0.44" r="0.5">
+      <stop offset="0" stop-color="#f0bd2f" stop-opacity="0.13"/>
+      <stop offset="1" stop-color="#f0bd2f" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="strand-left-2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffe078"/>
+      <stop offset="0.55" stop-color="#f2c13f"/>
+      <stop offset="1" stop-color="#ca9016"/>
+    </linearGradient>
+    <linearGradient id="strand-middle-2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffe487"/>
+      <stop offset="0.58" stop-color="#f4c747"/>
+      <stop offset="1" stop-color="#d39a1b"/>
+    </linearGradient>
+    <linearGradient id="strand-right-2" x1="1" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd45e"/>
+      <stop offset="0.58" stop-color="#eeb72f"/>
+      <stop offset="1" stop-color="#bf8110"/>
+    </linearGradient>
+    <linearGradient id="bundle-2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8cf50"/>
+      <stop offset="0.48" stop-color="#e6aa20"/>
+      <stop offset="1" stop-color="#bd790c"/>
+    </linearGradient>
+    <linearGradient id="wrap-2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffe17a"/>
+      <stop offset="0.52" stop-color="#f3c444"/>
+      <stop offset="1" stop-color="#d29215"/>
+    </linearGradient>
+    <filter id="soft-shadow-2" x="-30%" y="-20%" width="160%" height="150%">
+      <feDropShadow dx="0" dy="5" stdDeviation="6" flood-color="#000" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+
+  <rect id="icon-background" x="16" y="16" width="480" height="480" rx="116" fill="url(#background-2)"/>
+  <rect id="icon-border" x="16.5" y="16.5" width="479" height="479" rx="115.5" fill="none" stroke="#2b2e35"/>
+  <circle id="icon-glow" cx="256" cy="228" r="205" fill="url(#glow-2)"/>
+
+  <g id="icon-mark" clip-path="url(#tile-2)" filter="url(#soft-shadow-2)">
+    <!-- Five loose fibers. Every root extends well into the intact bundle, so no
+         strand can read as a detached accent when the icon is downsampled. -->
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M236 378C230 342 214 311 196 284C180 260 171 239 173 220C174 213 177 208 182 204" stroke="url(#strand-left-2)" stroke-width="19"/>
+      <path d="M247 369C250 323 241 277 229 231C220 198 214 171 213 151" stroke="url(#strand-left-2)" stroke-width="16"/>
+      <path d="M257 363C256 329 259 294 263 262C267 231 268 207 266 188" stroke="url(#strand-middle-2)" stroke-width="17"/>
+      <path d="M269 369C276 320 289 274 301 232C312 194 316 160 313 134" stroke="url(#strand-right-2)" stroke-width="16"/>
+      <path d="M280 378C300 344 321 315 337 289C353 264 360 241 356 221C355 214 352 209 348 205" stroke="url(#strand-right-2)" stroke-width="19"/>
+    </g>
+
+    <!-- The intact rope has a gentle alternating silhouette and a few broad,
+         curved wraps. Broad wraps survive at favicon scale without becoming a
+         striped pole. -->
+    <path d="M202 524C204 491 211 463 205 433C200 403 203 376 214 350C237 342 267 326 293 309C303 334 308 376 303 407C298 438 307 475 310 524Z" fill="url(#bundle-2)"/>
+    <g clip-path="url(#bundle-clip-2)">
+      <path d="M179 526C219 506 267 479 327 433L329 472C278 510 233 534 188 550Z" fill="url(#wrap-2)"/>
+      <path d="M177 445C219 428 267 401 321 359L324 398C275 435 229 460 183 477Z" fill="url(#wrap-2)"/>
+      <path d="M184 367C226 351 270 326 311 295L315 333C275 365 232 388 190 402Z" fill="url(#wrap-2)"/>
+      <g fill="none" stroke-linecap="round">
+        <path d="M181 526C224 507 273 477 329 435" stroke="#8f5809" stroke-opacity="0.52" stroke-width="7"/>
+        <path d="M180 445C223 427 271 398 323 359" stroke="#8f5809" stroke-opacity="0.52" stroke-width="7"/>
+        <path d="M186 367C228 350 271 325 313 294" stroke="#8f5809" stroke-opacity="0.52" stroke-width="7"/>
+        <path d="M226 532C224 481 224 431 230 383C233 358 239 340 248 329" stroke="#fff0a4" stroke-opacity="0.2" stroke-width="5"/>
+      </g>
+    </g>
+  </g>
+</svg>
+
+          <h1>Select a project</h1>
+          <p class="sub">One project so far. Frizz serves every project you add from this one address.</p>
+        </div>
+        <div class="grid">
+      <a class="card" href="#">
+        <div class="card-head">
+          <span class="card-name">frizz</span>
+          
+        </div>
+        <span class="card-path">~/Documents/projects/frizz</span>
+        <span class="card-meta">Opened 2 minutes ago</span>
+      </a>
+      <button class="card phantom">
+        <span class="plus">+</span>
+        <span class="phantom-label">Add a project</span>
+        
+      </button></div>
+      </div></div>
+  </section>
+
+
+  <section class="panel">
+    <div class="panel-label"><span class="panel-id">C</span> The everyday case<span class="panel-note">the phantom card sits last, quieter than a real project</span></div>
+    <div class="frame">
+      <div class="page">
+        <div class="hero">
+          <svg class="mark" width="56" height="56" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <clipPath id="tile-3">
+      <rect x="16" y="16" width="480" height="480" rx="116"/>
+    </clipPath>
+    <clipPath id="bundle-clip-3">
+      <path d="M202 524C204 491 211 463 205 433C200 403 203 376 214 350C237 342 267 326 293 309C303 334 308 376 303 407C298 438 307 475 310 524Z"/>
+    </clipPath>
+    <linearGradient id="background-3" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#191a20"/>
+      <stop offset="1" stop-color="#0d0e10"/>
+    </linearGradient>
+    <radialGradient id="glow-3" cx="0.5" cy="0.44" r="0.5">
+      <stop offset="0" stop-color="#f0bd2f" stop-opacity="0.13"/>
+      <stop offset="1" stop-color="#f0bd2f" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="strand-left-3" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffe078"/>
+      <stop offset="0.55" stop-color="#f2c13f"/>
+      <stop offset="1" stop-color="#ca9016"/>
+    </linearGradient>
+    <linearGradient id="strand-middle-3" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffe487"/>
+      <stop offset="0.58" stop-color="#f4c747"/>
+      <stop offset="1" stop-color="#d39a1b"/>
+    </linearGradient>
+    <linearGradient id="strand-right-3" x1="1" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd45e"/>
+      <stop offset="0.58" stop-color="#eeb72f"/>
+      <stop offset="1" stop-color="#bf8110"/>
+    </linearGradient>
+    <linearGradient id="bundle-3" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8cf50"/>
+      <stop offset="0.48" stop-color="#e6aa20"/>
+      <stop offset="1" stop-color="#bd790c"/>
+    </linearGradient>
+    <linearGradient id="wrap-3" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffe17a"/>
+      <stop offset="0.52" stop-color="#f3c444"/>
+      <stop offset="1" stop-color="#d29215"/>
+    </linearGradient>
+    <filter id="soft-shadow-3" x="-30%" y="-20%" width="160%" height="150%">
+      <feDropShadow dx="0" dy="5" stdDeviation="6" flood-color="#000" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+
+  <rect id="icon-background" x="16" y="16" width="480" height="480" rx="116" fill="url(#background-3)"/>
+  <rect id="icon-border" x="16.5" y="16.5" width="479" height="479" rx="115.5" fill="none" stroke="#2b2e35"/>
+  <circle id="icon-glow" cx="256" cy="228" r="205" fill="url(#glow-3)"/>
+
+  <g id="icon-mark" clip-path="url(#tile-3)" filter="url(#soft-shadow-3)">
+    <!-- Five loose fibers. Every root extends well into the intact bundle, so no
+         strand can read as a detached accent when the icon is downsampled. -->
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M236 378C230 342 214 311 196 284C180 260 171 239 173 220C174 213 177 208 182 204" stroke="url(#strand-left-3)" stroke-width="19"/>
+      <path d="M247 369C250 323 241 277 229 231C220 198 214 171 213 151" stroke="url(#strand-left-3)" stroke-width="16"/>
+      <path d="M257 363C256 329 259 294 263 262C267 231 268 207 266 188" stroke="url(#strand-middle-3)" stroke-width="17"/>
+      <path d="M269 369C276 320 289 274 301 232C312 194 316 160 313 134" stroke="url(#strand-right-3)" stroke-width="16"/>
+      <path d="M280 378C300 344 321 315 337 289C353 264 360 241 356 221C355 214 352 209 348 205" stroke="url(#strand-right-3)" stroke-width="19"/>
+    </g>
+
+    <!-- The intact rope has a gentle alternating silhouette and a few broad,
+         curved wraps. Broad wraps survive at favicon scale without becoming a
+         striped pole. -->
+    <path d="M202 524C204 491 211 463 205 433C200 403 203 376 214 350C237 342 267 326 293 309C303 334 308 376 303 407C298 438 307 475 310 524Z" fill="url(#bundle-3)"/>
+    <g clip-path="url(#bundle-clip-3)">
+      <path d="M179 526C219 506 267 479 327 433L329 472C278 510 233 534 188 550Z" fill="url(#wrap-3)"/>
+      <path d="M177 445C219 428 267 401 321 359L324 398C275 435 229 460 183 477Z" fill="url(#wrap-3)"/>
+      <path d="M184 367C226 351 270 326 311 295L315 333C275 365 232 388 190 402Z" fill="url(#wrap-3)"/>
+      <g fill="none" stroke-linecap="round">
+        <path d="M181 526C224 507 273 477 329 435" stroke="#8f5809" stroke-opacity="0.52" stroke-width="7"/>
+        <path d="M180 445C223 427 271 398 323 359" stroke="#8f5809" stroke-opacity="0.52" stroke-width="7"/>
+        <path d="M186 367C228 350 271 325 313 294" stroke="#8f5809" stroke-opacity="0.52" stroke-width="7"/>
+        <path d="M226 532C224 481 224 431 230 383C233 358 239 340 248 329" stroke="#fff0a4" stroke-opacity="0.2" stroke-width="5"/>
+      </g>
+    </g>
+  </g>
+</svg>
+
+          <h1>Select a project</h1>
+          
+        </div>
+        <div class="grid">
+      <a class="card" href="#">
+        <div class="card-head">
+          <span class="card-name">frizz</span>
+          
+        </div>
+        <span class="card-path">~/Documents/projects/frizz</span>
+        <span class="card-meta">Opened 2 minutes ago</span>
+      </a>
+      <a class="card" href="#">
+        <div class="card-head">
+          <span class="card-name">nub</span>
+          
+        </div>
+        <span class="card-path">~/Documents/projects/nub</span>
+        <span class="card-meta">Opened 40 minutes ago</span>
+      </a>
+      <a class="card" href="#">
+        <div class="card-head">
+          <span class="card-name">app</span>
+          <span class="card-slug">/pullfrog-app</span>
+        </div>
+        <span class="card-path">~/Documents/pullfrog/app</span>
+        <span class="card-meta">Opened 3 hours ago</span>
+      </a>
+      <a class="card" href="#">
+        <div class="card-head">
+          <span class="card-name">boron</span>
+          
+        </div>
+        <span class="card-path">~/Documents/projects/boron</span>
+        <span class="card-meta">Opened 1 day ago</span>
+      </a>
+      <a class="card" href="#">
+        <div class="card-head">
+          <span class="card-name">zod</span>
+          
+        </div>
+        <span class="card-path">~/Documents/projects/zod</span>
+        <span class="card-meta">Opened 2 days ago</span>
+      </a>
+      <a class="card" href="#">
+        <div class="card-head">
+          <span class="card-name">zshy</span>
+          
+        </div>
+        <span class="card-path">~/Documents/projects/zshy</span>
+        <span class="card-meta">Opened 1 week ago</span>
+      </a>
+      <button class="card phantom">
+        <span class="plus">+</span>
+        <span class="phantom-label">Add a project</span>
+        
+      </button></div>
+      </div></div>
+  </section>
+
+
+  <section class="panel">
+    <div class="panel-label"><span class="panel-id">D</span> Adding a project<span class="panel-note">the phantom card opens this</span></div>
+    <div class="frame"><div class="dialog-wrap"><div class="scrim"></div>
+    <div class="dialog">
+      <h2>Add a project</h2>
+      <p>Paste the folder you want a board for. Frizz walks up to the repository root, the same way it does when you run it in a terminal.</p>
+      <input class="field" value="~/Documents/projects/zshy" />
+      <div class="row"><button class="btn">Cancel</button><button class="btn btn-primary">Add project</button></div>
+    </div>
+  </div></div>
+  </section>
+
+
+  <section class="panel">
+    <div class="panel-label"><span class="panel-id">E</span> …and when the path is wrong<span class="panel-note">validated server-side; the folder has to exist</span></div>
+    <div class="frame"><div class="dialog-wrap"><div class="scrim"></div>
+    <div class="dialog">
+      <h2>Add a project</h2>
+      <p>Paste the folder you want a board for. Frizz walks up to the repository root, the same way it does when you run it in a terminal.</p>
+      <input class="field err" value="~/Documents/projects/zshyy" />
+      <p class="err-msg">No folder at that path.</p>
+      <div class="row"><button class="btn">Cancel</button><button class="btn btn-primary">Add project</button></div>
+    </div>
+  </div></div>
+  </section>
+
+
+  <section class="panel">
+    <div class="panel-label"><span class="panel-id">F</span> Logo treatments<span class="panel-note">fibers pulling loose from a bundle — small, it reads as a hand</span></div>
+    <div class="frame"><div style="padding:38px 40px;display:flex;gap:46px;align-items:flex-end;justify-content:center;">
+    <div style="text-align:center"><svg class="mark" width="40" height="40" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <clipPath id="tile-4">
+      <rect x="16" y="16" width="480" height="480" rx="116"/>
+    </clipPath>
+    <clipPath id="bundle-clip-4">
+      <path d="M202 524C204 491 211 463 205 433C200 403 203 376 214 350C237 342 267 326 293 309C303 334 308 376 303 407C298 438 307 475 310 524Z"/>
+    </clipPath>
+    <linearGradient id="background-4" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#191a20"/>
+      <stop offset="1" stop-color="#0d0e10"/>
+    </linearGradient>
+    <radialGradient id="glow-4" cx="0.5" cy="0.44" r="0.5">
+      <stop offset="0" stop-color="#f0bd2f" stop-opacity="0.13"/>
+      <stop offset="1" stop-color="#f0bd2f" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="strand-left-4" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffe078"/>
+      <stop offset="0.55" stop-color="#f2c13f"/>
+      <stop offset="1" stop-color="#ca9016"/>
+    </linearGradient>
+    <linearGradient id="strand-middle-4" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffe487"/>
+      <stop offset="0.58" stop-color="#f4c747"/>
+      <stop offset="1" stop-color="#d39a1b"/>
+    </linearGradient>
+    <linearGradient id="strand-right-4" x1="1" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd45e"/>
+      <stop offset="0.58" stop-color="#eeb72f"/>
+      <stop offset="1" stop-color="#bf8110"/>
+    </linearGradient>
+    <linearGradient id="bundle-4" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8cf50"/>
+      <stop offset="0.48" stop-color="#e6aa20"/>
+      <stop offset="1" stop-color="#bd790c"/>
+    </linearGradient>
+    <linearGradient id="wrap-4" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffe17a"/>
+      <stop offset="0.52" stop-color="#f3c444"/>
+      <stop offset="1" stop-color="#d29215"/>
+    </linearGradient>
+    <filter id="soft-shadow-4" x="-30%" y="-20%" width="160%" height="150%">
+      <feDropShadow dx="0" dy="5" stdDeviation="6" flood-color="#000" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+
+  <rect id="icon-background" x="16" y="16" width="480" height="480" rx="116" fill="url(#background-4)"/>
+  <rect id="icon-border" x="16.5" y="16.5" width="479" height="479" rx="115.5" fill="none" stroke="#2b2e35"/>
+  <circle id="icon-glow" cx="256" cy="228" r="205" fill="url(#glow-4)"/>
+
+  <g id="icon-mark" clip-path="url(#tile-4)" filter="url(#soft-shadow-4)">
+    <!-- Five loose fibers. Every root extends well into the intact bundle, so no
+         strand can read as a detached accent when the icon is downsampled. -->
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M236 378C230 342 214 311 196 284C180 260 171 239 173 220C174 213 177 208 182 204" stroke="url(#strand-left-4)" stroke-width="19"/>
+      <path d="M247 369C250 323 241 277 229 231C220 198 214 171 213 151" stroke="url(#strand-left-4)" stroke-width="16"/>
+      <path d="M257 363C256 329 259 294 263 262C267 231 268 207 266 188" stroke="url(#strand-middle-4)" stroke-width="17"/>
+      <path d="M269 369C276 320 289 274 301 232C312 194 316 160 313 134" stroke="url(#strand-right-4)" stroke-width="16"/>
+      <path d="M280 378C300 344 321 315 337 289C353 264 360 241 356 221C355 214 352 209 348 205" stroke="url(#strand-right-4)" stroke-width="19"/>
+    </g>
+
+    <!-- The intact rope has a gentle alternating silhouette and a few broad,
+         curved wraps. Broad wraps survive at favicon scale without becoming a
+         striped pole. -->
+    <path d="M202 524C204 491 211 463 205 433C200 403 203 376 214 350C237 342 267 326 293 309C303 334 308 376 303 407C298 438 307 475 310 524Z" fill="url(#bundle-4)"/>
+    <g clip-path="url(#bundle-clip-4)">
+      <path d="M179 526C219 506 267 479 327 433L329 472C278 510 233 534 188 550Z" fill="url(#wrap-4)"/>
+      <path d="M177 445C219 428 267 401 321 359L324 398C275 435 229 460 183 477Z" fill="url(#wrap-4)"/>
+      <path d="M184 367C226 351 270 326 311 295L315 333C275 365 232 388 190 402Z" fill="url(#wrap-4)"/>
+      <g fill="none" stroke-linecap="round">
+        <path d="M181 526C224 507 273 477 329 435" stroke="#8f5809" stroke-opacity="0.52" stroke-width="7"/>
+        <path d="M180 445C223 427 271 398 323 359" stroke="#8f5809" stroke-opacity="0.52" stroke-width="7"/>
+        <path d="M186 367C228 350 271 325 313 294" stroke="#8f5809" stroke-opacity="0.52" stroke-width="7"/>
+        <path d="M226 532C224 481 224 431 230 383C233 358 239 340 248 329" stroke="#fff0a4" stroke-opacity="0.2" stroke-width="5"/>
+      </g>
+    </g>
+  </g>
+</svg>
+<div class="cli" style="margin-top:10px">40</div></div>
+    <div style="text-align:center"><svg class="mark" width="56" height="56" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <clipPath id="tile-5">
+      <rect x="16" y="16" width="480" height="480" rx="116"/>
+    </clipPath>
+    <clipPath id="bundle-clip-5">
+      <path d="M202 524C204 491 211 463 205 433C200 403 203 376 214 350C237 342 267 326 293 309C303 334 308 376 303 407C298 438 307 475 310 524Z"/>
+    </clipPath>
+    <linearGradient id="background-5" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#191a20"/>
+      <stop offset="1" stop-color="#0d0e10"/>
+    </linearGradient>
+    <radialGradient id="glow-5" cx="0.5" cy="0.44" r="0.5">
+      <stop offset="0" stop-color="#f0bd2f" stop-opacity="0.13"/>
+      <stop offset="1" stop-color="#f0bd2f" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="strand-left-5" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffe078"/>
+      <stop offset="0.55" stop-color="#f2c13f"/>
+      <stop offset="1" stop-color="#ca9016"/>
+    </linearGradient>
+    <linearGradient id="strand-middle-5" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffe487"/>
+      <stop offset="0.58" stop-color="#f4c747"/>
+      <stop offset="1" stop-color="#d39a1b"/>
+    </linearGradient>
+    <linearGradient id="strand-right-5" x1="1" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd45e"/>
+      <stop offset="0.58" stop-color="#eeb72f"/>
+      <stop offset="1" stop-color="#bf8110"/>
+    </linearGradient>
+    <linearGradient id="bundle-5" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8cf50"/>
+      <stop offset="0.48" stop-color="#e6aa20"/>
+      <stop offset="1" stop-color="#bd790c"/>
+    </linearGradient>
+    <linearGradient id="wrap-5" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffe17a"/>
+      <stop offset="0.52" stop-color="#f3c444"/>
+      <stop offset="1" stop-color="#d29215"/>
+    </linearGradient>
+    <filter id="soft-shadow-5" x="-30%" y="-20%" width="160%" height="150%">
+      <feDropShadow dx="0" dy="5" stdDeviation="6" flood-color="#000" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+
+  <rect id="icon-background" x="16" y="16" width="480" height="480" rx="116" fill="url(#background-5)"/>
+  <rect id="icon-border" x="16.5" y="16.5" width="479" height="479" rx="115.5" fill="none" stroke="#2b2e35"/>
+  <circle id="icon-glow" cx="256" cy="228" r="205" fill="url(#glow-5)"/>
+
+  <g id="icon-mark" clip-path="url(#tile-5)" filter="url(#soft-shadow-5)">
+    <!-- Five loose fibers. Every root extends well into the intact bundle, so no
+         strand can read as a detached accent when the icon is downsampled. -->
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M236 378C230 342 214 311 196 284C180 260 171 239 173 220C174 213 177 208 182 204" stroke="url(#strand-left-5)" stroke-width="19"/>
+      <path d="M247 369C250 323 241 277 229 231C220 198 214 171 213 151" stroke="url(#strand-left-5)" stroke-width="16"/>
+      <path d="M257 363C256 329 259 294 263 262C267 231 268 207 266 188" stroke="url(#strand-middle-5)" stroke-width="17"/>
+      <path d="M269 369C276 320 289 274 301 232C312 194 316 160 313 134" stroke="url(#strand-right-5)" stroke-width="16"/>
+      <path d="M280 378C300 344 321 315 337 289C353 264 360 241 356 221C355 214 352 209 348 205" stroke="url(#strand-right-5)" stroke-width="19"/>
+    </g>
+
+    <!-- The intact rope has a gentle alternating silhouette and a few broad,
+         curved wraps. Broad wraps survive at favicon scale without becoming a
+         striped pole. -->
+    <path d="M202 524C204 491 211 463 205 433C200 403 203 376 214 350C237 342 267 326 293 309C303 334 308 376 303 407C298 438 307 475 310 524Z" fill="url(#bundle-5)"/>
+    <g clip-path="url(#bundle-clip-5)">
+      <path d="M179 526C219 506 267 479 327 433L329 472C278 510 233 534 188 550Z" fill="url(#wrap-5)"/>
+      <path d="M177 445C219 428 267 401 321 359L324 398C275 435 229 460 183 477Z" fill="url(#wrap-5)"/>
+      <path d="M184 367C226 351 270 326 311 295L315 333C275 365 232 388 190 402Z" fill="url(#wrap-5)"/>
+      <g fill="none" stroke-linecap="round">
+        <path d="M181 526C224 507 273 477 329 435" stroke="#8f5809" stroke-opacity="0.52" stroke-width="7"/>
+        <path d="M180 445C223 427 271 398 323 359" stroke="#8f5809" stroke-opacity="0.52" stroke-width="7"/>
+        <path d="M186 367C228 350 271 325 313 294" stroke="#8f5809" stroke-opacity="0.52" stroke-width="7"/>
+        <path d="M226 532C224 481 224 431 230 383C233 358 239 340 248 329" stroke="#fff0a4" stroke-opacity="0.2" stroke-width="5"/>
+      </g>
+    </g>
+  </g>
+</svg>
+<div class="cli" style="margin-top:10px">56 — used above</div></div>
+    <div style="text-align:center"><svg class="mark" width="76" height="76" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <clipPath id="tile-6">
+      <rect x="16" y="16" width="480" height="480" rx="116"/>
+    </clipPath>
+    <clipPath id="bundle-clip-6">
+      <path d="M202 524C204 491 211 463 205 433C200 403 203 376 214 350C237 342 267 326 293 309C303 334 308 376 303 407C298 438 307 475 310 524Z"/>
+    </clipPath>
+    <linearGradient id="background-6" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#191a20"/>
+      <stop offset="1" stop-color="#0d0e10"/>
+    </linearGradient>
+    <radialGradient id="glow-6" cx="0.5" cy="0.44" r="0.5">
+      <stop offset="0" stop-color="#f0bd2f" stop-opacity="0.13"/>
+      <stop offset="1" stop-color="#f0bd2f" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="strand-left-6" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffe078"/>
+      <stop offset="0.55" stop-color="#f2c13f"/>
+      <stop offset="1" stop-color="#ca9016"/>
+    </linearGradient>
+    <linearGradient id="strand-middle-6" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffe487"/>
+      <stop offset="0.58" stop-color="#f4c747"/>
+      <stop offset="1" stop-color="#d39a1b"/>
+    </linearGradient>
+    <linearGradient id="strand-right-6" x1="1" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd45e"/>
+      <stop offset="0.58" stop-color="#eeb72f"/>
+      <stop offset="1" stop-color="#bf8110"/>
+    </linearGradient>
+    <linearGradient id="bundle-6" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8cf50"/>
+      <stop offset="0.48" stop-color="#e6aa20"/>
+      <stop offset="1" stop-color="#bd790c"/>
+    </linearGradient>
+    <linearGradient id="wrap-6" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffe17a"/>
+      <stop offset="0.52" stop-color="#f3c444"/>
+      <stop offset="1" stop-color="#d29215"/>
+    </linearGradient>
+    <filter id="soft-shadow-6" x="-30%" y="-20%" width="160%" height="150%">
+      <feDropShadow dx="0" dy="5" stdDeviation="6" flood-color="#000" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+
+  <rect id="icon-background" x="16" y="16" width="480" height="480" rx="116" fill="url(#background-6)"/>
+  <rect id="icon-border" x="16.5" y="16.5" width="479" height="479" rx="115.5" fill="none" stroke="#2b2e35"/>
+  <circle id="icon-glow" cx="256" cy="228" r="205" fill="url(#glow-6)"/>
+
+  <g id="icon-mark" clip-path="url(#tile-6)" filter="url(#soft-shadow-6)">
+    <!-- Five loose fibers. Every root extends well into the intact bundle, so no
+         strand can read as a detached accent when the icon is downsampled. -->
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M236 378C230 342 214 311 196 284C180 260 171 239 173 220C174 213 177 208 182 204" stroke="url(#strand-left-6)" stroke-width="19"/>
+      <path d="M247 369C250 323 241 277 229 231C220 198 214 171 213 151" stroke="url(#strand-left-6)" stroke-width="16"/>
+      <path d="M257 363C256 329 259 294 263 262C267 231 268 207 266 188" stroke="url(#strand-middle-6)" stroke-width="17"/>
+      <path d="M269 369C276 320 289 274 301 232C312 194 316 160 313 134" stroke="url(#strand-right-6)" stroke-width="16"/>
+      <path d="M280 378C300 344 321 315 337 289C353 264 360 241 356 221C355 214 352 209 348 205" stroke="url(#strand-right-6)" stroke-width="19"/>
+    </g>
+
+    <!-- The intact rope has a gentle alternating silhouette and a few broad,
+         curved wraps. Broad wraps survive at favicon scale without becoming a
+         striped pole. -->
+    <path d="M202 524C204 491 211 463 205 433C200 403 203 376 214 350C237 342 267 326 293 309C303 334 308 376 303 407C298 438 307 475 310 524Z" fill="url(#bundle-6)"/>
+    <g clip-path="url(#bundle-clip-6)">
+      <path d="M179 526C219 506 267 479 327 433L329 472C278 510 233 534 188 550Z" fill="url(#wrap-6)"/>
+      <path d="M177 445C219 428 267 401 321 359L324 398C275 435 229 460 183 477Z" fill="url(#wrap-6)"/>
+      <path d="M184 367C226 351 270 326 311 295L315 333C275 365 232 388 190 402Z" fill="url(#wrap-6)"/>
+      <g fill="none" stroke-linecap="round">
+        <path d="M181 526C224 507 273 477 329 435" stroke="#8f5809" stroke-opacity="0.52" stroke-width="7"/>
+        <path d="M180 445C223 427 271 398 323 359" stroke="#8f5809" stroke-opacity="0.52" stroke-width="7"/>
+        <path d="M186 367C228 350 271 325 313 294" stroke="#8f5809" stroke-opacity="0.52" stroke-width="7"/>
+        <path d="M226 532C224 481 224 431 230 383C233 358 239 340 248 329" stroke="#fff0a4" stroke-opacity="0.2" stroke-width="5"/>
+      </g>
+    </g>
+  </g>
+</svg>
+<div class="cli" style="margin-top:10px">76</div></div>
+    <div style="text-align:center"><svg class="mark" width="96" height="96" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <clipPath id="tile-7">
+      <rect x="16" y="16" width="480" height="480" rx="116"/>
+    </clipPath>
+    <clipPath id="bundle-clip-7">
+      <path d="M202 524C204 491 211 463 205 433C200 403 203 376 214 350C237 342 267 326 293 309C303 334 308 376 303 407C298 438 307 475 310 524Z"/>
+    </clipPath>
+    <linearGradient id="background-7" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#191a20"/>
+      <stop offset="1" stop-color="#0d0e10"/>
+    </linearGradient>
+    <radialGradient id="glow-7" cx="0.5" cy="0.44" r="0.5">
+      <stop offset="0" stop-color="#f0bd2f" stop-opacity="0.13"/>
+      <stop offset="1" stop-color="#f0bd2f" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="strand-left-7" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffe078"/>
+      <stop offset="0.55" stop-color="#f2c13f"/>
+      <stop offset="1" stop-color="#ca9016"/>
+    </linearGradient>
+    <linearGradient id="strand-middle-7" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffe487"/>
+      <stop offset="0.58" stop-color="#f4c747"/>
+      <stop offset="1" stop-color="#d39a1b"/>
+    </linearGradient>
+    <linearGradient id="strand-right-7" x1="1" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd45e"/>
+      <stop offset="0.58" stop-color="#eeb72f"/>
+      <stop offset="1" stop-color="#bf8110"/>
+    </linearGradient>
+    <linearGradient id="bundle-7" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8cf50"/>
+      <stop offset="0.48" stop-color="#e6aa20"/>
+      <stop offset="1" stop-color="#bd790c"/>
+    </linearGradient>
+    <linearGradient id="wrap-7" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffe17a"/>
+      <stop offset="0.52" stop-color="#f3c444"/>
+      <stop offset="1" stop-color="#d29215"/>
+    </linearGradient>
+    <filter id="soft-shadow-7" x="-30%" y="-20%" width="160%" height="150%">
+      <feDropShadow dx="0" dy="5" stdDeviation="6" flood-color="#000" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+
+  <rect id="icon-background" x="16" y="16" width="480" height="480" rx="116" fill="url(#background-7)"/>
+  <rect id="icon-border" x="16.5" y="16.5" width="479" height="479" rx="115.5" fill="none" stroke="#2b2e35"/>
+  <circle id="icon-glow" cx="256" cy="228" r="205" fill="url(#glow-7)"/>
+
+  <g id="icon-mark" clip-path="url(#tile-7)" filter="url(#soft-shadow-7)">
+    <!-- Five loose fibers. Every root extends well into the intact bundle, so no
+         strand can read as a detached accent when the icon is downsampled. -->
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M236 378C230 342 214 311 196 284C180 260 171 239 173 220C174 213 177 208 182 204" stroke="url(#strand-left-7)" stroke-width="19"/>
+      <path d="M247 369C250 323 241 277 229 231C220 198 214 171 213 151" stroke="url(#strand-left-7)" stroke-width="16"/>
+      <path d="M257 363C256 329 259 294 263 262C267 231 268 207 266 188" stroke="url(#strand-middle-7)" stroke-width="17"/>
+      <path d="M269 369C276 320 289 274 301 232C312 194 316 160 313 134" stroke="url(#strand-right-7)" stroke-width="16"/>
+      <path d="M280 378C300 344 321 315 337 289C353 264 360 241 356 221C355 214 352 209 348 205" stroke="url(#strand-right-7)" stroke-width="19"/>
+    </g>
+
+    <!-- The intact rope has a gentle alternating silhouette and a few broad,
+         curved wraps. Broad wraps survive at favicon scale without becoming a
+         striped pole. -->
+    <path d="M202 524C204 491 211 463 205 433C200 403 203 376 214 350C237 342 267 326 293 309C303 334 308 376 303 407C298 438 307 475 310 524Z" fill="url(#bundle-7)"/>
+    <g clip-path="url(#bundle-clip-7)">
+      <path d="M179 526C219 506 267 479 327 433L329 472C278 510 233 534 188 550Z" fill="url(#wrap-7)"/>
+      <path d="M177 445C219 428 267 401 321 359L324 398C275 435 229 460 183 477Z" fill="url(#wrap-7)"/>
+      <path d="M184 367C226 351 270 326 311 295L315 333C275 365 232 388 190 402Z" fill="url(#wrap-7)"/>
+      <g fill="none" stroke-linecap="round">
+        <path d="M181 526C224 507 273 477 329 435" stroke="#8f5809" stroke-opacity="0.52" stroke-width="7"/>
+        <path d="M180 445C223 427 271 398 323 359" stroke="#8f5809" stroke-opacity="0.52" stroke-width="7"/>
+        <path d="M186 367C228 350 271 325 313 294" stroke="#8f5809" stroke-opacity="0.52" stroke-width="7"/>
+        <path d="M226 532C224 481 224 431 230 383C233 358 239 340 248 329" stroke="#fff0a4" stroke-opacity="0.2" stroke-width="5"/>
+      </g>
+    </g>
+  </g>
+</svg>
+<div class="cli" style="margin-top:10px">96</div></div>
+  </div></div>
+  </section>
+
+</body>
+</html>
