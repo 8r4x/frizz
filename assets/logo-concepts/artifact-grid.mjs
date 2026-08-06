@@ -9,6 +9,13 @@ import { fileURLToPath } from "node:url"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const SHEETS = {
+  cursive: {
+    dir: "out-cursive",
+    file: "frizz-cursive-grid.html",
+    title: "Frizz — the cursive family",
+    lede: `One swooping path with a bulb at each end, <b>exactly 180&deg; rotationally symmetric</b>. The spine is a curve, not a straight line, but it still cannot kink: the bulb is built <i>from</i> the spine so the spine's own direction is its tangent, and the stroke travels a full turn and rejoins going the same way. Quote an id and I'll refine around it.`,
+    groups: [["bleed", "Thread runs off the edge"], ["out", "Thread reaches the edge and stops"], ["in", "Thread ends inside the tile"]],
+  },
   slash: {
     dir: "out-slash",
     file: "frizz-slash.html",
@@ -33,7 +40,11 @@ const worstC2 = Math.max(...variants.map((v) => v.c2Error))
 const tile = (v) => `
     <figure>
       <img src="${uri(`${v.id}-200.png`)}" width="150" height="150" alt="Mark variant ${v.id}">
-      <figcaption><b>${v.id}</b><span>bulb ${v.lw}&times;${v.lh} &middot; tilt ${v.tilt ?? v.tiltRel}&deg; &middot; spine ${v.axis}&deg;<br>dist ${v.dist} &middot; ${v.side > 0 ? "side +" : "side −"}${v.dir > 0 ? " dir +" : " dir −"}${v.key ? ` &middot; ${v.key}` : ""}</span></figcaption>
+      <figcaption><b>${v.id}</b><span>${
+        v.along
+          ? `bulb ${v.along}&times;${v.across} &middot; spine ${v.spineAngle}&deg;/${v.spineLen}<br>bend ${v.spineBend}&deg; &middot; tail bend ${v.tailBend}&deg; &middot; ${v.side > 0 ? "side +" : "side −"}${v.dir > 0 ? " dir +" : " dir −"}`
+          : `bulb ${v.lw}&times;${v.lh} &middot; tilt ${v.tilt ?? v.tiltRel}&deg; &middot; spine ${v.axis}&deg;<br>dist ${v.dist} &middot; ${v.side > 0 ? "side +" : "side −"}${v.dir > 0 ? " dir +" : " dir −"}${v.key ? ` &middot; ${v.key}` : ""}`
+      }</span></figcaption>
     </figure>`
 
 writeFileSync(join(here, sheet.file), `<!doctype html>
