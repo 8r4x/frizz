@@ -1,4 +1,4 @@
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import { slugify } from "@frizz/shared"
@@ -175,10 +175,29 @@ export function deriveSlug(
  * exists, so this directory is a copy of that one rather than the same project moved. Nothing is
  * written in that case — the caller mints a fresh id for the copy and calls again.
  */
+/**
+ * The canonical form of a project path — resolved through every symlink.
+ *
+ * ONE place, because the callers disagreed and the disagreement was invisible until a rail rendered
+ * the same project twice. On macOS `/var` is a symlink to `/private/var`, so the launcher (which
+ * realpaths) and the grid's add path (which did not) registered one directory under two paths, with
+ * two ids and two slugs. Normalising at the boundary means no caller can get it wrong, and a path
+ * that cannot be resolved — a directory since deleted — is kept verbatim so a stale card still
+ * matches the entry it came from.
+ */
+function canonicalPath(dir: string): string {
+  try {
+    return realpathSync(dir)
+  } catch {
+    return dir
+  }
+}
+
 export function registerProject(
   input: { dir: string; id: string; remoteOwner?: string; now?: () => Date },
   home = homedir(),
 ): { entry?: RegistryEntry; action: RegisterAction } {
+  input = { ...input, dir: canonicalPath(input.dir) }
   const registry = readRegistry(home)
   const at = (input.now ?? (() => new Date()))().toISOString()
   const byId = registry.projects.find((p) => p.id === input.id)
@@ -259,7 +278,10 @@ export function backfillRegistry(
   const known = new Set(readRegistry(home).projects.map((p) => p.path))
   let added = 0
   for (const id of dirs) {
-    const dir = recordedProjectDir(join(frizzPaths({ home }).data, "projects", id))
+    // Canonical BEFORE the known-check: the registry stores canonical paths, so comparing a raw
+    // recorded one misses its own entry and re-registers the same project on every single boot.
+    const recorded = recordedProjectDir(join(frizzPaths({ home }).data, "projects", id))
+    const dir = recorded ? canonicalPath(recorded) : undefined
     if (!dir || known.has(dir)) continue
     if (read(dir) !== id) continue
     try {
@@ -350,7 +372,9 @@ export function reorderProjects(ids: readonly string[], home = homedir()): Regis
 
 /** The entry for a directory Frizz already knows, if it knows it. */
 export function findByPath(path: string, home = homedir()): RegistryEntry | undefined {
-  return readRegistry(home).projects.find((p) => p.path === path)
+  // Canonical on both sides, or a caller passing the symlinked spelling misses its own entry.
+  const canonical = canonicalPath(path)
+  return readRegistry(home).projects.find((p) => p.path === canonical || p.path === path)
 }
 
 export function findBySlug(slug: string, home = homedir()): RegistryEntry | undefined {

@@ -1,9 +1,20 @@
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
-import { backfillRegistry, deriveSlug, findBySlug, forgetProject, listProjects, readRegistry, registerProject, renameProject, reorderProjects } from "./project-registry.ts"
+import {
+  backfillRegistry,
+  deriveSlug,
+  findByPath,
+  findBySlug,
+  forgetProject,
+  listProjects,
+  readRegistry,
+  registerProject,
+  renameProject,
+  reorderProjects,
+} from "./project-registry.ts"
 
 const A = "029a30af-f126-40e3-b04c-d80e74e3e090"
 const B = "50577e5e-802f-4567-bd0e-cf7cbf3d2ed5"
@@ -19,6 +30,15 @@ function project(home: string, rel: string, id?: string): string {
   mkdirSync(join(dir, ".frizz"), { recursive: true })
   if (id) writeFileSync(join(dir, ".frizz", ".id"), `${id}\n`)
   return dir
+}
+
+/** The registry stores canonical paths, so an expectation built from a temp dir must match. */
+function canonical(path: string): string {
+  try {
+    return realpathSync(path)
+  } catch {
+    return path
+  }
 }
 
 test("a fresh registration takes the directory basename", () => {
@@ -90,7 +110,7 @@ test("a moved project keeps its id, its slug and its threads", () => {
     const moved = registerProject({ dir: after, id: A }, home)
     assert.equal(moved.action, "moved")
     assert.equal(moved.entry?.slug, "place", "the URL survives the move")
-    assert.equal(moved.entry?.path, after)
+    assert.equal(moved.entry?.path, canonical(after))
     assert.equal(readRegistry(home).projects.length, 1, "not a second card")
   } finally {
     rmSync(home, { recursive: true, force: true })
@@ -108,7 +128,7 @@ test("a copied checkout is detected rather than stealing the original's board", 
     assert.equal(result.action, "duplicate")
     assert.equal(result.entry, undefined, "nothing written — the caller mints a fresh id")
     assert.equal(readRegistry(home).projects.length, 1)
-    assert.equal(readRegistry(home).projects[0]?.path, join(home, "orig"))
+    assert.equal(readRegistry(home).projects[0]?.path, canonical(join(home, "orig")))
 
     // With a new id it registers as its own project.
     const reminted = registerProject({ dir: copy, id: B }, home)
@@ -225,9 +245,9 @@ test("backfill recovers projects from existing state dirs, and refuses to guess"
 
     // Stands in for each project's own `.frizz/.id`.
     const claims: Record<string, string> = {
-      [alpha]: "id-alpha",
-      [beta]: "id-beta",
-      [reidentified]: "id-something-else",
+      [canonical(alpha)]: "id-alpha",
+      [canonical(beta)]: "id-beta",
+      [canonical(reidentified)]: "id-something-else",
     }
     const recovered = backfillRegistry(home, (root) => claims[root])
     assert.equal(recovered, 2)
@@ -235,12 +255,12 @@ test("backfill recovers projects from existing state dirs, and refuses to guess"
     const slugs = listProjects(home).map((p) => p.slug).sort()
     assert.deepEqual(slugs, ["alpha", "beta"])
     assert.equal(
-      listProjects(home).some((p) => p.path === movedAway),
+      listProjects(home).some((p) => p.path === canonical(movedAway)),
       false,
       "a directory that no longer exists is not a project",
     )
     assert.equal(
-      listProjects(home).some((p) => p.path === reidentified),
+      listProjects(home).some((p) => p.path === canonical(reidentified)),
       false,
       "a checkout that claims another id is skipped rather than guessed at",
     )
@@ -320,9 +340,38 @@ test("backfill recovers a project whose server is STOPPED, not just a running on
       mkdirSync(sd, { recursive: true })
       writeFileSync(join(sd, file), JSON.stringify({ projectDir: dir }))
     }
-    const claims: Record<string, string> = { [stopped]: "id-stopped", [running]: "id-running" }
+    const claims: Record<string, string> = { [canonical(stopped)]: "id-stopped", [canonical(running)]: "id-running" }
     assert.equal(backfillRegistry(home, (root) => claims[root]), 2)
     assert.deepEqual(listProjects(home).map((p) => p.slug).sort(), ["running-project", "stopped-project"])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+// A rail rendered the same project twice — `/var/...` and `/private/var/...`, two ids, two slugs —
+// because the launcher realpaths and the grid's add path did not. On macOS /var IS a symlink, so this
+// is the default state of every temp path, not an edge case (2026-08-06).
+test("one directory registers once, whatever spelling of its path a caller uses", () => {
+  const home = mkdtempSync(join(tmpdir(), "frizz-canonical-"))
+  try {
+    const real = realpathSync(home)
+    const dir = join(real, "project")
+    mkdirSync(dir, { recursive: true })
+    // The symlinked spelling, if this platform has one; otherwise the same path twice, which still
+    // pins that a second registration of one directory is not a second project.
+    const alias = join(home, "project")
+
+    const first = registerProject({ dir: alias, id: "id-1" }, home)
+    assert.equal(first.action, "created")
+    assert.equal(first.entry?.path, canonical(alias), "stored canonically")
+
+    const again = registerProject({ dir, id: "id-1" }, home)
+    assert.notEqual(again.action, "created", "the same directory is not a new project")
+    assert.equal(listProjects(home).length, 1)
+
+    // And a lookup by either spelling finds it.
+    assert.ok(findByPath(dir, home))
+    assert.ok(findByPath(alias, home))
   } finally {
     rmSync(home, { recursive: true, force: true })
   }
