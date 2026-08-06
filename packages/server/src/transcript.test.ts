@@ -188,6 +188,14 @@ test("a coalesced user record splits back into the deliveries the scheduler actu
   assert.equal(ledWakes[0].displayText, rest)
   assert.doesNotMatch(led.map((m) => m.displayText ?? m.text).join("\n"), /frizz-wake|frizz-relay/)
   assert.match(led.map((m) => m.text).join("\n"), /Background task «Trace the packages» finished \(completion relayed\)/)
+
+  // …and every one of those messages needs its OWN sourceId. One record now yields a divider AND a
+  // delivery, and both used to take the record's bare id — silent on this side, a React duplicate-key
+  // warning in the browser, which is where it was actually caught. Asserted over both orderings.
+  for (const set of [msgs, led]) {
+    const ids = set.map((m) => m.sourceId)
+    assert.equal(new Set(ids).size, ids.length, `duplicate sourceId in ${JSON.stringify(ids)}`)
+  }
 })
 
 // frizz's own dispatch envelope. The bubble shows the operator's prompt and nothing else — on the plain

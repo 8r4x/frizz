@@ -207,13 +207,18 @@ function userProjection(text: string, first: boolean): { displayText?: string; w
 // SAME route a lone delivery takes, `isInjectedNoise` included, so a coalesced thread reads exactly
 // like one where the same messages arrived a second apart.
 //
-// `#i` on the later sourceIds for the reason the event-line loop does it: a sourceId is the chat's
-// per-message handle (scroll anchor, `data-frizz-msg`), so two rendered messages must never share one.
-function pushUserRecord(out: TranscriptMessage[], sourceId: string, text: string, at: string | undefined): void {
+// A sourceId is the chat's per-message handle — the scroll anchor, `data-frizz-msg`, and the React key
+// — so two rendered messages must never share one. The lone delivery keeps the record's bare sourceId
+// (it is the same one message it always was, and these anchors should not churn); anything beyond it
+// takes a `#u<i>` suffix. The `u` namespace matters: when this record ALSO drew completion dividers
+// they already claimed `#0`, `#1`, … and the collision is silent on the server — it surfaces only as a
+// React duplicate-key warning in the browser, which is where this was actually caught.
+function pushUserRecord(out: TranscriptMessage[], sourceId: string, text: string, at: string | undefined, shareId = true): void {
   for (const [i, segment] of splitWakeDeliveries(text).entries()) {
     if (isInjectedNoise(segment)) continue
     const projection = userProjection(segment, out.length === 0)
-    out.push({ sourceId: i === 0 ? sourceId : `${sourceId}#${i}`, role: "user", text: segment, ...projection, tools: [], parts: [], at })
+    const id = i === 0 && shareId ? sourceId : `${sourceId}#u${i}`
+    out.push({ sourceId: id, role: "user", text: segment, ...projection, tools: [], parts: [], at })
   }
 }
 
@@ -513,6 +518,9 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
     // position (clickable into the run-log drawer), back-fill the original launch cards' terminal
     // state, and emit a boundary line per woken shell.
     const evs = completionEvents(rec, agentDispatches, backgroundShells, backgroundTaskIds, relayedWakesDrawn)
+    // Did this record already spend its bare sourceId on a divider? Only a coalesced record reaches the
+    // user branch below after drawing one, and then the delivery must not reuse it (see pushUserRecord).
+    let drewEvents = false
     if (evs.length > 0) {
       // A user-record carrier can in principle also carry tool_result blocks — never skip their back-fill.
       attachToolResults(rec, pendingTools, backgroundShells, backgroundTaskIds, childDispatchIds)
@@ -525,6 +533,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
       // delivery merged in beside it. Bail out only when the plumbing is all there was — otherwise fall
       // through so the delivery underneath still reaches the chat, below its own dividers.
       if (isAllInjectedNoise(notificationCarrierText(rec) ?? "")) return
+      drewEvents = true
     }
 
     // A long THINKING window used to be surfaced here as a `Thought for Ns` event line. It is not any
@@ -787,7 +796,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
         // The first user message is the composed dispatch prompt (scratchpad orientation + project
         // instructions + banner + TASK). Only what sits below the banner is the human's words — that
         // narrowing is a DISPLAY projection (userDisplayText), never a rewrite of the stored text.
-        pushUserRecord(out, sourceId, text, rec.timestamp)
+        pushUserRecord(out, sourceId, text, rec.timestamp, !drewEvents)
         lastAssistantId = null
       }
       return
