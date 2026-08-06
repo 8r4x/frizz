@@ -27,7 +27,7 @@ test("minimal tool activity is settled history with no live shimmer or spinner i
   assert.match(block, /\$\{TRANSCRIPT_META_LABEL_CLASS\}/, "the disclosure must consume the shared metadata-label class")
   assert.doesNotMatch(block, /text-\[1[0-9]px\]/, "and must not restate its own type scale")
   assert.match(block, /data-tool-activity-label[\s\S]*className="min-w-0 truncate text-muted"/, "the label shrinks before the adjacent chevron")
-  assert.match(block, /data-tool-activity-chevron[^\n]*size-\[1em\]/, "the adjacent chevron scales with the label")
+  assert.match(block, /data-tool-activity-chevron[^\n]*transcriptMetaChevronClass\(expanded\)/, "the adjacent chevron takes the column's shared, measured treatment")
   assert.doesNotMatch(block, /ml-auto/, "the chevron must stay beside the digest label instead of jumping to the far edge")
   assert.doesNotMatch(block, /frizz-tool-spinner|data-running-indicator|w-2\.5/, "no spinner or reserved mark slot may indent the label")
 })
@@ -68,13 +68,18 @@ test("the live shimmer is the same disclosure as the settled digest, one moment 
   // an empty panel is a control that does nothing.
   assert.match(live, /\{expandable && \(/, "the chevron appears only when a run exists")
 
-  // ONE height for both chevrons. They alternate in a single quiet column — a settled digest directly
-  // above the live row — so a drifting offset reads as two misaligned marks. The value is the
-  // maintainer's own (1771fbe, then be2fd38 "lower digest chevron one pixel"); measured 2026-08-05,
-  // both land 2.90px below the 14px label's cap-band centre.
-  const offsetOf = (block: string) => block.match(/top-\[calc\(0\.032em\+1px\)\]/)?.[0]
-  assert.ok(offsetOf(settled), "the settled chevron keeps its tuned offset")
-  assert.equal(offsetOf(live), offsetOf(settled), "the live chevron must sit at the settled one's height")
+  // ONE treatment for every chevron in the quiet column — the digest, the reasoning toggle and the live
+  // row alternate in a single column, so each placing its own offset by hand is how they drifted (two
+  // vertical offsets, two tones, and a horizontal rhythm nobody had measured: 9.06px of INK where the
+  // CSS said 4px). transcriptMetaChevronClass owns it now, with the readings that set it.
+  const reasoning = source.match(/function ReasoningBlock[\s\S]*?\n}/)?.[0]
+  assert.ok(reasoning, "ReasoningBlock must exist")
+  for (const [name, block] of [["live shimmer", live], ["settled digest", settled], ["reasoning", reasoning]] as const) {
+    assert.match(block, /transcriptMetaChevronClass\(/, `the ${name} chevron must consume the shared treatment`)
+    // A hand-placed nudge beside it is the drift coming back: the correction belongs in the constant,
+    // where the measurement that justifies it lives.
+    assert.doesNotMatch(block, /(-)?translate-y-\[|top-\[calc/, `the ${name} chevron must not re-place itself by hand`)
+  }
 })
 
 test("codex reasoning toggle is a peer of quiet metadata labels", () => {

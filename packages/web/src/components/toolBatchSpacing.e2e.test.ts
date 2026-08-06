@@ -165,14 +165,25 @@ for (const [surface, query, column] of [
         const scope = document.querySelectorAll("[data-transcript-column]")[idx]
         const disclosures = [...scope.querySelectorAll<HTMLElement>("[data-tool-activity] button")]
         const labels = disclosures.map((button) => button.getAttribute("aria-label") ?? "")
+        // INK, not boxes. This used to read `chevronRect.left - labelRect.right` and pin it to 3–5px,
+        // which measured the one thing nobody looks at: the chevron paints 4.67 of its 14 box px, so a
+        // 4px BOX gap was 9.06px of ink and the mark floated away from its label. The box gap is now
+        // deliberately ~1.3px — transcriptMetaChevronClass collapses the box onto the ink — and the
+        // distance that matters is the label's last painted column to the chevron's first.
         const disclosureGeometry = disclosures.map((button) => {
           const label = button.querySelector<HTMLElement>("[data-tool-activity-label]")!
           const chevron = button.querySelector<SVGElement>("[data-tool-activity-chevron]")!
           const buttonRect = button.getBoundingClientRect()
-          const labelRect = label.getBoundingClientRect()
           const chevronRect = chevron.getBoundingClientRect()
+          const labelRect = label.getBoundingClientRect()
+          const cs = getComputedStyle(label)
+          const ctx = document.createElement("canvas").getContext("2d")!
+          ctx.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} / ${cs.lineHeight} ${cs.fontFamily}`
+          const labelInkRight = labelRect.left + ctx.measureText(label.textContent ?? "").actualBoundingBoxRight
+          // An SVG geometry child's rect IS its ink box (stroke included).
+          const chevronInk = [...chevron.querySelectorAll("path")].map((p) => p.getBoundingClientRect())
           return {
-            gap: Math.round((chevronRect.left - labelRect.right) * 10) / 10,
+            inkGap: Math.round((Math.min(...chevronInk.map((r) => r.left)) - labelInkRight) * 10) / 10,
             trailingSpace: Math.round((buttonRect.right - chevronRect.right) * 10) / 10,
           }
         })
@@ -188,7 +199,9 @@ for (const [surface, query, column] of [
       assert.match(collapsed.labels[1], /Expand 2 tool calls: Ran 2 tool calls/, "…and resumes across the batch below it, still presentation-transparent")
       assert.match(collapsed.labels[2], /Expand 3 tool calls: Ran 3 tool calls/, "the second prose tool tail absorbs the following provider batch")
       for (const geometry of collapsed.disclosureGeometry) {
-        assert.ok(geometry.gap >= 3 && geometry.gap <= 5, `digest chevron must sit directly beside its label, got ${geometry.gap}px`)
+        // ~7px of ink at 14px — clear of the last letter, and half the distance the shimmer keeps to its
+        // elapsed clock, so the chevron reads as the label's handle rather than a third mark on the row.
+        assert.ok(geometry.inkGap >= 5.5 && geometry.inkGap <= 8.5, `digest chevron must sit beside its label in INK, got ${geometry.inkGap}px`)
         assert.ok(geometry.trailingSpace > 20, "the full transcript row remains the click target after moving the chevron")
       }
       await page.waitForSelector(".frizz-bash")

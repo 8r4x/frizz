@@ -50,7 +50,7 @@ import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { agentCompletionCall, subAgentCompletionOutcome } from "../lib/subAgentCompletion.ts"
 import { agentReading } from "../lib/agentReading.ts"
 import { ChildOpRow } from "./ChildOpRow.tsx"
-import { TRANSCRIPT_META_LABEL_CLASS } from "../lib/transcriptMetaLabels.ts"
+import { TRANSCRIPT_META_LABEL_CLASS, transcriptMetaChevronClass } from "../lib/transcriptMetaLabels.ts"
 import { InteractionStack } from "./InteractionCards.tsx"
 // The shared card chrome and THE question card both live in their own modules now, so every
 // surface can render them without importing the thread view. QuestionBlockCard in particular is
@@ -1928,7 +1928,7 @@ function MinimalToolActivity({ tools, at }: { tools: CollapsedTool[]; at?: strin
         // Shares TRANSCRIPT_META_LABEL_CLASS rather than restating its type scale — this row and
         // the reasoning label alternate in one column, and the two drifted apart while the size was
         // copied here by hand.
-        className={`group flex w-full min-w-0 items-center gap-1 rounded py-0.5 text-left outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60 ${TRANSCRIPT_META_LABEL_CLASS}`}
+        className={`group flex w-full min-w-0 items-center gap-1.5 rounded py-0.5 text-left outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60 ${TRANSCRIPT_META_LABEL_CLASS}`}
       >
         <span
           data-tool-activity-label
@@ -1937,7 +1937,7 @@ function MinimalToolActivity({ tools, at }: { tools: CollapsedTool[]; at?: strin
         >
           {label}
         </span>
-        <ChevronRight data-tool-activity-chevron aria-hidden="true" size={13} className={`relative top-[calc(0.032em+1px)] size-[1em] shrink-0 text-muted/70 transition-transform group-hover:text-current ${expanded ? "rotate-90" : ""}`} />
+        <ChevronRight data-tool-activity-chevron aria-hidden="true" size={13} className={transcriptMetaChevronClass(expanded)} />
       </button>
       {expanded && (
         <div id={cardsId} className="mt-1.5 flex flex-col">
@@ -4186,12 +4186,12 @@ function ReasoningBlock({ text, sourceId }: { text: string; sourceId?: string })
         aria-controls={bodyId}
         aria-expanded={open}
         aria-label={`${open ? "Collapse" : "Expand"} model reasoning`}
-        className={`${TRANSCRIPT_META_LABEL_CLASS} flex items-center gap-1 self-start rounded outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60`}
+        className={`${TRANSCRIPT_META_LABEL_CLASS} flex items-center gap-1.5 self-start rounded outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60`}
       >
         <span>Reasoning</span>
-        {/* Lucide's chevron ink sits 1.15px below the 13px label's cap-band centre. The same
-            -0.088em correction used by the peer tool-activity chevron leaves a ~0px residual. */}
-        <ChevronRight aria-hidden="true" size={13} className={`size-[1em] shrink-0 -translate-y-[0.088em] transition-transform ${open ? "rotate-90" : ""}`} />
+        {/* One column, one chevron treatment — vertical correction, ink trim and tone all live in
+            transcriptMetaChevronClass with the measurements that set them. */}
+        <ChevronRight aria-hidden="true" size={13} className={transcriptMetaChevronClass(open)} />
       </button>
       {open && (
         <div id={bodyId} className="frizz-reasoning mt-1.5 ml-[5px] border-l border-border/70 pl-3">
@@ -4248,7 +4248,11 @@ export function WorkingIndicator({ since, activityLabel, run }: { since?: string
   // is the LIVE member of that column, and a shorter line box put its ink 1px nearer the card above
   // than a settled "Thought for Ns" in the same slot. Sharing the box is what makes the alternation
   // between them read as one rhythm — the tone stays the shimmer's own.
-  const rowClass = `group flex min-w-0 items-baseline gap-2 rounded text-left outline-none focus-visible:ring-1 focus-visible:ring-fg/60 ${TRANSCRIPT_META_LABEL_CLASS}`
+  // `gap-3` before the clock against `gap-1.5` inside the label group — the chevron is the label's
+  // handle and the elapsed time is its own field, so the 1:2 reads as one cluster and one readout.
+  // Those are INK distances now (~6.4px and ~11.8px); see transcriptMetaChevronClass for why they
+  // were not before.
+  const rowClass = `group flex min-w-0 items-baseline gap-3 rounded text-left outline-none focus-visible:ring-1 focus-visible:ring-fg/60 ${TRANSCRIPT_META_LABEL_CLASS}`
   // ONE LINE, always — the row is a live status reading, and a status reading that changes height
   // as a path gets longer makes the whole tail jump. The label TRUNCATES (maintainer 2026-07-31:
   // "prevent the actual gerund from ever breaking onto two lines. It should get truncated
@@ -4259,24 +4263,21 @@ export function WorkingIndicator({ since, activityLabel, run }: { since?: string
   // own space, which is exactly how `828m 49s` used to put the minutes outside the panel.
   const row = (
     <>
-      {/* The chevron is the LABEL's control, so it rides in the label's own group at the digest's `gap-1`
-          — on the row's `gap-2` it sat equidistant between the gerund and the clock and read as a third,
-          unrelated mark rather than the disclosure's handle. */}
-      <span className="flex min-w-0 items-baseline gap-1">
+      {/* The chevron is the LABEL's control, so it rides in the label's own group — `gap-1` here against
+          the row's `gap-2` before the clock. Those numbers only became the DISTANCES the eye reads once
+          transcriptMetaChevronClass collapsed the glyph's box onto its ink; see that constant. */}
+      <span className="flex min-w-0 items-baseline gap-1.5">
         <span className="min-w-0 truncate shimmer-text">{activityLabel ?? "Thinking…"}</span>
-        {/* Only when there is a run to open, and placed exactly where the settled digest keeps its own —
-            the two rows are one disclosure at two moments of its life, and they stand in the same column,
-            so the live chevron takes that row's maintainer-tuned offset verbatim (1771fbe, then be2fd38
-            "lower digest chevron one pixel"). Measured: both land 2.90px below the 14px label's cap-band
-            centre, i.e. identical. `self-center` rather than the row's baseline — an SVG's baseline is its
-            BOTTOM margin edge, which would hang the whole glyph above the text's ink; both rows are one
-            20px line box, so centring reproduces the peer exactly. */}
+        {/* Only when there is a run to open. `self-center` rather than the row's baseline — an SVG's
+            baseline is its BOTTOM margin edge, which would hang the whole glyph above the text's ink;
+            this row and the settled digest are both one 20px line box, so centring puts the two
+            disclosures' chevrons at exactly one height. */}
         {expandable && (
           <ChevronRight
             data-working-chevron
             aria-hidden="true"
             size={13}
-            className={`relative top-[calc(0.032em+1px)] size-[1em] shrink-0 self-center text-muted/70 transition-transform group-hover:text-fg ${expanded ? "rotate-90" : ""}`}
+            className={`self-center ${transcriptMetaChevronClass(expanded)}`}
           />
         )}
       </span>

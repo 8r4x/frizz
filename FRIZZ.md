@@ -128,6 +128,8 @@ real error. The two rules to internalize:
   shared nudge therefore cannot fix a cluster — measure each glyph, correct each in `em` so it tracks
   the font size, then re-measure and confirm the residual is ~0. Leave sub-pixel offsets alone.
 
+**And every UI change gets an OPTICAL SPACING PASS before you call it done** — load `optical-spacing`, measure with `scripts/ink-gaps.mjs`, and only then say it looks right. No threshold, no "this is just a one-line row". TWO MARKS ON ONE LINE ARE A ROW: a label and its chevron, a gerund and its clock. A `gap` spaces BOXES and a small glyph is mostly empty box — lucide's chevron paints 4.67 of its 14 box px — so `gap-1`/`gap-2` drew **9.06px and 13.00px** of ink here while the CSS read 4 and 8, and nothing in the source looked wrong (maintainer 2026-08-05: *"Fix the fucking optical spacing on that chevron"*). See AGENTS.md § Every UI change gets an optical spacing pass for the full rule and the instrument's overlap caveat.
+
 And when the pattern already exists in a real product — GitHub, Linear, this app's own components — go
 measure the real one and mirror it rather than designing from taste. Reading the real DOM settles in one
 call what two rounds of guessing will not.
