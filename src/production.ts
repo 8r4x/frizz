@@ -418,11 +418,11 @@ try {
   const existing = await existingPort();
   if (existing) {
     const slug = ownSlug();
-    await openOrPrint(existing, true, slug ? `/${slug}` : "");
+    await openOrPrint(existing, true, slug ? `/project/${slug}` : "");
     process.exit(0);
   }
   const joined = await joinRunningFrizz();
-  if (joined) { await openOrPrint(joined.port, true, `/${joined.slug}`); process.exit(0); }
+  if (joined) { await openOrPrint(joined.port, true, `/project/${joined.slug}`); process.exit(0); }
   const claim = tryAcquireProjectLaunchOwner(target, "launcher");
   if (claim.kind !== "acquired") throw new Error("Frizz is starting for this project; retry shortly");
   let release: (() => void) | undefined = await acquireGlobalLaunchLock();
@@ -462,7 +462,7 @@ try {
     portReservation();
     portReservation = undefined;
     const slug = ownSlug();
-    await openOrPrint(port, false, slug ? `/${slug}` : "");
+    await openOrPrint(port, false, slug ? `/project/${slug}` : "");
     await running;
   } finally { release?.(); portReservation?.(); claim.lease.release(); }
 } catch (error) {

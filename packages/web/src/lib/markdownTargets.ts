@@ -1,5 +1,5 @@
 import { FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
-import { apiBase, innerPath, APP_ROUTE_SEGMENTS } from "./base-path.ts"
+import { apiBase, innerPath, projectSlug, APP_ROUTE_SEGMENTS } from "./base-path.ts"
 // Markdown is often written by tools that report local artifacts as links. A browser interprets a
 // POSIX absolute path as a same-origin URL path, which both navigates away from Frizz and produces a
 // deceptive localhost URL. Identify those targets before DOM sanitization so they can never become
@@ -32,7 +32,11 @@ function isFrizzRoute(href: string): boolean {
   if (href === "/" || href.startsWith("/?") || href.startsWith("/#")) return true
   // Strip this page's project prefix first. Under `/nub/thread/x` the in-app link IS `/nub/thread/x`,
   // and without this it reads as a filesystem path and renders as a disabled local-file chip.
-  const inner = innerPath(href.replace(/[?#].*$/u, ""))
+  const bare = href.replace(/[?#].*$/u, "")
+  // A link straight to another project's board — `/project/nub` — is in-app even though it has no
+  // route segment of its own once the prefix is stripped.
+  if (projectSlug(bare)) return true
+  const inner = innerPath(bare)
   const first = inner.split("/")[1] ?? ""
   return APP_ROUTE_SEGMENTS.has(first)
 }

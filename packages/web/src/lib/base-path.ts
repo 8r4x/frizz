@@ -35,11 +35,31 @@ function here(pathname?: string): string {
   return typeof current === "string" ? current : "/"
 }
 
-/** `/nub`, or `""` when this page is the unprefixed launching project. */
+/**
+ * Projects live UNDER a segment of their own rather than at the root.
+ *
+ * `/nub` would have made every project slug a top-level route name, so every page Frizz might later
+ * want — settings, docs, a machine dashboard — would have to be fought for against a directory
+ * somebody happens to have. `/project/nub` costs one segment and keeps the root free.
+ */
+const PROJECT_SEGMENT = "project"
+export const PROJECT_PREFIX = `/${PROJECT_SEGMENT}`
+
+/** The slug this page is showing, or `undefined` for the unprefixed launching project. */
+export function projectSlug(pathname?: string): string | undefined {
+  const [, first, second] = here(pathname).split("/")
+  return first === PROJECT_SEGMENT && second ? second : undefined
+}
+
+/** The page URL for a project — the one place that knows the shape. */
+export function projectHref(slug: string): string {
+  return `${PROJECT_PREFIX}/${slug}`
+}
+
+/** `/project/nub`, or `""` when this page is the unprefixed launching project. */
 export function basePath(pathname?: string): string {
-  const first = here(pathname).split("/")[1] ?? ""
-  if (!first || APP_ROUTE_SEGMENTS.has(first)) return ""
-  return `/${first}`
+  const slug = projectSlug(pathname)
+  return slug ? projectHref(slug) : ""
 }
 
 /** The path with the project prefix removed — what the router reasons about. */
@@ -63,5 +83,8 @@ export function outerPath(inner: string, pathname?: string): string {
  * rather than whichever one happens to have launched the server.
  */
 export function apiBase(pathname?: string): string {
-  return `${FRIZZ_ROUTE_PREFIX}${basePath(here(pathname))}`
+  const slug = projectSlug(pathname)
+  // The API keeps the FLAT `/_frizz/<slug>/…` shape. It already sits inside a reserved namespace, so
+  // it has no root to protect, and the server's split stays a two-part one.
+  return slug ? `${FRIZZ_ROUTE_PREFIX}/${slug}` : FRIZZ_ROUTE_PREFIX
 }

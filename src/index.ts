@@ -588,7 +588,7 @@ let cachedSlugPath: string | undefined;
 function slugPath(): string {
   if (cachedSlugPath === undefined) {
     const slug = ownSlug();
-    cachedSlugPath = slug ? `/${slug}` : "";
+    cachedSlugPath = slug ? `/project/${slug}` : "";
   }
   return cachedSlugPath;
 }
@@ -832,7 +832,7 @@ try {
   {
     const joined = await joinRunningFrizz();
     if (joined) {
-      await openOrPrint(joined.port, true, `/${joined.slug}`);
+      await openOrPrint(joined.port, true, `/project/${joined.slug}`);
       process.exit(0);
     }
   }
