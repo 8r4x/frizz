@@ -83,7 +83,7 @@ function half({ spineAngle, spineLen, spineBend, along, across, side, dir, tailB
   const bulb = []
   const steps = 84
   for (let i = 1; i <= steps; i += 1) bulb.push(at(-Math.PI / 2 + dir * 2 * Math.PI * (i / steps)))
-  return { core: chain(spine.pts, bulb), exit: P, dir: t, tailBend, tailLen, bleed }
+  return { core: chain(spine.pts, bulb), bulb, exit: P, dir: t, tailBend, tailLen, bleed }
 }
 
 function spinePath(params) {
@@ -95,6 +95,7 @@ function spinePath(params) {
   const k = CORE_R / m
   const scale = ([x, y]) => [CX + (x - CX) * k, CY + (y - CY) * k]
   const core = h.core.map(scale)
+  const bulb = h.bulb.map(scale)
   const exit = scale(h.exit)
 
   // Grow the terminal until it leaves the tile (bleed) or hits its length.
@@ -109,7 +110,7 @@ function spinePath(params) {
   }
   const halfPts = chain(core, pts)
   const rot = halfPts.map(([x, y]) => [2 * CX - x, 2 * CY - y])
-  return [...rot.slice(1).reverse(), ...halfPts]
+  return { pts: [...rot.slice(1).reverse(), ...halfPts], bulb }
 }
 
 function c2Error(pts) {
@@ -148,6 +149,19 @@ function crossHalfGraze(pts) {
   return worst
 }
 
+/**
+ * Is the bulb wholly inside the upper-right quadrant?
+ *
+ * Because the mark is C2, containing ONE bulb there puts the other wholly in the
+ * lower-left by construction — so the two can never overlap or share a quadrant.
+ * The margin is half the stroke plus clearance, so the test is about the drawn
+ * ink rather than the centreline.
+ */
+function inUpperRight(bulb) {
+  const m = STROKE / 2 + 6
+  return bulb.every(([x, y]) => x - CX > m && CY - y > m)
+}
+
 /** Upright-ness: an f stands up. A mark whose bounding box is wider than it is
  *  tall reads as an infinity sign or a pair of rings lying down, not a letter. */
 function uprightness(pts) {
@@ -168,13 +182,16 @@ const sigDist = (a, b) => Math.max(...a.map((p, i) => Math.hypot(p[0] - b[i][0],
 // ------------------------------------------------------------------ the sweep
 
 const SWEEP = {
-  spineAngle: [62, 72, 82],
-  spineLen: [48, 72, 96],
-  spineBend: [16, 36, 56, 76], // 0 would be the straight spine; this family swoops
-  // g068's bulb was about 3:1 along the spine, with a counter wide enough to
-  // stay open. Squeezing `across` below ~30 collapses the loop into a sliver.
-  along: [80, 100, 120],
-  across: [30, 40, 50],
+  // Negative: y grows downward, so this heads UP and to the RIGHT, putting the
+  // bulb in the upper-right quadrant and its C2 partner in the lower-left.
+  spineAngle: [-34, -45, -56, -67],
+  // The bulb has to clear the axes, so its size is capped by how far out it
+  // sits. Growing both together is the only way to get a big bulb that still
+  // fits its quadrant.
+  spineLen: [96, 124, 152],
+  spineBend: [0, 14, 28, 42], // 0 is a straight spine; more swoops it
+  along: [58, 78, 98],
+  across: [32, 44, 56],
   side: [1, -1],
   dir: [1, -1],
   tailBend: [0, 24, 48],
@@ -197,20 +214,36 @@ for (const side of SWEEP.side)
                 for (const e of SWEEP.ends) combos.push({ spineAngle, spineLen, spineBend, along, across, side, dir, tailBend, ...e })
 
 const scored = []
+const rejected = { degenerate: 0, quadrant: 0, graze: 0, lyingDown: 0 }
 for (const params of combos) {
-  const pts = spinePath(params)
-  if (!pts || pts.length < 40) continue
+  const built = spinePath(params)
+  if (!built || built.pts.length < 40) {
+    rejected.degenerate += 1
+    continue
+  }
+  const { pts, bulb } = built
+  if (!inUpperRight(bulb)) {
+    rejected.quadrant += 1
+    continue
+  }
   const coarse = pts.filter((_, i) => i % 3 === 0)
   const graze = crossHalfGraze(coarse)
-  if (graze < 22) continue
+  if (graze < 22) {
+    rejected.graze += 1
+    continue
+  }
   const upright = uprightness(pts)
-  if (upright < 1.05) continue // lying down: reads as an infinity sign, not an f
+  if (upright < 1.05) {
+    rejected.lyingDown += 1
+    continue
+  }
   scored.push({ params, pts, graze, upright, c2: c2Error(pts), sig: signature(pts) })
 }
+console.log(`rejected: ${JSON.stringify(rejected)}`)
 
 const unique = []
 for (const s of scored) {
-  if (unique.every((u) => u.params.key !== s.params.key || sigDist(u.sig, s.sig) > 26)) unique.push(s)
+  if (unique.every((u) => u.params.key !== s.params.key || sigDist(u.sig, s.sig) > 20)) unique.push(s)
 }
 
 const TARGET = 144

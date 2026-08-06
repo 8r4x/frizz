@@ -13,7 +13,7 @@ const SHEETS = {
     dir: "out-cursive",
     file: "frizz-cursive-grid.html",
     title: "Frizz — the cursive family",
-    lede: `One swooping path with a bulb at each end, <b>exactly 180&deg; rotationally symmetric</b>. The spine is a curve, not a straight line, but it still cannot kink: the bulb is built <i>from</i> the spine so the spine's own direction is its tangent, and the stroke travels a full turn and rejoins going the same way. Quote an id and I'll refine around it.`,
+    lede: `One swooping path with a bulb at each end, <b>exactly 180&deg; rotationally symmetric</b>. One bulb sits <b>wholly in the upper-right quadrant</b> and the other wholly in the lower-left — never touching, never crossing an axis. The spine is a curve, not a straight line, but it still cannot kink: the bulb is built <i>from</i> the spine so the spine's own direction is its tangent, and the stroke travels a full turn and rejoins going the same way. Quote an id and I'll refine around it.`,
     groups: [["bleed", "Thread runs off the edge"], ["out", "Thread reaches the edge and stops"], ["in", "Thread ends inside the tile"]],
   },
   slash: {

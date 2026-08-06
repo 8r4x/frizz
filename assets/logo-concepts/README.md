@@ -4,7 +4,7 @@ Three sheets of directions for the mark after the `fray` → `frizz` rename, eac
 
 | Sheet | Open | What it covers |
 | --- | --- | --- |
-| Cursive family | [`frizz-cursive-grid.html`](frizz-cursive-grid.html) | 130 variants: one swooping path, a bulb at each end, a curved spine that still cannot kink. Three terminal treatments. **Current direction.** |
+| Cursive family | [`frizz-cursive-grid.html`](frizz-cursive-grid.html) | 77 variants: one swooping path, a bulb at each end, a curved spine that cannot kink. One bulb wholly in the upper-right quadrant, the other wholly in the lower-left. Three terminal treatments. **Current direction.** |
 | Slash spine | [`frizz-slash.html`](frizz-slash.html) | 144 variants with a **guaranteed-straight diagonal backbone** and a bulb hung off each end, in three terminal treatments: bleeding off the edge, stopping at the edge, and ending inside. |
 | Parametric grid | [`frizz-grid.html`](frizz-grid.html) | 144 variants of one construction, swept across blob size, tilt, axis, distance, wrap, origin side and tail length. Every one is exactly 180° rotationally symmetric. |
 | The cursive f | [`frizz-signature-f.html`](frizz-signature-f.html) | The written signature f from [`reference/reference-brief.png`](reference/reference-brief.png) — two loops crossing at a waist, with a crossbar. **Every mark is exactly 180° rotationally symmetric, and measured.** Eight weights and treatments. |
