@@ -524,6 +524,27 @@ export interface TailState extends FoldState {
   // load-bearing for background shells, tailer 2026-07-22). Without this set that late queue-op would
   // re-park an already-delivered report and frizz would "repair" a report the agent had read.
   deliveredReports: Set<string>
+  // Every `tool_use` id THIS session's own model emitted — the OWNERSHIP key for a completion report.
+  //
+  // The runtime writes the `queue-operation` bookkeeping for every background op into the ROOT
+  // transcript, a descendant's included, and the record names no owner (only `sessionId`, which is the
+  // root's for all of them). Meanwhile a CHILD's op is delivered into the CHILD's transcript, which this
+  // TailState never reads — so from here a descendant's op looks queued-and-never-delivered forever,
+  // which is byte-for-byte the signature of the runtime drop `queuedReports` exists to repair. Without
+  // an owner test frizz therefore "repaired" other agents' completions into this one: measured across
+  // four real threads, 66% of completed background-op notifications in a parent transcript belong to a
+  // descendant (1354 of 2052 on the worst), and on the one thread where the repair was live ALL 283 of
+  // its relays were for ops this session never launched.
+  //
+  // A notification's `<tool-use-id>` is the launching tool call, so "did we emit that id?" answers
+  // ownership exactly. Measured on the same four threads: every notification resolved to the parent's
+  // tool_use or to a subagent's, 7 of 3734 to neither, and ZERO descendant ops were attributed here.
+  //
+  // NOT the correlation `reportKind` warns off. That one asks which live dispatch ENTRY a notification
+  // belongs to — a lookup in `subAgents`, which misses a re-steered child and a grandchild (76 of 170).
+  // This is the weaker, total question: was this id ever ours at all. Membership over the whole
+  // transcript needs no live row and cannot be aged out by retirement.
+  ownedToolUseIds: Set<string>
   // CODEX rows only: the sub-agent tracker that fills the two maps above from `spawn_agent` /
   // sub_agent_activity / list_agents plus each child rollout's own turn brackets (codex-subagents.ts).
   // Claude fills them from `trackDispatches` instead, so this stays undefined there.
@@ -654,6 +675,7 @@ export function newTailState(
     retiredSubAgents: new Map(),
     queuedReports: new Map(),
     deliveredReports: new Set(),
+    ownedToolUseIds: new Set(),
     retiredShells: new Map(),
     dismissedOps: new Set(),
     primed: false,
@@ -845,6 +867,16 @@ function trackDispatches(state: TailState, rec: Record): void {
     if (b.type !== "tool_use") continue
     const id = typeof b.id === "string" ? b.id : undefined
     if (!id) continue
+    // OWNERSHIP, recorded BEFORE any of the filters below. A dismissed op and a foreground Agent are
+    // still OURS — the branches under this one decide what to SHOW, which is a different question from
+    // whose completion report this is (see TailState.ownedToolUseIds).
+    //
+    // Narrowed to the three tools that can ever produce a `<task-notification>`, which is exactly the
+    // set `reportKind` recognizes (an agent's report, a background command's, a monitor's). Recording
+    // every tool call instead would work and would also put the whole transcript's tool ids into the
+    // cached tail state on every write. Bash is included REGARDLESS of `run_in_background`: a
+    // foreground one that outlives its timeout is auto-backgrounded, and only its result says so.
+    if (b.name === "Agent" || b.name === "Bash" || b.name === "Monitor") rememberOwnedToolUse(state, id)
     // The operator RETIRED this op. Its dispatch record is still here and always will be — a killed
     // shell never gets a terminal record — so without this line every re-prime mints the row afresh
     // and it reads "running" forever. See FoldState.dismissedOps.
@@ -1422,6 +1454,20 @@ function trackReportDelivery(state: TailState, rec: Record, raw: string): void {
       for (const id of blockTaskIds(block)) state.queuedReports.delete(id)
       continue
     }
+    // WHOSE op is this? A descendant's completion is not ours to repair — the agent that is actually
+    // blocked on it is the child, and injecting it here tells THIS agent it lost work it never started
+    // and re-invokes it for a result it cannot use. Self-healing on purpose: a foreign id already parked
+    // (by a build before this gate, or by a block that carried no tool-use-id) is dropped on sight.
+    //
+    // NO tool-use-id ⇒ treat as ours, deliberately. That is the RECOVERY shape — the notification a new
+    // session emits for ops the previous process orphaned — which carries no per-op tool call and is by
+    // construction about this session's own work. Measured on the corpus, every ordinary `completed`
+    // notification carries one, so this branch costs the gate nothing.
+    const owner = block.match(/<tool-use-id>([^<]*)<\/tool-use-id>/)?.[1]?.trim()
+    if (owner && !state.ownedToolUseIds.has(owner)) {
+      for (const id of blockTaskIds(block)) state.queuedReports.delete(id)
+      continue
+    }
     const parsed = parseReportBlock(block, at, blockTaskIds(block)[0] ?? "")
     for (const id of blockTaskIds(block)) {
       if (modelFacing) {
@@ -1452,6 +1498,25 @@ function trackRelayEchoes(state: TailState, rec: Record): void {
     state.queuedReports.delete(id)
   }
   boundReportMaps(state)
+}
+
+// One entry per op-launching tool call this session has ever made, so it grows with the TRANSCRIPT
+// rather than with what is live, and it rides the cached tail state on every write. Measured on the
+// heaviest thread on this machine (three days, 1466 sub-agents): 8,647 ids ≈ 279 KB encoded, against
+// 12,094 ≈ 390 KB had this recorded every tool call.
+//
+// The cap is ~3x that, because eviction is not free — an evicted id reads as foreign, so the only
+// thing a too-small cap can cost is a repair that should have happened. It can never mint a wrong one,
+// and that asymmetry is the whole point: a missed repair leaves the agent exactly where it already was,
+// while a wrong one hands it another agent's work and re-invokes it to act on it.
+const MAX_OWNED_TOOL_USE_IDS = 25_000
+function rememberOwnedToolUse(state: TailState, id: string): void {
+  state.ownedToolUseIds.add(id)
+  while (state.ownedToolUseIds.size > MAX_OWNED_TOOL_USE_IDS) {
+    const oldest = state.ownedToolUseIds.values().next().value
+    if (oldest === undefined) break
+    state.ownedToolUseIds.delete(oldest)
+  }
 }
 
 // Both structures are unbounded in principle (one entry per child, and a long-running orchestrator
@@ -3428,6 +3493,11 @@ export function createTailer(deps: TailerDeps): Tailer {
       if (!(decoded[field] instanceof Map)) return false
     }
     if (!(decoded.deliveredReports instanceof Set)) return false
+    // A state cached by a build BEFORE the ownership gate carries no `ownedToolUseIds`, and restoring
+    // that would leave the set empty while the fold resumes past every dispatch that filled it — so
+    // every op would read as foreign and NO report would ever be repaired again. Reject the cache and
+    // re-fold instead; it is one replay, once, per thread across the upgrade.
+    if (!(decoded.ownedToolUseIds instanceof Set)) return false
     // `Record` is shadowed in this module by the JSONL record interface — spell the index type out.
     const target = state as unknown as { [key: string]: unknown }
     for (const [key, value] of Object.entries(decoded)) {
