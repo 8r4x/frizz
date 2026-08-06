@@ -1,8 +1,12 @@
 import { lstatSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { frizzTempDir } from "./frizz-paths.ts"
 
-export const SYSTEM_PROMPT_DIR = join(tmpdir(), "frizz-sysprompts")
+// Per-install. The filenames are UUIDs so content cannot collide, but on Linux the first OS user to
+// create this directory sets its mode and the second user's writeFileSync then fails EACCES — and
+// that write (dispatch.ts) is NOT wrapped, so every dispatch for the second user throws.
+export const SYSTEM_PROMPT_DIR = frizzTempDir("frizz-sysprompts")
 
 const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/
 

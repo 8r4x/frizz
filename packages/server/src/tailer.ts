@@ -30,6 +30,7 @@ import {
   type TailStateCache,
 } from "./tail-cache.ts"
 import { log as frizzLog } from "./logging.ts"
+import { frizzTempDir } from "./frizz-paths.ts"
 
 // The JSONL tailer: incrementally reads each registered session's Claude Code transcript
 // (~/.claude/projects/<cwdSlug>/<session_id>.jsonl) to derive liveness telemetry — last activity
@@ -146,7 +147,9 @@ const PRIME_PROGRESS_EVERY = 20
 const DISCOVER_RETRY_MS = 15_000
 // Per-session sink for a captured boot-failure pane, so a stall's root cause (claude's own error text,
 // frozen in the remain-on-exit pane) survives past the pane being killed. Best-effort; inert litter.
-const STALL_LOG_DIR = join(tmpdir(), "frizz-worker-logs")
+// NOTE: per-PROJECT, resolved inside createTailer — the filename is a bare thread slug, so two
+// projects with a thread called `fix-auth` overwrite each other's captured agent output. See
+// stallLogDir below.
 
 export type TurnState = "in-flight" | "idle"
 
@@ -2229,6 +2232,9 @@ export function createTailer(deps: TailerDeps): Tailer {
   const capturePane = deps.capturePane ?? (() => "")
   const capturePanesAsync = deps.capturePanesAsync
   const logDir = deps.sessionLogDir ?? defaultLogDir(deps.project)
+  // Keyed on THIS project's state dir: the stall log is named for a thread slug alone, which is not
+  // unique across projects (and, in a shared /tmp, not across OS users either).
+  const stallLogDir = frizzTempDir("frizz-worker-logs", deps.project.stateDir)
   const mtimeMs = deps.mtimeMs ?? defaultMtimeMs
   const readPermMarker = deps.readPermMarker ?? defaultReadPermMarker(deps.project)
   // The durable prime cache. `undefined` dep ⇒ open the default table in the project DB; `null` ⇒
@@ -3568,8 +3574,8 @@ export function createTailer(deps: TailerDeps): Tailer {
       `thread ${row.slug} (session ${row.session_id}): no transcript ${DISCOVERY_GRACE_MS / 1000}s after dispatch — likely a boot failure. ${isHeadlessRow(row) && !pane.trim() && !authFailure ? "" : "Pane:\n"}${detail.slice(0, 4000)}`,
     )
     try {
-      mkdirSync(STALL_LOG_DIR, { recursive: true })
-      writeFileSync(join(STALL_LOG_DIR, `${row.slug}.stall.log`), `session_id: ${row.session_id}\ncaptured_at: ${new Date(now()).toISOString()}\n\n${detail}\n`)
+      mkdirSync(stallLogDir, { recursive: true })
+      writeFileSync(join(stallLogDir, `${row.slug}.stall.log`), `session_id: ${row.session_id}\ncaptured_at: ${new Date(now()).toISOString()}\n\n${detail}\n`)
     } catch {
       // best-effort — a missing sink is inert
     }

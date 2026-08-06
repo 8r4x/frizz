@@ -13,6 +13,7 @@ import type { AgentBackend, NormalizedEvent } from "./backend/types.ts"
 import { createClaudeBackend } from "./backend/claude.ts"
 import { createCodexBackend } from "./backend/codex.ts"
 import { mkdirSync } from "node:fs"
+import { frizzTempDir } from "./frizz-paths.ts"
 
 function tmp(prefix: string) {
   return mkdtempSync(join(tmpdir(), prefix))
@@ -2554,9 +2555,11 @@ test("tailer: a PRESENT transcript binds directly — no discovery, transcript_i
 
 test("tailer: a transcript missing past the grace window → noTranscript degraded state (not an eternal spinner)", () => {
   const slug = "stall-thread"
-  const stallLog = join(tmpdir(), "frizz-worker-logs", `${slug}.stall.log`)
-  try { rmSync(stallLog) } catch { /* not there */ }
   const h = harness()
+  // Per-project now — keyed on the tailer's project.stateDir. This fixture project has none, so both
+  // sides fall back to the per-install directory; ask for it the same way or this looks in an empty one.
+  const stallLog = join(frizzTempDir("frizz-worker-logs"), `${slug}.stall.log`)
+  try { rmSync(stallLog) } catch { /* not there */ }
   h.storage.upsertSession(row({ slug, tmux_name: `frizz-${slug}` }))
   h.pane.text = "Error: Session ID sid is already in use." // claude's own boot-failure text in the pane
   const t = makeTailer(h)
@@ -2581,7 +2584,7 @@ test("tailer: a transcript missing past the grace window → noTranscript degrad
 // carded as a bare "Stalled" while the reason sat unread in the stall log.
 test("tailer: a present-but-EMPTY (0-byte) transcript past grace is treated as MISSING → degraded (0-byte crash-net hole closed)", () => {
   const slug = "empty-thread"
-  const stallLog = join(tmpdir(), "frizz-worker-logs", `${slug}.stall.log`)
+  const stallLog = join(frizzTempDir("frizz-worker-logs"), `${slug}.stall.log`)
   try { rmSync(stallLog) } catch { /* not there */ }
   const h = harness()
   h.storage.upsertSession(row({ slug, tmux_name: `frizz-${slug}` }))

@@ -792,7 +792,7 @@ test("SendUserFile → an image is copied into the servable cache (sentImages) +
     assert.equal(call.name, "SendUserFile")
     assert.equal(call.caption, "the fix")
     assert.equal(call.sentImages?.length, 1)
-    assert.match(call.sentImages![0], /frizz-tool-images\/[0-9a-f]{32}\.png$/) // servable cache copy, not the source
+    assert.match(call.sentImages![0], /frizz-tool-images-[0-9a-f]{16}\/[0-9a-f]{32}\.png$/) // servable cache copy, not the source
     assert.equal(call.sentFiles, undefined)
     assert.ok(readFileSync(call.sentImages![0]).length >= 12) // the copy exists on disk
   } finally {
@@ -1275,7 +1275,7 @@ test("a screenshot tool_result carrying a base64 image is decoded to a servable 
   const call = parseTranscript(raw)[0].tools[0]
   assert.equal(call.status, "completed")
   assert.ok(call.outputImage, "outputImage path is set")
-  assert.match(call.outputImage!, /frizz-tool-images[/\\][0-9a-f]{32}\.png$/)
+  assert.match(call.outputImage!, /frizz-tool-images-[0-9a-f]{16}[/\\][0-9a-f]{32}\.png$/)
   // The decoded file exists on disk with the exact source bytes, so /local-image can serve it.
   const bytes = readFileSync(call.outputImage!)
   assert.deepEqual(bytes, Buffer.from(PNG_1x1, "base64"))
