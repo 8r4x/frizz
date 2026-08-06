@@ -1,11 +1,11 @@
-import { readFileSync, readdirSync, statSync } from "node:fs"
+import { readFileSync, readdirSync, statSync, type Stats } from "node:fs"
 
 // Bounds on what the scratch-directory doc tab renders. The directory is agent-written and unbounded by
 // design, so the tab reads a BUDGET rather than a folder: enough that a real working doc arrives whole,
 // small enough that a thread which dumped a build log into its scratch space cannot stall the click.
 const SCRATCH_FILE_MAX = 100_000
 const SCRATCH_TOTAL_MAX = 300_000
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 import { randomUUID } from "node:crypto"
 import { z } from "zod"
 import { query, mutation } from "@frizz/rpc/server"
@@ -116,6 +116,10 @@ import { projectRetiredBackgroundOps, retiredOpsFor } from "./transcript.ts"
 import { listProjects } from "./project-registry.ts"
 import { basename } from "node:path"
 import { ProjectCard } from "@frizz/shared"
+import { homedir } from "node:os"
+import { discoverProjectRoot, ensureProjectIdFile, writeProjectIdFile } from "./project-root.ts"
+import { resolveProjectLabel } from "./project-identity.ts"
+import { registerProject } from "./project-registry.ts"
 
 const SlugInput = z.object({ slug: ThreadSlug }).strict()
 
@@ -2406,6 +2410,52 @@ export function createRouter(ctx: AppContext) {
           lastOpenedAt: entry.lastOpenedAt,
           stale: entry.stale,
         })),
+    }),
+
+    /**
+     * Register a directory as a project, from the grid's phantom card.
+     *
+     * The same authority as running `frizz` in that directory, and strictly less: this registers and
+     * resolves an id, it dispatches nothing. Everything it does — walk up to the project root, mint or
+     * adopt `.frizz/.id`, write the index — is what the CLI already does on every launch.
+     */
+    projectAdd: mutation({
+      input: z.object({ path: z.string().min(1) }),
+      output: ProjectCard,
+      handler: async ({ input }) => {
+        const typed = input.path.trim()
+        if (!typed) throw new Error("Enter a folder path.")
+        // `~` is what a person types; it is not a path any filesystem call understands.
+        const expanded = typed === "~" || typed.startsWith("~/") ? join(homedir(), typed.slice(1)) : typed
+        const absolute = resolve(expanded)
+        let stats: Stats
+        try {
+          stats = statSync(absolute)
+        } catch {
+          throw new Error(`No folder at ${absolute}`)
+        }
+        if (!stats.isDirectory()) throw new Error(`That is a file, not a folder: ${absolute}`)
+        // Walk up exactly as the CLI does, so adding ~/repo/packages/web adds ~/repo.
+        const root = discoverProjectRoot(absolute)
+        const id = ensureProjectIdFile(root)
+        const remoteOwner = resolveProjectLabel(root)?.split("/")[0]
+        let registered = registerProject({ dir: root, id, remoteOwner })
+        if (registered.action === "duplicate") {
+          // A copied checkout brought another project's `.frizz/.id` with it; give it one of its own
+          // rather than letting it adopt the original's threads.
+          registered = registerProject({ dir: root, id: writeProjectIdFile(root, randomUUID()), remoteOwner })
+        }
+        if (!registered.entry) throw new Error("Could not register that folder.")
+        const entry = registered.entry
+        return {
+          id: entry.id,
+          slug: entry.slug,
+          name: entry.name ?? basename(entry.path) ?? entry.path,
+          path: entry.path,
+          lastOpenedAt: entry.lastOpenedAt,
+          stale: false,
+        }
+      },
     }),
 
     settingsGet: query({

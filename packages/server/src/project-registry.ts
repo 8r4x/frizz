@@ -1,8 +1,9 @@
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import { slugify } from "@frizz/shared"
 import { frizzPaths } from "./frizz-paths.ts"
+import { readProjectIdFile } from "./project-root.ts"
 
 // THE MACHINE'S LIST OF PROJECTS.
 //
@@ -201,6 +202,71 @@ export function registerProject(
 }
 
 /** Most recently opened first — the order a grid wants. `stale` marks a path that is gone. */
+/**
+ * Seed the registry from state directories that predate it.
+ *
+ * WHY THIS EXISTS. The registry only learns about a project when something opens it, so a machine
+ * that has been running Frizz for months arrives at its first grid with one card — and the operator's
+ * only way to fill it is to visit every repository in a terminal, which is precisely the chore one
+ * server for the machine was supposed to end. Everything needed is already on disk: each state dir is
+ * named for its project id and records the directory it was opened from.
+ *
+ * CONSERVATIVE ON PURPOSE. A state dir is adopted only when the project STILL CLAIMS THAT ID — the
+ * `.frizz/.id` in the directory has to agree. A checkout that has since been re-identified (copied,
+ * or re-created after a delete) is skipped rather than guessed at, because the cost of guessing is a
+ * card that opens the wrong board. Same for a directory that no longer exists.
+ *
+ * DUPLICATES ARE REAL. Two ids can name one path — a project deleted and re-opened leaves the old
+ * state dir behind, and this machine had two for nub and two for boron. The `.frizz/.id` check
+ * settles it: only the id the project currently claims is adopted.
+ *
+ * Runs once at boot and is idempotent: a path already registered is left exactly as it is, so an
+ * operator's rename is never undone.
+ */
+export function backfillRegistry(
+  home = homedir(),
+  read: (root: string) => string | undefined = readProjectIdFile,
+): number {
+  let dirs: string[]
+  try {
+    dirs = readdirSync(join(frizzPaths({ home }).data, "projects"), { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+  } catch {
+    return 0 // no state dirs yet — a genuinely new machine has nothing to recover
+  }
+  const known = new Set(readRegistry(home).projects.map((p) => p.path))
+  let added = 0
+  for (const id of dirs) {
+    const dir = recordedProjectDir(join(frizzPaths({ home }).data, "projects", id))
+    if (!dir || known.has(dir)) continue
+    if (read(dir) !== id) continue
+    try {
+      const result = registerProject({ dir, id }, home)
+      if (result.entry) {
+        known.add(dir)
+        added++
+      }
+    } catch {
+      // One unreadable state dir must not stop the rest; this is a convenience, not a source of truth.
+    }
+  }
+  return added
+}
+
+/** The directory a state dir was last opened from, per the small JSON files the launcher leaves. */
+function recordedProjectDir(stateDir: string): string | undefined {
+  for (const name of ["server.lock", "project-launch.owner"]) {
+    try {
+      const value = (JSON.parse(readFileSync(join(stateDir, name), "utf8")) as { projectDir?: unknown }).projectDir
+      if (typeof value === "string" && value.length > 0 && existsSync(value)) return value
+    } catch {
+      // Missing or malformed; try the next one.
+    }
+  }
+  return undefined
+}
+
 export function listProjects(home = homedir()): (RegistryEntry & { stale: boolean })[] {
   return readRegistry(home)
     .projects.map((p) => ({ ...p, stale: !existsSync(p.path) }))

@@ -3,15 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
-import {
-  deriveSlug,
-  findBySlug,
-  forgetProject,
-  listProjects,
-  readRegistry,
-  registerProject,
-  renameProject,
-} from "./project-registry.ts"
+import { backfillRegistry, deriveSlug, findBySlug, forgetProject, listProjects, readRegistry, registerProject, renameProject } from "./project-registry.ts"
 
 const A = "029a30af-f126-40e3-b04c-d80e74e3e090"
 const B = "50577e5e-802f-4567-bd0e-cf7cbf3d2ed5"
@@ -199,6 +191,63 @@ test("forgetting a project removes exactly one card", () => {
     assert.equal(forgetProject(A, home), true)
     assert.equal(forgetProject(A, home), false, "idempotent")
     assert.deepEqual(readRegistry(home).projects.map((p) => p.id), [B])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+// A machine that has been running Frizz for months arrives at its first grid with ONE card, and the
+// only way to fill it would be to visit every repository in a terminal — the chore one server per
+// machine exists to end. Everything needed is already on disk.
+test("backfill recovers projects from existing state dirs, and refuses to guess", () => {
+  const home = mkdtempSync(join(tmpdir(), "frizz-backfill-"))
+  try {
+    const stateDir = (id: string) => join(home, ".frizz", "projects", id)
+    const seed = (id: string, dir: string, file = "server.lock") => {
+      mkdirSync(stateDir(id), { recursive: true })
+      writeFileSync(join(stateDir(id), file), JSON.stringify({ projectDir: dir }))
+    }
+    const repo = (name: string) => {
+      const dir = join(home, name)
+      mkdirSync(dir, { recursive: true })
+      return dir
+    }
+
+    const alpha = repo("alpha")
+    const beta = repo("beta")
+    const movedAway = join(home, "gone")
+    const reidentified = repo("reidentified")
+
+    seed("id-alpha", alpha)
+    seed("id-beta", beta, "project-launch.owner") // the other file the launcher leaves
+    seed("id-gone", movedAway) // directory no longer exists
+    seed("id-stale", reidentified) // the project claims a DIFFERENT id now
+
+    // Stands in for each project's own `.frizz/.id`.
+    const claims: Record<string, string> = {
+      [alpha]: "id-alpha",
+      [beta]: "id-beta",
+      [reidentified]: "id-something-else",
+    }
+    const recovered = backfillRegistry(home, (root) => claims[root])
+    assert.equal(recovered, 2)
+
+    const slugs = listProjects(home).map((p) => p.slug).sort()
+    assert.deepEqual(slugs, ["alpha", "beta"])
+    assert.equal(
+      listProjects(home).some((p) => p.path === movedAway),
+      false,
+      "a directory that no longer exists is not a project",
+    )
+    assert.equal(
+      listProjects(home).some((p) => p.path === reidentified),
+      false,
+      "a checkout that claims another id is skipped rather than guessed at",
+    )
+
+    // Idempotent: a second pass adds nothing and disturbs nothing.
+    assert.equal(backfillRegistry(home, (root) => claims[root]), 0)
+    assert.deepEqual(listProjects(home).map((p) => p.slug).sort(), ["alpha", "beta"])
   } finally {
     rmSync(home, { recursive: true, force: true })
   }

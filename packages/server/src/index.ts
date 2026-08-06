@@ -41,6 +41,7 @@ import { createBootProgressPublisher } from "./boot-progress.ts"
 import { log as frizzLog } from "./logging.ts"
 import { createTenantMap } from "./tenants.ts"
 import { findBySlug } from "./project-registry.ts"
+import { backfillRegistry } from "./project-registry.ts"
 
 export const SERVER_SHUTDOWN_TIMEOUT_MS = 4_000
 export const SERVER_FORCE_EXIT_MS = 5_000
@@ -654,6 +655,15 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       (value) => { ctx = value },
     )
     tenants.adopt(project, ctx)
+    // Recover the projects this machine already has state for. Without it a machine that has been
+    // running Frizz for months reaches its first grid with ONE card, and the only way to fill it is
+    // to visit every repository in a terminal — the chore one server per machine exists to end.
+    try {
+      const recovered = backfillRegistry()
+      if (recovered > 0) frizzLog.info("server", `registry: recovered ${recovered} project(s) from existing state`)
+    } catch (error) {
+      frizzLog.warn("server", `registry backfill skipped: ${error instanceof Error ? error.message : error}`)
+    }
 
     // Resolve GitHub detection in the background. The original promise is retained and drained on
     // rollback so even an injected/hung initializer cannot outlive ownership silently.
