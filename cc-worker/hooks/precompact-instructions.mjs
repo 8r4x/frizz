@@ -22,20 +22,32 @@
 //
 //   no hook (control)                    postTokens  4,060
 //   qualitative "prefer a long summary"  postTokens  4,429   (+9% — noise)
-//   explicit ">= 15,000 words"           postTokens 20,339   (5.0x the control)  <-- WORD_TARGET
+//   explicit ">= 15,000 words"           postTokens 20,339   (5.0x the control)
 //   explicit ">= 35,000 words"           postTokens  5,182   (WORSE, and slower + dearer)
 //
-// DO NOT RAISE WORD_TARGET without re-measuring: the response is NON-MONOTONIC. 35,000 words is past
-// what the model will produce in one response and asking for it degraded compliance badly — a quarter
-// the output of the 15,000 ask (2,174 words vs 9,829), at 11.2 min / $3.73 vs 8.6 min / $2.04. Three
-// single samples, so treat the exact figures as indicative, but 15,000 was clearly the best of them.
+// The response is NON-MONOTONIC, so do not move WORD_TARGET far in either direction without
+// re-measuring. 35,000 words is past what the model will produce in one response and asking for it
+// degraded compliance badly — a quarter the output of the 15,000 ask (2,174 words vs 9,829), at
+// 11.2 min / $3.73 vs 8.6 min / $2.04. Three single samples; treat the exact figures as indicative.
 //
-// Adjectives do nothing; a hard number does the work. The COST is latency: the 15,000-word run
-// produced no compaction result at all inside a 10-minute cap and only completed on a longer budget.
-// That is acceptable here because frizz workers run with `precomputeCompactionEnabled`, which arms
-// summary generation in a background sidecar at ~80% of the window and swaps it in at the real
-// threshold — so on an `auto` trigger the wait is largely hidden. A `manual` /compact pays it in
-// front of the human.
+// WHY IT IS NO LONGER 15,000 (2026-08-06, maintainer: "let's tone this down a bit"). That row is the
+// one that reads as a win in isolation and is the expensive one in production: a 20,339-token summary
+// is where the next context STARTS, so every compaction handed the thread ~16k tokens of overhead over
+// the control before it did any work. On a long-lived thread that compounds — each cycle begins nearer
+// the ceiling, so the next compaction arrives sooner, and the window between them shrinks. Observed on
+// the maintainer's own 10-day `are-taking-over-an-in-flight-epic` thread: 31 compactions, then a
+// cold resume whose replay overflowed the window outright ("Prompt is too long"), leaving a thread that
+// could not complete the one turn that would have compacted it. The latency was the visible cost; the
+// post-compaction FOOTPRINT was the one that actually mattered.
+//
+// 5,000 is UNMEASURED — an explicit number (adjectives measurably do nothing) at a third of the ask,
+// chosen to keep the mechanism that works while cutting what it leaves behind. There is no data point
+// between the qualitative row and 15,000; if this matters, re-run the differential above and add rows.
+//
+// The remaining COST is latency. That is acceptable because frizz workers run with
+// `precomputeCompactionEnabled`, which arms summary generation in a background sidecar at ~80% of the
+// window and swaps it in at the real threshold — so on an `auto` trigger the wait is largely hidden. A
+// `manual` /compact pays it in front of the human.
 //
 // HARD CEILING: the summary is ONE model response, so it is bounded by max output tokens (64k for
 // Opus 5 / Sonnet 5, ~48k words). A 200k-token summary is unreachable at any prompt.
@@ -51,8 +63,9 @@
 import { readFileSync } from 'node:fs';
 import { currentSessionId } from '../scripts/frizz/config.mjs';
 
-// See "LENGTH IS ONLY STEERABLE BY AN EXPLICIT NUMBER" above before changing this.
-const WORD_TARGET = 15000;
+// See "LENGTH IS ONLY STEERABLE BY AN EXPLICIT NUMBER" and "WHY IT IS NO LONGER 15,000" above before
+// changing this. The number is load-bearing; the prose around it is not.
+const WORD_TARGET = 5000;
 
 /** @type {{ agent_id?: unknown, agentId?: unknown, trigger?: string, session_id?: string }} */
 let input = {};
@@ -80,22 +93,20 @@ const scratch = sid
 
 // Written as an editorial brief, not as a command block — see TONE MATTERS above.
 const brief = [
-  'This is a frizz worker session driving one engineering effort (`' + thread + '`). Three things ' +
-    'matter more here than brevity does, because they are what actually gets lost in compaction:',
+  'This is a frizz worker session driving one engineering effort (`' + thread + '`). Three things to ' +
+    'get right, because they are what actually gets lost in compaction:',
   '',
-  '1. LENGTH. Write an EXHAUSTIVE summary, not a condensed one: target at least ' +
-    WORD_TARGET.toLocaleString('en-US') + ' words. There is ample room for it, so do not compress. ' +
-    'A short summary is the failure mode here — omitting something load-bearing is far worse than ' +
-    'including something redundant.',
+  '1. LENGTH. Target about ' + WORD_TARGET.toLocaleString('en-US') + ' words — long enough that ' +
+    'nothing load-bearing has to be dropped, but this is a working handover and not an archive. ' +
+    'Spend the length on what the next turn cannot recover for itself.',
   '',
   '2. THE HIGH-LEVEL APPROACH, AT HIGH FIDELITY. Preserve the shape of the work, not just its ' +
     'mechanics: what problem is being solved, the approach chosen, the approaches considered and ' +
-    'REJECTED and why, and the reasoning that led there. Reproduce this in full rather than ' +
-    'condensing it into a sentence — a summary that lists edits but loses the plan leaves the next ' +
-    'turn unable to judge whether a step is still the right one. Include substantial verbatim ' +
-    'excerpts of the code and output that matter rather than describing them from memory.',
+    'REJECTED and why, and the reasoning that led there. This is the part worth its space — a summary ' +
+    'that lists edits but loses the plan leaves the next turn unable to judge whether a step is still ' +
+    'the right one. Quote code and output where the exact text matters; summarize where it does not.',
   '',
-  'Carry forward, in as much detail as you can:',
+  'Carry forward:',
   '- The task list and its state — every item, marked done / in progress / not started / blocked.',
   '- Decisions made and the rationale for each, especially any the human made, approved, or reversed.',
   '- Constraints, conventions, and explicit human instructions or corrections — in the human\'s own ' +

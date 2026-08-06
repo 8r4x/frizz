@@ -1928,7 +1928,7 @@ function MinimalToolActivity({ tools, at }: { tools: CollapsedTool[]; at?: strin
         // Shares TRANSCRIPT_META_LABEL_CLASS rather than restating its type scale — this row and
         // the reasoning label alternate in one column, and the two drifted apart while the size was
         // copied here by hand.
-        className={`group flex w-full min-w-0 items-center gap-1.5 rounded py-0.5 text-left outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60 ${TRANSCRIPT_META_LABEL_CLASS}`}
+        className={`group flex w-full min-w-0 items-baseline gap-1.5 rounded py-0.5 text-left outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60 ${TRANSCRIPT_META_LABEL_CLASS}`}
       >
         <span
           data-tool-activity-label
@@ -4186,7 +4186,7 @@ function ReasoningBlock({ text, sourceId }: { text: string; sourceId?: string })
         aria-controls={bodyId}
         aria-expanded={open}
         aria-label={`${open ? "Collapse" : "Expand"} model reasoning`}
-        className={`${TRANSCRIPT_META_LABEL_CLASS} flex items-center gap-1.5 self-start rounded outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60`}
+        className={`${TRANSCRIPT_META_LABEL_CLASS} flex items-baseline gap-1.5 self-start rounded outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60`}
       >
         <span>Reasoning</span>
         {/* One column, one chevron treatment — vertical correction, ink trim and tone all live in
@@ -4268,16 +4268,14 @@ export function WorkingIndicator({ since, activityLabel, run }: { since?: string
           transcriptMetaChevronClass collapsed the glyph's box onto its ink; see that constant. */}
       <span className="flex min-w-0 items-baseline gap-1.5">
         <span className="min-w-0 truncate shimmer-text">{activityLabel ?? "Thinking…"}</span>
-        {/* Only when there is a run to open. `self-center` rather than the row's baseline — an SVG's
-            baseline is its BOTTOM margin edge, which would hang the whole glyph above the text's ink;
-            this row and the settled digest are both one 20px line box, so centring puts the two
-            disclosures' chevrons at exactly one height. */}
+        {/* Only when there is a run to open. The glyph places ITSELF off the text baseline — see
+            transcriptMetaChevronClass — so this row needs no alignment of its own. */}
         {expandable && (
           <ChevronRight
             data-working-chevron
             aria-hidden="true"
             size={13}
-            className={`self-center ${transcriptMetaChevronClass(expanded)}`}
+            className={transcriptMetaChevronClass(expanded)}
           />
         )}
       </span>

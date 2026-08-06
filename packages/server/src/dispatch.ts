@@ -199,10 +199,11 @@ function ensureSafeDirectDirectory(parent: string, name: string): string {
 }
 
 // The scratchpad skeleton (a CONVENTION, never validated): a compact continuity structure plus a
-// visible task-status/collaboration legend. Its body remains ordinary free-form Markdown; workers may
-// optionally prepend the reserved `stop_hook` frontmatter described in the contract. Both backends
-// share it with sub-agents, so stable per-agent subsections + merge-only edits keep concurrent progress
-// useful instead of destructive.
+// visible task-status/collaboration legend. Its body is ordinary free-form Markdown with NO reserved
+// fields — the `stop_hook:` frontmatter key was removed 2026-08-06 (unused in 659 pads on disk, and
+// superseded by the SQLite-backed `mcp__frizz__recurring_prompt`). Both backends share it with
+// sub-agents, so stable per-agent subsections + merge-only edits keep concurrent progress useful
+// instead of destructive.
 export function scratchpadContent(title: string, kind: BackendKind = "claude"): string {
   const guide = `> Status legend: \`[ ]\` pending · \`[/]\` in progress · \`[x]\` complete · \`[-]\` cancelled · \`[?]\` blocked / needs input
 > Collaboration: re-read before every edit; preserve existing content; keep each agent's updates under its own \`### <agent path>\` subsection in Agent progress. A scoped scratchpad merge is Frizz coordination state and remains allowed when a delegated task limits its deliverable paths. Never delete, truncate, reinitialize, move, or replace the whole file.`
@@ -326,7 +327,6 @@ export function codexScratchpadHookConfig(
     ],
   })
   const bashBackgroundHook = join(dirname(hookScript), "bash-background.mjs")
-  const scratchpadStopHook = join(dirname(hookScript), "scratchpad-stop.mjs")
   return {
     bypass_hook_trust: true,
     hooks: {
@@ -338,14 +338,6 @@ export function codexScratchpadHookConfig(
         hooks: [{
           type: "command",
           command: `node ${JSON.stringify(bashBackgroundHook)} --frizz-thread`,
-        }],
-      }],
-      // An optional scratchpad-frontmatter reminder can keep a worker from forgetting owned work when
-      // it tries to rest. The hook itself persists the two-minute anti-loop cooldown.
-      Stop: [{
-        hooks: [{
-          type: "command",
-          command: `node ${JSON.stringify(scratchpadStopHook)} --session=${JSON.stringify(sessionId)}`,
         }],
       }],
       // Native Codex children inherit the root scratchpad mandate even with `fork_turns:"none"`.

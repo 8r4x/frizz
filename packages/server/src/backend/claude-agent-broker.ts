@@ -286,7 +286,15 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
           // closing under the frame) on the same diagnostic channel every other drop site here uses.
           void handle.send(message).catch((error: unknown) => {
             const detail = error instanceof Error ? error.message : String(error)
-            const diagnostic = { kind: "stderr" as const, message: `${CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX}: ${detail}`, truncated: false }
+            // NAME THE MESSAGE. The prefix alone told frizz that *something* was thrown away, which is
+            // one grep better than silence but still leaves the ledger unable to act: it cannot tombstone
+            // a row it cannot identify, so a refused send sat at `enqueued` for the full hour
+            // `ageDeliveries` grants a queue entry — pretending to be held by a daemon that had in fact
+            // refused it. The id is the DELIVERY id frizz opened the ledger row under, so carrying it here
+            // is what lets the server retire exactly that row and hand the operator their text back.
+            // Ids only, never the text — same rule as the `input received` line above.
+            const droppedId = typeof message?.id === "string" ? ` id=${message.id}` : ""
+            const diagnostic = { kind: "stderr" as const, message: `${CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX}:${droppedId} ${detail}`, truncated: false }
             // Persist FIRST, then relay — same order and reasoning as the SDK's onDiagnostic above: a
             // drop is worth attributing even when no frizz is attached to hear it right now.
             writeDiagnostic?.(diagnostic)

@@ -178,6 +178,23 @@ export function describeClaudeBrokerExit(record: ClaudeBrokerExitRecord | null):
  * The rest of `stderr` is ordinary provider noise, which is why this matches the daemon's own drop
  * prefix rather than widening to the kind. A line per drop is what turns that afternoon into one grep.
  */
+/**
+ * The DELIVERY id a drop diagnostic names, when it names one.
+ *
+ * This is what turns the drop from a log line into something frizz can act on: the id is the ledger row
+ * the operator's message is sitting in, so the server can retire exactly that row instead of leaving it
+ * to `ageDeliveries`, which holds a queue entry for an hour on the (here false) premise that an enqueue
+ * proves the provider is holding it.
+ *
+ * Returns undefined for a drop from a daemon too old to carry the id — those still log, still surface,
+ * and still age out the slow way, which is the pre-existing behaviour rather than a regression.
+ */
+export function droppedDeliveryId(diagnostic: ClaudeDiagnostic): string | undefined {
+  if (diagnostic.kind !== "stderr") return undefined
+  if (!diagnostic.message.startsWith(CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX)) return undefined
+  return diagnostic.message.match(/\bid=([0-9a-fA-F-]{36})\b/)?.[1]
+}
+
 export function describeClaudeBrokerDiagnostic(diagnostic: ClaudeDiagnostic): string | undefined {
   if (diagnostic.kind === "stderr") {
     return diagnostic.message.startsWith(CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX) ? diagnostic.message : undefined

@@ -36,7 +36,8 @@ import {
 } from "./backend/claude-agent-broker-bridge.ts"
 import { createClaudeRuntimeIngest, type ClaudeRuntimeIngest } from "./backend/claude-runtime-ingest.ts"
 import type { ClaudePermissionMode } from "./backend/claude-agent-sdk-protocol.ts"
-import { describeClaudeBrokerDiagnostic } from "./backend/claude-broker-diagnostics.ts"
+import { describeClaudeBrokerDiagnostic, droppedDeliveryId } from "./backend/claude-broker-diagnostics.ts"
+import { cancelDelivery } from "./delivery-ledger.ts"
 import {
   ADOPTION_RECONCILE_INTERVAL_MS,
   adoptionRuntimeBinding,
@@ -680,6 +681,27 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         onDiagnostic: (slug, _sessionId, diagnostic) => {
           const line = describeClaudeBrokerDiagnostic(diagnostic)
           if (line) frizzLog.warn("broker", `claude broker ${slug}: ${line}`)
+          // A LOG LINE IS NOT ENOUGH, and this is where that was learned twice. The line above turned a
+          // silent afternoon into one grep; it still left the operator staring at eight gray bubbles with
+          // no way to move them. `ageDeliveries` holds an `enqueued` row for a full hour on the premise
+          // that "an enqueue record is positive evidence Claude Code holds the message in its own queue"
+          // — true of every other enqueue, and precisely false of a REFUSED one, which no one holds.
+          //
+          // So retire the row the instant the daemon says it threw the message away. Clicking the bubble
+          // could not do it: unqueue asks the CURRENT daemon to cancel the id, and the daemon that
+          // refused it is by then dead, so the answer is `false` and the operator gets "Too late — that
+          // message has already left the queue", which is exactly backwards (maintainer 2026-08-05: "If
+          // they've been dequeued and swallowed, then they shouldn't be showing up in the fucking UI").
+          //
+          // Tombstoning is SAFE here for the very reason the unqueue path is otherwise careful: the whole
+          // content of this diagnostic is the provider stating it never received the message, so there is
+          // no chance of hiding words the agent is about to read. cancelDelivery also drops the orphaned
+          // JSONL enqueue bubble, and hands the text back for a re-send.
+          const dropped = droppedDeliveryId(diagnostic)
+          if (dropped) {
+            cancelDelivery(storage, slug, dropped)
+            resources.board?.refresh()
+          }
         },
       })
     : undefined
