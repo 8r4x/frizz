@@ -186,6 +186,29 @@ export interface StartedServer {
 // through to the SPA shell with a 200, i.e. a blank page rather than an error.
 const isApiUrl = (url: string) => url === FRIZZ_ROUTE_PREFIX || url.startsWith(`${FRIZZ_ROUTE_PREFIX}/`)
 
+/**
+ * Split `/_frizz/<slug>/rest` into its project slug and the request the tenant's own app should see.
+ *
+ * A project slug and a route name share this position, so `/_frizz/rpc/board` and
+ * `/_frizz/nub/rpc/board` look alike until you know which slugs exist. The registry settles it, and
+ * cannot be ambiguous: it refuses to mint a slug that shadows one of Frizz's own route names.
+ *
+ * An unprefixed `/_frizz/rpc/…` stays the LAUNCHING project, so a client that has not learned about
+ * slugs yet keeps working.
+ */
+export function splitTenantRequest(
+  url: string,
+  isKnownSlug: (slug: string) => boolean,
+): { slug: string; rest: string } | undefined {
+  if (!isApiUrl(url)) return undefined
+  const after = url.slice(FRIZZ_ROUTE_PREFIX.length)
+  const match = /^\/([^/?#]+)(.*)$/u.exec(after)
+  if (!match) return undefined
+  const [, first = "", rest = ""] = match
+  if (!isKnownSlug(first)) return undefined
+  return { slug: first, rest: `${FRIZZ_ROUTE_PREFIX}${rest || "/"}` }
+}
+
 const MIME: Record<string, string> = {
   ".html": "text/html",
   ".js": "text/javascript",

@@ -20,7 +20,9 @@ import { log as frizzLog } from "./logging.ts"
 // cannot take down every other project in a shared process. `activate` therefore reports and returns
 // undefined rather than throwing: a project that will not open is one dead card, not an outage.
 
-export interface TenantMapOptions {
+export interface TenantMapOptions<App = unknown> {
+  /** Builds the HTTP app for a tenant. Without it the map holds contexts only. */
+  createApp?: (ctx: AppContext) => App
   /** Injected so a test can build a context without the real one. Defaults to `createContext`. */
   createContext: (opts: ContextOptions) => AppContext | Promise<AppContext>
   /** Extra options every tenant's context is built with (claudeBin, codexBin, …). */
@@ -28,7 +30,7 @@ export interface TenantMapOptions {
   onError?: (project: Project, error: unknown) => void
 }
 
-export interface TenantMap {
+export interface TenantMap<App = unknown> {
   /** Open a project, or return the already-open one. `undefined` means it failed and was reported. */
   activate(project: Project): Promise<AppContext | undefined>
   /**
@@ -39,17 +41,19 @@ export interface TenantMap {
    * card the way an additional project is. Adopting the result afterwards makes it addressable here
    * without moving that boot path, and without giving `activate` a second failure mode.
    */
-  adopt(project: Project, ctx: AppContext): AppContext
+  adopt(project: Project, ctx: AppContext, app?: App): AppContext
+  /** The HTTP app for an OPEN project, if one was built. */
+  appFor(projectId: string): App | undefined
   get(projectId: string): AppContext | undefined
   /** Close one project's resources while every other project keeps serving. */
   deactivate(projectId: string): Promise<boolean>
   /** Every open project, in activation order. */
-  active(): { project: Project; ctx: AppContext }[]
+  active(): { project: Project; ctx: AppContext; app?: App }[]
   closeAll(): Promise<void>
 }
 
-export function createTenantMap(options: TenantMapOptions): TenantMap {
-  const open = new Map<string, { project: Project; ctx: AppContext }>()
+export function createTenantMap<App = unknown>(options: TenantMapOptions<App>): TenantMap<App> {
+  const open = new Map<string, { project: Project; ctx: AppContext; app?: App }>()
   // An activation in flight, so two concurrent openings of one project build ONE context rather than
   // two racing SQLite handles onto the same file.
   const opening = new Map<string, Promise<AppContext | undefined>>()
@@ -69,7 +73,7 @@ export function createTenantMap(options: TenantMapOptions): TenantMap {
     const attempt = (async () => {
       try {
         const ctx = await options.createContext({ ...options.contextOptions, project })
-        open.set(project.id, { project, ctx })
+        open.set(project.id, { project, ctx, app: options.createApp?.(ctx) })
         return ctx
       } catch (error) {
         // THE SEAM. createContext already rolls its own partial resources back; what must not happen
@@ -115,10 +119,11 @@ export function createTenantMap(options: TenantMapOptions): TenantMap {
 
   return {
     activate,
-    adopt(project, ctx) {
-      open.set(project.id, { project, ctx })
+    adopt(project, ctx, app) {
+      open.set(project.id, { project, ctx, app })
       return ctx
     },
+    appFor: (projectId) => open.get(projectId)?.app,
     get: (projectId) => open.get(projectId)?.ctx,
     deactivate,
     active: () => [...open.values()],
