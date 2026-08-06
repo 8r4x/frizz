@@ -3996,52 +3996,61 @@ function SubAgentReportLine({ from, unnamed, dispatchId, sourceId }: { from: str
   // identity, and the drill-in survives: the word "Sub-agent" carries the link.
   const label = unnamed ? undefined : from
   const openTitle = unnamed && from ? `${CHILD_OPEN_TITLE.AGENT} — ${from}` : CHILD_OPEN_TITLE.AGENT
+  // ONE element for the whole unnamed reading, never a "Sub-agent" span plus the shared trailing verb.
+  // The divider's flex `gap` is 12px — a full em at its 12px petite-caps — because it was tuned to stand
+  // either side of a QUOTED TITLE. With the title gone it would land between two words of one phrase, and
+  // measured on the real page that is the difference between a word space and an em of air.
+  if (label === undefined) {
+    return (
+      <WakeDivider icon={Bot} sourceId={sourceId} marker="agent-report" ariaLabel={canDrill ? undefined : "Sub-agent reported"}>
+        {canDrill ? (
+          <button
+            type="button"
+            data-subagent-report-open
+            title={openTitle}
+            aria-label={`${CHILD_OPEN_TITLE.AGENT}${from ? `: ${from}` : ""}`}
+            onClick={() => pushSubAgentDrawer(slug!, dispatchId!, { label: "Sub-agent", subagentType: from })}
+            onMouseDown={(e) => e.preventDefault()}
+            className="shrink-0 rounded-sm underline decoration-muted/30 underline-offset-2 outline-none transition-colors hover:text-fg hover:decoration-fg/60 focus-visible:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
+          >
+            Sub-agent reported
+          </button>
+        ) : (
+          <span className="shrink-0" title={from || undefined}>Sub-agent reported</span>
+        )}
+      </WakeDivider>
+    )
+  }
   return (
-    <WakeDivider icon={Bot} sourceId={sourceId} marker="agent-report" ariaLabel={canDrill ? undefined : `Sub-agent ${label ?? ""} reported`.replace(/\s+/g, " ")}>
-      {label === undefined && canDrill ? (
-        <button
-          type="button"
-          data-subagent-report-open
-          title={openTitle}
-          aria-label={`${CHILD_OPEN_TITLE.AGENT}${from ? `: ${from}` : ""}`}
-          onClick={() => pushSubAgentDrawer(slug!, dispatchId!, { label: "Sub-agent", subagentType: from })}
-          onMouseDown={(e) => e.preventDefault()}
-          className="shrink-0 rounded-sm underline decoration-muted/30 underline-offset-2 outline-none transition-colors hover:text-fg hover:decoration-fg/60 focus-visible:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
-        >
-          Sub-agent
-        </button>
-      ) : (
-        <span className="shrink-0" title={label === undefined ? from || undefined : undefined}>Sub-agent</span>
-      )}
+    <WakeDivider icon={Bot} sourceId={sourceId} marker="agent-report" ariaLabel={canDrill ? undefined : `Sub-agent ${label} reported`}>
+      <span className="shrink-0">Sub-agent</span>
       {/* Guillemets OUTSIDE the truncating element, per the completion line: a title clipped at a narrow
           width still closes its quote. The TITLE is the only part allowed to shrink (`min-w-0 truncate`
           on it and on its flex host) — a `shrink-0` wrapper here let a long name push the whole divider
           past the pane at 420px, losing its left hairline, while the completion line beside it clipped
           cleanly. Codex task names are long snake_case identifiers, so that is the common case, not the
           edge. `label` is the child's real title: its codex task name, or on Claude the dispatch
-          description the parser resolved. Absent ⇒ the whole quoted slot is dropped, never filled with
-          the profile. */}
-      {label !== undefined && (
-        <span className="flex min-w-0 items-center">
-          <span className="shrink-0">«</span>
-          {canDrill ? (
-            <button
-              type="button"
-              data-subagent-report-open
-              title={CHILD_OPEN_TITLE.AGENT}
-              aria-label={`${CHILD_OPEN_TITLE.AGENT}: ${label}`}
-              onClick={() => pushSubAgentDrawer(slug!, dispatchId!, { label, subagentType: from })}
-              onMouseDown={(e) => e.preventDefault()}
-              className="min-w-0 truncate rounded-sm underline decoration-muted/30 underline-offset-2 outline-none transition-colors hover:text-fg hover:decoration-fg/60 focus-visible:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
-            >
-              {label}
-            </button>
-          ) : (
-            <span className="min-w-0 truncate">{label}</span>
-          )}
-          <span className="shrink-0">»</span>
-        </span>
-      )}
+          description the parser resolved — the unnamed case returned above and never reaches here, so
+          the quoted slot is either a real title or absent entirely, never the profile. */}
+      <span className="flex min-w-0 items-center">
+        <span className="shrink-0">«</span>
+        {canDrill ? (
+          <button
+            type="button"
+            data-subagent-report-open
+            title={CHILD_OPEN_TITLE.AGENT}
+            aria-label={`${CHILD_OPEN_TITLE.AGENT}: ${label}`}
+            onClick={() => pushSubAgentDrawer(slug!, dispatchId!, { label, subagentType: from })}
+            onMouseDown={(e) => e.preventDefault()}
+            className="min-w-0 truncate rounded-sm underline decoration-muted/30 underline-offset-2 outline-none transition-colors hover:text-fg hover:decoration-fg/60 focus-visible:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
+          >
+            {label}
+          </button>
+        ) : (
+          <span className="min-w-0 truncate">{label}</span>
+        )}
+        <span className="shrink-0">»</span>
+      </span>
       <span className="shrink-0">reported</span>
     </WakeDivider>
   )

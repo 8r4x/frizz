@@ -274,7 +274,9 @@ test("`recurring_prompt` reads back what is armed, and a `start` reports what it
     // VERBATIM, or the read is worthless — this is the text a worker would have to retype to restore.
     assert.ok(text.includes(armed.prompt), text)
     assert.match(text, /stop_hook/)
-    assert.match(text, /every 600s/)
+    // The SAME cadence form `start` prints — one formatter, so a worker cannot be told "every 10 min"
+    // when it arms and "every 600s" when it reads back the very same number.
+    assert.match(text, /every 10 min/)
     assert.match(text, /last fired 2026-08-06T11:00:00\.000Z/)
     // A trigger that is OFF must not be listed as if it were live.
     assert.doesNotMatch(text, /post_compaction/)

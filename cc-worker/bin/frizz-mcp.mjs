@@ -383,6 +383,14 @@ function threadSlug() {
   return slug
 }
 
+/** How a heartbeat cadence reads back to the worker. ONE formatter, because `start` and `get` describe
+ * the same stored number and a worker that saw "every 15 min" armed must not read "every 900s" back.
+ * @param {number|undefined} seconds */
+function cadenceLabel(seconds) {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds)) return undefined
+  return seconds % 60 === 0 ? `${seconds / 60} min` : `${seconds}s`
+}
+
 /** Render an armed recurring prompt for the worker to read: which triggers are live, the cadence, when
  * each last fired, and the text VERBATIM (never truncated — reading back a summary of your own
  * instruction is exactly as blind as not reading it).
@@ -394,7 +402,9 @@ function recurringPromptReport(rp) {
   const triggers = [
     rp.stopHook ? `  stop_hook — every time you come to rest (${fired(rp.lastRestFiredAt)})` : null,
     rp.heartbeat
-      ? `  heartbeat — every ${rp.intervalSeconds ?? "?"}s (${fired(rp.lastScheduleFiredAt)})`
+      // The SAME cadence form `start` reports (cadenceLabel), or the two readings of one row disagree
+      // about the number they are describing — "every 15 min" armed, "every 900s" read back.
+      ? `  heartbeat — every ${cadenceLabel(rp.intervalSeconds) ?? "?"} (${fired(rp.lastScheduleFiredAt)})`
       : null,
     rp.postCompaction ? `  post_compaction — every compaction (${fired(rp.lastCompactFiredAt)})` : null,
   ].filter(Boolean)
@@ -478,7 +488,7 @@ async function recurringPrompt(args) {
   // nothing" — so the clause only ever appears when the row genuinely carried something.
   const replaced = written?.result?.replaced
 
-  const every = heartbeat ? (interval % 60 === 0 ? `${interval / 60} min` : `${interval}s`) : null
+  const every = heartbeat ? cadenceLabel(interval) : null
   // One clause per armed trigger, joined — with three of them the old nested ternary could no longer say
   // what was actually armed, and a worker that misreads which trigger it holds waits for a delivery that
   // is never coming.
