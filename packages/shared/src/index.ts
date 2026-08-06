@@ -1255,6 +1255,31 @@ export const SetOwnThreadRecurringPromptInput = z.object({
 // z.input. Inferring the output here is what made the drift gate fire.
 export type SetOwnThreadRecurringPromptInput = z.input<typeof SetOwnThreadRecurringPromptInput>
 
+// What the write ANSWERS with: the row it just overwrote. A `start` REPLACES whatever the thread held —
+// including text the HUMAN edited in the footer panel — and the writer could not previously see what it
+// destroyed. Returning the superseded row lets the tool say so in the same breath, so a blind overwrite
+// is at least a REPORTED one. `null` when the thread held nothing.
+export const SetOwnThreadRecurringPromptResult = z.object({
+  replaced: ThreadRecurringPrompt.nullable(),
+}).strict()
+export type SetOwnThreadRecurringPromptResult = z.infer<typeof SetOwnThreadRecurringPromptResult>
+
+// The READ half, from `mcp__frizz__recurring_prompt` with `action: "get"`. Without it a worker can only
+// write: it cannot tell whether it is armed at all, what text it armed before its context was compacted
+// away, or whether the human has since edited it in the footer. Same caller rules as the write above —
+// keyed on the slug alone, and no thread parameter a model could aim at anyone else's row.
+export const GetOwnThreadRecurringPromptInput = z.object({
+  slug: ThreadSlug,
+}).strict()
+export type GetOwnThreadRecurringPromptInput = z.infer<typeof GetOwnThreadRecurringPromptInput>
+
+// `null` — rather than an omitted field — because "nothing is armed" is the answer a worker most needs
+// to be able to tell apart from "this server is too old to know", which arrives as an HTTP 404 instead.
+export const OwnThreadRecurringPromptResult = z.object({
+  recurringPrompt: ThreadRecurringPrompt.nullable(),
+}).strict()
+export type OwnThreadRecurringPromptResult = z.infer<typeof OwnThreadRecurringPromptResult>
+
 // ---- THE ONE-OFF TIMER's three worker procedures -------------------------------------------------
 // Same caller and therefore the same rules as the recurring prompt above: no session guard (the MCP
 // server outlives the session ids underneath it), and no thread parameter a model could aim elsewhere.
@@ -2138,6 +2163,24 @@ export const TranscriptMessage = z.object({
   // resumed session whose dispatch scrolled out), and the line then renders as plain text, not a dead link.
   peerFrom: z.string().optional(),
   peerDispatchId: z.string().optional(),
+  // …and the tell that `peerFrom` is ONLY that subagent_type — that the parser could not resolve the
+  // dispatch's own description for this sender. It matters because a profile cell is not a name: every
+  // child dispatched at `frizz:opus-high` reports under the identical string, so a divider reading
+  // «frizz:opus-high» names the MODEL, not the work, and two siblings are indistinguishable
+  // (maintainer 2026-08-06: "I'm also still occasionally seeing things like 'Agent <OPUS:HIGH>
+  // rested'"). The client renders an unnamed sender as "Sub-agent reported" and keeps the cell in the
+  // tooltip, rather than promoting a profile to a title.
+  //
+  // Resolution is genuinely late-arriving, not merely missing: the description comes from the DISPATCH
+  // record, so a report rendered while the window has not yet reached that record is unnamed and gains
+  // its title once it has. Set only on the Claude path — a codex peer names a real task.
+  peerUnnamed: z.literal(true).optional(),
+  // The sender's own RUNTIME agent id (`origin.senderTaskId`) — kept so a LATER pass can finish the job
+  // the fold could not. The paged transcript RPC folds a bounded window, so a report whose dispatch
+  // scrolled above the page start has no description available at fold time; the tailer still holds the
+  // pairing, and `projectTranscriptPeerNames` uses this id to ask it. Never a drawer key on its own —
+  // that is `peerDispatchId`, which the same pass can also supply once this resolves.
+  peerSenderTaskId: z.string().optional(),
 })
 export type TranscriptMessage = z.infer<typeof TranscriptMessage>
 

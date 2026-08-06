@@ -5,7 +5,7 @@ import {
 } from "node:fs"
 import { join } from "node:path"
 import watcher from "@parcel/watcher"
-import type { BoardSnapshot, ThreadView, RuntimeState, PlanView } from "@frizz/shared"
+import type { BoardSnapshot, ThreadView, RuntimeState, PlanView, ThreadRecurringPrompt } from "@frizz/shared"
 import { BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isDirectSubAgent, isValidAwaitingTimer, type PermissionMode as PermissionModeValue } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import type { Project } from "./project.ts"
@@ -549,6 +549,38 @@ export function resolvePendingPermission(row: Pick<SessionRow, "permission_pendi
   return parsed.success ? parsed.data : undefined
 }
 
+// The recurring prompt as BOTH readers see it: the board's footer panel (through the thread view below)
+// and the worker's own `mcp__frizz__recurring_prompt` with `action: "get"` (through the router). One
+// projection because they must agree — a worker reading back a different row than the human is editing
+// is exactly the confusion the read action exists to end.
+//
+// Present iff the text and its generation are both set (storage writes and clears them together).
+// Projected even with EVERY TRIGGER OFF — that is the state switching them all off leaves, and the text
+// and the cadence have to survive it or the panel would open empty.
+export function resolveRecurringPrompt(
+  row: Pick<
+    SessionRow,
+    | "recurring_prompt" | "recurring_armed_at" | "recurring_on_rest" | "recurring_on_schedule"
+    | "recurring_on_compact" | "recurring_interval_ms" | "recurring_rest_fired_at"
+    | "recurring_schedule_fired_at" | "recurring_compact_fired_at"
+  >,
+): ThreadRecurringPrompt | undefined {
+  if (!row.recurring_prompt || !row.recurring_armed_at) return undefined
+  return {
+    prompt: row.recurring_prompt,
+    stopHook: row.recurring_on_rest === 1,
+    heartbeat: row.recurring_on_schedule === 1,
+    postCompaction: row.recurring_on_compact === 1,
+    // Carried whenever a cadence has ever been chosen, INCLUDING while the heartbeat is off — the
+    // minutes field has to read back what switching it on again would use.
+    intervalSeconds: row.recurring_interval_ms ? Math.round(row.recurring_interval_ms / 1000) : undefined,
+    armedAt: row.recurring_armed_at,
+    lastRestFiredAt: row.recurring_rest_fired_at ?? undefined,
+    lastScheduleFiredAt: row.recurring_schedule_fired_at ?? undefined,
+    lastCompactFiredAt: row.recurring_compact_fired_at ?? undefined,
+  }
+}
+
 // Project a fold-observed limit fault onto the wire view: which window blew, when, when it comes back,
 // and whether frizz will deliver its own "continue". `resumesAt` is present only when the provider's
 // own reset clock resolves it (a weekly clock never does — see textResetInstant); its ABSENCE does not
@@ -713,24 +745,8 @@ function sessionThreadView(
     // already-delivered (or superseded) bump the row has not been swept clean of yet.
     snoozePrompt: snoozedUntil ? row.snooze_prompt ?? undefined : undefined,
     claudeRuntime: row.claude_runtime === "broker" ? "broker" as const : row.claude_runtime === "tmux" ? "tmux" as const : undefined,
-    // The recurring prompt. Present iff the text and its generation are both set (storage writes and
-    // clears them together). Projected even with BOTH TRIGGERS OFF — that is the state switching them
-    // off leaves, and the text and the cadence have to survive it or the panel would open empty.
-    recurringPrompt: row.recurring_prompt && row.recurring_armed_at
-      ? {
-          prompt: row.recurring_prompt,
-          stopHook: row.recurring_on_rest === 1,
-          heartbeat: row.recurring_on_schedule === 1,
-          postCompaction: row.recurring_on_compact === 1,
-          // Carried whenever a cadence has ever been chosen, INCLUDING while the heartbeat is off — the
-          // minutes field has to read back what switching it on again would use.
-          intervalSeconds: row.recurring_interval_ms ? Math.round(row.recurring_interval_ms / 1000) : undefined,
-          armedAt: row.recurring_armed_at,
-          lastRestFiredAt: row.recurring_rest_fired_at ?? undefined,
-          lastScheduleFiredAt: row.recurring_schedule_fired_at ?? undefined,
-          lastCompactFiredAt: row.recurring_compact_fired_at ?? undefined,
-        }
-      : undefined,
+    // The recurring prompt — the same projection the worker's own `action: "get"` reads back.
+    recurringPrompt: resolveRecurringPrompt(row),
     needsYou,
     awaitingBackground,
     crashed,

@@ -6,7 +6,8 @@
  *
  *   spawn_thread     — dispatch a brand-new TOP-LEVEL frizz board thread (its own session + scratchpad +
  *                      independent drive — NOT an in-session Agent/Task helper).
- *   recurring_prompt — arm ONE piece of text frizz re-sends the caller, at every rest and/or on a clock.
+ *   recurring_prompt — arm ONE piece of text frizz re-sends the caller, at every rest and/or on a clock
+ *                      and/or after every compaction; and READ BACK what is currently armed.
  *   timer            — arm a ONE-OFF prompt for a single instant; a thread may hold many at once.
  *
  * Future worker-facing frizz tools join the TOOLS registry below rather than mounting a second server:
@@ -114,10 +115,17 @@ const RECURRING_PROMPT = {
     "as ANY background task of yours is outstanding, so the moment you are parked behind a background " +
     "shell or a sub-agent — exactly when you most need waking — they go silent. This one is delivered by " +
     "frizz itself and is unaffected.\n\n" +
+    "READ IT BACK WITH `action: \"get\"` — and do that BEFORE any `start` that is not a fresh arming. A " +
+    "thread has AT MOST ONE recurring prompt, so a `start` REPLACES whatever is there, triggers and all, " +
+    "and the text you are about to destroy may not be yours: the HUMAN can edit it in the thread footer, " +
+    "and a compaction can take your own memory of arming it. `get` answers with the exact text currently " +
+    "armed, which triggers are on, the cadence, and when each trigger last fired. Reach for it whenever " +
+    "you are about to change one trigger and keep the rest, whenever you are unsure whether you are armed " +
+    "at all, and after a compaction. (A `start` also reports what it replaced, so a blind overwrite is at " +
+    "least a visible one.)\n\n" +
     "The text arrives VERBATIM as an ordinary user turn, so write it as an instruction to your future " +
-    "self. A thread has AT MOST ONE recurring prompt: calling this again REPLACES it, triggers and all. " +
-    "At most one scheduled delivery is ever outstanding and its clock runs from the last one DELIVERED, " +
-    "so you can never be handed a backlog at once.\n\n" +
+    "self. At most one scheduled delivery is ever outstanding and its clock runs from the last one " +
+    "DELIVERED, so you can never be handed a backlog at once.\n\n" +
     "STOP IT when the work it drives is done (`action: \"stop\"`) — one left armed on a finished thread " +
     "wakes it forever. The human sees it in the thread footer and can edit or switch it off there. " +
     "Replying ALLDONE on its own line also stops it, both triggers at once, but be sure before you do: " +
@@ -128,8 +136,11 @@ const RECURRING_PROMPT = {
     properties: {
       action: {
         type: "string",
-        enum: ["start", "stop"],
-        description: "`start` arms (or replaces) this thread's recurring prompt; `stop` disarms it.",
+        enum: ["start", "stop", "get"],
+        description:
+          "`start` arms (or replaces) this thread's recurring prompt; `stop` disarms it; `get` reads back " +
+          "what is armed right now — the text, the triggers, the cadence and each trigger's last delivery " +
+          "— without changing anything. `get` takes no other argument.",
       },
       prompt: {
         type: "string",
@@ -372,12 +383,59 @@ function threadSlug() {
   return slug
 }
 
-/** The `recurring_prompt` handler: arm or disarm this thread's re-prompt, on either or both triggers.
+/** Render an armed recurring prompt for the worker to read: which triggers are live, the cadence, when
+ * each last fired, and the text VERBATIM (never truncated — reading back a summary of your own
+ * instruction is exactly as blind as not reading it).
+ * @param {{ prompt: string, stopHook: boolean, heartbeat: boolean, postCompaction: boolean,
+ *           intervalSeconds?: number, armedAt: string, lastRestFiredAt?: string,
+ *           lastScheduleFiredAt?: string, lastCompactFiredAt?: string }} rp */
+function recurringPromptReport(rp) {
+  const fired = (/** @type {string|undefined} */ at) => (at ? `last fired ${at}` : "never fired yet")
+  const triggers = [
+    rp.stopHook ? `  stop_hook — every time you come to rest (${fired(rp.lastRestFiredAt)})` : null,
+    rp.heartbeat
+      ? `  heartbeat — every ${rp.intervalSeconds ?? "?"}s (${fired(rp.lastScheduleFiredAt)})`
+      : null,
+    rp.postCompaction ? `  post_compaction — every compaction (${fired(rp.lastCompactFiredAt)})` : null,
+  ].filter(Boolean)
+  // EVERY trigger off is a real, reachable state — the human can switch them off in the footer without
+  // clearing the words — and it is the one a worker would otherwise misread as "armed and running".
+  const head = triggers.length
+    ? `Armed since ${rp.armedAt}, on:\n${triggers.join("\n")}`
+    : `Text is parked (armed ${rp.armedAt}) but EVERY TRIGGER IS OFF — nothing will fire until one is switched back on.`
+  return `${head}\n\nThe text, verbatim:\n\n${rp.prompt}`
+}
+
+/** The `recurring_prompt` handler: arm, disarm, or READ BACK this thread's re-prompt.
  * @param {Record<string, unknown>} args @returns {Promise<string>} */
 async function recurringPrompt(args) {
   const slug = threadSlug()
   const action = typeof args.action === "string" ? args.action.trim() : ""
-  if (action !== "start" && action !== "stop") throw new Error("`action` must be either \"start\" or \"stop\"")
+  if (action !== "start" && action !== "stop" && action !== "get") {
+    throw new Error("`action` must be one of \"start\", \"stop\" or \"get\"")
+  }
+
+  if (action === "get") {
+    // A frizz server older than this tool has no such procedure and answers 404. Say what that means,
+    // rather than leaving a worker to read a bare HTTP status as "nothing is armed" — the two answers
+    // could not be further apart.
+    let payload
+    try {
+      payload = await callRpc("getOwnThreadRecurringPrompt", { slug })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (/HTTP 404/.test(message)) {
+        throw new Error(
+          "this frizz server predates the read action, so it cannot tell you what is armed. Treat the " +
+          "armed state as UNKNOWN — do not assume it is empty — and check the thread footer instead.",
+        )
+      }
+      throw err
+    }
+    const rp = payload?.result?.recurringPrompt
+    if (!rp) return "No recurring prompt is armed on this thread. Nothing will re-prompt you."
+    return recurringPromptReport(rp)
+  }
 
   if (action === "stop") {
     await callRpc("setOwnThreadRecurringPrompt", { slug, prompt: null, stopHook: false, heartbeat: false, postCompaction: false })
@@ -408,7 +466,7 @@ async function recurringPrompt(args) {
     throw new Error("at least one is required: set `stop_hook: true`, give `heartbeat_seconds`, set `post_compaction: true`, or any combination")
   }
 
-  await callRpc("setOwnThreadRecurringPrompt", {
+  const written = await callRpc("setOwnThreadRecurringPrompt", {
     slug,
     prompt,
     stopHook,
@@ -416,6 +474,9 @@ async function recurringPrompt(args) {
     postCompaction,
     ...(heartbeat ? { intervalSeconds: interval } : {}),
   })
+  // `replaced` is absent against a server that predates it, which is indistinguishable from "there was
+  // nothing" — so the clause only ever appears when the row genuinely carried something.
+  const replaced = written?.result?.replaced
 
   const every = heartbeat ? (interval % 60 === 0 ? `${interval / 60} min` : `${interval}s`) : null
   // One clause per armed trigger, joined — with three of them the old nested ternary could no longer say
@@ -429,9 +490,14 @@ async function recurringPrompt(args) {
   const when = clauses.length === 1
     ? clauses[0]
     : `${clauses.slice(0, -1).join(", ")} AND ${clauses[clauses.length - 1]}`
+  // Spelled out in full, not summarized: if this overwrote the human's own edit, the words themselves
+  // are the only way the worker can put them back.
+  const superseded = replaced
+    ? `\n\nIT REPLACED an existing recurring prompt — check that discarding it was intended, and restore ` +
+      `it with another \`start\` if it was not:\n\n${recurringPromptReport(replaced)}\n`
+    : ""
   return (
-    `Recurring prompt armed — frizz will send you this ${when}. It replaces any recurring prompt this ` +
-    "thread had before.\n\n" +
+    `Recurring prompt armed — frizz will send you this ${when}.${superseded}\n\n` +
     "Call this tool again with `action: \"stop\"` once the work it drives is finished — one left armed on " +
     "a finished thread wakes it forever. The human can also edit or switch it off in the thread footer. " +
     "Replying ALLDONE stops it too, but only use that when there is genuinely nothing left: it " +

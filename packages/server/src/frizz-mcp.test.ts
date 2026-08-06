@@ -73,6 +73,9 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
       Object.keys(list.result.tools[1].inputSchema.properties).sort(),
       ["action", "heartbeat_seconds", "post_compaction", "prompt", "stop_hook"],
     )
+    // The READ action is part of the advertised surface, not just the handler — a worker only reaches for
+    // what `tools/list` shows it, and writing blind is what having no read at all produced.
+    assert.deepEqual(list.result.tools[1].inputSchema.properties.action.enum, ["start", "stop", "get"])
     // `timer` is the same shape of tool and takes the same care: `action` alone is required, everything
     // else depends on which action, and it too exposes NO THREAD parameter.
     assert.deepEqual(list.result.tools[2].inputSchema.required, ["action"])
@@ -217,8 +220,119 @@ test("`recurring_prompt` arms and disarms the CALLING thread, identified from it
     rpc.send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "recurring_prompt", arguments: { action: "pause" } } })
     const bogus = await rpc.next(5)
     assert.equal(bogus.result.isError, true)
-    assert.match(bogus.result.content[0].text, /`action` must be either/)
+    assert.match(bogus.result.content[0].text, /`action` must be one of/)
     assert.equal(seen.length, before)
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
+
+// The READ action. A worker that can only WRITE its recurring prompt overwrites the human's own edit
+// without ever seeing it, and after a compaction cannot tell an armed thread from an unarmed one. What
+// this pins is that `get` reads the row back VERBATIM (a summary of your own instruction is as blind as
+// no read at all), that it mutates nothing, and that a `start` names the row it superseded.
+test("`recurring_prompt` reads back what is armed, and a `start` reports what it replaced", async () => {
+  const armed = {
+    prompt: "the human's own words, edited in the footer",
+    stopHook: true,
+    heartbeat: true,
+    postCompaction: false,
+    intervalSeconds: 600,
+    armedAt: "2026-08-06T10:00:00.000Z",
+    lastRestFiredAt: "2026-08-06T11:00:00.000Z",
+  }
+  const seen: Array<{ url: string; body: any }> = []
+  const http = createServer((req, res) => {
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      const url = req.url ?? ""
+      seen.push({ url, body: JSON.parse(body || "{}") })
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({
+        result: url.endsWith("/getOwnThreadRecurringPrompt")
+          ? { recurringPrompt: armed }
+          : { replaced: armed },
+      }))
+    })
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "owning-thread" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+
+    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "recurring_prompt", arguments: { action: "get" } } })
+    const got = await rpc.next(2)
+    assert.equal(got.result.isError, undefined)
+    assert.deepEqual(seen.at(-1), { url: "/_frizz/rpc/getOwnThreadRecurringPrompt", body: { slug: "owning-thread" } })
+    const text: string = got.result.content[0].text
+    // VERBATIM, or the read is worthless — this is the text a worker would have to retype to restore.
+    assert.ok(text.includes(armed.prompt), text)
+    assert.match(text, /stop_hook/)
+    assert.match(text, /every 600s/)
+    assert.match(text, /last fired 2026-08-06T11:00:00\.000Z/)
+    // A trigger that is OFF must not be listed as if it were live.
+    assert.doesNotMatch(text, /post_compaction/)
+
+    // An unarmed thread reads back as an explicit "nothing", never as an empty report.
+    const empty = createServer((req, res) => {
+      req.resume()
+      req.on("end", () => {
+        res.writeHead(200, { "content-type": "application/json" })
+        res.end(JSON.stringify({ result: { recurringPrompt: null } }))
+      })
+    })
+    await new Promise<void>((resolve) => empty.listen(0, "127.0.0.1", resolve))
+    writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port: (empty.address() as { port: number }).port }))
+    rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "recurring_prompt", arguments: { action: "get" } } })
+    const none = await rpc.next(3)
+    assert.equal(none.result.isError, undefined)
+    assert.match(none.result.content[0].text, /No recurring prompt is armed/)
+    empty.close()
+
+    // …and a `start` over an existing row hands the superseded words back, so an overwrite the worker
+    // did not intend is visible in the same reply rather than silently gone.
+    writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+    rpc.send({
+      jsonrpc: "2.0", id: 4, method: "tools/call",
+      params: { name: "recurring_prompt", arguments: { action: "start", prompt: "my own new text" } },
+    })
+    const replaced = await rpc.next(4)
+    assert.equal(replaced.result.isError, undefined)
+    assert.match(replaced.result.content[0].text, /IT REPLACED an existing recurring prompt/)
+    assert.ok(replaced.result.content[0].text.includes(armed.prompt), replaced.result.content[0].text)
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
+
+// A frizz server older than this tool 404s the read procedure. A bare HTTP status would read to a worker
+// as "nothing is armed", which is the opposite of the truth — so the refusal has to say UNKNOWN.
+test("`recurring_prompt` get says the state is UNKNOWN against a server that predates the read", async () => {
+  const http = createServer((req, res) => {
+    req.resume()
+    req.on("end", () => {
+      res.writeHead(404, { "content-type": "text/plain" })
+      res.end("no procedure getOwnThreadRecurringPrompt")
+    })
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port: (http.address() as { port: number }).port }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "owning-thread" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "recurring_prompt", arguments: { action: "get" } } })
+    const stale = await rpc.next(2)
+    assert.equal(stale.result.isError, true)
+    assert.match(stale.result.content[0].text, /UNKNOWN/)
   } finally {
     rpc.kill()
     http.close()

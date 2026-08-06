@@ -16,6 +16,9 @@ import {
   DeliverQueuedNowResult,
   SetThreadRecurringPromptInput,
   SetOwnThreadRecurringPromptInput,
+  SetOwnThreadRecurringPromptResult,
+  GetOwnThreadRecurringPromptInput,
+  OwnThreadRecurringPromptResult,
   SetOwnThreadStopHookInput,
   SetOwnThreadHeartbeatInput,
   SetOwnThreadTimerInput,
@@ -76,7 +79,7 @@ import {
   ThreadLocation,
 } from "@frizz/shared"
 import { mayHaveLiveBackgroundWork, needsFreshProcessForLimit, type AppContext } from "./context.ts"
-import { appServerTurnStalled } from "./board.ts"
+import { appServerTurnStalled, resolveRecurringPrompt } from "./board.ts"
 import { runThreadUpdate } from "./frizz.ts"
 import { repairThreadFile } from "./repair.ts"
 import { reopenArchivedThreadForFollowUp, resumeThread, wakeParkedThreadForFollowUp } from "./resume.ts"
@@ -1026,7 +1029,7 @@ export function createRouter(ctx: AppContext) {
         // Registry row → its session's transcript; foreign slug (a session id) → resolved directly; else [].
         // backendFor routes a codex thread through the codex rollout reader (else it renders empty).
         const page = readLatestThreadTranscriptPage(ctx.project, ctx.storage, input.slug, ctx.backendFor)
-        return retireOpsInPage(input.slug, projectTranscriptPageAgentLifecycles(page, (id) => ctx.tailer.subAgent(input.slug, id)))
+        return retireOpsInPage(input.slug, projectTranscriptPageAgentLifecycles(page, (id) => ctx.tailer.subAgent(input.slug, id), (taskId) => ctx.tailer.subAgentByTaskId?.(input.slug, taskId)))
       },
     }),
 
@@ -1037,7 +1040,7 @@ export function createRouter(ctx: AppContext) {
       output: TranscriptPage,
       handler: async ({ input }) => {
         const page = readEarlierThreadTranscriptPage(ctx.project, ctx.storage, input.slug, input.cursor, ctx.backendFor)
-        return retireOpsInPage(input.slug, projectTranscriptPageAgentLifecycles(page, (id) => ctx.tailer.subAgent(input.slug, id)))
+        return retireOpsInPage(input.slug, projectTranscriptPageAgentLifecycles(page, (id) => ctx.tailer.subAgent(input.slug, id), (taskId) => ctx.tailer.subAgentByTaskId?.(input.slug, taskId)))
       },
     }),
 
@@ -1920,10 +1923,14 @@ export function createRouter(ctx: AppContext) {
     // agent making a DIFFERENT thread loop forever is not a capability frizz hands out.
     setOwnThreadRecurringPrompt: mutation({
       input: SetOwnThreadRecurringPromptInput,
+      output: SetOwnThreadRecurringPromptResult,
       handler: async ({ input }) => {
         const row = ctx.storage.getSession(input.slug)
         if (!row) throw new Error(`thread ${input.slug} is not registered`)
         assertRecurringPromptArmable(input, row)
+        // Read off the row we already hold, BEFORE the write — so the tool can name what it superseded
+        // without a second call and without a race against a footer edit landing in between.
+        const replaced = resolveRecurringPrompt(row) ?? null
         if (!ctx.storage.setRecurringPromptBySlug(input.slug, {
           prompt: input.prompt,
           stopHook: input.stopHook,
@@ -1935,6 +1942,26 @@ export function createRouter(ctx: AppContext) {
           throw new Error(`thread ${input.slug} could not be updated`)
         }
         ctx.board.refresh()
+        return { replaced }
+      },
+    }),
+
+    // The READ. A worker had no way to see the row it was writing: not after a compaction took the text
+    // with it, and not after the human edited it in the footer panel — so every arming was blind, and a
+    // `start` meant to adjust one trigger silently rewrote the human's words. This answers with the same
+    // projection the board shows, so the two readers can never disagree.
+    //
+    // A MUTATION despite reading nothing, for `listOwnThreadTimers`'s reason exactly: the worker's MCP
+    // server POSTs every call through one `callRpc` helper, and a procedure declared as a query answers
+    // only GET. That helper ships inside every dispatched session and cannot be updated under a live
+    // worker, so the shape that ages best is the one it already speaks.
+    getOwnThreadRecurringPrompt: mutation({
+      input: GetOwnThreadRecurringPromptInput,
+      output: OwnThreadRecurringPromptResult,
+      handler: async ({ input }) => {
+        const row = ctx.storage.getSession(input.slug)
+        if (!row) throw new Error(`thread ${input.slug} is not registered`)
+        return { recurringPrompt: resolveRecurringPrompt(row) ?? null }
       },
     }),
 

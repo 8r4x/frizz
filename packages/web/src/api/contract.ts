@@ -35,6 +35,9 @@ import type {
   SetThreadProfileResult,
   SetThreadRecurringPromptInput,
   SetOwnThreadRecurringPromptInput,
+  SetOwnThreadRecurringPromptResult,
+  GetOwnThreadRecurringPromptInput,
+  OwnThreadRecurringPromptResult,
   SetOwnThreadStopHookInput,
   SetOwnThreadHeartbeatInput,
   SetOwnThreadTimerInput,
@@ -148,7 +151,10 @@ export interface Api {
   // The WORKER-facing counterpart, called by `mcp__frizz__recurring_prompt` rather than by this client.
   // Declared here because rpc-contract.ts proves the two procedure NAME SETS are equal — an RPC the
   // client cannot name is one nothing checks the shape of. No browser call site uses it.
-  setOwnThreadRecurringPrompt(input: SetOwnThreadRecurringPromptInput): Promise<void>
+  setOwnThreadRecurringPrompt(input: SetOwnThreadRecurringPromptInput): Promise<SetOwnThreadRecurringPromptResult>
+  // The READ half of the same tool (`action: "get"`), so a worker can see the row before it overwrites
+  // it — after a compaction, or after the human edited the text in the footer panel.
+  getOwnThreadRecurringPrompt(input: GetOwnThreadRecurringPromptInput): Promise<OwnThreadRecurringPromptResult>
   // THE SUPERSEDED WORKER PROCEDURES, declared here only so the drift gate can see them. A worker's MCP
   // server outlives every frizz restart, so a session dispatched before the stop hook and the heartbeat
   // merged is still POSTing these names; the router aliases them onto the one recurring-prompt row
@@ -289,6 +295,7 @@ export const PROCEDURES = {
   setThreadSnooze: "mutation",
   setThreadRecurringPrompt: "mutation",
   setOwnThreadRecurringPrompt: "mutation",
+  getOwnThreadRecurringPrompt: "mutation",
   setOwnThreadStopHook: "mutation",
   setOwnThreadHeartbeat: "mutation",
   setThreadHeartbeat: "mutation",
