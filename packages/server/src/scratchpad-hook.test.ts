@@ -18,7 +18,6 @@ import { scratchpadContent, codexScratchpadHookConfig } from "./dispatch.ts"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const HOOK = join(here, "../../../cc-worker/hooks/scratchpad.mjs")
-const STOP_HOOK = join(here, "../../../cc-worker/hooks/scratchpad-stop.mjs")
 const SID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
 
 function newProject(): string {
@@ -67,15 +66,6 @@ function runHook(
       ...env,
     },
   })
-}
-
-function runStopHook(dir: string): Record<string, unknown> {
-  const stdout = execFileSync("node", [STOP_HOOK, `--session=${SID}`], {
-    input: JSON.stringify({ hook_event_name: "Stop", session_id: "codex-rollout-id" }),
-    encoding: "utf8",
-    env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
-  })
-  return JSON.parse(stdout)
 }
 
 function additionalContext(stdout: string): string {
@@ -387,21 +377,16 @@ test("--session overrides the reported id, so a codex worker finds FRIZZ's pad a
   assert.match(explicit, new RegExp(`\\.frizz/threads/${SID}/scratch\\.md`))
 })
 
-test("scratchpad stop_hook frontmatter blocks once, cools down for two minutes, and deregisters by removal", () => {
+// The scratchpad body carries NO reserved fields. A `stop_hook:` frontmatter key used to register a
+// rest-time reminder; it was removed 2026-08-06 after 659 pads on disk turned out to carry no
+// frontmatter at all, and `mcp__frizz__recurring_prompt` (SQLite `recurring_on_rest`) does the same
+// job durably and visibly in the thread footer. Frontmatter in a pad is now inert prose.
+test("frontmatter in the pad is inert — it is injected as ordinary content, not parsed", () => {
   const dir = newProject()
-  const reason = "Collect managed shell cell 77 before resting.\nRemove this field after its terminal result."
-  writePad(dir, `---\nstop_hook: |\n  ${reason.replace("\n", "\n  ")}\n---\n# Scratchpad\n`)
-  assert.deepEqual(runStopHook(dir), { decision: "block", reason })
-  assert.deepEqual(runStopHook(dir), {}, "a forgotten key must not create a tight Stop-hook loop")
-
-  writeFileSync(
-    join(dir, ".frizz", "threads", SID, ".stop-hook-state.json"),
-    JSON.stringify({ lastFiredAt: Date.now() - 120_001 }),
-  )
-  assert.deepEqual(runStopHook(dir), { decision: "block", reason }, "the reminder may fire again after two minutes")
-
-  writePad(dir, "# Scratchpad\n\nThe operation is complete.\n")
-  assert.deepEqual(runStopHook(dir), {}, "removing the key is deregistration")
+  writePad(dir, "---\nstop_hook: Re-check the operation I still own.\n---\n\n# Scratchpad\n\nreal state\n")
+  const out = additionalContext(runHook(dir, ["--mode=session-start"], { session_id: SID, source: "compact" }))
+  assert.match(out, /stop_hook: Re-check the operation I still own\./)
+  assert.match(out, /real state/)
 })
 
 test("a codex rollout carries no readable claude usage, so the nudge degrades to silence", () => {
@@ -433,15 +418,12 @@ test("the codex hook config is built unconditionally, and carries what codex req
   assert.equal(cfg.bypass_hook_trust, true)
   // Codex exposes no PreCompact/PostCompact wire type, so summarizer steering stays Claude-only.
   // SubagentStart carries the shared-pad merge-only epilogue; the rest inject or nudge.
-  assert.deepEqual(Object.keys(cfg.hooks ?? {}).sort(), ["PostToolUse", "PreToolUse", "SessionStart", "Stop", "SubagentStart", "UserPromptSubmit"])
+  assert.deepEqual(Object.keys(cfg.hooks ?? {}).sort(), ["PostToolUse", "PreToolUse", "SessionStart", "SubagentStart", "UserPromptSubmit"])
   for (const [event, entries] of Object.entries(cfg.hooks ?? {})) {
     const cmd = entries[0].hooks[0].command
     if (event === "PreToolUse") {
       assert.match(cmd, /bash-background\.mjs/)
       assert.match(cmd, /--frizz-thread/)
-    } else if (event === "Stop") {
-      assert.match(cmd, /scratchpad-stop\.mjs/)
-      assert.match(cmd, /--session="sid-1"/)
     } else {
       assert.match(cmd, /--session="sid-1"/, "frizz's thread id must override codex's own reported session id")
       assert.doesNotMatch(cmd, /--enabled/, "there is no opt-in flag any more")

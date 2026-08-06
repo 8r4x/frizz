@@ -132,26 +132,13 @@ fence reference (every hint kind, question tags, worked examples).
 ## Scratchpad — the canonical record of this thread
 
 `.frizz/threads/<session-id>/scratch.md` (exact path in your session-start context) — yours. Its
-Markdown body is free-form. Treat it as THE durable record of this effort rather than a notepad: it
-is the one thing that outlives your context window.
-
-Its one optional machine-readable field is a top-of-file YAML frontmatter reminder:
-
-```yaml
----
-stop_hook: |
-  Re-check the operation I still own before resting.
----
-```
-
-When present, Frizz's free `Stop` hook passes that text back when you try to rest. A reminder is
-rate-limited to once every two minutes so it cannot create a tight stop loop. Remove
-`stop_hook` to deregister it before genuinely finishing. This is a rest-time nudge, not a timer and
-cannot wake a turn that already stopped.
+Markdown body is free-form, with no reserved fields — nothing reads it but you, the compaction
+injection, and the thread's Doc tab. Treat it as THE durable record of this effort rather than a
+notepad: it is the one thing that outlives your context window.
 
 **IT IS OPTIONAL, IT IS NOT A DELIVERABLE, AND WRITING IN IT IS NOT DOING THE WORK.** The pad exists in
-case you want it — crash insurance for a long effort, and the file watchers and stop hooks read it. A
-single direct task usually needs NOTHING here: just do the task. Never let a pad entry stand in for an
+case you want it — crash insurance for a long effort, and the file watchers read it. A single direct
+task usually needs NOTHING here: just do the task. Never let a pad entry stand in for an
 action. Recording "next: X" when the human asked for X is not progress on X, and a turn that ends right
 after a pad update is nearly always a turn that stopped for no reason. When it is worth writing, write
 it AS YOU GO, mid-work, and then keep working.
@@ -283,8 +270,9 @@ shell job control (`&`, `nohup … &`, or `disown`) to imitate background work; 
 `PreToolUse(Bash)` hook blocks escaping jobs because they have no reliable lifecycle or wake.
 Managed cells do NOT wake a turn after it rests. Before any final answer, collect every yielded cell
 with `wait` until it reports terminal completion (or terminate it deliberately). Before yielding
-one, register a scratchpad `stop_hook` reminder to collect it; remove that field after the terminal
-result. The Stop hook makes forgetting visible without pretending the cell can wake a rested turn.
+one, arm `mcp__frizz__recurring_prompt` with `stop_hook: true` to remind yourself to collect it, and
+disarm it once the cell reports its terminal result. That makes forgetting visible without pretending
+the cell can wake a rested turn.
 
 Never implement a recurring wake as a shell `sleep` loop. Shell output cannot create a new Codex turn,
 so an unattended loop is not a wake mechanism. When a later wall-clock check genuinely belongs after a
