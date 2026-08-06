@@ -116,7 +116,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { ProjectCard, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS } from "@frizz/shared"
 import { imageDimensions } from "./image-header.ts"
 import { homedir } from "node:os"
-import { discoverProjectRoot, ensureProjectIdFile, writeProjectIdFile } from "./project-root.ts"
+import { discoverProjectRoot, ensureProjectIdFile, existingProjectId, writeProjectIdFile } from "./project-root.ts"
 import { resolveProjectLabel } from "./project-identity.ts"
 import { registerProject } from "./project-registry.ts"
 import { pickDirectory } from "./directory-picker.ts"
@@ -515,7 +515,10 @@ function addProjectAtPath(input: string): ProjectCard {
   if (!stats.isDirectory()) throw new Error(`That is a file, not a folder: ${absolute}`)
   // Walk up exactly as the CLI does, so adding ~/repo/packages/web adds ~/repo.
   const root = discoverProjectRoot(absolute)
-  const id = ensureProjectIdFile(root)
+  // SEEDED, exactly as the launcher seeds it: an established repository whose id lives only in
+  // `git config frizz.id` keeps that id, so adding it from the grid finds its existing board instead
+  // of minting a fresh one and orphaning every thread on it.
+  const id = ensureProjectIdFile(root, homedir(), existingProjectId(root))
   const remoteOwner = resolveProjectLabel(root)?.split("/")[0]
   let registered = registerProject({ dir: root, id, remoteOwner })
   if (registered.action === "duplicate") {

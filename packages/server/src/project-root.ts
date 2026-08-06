@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join, parse, resolve } from "node:path"
-import { acquireNamedLaunchLockSync, validateProjectId } from "./project-identity.ts"
+import { acquireNamedLaunchLockSync, readGitProjectId, validateProjectId } from "./project-identity.ts"
 
 // WHAT A PROJECT IS, WITHOUT ASKING GIT.
 //
@@ -188,9 +188,31 @@ export function isHomeDirectory(dir: string, home = homedir()): boolean {
   }
 }
 
-/** Whether this directory has already been adopted — i.e. it holds a `.frizz/.id`. */
+/**
+ * The id this directory ALREADY claims, from either store — or undefined if it claims none.
+ *
+ * Both stores count, and checking only the file is a bug that has now bitten twice. `.frizz/.id` is
+ * where an id lives once a current Frizz has opened the project; `git config frizz.id` is where it
+ * lived before, and a repository that has not been reopened since the gitless change still carries
+ * only that. On this machine boron and pullfrog/app were both in that state — established boards with
+ * 15 and 85 threads — so a file-only check made them invisible to the registry backfill AND made the
+ * launcher offer to "add" them as if they were new (2026-08-06).
+ *
+ * Pure: it never mints. resolveGitProjectIdentity would, which is exactly wrong for a question.
+ */
+export function existingProjectId(dir: string): string | undefined {
+  const fromFile = readProjectIdFile(dir)
+  if (fromFile) return fromFile
+  try {
+    return readGitProjectId(dir)
+  } catch {
+    return undefined // no git, or not a repository — the file was the only place it could have been
+  }
+}
+
+/** Whether this directory has already been adopted, under either identity store. */
 export function isExistingProjectRoot(dir: string): boolean {
-  return readProjectIdFile(dir) !== undefined
+  return existingProjectId(dir) !== undefined
 }
 
 export function discoverProjectRoot(cwd = process.cwd(), home = homedir()): string {

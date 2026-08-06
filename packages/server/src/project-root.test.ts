@@ -3,8 +3,18 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
-import { discoverProjectRoot, ensureProjectIdFile, isHomeDirectory, projectIdPath, readProjectIdFile, writeProjectIdFile } from "./project-root.ts"
+import {
+  discoverProjectRoot,
+  ensureProjectIdFile,
+  existingProjectId,
+  isExistingProjectRoot,
+  isHomeDirectory,
+  projectIdPath,
+  readProjectIdFile,
+  writeProjectIdFile,
+} from "./project-root.ts"
 import { randomUUID } from "node:crypto"
+import { execFileSync } from "node:child_process"
 
 const UUID = "029a30af-f126-40e3-b04c-d80e74e3e090"
 const OTHER = "50577e5e-802f-4567-bd0e-cf7cbf3d2ed5"
@@ -174,5 +184,39 @@ test("the home directory is recognised even when it is reached through a symlink
   } finally {
     rmSync(link, { force: true })
     rmSync(real, { recursive: true, force: true })
+  }
+})
+
+// Boron and pullfrog/app were both in this state on the maintainer's machine — established boards
+// with 15 and 85 threads, carrying only a `git config frizz.id` because they predate the gitless
+// change and had not been reopened since. A file-only check made them invisible to the registry
+// backfill AND made the launcher offer to "add" them as if they were new, which would have minted a
+// fresh id and orphaned every thread (2026-08-06).
+test("a project whose id lives only in git config is still an EXISTING project", () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "frizz-gitid-")))
+  try {
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir })
+    const id = randomUUID()
+    execFileSync("git", ["config", "--local", "frizz.id", id], { cwd: dir })
+    assert.equal(existsSync(join(dir, ".frizz", ".id")), false, "no id FILE, on purpose")
+
+    assert.equal(existingProjectId(dir), id, "found in the git config")
+    assert.equal(isExistingProjectRoot(dir), true, "so it is not a new directory")
+
+    // The file still wins when both exist — it is the current store.
+    writeProjectIdFile(dir, id)
+    assert.equal(existingProjectId(dir), id)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("a directory that claims no id at all is genuinely new", () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "frizz-noid-")))
+  try {
+    assert.equal(existingProjectId(dir), undefined)
+    assert.equal(isExistingProjectRoot(dir), false)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
   }
 })

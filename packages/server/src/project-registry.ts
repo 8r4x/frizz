@@ -3,7 +3,7 @@ import { homedir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import { slugify } from "@frizz/shared"
 import { frizzPaths } from "./frizz-paths.ts"
-import { readProjectIdFile } from "./project-root.ts"
+import { existingProjectId } from "./project-root.ts"
 
 // THE MACHINE'S LIST OF PROJECTS.
 //
@@ -229,8 +229,11 @@ export function registerProject(
  * server for the machine was supposed to end. Everything needed is already on disk: each state dir is
  * named for its project id and records the directory it was opened from.
  *
- * CONSERVATIVE ON PURPOSE. A state dir is adopted only when the project STILL CLAIMS THAT ID — the
- * `.frizz/.id` in the directory has to agree. A checkout that has since been re-identified (copied,
+ * CONSERVATIVE ON PURPOSE. A state dir is adopted only when the project STILL CLAIMS THAT ID. It may
+ * claim it either way Frizz has ever stored one: `.frizz/.id`, or the older `git config frizz.id`.
+ * Checking only the file was a real bug — boron and pullfrog/app both predate the gitless change and
+ * had never been reopened since, so they carried a git-config id and no file, and the backfill
+ * silently skipped two of the four projects actually in use (2026-08-06). A checkout that has since been re-identified (copied,
  * or re-created after a delete) is skipped rather than guessed at, because the cost of guessing is a
  * card that opens the wrong board. Same for a directory that no longer exists.
  *
@@ -243,7 +246,7 @@ export function registerProject(
  */
 export function backfillRegistry(
   home = homedir(),
-  read: (root: string) => string | undefined = readProjectIdFile,
+  read: (root: string) => string | undefined = existingProjectId,
 ): number {
   let dirs: string[]
   try {
