@@ -69,6 +69,12 @@
   .pair span { font-size: 10.5px; color: var(--muted); font-family: var(--mono); }
   .pair p { margin: 0; color: var(--muted); font-size: 14px; }
 
+  .sym b { color: var(--live); }
+  .ctrl { border-collapse: collapse; margin: 18px 0 22px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .ctrl td { padding: 10px 18px; border-bottom: 1px solid var(--border); font-size: 13.5px; color: var(--muted); }
+  .ctrl tr:last-child td { border-bottom: none; }
+  .ctrl td:last-child { font-family: var(--mono); color: var(--fg); text-align: right; white-space: nowrap; }
+
   .foot { margin-top: 56px; border-top: 1px solid var(--border); padding-top: 24px; color: var(--muted); font-size: 13.5px; max-width: 72ch; }
   .foot b { color: var(--fg); }
 </style>
@@ -97,6 +103,7 @@
       <p class="line"><b>At 16px.</b> Holds. Both hooks are open rather than closed, so there is no counter that can seal — the failure mode of every other f here.</p>
       <p class="line"><b>Risk.</b> Without the crossbar some people will read it as an integral or a long s rather than an f. That ambiguity is the price of the legibility.</p>
       <p class="line verdict"><b>Verdict.</b> The one f that needs no compromise at 16px. Says the name, says the product, and degrades to a clean S-curve rather than to a blob.</p>
+      
     </div>
     <div class="evidence">
       <div class="row">
@@ -122,6 +129,7 @@
       <p class="line"><b>At 16px.</b> Holds, but only because both hooks were made shallow. A crossbar cannot coexist with a hook that curls back down — see the note below.</p>
       <p class="line"><b>Risk.</b> Three horizontal bands (hook, crossbar, hook) inside 320 units is the tightest arrangement in either sheet. There is no room left to adjust anything.</p>
       <p class="line verdict"><b>Verdict.</b> The safest way to be legibly an f. Buy that legibility by keeping the hooks shallow, which costs some of the cursive flourish.</p>
+      
     </div>
     <div class="evidence">
       <div class="row">
@@ -147,6 +155,7 @@
       <p class="line"><b>At 16px.</b> The strongest thing here in an actual tab strip. A solid amber tile carries far more of the 16x16 than a thin amber line on near-black does, so it holds its place among other favicons instead of receding.</p>
       <p class="line"><b>Risk.</b> Loud. It will be the brightest tile in the tab strip, on every tab, forever — and knocked-out counters need to run wider than positive ones to read, so the letter has to be redrawn slightly heavier, not just recoloured.</p>
       <p class="line verdict"><b>Verdict.</b> Worth testing against any form you pick. This is a question about contrast, and it is separable from the question of which f.</p>
+      
     </div>
     <div class="evidence">
       <div class="row">
@@ -172,6 +181,7 @@
       <p class="line"><b>At 16px.</b> The loop's counter survives at 76 units, but the crossing where the loop meets the stem fuses into a solid mass.</p>
       <p class="line"><b>Risk.</b> The charm is entirely in the crossing, and the crossing is the first thing to go.</p>
       <p class="line verdict"><b>Verdict.</b> Beautiful large, muddy small. Worth it only if the favicon is allowed to be a simplified version of the logo.</p>
+      
     </div>
     <div class="evidence">
       <div class="row">
@@ -197,6 +207,7 @@
       <p class="line"><b>At 16px.</b> The most stable f here. Nothing crosses, nothing closes, and the crossbar has 84 units of clearance.</p>
       <p class="line"><b>Risk.</b> Loses the thread metaphor almost entirely. At this point it is a letter, not a mark.</p>
       <p class="line verdict"><b>Verdict.</b> The conservative pick. Take it if the icon has to work as a lockup with the word Frizz beside it.</p>
+      
     </div>
     <div class="evidence">
       <div class="row">
@@ -222,6 +233,7 @@
       <p class="line"><b>At 16px.</b> Survives only because the thins are floored at 54 units. A true nib would take them to nothing, and nothing is invisible well before 16px.</p>
       <p class="line"><b>Risk.</b> The floor flattens the contrast that makes calligraphy worth doing, so the small render is noticeably duller than the hero.</p>
       <p class="line verdict"><b>Verdict.</b> The most crafted mark here and the most expensive to maintain — every future weight has to be redrawn, not restroked.</p>
+      
     </div>
     <div class="evidence">
       <div class="row">
@@ -247,6 +259,7 @@
       <p class="line"><b>At 16px.</b> Fails, and the arithmetic says so before the render does: a written ascender loop is about 52 units wide, so its counter is 2x52-56 = 48 units, which is 1.5px. It seals.</p>
       <p class="line"><b>Risk.</b> Widening the loop until the counter clears turns it into a ring on a stick — that is the shape this slot held for two drafts before the measurement explained why it kept looking wrong.</p>
       <p class="line verdict"><b>Verdict.</b> Ruled out by measurement. Worth knowing: a real cursive loop and a favicon are mutually exclusive, so every workable f here is a hooked f, not a looped one.</p>
+      
     </div>
     <div class="evidence">
       <div class="row">
@@ -272,6 +285,7 @@
       <p class="line"><b>At 16px.</b> Fails, and it fails for exactly the reason the outgoing icon does: the fibres are drawn light to stay subordinate to the letter, and light means gone.</p>
       <p class="line"><b>Risk.</b> None worth listing. This is the mistake the current icon already makes, repeated in a new shape.</p>
       <p class="line verdict"><b>Verdict.</b> Included as the control. It is the proof that the frizz cannot be depicted at favicon size — it has to be implied by the curl of the letter itself.</p>
+      
     </div>
     <div class="evidence">
       <div class="row">
