@@ -8,19 +8,37 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const here = dirname(fileURLToPath(import.meta.url))
-const variants = JSON.parse(readFileSync(join(here, "out-grid/variants.json"), "utf8"))
-const uri = (n) => `data:image/png;base64,${readFileSync(join(here, "out-grid", n)).toString("base64")}`
+const SHEETS = {
+  slash: {
+    dir: "out-slash",
+    file: "frizz-slash.html",
+    title: "Frizz — the slash spine",
+    lede: `One straight diagonal backbone with a bulb hung off each end, drawn as a single contiguous stroke, <b>exactly 180&deg; rotationally symmetric</b>. The spine cannot kink: the stem meets each bulb at a computed tangent point and travels a full 360&deg; round it, so it returns to that point going the same way and the terminal carries straight on. Quote an id and I'll take it further.`,
+    groups: [["bleed", "Terminals run off the edge"], ["out", "Terminals reach the edge and stop"], ["in", "Terminals end inside the tile"]],
+  },
+  grid: {
+    dir: "out-grid",
+    file: "frizz-grid.html",
+    title: "Frizz — parametric grid",
+    lede: `Variants of one construction: a single contiguous stroke, two blobs, and <b>exact 180&deg; rotational symmetry</b>. Quote an id and I'll take it further.`,
+    groups: null,
+  },
+}
+const sheet = SHEETS[process.argv[2] ?? "slash"]
+if (!sheet) throw new Error(`unknown sheet ${process.argv[2]}`)
+const variants = JSON.parse(readFileSync(join(here, sheet.dir, "variants.json"), "utf8"))
+const uri = (n) => `data:image/png;base64,${readFileSync(join(here, sheet.dir, n)).toString("base64")}`
 
 const worstC2 = Math.max(...variants.map((v) => v.c2Error))
 const tile = (v) => `
     <figure>
       <img src="${uri(`${v.id}-200.png`)}" width="150" height="150" alt="Mark variant ${v.id}">
-      <figcaption><b>${v.id}</b><span>blob ${v.lw}&times;${v.lh} &middot; tilt ${v.tilt}&deg; &middot; axis ${v.axis}&deg;<br>dist ${v.dist} &middot; wrap ${v.wrap}&deg; &middot; tail ${v.tail} &middot; ${v.side > 0 ? "side +" : "side −"}${v.dir > 0 ? " dir +" : " dir −"}</span></figcaption>
+      <figcaption><b>${v.id}</b><span>bulb ${v.lw}&times;${v.lh} &middot; tilt ${v.tilt ?? v.tiltRel}&deg; &middot; spine ${v.axis}&deg;<br>dist ${v.dist} &middot; ${v.side > 0 ? "side +" : "side −"}${v.dir > 0 ? " dir +" : " dir −"}${v.key ? ` &middot; ${v.key}` : ""}</span></figcaption>
     </figure>`
 
-writeFileSync(join(here, "frizz-grid.html"), `<!doctype html>
+writeFileSync(join(here, sheet.file), `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Frizz — parametric grid</title><style>
+<title>${sheet.title}</title><style>
 :root { --bg:#0d0e10; --panel:#131519; --border:#26282d; --fg:#e6e7e9; --muted:#8b8f96; --accent:#e8b923;
   --sans: system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; --mono: ui-monospace,"SF Mono",Consolas,monospace; }
 *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:1.6}
@@ -41,8 +59,8 @@ figcaption b{display:block;color:var(--fg);font-size:12px;margin-bottom:3px}
 .foot{margin-top:48px;border-top:1px solid var(--border);padding-top:22px;color:var(--muted);font-size:13.5px;max-width:76ch}
 .foot b{color:var(--fg)}
 </style></head><body><div class="wrap">
-<h1>Frizz — parametric grid</h1>
-<p class="lede">${variants.length} variants of one construction: a single contiguous stroke, two blobs, and <b>exact 180&deg; rotational symmetry</b>. Quote an id and I'll take it further.</p>
+<h1>${sheet.title}</h1>
+<p class="lede">${variants.length} options. ${sheet.lede}</p>
 
 <h2>What varies</h2>
 <div class="knobs">
@@ -55,8 +73,12 @@ figcaption b{display:block;color:var(--fg);font-size:12px;margin-bottom:3px}
   <div><b>tail</b><span>terminal length</span></div>
 </div>
 
-<h2>The ${variants.length} options</h2>
-<div class="grid">${variants.map(tile).join("")}</div>
+${sheet.groups
+  ? sheet.groups.map(([key, heading]) => {
+      const list = variants.filter((v) => v.key === key)
+      return `<h2>${heading} — ${list.length}</h2>\n<div class="grid">${list.map(tile).join("")}</div>`
+    }).join("\n")
+  : `<h2>The ${variants.length} options</h2>\n<div class="grid">${variants.map(tile).join("")}</div>`}
 
 <div class="foot">
 <p><b>Symmetry is exact, not approximate.</b> Each half is authored once and the other half is its 180&deg; rotation, so the two can't drift. Measured on the point set, the worst deviation across all ${variants.length} is <code>${worstC2.toExponential(2)}</code> units — floating-point noise. That is a proof, not a pixel comparison.</p>
@@ -65,4 +87,4 @@ figcaption b{display:block;color:var(--fg);font-size:12px;margin-bottom:3px}
 </div>
 </div></body></html>
 `)
-console.log(`frizz-grid.html — ${variants.length} variants`)
+console.log(`${sheet.file} — ${variants.length} variants`)
