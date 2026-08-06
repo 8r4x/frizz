@@ -125,8 +125,17 @@ function PhantomCard({
   )
 }
 
-function AddProjectDialog({ reason, onClose }: { reason?: string; onClose: () => void }) {
-  const [path, setPath] = useState("")
+function AddProjectDialog({
+  reason,
+  proposed,
+  onClose,
+}: {
+  reason?: string
+  /** A directory `frizz` was just run in. Pre-filled, never pre-registered. */
+  proposed?: string
+  onClose: () => void
+}) {
+  const [path, setPath] = useState(proposed ?? "")
   const queryClient = useQueryClient()
   const add = useMutation({
     mutationFn: (input: string) => rpc.projectAdd({ path: input }),
@@ -147,10 +156,15 @@ function AddProjectDialog({ reason, onClose }: { reason?: string; onClose: () =>
           aria-describedby={undefined}
           className="fixed left-1/2 top-1/2 z-[210] w-[460px] max-w-[90vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-black/50 outline-none"
         >
-          <RadixDialog.Title className="mb-1 text-[14px] font-medium">Add a project</RadixDialog.Title>
+          <RadixDialog.Title className="mb-1 text-[14px] font-medium">
+            {proposed ? "Add this folder as a project?" : "Add a project"}
+          </RadixDialog.Title>
           <p className="mb-3.5 text-[12.5px] leading-relaxed text-muted">
-            {reason ? `${reason}. Paste the folder instead — ` : "Paste the folder you want a board for. "}
-            Frizz walks up to the repository root, the same way it does when you run it in a terminal.
+            {proposed
+              ? "You ran Frizz here and it is not a project yet. Nothing has been written — adding it is what creates its board."
+              : reason
+                ? `${reason}. Paste the folder instead — Frizz walks up to the repository root, the same way it does when you run it in a terminal.`
+                : "Paste the folder you want a board for. Frizz walks up to the repository root, the same way it does when you run it in a terminal."}
           </p>
           <form
             onSubmit={(event) => {
@@ -176,14 +190,14 @@ function AddProjectDialog({ reason, onClose }: { reason?: string; onClose: () =>
                 disabled={add.isPending}
                 className="rounded-md border border-border-strong bg-elevated px-3 py-1.5 text-[12.5px] text-fg outline-none hover:bg-panel-2 focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-50"
               >
-                Cancel
+                {proposed ? "Not now" : "Cancel"}
               </button>
               <button
                 type="submit"
                 disabled={add.isPending || path.trim().length === 0}
                 className="rounded-md border border-accent bg-accent px-3 py-1.5 text-[12.5px] font-medium text-bg outline-none hover:brightness-110 focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-50"
               >
-                {add.isPending ? "Adding…" : "Add project"}
+                {add.isPending ? "Adding…" : proposed ? "Add it" : "Add project"}
               </button>
             </div>
           </form>
@@ -196,7 +210,15 @@ function AddProjectDialog({ reason, onClose }: { reason?: string; onClose: () =>
 export function ProjectGrid() {
   // The typed-path dialog is the FALLBACK, not the front door: it opens only when the machine has no
   // picker, or the picker failed to open and said why.
-  const [fallback, setFallback] = useState<{ reason?: string } | null>(null)
+  // `?add=<dir>` is the LAUNCHER asking, not a registration: running `frizz` in an unknown folder
+  // no longer adopts it, it sends you here to say yes. Read once — the answer belongs to this visit,
+  // and leaving it in the URL would re-ask on every reload.
+  const [proposed] = useState(() => {
+    const value = new URLSearchParams(location.search).get("add") ?? undefined
+    if (value) history.replaceState(null, "", location.pathname)
+    return value
+  })
+  const [fallback, setFallback] = useState<{ reason?: string } | null>(proposed ? {} : null)
   const queryClient = useQueryClient()
   const pick = useMutation({
     mutationFn: () => rpc.projectPick({}),
@@ -274,7 +296,7 @@ export function ProjectGrid() {
 
       </div>
       {fallback ? (
-        <AddProjectDialog reason={fallback.reason} onClose={() => setFallback(null)} />
+        <AddProjectDialog reason={fallback.reason} proposed={proposed} onClose={() => setFallback(null)} />
       ) : null}
     </div>
     </TooltipProvider>

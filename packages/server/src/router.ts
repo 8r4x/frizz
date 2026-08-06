@@ -78,6 +78,7 @@ import {
   ThreadSlug,
   isDirectSubAgent,
   DirectoryPickResult,
+  ThreadLocation,
 } from "@frizz/shared"
 import { needsFreshProcessForLimit, type AppContext } from "./context.ts"
 import { appServerTurnStalled } from "./board.ts"
@@ -114,7 +115,7 @@ import { resolvePlanFile, deletePlanFile } from "./plan-files.ts"
 import { providerResumeCommand } from "./external-terminal.ts"
 import { backgroundShellLineCount, readBackgroundShellOutput } from "./background-shell-output.ts"
 import { projectRetiredBackgroundOps, retiredOpsFor } from "./transcript.ts"
-import { clearProjectIcon, customIconPath, listProjects, setProjectIcon, type RegistryEntry } from "./project-registry.ts"
+import { clearProjectIcon, customIconPath, listProjects, reorderProjects, setProjectIcon, type RegistryEntry } from "./project-registry.ts"
 import { basename, dirname } from "node:path"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { ProjectCard, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS } from "@frizz/shared"
@@ -124,6 +125,8 @@ import { discoverProjectRoot, ensureProjectIdFile, writeProjectIdFile } from "./
 import { resolveProjectLabel } from "./project-identity.ts"
 import { registerProject } from "./project-registry.ts"
 import { pickDirectory } from "./directory-picker.ts"
+import Database from "./sqlite.ts"
+import { projectStateDir } from "./frizz-paths.ts"
 
 const SlugInput = z.object({ slug: ThreadSlug }).strict()
 
@@ -2464,6 +2467,22 @@ export function createRouter(ctx: AppContext) {
     }),
 
     /**
+     * Pin the rail's order.
+     *
+     * The whole list of ids, not a (from, to) pair: the client has just laid the squares out and knows
+     * exactly what it means, whereas an index pair has to be replayed against whatever the server
+     * believes the order is — and those disagree the moment a project is registered mid-drag.
+     */
+    projectsReorder: mutation({
+      input: z.object({ ids: z.array(z.string().min(1)).max(500) }),
+      output: z.array(ProjectCard),
+      handler: async ({ input }) => {
+        reorderProjects(input.ids)
+        return listProjects().map((entry) => projectCard(entry, entry.stale))
+      },
+    }),
+
+    /**
      * Give a project an icon of the operator's choosing.
      *
      * The bytes land in the project's STATE DIR, never in the repository: a picture chosen for a rail
@@ -2559,6 +2578,42 @@ export function createRouter(ctx: AppContext) {
       input: z.object({ path: z.string().min(1) }),
       output: ProjectCard,
       handler: async ({ input }) => addProjectAtPath(input.path),
+    }),
+
+    /**
+     * Find which project owns a thread slug.
+     *
+     * EVERY URL FROM THE PER-PROJECT ERA IS UNPREFIXED. `localhost:4917/thread/fix-auth/full` used
+     * to be unambiguous because the PORT named the project; one server for the machine makes that
+     * same path resolve against whichever project happened to launch it, so a bookmark that worked
+     * yesterday reports "not found" today. It is not lost — it is one directory over, and this is how
+     * the page finds it instead of blaming the operator.
+     *
+     * Runs only on a miss, and opens each candidate database read-only for one indexed lookup.
+     */
+    threadLocate: query({
+      input: z.object({ slug: z.string().min(1) }),
+      output: z.array(ThreadLocation),
+      handler: async ({ input }) => {
+        const found: ThreadLocation[] = []
+        for (const entry of listProjects()) {
+          if (entry.stale) continue
+          try {
+            // READ-ONLY, and a raw handle rather than createStorage: opening through the storage
+            // layer runs its migrations, and a lookup must never write to a project nobody opened.
+            const db = new Database(join(projectStateDir(entry.id), "ui.db"), { readonly: true })
+            try {
+              const hit = db.prepare("SELECT 1 FROM session WHERE slug = ? LIMIT 1").get(input.slug)
+              if (hit) found.push({ projectSlug: entry.slug, projectName: entry.name ?? entry.slug })
+            } finally {
+              db.close()
+            }
+          } catch {
+            // A project whose database will not open tells us nothing about this slug; keep looking.
+          }
+        }
+        return found
+      },
     }),
 
     settingsGet: query({

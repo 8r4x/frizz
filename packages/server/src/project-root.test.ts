@@ -1,15 +1,10 @@
 import assert from "node:assert/strict"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
-import {
-  discoverProjectRoot,
-  ensureProjectIdFile,
-  projectIdPath,
-  readProjectIdFile,
-  writeProjectIdFile,
-} from "./project-root.ts"
+import { discoverProjectRoot, ensureProjectIdFile, isHomeDirectory, projectIdPath, readProjectIdFile, writeProjectIdFile } from "./project-root.ts"
+import { randomUUID } from "node:crypto"
 
 const UUID = "029a30af-f126-40e3-b04c-d80e74e3e090"
 const OTHER = "50577e5e-802f-4567-bd0e-cf7cbf3d2ed5"
@@ -157,5 +152,27 @@ test("a seed that is not a UUID is refused rather than recorded", () => {
   } finally {
     rmSync(home, { recursive: true, force: true })
     rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// $HOME is where Frizz keeps its OWN state (~/.frizz), so adopting it as a project writes a project
+// id into the global state root — and from then on the walk-up finds it from every unmarked
+// directory under home. It happened on the maintainer's machine (2026-08-06).
+test("the home directory is recognised even when it is reached through a symlink", () => {
+  const real = realpathSync(mkdtempSync(join(tmpdir(), "frizz-realhome-")))
+  const link = join(realpathSync(tmpdir()), `frizz-linkhome-${randomUUID().slice(0, 8)}`)
+  symlinkSync(real, link)
+  try {
+    assert.equal(isHomeDirectory(real, real), true)
+    // THE BUG: comparing the paths as written misses this, because macOS hands the launcher a
+    // resolved cwd while homedir() stays symlinked — and the guard silently lets home through.
+    assert.equal(isHomeDirectory(link, real), true, "a symlinked home is still home")
+    assert.equal(isHomeDirectory(real, link), true, "…in either direction")
+    const child = join(real, "a-project")
+    mkdirSync(child, { recursive: true })
+    assert.equal(isHomeDirectory(child, real), false, "a directory inside home is not home")
+  } finally {
+    rmSync(link, { force: true })
+    rmSync(real, { recursive: true, force: true })
   }
 })

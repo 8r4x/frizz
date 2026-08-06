@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto"
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join, parse, resolve } from "node:path"
 import { acquireNamedLaunchLockSync, validateProjectId } from "./project-identity.ts"
@@ -158,6 +158,41 @@ function hasAny(dir: string, names: readonly string[]): boolean {
  * Stops at `$HOME` and never returns it. A stray `~/package.json` would otherwise make a user's whole
  * home directory one project, with agents dispatched at it.
  */
+/**
+ * THE HOME DIRECTORY IS NOT A PROJECT, and adopting it is not merely untidy.
+ *
+ * Frizz's own global state lives in `~/.frizz` — the registry, every project's state dir, the launch
+ * locks. Making $HOME a project writes `~/.frizz/.id` and `~/.frizz/.gitignore` INTO that state
+ * root, and from then on the walk-up below finds that `.frizz/.id` from any unmarked directory under
+ * $HOME, so every one of them resolves to the home "project". That happened (2026-08-06).
+ *
+ * discoverProjectRoot still ANSWERS with the directory it was given — "where would the root be" has
+ * an answer even in $HOME. Refusing to adopt it is the caller's job, and this is the predicate.
+ */
+export function isHomeDirectory(dir: string, home = homedir()): boolean {
+  // REALPATH BOTH SIDES. `resolve` alone compares the paths as written, and on macOS the launch
+  // directory arrives already resolved (`/private/var/...`) while `homedir()` does not (`/var/...`),
+  // so a symlinked home slips straight past the guard and gets adopted — which is the bug this
+  // predicate exists to stop. A home that cannot be realpath'd falls back to the literal compare.
+  const canonical = (value: string): string => {
+    try {
+      return realpathSync(resolve(value))
+    } catch {
+      return resolve(value)
+    }
+  }
+  try {
+    return canonical(dir) === canonical(home)
+  } catch {
+    return false
+  }
+}
+
+/** Whether this directory has already been adopted — i.e. it holds a `.frizz/.id`. */
+export function isExistingProjectRoot(dir: string): boolean {
+  return readProjectIdFile(dir) !== undefined
+}
+
 export function discoverProjectRoot(cwd = process.cwd(), home = homedir()): string {
   let dir: string
   try {
@@ -169,7 +204,9 @@ export function discoverProjectRoot(cwd = process.cwd(), home = homedir()): stri
   const filesystemRoot = parse(dir).root
 
   for (let at = dir; ; at = dirname(at)) {
-    // Never adopt the home directory itself, and never climb past it.
+    // Never climb INTO or past the home directory. Note this does not stop `dir` itself from BEING
+    // $HOME — the loop simply breaks and the launch directory is returned unchanged. Whether that is
+    // adoptable is isHomeDirectory's question, asked by the launcher, not answered here.
     if (at === stop || at === filesystemRoot) break
     // An existing Frizz project wins over the VCS or manifest it happens to sit in.
     if (existsSync(projectIdPath(at))) return at

@@ -28,6 +28,7 @@ import { DEFAULT_DEV_PORT, fallbackPort } from "@frizz/shared";
 import {
   acquireGlobalLaunchLock,
   allocatePort,
+  resolveLaunchIntent,
   EXPOSED_WARNING,
   PUBLIC_ORIGIN_WARNING,
   expectedOwnerHealth,
@@ -141,6 +142,7 @@ readout?.plan([
 readout?.begin("workspace");
 
 let workspace: Workspace;
+let launchIntent: ReturnType<typeof resolveLaunchIntent> | undefined;
 try {
   const pinned = projectLaunchTargetFromEnvironment(process.env);
   const internal =
@@ -159,9 +161,23 @@ try {
     if (interactiveLaunch) assertLaunchPrerequisites();
     else assertRequiredExecutables();
   }
-  workspace = internal
-    ? workspaceFromLaunchTarget(pinned!)
-    : resolveWorkspace(options.repoPath);
+  // Running the command no longer ADOPTS the directory it was run in — see resolveLaunchIntent. An
+  // unknown directory hosts the server on the most recent real project and asks about itself on the
+  // grid; $HOME is never asked about at all.
+  let hosted: Workspace | undefined;
+  if (!internal) {
+    const intent = resolveLaunchIntent(options.repoPath);
+    if (intent.kind === "empty") {
+      throw new Error(
+        intent.reason === "home"
+          ? "frizz cannot open your home directory as a project, and there is no other project to show yet. cd into a repository and run frizz there."
+          : `${intent.directory} is not a Frizz project yet, and there is no other project to show. Run frizz inside a repository, or add this one from the projects page once a board is open.`
+      );
+    }
+    launchIntent = intent;
+    hosted = intent.workspace;
+  }
+  workspace = internal ? workspaceFromLaunchTarget(pinned!) : hosted!;
 } catch (error) {
   // Report ONCE — `fail()` prints too, and doing both showed the operator the same sentence twice
   // under two prefixes, which reads like two separate failures.
@@ -584,11 +600,22 @@ async function joinRunningFrizz(): Promise<
 }
 
 let cachedSlugPath: string | undefined;
-/** `/nub`, or `""` when the registry could not answer. Computed once per launch. */
+/**
+ * Where to land: this project's board, the grid, or the grid with a directory to ask about.
+ *
+ * `?add=` is a REQUEST, not a registration — nothing on disk changes until the operator confirms on
+ * the page. That is the whole point of the change: a command typed in the wrong terminal must not
+ * leave a permanent card behind.
+ */
 function slugPath(): string {
   if (cachedSlugPath === undefined) {
-    const slug = ownSlug();
-    cachedSlugPath = slug ? `/project/${slug}` : "";
+    if (launchIntent?.kind === "grid") cachedSlugPath = "/";
+    else if (launchIntent?.kind === "offer")
+      cachedSlugPath = `/?add=${encodeURIComponent(launchIntent.directory)}`;
+    else {
+      const slug = ownSlug();
+      cachedSlugPath = slug ? `/project/${slug}` : "";
+    }
   }
   return cachedSlugPath;
 }

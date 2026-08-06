@@ -49,6 +49,14 @@ export interface RegistryEntry {
   iconSource?: "custom" | "detected"
   /** When the scan last ran. Its absence — not a missing `icon` — is what asks for another one. */
   iconScannedAt?: string
+  /**
+   * The operator's own position for this project in the rail, ascending.
+   *
+   * Absent until somebody drags something, and then written for EVERY project at once (see
+   * `reorderProjects`) so the list is never half-ordered. Its absence is what keeps recency as the
+   * default: a machine nobody has arranged still opens with what it was last working on at the top.
+   */
+  order?: number
 }
 
 export interface Registry {
@@ -277,10 +285,61 @@ function recordedProjectDir(stateDir: string): string | undefined {
   return undefined
 }
 
+/**
+ * Every project, in the order the rail and the grid draw them.
+ *
+ * The operator's ARRANGEMENT wins where one exists, and recency is the default until it does. Both
+ * surfaces read this one function on purpose: they are on screen together at `/`, and a rail the
+ * operator has arranged sitting beside a grid that has re-sorted itself by recency is two answers to
+ * the same question.
+ *
+ * Recency as the default is not merely a fallback, it is the better cold start — a machine nobody has
+ * arranged opens with what it was last working on at the top. But it also means the rail SHUFFLES
+ * ITSELF as you work, which is the thing manual order exists to stop, so the first drag pins
+ * everything (`reorderProjects` writes an order for every project, not just the moved one).
+ *
+ * A project registered after an arrangement has no order and sorts to the END, newest first, which is
+ * where a new arrival belongs in a list somebody has already arranged.
+ */
 export function listProjects(home = homedir()): (RegistryEntry & { stale: boolean })[] {
+  const byRecency = (a: RegistryEntry, b: RegistryEntry) =>
+    a.lastOpenedAt < b.lastOpenedAt ? 1 : a.lastOpenedAt > b.lastOpenedAt ? -1 : 0
   return readRegistry(home)
     .projects.map((p) => ({ ...p, stale: !existsSync(p.path) }))
-    .sort((a, b) => (a.lastOpenedAt < b.lastOpenedAt ? 1 : a.lastOpenedAt > b.lastOpenedAt ? -1 : 0))
+    .sort((a, b) => {
+      if (a.order === undefined && b.order === undefined) return byRecency(a, b)
+      if (a.order === undefined) return 1
+      if (b.order === undefined) return -1
+      return a.order - b.order
+    })
+}
+
+/**
+ * Pin the rail's order to exactly `ids`.
+ *
+ * Writes an order for EVERY project the registry knows, not only the ones named: a half-ordered list
+ * has to fall back to recency for the rest, and then the unordered tail keeps rearranging itself
+ * underneath an operator who has just said where they want things. Anything the caller did not name
+ * (registered on another tab, mid-drag) keeps its relative position after the named ones rather than
+ * being dropped.
+ */
+export function reorderProjects(ids: readonly string[], home = homedir()): RegistryEntry[] {
+  const registry = readRegistry(home)
+  const rank = new Map(ids.map((id, index) => [id, index]))
+  const known = registry.projects.filter((p) => rank.has(p.id))
+  const rest = listProjects(home).filter((p) => !rank.has(p.id))
+  known.sort((a, b) => rank.get(a.id)! - rank.get(b.id)!)
+  ;[...known, ...rest].forEach((entry, index) => {
+    const target = registry.projects.find((p) => p.id === entry.id)
+    if (target) target.order = index
+  })
+  writeRegistry(registry, home)
+  return registry.projects
+}
+
+/** The entry for a directory Frizz already knows, if it knows it. */
+export function findByPath(path: string, home = homedir()): RegistryEntry | undefined {
+  return readRegistry(home).projects.find((p) => p.path === path)
 }
 
 export function findBySlug(slug: string, home = homedir()): RegistryEntry | undefined {

@@ -31,9 +31,16 @@ import {
 } from "@frizz/server/local-origin";
 import { readBootProgress } from "@frizz/server/boot-progress";
 import { frizzPaths, projectStateDir } from "@frizz/server/frizz-paths";
-import { discoverProjectRoot, ensureProjectIdFile, isNotAGitWorktree } from "@frizz/server/project-root";
+import {
+  discoverProjectRoot,
+  ensureProjectIdFile,
+  isExistingProjectRoot,
+  isHomeDirectory,
+  isNotAGitWorktree,
+} from "@frizz/server/project-root";
 import { defaultLogRoot, latestLogPath } from "@frizz/server/logging";
 import { DEFAULT_PORT, fallbackPort, FRIZZ_ROUTE_PREFIX } from "@frizz/shared";
+import { findByPath, listProjects } from "@frizz/server/project-registry";
 
 export { acquireGlobalLaunchLock, pidIsAlive };
 
@@ -398,6 +405,62 @@ authentication at the proxy: with Cloudflare Access, that is the whole of your a
 
 An immutable artifact is the default. --dev is the only explicit unsafe source watcher/HMR mode.
 `;
+}
+
+/**
+ * What a `frizz` in THIS directory should actually do.
+ *
+ * Running the command used to adopt whatever directory it was in, minting `.frizz/.id` on the spot.
+ * That is wrong twice over: in $HOME it writes a project id into Frizz's own global state root
+ * (see isHomeDirectory), and anywhere else it silently turns "I typed a command in the wrong
+ * terminal" into a permanent card on the machine's grid. Adoption is now something the operator
+ * SAYS YES TO.
+ *
+ *  - `open`  — a directory Frizz already knows: its own board, exactly as before.
+ *  - `offer` — an unadopted directory: open the grid and let it ask. Nothing is written until then.
+ *  - `grid`  — $HOME, which is never offered at all, because there is no version of this the
+ *               operator wants.
+ *
+ * The last two still need a project to LAUNCH with, because a server is a process that has to serve
+ * something; the most recently opened registered project is that host. With an empty registry there
+ * is nothing to host and nothing to show, so the caller is told to adopt explicitly.
+ */
+export type LaunchIntent =
+  | { kind: "open"; workspace: Workspace }
+  | { kind: "offer"; workspace: Workspace; directory: string }
+  | { kind: "grid"; workspace: Workspace }
+  | { kind: "empty"; directory: string; reason: "home" | "unadopted" }
+
+export function resolveLaunchIntent(
+  cwd = process.cwd(),
+  home = homedir(),
+  env: NodeJS.ProcessEnv = process.env
+): LaunchIntent {
+  const candidate = realpathSync(discoverProjectRoot(cwd, home))
+  const known = isExistingProjectRoot(candidate) || findByPath(candidate, home) !== undefined
+  // A directory Frizz already knows opens as itself — including one it knows only from the registry,
+  // so forgetting to commit `.frizz/.id` never costs someone their board.
+  if (known && !isHomeDirectory(candidate, home)) return { kind: "open", workspace: resolveWorkspace(cwd, home, env) }
+
+  const host = mostRecentProject(home, env)
+  const reason = isHomeDirectory(candidate, home) ? "home" : "unadopted"
+  if (!host) return { kind: "empty", directory: candidate, reason }
+  return reason === "home"
+    ? { kind: "grid", workspace: host }
+    : { kind: "offer", workspace: host, directory: candidate }
+}
+
+/** The most recently opened project that still exists — the server's host when the cwd is not one. */
+function mostRecentProject(home: string, env: NodeJS.ProcessEnv): Workspace | undefined {
+  for (const entry of listProjects(home)) {
+    if (entry.stale || isHomeDirectory(entry.path, home)) continue
+    try {
+      return resolveWorkspace(entry.path, home, env)
+    } catch {
+      // A project that will not resolve any more must not block the ones after it.
+    }
+  }
+  return undefined
 }
 
 export function resolveWorkspace(

@@ -2259,6 +2259,10 @@ export const DirectoryPickResult = z.discriminatedUnion("kind", [
 ])
 export type DirectoryPickResult = z.infer<typeof DirectoryPickResult>
 
+/** Where a thread slug actually lives, for a link that no longer says which project it belongs to. */
+export const ThreadLocation = z.object({ projectSlug: z.string(), projectName: z.string() })
+export type ThreadLocation = z.infer<typeof ThreadLocation>
+
 export const FRIZZ_ROUTE_PREFIX = "/_frizz"
 export function frizzRoute(path: string): string {
   return `${FRIZZ_ROUTE_PREFIX}${path.startsWith("/") ? path : `/${path}`}`

@@ -73,6 +73,7 @@ import type {
   CancelInteractionResult,
   CompletionHold,
   ProjectCard,
+  ThreadLocation,
   DirectoryPickResult,
 } from "@frizz/shared"
 
@@ -214,6 +215,10 @@ export interface Api {
   accountLoginStatus(input: AccountLoginStatusInput): Promise<AccountLoginStatusResult>
   accountLoginCancel(input: AccountLoginStatusInput): Promise<Record<never, never>>
   // Machine-scoped: the registry is one file, so the grid reads the same from every project.
+  // Which project owns a thread slug. Every URL from the per-project era is unprefixed, so a
+  // bookmark that named its project by PORT now resolves against whichever project launched the
+  // server — this is how the page finds the thread instead of reporting it missing.
+  threadLocate(input: { slug: string }): Promise<ThreadLocation[]>
   projectsList(): Promise<ProjectCard[]>
   // Registering a folder as a project — the grid phantom card. Same authority as running `frizz`
   // there and strictly less: it resolves an id and writes the index, and dispatches nothing.
@@ -224,6 +229,9 @@ export interface Api {
   // The rail's squares. `projectIconSet` takes base64 from a browser file input (the bytes land in the
   // project's state dir, never in its working tree); clearing hands the square back to the automatic
   // scan, which is also what draws it in the first place — see server/project-icon.ts.
+  // The rail's manual order: the whole list of ids, because the client has just laid the squares out
+  // and an index pair would have to be replayed against a server order that may already differ.
+  projectsReorder(input: { ids: string[] }): Promise<ProjectCard[]>
   projectIconSet(input: { id: string; name: string; data: string }): Promise<ProjectCard>
   projectIconClear(input: { id: string }): Promise<ProjectCard>
   settingsGet(): Promise<Settings>
@@ -312,9 +320,11 @@ export const PROCEDURES = {
   accountLoginStart: "mutation",
   accountLoginStatus: "query",
   accountLoginCancel: "mutation",
+  threadLocate: "query",
   projectsList: "query",
   projectPick: "mutation",
   projectAdd: "mutation",
+  projectsReorder: "mutation",
   projectIconSet: "mutation",
   projectIconClear: "mutation",
   settingsGet: "query",
