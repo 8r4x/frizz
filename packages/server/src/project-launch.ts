@@ -694,6 +694,53 @@ export function projectLaunchEnvironment(
   }
 }
 
+/**
+ * The environment a forked agent should inherit FOR THIS PROJECT.
+ *
+ * `process.env` carries the launch identity of whichever project started this server, plus whatever
+ * project- and thread-scoped variables that launch happened to be holding. That was harmless while a
+ * server served exactly one project. Under one Frizz per machine it is project A identity leaking
+ * into project B agent: a broker fork for B would report A project id, write permission markers into
+ * A state directory, and log into A file.
+ *
+ * So: strip every scoped key rather than filtering a known-bad list, then restate the launch identity
+ * for the project that actually owns the fork. Stripping is the safe direction — a missing variable
+ * makes a consumer fall back to its own resolution, while a WRONG one is silently obeyed.
+ */
+export function projectScopedEnvironment(
+  env: NodeJS.ProcessEnv,
+  target: ProjectLaunchTarget,
+  token?: string,
+): Record<string, string> {
+  const scoped = new Set<string>([
+    FRIZZ_LAUNCH_OWNER_TOKEN,
+    FRIZZ_LAUNCH_PROJECT_ID,
+    FRIZZ_LAUNCH_PROJECT_DIR,
+    FRIZZ_LAUNCH_STATE_DIR,
+    FRIZZ_LAUNCH_IDENTITY_SCOPE,
+    FRIZZ_LAUNCH_TMUX_SOCKET,
+    FRIZZ_LAUNCH_TMUX_SOCKET_MANAGED,
+    // Not launch identity, but just as project- or thread-pinned: the state dir a worker MCP writes
+    // through, the permission-marker directory, this run log, and the thread slug of whatever worker
+    // may have started the server.
+    "FRIZZ_STATE_DIR",
+    "FRIZZ_PERM_DIR",
+    "FRIZZ_LOG_FILE",
+    "FRIZZ_THREAD",
+  ])
+  const out: Record<string, string> = {}
+  for (const [key, value] of Object.entries(env)) {
+    if (value == null || scoped.has(key)) continue
+    out[key] = value
+  }
+  out[FRIZZ_LAUNCH_PROJECT_ID] = target.projectId
+  out[FRIZZ_LAUNCH_PROJECT_DIR] = target.projectDir
+  out[FRIZZ_LAUNCH_STATE_DIR] = target.stateDir
+  out[FRIZZ_LAUNCH_IDENTITY_SCOPE] = target.identityScope ?? "repository"
+  if (token) out[FRIZZ_LAUNCH_OWNER_TOKEN] = token
+  return out
+}
+
 export function projectLaunchTargetFromEnvironment(env: NodeJS.ProcessEnv): ProjectLaunchTarget | null {
   const projectId = env[FRIZZ_LAUNCH_PROJECT_ID]
   const projectDir = env[FRIZZ_LAUNCH_PROJECT_DIR]

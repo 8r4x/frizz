@@ -52,6 +52,7 @@ import {
   type ShutdownDiagnostic,
 } from "./shutdown.ts"
 import { log as frizzLog } from "./logging.ts"
+import { projectScopedEnvironment } from "./project-launch.ts"
 
 export const CONTEXT_STARTUP_CLEANUP_TIMEOUT_MS = 4_000
 
@@ -602,7 +603,15 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         onEvent: (slug, sessionId, event) => claudeRuntimeIngest?.onEvent(slug, sessionId, event),
         stateDir: project.stateDir,
         executablePath: opts.claudeBin ?? "claude",
-        env: Object.fromEntries(Object.entries(process.env).filter(([, v]) => v != null)) as Record<string, string>,
+        // Scoped to THIS project, not to whichever one launched the server — see
+        // projectScopedEnvironment. A raw process.env spread is how project A identity would reach
+        // project B agent once one process holds both.
+        env: projectScopedEnvironment(process.env, {
+          projectId: project.id,
+          projectDir: project.dir,
+          stateDir: project.stateDir,
+          ...(project.identityScope ? { identityScope: project.identityScope } : {}),
+        }),
         // Route Claude tool-permission escalations to the dashboard approval UI (provider-neutral
         // InteractionStore; the same store + web cards codex approvals use).
         interactions: storage.interactions,
