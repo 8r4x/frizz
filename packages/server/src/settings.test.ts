@@ -1,0 +1,110 @@
+import assert from "node:assert/strict"
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { test } from "node:test"
+import { createStorage } from "./storage.ts"
+import {
+  defaultSettings,
+  getSettings,
+  machineSettingsPath,
+  readMachineSettings,
+  resetSettings,
+  setSettings,
+} from "./settings.ts"
+
+function sandbox(): { home: string; open: (name: string) => ReturnType<typeof createStorage>; done: () => void } {
+  const home = mkdtempSync(join(tmpdir(), "frizz-settings-"))
+  const opened: ReturnType<typeof createStorage>[] = []
+  return {
+    home,
+    open: (name) => {
+      const storage = createStorage(join(home, `${name}.db`))
+      opened.push(storage)
+      return storage
+    },
+    done: () => {
+      for (const storage of opened) storage.close()
+      rmSync(home, { recursive: true, force: true })
+    },
+  }
+}
+
+test("font, notifications and the file opener are the MACHINE's, shared by every project", () => {
+  const box = sandbox()
+  try {
+    const alpha = box.open("alpha")
+    const beta = box.open("beta")
+    assert.equal(getSettings(alpha, box.home).font, "sans")
+
+    setSettings(alpha, { ...defaultSettings(), font: "mono", notifications: false, localFileOpener: "cursor" }, box.home)
+
+    // The point: a project that was never touched sees it, because the value is not its to hold.
+    const seen = getSettings(beta, box.home)
+    assert.equal(seen.font, "mono")
+    assert.equal(seen.notifications, false)
+    assert.equal(seen.localFileOpener, "cursor")
+    assert.ok(existsSync(machineSettingsPath(box.home)))
+  } finally {
+    box.done()
+  }
+})
+
+test("a project's own settings stay its own", () => {
+  const box = sandbox()
+  try {
+    const alpha = box.open("alpha")
+    const beta = box.open("beta")
+    setSettings(alpha, { ...defaultSettings(), permissionMode: "bypassPermissions", model: "opus" }, box.home)
+    assert.equal(getSettings(alpha, box.home).permissionMode, "bypassPermissions")
+    assert.equal(getSettings(beta, box.home).permissionMode, "auto", "permissions are per project")
+    assert.equal(getSettings(beta, box.home).model, undefined)
+  } finally {
+    box.done()
+  }
+})
+
+// No migration ships with this: resolution falls back through the project blob, so an existing
+// project keeps what it had until the next save promotes it.
+test("a project that already stored a font keeps it with no machine file present", () => {
+  const box = sandbox()
+  try {
+    const alpha = box.open("alpha")
+    alpha.setSetting("settings", { ...defaultSettings(), font: "mono" })
+    assert.deepEqual(readMachineSettings(box.home), {})
+    assert.equal(getSettings(alpha, box.home).font, "mono")
+
+    // …and the next save is what makes it the machine's.
+    setSettings(alpha, getSettings(alpha, box.home), box.home)
+    assert.equal(readMachineSettings(box.home).font, "mono")
+    assert.equal(getSettings(box.open("beta"), box.home).font, "mono")
+  } finally {
+    box.done()
+  }
+})
+
+test("reset means defaults, so the machine file goes with the project blob", () => {
+  const box = sandbox()
+  try {
+    const alpha = box.open("alpha")
+    setSettings(alpha, { ...defaultSettings(), font: "mono" }, box.home)
+    assert.equal(resetSettings(alpha, box.home).font, "sans")
+    assert.equal(existsSync(machineSettingsPath(box.home)), false, "leaving it would resurrect the old font")
+    assert.equal(getSettings(alpha, box.home).font, "sans")
+  } finally {
+    box.done()
+  }
+})
+
+test("an unreadable machine file degrades to the project's values rather than throwing", () => {
+  const box = sandbox()
+  try {
+    const alpha = box.open("alpha")
+    setSettings(alpha, { ...defaultSettings(), font: "mono" }, box.home)
+    writeFileSync(machineSettingsPath(box.home), "{ not json")
+    assert.deepEqual(readMachineSettings(box.home), {})
+    assert.equal(getSettings(alpha, box.home).font, "mono", "the project blob is still there")
+  } finally {
+    box.done()
+  }
+})
