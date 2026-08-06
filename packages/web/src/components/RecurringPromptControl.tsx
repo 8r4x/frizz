@@ -356,9 +356,16 @@ function PromptPanel({ thread, armed, close }: {
             frizz-coined term to be consistent with. It sits last because it is the only one that fires on
             something the harness does rather than on something the thread or the clock does.
 
+            ONE WORD, not "After compaction", and the reason is measured rather than stylistic: the label
+            column is `auto`, so it sizes to the LONGEST label and every switch in the grid moves with it.
+            "After compaction" measured 91.61px of ink in a 93px column at 11px/500 — 1.4px of slack, on a
+            surface whose font is a user setting — and it dragged both existing switches ~38px right for a
+            preposition the gloss beside it already supplies. As a bare noun it sits with its siblings
+            (Stop hook · Heartbeat · Compaction) and the column stops being hostage to this row.
+
             The gloss carries the INSTRUCTION, not just the timing, because this trigger is useless
             without it: the prompt has to name a doc for the emptied window to be re-grounded ON. */}
-        <span className={`font-medium ${postCompaction ? "text-fg" : "text-muted"}`}>After compaction</span>
+        <span className={`font-medium ${postCompaction ? "text-fg" : "text-muted"}`}>Compaction</span>
         <OnOffToggle
           kind="post-compaction"
           value={postCompaction}
