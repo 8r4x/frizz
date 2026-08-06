@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { formatGithubWakeSteer, isValidAwaitingTimer, restPromptMessage, schedulePromptMessage, timerPromptMessage, wakeDeliveryToken, type QuotaSnapshot } from "@frizz/shared"
+import { compactionPromptMessage, formatGithubWakeSteer, isValidAwaitingTimer, restPromptMessage, schedulePromptMessage, timerPromptMessage, wakeDeliveryToken, type QuotaSnapshot } from "@frizz/shared"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
 import type { FenceView } from "./tailer.ts"
@@ -394,9 +394,9 @@ interface ArmedSchedule {
 
 type RecurringRow = Pick<
   SessionRow,
-  | "recurring_prompt" | "recurring_on_rest" | "recurring_on_schedule"
+  | "recurring_prompt" | "recurring_on_rest" | "recurring_on_schedule" | "recurring_on_compact"
   | "recurring_interval_ms" | "recurring_armed_at"
-  | "recurring_rest_fired_at" | "recurring_schedule_fired_at"
+  | "recurring_rest_fired_at" | "recurring_schedule_fired_at" | "recurring_compact_fired_at"
 >
 
 // A row's live ON SCHEDULE trigger, if it has one. A switched-off trigger deliberately reads as ABSENT
@@ -456,6 +456,46 @@ function armedRest(row: RecurringRow): ArmedRest | undefined {
   const armedAt = row.recurring_armed_at
   if (!prompt || !armedAt) return undefined
   if (row.recurring_on_rest !== 1) return undefined
+  return { prompt, armedAt }
+}
+
+// ---- SOURCE 7: THE RECURRING PROMPT, ON COMPACTION -----------------------------------------------
+// The THIRD trigger on the same stored text (2026-08-06), delivered every time the harness summarizes
+// the thread's context away.
+//
+// WHY IT IS A TRIGGER AND NOT A HOOK. Compaction is the largest source of context loss there is, and
+// frizz used to answer it by having a worker-side hook splice the head of a canonical `scratch.md` into
+// the emptied window. That made the pad a load-bearing file every worker had to maintain whether or not
+// it wanted one. The recurring prompt already solves the same problem better: the worker writes whatever
+// doc it likes in its scratch directory and LINKS it here, and the link comes back at exactly the moment
+// the context is gone. The row is durable, it is visible in the thread footer, and the operator can edit
+// it — none of which a hook injection was.
+//
+// IT DOES NOT WAIT FOR REST, and that is the one place it deliberately parts company with SOURCE 5. A
+// compaction lands MID-TURN: the worker is still working, and the whole value is re-grounding it before
+// its next tool call rather than after it has finished acting on a summary. So this takes the SCHEDULE
+// trigger's delivery gate, not the rest trigger's.
+//
+// Same generation (`recurring_armed_at`) as its two siblings, because it is the same prompt.
+const COMPACT_FENCE_PREFIX = "compact"
+const COMPACT_HINT_KEY = "recurring:compaction"
+
+// The compaction a delivery is bound to. A new compaction necessarily carries a new instant, so "at most
+// one per compaction" falls out of delivery-id uniqueness — the same trick the rest trigger plays with
+// `lastActivityAt`, and the reason neither needs a counter.
+function compactFenceId(armedAt: string, compactedAt: string): string {
+  return `${COMPACT_FENCE_PREFIX}:${armedAt}:${compactedAt}`
+}
+function isCompactFenceId(fenceId: string): boolean {
+  return fenceId.startsWith(`${COMPACT_FENCE_PREFIX}:`)
+}
+
+// A row's live ON COMPACTION trigger, if it has one. Switched off reads as ABSENT, same as the others.
+function armedCompact(row: RecurringRow): ArmedRest | undefined {
+  const prompt = row.recurring_prompt?.trim()
+  const armedAt = row.recurring_armed_at
+  if (!prompt || !armedAt) return undefined
+  if (row.recurring_on_compact !== 1) return undefined
   return { prompt, armedAt }
 }
 
@@ -870,6 +910,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (tele.lastAssistantAllDone) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
+    // A post-compaction delivery is bound to the generation AND to the exact compaction it was queued
+    // for — a SECOND compaction between enqueue and delivery supersedes the first, because re-grounding
+    // on the older window is not what the operator asked for. Unlike the rest trigger it does NOT check
+    // `lastAssistantAllDone`: that sentinel is an answer about resting, and this delivery is not one.
+    if (isCompactFenceId(item.fenceId)) {
+      const armed = armedCompact(row)
+      if (!armed || item.fenceId !== compactFenceId(armed.armedAt, tele.lastCompactionAt ?? "")) return "superseded"
+      return tele.turn === "idle" ? "current-idle" : "current-busy"
+    }
     // A one-off timer is bound to its own row still being ARMED. The worker cancelling it, and a
     // previous attempt having already settled it as fired, both read as supersession here — which is
     // what makes "exactly once" hold even after the outbox has pruned this delivery's terminal row.
@@ -921,7 +970,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // we can safely address.
   function isDeliverableNow(item: WakeDelivery, context: DeliveryContext): boolean {
     if (context === "current-idle") return true
-    return context === "current-busy" && (isHeartbeatFenceId(item.fenceId) || isTimerFenceId(item.fenceId))
+    // The post-compaction trigger joins the mid-turn pair for the reason it exists at all: a compaction
+    // happens WHILE the worker is working, and a re-grounding that waits for it to stop has missed the
+    // window it was written for.
+    return context === "current-busy"
+      && (isHeartbeatFenceId(item.fenceId) || isTimerFenceId(item.fenceId) || isCompactFenceId(item.fenceId))
   }
 
   // Name the activity for the bump steer. A review carries a GitHub `state`, so an APPROVAL or a
@@ -1541,6 +1594,54 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   }
 
+  // ---- The ON COMPACTION pass -----------------------------------------------------------------
+  // Deliberately does NOT filter on `turn === "idle"` (see SOURCE 7): the point is to reach the worker
+  // in the emptied window, and a compaction happens while it is working. Nor does it consult
+  // `lastAssistantAllDone` — that sentinel answers "you stopped, is there more?", which is not the
+  // question a compaction asks. A worker that genuinely wants these to stop replies ALLDONE, and the
+  // shared opt-out disarms every trigger at once.
+  function evalCompactPrompts(nowMs: number): void {
+    for (const row of deps.storage.allSessions()) {
+      if (row.state === "archived" || row.archived === 1) continue
+      const armed = armedCompact(row)
+      if (!armed) continue
+      const tele = deps.tailer.get(row.slug)
+      if (!tele?.lastCompactionAt) continue
+      // NEVER fire for a compaction that predates the arming. Without this, switching the trigger on for
+      // a thread that compacted an hour ago delivers immediately for an event the operator never saw —
+      // and a thread that has compacted before is the common case, not the exotic one.
+      if (tele.lastCompactionAt <= armed.armedAt) continue
+      const fenceId = compactFenceId(armed.armedAt, tele.lastCompactionAt)
+      const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
+      // Terminal rows stay in the store, so this alone is what makes a compaction bump EXACTLY once: the
+      // same compaction yields the same delivery id, whatever happened to the first attempt.
+      if (outbox.get(deliveryId)) continue
+      const item = outbox.enqueue({
+        id: deliveryId,
+        slug: row.slug,
+        sessionId: row.session_id,
+        fenceId,
+        hintKey: COMPACT_HINT_KEY,
+        message: compactionPromptMessage(armed.prompt),
+        reason: "recurring prompt after compaction",
+      }, nowMs).delivery
+      log(`waker: queued ${row.slug} — ${item.reason}`)
+      checkpoint("after-enqueue", item)
+    }
+  }
+
+  // Stamp the POST-COMPACTION readout once its delivery is terminal. Cosmetic (the panel's "last sent"),
+  // guarded on the generation for the same reason as its siblings: a bump settling after the operator
+  // edited the text must not write onto words it no longer describes.
+  function settleCompactPrompt(item: WakeDelivery): void {
+    if (!isCompactFenceId(item.fenceId)) return
+    const row = deps.storage.getSession(item.slug)
+    if (!row || row.session_id !== item.sessionId) return
+    const armedAt = row.recurring_armed_at
+    if (!armedAt || !item.fenceId.startsWith(`${COMPACT_FENCE_PREFIX}:${armedAt}:`)) return
+    deps.storage.stampRecurringCompactFired(item.slug, armedAt, new Date().toISOString())
+  }
+
   // Stamp the bump clock once a bump has genuinely REACHED the worker — the HEARTBEAT's input, and
   // called only from the settle points that mean delivery genuinely happened.
   // Guarded on the generation so a bump settling after the operator edited the text cannot write onto
@@ -1573,6 +1674,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         settleSnooze(item)
         settleSchedulePrompt(item)
         settleRestPrompt(item)
+        settleCompactPrompt(item)
         settleTimer(item)
         continue
       }
@@ -1623,6 +1725,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         settleSnooze(item)
         settleSchedulePrompt(item)
         settleRestPrompt(item)
+        settleCompactPrompt(item)
         settleTimer(item)
         continue
       }
@@ -1689,6 +1792,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       settleSnooze(item)
       settleSchedulePrompt(item)
       settleRestPrompt(item)
+      settleCompactPrompt(item)
       settleTimer(item)
       const acknowledged = outbox.get(item.id)
       if (acknowledged) checkpoint("after-ack", acknowledged)
@@ -1754,6 +1858,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     } catch (err) {
       if (err instanceof InjectedSchedulerCrash) throw err
       log(`waker: recurring-prompt rest pass failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    try {
+      evalCompactPrompts(now())
+    } catch (err) {
+      if (err instanceof InjectedSchedulerCrash) throw err
+      log(`waker: recurring-prompt compaction pass failed: ${err instanceof Error ? err.message : String(err)}`)
     }
     try {
       evalTimers(now())

@@ -34,9 +34,9 @@ import { Popover, PopoverContent, PopoverTrigger } from "./ui/Popover.tsx"
 export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
   const [open, setOpen] = useState(false)
   const armed = thread.recurringPrompt
-  // COLOURED IF EITHER MECHANISM IS LIVE. The glyph answers one question — "is frizz going to re-prompt
-  // this thread on its own?" — and either one is a yes.
-  const live = armed?.stopHook === true || armed?.heartbeat === true
+  // COLOURED IF ANY MECHANISM IS LIVE. The glyph answers one question — "is frizz going to re-prompt
+  // this thread on its own?" — and any one of them is a yes.
+  const live = armed?.stopHook === true || armed?.heartbeat === true || armed?.postCompaction === true
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -112,7 +112,18 @@ const MIN_MINUTES = 1
 const MAX_MINUTES = 24 * 60
 const DEFAULT_INTERVAL_SECONDS = 600
 
-interface Draft { text: string; stopHook: boolean; heartbeat: boolean; seconds: number }
+interface Draft { text: string; stopHook: boolean; heartbeat: boolean; postCompaction: boolean; seconds: number }
+
+/** What will actually happen, as one clause per ARMED trigger. With three of them a nested ternary can
+ *  no longer say what is on — and an operator who misreads which trigger they armed waits for a delivery
+ *  that is never coming. Empty when nothing is armed; the callers phrase that case themselves. */
+function triggerClauses(d: Pick<Draft, "stopHook" | "heartbeat" | "postCompaction" | "seconds">): string[] {
+  return [
+    d.stopHook ? "at every rest" : null,
+    d.heartbeat ? `every ${Math.round(d.seconds / 60)} min` : null,
+    d.postCompaction ? "after every compaction" : null,
+  ].filter((c): c is string => c !== null)
+}
 
 function PromptPanel({ thread, armed, close }: {
   thread: ThreadView
@@ -127,6 +138,7 @@ function PromptPanel({ thread, armed, close }: {
   const [text, setText] = useState(armed?.prompt ?? "")
   const [stopHook, setStopHook] = useState(armed?.stopHook ?? false)
   const [heartbeat, setHeartbeat] = useState(armed?.heartbeat ?? false)
+  const [postCompaction, setPostCompaction] = useState(armed?.postCompaction ?? false)
   const [seconds, setSeconds] = useState(armed?.intervalSeconds ?? DEFAULT_INTERVAL_SECONDS)
   // The minutes field is a STRING while it is being typed, so a half-typed value ("", "1" on the way to
   // "120") is not immediately clamped out from under the caret. It becomes a number on commit.
@@ -138,13 +150,14 @@ function PromptPanel({ thread, armed, close }: {
     prompt: armed?.prompt ?? "",
     stopHook: armed?.stopHook ?? false,
     heartbeat: armed?.heartbeat ?? false,
+    postCompaction: armed?.postCompaction ?? false,
     seconds: armed?.intervalSeconds ?? DEFAULT_INTERVAL_SECONDS,
   })
 
   // Persist on unmount too: closing the popover destroys this subtree, and without this a prompt typed
   // and then dismissed with Escape would be silently lost.
-  const latest = useRef<Draft>({ text, stopHook, heartbeat, seconds })
-  latest.current = { text, stopHook, heartbeat, seconds }
+  const latest = useRef<Draft>({ text, stopHook, heartbeat, postCompaction, seconds })
+  latest.current = { text, stopHook, heartbeat, postCompaction, seconds }
   useEffect(() => () => { void persistNow(latest.current) }, [])
 
   /** Resolves TRUE when the server row matches this draft — either it already did, or the write landed.
@@ -155,12 +168,13 @@ function PromptPanel({ thread, armed, close }: {
     const unchanged = prompt === (sent.current.prompt || null)
       && next.stopHook === sent.current.stopHook
       && next.heartbeat === sent.current.heartbeat
+      && next.postCompaction === sent.current.postCompaction
       && next.seconds === sent.current.seconds
     if (unchanged) return true
     // Nothing armed and nothing typed — flipping a trigger before writing anything has nothing to
     // persist yet. Keep the local flip and let the first real text carry it up.
     if (prompt === null && !armed) {
-      sent.current = { prompt: "", stopHook: next.stopHook, heartbeat: next.heartbeat, seconds: next.seconds }
+      sent.current = { prompt: "", stopHook: next.stopHook, heartbeat: next.heartbeat, postCompaction: next.postCompaction, seconds: next.seconds }
       return true
     }
     setBusy(true)
@@ -171,6 +185,7 @@ function PromptPanel({ thread, armed, close }: {
         prompt,
         stopHook: next.stopHook,
         heartbeat: next.heartbeat,
+        postCompaction: next.postCompaction,
         // ALWAYS sent alongside a prompt, even while the schedule trigger is OFF. Gating this on
         // `heartbeat` looked right and silently destroyed data: switching the schedule off sent no
         // cadence, storage cleared the column, and reopening the panel showed the 10-minute default —
@@ -179,15 +194,14 @@ function PromptPanel({ thread, armed, close }: {
         // test: every unit here asserted on rows that still had a cadence.
         ...(prompt === null ? {} : { intervalSeconds: next.seconds }),
       })
-      sent.current = { prompt: prompt ?? "", stopHook: next.stopHook, heartbeat: next.heartbeat, seconds: next.seconds }
+      sent.current = { prompt: prompt ?? "", stopHook: next.stopHook, heartbeat: next.heartbeat, postCompaction: next.postCompaction, seconds: next.seconds }
       // The toast names WHAT WILL HAPPEN, not which switch moved. "On"/"off" was legible when there was
       // one toggle per feature and is ambiguous the moment two triggers share a row.
+      const clauses = triggerClauses(next)
       showToast(
         prompt === null ? "Recurring prompt cleared"
-          : next.stopHook && next.heartbeat ? `Recurring prompt: at every rest, and every ${Math.round(next.seconds / 60)} min`
-          : next.stopHook ? "Recurring prompt: at every rest"
-          : next.heartbeat ? `Recurring prompt: every ${Math.round(next.seconds / 60)} min`
-          : "Recurring prompt off — no trigger is on",
+          : clauses.length === 0 ? "Recurring prompt off — no trigger is on"
+          : `Recurring prompt: ${clauses.join(", ")}`,
       )
     } catch (error) {
       showToast((error instanceof Error ? error.message : "Could not save the recurring prompt").slice(0, 100))
@@ -197,7 +211,7 @@ function PromptPanel({ thread, armed, close }: {
     }
     return true
   }
-  const persist = () => void persistNow({ text, stopHook, heartbeat, seconds })
+  const persist = () => void persistNow({ text, stopHook, heartbeat, postCompaction, seconds })
   // Clamp on COMMIT, not on keystroke. An out-of-range or empty field snaps back to something legal and
   // the field is rewritten to match, so what the operator sees is always what was actually stored.
   function commitMinutes(): void {
@@ -207,7 +221,7 @@ function PromptPanel({ thread, armed, close }: {
       : Math.round(seconds / 60)
     setMinutes(String(clamped))
     setSeconds(clamped * 60)
-    void persistNow({ text, stopHook, heartbeat, seconds: clamped * 60 })
+    void persistNow({ text, stopHook, heartbeat, postCompaction, seconds: clamped * 60 })
   }
   // Is there anything to save? Compared against what was last SENT, so the button is live exactly when
   // a click would change something on the server — the alternative (always enabled) makes "Save" a
@@ -215,19 +229,25 @@ function PromptPanel({ thread, armed, close }: {
   const dirty = (text.trim() || null) !== (sent.current.prompt || null)
     || stopHook !== sent.current.stopHook
     || heartbeat !== sent.current.heartbeat
+    || postCompaction !== sent.current.postCompaction
     || seconds !== sent.current.seconds
 
-  // The far end of the header belongs to the reading, not to a control. With two triggers there are two
-  // clocks, so it names WHICH one last fired rather than implying the pair share a stamp.
-  const lastRest = armed?.lastRestFiredAt
-  const lastSchedule = armed?.lastScheduleFiredAt
-  const lastFired = !lastRest ? lastSchedule
-    : !lastSchedule ? lastRest
-    : Date.parse(lastRest) >= Date.parse(lastSchedule) ? lastRest : lastSchedule
-  const lastLabel = lastFired === undefined ? null
-    : lastRest && lastSchedule ? `Last sent ${formatAgo(lastFired)}`
-    : lastRest ? `Last sent at rest ${formatAgo(lastFired)}`
-    : `Last sent on schedule ${formatAgo(lastFired)}`
+  // The far end of the header belongs to the reading, not to a control. Each trigger keeps its own clock,
+  // so this names WHICH one last fired rather than implying they share a stamp — and only while exactly
+  // one has ever fired, because "last sent at rest" over a row where the schedule fired more recently
+  // would be a lie. With more than one stamp it reports the newest instant unqualified.
+  const stamps = [
+    { at: armed?.lastRestFiredAt, how: "at rest" },
+    { at: armed?.lastScheduleFiredAt, how: "on schedule" },
+    { at: armed?.lastCompactFiredAt, how: "after a compaction" },
+  ].filter((s): s is { at: string; how: string } => s.at !== undefined)
+  const newest = stamps.reduce<{ at: string; how: string } | undefined>(
+    (best, s) => (best && Date.parse(best.at) >= Date.parse(s.at) ? best : s),
+    undefined,
+  )
+  const lastLabel = newest === undefined ? null
+    : stamps.length > 1 ? `Last sent ${formatAgo(newest.at)}`
+    : `Last sent ${newest.how} ${formatAgo(newest.at)}`
 
   return (
     <section data-recurring-panel>
@@ -283,7 +303,7 @@ function PromptPanel({ thread, armed, close }: {
           disabled={busy}
           onChange={(next) => {
             setStopHook(next)
-            void persistNow({ text, stopHook: next, heartbeat, seconds })
+            void persistNow({ text, stopHook: next, heartbeat, postCompaction, seconds })
             if (next && !text.trim()) requestAnimationFrame(() => textarea.current?.focus())
           }}
         />
@@ -296,7 +316,7 @@ function PromptPanel({ thread, armed, close }: {
           disabled={busy}
           onChange={(next) => {
             setHeartbeat(next)
-            void persistNow({ text, stopHook, heartbeat: next, seconds })
+            void persistNow({ text, stopHook, heartbeat: next, postCompaction, seconds })
             if (next && !text.trim()) requestAnimationFrame(() => textarea.current?.focus())
           }}
         />
@@ -330,6 +350,26 @@ function PromptPanel({ thread, armed, close }: {
         ) : (
           <span className="text-muted">on a clock, even mid-turn</span>
         )}
+
+        {/* POST-COMPACTION (scheduler SOURCE 7). Named for the event rather than the mechanism, unlike
+            its two neighbours, because "compaction" IS the name everything uses for it — there is no
+            frizz-coined term to be consistent with. It sits last because it is the only one that fires on
+            something the harness does rather than on something the thread or the clock does.
+
+            The gloss carries the INSTRUCTION, not just the timing, because this trigger is useless
+            without it: the prompt has to name a doc for the emptied window to be re-grounded ON. */}
+        <span className={`font-medium ${postCompaction ? "text-fg" : "text-muted"}`}>After compaction</span>
+        <OnOffToggle
+          kind="post-compaction"
+          value={postCompaction}
+          disabled={busy}
+          onChange={(next) => {
+            setPostCompaction(next)
+            void persistNow({ text, stopHook, heartbeat, postCompaction: next, seconds })
+            if (next && !text.trim()) requestAnimationFrame(() => textarea.current?.focus())
+          }}
+        />
+        <span className="text-muted">when the context is summarized away — link the doc to re-read</span>
       </div>
       {/* The explanation and the Save share one row, which is what puts the button at the panel's
           bottom-right without a bar of its own. `items-end` rather than `items-center`: the explainer is
@@ -345,10 +385,10 @@ function PromptPanel({ thread, armed, close }: {
               which is what an operator actually cannot infer from the panel. An earlier version repeated
               the mid-turn fact here and wrapped to three lines, parking Save beside a line holding the
               word "it." */}
-          {!stopHook && !heartbeat
-            ? <>Neither is on, so nothing is sent — the text stays here for when you want it back.</>
+          {!stopHook && !heartbeat && !postCompaction
+            ? <>None is on, so nothing is sent — the text stays here for when you want it back.</>
             : <>
-                Switch both off to stop it, or the agent can reply{" "}
+                Switch them all off to stop it, or the agent can reply{" "}
                 <code className="font-mono font-medium text-fg/85">{ALLDONE_SENTINEL}</code> — which
                 stalls the run until you move it.
               </>}
@@ -362,7 +402,7 @@ function PromptPanel({ thread, armed, close }: {
           // one surface that can report a failure, and the operator would walk away believing a prompt
           // was armed that never was. The unmount persist is a no-op by then: `sent.current` already
           // matches this draft, so it returns early rather than sending the same row twice.
-          onClick={() => { void persistNow({ text, stopHook, heartbeat, seconds }).then((ok) => { if (ok) close() }) }}
+          onClick={() => { void persistNow({ text, stopHook, heartbeat, postCompaction, seconds }).then((ok) => { if (ok) close() }) }}
           // Small, quiet, and INERT until there is something to save — the disabled state is the whole
           // signal. `shrink-0` so a long explainer can never squeeze the label; `leading-none` + the
           // symmetric py keeps the word optically centred rather than riding high on the default

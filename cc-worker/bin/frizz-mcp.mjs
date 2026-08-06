@@ -95,16 +95,20 @@ const SPAWN_THREAD = {
 const RECURRING_PROMPT = {
   name: "recurring_prompt",
   description:
-    "Arm a RECURRING PROMPT on YOUR OWN thread: one piece of text that frizz re-sends you, on either or " +
-    "both of two triggers, for as long as it is armed.\n\n" +
+    "Arm a RECURRING PROMPT on YOUR OWN thread: one piece of text that frizz re-sends you, on any or all " +
+    "of three triggers, for as long as it is armed.\n\n" +
     "  stop_hook          — every time you come to REST. Use it to keep a long autonomous effort moving " +
     "without the human driving every step, and to rescue yourself from a wait that may never resolve.\n" +
     "  heartbeat_seconds  — on a CLOCK, whatever you are doing. This one reaches you MID-TURN: it arrives as " +
     "a queued message you read at your next tool boundary rather than waiting for you to stop, and it " +
     "never aborts what you are running. Use it for something that must be revisited on a schedule no " +
-    "matter what you happen to believe at the time.\n\n" +
-    "Set at least one. Setting BOTH is the ordinary case for \"keep this moving\": you are prompted " +
-    "whenever you stop, and at least every N seconds even if you never do.\n\n" +
+    "matter what you happen to believe at the time.\n" +
+    "  post_compaction    — every time your CONTEXT IS COMPACTED, delivered into the emptied window. This " +
+    "is how you survive compaction: write a doc in your scratch directory as you work, LINK IT in this " +
+    "prompt, and the link comes back at the exact moment you have lost everything else. Also mid-turn — " +
+    "a compaction happens while you are working.\n\n" +
+    "Set at least one. The ordinary shape for a long effort is post_compaction plus stop_hook: you are " +
+    "re-grounded whenever your context is summarized away, and prompted again whenever you stop.\n\n" +
     "USE THIS RATHER THAN `CronCreate` or `ScheduleWakeup`. Those are Claude Code's own in-session " +
     "schedulers and they CANNOT fire in the runtime frizz runs you in: their gate stays shut for as long " +
     "as ANY background task of yours is outstanding, so the moment you are parked behind a background " +
@@ -137,8 +141,8 @@ const RECURRING_PROMPT = {
       stop_hook: {
         type: "boolean",
         description:
-          "Send it every time you come to rest. Defaults to true when `heartbeat_seconds` is omitted, so a " +
-          "`start` that names neither mechanism still does the obvious thing.",
+          "Send it every time you come to rest. Defaults to true when neither `heartbeat_seconds` nor " +
+          "`post_compaction` is given, so a `start` that names no mechanism still does the obvious thing.",
       },
       heartbeat_seconds: {
         type: "integer",
@@ -146,6 +150,13 @@ const RECURRING_PROMPT = {
           "Also send it on this clock, in seconds (minimum 60, maximum 86400). Omit for no heartbeat. A " +
           "delivery is read at your next tool boundary, so a sub-minute cadence buys no promptness and " +
           "only talks over your own work.",
+      },
+      post_compaction: {
+        type: "boolean",
+        description:
+          "Also send it every time your context is compacted. Set this on any effort long enough to be " +
+          "summarized, and make the prompt LINK the doc you are keeping in your scratch directory — that " +
+          "link arriving in the emptied window is what lets you pick the work back up.",
       },
     },
     required: ["action"],
@@ -369,8 +380,8 @@ async function recurringPrompt(args) {
   if (action !== "start" && action !== "stop") throw new Error("`action` must be either \"start\" or \"stop\"")
 
   if (action === "stop") {
-    await callRpc("setOwnThreadRecurringPrompt", { slug, prompt: null, stopHook: false, heartbeat: false })
-    return "Recurring prompt disarmed and cleared. Neither the stop hook nor the heartbeat will fire, and the text is gone from the thread footer."
+    await callRpc("setOwnThreadRecurringPrompt", { slug, prompt: null, stopHook: false, heartbeat: false, postCompaction: false })
+    return "Recurring prompt disarmed and cleared. No trigger will fire — not the stop hook, not the heartbeat, not the post-compaction one — and the text is gone from the thread footer."
   }
 
   const prompt = typeof args.prompt === "string" ? args.prompt.trim() : ""
@@ -387,13 +398,14 @@ async function recurringPrompt(args) {
       throw new Error(`\`heartbeat_seconds\` must be between ${MIN_INTERVAL_SECONDS} and ${MAX_INTERVAL_SECONDS}`)
     }
   }
+  const postCompaction = args.post_compaction === true
   // DEFAULTED, not required: a `start` that names no trigger at all is a model asking to be re-prompted
   // and leaving the mechanism to us, and the rest trigger is the safe reading of that — it cannot talk
   // over a running turn, and it cannot fire on a thread that has stopped needing it.
-  const stopHook = typeof args.stop_hook === "boolean" ? args.stop_hook : !hasHeartbeat
+  const stopHook = typeof args.stop_hook === "boolean" ? args.stop_hook : !hasHeartbeat && !postCompaction
   const heartbeat = hasHeartbeat
-  if (!stopHook && !heartbeat) {
-    throw new Error("at least one is required: set `stop_hook: true`, or give `heartbeat_seconds`, or both")
+  if (!stopHook && !heartbeat && !postCompaction) {
+    throw new Error("at least one is required: set `stop_hook: true`, give `heartbeat_seconds`, set `post_compaction: true`, or any combination")
   }
 
   await callRpc("setOwnThreadRecurringPrompt", {
@@ -401,15 +413,22 @@ async function recurringPrompt(args) {
     prompt,
     stopHook,
     heartbeat,
+    postCompaction,
     ...(heartbeat ? { intervalSeconds: interval } : {}),
   })
 
   const every = heartbeat ? (interval % 60 === 0 ? `${interval / 60} min` : `${interval}s`) : null
-  const when = stopHook && every
-    ? `every time you come to rest AND every ${every} (the heartbeat reaches you mid-turn)`
-    : stopHook
-      ? "every time you come to rest"
-      : `every ${every}, reaching you mid-turn rather than waiting for you to stop`
+  // One clause per armed trigger, joined — with three of them the old nested ternary could no longer say
+  // what was actually armed, and a worker that misreads which trigger it holds waits for a delivery that
+  // is never coming.
+  const clauses = [
+    stopHook ? "every time you come to rest" : null,
+    every ? `every ${every} (the heartbeat reaches you mid-turn)` : null,
+    postCompaction ? "every time your context is compacted, delivered into the emptied window" : null,
+  ].filter(Boolean)
+  const when = clauses.length === 1
+    ? clauses[0]
+    : `${clauses.slice(0, -1).join(", ")} AND ${clauses[clauses.length - 1]}`
   return (
     `Recurring prompt armed — frizz will send you this ${when}. It replaces any recurring prompt this ` +
     "thread had before.\n\n" +

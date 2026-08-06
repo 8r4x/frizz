@@ -114,6 +114,11 @@ export interface NormalizedTail {
   limitFault?: LimitFault // subscription window exhausted mid-turn (see FoldState.limitFault)
   contextTokens?: number // tokens the last request carried (see FoldState.contextTokens)
   contextWindow?: number // the model's context size, provider-reported (see FoldState.contextWindow)
+  // ISO8601 of the newest CONTEXT COMPACTION, or absent if this session has never been compacted. It is
+  // the trigger clock for scheduler SOURCE 7 (the recurring prompt's post-compaction delivery): a new
+  // compaction necessarily carries a new instant, so "at most one delivery per compaction" falls out of
+  // delivery-id uniqueness, exactly as the rest trigger gets it from lastActivityAt.
+  lastCompactionAt?: string
 }
 
 // The backend-NEUTRAL fold accumulator: the running derivation a backend folds each transcript line
@@ -183,6 +188,12 @@ export interface FoldState {
   // Claude row has a numerator from its first assistant record but no denominator until its first turn
   // ends — and a tmux/foreign Claude row never gets one at all. Absent ⇒ NO reading is rendered.
   contextWindow?: number
+  // Newest context compaction — the post-compaction trigger's clock (see NormalizedTail.lastCompactionAt).
+  // The two backends observe it differently and neither has a second signal: Claude injects its
+  // carry-over summary as an ordinary user record flagged `isCompactSummary`, while codex emits an
+  // explicit `compaction` normalized event. Both are the harness's work, not the agent's, so this is the
+  // ONLY field either of them moves — turn state, preview, fence and row order all stay put.
+  lastCompactionAt?: string
 }
 
 // A file a backend needs on disk BEFORE the detached spawn (e.g. codex's session-scoped AGENTS.md).

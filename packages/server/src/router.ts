@@ -500,6 +500,7 @@ export function createRouter(ctx: AppContext) {
     prompt: string | null
     stopHook: boolean
     heartbeat: boolean
+    postCompaction: boolean
     intervalSeconds?: number
   }
   function assertRecurringPromptArmable(
@@ -510,7 +511,7 @@ export function createRouter(ctx: AppContext) {
     if (input.heartbeat && input.intervalSeconds === undefined) {
       throw new Error("`intervalSeconds` is required when the heartbeat is on")
     }
-    if ((input.stopHook || input.heartbeat) && (row.state === "archived" || row.archived === 1)) {
+    if ((input.stopHook || input.heartbeat || input.postCompaction) && (row.state === "archived" || row.archived === 1)) {
       throw new Error("Reopen this thread before arming a recurring prompt")
     }
   }
@@ -549,6 +550,10 @@ export function createRouter(ctx: AppContext) {
     if (!row) throw new Error(`thread ${slug} is not registered`)
 
     const otherOn = trigger === "rest" ? row.recurring_on_schedule === 1 : row.recurring_on_rest === 1
+    // The post-compaction trigger is preserved verbatim across a legacy write. These aliases exist for
+    // workers running the PRE-MERGE two-feature tools, which predate SOURCE 7 entirely — such a call
+    // cannot have an opinion about a trigger it has never heard of, so it must not switch one off.
+    const compactOn = row.recurring_on_compact === 1
     // The cadence the row already carries, in the seconds the shared validator speaks. Read back even
     // while the HEARTBEAT is off, because arming the stop hook must not drop the interval the panel
     // needs to switch the heartbeat back on.
@@ -557,26 +562,27 @@ export function createRouter(ctx: AppContext) {
 
     // Keep the parked text when this mechanism goes off but the other is still armed: clearing the row
     // there would disarm a mechanism this call never mentioned.
-    const prompt = on ? write.prompt : otherOn ? row.recurring_prompt ?? null : null
+    const prompt = on ? write.prompt : otherOn || compactOn ? row.recurring_prompt ?? null : null
     const next: RecurringPromptWrite = prompt === null
       // No text, no mechanisms — one armed over an empty prompt is a row the scheduler cannot fire.
-      ? { prompt: null, stopHook: false, heartbeat: false }
+      ? { prompt: null, stopHook: false, heartbeat: false, postCompaction: false }
       : {
         prompt,
         stopHook: trigger === "rest" ? on : otherOn,
         heartbeat: trigger === "schedule" ? on : otherOn,
+        postCompaction: compactOn,
         intervalSeconds: trigger === "schedule" && on ? write.intervalSeconds : storedSeconds,
       }
 
     assertRecurringPromptArmable(next, row)
-    if (!ctx.storage.setRecurringPromptBySlug(
-      slug,
-      next.prompt,
-      next.stopHook,
-      next.heartbeat,
-      recurringIntervalMs(next),
-      new Date().toISOString(),
-    )) {
+    if (!ctx.storage.setRecurringPromptBySlug(slug, {
+      prompt: next.prompt,
+      stopHook: next.stopHook,
+      heartbeat: next.heartbeat,
+      postCompaction: next.postCompaction,
+      intervalMs: recurringIntervalMs(next),
+      armedAt: new Date().toISOString(),
+    })) {
       throw new Error(`thread ${slug} could not be updated`)
     }
     ctx.board.refresh()
@@ -1774,16 +1780,14 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         const row = currentOwnedSession(input.slug, input.sessionId)
         assertRecurringPromptArmable(input, row)
-        if (!ctx.storage.setRecurringPromptIfCurrent(
-          input.slug,
-          row.session_id,
-          row.runtime_generation ?? 0,
-          input.prompt,
-          input.stopHook,
-          input.heartbeat,
-          recurringIntervalMs(input),
-          new Date().toISOString(),
-        )) {
+        if (!ctx.storage.setRecurringPromptIfCurrent(input.slug, row.session_id, row.runtime_generation ?? 0, {
+          prompt: input.prompt,
+          stopHook: input.stopHook,
+          heartbeat: input.heartbeat,
+          postCompaction: input.postCompaction,
+          intervalMs: recurringIntervalMs(input),
+          armedAt: new Date().toISOString(),
+        })) {
           throw new Error("This thread moved on; reopen it and try again")
         }
         ctx.board.refresh()
@@ -1804,14 +1808,14 @@ export function createRouter(ctx: AppContext) {
         const row = ctx.storage.getSession(input.slug)
         if (!row) throw new Error(`thread ${input.slug} is not registered`)
         assertRecurringPromptArmable(input, row)
-        if (!ctx.storage.setRecurringPromptBySlug(
-          input.slug,
-          input.prompt,
-          input.stopHook,
-          input.heartbeat,
-          recurringIntervalMs(input),
-          new Date().toISOString(),
-        )) {
+        if (!ctx.storage.setRecurringPromptBySlug(input.slug, {
+          prompt: input.prompt,
+          stopHook: input.stopHook,
+          heartbeat: input.heartbeat,
+          postCompaction: input.postCompaction,
+          intervalMs: recurringIntervalMs(input),
+          armedAt: new Date().toISOString(),
+        })) {
           throw new Error(`thread ${input.slug} could not be updated`)
         }
         ctx.board.refresh()

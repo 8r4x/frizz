@@ -1583,6 +1583,10 @@ export function applyRecord(state: TailState, rec: Record): void {
   // the row to the top of the board on motion the human never caused. It IS a re-invoking record (the
   // model resumes from the summary), so it keeps the in-flight flip; it just may not touch lastUserAt.
   const compactSummaryRec = type === "user" && rec.isCompactSummary === true
+  // ...and it is also the ONLY place a Claude transcript says a compaction just happened in a record the
+  // fold already reads, which makes it the post-compaction trigger's clock (scheduler SOURCE 7). It moves
+  // nothing else — see the flag's own note above for why this record must not read as human motion.
+  if (compactSummaryRec && typeof rec.timestamp === "string") state.lastCompactionAt = rec.timestamp
   if (typeof rec.timestamp === "string" && (type === "assistant" || (type === "user" && !metaUserRec) || type === "system")) {
     state.lastActivityAt = rec.timestamp
   }
@@ -1832,7 +1836,10 @@ export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
       // bump above), but it is the HARNESS's work, not the agent's: it brackets no turn, produces no
       // text, and must never move the preview, the fence, or the row-order key. Rendering is the
       // transcript projection's job (a compaction divider); the fold only needs to not be fooled by it.
+      // The one thing it DOES set is the post-compaction trigger's clock (scheduler SOURCE 7) — codex's
+      // half of what `isCompactSummary` gives the Claude fold.
       state.sawRecords = true
+      if (typeof ev.at === "string") state.lastCompactionAt = ev.at
       break
     case "context-usage":
       // Pure telemetry — see the activity-clock note above. Read by the transcript projection (which
@@ -4150,7 +4157,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       // an unanswered ```question fence (a user reply clears the flag and flips the turn in-flight).
       const pendingQuestion = s.turn === "idle" && s.lastAssistantHasQuestion
       const nowMs = now()
-      return { turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, nativeInputRequired: s.nativeInputRequired, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: s.lastAssistantAllDone, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow }
+      return { turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, nativeInputRequired: s.nativeInputRequired, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: s.lastAssistantAllDone, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt }
     },
     // The CURRENT fresh foreign session ids (mtime within FOREIGN_FRESH_MS, capped), mtime-desc. Kept
     // as the last scan's result — recomputed at most every FOREIGN_SCAN_EVERY ticks.

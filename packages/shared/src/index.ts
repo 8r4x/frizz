@@ -394,21 +394,24 @@ export const RecurringIntervalSeconds = z
   .min(RECURRING_MIN_INTERVAL_SECONDS)
   .max(RECURRING_MAX_INTERVAL_SECONDS)
 
-// What the board renders for a thread carrying one. The two triggers are independent booleans rather
-// than one `enabled` flag, and the text survives both being switched off so re-arming costs no retyping.
-// `intervalSeconds` is present whenever a schedule has ever been set, INCLUDING while the heartbeat is
-// off — otherwise flipping the schedule back on would lose the cadence the operator chose.
+// What the board renders for a thread carrying one. The three triggers are independent booleans rather
+// than one `enabled` flag, and the text survives all of them being switched off so re-arming costs no
+// retyping. `intervalSeconds` is present whenever a schedule has ever been set, INCLUDING while the
+// heartbeat is off — otherwise flipping the schedule back on would lose the cadence the operator chose.
 export const ThreadRecurringPrompt = z.object({
   prompt: z.string(),
-  /** The two mechanisms, named as the panel labels them. `stopHook` fires at every rest; `heartbeat`
-   *  fires on `intervalSeconds` and reaches the agent mid-turn. */
+  /** The three mechanisms, named as the panel labels them. `stopHook` fires at every rest; `heartbeat`
+   *  fires on `intervalSeconds`; `postCompaction` fires whenever the harness summarizes the thread's
+   *  context away. The latter two both reach the agent mid-turn. */
   stopHook: z.boolean(),
   heartbeat: z.boolean(),
+  postCompaction: z.boolean(),
   intervalSeconds: z.number().int().positive().optional(),
   armedAt: z.string(),
-  /** Last delivery of the ON REST trigger; the two are stamped separately so each reads its own clock. */
+  /** Last delivery per trigger; stamped separately so each reads its own clock. */
   lastRestFiredAt: z.string().optional(),
   lastScheduleFiredAt: z.string().optional(),
+  lastCompactFiredAt: z.string().optional(),
 }).strict()
 export type ThreadRecurringPrompt = z.infer<typeof ThreadRecurringPrompt>
 
@@ -466,6 +469,25 @@ export function restPromptMessage(prompt: string): string {
   return `${prompt.trim()}\n\n(Recurring prompt — sent each time you come to rest. ${OPT_OUT_NOTE})`
 }
 
+/** What frizz delivers when the POST-COMPACTION trigger fires (scheduler SOURCE 7).
+ *
+ * This one lands in a context that has just been summarized away, which is the whole reason it exists —
+ * so unlike its two siblings the trailer must first say WHERE the reader is, or the operator's words
+ * arrive with nothing to attach to. It also answers the compaction preamble in the same breath: a
+ * worker reading "a previous conversation that ran out of context" routinely treats it as a report on
+ * ITSELF and starts winding down, and this delivery is the one piece of frizz text guaranteed to land
+ * in that exact window.
+ *
+ * Like the schedule trigger's, it may arrive MID-TURN — a compaction does not stop the work. */
+export function compactionPromptMessage(prompt: string): string {
+  return (
+    `${prompt.trim()}\n\n(Recurring prompt — your context was just compacted. This is what you asked to` +
+    " be handed back: re-ground on it before doing anything else, and treat it as authoritative over" +
+    " anything the summary implies. The window is close to empty again, which is normal and not a reason" +
+    ` to wind down or hand off. ${OPT_OUT_NOTE})`
+  )
+}
+
 /** What frizz delivers when the ON SCHEDULE trigger fires. Same text, same shape, and it names the
  * cadence — which is the ONE thing that distinguishes the two deliveries now that the prompt is shared.
  * A worker needs that distinction: a scheduled delivery may arrive MID-TURN, so reading one does not
@@ -497,8 +519,8 @@ export function formatIntervalLabel(seconds: number): string {
  * in this file so they cannot drift. Anything that does not match returns undefined and renders as it
  * did before — text is never lost to a parse. */
 export interface RecurringPrompt {
-  kind: "rest" | "schedule"
-  /** The cadence as the trailer stated it ("10 min"); absent for a rest delivery. */
+  kind: "rest" | "schedule" | "compaction"
+  /** The cadence as the trailer stated it ("10 min"); absent for a rest or post-compaction delivery. */
   every?: string
   /** The operator's own words, with the trailer removed. */
   prompt: string
@@ -507,14 +529,19 @@ export interface RecurringPrompt {
 // "Stop hook — …" / "Heartbeat — sent every …", and those messages are still sitting in every open
 // thread on disk. Dropping them from the pattern would not lose the text (a non-match falls through to
 // plain rendering) but it would silently demote a whole thread's history from wake dividers to prose.
+//
+// The post-compaction alternate does not say "sent …" at all — its trailer opens by telling the reader
+// where they are, because it lands in a window that was just emptied. So it is matched on its own
+// opening clause rather than bent into the shared "sent X" shape.
 const RECURRING_TRAILER =
-  /\n\n\((?:Recurring prompt|Stop hook|Heartbeat) — sent (?:(each time you come to rest)|every ([^.)]+))\. [^)]*\)$/
+  /\n\n\((?:Recurring prompt|Stop hook|Heartbeat) — (?:sent (?:(each time you come to rest)|every ([^.)]+))|(your context was just compacted))\. [^)]*\)$/
 export function parseRecurringPrompt(text: string | undefined): RecurringPrompt | undefined {
   if (typeof text !== "string") return undefined
   const m = RECURRING_TRAILER.exec(text.trimEnd())
   if (!m) return undefined
   const prompt = text.trimEnd().slice(0, m.index).trim()
   if (!prompt) return undefined
+  if (m[3]) return { kind: "compaction", prompt }
   return m[2]
     ? { kind: "schedule", every: m[2].trim(), prompt }
     : { kind: "rest", prompt }
@@ -1178,6 +1205,10 @@ export const SetThreadRecurringPromptInput = z.object({
   prompt: RecurringPromptText.nullable(),
   stopHook: z.boolean(),
   heartbeat: z.boolean(),
+  // The POST-COMPACTION trigger (scheduler SOURCE 7, added 2026-08-06). Defaulted rather than required
+  // so a client that predates it — an older tab, an older MCP server — keeps writing the row correctly
+  // with the trigger off, which is the honest reading of a caller that has never heard of it.
+  postCompaction: z.boolean().default(false),
   intervalSeconds: RecurringIntervalSeconds.optional(),
 }).strict()
 export type SetThreadRecurringPromptInput = z.infer<typeof SetThreadRecurringPromptInput>
@@ -1202,6 +1233,10 @@ export const SetOwnThreadRecurringPromptInput = z.object({
   prompt: RecurringPromptText.nullable(),
   stopHook: z.boolean(),
   heartbeat: z.boolean(),
+  // The POST-COMPACTION trigger (scheduler SOURCE 7, added 2026-08-06). Defaulted rather than required
+  // so a client that predates it — an older tab, an older MCP server — keeps writing the row correctly
+  // with the trigger off, which is the honest reading of a caller that has never heard of it.
+  postCompaction: z.boolean().default(false),
   intervalSeconds: RecurringIntervalSeconds.optional(),
 }).strict()
 export type SetOwnThreadRecurringPromptInput = z.infer<typeof SetOwnThreadRecurringPromptInput>
@@ -1406,9 +1441,26 @@ export function wakeDeliveryToken(id: string): string {
 // this comment's own wording, a bug report pasting one — intact in the bubble.
 const WAKE_DELIVERY_TOKEN_TAIL = /\n*<!-- frizz-wake:[A-Za-z0-9_-]+ -->\s*$/
 
+// The token wherever it sits ON A LINE OF ITS OWN. That is how the scheduler always writes it, and it
+// is never how prose quotes one — a human asking "why is <!-- frizz-wake:… --> in my bubble?" writes it
+// mid-sentence, which this deliberately leaves alone (see the transcript test of exactly that).
+//
+// The tail anchor above is the RULE; this is the BACKSTOP. The tail is only correct while one record
+// holds one delivery, and the runtime breaks that whenever two land while the worker is mid-turn
+// (splitWakeDeliveries, below). Splitting restores the anchor — but the split has to model how the
+// runtime joins, and that is not frizz's format to pin. So the display strip refuses to depend on it:
+// a token on its own line is machine plumbing wherever it ended up, and no shape the runtime invents
+// next can put one in front of the human again.
+const WAKE_DELIVERY_TOKEN_LINE = /(?:^|\n)[ \t]*<!-- frizz-wake:[A-Za-z0-9_-]+ -->[ \t]*(?=\n|$)/g
+
 // Display projection: the steer the human is meant to read, without the machine-facing token.
 export function stripWakeDeliveryToken(text: string): string {
-  return text.replace(WAKE_DELIVERY_TOKEN_TAIL, "")
+  const out = text.replace(WAKE_DELIVERY_TOKEN_LINE, "")
+  // The blank line the token sat behind is its punctuation, not the message's — a token that LED the
+  // text leaves one at the top, one that closed it leaves one at the bottom. Both go with it, and only
+  // when something was actually removed, so an ordinary message with trailing whitespace does not
+  // acquire a display projection (userDisplayText treats "changed" as "worth sending to the client").
+  return out === text ? text.replace(WAKE_DELIVERY_TOKEN_TAIL, "") : out.replace(/^\n+/, "").replace(/\s+$/, "")
 }
 
 // Was this user turn WRITTEN BY FRIZZ rather than by the human? The token rides only on a scheduler
@@ -1417,6 +1469,40 @@ export function stripWakeDeliveryToken(text: string): string {
 // fact frizz is reporting something it noticed. The chat renders these as a first-party card instead.
 export function isWakeDelivery(text: string): boolean {
   return WAKE_DELIVERY_TOKEN_TAIL.test(text)
+}
+
+// A COALESCED delivery: several outbox messages merged by the runtime into ONE user record.
+//
+// Everything above assumes one record carries one delivery — the token is anchored to the END, and both
+// the display strip and every downstream parse (the recurring-prompt trailer, the GitHub steer) read
+// from there. That assumption breaks whenever two deliveries land while the worker is mid-turn: the
+// runtime hands the model one user message holding both, joined by a newline, each still carrying its
+// own token. The record then ends in a token — so `isWakeDelivery` says yes and the strip takes the
+// LAST one — while the first delivery's own token and trailer are stranded in the middle, where no
+// anchored parse can see them. That is exactly how a recurring prompt lost its `Recurring prompt · at
+// rest` divider and rendered instead as a generic bell card with the whole run of deliveries inside it,
+// interior `<!-- frizz-wake:… -->` and all (measured: 14 of 380 real deliveries on this machine).
+//
+// So cut the record back into the deliveries the scheduler actually sent, and let each one be projected
+// on its own. A boundary is a token line WITH MORE CONTENT AFTER IT — the token ends a delivery, so
+// anything below it came from the next one. Deliberately not keyed on the runtime's joiner (measured
+// today as a single "\n"): that is its format, not frizz's, and a fix that hard-codes it silently stops
+// working the day it changes. Whitespace between segments is dropped with the join.
+/** One user record → the deliveries it carries, each ending in its own token. `[text]` when it carries
+ *  a single delivery (or none), so every caller can treat the split as the general case. */
+export function splitWakeDeliveries(text: string): string[] {
+  const out: string[] = []
+  let start = 0
+  for (const m of text.matchAll(WAKE_DELIVERY_TOKEN_LINE)) {
+    const end = m.index + m[0].length
+    if (!text.slice(end).trim()) break // the LAST token — it closes the record, so nothing follows it
+    out.push(text.slice(start, end))
+    start = end
+  }
+  if (out.length === 0) return [text]
+  const rest = text.slice(start).replace(/^\s*\n/, "")
+  if (rest.trim()) out.push(rest)
+  return out
 }
 
 // ---- THE agent-to-agent UPWARD message (a sub-agent reporting to its parent) ----------------------

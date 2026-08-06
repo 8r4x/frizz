@@ -61,29 +61,37 @@ export interface SessionRow {
   // came to a new rest because a sub-agent/shell returned. NULL = no event-snooze armed. Distinct from
   // snoozed_until (a wall-clock park owned by the scheduler); this one clears itself on the next rest.
   bg_snooze_rested_at?: string | null
-  // The thread's RECURRING PROMPT — one piece of text with up to two independent triggers
-  // (scheduler.ts SOURCES 4 and 5). `recurring_armed_at` is the GENERATION: editing the text or the
+  // The thread's RECURRING PROMPT — one piece of text with up to three independent triggers
+  // (scheduler.ts SOURCES 4, 5 and 7). `recurring_armed_at` is the GENERATION: editing the text or the
   // cadence mints a new one, so a delivery already queued under the old settings reads as superseded.
   recurring_prompt?: string | null
-  // The two mechanisms. BOTH 0 is the off state — the text and the cadence are kept so re-arming costs
-  // no retyping, and there is deliberately no third `enabled` column that could disagree with these.
+  // The three mechanisms. ALL 0 is the off state — the text and the cadence are kept so re-arming costs
+  // no retyping, and there is deliberately no fourth `enabled` column that could disagree with these.
   //
-  // NAME MAPPING, stated once: `recurring_on_rest` is the STOP HOOK and `recurring_on_schedule` is the
-  // HEARTBEAT — the names the panel, the API and the MCP tool all use. The columns keep their
-  // trigger-shaped names because renaming them would mean migrating rows that are armed right now, for
-  // no user-visible gain; everything above the storage boundary speaks stopHook/heartbeat.
+  // NAME MAPPING, stated once: `recurring_on_rest` is the STOP HOOK, `recurring_on_schedule` is the
+  // HEARTBEAT and `recurring_on_compact` is POST-COMPACTION — the names the panel, the API and the MCP
+  // tool all use. The columns keep their trigger-shaped names because renaming them would mean
+  // migrating rows that are armed right now, for no user-visible gain; everything above the storage
+  // boundary speaks stopHook/heartbeat/postCompaction.
   recurring_on_rest?: number
   recurring_on_schedule?: number
+  // POST-COMPACTION (scheduler SOURCE 7, added 2026-08-06). The trigger that exists because a worker's
+  // context is emptiest exactly when nobody is there to re-orient it: the operator (or the worker)
+  // links whatever doc it wrote in its scratch directory, and this hands that link back the moment the
+  // window is summarized away. It replaced a hook that spliced a canonical scratchpad's head into the
+  // context — the durable row is visible and editable in the thread footer, where a hook was neither.
+  recurring_on_compact?: number
   // The ON SCHEDULE trigger's cadence. Kept even while that trigger is off, so switching it back on
   // does not lose the interval the operator chose.
   recurring_interval_ms?: number | null
   recurring_armed_at?: string | null
   // Terminal-delivery stamps, ONE PER TRIGGER. They are separate because they answer different
   // questions: the schedule's is load-bearing (the next delivery is due an interval after THIS, so a
-  // thread cannot accumulate a backlog), while the rest trigger's is only the panel's "last sent"
-  // readout — it has no floor and fires on every rest.
+  // thread cannot accumulate a backlog), while the rest and post-compaction triggers' are only the
+  // panel's "last sent" readout — they have no floor and fire on every rest / every compaction.
   recurring_rest_fired_at?: string | null
   recurring_schedule_fired_at?: string | null
+  recurring_compact_fired_at?: string | null
   // Operator confirmation for one exact final ```awaiting fence generation. The board/scheduler ignore a
   // transcript proposal unless these match its current fence identity.
   awaiting_fence_id?: string | null
@@ -198,6 +206,20 @@ export interface RuntimeExpectation {
   generation: number
   permissionPending: string | null
   runtimeControl?: string | null
+}
+
+// ONE recurring-prompt write, for both the operator's session-guarded path and the worker's by-slug one.
+// An OBJECT rather than a positional list because the triggers are same-typed booleans: with two of them
+// `("keep going", true, false, null, at)` was already unreadable at the call site, and a third made a
+// silently transposed pair a question of when rather than whether. `prompt: null` clears the row, which
+// forces every trigger off regardless of what is passed here (see recurringArgs).
+export interface RecurringWrite {
+  prompt: string | null
+  stopHook: boolean // scheduler SOURCE 5 — on every rest
+  heartbeat: boolean // scheduler SOURCE 4 — every intervalMs on a clock
+  postCompaction: boolean // scheduler SOURCE 7 — on every context compaction
+  intervalMs: number | null
+  armedAt: string
 }
 
 export type RuntimeControlKind = "permission" | "profile" | "resume" | "follow-up" | "ai-rename"
@@ -432,29 +454,13 @@ export interface Storage {
   //
   // Session-guarded: this comes from a browser tab that may be looking at a thread which has since been
   // re-dispatched.
-  setRecurringPromptIfCurrent(
-    slug: string,
-    sessionId: string,
-    generation: number,
-    prompt: string | null,
-    stopHook: boolean,
-    heartbeat: boolean,
-    intervalMs: number | null,
-    armedAt: string,
-  ): boolean
+  setRecurringPromptIfCurrent(slug: string, sessionId: string, generation: number, write: RecurringWrite): boolean
   // The WORKER's path to the same row, from `mcp__frizz__recurring_prompt`. Deliberately keyed on the
   // slug ALONE, with no session/generation guard, because the MCP server cannot satisfy one: it is
   // spawned with its thread's slug and keeps it across a resume, while the session id and generation
   // bump underneath it — so a guard here would fail exactly on the long-lived thread this exists for.
   // The slug is stamped into that server's env by frizz itself and is not attacker-controlled.
-  setRecurringPromptBySlug(
-    slug: string,
-    prompt: string | null,
-    stopHook: boolean,
-    heartbeat: boolean,
-    intervalMs: number | null,
-    armedAt: string,
-  ): boolean
+  setRecurringPromptBySlug(slug: string, write: RecurringWrite): boolean
   // ---- ONE-OFF TIMERS (scheduler SOURCE 6) -------------------------------------------------------
   // Arm one. `id` is minted by the caller so the row and the scheduler's delivery id agree without a
   // read-back. Slug-keyed for the same reason the recurring prompt's worker path is.
@@ -477,6 +483,9 @@ export interface Storage {
   // Stamp a delivered ON SCHEDULE prompt. Same guard, and load-bearing rather than cosmetic: the next
   // one is due an interval after THIS stamp.
   stampRecurringScheduleFired(slug: string, armedAt: string, firedAt: string): boolean
+  // Stamp a delivered POST-COMPACTION prompt. Same guard; cosmetic like the rest trigger's, since a
+  // compaction is an event rather than a deadline and every one of them fires.
+  stampRecurringCompactFired(slug: string, armedAt: string, firedAt: string): boolean
   // Operator confirmation of ONE exact awaiting fence; fails closed if the session/generation moved.
   confirmAwaitingWait(
     slug: string,
@@ -775,9 +784,10 @@ export function createStorage(dbPath: string): Storage {
     "stop_hook_enabled INTEGER NOT NULL DEFAULT 0",
     "stop_hook_armed_at TEXT",
     "stop_hook_last_fired_at TEXT",
-    // THE RECURRING PROMPT (scheduler.ts SOURCES 4 and 5): one text, two independent triggers — every
-    // time the thread rests, and/or every N ms on a clock. Both flags 0 = off; there is no separate
-    // enable column, because a third flag could only ever contradict the two that decide the behaviour.
+    // THE RECURRING PROMPT (scheduler.ts SOURCES 4, 5 and 7): one text, three independent triggers —
+    // every time the thread rests, every N ms on a clock, and/or every time its context is compacted.
+    // All flags 0 = off; there is no separate enable column, because another flag could only ever
+    // contradict the ones that decide the behaviour.
     "recurring_prompt TEXT",
     "recurring_on_rest INTEGER NOT NULL DEFAULT 0",
     "recurring_on_schedule INTEGER NOT NULL DEFAULT 0",
@@ -785,6 +795,11 @@ export function createStorage(dbPath: string): Storage {
     "recurring_armed_at TEXT",
     "recurring_rest_fired_at TEXT",
     "recurring_schedule_fired_at TEXT",
+    // The post-compaction trigger (2026-08-06). Added as its own ALTER rather than folded into the set
+    // above so a database armed before this release picks it up on the next boot with the flag off,
+    // which is the correct default: an existing prompt described the triggers its operator chose.
+    "recurring_on_compact INTEGER NOT NULL DEFAULT 0",
+    "recurring_compact_fired_at TEXT",
   ]) {
     try {
       db.exec(`ALTER TABLE session ADD COLUMN ${col}`)
@@ -1164,15 +1179,16 @@ export function createStorage(dbPath: string): Storage {
   // a fresh arming or an edit: the generation survives exactly when the text AND the interval are both
   // unchanged. That is what makes a bare trigger flip non-destructive.
   //
-  // The two fired-stamps clear ASYMMETRICALLY, and deliberately. A prompt edit invalidates both (the
-  // words that fired are gone). An interval-only change invalidates only the SCHEDULE's clock — the rest
-  // trigger has no cadence for the interval to describe, so wiping its "last sent" readout would be a
-  // lie about when the operator's text last reached the worker.
+  // The three fired-stamps clear ASYMMETRICALLY, and deliberately. A prompt edit invalidates all three
+  // (the words that fired are gone). An interval-only change invalidates only the SCHEDULE's clock — the
+  // rest and post-compaction triggers have no cadence for the interval to describe, so wiping their
+  // "last sent" readout would be a lie about when the operator's text last reached the worker.
   const RECURRING_SET = `
       recurring_prompt = ?,
       recurring_interval_ms = CASE WHEN ? IS NULL THEN NULL ELSE ? END,
       recurring_on_rest = ?,
       recurring_on_schedule = ?,
+      recurring_on_compact = ?,
       recurring_armed_at = CASE
         WHEN ? IS NULL THEN NULL
         WHEN recurring_armed_at IS NOT NULL AND recurring_prompt IS ? AND recurring_interval_ms IS ? THEN recurring_armed_at
@@ -1184,27 +1200,28 @@ export function createStorage(dbPath: string): Storage {
       recurring_schedule_fired_at = CASE
         WHEN ? IS NULL THEN NULL
         WHEN recurring_armed_at IS NOT NULL AND recurring_prompt IS ? AND recurring_interval_ms IS ? THEN recurring_schedule_fired_at
+        ELSE NULL END,
+      recurring_compact_fired_at = CASE
+        WHEN ? IS NULL THEN NULL
+        WHEN recurring_armed_at IS NOT NULL AND recurring_prompt IS ? THEN recurring_compact_fired_at
         ELSE NULL END`
-  // The 14 bound values RECURRING_SET consumes, in order. Factored out for the same reason the SET list
+  // The 17 bound values RECURRING_SET consumes, in order. Factored out for the same reason the SET list
   // is: writing this argument list twice is how the two paths silently diverge.
-  const recurringArgs = (
-    prompt: string | null,
-    stopHook: boolean,
-    heartbeat: boolean,
-    intervalMs: number | null,
-    armedAt: string,
-  ) => {
-    // A cleared row keeps nothing: no cadence, and both triggers off. Neither trigger can be left on
-    // over a null prompt, or the scheduler would hold an armed row with nothing to say.
+  const recurringArgs = ({ prompt, stopHook, heartbeat, postCompaction, intervalMs, armedAt }: RecurringWrite) => {
+    // A cleared row keeps nothing: no cadence, and every trigger off. No trigger can be left on over a
+    // null prompt, or the scheduler would hold an armed row with nothing to say.
     const ms = prompt === null ? null : intervalMs
+    const flag = (on: boolean) => (prompt === null || !on ? 0 : 1)
     return [
       prompt,
       ms, ms,
-      prompt === null ? 0 : stopHook ? 1 : 0,
-      prompt === null ? 0 : heartbeat ? 1 : 0,
+      flag(stopHook),
+      flag(heartbeat),
+      flag(postCompaction),
       prompt, prompt, ms, armedAt,
       prompt, prompt,
       prompt, prompt, ms,
+      prompt, prompt,
     ] as const
   }
   const recurringStmt = db.prepare(`UPDATE session SET ${RECURRING_SET}
@@ -1216,6 +1233,10 @@ export function createStorage(dbPath: string): Storage {
   `)
   const recurringScheduleFiredStmt = db.prepare(`
     UPDATE session SET recurring_schedule_fired_at = ?
+    WHERE slug = ? AND recurring_armed_at = ?
+  `)
+  const recurringCompactFiredStmt = db.prepare(`
+    UPDATE session SET recurring_compact_fired_at = ?
     WHERE slug = ? AND recurring_armed_at = ?
   `)
   // ---- ONE-OFF TIMERS ----------------------------------------------------------------------------
@@ -1871,13 +1892,10 @@ export function createStorage(dbPath: string): Storage {
       snoozedUntilIfCurrentStmt.run(until, slug, sessionId, generation).changes === 1,
     setBgSnoozeRestedAtIfCurrent: (slug, sessionId, generation, restedAt) =>
       bgSnoozeRestedAtIfCurrentStmt.run(restedAt, slug, sessionId, generation).changes === 1,
-    setRecurringPromptIfCurrent: (slug, sessionId, generation, prompt, stopHook, heartbeat, intervalMs, armedAt) =>
-      recurringStmt.run(
-        ...recurringArgs(prompt, stopHook, heartbeat, intervalMs, armedAt),
-        slug, sessionId, generation,
-      ).changes === 1,
-    setRecurringPromptBySlug: (slug, prompt, stopHook, heartbeat, intervalMs, armedAt) =>
-      recurringBySlugStmt.run(...recurringArgs(prompt, stopHook, heartbeat, intervalMs, armedAt), slug).changes === 1,
+    setRecurringPromptIfCurrent: (slug, sessionId, generation, write) =>
+      recurringStmt.run(...recurringArgs(write), slug, sessionId, generation).changes === 1,
+    setRecurringPromptBySlug: (slug, write) =>
+      recurringBySlugStmt.run(...recurringArgs(write), slug).changes === 1,
     armThreadTimer: (timer) => void armTimerStmt.run(timer),
     listThreadTimers: (slug, opts) =>
       (opts?.armedOnly ? armedTimersBySlugStmt : timersBySlugStmt).all(slug),
@@ -1890,6 +1908,8 @@ export function createStorage(dbPath: string): Storage {
       recurringRestFiredStmt.run(firedAt, slug, armedAt).changes === 1,
     stampRecurringScheduleFired: (slug, armedAt, firedAt) =>
       recurringScheduleFiredStmt.run(firedAt, slug, armedAt).changes === 1,
+    stampRecurringCompactFired: (slug, armedAt, firedAt) =>
+      recurringCompactFiredStmt.run(firedAt, slug, armedAt).changes === 1,
     confirmAwaitingWait: (slug, sessionId, generation, fenceId, confirmedAt, snoozedUntil) =>
       confirmAwaitingWaitStmt.run(fenceId, confirmedAt, snoozedUntil, slug, sessionId, generation).changes === 1,
     clearAwaitingWaitIfSession: (slug, sessionId, generation) =>
