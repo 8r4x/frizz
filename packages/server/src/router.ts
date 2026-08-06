@@ -80,7 +80,7 @@ import {
   DirectoryPickResult,
   ThreadLocation,
 } from "@frizz/shared"
-import { needsFreshProcessForLimit, type AppContext } from "./context.ts"
+import { mayHaveLiveBackgroundWork, needsFreshProcessForLimit, type AppContext } from "./context.ts"
 import { appServerTurnStalled } from "./board.ts"
 import { runThreadUpdate } from "./frizz.ts"
 import { repairThreadFile } from "./repair.ts"
@@ -1462,7 +1462,7 @@ export function createRouter(ctx: AppContext) {
             freshProcess: input.freshProcess === true || needsFreshProcessForLimit(
               ctx.tailer.get(input.slug)?.limitFault,
               Date.now(),
-              (ctx.tailer.get(input.slug)?.subAgents ?? []).some((agent) => agent.state === "running"),
+              mayHaveLiveBackgroundWork(ctx.tailer.get(input.slug)),
             ),
           })
           // The ledger's RELIABILITY half is indeed tmux-only — flush-stuck-composer and the
@@ -1522,7 +1522,7 @@ export function createRouter(ctx: AppContext) {
             freshProcess: needsFreshProcessForLimit(
               ctx.tailer.get(input.slug)?.limitFault,
               Date.now(),
-              (ctx.tailer.get(input.slug)?.subAgents ?? []).some((agent) => agent.state === "running"),
+              mayHaveLiveBackgroundWork(ctx.tailer.get(input.slug)),
             ),
           })
         // Injection accepted → open a delivery-ledger entry (Claude rows only; Codex has its own durable
