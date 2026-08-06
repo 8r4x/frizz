@@ -379,6 +379,14 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       await surfaces.appSocket.close()
       await surfaces.terminal.close()
     },
+    // The same producers boot starts for the launching project, in the same order. The tailer's cold
+    // prime is what makes this affordable to do lazily — it is bounded per tick, so activating a
+    // large board no longer blocks the event loop for seconds.
+    startProducers: async (tenantCtx) => {
+      await tenantCtx.board.start()
+      await tenantCtx.tailer.start()
+      if (process.env.FRIZZ_WAKERS_OFF !== "1") await tenantCtx.scheduler.start()
+    },
   })
   const appOptionsFor = (c: AppContext) => ({
     port,

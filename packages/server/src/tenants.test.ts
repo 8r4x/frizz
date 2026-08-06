@@ -131,3 +131,28 @@ test("closeAll drains every project", async () => {
   assert.equal(tenants.active().length, 0)
   assert.equal(stopped.filter((s) => s === "storage").length, 2)
 })
+
+// An activated project that never starts its producers is a STATIC board: the RPC reads storage
+// directly so its threads render, which is exactly what makes the omission look like it works.
+test("activating a project starts its producers, and a producer that throws is reported not thrown", async () => {
+  const started: string[] = []
+  const ctxFor = (name: string) => ({ project: { id: name, name } }) as never
+  const reported: string[] = []
+  const map = createTenantMap({
+    createContext: (opts) => ctxFor((opts.project as { id: string }).id),
+    startProducers: async (ctx) => {
+      const id = (ctx as unknown as { project: { id: string } }).project.id
+      if (id === "bad") throw new Error("tailer would not start")
+      started.push(id)
+    },
+    onError: (project) => reported.push(project.id),
+  })
+
+  assert.ok(await map.activate({ id: "good", name: "good" } as never))
+  assert.deepEqual(started, ["good"], "the producers ran for the project that opened")
+
+  assert.equal(await map.activate({ id: "bad", name: "bad" } as never), undefined)
+  assert.deepEqual(reported, ["bad"], "the failure came back through the seam")
+  assert.ok(map.get("good"), "and the project already serving is untouched")
+  await map.closeAll()
+})

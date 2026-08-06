@@ -29,6 +29,18 @@ export interface TenantMapOptions<App = unknown> {
    * that produces errors instead of a clean stop.
    */
   closeApp?: (app: App) => void | Promise<void>
+  /**
+   * Start the project's producers — board, tailer, scheduler — the way boot starts the launching
+   * project's.
+   *
+   * Without this an activated project is a STATIC board: the RPC reads storage directly so threads
+   * render, which is exactly why the omission looks like it works. But nothing tails the transcripts,
+   * so the board never updates as agents work, and nothing runs the scheduler, so that project's
+   * timers, awaiting wakes, snooze expiry and PR watches stay dead until the process restarts with it
+   * as the launcher. Supplied by the caller rather than done here, because which producers exist and
+   * whether wakes are armed are the server's business, not the map's.
+   */
+  startProducers?: (ctx: AppContext) => void | Promise<void>
   /** Injected so a test can build a context without the real one. Defaults to `createContext`. */
   createContext: (opts: ContextOptions) => AppContext | Promise<AppContext>
   /** Extra options every tenant's context is built with (claudeBin, codexBin, …). */
@@ -80,6 +92,9 @@ export function createTenantMap<App = unknown>(options: TenantMapOptions<App>): 
       try {
         const ctx = await options.createContext({ ...options.contextOptions, project })
         open.set(project.id, { project, ctx, app: options.createApp?.(ctx) })
+        // Inside the try on purpose: a producer that fails to start is reported through the same seam
+        // as a context that fails to open, and must not end a process serving other projects.
+        await options.startProducers?.(ctx)
         return ctx
       } catch (error) {
         // THE SEAM. createContext already rolls its own partial resources back; what must not happen
