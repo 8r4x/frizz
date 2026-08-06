@@ -754,6 +754,14 @@ export async function choosePort(
  *
  * Degrade, do not refuse: Vite and Jupyter both move to another port, Docker fails hard, and a local
  * tool that will not start because something unrelated holds a port is the worse of the two.
+ *
+ * THE WELL-KNOWN PORT COMES FIRST, ahead of the port this project last bound. A remembered port was
+ * the right first choice when every project ran its own server — it kept that board's URL stable. One
+ * server for the machine inverts it: the remembered port is a per-project answer to a machine-level
+ * question, so whichever project you happened to launch from would decide the address, and every
+ * pre-singleton `launcher.json` on this machine would keep dragging the singleton back to a port from
+ * the era of many servers. It stays the SECOND candidate, so an old bookmark still resolves when the
+ * well-known port is taken.
  */
 function portCandidates(
   preferred: number | undefined,
@@ -761,8 +769,8 @@ function portCandidates(
 ): number[] {
   const fallback = fallbackPort(base);
   return [
-    preferred,
     base,
+    preferred,
     ...Array.from({ length: PORT_SCAN_COUNT }, (_, index) => fallback + index),
   ].filter((port): port is number => !!port && port <= 65535);
 }

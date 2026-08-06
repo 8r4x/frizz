@@ -1647,13 +1647,16 @@ test("workspace status compares a stored generation with a real disposable proce
   }
 });
 
-test("port selection keeps a free preference, then takes the well-known port, and JUMPS rather than scanning past it", async () => {
+test("port selection prefers the well-known port over a remembered one, and JUMPS rather than scanning past it", async () => {
   const used = new Set([DEFAULT_PORT, 19393, 19394]);
   const available = async (port: number) => !used.has(port);
-  // A remembered port that still works is kept, so a board keeps its URL across restarts.
-  assert.equal(await choosePort(undefined, 9999, available), 9999);
+  // The well-known port wins even when this project remembers a different one that is free: one
+  // server serves the machine, so the address is not the launching project's to choose.
+  assert.equal(await choosePort(undefined, 9999, async () => true), DEFAULT_PORT);
   assert.equal(await choosePort(undefined, undefined, async () => true), DEFAULT_PORT);
-  // THE POINT: with 9393 taken the next candidate is 19393, never 9394. Windows reserves ports in
+  // A remembered port is still the SECOND candidate, so an old bookmark resolves when 9393 is taken.
+  assert.equal(await choosePort(undefined, 9999, available), 9999);
+  // THE POINT: with both taken the next candidate is 19393, never 9394. Windows reserves ports in
   // contiguous 100-port blocks, so a +1 scan burns every candidate inside the same reservation and
   // then reports "no free port" with tens of thousands free.
   assert.equal(await choosePort(undefined, undefined, available), 19395);
