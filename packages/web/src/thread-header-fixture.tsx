@@ -11,7 +11,7 @@ const calls: string[] = []
 globalThis.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : input.toString(), window.location.origin)
   const body = JSON.parse(String(init?.body ?? "{}")) as { message?: string }
-  if (url.pathname === "/rpc/followUp") {
+  if (url.pathname === "/_frizz/rpc/followUp") {
     calls.push(`followUp: ${body.message ?? ""}`)
     const output = document.querySelector("[data-fixture-rpc-calls]")
     if (output) output.textContent = `RPC calls: ${calls.join(" | ")}`

@@ -2108,6 +2108,19 @@ export type SocketServerMsg =
     }
   | { t: "hb" }
 
+/**
+ * Everything Frizz itself serves lives under this prefix, so EVERY OTHER top-level path segment is
+ * free to be a project slug (`/nub`, `/frizz`). Without a reserved namespace the deny-list is a
+ * growing list of route names that breaks the day someone clones a repo called `settings`.
+ *
+ * One constant, exported to both sides, because a server route and the client URL that calls it
+ * drifting apart is a 404 that looks like a hung request.
+ */
+export const FRIZZ_ROUTE_PREFIX = "/_frizz"
+export function frizzRoute(path: string): string {
+  return `${FRIZZ_ROUTE_PREFIX}${path.startsWith("/") ? path : `/${path}`}`
+}
+
 export const DEFAULT_PORT = 4917
 // A thread's stable identity string, `frizz-<slug>`. It named a tmux session once; frizz has no tmux,
 // and this survives as the integrity check on the session row's `tmux_name` column — a row whose

@@ -67,9 +67,9 @@ window.fetch = async (input, init) => {
   const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } })
   if (url.pathname === "/_frizz/control/status") return json({ protocol: 1, state: "ready", updateRestart: true })
   // Every RPC response is the {result} envelope, never the payload bare.
-  if (url.pathname === "/rpc/quota") return json({ result: quota })
-  if (url.pathname === "/rpc/authStatus") return json({ result: auth })
-  if (url.pathname === "/rpc/settingsGet") return json({ result: {} })
+  if (url.pathname === "/_frizz/rpc/quota") return json({ result: quota })
+  if (url.pathname === "/_frizz/rpc/authStatus") return json({ result: auth })
+  if (url.pathname === "/_frizz/rpc/settingsGet") return json({ result: {} })
   return nativeFetch(input, init)
 }
 

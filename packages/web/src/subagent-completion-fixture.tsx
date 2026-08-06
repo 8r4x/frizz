@@ -90,7 +90,7 @@ const childMessages: TranscriptMessage[] = [
 
 window.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : input.toString(), window.location.origin)
-  if (url.pathname === "/rpc/subAgentTranscript") {
+  if (url.pathname === "/_frizz/rpc/subAgentTranscript") {
     const id = JSON.parse(new URL(url.href).searchParams.get("input") ?? "{}").id as string
     // An id the tailer can no longer resolve → "gone", which the drawer states plainly. That is the
     // required graceful degrade, and it is what a GRANDCHILD really hits today: the tailer keys every

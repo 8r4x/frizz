@@ -1,3 +1,4 @@
+import { FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
 // Markdown is often written by tools that report local artifacts as links. A browser interprets a
 // POSIX absolute path as a same-origin URL path, which both navigates away from Frizz and produces a
 // deceptive localhost URL. Identify those targets before DOM sanitization so they can never become
@@ -65,7 +66,7 @@ export function localMarkdownTarget(raw: string | null | undefined): LocalMarkdo
 }
 
 export function localImageUrl(path: string): string {
-  return `/local-image?path=${encodeURIComponent(path)}`
+  return `${FRIZZ_ROUTE_PREFIX}/local-image?path=${encodeURIComponent(path)}`
 }
 
 // Must match the server's image-content-type allowlist. The server still decides whether a path is

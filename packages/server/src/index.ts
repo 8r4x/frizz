@@ -3,7 +3,7 @@ export type { AppRouter } from "./router.ts"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { readFileSync, existsSync } from "node:fs"
 import { join, resolve, extname, normalize } from "node:path"
-import { DEFAULT_PORT } from "@frizz/shared"
+import { DEFAULT_PORT, FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
 import {
 ContextStartupError,
   createContext,
@@ -179,9 +179,10 @@ export interface StartedServer {
   readonly shutdownFence: ServerShutdownFence
 }
 
-const isApiUrl = (url: string) =>
-  url.startsWith("/rpc") || url.startsWith("/events") || url === "/health" || url === "/control/stop"
-  || url.startsWith("/local-image") || url.startsWith("/local-visualization") || url === "/attach"
+// Everything Frizz serves is under the reserved prefix now, so this is one test instead of a list
+// that had to grow with every new route — and a prefixed request that missed the old allowlist fell
+// through to the SPA shell with a 200, i.e. a blank page rather than an error.
+const isApiUrl = (url: string) => url === FRIZZ_ROUTE_PREFIX || url.startsWith(`${FRIZZ_ROUTE_PREFIX}/`)
 
 const MIME: Record<string, string> = {
   ".html": "text/html",

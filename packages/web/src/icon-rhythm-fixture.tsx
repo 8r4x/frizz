@@ -28,7 +28,7 @@ window.fetch = async (input, init) => {
     })
   }
   // GithubTrigger renders only for an authed gh in a GitHub repo.
-  if (url.pathname === "/rpc/githubStatus") {
+  if (url.pathname === "/_frizz/rpc/githubStatus") {
     return new Response(JSON.stringify({ result: { inRepo: true, authed: true } }), {
       headers: { "content-type": "application/json" },
     })

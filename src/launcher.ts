@@ -33,7 +33,7 @@ import { readBootProgress } from "@frizz/server/boot-progress";
 import { frizzPaths, projectStateDir } from "@frizz/server/frizz-paths";
 import { discoverProjectRoot, ensureProjectIdFile, isNotAGitWorktree } from "@frizz/server/project-root";
 import { defaultLogRoot, latestLogPath } from "@frizz/server/logging";
-import { DEFAULT_PORT } from "@frizz/shared";
+import { DEFAULT_PORT, FRIZZ_ROUTE_PREFIX } from "@frizz/shared";
 
 export { acquireGlobalLaunchLock, pidIsAlive };
 
@@ -609,7 +609,7 @@ export async function probeFrizz(
   const timeout = setTimeout(() => controller.abort(), 1000);
   timeout.unref?.();
   try {
-    const response = await fetcher(`http://127.0.0.1:${port}/health`, {
+    const response = await fetcher(`http://127.0.0.1:${port}${FRIZZ_ROUTE_PREFIX}/health`, {
       signal: controller.signal,
     });
     if (!response.ok) return null;
@@ -650,7 +650,7 @@ export async function requestFrizzStop(
   const timeout = setTimeout(() => controller.abort(), 1_000);
   timeout.unref?.();
   try {
-    const response = await fetcher(`http://127.0.0.1:${port}/control/stop`, {
+    const response = await fetcher(`http://127.0.0.1:${port}${FRIZZ_ROUTE_PREFIX}/control/stop`, {
       method: "POST",
       headers: { "x-frizz-launch-token": ownerToken },
       signal: controller.signal,
@@ -786,7 +786,7 @@ export interface WaitForWorkspaceOptions {
 }
 
 /**
- * Wait for the control plane on `port` to answer /health as the expected owner.
+ * Wait for the control plane on `port` to answer /_frizz/health as the expected owner.
  *
  * WHY THIS IS NOT A FLAT DEADLINE. A launcher spawns the control plane detached and cannot see inside
  * it, so a flat 30s budget silently conflates "something is wrong" with "this board is big and this

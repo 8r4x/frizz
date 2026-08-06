@@ -66,11 +66,11 @@ const RESPONSES: Record<string, { state: string; steerable: boolean; steerNote: 
 
 window.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : input.toString(), window.location.origin)
-  if (url.pathname === "/rpc/subAgentTranscript") {
+  if (url.pathname === "/_frizz/rpc/subAgentTranscript") {
     return rpcResult({ messages: childMessages, ...(RESPONSES[STATE] ?? RESPONSES.rich) })
   }
-  if (url.pathname === "/rpc/subAgentSteer") return rpcResult({ delivered: true })
-  if (url.pathname === "/rpc/subAgentStop") return rpcResult({ stopped: true, descendantsStopped: 0, note: null })
+  if (url.pathname === "/_frizz/rpc/subAgentSteer") return rpcResult({ delivered: true })
+  if (url.pathname === "/_frizz/rpc/subAgentStop") return rpcResult({ stopped: true, descendantsStopped: 0, note: null })
   return nativeFetch(input, init)
 }
 

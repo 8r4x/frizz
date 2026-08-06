@@ -591,7 +591,7 @@ async function waitForArtifactHealth(
     if (child.exitCode !== null || child.signalCode !== null)
       throw new Error(`bundled runtime exited before serving /health:\n${output()}`);
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/health`);
+      const response = await fetch(`http://127.0.0.1:${port}/_frizz/health`);
       const health = (await response.json()) as {
         ok?: unknown;
         projectId?: unknown;

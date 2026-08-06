@@ -396,9 +396,9 @@ test("adoptThread RPC rejects malformed or extended identities before handler di
 test("mounted adoptThread HTTP RPC returns 400 with zero dispatcher calls for hostile input", async () => {
   const h = harness()
   const app = new Hono()
-  mountRouter(app, "/rpc", h.router)
+  mountRouter(app, "/_frizz/rpc", h.router)
   for (const input of [{ slug: "../escape" }, { slug: "safe", extra: true }, { slug: "a".repeat(201) }]) {
-    const response = await app.request("http://localhost/rpc/adoptThread", {
+    const response = await app.request("http://localhost/_frizz/rpc/adoptThread", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
@@ -1481,7 +1481,7 @@ test("Restart worker is refused on a thread that is not a broker-backed Claude w
 
 // ---- The superseded worker procedures ------------------------------------------------------------
 // A worker's `frizz-mcp.mjs` is spawned once from the build its session was dispatched with and outlives
-// every server restart, so `/rpc` is a versioned contract between two independently-updated processes.
+// every server restart, so `/_frizz/rpc` is a versioned contract between two independently-updated processes.
 // Merging the old `stop_hook` + `heartbeat` tools into `recurring_prompt` renamed the procedure and gave
 // every in-flight worker a bare 404 from the one tool that keeps a long effort moving. These pin that
 // each superseded name still lands on the merged row.
@@ -1576,8 +1576,8 @@ test("an unknown RPC procedure answers 404 NAMING it, so the next version skew d
   const h = harness()
   try {
     const app = new Hono()
-    mountRouter(app, "/rpc", h.router)
-    const res = await app.request("/rpc/setOwnThreadPreviousName", {
+    mountRouter(app, "/_frizz/rpc", h.router)
+    const res = await app.request("/_frizz/rpc/setOwnThreadPreviousName", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ slug: "legacy-thread" }),
@@ -1589,7 +1589,7 @@ test("an unknown RPC procedure answers 404 NAMING it, so the next version skew d
     assert.match(body.error, /different version of frizz/)
 
     // And the catch-all must not shadow a real procedure registered before it.
-    const real = await app.request("/rpc/setOwnThreadStopHook", {
+    const real = await app.request("/_frizz/rpc/setOwnThreadStopHook", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ slug: "never-dispatched", prompt: "go", enabled: true }),

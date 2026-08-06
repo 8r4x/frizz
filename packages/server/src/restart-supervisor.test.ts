@@ -118,7 +118,7 @@ test("public supervisor serves local images without entering or requiring the di
   })
   try {
     await proxy.listen()
-    const path = `/local-image?path=${encodeURIComponent(imagePath)}`
+    const path = `/_frizz/local-image?path=${encodeURIComponent(imagePath)}`
     const served = await getBytes(port, path, { "sec-fetch-site": "same-origin" })
     assert.equal(served.status, 200)
     assert.equal(served.headers["content-type"], "image/png")
@@ -316,15 +316,15 @@ test("the proxy refuses a foreign Origin instead of laundering it into the child
   try {
     await proxy.listen()
     const host = `127.0.0.1:${port}`
-    assert.equal((await proxied(port, "/rpc/x", { host, origin: `http://127.0.0.1:${port}` }, "POST")).status, 200)
+    assert.equal((await proxied(port, "/_frizz/rpc/x", { host, origin: `http://127.0.0.1:${port}` }, "POST")).status, 200)
     // A same-origin GET may legitimately omit Origin; the child still applies its own per-route rule.
     assert.equal((await proxied(port, "/assets/app.css", { host })).status, 200)
     for (const origin of ["http://evil.example", `http://localhost.evil:${port}`, `http://127.0.0.1:${port + 1}`]) {
-      assert.equal((await proxied(port, "/rpc/x", { host, origin }, "POST")).status, 403, origin)
+      assert.equal((await proxied(port, "/_frizz/rpc/x", { host, origin }, "POST")).status, 403, origin)
     }
     // A Host naming somebody else is refused too, which is what stops DNS rebinding.
-    assert.equal((await proxied(port, "/rpc/x", { host: `frizz.evil:${port}` }, "POST")).status, 403)
-    assert.equal((await proxied(port, "/rpc/x", { host, "x-forwarded-host": "evil.example" }, "POST")).status, 403)
+    assert.equal((await proxied(port, "/_frizz/rpc/x", { host: `frizz.evil:${port}` }, "POST")).status, 403)
+    assert.equal((await proxied(port, "/_frizz/rpc/x", { host, "x-forwarded-host": "evil.example" }, "POST")).status, 403)
   } finally {
     await proxy.close().catch(() => undefined)
     await current.close().catch(() => undefined)
@@ -345,12 +345,12 @@ test("--host: a non-loopback bind accepts IP-literal authorities, and loopback s
   try {
     await proxy.listen()
     for (const authority of [`192.168.1.5:${port}`, `10.0.0.4:${port}`, `frizz.local:${port}`, `127.0.0.1:${port}`]) {
-      const status = (await proxied(port, "/rpc/x", { host: authority, origin: `http://${authority}` }, "POST")).status
+      const status = (await proxied(port, "/_frizz/rpc/x", { host: authority, origin: `http://${authority}` }, "POST")).status
       assert.equal(status, 200, authority)
     }
     // Exposure widens WHICH authority is legitimate, never the Origin-must-match-Host rule itself.
-    assert.equal((await proxied(port, "/rpc/x", { host: `192.168.1.5:${port}`, origin: "http://evil.example" }, "POST")).status, 403)
-    assert.equal((await proxied(port, "/rpc/x", { host: `evil.example:${port}` }, "POST")).status, 403)
+    assert.equal((await proxied(port, "/_frizz/rpc/x", { host: `192.168.1.5:${port}`, origin: "http://evil.example" }, "POST")).status, 403)
+    assert.equal((await proxied(port, "/_frizz/rpc/x", { host: `evil.example:${port}` }, "POST")).status, 403)
   } finally {
     await proxy.close().catch(() => undefined)
     await current.close().catch(() => undefined)
@@ -372,20 +372,20 @@ test("an exposed board supplies the Sec-Fetch stamp a LAN browser cannot send", 
   const exposed = new RestartSupervisorProxy({ port, host: "0.0.0.0", childPort: () => current.port, restart: async () => ({ state: "ready" }) })
   try {
     await exposed.listen()
-    assert.equal((await proxied(port, "/rpc/board", { host: `192.168.1.5:${port}` })).status, 200)
+    assert.equal((await proxied(port, "/_frizz/rpc/board", { host: `192.168.1.5:${port}` })).status, 200)
     assert.equal(seen.at(-1)?.["sec-fetch-site"], "same-origin", "a LAN read is vouched for")
 
     // Loopback is untouched even on an exposed board: the browser really can stamp that one, so the
     // real signal is forwarded and its absence stays meaningful.
-    await proxied(port, "/rpc/board", { host: `127.0.0.1:${port}` })
+    await proxied(port, "/_frizz/rpc/board", { host: `127.0.0.1:${port}` })
     assert.equal(seen.at(-1)?.["sec-fetch-site"], undefined, "loopback keeps the browser's own signal")
 
     // A stamp the caller supplied is never overwritten, in either direction.
-    await proxied(port, "/rpc/board", { host: `192.168.1.5:${port}`, "sec-fetch-site": "cross-site" })
+    await proxied(port, "/_frizz/rpc/board", { host: `192.168.1.5:${port}`, "sec-fetch-site": "cross-site" })
     assert.equal(seen.at(-1)?.["sec-fetch-site"], "cross-site", "a declared cross-site request stays cross-site")
 
     // Vouching is for the Origin-LESS case only; a present Origin still has to match, and did.
-    await proxied(port, "/rpc/board", { host: `192.168.1.5:${port}`, origin: `http://192.168.1.5:${port}` })
+    await proxied(port, "/_frizz/rpc/board", { host: `192.168.1.5:${port}`, origin: `http://192.168.1.5:${port}` })
     assert.equal(seen.at(-1)?.["sec-fetch-site"], undefined)
   } finally {
     await exposed.close().catch(() => undefined)
@@ -404,7 +404,7 @@ test("a loopback-bound proxy never vouches, so its missing-Origin posture is exa
   const proxy = new RestartSupervisorProxy({ port, childPort: () => current.port, restart: async () => ({ state: "ready" }) })
   try {
     await proxy.listen()
-    await proxied(port, "/rpc/board", { host: `127.0.0.1:${port}` })
+    await proxied(port, "/_frizz/rpc/board", { host: `127.0.0.1:${port}` })
     assert.equal(seen.at(-1)?.["sec-fetch-site"], undefined, "the default posture invents no signal")
   } finally {
     await proxy.close().catch(() => undefined)
@@ -418,8 +418,8 @@ test("a loopback-bound proxy rejects the LAN authority an exposed one would acce
   const proxy = new RestartSupervisorProxy({ port, childPort: () => current.port, restart: async () => ({ state: "ready" }) })
   try {
     await proxy.listen()
-    assert.equal((await proxied(port, "/rpc/x", { host: `192.168.1.5:${port}` }, "POST")).status, 403)
-    assert.equal((await proxied(port, "/rpc/x", { host: `frizz.local:${port}` }, "POST")).status, 403)
+    assert.equal((await proxied(port, "/_frizz/rpc/x", { host: `192.168.1.5:${port}` }, "POST")).status, 403)
+    assert.equal((await proxied(port, "/_frizz/rpc/x", { host: `frizz.local:${port}` }, "POST")).status, 403)
   } finally {
     await proxy.close().catch(() => undefined)
     await current.close().catch(() => undefined)
@@ -548,7 +548,7 @@ test("--public-origin: a tunnelled request is accepted and reaches the child wit
       "x-forwarded-host": "frizz.example.com",
       "sec-fetch-site": "same-origin",
     }
-    assert.equal((await proxied(port, "/rpc/x", tunnelled, "POST")).status, 200)
+    assert.equal((await proxied(port, "/_frizz/rpc/x", tunnelled, "POST")).status, 200)
     const forwarded = seen.at(-1)!
     assert.equal(forwarded.host, `127.0.0.1:${current.port}`)
     assert.equal(forwarded.origin, `http://127.0.0.1:${current.port}`)
@@ -560,14 +560,14 @@ test("--public-origin: a tunnelled request is accepted and reaches the child wit
 
     // The widening is exactly one origin wide. A neighbouring name, a scheme downgrade, and the
     // loopback caller trying to borrow the tunnel's forwarding licence are all still refused.
-    assert.equal((await proxied(port, "/rpc/x", { ...tunnelled, host: "frizz.example.com.evil", origin: "https://frizz.example.com.evil" }, "POST")).status, 403)
-    assert.equal((await proxied(port, "/rpc/x", { ...tunnelled, origin: "http://frizz.example.com" }, "POST")).status, 403)
+    assert.equal((await proxied(port, "/_frizz/rpc/x", { ...tunnelled, host: "frizz.example.com.evil", origin: "https://frizz.example.com.evil" }, "POST")).status, 403)
+    assert.equal((await proxied(port, "/_frizz/rpc/x", { ...tunnelled, origin: "http://frizz.example.com" }, "POST")).status, 403)
     assert.equal(
-      (await proxied(port, "/rpc/x", { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}`, "x-forwarded-for": "203.0.113.7" }, "POST")).status,
+      (await proxied(port, "/_frizz/rpc/x", { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}`, "x-forwarded-for": "203.0.113.7" }, "POST")).status,
       403,
     )
     // The operator's own tab on the box keeps working while a tunnel is declared.
-    assert.equal((await proxied(port, "/rpc/x", { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}` }, "POST")).status, 200)
+    assert.equal((await proxied(port, "/_frizz/rpc/x", { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}` }, "POST")).status, 200)
   } finally {
     await proxy.close().catch(() => undefined)
     await current.close().catch(() => undefined)

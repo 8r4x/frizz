@@ -16,7 +16,7 @@ const nativeFetch = window.fetch.bind(window)
 window.fetch = async (input, init) => {
   const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
   const url = new URL(requestUrl, window.location.href)
-  if (url.pathname === "/rpc/followUp") {
+  if (url.pathname === "/_frizz/rpc/followUp") {
     const body = JSON.parse(String(init?.body ?? "{}"))
     const log = JSON.parse(window.sessionStorage.getItem("followUpCalls") ?? "[]")
     log.push(body)
@@ -24,7 +24,7 @@ window.fetch = async (input, init) => {
     return new Response(JSON.stringify({ result: null }), { headers: { "content-type": "application/json" } })
   }
   // markRead rides along on every eager send; stub it so the card's click path stays self-contained.
-  if (url.pathname === "/rpc/markRead") {
+  if (url.pathname === "/_frizz/rpc/markRead") {
     return new Response(JSON.stringify({ result: null }), { headers: { "content-type": "application/json" } })
   }
   return nativeFetch(input, init)

@@ -6,7 +6,7 @@ import { installLocalFileLinkInterceptor } from "./lib/local-file-links.ts"
 const nativeFetch = window.fetch.bind(window)
 window.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, window.location.href)
-  if (url.pathname === "/rpc/openLocalFile") {
+  if (url.pathname === "/_frizz/rpc/openLocalFile") {
     ;(window as Window & { __localFileFixtureOpened?: boolean }).__localFileFixtureOpened = true
     return new Response(JSON.stringify({ result: { action: "copy", path: "/fixture/report.md" } }), {
       headers: { "content-type": "application/json", "x-frizz-boot": "local-file-fixture" },

@@ -2,7 +2,7 @@ import type { IncomingMessage } from "node:http"
 import type { Duplex } from "node:stream"
 import { WebSocket, WebSocketServer, type RawData } from "ws"
 import pty from "node-pty"
-import { ThreadSlug, type TermClientMsg } from "@frizz/shared"
+import { ThreadSlug, type TermClientMsg, FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
 import { isTrustedLocalWebSocketRequest, rejectWebSocketUpgrade } from "./local-origin.ts"
 import type { LoginAttachment } from "./login-utility.ts"
 
@@ -14,7 +14,7 @@ import type { LoginAttachment } from "./login-utility.ts"
 // there is nothing to attach to, and the whole tmux half of this file (socket resolution, per-viewer
 // attach ptys, and the refresh-client dance that worked around tmux's resize replay) went with it.
 
-const TERM_PATH = /^\/term\/([^/?]+)$/
+const TERM_PATH = new RegExp(`^${FRIZZ_ROUTE_PREFIX}/term/([^/?]+)$`)
 
 
 // Keep the raw websocket bounded before JSON parsing, and independently validate the decoded input.

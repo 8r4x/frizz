@@ -113,7 +113,7 @@ function spawnLaunchProtocolChild(
     let port
     if (process.env.FAIL_CONTROL === "1") {
       control = createServer((req, res) => {
-        if (req.url === "/health") {
+        if (req.url === "/_frizz/health") {
           res.writeHead(200, { "content-type": "application/json" })
           res.end(JSON.stringify({
             ok: true,
@@ -124,7 +124,7 @@ function spawnLaunchProtocolChild(
           }))
           return
         }
-        res.writeHead(req.url === "/control/stop" ? 503 : 404)
+        res.writeHead(req.url === "/_frizz/control/stop" ? 503 : 404)
         res.end()
       })
       await new Promise((resolve) => control.listen(0, "127.0.0.1", resolve))
@@ -1269,7 +1269,7 @@ test("token-bound status and control remain usable when external generation proo
       init?: RequestInit
     ) => {
       requests.push({ url: String(input), init });
-      if (String(input).endsWith("/health")) {
+      if (String(input).endsWith("/_frizz/health")) {
         return new Response(
           JSON.stringify({
             ok: true,

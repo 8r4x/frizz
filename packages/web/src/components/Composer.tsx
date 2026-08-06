@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { ArrowUp, FileText, Loader2, Paperclip, X } from "lucide-react"
-import { ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, isAllowedAttachmentName } from "@frizz/shared"
+import { ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, isAllowedAttachmentName, frizzRoute } from "@frizz/shared"
 import { showToast } from "../store.ts"
 import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
 import { shouldInterruptSubmitComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
@@ -25,7 +25,7 @@ async function uploadAttachment(file: File, name: string): Promise<string | null
   let bin = ""
   const bytes = new Uint8Array(buf)
   for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
-  const res = await fetch("/attach", {
+  const res = await fetch(frizzRoute("/attach"), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ name, data: btoa(bin) }),

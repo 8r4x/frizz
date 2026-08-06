@@ -174,7 +174,7 @@ const messages: TranscriptMessage[] = [
 const originalFetch = window.fetch
 window.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : ((input as Request).url ?? input.toString()), location.origin)
-  if (url.pathname === "/rpc/threadTranscript" || url.pathname === "/rpc/threadTranscriptEarlier") {
+  if (url.pathname === "/_frizz/rpc/threadTranscript" || url.pathname === "/_frizz/rpc/threadTranscriptEarlier") {
     return new Response(
       JSON.stringify({ result: { messages, transcriptKey: `${SLUG}-key`, hasEarlier: false, historyLoaded: true } }),
       { headers: { "content-type": "application/json" } },
@@ -182,12 +182,12 @@ window.fetch = async (input, init) => {
   }
   // The SUB-AGENT DRAWER reads its child's transcript from its own RPC — same messages, so the two
   // surfaces are directly comparable.
-  if (url.pathname === "/rpc/subAgentTranscript") {
+  if (url.pathname === "/_frizz/rpc/subAgentTranscript") {
     return new Response(JSON.stringify({ result: { messages, state: SETTLED ? "done" : "running" } }), {
       headers: { "content-type": "application/json" },
     })
   }
-  if (url.pathname.startsWith("/rpc/")) {
+  if (url.pathname.startsWith("/_frizz/rpc/")) {
     return new Response(JSON.stringify({ result: {} }), { headers: { "content-type": "application/json" } })
   }
   return originalFetch(input, init)

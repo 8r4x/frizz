@@ -28,9 +28,9 @@ const nativeFetch = window.fetch.bind(window)
 window.fetch = async (input, init) => {
   const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
   const url = new URL(requestUrl, window.location.origin)
-  if (url.pathname === "/rpc/dispatchPreferencesGet") return json(preferences)
-  if (url.pathname === "/rpc/codexModels") return json(codexModels)
-  if (url.pathname === "/rpc/dispatchPreferenceSet") {
+  if (url.pathname === "/_frizz/rpc/dispatchPreferencesGet") return json(preferences)
+  if (url.pathname === "/_frizz/rpc/codexModels") return json(codexModels)
+  if (url.pathname === "/_frizz/rpc/dispatchPreferenceSet") {
     const update = JSON.parse(String(init?.body ?? "{}")) as SetDispatchPreferenceInput
     writes.push(update)
     if (update.field === "profile") {
@@ -43,7 +43,7 @@ window.fetch = async (input, init) => {
     window.dispatchComposerProfileFixture = { preferences, writes }
     return json(preferences)
   }
-  if (url.pathname === "/rpc/dispatch") {
+  if (url.pathname === "/_frizz/rpc/dispatch") {
     // A deliberately isolated RPC seam for visual QA: no local server state, worker, terminal, or
     // live thread can be touched from this fixture. The short delay leaves the optimistic task card
     // visible long enough to inspect before either acknowledgement or rollback.

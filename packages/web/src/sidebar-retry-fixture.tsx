@@ -19,7 +19,7 @@ const nativeFetch = window.fetch.bind(window)
 window.fetch = async (input, init) => {
   const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
   const url = new URL(requestUrl, window.location.href)
-  if (url.pathname === "/rpc/followUp") {
+  if (url.pathname === "/_frizz/rpc/followUp") {
     const body = JSON.parse(String(init?.body ?? "{}"))
     const log = JSON.parse(window.sessionStorage.getItem("followUpCalls") ?? "[]")
     log.push(body)
@@ -28,7 +28,7 @@ window.fetch = async (input, init) => {
   }
   // Retry is an ordinary eager send, which also fires markRead for the slug — stub it so the click path
   // runs clean (no stray 404) exactly as it does against the real server.
-  if (url.pathname === "/rpc/markRead") {
+  if (url.pathname === "/_frizz/rpc/markRead") {
     return new Response(JSON.stringify({ result: {} }), { headers: { "content-type": "application/json" } })
   }
   return nativeFetch(input, init)

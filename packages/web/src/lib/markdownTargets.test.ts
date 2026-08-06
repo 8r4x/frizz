@@ -13,11 +13,11 @@ test("absolute POSIX and file URLs become local targets with decoded proxy paths
   )
   assert.equal(
     localImageUrl("/Users/me/visual review/shot.png"),
-    "/local-image?path=%2FUsers%2Fme%2Fvisual%20review%2Fshot.png",
+    "/_frizz/local-image?path=%2FUsers%2Fme%2Fvisual%20review%2Fshot.png",
   )
   assert.equal(
     localImageUrlForTarget(localMarkdownTarget("/Users/me/visual%20review/shot.png")!),
-    "/local-image?path=%2FUsers%2Fme%2Fvisual%20review%2Fshot.png",
+    "/_frizz/local-image?path=%2FUsers%2Fme%2Fvisual%20review%2Fshot.png",
   )
 })
 

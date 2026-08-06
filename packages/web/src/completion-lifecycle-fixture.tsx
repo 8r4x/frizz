@@ -12,7 +12,7 @@ const rpcResult = (result: unknown) => new Response(JSON.stringify({ result }), 
 
 window.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : input.toString(), window.location.origin)
-  if (url.pathname === "/rpc/completeThread") {
+  if (url.pathname === "/_frizz/rpc/completeThread") {
     const body = JSON.parse(String(init?.body ?? "{}")) as { terminateLive?: boolean }
     window.dispatchEvent(new CustomEvent("fixture-complete", { detail: body }))
     return rpcResult({ needsConfirmation: mode === "executing" && body.terminateLive !== true })

@@ -74,15 +74,15 @@ const initialPage: PaginatedTranscriptData = {
 const originalFetch = window.fetch
 window.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : (input as Request).url ?? input.toString(), location.origin)
-  if (url.pathname === "/rpc/threadTranscript") {
+  if (url.pathname === "/_frizz/rpc/threadTranscript") {
     return new Response(JSON.stringify({ result: { ...initialPage, messages: serverWindow() } }), { headers: { "content-type": "application/json" } })
   }
-  if (url.pathname === "/rpc/threadTranscriptEarlier") {
+  if (url.pathname === "/_frizz/rpc/threadTranscriptEarlier") {
     // One page of genuinely earlier history, the way the server would answer the cursor.
     const earlier = all.slice(0, Math.max(0, all.length - CAP)).slice(-40)
     return new Response(JSON.stringify({ result: { messages: earlier, transcriptKey: "fixture-key", beforeCursor: "cursor-older", hasEarlier: true, reachedTurnBoundary: false } }), { headers: { "content-type": "application/json" } })
   }
-  if (url.pathname.startsWith("/rpc/")) {
+  if (url.pathname.startsWith("/_frizz/rpc/")) {
     return new Response(JSON.stringify({ result: null }), { headers: { "content-type": "application/json" } })
   }
   return originalFetch(input, init)

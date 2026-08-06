@@ -47,13 +47,13 @@ const messages: ChatMessage[] = [
 const originalFetch = window.fetch
 window.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : (input as Request).url ?? input.toString(), window.location.origin)
-  if (url.pathname === "/rpc/followUp") {
+  if (url.pathname === "/_frizz/rpc/followUp") {
     const body = JSON.parse(String(init?.body ?? "{}"))
     const node = document.querySelector("[data-sent-wire]")
     if (node) node.textContent = body.message
     return new Response(JSON.stringify({ result: {} }), { headers: { "content-type": "application/json" } })
   }
-  if (url.pathname === "/rpc/markRead") return new Response(JSON.stringify({ result: {} }), { headers: { "content-type": "application/json" } })
+  if (url.pathname === "/_frizz/rpc/markRead") return new Response(JSON.stringify({ result: {} }), { headers: { "content-type": "application/json" } })
   return originalFetch(input, init)
 }
 

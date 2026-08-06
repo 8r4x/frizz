@@ -6,6 +6,7 @@ import { connectSSE } from "./sse.ts"
 import { mergeOptimistic, preserveMessageIdentity, type QueuedMessage } from "../lib/transcript-sync.ts"
 import { reconcileLiveMessages, type PaginatedTranscriptData } from "../lib/transcriptPagination.ts"
 import { invalidateInteractionQueries } from "./interaction-cache.ts"
+import { FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
 
 // The stage-2 multiplexed client: ONE WebSocket("/ws") carrying the board channel (keyframe + deltas +
 // notify, driven through the shared BoardStream) AND per-thread transcript push (replacing the 1.5s
@@ -49,7 +50,7 @@ const stream = new BoardStream(
 const HEARTBEAT_TIMEOUT = 35_000
 
 function wsUrl(): string {
-  return `${location.origin.replace(/^http/, "ws")}/ws`
+  return `${location.origin.replace(/^http/, "ws")}${FRIZZ_ROUTE_PREFIX}/ws`
 }
 
 function connect(): void {
