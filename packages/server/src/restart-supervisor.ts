@@ -14,6 +14,7 @@ import {
   type LocalAuthorityPolicy,
 } from "./local-origin.ts"
 import { resolveLocalImage } from "./local-image.ts"
+import { frizzRoute } from "@frizz/shared"
 
 export const SUPERVISOR_CONTROL_PREFIX = "/_frizz/control"
 export const SUPERVISOR_RESTART_PATH = `${SUPERVISOR_CONTROL_PREFIX}/restart`
@@ -111,7 +112,7 @@ function isControlRequest(req: IncomingMessage): boolean {
 
 function isLocalImageRequest(req: IncomingMessage): boolean {
   return (req.method === "GET" || req.method === "HEAD")
-    && new URL(req.url ?? "/", "http://frizz.invalid").pathname === "/local-image"
+    && new URL(req.url ?? "/", "http://frizz.invalid").pathname === frizzRoute("/local-image")
 }
 
 export class RestartSupervisorProxy {

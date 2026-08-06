@@ -3,10 +3,11 @@ export type { AppRouter } from "./router.ts"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { readFileSync, existsSync } from "node:fs"
 import { join, resolve, extname, normalize } from "node:path"
-import { DEFAULT_PORT } from "@frizz/shared"
+import { DEFAULT_PORT, FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
 import {
 ContextStartupError,
   createContext,
+  projectContextCleanups,
   initGithub,
   type AppContext,
   type ContextOptions,
@@ -24,7 +25,7 @@ import {
   type ShutdownBarrierOptions,
   type ShutdownDiagnostic,
 } from "./shutdown.ts"
-import { projectLaunchTarget, resolveProject, type Project } from "./project.ts"
+import { projectLaunchTarget, resolveProject, type Project, projectFromRegistryEntry } from "./project.ts"
 import {
   acquireProjectLaunchOwner,
   currentProcessGeneration,
@@ -38,6 +39,8 @@ import {
 } from "./project-launch.ts"
 import { createBootProgressPublisher } from "./boot-progress.ts"
 import { log as frizzLog } from "./logging.ts"
+import { createTenantMap } from "./tenants.ts"
+import { findBySlug } from "./project-registry.ts"
 
 export const SERVER_SHUTDOWN_TIMEOUT_MS = 4_000
 export const SERVER_FORCE_EXIT_MS = 5_000
@@ -64,6 +67,13 @@ export type ServerStartupPhase =
 type HttpServer = ReturnType<typeof createServer>
 type TerminalServer = ReturnType<typeof createTerminalServer>
 type AppSocketServer = ReturnType<typeof createAppSocketServer>
+
+/** Everything one project serves: its HTTP app and its two live transports. */
+interface TenantSurfaces {
+  app: ReturnType<typeof createApp>
+  terminal: TerminalServer
+  appSocket: AppSocketServer
+}
 type ViteServer = import("vite").ViteDevServer
 
 /** Dependency seam for deterministic startup-rollback tests. Production callers must not set it. */
@@ -179,9 +189,33 @@ export interface StartedServer {
   readonly shutdownFence: ServerShutdownFence
 }
 
-const isApiUrl = (url: string) =>
-  url.startsWith("/rpc") || url.startsWith("/events") || url === "/health" || url === "/control/stop"
-  || url.startsWith("/local-image") || url.startsWith("/local-visualization") || url === "/attach"
+// Everything Frizz serves is under the reserved prefix now, so this is one test instead of a list
+// that had to grow with every new route — and a prefixed request that missed the old allowlist fell
+// through to the SPA shell with a 200, i.e. a blank page rather than an error.
+const isApiUrl = (url: string) => url === FRIZZ_ROUTE_PREFIX || url.startsWith(`${FRIZZ_ROUTE_PREFIX}/`)
+
+/**
+ * Split `/_frizz/<slug>/rest` into its project slug and the request the tenant's own app should see.
+ *
+ * A project slug and a route name share this position, so `/_frizz/rpc/board` and
+ * `/_frizz/nub/rpc/board` look alike until you know which slugs exist. The registry settles it, and
+ * cannot be ambiguous: it refuses to mint a slug that shadows one of Frizz's own route names.
+ *
+ * An unprefixed `/_frizz/rpc/…` stays the LAUNCHING project, so a client that has not learned about
+ * slugs yet keeps working.
+ */
+export function splitTenantRequest(
+  url: string,
+  isKnownSlug: (slug: string) => boolean,
+): { slug: string; rest: string } | undefined {
+  if (!isApiUrl(url)) return undefined
+  const after = url.slice(FRIZZ_ROUTE_PREFIX.length)
+  const match = /^\/([^/?#]+)(.*)$/u.exec(after)
+  if (!match) return undefined
+  const [, first = "", rest = ""] = match
+  if (!isKnownSlug(first)) return undefined
+  return { slug: first, rest: `${FRIZZ_ROUTE_PREFIX}${rest || "/"}` }
+}
 
 const MIME: Record<string, string> = {
   ".html": "text/html",
@@ -326,6 +360,51 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
   // Named, incremental boot progress for whatever launcher is waiting on /health (boot-progress.ts).
   const bootProgress = createBootProgressPublisher(project.stateDir)
   let ctx: AppContext | undefined
+  // One process, N projects (tenants.ts). The launching project is adopted below once its own boot
+  // phases have built it; anything opened later goes through activate(), which is where the
+  // AppContext-seam error boundary lives.
+  const tenants = createTenantMap<TenantSurfaces>({
+    createContext: (contextOptions) => runtime.createContext(contextOptions),
+    contextOptions: { claudeBin: opts.claudeBin },
+    // Each project's app carries ITS OWN owner proof, so /health stays honest per project rather than
+    // answering for whichever one happened to launch the server. The transports are per project for a
+    // blunter reason: a socket is a live feed of ONE board, so sharing the launcher's would push its
+    // threads into every other project's UI.
+    createApp: (tenantCtx) => ({
+      app: runtime.createApp(tenantCtx, appOptionsFor(tenantCtx)),
+      terminal: runtime.createTerminal(terminalOptionsFor(tenantCtx)),
+      appSocket: runtime.createAppSocket(appSocketOptionsFor(tenantCtx)),
+    }),
+    closeApp: async (surfaces) => {
+      await surfaces.appSocket.close()
+      await surfaces.terminal.close()
+    },
+  })
+  const appOptionsFor = (c: AppContext) => ({
+    port,
+    ownerProof: projectLaunchTokenProof(projectLaunchTarget(c.project), effectiveOwnerToken),
+    controlToken: effectiveOwnerToken,
+    requestOwnerStop,
+  })
+  const terminalOptionsFor = (c: AppContext) => ({
+    resolveLogin: (slug: string) => c.loginUtility.attach(slug),
+  })
+  const appSocketOptionsFor = (c: AppContext) => ({
+    bus: c.bus,
+    bootId: c.bootId,
+    transcriptChange: c.transcriptChange,
+    boardSnapshot: () => c.board.snapshot(),
+    currentSeq: () => c.board.currentSeq(),
+    readTranscript: makeTranscriptReader(
+      c.project,
+      c.storage,
+      c.backendFor,
+      (slug, id) => c.tailer.subAgent(slug, id),
+      // The /ws producer is the one the live UI actually renders, so a dead owner has to reach it
+      // too — projecting only the RPC is the exact half-fix the × already had to correct once.
+      (slug) => c.tailer.ownerGone?.(slug) ?? false,
+    ),
+  })
   let githubInit: Promise<void> | undefined
   let terminal: TerminalServer | undefined
   let appSocket: AppSocketServer | undefined
@@ -392,18 +471,25 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
   })
   const cleanupTerminal = createRetryableCleanup(async () => { await terminal?.close() })
   const cleanupAppSocket = createRetryableCleanup(async () => { await appSocket?.close() })
-  const cleanupTailer = createRetryableCleanup(() => ctx?.tailer.stop())
-  const cleanupLoginUtility = createRetryableCleanup(() => ctx?.loginUtility?.stop())
-  // `?.` on the RESOURCE too, like loginUtility/profileController beside it. Every shutdown phase is
-  // requiredForStorage by default, so a TypeError here does not just log — it fails the whole barrier
-  // with "could not safely close storage", turning a recoverable startup failure into a wedged one.
-  const cleanupSubscriptions = createRetryableCleanup(() => ctx?.stopSubscriptions())
-  const cleanupScheduler = createRetryableCleanup(async () => { await ctx?.scheduler.stop() })
-  const cleanupBoard = createRetryableCleanup(async () => { await ctx?.board.stop() })
-  const cleanupBridge = createRetryableCleanup(async () => { await ctx?.codexAppServer?.shutdown() })
+  // The per-project half, from context.ts, so one project can be torn down without the server —
+  // `() => ctx` rather than `ctx` because these are built before the context exists.
+  const tenant = projectContextCleanups(() => ctx)
+  // Every project opened BESIDES the launching one. The launching project is torn down by the phases
+  // below — it was adopted into the map, so draining the map wholesale would close it twice.
+  const cleanupExtraTenants = createRetryableCleanup(async () => {
+    for (const { project: opened } of tenants.active()) {
+      if (opened.id !== project.id) await tenants.deactivate(opened.id)
+    }
+  })
+  const cleanupTailer = createRetryableCleanup(tenant.tailer)
+  const cleanupLoginUtility = createRetryableCleanup(tenant.loginUtility)
+  const cleanupSubscriptions = createRetryableCleanup(tenant.subscriptions)
+  const cleanupScheduler = createRetryableCleanup(tenant.scheduler)
+  const cleanupBoard = createRetryableCleanup(tenant.board)
+  const cleanupBridge = createRetryableCleanup(tenant.bridge)
   const cleanupVite = createRetryableCleanup(async () => { await vite?.close() })
   const cleanupGithub = createRetryableCleanup(async () => { await githubInit })
-  const cleanupStorage = createRetryableCleanup(() => ctx?.storage.close())
+  const cleanupStorage = createRetryableCleanup(tenant.storage)
 
   const createLifecycleBarrier = (): ShutdownBarrier => createShutdownBarrier({
     timeoutMs: opts.shutdownTimeoutMs ?? SERVER_SHUTDOWN_TIMEOUT_MS,
@@ -426,6 +512,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
         name: "application socket",
         run: cleanupAppSocket,
       },
+      { name: "other projects", run: cleanupExtraTenants },
       { name: "tailer producer", run: cleanupTailer },
       // Kill any live login-attempt pane so OAuth bytes never outlive the server.
       { name: "login utility", run: cleanupLoginUtility },
@@ -552,6 +639,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       }),
       (value) => { ctx = value },
     )
+    tenants.adopt(project, ctx)
 
     // Resolve GitHub detection in the background. The original promise is retained and drained on
     // rollback so even an injected/hung initializer cannot outlive ownership silently.
@@ -560,39 +648,21 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     void githubInit.catch(() => undefined)
     await runtime.afterPhase?.("GitHub initialization")
 
-    const app = await phase("application", () => runtime.createApp(ctx!, {
-      port,
-      ownerProof: projectLaunchTokenProof(launchTarget, effectiveOwnerToken),
-      controlToken: effectiveOwnerToken,
-      requestOwnerStop,
-    }))
+    const app = await phase("application", () => runtime.createApp(ctx!, appOptionsFor(ctx!)))
     terminal = await phase(
       "terminal transport",
-      () => runtime.createTerminal({
-        resolveLogin: (slug) => ctx!.loginUtility.attach(slug),
-      }),
+      () => runtime.createTerminal(terminalOptionsFor(ctx!)),
       (value) => { terminal = value },
     )
     appSocket = await phase(
       "application socket",
-      () => runtime.createAppSocket({
-        bus: ctx!.bus,
-        bootId: ctx!.bootId,
-        transcriptChange: ctx!.transcriptChange,
-        boardSnapshot: () => ctx!.board.snapshot(),
-        currentSeq: () => ctx!.board.currentSeq(),
-        readTranscript: makeTranscriptReader(
-          ctx!.project,
-          ctx!.storage,
-          ctx!.backendFor,
-          (slug, id) => ctx!.tailer.subAgent(slug, id),
-          // The /ws producer is the one the live UI actually renders, so a dead owner has to reach it
-          // too — projecting only the RPC is the exact half-fix the × already had to correct once.
-          (slug) => ctx!.tailer.ownerGone?.(slug) ?? false,
-        ),
-      }),
+      () => runtime.createAppSocket(appSocketOptionsFor(ctx!)),
       (value) => { appSocket = value },
     )
+    // Re-adopt with the surfaces attached. The early adopt registered the context so the map is never
+    // missing the launching project; these did not exist yet at that point, and routing is closed
+    // until `accepting` flips below, so nothing can observe the gap.
+    tenants.adopt(project, ctx, { app, terminal, appSocket })
     await phase("board producer", () => ctx!.board.start())
     // The tailer's FIRST pass is the one boot step that can legitimately take minutes on a cold board
     // of thousands of threads. Report its position so a waiting launcher can tell "working" from
@@ -628,6 +698,28 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     }
     await runtime.afterPhase?.("Vite")
 
+    /**
+     * Route a `/_frizz/<slug>/…` request at the project that owns it, opening that project on first
+     * use. This is the lazy activation §4 settles on: a board nobody has visited costs nothing, and
+     * the first request for it pays the (now bounded) activation.
+     *
+     * Undefined for an unknown slug or a project that will not open — the caller falls through to the
+     * launching project's app, which answers 404 rather than leaking another project's data.
+     */
+    const routeToTenant = async (
+      url: string,
+    ): Promise<{ surfaces: TenantSurfaces; url: string } | undefined> => {
+      const split = splitTenantRequest(url, (slug) => findBySlug(slug) !== undefined)
+      if (!split) return undefined
+      const entry = findBySlug(split.slug)
+      if (!entry) return undefined
+      const existing = tenants.appFor(entry.id)
+      if (existing) return { surfaces: existing, url: split.rest }
+      if (!(await tenants.activate(projectFromRegistryEntry(entry)))) return undefined
+      const built = tenants.appFor(entry.id)
+      return built ? { surfaces: built, url: split.rest } : undefined
+    }
+
     accepting = true
     httpServer = await phase("HTTP server", () => runtime.createHttpServer((req, res) => {
       if (!accepting) {
@@ -640,7 +732,13 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
         const controller = new AbortController()
         requestControllers.add(controller)
         let task!: Promise<void>
-        task = pipeToApp(app, req, res, port, controller)
+        // The tenant's own app sees its ordinary routes: the `<slug>` segment is stripped, so nothing
+        // downstream needs to know it was ever addressed by one.
+        task = routeToTenant(url)
+          .then((routed) => {
+            if (routed) req.url = routed.url
+            return pipeToApp(routed?.surfaces.app ?? app, req, res, port, controller)
+          })
           .catch(() => {
             if (!res.headersSent) res.writeHead(controller.signal.aborted ? 503 : 500)
             res.end()
@@ -681,9 +779,20 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
         socket.destroy()
         return
       }
-      if (terminal!.handleUpgrade(req, socket, head)) return
-      if (appSocket!.handleUpgrade(req, socket, head)) return
-      socket.destroy()
+      // A `/_frizz/<slug>/ws` upgrade has to reach THAT project's socket, so this resolves the tenant
+      // exactly as the request path does — asynchronously, because the project may not be open yet.
+      // The socket simply waits; there is nothing to answer with until we know whose feed it wants.
+      void routeToTenant(req.url ?? "/")
+        .then((routed) => {
+          const surfaces = routed?.surfaces
+          if (routed) req.url = routed.url
+          const term = surfaces?.terminal ?? terminal!
+          const ws = surfaces?.appSocket ?? appSocket!
+          if (term.handleUpgrade(req, socket, head)) return
+          if (ws.handleUpgrade(req, socket, head)) return
+          socket.destroy()
+        })
+        .catch(() => socket.destroy())
     })
 
     await phase("HTTP listen", () => new Promise<void>((resolveListen, rejectListen) => {

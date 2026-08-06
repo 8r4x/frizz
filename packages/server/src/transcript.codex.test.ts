@@ -662,7 +662,7 @@ test("a direct view_image function_call renders the picture inline, never an '[i
   assert.equal(call.status, "completed")
   assert.equal(call.output, undefined, "the placeholder is suppressed — the picture is the content")
   assert.ok(call.outputImage, "outputImage is set")
-  assert.match(call.outputImage!, /frizz-tool-images[/\\][0-9a-f]{32}\.png$/)
+  assert.match(call.outputImage!, /frizz-tool-images-[0-9a-f]{16}[/\\][0-9a-f]{32}\.png$/)
   // The cache copy holds the source bytes verbatim, so /local-image serves the real picture.
   assert.deepEqual(readFileSync(call.outputImage!), Buffer.from(PNG_1x1, "base64"))
 })
@@ -1065,7 +1065,7 @@ test("an MCP take_screenshot decodes its inline shot and drops the '[image outpu
   // fallback had picked the `format` arg, labelling every shot with its file extension.
   assert.equal(call.detail, "viewport")
   assert.ok(call.outputImage, "the shot is decoded to a servable path")
-  assert.match(call.outputImage!, /frizz-tool-images[/\\][0-9a-f]{32}\.png$/)
+  assert.match(call.outputImage!, /frizz-tool-images-[0-9a-f]{16}[/\\][0-9a-f]{32}\.png$/)
   assert.deepEqual(readFileSync(call.outputImage!), Buffer.from(PNG_1x1, "base64"))
   // The wall-time envelope duplicates the card's own duration meta, and the stand-in captions a picture
   // the reader can now see. Only the real sentence survives — and the duration still parses out of it.

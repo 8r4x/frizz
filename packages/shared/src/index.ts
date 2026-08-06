@@ -2108,7 +2108,71 @@ export type SocketServerMsg =
     }
   | { t: "hb" }
 
-export const DEFAULT_PORT = 4917
+/**
+ * Everything Frizz itself serves lives under this prefix, so EVERY OTHER top-level path segment is
+ * free to be a project slug (`/nub`, `/frizz`). Without a reserved namespace the deny-list is a
+ * growing list of route names that breaks the day someone clones a repo called `settings`.
+ *
+ * One constant, exported to both sides, because a server route and the client URL that calls it
+ * drifting apart is a 404 that looks like a hung request.
+ */
+/**
+ * One card on the machine's project grid.
+ *
+ * Everything here comes from the registry index, which is why listing every project costs one file
+ * read and never opens a database: the grid must stay cheap enough to be the home page even with
+ * forty projects, and opening them to draw cards is exactly the cost lazy activation exists to avoid.
+ */
+export const ProjectCard = z.object({
+  id: z.string(),
+  slug: z.string(),
+  name: z.string(),
+  path: z.string(),
+  lastOpenedAt: z.string(),
+  /** The directory is gone — moved or deleted. The card stays so it can be reopened or forgotten. */
+  stale: z.boolean(),
+})
+export type ProjectCard = z.infer<typeof ProjectCard>
+
+export const FRIZZ_ROUTE_PREFIX = "/_frizz"
+export function frizzRoute(path: string): string {
+  return `${FRIZZ_ROUTE_PREFIX}${path.startsWith("/") ? path : `/${path}`}`
+}
+
+/**
+ * `http://localhost:9393`.
+ *
+ * Unassigned in the IANA registry on both TCP and UDP — its neighbours `9390` (OpenVAS) and `9396`
+ * are registered and it is not — clear of both Chromium's and Firefox's blocklists (the highest port
+ * either blocks is 10080), no dev-tool default, and below every platform's ephemeral floor.
+ *
+ * Port choice CANNOT buy robustness on Windows: Hyper-V/WSL reservations reported at
+ * microsoft/WSL#5514 and #5306 cover 89% of 1024-9999 between them, and every four-digit repeating
+ * port is inside a block on at least one of those machines — as are Vite's 5173 and Postgres's 5432.
+ * Robustness lives entirely in the fallback below.
+ */
+export const DEFAULT_PORT = 9393
+
+/**
+ * The dev server's own default, so `frizz-dev` never fights the singleton for `9393`.
+ *
+ * Picked off the same verified shortlist as DEFAULT_PORT: IANA-unassigned on TCP and UDP, on neither
+ * browser's blocklist, no tool default. Adjacent by sight for the same reason the fallback is.
+ */
+export const DEFAULT_DEV_PORT = 9494
+
+/**
+ * The primary with a `1` in front: 9393 → 19393.
+ *
+ * Lands in `10896-24265`, a 13,370-port gap clean on both reported Windows machines, above the
+ * highest browser-blocked port and below Linux's ephemeral floor (32768). The band is wide enough
+ * that "clean" picks no winner, so the tiebreak is explicability — someone meeting
+ * `localhost:19393` is meeting it while something is already going wrong, and it should read at a
+ * glance as the same app on its backup port.
+ */
+export function fallbackPort(base: number): number {
+  return base + 10_000
+}
 // A thread's stable identity string, `frizz-<slug>`. It named a tmux session once; frizz has no tmux,
 // and this survives as the integrity check on the session row's `tmux_name` column — a row whose
 // stored name does not re-derive from its own slug has been tampered with or mis-keyed.

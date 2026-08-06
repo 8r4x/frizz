@@ -51,6 +51,9 @@ import {
   assertRequiredExecutables,
   ensureNativeHelperPermissions,
 } from "./preflight.ts";
+import { DEFAULT_PORT, fallbackPort } from "@frizz/shared";
+import { registerProject } from "@frizz/server/project-registry";
+import { resolveProjectLabel } from "@frizz/server/project-identity";
 
 const PACKAGE_NAME = process.env.FRIZZ_REGISTRY_PACKAGE ?? "frizz";
 
@@ -185,6 +188,52 @@ async function existingPort(): Promise<number | undefined> {
 }
 
 /**
+ * A Frizz already running on this machine, serving THIS project under its own slug.
+ *
+ * The singleton's payoff at the CLI: a second `frizz` in another repository is a client, not a
+ * server. It registers the project (which is what mints the slug), then asks the machine's Frizz for
+ * that project's health — a request which, by activating the tenant, is also what opens it.
+ *
+ * The identity check is the launcher's own handshake minus the owner proof. That proof is keyed to a
+ * launch LEASE and a client holds none; what a client needs to know is that this port serves ITS
+ * project id from ITS directory, and that is exactly what the id and dir already answer. The proof
+ * still guards the case it was written for — a launcher adopting the supervisor it believes it owns.
+ *
+ * A COPIED checkout (`cp -R`, so two directories claim one id) is deliberately not joined here: the
+ * registry refuses the duplicate, and the re-mint belongs to resolveProject, which does it properly.
+ */
+/**
+ * This project's URL segment, registering it if the machine has not seen it before.
+ *
+ * `/` is the project GRID now, so a board — including the one we are about to launch — lives at
+ * `/<slug>`. Both the join path and the launch path want the same answer, and registration is
+ * idempotent: an id already in the registry keeps the slug it was given.
+ */
+function ownSlug(): string | undefined {
+  try {
+    return registerProject(
+      { dir: workspace.root, id: target.projectId, remoteOwner: resolveProjectLabel(workspace.root)?.split("/")[0] },
+      homedir(),
+    ).entry?.slug;
+  } catch {
+    // The registry is an INDEX. If it cannot be written, opening the board unprefixed still works.
+    return undefined;
+  }
+}
+
+async function joinRunningFrizz(): Promise<{ port: number; slug: string } | undefined> {
+  const slug = ownSlug();
+  if (!slug) return undefined;
+  // The well-known port, then the one the fallback jumps to. A server that had to scan past both is
+  // rare enough to be worth a second server rather than a slow probe on every cold start.
+  for (const port of new Set([DEFAULT_PORT, fallbackPort(DEFAULT_PORT)])) {
+    if (await probeFrizz(port, { projectId: target.projectId, projectDir: target.projectDir, slug }))
+      return { port, slug };
+  }
+  return undefined;
+}
+
+/**
  * Hand the operator the running board. This is deliberately the SAME contract as the source
  * launcher's openOrPrint (index.ts): a plain launch opens the default browser, `--app` opens the
  * dedicated app window, `--no-app` prints the URL and nothing else, and a browser that refuses to
@@ -193,8 +242,8 @@ async function existingPort(): Promise<number | undefined> {
  * It printed the URL and stopped there from the day this file was written, so `npx frizz` never
  * opened anything while `frizz-dev` always did — the whole divergence the operator hit.
  */
-async function openOrPrint(port: number, reused: boolean): Promise<void> {
-  const url = `http://127.0.0.1:${port}`;
+async function openOrPrint(port: number, reused: boolean, path = ""): Promise<void> {
+  const url = `http://127.0.0.1:${port}${path}`;
   logger.info("launcher", `${reused ? "reusing" : "started"} Frizz at ${url}`);
   readout?.settle("server", "done", reused ? `already running on port ${port}` : `port ${port}`);
   let browser: string | undefined;
@@ -367,7 +416,13 @@ try {
     await runSupervisor(options.port, token);
   }
   const existing = await existingPort();
-  if (existing) { await openOrPrint(existing, true); process.exit(0); }
+  if (existing) {
+    const slug = ownSlug();
+    await openOrPrint(existing, true, slug ? `/${slug}` : "");
+    process.exit(0);
+  }
+  const joined = await joinRunningFrizz();
+  if (joined) { await openOrPrint(joined.port, true, `/${joined.slug}`); process.exit(0); }
   const claim = tryAcquireProjectLaunchOwner(target, "launcher");
   if (claim.kind !== "acquired") throw new Error("Frizz is starting for this project; retry shortly");
   let release: (() => void) | undefined = await acquireGlobalLaunchLock();
@@ -406,7 +461,8 @@ try {
     // launch off its remembered port.
     portReservation();
     portReservation = undefined;
-    await openOrPrint(port, false);
+    const slug = ownSlug();
+    await openOrPrint(port, false, slug ? `/${slug}` : "");
     await running;
   } finally { release?.(); portReservation?.(); claim.lease.release(); }
 } catch (error) {

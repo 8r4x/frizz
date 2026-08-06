@@ -1,7 +1,7 @@
 import { execFileSync, spawn as spawnChild } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { createServer } from "node:net";
+import { createServer, type AddressInfo } from "node:net";
 import { createServer as createHttpServer } from "node:http";
 import {
   existsSync,
@@ -41,7 +41,10 @@ import { frizzPaths, projectStateDir } from "@frizz/server/frizz-paths";
 import {
   acquireGlobalLaunchLock,
   allocatePort,
+  canBindPort,
   choosePort,
+  portUnavailableMessage,
+  probeBindPort,
   helpText,
   expectedOwnerHealth,
   liveWorkspaceOwner,
@@ -59,6 +62,7 @@ import {
   workspaceLaunchTarget,
   type Workspace,
 } from "./launcher.ts";
+import { DEFAULT_PORT, DEFAULT_DEV_PORT } from "@frizz/shared";
 
 test("artifact re-exec keeps the original canonical Frizz source directory", () => {
   const source = mkdtempSync(join(tmpdir(), "frizz-canonical-source-"));
@@ -113,7 +117,7 @@ function spawnLaunchProtocolChild(
     let port
     if (process.env.FAIL_CONTROL === "1") {
       control = createServer((req, res) => {
-        if (req.url === "/health") {
+        if (req.url === "/_frizz/health") {
           res.writeHead(200, { "content-type": "application/json" })
           res.end(JSON.stringify({
             ok: true,
@@ -124,7 +128,7 @@ function spawnLaunchProtocolChild(
           }))
           return
         }
-        res.writeHead(req.url === "/control/stop" ? 503 : 404)
+        res.writeHead(req.url === "/_frizz/control/stop" ? 503 : 404)
         res.end()
       })
       await new Promise((resolve) => control.listen(0, "127.0.0.1", resolve))
@@ -1269,7 +1273,7 @@ test("token-bound status and control remain usable when external generation proo
       init?: RequestInit
     ) => {
       requests.push({ url: String(input), init });
-      if (String(input).endsWith("/health")) {
+      if (String(input).endsWith("/_frizz/health")) {
         return new Response(
           JSON.stringify({
             ok: true,
@@ -1643,15 +1647,81 @@ test("workspace status compares a stored generation with a real disposable proce
   }
 });
 
-test("port selection preserves a free preference, scans conflicts, and fails an occupied explicit port", async () => {
-  const used = new Set([4917, 4918]);
+test("port selection keeps a free preference, then takes the well-known port, and JUMPS rather than scanning past it", async () => {
+  const used = new Set([DEFAULT_PORT, 19393, 19394]);
   const available = async (port: number) => !used.has(port);
-  assert.equal(await choosePort(undefined, 4999, available), 4999);
-  assert.equal(await choosePort(undefined, 4917, available), 4919);
-  await assert.rejects(
-    choosePort(4917, undefined, available),
-    /already in use/
+  // A remembered port that still works is kept, so a board keeps its URL across restarts.
+  assert.equal(await choosePort(undefined, 9999, available), 9999);
+  assert.equal(await choosePort(undefined, undefined, async () => true), DEFAULT_PORT);
+  // THE POINT: with 9393 taken the next candidate is 19393, never 9394. Windows reserves ports in
+  // contiguous 100-port blocks, so a +1 scan burns every candidate inside the same reservation and
+  // then reports "no free port" with tens of thousands free.
+  assert.equal(await choosePort(undefined, undefined, available), 19395);
+  await assert.rejects(choosePort(DEFAULT_PORT, undefined, available), /already in use/);
+});
+
+test("the dev server has its own well-known port, so frizz-dev never fights the singleton for 9393", async () => {
+  assert.notEqual(DEFAULT_DEV_PORT, DEFAULT_PORT);
+  assert.equal(
+    await choosePort(undefined, undefined, async () => true, DEFAULT_DEV_PORT),
+    DEFAULT_DEV_PORT
   );
+  assert.equal(
+    await choosePort(undefined, undefined, async (port) => port !== DEFAULT_DEV_PORT, DEFAULT_DEV_PORT),
+    19494
+  );
+});
+
+test("a health probe can name the project it is asking about", async () => {
+  const asked: string[] = [];
+  const answer = (body: Record<string, unknown>) =>
+    (async (url: string) => {
+      asked.push(String(url));
+      return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+  const healthy = { ok: true, projectId: "beta-id", projectDir: "/repos/beta", bootId: "b1" };
+
+  // Unprefixed asks the launching project, exactly as before.
+  assert.ok(
+    await probeFrizz(9393, { projectId: "beta-id", projectDir: "/repos/beta" }, answer(healthy))
+  );
+  assert.match(asked[0], /\/_frizz\/health$/);
+
+  // A slug asks THAT project — and because the route activates a tenant, asking is also opening.
+  assert.ok(
+    await probeFrizz(9393, { projectId: "beta-id", projectDir: "/repos/beta", slug: "beta" }, answer(healthy))
+  );
+  assert.match(asked[1], /\/_frizz\/beta\/health$/);
+
+  // The identity gate is unchanged: a server serving someone else is refused, slug or no slug.
+  assert.equal(
+    await probeFrizz(9393, { projectId: "alpha-id", projectDir: "/repos/alpha", slug: "beta" }, answer(healthy)),
+    null
+  );
+});
+
+test("a port held by a system reservation is not reported as a port in use", () => {
+  // EACCES means nothing is listening — netstat shows the port free and bind() still fails — so
+  // "already in use" sends people hunting a process that does not exist.
+  const reserved = portUnavailableMessage(DEFAULT_PORT, "EACCES");
+  assert.match(reserved, /reserved by the system/);
+  assert.match(reserved, /excludedportrange/);
+  assert.doesNotMatch(reserved, /already in use/);
+  assert.match(portUnavailableMessage(DEFAULT_PORT, "EADDRINUSE"), /already in use/);
+  assert.match(portUnavailableMessage(DEFAULT_PORT), /already in use/);
+});
+
+test("a bind probe reports why it failed, not merely that it did", async () => {
+  const held = createServer();
+  await new Promise<void>((done) => held.listen(0, "127.0.0.1", () => done()));
+  const port = (held.address() as AddressInfo).port;
+  try {
+    assert.equal(await probeBindPort(port, "127.0.0.1"), "EADDRINUSE");
+    assert.equal(await canBindPort(port, "127.0.0.1"), false);
+  } finally {
+    await new Promise<void>((done) => held.close(() => done()));
+  }
+  assert.equal(await probeBindPort(port, "127.0.0.1"), undefined);
 });
 
 test("two distinct repositories concurrently reserve different launch ports without sharing tmux ownership", async () => {

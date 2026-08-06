@@ -5,7 +5,7 @@ import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { mountRouter } from "@frizz/rpc/server"
-import { DEFAULT_PORT, ATTACHMENT_MAX_BASE64_CHARS, attachmentExtension, isAllowedAttachmentName, type ServerEvent } from "@frizz/shared"
+import { DEFAULT_PORT, ATTACHMENT_MAX_BASE64_CHARS, attachmentExtension, isAllowedAttachmentName, type ServerEvent, frizzRoute } from "@frizz/shared"
 import { createRouter } from "./router.ts"
 import type { AppContext } from "./context.ts"
 import { allowedLocalCorsOrigin, isTrustedLocalHttpRequest } from "./local-origin.ts"
@@ -39,8 +39,8 @@ export function createApp(ctx: AppContext, options: AppOptions = {}) {
   app.use("*", async (c, next) => {
     const origin = c.req.header("origin")
     const allowMissingOrigin = origin === undefined && (
-      (c.req.method === "GET" && c.req.path === "/health") ||
-      (c.req.method === "POST" && c.req.path === "/control/stop") ||
+      (c.req.method === "GET" && c.req.path === frizzRoute("/health")) ||
+      (c.req.method === "POST" && c.req.path === frizzRoute("/control/stop")) ||
       c.req.header("sec-fetch-site") === "same-origin"
     )
     if (!isTrustedLocalHttpRequest({
@@ -78,7 +78,7 @@ export function createApp(ctx: AppContext, options: AppOptions = {}) {
   // Launcher identity probe: a bare `{ok:true}` cannot distinguish two workspace servers that race
   // for a port or a stale lock whose PID was reused. Keep this small and non-secret; all fields are
   // already visible in the board keyframe/client URL.
-  app.get("/health", (c) => c.json({
+  app.get(frizzRoute("/health"), (c) => c.json({
     ok: true as const,
     projectId: ctx.project.id,
     projectDir: ctx.project.dir,
@@ -88,7 +88,7 @@ export function createApp(ctx: AppContext, options: AppOptions = {}) {
 
   // Cross-platform owner stop channel. The raw capability is never returned by /health; the CLI
   // reads it from the 0600 owner record and health proves only its project-bound SHA-256 digest.
-  app.post("/control/stop", (c) => {
+  app.post(frizzRoute("/control/stop"), (c) => {
     const supplied = c.req.header("x-frizz-launch-token")
     if (!options.controlToken || !supplied || supplied !== options.controlToken) return c.text("Forbidden", 403)
     if (!options.requestOwnerStop) return c.text("Owner control unavailable", 503)
@@ -97,14 +97,14 @@ export function createApp(ctx: AppContext, options: AppOptions = {}) {
     return c.json({ accepted: true as const }, 202)
   })
 
-  app.get("/local-image", (c) => {
+  app.get(frizzRoute("/local-image"), (c) => {
     const r = resolveLocalImage(c.req.query("path"))
     if (r.status !== 200) return c.text(String(r.status), r.status)
     // Copy into a plain Uint8Array<ArrayBuffer> — Hono's body type rejects Node's Buffer union.
     return c.body(Uint8Array.from(r.body), 200, { "content-type": r.contentType, "cache-control": "private, max-age=60" })
   })
 
-  app.get("/local-visualization", (c) => {
+  app.get(frizzRoute("/local-visualization"), (c) => {
     const row = ctx.storage.getSession(c.req.query("slug") ?? "")
     const r = resolveLocalVisualization(ctx.project.dir, row?.session_id, c.req.query("file"))
     if (r.status !== 200) return c.text(String(r.status), r.status)
@@ -122,7 +122,7 @@ export function createApp(ctx: AppContext, options: AppOptions = {}) {
   // files as an openable chip (both roots include the attachments dir). JSON base64 keeps the route
   // dependency-free. The extension allowlist + the char cap are the only trust gates; the on-disk name
   // is timestamped and stripped of every client path segment.
-  app.post("/attach", async (c) => {
+  app.post(frizzRoute("/attach"), async (c) => {
     let body: { name?: string; data?: string }
     try {
       body = await c.req.json()
@@ -154,7 +154,7 @@ export function createApp(ctx: AppContext, options: AppOptions = {}) {
   // never lost — buffered deltas are all ≤ the keyframe's seq (the keyframe reflects the latest committed
   // state), so the client's dup-guard drops them. Without this, a lost delta would force an immediate
   // resync on connect.
-  app.get("/events", (c) =>
+  app.get(frizzRoute("/events"), (c) =>
     streamSSE(c, async (stream) => {
       let id = 0
       const send = (event: unknown) => stream.writeSSE({ data: JSON.stringify(event), id: String(id++) })
@@ -188,6 +188,6 @@ export function createApp(ctx: AppContext, options: AppOptions = {}) {
     }),
   )
 
-  mountRouter(app, "/rpc", createRouter(ctx))
+  mountRouter(app, frizzRoute("/rpc"), createRouter(ctx))
   return app
 }

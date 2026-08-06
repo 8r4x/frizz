@@ -49,17 +49,17 @@ function originTestApp(port: number, onDispatch?: () => void, options: Partial<A
 test("HTTP control plane accepts exact local origins and intentional no-Origin CLI probes", async () => {
   const port = 49_177
   const app = originTestApp(port)
-  const request = (headers: Record<string, string>) => app.request(`http://127.0.0.1:${port}/health`, { headers })
+  const request = (headers: Record<string, string>) => app.request(`http://127.0.0.1:${port}/_frizz/health`, { headers })
 
   const cli = await request({ host: `127.0.0.1:${port}` })
   assert.equal(cli.status, 200, "native local health probes intentionally carry no Origin")
 
-  const missingOriginControl = await app.request(`http://127.0.0.1:${port}/local-image`, {
+  const missingOriginControl = await app.request(`http://127.0.0.1:${port}/_frizz/local-image`, {
     headers: { host: `127.0.0.1:${port}` },
   })
   assert.equal(missingOriginControl.status, 403, "no-Origin compatibility is not control-plane-wide")
 
-  const sameOriginBrowser = await app.request(`http://127.0.0.1:${port}/local-image`, {
+  const sameOriginBrowser = await app.request(`http://127.0.0.1:${port}/_frizz/local-image`, {
     headers: { host: `127.0.0.1:${port}`, "sec-fetch-site": "same-origin" },
   })
   assert.equal(sameOriginBrowser.status, 400, "same-origin browser metadata reaches the route (which then rejects its missing path)")
@@ -83,7 +83,7 @@ test("token-bound health and stop control never expose or accept a forged owner 
     controlToken: "owner-capability",
     requestOwnerStop: () => { stops++ },
   })
-  const health = await app.request(`http://127.0.0.1:${port}/health`, {
+  const health = await app.request(`http://127.0.0.1:${port}/_frizz/health`, {
     headers: { host: `127.0.0.1:${port}` },
   })
   assert.deepEqual(await health.json(), {
@@ -94,12 +94,12 @@ test("token-bound health and stop control never expose or accept a forged owner 
     ownerProof: "project-bound-proof",
   })
 
-  const forged = await app.request(`http://127.0.0.1:${port}/control/stop`, {
+  const forged = await app.request(`http://127.0.0.1:${port}/_frizz/control/stop`, {
     method: "POST",
     headers: { host: `127.0.0.1:${port}`, "x-frizz-launch-token": "forged" },
   })
   assert.equal(forged.status, 403)
-  const crossOrigin = await app.request(`http://127.0.0.1:${port}/control/stop`, {
+  const crossOrigin = await app.request(`http://127.0.0.1:${port}/_frizz/control/stop`, {
     method: "POST",
     headers: {
       host: `127.0.0.1:${port}`,
@@ -108,7 +108,7 @@ test("token-bound health and stop control never expose or accept a forged owner 
     },
   })
   assert.equal(crossOrigin.status, 403)
-  const accepted = await app.request(`http://127.0.0.1:${port}/control/stop`, {
+  const accepted = await app.request(`http://127.0.0.1:${port}/_frizz/control/stop`, {
     method: "POST",
     headers: { host: `127.0.0.1:${port}`, "x-frizz-launch-token": "owner-capability" },
   })
@@ -132,11 +132,11 @@ test("HTTP/CORS rejects every cross-loopback Host/Origin pair before reads, pref
       if (target.host === source.host) continue
       const headers = { host: target.host, origin: source.origin }
 
-      const read = await app.request(`http://127.0.0.1:${port}/health`, { headers })
+      const read = await app.request(`http://127.0.0.1:${port}/_frizz/health`, { headers })
       assert.equal(read.status, 403, `read ${source.origin} -> ${target.host}`)
       assert.equal(read.headers.get("access-control-allow-origin"), null)
 
-      const preflight = await app.request(`http://127.0.0.1:${port}/rpc/dispatch`, {
+      const preflight = await app.request(`http://127.0.0.1:${port}/_frizz/rpc/dispatch`, {
         method: "OPTIONS",
         headers: {
           ...headers,
@@ -147,7 +147,7 @@ test("HTTP/CORS rejects every cross-loopback Host/Origin pair before reads, pref
       assert.equal(preflight.status, 403, `preflight ${source.origin} -> ${target.host}`)
       assert.equal(preflight.headers.get("access-control-allow-origin"), null)
 
-      const mutation = await app.request(`http://127.0.0.1:${port}/rpc/dispatch`, {
+      const mutation = await app.request(`http://127.0.0.1:${port}/_frizz/rpc/dispatch`, {
         method: "POST",
         headers: { ...headers, "content-type": "application/json" },
         body: JSON.stringify({ prompt: "must not dispatch", slug: "must-not-dispatch" }),
@@ -168,7 +168,7 @@ test("HTTP/CORS preserves same-authority desktop/PWA preflights and valid mutati
     { host: `localhost:${port}`, origin: `http://localhost:${port}` },
     { host: `[::1]:${port}`, origin: `http://[::1]:${port}` },
   ]) {
-    const preflight = await app.request(`http://127.0.0.1:${port}/rpc/dispatch`, {
+    const preflight = await app.request(`http://127.0.0.1:${port}/_frizz/rpc/dispatch`, {
       method: "OPTIONS",
       headers: {
         host,
@@ -181,7 +181,7 @@ test("HTTP/CORS preserves same-authority desktop/PWA preflights and valid mutati
     assert.equal(preflight.headers.get("access-control-allow-origin"), origin)
     assert.match(preflight.headers.get("access-control-allow-headers") ?? "", /content-type/i)
 
-    const mutation = await app.request(`http://127.0.0.1:${port}/rpc/dispatch`, {
+    const mutation = await app.request(`http://127.0.0.1:${port}/_frizz/rpc/dispatch`, {
       method: "POST",
       headers: { host, origin, "content-type": "application/json" },
       body: JSON.stringify({ prompt: "same-authority dispatch", slug: "authority-probe" }),
@@ -189,7 +189,7 @@ test("HTTP/CORS preserves same-authority desktop/PWA preflights and valid mutati
     assert.equal(mutation.status, 200, `${origin} reaches the typed mutation handler`)
     assert.equal(mutation.headers.get("access-control-allow-origin"), origin)
   }
-  const sameOriginMetadataOnly = await app.request(`http://127.0.0.1:${port}/rpc/dispatch`, {
+  const sameOriginMetadataOnly = await app.request(`http://127.0.0.1:${port}/_frizz/rpc/dispatch`, {
     method: "POST",
     headers: {
       host: `127.0.0.1:${port}`,
@@ -208,7 +208,7 @@ test("HTTP/CORS preserves same-authority desktop/PWA preflights and valid mutati
 test("a rejected RPC input returns a readable string message, not an unrenderable object", async () => {
   const port = 49_177
   const app = originTestApp(port)
-  const res = await app.request(`http://127.0.0.1:${port}/rpc/setThreadSnooze`, {
+  const res = await app.request(`http://127.0.0.1:${port}/_frizz/rpc/setThreadSnooze`, {
     method: "POST",
     headers: { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}`, "content-type": "application/json" },
     body: JSON.stringify({ slug: "some-thread", until: "2026-07-24T17:00:00Z" }),
@@ -222,7 +222,7 @@ test("a rejected RPC input returns a readable string message, not an unrenderabl
 test("HTTP control plane rejects hostile/prefix/port/Host/forwarded origin tricks", async () => {
   const port = 49_177
   const app = originTestApp(port)
-  const request = (headers: Record<string, string>) => app.request(`http://127.0.0.1:${port}/health`, { headers })
+  const request = (headers: Record<string, string>) => app.request(`http://127.0.0.1:${port}/_frizz/health`, { headers })
   const validHost = `127.0.0.1:${port}`
 
   const hostileOrigins = [
@@ -243,7 +243,7 @@ test("HTTP control plane rejects hostile/prefix/port/Host/forwarded origin trick
   ]
   for (const origin of hostileOrigins) {
     assert.equal((await request({ host: validHost, origin })).status, 403, origin)
-    const preflight = await app.request(`http://127.0.0.1:${port}/rpc/dispatch`, {
+    const preflight = await app.request(`http://127.0.0.1:${port}/_frizz/rpc/dispatch`, {
       method: "OPTIONS",
       headers: {
         host: validHost,
@@ -269,7 +269,7 @@ test("HTTP control plane rejects hostile/prefix/port/Host/forwarded origin trick
   ]
   for (const host of hostileHosts) {
     assert.equal((await request({ host })).status, 403, host)
-    const preflight = await app.request(`http://127.0.0.1:${port}/rpc/dispatch`, {
+    const preflight = await app.request(`http://127.0.0.1:${port}/_frizz/rpc/dispatch`, {
       method: "OPTIONS",
       headers: {
         host,
@@ -292,7 +292,7 @@ test("HTTP control plane rejects hostile/prefix/port/Host/forwarded origin trick
       [name]: name === "forwarded" ? "" : "attacker-controlled",
     })).status, 403, name)
   }
-  assert.equal((await app.request(`http://127.0.0.1:${port}/local-image`, {
+  assert.equal((await app.request(`http://127.0.0.1:${port}/_frizz/local-image`, {
     headers: { host: validHost, "sec-fetch-site": "cross-site" },
   })).status, 403, "a cross-site browser cannot use the CLI's missing-Origin exception")
 })
@@ -343,14 +343,14 @@ test("missing file → 404", () => {
   assert.equal(resolveLocalImage(join(root, "nope.png")).status, 404)
 })
 
-test("/local-image route serves an agent screenshot under /tmp end-to-end", async () => {
+test("/_frizz/local-image route serves an agent screenshot under /tmp end-to-end", async () => {
   const port = 49_233
   const app = originTestApp(port)
   // A Claude-Code-scratchpad-shaped screenshot under the shared temp tree, driven through the REAL route.
   const scratch = mkdtempSync(join("/tmp", "claude-501-worker-"))
   const shot = join(scratch, "summary-dark-crop.png")
   writeFileSync(shot, PNG)
-  const served = await app.request(`http://127.0.0.1:${port}/local-image?path=${encodeURIComponent(shot)}`, {
+  const served = await app.request(`http://127.0.0.1:${port}/_frizz/local-image?path=${encodeURIComponent(shot)}`, {
     headers: { host: `127.0.0.1:${port}`, "sec-fetch-site": "same-origin" },
   })
   assert.equal(served.status, 200, "worker screenshot serves")
@@ -358,7 +358,7 @@ test("/local-image route serves an agent screenshot under /tmp end-to-end", asyn
   assert.deepEqual(Buffer.from(await served.arrayBuffer()), PNG)
 })
 
-test("/local-visualization binds a directive basename to the owning thread session", async () => {
+test("/_frizz/local-visualization binds a directive basename to the owning thread session", async () => {
   const port = 49_234
   const projectDir = mkdtempSync(join(tmpdir(), "frizz-inline-vis-route-"))
   const dir = join(projectDir, ".codex", "visualizations", "2026", "07", "22", "session-a")
@@ -376,17 +376,17 @@ test("/local-visualization binds a directive basename to the owning thread sessi
     storage: { getSession: (slug: string) => slug === "spend-thread" ? { session_id: "session-a" } : undefined } as AppContext["storage"],
   })
   const headers = { host: `127.0.0.1:${port}`, "sec-fetch-site": "same-origin" }
-  const served = await app.request(`http://127.0.0.1:${port}/local-visualization?slug=spend-thread&file=spend-chart.html`, { headers })
+  const served = await app.request(`http://127.0.0.1:${port}/_frizz/local-visualization?slug=spend-thread&file=spend-chart.html`, { headers })
   assert.equal(served.status, 200)
   assert.match(served.headers.get("content-security-policy") ?? "", /default-src 'none'/)
   assert.equal(served.headers.get("x-content-type-options"), "nosniff")
   assert.match(await served.text(), /bound visualization/)
 
-  const probe = await app.request(`http://127.0.0.1:${port}/local-visualization?slug=spend-thread&file=spend-chart.html`, { method: "HEAD", headers })
+  const probe = await app.request(`http://127.0.0.1:${port}/_frizz/local-visualization?slug=spend-thread&file=spend-chart.html`, { method: "HEAD", headers })
   assert.equal(probe.status, 200)
   assert.equal(await probe.text(), "")
 
-  const unowned = await app.request(`http://127.0.0.1:${port}/local-visualization?slug=other&file=spend-chart.html`, { headers })
+  const unowned = await app.request(`http://127.0.0.1:${port}/_frizz/local-visualization?slug=other&file=spend-chart.html`, { headers })
   assert.equal(unowned.status, 400)
 })
 
@@ -402,13 +402,13 @@ test("symlink to a real image resolves and renders → 200; a dangling symlink �
   assert.equal(resolveLocalImage(dangling).status, 404) // realpath throws on a dangling link → clean 404
 })
 
-test("/attach accepts the safe tier, rejects office/extensionless/oversized, and writes a sanitized name", async () => {
+test("/_frizz/attach accepts the safe tier, rejects office/extensionless/oversized, and writes a sanitized name", async () => {
   const port = 49_231
   const stateDir = mkdtempSync(join(tmpdir(), "frizz-attach-"))
   const app = originTestApp(port, undefined, {}, stateDir)
   const b64 = (s: string) => Buffer.from(s).toString("base64")
   const attach = (body: unknown) =>
-    app.request(`http://127.0.0.1:${port}/attach`, {
+    app.request(`http://127.0.0.1:${port}/_frizz/attach`, {
       method: "POST",
       headers: { host: `127.0.0.1:${port}`, "sec-fetch-site": "same-origin", "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -442,7 +442,7 @@ test("/attach accepts the safe tier, rejects office/extensionless/oversized, and
 // handler is CANCELLING its response body. index.ts's pipeToApp therefore cancels the reader when the
 // request aborts. Pin BOTH halves — the trap and the fix — so that cancel can never be "simplified"
 // back into an AbortController that this handler cannot hear.
-test("/events ends when its response body is cancelled, and an aborted request signal alone does not", async () => {
+test("/_frizz/events ends when its response body is cancelled, and an aborted request signal alone does not", async () => {
   const port = 49_181
   let unsubscribed = 0
   const app = originTestApp(port, undefined, {}, "/tmp/origin-test-state", {
@@ -451,7 +451,7 @@ test("/events ends when its response body is cancelled, and an aborted request s
   } as unknown as Partial<AppContext>)
 
   const controller = new AbortController()
-  const res = await app.request(`http://127.0.0.1:${port}/events`, {
+  const res = await app.request(`http://127.0.0.1:${port}/_frizz/events`, {
     headers: { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}` },
     signal: controller.signal,
   })

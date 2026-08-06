@@ -3,6 +3,8 @@ import type { QueryClient } from "@tanstack/react-query"
 import { store } from "../store.ts"
 import { BoardStream } from "./board-stream.ts"
 import { invalidateInteractionQueries } from "./interaction-cache.ts"
+import { frizzRoute } from "@frizz/shared"
+import { apiBase } from "../lib/base-path.ts"
 
 // The SSE transport — the FALLBACK path once the /ws multiplex exists (socket.ts calls connectSSE() when
 // a pre-restart server has no /ws route). It carries the board channel (keyframe + deltas + notify) through
@@ -32,7 +34,7 @@ const HEARTBEAT_TIMEOUT = 35_000
 function connect() {
   if (es) return
   if (store.connection !== "open") store.connection = "connecting"
-  es = new EventSource("/events")
+  es = new EventSource(`${apiBase()}/events`)
   lastMsg = Date.now()
 
   es.onopen = () => {

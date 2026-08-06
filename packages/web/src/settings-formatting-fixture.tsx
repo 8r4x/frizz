@@ -15,15 +15,15 @@ const nativeFetch = window.fetch.bind(window)
 window.fetch = async (input, init) => {
   const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
   const url = new URL(requestUrl, window.location.href)
-  if (url.pathname === "/rpc/settingsGet") return rpcResult(settings)
-  if (url.pathname === "/rpc/codexModels") return rpcResult([])
-  if (url.pathname === "/rpc/githubPromptDefaults") {
+  if (url.pathname === "/_frizz/rpc/settingsGet") return rpcResult(settings)
+  if (url.pathname === "/_frizz/rpc/codexModels") return rpcResult([])
+  if (url.pathname === "/_frizz/rpc/githubPromptDefaults") {
     return rpcResult({
       issue: "Investigate the reported issue. Classify it, reproduce it when possible, and give an evidence-backed implementation plan.",
       pr: "Audit this pull request adversarially. Verify behavior, edge cases, tests, and CI before recommending approve or request changes.",
     })
   }
-  if (url.pathname === "/rpc/settingsSet") return rpcResult(settings)
+  if (url.pathname === "/_frizz/rpc/settingsSet") return rpcResult(settings)
   return nativeFetch(input, init)
 }
 

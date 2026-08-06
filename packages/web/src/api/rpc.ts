@@ -1,6 +1,8 @@
 import { noteServerBootId } from "./boot.ts"
 import { store } from "../store.ts"
 import { PROCEDURES, type Api, type ProcType, type RpcCallOpts } from "./contract.ts"
+import { FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
+import { apiBase } from "../lib/base-path.ts"
 
 export type { Api, ProcType, RpcCallOpts } from "./contract.ts"
 export { PROCEDURES } from "./contract.ts"
@@ -56,13 +58,13 @@ async function call(name: string, type: ProcType, input?: unknown, opts?: RpcCal
   // a mutation race that handoff; local draft state remains editable and every query stays available.
   assertMutationAllowedDuringControlPlaneTransition(type)
   if (type === "query") {
-    const url = new URL(`/rpc/${name}`, location.origin)
+    const url = new URL(`${apiBase()}/rpc/${name}`, location.origin)
     if (input !== undefined) url.searchParams.set("input", JSON.stringify(input))
     const res = await fetch(url.toString(), { signal: opts?.signal })
     noteServerBootId(res.headers.get("x-frizz-boot")) // notice a server restart on any RPC roundtrip
     return parseRpcResponse(res, name)
   }
-  const res = await fetch(`/rpc/${name}`, {
+  const res = await fetch(`${apiBase()}/rpc/${name}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input ?? {}),

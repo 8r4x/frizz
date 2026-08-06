@@ -9,6 +9,7 @@
     "./detached-daemons": "./src/detached-daemons.ts",
     "./project-identity": "./src/project-identity.ts",
     "./project-root": "./src/project-root.ts",
+    "./tenants": "./src/tenants.ts",
     "./project-registry": "./src/project-registry.ts",
     "./project-launch": "./src/project-launch.ts",
     "./local-origin": "./src/local-origin.ts",

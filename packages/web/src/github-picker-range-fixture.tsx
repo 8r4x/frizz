@@ -66,8 +66,8 @@ const nativeFetch = window.fetch.bind(window)
 window.fetch = async (input, init) => {
   const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
   const url = new URL(requestUrl, window.location.origin)
-  if (url.pathname === "/rpc/githubStatus") return json({ inRepo: true, authed: true, nameWithOwner: "fixture/repo" })
-  if (url.pathname === "/rpc/githubList") {
+  if (url.pathname === "/_frizz/rpc/githubStatus") return json({ inRepo: true, authed: true, nameWithOwner: "fixture/repo" })
+  if (url.pathname === "/_frizz/rpc/githubList") {
     // Serve a real PAGE, exactly as the server does: queries carry their input as ?input=<json>, and
     // the response reports which page was served plus the totals the pager renders.
     const input = JSON.parse(url.searchParams.get("input") ?? "{}") as { page?: number; perPage?: number }
@@ -76,9 +76,9 @@ window.fetch = async (input, init) => {
     const page = Math.min(Math.max(1, input.page ?? 1), pageCount)
     return json({ items: items.slice((page - 1) * perPage, page * perPage), total: items.length, page, pageCount })
   }
-  if (url.pathname === "/rpc/codexModels") return json(codexModels)
-  if (url.pathname === "/rpc/dispatchPreferencesGet") return json(preferences)
-  if (url.pathname === "/rpc/githubDispatchBatch") {
+  if (url.pathname === "/_frizz/rpc/codexModels") return json(codexModels)
+  if (url.pathname === "/_frizz/rpc/dispatchPreferencesGet") return json(preferences)
+  if (url.pathname === "/_frizz/rpc/githubDispatchBatch") {
     // Isolated seam: the fixture never starts a worker. It records the payload so a test can assert
     // that what dispatches is exactly what the human watched themselves check.
     dispatched.push(JSON.parse(String(init?.body ?? "{}")))

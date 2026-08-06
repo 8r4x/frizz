@@ -26,10 +26,10 @@ const PNG_1x1 = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HA
 const nativeFetch = window.fetch.bind(window)
 window.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, window.location.href)
-  if (url.pathname === "/local-image") {
+  if (url.pathname === "/_frizz/local-image") {
     return new Response(PNG_1x1, { headers: { "content-type": "image/png" } })
   }
-  if (url.pathname === "/rpc/openLocalFile") {
+  if (url.pathname === "/_frizz/rpc/openLocalFile") {
     ;(window as Window & { __openedLocalPath?: string }).__openedLocalPath =
       JSON.parse((init?.body as string) ?? "{}").path
     return new Response(JSON.stringify({ result: { action: "opened", path: "opened" } }), {

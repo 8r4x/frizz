@@ -1,5 +1,6 @@
 import { subscribe } from "valtio"
 import { store, topThreadSlug, closeDrawersById } from "../store.ts"
+import { innerPath, outerPath } from "./base-path.ts"
 
 // URL ⇄ state sync, SPA-style. Paths: `/` (the unified queue — the only page), `/thread/<slug>`
 // (the queue with that thread open in the drawer STACK's topmost thread layer — there is no
@@ -84,7 +85,7 @@ function applyPath(path: string): void {
 // and it fires on the very render the board lands — the same render that replaces App's boot spinner
 // with the queue, so the sheet and the page behind it appear together.
 export function primeRoute(path = location.pathname): void {
-  applyPath(path)
+  applyPath(innerPath(path))
 }
 
 export function startRouter(): () => void {
@@ -92,7 +93,7 @@ export function startRouter(): () => void {
   primeRoute()
 
   const unsub = subscribe(store, () => {
-    const path = currentPath()
+    const path = outerPath(currentPath())
     if (path === location.pathname) return
     // A NEW topmost thread pushes history; unwinding or non-thread transitions replace.
     const openingThread = path.startsWith("/thread/")
@@ -101,7 +102,7 @@ export function startRouter(): () => void {
   })
 
   // URL → state (back/forward, hand-edited paths).
-  const onPop = () => applyPath(location.pathname)
+  const onPop = () => applyPath(innerPath(location.pathname))
   window.addEventListener("popstate", onPop)
   return () => {
     unsub()

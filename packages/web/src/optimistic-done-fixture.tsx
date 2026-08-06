@@ -91,7 +91,7 @@ const telemetry: RpcTelemetry = { delayMs: RPC_DELAY_MS, completeCalledAt: null,
 const originalFetch = window.fetch
 window.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : (input as Request).url ?? input.toString(), location.origin)
-  if (url.pathname === "/rpc/threadTranscript" || url.pathname === "/rpc/threadTranscriptEarlier") {
+  if (url.pathname === "/_frizz/rpc/threadTranscript" || url.pathname === "/_frizz/rpc/threadTranscriptEarlier") {
     const slug = slugFromBody(init) ?? CARDS[0].id
     const card = CARDS.find((c) => c.id === slug) ?? CARDS[0]
     return new Response(JSON.stringify({ result: transcriptFor(card.id, card.title) }), { headers: { "content-type": "application/json" } })
@@ -100,7 +100,7 @@ window.fetch = async (input, init) => {
   // resting shell + prove it stopped) before responding, THEN board.refresh() drops the row. We model that
   // with a fixed delay and prune the board only when the (delayed) response resolves. The card must already
   // be fading well before this point — that is the whole fix.
-  if (url.pathname === "/rpc/completeThread") {
+  if (url.pathname === "/_frizz/rpc/completeThread") {
     const slug = slugFromBody(init)
     telemetry.completeCalledAt = performance.now()
     // ?needsConfirmation=1 models a mispredict / executing turn. FAITHFUL to the server: it returns
@@ -132,7 +132,7 @@ window.fetch = async (input, init) => {
     telemetry.completeResolvedAt = performance.now()
     return new Response(JSON.stringify({ result: { needsConfirmation: false } }), { headers: { "content-type": "application/json" } })
   }
-  if (url.pathname.startsWith("/rpc/")) {
+  if (url.pathname.startsWith("/_frizz/rpc/")) {
     return new Response(JSON.stringify({ result: {} }), { headers: { "content-type": "application/json" } })
   }
   return originalFetch(input, init)

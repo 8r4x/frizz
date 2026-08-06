@@ -147,7 +147,7 @@ store.drawers = []
 const originalFetch = window.fetch
 window.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : ((input as Request).url ?? input.toString()), location.origin)
-  if (url.pathname.startsWith("/rpc/")) {
+  if (url.pathname.startsWith("/_frizz/rpc/")) {
     return new Response(JSON.stringify({ result: null }), { headers: { "content-type": "application/json" } })
   }
   return originalFetch(input, init)

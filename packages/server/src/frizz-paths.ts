@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
-import { homedir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 
 // WHERE FRIZZ'S MACHINE-GLOBAL STATE LIVES.
@@ -164,6 +165,24 @@ export function frizzRoots(): FrizzPaths {
 /** Test-only: drop the memo so a case can resolve under a different HOME or platform. */
 export function resetFrizzRoots(): void {
   cached = undefined
+}
+
+/**
+ * A temp directory no other install or OS user can collide inside.
+ *
+ * `$TMPDIR` is per-user on macOS (`/var/folders/…`, drwx------) but on Linux it is normally unset,
+ * so it means a world-shared `/tmp`. A bare `/tmp/frizz-<name>` is therefore shared between two OS
+ * accounts AND between two installs of one account: the first creator sets the mode, and the second
+ * writer gets EACCES or silently prunes the first one's files.
+ *
+ * Keying the DIRECTORY on a path that lives under $HOME is the fix already used for the broker
+ * sockets (claude-broker-host.ts). Pass a state dir for per-PROJECT isolation, or leave the default
+ * for per-install — which is enough wherever the filenames are already content- or id-addressed and
+ * only a sweep is destructive.
+ */
+export function frizzTempDir(name: string, key?: string): string {
+  const digest = createHash("sha256").update(key ?? frizzRoots().data).digest("hex").slice(0, 16)
+  return join(tmpdir(), `${name}-${digest}`)
 }
 
 /** `<data>/projects/<id>` — a project's own directory, and the value of `stateDir` everywhere. */

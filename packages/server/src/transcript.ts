@@ -29,6 +29,7 @@ import { discoverTranscriptId, DISCOVERY_GRACE_MS } from "./discover.ts"
 import { isClaudeAuthErrorText } from "./tailer.ts"
 import { redactCredentialStructure, redactCredentialSyntax } from "./credential-redaction.ts"
 import { hasEscapingBackgroundJob } from "../../../cc-worker/hooks/bash-background.mjs"
+import { frizzTempDir } from "./frizz-paths.ts"
 
 // Parse a session JSONL into a renderable conversation — mechanically, no AI. Same defensive
 // posture as the tailer: bad line → skip, unknown type → ignore, never throw. Assistant messages
@@ -1067,7 +1068,10 @@ const IMAGE_MEDIA_EXT: Record<string, string> = {
 
 // Directory for decoded tool-result screenshots. Under the OS temp dir so it is already a trusted root
 // for the /local-image route (app.ts) — the client serves these paths without any allowlist change.
-const SCREENSHOT_CACHE_DIR = join(tmpdir(), "frizz-tool-images")
+// Per-install: pruneScreenshotCache() unlinks the oldest entries past a cap across the WHOLE
+// directory, so a shared one means one install deleting another's cache. Filenames are id-hashed,
+// so nothing needs per-project isolation here — only the sweep does.
+const SCREENSHOT_CACHE_DIR = frizzTempDir("frizz-tool-images")
 // Defensive cap on retained decoded images: a long-lived server driving many screenshot QA loops would
 // otherwise grow the cache without bound. Oldest-by-mtime are pruned past this on the rare write path.
 const SCREENSHOT_CACHE_MAX = 200

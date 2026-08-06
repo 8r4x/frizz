@@ -1,0 +1,141 @@
+import type { AppContext, ContextOptions } from "./context.ts"
+import { projectContextCleanups } from "./context.ts"
+import type { Project } from "./project.ts"
+import { log as frizzLog } from "./logging.ts"
+
+// ONE PROCESS, N PROJECTS.
+//
+// `startServer` used to build exactly one AppContext and tear it down at process exit. That is the
+// assumption plans/singleton-frizz.md §4 item 2 calls out: there was no way to open a second project,
+// and no way to close one without closing the server.
+//
+// This is the keyed map that replaces it — projectId → AppContext, with activate/deactivate. The
+// AppContext itself needed no changes to get here: it is already a per-call object, documented as
+// "derived once at boot and threaded through", with zero `process.chdir`, zero `process.env`
+// mutation, and every module-level cache keyed by absolute path or genuinely machine-global.
+//
+// THE ERROR BOUNDARY LIVES HERE (§4 item 3). Per-subsystem guards are already good — tailer ticks,
+// board rebuilds, `fs.watch` setup and transcript discovery are each individually caught. What was
+// missing is a catch at the AppContext SEAM, so one project's corrupt `ui.db` or malformed `.frizz/`
+// cannot take down every other project in a shared process. `activate` therefore reports and returns
+// undefined rather than throwing: a project that will not open is one dead card, not an outage.
+
+export interface TenantMapOptions<App = unknown> {
+  /** Builds the HTTP app for a tenant. Without it the map holds contexts only. */
+  createApp?: (ctx: AppContext) => App
+  /**
+   * Close what createApp built. Runs FIRST in a deactivation, before any of the context's own
+   * subsystems: a transport still serving a board whose storage has just closed is the one ordering
+   * that produces errors instead of a clean stop.
+   */
+  closeApp?: (app: App) => void | Promise<void>
+  /** Injected so a test can build a context without the real one. Defaults to `createContext`. */
+  createContext: (opts: ContextOptions) => AppContext | Promise<AppContext>
+  /** Extra options every tenant's context is built with (claudeBin, codexBin, …). */
+  contextOptions?: Omit<ContextOptions, "project">
+  onError?: (project: Project, error: unknown) => void
+}
+
+export interface TenantMap<App = unknown> {
+  /** Open a project, or return the already-open one. `undefined` means it failed and was reported. */
+  activate(project: Project): Promise<AppContext | undefined>
+  /**
+   * Take ownership of a context somebody else built.
+   *
+   * The project the server was LAUNCHED from is built by startServer's own boot phases, because its
+   * failure is a boot failure — it must roll back and abort, not be caught and reported as one dead
+   * card the way an additional project is. Adopting the result afterwards makes it addressable here
+   * without moving that boot path, and without giving `activate` a second failure mode.
+   */
+  adopt(project: Project, ctx: AppContext, app?: App): AppContext
+  /** The HTTP app for an OPEN project, if one was built. */
+  appFor(projectId: string): App | undefined
+  get(projectId: string): AppContext | undefined
+  /** Close one project's resources while every other project keeps serving. */
+  deactivate(projectId: string): Promise<boolean>
+  /** Every open project, in activation order. */
+  active(): { project: Project; ctx: AppContext; app?: App }[]
+  closeAll(): Promise<void>
+}
+
+export function createTenantMap<App = unknown>(options: TenantMapOptions<App>): TenantMap<App> {
+  const open = new Map<string, { project: Project; ctx: AppContext; app?: App }>()
+  // An activation in flight, so two concurrent openings of one project build ONE context rather than
+  // two racing SQLite handles onto the same file.
+  const opening = new Map<string, Promise<AppContext | undefined>>()
+
+  const report = (project: Project, error: unknown): void => {
+    const detail = error instanceof Error ? error.stack ?? error.message : String(error)
+    frizzLog.error("tenants", `project ${project.name} (${project.id}) failed to open: ${detail}`)
+    options.onError?.(project, error)
+  }
+
+  async function activate(project: Project): Promise<AppContext | undefined> {
+    const already = open.get(project.id)
+    if (already) return already.ctx
+    const inFlight = opening.get(project.id)
+    if (inFlight) return inFlight
+
+    const attempt = (async () => {
+      try {
+        const ctx = await options.createContext({ ...options.contextOptions, project })
+        open.set(project.id, { project, ctx, app: options.createApp?.(ctx) })
+        return ctx
+      } catch (error) {
+        // THE SEAM. createContext already rolls its own partial resources back; what must not happen
+        // is the failure propagating out and ending a process that is serving other projects.
+        report(project, error)
+        return undefined
+      } finally {
+        opening.delete(project.id)
+      }
+    })()
+    opening.set(project.id, attempt)
+    return attempt
+  }
+
+  async function deactivate(projectId: string): Promise<boolean> {
+    const entry = open.get(projectId)
+    if (!entry) return false
+    // Drop it from the map FIRST: a deactivation that fails half way must not leave a context
+    // reachable that has already had its storage closed.
+    open.delete(projectId)
+    const cleanups = projectContextCleanups(() => entry.ctx)
+    // The same order the process barrier uses, with this tenant's own transports at the front.
+    for (const [name, run] of [
+      ["transports", async () => { if (entry.app !== undefined) await options.closeApp?.(entry.app) }],
+      ["tailer", cleanups.tailer],
+      ["login utility", cleanups.loginUtility],
+      ["subscriptions", cleanups.subscriptions],
+      ["scheduler", cleanups.scheduler],
+      ["board", cleanups.board],
+      ["Codex app-server bridge", cleanups.bridge],
+      ["storage", cleanups.storage],
+    ] as const) {
+      try {
+        await run()
+      } catch (error) {
+        // Keep going. A stuck subsystem must not strand the ones after it — storage above all, which
+        // is the one whose handle actually has to be released.
+        const detail = error instanceof Error ? error.message : String(error)
+        frizzLog.error("tenants", `project ${entry.project.name}: ${name} did not close cleanly: ${detail}`)
+      }
+    }
+    return true
+  }
+
+  return {
+    activate,
+    adopt(project, ctx, app) {
+      open.set(project.id, { project, ctx, app })
+      return ctx
+    },
+    appFor: (projectId) => open.get(projectId)?.app,
+    get: (projectId) => open.get(projectId)?.ctx,
+    deactivate,
+    active: () => [...open.values()],
+    async closeAll() {
+      for (const id of [...open.keys()]) await deactivate(id)
+    },
+  }
+}

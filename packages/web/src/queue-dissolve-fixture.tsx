@@ -85,7 +85,7 @@ function slugFromBody(init?: RequestInit): string | null {
 const originalFetch = window.fetch
 window.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : (input as Request).url ?? input.toString(), location.origin)
-  if (url.pathname === "/rpc/threadTranscript" || url.pathname === "/rpc/threadTranscriptEarlier") {
+  if (url.pathname === "/_frizz/rpc/threadTranscript" || url.pathname === "/_frizz/rpc/threadTranscriptEarlier") {
     const slug = slugFromBody(init) ?? CARDS[0].id
     const card = CARDS.find((c) => c.id === slug) ?? CARDS[0]
     return new Response(JSON.stringify({ result: transcriptFor(card.id, card.title) }), { headers: { "content-type": "application/json" } })
@@ -97,7 +97,7 @@ window.fetch = async (input, init) => {
   // the thread from store.board — the card must STILL dissolve fully even though the board drops it (the
   // exit is decoupled from the board push in TodosView). Without that decoupling the card unmounts
   // instantly and no animation plays.
-  if (url.pathname === "/rpc/completeThread") {
+  if (url.pathname === "/_frizz/rpc/completeThread") {
     const slug = slugFromBody(init)
     if (slug && store.board) {
       store.board = { ...store.board, threads: store.board.threads.filter((t) => t.id !== slug) } as BoardSnapshot
@@ -106,14 +106,14 @@ window.fetch = async (input, init) => {
   }
   // A reply (answering the card's question) clears the queue in production once the agent's turn
   // starts; model that by pruning the thread so the resolve() 8s guard never reappears the card.
-  if (url.pathname === "/rpc/followUp") {
+  if (url.pathname === "/_frizz/rpc/followUp") {
     const slug = slugFromBody(init)
     if (slug && store.board) {
       store.board = { ...store.board, threads: store.board.threads.filter((t) => t.id !== slug) } as BoardSnapshot
     }
     return new Response(JSON.stringify({ result: {} }), { headers: { "content-type": "application/json" } })
   }
-  if (url.pathname.startsWith("/rpc/")) {
+  if (url.pathname.startsWith("/_frizz/rpc/")) {
     return new Response(JSON.stringify({ result: {} }), { headers: { "content-type": "application/json" } })
   }
   return originalFetch(input, init)

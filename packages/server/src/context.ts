@@ -53,6 +53,8 @@ import {
   type ShutdownDiagnostic,
 } from "./shutdown.ts"
 import { log as frizzLog } from "./logging.ts"
+import { projectScopedEnvironment } from "./project-launch.ts"
+import { homedir } from "node:os"
 
 export const CONTEXT_STARTUP_CLEANUP_TIMEOUT_MS = 4_000
 
@@ -168,6 +170,12 @@ export interface ContextOptions {
   codexBin?: string // injectable app-server executable; unused unless the bridge flag is enabled
   // startServer pins the owner-verified project before any SQLite/tailer/scheduler initialization.
   project?: Project
+  /**
+   * The home whose `~/.frizz` holds the machine-level settings. Injectable so a test can point at a
+   * sandbox: these were pure storage reads before machine settings existed, and a defaulted home is
+   * exactly how a test run silently rewrote the maintainer's own `notifications` flag.
+   */
+  home?: string
   /** Internal deterministic construction/rollback seam. */
   startup?: {
     afterPhase?: (phase: ContextStartupPhase) => void
@@ -372,6 +380,38 @@ export function needsFreshProcessForLimit(
  * every already-created timer, observer, bridge, watcher and storage handle drains behind the same
  * bounded lifecycle barrier before the error crosses the ownership boundary.
  */
+/**
+ * The per-PROJECT half of a shutdown, named so a caller can order it against its own phases.
+ *
+ * Process-level transports — the HTTP server, the terminal socket, the app socket, Vite — belong to
+ * the server, not to any one project, and stay with startServer. Everything here belongs to a single
+ * AppContext, which is what makes it reusable: today startServer runs these once at exit, and a
+ * tenant lifecycle runs the same set when one project is deactivated while others keep serving.
+ *
+ * Every entry tolerates a MISSING context on purpose. Each shutdown phase is requiredForStorage by
+ * default, so a TypeError here would not merely log — it would fail the whole barrier with "could not
+ * safely close storage", turning a recoverable startup failure into a wedged one.
+ */
+export function projectContextCleanups(get: () => AppContext | undefined): {
+  tailer: () => void
+  loginUtility: () => void
+  subscriptions: () => void
+  scheduler: () => Promise<void>
+  board: () => Promise<void>
+  bridge: () => Promise<void>
+  storage: () => void
+} {
+  return {
+    tailer: () => get()?.tailer.stop(),
+    loginUtility: () => get()?.loginUtility?.stop(),
+    subscriptions: () => get()?.stopSubscriptions(),
+    scheduler: async () => { await get()?.scheduler.stop() },
+    board: async () => { await get()?.board.stop() },
+    bridge: async () => { await get()?.codexAppServer?.shutdown() },
+    storage: () => get()?.storage.close(),
+  }
+}
+
 export async function createContext(opts: ContextOptions = {}): Promise<AppContext> {
   const resources: PartialContextResources = {}
   const cleanup = partialContextCleanup(resources)
@@ -416,6 +456,7 @@ export async function createContext(opts: ContextOptions = {}): Promise<AppConte
 }
 
 function createContextUnchecked(opts: ContextOptions, resources: PartialContextResources): AppContext {
+  const home = opts.home ?? homedir()
   const project = opts.project ?? resolveProject()
   // Isolate this instance's tmux server by PROJECT (C3): two frizz instances sharing one
   // `tmux -L frizz` server would collide on frizz-<slug> session names. Derive the socket from the
@@ -603,7 +644,15 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         onEvent: (slug, sessionId, event) => claudeRuntimeIngest?.onEvent(slug, sessionId, event),
         stateDir: project.stateDir,
         executablePath: opts.claudeBin ?? "claude",
-        env: Object.fromEntries(Object.entries(process.env).filter(([, v]) => v != null)) as Record<string, string>,
+        // Scoped to THIS project, not to whichever one launched the server — see
+        // projectScopedEnvironment. A raw process.env spread is how project A identity would reach
+        // project B agent once one process holds both.
+        env: projectScopedEnvironment(process.env, {
+          projectId: project.id,
+          projectDir: project.dir,
+          stateDir: project.stateDir,
+          ...(project.identityScope ? { identityScope: project.identityScope } : {}),
+        }),
         // Route Claude tool-permission escalations to the dashboard approval UI (provider-neutral
         // InteractionStore; the same store + web cards codex approvals use).
         interactions: storage.interactions,
@@ -726,7 +775,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     project,
     storage,
     board,
-    getSettings: () => getSettings(storage),
+    getSettings: () => getSettings(storage, home),
     claudeBin: opts.claudeBin,
     backendFor,
     codexAppServer,
@@ -791,7 +840,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         })
       }
       resumeThread(
-        { project, storage, board, getSettings: () => getSettings(storage), backendFor },
+        { project, storage, board, getSettings: () => getSettings(storage, home), backendFor },
         slug,
         deliveryMessage,
         undefined,
@@ -824,9 +873,9 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     scheduler,
     stopSubscriptions,
     backendFor,
-    getSettings: () => getSettings(storage),
-    setSettings: (s) => setSettings(storage, s),
-    resetSettings: () => resetSettings(storage),
+    getSettings: () => getSettings(storage, home),
+    setSettings: (s) => setSettings(storage, s, home),
+    resetSettings: () => resetSettings(storage, home),
     claudeBin: opts.claudeBin,
     codexBin: opts.codexBin,
     loginUtility: createLoginUtility({ claudeBin: opts.claudeBin, codexBin: opts.codexBin, cwd: project.dir }),

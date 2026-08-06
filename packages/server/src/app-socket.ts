@@ -3,7 +3,7 @@ import type { Duplex } from "node:stream"
 import { createHash } from "node:crypto"
 import { WebSocketServer, type WebSocket } from "ws"
 import type { BoardSnapshot, ServerEvent, SocketServerMsg, TranscriptMessage } from "@frizz/shared"
-import { SocketClientMsg } from "@frizz/shared"
+import { SocketClientMsg, frizzRoute } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import type { Emitter } from "./bus.ts"
 import type { Project } from "./project.ts"
@@ -17,7 +17,7 @@ import { isTrustedLocalWebSocketRequest, rejectWebSocketUpgrade } from "./local-
 // per-thread transcript PUSH (replacing the client's 1.5s threadTranscript poll). index.ts routes the
 // /ws upgrade here; terminals stay on /term/:slug.
 
-const WS_PATH = "/ws"
+const WS_PATH = frizzRoute("/ws")
 
 function isWsPath(url: string | undefined): boolean {
   return (url ?? "").split("?")[0] === WS_PATH

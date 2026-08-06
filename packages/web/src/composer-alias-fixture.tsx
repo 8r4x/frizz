@@ -95,15 +95,15 @@ const worker: WorkerTelemetry = { sent: [], rpc: [] }
 const originalFetch = window.fetch
 window.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : (input as Request).url ?? input.toString(), location.origin)
-  if (!url.pathname.startsWith("/rpc/")) return originalFetch(input, init)
-  worker.rpc.push(url.pathname.slice("/rpc/".length))
-  if (url.pathname === "/rpc/threadTranscript" || url.pathname === "/rpc/threadTranscriptEarlier") {
+  if (!url.pathname.startsWith("/_frizz/rpc/")) return originalFetch(input, init)
+  worker.rpc.push(url.pathname.slice("/_frizz/rpc/".length))
+  if (url.pathname === "/_frizz/rpc/threadTranscript" || url.pathname === "/_frizz/rpc/threadTranscriptEarlier") {
     return new Response(
       JSON.stringify({ result: { messages, transcriptKey: `${SLUG}-key`, hasEarlier: false, historyLoaded: false } }),
       { headers: { "content-type": "application/json" } },
     )
   }
-  if (url.pathname === "/rpc/followUp") {
+  if (url.pathname === "/_frizz/rpc/followUp") {
     try {
       const parsed = typeof init?.body === "string" ? (JSON.parse(init.body) as { message?: string }) : null
       worker.sent.push(parsed?.message ?? "")

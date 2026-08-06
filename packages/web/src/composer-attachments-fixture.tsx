@@ -20,8 +20,8 @@ const PNG = Uint8Array.from(
 const originalFetch = window.fetch
 window.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : (input as Request).url ?? input.toString(), location.origin)
-  if (url.pathname === "/local-image") return new Response(PNG, { headers: { "content-type": "image/png" } })
-  if (url.pathname.startsWith("/rpc/")) return new Response(JSON.stringify({ result: {} }), { headers: { "content-type": "application/json" } })
+  if (url.pathname === "/_frizz/local-image") return new Response(PNG, { headers: { "content-type": "image/png" } })
+  if (url.pathname.startsWith("/_frizz/rpc/")) return new Response(JSON.stringify({ result: {} }), { headers: { "content-type": "application/json" } })
   return originalFetch(input, init)
 }
 

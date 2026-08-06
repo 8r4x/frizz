@@ -21,6 +21,7 @@ import {
   type ProcessGeneration,
   type ProcessGenerationObservation,
   type ProcessPlatformAdapter,
+  projectScopedEnvironment,
   type ProjectLaunchTarget,
 } from "./project-launch.ts"
 import { startServer } from "./index.ts"
@@ -505,4 +506,46 @@ test("real SIGKILL recovery follows canonical main and linked-worktree root move
     await stopChild(repeated.child)
     await stopChild(successor.child)
   }
+})
+
+// One Frizz per machine means one process.env for N projects. A raw spread of it into a forked agent
+// is project A's identity arriving in project B's worker — a wrong value is silently obeyed, where a
+// missing one just makes the consumer resolve for itself. So scoped keys are STRIPPED, not filtered.
+test("projectScopedEnvironment strips the launching project's identity and restates this one's", () => {
+  const launched = {
+    PATH: "/usr/bin",
+    HOME: "/Users/x",
+    FRIZZ_LAUNCH_PROJECT_ID: "aaaaaaaa-0000-4000-8000-000000000000",
+    FRIZZ_LAUNCH_PROJECT_DIR: "/repos/launcher-project",
+    FRIZZ_LAUNCH_STATE_DIR: "/state/launcher-project",
+    FRIZZ_LAUNCH_IDENTITY_SCOPE: "worktree",
+    FRIZZ_LAUNCH_OWNER_TOKEN: "someone-elses-token",
+    FRIZZ_LAUNCH_TMUX_SOCKET: "/tmp/old.sock",
+    FRIZZ_STATE_DIR: "/state/launcher-project",
+    FRIZZ_PERM_DIR: "/state/launcher-project/perm-requests",
+    FRIZZ_LOG_FILE: "/state/launcher-project/logs/run.log",
+    FRIZZ_THREAD: "some-other-threads-slug",
+  }
+  const mine = {
+    projectId: "bbbbbbbb-0000-4000-8000-000000000000",
+    projectDir: "/repos/mine",
+    stateDir: "/state/mine",
+  }
+
+  const env = projectScopedEnvironment(launched, mine)
+
+  assert.equal(env.PATH, "/usr/bin", "ordinary environment is inherited untouched")
+  assert.equal(env.HOME, "/Users/x")
+  assert.equal(env.FRIZZ_LAUNCH_PROJECT_ID, mine.projectId, "restated for the project that owns the fork")
+  assert.equal(env.FRIZZ_LAUNCH_PROJECT_DIR, mine.projectDir)
+  assert.equal(env.FRIZZ_LAUNCH_STATE_DIR, mine.stateDir)
+  assert.equal(env.FRIZZ_LAUNCH_IDENTITY_SCOPE, "repository", "not the launcher's worktree scope")
+
+  // Nothing scoped to the launching project or thread may survive.
+  for (const leaked of ["FRIZZ_LAUNCH_TMUX_SOCKET", "FRIZZ_STATE_DIR", "FRIZZ_PERM_DIR", "FRIZZ_LOG_FILE", "FRIZZ_THREAD"]) {
+    assert.equal(env[leaked], undefined, `${leaked} must not reach another project's agent`)
+  }
+  // A token is a capability: never inherited, only granted explicitly.
+  assert.equal(env.FRIZZ_LAUNCH_OWNER_TOKEN, undefined, "no token unless one is passed")
+  assert.equal(projectScopedEnvironment(launched, mine, "my-token").FRIZZ_LAUNCH_OWNER_TOKEN, "my-token")
 })

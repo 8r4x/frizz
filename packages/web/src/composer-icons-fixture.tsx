@@ -16,10 +16,10 @@ const authed = !new URLSearchParams(location.search).has("unauthed")
 const originalFetch = window.fetch
 window.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : (input as Request).url ?? input.toString(), location.origin)
-  if (url.pathname === "/rpc/githubStatus") {
+  if (url.pathname === "/_frizz/rpc/githubStatus") {
     return new Response(JSON.stringify({ result: { inRepo: true, authed } }), { headers: { "content-type": "application/json" } })
   }
-  if (url.pathname.startsWith("/rpc/")) return new Response(JSON.stringify({ result: {} }), { headers: { "content-type": "application/json" } })
+  if (url.pathname.startsWith("/_frizz/rpc/")) return new Response(JSON.stringify({ result: {} }), { headers: { "content-type": "application/json" } })
   return originalFetch(input, init)
 }
 

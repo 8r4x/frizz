@@ -24,6 +24,7 @@ import {
   readStableArtifact,
 } from "./artifacts.ts";
 import { assertLaunchPrerequisites, assertRequiredExecutables } from "./preflight.ts";
+import { DEFAULT_DEV_PORT } from "@frizz/shared";
 import {
   acquireGlobalLaunchLock,
   allocatePort,
@@ -846,7 +847,7 @@ try {
     const allocation = await allocatePort(
       options.port,
       readPreferredPort(workspace.stateDir),
-      { host: bind.host }
+      { host: bind.host, base: DEFAULT_DEV_PORT }
     );
     const port = allocation.port;
     portReservation = allocation.release;

@@ -33,14 +33,14 @@ function terminalRow(slug: string, sessionId: string): SessionRow {
 }
 
 test("parseTermSlug uses the same bounded canonical identity as RPC and tmux", () => {
-  assert.equal(parseTermSlug("/term/valid-thread"), "valid-thread")
+  assert.equal(parseTermSlug("/_frizz/term/valid-thread"), "valid-thread")
   for (const url of [
-    "/term/../escape",
-    "/term/-option",
-    "/term/Upper",
-    "/term/control%0a",
-    "/term/control\nslug",
-    `/term/${"a".repeat(201)}`,
+    "/_frizz/term/../escape",
+    "/_frizz/term/-option",
+    "/_frizz/term/Upper",
+    "/_frizz/term/control%0a",
+    "/_frizz/term/control\nslug",
+    `/_frizz/term/${"a".repeat(201)}`,
   ]) {
     assert.equal(parseTermSlug(url), null, url)
   }
@@ -162,7 +162,7 @@ async function listen(server: Server): Promise<number> {
 }
 
 async function openSocket(port: number, options: ClientOptions = {}, slug = "safe-test"): Promise<WebSocket> {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}/term/${slug}`, {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/_frizz/term/${slug}`, {
     origin: `http://127.0.0.1:${port}`,
     ...options,
   })
@@ -178,7 +178,7 @@ async function rejectedSocket(
   options: ClientOptions = {},
   slug = "safe-test",
 ): Promise<number> {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}/term/${slug}`, options)
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/_frizz/term/${slug}`, options)
   return await new Promise<number>((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error("timed out waiting for terminal rejection")), 1_000)
     ws.once("unexpected-response", (_request, response) => {
@@ -197,7 +197,7 @@ async function rejectedSocket(
 }
 
 async function connectOutcome(port: number, slug: string): Promise<WebSocket | number> {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}/term/${slug}`, {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/_frizz/term/${slug}`, {
     origin: `http://127.0.0.1:${port}`,
   })
   return await new Promise<WebSocket | number>((resolve, reject) => {

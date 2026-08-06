@@ -30,6 +30,7 @@ import {
   type TailStateCache,
 } from "./tail-cache.ts"
 import { log as frizzLog } from "./logging.ts"
+import { frizzTempDir } from "./frizz-paths.ts"
 
 // The JSONL tailer: incrementally reads each registered session's Claude Code transcript
 // (~/.claude/projects/<cwdSlug>/<session_id>.jsonl) to derive liveness telemetry — last activity
@@ -68,6 +69,23 @@ const IDLE_BACKSTOP_MS = 5000
 // catch up with its event stream before handing back to the ordinary poll. See chaseRuntime.
 const RUNTIME_CHASE_MAX = 20
 const POLL_MS = 1000
+// How many sessions may run the FULL-TRANSCRIPT prime fold in one tick.
+//
+// The prime is the expensive half of the tailer by an order of magnitude — measured on real boards:
+// a first tick costs 1.5-7.5s while a warm one costs 4-18ms, and start() used to run that prime
+// synchronously. One project could stall the loop for seconds at boot; a singleton activating several
+// would stall it for the SUM. Bounding the number of newly-primed rows per tick turns that into a few
+// short ticks instead, and costs nothing steady-state because an already-primed row is cheap.
+//
+// A row that does not get primed this tick is simply not in `states` yet, which is the same condition
+// as a row dispatched a second from now — the tick already handles that on every poll.
+const MAX_PRIME_ROWS_PER_TICK = 25
+// …and a wall-clock ceiling on the same pass, because per-row prime cost varies by orders of
+// magnitude: one enormous transcript costs more than fifty ordinary ones. A row count alone left a
+// measured 3853ms tick on a 249-row board. Checked BEFORE each row rather than during, so a single
+// pathological transcript can still overrun it — that row is a pre-existing pathology, not something
+// the bound introduces — but it can no longer be followed by 24 more like it in the same tick.
+const PRIME_BUDGET_MS = 200
 // Ceiling on the adaptive poll (see scheduleTick). A tick this expensive means something is badly
 // wrong, but the tailer is still the only source of turn/liveness telemetry — it must keep running.
 const MAX_POLL_MS = 10_000
@@ -129,7 +147,9 @@ const PRIME_PROGRESS_EVERY = 20
 const DISCOVER_RETRY_MS = 15_000
 // Per-session sink for a captured boot-failure pane, so a stall's root cause (claude's own error text,
 // frozen in the remain-on-exit pane) survives past the pane being killed. Best-effort; inert litter.
-const STALL_LOG_DIR = join(tmpdir(), "frizz-worker-logs")
+// NOTE: per-PROJECT, resolved inside createTailer — the filename is a bare thread slug, so two
+// projects with a thread called `fix-auth` overwrite each other's captured agent output. See
+// stallLogDir below.
 
 export type TurnState = "in-flight" | "idle"
 
@@ -2212,6 +2232,9 @@ export function createTailer(deps: TailerDeps): Tailer {
   const capturePane = deps.capturePane ?? (() => "")
   const capturePanesAsync = deps.capturePanesAsync
   const logDir = deps.sessionLogDir ?? defaultLogDir(deps.project)
+  // Keyed on THIS project's state dir: the stall log is named for a thread slug alone, which is not
+  // unique across projects (and, in a shared /tmp, not across OS users either).
+  const stallLogDir = frizzTempDir("frizz-worker-logs", deps.project.stateDir)
   const mtimeMs = deps.mtimeMs ?? defaultMtimeMs
   const readPermMarker = deps.readPermMarker ?? defaultReadPermMarker(deps.project)
   // The durable prime cache. `undefined` dep ⇒ open the default table in the project DB; `null` ⇒
@@ -3551,8 +3574,8 @@ export function createTailer(deps: TailerDeps): Tailer {
       `thread ${row.slug} (session ${row.session_id}): no transcript ${DISCOVERY_GRACE_MS / 1000}s after dispatch — likely a boot failure. ${isHeadlessRow(row) && !pane.trim() && !authFailure ? "" : "Pane:\n"}${detail.slice(0, 4000)}`,
     )
     try {
-      mkdirSync(STALL_LOG_DIR, { recursive: true })
-      writeFileSync(join(STALL_LOG_DIR, `${row.slug}.stall.log`), `session_id: ${row.session_id}\ncaptured_at: ${new Date(now()).toISOString()}\n\n${detail}\n`)
+      mkdirSync(stallLogDir, { recursive: true })
+      writeFileSync(join(stallLogDir, `${row.slug}.stall.log`), `session_id: ${row.session_id}\ncaptured_at: ${new Date(now()).toISOString()}\n\n${detail}\n`)
     } catch {
       // best-effort — a missing sink is inert
     }
@@ -3636,6 +3659,10 @@ export function createTailer(deps: TailerDeps): Tailer {
     adoptionBindings = new Map()
     const rows = deps.storage.allSessions()
     let primed = 0
+    // Newly-primed rows this tick, and whether the bound cut the pass short (see MAX_PRIME_ROWS_PER_TICK).
+    let primedRows = 0
+    const tickStartedMs = performance.now()
+    primeIncomplete = false
     for (const row of rows) {
       if (primeProgress && primed % PRIME_PROGRESS_EVERY === 0) primeProgress(primed, rows.length)
       primed++
@@ -3696,6 +3723,19 @@ export function createTailer(deps: TailerDeps): Tailer {
       // whole transcript to date and adopt its state as the baseline WITHOUT firing turn-done /
       // exited notifies — those pre-restart events are history, not new activity.
       if (!state.primed) {
+        // Bounded so activation never blocks the loop for seconds. The row keeps its place in the
+        // registry and primes on a following tick; scheduleTick below re-arms immediately while any
+        // remain, so a cold board converges in a few hundred ms of wall time without a long stall.
+        // `primedRows > 0` guarantees forward progress: the very first cold row of a tick always
+        // primes, however expensive, so a board can never stall by being over budget on entry.
+        if (
+          primedRows >= MAX_PRIME_ROWS_PER_TICK ||
+          (primedRows > 0 && performance.now() - tickStartedMs > PRIME_BUDGET_MS)
+        ) {
+          primeIncomplete = true
+          continue
+        }
+        primedRows++
         const primeOffset = state.offset
         const primeLedger = ledgerFold(row, nowMs)
         consume(state, backend, chainOnLine(primeLedger.onLine, codexSubAgentOnLine(row, state)))
@@ -3988,6 +4028,10 @@ export function createTailer(deps: TailerDeps): Tailer {
   // Duration of the most recent tick — read by the self-scheduling poll below so a tick that costs more
   // than its own period yields the event loop for at least as long as it just held it.
   let lastTickMs = 0
+  // Set by a tick that hit MAX_PRIME_ROWS_PER_TICK — there are still cold rows waiting. scheduleTick
+  // re-arms immediately in that case so a cold board converges in a burst of short ticks rather than
+  // one row-block per second.
+  let primeIncomplete = false
   function tickWithBudget(): void {
     const started = performance.now()
     try {
@@ -4029,7 +4073,11 @@ export function createTailer(deps: TailerDeps): Tailer {
   }
 
   function scheduleTick(): void {
-    const delay = Math.min(MAX_POLL_MS, Math.max(POLL_MS, Math.round(lastTickMs)))
+    // While rows are still cold, come straight back: each pass is bounded, so this is a burst of short
+    // ticks, not a stall. setImmediate-scale rather than 0 so I/O and pending RPCs interleave.
+    const delay = primeIncomplete
+      ? 1
+      : Math.min(MAX_POLL_MS, Math.max(POLL_MS, Math.round(lastTickMs)))
     timer = setTimeout(() => {
       timer = null
       // RE-ARM EVEN IF THE TICK THREW. tickWithBudget is try/finally, not try/catch, so an exception

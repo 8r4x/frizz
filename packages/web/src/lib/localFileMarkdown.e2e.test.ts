@@ -25,7 +25,7 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
     page.on("pageerror", (error) => pageErrors.push(String(error)))
     await page.setRequestInterception(true)
     page.on("request", (request) => {
-      if (request.url().includes("/local-image?path=%2Ffixture%2Fshot.png")) {
+      if (request.url().includes("/_frizz/local-image?path=%2Ffixture%2Fshot.png")) {
         void request.respond({ status: 200, contentType: "image/png", body: PIXEL_PNG })
       } else {
         void request.continue()
@@ -48,7 +48,7 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
     })
     assert.deepEqual(rendered, {
       button: "/fixture/report.md",
-      imageSrc: "/local-image?path=%2Ffixture%2Fshot.png",
+      imageSrc: "/_frizz/local-image?path=%2Ffixture%2Fshot.png",
       imagePath: "/fixture/shot.png",
       imageAlt: "descriptive alt",
       framedIn: "SPAN",

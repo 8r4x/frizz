@@ -13,7 +13,7 @@
  * one server keeps the worker's tool namespace coherent and the server-level pre-approval single.
  *
  * spawn_thread wraps frizz's own dispatch RPC: it reads the running server's port from
- * `<state-dir>/server.lock` and POSTs `/rpc/dispatch`. The `/rpc` surface has no token auth — only a
+ * `<state-dir>/server.lock` and POSTs `/_frizz/rpc/dispatch`. The `/_frizz/rpc` surface has no token auth — only a
  * loopback-origin CSRF gate — so a headerless local POST with `sec-fetch-site: same-origin` (undici
  * sends no Origin) satisfies it.
  *
@@ -265,7 +265,7 @@ function serverLockPort() {
   return port
 }
 
-/** The `spawn_thread` handler: POST /rpc/dispatch, return the worker-facing result text.
+/** The `spawn_thread` handler: POST /_frizz/rpc/dispatch, return the worker-facing result text.
  * @param {Record<string, unknown>} args @returns {Promise<string>} */
 async function spawnThread(args) {
   const prompt = typeof args.prompt === "string" ? args.prompt.trim() : ""
@@ -288,7 +288,7 @@ async function spawnThread(args) {
   const timer = setTimeout(() => controller.abort(), DISPATCH_TIMEOUT_MS)
   let res
   try {
-    res = await fetch(`http://127.0.0.1:${port}/rpc/dispatch`, {
+    res = await fetch(`http://127.0.0.1:${port}/_frizz/rpc/dispatch`, {
       method: "POST",
       // No Origin header (undici omits it for non-browser fetch); `sec-fetch-site: same-origin`
       // satisfies the server's loopback-origin gate (app.ts isTrustedLocalHttpRequest).
@@ -325,7 +325,7 @@ async function callRpc(procedure, body) {
   const timer = setTimeout(() => controller.abort(), DISPATCH_TIMEOUT_MS)
   let res
   try {
-    res = await fetch(`http://127.0.0.1:${port}/rpc/${procedure}`, {
+    res = await fetch(`http://127.0.0.1:${port}/_frizz/rpc/${procedure}`, {
       method: "POST",
       headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" },
       body: JSON.stringify(body),

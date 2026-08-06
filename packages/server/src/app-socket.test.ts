@@ -136,7 +136,7 @@ function collect(ws: WebSocket) {
   }
 }
 
-async function connectClient(port: number, path = "/ws", options: ClientOptions = {}) {
+async function connectClient(port: number, path = "/_frizz/ws", options: ClientOptions = {}) {
   const ws = new WebSocket(`ws://127.0.0.1:${port}${path}`, {
     origin: `http://127.0.0.1:${port}`,
     ...options,
@@ -150,7 +150,7 @@ async function rejectedClientDetails(
   port: number,
   options: ClientOptions = {},
 ): Promise<{ status: number; body: string }> {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, options)
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/_frizz/ws`, options)
   return await new Promise<{ status: number; body: string }>((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error("timed out waiting for /ws rejection")), 1_000)
     ws.once("unexpected-response", (_request, response) => {
@@ -641,7 +641,7 @@ test("resource control: per-origin and global sliding read budgets are fair, typ
   })
   try {
     const originA = await connectClient(h.port)
-    const originB = await connectClient(h.port, "/ws", {
+    const originB = await connectClient(h.port, "/_frizz/ws", {
       origin: `http://localhost:${h.port}`,
       headers: { host: `localhost:${h.port}` },
     })

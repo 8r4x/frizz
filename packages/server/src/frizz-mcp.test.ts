@@ -117,7 +117,7 @@ test("`spawn_thread` POSTs the real dispatch RPC and returns the thread's drawer
     const call = await rpc.next(2)
     assert.equal(call.result.isError, undefined)
     assert.match(call.result.content[0].text, /\[Child\]\(\/thread\/spawned-child\)/)
-    assert.deepEqual(seen, [{ url: "/rpc/dispatch", body: { prompt: "do the thing", model: "opus", effort: "high", title: "Child" } }])
+    assert.deepEqual(seen, [{ url: "/_frizz/rpc/dispatch", body: { prompt: "do the thing", model: "opus", effort: "high", title: "Child" } }])
 
     // model/effort stay REQUIRED server-side, not only in the schema — a lenient client must not be
     // able to skip the deliberate choice.
@@ -165,7 +165,7 @@ test("`recurring_prompt` arms and disarms the CALLING thread, identified from it
     // re-prompted and leaving the mechanism to us; rest is the safe reading, because it cannot talk over
     // a running turn and cannot fire on a thread that has stopped needing it.
     assert.deepEqual(seen.at(-1), {
-      url: "/rpc/setOwnThreadRecurringPrompt",
+      url: "/_frizz/rpc/setOwnThreadRecurringPrompt",
       body: { slug: "owning-thread", prompt: "keep the migration moving", stopHook: true, heartbeat: false },
     })
     // The reply must teach how it ENDS, or a worker only knows how to start one — and it must warn
@@ -182,7 +182,7 @@ test("`recurring_prompt` arms and disarms the CALLING thread, identified from it
     const scheduled = await rpc.next(6)
     assert.equal(scheduled.result.isError, undefined)
     assert.deepEqual(seen.at(-1), {
-      url: "/rpc/setOwnThreadRecurringPrompt",
+      url: "/_frizz/rpc/setOwnThreadRecurringPrompt",
       body: { slug: "owning-thread", prompt: "check the deploy", stopHook: false, heartbeat: true, intervalSeconds: 600 },
     }, "giving a cadence and nothing else means the schedule trigger alone")
     assert.match(scheduled.result.content[0].text, /every 10 min/)
@@ -193,7 +193,7 @@ test("`recurring_prompt` arms and disarms the CALLING thread, identified from it
     })
     await rpc.next(7)
     assert.deepEqual(seen.at(-1), {
-      url: "/rpc/setOwnThreadRecurringPrompt",
+      url: "/_frizz/rpc/setOwnThreadRecurringPrompt",
       body: { slug: "owning-thread", prompt: "keep going", stopHook: true, heartbeat: true, intervalSeconds: 900 },
     }, "both triggers at once is the ordinary keep-this-moving case")
 
@@ -201,7 +201,7 @@ test("`recurring_prompt` arms and disarms the CALLING thread, identified from it
     const stopped = await rpc.next(3)
     assert.equal(stopped.result.isError, undefined)
     assert.deepEqual(seen.at(-1), {
-      url: "/rpc/setOwnThreadRecurringPrompt",
+      url: "/_frizz/rpc/setOwnThreadRecurringPrompt",
       body: { slug: "owning-thread", prompt: null, stopHook: false, heartbeat: false },
     })
 
@@ -255,7 +255,7 @@ test("`timer` resolves in_seconds/at into one exact instant and POSTs the callin
     })
     const set = await rpc.next(2)
     assert.equal(set.result.isError, undefined)
-    assert.equal(seen.at(-1)!.url, "/rpc/setOwnThreadTimer")
+    assert.equal(seen.at(-1)!.url, "/_frizz/rpc/setOwnThreadTimer")
     assert.equal(seen.at(-1)!.body.slug, "owning-thread")
     assert.equal(seen.at(-1)!.body.prompt, "re-check the deploy")
     const fired = Date.parse(seen.at(-1)!.body.fireAt)
@@ -273,11 +273,11 @@ test("`timer` resolves in_seconds/at into one exact instant and POSTs the callin
 
     rpc.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "timer", arguments: { action: "list" } } })
     await rpc.next(4)
-    assert.deepEqual(seen.at(-1), { url: "/rpc/listOwnThreadTimers", body: { slug: "owning-thread" } })
+    assert.deepEqual(seen.at(-1), { url: "/_frizz/rpc/listOwnThreadTimers", body: { slug: "owning-thread" } })
 
     rpc.send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "timer", arguments: { action: "cancel", id: "tmr_abc" } } })
     await rpc.next(5)
-    assert.deepEqual(seen.at(-1), { url: "/rpc/cancelOwnThreadTimer", body: { slug: "owning-thread", id: "tmr_abc" } })
+    assert.deepEqual(seen.at(-1), { url: "/_frizz/rpc/cancelOwnThreadTimer", body: { slug: "owning-thread", id: "tmr_abc" } })
 
     // …and an invented thread argument never reaches the server, exactly as for `recurring_prompt`.
     rpc.send({

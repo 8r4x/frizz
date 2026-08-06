@@ -1,3 +1,5 @@
+import { FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
+import { apiBase, innerPath, APP_ROUTE_SEGMENTS } from "./base-path.ts"
 // Markdown is often written by tools that report local artifacts as links. A browser interprets a
 // POSIX absolute path as a same-origin URL path, which both navigates away from Frizz and produces a
 // deceptive localhost URL. Identify those targets before DOM sanitization so they can never become
@@ -27,8 +29,12 @@ function decodePath(value: string): string {
 // are treated as filesystem paths; ordinary relative links (`docs/foo`), fragments, mailto, and
 // http(s) never reach this classifier.
 function isFrizzRoute(href: string): boolean {
-  return href === "/" || href.startsWith("/?") || href.startsWith("/#")
-    || /^\/(?:thread|status)(?:\/|$)/.test(href)
+  if (href === "/" || href.startsWith("/?") || href.startsWith("/#")) return true
+  // Strip this page's project prefix first. Under `/nub/thread/x` the in-app link IS `/nub/thread/x`,
+  // and without this it reads as a filesystem path and renders as a disabled local-file chip.
+  const inner = innerPath(href.replace(/[?#].*$/u, ""))
+  const first = inner.split("/")[1] ?? ""
+  return APP_ROUTE_SEGMENTS.has(first)
 }
 
 /**
@@ -65,7 +71,7 @@ export function localMarkdownTarget(raw: string | null | undefined): LocalMarkdo
 }
 
 export function localImageUrl(path: string): string {
-  return `/local-image?path=${encodeURIComponent(path)}`
+  return `${apiBase()}/local-image?path=${encodeURIComponent(path)}`
 }
 
 // Must match the server's image-content-type allowlist. The server still decides whether a path is
