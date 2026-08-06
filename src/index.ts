@@ -24,7 +24,7 @@ import {
   readStableArtifact,
 } from "./artifacts.ts";
 import { assertLaunchPrerequisites, assertRequiredExecutables } from "./preflight.ts";
-import { DEFAULT_DEV_PORT } from "@frizz/shared";
+import { DEFAULT_DEV_PORT, fallbackPort } from "@frizz/shared";
 import {
   acquireGlobalLaunchLock,
   allocatePort,
@@ -63,6 +63,8 @@ import {
   verifyProjectLaunchDelegate,
   type ProjectLaunchLease,
 } from "@frizz/server/project-launch";
+import { registerProject } from "@frizz/server/project-registry";
+import { resolveProjectLabel } from "@frizz/server/project-identity";
 
 function fail(error: unknown): never {
   console.error(`frizz: ${error instanceof Error ? error.message : error}`);
@@ -529,8 +531,74 @@ async function claimProjectLaunch(): Promise<
  * plane's private child port as well ("server on http://127.0.0.1:51739") — two ports, no indication
  * which was real. That port is an implementation detail and now goes to the log only.
  */
-async function openOrPrint(port: number, reused: boolean): Promise<void> {
-  const url = `http://127.0.0.1:${port}`;
+/**
+ * This project's URL segment, registering it with the machine if it has not been seen before.
+ *
+ * `/` is the project grid now, so a board lives at `/<slug>` — including the board we are about to
+ * launch. Registration is idempotent: an id already in the registry keeps the slug it was given.
+ */
+function ownSlug(): string | undefined {
+  try {
+    return registerProject(
+      {
+        dir: workspace.root,
+        id: workspaceLaunchTarget(workspace).projectId,
+        remoteOwner: resolveProjectLabel(workspace.root)?.split("/")[0],
+      },
+      homedir()
+    ).entry?.slug;
+  } catch {
+    // The registry is an INDEX. If it cannot be written, opening the board unprefixed still works.
+    return undefined;
+  }
+}
+
+/**
+ * A frizz-dev already running on this machine, serving THIS project under its own slug.
+ *
+ * The same client-not-a-server move the published launcher makes, and it matters more here: this is
+ * the command the maintainer actually runs, in four repositories. Without it a second `frizz-dev`
+ * would start a second server rather than joining the one that is already serving every project.
+ *
+ * The identity check is the launcher's own handshake minus the owner proof — that proof is keyed to a
+ * launch LEASE and a client holds none. What a client needs to know is that this port serves ITS id
+ * from ITS directory, which is exactly what the id and dir answer.
+ */
+async function joinRunningFrizz(): Promise<
+  { port: number; slug: string } | undefined
+> {
+  const slug = ownSlug();
+  if (!slug) return undefined;
+  const target = workspaceLaunchTarget(workspace);
+  for (const port of new Set([DEFAULT_DEV_PORT, fallbackPort(DEFAULT_DEV_PORT)])) {
+    if (
+      await probeFrizz(port, {
+        projectId: target.projectId,
+        projectDir: target.projectDir,
+        slug,
+      })
+    )
+      return { port, slug };
+  }
+  return undefined;
+}
+
+let cachedSlugPath: string | undefined;
+/** `/nub`, or `""` when the registry could not answer. Computed once per launch. */
+function slugPath(): string {
+  if (cachedSlugPath === undefined) {
+    const slug = ownSlug();
+    cachedSlugPath = slug ? `/${slug}` : "";
+  }
+  return cachedSlugPath;
+}
+
+async function openOrPrint(
+  port: number,
+  reused: boolean,
+  path = ""
+): Promise<void> {
+  const url = `http://127.0.0.1:${port}${path}`;
   const home = homedir();
   logger.info("launcher", `${reused ? "reusing" : "started"} Frizz at ${url} for ${workspace.root}`);
   if (reused) {
@@ -747,8 +815,15 @@ try {
     process.exit();
   }
   if (before.health && before.port) {
-    await openOrPrint(before.port, true);
+    await openOrPrint(before.port, true, slugPath());
     process.exit(0);
+  }
+  {
+    const joined = await joinRunningFrizz();
+    if (joined) {
+      await openOrPrint(joined.port, true, `/${joined.slug}`);
+      process.exit(0);
+    }
   }
   if (before.owner && !readProjectLaunchOwner(workspace.stateDir)) {
     const owner = before.owner;
@@ -759,7 +834,7 @@ try {
       before = await existingHealth();
     } catch {}
     if (before.health && before.port) {
-      await openOrPrint(before.port, true);
+      await openOrPrint(before.port, true, slugPath());
       process.exit(0);
     }
     throw new Error(
@@ -775,7 +850,7 @@ try {
 
   const projectClaim = await claimProjectLaunch();
   if ("reusePort" in projectClaim) {
-    await openOrPrint(projectClaim.reusePort, true);
+    await openOrPrint(projectClaim.reusePort, true, slugPath());
     process.exit(0);
   }
   const launchOwner = projectClaim;
@@ -833,7 +908,7 @@ try {
     // Another invocation may have completed while this one waited for the allocator lock.
     const after = await existingHealth();
     if (after.health && after.port) {
-      await openOrPrint(after.port, true);
+      await openOrPrint(after.port, true, slugPath());
       release();
       release = undefined;
       launchOwner.release();
