@@ -7,6 +7,7 @@ import { DEFAULT_PORT, FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
 import {
 ContextStartupError,
   createContext,
+  projectContextCleanups,
   initGithub,
   type AppContext,
   type ContextOptions,
@@ -393,18 +394,18 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
   })
   const cleanupTerminal = createRetryableCleanup(async () => { await terminal?.close() })
   const cleanupAppSocket = createRetryableCleanup(async () => { await appSocket?.close() })
-  const cleanupTailer = createRetryableCleanup(() => ctx?.tailer.stop())
-  const cleanupLoginUtility = createRetryableCleanup(() => ctx?.loginUtility?.stop())
-  // `?.` on the RESOURCE too, like loginUtility/profileController beside it. Every shutdown phase is
-  // requiredForStorage by default, so a TypeError here does not just log — it fails the whole barrier
-  // with "could not safely close storage", turning a recoverable startup failure into a wedged one.
-  const cleanupSubscriptions = createRetryableCleanup(() => ctx?.stopSubscriptions())
-  const cleanupScheduler = createRetryableCleanup(async () => { await ctx?.scheduler.stop() })
-  const cleanupBoard = createRetryableCleanup(async () => { await ctx?.board.stop() })
-  const cleanupBridge = createRetryableCleanup(async () => { await ctx?.codexAppServer?.shutdown() })
+  // The per-project half, from context.ts, so one project can be torn down without the server —
+  // `() => ctx` rather than `ctx` because these are built before the context exists.
+  const tenant = projectContextCleanups(() => ctx)
+  const cleanupTailer = createRetryableCleanup(tenant.tailer)
+  const cleanupLoginUtility = createRetryableCleanup(tenant.loginUtility)
+  const cleanupSubscriptions = createRetryableCleanup(tenant.subscriptions)
+  const cleanupScheduler = createRetryableCleanup(tenant.scheduler)
+  const cleanupBoard = createRetryableCleanup(tenant.board)
+  const cleanupBridge = createRetryableCleanup(tenant.bridge)
   const cleanupVite = createRetryableCleanup(async () => { await vite?.close() })
   const cleanupGithub = createRetryableCleanup(async () => { await githubInit })
-  const cleanupStorage = createRetryableCleanup(() => ctx?.storage.close())
+  const cleanupStorage = createRetryableCleanup(tenant.storage)
 
   const createLifecycleBarrier = (): ShutdownBarrier => createShutdownBarrier({
     timeoutMs: opts.shutdownTimeoutMs ?? SERVER_SHUTDOWN_TIMEOUT_MS,

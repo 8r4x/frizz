@@ -372,6 +372,38 @@ export function needsFreshProcessForLimit(
  * every already-created timer, observer, bridge, watcher and storage handle drains behind the same
  * bounded lifecycle barrier before the error crosses the ownership boundary.
  */
+/**
+ * The per-PROJECT half of a shutdown, named so a caller can order it against its own phases.
+ *
+ * Process-level transports — the HTTP server, the terminal socket, the app socket, Vite — belong to
+ * the server, not to any one project, and stay with startServer. Everything here belongs to a single
+ * AppContext, which is what makes it reusable: today startServer runs these once at exit, and a
+ * tenant lifecycle runs the same set when one project is deactivated while others keep serving.
+ *
+ * Every entry tolerates a MISSING context on purpose. Each shutdown phase is requiredForStorage by
+ * default, so a TypeError here would not merely log — it would fail the whole barrier with "could not
+ * safely close storage", turning a recoverable startup failure into a wedged one.
+ */
+export function projectContextCleanups(get: () => AppContext | undefined): {
+  tailer: () => void
+  loginUtility: () => void
+  subscriptions: () => void
+  scheduler: () => Promise<void>
+  board: () => Promise<void>
+  bridge: () => Promise<void>
+  storage: () => void
+} {
+  return {
+    tailer: () => get()?.tailer.stop(),
+    loginUtility: () => get()?.loginUtility?.stop(),
+    subscriptions: () => get()?.stopSubscriptions(),
+    scheduler: async () => { await get()?.scheduler.stop() },
+    board: async () => { await get()?.board.stop() },
+    bridge: async () => { await get()?.codexAppServer?.shutdown() },
+    storage: () => get()?.storage.close(),
+  }
+}
+
 export async function createContext(opts: ContextOptions = {}): Promise<AppContext> {
   const resources: PartialContextResources = {}
   const cleanup = partialContextCleanup(resources)
