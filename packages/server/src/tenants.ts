@@ -31,6 +31,15 @@ export interface TenantMapOptions {
 export interface TenantMap {
   /** Open a project, or return the already-open one. `undefined` means it failed and was reported. */
   activate(project: Project): Promise<AppContext | undefined>
+  /**
+   * Take ownership of a context somebody else built.
+   *
+   * The project the server was LAUNCHED from is built by startServer's own boot phases, because its
+   * failure is a boot failure — it must roll back and abort, not be caught and reported as one dead
+   * card the way an additional project is. Adopting the result afterwards makes it addressable here
+   * without moving that boot path, and without giving `activate` a second failure mode.
+   */
+  adopt(project: Project, ctx: AppContext): AppContext
   get(projectId: string): AppContext | undefined
   /** Close one project's resources while every other project keeps serving. */
   deactivate(projectId: string): Promise<boolean>
@@ -106,6 +115,10 @@ export function createTenantMap(options: TenantMapOptions): TenantMap {
 
   return {
     activate,
+    adopt(project, ctx) {
+      open.set(project.id, { project, ctx })
+      return ctx
+    },
     get: (projectId) => open.get(projectId)?.ctx,
     deactivate,
     active: () => [...open.values()],

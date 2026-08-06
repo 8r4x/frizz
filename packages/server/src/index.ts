@@ -39,6 +39,7 @@ import {
 } from "./project-launch.ts"
 import { createBootProgressPublisher } from "./boot-progress.ts"
 import { log as frizzLog } from "./logging.ts"
+import { createTenantMap } from "./tenants.ts"
 
 export const SERVER_SHUTDOWN_TIMEOUT_MS = 4_000
 export const SERVER_FORCE_EXIT_MS = 5_000
@@ -328,6 +329,13 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
   // Named, incremental boot progress for whatever launcher is waiting on /health (boot-progress.ts).
   const bootProgress = createBootProgressPublisher(project.stateDir)
   let ctx: AppContext | undefined
+  // One process, N projects (tenants.ts). The launching project is adopted below once its own boot
+  // phases have built it; anything opened later goes through activate(), which is where the
+  // AppContext-seam error boundary lives.
+  const tenants = createTenantMap({
+    createContext: (contextOptions) => runtime.createContext(contextOptions),
+    contextOptions: { claudeBin: opts.claudeBin },
+  })
   let githubInit: Promise<void> | undefined
   let terminal: TerminalServer | undefined
   let appSocket: AppSocketServer | undefined
@@ -397,6 +405,13 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
   // The per-project half, from context.ts, so one project can be torn down without the server —
   // `() => ctx` rather than `ctx` because these are built before the context exists.
   const tenant = projectContextCleanups(() => ctx)
+  // Every project opened BESIDES the launching one. The launching project is torn down by the phases
+  // below — it was adopted into the map, so draining the map wholesale would close it twice.
+  const cleanupExtraTenants = createRetryableCleanup(async () => {
+    for (const { project: opened } of tenants.active()) {
+      if (opened.id !== project.id) await tenants.deactivate(opened.id)
+    }
+  })
   const cleanupTailer = createRetryableCleanup(tenant.tailer)
   const cleanupLoginUtility = createRetryableCleanup(tenant.loginUtility)
   const cleanupSubscriptions = createRetryableCleanup(tenant.subscriptions)
@@ -428,6 +443,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
         name: "application socket",
         run: cleanupAppSocket,
       },
+      { name: "other projects", run: cleanupExtraTenants },
       { name: "tailer producer", run: cleanupTailer },
       // Kill any live login-attempt pane so OAuth bytes never outlive the server.
       { name: "login utility", run: cleanupLoginUtility },
@@ -554,6 +570,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       }),
       (value) => { ctx = value },
     )
+    tenants.adopt(project, ctx)
 
     // Resolve GitHub detection in the background. The original promise is retained and drained on
     // rollback so even an injected/hung initializer cannot outlive ownership silently.
