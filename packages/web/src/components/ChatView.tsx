@@ -12,6 +12,8 @@ import { rpc } from "../api/rpc.ts"
 import { displayTitle, lastActiveLabelAt } from "../groups.ts"
 import { mdToHtml, mdInlineToHtml, stripFrontmatter } from "../lib/markdown.ts"
 import { splitComposerValue, splitProseAttachments } from "../lib/imagePaths.ts"
+import { localImageUrl } from "../lib/markdownTargets.ts"
+import { apiBase } from "../lib/base-path.ts"
 import { DiffBlock, PathLink } from "./DiffBlock.tsx"
 import { TodoBlock } from "./TodoBlock.tsx"
 import { splitQuestionBlocks, parseQuestionBlock, type QuestionKind, type BlockAnswer, type MessageAnswering } from "../lib/questionBlocks.ts"
@@ -3240,7 +3242,7 @@ export function BlockImage({ path, hideCaption, altText, header }: { path: strin
       caption={hideCaption ? undefined : <figcaption className="bg-panel-2 px-2 pb-1.5 font-mono-keep text-[11px] text-muted/60 break-all">{base}</figcaption>}
     >
       <img
-        src={`/local-image?path=${encodeURIComponent(path)}`}
+        src={localImageUrl(path)}
         alt={altText ?? base}
         data-local-path={path}
         data-local-image="true"
@@ -3307,7 +3309,7 @@ export function InlineVisualization({ file }: { file: string }) {
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const [height, setHeight] = useState(360)
   const [available, setAvailable] = useState<boolean | null>(null)
-  const src = slug ? `/local-visualization?slug=${encodeURIComponent(slug)}&file=${encodeURIComponent(file)}` : null
+  const src = slug ? `${apiBase()}/local-visualization?slug=${encodeURIComponent(slug)}&file=${encodeURIComponent(file)}` : null
 
   useEffect(() => {
     if (!src) { setAvailable(false); return }

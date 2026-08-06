@@ -108,10 +108,10 @@ try {
       title: document.title,
       shell: document.body.innerText.slice(0, 60).replace(/\s+/g, " "),
     }
-    const read = await fetch("/rpc/board?input=%7B%7D")
+    const read = await fetch("/_frizz/rpc/board?input=%7B%7D")
     out.rpcRead = read.status
     out.ws = await new Promise((resolve) => {
-      const socket = new WebSocket(`${location.origin.replace(/^http/, "ws")}/ws`)
+      const socket = new WebSocket(`${location.origin.replace(/^http/, "ws")}/_frizz/ws`)
       socket.onopen = () => resolve("open")
       socket.onerror = () => resolve("error")
       socket.onclose = (event) => resolve(`closed:${event.code}`)
@@ -134,7 +134,7 @@ try {
 
   // A deliberately empty body: 400 proves the request cleared the origin gate and reached validation.
   // 403 would mean the gate refused a write the browser had correctly stamped with an Origin.
-  const rpcWrite = await page.evaluate(async () => (await fetch("/rpc/setThreadSnooze", {
+  const rpcWrite = await page.evaluate(async () => (await fetch("/_frizz/rpc/setThreadSnooze", {
     method: "POST", headers: { "content-type": "application/json" }, body: "{}",
   })).status)
   check("RPC write cleared the origin gate", rpcWrite !== 403, String(rpcWrite))

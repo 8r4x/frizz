@@ -1,12 +1,13 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { ArrowUp, FileText, Loader2, Paperclip, X } from "lucide-react"
-import { ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, isAllowedAttachmentName, frizzRoute } from "@frizz/shared"
+import { ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, isAllowedAttachmentName } from "@frizz/shared"
 import { showToast } from "../store.ts"
 import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
 import { shouldInterruptSubmitComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
 import { queueComposerHandlesOptionEnter } from "../lib/queueComposerKeyboard.ts"
 import { RAIL_ACTION_OFFSET, RAIL_PAPERCLIP_OFFSET, RAIL_PAPERCLIP_PLAIN_OFFSET, RAIL_RESERVE_PLAIN, RAIL_RESERVE_WITH_ACTION, RAIL_SEND_OFFSET } from "../lib/iconRhythm.ts"
 import { apiBase } from "../lib/base-path.ts"
+import { localImageUrl } from "../lib/markdownTargets.ts"
 
 // The shared prompt composer (the pattern the user called "perfect"): ONE rounded bordered box
 // holding a borderless auto-growing textarea plus a small round accent send button hovering INSIDE
@@ -497,7 +498,7 @@ function AttachmentChip({
     <div className="group/att relative h-11 w-11" title={base}>
       {asImage ? (
         <img
-          src={`/local-image?path=${encodeURIComponent(attachment.path)}`}
+          src={localImageUrl(attachment.path)}
           alt={base}
           onError={() => setBroken(true)}
           className="h-11 w-11 rounded-md border border-border object-cover"

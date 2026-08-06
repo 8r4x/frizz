@@ -16,6 +16,14 @@
 // this (packages/web/src/api) — the node side just had no shared copy to import.
 //
 // Loopback `Origin` is required or the server 403s a cross-origin write.
+//
+//   3. THE `/_frizz` PREFIX (c34a7e2). Everything frizz serves lives under it, and every other
+//      top-level path is a project slug that falls through to the SPA shell — with a 200 and an HTML
+//      body. So an unprefixed `/rpc/board` does not 404 either: it reads back as "rpc board failed
+//      (200): <!doctype html>", and an unprefixed `/health` probe resolves TRUE against the shell
+//      before the server is anywhere near ready. Build every URL through FRIZZ_ROUTE_PREFIX.
+
+const FRIZZ_ROUTE_PREFIX = "/_frizz"
 
 export class RpcError extends Error {
   constructor(method, status, message) {
@@ -47,25 +55,30 @@ export function createRpcClient(baseUrl) {
 
   return {
     origin,
-    /** GET /rpc/<method>?input=… — for router `query` procedures. */
+    /** GET /_frizz/rpc/<method>?input=… — for router `query` procedures. */
     query(method, input) {
-      const url = new URL(`/rpc/${method}`, baseUrl)
+      const url = new URL(`${FRIZZ_ROUTE_PREFIX}/rpc/${method}`, baseUrl)
       if (input !== undefined) url.searchParams.set("input", JSON.stringify(input))
       return send(method, {}, url)
     },
-    /** POST /rpc/<method> — for router `mutation` procedures. */
+    /** POST /_frizz/rpc/<method> — for router `mutation` procedures. */
     mutate(method, input) {
       return send(
         method,
         { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(input ?? {}) },
-        new URL(`/rpc/${method}`, baseUrl),
+        new URL(`${FRIZZ_ROUTE_PREFIX}/rpc/${method}`, baseUrl),
       )
     },
-    /** Resolves once /health answers, or throws after `timeoutMs`. */
+    /** Resolves once /_frizz/health answers with the health JSON, or gives up after `timeoutMs`. */
     async waitForHealth(timeoutMs = 30_000) {
       const deadline = Date.now() + timeoutMs
       for (;;) {
-        try { if ((await fetch(new URL("/health", baseUrl))).ok) return true } catch {}
+        // `.ok` alone is not readiness: the SPA shell answers 200 to anything it does not recognize,
+        // so the probe must see the health BODY before it believes the server is up.
+        try {
+          const res = await fetch(new URL(`${FRIZZ_ROUTE_PREFIX}/health`, baseUrl))
+          if (res.ok && (await res.json())?.ok !== undefined) return true
+        } catch {}
         if (Date.now() > deadline) return false
         await new Promise((r) => setTimeout(r, 150))
       }

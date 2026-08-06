@@ -1,5 +1,6 @@
 import { useEffect, useId, useState, type ReactNode } from "react"
 import { useInnerHtml } from "../lib/innerHtml.ts"
+import { localImageUrl } from "../lib/markdownTargets.ts"
 import {
   Archive,
   CalendarClock,
@@ -66,7 +67,7 @@ function TemplateCard({ directive }: { directive: CodexHostDirective }) {
       {skill && <Detail mono>{skill.startsWith("$") ? skill : `$${skill}`}</Detail>}
       {preview && directory && (
         <img
-          src={`/local-image?path=${encodeURIComponent(`${directory}/assets/preview.png`)}`}
+          src={localImageUrl(`${directory}/assets/preview.png`)}
           alt={`${displayName} template preview`}
           loading="lazy"
           onError={() => setPreview(false)}
