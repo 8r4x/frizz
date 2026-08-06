@@ -44,9 +44,9 @@ not a narrative. Open with one of these four tokens, bolded, then the outcome in
 **None of these apply while the instruction still has parts left — then you do not write up at all,
 you keep working in the same turn.** This table is for a turn that has genuinely ended; reaching for
 it early is the most common way an effort dies half-finished. A verified milestone, a green test run
-and a long turn are not endings. Neither is announcing the next step, and neither is recording it in
-the scratchpad — the pad is optional crash insurance, never a handoff, and writing "next: X" when the
-human asked for X is not progress on X. Two rows above describe INCOMPLETE work resting; both mean
+and a long turn are not endings. Neither is announcing the next step, and neither is writing it into
+your scratch directory — notes are optional crash insurance, never a handoff, and writing "next: X"
+when the human asked for X is not progress on X. Two rows above describe INCOMPLETE work resting; both mean
 "nothing further is possible right now", never "I stopped at a good spot".
 
 The token and the fence must agree; the fence is the glance-level signal and the token is its
@@ -55,7 +55,7 @@ one-line caption. `**Fixed** — the divider now shows the child's description, 
 Then, in this order and nothing else: **what the human must do** (a restart, a re-pull, a follow-up
 they own), the **judgment calls** worth catching, and what you deliberately did NOT do. Root cause,
 measurements and evidence tables earn their place only when they change what the human does next —
-otherwise they belong in the scratchpad, which is already the durable record. A screenshot is
+otherwise they belong in your scratch directory, which is where the durable account lives. A screenshot is
 evidence, not narration: embed the decisive one or two, not the set.
 
 **The prose and the fenced card must not repeat each other.** They are two surfaces, not one message

@@ -58,7 +58,7 @@
 // brief about what to retain.
 //
 // GATE: everything is gated on FRIZZ_THREAD, so the plugin stays inert when loaded outside a
-// frizz worker. Sub-agent contexts are skipped, matching session-seed.mjs — the scratchpad path
+// frizz worker. Sub-agent contexts are skipped, matching session-seed.mjs — the scratch-directory path
 // below is only guaranteed correct for the top-level worker session.
 import { readFileSync } from 'node:fs';
 import { currentSessionId } from '../scripts/frizz/config.mjs';
@@ -88,8 +88,8 @@ try {
   /* best-effort — fall back to the generic path shape below */
 }
 const scratch = sid
-  ? '.frizz/threads/' + sid + '/scratch.md'
-  : '.frizz/threads/<session-id>/scratch.md';
+  ? '.frizz/threads/' + sid + '/'
+  : '.frizz/threads/<session-id>/';
 
 // Written as an editorial brief, not as a command block — see TONE MATTERS above.
 const brief = [
@@ -121,7 +121,7 @@ const brief = [
   '3. RE-GROUNDING. End the summary with a final section headed exactly "Re-grounding before ' +
     'continuing:" that tells the next turn what to re-establish BEFORE it asserts anything or resumes ' +
     'editing. Make it concrete and specific to this session — not generic advice:',
-  '- Re-read the scratchpad at `' + scratch + '` first. It is the durable working state and it ' +
+  '- Read whatever the worker left in `' + scratch + '` first. That is its durable working state and it ' +
     'outlives this summary.',
   '- Name the specific files to re-read before describing or changing them, rather than relying on ' +
     'remembered contents.',

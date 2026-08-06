@@ -87,6 +87,20 @@ test("applyRecord: claude's post-compaction carry-over summary re-invokes but ne
   assert.equal(s.lastKind, "user") // still re-invoking: the model resumes from the summary → shimmer
   assert.equal(s.lastActivityAt, "2026-07-01T00:05:01.000Z") // the transcript did grow
   assert.equal(s.lastUserAt, "2026-07-01T00:00:00.000Z") // ROW ORDER unchanged
+  // …and it is ALSO the only place a Claude transcript says a compaction just happened, which makes it
+  // the post-compaction trigger's clock (scheduler SOURCE 7). Without this the trigger never fires on
+  // Claude at all — it would arm cleanly, report armed in the footer, and silently do nothing.
+  assert.equal(s.lastCompactionAt, "2026-07-01T00:05:01.000Z")
+})
+
+// The CONTROL for the line above. If an ordinary user record set the clock, every human steer would
+// re-fire the post-compaction prompt — which is worse than the trigger not working, because it looks
+// like it does.
+test("applyRecord: an ordinary user record does NOT set the post-compaction clock", () => {
+  const s = newTailState("t", "sid", "/x")
+  applyRecord(s, { type: "user", timestamp: "2026-07-01T00:00:00.000Z", message: { content: [{ type: "text", text: "a normal steer" }] } })
+  applyRecord(s, { type: "assistant", timestamp: "2026-07-01T00:00:05.000Z", message: { stop_reason: "end_turn", content: [{ type: "text", text: "ok" }] } })
+  assert.equal(s.lastCompactionAt, undefined)
 })
 
 test("applyRecord: caps preview at 200 chars with an ellipsis", () => {

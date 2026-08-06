@@ -259,11 +259,12 @@ test("resolveSlug: appends -N on collision", () => {
   assert.equal(resolveSlug(frizzDir, "baz", (s) => taken.has(s)), "baz")
 })
 
-test("composePrompt: scratchpad orientation + task, and NOT the operator's instructions", () => {
+test("composePrompt: scratch-directory orientation + task, and NOT the operator's instructions", () => {
   const out = composePrompt("sid-123", "Do the thing.")
-  // Session-first: the visible first message points at the scratchpad, NOT a .frizz file to own. The
-  // fixed worker prompt still rides --append-system-prompt (buildClaudeCommand), not this message.
-  assert.ok(out.includes(".frizz/threads/sid-123/scratch.md"))
+  // Session-first: the visible first message points at the scratch DIRECTORY, NOT a .frizz file to own.
+  // The fixed worker prompt still rides --append-system-prompt (buildClaudeCommand), not this message.
+  assert.ok(out.includes(".frizz/threads/sid-123/"))
+  assert.ok(!out.includes("scratch.md"), "no filename is reserved in that directory")
   assert.ok(!out.includes("You are a dispatched worker agent"))
   assert.ok(!out.includes("You own")) // the old ownership contract is gone
   assert.ok(!out.includes("status: blocked"))
@@ -272,12 +273,12 @@ test("composePrompt: scratchpad orientation + task, and NOT the operator's instr
   assert.ok(out.endsWith("\n\nDo the thing.")) // the task is the tail, directly below the banner
 })
 
-test("scratchpadOrientation: scratchpad line always; PLAN line only when a plan is associated", () => {
+test("scratchpadOrientation: scratch line always; PLAN line only when a plan is associated", () => {
   const bare = scratchpadOrientation("sid-1")
-  assert.ok(bare.includes("SCRATCHPAD (optional): .frizz/threads/sid-1/scratch.md"))
+  assert.ok(bare.includes("SCRATCH DIRECTORY: .frizz/threads/sid-1/"))
   assert.ok(!bare.includes("PLAN:"))
   const withPlan = scratchpadOrientation("sid-1", ".frizz/plans/p.md")
-  assert.ok(withPlan.includes("SCRATCHPAD (optional): .frizz/threads/sid-1/scratch.md"))
+  assert.ok(withPlan.includes("SCRATCH DIRECTORY: .frizz/threads/sid-1/"))
   assert.ok(withPlan.includes("PLAN: .frizz/plans/p.md"))
 })
 
@@ -377,32 +378,26 @@ test("build*Command: extraSystemPrompt is appended AFTER the worker norms in the
   assert.ok(rSys.includes(scratch))
 })
 
-test("dispatch: writes a scratchpad (not a thread file), argv carries the scratchpad, stores an open row", async () => {
+test("dispatch: creates an EMPTY scratch dir (not a thread file), argv carries it, stores an open row", async () => {
   const h = dispatcherHarness()
   const { slug, sessionId } = await h.dispatcher.dispatch({ prompt: "Do the thing.", model: "opus", effort: "high" })
 
   // Session-first: NO .frizz/<slug>.md thread file is written on dispatch.
   assert.ok(!existsSync(join(h.dir, ".frizz", `${slug}.md`)), "no thread file written")
 
-  // The scratchpad is provisioned with the conventional skeleton.
-  const scratch = join(h.dir, ".frizz", "threads", sessionId, "scratch.md")
-  assert.ok(existsSync(scratch), "scratchpad file created")
-  const body = readFileSync(scratch, "utf8")
-  assert.ok(body.startsWith("# Scratchpad — "))
-  assert.ok(body.includes("## Task list"))
-  assert.ok(body.includes("## Shared context"))
-  assert.ok(body.includes("## Agent progress"))
-  assert.ok(body.includes("## Next action"))
-  assert.ok(body.includes("`[/]` in progress"))
-  assert.ok(body.includes("`[?]` blocked / needs input"))
-  assert.ok(body.includes("Never delete, truncate, reinitialize, move, or replace the whole file"))
+  // The scratch DIRECTORY is provisioned, and provisioned EMPTY. Nothing is seeded into it: the
+  // skeleton went away with the canonical pad (2026-08-06), and a template the worker did not write is
+  // exactly what used to make "present" indistinguishable from "written".
+  const scratchDir = join(h.dir, ".frizz", "threads", sessionId)
+  assert.ok(existsSync(scratchDir), "scratch directory created")
+  assert.deepEqual(readdirSync(scratchDir), [], "nothing is provisioned inside it")
 
-  // argv: the SCRATCHPAD orientation rides the system prompt; the user message carries the path + TASK
+  // argv: the SCRATCH orientation rides the system prompt; the user message carries the path + TASK
   // and NONE of the retired thread-ownership contract.
   const cmd = h.spawned[0].cmd
-  assert.ok(systemPromptOf(cmd).includes(`SCRATCHPAD (optional): .frizz/threads/${sessionId}/scratch.md`))
+  assert.ok(systemPromptOf(cmd).includes(`SCRATCH DIRECTORY: .frizz/threads/${sessionId}/`))
   const userPrompt = cmd[cmd.length - 1]
-  assert.ok(userPrompt.includes(`.frizz/threads/${sessionId}/scratch.md`))
+  assert.ok(userPrompt.includes(`.frizz/threads/${sessionId}/`))
   assert.ok(userPrompt.endsWith("\n\nDo the thing.")) // the task is the tail, directly below the banner
   assert.ok(!userPrompt.includes("You own"))
   assert.equal(h.spawned[0].env?.FRIZZ_THREAD, slug)
@@ -433,7 +428,7 @@ test("dispatch: a valid planPath is stored + named in the system prompt; invalid
   assert.equal(h.storage.getSession(bad.slug)?.plan_path, null)
 })
 
-test("adopt: requires the legacy file, provisions a scratchpad, orientation is context-not-contract", async () => {
+test("adopt: requires the legacy file, provisions a scratch dir, orientation is context-not-contract", async () => {
   const h = dispatcherHarness({ ...defaultSettings(), model: "sonnet", effort: "xhigh" })
   // No file → clean rejection.
   await assert.rejects(h.dispatcher.adopt("adopt-fixture"), /thread is not available for adoption/)
@@ -443,12 +438,12 @@ test("adopt: requires the legacy file, provisions a scratchpad, orientation is c
   const { slug, sessionId } = await h.dispatcher.adopt("adopt-fixture", "keep going")
   assert.equal(slug, "adopt-fixture")
 
-  // Scratchpad provisioned even for an adopted thread.
-  assert.ok(existsSync(join(h.dir, ".frizz", "threads", sessionId, "scratch.md")))
+  // A scratch directory is provisioned even for an adopted thread.
+  assert.ok(existsSync(join(h.dir, ".frizz", "threads", sessionId)))
 
-  // System prompt: scratchpad orientation + the adoption note framing the file as CONTEXT, not a contract.
+  // System prompt: scratch orientation + the adoption note framing the file as CONTEXT, not a contract.
   const sys = systemPromptOf(h.spawned[0].cmd)
-  assert.ok(sys.includes(`SCRATCHPAD (optional): .frizz/threads/${sessionId}/scratch.md`))
+  assert.ok(sys.includes(`SCRATCH DIRECTORY: .frizz/threads/${sessionId}/`))
   assert.ok(sys.includes("CONTEXT, not a contract"))
   assert.ok(sys.includes("adopt-fixture.md"))
   const row = h.storage.getSession(slug)

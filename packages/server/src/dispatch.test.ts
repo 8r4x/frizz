@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join, dirname } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { DISPATCH_TASK_BANNER_MARKER } from "@frizz/shared"
-import { buildClaudeCommand, loadWorkerPrompt, composePrompt, resolveWorkerPluginDir, scratchpadOrientation, scratchpadContent, workerPluginDir, frizzConfigBlock, workerDispatchPermission, WORKER_DISPATCH_PERMISSION } from "./dispatch.ts"
+import { buildClaudeCommand, loadWorkerPrompt, composePrompt, resolveWorkerPluginDir, scratchpadOrientation, workerPluginDir, frizzConfigBlock, workerDispatchPermission, WORKER_DISPATCH_PERMISSION } from "./dispatch.ts"
 import { parseTranscript } from "./transcript.ts"
 import { CHROME_DEVTOOLS_MCP, FRIZZ_MCP } from "./backend/types.ts"
 
@@ -80,12 +80,16 @@ test("Claude dispatch still mounts + pre-approves chrome-devtools when no frizz-
   assert.ok(argv.includes("--allowedTools=mcp__chrome-devtools"))
 })
 
-test("Claude worker surfaces share the canonical per-session scratchpad path", () => {
+test("Claude worker surfaces share the canonical per-session scratch DIRECTORY path", () => {
   const sessionId = "scratch-canonical"
-  const canonical = `.frizz/threads/${sessionId}/scratch.md`
+  const canonical = `.frizz/threads/${sessionId}/`
   assert.match(composePrompt(sessionId, "task", "claude"), new RegExp(canonical.replaceAll("/", "\\/")))
   assert.match(scratchpadOrientation(sessionId, null, "claude"), new RegExp(canonical.replaceAll("/", "\\/")))
-  assert.match(SESSION_SEED, /\.frizz\/threads\/.*scratch\.md/)
+  assert.match(SESSION_SEED, /\.frizz\/threads\//)
+  // No surface may resurrect the canonical filename: nothing reserves a name in that directory now.
+  assert.doesNotMatch(composePrompt(sessionId, "task", "claude"), /scratch\.md/)
+  assert.doesNotMatch(scratchpadOrientation(sessionId, null, "claude"), /scratch\.md/)
+  assert.doesNotMatch(SESSION_SEED, /scratch\.md/)
   assert.doesNotMatch(SESSION_SEED, /\.frizz\/scratch\//)
 })
 
@@ -192,7 +196,7 @@ test("loadWorkerPrompt(claude) carries the Claude-Code-only guidance", () => {
   assert.match(c, /## Sub-agents/)
   assert.match(c, /plain Agent tool \+ `run_in_background: true`/)
   assert.match(c, /namespaced string `frizz:<model>-<effort>`/)
-  assert.match(c, /the shared blackboard for your sub-agents/)
+  assert.match(c, /name your scratch directory and the OWN FILE it should write there/)
   // Claude frizz workers have NO fork option (`subagent_type: "fork"` does not resolve); say so
   // explicitly so a worker never blocks hunting for one — the codex fork_context failure mode.
   assert.match(c, /There is NO fork\/inherit option here/)
@@ -299,10 +303,6 @@ test("loadWorkerPrompt: the backend-AGNOSTIC core is present in BOTH contracts",
     assert.match(c, /let it run to its terminal return/)
     assert.match(c, /partially applied edits, tests, and owned processes/)
     assert.match(c, /only the affected service, never by stopping a writer/)
-    assert.match(c, /scratchpad is Frizz coordination state, not a project deliverable or source edit/)
-    assert.match(c, /deliverable paths/)
-    assert.match(c, /repository-root files/)
-    assert.match(c, /location alone neither permits nor forbids/)
     assert.match(c, /!\[descriptive alt\]\(\/absolute\/path\.png\)/)
     assert.match(c, /eligible absolute local image paths through its guarded local-image proxy/)
   }
@@ -401,7 +401,8 @@ test("session-seed is a SLIM runtime pointer, not a fourth full contract copy", 
   assert.match(SESSION_SEED, /lives in your SYSTEM PROMPT/i)
   // The worker-skill copy is GONE — the seed must not tell workers to load a skill that no longer exists.
   assert.doesNotMatch(SESSION_SEED, /frizz:worker/)
-  assert.match(SESSION_SEED, /\.frizz\/threads\/.*scratch\.md/)
+  assert.match(SESSION_SEED, /\.frizz\/threads\//)
+  assert.doesNotMatch(SESSION_SEED, /scratch\.md/, "no filename is reserved in the scratch directory")
   for (const fence of [/```done/, /```awaiting/, /```question/]) assert.match(SESSION_SEED, fence)
   assert.doesNotMatch(SESSION_SEED, /RUNTIME RELEASE GATE:/)
   assert.doesNotMatch(SESSION_SEED, /never build a bespoke screenshot tool/)
@@ -441,20 +442,22 @@ test("visual-evidence handoffs: provider contracts keep embeds safe, useful, and
 
 // ---- composePrompt: the first VISIBLE user message's scratchpad line is backend-aware ----
 
-test("composePrompt keeps each backend's shared sub-agent scratchpad contract", () => {
+test("composePrompt gives each backend's sub-agents their OWN file, never a shared document", () => {
   const claude = composePrompt("sid", "do the thing", "claude")
-  assert.match(claude, /shared blackboard for your sub-agents/)
-  assert.match(claude, /pass its path to every sub-agent you dispatch/)
+  assert.match(claude, /Name it in a sub-agent's prompt/)
+  assert.match(claude, /give each child its OWN file rather than having them all edit one/)
   assert.equal(composePrompt("sid", "do the thing"), claude) // default = claude (unchanged)
 
   const codex = composePrompt("sid", "do the thing", "codex")
-  assert.doesNotMatch(codex, /blackboard/)
-  assert.match(codex, /useful crash insurance/)
-  assert.match(codex, /shared progress document for native sub-agents/)
-  assert.match(codex, /Each native sub-agent should merge its own scoped progress into it/)
-  assert.match(codex, /rather than leaving the root as its sole writer/)
-  assert.match(codex, /re-read before each edit/)
-  assert.match(codex, /never delete, truncate, reinitialize, move, or replace the whole file/)
+  assert.match(codex, /Native sub-agents share it — have each write its OWN file/)
+
+  for (const [kind, text] of [["claude", claude], ["codex", codex]] as const) {
+    // The merge contract is GONE, not reworded: one file per writer is what removed the hazard.
+    assert.doesNotMatch(text, /merge/i, `${kind} must not reintroduce a shared-document merge contract`)
+    assert.doesNotMatch(text, /blackboard/, `${kind} must not reintroduce the shared blackboard`)
+    // The arming is the whole compaction story now, so both must name it.
+    assert.match(text, /post_compaction: true/, `${kind} must teach the arming`)
+  }
   assert.ok(codex.endsWith("do the thing")) // the task still rides through, and rides through LAST
 })
 
@@ -463,17 +466,17 @@ test("composePrompt keeps each backend's shared sub-agent scratchpad contract", 
 // treats WRITING the next step as equivalent to DOING it, writes "next: X" for an X the human already
 // asked for, and rests mid-mandate. Both surfaces must keep saying optional, and must keep saying that
 // writing in it is not doing the work.
-test("every scratchpad surface presents the pad as optional and never a substitute for the work", () => {
+test("every scratch surface presents notes as optional and never a substitute for the work", () => {
   for (const kind of ["claude", "codex"] as const) {
     const prompt = composePrompt("sid", "do the thing", kind)
-    assert.match(prompt, /OPTIONAL/, `${kind} composePrompt must not present the pad as mandatory`)
-    assert.match(prompt, /never substitutes for doing the work/, `${kind} composePrompt must refuse the substitution`)
-    assert.doesNotMatch(prompt, /CANONICAL record/, `${kind} composePrompt must not re-promote the pad`)
+    assert.match(prompt, /nothing is expected in it/, `${kind} composePrompt must not present notes as mandatory`)
+    assert.match(prompt, /never a substitute for doing the work/, `${kind} composePrompt must refuse the substitution`)
+    assert.doesNotMatch(prompt, /CANONICAL/, `${kind} composePrompt must not re-promote a canonical doc`)
 
     const orientation = scratchpadOrientation("sid", null, kind)
-    assert.match(orientation, /optional/i, `${kind} orientation must not present the pad as mandatory`)
+    assert.match(orientation, /nothing is expected in it/, `${kind} orientation must not present notes as mandatory`)
     assert.match(orientation, /never a substitute for doing the work/, `${kind} orientation must refuse the substitution`)
-    assert.doesNotMatch(orientation, /CANONICAL record/, `${kind} orientation must not re-promote the pad`)
+    assert.doesNotMatch(orientation, /CANONICAL/, `${kind} orientation must not re-promote a canonical doc`)
   }
 })
 
@@ -488,7 +491,7 @@ test("composePrompt puts NOTHING of frizz's below the banner — the operator's 
   assert.notEqual(banner, -1)
   // Anchor on the scratchpad orientation: the operator preamble moved to the system prompt, and
   // asserting `indexOf(...) < banner` on an ABSENT string passes vacuously (-1 < banner).
-  assert.ok(composed.indexOf("scratch.md") < banner)
+  assert.ok(composed.indexOf(".frizz/threads/") < banner)
   assert.doesNotMatch(composed, /PROJECT INSTRUCTIONS/)
   assert.match(composed, /\n\n\n\n=+\n=+ {4}YOUR TASK {4}=+\n=+\n/)
   // THE property the banner exists for: below it is the operator's prompt, byte for byte. The framing
@@ -528,49 +531,26 @@ test("composePrompt round-trips through the BROKER's enqueue record with the sam
 
 // ---- scratchpadOrientation: the SYSTEM-level line is backend-aware ----
 
-test("scratchpadOrientation gives codex a merge-only shared pad; claude keeps its blackboard", () => {
+test("scratchpadOrientation names the directory, the arming, and one file per sub-agent", () => {
   const claude = scratchpadOrientation("sid", null, "claude")
-  assert.match(claude, /shared blackboard for your sub-agents/)
+  assert.match(claude, /SCRATCH DIRECTORY: \.frizz\/threads\/sid\//)
+  assert.match(claude, /name it in a sub-agent's prompt when you want its notes back, and give each child its own file/)
   assert.equal(scratchpadOrientation("sid", null), claude)
 
   const codex = scratchpadOrientation("sid", null, "codex")
-  assert.doesNotMatch(codex, /blackboard/)
-  assert.match(codex, /crash insurance/)
-  assert.match(codex, /shared progress document for native sub-agents/)
-  assert.match(codex, /Each native sub-agent should merge its own scoped progress into it/)
-  assert.match(codex, /rather than leaving the root as its sole writer/)
-  assert.match(codex, /preserve all existing content/)
-  assert.match(codex, /never delete, truncate, reinitialize, move, or replace the whole file/)
+  assert.match(codex, /native sub-agents share it, so give each its own file/)
+
+  for (const [kind, text] of [["claude", claude], ["codex", codex]] as const) {
+    // Compaction recovery is the ARMING, not the folder — a worker told only about the folder writes
+    // notes nothing will ever hand back.
+    assert.match(text, /post_compaction: true/, `${kind} must name the trigger`)
+    assert.match(text, /Nothing in this directory is read automatically/, `${kind} must not imply an injection`)
+    assert.doesNotMatch(text, /merge/i, `${kind} must not reintroduce the merge contract`)
+    assert.doesNotMatch(text, /scratch\.md/, `${kind} must not reserve a filename`)
+  }
 
   // The plan line is agnostic and appended for both.
   assert.match(scratchpadOrientation("sid", ".frizz/plans/x.md", "codex"), /PLAN: \.frizz\/plans\/x\.md/)
-})
-
-// ---- scratchpadContent: the pad skeleton is backend-aware ----
-
-test("scratchpadContent seeds a flexible shared structure and Obsidian-flavoured status legend", () => {
-  const claude = scratchpadContent("t", "claude")
-  assert.match(claude, /blackboard your sub-agents read and update/)
-  assert.match(claude, /## Shared context/)
-  assert.equal(scratchpadContent("t"), claude) // default = claude (unchanged)
-
-  const codex = scratchpadContent("t", "codex")
-  assert.doesNotMatch(codex, /blackboard/)
-  assert.match(codex, /progress document shared with native sub-agents/)
-  for (const body of [claude, codex]) {
-    assert.match(body, /`\[ \]` pending/)
-    assert.match(body, /`\[\/\]` in progress/)
-    assert.match(body, /`\[x\]` complete/)
-    assert.match(body, /`\[-\]` cancelled/)
-    assert.match(body, /`\[\?\]` blocked \/ needs input/)
-    assert.match(body, /re-read before every edit/)
-    assert.match(body, /own `### <agent path>` subsection/)
-    assert.match(body, /scoped scratchpad merge is Frizz coordination state/)
-    assert.match(body, /allowed when a delegated task limits its deliverable paths/)
-    assert.match(body, /Never delete, truncate, reinitialize, move, or replace the whole file/)
-    for (const section of ["Goal", "Task list", "Decisions", "Shared context", "Agent progress", "Verification", "Next action"])
-      assert.match(body, new RegExp(`## ${section}`))
-  }
 })
 
 // ---- workerDispatchPermission: the Settings-driven launch mode for a NEW worker ----

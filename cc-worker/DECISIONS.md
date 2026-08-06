@@ -30,8 +30,8 @@ what was ported from the orchestrator `cc/` plugin, what was dropped, and why.
 | Hook | Event | Ported from | What it does for a worker |
 | --- | --- | --- | --- |
 | `session-seed.mjs` | SessionStart (startup/resume/clear/compact) | cc `session-seed.mjs` | Injects the single-thread worker contract + the bound slug + its file path; re-grounds on compact. Also writes cc's `off` sentinel defensively (see interplay). |
-| `precompact-instructions.mjs` | PreCompact (auto/manual) | new — no cc equivalent | Steers WHAT SURVIVES compaction: emits an editorial brief asking the summarizer to preserve the high-level approach (plan, alternatives rejected, rationale) at high fidelity, plus a closing "Re-grounding before continuing:" section naming the scratchpad path and the files to re-read. **PLAIN STDOUT is the channel** — cc's usual `hookSpecificOutput` JSON would be handed to the summarizer as its literal instructions. Skips sub-agent contexts (the derived scratchpad path is only guaranteed for the top-level worker). |
-| `scratchpad.mjs` | SessionStart (startup/resume/clear/compact) + PreCompact (auto/manual) + UserPromptSubmit + PostToolUse | new — no cc equivalent | Keeps the ONE per-thread scratchpad (`.frizz/threads/<sid>/scratch.md`) written and re-grounded across compaction. `--mode=session-start` injects the pad's HEAD back verbatim on the context-losing sources (compact/resume/clear) plus a re-read pointer, and teaches the contract when the pad is still an unwritten skeleton; `--mode=precompact` (**plain stdout**) hands the head to the summarizer; `--mode=nudge` fires on BOTH UserPromptSubmit and PostToolUse (mid-turn — the one that matters for long autonomous turns) once context has grown past `STALE_TOKENS` since the last write. Both nudge channels share one state file, so mid-turn firing does not multiply reminders. NOT gated on `FRIZZ_THREAD`; `--via=project` marks the repo-local registration and defers to this one inside a frizz worker. |
+| `precompact-instructions.mjs` | PreCompact (auto/manual) | new — no cc equivalent | Steers WHAT SURVIVES compaction: emits an editorial brief asking the summarizer to preserve the high-level approach (plan, alternatives rejected, rationale) at high fidelity, plus a closing "Re-grounding before continuing:" section naming the thread's scratch-directory path and the files to re-read. **PLAIN STDOUT is the channel** — cc's usual `hookSpecificOutput` JSON would be handed to the summarizer as its literal instructions. Skips sub-agent contexts (the derived scratch-directory path is only guaranteed for the top-level worker). |
+| `scratchpad.mjs` | SessionStart (startup/resume/clear/compact) + PreCompact (auto/manual) + UserPromptSubmit + PostToolUse | new — no cc equivalent | Keeps a worker aware of its per-thread scratch DIRECTORY (`.frizz/threads/<sid>/`). `--mode=session-start` NAMES the files in it on the context-losing sources (compact/resume/clear) — a listing, never their content — and otherwise teaches the arrangement (write a doc, then arm `post_compaction`); `--mode=precompact` (**plain stdout**) tells the summarizer those files exist so it carries their paths forward; `--mode=nudge` fires on BOTH UserPromptSubmit and PostToolUse (mid-turn — the one that matters for long autonomous turns) once context has grown past `STALE_TOKENS` since the last write. Both nudge channels share one state file, so mid-turn firing does not multiply reminders. NOT gated on `FRIZZ_THREAD`; `--via=project` marks the repo-local registration and defers to this one inside a frizz worker. |
 | `agent-dispatch.mjs` | PreToolUse(Agent) | cc `agent-dispatch.mjs` | Enforces `run_in_background:true`, strips `name`/`team_name`, appends a worker-flavored orchestration epilogue. |
 | `bash-background.mjs` | PreToolUse(Bash) | new | Denies a local shell job that escapes through `&` without a later `wait` or EXIT trap, including one hidden inside a command-position `bash -c '…'`. Shell job control bypasses Claude's task registry, so Frizz cannot track or wake it; self-contained probe concurrency, and a wrapper handed to another program (`ssh`/`docker run`/`limactl shell`), remain allowed. |
 | `agent-bind.mjs` | PostToolUse(Agent) | cc `agent-bind.mjs` (verbatim behavior) | Records `agentId → thread` into `.frizz/.agent-bindings.jsonl` in cc's exact format, so a worker's THREAD-tagged helper renders on the frizz board's per-thread liveness. |
@@ -1023,3 +1023,51 @@ The rule now LEADS both child-facing epilogues, with the collection paragraph ke
 This is a PROMPT-level default, deliberately NOT the hook-level depth-2 DENY rejected on 2026-07-31 as too blunt: a dispatcher that genuinely wants a prong fanned out says so in the prompt and the child dispatches, unmodified. Also left alone: `workerPrompt.ts` — the root contract already authorizes fan-out *"when work genuinely decomposes"*, and the root is the one agent whose fan-out is wanted.
 
 Pinned by a new test in `agent-dispatch-hook.test.ts` (the lead-with-the-default wording plus the re-hinged conditional) and one in `scratchpad-hook.test.ts` (the codex block).
+
+
+## 2026-08-06: the canonical scratchpad is DELETED — a free scratch directory, and compaction recovery moves to the recurring prompt
+
+Frizz provisioned one canonical `scratch.md` per thread and a `SessionStart` hook spliced its HEAD into
+the context window after every compaction. The argument for the injection was sound and is worth
+restating, because it is what any replacement has to answer: a bare "remember to read your scratchpad"
+routes recovery through a decision the model can skip, which is exactly the failure the pad existed to
+prevent.
+
+It still lost, on three counts. It made a MAINTAINED FILE the price of admission for every worker,
+including the ones whose whole task was one edit. It needed a merge-only contract per backend to stop
+sub-agents clobbering the one document — an epilogue in `agent-dispatch.mjs`, a `--mode=subagent-start`
+epilogue for codex, a legend line in every provisioned pad, and a paragraph of the worker contract, all
+of it policing a hazard rather than removing it. And the injection was INVISIBLE to the operator, who
+could neither see what their worker would be handed nor change it.
+
+**What replaced it, maintainer's design:** the thread gets `.frizz/threads/<session-id>/` as a free-form
+scratch DIRECTORY — nothing provisioned into it, no reserved filename, no format — and compaction
+recovery moves to `mcp__frizz__recurring_prompt`'s new POST-COMPACTION trigger (scheduler SOURCE 7,
+landed the same day). The worker writes whatever doc it likes and LINKS it in the prompt; frizz re-sends
+that text the instant the context is summarized away. Durable in SQLite, visible and editable in the
+thread footer, and the worker chooses what it gets back.
+
+The sub-agent story falls out for free: **one file per writer**. There is nothing to merge, so there is
+nothing to clobber, and the entire merge contract is deleted rather than reworded. Both child epilogues
+now say "write your OWN file; never edit or delete a file another agent wrote". The delegated-authority
+carve-out ("write only <path>" must not forbid the child's own coordination file) MOVED out of the
+worker contract and into the two epilogues that actually reach a child — it is pinned in
+`agent-dispatch-hook.test.ts` and `scratchpad-hook.test.ts` rather than in the contract goldens.
+
+**The accepted cost, stated plainly rather than engineered around.** The maintainer chose this over a
+hybrid that kept a canonical doc, knowing compaction recovery degrades from a guaranteed injection to a
+pointer the model can skip. So the hook now NAMES the files in the directory and never their content
+(`scratchpad-hook.test.ts` pins that a body written into a scratch file does not appear in the
+injection). Re-growing that listing back into a content injection would restore exactly what was
+removed. The guaranteed channel is the arming, and every surface that mentions the directory also
+mentions `post_compaction: true`, because a folder nothing ever reads back is a folder of notes nobody
+opens.
+
+**Two migrations that cost nothing.** `discover.ts`'s transcript-recovery sentinel shortened from
+`threads/<id>/scratch.md` to `threads/<id>/` — the new string is a PREFIX of the old one, so every
+transcript written before today still matches and no live thread lost its recovery path (pinned by
+`discover.test.ts`). And the Doc tab now renders the directory: files concatenated under a heading
+each, newest first, dotfiles excluded (frizz's own `.scratchpad-state.json` is not the worker's notes),
+binaries named rather than inlined, with per-file and total caps that say when they truncated. It is
+gated on the directory being NON-EMPTY rather than merely present, since dispatch now creates it empty
+and "exists" stopped meaning "the worker wrote something".

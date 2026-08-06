@@ -14,13 +14,13 @@ import { sendEagerFollowUp } from "./eagerComposerSubmission.ts"
 //
 // It is NOT "start a fresh agent": the transcript is on disk, so the cold resume replays the whole
 // conversation into the new process, and the server rebuilds the worker system prompt on the way in.
-// The thread keeps its history, its scratchpad and its identity — it just comes back on current tooling.
+// The thread keeps its history, its scratch directory and its identity — it just comes back on current tooling.
 //
 // Delivering a message is the point rather than an afterthought. Retiring the daemon alone would leave
 // the operator staring at a card where nothing visibly happened until the thread's next natural wake;
 // carrying a continuation makes the restart the observable act it reads as.
 export const RESTART_WORKER_MESSAGE =
-  "Your worker process was restarted so it picks up frizz's current tooling (hooks and worker contract). Re-read your scratchpad, then continue exactly where you left off."
+  "Your worker process was restarted so it picks up frizz's current tooling (hooks and worker contract). Re-read whatever you left in your scratch directory, then continue exactly where you left off."
 
 // Live sub-agents do NOT gate this verb. A restart does kill the parent's in-memory children, and for a
 // while that reasoning disabled the button whenever any of them was running — but the operator reaching

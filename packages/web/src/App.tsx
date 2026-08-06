@@ -228,7 +228,7 @@ export function App() {
 
   // NOTE: there is deliberately NO "this repo has no .frizz/" branch here. Threads are session-first
   // (the registry in ui.db IS the board); `.frizz/` only holds scratchpads and plans, and dispatch
-  // creates it on the way (writeScratchpad → ensureSafeDirectDirectory). Gating the shell on it
+  // creates it on the way (writeScratchDir → ensureSafeDirectDirectory). Gating the shell on it
   // inverted the fresh-repo experience: a repo with an EMPTY `.frizz/` got the real first-run view,
   // while a repo without one got a dead end that said "dispatch a first thread" with no composer to
   // do it in. A `.frizz`-less repo is simply a board with zero threads — TodosView's `nothingAtAll`

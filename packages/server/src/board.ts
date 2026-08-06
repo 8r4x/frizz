@@ -1,5 +1,6 @@
 import {
   existsSync,
+  readdirSync,
   watch as fsWatch,
   type FSWatcher,
 } from "node:fs"
@@ -16,7 +17,7 @@ import type { Tailer, SessionTelemetry } from "./tailer.ts"
 import type { InteractionChange } from "./interaction-store.ts"
 import { frizzDirExists } from "./frizz.ts"
 import { parseDeliveryLedger } from "./delivery-ledger.ts"
-import { effectivePermissionMode, resolveLegacyThreadFile, scratchpadRelPath } from "./dispatch.ts"
+import { effectivePermissionMode, resolveLegacyThreadFile, scratchDirRelPath } from "./dispatch.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
 import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 import { listPlanFiles } from "./plan-files.ts"
@@ -481,11 +482,24 @@ export function deriveAwaitingBackground(
   return deriveNeedsYou({ ...row, bg_snooze_rested_at: null }, tele, runtime, hasActionableInteraction, nowMs, limitPause, false)
 }
 
-// The scratchpad path for a session, iff the file exists under the project dir (else undefined so the
-// client offers no doc tab). Convention: .frizz/threads/<session_id>/scratch.md.
-function scratchpadPathIfExists(projectDir: string, sessionId: string): string | undefined {
-  const rel = scratchpadRelPath(sessionId)
-  return existsSync(join(projectDir, rel)) ? rel : undefined
+// The scratch directory for a session, iff it holds anything (else undefined, so the client offers no
+// doc tab). Convention: .frizz/threads/<session_id>/.
+//
+// NON-EMPTY, not merely PRESENT, and that distinction is the whole point since 2026-08-06: dispatch now
+// provisions the directory EMPTY, so existence stopped meaning "the worker wrote something". A tab
+// offered on every thread and empty on most is a tab nobody learns to trust.
+//
+// Dotfiles do not count. Frizz keeps its own per-thread state in here (`.scratchpad-state.json`), and a
+// tab that appeared because the nudge hook wrote its bookkeeping would be reporting frizz to itself.
+function scratchDirPathIfNonEmpty(projectDir: string, sessionId: string): string | undefined {
+  const rel = scratchDirRelPath(sessionId)
+  try {
+    const entries = readdirSync(join(projectDir, rel))
+    return entries.some((name) => !name.startsWith(".")) ? rel : undefined
+  } catch {
+    // Absent or unreadable — no tab, exactly as before.
+    return undefined
+  }
 }
 
 // A REGISTERED session thread's view (id = row.slug). Runtime via the shared deriveRuntime (tmux-aware);
@@ -743,7 +757,7 @@ function sessionThreadView(
     crashed,
     pendingInteraction: interactionPresence.pending,
     actionableInteraction: interactionPresence.needsUser,
-    scratchpadPath: scratchpadPathIfExists(projectDir, row.session_id),
+    scratchpadPath: scratchDirPathIfNonEmpty(projectDir, row.session_id),
     // Preserve only a durable, canonical backend identity. In particular, Claude is not inferred
     // from today's dispatch preference: unknown/migrated rows remain unmarked, while rows whose
     // database default was explicitly normalized to "claude" get the same per-thread identity as

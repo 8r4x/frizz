@@ -76,7 +76,7 @@ function directFrizzRoot(projectDir: string): string | null {
 // Whether `.frizz/` exists. This is a STORAGE capability probe (plans, scratchpads, the legacy CLI —
 // which would just print a "no .frizz/" notice), NOT a board-existence check: threads are session-first
 // and live in the ui.db registry, so a project with no `.frizz/` can still have a full board, and
-// dispatch creates the directory on its way (see writeScratchpad).
+// dispatch creates the directory on its way (see writeScratchDir).
 export function frizzDirExists(projectDir: string): boolean {
   return directFrizzRoot(projectDir) !== null
 }

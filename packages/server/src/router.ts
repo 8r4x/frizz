@@ -1,4 +1,10 @@
-import { readFileSync } from "node:fs"
+import { readFileSync, readdirSync, statSync } from "node:fs"
+
+// Bounds on what the scratch-directory doc tab renders. The directory is agent-written and unbounded by
+// design, so the tab reads a BUDGET rather than a folder: enough that a real working doc arrives whole,
+// small enough that a thread which dumped a build log into its scratch space cannot stall the click.
+const SCRATCH_FILE_MAX = 100_000
+const SCRATCH_TOTAL_MAX = 300_000
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { z } from "zod"
@@ -89,7 +95,7 @@ import { openExternalUrl } from "./open-external.ts"
 import { openLocalFile, resolveOpenableFile } from "./local-file.ts"
 import { openableFileRoots } from "./project.ts"
 import { ghInstalled, ghAuthed, ghRepo, listItems, hydrateIssue, hydratePr, renderGithubPrompt, effectiveTemplate, DEFAULT_ISSUE_PROMPT, DEFAULT_PR_PROMPT } from "./github.ts"
-import { slugify, resolveSlug, resolveLegacyThreadFile, scratchpadRelPath, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock } from "./dispatch.ts"
+import { slugify, resolveSlug, resolveLegacyThreadFile, scratchDirRelPath, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock } from "./dispatch.ts"
 import { readCodexModels } from "./backend/codex-models.ts"
 import { codexSandbox } from "./backend/codex.ts"
 import type { CodexSandboxMode } from "./backend/codex-app-server.ts"
@@ -2026,19 +2032,71 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
-    // The thread's scratchpad (.frizz/threads/<session-id>/scratch.md) — the worker's compaction-proof
-    // working memory, rendered as the thread's doc tab. "" when never provisioned / foreign.
+    // The thread's SCRATCH DIRECTORY (.frizz/threads/<session-id>/), rendered as the thread's doc tab.
+    // "" when empty / never provisioned / foreign.
+    //
+    // It reads a FOLDER now, not one file. The worker owns the shape of what is in there — one doc, a
+    // file per sub-agent, or nothing — so this concatenates whatever it finds under a heading each,
+    // NEWEST FIRST because the thing most worth seeing is what was written last.
+    //
+    // Everything here is a bound, and every bound is deliberate: this is agent-written content of
+    // unknown size on a latency-sensitive tab click. Dotfiles are frizz's own per-thread bookkeeping and
+    // never the worker's notes; a non-text file would render as mojibake, so it is listed rather than
+    // inlined; and both the per-file and the total cap say plainly that they truncated instead of
+    // quietly handing back a prefix.
     threadScratchpad: query({
       input: SlugInput,
       output: z.object({ markdown: z.string() }),
       handler: async ({ input }) => {
         const row = ctx.storage.getSession(input.slug)
         if (!row) return { markdown: "" }
+        const dir = join(ctx.project.dir, scratchDirRelPath(row.session_id))
+        let names: string[]
         try {
-          return { markdown: readFileSync(join(ctx.project.dir, scratchpadRelPath(row.session_id)), "utf8") }
+          names = readdirSync(dir).filter((name) => !name.startsWith("."))
         } catch {
           return { markdown: "" }
         }
+        const files: { name: string; mtimeMs: number; size: number }[] = []
+        for (const name of names) {
+          try {
+            const st = statSync(join(dir, name))
+            if (!st.isFile()) continue
+            files.push({ name, mtimeMs: st.mtimeMs, size: st.size })
+          } catch {
+            // A file that vanished between the listing and the stat is simply not shown.
+          }
+        }
+        if (files.length === 0) return { markdown: "" }
+        files.sort((a, b) => b.mtimeMs - a.mtimeMs)
+        const sections: string[] = []
+        let budget = SCRATCH_TOTAL_MAX
+        for (const file of files) {
+          if (budget <= 0) {
+            sections.push(`## ${file.name}\n\n_Not shown — this thread's scratch directory is larger than the tab renders._`)
+            continue
+          }
+          let body: string
+          try {
+            body = readFileSync(join(dir, file.name), "utf8")
+          } catch {
+            sections.push(`## ${file.name}\n\n_Could not be read._`)
+            continue
+          }
+          // A NUL byte is the cheap, dependency-free tell that this is not text. Rendering a binary into
+          // a markdown pane produces a screenful of replacement characters and no way to tell what
+          // happened, so it is named and skipped instead.
+          if (body.includes("\0")) {
+            sections.push(`## ${file.name}\n\n_Not text (${file.size} bytes)._`)
+            continue
+          }
+          const clipped = body.length > SCRATCH_FILE_MAX
+            ? `${body.slice(0, SCRATCH_FILE_MAX)}\n\n_…clipped — open the file for the rest._`
+            : body
+          budget -= clipped.length
+          sections.push(`## ${file.name}\n\n${clipped.trim()}`)
+        }
+        return { markdown: sections.join("\n\n") }
       },
     }),
 

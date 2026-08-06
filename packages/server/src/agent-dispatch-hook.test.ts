@@ -78,10 +78,19 @@ test("Agent dispatch hook tells every helper how to collect a helper of its own"
   assert.match(prompt, /description. naming its narrower slice/)
 })
 
-test("Agent dispatch hook keeps the handoff, scratchpad and upward-channel coordination", () => {
+test("Agent dispatch hook keeps the handoff, scratch-file and upward-channel coordination", () => {
   const prompt = output(dispatch).updatedInput.prompt as string
   assert.match(prompt, /Your final message is the handoff/)
-  assert.match(prompt, /never delete, truncate, reinitialize, move, or replace the whole file/i)
+  // One file per writer replaced the shared-document merge contract (2026-08-06): the hazard it
+  // policed — a child rewriting or rolling back a document it did not create — cannot arise now.
+  assert.match(prompt, /Write your OWN file there/)
+  assert.match(prompt, /never edit or delete a file another agent wrote/)
+  assert.doesNotMatch(prompt, /merge your own scoped progress/, "the merge mandate is gone, not reworded")
+  // The delegated-authority carve-out lives HERE now, not in the worker contract: a child told
+  // "write only <path>" must not read that as forbidding its own coordination file.
+  assert.match(prompt, /Frizz coordination state, not a project deliverable or source edit/)
+  assert.match(prompt, /write only <path>/)
+  assert.match(prompt, /location alone neither permits nor forbids editing/)
   assert.match(prompt, /SendMessage\(\{to: "main"/)
 })
 

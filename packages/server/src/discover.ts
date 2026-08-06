@@ -36,10 +36,14 @@ const DISCOVER_MAX_SCAN = 40
 // directory scan for an ordinary just-spawned thread whose file simply isn't written yet.
 export const DISCOVERY_GRACE_MS = 60_000
 
-// The content sentinel for a session: its scratchpad path tail. Embeds the ORIGINAL pinned id, so it is
-// stable across filename drift. `/` and `.` are not JSON-escaped, so this matches the raw JSONL bytes.
+// The content sentinel for a session: its scratch-directory path tail. Embeds the ORIGINAL pinned id, so
+// it is stable across filename drift. `/` is not JSON-escaped, so this matches the raw JSONL bytes.
+//
+// It used to be `threads/<id>/scratch.md`, and the shortening to the directory is FREE rather than a
+// migration: the old string CONTAINS this one, so a transcript written before 2026-08-06 still matches.
+// Nothing had to be re-indexed and no live thread lost its recovery path.
 export function sentinelFor(sessionId: string): string {
-  return `threads/${sessionId}/scratch.md`
+  return `threads/${sessionId}/`
 }
 
 // Read up to HEAD_BYTES from the top of a file as UTF-8. Any error → "" (caller treats as no-match).

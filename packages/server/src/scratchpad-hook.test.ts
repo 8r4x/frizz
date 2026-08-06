@@ -5,16 +5,22 @@ import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, utimesSync } from 
 import { tmpdir } from "node:os"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
-import { scratchpadContent, codexScratchpadHookConfig } from "./dispatch.ts"
+import { codexScratchpadHookConfig } from "./dispatch.ts"
 
-// ---- scratchpad reinforcement hook (cc-worker/hooks/scratchpad.mjs) ----
-// Keeps the ONE per-thread scratchpad written and re-grounded across compaction: it injects the pad's
-// head back after a compaction/resume, hands it to the summarizer, and nudges when the context has
-// moved on since the last write. These tests EXECUTE the real hook the way Claude Code does — argv
-// flags, a JSON event on stdin, output on stdout — rather than asserting on its source, because the
-// whole value of the hook is its wire behavior. Verified live against cli 2.1.220 as well: a real
-// session quoted injected text with zero tool calls, `PreCompact:manual` logged status 0, and
-// PostToolUse additionalContext reached the model mid-turn.
+// ---- scratch-directory hook (cc-worker/hooks/scratchpad.mjs) ----
+// Keeps a worker aware of its per-thread scratch DIRECTORY and re-orients it there when the context is
+// lost: it names what is in the directory after a compaction/resume, tells the summarizer those files
+// exist, and nudges when the context has moved on since the last write. These tests EXECUTE the real
+// hook the way Claude Code does — argv flags, a JSON event on stdin, output on stdout — rather than
+// asserting on its source, because the whole value of the hook is its wire behavior. Verified live
+// against cli 2.1.220 as well: a real session quoted injected text with zero tool calls,
+// `PreCompact:manual` logged status 0, and PostToolUse additionalContext reached the model mid-turn.
+//
+// IT POINTS, IT NO LONGER INJECTS. Until 2026-08-06 frizz provisioned one canonical `scratch.md` and
+// this hook spliced its head into the emptied window. The maintainer replaced that with a free-form
+// directory plus the recurring prompt's post_compaction trigger, so the guaranteed channel is now
+// something the WORKER arms and the OPERATOR can see. What the hook still owes is the listing — and
+// the test below pins that it is a listing and never the content.
 
 const here = dirname(fileURLToPath(import.meta.url))
 const HOOK = join(here, "../../../cc-worker/hooks/scratchpad.mjs")
@@ -26,12 +32,14 @@ function newProject(): string {
   return dir
 }
 
-function padPath(dir: string): string {
-  return join(dir, ".frizz", "threads", SID, "scratch.md")
+function scratchPath(dir: string, name = "notes.md"): string {
+  return join(dir, ".frizz", "threads", SID, name)
 }
 
-function writePad(dir: string, body: string): void {
-  writeFileSync(padPath(dir), body)
+/** Write one file into the thread's scratch directory. The worker chooses these names; nothing in
+ *  frizz reserves one, so the tests use several to prove the hook does not privilege any. */
+function writeScratch(dir: string, body: string, name = "notes.md"): void {
+  writeFileSync(scratchPath(dir, name), body)
 }
 
 // A transcript whose newest usage record reports `tokens` of context fill — the same shape Claude
@@ -72,39 +80,44 @@ function additionalContext(stdout: string): string {
   return JSON.parse(stdout).hookSpecificOutput.additionalContext as string
 }
 
-test("a fresh startup teaches the contract instead of echoing the pad's own skeleton", () => {
+test("a fresh startup teaches the ARRANGEMENT — the directory is useless without the arming", () => {
   const dir = newProject()
-  // The real skeleton frizz writes at dispatch — headings, orientation line, an empty task box.
-  writePad(dir, scratchpadContent("some effort"))
   const ctx = additionalContext(runHook(dir, ["--mode=session-start"], { session_id: SID, source: "startup" }))
-  assert.match(ctx, /⟦scratchpad⟧/)
-  assert.match(ctx, /is the CANONICAL document for this thread/)
-  // Injecting an empty template back would be pure noise, and a fresh start has lost nothing.
-  assert.doesNotMatch(ctx, /⟦end scratchpad⟧/)
-  assert.doesNotMatch(ctx, /reground here/)
+  assert.match(ctx, /⟦scratch directory⟧/)
+  assert.match(ctx, /nothing in it is read automatically/)
+  // The whole point of the replacement: the file is inert until a post_compaction prompt links it.
+  assert.match(ctx, /post_compaction: true/)
+  assert.match(ctx, /That arming, not the file, is what makes it come back/)
 })
 
-test("a written scratchpad's head is injected BYTE-FOR-BYTE after a compaction, with a re-read pointer", () => {
+test("after a compaction the hook NAMES the scratch files and never injects their content", () => {
   const dir = newProject()
-  const pad = '# Scratchpad\n\nRejected: retries — the human said "they just move the race".\n\tindented\n'
-  writePad(dir, pad)
+  // Content that would be unmistakable if it leaked into the injection.
+  writeScratch(dir, "UNMISTAKABLE-BODY-TEXT\n".repeat(40), "plan.md")
+  writeScratch(dir, "reviewer findings", "reviewer.md")
+  // frizz's own per-thread bookkeeping lives in the same directory and is NOT the worker's notes.
+  writeFileSync(scratchPath(dir, ".scratchpad-state.json"), "{}")
   const ctx = additionalContext(runHook(dir, ["--mode=session-start"], { session_id: SID, source: "compact" }))
-  assert.ok(ctx.includes(pad), "the pad must appear verbatim, not reformatted")
-  assert.match(ctx, /⟦scratchpad — reground here⟧/)
-  assert.match(ctx, /RE-GROUND ON IT BEFORE DOING ANYTHING ELSE/, "the pad is the canonical record")
-  assert.match(ctx, /re-read the full file/i, "injection is the floor; the pointer is the ceiling")
-  assert.match(ctx, new RegExp(`\\.frizz/threads/${SID}/scratch\\.md`))
-  assert.match(ctx, /⟦end scratchpad⟧/)
+
+  assert.match(ctx, /⟦scratch directory⟧/)
+  assert.match(ctx, new RegExp(`\\.frizz/threads/${SID}/plan\\.md`))
+  assert.match(ctx, new RegExp(`\\.frizz/threads/${SID}/reviewer\\.md`))
+  // THE LOAD-BEARING ASSERTION. Naming is the accepted cost of dropping the canonical pad; quietly
+  // re-growing this back into a content injection would restore exactly what was removed.
+  assert.doesNotMatch(ctx, /UNMISTAKABLE-BODY-TEXT/, "a listing, never the content")
+  assert.doesNotMatch(ctx, /scratchpad-state/, "frizz's own bookkeeping is not the worker's notes")
+  // And it teaches the guaranteed channel, since a pointer is skippable by construction.
+  assert.match(ctx, /post_compaction: true/)
 })
 
-test("a fresh startup does not pay for the pad — only the context-losing sources restore it", () => {
+test("a fresh startup does not pay for the listing — only the context-losing sources get it", () => {
   const dir = newProject()
-  writePad(dir, "# Scratchpad\n\nreal content here\n")
+  writeScratch(dir, "real notes here\n", "plan.md")
   const startup = additionalContext(runHook(dir, ["--mode=session-start"], { session_id: SID, source: "startup" }))
-  assert.doesNotMatch(startup, /⟦end scratchpad⟧/, "a brand-new session has lost nothing to restore")
+  assert.doesNotMatch(startup, /plan\.md/, "a brand-new session has lost nothing to re-orient on")
   for (const source of ["compact", "resume", "clear"]) {
     const ctx = additionalContext(runHook(dir, ["--mode=session-start"], { session_id: SID, source }))
-    assert.match(ctx, /⟦end scratchpad⟧/, `${source} has lost context and must get the pad back`)
+    assert.match(ctx, /plan\.md/, `${source} has lost context and must be told what it left itself`)
   }
 })
 
@@ -116,9 +129,11 @@ test("a fresh startup does not pay for the pad — only the context-losing sourc
 // that lands in that exact window, so it is where the preamble gets answered. Pinned on BOTH pad
 // states, because a compacted worker with an empty pad is the one least able to argue with it.
 test("a compaction re-ground contradicts the summary's 'ran out of context' preamble", () => {
-  for (const pad of ["# Scratchpad\n\nthe approach and why\n", scratchpadContent("some effort")]) {
+  // Pinned on BOTH directory states — a compacted worker that left itself nothing is the one least
+  // able to argue with the preamble.
+  for (const write of [true, false]) {
     const dir = newProject()
-    writePad(dir, pad)
+    if (write) writeScratch(dir, "the approach and why\n", "plan.md")
     const ctx = additionalContext(runHook(dir, ["--mode=session-start"], { session_id: SID, source: "compact" }))
     assert.match(ctx, /ran out of context/, "the preamble is quoted so the worker knows what is being corrected")
     assert.match(ctx, /this window is close to EMPTY again/)
@@ -129,40 +144,43 @@ test("a compaction re-ground contradicts the summary's 'ran out of context' prea
 
 test("only a COMPACT start answers the preamble — a resume never saw one", () => {
   const dir = newProject()
-  writePad(dir, "# Scratchpad\n\nthe approach and why\n")
+  writeScratch(dir, "the approach and why\n", "plan.md")
   for (const source of ["resume", "clear"]) {
     const ctx = additionalContext(runHook(dir, ["--mode=session-start"], { session_id: SID, source }))
-    assert.match(ctx, /⟦scratchpad — reground here⟧/, `${source} still re-grounds`)
+    assert.match(ctx, /⟦scratch directory⟧/, `${source} still re-orients`)
     assert.doesNotMatch(ctx, /ran out of context/, `${source} gets no compaction summary, so there is nothing to correct`)
   }
 })
 
 test("precompact emits PLAIN stdout (never JSON) so it reaches the summarizer's instructions", () => {
   const dir = newProject()
-  writePad(dir, "the approach and why\n")
+  writeScratch(dir, "the approach and why\n", "plan.md")
   const out = runHook(dir, ["--mode=precompact"], { session_id: SID, trigger: "auto" })
-  assert.ok(out.includes("the approach and why"))
+  assert.match(out, /plan\.md/, "the summarizer is told the file exists so it can carry the path forward")
+  assert.doesNotMatch(out, /the approach and why/, "the summarizer gets the path, not the prose")
   // Emitting JSON here would hand the summarizer a blob of JSON as its literal instructions.
   assert.throws(() => JSON.parse(out), "precompact output must not be JSON")
   assert.doesNotMatch(out, /hookSpecificOutput/)
-  // An unwritten pad has nothing to preserve.
-  writePad(dir, scratchpadContent("some effort"))
+})
+
+test("precompact is silent when the worker wrote nothing", () => {
+  const dir = newProject()
   assert.equal(runHook(dir, ["--mode=precompact"], { session_id: SID, trigger: "auto" }), "")
 })
 
-test("an oversized pad is clipped, and says so rather than silently truncating", () => {
+test("a large directory is summarized rather than listed line by line", () => {
   const dir = newProject()
-  writePad(dir, "x".repeat(5000))
+  for (let i = 0; i < 12; i++) writeScratch(dir, "x", `note-${i}.md`)
   const ctx = additionalContext(
-    runHook(dir, ["--mode=session-start"], { session_id: SID, source: "compact" }, { FRIZZ_SCRATCHPAD_MAX_CHARS: "500" })
+    runHook(dir, ["--mode=session-start"], { session_id: SID, source: "compact" }, { FRIZZ_SCRATCH_MAX_LISTED: "5" })
   )
-  assert.match(ctx, /clipped at 500 characters/)
-  assert.ok(!ctx.includes("x".repeat(600)), "content past the cap must not be injected")
+  assert.match(ctx, /…and 7 more/, "a worker with many files needs the count, not every line")
+  assert.equal((ctx.match(/note-\d+\.md/g) ?? []).length, 5)
 })
 
 test("every silence gate holds: project registration under frizz, sub-agents, and the kill switch", () => {
   const dir = newProject()
-  writePad(dir, "should never appear\n")
+  writeScratch(dir, "should never appear\n", "plan.md")
   const evt = { session_id: SID, source: "compact" }
   // The repo-local `.claude/settings.json` copy defers to the plugin one inside a frizz worker.
   assert.equal(runHook(dir, ["--mode=session-start", "--via=project"], evt, { FRIZZ_THREAD: "t" }), "")
@@ -177,7 +195,7 @@ test("every silence gate holds: project registration under frizz, sub-agents, an
   assert.equal(runHook(dir, ["--mode=session-start"], { source: "compact" }, { CLAUDE_CODE_SESSION_ID: "" }), "")
 })
 
-test("the codex child epilogue permits scoped progress merges but forbids destructive replacement", () => {
+test("the codex child epilogue gives a child its OWN file instead of a document to merge into", () => {
   const dir = newProject()
   const out = JSON.parse(
     runHook(dir, [`--session=${SID}`, "--mode=subagent-start"], {
@@ -188,18 +206,18 @@ test("the codex child epilogue permits scoped progress merges but forbids destru
   )
   assert.equal(out.hookSpecificOutput.hookEventName, "SubagentStart")
   const ctx = out.hookSpecificOutput.additionalContext as string
-  assert.match(ctx, new RegExp(`\\.frizz/threads/${SID}/scratch\\.md`))
-  assert.match(ctx, /Update your own task progress in it as you work/)
-  assert.match(ctx, /rather than leaving the root as its sole writer/)
-  assert.match(ctx, /Before every edit, re-read the current file/)
-  assert.match(ctx, /patch only your scoped task\/progress entry/)
-  assert.match(ctx, /preserving every other agent’s content/)
+  assert.match(ctx, new RegExp(`\\.frizz/threads/${SID}/`))
+  assert.match(ctx, /create your own file in it/)
+  // The failure this replaced: an undifferentiated "keep the doc current" mandate once made a native
+  // child replace a shared document with its task notes, then delete the replacement as a rollback.
+  // One file per writer removes the hazard instead of policing it.
+  assert.match(ctx, /never edit, replace or delete a file another agent wrote/)
+  assert.match(ctx, /nothing to merge and nothing to clobber/)
+  assert.doesNotMatch(ctx, /merge your own scoped progress/, "the merge mandate is gone, not reworded")
+  // The delegated-authority carve-out survives: a task that says "write only <path>" must not be read
+  // as forbidding the child's own coordination file.
   assert.match(ctx, /Frizz coordination state, not a project deliverable or source edit/)
-  assert.match(ctx, /explicit exception to delegated phrases such as “write only <path>”/)
-  assert.match(ctx, /never classify that merge as unauthorized or roll it back/)
-  assert.match(ctx, /Never delete, truncate, reinitialize, move, or replace the whole file/)
-  assert.match(ctx, /not even to “clean up” or undo your own mistaken change/)
-  assert.match(ctx, /repository root/)
+  assert.match(ctx, /“write only <path>”/)
   assert.match(ctx, /location alone neither permits nor forbids editing/)
 })
 
@@ -227,19 +245,19 @@ test("the nudge tracks context GROWTH, not an absolute threshold or wall clock",
 
   assert.equal(nudge(20_000), "", "below the threshold the hook must say nothing")
 
-  // An unwritten pad measures growth from ZERO — the whole session is unpersisted.
+  // An EMPTY directory measures growth from ZERO — the whole session is unrecorded.
   const empty = additionalContext(nudge(70_000))
-  assert.match(empty, /⟦scratchpad empty⟧/)
+  assert.match(empty, /⟦scratch directory empty⟧/)
   assert.match(empty, /~70k tokens deep/)
 
   assert.equal(nudge(75_000), "", "a second nudge must not follow immediately")
 
-  writePad(dir, "now written with real content\n")
+  writeScratch(dir, "now written with real content\n", "plan.md")
   assert.equal(nudge(76_000), "", "a fresh write silences the nudge")
   assert.equal(nudge(120_000), "", "44k of growth is still under the interval")
 
   const restale = additionalContext(nudge(140_000))
-  assert.match(restale, /⟦scratchpad stale⟧/)
+  assert.match(restale, /⟦scratch notes stale⟧/)
   assert.match(restale, /grown ~64k tokens/)
 })
 
@@ -254,7 +272,7 @@ test("the mid-turn channel reports itself as PostToolUse so the harness accepts 
   // A frizz worker runs enormous autonomous turns; a turn-boundary-only nudge can miss a whole
   // session's work. The event name must match the firing hook or the payload is rejected.
   assert.equal(JSON.parse(out).hookSpecificOutput.hookEventName, "PostToolUse")
-  assert.match(additionalContext(out), /⟦scratchpad empty⟧/)
+  assert.match(additionalContext(out), /⟦scratch directory empty⟧/)
 })
 
 test("both nudge channels share one interval, so mid-turn firing does not multiply reminders", () => {
@@ -268,20 +286,21 @@ test("both nudge channels share one interval, so mid-turn firing does not multip
   assert.equal(runHook(dir, ["--mode=nudge", "--event=PostToolUse"], t(80_000), stale), "")
 })
 
-test("the nudge rebases when a human hand-edits the pad mid-session", () => {
+test("the nudge rebases when ANY file in the directory is touched, by agent or human", () => {
   const dir = newProject()
   const stale = { FRIZZ_SCRATCHPAD_STALE_TOKENS: "10000" }
   const nudge = (tokens: number) =>
     runHook(dir, ["--mode=nudge"], { session_id: SID, transcript_path: writeTranscript(dir, tokens) }, stale)
 
-  writePad(dir, "v1 with content\n")
+  writeScratch(dir, "v1 with content\n", "plan.md")
   nudge(20_000)
   assert.notEqual(nudge(40_000), "", "stale after 20k of growth")
 
-  writePad(dir, "v2, edited by the human\n")
+  // A DIFFERENT file — the clock is the newest write across the whole directory, not one path's.
+  writeScratch(dir, "a sub-agent's findings\n", "reviewer.md")
   const future = new Date(Date.now() + 1000)
-  utimesSync(padPath(dir), future, future)
-  assert.equal(nudge(45_000), "", "an edit from any source rebases the baseline")
+  utimesSync(scratchPath(dir, "reviewer.md"), future, future)
+  assert.equal(nudge(45_000), "", "any write anywhere in the directory rebases the baseline")
 })
 
 test("the nudge is silent when the transcript carries no readable usage", () => {
@@ -329,35 +348,34 @@ test("hooks.json wires every channel, and no stale carryover registration surviv
 // Verified live: SessionStart / UserPromptSubmit / Stop all fired through CodexAppServerBridge with
 // the real scratchpad.mjs wired exactly as codexScratchpadHookConfig wires it.
 
-test("re-grounding is UNCONDITIONAL — no setting, no flag, no env var required", () => {
+test("re-orienting is UNCONDITIONAL — no setting, no flag, no env var required", () => {
   const dir = newProject()
-  writePad(dir, "# Scratchpad\n\ncanonical content\n")
-  // No opt-in of any kind: the pad is the canonical document, so a compacted worker always gets it
-  // back. An earlier revision gated this behind a default-OFF setting, which meant the DEFAULT worker
-  // recovered nothing after a compaction — the exact failure the pad exists to prevent.
+  writeScratch(dir, "canonical content\n", "plan.md")
+  // No opt-in of any kind. An earlier revision gated this behind a default-OFF setting, which meant
+  // the DEFAULT worker recovered nothing after a compaction — the exact failure it exists to prevent.
   const ctx = additionalContext(runHook(dir, ["--mode=session-start"], { session_id: SID, source: "compact" }))
-  assert.match(ctx, /⟦scratchpad — reground here⟧/)
-  assert.match(ctx, /canonical content/)
+  assert.match(ctx, /⟦scratch directory⟧/)
+  assert.match(ctx, /plan\.md/)
   // The only escape hatch is an explicit env off — a one-off, not a project posture.
   assert.equal(runHook(dir, ["--mode=session-start"], { session_id: SID, source: "compact" }, { FRIZZ_SCRATCHPAD_HOOK: "off" }), "")
 })
 
-test("an EMPTY pad still re-grounds after compaction, and says the pad is empty", () => {
+test("an EMPTY directory still re-orients after compaction, and says so plainly", () => {
   const dir = newProject()
-  writePad(dir, scratchpadContent("some effort"))
   const ctx = additionalContext(runHook(dir, ["--mode=session-start"], { session_id: SID, source: "compact" }))
-  // "You lost your context and your pad is empty" is the most urgent thing the next turn can hear —
-  // staying silent here was the old behavior and it left the worker with nothing.
-  assert.match(ctx, /⟦scratchpad — reground here⟧/)
-  assert.match(ctx, /absent or has nothing substantive in it/)
-  assert.match(ctx, /That exact path is authoritative/)
-  assert.match(ctx, /do not search other `\.frizz\/threads\/\*\/scratch\.md` files/)
+  // "You lost your context and left yourself nothing" is the most urgent thing the next turn can hear —
+  // staying silent here was the old behavior and it left the worker with nothing at all.
+  assert.match(ctx, /⟦scratch directory⟧/)
+  assert.match(ctx, /is EMPTY — you left yourself nothing to recover from/)
+  assert.match(ctx, /Do not search other `\.frizz\/threads\/\*\/` directories/)
   assert.match(ctx, /retained compaction summary/)
+  // …and it says how to not be here again.
+  assert.match(ctx, /post_compaction: true/)
 })
 
-test("--session overrides the reported id, so a codex worker finds FRIZZ's pad and not its own", () => {
+test("--session overrides the reported id, so a codex worker finds FRIZZ's directory not its own", () => {
   const dir = newProject()
-  writePad(dir, "# Scratchpad\n\nfrizz thread content\n")
+  writeScratch(dir, "frizz thread content\n", "frizz-thread-file.md")
   // Exactly what codex sends: its own rollout session id, and a transcript under ~/.codex/sessions.
   const codexEvent = {
     session_id: "019fb427-93aa-7ab0-91af-436173f99bc4",
@@ -365,33 +383,34 @@ test("--session overrides the reported id, so a codex worker finds FRIZZ's pad a
     hook_event_name: "SessionStart",
     transcript_path: "/Users/x/.codex/sessions/2026/07/30/rollout-019fb427.jsonl",
   }
-  // Without --session the hook addresses codex's id — a path that does not exist — so it can only
-  // fall back to the contract text.
+  // Without --session the hook addresses codex's id — a directory that does not exist — so it can
+  // only report an empty one.
   const derived = additionalContext(runHook(dir, ["--mode=session-start"], codexEvent))
-  assert.doesNotMatch(derived, /frizz thread content/)
-  // With it, the real pad is found and restored.
+  assert.doesNotMatch(derived, /frizz-thread-file\.md/)
+  // With it, the real directory is found.
   const explicit = additionalContext(
     runHook(dir, [`--session=${SID}`, "--mode=session-start"], codexEvent)
   )
-  assert.match(explicit, /frizz thread content/)
-  assert.match(explicit, new RegExp(`\\.frizz/threads/${SID}/scratch\\.md`))
+  assert.match(explicit, /frizz-thread-file\.md/)
+  assert.match(explicit, new RegExp(`\\.frizz/threads/${SID}/`))
 })
 
-// The scratchpad body carries NO reserved fields. A `stop_hook:` frontmatter key used to register a
-// rest-time reminder; it was removed 2026-08-06 after 659 pads on disk turned out to carry no
-// frontmatter at all, and `mcp__frizz__recurring_prompt` (SQLite `recurring_on_rest`) does the same
-// job durably and visibly in the thread footer. Frontmatter in a pad is now inert prose.
-test("frontmatter in the pad is inert — it is injected as ordinary content, not parsed", () => {
+// NO FILENAME IS RESERVED, and nothing in a scratch file is parsed. `scratch.md` used to be the one
+// canonical name with a `stop_hook:` frontmatter key on top of it; both are gone (2026-08-06). A file
+// still called scratch.md is now just another file the worker happened to name that way.
+test("no filename is privileged — scratch.md is listed like any other file, and nothing is parsed", () => {
   const dir = newProject()
-  writePad(dir, "---\nstop_hook: Re-check the operation I still own.\n---\n\n# Scratchpad\n\nreal state\n")
+  writeScratch(dir, "---\nstop_hook: Re-check the operation I still own.\n---\n\nstate\n", "scratch.md")
+  writeScratch(dir, "other", "zzz-other.md")
   const out = additionalContext(runHook(dir, ["--mode=session-start"], { session_id: SID, source: "compact" }))
-  assert.match(out, /stop_hook: Re-check the operation I still own\./)
-  assert.match(out, /real state/)
+  assert.match(out, /scratch\.md/)
+  assert.match(out, /zzz-other\.md/)
+  assert.doesNotMatch(out, /stop_hook/, "frontmatter is not read, because no content is read")
 })
 
 test("a codex rollout carries no readable claude usage, so the nudge degrades to silence", () => {
   const dir = newProject()
-  writePad(dir, "content\n")
+  writeScratch(dir, "content\n", "plan.md")
   const rollout = join(dir, "rollout.jsonl")
   // The real codex rollout shape — event_msg/payload, not claude's message.usage.
   writeFileSync(
@@ -417,7 +436,7 @@ test("the codex hook config is built unconditionally, and carries what codex req
   // Codex silently SKIPS untrusted hook definitions, so without this the config is delivered and ignored.
   assert.equal(cfg.bypass_hook_trust, true)
   // Codex exposes no PreCompact/PostCompact wire type, so summarizer steering stays Claude-only.
-  // SubagentStart carries the shared-pad merge-only epilogue; the rest inject or nudge.
+  // SubagentStart carries the own-file epilogue; the rest orient or nudge.
   assert.deepEqual(Object.keys(cfg.hooks ?? {}).sort(), ["PostToolUse", "PreToolUse", "SessionStart", "SubagentStart", "UserPromptSubmit"])
   for (const [event, entries] of Object.entries(cfg.hooks ?? {})) {
     const cmd = entries[0].hooks[0].command

@@ -55,7 +55,7 @@ while its own watcher is still live — the wait IS its work.
 Give the child, literally, in the prompt:
 
 - the exact command to run and the terminal condition to stop on;
-- the repo path and the scratchpad path;
+- the repo path and the thread's scratch-directory path;
 - what to return: the verdict plus enough detail to act on a failure (job name, failing step, log tail);
 - an instruction not to fix anything — it observes and reports; you decide.
 

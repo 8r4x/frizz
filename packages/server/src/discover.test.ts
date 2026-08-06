@@ -9,13 +9,13 @@ function tmp() {
   return mkdtempSync(join(tmpdir(), "frizz-discover-"))
 }
 
-// Write a transcript whose first user message embeds the scratchpad sentinel for `ownerId` (the ORIGINAL
-// pinned id), simulating a worker whose file lives at a DIFFERENT filename `fileId`.
+// Write a transcript whose first user message embeds the scratch-directory sentinel for `ownerId` (the
+// ORIGINAL pinned id), simulating a worker whose file lives at a DIFFERENT filename `fileId`.
 function transcript(dir: string, fileId: string, ownerId: string, mtimeSec?: number) {
   const first = JSON.stringify({
     type: "user",
     timestamp: "2026-07-01T00:00:00.000Z",
-    message: { role: "user", content: `Your scratchpad is \`.frizz/threads/${ownerId}/scratch.md\` — keep state there.` },
+    message: { role: "user", content: `Your scratch directory is \`.frizz/threads/${ownerId}/\` — yours to use.` },
   })
   const path = join(dir, `${fileId}.jsonl`)
   writeFileSync(path, first + "\n")
@@ -23,8 +23,23 @@ function transcript(dir: string, fileId: string, ownerId: string, mtimeSec?: num
   return path
 }
 
-test("sentinelFor: the scratchpad path tail embeds the pinned id", () => {
-  assert.equal(sentinelFor("abc-123"), "threads/abc-123/scratch.md")
+test("sentinelFor: the scratch-directory path tail embeds the pinned id", () => {
+  assert.equal(sentinelFor("abc-123"), "threads/abc-123/")
+})
+
+// WHY SHORTENING THE SENTINEL WAS FREE. Until 2026-08-06 it was `threads/<id>/scratch.md`, and every
+// transcript on disk written before then carries that string. The new sentinel is a PREFIX of the old
+// one, so those transcripts still match and no live thread lost its recovery path — there was nothing
+// to migrate. Delete this test only if you are willing to strand every pre-2026-08-06 thread.
+test("discoverTranscriptId: a PRE-2026-08-06 transcript still matches the shortened sentinel", () => {
+  const dir = tmp()
+  const path = join(dir, "forked-id.jsonl")
+  writeFileSync(path, JSON.stringify({
+    type: "user",
+    timestamp: "2026-07-01T00:00:00.000Z",
+    message: { role: "user", content: "Your scratchpad is `.frizz/threads/pinned-id/scratch.md` — keep state there." },
+  }) + "\n")
+  assert.equal(discoverTranscriptId(dir, "pinned-id"), "forked-id")
 })
 
 test("discoverTranscriptId: finds a drifted transcript by its scratchpad sentinel", () => {

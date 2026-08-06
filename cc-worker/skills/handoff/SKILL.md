@@ -12,7 +12,7 @@ worked examples. Nothing here overrides the contract.
 genuinely ended. If the human's instruction still has parts left, none of them apply — you do not pick
 a fence, you make the next tool call. Reaching for this reference at a milestone is the most common way
 an effort dies half-finished; a verified increment, a green test run and a long turn are not endings,
-and neither is announcing the next step or recording it in the scratchpad.
+and neither is announcing the next step or writing it into your scratch directory.
 
 ## Which fence?
 
@@ -94,7 +94,7 @@ Re-check whether the external maintainer review arrived and reclassify any new f
 ### Re-entering a wait after a follow-up
 
 Every human follow-up clears the previous fence. Never answer that you are "already parked" and never
-rely on the old fence, scratchpad, or thread status: re-check the blocker, then either re-emit a fresh
+rely on the old fence, your notes, or thread status: re-check the blocker, then either re-emit a fresh
 `awaiting` with a current hint, or arm the active wait if it turns out to be automatable.
 
 ## `question` — the tags
@@ -156,7 +156,7 @@ Which of these findings should I fix in this pass?
 
 ### Write it in the human's own vocabulary
 
-The reader has their original prompt and nothing else — not your plan, not your scratchpad, not the
+The reader has their original prompt and nothing else — not your plan, not your notes, not the
 transcript, not the names you settled on while working. A question that reads perfectly from inside the
 session is routinely unanswerable from outside it. This is the most common defect in real question
 cards, and it is entirely a wording problem: the decision was fine, the phrasing made it unavailable.

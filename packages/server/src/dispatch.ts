@@ -198,93 +198,34 @@ function ensureSafeDirectDirectory(parent: string, name: string): string {
   return real
 }
 
-// The scratchpad skeleton (a CONVENTION, never validated): a compact continuity structure plus a
-// visible task-status/collaboration legend. Its body is ordinary free-form Markdown with NO reserved
-// fields — the `stop_hook:` frontmatter key was removed 2026-08-06 (unused in 659 pads on disk, and
-// superseded by the SQLite-backed `mcp__frizz__recurring_prompt`). Both backends share it with
-// sub-agents, so stable per-agent subsections + merge-only edits keep concurrent progress useful
-// instead of destructive.
-export function scratchpadContent(title: string, kind: BackendKind = "claude"): string {
-  const guide = `> Status legend: \`[ ]\` pending · \`[/]\` in progress · \`[x]\` complete · \`[-]\` cancelled · \`[?]\` blocked / needs input
-> Collaboration: re-read before every edit; preserve existing content; keep each agent's updates under its own \`### <agent path>\` subsection in Agent progress. A scoped scratchpad merge is Frizz coordination state and remains allowed when a delegated task limits its deliverable paths. Never delete, truncate, reinitialize, move, or replace the whole file.`
-  if (kind === "codex") {
-    return `# Scratchpad — ${title}
-
-The canonical record of this thread, your compaction-survival mechanism, and the progress document shared with native sub-agents.
-
-${guide}
-
-## Goal
-
-## Task list
-
-- [ ]
-
-## Decisions
-
-## Shared context
-
-## Agent progress
-
-## Verification
-
-## Next action
-`
-  }
-  return `# Scratchpad — ${title}
-
-The canonical record of this thread, your compaction-survival mechanism, and the blackboard your sub-agents read and update.
-
-${guide}
-
-## Goal
-
-## Task list
-
-- [ ]
-
-## Decisions
-
-## Shared context
-
-## Agent progress
-
-## Verification
-
-## Next action
-`
+// ---- THE THREAD SCRATCH DIRECTORY ----------------------------------------------------------------
+// `.frizz/threads/<sessionId>/` — a folder the worker and its sub-agents may use however they like, and
+// nothing more than that. NOTHING is provisioned into it: no skeleton, no reserved filename, no format.
+//
+// It REPLACED a canonical `scratch.md` (2026-08-06, maintainer's call). That pad was one file every
+// worker was told to maintain, whose head a hook spliced into the context after a compaction, and whose
+// sharing with sub-agents needed a whole merge-only contract — an epilogue per backend, a legend line in
+// every provisioned pad, and a paragraph of the worker contract — all of it existing only to stop
+// children clobbering the one file. A folder deletes that surface outright: each agent writes its OWN
+// file, so there is nothing to merge and nothing to clobber.
+//
+// What replaced the compaction injection is `mcp__frizz__recurring_prompt`'s POST-COMPACTION trigger
+// (scheduler SOURCE 7). The worker links whatever doc it wrote here and frizz hands that link back the
+// moment the context is summarized away. Durable in SQLite, and visible to the operator — which the hook
+// injection never was.
+export function scratchDirRelPath(sessionId: string): string {
+  return `.frizz/threads/${sessionId}`
 }
 
-// The thread scratchpad's project-relative path — the ONE spelling, shared by the writer below, the
-// board's doc-tab visibility probe, and the reader RPC. The tab is offered iff this file exists and
-// shows what this file holds, so a reader that spells the path out separately silently renders every
-// scratchpad as "No scratchpad yet." — which is exactly what it did.
-export function scratchpadRelPath(sessionId: string): string {
-  return `.frizz/threads/${sessionId}/scratch.md`
-}
-
-// Provision the thread's scratchpad (.frizz/threads/<sessionId>/scratch.md), atomic tmp+rename. Returns the
-// project-relative path. sessionId is a fresh UUID at both dispatch and adopt, so this never clobbers.
-export function writeScratchpad(projectDir: string, sessionId: string, title: string, kind: BackendKind = "claude"): string {
+// Provision the thread's scratch directory. Creates the folder and NOTHING inside it, returning the
+// project-relative path. sessionId is a fresh UUID at both dispatch and adopt, so this never collides.
+export function writeScratchDir(projectDir: string, sessionId: string): string {
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/.test(sessionId)) throw new Error("invalid session id")
   const projectRoot = realpathSync(projectDir)
   const frizzDir = ensureSafeDirectDirectory(projectRoot, ".frizz")
   const threadsDir = ensureSafeDirectDirectory(frizzDir, "threads")
-  const dir = ensureSafeDirectDirectory(threadsDir, sessionId)
-  const rel = scratchpadRelPath(sessionId)
-  const path = join(dir, "scratch.md")
-  // Deterministic per-session staging name lets restart recovery remove a SIGKILL artifact; the
-  // session id is unique, so randomizing this filename only made the orphan undiscoverable.
-  const tmp = join(dir, ".scratch.tmp")
-  try {
-    writeFileSync(tmp, scratchpadContent(title, kind), { flag: "wx", mode: 0o600 })
-    if (existsSync(path)) throw new Error("scratchpad already exists")
-    renameSync(tmp, path)
-  } catch (error) {
-    rmSync(tmp, { force: true })
-    throw error
-  }
-  return rel
+  ensureSafeDirectDirectory(threadsDir, sessionId)
+  return scratchDirRelPath(sessionId)
 }
 
 // The FIXED worker system prompt for `kind`, compiled in via workerPrompt.ts (single source of truth).
@@ -356,16 +297,21 @@ export function scratchpadHookScript(): string | undefined {
   return plugin ? join(plugin, "hooks", "scratchpad.mjs") : undefined
 }
 
-// The first USER message a dispatched agent receives: scratchpad orientation + custom instructions +
-// task. Session-first (2026-07-09) — the old thread-ownership contract is REPLACED by scratchpad
-// orientation (a new dispatch owns no .frizz file). The fixed worker prompt (workerPrompt.ts) and the
-// same scratchpad line at SYSTEM level travel via --append-system-prompt (see buildClaudeCommand) so
+// The first USER message a dispatched agent receives: scratch-directory orientation + custom
+// instructions + task. Session-first (2026-07-09) — the old thread-ownership contract is REPLACED by
+// this orientation (a new dispatch owns no .frizz file). The fixed worker prompt (workerPrompt.ts) and
+// the same scratch line at SYSTEM level travel via --append-system-prompt (see buildClaudeCommand) so
 // they survive compaction and re-apply on resume; this composes the visible-message half.
 export function composePrompt(sessionId: string, prompt: string, kind: BackendKind = "claude"): string {
-  const scratch =
+  // The sub-agent clause is the ONE thing that differs between backends here: Claude's children are
+  // dispatched with a prompt this worker writes, so it must be told to name the directory in it; codex's
+  // native children inherit the conversation and already have it.
+  const children =
     kind === "codex"
-      ? `Your scratchpad is \`.frizz/threads/${sessionId}/scratch.md\` — an OPTIONAL scratch file kept for you, not a deliverable. A single direct task usually needs nothing in it, and writing in it never substitutes for doing the work. On a long effort it is useful crash insurance and a shared progress document for native sub-agents: keep the approach, what you rejected, and the human's decisions in it as you go, mid-work, then keep working; re-read it after any compaction or resume before asserting anything. Each native sub-agent should merge its own scoped progress into it rather than leaving the root as its sole writer, but must re-read before each edit, preserve all existing content, and never delete, truncate, reinitialize, move, or replace the whole file.`
-      : `Your scratchpad is \`.frizz/threads/${sessionId}/scratch.md\` — an OPTIONAL scratch file kept for you, not a deliverable. A single direct task usually needs nothing in it, and writing in it never substitutes for doing the work. On a long effort it is useful crash insurance and the shared blackboard for your sub-agents: keep the approach, what you rejected, and the human's decisions in it as you go, mid-work, then keep working; re-read it after any compaction or resume, and pass its path to every sub-agent you dispatch. Each sub-agent should merge its own scoped progress into it rather than leaving the root as its sole writer, but must re-read before each edit, preserve all existing content, and never delete, truncate, reinitialize, move, or replace the whole file.`
+      ? "Native sub-agents share it — have each write its OWN file rather than all editing one."
+      : "Name it in a sub-agent's prompt when you want its notes to land somewhere you can read; give each child its OWN file rather than having them all edit one."
+  const scratch =
+    `Your scratch directory is \`.frizz/threads/${sessionId}/\` — yours to use however you like, for as many files as you like. It is EMPTY and nothing is expected in it: a single direct task usually needs nothing, and writing notes is never a substitute for doing the work. ${children} On a long effort, write the doc you would want if you lost your context — the approach, what you rejected, the human's decisions — and then ARM \`mcp__frizz__recurring_prompt\` with \`post_compaction: true\` and a prompt that LINKS that file, so frizz hands it back the moment your context is compacted. Nothing here is read automatically; the link you arm is what survives.`
   // The banner makes the system→human handoff unmistakable to the worker, and NOTHING of frizz's is
   // allowed below it: the framing note goes here, ABOVE, so everything past the banner is the
   // operator's prompt byte for byte. That is also what the transcript projectors cut on
@@ -375,14 +321,20 @@ export function composePrompt(sessionId: string, prompt: string, kind: BackendKi
   return `${scratch}${handoff}\n\n\n${DISPATCH_TASK_BANNER_MARKER}${prompt}`
 }
 
-// The SYSTEM-level scratchpad orientation (survives compaction, rebuilds on every resume): a scratchpad
-// line, plus a PLAN line when the thread is associated with a plan artifact. Passed as extraSystemPrompt
-// on dispatch, adopt, AND the followUp resume path.
+// The SYSTEM-level scratch-directory orientation (survives compaction, rebuilds on every resume): the
+// scratch line, plus a PLAN line when the thread is associated with a plan artifact. Passed as
+// extraSystemPrompt on dispatch, adopt, AND the followUp resume path.
+//
+// It names the POST-COMPACTION trigger deliberately. This text is one of the few things that reliably
+// reaches a worker after a resume, and a scratch directory nothing ever reads back is a folder of notes
+// nobody opens — the arming is what turns it into compaction insurance.
 export function scratchpadOrientation(sessionId: string, planPath?: string | null, kind: BackendKind = "claude"): string {
-  const scratch =
+  const children =
     kind === "codex"
-      ? `SCRATCHPAD (optional): .frizz/threads/${sessionId}/scratch.md — a scratch file kept FOR YOU, not a deliverable. A single direct task usually needs nothing in it; writing in it is never a substitute for doing the work. Useful on a long effort as crash insurance, and a shared progress document for native sub-agents (write your task list, the approach and what you rejected, and anything that must outlive your context there, as you go; re-read it after any compaction or resume). Each native sub-agent should merge its own scoped progress into it rather than leaving the root as its sole writer, but must re-read before each edit, preserve all existing content, and never delete, truncate, reinitialize, move, or replace the whole file.`
-      : `SCRATCHPAD (optional): .frizz/threads/${sessionId}/scratch.md — a scratch file kept FOR YOU, not a deliverable. A single direct task usually needs nothing in it; writing in it is never a substitute for doing the work. Useful on a long effort as crash insurance, and the shared blackboard for your sub-agents (write your task list, the approach and what you rejected, and anything that must outlive your context there, as you go; re-read it after any compaction or resume; pass this path in every sub-agent prompt). Each sub-agent should merge its own scoped progress into it rather than leaving the root as its sole writer, but must re-read before each edit, preserve all existing content, and never delete, truncate, reinitialize, move, or replace the whole file.`
+      ? "native sub-agents share it, so give each its own file"
+      : "name it in a sub-agent's prompt when you want its notes back, and give each child its own file"
+  const scratch =
+    `SCRATCH DIRECTORY: .frizz/threads/${sessionId}/ — yours, free-form, as many files as you like, and nothing is expected in it. A single direct task usually needs none; writing notes is never a substitute for doing the work. On a long effort write the doc you would want if you lost your context (${children}), then arm mcp__frizz__recurring_prompt with post_compaction: true and a prompt LINKING that file — frizz hands the link back when your context is compacted. Nothing in this directory is read automatically.`
   const lines = [scratch]
   if (planPath) lines.push(`PLAN: ${planPath} — the durable plan artifact this thread works from; read it FIRST.`)
   return lines.join("\n")
@@ -824,9 +776,12 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
   function cleanupDispatchFiles(scratchRel: string, built: BuiltCommand, sessionId: string): void {
     cleanupPrewrites(built)
     try {
-      rmSync(join(deps.project.dir, scratchRel), { force: true })
+      // `recursive` because this is a DIRECTORY now, not one file. A failed dispatch has produced no
+      // agent and therefore nothing in it, but removing it whole is what keeps a rejected dispatch from
+      // leaving a trace — and the path is session-id-keyed, so it can never name another worker.
+      rmSync(join(deps.project.dir, scratchRel), { force: true, recursive: true })
     } catch {
-      // The session-id-keyed scratchpad is inert and never identifies another worker.
+      // The session-id-keyed scratch directory is inert and never identifies another worker.
     }
     cleanupAdoptionSessionFiles(deps.project.dir, sessionId)
   }
@@ -874,10 +829,11 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       const effort = input.effort ?? settings.effort
       const planPath = validPlanPath(deps.project.dir, input.planPath)
 
-      // Session-first: provision the scratchpad (the durable working memory) — NO .frizz/<slug>.md file.
-      // The scratchpad keys on the frizz-minted sessionId, which stays the row's session_id for BOTH
-      // backends (codex's discovered rollout id is pinned separately on agent_session_id).
-      const scratchRel = writeScratchpad(deps.project.dir, sessionId, title, kind)
+      // Session-first: provision the thread's scratch DIRECTORY (empty; the worker fills it or does
+      // not) — NO .frizz/<slug>.md file. It keys on the frizz-minted sessionId, which stays the row's
+      // session_id for BOTH backends (codex's discovered rollout id is pinned separately on
+      // agent_session_id).
+      const scratchRel = writeScratchDir(deps.project.dir, sessionId)
 
       const prompt = composePrompt(sessionId, input.prompt, kind)
 
@@ -1120,9 +1076,9 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         slug +
         ".md` (a previous agent or session worked it — you have no access to that conversation, and you don't need it). READ THAT FILE FIRST for context: `## Goal` is the mission, `## Status`/`## Decisions`/`## Next step` are where things stand. It is CONTEXT, not a contract — do NOT edit its frontmatter. You work session-first from here: keep your working state in your scratchpad and signal end-of-turn with the done/awaiting fences. The human's message below is your steer on top of that context."
       const task = message?.trim() || "Pick up this thread and continue from where the file says things stand."
-      // Provision a scratchpad too (the adopted worker's durable memory); the legacy file stays read-only.
+      // Provision a scratch directory too (the adopted worker's own space); the legacy file stays read-only.
       try {
-        scratchRel = writeScratchpad(deps.project.dir, sessionId, slug)
+        scratchRel = writeScratchDir(deps.project.dir, sessionId)
       } catch {
         rollback()
         throw unavailable()

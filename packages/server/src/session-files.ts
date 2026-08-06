@@ -52,7 +52,7 @@ export function cleanupAdoptionSessionFiles(projectDir: string, sessionId: strin
   let clean = true
   if (isDirectDirectory(frizzDir)) {
     const threads = join(frizzDir, "threads")
-    // A UUID-named child belongs to exactly one dispatch. Remove the complete private scratchpad
+    // A UUID-named child belongs to exactly one dispatch. Remove the complete private scratch directory
     // directory rather than leaving an empty per-thread shell after a failed spawn/adoption.
     if (isDirectDirectory(threads)) {
       const child = join(threads, sessionId)

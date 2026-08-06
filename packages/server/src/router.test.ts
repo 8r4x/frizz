@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, utimesSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Hono } from "hono"
@@ -31,7 +31,7 @@ import type { AdoptionPaneLookup, PaneIdentity, PaneIdentity as PaneSnapshot } f
 import type { AppContext } from "./context.ts"
 import type { Project } from "./project.ts"
 import type { Tailer } from "./tailer.ts"
-import { writeScratchpad } from "./dispatch.ts"
+import { writeScratchDir } from "./dispatch.ts"
 import { providerResumeCommand, shellQuote } from "./external-terminal.ts"
 
 test("provider resume command is shell-safe", () => {
@@ -270,20 +270,44 @@ test("threadTerminalCommand offers the verified provider resume command in every
 // matters. `<cli> resume` starts a SEPARATE process off the transcript, so handing it back for a live
 // worker sends the human to a terminal that cannot show the in-flight turn or the permission prompt
 // the worker is parked on (that prompt is never written to the transcript at all).
-// The Doc tab is gated on the scratchpad file existing and filled by this RPC, so the reader must read
-// exactly what the writer wrote. It once read a path of its own (.frizz/scratch/<id>.md) that dispatch
-// never wrote, so every thread's Doc tab rendered "No scratchpad yet." Round-trip the real writer.
-test("threadScratchpad reads the scratchpad the dispatcher actually writes", async () => {
+// The Doc tab is gated on the scratch DIRECTORY being non-empty and filled by this RPC, so the reader
+// must read exactly where the writer wrote. It once read a path of its own (.frizz/scratch/<id>.md) that
+// dispatch never wrote, so every thread's Doc tab rendered "No scratchpad yet." Round-trip the real writer.
+test("threadScratchpad renders the scratch directory the dispatcher actually provisions", async () => {
   const h = harness()
   try {
     h.storage.upsertSession(row("scratch-thread"))
-    const rel = writeScratchpad(h.dir, "sid-scratch-thread", "Scratch thread")
-    assert.equal(rel, ".frizz/threads/sid-scratch-thread/scratch.md")
-    writeFileSync(join(h.dir, rel), "# Scratchpad\n\nreal worker notes\n")
+    const rel = writeScratchDir(h.dir, "sid-scratch-thread")
+    assert.equal(rel, ".frizz/threads/sid-scratch-thread")
 
-    assert.deepEqual(await h.router.threadScratchpad.handler({ input: { slug: "scratch-thread" } }), {
-      markdown: "# Scratchpad\n\nreal worker notes\n",
-    })
+    // A PROVISIONED-BUT-EMPTY directory is the state every fresh dispatch is in, and it must render as
+    // nothing — the tab is for what the worker wrote, not for the folder frizz made.
+    assert.deepEqual(await h.router.threadScratchpad.handler({ input: { slug: "scratch-thread" } }), { markdown: "" })
+
+    writeFileSync(join(h.dir, rel, "plan.md"), "real worker notes\n")
+    const one = await h.router.threadScratchpad.handler({ input: { slug: "scratch-thread" } })
+    assert.match(one.markdown, /## plan\.md/)
+    assert.match(one.markdown, /real worker notes/)
+
+    // SEVERAL files, NEWEST FIRST: with one doc per writer the most recent write is the one most worth
+    // seeing, and a stable alphabetical order would bury it under whatever a sub-agent wrote first.
+    const older = join(h.dir, rel, "aaa-first.md")
+    writeFileSync(older, "written earlier\n")
+    utimesSync(older, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000))
+    const many = await h.router.threadScratchpad.handler({ input: { slug: "scratch-thread" } })
+    assert.ok(many.markdown.indexOf("## plan.md") < many.markdown.indexOf("## aaa-first.md"), "newest first")
+
+    // Dotfiles are frizz's own per-thread bookkeeping, never the worker's notes.
+    writeFileSync(join(h.dir, rel, ".scratchpad-state.json"), '{"mtimeMs":1}')
+    const withState = await h.router.threadScratchpad.handler({ input: { slug: "scratch-thread" } })
+    assert.doesNotMatch(withState.markdown, /scratchpad-state/)
+
+    // A binary file is NAMED rather than rendered — a NUL-bearing body becomes a screenful of
+    // replacement characters with nothing to say what happened.
+    writeFileSync(join(h.dir, rel, "shot.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01]))
+    const withBinary = await h.router.threadScratchpad.handler({ input: { slug: "scratch-thread" } })
+    assert.match(withBinary.markdown, /## shot\.png/)
+    assert.match(withBinary.markdown, /_Not text \(6 bytes\)\._/)
 
     // Unowned slug and never-provisioned session both fail closed to the empty doc, never throw.
     assert.deepEqual(await h.router.threadScratchpad.handler({ input: { slug: "no-such-thread" } }), { markdown: "" })

@@ -1,49 +1,44 @@
 #!/usr/bin/env node
 // @ts-check
-// SCRATCHPAD REINFORCEMENT hook (frizz-worker) — keeps the ONE per-thread scratchpad
-// (`.frizz/threads/<sid>/scratch.md`) written and re-grounded across compaction. Run directly with
-// node (zero deps, max Node compat), mirroring the other hooks in this plugin.
+// SCRATCH-DIRECTORY hook (frizz-worker) — keeps a worker aware of the per-thread scratch directory
+// (`.frizz/threads/<sid>/`) it may use, and re-orients it on that directory when its context is lost.
+// Run directly with node (zero deps, max Node compat), mirroring the other hooks in this plugin.
 //
-// WHY THIS EXISTS: compaction is the largest source of context loss in a long session, and the
-// scratchpad is frizz's answer to it — but the scratchpad only works if two things happen, and
-// nothing was enforcing either. It has to be WRITTEN while the work is happening, and it has to be
-// RE-READ after the context is gone. A worker that forgets the first has nothing to recover; one
-// that forgets the second has a recovery it never opens.
+// WHAT THIS USED TO BE, AND WHY IT IS NOT ANY MORE. Until 2026-08-06 frizz provisioned ONE canonical
+// `scratch.md` per thread and this hook spliced its HEAD into the context window after every compaction,
+// on the argument that a bare "remember to read your scratchpad" routes recovery through a decision the
+// model can skip. That argument was sound and the mechanism still lost: it made a maintained file the
+// price of admission for every worker, it needed a merge-only contract per backend to keep sub-agents
+// from clobbering it, and the injection was invisible to the operator, who could neither see nor change
+// what their worker would be told.
 //
-// This hook closes both, and deliberately targets scratch.md rather than a second file of its own.
-// An earlier revision shipped a separate `carryover.md` brief; it was redundant with the scratchpad
-// and made the worker maintain two overlapping documents. ONE doc per thread is the rule — the
-// scratchpad the dispatcher already provisions, already names in the system prompt, and shares with
-// sub-agents under the merge-only contract (see agent-dispatch.mjs).
+// The maintainer's replacement (chosen deliberately over keeping a canonical doc): the thread gets a
+// free-form scratch DIRECTORY, and compaction recovery moves to `mcp__frizz__recurring_prompt`'s
+// post_compaction trigger — the worker writes whatever doc it likes and LINKS it in a prompt frizz
+// re-sends when the context is summarized away. Durable in SQLite, visible in the thread footer,
+// editable by the human. This hook's job is therefore reduced to two honest things:
+//
+//   1. TELL the worker the directory exists, and that the arming is what makes anything in it come back.
+//   2. On compact/resume, say what is IN the directory — a listing, not the content. That is the
+//      degradation the maintainer accepted when choosing this over a canonical doc, and it is stated
+//      here rather than quietly re-implemented as an injection: a worker that never armed the trigger
+//      gets a pointer it may skip. Naming the files it already wrote is the most a pointer can do.
 //
 // CODEX CHILD EPILOGUE — native Codex sub-agents inherit the root conversation's system/user
-// scratchpad instructions even with `fork_turns:"none"`. Sharing the thread pad is useful: a child
-// can persist progress even if the root later compacts. But an undifferentiated "keep it current"
-// mandate once made a child replace the whole document with its task notes, then DELETE that
-// replacement as a misguided rollback after realizing it had clobbered the root's state. The
-// `subagent-start` mode preserves collaborative writes while requiring merge-only, scoped edits. It
-// also carries the codex half of the default-off nesting rule (2026-08-04): a native child does the
-// work itself and does not `spawn_agent` a layer of its own unless its task said to. SubagentStart is
-// the only structural seam that reaches a native child, the way agent-dispatch.mjs's epilogue is for
-// Claude — the same rule, stated once per backend.
+// instructions even with `fork_turns:"none"`. The `subagent-start` mode is what tells such a child to
+// write its OWN file rather than treating a document it did not create as its own. It also carries the
+// codex half of the default-off nesting rule (2026-08-04): a native child does the work itself and does
+// not `spawn_agent` a layer of its own unless its task said to. SubagentStart is the only structural
+// seam that reaches a native child, the way agent-dispatch.mjs's epilogue is for Claude.
 //
-// THE RE-READ SIDE — injection, not a reminder. On compaction/resume the head of scratch.md is
-// spliced into the context window by the harness, before the model's first token, alongside a
-// pointer to read the rest. A bare "remember to read your scratchpad" routes recovery through a
-// decision the model can skip, which is exactly the failure being fixed; injecting the head
-// guarantees a floor of orientation even if the pointer is ignored. The cap keeps the guarantee
-// affordable — a scratchpad is unbounded working memory and the whole file is not owed to every
-// session start.
-//
-// THE WRITE SIDE — a staleness nudge on two channels:
+// THE WRITE-SIDE NUDGE — two channels:
 //   UserPromptSubmit — the turn boundary.
 //   PostToolUse      — MID-TURN, and this is the one that matters. A frizz worker runs enormous
 //                      autonomous turns (dozens of tool calls between human prompts), so a
-//                      turn-boundary-only nudge can miss an entire session's worth of work and let
-//                      it compact unpersisted. PostToolUse additionalContext was verified live
-//                      against cli 2.1.220: a real session quoted a sentinel injected after a Bash
-//                      call. Both channels share one state file, so the interval is global — moving
-//                      to per-tool-call firing does NOT multiply the number of nudges.
+//                      turn-boundary-only nudge can miss an entire session's worth of work. PostToolUse
+//                      additionalContext was verified live against cli 2.1.220: a real session quoted a
+//                      sentinel injected after a Bash call. Both channels share one state file, so the
+//                      interval is global — firing per tool call does NOT multiply the nudges.
 //
 // NO HOOK FIRES ON CONTEXT PRESSURE — measured, not assumed. Claude Code 2.1.220 exposes 31 hook
 // events and not one of them signals an approaching context limit; no hook input carries a token
@@ -59,22 +54,19 @@
 // tried and REMOVED on 2026-07-02 (maintainer's call): the block-until-file-edited nag forced even
 // trivial workers into Read/Edit dances that render as noise in the chat UI. This nudges; it never
 // blocks.
-import { readFileSync, writeFileSync, mkdirSync, statSync, openSync, readSync, closeSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, statSync, readdirSync, openSync, readSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
 import { currentSessionId } from '../scripts/frizz/config.mjs';
 
-const SCRATCH_FILE = 'scratch.md';
+/** How many filenames a listing names before it summarizes the rest. A worker with 200 scratch files
+ *  needs to know that, not to be handed 200 lines of them. */
+const MAX_LISTED_FILES = intFromEnv('FRIZZ_SCRATCH_MAX_LISTED', 40);
 
-/** Hard cap on injected characters. The scratchpad is unbounded working memory, so this bounds what
- *  a session start is charged; past the cap we inject the HEAD (a scratchpad's orientation lives at
- *  the top) and say plainly that it was clipped, pointing at the file for the rest. */
-const MAX_INJECT_CHARS = intFromEnv('FRIZZ_SCRATCHPAD_MAX_CHARS', 12000);
-
-/** Context-token growth since the last scratchpad write that marks it stale. 60k is ~a third of a
- *  200k window and ~6% of a 1M one: frequent enough that the pad is never many turns behind, rare
- *  enough not to be chatter. Also the first-write trigger — an untouched template counts as
- *  unwritten, so the baseline is zero and the first nudge lands once a session has accumulated 60k
- *  tokens actually worth persisting. */
+/** Context-token growth since the last scratch write that marks the directory stale. 60k is ~a third of
+ *  a 200k window and ~6% of a 1M one: frequent enough that a long effort is reminded while there is
+ *  still something to record, rare enough not to be chatter. Also the first-write trigger — an EMPTY
+ *  directory has no clock of its own, so the baseline is zero and the first nudge lands once a session
+ *  has accumulated 60k tokens actually worth persisting. */
 const STALE_TOKENS = intFromEnv('FRIZZ_SCRATCHPAD_STALE_TOKENS', 60000);
 
 /** @param {string} name @param {number} fallback */
@@ -140,8 +132,7 @@ try {
 if (!sid) process.exit(0);
 
 const threadDir = join(projectDir, '.frizz', 'threads', sid);
-const relPath = '.frizz/threads/' + sid + '/' + SCRATCH_FILE;
-const absPath = join(threadDir, SCRATCH_FILE);
+const relPath = '.frizz/threads/' + sid + '/';
 
 // ── mode: subagent-start (Codex child-only merge epilogue) ───────────────────────────────────────
 if (mode === 'subagent-start') {
@@ -149,18 +140,16 @@ if (mode === 'subagent-start') {
     hookSpecificOutput: {
       hookEventName: 'SubagentStart',
       additionalContext:
-        '⟦shared scratchpad — merge only⟧ `' + relPath + '` is the canonical document shared with ' +
-        'the top-level `/root` worker. Update your own task progress in it as you work rather than ' +
-        'leaving the root as its sole writer. Before every edit, re-read the current file, then ' +
-        'patch only your scoped task/progress entry while ' +
-        'preserving every other agent’s content. This exact file is Frizz coordination state, not a ' +
-        'project deliverable or source edit: a scoped merge is an explicit exception to delegated ' +
-        'phrases such as “write only <path>” or “do not modify the repo”; never classify that merge ' +
-        'as unauthorized or roll it back. Never delete, truncate, reinitialize, move, or replace the ' +
-        'whole file — not even to “clean up” or undo your own mistaken change. Other project files, ' +
-        'including files at the repository root, remain governed by your delegated authority; their ' +
-        'location alone neither permits nor forbids editing. If the file is absent or you cannot ' +
-        'merge safely, return your state to the parent without writing.\n' +
+        '⟦scratch directory — write your OWN file⟧ `' + relPath + '` is a scratch directory shared with ' +
+        'the top-level `/root` worker and any sibling agents. If you want notes on disk, create your ' +
+        'own file in it — never edit, replace or delete a file another agent wrote, and never treat a ' +
+        'document you did not create as yours to rewrite. One file per writer means there is nothing ' +
+        'to merge and nothing to clobber. Writing your own file here is Frizz coordination state, not ' +
+        'a project deliverable or source edit: it remains allowed when a delegated task limits your ' +
+        'deliverable paths with phrases such as “write only <path>” or “do not modify the repo”, and ' +
+        'must never be classified as unauthorized or rolled back. Other project files, including files ' +
+        'at the repository root, remain governed by your delegated authority; their location alone ' +
+        'neither permits nor forbids editing.\n' +
         '⟦no fan-out of your own⟧ Do the work yourself: do not spawn agents of your own ' +
         '(`spawn_agent`) unless the task you were given explicitly tells you to. You are already one ' +
         'prong of the root worker’s fan-out, and another layer below you splits the context you were ' +
@@ -179,54 +168,41 @@ try {
   /* a read-only or racing FS just means the agent's Write creates it instead */
 }
 
-/** Raw scratchpad text, or null when absent/empty/unreadable. */
-function readPad() {
+/** The worker's own files in the scratch directory, newest first — name, size, and how long ago it was
+ *  touched. Dotfiles are excluded: frizz keeps its own per-thread bookkeeping in here
+ *  (`.scratchpad-state.json`), and reporting that back to the worker as its own notes would be a lie.
+ *  @returns {{ name: string, size: number, mtimeMs: number }[]} */
+function listScratch() {
+  let names;
   try {
-    const raw = readFileSync(absPath, 'utf8');
-    return raw.trim() ? raw : null;
+    names = readdirSync(threadDir);
   } catch {
-    return null;
+    return [];
   }
+  const out = [];
+  for (const name of names) {
+    if (name.startsWith('.')) continue;
+    try {
+      const st = statSync(join(threadDir, name));
+      if (!st.isFile()) continue;
+      out.push({ name, size: st.size, mtimeMs: st.mtimeMs });
+    } catch {
+      // vanished between the listing and the stat — simply not listed
+    }
+  }
+  return out.sort((a, b) => b.mtimeMs - a.mtimeMs);
 }
 
-/** Characters of SUBSTANTIVE content — the pad minus its provisioned skeleton.
- *  frizz writes scratch.md up front with an H1, a one-line orientation, section headings and an empty
- *  task box, so unlike a file that simply does not exist, "present" no longer means "written". This
- *  strips exactly those skeleton shapes and measures what is left. A heuristic on purpose: it only
- *  decides whether to NUDGE, so a wrong call costs one redundant reminder, never correctness.
- *  @param {string|null} text */
-function substanceLength(text) {
-  if (!text) return 0;
-  return text
-    .split('\n')
-    .filter((line) => {
-      const t = line.trim();
-      if (!t) return false;
-      if (t.startsWith('#')) return false; // headings
-      if (/^[-*]\s*\[\s*\]\s*$/.test(t)) return false; // an empty task box
-      // The visible legend/collaboration guide provisioned in every new pad. They teach the shared
-      // editing contract but are not evidence that the worker has recorded any task state yet.
-      if (/^>\s*(?:Status legend:|Collaboration:)/.test(t)) return false;
-      // The provisioned orientation line. Matched on the CONCEPT rather than a leading word, because
-      // the wording has changed once already and pads written under the old shape are still on disk —
-      // anchoring on a prefix silently reclassified a template as "written", which made an empty pad
-      // skip its re-grounding and made the summarizer swallow a skeleton.
-      if (/compaction-survival mechanism|compaction-proof working memory/.test(t)) return false;
-      return true;
-    })
-    .join('')
-    .trim().length;
+/** The listing as text: what the worker actually has to go back to. NAMES ONLY, never content — see
+ *  the header for why this hook points rather than injects.
+ *  @param {{ name: string, size: number }[]} files */
+function describe(files) {
+  const shown = files.slice(0, MAX_LISTED_FILES).map((f) => '  - `' + relPath + f.name + '` (' + f.size + ' bytes)');
+  if (files.length > shown.length) shown.push('  - …and ' + (files.length - shown.length) + ' more');
+  return shown.join('\n');
 }
 
-/** @param {string} text */
-function capped(text) {
-  if (text.length <= MAX_INJECT_CHARS) return text;
-  return (
-    text.slice(0, MAX_INJECT_CHARS) +
-    '\n\n[…clipped at ' + MAX_INJECT_CHARS.toLocaleString('en-US') + ' characters — read `' + relPath +
-    '` for the rest.]'
-  );
-}
+
 
 /** @param {string} additionalContext @param {'SessionStart'|'UserPromptSubmit'|'PostToolUse'} hookEventName */
 function emitJson(additionalContext, hookEventName) {
@@ -236,13 +212,10 @@ function emitJson(additionalContext, hookEventName) {
 
 // ── mode: session-start ──────────────────────────────────────────────────────────────────────────
 if (mode === 'session-start') {
-  const pad = readPad();
-  const written = substanceLength(pad) > 0;
-  const parts = [];
+  const files = listScratch();
+  const written = files.length > 0;
 
-  // The sources where the deep model of the work is actually GONE. On these the worker is ALWAYS
-  // re-grounded on its scratchpad — whether or not there is anything in it yet, because "your pad is
-  // empty and you just lost your context" is itself the most urgent thing the next turn can be told.
+  // The sources where the deep model of the work is actually GONE.
   const lostContext = input.source === 'compact' || input.source === 'resume' || input.source === 'clear'
 
   // Claude Code opens every compaction summary with the fixed preamble "This session is being
@@ -252,8 +225,7 @@ if (mode === 'session-start') {
   // auto-compaction at line 20239 and then declared "I'm out of context" / "I'm at the end of this
   // context window" on 13 consecutive turns at fills of 176k-244k, before self-diagnosing at line
   // 20628 — "I've been treating 'low context' as a stopping condition ... and winding down instead of
-  // working." This hook is the only frizz text that lands in that exact window, so it is where the
-  // preamble gets answered. Kept to two sentences: the re-grounding instruction is the payload.
+  // working." Kept to two sentences: the re-grounding instruction is the payload.
   const compactedNote =
     input.source === 'compact'
       ? ' The summary opens "a previous conversation that ran out of context" — that describes the ' +
@@ -262,41 +234,46 @@ if (mode === 'session-start') {
         'a reason to wind down, hand off, or leave the next step to a fresh session.'
       : ''
 
+  const parts = [];
   if (lostContext && written) {
-    // Inject the head AND point at the file: the injection is the floor (it cannot be skipped), the
-    // pointer is the ceiling (the pad may be longer than the cap, and it is the canonical doc).
-    const lead =
-      input.source === 'compact'
-        ? '⟦scratchpad — reground here⟧ Context was just compacted. Your scratchpad `' + relPath +
-          '` is the CANONICAL record of this thread and the head of it follows. RE-GROUND ON IT BEFORE ' +
-          'DOING ANYTHING ELSE: re-read the full file, treat it as authoritative over anything the ' +
-          'summary implies, and re-read only the code you are about to describe or change.' + compactedNote
-        : '⟦scratchpad — reground here⟧ This session resumed and lost its working context. Your ' +
-          'scratchpad `' + relPath + '` is the CANONICAL record of this thread and the head of it ' +
-          'follows. Re-read the full file before acting.';
-    parts.push(lead + '\n\n' + capped(/** @type {string} */ (pad)) + '\n\n⟦end scratchpad⟧');
-  } else if (lostContext) {
-    // Context is gone and there is nothing to restore. Say plainly that the exact pad is empty and
-    // constrain reconstruction to the compact summary + named handoffs. Searching neighbouring
-    // thread pads is both expensive and unsafe: they belong to unrelated workers.
+    // NAMES, NOT CONTENT. This is the pointer the maintainer accepted in place of an injection when
+    // the canonical pad was dropped; the guaranteed channel is now the recurring prompt's
+    // post_compaction trigger, which the worker arms for itself. Saying which files exist is the most
+    // a pointer can do, and it is worth doing: a worker that wrote three docs and lost its context
+    // otherwise has no idea they are there.
     parts.push(
-      '⟦scratchpad — reground here⟧ Context was just compacted or resumed. Your scratchpad `' +
-        relPath + '` is the CANONICAL record of this thread, but it is absent or has nothing ' +
-        'substantive in it. That exact path is authoritative: do not search other ' +
-        '`.frizz/threads/*/scratch.md` files for a substitute, and do not broadly reload repo docs or ' +
+      '⟦scratch directory⟧ Context was just ' + (input.source === 'compact' ? 'compacted' : 'lost') +
+        '. You have files in your scratch directory `' + relPath + '`:\n' + describe(files) +
+        '\n\nRead whichever of them bears on what you were doing BEFORE acting, and treat what you ' +
+        'wrote there as authoritative over anything the summary implies. If you have not already, arm ' +
+        'mcp__frizz__recurring_prompt with post_compaction: true and a prompt linking the one that ' +
+        'matters, so the next compaction hands it back to you without relying on this note.' +
+        compactedNote,
+    );
+  } else if (lostContext) {
+    // Context is gone and the worker left itself nothing. Say so plainly and constrain reconstruction:
+    // searching neighbouring threads' directories is both expensive and unsafe — they belong to
+    // unrelated workers.
+    parts.push(
+      '⟦scratch directory⟧ Context was just compacted or resumed, and your scratch directory `' +
+        relPath + '` is EMPTY — you left yourself nothing to recover from. Do not search other ' +
+        '`.frizz/threads/*/` directories for a substitute, and do not broadly reload repo docs or ' +
         'skills merely to reconstruct context. Recover from the retained compaction summary and any ' +
-        'task-specific handoff it directly names, then WRITE this exact pad: the problem, the approach ' +
-        'and the approaches you rejected, the decisions the human made, what is verified versus merely ' +
-        'believed, and the next action.' + compactedNote,
+        'task-specific handoff it directly names. If this effort is long enough to be compacted again, ' +
+        'write the account down this time — the problem, the approach and what you rejected, the ' +
+        "human's decisions, what is verified versus believed, the next action — and arm " +
+        'mcp__frizz__recurring_prompt with post_compaction: true and a prompt linking it.' +
+        compactedNote,
     );
   } else {
-    // A fresh start has lost nothing — teach the contract so the pad gets written in the first place.
+    // A fresh start has lost nothing — teach the arrangement while there is still time to make it.
     parts.push(
-      '⟦scratchpad⟧ `' + relPath + '` is the CANONICAL document for this thread and your ONE durable ' +
-        'working doc: its head is injected back into your context automatically whenever the context ' +
-        'is lost, so it is the only thing guaranteed to survive a compaction. Keep it current as you ' +
-        'work — the problem, the approach and the approaches you REJECTED and why, decisions the human ' +
-        'made or reversed, what is VERIFIED by running it versus merely believed, and the next action.',
+      '⟦scratch directory⟧ `' + relPath + '` is yours: any files you like, no format expected, and ' +
+        'nothing in it is read automatically. On an effort long enough to be compacted, write the doc ' +
+        'you would want if you lost your context — the approach, what you rejected, the decisions the ' +
+        'human made, what is VERIFIED versus believed, the next action — then arm ' +
+        'mcp__frizz__recurring_prompt with post_compaction: true and a prompt that LINKS it. That ' +
+        'arming, not the file, is what makes it come back.',
     );
   }
   emitJson(parts.join('\n\n'), 'SessionStart');
@@ -307,15 +284,13 @@ if (mode === 'session-start') {
 // `Additional Instructions:`. Worded as an ordinary editorial note: precompact-instructions.mjs
 // records that a summarizer REFUSES instructions that read like prompt-hijacking.
 if (mode === 'precompact') {
-  const pad = readPad();
-  if (substanceLength(pad) === 0) process.exit(0);
+  const files = listScratch();
+  if (files.length === 0) process.exit(0);
   process.stdout.write(
-    'The worker keeps a running scratchpad of this effort at `' + relPath + '`, written by hand as ' +
-      'the work progressed. Its current head is reproduced below. Treat it as the authoritative ' +
-      'account of the problem, the chosen approach, and the decisions behind them, and make sure the ' +
-      'summary preserves its substance — where it disagrees with your reading of the transcript, ' +
-      'prefer it.\n\n' +
-      capped(/** @type {string} */ (pad)) + '\n',
+    'The worker kept working notes for this effort in `' + relPath + '`:\n' + describe(files) +
+      '\nThose files are the hand-written account of the problem, the chosen approach and the ' +
+      'decisions behind them. Make sure the summary preserves the substance of the work they describe, ' +
+      'and name their paths in it so the continuing session can open them.\n',
   );
   process.exit(0);
 }
@@ -392,18 +367,15 @@ if (mode === 'nudge') {
   // silence is always safe.
   if (!tokens) process.exit(0);
 
-  const pad = readPad();
-  const written = substanceLength(pad) > 0;
+  const files = listScratch();
 
-  let mtimeMs = 0;
-  try {
-    mtimeMs = written ? statSync(absPath).mtimeMs : 0;
-  } catch {
-    mtimeMs = 0;
-  }
+  // The NEWEST write across the whole directory is the clock. A worker with several docs has "written
+  // recently" if it touched ANY of them — the nudge asks whether the effort is being recorded at all,
+  // not whether one particular file moved. Zero when the directory is empty.
+  const mtimeMs = files.length ? Math.max(...files.map((f) => f.mtimeMs)) : 0;
 
   let state = readState();
-  // A changed mtime means the pad was just written — rebase the baseline to NOW and go quiet. This is
+  // A changed mtime means something was just written — rebase the baseline to NOW and go quiet. This is
   // also the first-ever observation, and it is why a fresh write buys a full interval of silence. It
   // fires for a human's hand-edit exactly as for the agent's Write: both are just an mtime change.
   if (state.mtimeMs !== mtimeMs) {
@@ -411,8 +383,8 @@ if (mode === 'nudge') {
     writeState(state);
   }
 
-  // An unwritten pad (absent, or still the provisioned skeleton) measures growth from ZERO: the whole
-  // session is unpersisted, so the clock starts at the beginning, not at whenever this first looked.
+  // An EMPTY directory measures growth from ZERO: the whole session is unrecorded, so the clock starts
+  // at the beginning, not at whenever this first looked.
   const baseline = mtimeMs ? (state.tokensAtWrite ?? tokens) : 0;
   const grown = tokens - baseline;
   if (grown < STALE_TOKENS) process.exit(0);
@@ -428,17 +400,18 @@ if (mode === 'nudge') {
   );
   emitJson(
     mtimeMs
-      ? '⟦scratchpad stale⟧ Your context has grown ~' + k + 'k tokens since you last wrote `' +
-          relPath + '`. If this effort is long enough that losing your reasoning would hurt, top it up ' +
-          'in passing — the approach, what you rejected, the human\'s decisions, what is verified ' +
-          'versus believed. Its head is injected back after a compaction. This is a background note, ' +
-          'NOT a task and NOT a reason to pause: do not stop working to service it, and never end a ' +
-          'turn on it while the human\'s instruction still has parts left.'
-      : '⟦scratchpad empty⟧ This session is ~' + k + 'k tokens deep and `' + relPath + '` is empty. ' +
-          'That is fine for a single direct task — the pad is optional and writing in it is not doing ' +
-          'the work. If this effort is long or branching, a few lines on the approach and the human\'s ' +
-          'decisions will survive a compaction. This is a background note, NOT a task and NOT a reason ' +
-          'to pause: keep going with what you were asked to do.',
+      ? '⟦scratch notes stale⟧ Your context has grown ~' + k + 'k tokens since you last wrote anything ' +
+          'in `' + relPath + '`. If this effort is long enough that losing your reasoning would hurt, ' +
+          'top it up in passing — the approach, what you rejected, the human\'s decisions, what is ' +
+          'verified versus believed — and make sure a post_compaction recurring prompt links it. This ' +
+          'is a background note, NOT a task and NOT a reason to pause: do not stop working to service ' +
+          'it, and never end a turn on it while the human\'s instruction still has parts left.'
+      : '⟦scratch directory empty⟧ This session is ~' + k + 'k tokens deep and `' + relPath + '` is ' +
+          'empty. That is fine for a single direct task — notes are optional and writing them is not ' +
+          'doing the work. If this effort is long or branching, write down the approach and the ' +
+          'human\'s decisions and arm mcp__frizz__recurring_prompt with post_compaction: true linking ' +
+          'that file, or a compaction takes your reasoning with it. This is a background note, NOT a ' +
+          'task and NOT a reason to pause: keep going with what you were asked to do.',
     event,
   );
 }
