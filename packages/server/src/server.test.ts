@@ -181,15 +181,17 @@ test("storage: transcript_id cache round-trips, survives restart, resets on re-d
 test("settings: defaults, roundtrip, merge-over-defaults", () => {
   const dir = tmp("frizz-settings-")
   const s = createStorage(join(dir, "ui.db"))
-  const def = getSettings(s)
+  // The tmp dir doubles as the home: machine settings are real files, and a test that reads the
+  // developer own ~/.frizz would both leak into its assertions and write to it.
+  const def = getSettings(s, dir)
   assert.deepEqual(def, defaultSettings())
   // Project-specific conventions live in FRIZZ.md, not in settings — there is no preamble field.
   // system prompt ships separately (packages/server/src/workerPrompt.ts via dispatch.ts) and is not a setting.
   assert.equal(def.permissionMode, "auto")
   assert.equal(def.notifications, true)
 
-  setSettings(s, { ...def, permissionMode: "plan", model: "opus", notifications: false })
-  const got = getSettings(s)
+  setSettings(s, { ...def, permissionMode: "plan", model: "opus", notifications: false }, dir)
+  const got = getSettings(s, dir)
   assert.equal(got.permissionMode, "plan")
   assert.equal(got.model, "opus")
   assert.equal(got.notifications, false)

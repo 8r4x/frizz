@@ -8,6 +8,7 @@ import "./styles.css"
 import { App } from "./App.tsx"
 import { RootErrorBoundary } from "./components/ErrorBoundary.tsx"
 import { StandaloneThreadPage } from "./components/StandaloneThreadPage.tsx"
+import { ProjectGrid } from "./components/ProjectGrid.tsx"
 import { connectSync } from "./api/socket.ts"
 import { initTranscriptLive } from "./api/transcript-live.ts"
 import { initFont } from "./lib/font.ts"
@@ -15,12 +16,16 @@ import { installExternalLinkInterceptor } from "./lib/external-links.ts"
 import { installLocalFileLinkInterceptor } from "./lib/local-file-links.ts"
 import { installThreadLinkInterceptor } from "./lib/thread-links.ts"
 import { primeRoute } from "./lib/router.ts"
+import { innerPath } from "./lib/base-path.ts"
 import { parseStandaloneThreadPath } from "./lib/standaloneThreadRoute.ts"
 
 installRenderScan()
 
 const settingsFixture = typeof window !== "undefined" && window.location.pathname.endsWith("/settings-formatting-fixture.html")
-const standaloneThreadSlug = typeof window !== "undefined" ? parseStandaloneThreadPath(window.location.pathname) : null
+// innerPath, not location.pathname: under a project prefix the deep link is `/nub/thread/x/full`.
+const standaloneThreadSlug = typeof window !== "undefined" ? parseStandaloneThreadPath(innerPath()) : null
+// The machine home page. A project board lives at `/<slug>`, which is what freed the root for it.
+const projectGrid = typeof window !== "undefined" && window.location.pathname === "/"
 
 if (!settingsFixture && !standaloneThreadSlug) {
   // Adopt a cold/deep URL before React takes its first store snapshot. startRouter installs the ongoing
@@ -56,7 +61,13 @@ if (!settingsFixture) {
           or in the standalone thread page. It still renders a page with the error ON it, which is
           the whole difference between a bad render and the blank window this replaced. */}
       <RootErrorBoundary>
-        {standaloneThreadSlug ? <StandaloneThreadPage slug={standaloneThreadSlug} /> : <App />}
+        {standaloneThreadSlug ? (
+          <StandaloneThreadPage slug={standaloneThreadSlug} />
+        ) : projectGrid ? (
+          <ProjectGrid />
+        ) : (
+          <App />
+        )}
       </RootErrorBoundary>
     </QueryClientProvider>,
   )

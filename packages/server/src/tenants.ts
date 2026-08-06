@@ -23,6 +23,12 @@ import { log as frizzLog } from "./logging.ts"
 export interface TenantMapOptions<App = unknown> {
   /** Builds the HTTP app for a tenant. Without it the map holds contexts only. */
   createApp?: (ctx: AppContext) => App
+  /**
+   * Close what createApp built. Runs FIRST in a deactivation, before any of the context's own
+   * subsystems: a transport still serving a board whose storage has just closed is the one ordering
+   * that produces errors instead of a clean stop.
+   */
+  closeApp?: (app: App) => void | Promise<void>
   /** Injected so a test can build a context without the real one. Defaults to `createContext`. */
   createContext: (opts: ContextOptions) => AppContext | Promise<AppContext>
   /** Extra options every tenant's context is built with (claudeBin, codexBin, …). */
@@ -95,8 +101,9 @@ export function createTenantMap<App = unknown>(options: TenantMapOptions<App>): 
     // reachable that has already had its storage closed.
     open.delete(projectId)
     const cleanups = projectContextCleanups(() => entry.ctx)
-    // The same order the process barrier uses, minus the transports the server owns.
+    // The same order the process barrier uses, with this tenant's own transports at the front.
     for (const [name, run] of [
+      ["transports", async () => { if (entry.app !== undefined) await options.closeApp?.(entry.app) }],
       ["tailer", cleanups.tailer],
       ["login utility", cleanups.loginUtility],
       ["subscriptions", cleanups.subscriptions],

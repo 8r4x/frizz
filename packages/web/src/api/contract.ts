@@ -72,6 +72,7 @@ import type {
   CancelInteractionInput,
   CancelInteractionResult,
   CompletionHold,
+  ProjectCard,
 } from "@frizz/shared"
 
 // Per-call transport options — declared here (not in rpc.ts) only because two procedures name it in
@@ -211,6 +212,8 @@ export interface Api {
   accountLoginStart(input: AccountLoginStartInput): Promise<AccountLoginStartResult>
   accountLoginStatus(input: AccountLoginStatusInput): Promise<AccountLoginStatusResult>
   accountLoginCancel(input: AccountLoginStatusInput): Promise<Record<never, never>>
+  // Machine-scoped: the registry is one file, so the grid reads the same from every project.
+  projectsList(): Promise<ProjectCard[]>
   settingsGet(): Promise<Settings>
   settingsSet(input: Settings): Promise<Settings>
   // Takes an empty object, not nothing: the router declares `input: z.object({})` (a mutation always
@@ -297,6 +300,7 @@ export const PROCEDURES = {
   accountLoginStart: "mutation",
   accountLoginStatus: "query",
   accountLoginCancel: "mutation",
+  projectsList: "query",
   settingsGet: "query",
   settingsSet: "mutation",
   settingsReset: "mutation",

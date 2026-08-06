@@ -67,6 +67,13 @@ export type ServerStartupPhase =
 type HttpServer = ReturnType<typeof createServer>
 type TerminalServer = ReturnType<typeof createTerminalServer>
 type AppSocketServer = ReturnType<typeof createAppSocketServer>
+
+/** Everything one project serves: its HTTP app and its two live transports. */
+interface TenantSurfaces {
+  app: ReturnType<typeof createApp>
+  terminal: TerminalServer
+  appSocket: AppSocketServer
+}
 type ViteServer = import("vite").ViteDevServer
 
 /** Dependency seam for deterministic startup-rollback tests. Production callers must not set it. */
@@ -356,17 +363,47 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
   // One process, N projects (tenants.ts). The launching project is adopted below once its own boot
   // phases have built it; anything opened later goes through activate(), which is where the
   // AppContext-seam error boundary lives.
-  const tenants = createTenantMap<ReturnType<typeof createApp>>({
+  const tenants = createTenantMap<TenantSurfaces>({
     createContext: (contextOptions) => runtime.createContext(contextOptions),
     contextOptions: { claudeBin: opts.claudeBin },
     // Each project's app carries ITS OWN owner proof, so /health stays honest per project rather than
-    // answering for whichever one happened to launch the server.
-    createApp: (tenantCtx) => runtime.createApp(tenantCtx, {
-      port,
-      ownerProof: projectLaunchTokenProof(projectLaunchTarget(tenantCtx.project), effectiveOwnerToken),
-      controlToken: effectiveOwnerToken,
-      requestOwnerStop,
+    // answering for whichever one happened to launch the server. The transports are per project for a
+    // blunter reason: a socket is a live feed of ONE board, so sharing the launcher's would push its
+    // threads into every other project's UI.
+    createApp: (tenantCtx) => ({
+      app: runtime.createApp(tenantCtx, appOptionsFor(tenantCtx)),
+      terminal: runtime.createTerminal(terminalOptionsFor(tenantCtx)),
+      appSocket: runtime.createAppSocket(appSocketOptionsFor(tenantCtx)),
     }),
+    closeApp: async (surfaces) => {
+      await surfaces.appSocket.close()
+      await surfaces.terminal.close()
+    },
+  })
+  const appOptionsFor = (c: AppContext) => ({
+    port,
+    ownerProof: projectLaunchTokenProof(projectLaunchTarget(c.project), effectiveOwnerToken),
+    controlToken: effectiveOwnerToken,
+    requestOwnerStop,
+  })
+  const terminalOptionsFor = (c: AppContext) => ({
+    resolveLogin: (slug: string) => c.loginUtility.attach(slug),
+  })
+  const appSocketOptionsFor = (c: AppContext) => ({
+    bus: c.bus,
+    bootId: c.bootId,
+    transcriptChange: c.transcriptChange,
+    boardSnapshot: () => c.board.snapshot(),
+    currentSeq: () => c.board.currentSeq(),
+    readTranscript: makeTranscriptReader(
+      c.project,
+      c.storage,
+      c.backendFor,
+      (slug, id) => c.tailer.subAgent(slug, id),
+      // The /ws producer is the one the live UI actually renders, so a dead owner has to reach it
+      // too — projecting only the RPC is the exact half-fix the × already had to correct once.
+      (slug) => c.tailer.ownerGone?.(slug) ?? false,
+    ),
   })
   let githubInit: Promise<void> | undefined
   let terminal: TerminalServer | undefined
@@ -611,39 +648,21 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     void githubInit.catch(() => undefined)
     await runtime.afterPhase?.("GitHub initialization")
 
-    const app = await phase("application", () => runtime.createApp(ctx!, {
-      port,
-      ownerProof: projectLaunchTokenProof(launchTarget, effectiveOwnerToken),
-      controlToken: effectiveOwnerToken,
-      requestOwnerStop,
-    }))
+    const app = await phase("application", () => runtime.createApp(ctx!, appOptionsFor(ctx!)))
     terminal = await phase(
       "terminal transport",
-      () => runtime.createTerminal({
-        resolveLogin: (slug) => ctx!.loginUtility.attach(slug),
-      }),
+      () => runtime.createTerminal(terminalOptionsFor(ctx!)),
       (value) => { terminal = value },
     )
     appSocket = await phase(
       "application socket",
-      () => runtime.createAppSocket({
-        bus: ctx!.bus,
-        bootId: ctx!.bootId,
-        transcriptChange: ctx!.transcriptChange,
-        boardSnapshot: () => ctx!.board.snapshot(),
-        currentSeq: () => ctx!.board.currentSeq(),
-        readTranscript: makeTranscriptReader(
-          ctx!.project,
-          ctx!.storage,
-          ctx!.backendFor,
-          (slug, id) => ctx!.tailer.subAgent(slug, id),
-          // The /ws producer is the one the live UI actually renders, so a dead owner has to reach it
-          // too — projecting only the RPC is the exact half-fix the × already had to correct once.
-          (slug) => ctx!.tailer.ownerGone?.(slug) ?? false,
-        ),
-      }),
+      () => runtime.createAppSocket(appSocketOptionsFor(ctx!)),
       (value) => { appSocket = value },
     )
+    // Re-adopt with the surfaces attached. The early adopt registered the context so the map is never
+    // missing the launching project; these did not exist yet at that point, and routing is closed
+    // until `accepting` flips below, so nothing can observe the gap.
+    tenants.adopt(project, ctx, { app, terminal, appSocket })
     await phase("board producer", () => ctx!.board.start())
     // The tailer's FIRST pass is the one boot step that can legitimately take minutes on a cold board
     // of thousands of threads. Report its position so a waiting launcher can tell "working" from
@@ -689,17 +708,16 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
      */
     const routeToTenant = async (
       url: string,
-    ): Promise<{ app: ReturnType<typeof createApp>; url: string } | undefined> => {
+    ): Promise<{ surfaces: TenantSurfaces; url: string } | undefined> => {
       const split = splitTenantRequest(url, (slug) => findBySlug(slug) !== undefined)
       if (!split) return undefined
       const entry = findBySlug(split.slug)
       if (!entry) return undefined
-      if (entry.id === project.id) return { app, url: split.rest } // the launcher, already open
       const existing = tenants.appFor(entry.id)
-      if (existing) return { app: existing, url: split.rest }
+      if (existing) return { surfaces: existing, url: split.rest }
       if (!(await tenants.activate(projectFromRegistryEntry(entry)))) return undefined
       const built = tenants.appFor(entry.id)
-      return built ? { app: built, url: split.rest } : undefined
+      return built ? { surfaces: built, url: split.rest } : undefined
     }
 
     accepting = true
@@ -719,7 +737,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
         task = routeToTenant(url)
           .then((routed) => {
             if (routed) req.url = routed.url
-            return pipeToApp(routed?.app ?? app, req, res, port, controller)
+            return pipeToApp(routed?.surfaces.app ?? app, req, res, port, controller)
           })
           .catch(() => {
             if (!res.headersSent) res.writeHead(controller.signal.aborted ? 503 : 500)
@@ -761,9 +779,20 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
         socket.destroy()
         return
       }
-      if (terminal!.handleUpgrade(req, socket, head)) return
-      if (appSocket!.handleUpgrade(req, socket, head)) return
-      socket.destroy()
+      // A `/_frizz/<slug>/ws` upgrade has to reach THAT project's socket, so this resolves the tenant
+      // exactly as the request path does — asynchronously, because the project may not be open yet.
+      // The socket simply waits; there is nothing to answer with until we know whose feed it wants.
+      void routeToTenant(req.url ?? "/")
+        .then((routed) => {
+          const surfaces = routed?.surfaces
+          if (routed) req.url = routed.url
+          const term = surfaces?.terminal ?? terminal!
+          const ws = surfaces?.appSocket ?? appSocket!
+          if (term.handleUpgrade(req, socket, head)) return
+          if (ws.handleUpgrade(req, socket, head)) return
+          socket.destroy()
+        })
+        .catch(() => socket.destroy())
     })
 
     await phase("HTTP listen", () => new Promise<void>((resolveListen, rejectListen) => {

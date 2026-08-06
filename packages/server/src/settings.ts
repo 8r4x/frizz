@@ -1,5 +1,4 @@
 import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
-import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { Settings } from "@frizz/shared"
 import { frizzPaths } from "./frizz-paths.ts"
@@ -18,11 +17,17 @@ const SETTINGS_KEY = "settings"
  *
  * There is no migration. Resolution falls back through the project blob (see getSettings), so an
  * existing project keeps its values until the user next saves, and that save is what promotes them.
+ *
+ * `home` is REQUIRED and deliberately not defaulted to homedir(). These were pure storage functions
+ * before this file learned about a machine-level file; defaulting it silently turned every existing
+ * caller — the test suite included — into one that reads and WRITES the real ~/.frizz. That is not
+ * hypothetical: the first run of this change wrote `notifications: false` into the maintainer's own
+ * settings, which would have quietly turned their desktop notifications off.
  */
 const MACHINE_KEYS = ["font", "notifications", "localFileOpener"] as const
 type MachineSettings = Pick<Settings, (typeof MACHINE_KEYS)[number]>
 
-export function machineSettingsPath(home = homedir()): string {
+export function machineSettingsPath(home: string): string {
   return join(frizzPaths({ home }).data, "settings.json")
 }
 
@@ -31,7 +36,7 @@ function pickMachine(settings: Settings): MachineSettings {
 }
 
 /** Whatever of the machine settings is readable. A miss is a fallback, never an error. */
-export function readMachineSettings(home = homedir()): Partial<MachineSettings> {
+export function readMachineSettings(home: string): Partial<MachineSettings> {
   let raw: unknown
   try {
     raw = JSON.parse(readFileSync(machineSettingsPath(home), "utf8"))
@@ -51,7 +56,7 @@ function pickPresent(partial: Partial<Settings>): Partial<MachineSettings> {
 }
 
 /** open(wx) → fsync → rename, as everywhere else here: a reader never sees a half file. */
-export function writeMachineSettings(next: MachineSettings, home = homedir()): void {
+export function writeMachineSettings(next: MachineSettings, home: string): void {
   const path = machineSettingsPath(home)
   mkdirSync(dirname(path), { recursive: true })
   const temp = `${path}.${process.pid}.tmp`
@@ -87,7 +92,7 @@ export const defaultSettings = (): Settings => ({
 // Settings persist as one JSON blob under settings['settings']. Read merges over defaults
 // (so a schema addition lands with a sane value on an old DB); a parse/validation miss also
 // degrades to defaults rather than throwing.
-export function getSettings(storage: Storage, home = homedir()): Settings {
+export function getSettings(storage: Storage, home: string): Settings {
   const raw = storage.getSetting(SETTINGS_KEY)
   const project =
     raw === undefined
@@ -98,7 +103,7 @@ export function getSettings(storage: Storage, home = homedir()): Settings {
   return { ...project, ...readMachineSettings(home) }
 }
 
-export function setSettings(storage: Storage, next: Settings, home = homedir()): Settings {
+export function setSettings(storage: Storage, next: Settings, home: string): Settings {
   const validated = Settings.parse(next)
   writeMachineSettings(pickMachine(validated), home)
   storage.setSetting(SETTINGS_KEY, validated)
@@ -107,7 +112,7 @@ export function setSettings(storage: Storage, next: Settings, home = homedir()):
 
 // Clear the stored blob so getSettings falls back to defaults (incl. the shipped default preamble).
 // A reset means DEFAULTS, so the machine file goes too — leaving it would resurrect the old font.
-export function resetSettings(storage: Storage, home = homedir()): Settings {
+export function resetSettings(storage: Storage, home: string): Settings {
   storage.deleteSetting(SETTINGS_KEY)
   try {
     rmSync(machineSettingsPath(home), { force: true })

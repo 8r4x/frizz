@@ -53,6 +53,7 @@ import {
 } from "./shutdown.ts"
 import { log as frizzLog } from "./logging.ts"
 import { projectScopedEnvironment } from "./project-launch.ts"
+import { homedir } from "node:os"
 
 export const CONTEXT_STARTUP_CLEANUP_TIMEOUT_MS = 4_000
 
@@ -168,6 +169,12 @@ export interface ContextOptions {
   codexBin?: string // injectable app-server executable; unused unless the bridge flag is enabled
   // startServer pins the owner-verified project before any SQLite/tailer/scheduler initialization.
   project?: Project
+  /**
+   * The home whose `~/.frizz` holds the machine-level settings. Injectable so a test can point at a
+   * sandbox: these were pure storage reads before machine settings existed, and a defaulted home is
+   * exactly how a test run silently rewrote the maintainer's own `notifications` flag.
+   */
+  home?: string
   /** Internal deterministic construction/rollback seam. */
   startup?: {
     afterPhase?: (phase: ContextStartupPhase) => void
@@ -448,6 +455,7 @@ export async function createContext(opts: ContextOptions = {}): Promise<AppConte
 }
 
 function createContextUnchecked(opts: ContextOptions, resources: PartialContextResources): AppContext {
+  const home = opts.home ?? homedir()
   const project = opts.project ?? resolveProject()
   // Isolate this instance's tmux server by PROJECT (C3): two frizz instances sharing one
   // `tmux -L frizz` server would collide on frizz-<slug> session names. Derive the socket from the
@@ -745,7 +753,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     project,
     storage,
     board,
-    getSettings: () => getSettings(storage),
+    getSettings: () => getSettings(storage, home),
     claudeBin: opts.claudeBin,
     backendFor,
     codexAppServer,
@@ -810,7 +818,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         })
       }
       resumeThread(
-        { project, storage, board, getSettings: () => getSettings(storage), backendFor },
+        { project, storage, board, getSettings: () => getSettings(storage, home), backendFor },
         slug,
         deliveryMessage,
         undefined,
@@ -843,9 +851,9 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     scheduler,
     stopSubscriptions,
     backendFor,
-    getSettings: () => getSettings(storage),
-    setSettings: (s) => setSettings(storage, s),
-    resetSettings: () => resetSettings(storage),
+    getSettings: () => getSettings(storage, home),
+    setSettings: (s) => setSettings(storage, s, home),
+    resetSettings: () => resetSettings(storage, home),
     claudeBin: opts.claudeBin,
     codexBin: opts.codexBin,
     loginUtility: createLoginUtility({ claudeBin: opts.claudeBin, codexBin: opts.codexBin, cwd: project.dir }),

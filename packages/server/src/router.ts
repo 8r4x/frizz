@@ -107,6 +107,9 @@ import { resolvePlanFile, deletePlanFile } from "./plan-files.ts"
 import { providerResumeCommand } from "./external-terminal.ts"
 import { backgroundShellLineCount, readBackgroundShellOutput } from "./background-shell-output.ts"
 import { projectRetiredBackgroundOps, retiredOpsFor } from "./transcript.ts"
+import { listProjects } from "./project-registry.ts"
+import { basename } from "node:path"
+import { ProjectCard } from "@frizz/shared"
 
 const SlugInput = z.object({ slug: ThreadSlug }).strict()
 
@@ -2322,6 +2325,25 @@ export function createRouter(ctx: AppContext) {
         ctx.loginUtility.cancel(input.attemptId)
         return {}
       },
+    }),
+
+    /**
+     * Every project this machine knows about, most recently opened first.
+     *
+     * Machine-scoped, so which project's app answers it does not matter — the registry is one file
+     * and the grid is the same grid from every board.
+     */
+    projectsList: query({
+      output: z.array(ProjectCard),
+      handler: async () =>
+        listProjects().map((entry) => ({
+          id: entry.id,
+          slug: entry.slug,
+          name: entry.name ?? basename(entry.path) ?? entry.path,
+          path: entry.path,
+          lastOpenedAt: entry.lastOpenedAt,
+          stale: entry.stale,
+        })),
     }),
 
     settingsGet: query({

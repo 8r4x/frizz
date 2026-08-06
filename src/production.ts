@@ -202,19 +202,28 @@ async function existingPort(): Promise<number | undefined> {
  * A COPIED checkout (`cp -R`, so two directories claim one id) is deliberately not joined here: the
  * registry refuses the duplicate, and the re-mint belongs to resolveProject, which does it properly.
  */
-async function joinRunningFrizz(): Promise<{ port: number; slug: string } | undefined> {
-  let slug: string;
+/**
+ * This project's URL segment, registering it if the machine has not seen it before.
+ *
+ * `/` is the project GRID now, so a board — including the one we are about to launch — lives at
+ * `/<slug>`. Both the join path and the launch path want the same answer, and registration is
+ * idempotent: an id already in the registry keeps the slug it was given.
+ */
+function ownSlug(): string | undefined {
   try {
-    const registered = registerProject(
+    return registerProject(
       { dir: workspace.root, id: target.projectId, remoteOwner: resolveProjectLabel(workspace.root)?.split("/")[0] },
       homedir(),
-    );
-    if (!registered.entry) return undefined;
-    slug = registered.entry.slug;
+    ).entry?.slug;
   } catch {
-    // The registry is an INDEX. If it cannot be written, launching our own server is still correct.
+    // The registry is an INDEX. If it cannot be written, opening the board unprefixed still works.
     return undefined;
   }
+}
+
+async function joinRunningFrizz(): Promise<{ port: number; slug: string } | undefined> {
+  const slug = ownSlug();
+  if (!slug) return undefined;
   // The well-known port, then the one the fallback jumps to. A server that had to scan past both is
   // rare enough to be worth a second server rather than a slow probe on every cold start.
   for (const port of new Set([DEFAULT_PORT, fallbackPort(DEFAULT_PORT)])) {
@@ -407,7 +416,11 @@ try {
     await runSupervisor(options.port, token);
   }
   const existing = await existingPort();
-  if (existing) { await openOrPrint(existing, true); process.exit(0); }
+  if (existing) {
+    const slug = ownSlug();
+    await openOrPrint(existing, true, slug ? `/${slug}` : "");
+    process.exit(0);
+  }
   const joined = await joinRunningFrizz();
   if (joined) { await openOrPrint(joined.port, true, `/${joined.slug}`); process.exit(0); }
   const claim = tryAcquireProjectLaunchOwner(target, "launcher");
@@ -448,7 +461,8 @@ try {
     // launch off its remembered port.
     portReservation();
     portReservation = undefined;
-    await openOrPrint(port, false);
+    const slug = ownSlug();
+    await openOrPrint(port, false, slug ? `/${slug}` : "");
     await running;
   } finally { release?.(); portReservation?.(); claim.lease.release(); }
 } catch (error) {

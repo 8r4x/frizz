@@ -2116,6 +2116,24 @@ export type SocketServerMsg =
  * One constant, exported to both sides, because a server route and the client URL that calls it
  * drifting apart is a 404 that looks like a hung request.
  */
+/**
+ * One card on the machine's project grid.
+ *
+ * Everything here comes from the registry index, which is why listing every project costs one file
+ * read and never opens a database: the grid must stay cheap enough to be the home page even with
+ * forty projects, and opening them to draw cards is exactly the cost lazy activation exists to avoid.
+ */
+export const ProjectCard = z.object({
+  id: z.string(),
+  slug: z.string(),
+  name: z.string(),
+  path: z.string(),
+  lastOpenedAt: z.string(),
+  /** The directory is gone — moved or deleted. The card stays so it can be reopened or forgotten. */
+  stale: z.boolean(),
+})
+export type ProjectCard = z.infer<typeof ProjectCard>
+
 export const FRIZZ_ROUTE_PREFIX = "/_frizz"
 export function frizzRoute(path: string): string {
   return `${FRIZZ_ROUTE_PREFIX}${path.startsWith("/") ? path : `/${path}`}`
