@@ -127,6 +127,14 @@ dispatches a worker", never "frizz dispatches a worker". Lowercase survives only
 identifiers, where it is part of the name: `npx frizz`, `FRIZZ.md`, `.frizz/`, `~/.frizz/`,
 `frizz-<slug>` session names, the `frizz`/`frizz-update` CLIs, and the `frizz:*` skill and sub-agent profile names.
 
+# There is NO tmux. Agents are detached broker daemons
+
+Every agent that touches this repo eventually tells the maintainer that stopping Frizz is safe "because the agents are in tmux," and every one of them is wrong. They are reading it off the codebase: `tmux_name` is a session column, `FRIZZ_LAUNCH_TMUX_SOCKET` is a launch variable, and dozens of comments in `router.ts`, `tailer.ts` and `dispatch.ts` still narrate a tmux pane. **None of it runs.** There is no `tmux.ts`, nothing imports one, and dispatch never execs `tmux` — check it in ten seconds with `ls packages/server/src/tmux*` and `grep -rn '"tmux"' --include='*.ts' packages/server/src`.
+
+What actually happens: a Claude thread is `claude_runtime="broker"`, and `claude-broker-host.ts` forks a daemon with `detached: true, stdio: "ignore"` into its **own process group**. That single fact is the answer to most operational questions — Ctrl-C on the server signals the launcher's group and cannot reach the daemon, so a running turn survives a stop; its events queue in a 20,000-frame backlog rather than dropping while nothing is attached, and the bridge replays them on reconnect. Sub-agents live inside that daemon's SDK session, so they ride along too.
+
+**So: never tell the operator anything about tmux, and never repeat "the agents are in tmux" as a reason a restart is safe.** It is safe, for a different reason, and saying the wrong one has cost real trust here. The surviving tmux names are legacy spellings of "the identity string for this thread" — kept because the column is load-bearing on disk. Treat any present-tense tmux comment as stale, and prefer `git log -S` over believing it.
+
 # Board nomenclature: "active" means SPINNING, and nothing else
 
 The sidebar's row groups have names the maintainer uses precisely (2026-08-05: *"when I say active, I'm only referring to the things that are currently spinning; the things beneath that, I would refer to as rested, or just items in the queue"*). Use them in code, comments, copy and when reporting back:

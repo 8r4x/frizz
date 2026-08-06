@@ -79,7 +79,7 @@ function printFarewell(code: number): void {
   const suffix = logger.file ? `\n  log: ${tildePath(logger.file, homedir())}` : "";
   process.stdout.write(
     code === 0
-      ? `\n  Frizz stopped. Agent sessions in tmux keep running.${suffix}\n\n`
+      ? `\n  Frizz stopped. Running agents keep going — they are detached daemons.${suffix}\n\n`
       : `\n  Frizz stopped with errors (exit ${code}).${suffix}\n\n`
   );
 }

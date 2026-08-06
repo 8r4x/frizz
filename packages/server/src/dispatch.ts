@@ -35,8 +35,12 @@ import {
   productionRuntime as productionAdoptionRuntime,
 } from "./adoption-recovery.ts"
 
-// Dispatch = provision the thread's scratch DIRECTORY + compose the full prompt + spawn a detached
-// `claude` in a tmux session + register the session row. Session-first (2026-07-09): a new dispatch
+// Dispatch = provision the thread's scratch DIRECTORY + compose the full prompt + fork a detached
+// BROKER DAEMON for the session + register the session row. NOT tmux: this file still says the word
+// thirty times in comments below, all of them describing a path that no longer exists (there is no
+// tmux.ts and dispatch never execs tmux — see the invariant in ARCHITECTURE.md). A Claude thread is
+// `claude_runtime="broker"`, forked by claude-broker-host.ts with `detached: true`.
+// Session-first (2026-07-09): a new dispatch
 // writes NO .frizz/<slug>.md thread file — the session IS the thread, and it gets an empty folder
 // (.frizz/threads/<sessionId>/) to use as it likes. The prompt is the ONLY intelligence: the worker
 // contract + this repo's FRIZZ.md + the scratch orientation + the task. Project-specific conventions

@@ -60,6 +60,15 @@ need no install or provider CLI; the full suite is local-only by design.
 
 ## Invariants
 
+- **THERE IS NO TMUX. Agents run as detached broker daemons.** Say it here because the codebase is
+  full of the old vocabulary and every reader keeps re-deriving the wrong answer from it: `tmux_name`
+  is a session column, `FRIZZ_LAUNCH_TMUX_SOCKET` is a launch variable, and dozens of comments still
+  narrate a tmux pane. None of it runs. There is no `tmux.ts`, nothing imports one, and dispatch
+  never execs `tmux` — a Claude thread is `claude_runtime="broker"`, forked by
+  `claude-broker-host.ts` with `detached: true` into its own process group, which is exactly why
+  Ctrl-C on the server does not reach it and why a turn survives a restart. The surviving names are
+  legacy spellings of "the identity string for this thread", nothing more. Treat any present-tense
+  tmux comment as stale until proven otherwise, and prefer `git log -S` over believing it.
 - **Workspace-scoped.** One server per repo, launched from the repo root. It watches only that
   repo's `.frizz/` and only the matching `~/.claude/projects/<cwd-slug>/` session logs. No
   cross-repo anything.

@@ -13,6 +13,12 @@ export interface SessionRow {
   session_id: string
   // Legacy column NAME, live column: the thread identity string (`frizz-<slug>`). It is not renamed
   // because every existing ui.db on disk carries it; see threadIdentityName.
+  /**
+   * LEGACY NAME. Nothing here has been a tmux session since the broker landed: this is the thread's
+   * IDENTITY STRING, `frizz-<slug>`, re-derived and checked on every write by
+   * validateSessionIdentity. It is not renamed because the column is load-bearing on disk in every
+   * existing database; see the tmux invariant in ARCHITECTURE.md.
+   */
   tmux_name: string
   spawned_at: string // ISO8601
   last_read_at: string | null // ISO8601
