@@ -3411,8 +3411,14 @@ interface TranscriptSourceBinding {
 }
 
 interface FixedTranscriptSnapshot extends TranscriptSourceBinding {
+  /** LAZY — materialises the whole file as a string. Only the codex projector needs it. */
   raw: string
+  /** LAZY — materialises the whole file as a Buffer. Prefer `size` and `readRange`. */
   bytes: Buffer
+  /** The file's size at snapshot time, without reading a byte of it. */
+  size: number
+  /** Read `[from, from + length)` on demand, re-verifying the file's identity. */
+  readRange(from: number, length: number): Buffer
   fileKey: string
   transcriptKey: string
 }
@@ -3499,17 +3505,45 @@ function fixedSnapshot(source: TranscriptSourceBinding): FixedTranscriptSnapshot
     fd = openSync(source.path, "r")
     const before = fstatSync(fd)
     if (!Number.isSafeInteger(before.size) || before.size < 0) throw new Error("transcript is too large to page safely")
-    const bytes = Buffer.allocUnsafe(before.size)
-    let offset = 0
-    while (offset < bytes.length) {
-      const read = readSync(fd, bytes, offset, bytes.length - offset, offset)
-      if (read === 0) break
-      offset += read
-    }
+    // NOT SLURPED. This used to read the entire file into a Buffer before anything consulted the
+    // cache — 566MB per call on the maintainer's biggest thread, twice past 1.2GB RSS for two drawer
+    // opens, in a process that now serves EVERY project. The lazy `raw` below already avoided the
+    // whole-file STRING; it did not avoid the whole-file BUFFER.
+    //
+    // The identity check that made the eager read look necessary is preserved differently: the file is
+    // re-stat'd here, and every range read below re-opens and re-checks dev/ino/size, so a file
+    // swapped or truncated mid-page is still caught — by the same fileKey the paging protocol already
+    // validates against.
     const after = fstatSync(fd)
-    if (offset !== before.size || after.dev !== before.dev || after.ino !== before.ino || after.size < before.size) {
+    if (after.dev !== before.dev || after.ino !== before.ino || after.size < before.size) {
       throw new Error("transcript changed while it was being read; retry")
     }
+    const size = before.size
+    const path = source.path
+    /** Read `[from, from+length)` on demand, re-verifying identity so a rotated file cannot be mixed. */
+    const readRange = (from: number, length: number): Buffer => {
+      const rfd = openSync(path, "r")
+      try {
+        const st = fstatSync(rfd)
+        if (st.dev !== before.dev || st.ino !== before.ino || st.size < size) {
+          throw new Error("transcript changed while it was being read; retry")
+        }
+        const want = Math.max(0, Math.min(length, size - from))
+        const buf = Buffer.allocUnsafe(want)
+        let filled = 0
+        while (filled < want) {
+          const n = readSync(rfd, buf, filled, want - filled, from + filled)
+          if (n === 0) break
+          filled += n
+        }
+        return filled === want ? buf : buf.subarray(0, filled)
+      } finally {
+        closeSync(rfd)
+      }
+    }
+    // The whole-file Buffer, materialised ONLY if something genuinely needs it (the codex projector
+    // and the full digest). Everything on the claude path goes through readRange instead.
+    let allBytes: Buffer | undefined
     const fileKey = `${before.dev}:${before.ino}:${Math.trunc(before.birthtimeMs)}`
     const transcriptKey = createHash("sha256")
       .update(`${source.slug}\0${source.sessionId}\0${source.nativeId}\0${source.backend}\0${source.runtimeGeneration}\0${fileKey}`)
@@ -3522,10 +3556,15 @@ function fixedSnapshot(source: TranscriptSourceBinding): FixedTranscriptSnapshot
     return {
       ...source,
       get raw() {
-        if (rawText === undefined) rawText = bytes.toString("utf8")
+        if (rawText === undefined) rawText = this.bytes.toString("utf8")
         return rawText
       },
-      bytes,
+      get bytes() {
+        if (allBytes === undefined) allBytes = readRange(0, size)
+        return allBytes
+      },
+      size,
+      readRange,
       fileKey,
       transcriptKey,
     }
@@ -3551,8 +3590,9 @@ function projectSnapshot(snapshot: FixedTranscriptSnapshot): TranscriptMessage[]
   // of the reader rather than of one backend's current parser.
   if (snapshot.backend === "codex") return retireStaleQueuedBubbles(projectCodexTranscript(snapshot.raw, prefix))
 
-  const { entry } = retainedFoldEntry(snapshot.path, prefix, snapshot.fileKey, snapshot.bytes.length)
-  ingestBounded(entry, snapshot.bytes.length, (from, length) => snapshot.bytes.subarray(from, from + length))
+  const { entry } = retainedFoldEntry(snapshot.path, prefix, snapshot.fileKey, snapshot.size)
+  // Reads ONLY the appended delta — the reason the whole-file buffer is no longer materialised.
+  ingestBounded(entry, snapshot.size, (from, length) => snapshot.readRange(from, length))
   // Deliberately NO finalize(): it is the one-shot path's trailing-partial flush and advances the fold
   // past bytes a later ingest would then re-fold, duplicating messages. A complete final record that
   // simply lacks its newline is still projected — the fold consumes it optimistically (tryConsumePartial)
@@ -3577,14 +3617,24 @@ function digestPrefix(bytes: Buffer, length = bytes.length): string {
 }
 
 function fullDigest(snapshot: FixedTranscriptSnapshot): string {
-  const key = `${snapshot.fileKey}\0${snapshot.bytes.length}`
+  const key = `${snapshot.fileKey}\0${snapshot.size}`
   const hit = fullDigestCache.get(key)
   if (hit !== undefined) {
     fullDigestCache.delete(key)
     fullDigestCache.set(key, hit)
     return hit
   }
-  const digest = digestPrefix(snapshot.bytes)
+  // STREAMED. This hashed the whole file as one Buffer, so every snapshot of a 566MB transcript
+  // resident-set another 566MB even though the digest itself is cached — two drawer opens reached
+  // 1.4GB RSS. The hash is incremental by nature; only the reader was not.
+  const hash = createHash("sha256")
+  for (let at = 0; at < snapshot.size; ) {
+    const buf = snapshot.readRange(at, Math.min(TRANSCRIPT_DECODE_WINDOW, snapshot.size - at))
+    if (buf.length === 0) break
+    hash.update(buf)
+    at += buf.length
+  }
+  const digest = hash.digest("base64url")
   fullDigestCache.set(key, digest)
   while (fullDigestCache.size > FULL_DIGEST_CACHE_CAP) {
     const oldest = fullDigestCache.keys().next().value
@@ -3603,7 +3653,7 @@ function encodeTranscriptCursor(snapshot: FixedTranscriptSnapshot, anchorSourceI
     backend: snapshot.backend,
     runtimeGeneration: snapshot.runtimeGeneration,
     fileKey: snapshot.fileKey,
-    snapshotBytes: snapshot.bytes.length,
+    snapshotBytes: snapshot.size,
     prefixDigest: fullDigest(snapshot),
     anchorSourceId,
   }
@@ -3760,10 +3810,10 @@ export function readEarlierThreadTranscriptPage(
     source.backend !== payload.backend || source.runtimeGeneration !== payload.runtimeGeneration
   ) throw new Error("transcript cursor is stale because the session was replaced")
   const snapshot = fixedSnapshot(source)
-  if (!snapshot || snapshot.fileKey !== payload.fileKey || snapshot.bytes.length < payload.snapshotBytes) {
+  if (!snapshot || snapshot.fileKey !== payload.fileKey || snapshot.size < payload.snapshotBytes) {
     throw new Error("transcript cursor is stale because the transcript was replaced")
   }
-  if (digestPrefix(snapshot.bytes, payload.snapshotBytes) !== payload.prefixDigest) {
+  if (digestPrefix(snapshot.readRange(0, payload.snapshotBytes)) !== payload.prefixDigest) {
     throw new Error("transcript cursor is stale because prior transcript bytes changed")
   }
   const projected = projectSnapshot(snapshot)
