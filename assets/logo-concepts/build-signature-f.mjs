@@ -3,14 +3,20 @@
 // exactly 180-degree rotationally symmetric.
 //
 // The reference sketch has two loose ends and nothing else. Reading it as a
-// closed figure-eight with a crossbar laid across it — which is what the last
+// closed figure-eight with a crossbar laid across it — which is what an earlier
 // draft did — gets the topology wrong, and the result reads as an 8 with a line
 // through it because that is literally what it is. The real path is:
 //
-//   left tail -> descender loop -> up the stem -> ascender loop -> right tail
+//   left tail -> UP into the ascender -> apex -> down across the middle
+//             -> round the descender -> out to the right tail
 //
-// The apparent "crossbar" is not a stroke at all. It is the entry and exit
-// tails, which leave the letter on opposite sides at mirrored heights and so
+// The direction matters as much as the topology. Entering from the left the
+// stroke must rise up-and-RIGHT into the ascender, so the first thing it does is
+// swoop up. Running the loop the other way round hides that rise inside the
+// crossing and the letter reads as swooping down first.
+//
+// The apparent "crossbar" is not a stroke at all. It is the long entry and exit
+// diagonals, which leave the letter on opposite sides at mirrored heights and so
 // line up into what looks like one bar crossing the middle.
 //
 // C2 then falls out of the same fact that makes the letter work: the descender
@@ -31,34 +37,37 @@ const CX = 256
 const CY = 256 // the symmetry centre must be the canvas centre, or the RENDER is not C2
 
 /**
- * Half the stroke: from the centre of symmetry, up the stem, round the ascender
- * loop, and out to the right-hand tail tip. c2() supplies the descender half.
+ * Half the stroke: from the centre of symmetry, up the ascender's left side,
+ * over the apex, down its right side, and out along the diagonal to the LEFT
+ * tail tip. c2() supplies the descender half and the right tail.
  *
- * The centre sits on the STEM, midway along it — that is the point the whole
- * path maps onto itself through. The stem then passes through the centre once
- * rather than pinching to a point there, which is the difference between a
- * flowing written letter and a mathematical figure-eight.
+ * The centre is the point the whole path maps onto itself through, and it sits
+ * on the diagonal rather than at a pinch between the loops — that is the
+ * difference between a flowing written letter and a mathematical figure-eight.
  *
- * `loop` widens the ascender loop about its own axis without stretching the
- * tails, so a heavier weight can open its counters without the tails growing.
+ * `loop` widens the ascender about its own axis without stretching the tails, so
+ * a heavier weight can open its counters without the terminals growing with it.
  */
 function halfStroke({ loop = 1, tail = 1, shear = 0.16 } = {}) {
-  // Up the middle diagonal, round the ascender, and back down the far side —
-  // and crucially the branch keeps going PAST the centre before it peels off
-  // into the tail. That overrun is what makes the two loops overlap into a long
-  // narrow X instead of meeting at a pinch, and the pinch is what made every
-  // earlier draft read as a figure-eight.
+  // Up the ascender's left side, over the apex, and back down the right — and
+  // crucially the descending branch keeps going PAST the centre before it peels
+  // off into the tail. That overrun is what makes the two loops overlap into a
+  // long narrow X instead of meeting at a pinch, and the pinch is what made
+  // every earlier draft read as a figure-eight.
   const curl = [
-    [266, 240], [278, 220], [288, 196], [295, 168], [297, 140], // up the right side
-    [293, 110], [283, 86], [268, 66], [250, 56], // over the apex
-    [233, 64], [225, 86], [221, 112], [222, 142], // down the left side
-    [228, 174], [237, 204], [248, 232], // converging back toward the middle
-    [254, 258], [256, 286], // past the centre: the overlap with the descender
+    [250, 232], [242, 206], [232, 178], [225, 148], [222, 118], // up the LEFT side
+    [226, 92], [236, 72], [252, 58], // over the apex
+    [270, 64], [284, 84], [293, 110], [297, 142], [297, 174], [292, 204], // down the RIGHT side
+    [282, 232], [268, 258], // past the centre: the overlap with the descender
   ]
-  // The tail runs out level from below the centre. Its C2 partner runs out on
-  // the far side above the centre, so the two line up into what looks like a
-  // single bar rising across the letter. There is no bar.
-  const tails = [[250, 302], [230, 308], [196, 311], [156, 312], [120, 312]]
+  // The tail leaves the descending right-hand branch and runs down-LEFT across
+  // the letter. Read the other way — which is how you read handwriting — the
+  // stroke enters from the left and rises up-and-RIGHT into the ascender, so the
+  // first thing it does is swoop up. Leaving the loop the other way round hides
+  // that rise inside the crossing and the letter reads as swooping down first.
+  //
+  // This long diagonal and its C2 partner are also what looks like a crossbar.
+  const tails = [[250, 282], [224, 300], [190, 310], [152, 314], [118, 316]]
   const points = [
     [CX, CY],
     ...curl.map(([x, y]) => [CX + (x - CX) * loop, y]),
@@ -82,10 +91,10 @@ const concepts = [
     rank: "pick",
     symmetric: true,
     tagline: "One stroke, two free ends, symmetric under a half turn",
-    idea: "A single contiguous line: in from the left, round the descender loop, up the stem, round the ascender loop, out to the right. There is no crossbar — what looks like one is the entry and exit tails leaving on opposite sides at mirrored heights. Every crossing on the letter is the stroke meeting itself.",
+    idea: "A single contiguous line. It enters from the left and swoops UP first, rising to the right into the ascender, over the apex, back down across the middle, round the descender, and out to the right. There is no crossbar — what looks like one is the long entry and exit diagonals, which leave on opposite sides at mirrored heights and line up. Every crossing is the stroke meeting itself.",
     small: "Fails, and not narrowly. A 16-unit line is 0.5px at 16px — the counters are fine at 60 units (1.9px), but the stroke drawing them is half a pixel wide. This weight is a logo, full stop.",
     risk: "Symmetry costs the letter some handwriting: a real hand makes the descender bigger than the ascender, and forbidding that makes the f a little more even than the sketch.",
-    verdict: "The reference's actual topology. One path, two terminals, and the bar is an artefact of the tails rather than a part laid on top.",
+    verdict: "The sketch's actual topology and its actual direction of travel. One path, two terminals, and the bar is an artefact of the diagonals rather than a part laid on top.",
     mark: `<path d="${body()}" stroke-width="${FINE}"/>`,
   },
   {
