@@ -5,10 +5,9 @@ import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import "@xterm/xterm/css/xterm.css"
 import "./styles.css"
-import { App } from "./App.tsx"
 import { RootErrorBoundary } from "./components/ErrorBoundary.tsx"
-import { StandaloneThreadPage } from "./components/StandaloneThreadPage.tsx"
-import { ProjectGrid } from "./components/ProjectGrid.tsx"
+import { RouterProvider } from "react-router"
+import { router } from "./routes.tsx"
 import { connectSync } from "./api/socket.ts"
 import { initTranscriptLive } from "./api/transcript-live.ts"
 import { initFont } from "./lib/font.ts"
@@ -22,14 +21,14 @@ import { parseStandaloneThreadPath } from "./lib/standaloneThreadRoute.ts"
 installRenderScan()
 
 const settingsFixture = typeof window !== "undefined" && window.location.pathname.endsWith("/settings-formatting-fixture.html")
-// innerPath, not location.pathname: under a project prefix the deep link is `/nub/thread/x/full`.
+// innerPath, not location.pathname: under a project prefix the deep link is `/project/nub/thread/x/full`.
 const standaloneThreadSlug = typeof window !== "undefined" ? parseStandaloneThreadPath(innerPath()) : null
-// The machine home page. A project board lives at `/<slug>`, which is what freed the root for it.
-const projectGrid = typeof window !== "undefined" && window.location.pathname === "/"
 
 if (!settingsFixture && !standaloneThreadSlug) {
-  // Adopt a cold/deep URL before React takes its first store snapshot. startRouter installs the ongoing
-  // store/history listeners from App; this synchronous seed is what makes the initial drawer real.
+  // Adopt a cold/deep URL before React takes its first store snapshot — still SYNCHRONOUS, and still
+  // before the first render, which is the whole point: it is what makes a deep-linked drawer painted
+  // open on the first frame instead of animating in afterwards. The router resolves the same path a
+  // beat later and `useRouteToStore` re-applies it, which is idempotent.
   primeRoute()
 }
 
@@ -61,13 +60,7 @@ if (!settingsFixture) {
           or in the standalone thread page. It still renders a page with the error ON it, which is
           the whole difference between a bad render and the blank window this replaced. */}
       <RootErrorBoundary>
-        {standaloneThreadSlug ? (
-          <StandaloneThreadPage slug={standaloneThreadSlug} />
-        ) : projectGrid ? (
-          <ProjectGrid />
-        ) : (
-          <App />
-        )}
+        <RouterProvider router={router} />
       </RootErrorBoundary>
     </QueryClientProvider>,
   )

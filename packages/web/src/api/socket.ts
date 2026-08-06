@@ -311,6 +311,30 @@ export function retryTranscriptSocket(slug: string): void {
   if (subs.has(slug)) send({ t: "sub", topic: "transcript", slug })
 }
 
+/**
+ * Point the live feed at a DIFFERENT project, in place.
+ *
+ * The rail switches projects without a document load, and every stream in this module is bound to one
+ * project: `wsUrl()` derives from `apiBase()`, which derives from the page's own path. So a switch is
+ * a resync against a URL that has already changed — the same drop-and-reopen the seq-gap path uses,
+ * plus the two pieces of per-project bookkeeping a seq gap must NOT clear:
+ *
+ *   · `subs` is keyed by THREAD SLUG, which is only unique within a project. Carrying it across would
+ *     re-subscribe the new project's socket to the old project's threads, and slugs collide.
+ *   · `connection` goes back to connecting, so the status bar stops claiming a live feed it no longer
+ *     has while the new socket opens.
+ *
+ * `confirmed`/`fellBack` are deliberately KEPT: they describe whether this SERVER speaks /ws at all,
+ * which is a property of the process, not of the project it happens to be serving.
+ */
+export function rebindProject(): void {
+  subs.clear()
+  stream.reset()
+  dropWs()
+  store.connection = "connecting"
+  if (!fellBack) connect()
+}
+
 // Entry point (replaces connectSSE in main.tsx). Deferred to `load` so the socket doesn't consume one of
 // Chrome's 6 per-host connection slots while Vite is still streaming modules in dev.
 export function connectSync(queryClient: QueryClient): void {

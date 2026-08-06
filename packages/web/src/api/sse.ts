@@ -118,6 +118,22 @@ function resync() {
 
 // Connect after load so the SSE socket doesn't consume one of Chrome's 6 per-host
 // connection slots while Vite is still streaming modules in dev.
+/**
+ * Re-open the event stream against the project the page is NOW showing.
+ *
+ * The socket path is the usual one, but a server with no `/ws` has committed to SSE for the session,
+ * and this stream is bound to one project exactly as the socket is — `apiBase()` derives from the
+ * page's own path. Without this, switching projects on such a server leaves the board fed by the
+ * project you just left.
+ */
+export function rebindSSEProject(): void {
+  stream.reset()
+  es?.close()
+  es = null
+  store.connection = "connecting"
+  connect()
+}
+
 export function connectSSE(queryClient?: QueryClient) {
   if (queryClient) qc = queryClient
   if (document.readyState === "complete") connect()

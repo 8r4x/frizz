@@ -1,7 +1,9 @@
 // THE MACHINE'S HOME PAGE: every project Frizz knows about, one card each, and a way to add another.
 //
-// This is the third root shell beside <App/> and <StandaloneThreadPage/> (main.tsx). It renders at
-// `/` and nothing else; a project's own board lives at `/<slug>`, which is what freed the root.
+// It renders at `/` and nothing else; a project's own board lives at `/project/<slug>`, which is what
+// freed the root. The RAIL and the tooltip provider are NOT here — they belong to the layout route
+// that stays mounted across a navigation (routes.tsx), which is what stops the rail rebuilding itself
+// every time you use it.
 //
 // It draws entirely from the registry index — one file read, no databases opened. Opening forty
 // projects to draw forty cards is exactly the cost lazy activation exists to avoid, so a card
@@ -10,12 +12,12 @@ import * as RadixDialog from "@radix-ui/react-dialog"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 import { ImagePlus } from "lucide-react"
+import { Link, useNavigate } from "react-router"
 import type { ProjectCard } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { relativeAge } from "../lib/activityTime.ts"
 import { projectHref } from "../lib/base-path.ts"
-import { TooltipProvider } from "./Tooltip.tsx"
-import { ProjectIconMenu, ProjectRail, ProjectSquare, RAIL_INSET_CLASS } from "./ProjectRail.tsx"
+import { ProjectIconMenu, ProjectSquare } from "./ProjectRail.tsx"
 
 /**
  * The mark, at the size where it is legible AS a mark.
@@ -44,8 +46,8 @@ function Card({ project, home }: { project: ProjectCard; home: string | undefine
     // sit OUTSIDE the <a> (a button nested in a link is invalid, and clicking it would navigate), so
     // the link fills the wrapper and the trigger overlays a corner of it.
     <div className="group/card relative">
-      <a
-        href={projectHref(project.slug)}
+      <Link
+        to={projectHref(project.slug)}
         className={`${CARD_BASE} flex-row items-center gap-3 border-border bg-panel hover:border-border-strong hover:bg-panel-2 ${
           project.stale ? "opacity-60" : ""
         }`}
@@ -74,7 +76,7 @@ function Card({ project, home }: { project: ProjectCard; home: string | undefine
             {project.stale ? "Directory is missing" : opened ? `Opened ${opened}` : "Never opened"}
           </span>
         </span>
-      </a>
+      </Link>
       {/* Revealed on hover over the card, and permanently for keyboard users once focused. */}
       <div className="absolute bottom-2 right-2 opacity-0 transition-opacity focus-within:opacity-100 group-hover/card:opacity-100">
         <ProjectIconMenu project={project}>
@@ -136,13 +138,15 @@ function AddProjectDialog({
   onClose: () => void
 }) {
   const [path, setPath] = useState(proposed ?? "")
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const add = useMutation({
     mutationFn: (input: string) => rpc.projectAdd({ path: input }),
     onSuccess: (project) => {
       void queryClient.invalidateQueries({ queryKey: ["projectsList"] })
-      // Adding a project is only ever a step towards opening it.
-      location.assign(projectHref(project.slug))
+      // Adding a project is only ever a step towards opening it. `navigate`, not location.assign:
+      // the rail is already showing and must not be torn down to open what was just added.
+      navigate(projectHref(project.slug))
     },
   })
   const error = add.error instanceof Error ? add.error.message : add.error ? String(add.error) : null
@@ -219,6 +223,7 @@ export function ProjectGrid() {
     return value
   })
   const [fallback, setFallback] = useState<{ reason?: string } | null>(proposed ? {} : null)
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const pick = useMutation({
     mutationFn: () => rpc.projectPick({}),
@@ -229,7 +234,7 @@ export function ProjectGrid() {
         return
       }
       void queryClient.invalidateQueries({ queryKey: ["projectsList"] })
-      location.assign(projectHref(result.project.slug))
+      navigate(projectHref(result.project.slug))
     },
     // A picker that throws is still a machine without a working picker.
     onError: (error) => setFallback({ reason: error instanceof Error ? error.message : String(error) }),
@@ -246,12 +251,7 @@ export function ProjectGrid() {
     // m-auto rather than justify-center: a centred flex column CLIPS its overflow at the top once
     // the content is taller than the viewport, and forty projects will be. Auto margins centre while
     // still letting the page scroll from its real top.
-    // Its OWN provider: this is a root shell beside <App/> (main.tsx), not a subtree of it, so the
-    // one App mounts is not in scope here. The rail's tooltips render in both, and without this the
-    // grid throws "`Tooltip` must be used within `TooltipProvider`" the moment the rail mounts.
-    <TooltipProvider>
-    <ProjectRail />
-    <div className={`flex min-h-dvh w-full flex-col px-6 py-14 ${RAIL_INSET_CLASS}`}>
+    <div className="flex min-h-dvh w-full flex-col px-6 py-14">
       <div className="m-auto flex w-full flex-col items-center">
       <div className="mb-8 flex flex-col items-center gap-2.5 text-center">
         <img src="/favicon.svg" width={MARK_PX} height={MARK_PX} alt="" className="rounded-[17px]" />
@@ -299,6 +299,5 @@ export function ProjectGrid() {
         <AddProjectDialog reason={fallback.reason} proposed={proposed} onClose={() => setFallback(null)} />
       ) : null}
     </div>
-    </TooltipProvider>
   )
 }

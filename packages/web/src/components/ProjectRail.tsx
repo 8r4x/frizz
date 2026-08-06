@@ -1,7 +1,8 @@
 import * as RadixDropdown from "@radix-ui/react-dropdown-menu"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react"
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type DragEvent as DragEvent_, type KeyboardEvent as KeyboardEvent_, type MouseEvent as MouseEvent_, type PointerEvent as PointerEvent_, type ReactNode } from "react"
 import { House, Plus } from "lucide-react"
+import { Link, useNavigate } from "react-router"
 import type { ProjectCard } from "@frizz/shared"
 import { PROJECT_ICON_EXTENSIONS } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
@@ -157,8 +158,8 @@ function RailLink({
   current: boolean
   index: number
   drag: DragState | null
-  onPointerDown: (event: React.PointerEvent<HTMLAnchorElement>, index: number) => void
-  onKeyDown: (event: React.KeyboardEvent<HTMLAnchorElement>, index: number) => void
+  onPointerDown: (event: PointerEvent_<HTMLAnchorElement>, index: number) => void
+  onKeyDown: (event: KeyboardEvent_<HTMLAnchorElement>, index: number) => void
 }) {
   const held = drag?.fromIndex === index
   // The held square follows the pointer; everything between its old slot and its new one slides one
@@ -178,20 +179,22 @@ function RailLink({
       disabled={drag !== null}
       label={project.stale ? `${project.name} — directory is missing` : project.name}
     >
-      <a
-        href={projectHref(project.slug)}
+      <Link
+        to={projectHref(project.slug)}
         aria-current={current ? "page" : undefined}
         // The rail is a reorderable list, and a link is not one. `listitem` + `aria-grabbed` is the
         // most a native anchor can say about it; the keyboard path below is what makes it true.
         aria-grabbed={held || undefined}
-        onPointerDown={(event) => onPointerDown(event, index)}
-        onKeyDown={(event) => onKeyDown(event, index)}
-        onClick={(event) => {
+        onPointerDown={(event: PointerEvent_<HTMLAnchorElement>) => onPointerDown(event, index)}
+        onKeyDown={(event: KeyboardEvent_<HTMLAnchorElement>) => onKeyDown(event, index)}
+        onClick={(event: MouseEvent_<HTMLAnchorElement>) => {
           // A drag ENDS over a link, so the browser fires a click on release. Without this, every
-          // reorder also navigated to whatever square you dropped on.
+          // reorder also navigated to whatever square you dropped on — and under a real router that
+          // navigation is instant, so the wrong board would already be mounting.
           if (drag || justDragged()) event.preventDefault()
         }}
-        onDragStart={(event) => event.preventDefault()} // native image-drag would fight the pointer drag
+        // Native image-drag would fight the pointer drag.
+        onDragStart={(event: DragEvent_<HTMLAnchorElement>) => event.preventDefault()}
         className={`group relative flex h-10 w-full items-center justify-center outline-none ${
           held ? "z-10 cursor-grabbing" : ""
         }`}
@@ -219,7 +222,7 @@ function RailLink({
         >
           <ProjectSquare project={project} size={SQUARE} />
         </span>
-      </a>
+      </Link>
     </Tooltip>
   )
 }
@@ -330,6 +333,7 @@ export function ProjectRail() {
   const { data } = useQuery({ queryKey: ["projectsList"], queryFn: () => rpc.projectsList() })
   const current = projectSlug()
   const [adding, setAdding] = useState(false)
+  const navigate = useNavigate()
   const [drag, setDrag] = useState<DragState | null>(null)
   /** The order the operator is looking at, which leads the server for the whole round trip. */
   const [optimistic, setOptimistic] = useState<ProjectCard[] | null>(null)
@@ -337,10 +341,10 @@ export function ProjectRail() {
   const pick = useMutation({
     mutationFn: () => rpc.projectPick({}),
     onSuccess: (result) => {
-      if (result.kind === "picked") location.assign(projectHref(result.project.slug))
+      if (result.kind === "picked") navigate(projectHref(result.project.slug))
       // No picker on this machine, or it failed: the grid owns the typed-path fallback dialog, and
-      // sending someone there is better than growing a second copy of it in a 56px column.
-      else if (result.kind === "unavailable") location.assign("/")
+      // sending someone there is better than growing a second copy of it in a 57px column.
+      else if (result.kind === "unavailable") navigate("/")
     },
     onSettled: () => setAdding(false),
   })
@@ -383,7 +387,7 @@ export function ProjectRail() {
     }
   }, [projects.length])
 
-  const startDrag = useCallback((event: React.PointerEvent<HTMLAnchorElement>, index: number) => {
+  const startDrag = useCallback((event: PointerEvent_<HTMLAnchorElement>, index: number) => {
     // Left button only, and never on a modified click — ⌘/ctrl-click opens a new tab and must not be
     // hijacked into a reorder.
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
@@ -461,7 +465,7 @@ export function ProjectRail() {
    * Alt+Arrow rather than bare arrows: a bare ArrowUp on a focused link is how you SCROLL, and taking
    * it would make the rail a trap to tab through.
    */
-  const onKeyDown = useCallback((event: React.KeyboardEvent<HTMLAnchorElement>, index: number) => {
+  const onKeyDown = useCallback((event: KeyboardEvent_<HTMLAnchorElement>, index: number) => {
     if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return
     const to = index + (event.key === "ArrowUp" ? -1 : 1)
     if (to < 0 || to >= projects.length) return
@@ -486,14 +490,14 @@ export function ProjectRail() {
           inside a 512 viewBox with 16px of bleed around a 480 tile, so at 26px it cast a soft shadow
           DOWN onto the first project square. A stroke glyph paints only its own strokes. */}
       <Tooltip side="right" label="All projects">
-        <a
-          href="/"
+        <Link
+          to="/"
           aria-label="All projects"
           aria-current={current ? undefined : "page"}
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted/70 outline-none transition-colors hover:bg-elevated hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
         >
           <House size={17} />
-        </a>
+        </Link>
       </Tooltip>
       <hr className="my-2.5 w-6 shrink-0 border-0 border-t border-border" />
 

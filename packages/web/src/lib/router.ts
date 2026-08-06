@@ -32,7 +32,7 @@ function decodeSegment(segment: string): string | null {
   }
 }
 
-function applyPath(path: string): void {
+export function applyPath(path: string): void {
   const thread = path.match(/^\/thread\/([^/]+)$/)
   if (thread) {
     const slug = decodeSegment(thread[1])
@@ -88,24 +88,27 @@ export function primeRoute(path = location.pathname): void {
   applyPath(innerPath(path))
 }
 
-export function startRouter(): () => void {
+/**
+ * STORE → URL. The other direction now belongs to the route tree (routes.tsx `useRouteToStore`).
+ *
+ * `navigate` rather than `history.pushState`: with a real router the history stack is the router's,
+ * and writing to it behind its back leaves react-router rendering the previous match — the drawer
+ * would open with the address bar agreeing and the page not.
+ *
+ * Back/forward needs no listener any more either. The router owns popstate and re-renders the match,
+ * which drives `useRouteToStore`, which calls `applyPath` — the same function the old popstate
+ * handler called, reached the same way every other navigation reaches it.
+ */
+export function startRouter(navigate: (path: string, options: { replace: boolean }) => void): () => void {
   // Boot: adopt whatever the address bar says (deep link / reload restores the state).
   primeRoute()
 
-  const unsub = subscribe(store, () => {
+  return subscribe(store, () => {
     const path = outerPath(currentPath())
     if (path === location.pathname) return
-    // A NEW topmost thread pushes history; unwinding or non-thread transitions replace.
-    const openingThread = path.startsWith("/thread/")
-    if (openingThread) history.pushState(null, "", path)
-    else history.replaceState(null, "", path)
+    // A NEW topmost thread pushes history; unwinding or non-thread transitions replace. `startsWith`
+    // is checked against the INNER path: under a project prefix every path starts with `/project/`.
+    const openingThread = currentPath().startsWith("/thread/")
+    navigate(path, { replace: !openingThread })
   })
-
-  // URL → state (back/forward, hand-edited paths).
-  const onPop = () => applyPath(innerPath(location.pathname))
-  window.addEventListener("popstate", onPop)
-  return () => {
-    unsub()
-    window.removeEventListener("popstate", onPop)
-  }
 }

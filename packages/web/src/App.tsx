@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react"
+import { useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
 import { useQuery } from "@tanstack/react-query"
 import { closeGithubPicker, store, seedBoard, pushDrawer, resolveRoutedThread, topDrawer, topThreadSlug, showToast } from "./store.ts"
@@ -8,9 +9,7 @@ import { startRouter } from "./lib/router.ts"
 import { nextSidebarPresence, type SidebarPresence } from "./lib/sidebarPresence.ts"
 import { rpc } from "./api/rpc.ts"
 import { Sidebar, projectIdentity } from "./components/Sidebar.tsx"
-import { ProjectRail, RAIL_INSET_CLASS } from "./components/ProjectRail.tsx"
 import { StatusBar } from "./components/StatusBar.tsx"
-import { TooltipProvider } from "./components/Tooltip.tsx"
 import { DrawerStack } from "./components/DrawerStack.tsx"
 import { TodosView } from "./components/TodosView.tsx"
 import { NewThreadDialog } from "./components/NewThreadModal.tsx"
@@ -46,8 +45,11 @@ export function App() {
     rpc.board().then(seedBoard).catch(() => {})
   }, [])
 
-  // URL ⇄ view sync (deep links, reload restore, shareable paths).
-  useEffect(() => startRouter(), [])
+  // STORE → URL (opening a drawer writes the address bar). The other direction is the route tree's —
+  // see routes.tsx useRouteToStore. Navigation goes through the router so its history stack and its
+  // rendered match stay the same thing.
+  const navigate = useNavigate()
+  useEffect(() => startRouter((path, options) => navigate(path, options)), [navigate])
 
   // The public supervisor survives replacement of the app child. It is consequently the only
   // trustworthy transition signal: an old child can still say ready while the next artifact builds.
@@ -235,7 +237,7 @@ export function App() {
   // do it in. A `.frizz`-less repo is simply a board with zero threads — TodosView's `nothingAtAll`
   // branch already renders exactly the right thing for it (centered prompt box, sidebar hidden).
   return (
-    <TooltipProvider>
+    <>
     <RestartOverlay open={snap.controlPlaneState === "restarting"} message={snap.controlPlaneMessage} />
     {/* While restarting, the whole app subtree goes inert so nothing behind the scrim is focusable or
         clickable; the overlay above is a sibling OUTSIDE it so it stays interactive. */}
@@ -245,13 +247,6 @@ export function App() {
           now — the settings/reload pair used to live there, a screen's width away from the identity
           they describe. Everything else flows; the PAGE is the one and only scroll container — a tall
           card simply runs off both edges. */}
-      {/* The permanent project switcher, fixed to the viewport's left edge. It is a SIBLING of the
-          centered pair rather than a column in it: the pair centers in the page, and a rail inside
-          that flow would drag the centre right by half its width on every screen. The container
-          below reserves the width instead. */}
-      <ErrorBoundary label="the project rail">
-        <ProjectRail />
-      </ErrorBoundary>
       <StatusBar identity={identity} connection={snap.connection} boardFallback={snap.socketBoardFallback} />
       {/* (The old fixed "New thread" pill moved INTO the sidebar's top — one entry point, same modal
           flow; the ⌘K palette's "New thread" item and the always-visible dispatch box are the
@@ -273,7 +268,7 @@ export function App() {
               there is leftover space anyway and the padding stops binding.
             · the gutter scales clamp(28px → 3.4vw → 52px): ~28px where space is scarce, back to the
               tuned 52px by ~1530px, where the pair has margins to spare. Wide layouts are unchanged. */}
-      <div className={`flex min-h-screen justify-center gap-[clamp(28px,3.4vw,52px)] px-5 max-[800px]:flex-col max-[800px]:justify-start max-[800px]:gap-0 max-[800px]:px-3 ${RAIL_INSET_CLASS}`}>
+      <div className="flex min-h-screen justify-center gap-[clamp(28px,3.4vw,52px)] px-5 max-[800px]:flex-col max-[800px]:justify-start max-[800px]:gap-0 max-[800px]:px-3">
         {/* A genuinely fresh project keeps its centered first-task view. Once this project has had a
             Frizz-owned thread or plan, the sidebar remains mounted through transient empty keyframes;
             navigation must not vanish while the live board stream reconnects or catches up. */}
@@ -322,6 +317,6 @@ export function App() {
       <CommandPalette />
       <Toaster />
     </div>
-    </TooltipProvider>
+    </>
   )
 }
