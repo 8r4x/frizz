@@ -95,7 +95,12 @@ export interface RunningBroker { close: () => Promise<void>; sessionId: string; 
 export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
   const generation = config.generation ?? randomUUID()
   let client: net.Socket | null = null
+  // 20,000 frames was the only bound; see emitEvent for why bytes matter more than count.
+  const MAX_BACKLOG_FRAMES = 20_000
+  /** 64 MB of replay is a long detached window at the measured mean (~5 KB/frame ⇒ ~12,000 frames). */
+  const MAX_BACKLOG_BYTES = 64 * 1024 * 1024
   const eventBacklog: string[] = []
+  let eventBacklogBytes = 0
   const pendingPermissions = new Map<string, { request: ClaudePermissionRequest; resolve: (d: ClaudePermissionDecision) => void }>()
   let permSeq = 0
   let published = false
@@ -105,7 +110,23 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
   const write = (sock: net.Socket, frame: unknown) => sock.write(JSON.stringify(frame) + "\n")
   const emitEvent = (event: ClaudeQueryEvent) => {
     if (client) write(client, { t: "event", event })
-    else { eventBacklog.push(JSON.stringify({ t: "event", event }) + "\n"); if (eventBacklog.length > 20_000) eventBacklog.shift() }
+    else {
+      // CAPPED ON BOTH AXES. The count cap alone bounds the wrong quantity: measured over 108,718 real
+      // records of the maintainer's largest thread, a frame is 0.7 KB at p50 but 193 KB at p99 and
+      // 568 KB at the max — so 20,000 frames is ~105 MB of backlog at the MEAN and ~500 MB at the
+      // large end, per detached session. And it only fills WHILE DETACHED, which is precisely a frizz
+      // restart, when several daemons are detached at once.
+      const frame = JSON.stringify({ t: "event", event }) + "\n"
+      eventBacklog.push(frame)
+      eventBacklogBytes += Buffer.byteLength(frame)
+      // Drops the OLDEST first, the same semantic the count cap already had: a reconnecting client
+      // would rather have the recent story complete than the whole story truncated at the end.
+      while (eventBacklog.length > MAX_BACKLOG_FRAMES || eventBacklogBytes > MAX_BACKLOG_BYTES) {
+        const dropped = eventBacklog.shift()
+        if (dropped === undefined) break
+        eventBacklogBytes -= Buffer.byteLength(dropped)
+      }
+    }
   }
 
   const writeDiagnostic = config.diagnosticLogPath
@@ -254,6 +275,7 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
     write(sock, { t: "hello", sessionId: handle.sessionId, generation })
     for (const [requestId, { request }] of pendingPermissions) write(sock, { t: "permission-request", requestId, request })
     while (eventBacklog.length) sock.write(eventBacklog.shift()!)
+    eventBacklogBytes = 0
     let buf = ""
     sock.on("data", (chunk) => {
       buf += chunk
