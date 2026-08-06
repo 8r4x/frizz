@@ -193,6 +193,29 @@ function registerAndReconcile(dir: string, id: string, home: string): string {
   }
 }
 
+/**
+ * The Project for a registry entry, without opening the directory.
+ *
+ * The registry records the id and the path; everything else about a Project is derived from those
+ * two, exactly as resolveProject derives them. This is the path a SECOND project takes — the one you
+ * navigated to rather than launched from — so it must not re-resolve identity: the id in the registry
+ * is already the answer, and re-deriving would mean re-reading a checkout that may not even be there.
+ */
+export function projectFromRegistryEntry(
+  entry: { id: string; path: string; name?: string },
+  home = homedir(),
+): Project {
+  const name = entry.name ?? basename(entry.path) ?? entry.path
+  return {
+    dir: entry.path,
+    id: entry.id,
+    name,
+    label: resolveProjectLabel(entry.path) ?? name,
+    stateDir: projectStateDir(entry.id, home),
+    cwdSlug: cwdSlug(entry.path),
+  }
+}
+
 export function resolveProject(
   cwd = process.cwd(),
   home = homedir(),

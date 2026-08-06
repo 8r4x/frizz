@@ -25,7 +25,7 @@ import {
   type ShutdownBarrierOptions,
   type ShutdownDiagnostic,
 } from "./shutdown.ts"
-import { projectLaunchTarget, resolveProject, type Project } from "./project.ts"
+import { projectLaunchTarget, resolveProject, type Project, projectFromRegistryEntry } from "./project.ts"
 import {
   acquireProjectLaunchOwner,
   currentProcessGeneration,
@@ -40,6 +40,7 @@ import {
 import { createBootProgressPublisher } from "./boot-progress.ts"
 import { log as frizzLog } from "./logging.ts"
 import { createTenantMap } from "./tenants.ts"
+import { findBySlug } from "./project-registry.ts"
 
 export const SERVER_SHUTDOWN_TIMEOUT_MS = 4_000
 export const SERVER_FORCE_EXIT_MS = 5_000
@@ -355,9 +356,17 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
   // One process, N projects (tenants.ts). The launching project is adopted below once its own boot
   // phases have built it; anything opened later goes through activate(), which is where the
   // AppContext-seam error boundary lives.
-  const tenants = createTenantMap({
+  const tenants = createTenantMap<ReturnType<typeof createApp>>({
     createContext: (contextOptions) => runtime.createContext(contextOptions),
     contextOptions: { claudeBin: opts.claudeBin },
+    // Each project's app carries ITS OWN owner proof, so /health stays honest per project rather than
+    // answering for whichever one happened to launch the server.
+    createApp: (tenantCtx) => runtime.createApp(tenantCtx, {
+      port,
+      ownerProof: projectLaunchTokenProof(projectLaunchTarget(tenantCtx.project), effectiveOwnerToken),
+      controlToken: effectiveOwnerToken,
+      requestOwnerStop,
+    }),
   })
   let githubInit: Promise<void> | undefined
   let terminal: TerminalServer | undefined
@@ -670,6 +679,29 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     }
     await runtime.afterPhase?.("Vite")
 
+    /**
+     * Route a `/_frizz/<slug>/…` request at the project that owns it, opening that project on first
+     * use. This is the lazy activation §4 settles on: a board nobody has visited costs nothing, and
+     * the first request for it pays the (now bounded) activation.
+     *
+     * Undefined for an unknown slug or a project that will not open — the caller falls through to the
+     * launching project's app, which answers 404 rather than leaking another project's data.
+     */
+    const routeToTenant = async (
+      url: string,
+    ): Promise<{ app: ReturnType<typeof createApp>; url: string } | undefined> => {
+      const split = splitTenantRequest(url, (slug) => findBySlug(slug) !== undefined)
+      if (!split) return undefined
+      const entry = findBySlug(split.slug)
+      if (!entry) return undefined
+      if (entry.id === project.id) return { app, url: split.rest } // the launcher, already open
+      const existing = tenants.appFor(entry.id)
+      if (existing) return { app: existing, url: split.rest }
+      if (!(await tenants.activate(projectFromRegistryEntry(entry)))) return undefined
+      const built = tenants.appFor(entry.id)
+      return built ? { app: built, url: split.rest } : undefined
+    }
+
     accepting = true
     httpServer = await phase("HTTP server", () => runtime.createHttpServer((req, res) => {
       if (!accepting) {
@@ -682,7 +714,13 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
         const controller = new AbortController()
         requestControllers.add(controller)
         let task!: Promise<void>
-        task = pipeToApp(app, req, res, port, controller)
+        // The tenant's own app sees its ordinary routes: the `<slug>` segment is stripped, so nothing
+        // downstream needs to know it was ever addressed by one.
+        task = routeToTenant(url)
+          .then((routed) => {
+            if (routed) req.url = routed.url
+            return pipeToApp(routed?.app ?? app, req, res, port, controller)
+          })
           .catch(() => {
             if (!res.headersSent) res.writeHead(controller.signal.aborted ? 503 : 500)
             res.end()
