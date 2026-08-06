@@ -304,3 +304,26 @@ test("reordering a subset keeps the projects it did not name, after the ones it 
     rmSync(home, { recursive: true, force: true })
   }
 })
+
+// `server.lock` and `project-launch.owner` are LIVENESS records — removed when the server stops. A
+// backfill reading only those recovers whatever happened to be running and nothing else, which is why
+// boron and pullfrog/app stayed missing from the maintainer's grid even after the identity fix that
+// was supposed to find them. `launcher.json` is the one that survives (2026-08-06).
+test("backfill recovers a project whose server is STOPPED, not just a running one", () => {
+  const home = mkdtempSync(join(tmpdir(), "frizz-backfill-stopped-"))
+  try {
+    const stopped = join(home, "stopped-project")
+    const running = join(home, "running-project")
+    for (const [id, dir, file] of [["id-stopped", stopped, "launcher.json"], ["id-running", running, "server.lock"]]) {
+      mkdirSync(dir, { recursive: true })
+      const sd = join(home, ".frizz", "projects", id)
+      mkdirSync(sd, { recursive: true })
+      writeFileSync(join(sd, file), JSON.stringify({ projectDir: dir }))
+    }
+    const claims: Record<string, string> = { [stopped]: "id-stopped", [running]: "id-running" }
+    assert.equal(backfillRegistry(home, (root) => claims[root]), 2)
+    assert.deepEqual(listProjects(home).map((p) => p.slug).sort(), ["running-project", "stopped-project"])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})

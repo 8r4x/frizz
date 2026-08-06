@@ -275,9 +275,17 @@ export function backfillRegistry(
   return added
 }
 
-/** The directory a state dir was last opened from, per the small JSON files the launcher leaves. */
+/**
+ * The directory a state dir was last opened from, per the small JSON files the launcher leaves.
+ *
+ * `launcher.json` FIRST, and that ordering is the whole point: it is the only one of the three that
+ * SURVIVES A CLEAN SHUTDOWN. `server.lock` and `project-launch.owner` are liveness records and are
+ * removed when the server stops, so a backfill that consulted only those could recover a project that
+ * happened to be running and nothing else — which on this machine meant boron and pullfrog/app, both
+ * stopped, stayed invisible even after the identity fix that was supposed to find them (2026-08-06).
+ */
 function recordedProjectDir(stateDir: string): string | undefined {
-  for (const name of ["server.lock", "project-launch.owner"]) {
+  for (const name of ["launcher.json", "server.lock", "project-launch.owner"]) {
     try {
       const value = (JSON.parse(readFileSync(join(stateDir, name), "utf8")) as { projectDir?: unknown }).projectDir
       if (typeof value === "string" && value.length > 0 && existsSync(value)) return value
