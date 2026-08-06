@@ -30,6 +30,8 @@ A 512-unit canvas maps to 16 px, so **one pixel is 32 units**:
 
 The outgoing fraying-rope mark draws its fibres at stroke-width 16–19, which is half a pixel at favicon size. They do not thin out; they disappear.
 
+**Topology.** The letter is ONE contiguous stroke with exactly two free ends: in from the left, round the descender, up through the middle, round the ascender, out to the right. The apparent crossbar is not a stroke — it is the two tails leaving on opposite sides at mirrored heights. Reading it as a closed figure-eight plus a crossbar is what made earlier drafts look like an `8` with a line through it.
+
 **Rotational symmetry.** The cursive f is C2 by nature — two loops crossing once at a waist are point reflections of each other. Every mark on that sheet is derived from one half and rotated, never drawn twice, then checked: render, rotate 180°, take the RMSE. Controls set the scale — a perfect centred circle scores `1.3e-3` (the rasteriser's floor) and a circle just 4 units off centre scores `9.3e-2`, 75x higher. All eight marks land at or under the floor.
 
 **The size finding.** A genuinely written cursive `f` cannot also be the favicon — its line runs about 0.69 px and its loop counters about 1.4 px at 16 px, and bolding it until the arithmetic works widens the loops until the letter reads as an `8`. The resolution is two drawings: the signature as the logo, and the hooked `ƒ` as the icon.
