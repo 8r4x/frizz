@@ -42,6 +42,7 @@ import { log as frizzLog } from "./logging.ts"
 import { createTenantMap } from "./tenants.ts"
 import { findBySlug } from "./project-registry.ts"
 import { backfillRegistry } from "./project-registry.ts"
+import { servedByAnotherProcess } from "./project-launch.ts"
 
 export const SERVER_SHUTDOWN_TIMEOUT_MS = 4_000
 export const SERVER_FORCE_EXIT_MS = 5_000
@@ -364,8 +365,35 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
   // One process, N projects (tenants.ts). The launching project is adopted below once its own boot
   // phases have built it; anything opened later goes through activate(), which is where the
   // AppContext-seam error boundary lives.
+  /**
+   * Refuse to open a project a DIFFERENT live server is already serving.
+   *
+   * The launching project is protected by its launch lease (acquireProjectLaunchOwner below); a
+   * tenant took nothing, so nothing stopped one process from activating a board another was already
+   * tailing. Two tailers on one SQLite file is the survivable half — two SCHEDULERS is not: both
+   * would independently decide the same recurring prompt or timer was due and dispatch it twice into
+   * the same worker.
+   *
+   * This is exactly the state a machine is in while migrating from per-project servers to one
+   * singleton, which is the only reason anyone runs both at once — so it has to fail loudly and
+   * name the other process rather than quietly double-firing.
+   *
+   * A stale record does not block: pidIsAlive settles it, and the owner is per project, so this only
+   * ever refuses the specific board that is genuinely taken.
+   */
+  const assertNotServedElsewhere = (candidate: Project): void => {
+    const other = servedByAnotherProcess(candidate.stateDir, candidate.id)
+    if (other === undefined) return
+    throw new Error(
+      `${candidate.name} is already being served by another Frizz (pid ${other}). Stop that one first — two servers on one board would fire its timers and recurring prompts twice.`,
+    )
+  }
+
   const tenants = createTenantMap<TenantSurfaces>({
-    createContext: (contextOptions) => runtime.createContext(contextOptions),
+    createContext: (contextOptions) => {
+      if (contextOptions.project) assertNotServedElsewhere(contextOptions.project)
+      return runtime.createContext(contextOptions)
+    },
     contextOptions: { claudeBin: opts.claudeBin },
     // Each project's app carries ITS OWN owner proof, so /health stays honest per project rather than
     // answering for whichever one happened to launch the server. The transports are per project for a

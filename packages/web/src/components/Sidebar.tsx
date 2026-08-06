@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
-import { Check, ChevronRight, CircleDashed, Clock, Ellipsis, FileText, Github, Hourglass, Loader2, RotateCcw, Timer } from "lucide-react"
+import { Check, ChevronRight, CircleDashed, Clock, Ellipsis, FileText, Github, Hourglass, House, Loader2, RotateCcw, Timer } from "lucide-react"
 import type { AwaitingHint, BoardSnapshot, PlanView, ThreadView } from "@frizz/shared"
 import { store, openThread, scrollToQueueCard, pushSubAgentDrawer, pushPlanDrawer, QUEUE_CARD_VIEWPORT_TOP, type ConnectionState } from "../store.ts"
 import { useBoard, asThreads } from "../hooks.ts"
@@ -22,6 +22,7 @@ import { prWatchRefs } from "../lib/awaitingPresentation.ts"
 import { useOptimisticallySteered } from "../lib/steering.ts"
 import { activeSidebarSection, queueNavigationSettled, railRevealDelta, type SidebarSectionGeometry } from "../lib/sidebarScrollspy.ts"
 import type { ReactElement, ReactNode } from "react"
+import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 
 // THE LEFT SIDEBAR — the thread list as a FLOATING column (no border, no fill: it floats in the
 // page's whitespace the way the old ToC nav did). App centers the sidebar + workpane as a PAIR with
@@ -859,11 +860,25 @@ export function IdentityMark({
       aria-label={accessibleLabel}
       aria-busy={identity.state === "loading" || undefined}
     >
+      {/* The way back to the machine's project grid, as a breadcrumb rather than a lone button:
+          `home / project` says where you are as well as where you can go. 12px lucide beside a
+          12px label is exactly the pairing ICON_LABEL_NUDGE was measured for. */}
+      <a
+        href="/"
+        title="All projects"
+        aria-label="All projects"
+        className="shrink-0 rounded-sm text-muted/70 outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
+      >
+        <House size={12} className={`shrink-0 ${ICON_LABEL_NUDGE}`} />
+      </a>
+      <span className="-ml-1 shrink-0 text-muted/60">/</span>
       <span className={`identity-slot ${identity.state === "verified" ? "identity-slot--resolved" : "identity-slot--placeholder"}`}>
+        {/* The REPO alone. The owner used to earn its place as the left half of a verified
+            owner/repo identity; with a home crumb in front of it the header became
+            `home / owner / repo`, where only two of those three are somewhere you can go. It stays
+            in the tooltip and the accessible label, so nothing is actually lost. */}
         {identity.state === "verified" ? (
           <span className="block min-w-0 truncate" title={identity.label}>
-            <span className="text-muted">{identity.owner}</span>
-            <span className="text-muted/60 ml-0.5 mr-1">/</span>
             <span className="font-semibold text-fg/90">{identity.repo}</span>
           </span>
         ) : (

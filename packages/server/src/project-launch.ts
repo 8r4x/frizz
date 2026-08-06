@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from "node:fs"
 import { basename, dirname, isAbsolute, join } from "node:path"
+import { pidIsAlive } from "./project-identity.ts"
 import {
   currentProcessGeneration,
   defaultProcessPlatformAdapter,
@@ -318,6 +319,31 @@ function parseOwner(path: string): ProjectLaunchOwnerRecord | null {
 
 export function projectLaunchOwnerPath(stateDir: string): string {
   return join(stateDir, OWNER_NAME)
+}
+
+/**
+ * The pid of ANOTHER live process already serving this project, if there is one.
+ *
+ * The launching project is protected by its launch lease; a tenant in the multi-project server takes
+ * nothing, so without this one process can activate a board another is already tailing. Two tailers
+ * on one SQLite file is the survivable half — two SCHEDULERS is not: both would independently decide
+ * the same recurring prompt or timer was due and dispatch it twice into the same worker.
+ *
+ * That is exactly the state a machine is in while migrating from per-project servers to one
+ * singleton, which is the only reason anyone runs both at once.
+ *
+ * A stale record never blocks (pidIsAlive settles it), and neither does our own (`self`).
+ */
+export function servedByAnotherProcess(
+  stateDir: string,
+  projectId: string,
+  self = process.pid,
+  alive: (pid: unknown) => boolean = pidIsAlive,
+): number | undefined {
+  const owner = readProjectLaunchOwner(stateDir)
+  if (!owner || owner.projectId !== projectId) return undefined
+  if (owner.pid === self || !alive(owner.pid)) return undefined
+  return owner.pid
 }
 
 export function readProjectLaunchOwner(stateDir: string): ProjectLaunchOwnerRecord | null {

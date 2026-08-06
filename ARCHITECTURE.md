@@ -89,9 +89,8 @@ need no install or provider CLI; the full suite is local-only by design.
 - **Permission prompts come from a MARKER, not from JSONL.** Even under `--permission-mode auto` a
   worker can pause on a permission request with NO transcript signal (the last record stays assistant
   + `stop_reason:"tool_use"`), so the cc-worker hook writes a marker into `FRIZZ_PERM_DIR` naming what
-  is waiting and the tailer reads that. (It used to fall back to capturing the tmux pane and matching
-  the TUI's modal chrome by regex; there are no panes, and a broker thread's approvals arrive as typed
-  permission requests over the control channel.) The `perm-prompt` runtime rides the board snapshot
+  is waiting and the tailer reads that. A broker thread's approvals arrive as typed permission
+  requests over the control channel. The `perm-prompt` runtime rides the board snapshot
   with no notify and no unread — the sidebar's attention sort surfaces it.
 - **Human questions are ```question fenced blocks in the worker's final pre-rest message** — the
   message is the medium; there is deliberately NO question tool, sidecar file, or RPC (two earlier
@@ -155,8 +154,8 @@ Two entry points, deliberately distinct:
 
 State is keyed by a stable checkout UUID: an ordinary worktree keeps it in `git config --local frizz.id`,
 each linked worktree in its private Git admin dir, so siblings stay isolated. Canonical real paths make
-a checkout opened through a symlink reuse the same instance. (That UUID also keyed a per-project tmux
-socket once; there is no multiplexer any more, so the project id and state dir are the whole identity.)
+a checkout opened through a symlink reuse the same instance. The project id and its state dir are the
+whole identity — there is no multiplexer and nothing else to key.
 
 ### Browser launch modes
 

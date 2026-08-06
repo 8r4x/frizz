@@ -13,16 +13,17 @@ import {
   currentProcessGeneration,
   projectLaunchOwnerPath,
   projectLaunchTokenProof,
+  projectScopedEnvironment,
   readProjectLaunchOwner,
   registerProjectLaunchDelegate,
-  tryAcquireProjectLaunchOwner,
   removeProjectStatus,
-  writeProjectStatus,
+  servedByAnotherProcess,
+  tryAcquireProjectLaunchOwner,
   type ProcessGeneration,
   type ProcessGenerationObservation,
   type ProcessPlatformAdapter,
-  projectScopedEnvironment,
   type ProjectLaunchTarget,
+  writeProjectStatus,
 } from "./project-launch.ts"
 import { startServer } from "./index.ts"
 
@@ -548,4 +549,29 @@ test("projectScopedEnvironment strips the launching project's identity and resta
   // A token is a capability: never inherited, only granted explicitly.
   assert.equal(env.FRIZZ_LAUNCH_OWNER_TOKEN, undefined, "no token unless one is passed")
   assert.equal(projectScopedEnvironment(launched, mine, "my-token").FRIZZ_LAUNCH_OWNER_TOKEN, "my-token")
+})
+
+// Running the singleton beside the old per-project servers is the ONLY reason two processes ever
+// reach for one board — and two schedulers on one row would dispatch its timers twice.
+test("a project served by another LIVE process is refused, and a stale or own record is not", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-served-elsewhere-"))
+  try {
+    // A unique id: the launch owner is keyed globally, so a shared "p1" collides with other tests.
+    const projectId = randomUUID()
+    const claim = tryAcquireProjectLaunchOwner({ projectId, projectDir: dir, stateDir: dir }, "server")
+    assert.equal(claim.kind, "acquired")
+
+    // Another live process holds it.
+    assert.equal(servedByAnotherProcess(dir, projectId, 999_999, () => true), process.pid)
+    // The same process is not "another".
+    assert.equal(servedByAnotherProcess(dir, projectId, process.pid, () => true), undefined)
+    // A record whose owner is gone must never block a fresh open.
+    assert.equal(servedByAnotherProcess(dir, projectId, 999_999, () => false), undefined)
+    // A record for a DIFFERENT project says nothing about this one.
+    assert.equal(servedByAnotherProcess(dir, "other-project", 999_999, () => true), undefined)
+    // No record at all.
+    assert.equal(servedByAnotherProcess(mkdtempSync(join(tmpdir(), "empty-")), projectId, 999_999, () => true), undefined)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
