@@ -9,11 +9,13 @@ import {
   findByPath,
   findBySlug,
   forgetProject,
+  ICON_SCAN_VERSION,
   listProjects,
   readRegistry,
   registerProject,
   renameProject,
   reorderProjects,
+  resolveProjectIcon,
 } from "./project-registry.ts"
 
 const A = "029a30af-f126-40e3-b04c-d80e74e3e090"
@@ -372,6 +374,47 @@ test("one directory registers once, whatever spelling of its path a caller uses"
     // And a lookup by either spelling finds it.
     assert.ok(findByPath(dir, home))
     assert.ok(findByPath(alias, home))
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("a cached 'no icon' is re-asked when the SCANNER changes, not just when it ages out", () => {
+  const home = sandbox()
+  try {
+    const dir = project(home, "code/nub", A)
+    registerProject({ dir, id: A }, home)
+
+    // An older scanner concluded there was nothing here, moments ago.
+    let asked = 0
+    assert.equal(resolveProjectIcon(A, () => { asked++; return undefined }, { home, version: 1 }), undefined)
+    assert.equal(asked, 1)
+
+    // Same scanner version → the remembered answer stands, and nothing is re-scanned.
+    assert.equal(resolveProjectIcon(A, () => { asked++; return undefined }, { home, version: 1 }), undefined)
+    assert.equal(asked, 1, "a fresh answer from the same scanner is not re-asked")
+
+    // A NEWER scanner → asked again immediately, without waiting out the 12-hour retry. This is the
+    // difference between shipping a scan fix and shipping it half a day later.
+    const found = join(dir, "site", "public", "icon.svg")
+    assert.equal(resolveProjectIcon(A, () => { asked++; return found }, { home, version: 2 }), found)
+    assert.equal(asked, 2)
+    assert.equal(readRegistry(home).projects[0]?.iconScanVersion, 2)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("the shipped scan version is what an unversioned cache is compared against", () => {
+  const home = sandbox()
+  try {
+    const dir = project(home, "code/legacy", A)
+    registerProject({ dir, id: A }, home)
+    // An entry written before versioning existed has no iconScanVersion at all, so it must re-scan.
+    let asked = 0
+    resolveProjectIcon(A, () => { asked++; return undefined }, { home })
+    assert.equal(asked, 1)
+    assert.equal(readRegistry(home).projects[0]?.iconScanVersion, ICON_SCAN_VERSION)
   } finally {
     rmSync(home, { recursive: true, force: true })
   }

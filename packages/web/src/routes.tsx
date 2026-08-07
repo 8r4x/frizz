@@ -38,14 +38,21 @@ import { useProjectRailVisible } from "./lib/projectRail.ts"
 export const PROJECT_PATH = "/project/:slug"
 
 function RootLayout() {
+  // ONE decision drives the column AND the space reserved for it. They were separate — the rail was
+  // conditional while every page kept an unconditional `pl-[57px]` — so turning the rail off left a
+  // 57px lane of nothing down the left of every board. A hidden rail has to be gone from the layout,
+  // not merely invisible in it.
+  const railVisible = useProjectRailVisible()
   return (
     <TooltipProvider>
       {/* Outside the <Outlet/> on purpose: this is the element that must survive the navigation.
           OPT-IN: a permanent column of every project is a standing invitation to leave the thread
           you are in, so it is off unless asked for. Hidden, the way back is the status bar's home
           crumb (Sidebar's IdentityMark), which costs a click exactly when you meant to switch. */}
-      {useProjectRailVisible() ? <ProjectRail /> : null}
-      <Outlet />
+      {railVisible ? <ProjectRail /> : null}
+      <div className={railVisible ? RAIL_INSET_CLASS : undefined}>
+        <Outlet />
+      </div>
     </TooltipProvider>
   )
 }
@@ -86,20 +93,12 @@ function BoardRoute() {
   const { slug } = useParams()
   useProjectBinding(slug)
   useRouteToStore()
-  return (
-    <div className={RAIL_INSET_CLASS}>
-      <App key={slug ?? "__launching__"} />
-    </div>
-  )
+  return <App key={slug ?? "__launching__"} />
 }
 
 function GridRoute() {
   useProjectBinding(undefined)
-  return (
-    <div className={RAIL_INSET_CLASS}>
-      <ProjectGrid />
-    </div>
-  )
+  return <ProjectGrid />
 }
 
 /**

@@ -2286,6 +2286,23 @@ export const ProjectCard = z.object({
    * scanned yet would mean scanning it, and this list is one file read on purpose.
    */
   iconVersion: z.string().optional(),
+  /**
+   * Whether this project HAS an icon — and crucially, whether we have even looked.
+   *
+   * Three states, not a boolean, because the two "no icon to draw right now" cases must behave
+   * differently and a boolean collapses them:
+   *   · `icon`    — one is stored; draw it.
+   *   · `none`    — scanned, nothing found. Draw the monogram and DO NOT request the icon route,
+   *                 which is what stops an iconless project flashing its initials and then swapping.
+   *   · `unknown` — never scanned. The monogram shows, but the request MUST still go out, because
+   *                 that request is what triggers the (lazy, cached) scan in the first place.
+   *
+   * Collapsing `unknown` into `none` deadlocks the whole feature: no image element is rendered, so
+   * the icon route is never called, so the scan never runs, so the project stays `unknown` forever.
+   * Measured 2026-08-06 — a rail of 29 projects had scanned exactly ONE, and only because a probe
+   * had fetched that one's URL by hand.
+   */
+  iconStatus: z.enum(["icon", "none", "unknown"]),
   /** An operator's uploaded icon, rather than one the scan found. Drives what the menu offers. */
   iconIsCustom: z.boolean().optional(),
 })

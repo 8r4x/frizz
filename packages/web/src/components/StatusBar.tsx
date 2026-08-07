@@ -53,10 +53,12 @@ export function StatusBar({
       // sat (y = 24px) while giving the fill 2px of breathing room around the 24px icon targets. Now
       // that the bar is a BOX, its inset is the corner gutter (left-3 = the 12px the narrow layout
       // already uses for the sidebar), so the chip's edge lines up with the composer below it.
-      // left-[69px] clears the project rail (57px + the same 12px gutter left-3 gives it). Below 800px
-      // the rail is hidden, so the bar takes its original left-3 back — measured collision: at left-3
-      // the bar's own project mark rendered ON TOP of the rail's home mark.
-      className="fixed top-2.5 left-[69px] max-[800px]:left-3 z-20 flex h-7 max-w-[calc(100vw-1.5rem)] items-center gap-2 rounded-lg border border-border bg-panel px-2 text-[12px] shadow-sm shadow-black/30"
+      // The left inset clears the project rail ONLY WHEN THERE IS ONE: 57px + the same 12px gutter.
+      // A hidden rail must leave no trace, so this goes back to the plain corner inset rather than
+      // holding a lane open for a column that is not there. (With the rail showing at left-3 the
+      // bar's own project mark rendered ON TOP of the rail's home mark — measured, which is why the
+      // offset exists at all.) Below 800px the rail never shows, so the gutter always wins there.
+      className={`fixed top-2.5 ${railVisible ? "left-[69px] max-[800px]:left-3" : "left-3"} z-20 flex h-7 max-w-[calc(100vw-1.5rem)] items-center gap-2 rounded-lg border border-border bg-panel px-2 text-[12px] shadow-sm shadow-black/30`}
     >
       <IdentityMark identity={identity} state={connection} boardFallback={boardFallback} railVisible={railVisible} />
       <Divider />

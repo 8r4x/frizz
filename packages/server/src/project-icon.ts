@@ -35,66 +35,42 @@ import { readRegistry, resolveProjectIcon } from "./project-registry.ts"
 const MAX_CANDIDATES = 400
 
 /**
- * Where projects actually keep icons, one level deep each.
+ * Directories that may CONTAIN a web app, and therefore its icons.
  *
- * Assembled by reading the real conventions rather than guessing: `public/` (Vite, CRA, Next's pages
- * router), `src/app/` (Next's app router, where `favicon.ico` is a ROUTE file), `static/` (SvelteKit,
- * Hugo, Docusaurus), `assets/` (Expo, Angular), `resources/` (Capacitor, Laravel), `build/` (electron-
- * builder), `.github/` (the README's logo, which for a library is very often the only icon that
- * exists).
+ * The gap this closes was real and common: a tool's marketing or docs site lives in a subdirectory
+ * with its OWN `public/`, so the icons sit at `site/public/icon.svg`. The old table listed `site` and
+ * `public` separately but never their combination, so a repo whose only icons were in `site/public/`
+ * scanned clean — measured on nub, which has a complete icon set there (2026-08-06).
+ *
+ * Crossed with ASSET_DIRECTORIES below rather than hand-listing every pair, because hand-listing is
+ * exactly how `site/public` came to be missing while `docs/public` was present.
  */
-const ICON_DIRECTORIES = [
-  "",
-  "public",
-  "static",
-  "assets",
-  "resources",
-  "app",
-  "src",
-  "src/app",
-  "src/assets",
-  "src/public",
-  "app/assets",
-  "app/public",
-  "www",
-  "web",
-  "site",
-  "docs",
-  "doc",
-  "website",
-  "images",
-  "img",
-  "media",
-  "icons",
-  "brand",
-  "design",
-  "build",
-  "build/icons",
-  "electron",
-  "extension",
-  "extension/icons",
-  ".github",
-  "public/images",
-  "public/img",
-  "public/icons",
-  "public/assets",
-  "public/static",
-  "static/img",
-  "static/images",
-  "static/icons",
-  "assets/images",
-  "assets/icons",
-  "assets/img",
-  "resources/icons",
-  "docs/public",
-  "docs/assets",
-  "docs/static/img",
-  "website/static/img",
+const HOST_DIRECTORIES = [
+  "site", "sites", "website", "web", "www", "docs", "doc", "documentation",
+  "frontend", "client", "ui", "app", "src", "landing", "marketing", "homepage",
+  "extension", "electron", "desktop", "mobile", "www-root", "public-site",
 ]
 
+/**
+ * Where icons sit INSIDE a host, including the one nested level real toolchains use.
+ *
+ * `static/img` is Docusaurus, `public/icons` is most PWA generators — nesting one level is what
+ * catches those without walking the tree.
+ */
+const ASSET_DIRECTORIES = [
+  "",
+  "public", "static", "assets", "resources", "images", "img", "icons", "media", "brand", "design",
+  "public/images", "public/img", "public/icons", "public/assets", "public/static",
+  "static/img", "static/images", "static/icons",
+  "assets/images", "assets/img", "assets/icons",
+  "resources/icons", "src/app", "src/assets",
+]
+
+/** Places that are not "a host with assets" and so cannot come out of the cross product. */
+const EXTRA_DIRECTORIES = [".github", "build", "build/icons", "extension/icons"]
+
 /** Monorepo containers. One level of children each, then the usual asset dirs inside them. */
-const WORKSPACE_CONTAINERS = ["apps", "packages", "sites"]
-const WORKSPACE_SUBDIRECTORIES = ["", "public", "static", "assets", "src/app", "src/assets"]
+const WORKSPACE_CONTAINERS = ["apps", "packages", "sites", "services", "libs", "workspaces"]
 
 /** Web app manifests, whose `icons[]` is a project stating its icons outright. */
 const MANIFEST_NAMES = ["manifest.json", "site.webmanifest", "manifest.webmanifest", "manifest.json5"]
@@ -220,25 +196,51 @@ function listFiles(directory: string): string[] {
 }
 
 /**
- * The directories to look in: the fixed table, plus one level inside each monorepo container.
+ * The directories to look in: the repo root and every host that actually exists, each crossed with
+ * the asset directories, plus one level inside each monorepo container.
+ *
+ * PRUNED BEFORE CROSSING. The root is read once and only hosts that are really there are expanded,
+ * so the cross product costs a handful of stats on a typical repo rather than several hundred — and
+ * a repo with no `site/` never pays for the `site/*` half of the table at all.
  *
  * The expansion is what makes this work on the repos it is most needed for. A monorepo's web app
  * keeps its favicon in `apps/web/public/`, which no fixed table can name in advance because the
  * package is called whatever it is called.
  */
 export function iconDirectories(root: string): string[] {
-  const directories = ICON_DIRECTORIES.map((relativeDirectory) => under(root, relativeDirectory))
+  let children: Set<string>
+  try {
+    children = new Set(
+      readdirSync(root, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name),
+    )
+  } catch {
+    return [root] // unreadable root — the root itself is still worth a look
+  }
+
+  const directories: string[] = []
+  // The repo root itself, and its own asset directories.
+  for (const asset of ASSET_DIRECTORIES) directories.push(under(root, asset))
+  // Each host that is really present, crossed with the same asset directories.
+  for (const host of HOST_DIRECTORIES) {
+    if (!children.has(host)) continue
+    for (const asset of ASSET_DIRECTORIES) directories.push(under(join(root, host), asset))
+  }
+  for (const extra of EXTRA_DIRECTORIES) directories.push(under(root, extra))
+
   for (const container of WORKSPACE_CONTAINERS) {
-    let children: string[]
+    if (!children.has(container)) continue
+    let members: string[]
     try {
-      children = readdirSync(join(root, container), { withFileTypes: true })
+      members = readdirSync(join(root, container), { withFileTypes: true })
         .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
         .map((entry) => entry.name)
     } catch {
       continue
     }
-    for (const child of children) {
-      for (const sub of WORKSPACE_SUBDIRECTORIES) directories.push(under(join(root, container, child), sub))
+    for (const member of members) {
+      for (const asset of ASSET_DIRECTORIES) directories.push(under(join(root, container, member), asset))
     }
   }
   return [...new Set(directories)]

@@ -10,8 +10,11 @@ import { projectIdentity } from "./Sidebar.tsx"
 // Codex, left to right on one line. It used to be three separate pieces of chrome in three places
 // (identity top-left, settings/reload top-right, quota floating over the sidebar composer), so a
 // regression here is a silent return to that scatter rather than a visible break.
-function render(label = "colinhacks/frizz"): string {
+function render(label = "colinhacks/frizz", options: { rail?: boolean } = {}): string {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  // The rail's visibility is a SETTING, read through the same query the component reads, so seeding
+  // the cache is how a static render reaches the shown state at all.
+  if (options.rail !== undefined) client.setQueryData(["settingsGet"], { projectRail: options.rail })
   return renderToStaticMarkup(
     createElement(
       QueryClientProvider,
@@ -42,11 +45,20 @@ test("the bar is one fixed upper-left strip, not per-item corner chrome", () => 
   // One line pinned top-left. The reload button is absent in a static render (it only appears
   // once the supervisor status resolves), which is why the order test above pins settings, not it.
   //
-  // The left inset CLEARS THE PROJECT RAIL (57px + the 12px gutter `left-3` used to give it). At
-  // `left-3` the bar's own project mark rendered on top of the rail's home mark — measured, not
-  // theorised. Below 800px the rail is hidden and the original inset comes back.
-  assert.match(html, /class="fixed top-2\.5 left-\[69px\] max-\[800px\]:left-3 z-20 flex h-7/)
+  // With the rail HIDDEN — which is the default — the bar takes the plain corner gutter. A hidden
+  // rail must leave no trace in the layout, and holding a 69px lane open for a column that is not
+  // there is exactly the trace that was complained about.
+  assert.match(html, /class="fixed top-2\.5 left-3 z-20 flex h-7/)
   assert.doesNotMatch(html, /top-3 right-3/)
+})
+
+test("with the rail SHOWING, the bar steps aside for it", () => {
+  // 57px of rail plus the same 12px gutter. At `left-3` against a visible rail the bar's own project
+  // mark rendered ON TOP of the rail's home mark — measured, not theorised.
+  const html = render("colinhacks/frizz", { rail: true })
+  assert.match(html, /class="fixed top-2\.5 left-\[69px\] max-\[800px\]:left-3 z-20 flex h-7/)
+  // Below 800px the rail never shows, so the gutter wins there even when the setting is on.
+  assert.match(html, /max-\[800px\]:left-3/)
 })
 
 test("the bar is an OPAQUE surface stacked above the sidebar, not bare glyphs on the page", () => {

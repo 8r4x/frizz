@@ -499,6 +499,9 @@ function projectCard(entry: RegistryEntry, stale: boolean): ProjectCard {
     lastOpenedAt: entry.lastOpenedAt,
     stale,
     iconVersion: entry.iconScannedAt,
+    // `iconScannedAt` alone cannot answer this: it is stamped whenever a scan RAN, found or not. See
+    // ProjectCard.iconStatus for why the never-scanned case has to stay distinguishable.
+    iconStatus: entry.icon ? "icon" : entry.iconScannedAt ? "none" : "unknown",
     iconIsCustom: entry.iconSource === "custom" ? true : undefined,
   }
 }

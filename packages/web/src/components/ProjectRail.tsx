@@ -87,11 +87,11 @@ export function ProjectSquare({ project, size }: { project: ProjectCard; size: n
   // A real logo (.github/logo.webp, 300x331) is 9.4% off, so 5% separates the two cleanly.
   const [fills, setFills] = useState(false)
   const hue = monogramHue(project.id)
-  // The server already knows whether this project HAS an icon (iconVersion is stamped when one is
-  // stored), so the monogram is no longer a placeholder for one that is about to arrive — it is the
-  // answer for a project that has none. Rendering it unconditionally is what made every iconned
-  // project flash its initials and then swap: a flash of WRONG content, not of missing content.
-  const hasIcon = Boolean(project.iconVersion)
+  // Draw the image unless we KNOW there is nothing to draw. Skipping it for a project that has simply
+  // never been scanned deadlocks the feature — the image request is what triggers the lazy scan, so
+  // no request means no scan means never any icon. `iconVersion` cannot decide this on its own: it is
+  // stamped whenever a scan RAN, found or not. See ProjectCard.iconStatus.
+  const hasIcon = project.iconStatus !== "none"
   const [failed, setFailed] = useState(false)
   const showMonogram = !hasIcon || failed
   return (

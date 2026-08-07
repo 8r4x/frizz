@@ -50,6 +50,16 @@ export interface RegistryEntry {
   /** When the scan last ran. Its absence — not a missing `icon` — is what asks for another one. */
   iconScannedAt?: string
   /**
+   * Which VERSION of the scanner produced that answer.
+   *
+   * A cached "this project has no icon" is only as good as the scan that concluded it, and improving
+   * the scanner is precisely when every one of those answers becomes suspect. Without this, widening
+   * the search (2026-08-06: `site/public` was never looked in, so nub's complete icon set was
+   * invisible) would have left every affected project showing a monogram until the 12-hour retry
+   * happened to come round. Bumping ICON_SCAN_VERSION re-asks every project at once.
+   */
+  iconScanVersion?: number
+  /**
    * The operator's own position for this project in the rail, ascending.
    *
    * Absent until somebody drags something, and then written for EVERY project at once (see
@@ -390,6 +400,14 @@ export function findBySlug(slug: string, home = homedir()): RegistryEntry | unde
 //
 // Losing this cache costs one rescan, like losing anything else in the index.
 
+/**
+ * Bump whenever the SCAN changes in a way that could find something it previously missed.
+ *
+ * 2 — `site/public` and its family: hosts (`site`, `web`, `docs`, `frontend`, …) are now crossed with
+ *     asset directories instead of hand-listed, so a site in a subdirectory is finally looked in.
+ */
+export const ICON_SCAN_VERSION = 2
+
 /** Where an uploaded icon lands: the project's own state dir, never inside the repository. */
 export function customIconPath(id: string, extension: string, home = homedir()): string {
   return join(frizzPaths({ home }).data, "projects", id, `icon${extension}`)
@@ -444,10 +462,11 @@ export function clearProjectIcon(id: string, home = homedir()): RegistryEntry | 
 export function resolveProjectIcon(
   id: string,
   detect: (root: string) => string | undefined,
-  options: { home?: string; rescanAfterMs?: number; now?: () => number } = {},
+  options: { home?: string; rescanAfterMs?: number; now?: () => number; version?: number } = {},
 ): string | undefined {
   const home = options.home ?? homedir()
   const rescanAfterMs = options.rescanAfterMs ?? 12 * 60 * 60 * 1000
+  const version = options.version ?? ICON_SCAN_VERSION
   const now = options.now ?? Date.now
   const entry = readRegistry(home).projects.find((p) => p.id === id)
   if (!entry) return undefined
@@ -456,7 +475,11 @@ export function resolveProjectIcon(
   // An operator's chosen file that has gone missing is a broken square, not an invitation to pick a
   // different picture for them — leave the choice recorded and let them fix it.
   if (entry.iconSource === "custom") return undefined
-  if (!entry.icon && entry.iconScannedAt && now() - Date.parse(entry.iconScannedAt) < rescanAfterMs) {
+  // A remembered "nothing here" is only trusted while it came from the CURRENT scanner and is recent.
+  // The version check is what makes improving the scan take effect immediately rather than whenever
+  // each project's 12 hours happen to elapse.
+  const staleScanner = (entry.iconScanVersion ?? 0) !== version
+  if (!entry.icon && !staleScanner && entry.iconScannedAt && now() - Date.parse(entry.iconScannedAt) < rescanAfterMs) {
     return undefined
   }
   if (!existsSync(entry.path)) return undefined
@@ -471,6 +494,7 @@ export function resolveProjectIcon(
       delete target.iconSource
     }
     target.iconScannedAt = new Date(now()).toISOString()
+    target.iconScanVersion = version
   }, home)
   return found
 }

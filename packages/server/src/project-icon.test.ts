@@ -191,3 +191,35 @@ test("only formats a browser will render in an <img> are servable", () => {
   assert.equal(iconMediaType("/x/icon.bmp"), undefined)
   assert.equal(iconMediaType("/x/icon.pdf"), undefined)
 })
+
+test("a site in a SUBDIRECTORY is looked in — site/public, not just site (nub)", (t) => {
+  // The real miss, and the reason the directory table became a cross product. nub keeps a complete
+  // icon set at `site/public/`; the old table listed `site` and `public` separately but never their
+  // combination, so the scan came back empty on a repo that plainly has a logo.
+  const root = project(t, "nub", {
+    "site/public/icon.svg": svg(512),
+    "site/public/favicon.ico": png(48, 48),
+    "site/public/icon-512.png": png(512, 512),
+  })
+  assert.equal(picked(root), join("site", "public", "icon.svg"))
+})
+
+test("every host directory gets its own asset directories", (t) => {
+  // One case per family, so a future edit to HOST_DIRECTORIES cannot silently drop one.
+  for (const [host, asset] of [
+    ["web", "public"],
+    ["www", "static/img"],
+    ["docs", "public"],
+    ["frontend", "assets"],
+    ["client", "public"],
+    ["website", "static"],
+  ] as const) {
+    const root = project(t, `host-${host}`, { [`${host}/${asset}/icon.png`]: png(512, 512) })
+    assert.equal(picked(root), join(host, ...asset.split("/"), "icon.png"), `${host}/${asset}`)
+  }
+})
+
+test("a host that does not exist costs nothing and finds nothing", (t) => {
+  const root = project(t, "plain", { "README.md": "# plain", "src/index.ts": "export {}" })
+  assert.equal(detectProjectIcon(root), undefined)
+})
