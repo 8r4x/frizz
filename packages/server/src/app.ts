@@ -71,7 +71,10 @@ export function createApp(ctx: AppContext, options: AppOptions = {}) {
 
   // Stamp the server boot id on every /rpc response — a second, always-warm channel (besides the SSE
   // board frames) for the client to notice a restart even when the board is quiet but RPCs are flowing.
-  app.use("/rpc/*", async (c, next) => {
+  // `frizzRoute`, not a bare "/rpc/*": every route around this one moved under `/_frizz` and this
+  // middleware did not, so it matched nothing and the header was never sent — while the CORS
+  // `exposeHeaders` above kept advertising it. Verified absent on the live server before the fix.
+  app.use(`${frizzRoute("/rpc")}/*`, async (c, next) => {
     c.header("x-frizz-boot", ctx.bootId)
     await next()
   })

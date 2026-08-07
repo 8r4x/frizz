@@ -77,6 +77,29 @@ export function outerPath(inner: string, pathname?: string): string {
 }
 
 /**
+ * An UNPREFIXED in-app route re-pointed at the project this page is showing, or `null` for anything
+ * else (an already-prefixed link, a `/project/...` link, `/`, a filesystem path, a web URL).
+ *
+ * A worker writes `[label](/thread/<slug>)` — the shape from when one server meant one project, and
+ * the shape its prompt still teaches. Rendered verbatim under `/project/nub`, that anchor addresses
+ * whichever project LAUNCHED the server: a plain left-click is caught by the thread-link interceptor
+ * and opens the right thread, but ⌘-click, middle-click and "open link in new tab" hand the raw href
+ * to the browser and land on a stranger's board (or on <MissingThread>). Rewriting the href at
+ * sanitize time fixes every one of those without the author having to know which project they are in.
+ *
+ * `/` is deliberately NOT rewritten: it is the all-projects grid, which is the same page everywhere.
+ */
+export function prefixedAppRoute(href: string | null | undefined, pathname?: string): string | null {
+  if (!href || !href.startsWith("/") || href.startsWith("//")) return null
+  const bare = href.replace(/[?#].*$/u, "")
+  if (projectSlug(bare)) return null // already names its project
+  const first = bare.split("/")[1] ?? ""
+  if (!APP_ROUTE_SEGMENTS.has(first)) return null
+  const outer = outerPath(href, pathname)
+  return outer === href ? null : outer
+}
+
+/**
  * Where THIS page's API lives: `/_frizz/nub`, or `/_frizz` unprefixed.
  *
  * Every client URL builder goes through here, so a page always addresses the project it is showing

@@ -13,7 +13,8 @@ import { displayTitle, lastActiveLabelAt } from "../groups.ts"
 import { mdToHtml, mdInlineToHtml, stripFrontmatter } from "../lib/markdown.ts"
 import { splitComposerValue, splitProseAttachments } from "../lib/imagePaths.ts"
 import { localImageUrl } from "../lib/markdownTargets.ts"
-import { apiBase, outerPath } from "../lib/base-path.ts"
+import { apiBase } from "../lib/base-path.ts"
+import { queueDestination } from "../lib/router.ts"
 import { DiffBlock, PathLink } from "./DiffBlock.tsx"
 import { TodoBlock } from "./TodoBlock.tsx"
 import { splitQuestionBlocks, parseQuestionBlock, type QuestionKind, type BlockAnswer, type MessageAnswering } from "../lib/questionBlocks.ts"
@@ -1373,11 +1374,12 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
         <div className="flex min-w-0 items-center gap-1.5">
           {showReturnToQueue && (
             <Tooltip label="Return to queue">
-              {/* THIS project's queue, not the launching one's. A bare "/" sent a reader who opened
-                  `/project/nub/thread/x/full` to whichever board the server was started from — the
-                  same prefix-blind mistake the ↗ button that brought them here used to make. */}
+              {/* THIS project's queue, not the launching one's — and a BOARD, not the project picker.
+                  A bare "/" sent a reader who opened `/project/nub/thread/x/full` to whichever board
+                  the server was started from (the same prefix-blind mistake the ↗ button that brought
+                  them here used to make), and on the launching project it sent them to the grid. */}
               <a
-                href={outerPath("/")}
+                href={queueDestination("/")}
                 aria-label="Return to queue"
                 data-standalone-return
                 className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"

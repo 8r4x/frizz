@@ -2,7 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import type { BoardSnapshot, ThreadView } from "@frizz/shared"
 import { markDrawerClosing, resolveRoutedThread, store } from "../store.ts"
-import { primeRoute } from "./router.ts"
+import { primeRoute, queueDestination } from "./router.ts"
 
 function resetStore(): void {
   store.drawers = []
@@ -186,4 +186,14 @@ test("malformed percent escapes fall back to Queue instead of throwing before mo
 
   assert.doesNotThrow(() => primeRoute("/status/%"))
   assert.equal(store.view, "todos")
+})
+
+// `/` is the ALL-PROJECTS GRID since the singleton landed, so the queue could not keep using it as a
+// URL: closing the last drawer on the launching project navigated to the project picker.
+test("the queue's URL is a board, never the all-projects grid", () => {
+  assert.equal(queueDestination("/", "fray"), "/project/fray", "the launching project has a board URL too")
+  assert.equal(queueDestination("/", undefined), "/", "no slug yet (pre-restart server / cold boot) — old behaviour")
+  // A thread path is already a board on either shape and must pass through untouched.
+  assert.equal(queueDestination("/thread/fix-auth", "fray"), "/thread/fix-auth")
+  assert.equal(queueDestination("/status/active", "fray"), "/status/active")
 })

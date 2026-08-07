@@ -15,6 +15,7 @@ import { normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
 import type { Tailer, SessionTelemetry } from "./tailer.ts"
 import type { InteractionChange } from "./interaction-store.ts"
 import { frizzDirExists } from "./frizz.ts"
+import { findByPath } from "./project-registry.ts"
 import { parseDeliveryLedger } from "./delivery-ledger.ts"
 import { effectivePermissionMode, resolveLegacyThreadFile } from "./dispatch.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
@@ -971,7 +972,14 @@ export function createBoard(
     // Canonical UTC strings sort chronologically, so one indexed write clears every elapsed snooze.
     // This runs on every edge-triggered refresh as well as the level-triggered reconcile.
     storage.clearExpiredSnoozes(new Date(assembledAtMs).toISOString())
-    const base = { projectDir: project.dir, projectName: project.name, projectLabel: project.label }
+    // The URL slug comes from the machine-wide registry, not from `project` — the same lookup every
+    // other link goes through, so the board can never name itself differently from the rail.
+    const base = {
+      projectDir: project.dir,
+      projectName: project.name,
+      projectLabel: project.label,
+      projectSlug: findByPath(project.dir)?.slug,
+    }
     const sessionThreads = buildSessionThreads(assembledAtMs)
     armSnoozeWake(sessionThreads, assembledAtMs)
     notifyNeedsYou(sessionThreads)

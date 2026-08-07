@@ -4,11 +4,26 @@ import { useBoard } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
 import { displayTitle } from "../groups.ts"
 import { resolveThreadRoute } from "../lib/threadRouteState.ts"
+import { projectHref } from "../lib/base-path.ts"
+import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
 import { ThreadView } from "./ChatView.tsx"
 import { DrawerStack } from "./DrawerStack.tsx"
 import { TooltipProvider } from "./Tooltip.tsx"
 import { Toaster } from "./Toaster.tsx"
 import { useQuery } from "@tanstack/react-query"
+
+/**
+ * The `/full` page for a thread in ANOTHER project — the two places that must name a project other
+ * than this page's. Composed from the two helpers that own the shapes rather than spelled by hand:
+ * these were the only call sites bypassing `projectHref`, and a hand-spelled prefix is exactly how the
+ * ↗ button came to mint an unprefixed URL in the first place.
+ */
+function standaloneHrefIn(projectSlug: string, slug: string): string {
+  // `"/"` forces the UNPREFIXED inner form: this page may itself be prefixed (a `/project/a/…/full`
+  // link to a thread that turns out to live in project b), and `standaloneThreadHref` would otherwise
+  // stamp THIS page's prefix on before we prepend the other project's.
+  return `${projectHref(projectSlug)}${standaloneThreadHref(slug, "/")}`
+}
 
 export function StandaloneThreadPage({ slug }: { slug: string }) {
   const board = useBoard()
@@ -81,7 +96,7 @@ function MissingThread({ slug }: { slug: string }) {
   })
   // Exactly one owner is the overwhelmingly common case, and there is nothing to choose between.
   useEffect(() => {
-    if (data?.length === 1) location.replace(`/project/${data[0].projectSlug}/thread/${encodeURIComponent(slug)}/full`)
+    if (data?.length === 1) location.replace(standaloneHrefIn(data[0].projectSlug, slug))
   }, [data, slug])
 
   return (
@@ -103,7 +118,7 @@ function MissingThread({ slug }: { slug: string }) {
           {data.map((hit) => (
             <a
               key={hit.projectSlug}
-              href={`/project/${hit.projectSlug}/thread/${encodeURIComponent(slug)}/full`}
+              href={standaloneHrefIn(hit.projectSlug, slug)}
               className="rounded-md border border-border px-3 py-1.5 text-[12px] text-fg/90 hover:bg-panel-2"
             >
               {hit.projectName}

@@ -845,7 +845,7 @@ try {
       // is the one the join path already knows how to get.
       const joined = await joinRunningFrizz();
       if (joined) {
-        console.log(`running: http://127.0.0.1:${joined.port}/${joined.slug}`);
+        console.log(`running: http://127.0.0.1:${joined.port}/project/${joined.slug}`);
         console.log(`workspace: ${workspace.root}`);
         console.log(`served by the frizz running on this machine, which this project did not start`);
       } else console.log(`stopped: ${workspace.root}`);

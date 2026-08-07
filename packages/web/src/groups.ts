@@ -11,8 +11,8 @@ export function displayTitle(t: Pick<ThreadView, "title" | "aiTitle" | "id" | "t
   // A machine-guessed dispatch title (titleAuto) with no aiTitle yet is NOT a real name — show the
   // "Spinning up…" placeholder while the session is genuinely just spinning up (maintainer 2026-07-10:
   // "do not try to guess at the thread title"). But that's BOUNDED (see titleIsProvisional): a session
-  // Claude that never yields an aiTitle falls back after its bounded window; Codex uses live runtime
-  // state and the neutral fallback below.
+  // Claude that never yields an aiTitle falls back after its bounded window; Codex gets a shorter
+  // grace and then the neutral fallback below.
   if (titleIsProvisional(t)) return SPINNING_UP_TITLE
   // The worker's OWN name for its task wins over whatever the row was seeded with — unless a human has
   // claimed the name, in which case a stale/slug-shaped backend record must never displace it.
@@ -63,7 +63,9 @@ export function readableMachineTitle(raw: string): string {
 export const SPINNING_UP_TITLE = "Spinning up a thread…"
 export const UNTITLED_THREAD_TITLE = "Untitled thread"
 
-// Claude uses a brief time window; Codex uses its concrete spawning runtime state.
+// Both backends are bounded by a TIME window — Codex's is shorter because its title signal rides the
+// first finalized response rather than a separate naming event. (This once read "Codex uses its
+// concrete spawning runtime state"; nothing ever emitted that state. See titleIsProvisional.)
 const SPIN_UP_MS = 60_000
 const CODEX_TITLE_SIGNAL_GRACE_MS = 15_000
 
@@ -80,6 +82,11 @@ export function titleIsProvisional(t: Pick<ThreadView, "aiTitle" | "titleAuto" |
   // the row never flashes "Untitled thread" between task_started and the comment. A noncompliant or
   // failed worker still degrades to the neutral fallback after the grace; it can never stick here.
   if (t.backend === "codex") {
+    // DEAD BRANCH, kept deliberately. `deriveRuntime` (board.ts) has no `"spawning"` return — the
+    // state is on the wire enum and nothing emits it — so the grace below is what actually bounds a
+    // codex row, and a dispatch whose title signal lands after it flashes "Untitled thread". Waking
+    // this branch means making the server emit `spawning`, which changes what every other reader of
+    // `runtime` sees; it is not a comment fix. Left as the honest record of the intended shape.
     if (t.runtime === "spawning") return true
     const spawned = Date.parse(t.spawnedAt ?? "")
     return Number.isFinite(spawned) && Date.now() - spawned < CODEX_TITLE_SIGNAL_GRACE_MS

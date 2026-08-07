@@ -81,9 +81,16 @@ try {
     } catch {}
     await new Promise((r) => setTimeout(r, 100))
   }
+  // `/` is the all-projects GRID, not a board. Announcing it sent every agent doing browser QA to the
+  // project picker, where a `threads: N` assertion reads 0 forever and a screenshot shows the wrong
+  // page entirely. Announce the BOARD — `/project/<slug>` — and keep the grid at `gridUrl` for the
+  // rare check that actually wants it.
+  const { findByPath } = await import("../packages/server/src/project-registry.ts")
+  const slug = findByPath(projectDir, home)?.slug
   console.log(JSON.stringify({
-    url: `http://127.0.0.1:${port}/`,
-    port, home, project: projectDir,
+    url: slug ? `http://127.0.0.1:${port}/project/${slug}` : `http://127.0.0.1:${port}/`,
+    gridUrl: `http://127.0.0.1:${port}/`,
+    slug, port, home, project: projectDir,
     wakers: flag("wakers"),
   }))
 } catch (error) {

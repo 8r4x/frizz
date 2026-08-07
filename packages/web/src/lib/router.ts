@@ -1,6 +1,6 @@
 import { subscribe } from "valtio"
 import { store, topThreadSlug, closeDrawersById } from "../store.ts"
-import { innerPath, outerPath } from "./base-path.ts"
+import { innerPath, outerPath, projectHref } from "./base-path.ts"
 
 // URL ⇄ state sync, SPA-style. Paths: `/` (the unified queue — the only page), `/thread/<slug>`
 // (the queue with that thread open in the drawer STACK's topmost thread layer — there is no
@@ -30,6 +30,23 @@ function decodeSegment(segment: string): string | null {
     // app before React mounts. Treat malformed routes like any other unknown path: return to Queue.
     return null
   }
+}
+
+/**
+ * An inner path put back in address-bar terms — with ONE correction `outerPath` cannot make.
+ *
+ * On an unprefixed page `outerPath("/")` is `"/"`, and since the singleton landed `/` is the
+ * ALL-PROJECTS GRID, not a board. So closing the last thread drawer on the launching project — the
+ * commonest navigation there is — navigated the maintainer straight to the project picker (verified
+ * live, 2026-08-07). Every other project was unaffected: theirs is `/project/<slug>`, which is a board.
+ *
+ * The launching project has a `/project/<slug>` URL too; it simply had no way to say its own slug
+ * until the board snapshot started carrying one. Use it for the queue and the ejection stops. With no
+ * slug yet (a pre-restart server, or before the first board lands) this is exactly the old behaviour.
+ */
+export function queueDestination(inner: string, slug = store.board?.projectSlug): string {
+  const outer = outerPath(inner)
+  return outer === "/" && slug ? projectHref(slug) : outer
 }
 
 export function applyPath(path: string): void {
@@ -104,7 +121,7 @@ export function startRouter(navigate: (path: string, options: { replace: boolean
   primeRoute()
 
   return subscribe(store, () => {
-    const path = outerPath(currentPath())
+    const path = queueDestination(currentPath())
     if (path === location.pathname) return
     // A NEW topmost thread pushes history; unwinding or non-thread transitions replace. `startsWith`
     // is checked against the INNER path: under a project prefix every path starts with `/project/`.

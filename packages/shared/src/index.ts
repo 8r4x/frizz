@@ -860,6 +860,12 @@ export const BoardSnapshot = z.object({
   projectDir: z.string(),
   projectName: z.string(),
   projectLabel: z.string(), // "owner/repo" from the git origin remote; falls back to projectName
+  // This project's URL slug — the `<slug>` in `/project/<slug>`. The client cannot derive it: a
+  // PREFIXED page reads it off its own path, but the LAUNCHING project is served unprefixed and so has
+  // nothing to read, which left `/` — the all-projects GRID — as the only URL its queue could name.
+  // Optional so a pre-restart server keeps working; absent means "fall back to `/`", i.e. the old
+  // behaviour. Registry-derived, so it is the same slug every other surface links to.
+  projectSlug: z.string().optional(),
   // (No `.frizz/ exists` bit here on purpose. Threads are session-first — the ui.db registry IS the
   // board — so `.frizz/` presence says nothing about whether this project has one. Its only consumer
   // was a shell gate that dead-ended `.frizz`-less repos; the server still probes the directory

@@ -14,7 +14,7 @@ import {
   type LocalAuthorityPolicy,
 } from "./local-origin.ts"
 import { resolveLocalImage } from "./local-image.ts"
-import { frizzRoute } from "@frizz/shared"
+import { FRIZZ_ROUTE_PREFIX, frizzRoute } from "@frizz/shared"
 
 export const SUPERVISOR_CONTROL_PREFIX = "/_frizz/control"
 export const SUPERVISOR_RESTART_PATH = `${SUPERVISOR_CONTROL_PREFIX}/restart`
@@ -110,10 +110,18 @@ function isControlRequest(req: IncomingMessage): boolean {
   return url.pathname === SUPERVISOR_RESTART_PATH || url.pathname === SUPERVISOR_UPDATE_RESTART_PATH || url.pathname === SUPERVISOR_STATUS_PATH
 }
 
+// `/_frizz/local-image` AND `/_frizz/<project>/local-image` — the client builds it from `apiBase()`,
+// which carries the project slug on every prefixed board. Matching only the unprefixed spelling meant
+// a prefixed board's inline screenshots were answered with the recovery HTML during a restart while an
+// unprefixed one's still rendered.
 function isLocalImageRequest(req: IncomingMessage): boolean {
-  return (req.method === "GET" || req.method === "HEAD")
-    && new URL(req.url ?? "/", "http://frizz.invalid").pathname === frizzRoute("/local-image")
+  if (req.method !== "GET" && req.method !== "HEAD") return false
+  const { pathname } = new URL(req.url ?? "/", "http://frizz.invalid")
+  return LOCAL_IMAGE_PATH.test(pathname)
 }
+// Anchored on the reserved namespace, so only Frizz's own route matches — never some project file
+// that happens to end in the same segment.
+const LOCAL_IMAGE_PATH = new RegExp(`^${FRIZZ_ROUTE_PREFIX}(?:/[^/]+)?/local-image$`)
 
 export class RestartSupervisorProxy {
   private server: Server | null = null

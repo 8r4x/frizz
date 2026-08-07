@@ -2,6 +2,7 @@ import { Marked } from "marked"
 import type { Token, Tokens, TokenizerAndRendererExtension } from "marked"
 import { renderHighlightedCode } from "./syntaxHighlight.ts"
 import { localImageUrlForTarget, localMarkdownTarget } from "./markdownTargets.ts"
+import { prefixedAppRoute } from "./base-path.ts"
 import { FRAMED_IMAGE, IMAGE_FRAME, IMAGE_FRAME_MAT } from "../components/ImageFrame.tsx"
 
 // marked's GFM strikethrough opener is `~~?` — ONE tilde is enough. That misreads the tilde agents
@@ -336,6 +337,8 @@ function walk(node: ParentNode, inertInteractive: boolean, block: boolean) {
       continue
     }
     if (tag === "a") {
+      const inApp = prefixedAppRoute(el.getAttribute("href"))
+      if (inApp) el.setAttribute("href", inApp)
       const target = localMarkdownTarget(el.getAttribute("href"))
       if (target) {
         const imageUrl = localImageUrlForTarget(target)

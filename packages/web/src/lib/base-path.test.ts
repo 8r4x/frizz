@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { apiBase, basePath, innerPath, outerPath, projectHref, projectSlug } from "./base-path.ts"
+import { apiBase, basePath, innerPath, outerPath, prefixedAppRoute, projectHref, projectSlug } from "./base-path.ts"
 
 // The launching project is still served unprefixed, so an empty base is a supported state.
 test("an unprefixed page has no base and addresses the unprefixed API", () => {
@@ -44,4 +44,26 @@ test("only /project/<slug> is a project, so the root is free for other pages", (
   // …and `/project` with nothing after it is not a project either.
   assert.equal(basePath("/project"), "")
   assert.equal(projectSlug("/project"), undefined)
+})
+
+// A worker writes `[label](/thread/<slug>)` — the shape from when one server meant one project. Under
+// a prefix that raw href addresses whichever project LAUNCHED the server, so every modified click
+// (⌘, middle, "open in new tab") on an agent's own cross-reference landed on a stranger's board.
+test("an agent's unprefixed in-app link is re-pointed at the project the page is showing", () => {
+  const page = "/project/nub/thread/fix-auth"
+  assert.equal(prefixedAppRoute("/thread/other", page), "/project/nub/thread/other")
+  assert.equal(prefixedAppRoute("/status/active", page), "/project/nub/status/active")
+  assert.equal(prefixedAppRoute("/thread/other/full", page), "/project/nub/thread/other/full")
+  // Query and fragment ride along rather than being dropped or re-pointed at the base.
+  assert.equal(prefixedAppRoute("/thread/other?x=1#y", page), "/project/nub/thread/other?x=1#y")
+
+  // Everything that must be left exactly as written.
+  assert.equal(prefixedAppRoute("/project/other/thread/x", page), null, "already names its project")
+  assert.equal(prefixedAppRoute("/", page), null, "the all-projects grid is the same page everywhere")
+  assert.equal(prefixedAppRoute("/Users/me/notes.md", page), null, "a filesystem path is not a route")
+  assert.equal(prefixedAppRoute("//cdn.example/a", page), null, "protocol-relative is a web URL")
+  assert.equal(prefixedAppRoute("docs/x", page), null)
+  assert.equal(prefixedAppRoute(null, page), null)
+  // On the launching project there is nothing to add, so the href is left alone rather than churned.
+  assert.equal(prefixedAppRoute("/thread/other", "/thread/fix-auth"), null)
 })
