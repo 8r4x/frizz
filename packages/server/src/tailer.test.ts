@@ -2036,6 +2036,49 @@ test("tailer: a denial predating the current spawn is NOT re-adopted by the new 
   assert.equal(t.get("t")?.permDenies, undefined, "and it must not inflate the denial count either")
 })
 
+// EVERY live Claude thread is claude_runtime="broker" ⇒ isHeadlessRow, and the steady tick's marker
+// read used to sit inside `if (!isHeadlessRow(row))`. So the marker was consulted exactly once, at
+// PRIME — meaning a block or a denial that began after boot was never seen at all, and one that was
+// already on disk surfaced at the next server restart instead. That is the "just showed up randomly"
+// half of the original report. The guard's own comment justifies itself entirely on pane capture, and
+// sniffPane no longer captures anything: its remaining marker path "always worked headlessly".
+test("tailer: a headless broker row sees a denial that lands AFTER prime", () => {
+  const h = harness()
+  h.storage.upsertSession(row({ backend: "claude" }))
+  h.storage.setClaudeRuntime("t", "broker")
+  fixture(h.logDir, "sid", [IN_FLIGHT, TOOL])
+  h.clock.ms = Date.parse("2026-07-01T00:00:01.500Z")
+  let marker: ReturnType<typeof permMarker> | undefined
+  const t = makeTailer(h, { readPermMarker: () => marker })
+  t.tick() // prime, with nothing on disk yet
+  assert.equal(t.get("t")?.permPolicy, undefined, "nothing to see at prime")
+
+  marker = permMarker("2026-07-01T00:00:05.000Z", {
+    decision: "deny", rule: "catastrophic-delete", reason: "unrecoverable", command: "rm -rf ~",
+  })
+  t.tick()
+  assert.equal(t.get("t")?.permPolicy?.rule, "catastrophic-delete", "the refusal must not wait for a restart")
+  assert.equal(t.get("t")?.permDenies, 1)
+})
+
+// The same gap, on the BLOCK verdict: a headless thread parked on a deferred request must card as
+// "Needs you" on the tick it happens, not at the next boot.
+test("tailer: a headless broker row blocks on a deferred marker that lands AFTER prime", () => {
+  const h = harness()
+  h.storage.upsertSession(row({ backend: "claude" }))
+  h.storage.setClaudeRuntime("t", "broker")
+  fixture(h.logDir, "sid", [IN_FLIGHT, TOOL])
+  h.clock.ms = Date.parse("2026-07-01T00:00:01.500Z")
+  let marker: ReturnType<typeof permMarker> | undefined
+  const t = makeTailer(h, { readPermMarker: () => marker })
+  t.tick()
+  assert.equal(t.get("t")?.permPrompt, false)
+
+  marker = permMarker("2026-07-01T00:00:05.000Z", { decision: "defer" })
+  t.tick()
+  assert.equal(t.get("t")?.permPrompt, true, "a live block on a headless row is still a block")
+})
+
 test("tailer: a deny decision is retained and counted", () => {
   const h = harness()
   h.storage.upsertSession(row())

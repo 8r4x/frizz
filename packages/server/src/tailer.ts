@@ -4046,19 +4046,31 @@ export function createTailer(deps: TailerDeps): Tailer {
       // "missing pane" must NOT read as process death. Native approvals arrive via the bridge's
       // InteractionStore (surfaced through interactionPresence), not a scraped modal; rest is stamped
       // by onTurnDone off the rollout, not onPaneDeath.
-      if (!isHeadlessRow(row)) {
-        const pane = sniffPane(
-          state,
-          row,
-          nextTurn,
-          nowMs,
-          backend,
-        )
-        if (pane.permPrompt !== state.permPrompt) dirty = true
-        if (!sameNativeInput(pane.nativeInputRequired, state.nativeInputRequired)) dirty = true
-        state.permPrompt = pane.permPrompt
-        state.nativeInputRequired = pane.nativeInputRequired
+      // EVERY row, headless included — the prime path has always called this unguarded, and the steady
+      // tick must agree or the reading LATCHES at boot. It used to sit inside the `!isHeadlessRow`
+      // guard below, on the reasoning quoted there: pane capture is meaningless without a pane. But
+      // sniffPane no longer captures one — all that survives is the MARKER read, whose own comment
+      // says it "always worked headlessly" — and every live Claude thread is claude_runtime="broker",
+      // hence headless. So the guard silently reduced the marker to a once-per-boot reading for the
+      // entire Claude fleet: a block or a policy denial that began after prime was never seen, and one
+      // already on disk surfaced at the next SERVER RESTART, which is what made the note read as
+      // having "just showed up randomly". Harmless for the other headless kind: sniffPane returns
+      // false outright for a codex row, exactly as it did at prime.
+      const pane = sniffPane(
+        state,
+        row,
+        nextTurn,
+        nowMs,
+        backend,
+      )
+      if (pane.permPrompt !== state.permPrompt) dirty = true
+      if (!sameNativeInput(pane.nativeInputRequired, state.nativeInputRequired)) dirty = true
+      state.permPrompt = pane.permPrompt
+      state.nativeInputRequired = pane.nativeInputRequired
 
+      // The PANE-death half stays guarded — that reasoning is still sound, and it is the half the
+      // comment was actually written about.
+      if (!isHeadlessRow(row)) {
         // pane death (tmux remain-on-exit pane went dead) — the agent process exited.
         // Asked only while the answer can still change anything. Once a row is stamped exited AND its
         // pane has been observed dead, the death edge has already fired and nothing un-exits a row —
@@ -4073,7 +4085,8 @@ export function createTailer(deps: TailerDeps): Tailer {
           state.paneDead = dead
         }
       } else {
-        // No pane to sniff, but the "owning process is gone" flag still has to stay CURRENT: it is what
+        // No pane to observe a death on, but the "owning process is gone" flag still has to stay
+        // CURRENT: it is what
         // clears a headless thread's background shells when frizz stops the session, exactly as a dead
         // pane clears a tmux thread's. Assigned without the death EDGE — onPaneDeath stamps `exited`
         // and fires the one-shot notify, and for a headless row `exited` is the input here, not the
