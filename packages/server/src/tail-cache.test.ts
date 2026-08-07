@@ -272,3 +272,32 @@ test("tail-cache: a MISSING table degrades to correct-but-slow rather than throw
   // The next boot re-creates it; the derivation is unaffected either way.
   assert.deepEqual(boot(h), cold)
 })
+
+// A field the fold does NOT derive from the transcript has no business surviving in this cache. The
+// marker-derived permission state is exactly that — permPrompt and nativeInputRequired are already in
+// UNRESTORED_TAIL_FIELDS for the same reason — and permPolicy was left out.
+//
+// It matters more than the usual staleness because the fold-schema digest CANNOT save us here. In a
+// promoted artifact the .ts sources are not shipped (verified: `find ~/.frizz/builds -name tailer.ts`
+// is empty), so foldSchemaDigest falls back to the fixed "frizz-tail-state-v1-unreadable" constant and
+// every build's rows match every other build's. A state cached by the build that still retained
+// auto-APPROVALS would therefore be handed straight back to the build that removed them — resurrecting
+// the note ab774ee deleted, permanently, because nothing clears it.
+test("tail-cache: marker-derived permission state is never restored from the cache", () => {
+  const h = harness()
+  h.storage.upsertSession(row())
+  writeFileSync(h.path("sid"), [user(1, "go"), assistant(2, "answer")].map((l) => l + "\n").join(""))
+  boot(h) // seed
+
+  // Forge the blob the PREVIOUS build would have written: same fold cursor, plus the retained policy.
+  const stored = h.storage.db.prepare<[], { state: string }>("SELECT state FROM tail_state").get()!
+  const decoded = decodeTailState(stored.state)!
+  decoded.permPolicy = { decision: "allow", rule: "worker-autonomy", reason: "unattended", tool: "Bash", command: "git status --short", at: stamp(2) }
+  decoded.permDenies = 4
+  h.storage.db.prepare("UPDATE tail_state SET state = ?").run(encodeTailState(decoded))
+
+  const warm = boot(h)
+  assert.equal(warm?.lastAssistant, "answer", "the cache still hit — this is a restore, not a re-fold")
+  assert.equal(warm?.permPolicy, undefined, "a cached policy decision must not be handed back")
+  assert.equal(warm?.permDenies, undefined, "nor its denial count")
+})

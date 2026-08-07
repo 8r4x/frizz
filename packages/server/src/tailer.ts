@@ -2294,6 +2294,14 @@ type TailBackend = Pick<AgentBackend, "transcriptPath" | "foldLine" | "matchesPe
 export const UNRESTORED_TAIL_FIELDS: ReadonlySet<string> = new Set([
   "slug", "sessionId", "nativeSessionId", "runtimeGeneration", "path", "foreign",
   "primed", "permPrompt", "nativeInputRequired", "paneDead", "subAgentsSig",
+  // Marker-DERIVED, exactly like permPrompt and nativeInputRequired above: this cache exists to skip
+  // re-folding the TRANSCRIPT, and none of these three come from it. Re-derived from the on-disk
+  // marker on the next tick anyway, so dropping them costs nothing and restoring them costs a lot —
+  // the fold-schema digest cannot invalidate a stale one, because a promoted artifact ships no .ts
+  // sources (verified) and foldSchemaDigest therefore falls back to a FIXED constant that every build
+  // shares. A state cached by the build that still retained auto-approvals would otherwise be handed
+  // straight back to the build that removed them, resurrecting the note permanently.
+  "permPolicy", "permDenies",
   "noTranscript", "nextDiscoverMs", "stallLogged",
   "deliveryLedgerSeen",
   // The chase bookkeeping is compared against an IN-MEMORY, per-process counter — the ingest's `live`
