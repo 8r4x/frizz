@@ -2016,6 +2016,26 @@ test("tailer: a later allow does not clear a retained denial", () => {
   assert.equal(t.get("t")?.permDenies, 1)
 })
 
+// SAME stale-generation rule the BLOCK verdict has always had, applied to the retained denial. The
+// marker file is durable and is never deleted — nothing unlinks perm-requests/<slug>.json — so a
+// denial from a PREVIOUS run of this thread is still sitting on disk when it is re-dispatched. The
+// fresh TailState has no permPolicy to dedupe against, so without this guard the first in-flight tick
+// of the new generation re-adopts an ancient refusal and cards it as if it had just happened.
+test("tailer: a denial predating the current spawn is NOT re-adopted by the new generation", () => {
+  const h = harness()
+  h.storage.upsertSession(row({ spawned_at: "2026-07-01T00:00:03.000Z" })) // re-dispatched at :03
+  fixture(h.logDir, "sid", [IN_FLIGHT, TOOL])
+  h.clock.ms = Date.parse("2026-07-01T00:00:03.500Z")
+  const t = makeTailer(h, {
+    readPermMarker: () => permMarker("2026-07-01T00:00:02.000Z", { // prior gen
+      decision: "deny", rule: "catastrophic-delete", reason: "unrecoverable", command: "rm -rf ~",
+    }),
+  })
+  t.tick()
+  assert.equal(t.get("t")?.permPolicy, undefined, "a previous run's refusal is not this run's")
+  assert.equal(t.get("t")?.permDenies, undefined, "and it must not inflate the denial count either")
+})
+
 test("tailer: a deny decision is retained and counted", () => {
   const h = harness()
   h.storage.upsertSession(row())

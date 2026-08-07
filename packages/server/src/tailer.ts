@@ -3225,6 +3225,16 @@ export function createTailer(deps: TailerDeps): Tailer {
   function permMarkerBlocks(state: TailState, row: SessionRow): boolean {
     const marker = readPermMarker(row.slug)
     if (!marker) return false
+    // Stale-generation guard, shared by BOTH readings below. `spawned_at` is bumped to the current
+    // generation on every (re)spawn (storage.beginRuntimeGeneration), so a marker older than it was
+    // written by a run that has already ended. This matters more than it looks: the marker file is
+    // DURABLE and nothing ever unlinks perm-requests/<slug>.json, so a refusal from a previous run of
+    // a thread is still on disk when it is re-dispatched — and the fresh TailState has no permPolicy
+    // to dedupe against, so the retention below would re-adopt it and card an ancient refusal as if it
+    // had just happened. An unparseable spawned_at skips the guard (never suppress a LIVE block, and
+    // never drop a real refusal, on the strength of a timestamp we could not read).
+    const spawnedMs = Date.parse(row.spawned_at)
+    const priorGeneration = (at: number) => Number.isFinite(spawnedMs) && at < spawnedMs
     // RETAIN a DENIAL for display, separately from the block verdict below. Retained on the state
     // rather than recomputed per tick, so it survives the turn ending — a refusal stays readable after
     // the worker moves on, and it changed what the worker could do.
@@ -3241,7 +3251,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     // in the transcript permanently (the model reads the refusal), which is the durable half.
     if (marker.decision === "deny") {
       const at = Date.parse(marker.at)
-      if (Number.isFinite(at) && at !== Date.parse(state.permPolicy?.at ?? "")) {
+      if (Number.isFinite(at) && !priorGeneration(at) && at !== Date.parse(state.permPolicy?.at ?? "")) {
         state.permPolicy = {
           decision: "deny",
           rule: marker.rule ?? "unknown",
@@ -3260,13 +3270,10 @@ export function createTailer(deps: TailerDeps): Tailer {
     if (markerDecision(marker) !== "defer") return false
     const at = Date.parse(marker.at)
     if (!Number.isFinite(at)) return false
-    // Stale-generation guard: a marker written BEFORE this process generation's spawn belongs to an
-    // already-ended block — e.g. a worker killed while parked on a prompt, then resumed. spawned_at is
-    // bumped to the current generation on every (re)spawn (storage.beginRuntimeGeneration), so on prime
-    // the replayed old transcript (lastActivityAt < at) would otherwise flash "Needs you" until the
-    // resume record lands. An unparseable spawned_at skips this guard (never suppress a live block).
-    const spawnedMs = Date.parse(row.spawned_at)
-    if (Number.isFinite(spawnedMs) && at < spawnedMs) return false
+    // A marker written BEFORE this generation's spawn belongs to an already-ended block — e.g. a worker
+    // killed while parked on a prompt, then resumed. Without this, priming on the replayed old
+    // transcript (lastActivityAt < at) would flash "Needs you" until the resume record lands.
+    if (priorGeneration(at)) return false
     const last = state.lastActivityAt ? Date.parse(state.lastActivityAt) : Number.NEGATIVE_INFINITY
     return at > last
   }
