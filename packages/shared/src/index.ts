@@ -2258,14 +2258,6 @@ export type SocketServerMsg =
   | { t: "hb" }
 
 /**
- * Everything Frizz itself serves lives under this prefix, so EVERY OTHER top-level path segment is
- * free to be a project slug (`/nub`, `/frizz`). Without a reserved namespace the deny-list is a
- * growing list of route names that breaks the day someone clones a repo called `settings`.
- *
- * One constant, exported to both sides, because a server route and the client URL that calls it
- * drifting apart is a 404 that looks like a hung request.
- */
-/**
  * One card on the machine's project grid.
  *
  * Everything here comes from the registry index, which is why listing every project costs one file
@@ -2337,6 +2329,19 @@ export type DirectoryPickResult = z.infer<typeof DirectoryPickResult>
 export const ThreadLocation = z.object({ projectSlug: z.string(), projectName: z.string() })
 export type ThreadLocation = z.infer<typeof ThreadLocation>
 
+/**
+ * Everything Frizz itself serves lives under this prefix, so the top level stays free for the project
+ * routes (`/project/<slug>`) and for the SPA's own route names. Without a reserved namespace the
+ * deny-list is a growing list of route names that breaks the day someone clones a repo called
+ * `settings`.
+ *
+ * One constant, exported to both sides, because a server route and the client URL that calls it
+ * drifting apart is a 404 that looks like a hung request. The client end is `apiBase()`
+ * (web/src/lib/base-path.ts), which appends the project slug; ARCHITECTURE.md § URL shape has the map.
+ *
+ * (This docstring sat ~80 lines up the file, stacked on ProjectCard's own, until 2026-08-07 — which is
+ * why nothing here said where the client half lived.)
+ */
 export const FRIZZ_ROUTE_PREFIX = "/_frizz"
 export function frizzRoute(path: string): string {
   return `${FRIZZ_ROUTE_PREFIX}${path.startsWith("/") ? path : `/${path}`}`

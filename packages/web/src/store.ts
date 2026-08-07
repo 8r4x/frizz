@@ -2,6 +2,8 @@ import { proxy } from "valtio"
 import type { BoardSnapshot, ThreadView, BoardDelta } from "@frizz/shared"
 import { applyBoardDelta } from "@frizz/shared"
 import { closeDrawerAnimated, focusDrawer } from "./lib/overlays.ts"
+import { resolveThreadRoute } from "./lib/threadRouteState.ts"
+import { standaloneThreadHref } from "./lib/standaloneThreadRoute.ts"
 
 // Where a scroll-to-card lands a card's outer border below the viewport top (px). Exported because the
 // sidebar's reading rail watches for that same landing to know a click-to-card has arrived.
@@ -233,8 +235,18 @@ export function resolveRoutedThread(): void {
   const slug = store.routeThreadSlug
   if (!slug || !store.board) return
   store.routeThreadSlug = null
-  const t = store.board.threads.find((x) => x.id === slug)
-  if (t?.needsYou && scrollToQueueCard(slug)) return
+  const route = resolveThreadRoute(store.board, slug)
+  // A slug THIS project does not have. Since one server started serving every project that is usually
+  // a thread another project has — and `/thread/<slug>` is the exact shape every pre-singleton
+  // bookmark and every agent-written cross-reference uses, so it is not a rare typo. Pushing the
+  // drawer anyway opened an empty sheet over the board that said nothing and offered nothing.
+  // The `/full` page already knows how to recover: <MissingThread> asks `threadLocate` which project
+  // owns the slug and relocates there. Hand it over rather than growing a second copy of that.
+  if (route.kind === "missing") {
+    if (typeof location !== "undefined") location.replace(standaloneThreadHref(slug))
+    return
+  }
+  if (route.kind === "found" && route.thread.needsYou && scrollToQueueCard(slug)) return
   pushDrawer("thread", slug, { routed: true })
 }
 

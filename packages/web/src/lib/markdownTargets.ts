@@ -30,8 +30,9 @@ function decodePath(value: string): string {
 // http(s) never reach this classifier.
 function isFrizzRoute(href: string): boolean {
   if (href === "/" || href.startsWith("/?") || href.startsWith("/#")) return true
-  // Strip this page's project prefix first. Under `/nub/thread/x` the in-app link IS `/nub/thread/x`,
-  // and without this it reads as a filesystem path and renders as a disabled local-file chip.
+  // Strip this page's project prefix first. Under `/project/nub/thread/x` the in-app link IS
+  // `/project/nub/thread/x`, and without this it reads as a filesystem path and renders as a
+  // disabled local-file chip.
   const bare = href.replace(/[?#].*$/u, "")
   // A link straight to another project's board — `/project/nub` — is in-app even though it has no
   // route segment of its own once the prefix is stripped.

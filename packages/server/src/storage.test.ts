@@ -430,6 +430,28 @@ test("boot releases a stranded 'codex-input' runtime lock left by the retired tm
   reopened.close()
 })
 
+// The OTHER purely in-process lock. resume.ts holds 'follow-up' for the ~300-800ms an injection needs
+// and releases it in a `finally`, so no process can still hold one after a restart — but a hard kill
+// inside that window leaves it, and every later send then fails "Another runtime control is in
+// progress" forever. Unlike 'codex-input' this kind is still LIVE, so the sweep has to be a boot-time
+// one (a stale lock is unrepresentable at boot) and must not touch the durable 'profile' handoff.
+test("boot releases a 'follow-up' lock a hard kill stranded, and never the durable profile handoff", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-storage-followup-lock-"))
+  const path = join(dir, "ui.db")
+  const s = createStorage(path)
+  s.upsertSession(row({ slug: "killed-mid-send" }))
+  s.upsertSession(row({ slug: "profile-armed", session_id: "sid-profile" }))
+  s.beginRuntimeControl("killed-mid-send", { sessionId: "sid", nativeSessionId: null, generation: 0 }, "follow-up")
+  s.beginRuntimeControl("profile-armed", { sessionId: "sid-profile", nativeSessionId: null, generation: 0 }, "profile")
+  assert.equal(s.getSession("killed-mid-send")?.runtime_control, "follow-up", "the lock is real before the crash")
+  s.close() // ← the hard kill: nothing ran the `finally`
+
+  const reopened = createStorage(path)
+  assert.equal(reopened.getSession("killed-mid-send")?.runtime_control ?? null, null, "the thread's composer is not fenced forever")
+  assert.equal(reopened.getSession("profile-armed")?.runtime_control, "profile", "the durable handoff still awaits its recovery")
+  reopened.close()
+})
+
 // Same class as above: a CODEX row can also still hold the tmux-era PROFILE handoff from a pre-cutover
 // crash. It can never complete (recovery reads the pane with the Claude composer parser), and the
 // recovery loop would re-block the thread on every tick. Boot abandons it and explains why.

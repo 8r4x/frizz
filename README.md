@@ -42,7 +42,7 @@ $ npx frizz
   press ctrl-c to stop · run with --debug for the full event feed
 ```
 
-A browser tab opens on localhost — a dedicated workspace for this directory. **One tab per project!** Runs on macOS, Linux, and Windows.
+A browser tab opens on localhost — a dedicated workspace for this directory. **One tab per project!** One Frizz serves every project on the machine, each at its own `/project/<name>` URL, so running it in a second directory joins the server already running rather than starting another. Runs on macOS, Linux, and Windows.
 
 <p align="center">
   <img src="assets/board.png" alt="Frizz running in a browser tab at 127.0.0.1:4921: a sidebar of threads on the left, and on the right a card where an agent is asking an answerable question with lettered options, above Snooze and Mark as done." width="100%">
@@ -129,7 +129,7 @@ only for a source checkout.
 Options:
   --app                  use the legacy dedicated app window instead of a browser tab
   --no-app               print the URL without opening a browser
-  --port <port>          request a fixed port for a new workspace server
+  --port <port>          request a fixed port when starting the machine's Frizz
   --host [address]       serve on a network address instead of loopback (bare --host means 0.0.0.0)
   --allowed-host <name>  with --host, also accept this DNS name as the board's address (repeatable)
   --public-origin <url>  serve behind a proxy/tunnel reachable at this exact origin

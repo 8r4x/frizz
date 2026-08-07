@@ -197,3 +197,31 @@ test("the queue's URL is a board, never the all-projects grid", () => {
   assert.equal(queueDestination("/thread/fix-auth", "fray"), "/thread/fix-auth")
   assert.equal(queueDestination("/status/active", "fray"), "/status/active")
 })
+
+// A deep link to a slug THIS project does not have. Since one server started serving every project
+// that is usually a thread ANOTHER project has — every pre-singleton bookmark and every agent-written
+// `/thread/<slug>` cross-reference has that shape — so it must not open an empty sheet over the board.
+test("a routed slug this board does not have hands off to the /full page's recovery", () => {
+  resetStore()
+  const globals = globalThis as typeof globalThis & { location?: Location }
+  const previous = globals.location
+  const replaced: string[] = []
+  globals.location = { pathname: "/", replace: (url: string) => replaced.push(url) } as unknown as Location
+  try {
+    boardWith([{ id: "present" }])
+    primeRoute("/thread/lives-elsewhere")
+    resolveRoutedThread()
+    assert.deepEqual(replaced, ["/thread/lives-elsewhere/full"], "<MissingThread> + threadLocate relocate from there")
+    assert.equal(store.drawers.length, 0, "no empty drawer is opened over the board")
+
+    // A thread this board DOES have is unaffected: it still opens in place, with no navigation.
+    replaced.length = 0
+    primeRoute("/thread/present")
+    resolveRoutedThread()
+    assert.deepEqual(replaced, [])
+    assert.equal(store.drawers.length, 1)
+    assert.equal(store.drawers[0].slug, "present")
+  } finally {
+    globals.location = previous
+  }
+})

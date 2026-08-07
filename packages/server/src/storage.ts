@@ -952,6 +952,13 @@ export function createStorage(dbPath: string): Storage {
     // nothing can ever clear it again: the board reports runtimeControlPending forever, which fences
     // that thread's composer, model, and sandbox controls permanently. Release it once, at boot.
     db.exec("UPDATE session SET runtime_control = NULL WHERE runtime_control = 'codex-input'")
+    // Same class, same reasoning, the OTHER purely in-process lock. `resume.ts` takes 'follow-up' for
+    // the ~300-800ms an injection needs and releases it in a `finally` — so no process can legitimately
+    // still hold one after a restart, and one left by a hard kill inside that window fences the thread's
+    // follow-ups permanently ("Another runtime control is in progress" on every later send, forever).
+    // Note what is NOT swept: 'profile' is DURABLE by design — profile_handoff rides with it and restart
+    // recovery must prove one exact runtime before clearing either (see the codex-only abandon above).
+    db.exec("UPDATE session SET runtime_control = NULL WHERE runtime_control = 'follow-up'")
     // Same class, one step further: a CODEX row can also still hold the tmux-era PROFILE handoff from a
     // pre-cutover crash. That handoff can never complete now — recovery reattaches a tmux pane and reads
     // it with the Claude composer parser, which a Codex pane never satisfies, so the recovery loop

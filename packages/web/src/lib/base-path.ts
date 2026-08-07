@@ -2,13 +2,18 @@ import { FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
 
 // WHICH PROJECT THIS PAGE IS SHOWING, taken from its own URL.
 //
-// One Frizz per machine serves every project from one origin, so the first path segment names the
-// project: `/nub/thread/fix-auth`. That works precisely because Frizz's own routes were moved under
+// One Frizz per machine serves every project from one origin, so the URL names the project:
+// `/project/nub/thread/fix-auth`. That works precisely because Frizz's own routes were moved under
 // `/_frizz/` — the top-level namespace is otherwise free, so a first segment is either the SPA's own
-// route or a project slug, and nothing else.
+// route or the `project` segment, and nothing else. (`/nub/thread/x` — the project at the ROOT — was
+// the shape considered and rejected; see PROJECT_SEGMENT below for why it cost too much.)
 //
-// AN EMPTY BASE IS A SUPPORTED STATE, not a bug. The launching project is still served unprefixed at
-// `/`, which is what lets the server land slug routing without a lockstep rewrite of this file.
+// AN EMPTY BASE IS A SUPPORTED STATE, not a bug: the launching project is still served unprefixed at
+// `/thread/<slug>` and `/status/<name>`, which is what lets the server land slug routing without a
+// lockstep rewrite of this file, and what keeps every pre-singleton bookmark resolving. It is a legacy
+// INBOUND alias, not a shape to MINT — see `outerPath`/`projectHref`. Note it does NOT include `/`,
+// which is the all-projects GRID; the launching project's queue reaches its board through
+// `queueDestination` (lib/router.ts) instead.
 
 /**
  * The SPA's own top-level route names.

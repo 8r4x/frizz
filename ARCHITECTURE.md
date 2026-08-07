@@ -124,8 +124,10 @@ Neither name is worth a rename sweep — but every new comment says Active / Res
 - `shared` — zod schemas + types + constants. THE contract; read `src/index.ts` first.
 - `rpc` — typed query/mutation/stream over Hono (lifted from gent, unchanged). Server defines a
   `Router` in `server/src/router.ts`; web imports `type AppRouter` from it for the typed client.
-- `server` — Hono app on 127.0.0.1 (default port in shared): rpc mounts at `/rpc`, SSE at
-  `/events`, terminal WebSocket at `/term/:slug` (`ws` package), static web assets in prod, Vite
+- `server` — Hono app on 127.0.0.1 (default port in shared). Every route of its own lives under the
+  RESERVED `/_frizz` namespace (`FRIZZ_ROUTE_PREFIX`), which is what leaves the top level free for a
+  project slug: rpc mounts at `/_frizz/rpc` (and `/_frizz/<project>/rpc` — see § URL shape), SSE at
+  `/_frizz/events`, the multiplex socket at `/_frizz/ws`, static web assets in prod, Vite
   middleware in dev (`src/dev.ts`). Subsystems: `bus.ts` (EventEmitter → SSE), `board.ts`
   (.frizz watcher + read model), `sessions.ts` (SQLite registry via better-sqlite3),
   `tailer.ts` (JSONL), `dispatch.ts` (thread file create + prompt compose + spawn),
@@ -136,6 +138,30 @@ Plus root `src/` — the `frizz` launcher (NOT a workspace package): canonicaliz
 health-check/reuse its detached supervisor, atomically allocate/persist an isolated port, then open the
 URL. Locks and logs live under `~/.frizz/projects/<id>/`; `src/browser.ts` is vendored from Gluon via
 gent. See **CLI launcher** below.
+
+## URL shape (one server, every project — the singleton)
+
+Frizz used to run ONE SERVER PER PROJECT, each on its own port, so every URL was unambiguous and unprefixed. It is now a SINGLETON: one server on one origin serves EVERY project on the machine, and the project is named by a URL PREFIX. Two rules follow, and most of the bugs in this area come from missing one of them.
+
+**Frizz's own routes are under `/_frizz`, so the top level is free.** That is what lets a first path segment be a project slug at all. Anything outside `/_frizz` is either an SPA route name (`APP_ROUTE_SEGMENTS` — `thread`, `status`) or a project.
+
+**Projects live under `/project/<slug>`, not at `/<slug>`.** One segment buys back the whole root namespace, so a future page can never be shadowed by a directory somebody happens to have. `/` is the ALL-PROJECTS GRID.
+
+`packages/web/src/lib/base-path.ts` is the single definition, and every URL a client builds or parses goes through it:
+
+| helper | answers |
+| --- | --- |
+| `projectSlug(path)` | the slug this page is showing, or `undefined` for the launching project |
+| `basePath(path)` | `/project/<slug>`, or `""` when unprefixed |
+| `innerPath(path)` | the path with the prefix removed — what the ROUTER reasons about |
+| `outerPath(inner)` | an inner path put back in ADDRESS-BAR terms |
+| `apiBase(path)` | `/_frizz/<slug>`, or `/_frizz` unprefixed |
+| `projectHref(slug)` | another project's page — the one place that knows the shape |
+| `prefixedAppRoute(href)` | an agent-written `/thread/<slug>` re-pointed at this page's project |
+
+**AN EMPTY BASE IS A SUPPORTED STATE.** The LAUNCHING project is still served unprefixed at `/thread/<slug>` and `/status/<name>`, so every pre-singleton bookmark still resolves. It is a legacy INBOUND alias, not a shape to MINT: a link built without the prefix silently addresses whichever project started the server, which is how the drawer's ↗ button came to open a stranger's board (2026-08-07). Build outward-facing URLs with `outerPath`/`projectHref`; parse with `innerPath`.
+
+One consequence worth knowing because it is not symmetric: the launching project's board has NO unprefixed queue URL, because `/` is the grid. `queueDestination` (`lib/router.ts`) uses the board snapshot's `projectSlug` to send it to `/project/<slug>` instead — without which closing the last drawer navigated to the project picker.
 
 ## CLI launcher
 
