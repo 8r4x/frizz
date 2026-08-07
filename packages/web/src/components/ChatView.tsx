@@ -3,7 +3,7 @@ import { createPortal } from "react-dom"
 import { useSnapshot } from "valtio"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
-import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, ArrowUpRight, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, ShieldCheck, Sparkles, TerminalSquare, X, type LucideIcon } from "lucide-react"
+import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, ArrowUpRight, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, Sparkles, TerminalSquare, X, type LucideIcon } from "lucide-react"
 import { parseRecurringPrompt } from "@frizz/shared"
 import type { AwaitingHint, BgShellView, NativeInputRequired as NativeInputRequiredData, PendingAsk, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@frizz/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
@@ -505,11 +505,11 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
               <AwaitingBackgroundCard thread={thread} />
             ) : null}
             {/* SIBLING of the chain above, not a branch in it. Those are mutually exclusive because they
-                all describe the ONE thing currently blocking; a policy decision blocks nothing and can
-                coexist with any of them, so it must not compete for the same slot. */}
+                all describe the ONE thing currently blocking; a policy denial already happened and
+                blocks nobody now, so it can coexist and must not compete for the same slot. */}
             {thread?.permPolicy ? (
               <div className="mt-3">
-                <PermPolicyNote policy={thread.permPolicy} denies={thread.permDenies} />
+                <PermPolicyDenialCard policy={thread.permPolicy} denies={thread.permDenies} />
               </div>
             ) : null}
             {/* No thread-level Send button anymore: each question-bearing message renders its OWN bottom
@@ -1253,7 +1253,7 @@ function VirtualizedThreadTranscript({
                 {/* Sibling, not a branch — see the runtime-status block above. */}
                 {thread?.permPolicy ? (
                   <div className="mt-3">
-                    <PermPolicyNote policy={thread.permPolicy} denies={thread.permDenies} />
+                    <PermPolicyDenialCard policy={thread.permPolicy} denies={thread.permDenies} />
                   </div>
                 ) : null}
               </div>
@@ -3697,44 +3697,28 @@ export function PermPromptBanner({ onTerminal }: { onTerminal: () => void }) {
   )
 }
 
-// What frizz's permission POLICY did on the worker's behalf (cc-worker/hooks/perm-policy.mjs).
+// What frizz's permission policy REFUSED on the worker's behalf (cc-worker/hooks/perm-policy.mjs).
 //
-// This exists because a policy decision is otherwise INVISIBLE. Nobody was prompted, nothing blocked,
-// and an auto-approval is never written to the transcript — Claude Code renders "Allowed by
-// PermissionRequest hook" in the terminal and stores nothing. Without this the honest description of
-// the feature would be "frizz silently approves things for you", which is not a trade anyone should
-// make blind.
-//
-// Weighted by consequence, deliberately. A DENIAL is rare and changes what the worker can do, so it
-// gets a real card. An approval is routine and would be pure noise as a card, so it is one quiet line
-// — enough to answer "is this thread auto-approving?" without competing with the transcript.
-export function PermPolicyNote({ policy, denies }: { policy: NonNullable<ThreadViewData["permPolicy"]>; denies?: number }) {
+// Denials only. A refusal is rare, changes what the worker can do, and is worth a card that stays put.
+// Approvals used to render here too, as one quiet line — and that was a mistake: the state behind it
+// never clears, so a single routine `git status` approval pinned itself to the bottom of the thread
+// permanently, reading as a live condition of the thread rather than a thing that happened once
+// (maintainer 2026-08-07: "it's fucking useless"). Nothing was blocked, nobody was waiting, and the
+// line outlived every reason to look at it. The server no longer retains an approval at all.
+export function PermPolicyDenialCard({ policy, denies }: { policy: NonNullable<ThreadViewData["permPolicy"]>; denies?: number }) {
   const what = [policy.tool, policy.command].filter(Boolean).join(": ")
-  if (policy.decision === "deny") {
-    return (
-      <TranscriptCard tone="caution" icon={AlertTriangle} label="Blocked by frizz's permission policy">
-        {/* The refused command leads on its own line — it is the thing you actually need to see — and
-            the reason follows as prose. The reason is the same text the WORKER was given, so it
-            already opens with "Refused:"; prefixing it here too read as a stutter. */}
-        {what ? <code className="mb-1.5 block min-w-0 break-all rounded bg-panel px-1.5 py-1 text-[11px] text-fg/85">{what}</code> : null}
-        <span className={CARD_BODY}>{policy.reason}</span>
-        <span className="mt-1.5 block text-[11px] text-muted">
-          Rule <code className="rounded bg-panel px-1 py-0.5">{policy.rule}</code>
-          {denies && denies > 1 ? ` · ${denies} denials this session` : ""}
-        </span>
-      </TranscriptCard>
-    )
-  }
   return (
-    <div className="flex min-w-0 items-start gap-1.5 text-[11px] leading-5 text-muted">
-      <ShieldCheck size={12} strokeWidth={1.8} className="mt-[5px] shrink-0" />
-      <span className="min-w-0">
-        {/* The COMMAND may break anywhere — it is long by nature and forcing it whole would overflow a
-            narrow pane. The RULE name must not: split across lines its pill reads as two fragments. */}
-        Auto-approved{what ? <> <code className="rounded bg-panel-2 px-1 py-0.5 text-[10.5px]">{what}</code></> : null}
-        {" · "}rule <code className="whitespace-nowrap rounded bg-panel-2 px-1 py-0.5 text-[10.5px]">{policy.rule}</code>
+    <TranscriptCard tone="caution" icon={AlertTriangle} label="Blocked by frizz's permission policy">
+      {/* The refused command leads on its own line — it is the thing you actually need to see — and
+          the reason follows as prose. The reason is the same text the WORKER was given, so it
+          already opens with "Refused:"; prefixing it here too read as a stutter. */}
+      {what ? <code className="mb-1.5 block min-w-0 break-all rounded bg-panel px-1.5 py-1 text-[11px] text-fg/85">{what}</code> : null}
+      <span className={CARD_BODY}>{policy.reason}</span>
+      <span className="mt-1.5 block text-[11px] text-muted">
+        Rule <code className="rounded bg-panel px-1 py-0.5">{policy.rule}</code>
+        {denies && denies > 1 ? ` · ${denies} denials this session` : ""}
       </span>
-    </div>
+    </TranscriptCard>
   )
 }
 

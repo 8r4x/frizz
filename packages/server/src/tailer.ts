@@ -599,7 +599,7 @@ export interface TailState extends FoldState {
   primed: boolean // first tick restores state WITHOUT firing transition notifies (boot/restart)
   permPrompt: boolean // last pane-sniff verdict (see matchesPermPrompt)
   nativeInputRequired?: NativeInputRequiredData // last structured native-modal verdict
-  permPolicy?: PermPolicyView // last allow/deny from the worker's permission policy (display only)
+  permPolicy?: PermPolicyView // last DENIAL from the worker's permission policy (display only)
   permDenies?: number // how many policy DENIALS this thread has accumulated
   paneDead: boolean
   // ---- read-side transcript discovery (registered rows only; foreign states never touch these) ----
@@ -2169,11 +2169,14 @@ export function markerDecision(marker: Pick<PermMarker, "decision">): PermDecisi
   return marker.decision === "allow" || marker.decision === "deny" ? marker.decision : "defer"
 }
 
-// The last policy decision frizz OBSERVED for a thread, for display. Only allow/deny appear here — a
-// deferred request is already fully represented by permPrompt ("Needs you"), so repeating it would be
-// noise. `command` is present for Bash only and is display text, not a re-executable string.
+// The last policy DENIAL frizz observed for a thread, for display. Only denials appear here: a
+// deferred request is already fully represented by permPrompt ("Needs you"), and an approval is
+// routine — it used to render as a quiet line, which pinned itself to the bottom of the thread
+// forever after one unremarkable command and told the maintainer nothing they wanted
+// (2026-08-07: "it's fucking useless"). `command` is present for Bash only and is display text,
+// not a re-executable string.
 export interface PermPolicyView {
-  decision: "allow" | "deny"
+  decision: "deny"
   rule: string
   reason: string
   tool: string | null
@@ -3222,27 +3225,32 @@ export function createTailer(deps: TailerDeps): Tailer {
   function permMarkerBlocks(state: TailState, row: SessionRow): boolean {
     const marker = readPermMarker(row.slug)
     if (!marker) return false
-    // RETAIN the policy's own decision for display, separately from the block verdict below. This is
-    // the only durable record an auto-approval leaves anywhere: Claude Code renders "Allowed by
-    // PermissionRequest hook" in the pane but writes NOTHING about an allow to the transcript
-    // (verified 2026-07-25), so without this the dashboard could never say what frizz approved or why.
-    // Retained on the state rather than recomputed per tick, so it survives the turn ending — a
-    // decision stays readable after the worker moves on.
+    // RETAIN a DENIAL for display, separately from the block verdict below. Retained on the state
+    // rather than recomputed per tick, so it survives the turn ending — a refusal stays readable after
+    // the worker moves on, and it changed what the worker could do.
+    // APPROVALS ARE DELIBERATELY NOT RETAINED. They were, on the theory that a silent auto-approval is
+    // otherwise invisible (Claude Code renders "Allowed by PermissionRequest hook" in the pane and
+    // writes nothing about an allow to the transcript). But this state has no clear: the note it fed
+    // sat at the bottom of the thread FOREVER, long after the command it described, naming one
+    // arbitrary `git status` as though it were the thread's standing condition. An approval is routine,
+    // it blocks nobody, and the line answered no question anyone was asking (maintainer 2026-08-07:
+    // "This message just showed up randomly, and now it's stuck showing up in the thread forever …
+    // it's fucking useless").
     // KNOWN BOUND (documented, not hidden): the hook keeps ONE marker per thread, overwritten by the
-    // next request, so this is the LAST decision observed, not a full history. Denials additionally
-    // land in the transcript permanently (the model reads the refusal), which is the consequential half.
-    if (marker.decision === "allow" || marker.decision === "deny") {
+    // next request, so this is the LAST denial observed, not a full history. Denials additionally land
+    // in the transcript permanently (the model reads the refusal), which is the durable half.
+    if (marker.decision === "deny") {
       const at = Date.parse(marker.at)
       if (Number.isFinite(at) && at !== Date.parse(state.permPolicy?.at ?? "")) {
         state.permPolicy = {
-          decision: marker.decision,
+          decision: "deny",
           rule: marker.rule ?? "unknown",
           reason: marker.reason ?? "",
           tool: marker.tool ?? null,
           at: marker.at,
           ...(marker.command ? { command: marker.command } : {}),
         }
-        if (marker.decision === "deny") state.permDenies = (state.permDenies ?? 0) + 1
+        state.permDenies = (state.permDenies ?? 0) + 1
       }
     }
     // Policy-resolved requests are NOT human blocks. perm-policy.mjs records what it did, so an

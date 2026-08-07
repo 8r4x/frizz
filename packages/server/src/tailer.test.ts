@@ -1974,10 +1974,11 @@ test("tailer: a decision-less marker (older plugin build) still blocks", () => {
   assert.equal(t.get("t")?.permPrompt, true, "no decision ⇒ treat as deferred, exactly as before")
 })
 
-// An auto-approval is written NOWHERE else — Claude Code renders "Allowed by PermissionRequest hook"
-// in the pane and puts nothing in the transcript — so if the tailer does not retain it, the dashboard
-// can never say what frizz approved on the human's behalf.
-test("tailer: an allow decision is retained for display (the only record an approval leaves)", () => {
+// An approval is NOT retained. It used to be, so the dashboard could say what frizz approved on the
+// human's behalf — but permPolicy has no clear, so the note it fed sat at the bottom of the thread
+// forever, naming one routine command as though it were the thread's standing condition. It blocks
+// nobody and answered no question anyone was asking; only the denial half survives.
+test("tailer: an allow decision is NOT retained (it would pin a stale note to the thread forever)", () => {
   const h = harness()
   h.storage.upsertSession(row())
   fixture(h.logDir, "sid", [IN_FLIGHT, TOOL])
@@ -1989,10 +1990,30 @@ test("tailer: an allow decision is retained for display (the only record an appr
   })
   t.tick()
   assert.equal(t.get("t")?.permPrompt, false, "an approval never blocks")
-  assert.equal(t.get("t")?.permPolicy?.decision, "allow")
-  assert.equal(t.get("t")?.permPolicy?.rule, "worker-autonomy")
-  assert.equal(t.get("t")?.permPolicy?.command, "git push origin HEAD:main")
+  assert.equal(t.get("t")?.permPolicy, undefined, "nothing to display, and nothing to get stuck")
   assert.equal(t.get("t")?.permDenies, undefined, "an approval is not a denial")
+})
+
+// The retained denial must not be WIPED by the routine approvals that follow it either: the marker
+// file holds one decision, so the next auto-approved command overwrites it, and re-deriving state from
+// that marker would silently drop the refusal the human still needs to see.
+test("tailer: a later allow does not clear a retained denial", () => {
+  const h = harness()
+  h.storage.upsertSession(row())
+  fixture(h.logDir, "sid", [IN_FLIGHT, TOOL])
+  h.clock.ms = Date.parse("2026-07-01T00:00:01.500Z")
+  let marker = permMarker("2026-07-01T00:00:05.000Z", {
+    decision: "deny", rule: "catastrophic-delete", reason: "unrecoverable", command: "rm -rf ~",
+  })
+  const t = makeTailer(h, { readPermMarker: () => marker })
+  t.tick()
+  assert.equal(t.get("t")?.permPolicy?.decision, "deny")
+  marker = permMarker("2026-07-01T00:00:06.000Z", {
+    decision: "allow", rule: "worker-autonomy", reason: "unattended", command: "git status --short",
+  })
+  t.tick()
+  assert.equal(t.get("t")?.permPolicy?.rule, "catastrophic-delete", "the denial still stands")
+  assert.equal(t.get("t")?.permDenies, 1)
 })
 
 test("tailer: a deny decision is retained and counted", () => {

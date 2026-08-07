@@ -273,9 +273,21 @@ defect, and arguably correct: an explicit human rule should beat a blanket polic
 
 MARKER: `<stateDir>/perm-requests/<slug>.json` now carries `decision` / `rule` / `reason` / `command`
 alongside the original fields. The tailer treats ONLY a deferred request as a human block (an
-auto-resolved one must never card as "Needs you"), and surfaces the last allow/deny as `permPolicy` —
-the only durable record an approval leaves anywhere, since allows are never written to the transcript.
+auto-resolved one must never card as "Needs you"), and surfaces the last DENIAL as `permPolicy`.
 A marker with no `decision` (an older plugin build) still blocks exactly as before.
+
+APPROVALS ARE NOT SURFACED — reversed 2026-08-07. The tailer originally retained allows too, on the
+reasoning that an approval leaves no other durable record (Claude Code renders "Allowed by
+PermissionRequest hook" in the pane and writes nothing to the transcript), and Chat rendered them as
+one quiet `Auto-approved <command> · rule <name>` line. The flaw was that `permPolicy` has no CLEAR:
+the line stuck to the bottom of the thread permanently, so one routine `git status --short` read as
+the thread's standing condition long after the turn that ran it (maintainer: *"This message just
+showed up randomly, and now it's stuck showing up in the thread forever … it's fucking useless"*).
+Nothing was blocked and nobody was waiting, so the visibility it bought was worth less than the
+permanent noise. Denials keep the card: they are rare, they changed what the worker could do, and the
+refusal also lands in the transcript, so the card is a pointer to something real rather than the only
+copy of it. If approval visibility is ever wanted again it needs an EXPIRY (or a per-turn scope) —
+re-adding the sticky line is not the fix.
 
 VERIFICATION: `scripts/verify-perm-marker.mjs` runs the REAL hook the way Claude Code does and
 asserts every branch. The allow path was additionally driven against a REAL interactive `claude` (it

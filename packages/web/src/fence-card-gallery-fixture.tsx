@@ -8,7 +8,7 @@ import {
   LimitPauseCard,
   NativeInputRequiredCard,
   PendingAskCard,
-  PermPolicyNote,
+  PermPolicyDenialCard,
   PermPromptBanner,
   ProviderFaultCard,
   QuestionBlockCard,
@@ -183,10 +183,9 @@ function Fixture() {
         <Section label="permission prompt">
           <PermPromptBanner onTerminal={() => {}} />
         </Section>
-        {/* Both weights of the policy note, adjacent on purpose: the denial must read as something to
-            look at while the approval must not compete with the transcript around it. */}
+        {/* Denials only. The approval line this used to sit beside is gone — see PermPolicyDenialCard. */}
         <Section label="permission policy — denied">
-          <PermPolicyNote
+          <PermPolicyDenialCard
             policy={{
               decision: "deny",
               rule: "catastrophic-delete",
@@ -198,26 +197,14 @@ function Fixture() {
             denies={2}
           />
         </Section>
-        <Section label="permission policy — auto-approved">
-          <PermPolicyNote
+        <Section label="permission policy — denied (long command, wrapping)">
+          <PermPolicyDenialCard
             policy={{
-              decision: "allow",
-              rule: "worker-autonomy",
-              reason: "Unattended frizz worker: approved automatically because no human is watching the terminal to answer a prompt.",
+              decision: "deny",
+              rule: "history-rewrite",
+              reason: "Refused: this force-pushes a rewritten history over a shared branch, which destroys commits other agents may already be building on.",
               tool: "Bash",
-              command: "git push origin HEAD:main",
-              at: new Date().toISOString(),
-            }}
-          />
-        </Section>
-        <Section label="permission policy — auto-approved (long command, wrapping)">
-          <PermPolicyNote
-            policy={{
-              decision: "allow",
-              rule: "worker-autonomy",
-              reason: "Unattended frizz worker.",
-              tool: "Bash",
-              command: "cd ~/.cache/nub/worktrees/canary-debug && git fetch origin && git rebase origin/main && git push origin HEAD:main --follow-tags",
+              command: "cd ~/.cache/nub/worktrees/canary-debug && git fetch origin && git rebase origin/main && git push origin HEAD:main --force --follow-tags",
               at: new Date().toISOString(),
             }}
           />

@@ -802,13 +802,13 @@ export const ThreadView = z.object({
   // Raw durable barrier bit. Unlike permissionPending this remains true for a future/corrupt value,
   // so rolling clients fail closed instead of enabling another composer while ownership is unknown.
   permissionChangePending: z.boolean().optional(),
-  // The last decision the worker's permission POLICY made for this thread (cc-worker/hooks/
-  // perm-policy.mjs), and how many times it has DENIED. A policy decision never blocks anyone, so it
-  // has no other way of being noticed — an allow is not written to the transcript at all. Surfacing it
-  // is what keeps "frizz silently approved something on your behalf" from being invisible.
-  // Deferred requests are deliberately absent: those already show as a permission prompt / Needs you.
+  // The last DENIAL the worker's permission POLICY made for this thread (cc-worker/hooks/
+  // perm-policy.mjs), and how many times it has denied. A refusal changes what the worker can do, so
+  // it earns a card. Approvals and deferrals are deliberately absent: a deferral already shows as a
+  // permission prompt / Needs you, and an approval blocks nobody — the quiet line that used to report
+  // one stuck to the bottom of the thread forever, describing a command the reader had long moved past.
   permPolicy: z.object({
-    decision: z.enum(["allow", "deny"]),
+    decision: z.literal("deny"),
     rule: z.string(),
     reason: z.string(),
     tool: z.string().nullable(),

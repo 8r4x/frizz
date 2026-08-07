@@ -10,7 +10,7 @@ import { orderQueue, queued, displayTitle, lastActiveLabelAt } from "../groups.t
 import { useLiveAnswering } from "../lib/answering.ts"
 import { hasQuestionBlock } from "../lib/questionBlocks.ts"
 import { pairAllAnswers } from "../lib/answersMessage.ts"
-import { Message, NativeInputRequiredCard, PermPolicyNote, PermPromptBanner, PendingAskCard, StickyUserBand, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText } from "./ChatView.tsx"
+import { Message, NativeInputRequiredCard, PermPolicyDenialCard, PermPromptBanner, PendingAskCard, StickyUserBand, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText } from "./ChatView.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_TOP, CARD_ACTION_EXPLAINER, CARD_PRIMARY_ACTION } from "./TranscriptCard.tsx"
 import { AwaitingBackgroundCard } from "./AwaitingBackgroundCard.tsx"
 import { agentCompletionCall } from "../lib/subAgentCompletion.ts"
@@ -1161,11 +1161,11 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
             <PermPromptBanner onTerminal={copyTerminalCommand} />
           </div>
         ) : null}
-        {/* What frizz's permission policy decided on the worker's behalf. Sits BELOW the gates above:
+        {/* What frizz's permission policy REFUSED on the worker's behalf. Sits BELOW the gates above:
             those are things waiting on the human, this is something already handled for them. */}
         {thread.permPolicy ? (
           <div className="mb-4">
-            <PermPolicyNote policy={thread.permPolicy} denies={thread.permDenies} />
+            <PermPolicyDenialCard policy={thread.permPolicy} denies={thread.permDenies} />
           </div>
         ) : null}
         {messages.length === 0 ? (
