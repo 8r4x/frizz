@@ -1335,9 +1335,9 @@ function trackResumes(state: TailState, rec: Record): void {
     // was aimed at: the row comes back here (correctly — it is live work again), and the next re-prime
     // silently deletes it, hiding a child that is genuinely running. The replay guard directly above is
     // what makes this safe to do unconditionally — only a GENUINE ack reaches this line.
-    // Queued rather than written here: this is a pure fold function with no storage handle. The tick
-    // drains `unretiredOps` (see the drain beside the prime), which keeps every registry write on the
-    // one side of the module that owns them.
+    // Queued rather than written here: this is a pure fold function with no storage handle. Every tick
+    // drains `unretiredOps` (drainUnretiredOps), which keeps every registry write on the one side of
+    // the module that owns them.
     if (state.dismissedOps.delete(toolUseId)) (state.unretiredOps ??= new Set()).add(toolUseId)
     state.subAgents.set(toolUseId, {
       kind: "agent",
@@ -3316,6 +3316,22 @@ export function createTailer(deps: TailerDeps): Tailer {
     }
     return { permPrompt: false }
   }
+
+  // Write out the un-retirements the FOLD queued: an op the agent restarted under an id the operator
+  // had dismissed is live work again, so the registry row has to go.
+  //
+  // Called from EVERY tick, not just the prime. It lived inline beside the prime, which ends in
+  // `continue` — but a SendMessage restart is folded on an ordinary tick, so its un-retirement was
+  // queued and never written. `retired_op` went on asserting a dismissal the fold had already
+  // superseded, and the next re-prime deleted a child that was genuinely running. Idempotent (a
+  // DELETE by exact key), so running it per tick costs nothing when the set is empty, which is
+  // nearly always.
+  function drainUnretiredOps(state: TailState, row: SessionRow): void {
+    if (!state.unretiredOps?.size) return
+    for (const id of state.unretiredOps) deps.storage.unretireOp(row.slug, row.session_id, id)
+    state.unretiredOps.clear()
+  }
+
   const states = new Map<string, TailState>()
   // FOREIGN thread tails, keyed by session id (separate map so a session-id key can never collide
   // with or shadow a registered slug's TailState in `states`). Entries persist once discovered — a
@@ -3916,12 +3932,7 @@ export function createTailer(deps: TailerDeps): Tailer {
         state.deliveryLedgerSeen = primedLedger.changed ? primedLedger.value : row.delivery_ledger ?? null
         if (primedLedger.changed) transcriptDirty.push(row.slug)
         persistCodexAutoTitle(row, state, runtimeGeneration)
-        // Drain the fold's un-retirements: an op the agent RESTARTED under an id the operator had
-        // dismissed is live work again, and its registry row has to go or the next prime would hide it.
-        if (state.unretiredOps?.size) {
-          for (const id of state.unretiredOps) deps.storage.unretireOp(row.slug, row.session_id, id)
-          state.unretiredOps.clear()
-        }
+        drainUnretiredOps(state, row)
         if (state.offset !== primeOffset) transcriptDirty.push(row.slug)
         state.turn = turnFor(row, state, nowMs)
         const pane = sniffPane(
@@ -4024,6 +4035,8 @@ export function createTailer(deps: TailerDeps): Tailer {
         transcriptDirty.push(row.slug)
         cacheDirty.add(row.slug) // the cached prefix is short by the bytes we just folded
       }
+      // The bytes just folded may have carried a restart that supersedes an operator's ×.
+      drainUnretiredOps(state, row)
       if (chaseRuntime(row, state, state.offset !== prevOffset)) chaseWanted = true
 
       // turn transition (in-flight → idle): a completed turn. Mark unread + notify, gated on

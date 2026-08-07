@@ -3121,6 +3121,52 @@ test("tailer: a killed shell does NOT come back when the fold re-primes from scr
   assert.deepEqual(second.get("t")?.subAgents, [], "…and it is gone from every live surface, not just the shell list")
 })
 
+// …AND A REVIVED OP STOPS BEING DISMISSED — on the tick the revival lands, not at the next boot.
+//
+// trackResumes queues the un-retirement (a pure fold function holds no storage handle), and the drain
+// that writes it lived ONLY in the prime branch, which ends in `continue`. A SendMessage restart is
+// folded on a STEADY tick, so its un-retirement was queued and never written: `retired_op` kept
+// asserting a dismissal the fold had already superseded. The row is back on the board — correctly, it
+// is live work again — and the NEXT frizz restart silently deletes it, hiding a child that is
+// genuinely running. That is verbatim the failure the un-retire exists to prevent.
+test("tailer: a restart on a STEADY tick clears the dismissal, not just the board", () => {
+  const h = harness()
+  h.storage.upsertSession(row({ backend: "claude" }))
+  const OUT = "/tmp/tasks/a0b.output"
+  fixture(h.logDir, "sid", [
+    JSON.stringify(agentDispatch("toolu_dispatch", "Fix the node-shim abort", "2026-07-28T18:14:02.743Z")),
+    JSON.stringify(agentLaunch("toolu_dispatch", "a0b15ec8029fe3830", OUT, "2026-07-28T18:14:02.926Z")),
+  ])
+  h.clock.ms = Date.parse("2026-07-28T18:14:03.000Z")
+  const t = makeTailer(h, { mtimeMs: () => h.clock.ms })
+  t.tick() // prime
+  assert.deepEqual(t.get("t")?.subAgents.map((a) => a.id), ["toolu_dispatch"], "the child is live before the ×")
+
+  // It fails; the operator clicks ×.
+  appendFileSync(join(h.logDir, "sid.jsonl"), JSON.stringify(notify("toolu_dispatch", "a0b15ec8029fe3830", "failed", "2026-07-28T18:26:53.757Z")) + "\n")
+  h.clock.ms = Date.parse("2026-07-28T18:27:00.000Z")
+  t.tick()
+  assert.equal(t.dismissOp?.("t", "toolu_dispatch"), true)
+  assert.deepEqual([...h.storage.retiredOps("t", "sid")], ["toolu_dispatch"], "the × is durable, as it must be")
+
+  // The agent RESTARTS it with SendMessage — folded on a steady tick, never a prime.
+  appendFileSync(join(h.logDir, "sid.jsonl"), [
+    JSON.stringify(sendMessage("toolu_send", "a0b15ec8029fe3830", "Resume shim fix", "2026-07-28T18:36:36.963Z")),
+    JSON.stringify(resumeAck("toolu_send", "a0b15ec8029fe3830", OUT, "2026-07-28T18:36:36.974Z")),
+  ].map((l) => l + "\n").join(""))
+  h.clock.ms = Date.parse("2026-07-28T18:36:37.000Z")
+  t.tick()
+
+  assert.deepEqual(t.get("t")?.subAgents.map((a) => a.id), ["toolu_dispatch"], "the revived child is back on the board")
+  assert.deepEqual([...h.storage.retiredOps("t", "sid")], [], "and the registry no longer calls it dismissed")
+
+  // The consequence, made explicit: a frizz restart over the same registry must not re-hide it.
+  t.stop()
+  const second = makeTailer(h, { mtimeMs: () => h.clock.ms })
+  second.tick()
+  assert.deepEqual(second.get("t")?.subAgents.map((a) => a.id), ["toolu_dispatch"], "a restart must not delete a running child")
+})
+
 test("tailer: dismissing scopes to the SESSION — a re-dispatched slug starts clean", () => {
   // The durable key is (slug, session_id) on purpose. A replacement session is a different
   // conversation whose tool_use ids come from a different transcript; inheriting the old one's
