@@ -274,3 +274,48 @@ test("a follow-up sent instead of an answer retires the open card and UNBLOCKS t
     await rmEventually(dir)
   }
 })
+
+// The THIRD way a session stops being answerable, and the one nothing swept: an operator pressing Stop
+// or "Mark as done". Both reach router.stopThreadRuntime, which SIGTERMs the daemon by record via
+// releaseSession — and releaseSession swept only `pendingPerms`, its own PROCESS memory. The durable
+// journal row stayed `pending`.
+//
+// Nothing else catches it afterwards. `cancelForSession` runs from storage.ts only on a session DELETE
+// or REPLACE, and a completion is neither: it UPDATEs the row to state='archived'. The boot sweep
+// cannot help either, because `ownedSessions` filters archived rows out by design ("never wake a thread
+// the human has already put away") — so warmUp will not see this row at this boot or any future one.
+// And Claude's two create sites both journal `expiresAt: null`, so `expireDue` will never reach it.
+//
+// The result is the exact 2026-08-02 defect through a different door: reopening the thread from Done
+// renders a live, answerable card for a daemon that has been dead since the day it was completed, and
+// answering it flips the journal while telling nobody. releaseSession already RECEIVES the reason it
+// needs — router passes "session-deleted" — it just dropped the argument on the floor.
+test("releaseSession terminalizes the journal, not just its own process memory", { timeout: 15_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cbrk-sweep-release-"))
+  const env = { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" }
+  const sessionId = randomUUID()
+  const slug = "sweep-release"
+  const projectId = "proj-sweep-release"
+  const scope = { projectId, threadSlug: slug, sessionId }
+  const store = createInteractionStore(new Database(":memory:"))
+  const bridge = createClaudeAgentBrokerBridge({
+    stateDir: dir, executablePath: fakeExe(dir, "permission"), env,
+    interactions: store, projectId,
+    // Archived by completion: the boot sweep is filtered away from this row forever.
+    ownedSessions: () => [],
+  })
+  try {
+    const orphanId = seedOrphan(store, { projectId, threadSlug: slug, sessionId, cwd: dir }, "released-request-1")
+    assert.equal(store.listPending(scope).length, 1)
+
+    bridge.releaseSession(slug, sessionId, "session-deleted")
+
+    assert.equal(store.listPending(scope).length, 0, "a stopped session leaves no answerable card")
+    const swept = store.get(scope, orphanId)
+    assert.equal(swept?.lifecycle, "cancelled")
+    assert.equal(swept?.cancellationReason, "session-deleted", "and it says WHY it went away")
+  } finally {
+    bridge.close()
+    await rmEventually(dir)
+  }
+})

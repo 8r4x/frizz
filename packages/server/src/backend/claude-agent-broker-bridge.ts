@@ -362,7 +362,7 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
   // the card on the way past denies the still-blocked daemon, the tool call unwinds, the turn resumes and
   // eats the queued input — so a follow-up steers a question-blocked thread the same way it steers any
   // other one, which is the property a ```question fence has for free.
-  const retirePendingFor = (slug: string, sessionId: string, reason: "turn-ended" | "provider-cancelled" | "user-cancelled"): void => {
+  const retirePendingFor = (slug: string, sessionId: string, reason: Parameters<InteractionStore["cancelForSession"]>[2]): void => {
     if (!deps.interactions) return
     let cancelled: ReturnType<InteractionStore["cancelForSession"]> = []
     // Never let a sweep fail a turn ending, a boot, or a daemon teardown — it is hygiene, not the work.
@@ -713,17 +713,24 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
       try { return readClaudeBrokerExit(deps.stateDir, sessionId) } catch { return null }
     },
 
-    releaseSession(threadSlug, sessionId) {
+    releaseSession(threadSlug, sessionId, reason) {
       // Kill the daemon UNCONDITIONALLY (by record), even when we don't currently hold it live — after a
       // frizz restart the ownerless daemon is still running but unattached, and a stop/complete must not
       // leak it. The return value reports only whether we held a live binding to tear down first.
       const s = current(threadSlug, sessionId)
       if (s) { s.client.close(); sessions.delete(threadSlug) }
       killBroker(deps.stateDir, sessionId)
-      // storage.ts cancels every pending interaction for the session before it emits the lifecycle
-      // event, so the subscriber above has already denied and dropped these. Sweep anyway: an entry
-      // whose interaction was ALREADY terminal never gets a change event, and there is no daemon left
-      // to answer it against.
+      // Terminalize the JOURNAL, not just this process's memory of it. When the caller is the lifecycle
+      // subscriber, storage.ts has already cancelled these and this is a no-op (an already-terminal
+      // record is not returned). When it is router.stopThreadRuntime — Stop, or "Mark as done" — it is
+      // the only sweep there is: a completion UPDATEs the row to state='archived' rather than deleting
+      // or replacing it, so storage cancels nothing, and `ownedSessions` filters archived rows out of
+      // the boot sweep by design. Claude's create sites journal `expiresAt: null`, so expireDue never
+      // reaches them either. Without this the card outlives its daemon forever and still renders with
+      // working buttons. `reason` was accepted and dropped here for exactly as long as that was true.
+      retirePendingFor(threadSlug, sessionId, reason)
+      // Belt and braces for the entry whose interaction was ALREADY terminal: it is returned by no
+      // cancel, gets no change event, and there is no daemon left to answer it against.
       for (const [id, pending] of pendingPerms) if (pending.scope.sessionId === sessionId) pendingPerms.delete(id)
       return s !== undefined
     },
