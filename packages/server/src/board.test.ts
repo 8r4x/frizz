@@ -205,6 +205,33 @@ test("resolveSessionTitle: a human title suppresses stale transcript names; gene
   )
 })
 
+test("resolveSessionTitle: a PERSISTED worker title survives the loss of its telemetry", () => {
+  // The whole point of title_agent. Telemetry only exists while a session is tailed, so a rested,
+  // archived or post-restart codex thread arrives with `tele` empty — and with no aiTitle on the wire
+  // the display side cannot tell the worker's own name from the dispatch chop, so it showed "Untitled
+  // thread" for every one of them (maintainer 2026-08-07).
+  assert.deepEqual(
+    resolveSessionTitle(row({ title: "Build minimal tool renderer", title_auto: 1, title_locked: 0, title_agent: 1 }), undefined),
+    { title: "Build minimal tool renderer", titleAuto: true, titleLocked: false, aiTitle: "Build minimal tool renderer" },
+  )
+  // Without the flag the same row IS just its chop, and must stay unnamed rather than exposing it.
+  assert.deepEqual(
+    resolveSessionTitle(row({ title: "i want to start working", title_auto: 1, title_locked: 0, title_agent: 0 }), undefined),
+    { title: "i want to start working", titleAuto: true, titleLocked: false, aiTitle: undefined },
+  )
+  // Live telemetry is the FRESHER of the two — a worker that renames itself mid-turn shows the new
+  // name before the CAS has persisted it.
+  assert.deepEqual(
+    resolveSessionTitle(row({ title: "Stale persisted name", title_auto: 1, title_locked: 0, title_agent: 1 }), tele({ aiTitle: "Newer live name" })),
+    { title: "Stale persisted name", titleAuto: true, titleLocked: false, aiTitle: "Newer live name" },
+  )
+  // A human's name still outranks both, exactly as it does the live one.
+  assert.deepEqual(
+    resolveSessionTitle(row({ title: "Named by hand", title_auto: 0, title_locked: 1, title_agent: 1 }), undefined),
+    { title: "Named by hand", titleAuto: false, titleLocked: true, aiTitle: undefined },
+  )
+})
+
 test("deriveNeedsYou: a perm-prompt process block always queues (a view can't clear it)", () => {
   assert.equal(deriveNeedsYou(row({ seen_at: LATER }), tele({ lastActivityAt: T0 }), "perm-prompt"), true)
 })

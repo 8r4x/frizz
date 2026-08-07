@@ -620,16 +620,23 @@ export function resolveLimitPause(
 // display value. Note the two flags are independent here: a title hard-coded by a dispatch caller is
 // not a guess (titleAuto false, so the UI shows it verbatim while the session spins up) yet is still
 // unlocked, so the worker's own aiTitle rides the wire and wins the moment it exists.
+// The transcript title is LIVE telemetry and only exists while a session is being tailed; the registry
+// copy (`title_agent = 1`, written by the auto-title CAS) is the same worker-authored name persisted,
+// and it is all that is left once the thread rests, is archived, or the server restarts. Falling back
+// to it is what stops a codex thread reading "Untitled thread" for the rest of its life: with no
+// aiTitle on the wire the display side cannot tell a persisted worker title from the dispatch chop,
+// so it must assume the chop. Telemetry still wins while present — it is the fresher of the two.
 export function resolveSessionTitle(
-  row: Pick<SessionRow, "title" | "title_auto" | "title_locked">,
+  row: Pick<SessionRow, "title" | "title_auto" | "title_locked" | "title_agent">,
   tele: Pick<SessionTelemetry, "aiTitle"> | undefined,
 ): Pick<ThreadView, "title" | "titleAuto" | "titleLocked" | "aiTitle"> {
   const locked = sessionTitleLocked(row)
+  const persisted = row.title_agent === 1 ? row.title?.trim() || undefined : undefined
   return {
     title: row.title ?? "",
     titleAuto: row.title_auto === 1,
     titleLocked: locked,
-    aiTitle: locked ? undefined : tele?.aiTitle,
+    aiTitle: locked ? undefined : (tele?.aiTitle ?? persisted),
   }
 }
 

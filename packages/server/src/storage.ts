@@ -40,6 +40,16 @@ export interface SessionRow {
   // Optional in the TS shape so the many pre-existing row literals keep their old semantics — absent
   // reads as "locked unless the title was a machine guess" (see sessionTitleLocked).
   title_locked?: number
+  // 0 | 1 — the text currently in `title` is the WORKER's own name for its task (persisted from its
+  // title signal by the auto-title CAS), not the dispatch chop the row was seeded with. `title_auto`
+  // cannot answer this: it records how the row was SEEDED and is deliberately left alone when a
+  // machine title lands, so a codex row reads `title_auto = 1` whether its title is still the prompt
+  // chop or the worker's real name. The display side needs exactly that distinction — without it the
+  // codex fallback had to assume the worst and showed "Untitled thread" for every rested codex thread,
+  // discarding a perfectly good persisted title (maintainer 2026-08-07). Cleared by every other title
+  // writer (human rename, re-dispatch) so it always describes the CURRENT text.
+  // Optional in the TS shape for the same reason as `title_locked`: pre-existing row literals.
+  title_agent?: number
   // ---- session-first columns (2026-07-09; all nullable — additive migration under a live server) ----
   title: string | null // dispatch title (new dispatches have no thread FILE to hold it); display prefers aiTitle
   // The filename stem of the DISCOVERED transcript when it drifted off the pinned `<session_id>.jsonl`
@@ -806,6 +816,10 @@ export function createStorage(dbPath: string): Storage {
     // which is the correct default: an existing prompt described the triggers its operator chose.
     "recurring_on_compact INTEGER NOT NULL DEFAULT 0",
     "recurring_compact_fired_at TEXT",
+    // Title provenance for the CURRENT text (2026-08-07): 1 = the worker's own title signal wrote it,
+    // 0 = the dispatch seeded it. DEFAULT 0 is the conservative direction — an existing row is assumed
+    // to hold its dispatch chop until the repair below (or the next title signal) says otherwise.
+    "title_agent INTEGER NOT NULL DEFAULT 0",
   ]) {
     try {
       db.exec(`ALTER TABLE session ADD COLUMN ${col}`)
@@ -904,6 +918,35 @@ export function createStorage(dbPath: string): Storage {
       db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
         .run(unlockedRepairKey, new Date().toISOString())
     }
+    // ONE-TIME backfill of `title_agent` for rows that predate the column. The auto-title CAS has been
+    // persisting the codex worker's own title into `title` since the app-server path landed, but until
+    // the column shipped nothing recorded that provenance — so once a codex thread's live telemetry
+    // went away (rest, archive, restart) the board had no way to tell that title from the dispatch
+    // chop and the display fell back to "Untitled thread" for ALL of them. On the maintainer's own
+    // board that was every codex thread on it, 29 of 29 (2026-08-07).
+    //
+    // Same sharper question the repair above asks, in the same direction: dispatch is the only writer
+    // that derives the slug and the title from each other, so a codex row whose slug no longer reads
+    // as one this title minted is a row whose title has been REPLACED since dispatch — and on an
+    // unlocked `title_auto = 1` row the only writer that can have done so is the auto-title CAS.
+    // ONCE (settings marker), because it is a heuristic: a row whose title genuinely is still its chop
+    // must be free to stay that way, and every title written from here on records its own provenance.
+    const agentTitleRepairKey = "repair:mark-agent-written-titles"
+    const agentRepairDone = db.prepare<[string], { value: string }>("SELECT value FROM settings WHERE key = ?")
+      .get(agentTitleRepairKey)
+    if (!agentRepairDone) {
+      const markOne = db.prepare("UPDATE session SET title_agent = 1 WHERE slug = ? AND title_agent = 0")
+      const candidates = db.prepare<[], Pick<SessionRow, "slug" | "title">>(`
+        SELECT slug, title FROM session
+        WHERE backend = 'codex' AND title_auto = 1 AND title_locked = 0
+          AND title IS NOT NULL AND title <> ''
+      `).all()
+      for (const row of candidates) {
+        if (row.title && !slugMintedFromTitle(row.slug, row.title)) markOne.run(row.slug)
+      }
+      db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
+        .run(agentTitleRepairKey, new Date().toISOString())
+    }
     // The tmux codex composer is gone, and with it every writer AND releaser of its durable
     // 'codex-input' runtime lock. A row that still holds one was locked by the retired subsystem and
     // nothing can ever clear it again: the board reports runtimeControlPending forever, which fences
@@ -964,6 +1007,10 @@ export function createStorage(dbPath: string): Storage {
       title_auto = excluded.title_auto,
       title_locked = excluded.title_locked,
       title = excluded.title,
+      -- This statement REPLACES the title text, so the provenance of the old one cannot survive it: a
+      -- re-dispatch over a slug whose worker had already named itself would otherwise keep reading as
+      -- agent-written while displaying the fresh dispatch chop. The next title signal sets it again.
+      title_agent = 0,
       snoozed_until = excluded.snoozed_until,
       -- Always moves WITH the instant: a spread row carries both, a re-dispatch clears both. An armed
       -- prompt outliving its deadline would be a wake nothing can ever fire.
@@ -1309,15 +1356,17 @@ export function createStorage(dbPath: string): Storage {
   `)
   // Both human-title writers LOCK as they write: the text, the "not a guess" flag, and the lock move in
   // one statement, so no concurrent tail tick can land a backend auto-title between them.
-  const titleStmt = db.prepare("UPDATE session SET title = ?, title_auto = 0, title_locked = 1 WHERE slug = ?")
+  const titleStmt = db.prepare("UPDATE session SET title = ?, title_auto = 0, title_locked = 1, title_agent = 0 WHERE slug = ?")
   const titleCasStmt = db.prepare(
-    "UPDATE session SET title = ?, title_auto = 0, title_locked = 1 WHERE slug = ? AND session_id = ? AND title IS ? AND title_auto = ?",
+    "UPDATE session SET title = ?, title_auto = 0, title_locked = 1, title_agent = 0 WHERE slug = ? AND session_id = ? AND title IS ? AND title_auto = ?",
   )
   // Gated on the LOCK, not on title_auto: a caller-supplied dispatch title (`Investigate acme/app#391`,
   // a parent agent's guess) is unlocked, so the worker's own title supersedes it. title_auto is left
   // alone — the row's DISPLAY provenance is unchanged by which machine produced the current text.
+  // `title_agent` IS moved, because it describes the text this statement is writing: the worker's own
+  // name. It is what lets the display trust a persisted codex title once the live telemetry is gone.
   const autoTitleCasStmt = db.prepare(`
-    UPDATE session SET title = ?
+    UPDATE session SET title = ?, title_agent = 1
     WHERE slug = ? AND session_id = ? AND agent_session_id IS ?
       AND runtime_generation = ? AND title_locked = 0
   `)

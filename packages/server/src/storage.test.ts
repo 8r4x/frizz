@@ -689,9 +689,13 @@ test("automatic title CAS persists provenance and rejects manual, native-session
   s.setAgentSession("codex-title", "codex-native")
   const expected = { sessionId: "frizz-session", nativeSessionId: "codex-native", runtimeGeneration: 3 }
 
+  assert.equal(s.getSession("codex-title")?.title_agent, 0, "a freshly dispatched row holds its chop, not a worker's name")
   assert.equal(s.setAutoTitleIfCurrent("codex-title", "Useful generated title", expected), true)
   assert.equal(s.getSession("codex-title")?.title, "Useful generated title")
   assert.equal(s.getSession("codex-title")?.title_auto, 1, "automatic provenance stays eligible for a better native title")
+  // The flag the display side reads once telemetry is gone: this text is the WORKER's name for the
+  // task, so a rested/archived/post-restart row can show it instead of falling back to "Untitled".
+  assert.equal(s.getSession("codex-title")?.title_agent, 1)
   assert.equal(
     s.setAutoTitleIfCurrent("codex-title", "Wrong native", { ...expected, nativeSessionId: "other-native" }),
     false,
@@ -704,6 +708,7 @@ test("automatic title CAS persists provenance and rejects manual, native-session
   s.setTitle("codex-title", "Manual title wins")
   assert.equal(s.setAutoTitleIfCurrent("codex-title", "Late generated title", expected), false)
   assert.equal(s.getSession("codex-title")?.title, "Manual title wins")
+  assert.equal(s.getSession("codex-title")?.title_agent, 0, "a human's rename replaced the text, so the worker's provenance goes with it")
 
   s.upsertSession(row({
     slug: "codex-title",
@@ -715,7 +720,46 @@ test("automatic title CAS persists provenance and rejects manual, native-session
   s.setAgentSession("codex-title", "replacement-native")
   assert.equal(s.setAutoTitleIfCurrent("codex-title", "Old transcript title", expected), false)
   assert.equal(s.getSession("codex-title")?.title, "Replacement fallback")
+  assert.equal(s.getSession("codex-title")?.title_agent, 0, "a re-dispatch writes a fresh chop; the previous worker's name is gone")
   s.close()
+})
+
+test("the title_agent backfill marks worker-written codex titles and leaves untouched chops alone", () => {
+  const dbPath = join(mkdtempSync(join(tmpdir(), "frizz-title-agent-")), "ui.db")
+  const first = createStorage(dbPath)
+  // What the auto-title CAS has been leaving behind since the codex app-server path landed: a row
+  // still flagged as a machine guess (title_auto 1) whose TEXT is the worker's own name, so its slug —
+  // minted from the dispatch chop — no longer reads as one this title could have produced.
+  first.upsertSession(row({ slug: "i-want-to-start-working", session_id: "sid-a", title: "Build minimal tool renderer", title_auto: 1, title_locked: 0 }))
+  first.setBackend("i-want-to-start-working", "codex")
+  // The counter-case: a worker that never emitted a title signal, so the row still holds its chop.
+  first.upsertSession(row({ slug: "fix-the-parser-bug", session_id: "sid-b", title: "Fix the parser bug", title_auto: 1, title_locked: 0 }))
+  first.setBackend("fix-the-parser-bug", "codex")
+  // Claude rows are not in scope: nothing persists their aiTitle, so a replaced title there is a
+  // rename, and the repair must not claim it as a worker's.
+  first.upsertSession(row({ slug: "some-old-prompt", session_id: "sid-c", title: "Resolver cache bug", title_auto: 1, title_locked: 0 }))
+  first.close()
+
+  // Rewind to the pre-column shape and clear the marker, exactly as a server upgrade finds it.
+  const raw = new Database(dbPath)
+  raw.exec("ALTER TABLE session DROP COLUMN title_agent")
+  raw.exec("DELETE FROM settings WHERE key = 'repair:mark-agent-written-titles'")
+  raw.close()
+
+  const upgraded = createStorage(dbPath)
+  assert.equal(upgraded.getSession("i-want-to-start-working")?.title_agent, 1, "the slug proves this title is NOT the one the thread was dispatched with")
+  assert.equal(upgraded.getSession("fix-the-parser-bug")?.title_agent, 0, "a title that still mints its own slug is the dispatch chop")
+  assert.equal(upgraded.getSession("some-old-prompt")?.title_agent, 0, "claude rows never persist a worker title, so nothing to recover")
+
+  // ONE time only: the predicate is a heuristic, and every title written from here on records its own
+  // provenance. A restart must not re-decide a row the flag already answers for.
+  const rewritten = new Database(dbPath)
+  rewritten.exec("UPDATE session SET title_agent = 0 WHERE slug = 'i-want-to-start-working'")
+  rewritten.close()
+  upgraded.close()
+  const restarted = createStorage(dbPath)
+  assert.equal(restarted.getSession("i-want-to-start-working")?.title_agent, 0, "the marker keeps the repair from re-running")
+  restarted.close()
 })
 
 test("a dispatch title a CALLER hard-coded is displayable but replaceable; only a human's locks", () => {
