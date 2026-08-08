@@ -39,8 +39,11 @@ test("the current gerund replaces Thinking in the exact bottom shimmer span", ()
   assert.match(block, /data-working-indicator/, "the runtime tail needs a stable browser-QA target")
   // The generic reading names what the model is DOING with the turn — composing its next move — not
   // that the session is alive, which the reader can already see (maintainer 2026-08-01: "Do you think
-  // it makes more sense to change it to 'thinking'?").
-  assert.match(block, /<span className="[^"]*shimmer-text">\{activityLabel \?\? "Thinking…"\}<\/span>/, "tool activity and the generic reading must use the exact same shimmer element")
+  // it makes more sense to change it to 'thinking'?"). It also carries the run's count, so the gap
+  // between two calls reads as progress rather than a stall (maintainer 2026-08-08) — the wording lives
+  // in lib/toolActivity.thinkingToolActivityLabel, never inline here.
+  assert.match(block, /<span className="[^"]*shimmer-text">\{activityLabel \?\? thinkingToolActivityLabel\(total\)\}<\/span>/, "tool activity and the generic reading must use the exact same shimmer element")
+  assert.doesNotMatch(block, /"Thinking…"/, "the generic reading's wording belongs to the shared label helper, not a literal in the row")
   assert.doesNotMatch(block, /"Working…"/, "the generic reading is Thinking, not Working")
   assert.equal((block.match(/shimmer-text/g) ?? []).length, 1, "the runtime tail must have one shimmer treatment")
   // ONE LINE, always. The label TRUNCATES rather than wrapping (maintainer 2026-07-31: "prevent the

@@ -77,7 +77,7 @@ import { PROVIDER_LABEL } from "../lib/signIn.ts"
 import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
 import { prependEarlierPage } from "../lib/transcriptPagination.ts"
 import { buildVirtualTranscriptMessageRows, earlierLoadGate, nextTailFollow, TAIL_FOLLOW_PX, USER_TAIL_EXTRA, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
-import { coalesceToolActivityMessages, editedFileCount, historicalToolActivityMessages, isToolActivityException, liveToolActivityRun, liveToolActivityTail, settledToolActivityLabel, toolActivityLabel } from "../lib/toolActivity.ts"
+import { coalesceToolActivityMessages, editedFileCount, historicalToolActivityMessages, isToolActivityException, liveToolActivityRun, liveToolActivityTail, settledToolActivityLabel, thinkingToolActivityLabel, toolActivityLabel } from "../lib/toolActivity.ts"
 import { CodexDirectiveCard, MermaidDiagram } from "./CodexRichOutput.tsx"
 
 // Answer types moved to lib/questionBlocks.ts (shared by the queue card, the thread view, and the
@@ -4201,6 +4201,13 @@ function Dots() {
 // model composing its next move is what the slot is actually reporting, and it is what every gerund
 // beside it reports too (maintainer 2026-08-01: "Do you think it makes more sense to change it to
 // 'thinking'?").
+//
+// In that gap the generic reading also STATES THE RUN — `Ran 23 tool calls. Thinking…` — because a bare
+// `Thinking…` under a clock counting the whole turn reads as a thread that has been thinking for ten
+// minutes rather than one that has just done twenty-three things (maintainer 2026-08-08). So the slot
+// alternates `Ran 23 tool calls. Thinking…` → the next call's gerund → `Ran 24 tool calls. Thinking…`,
+// and the count ticking up is the progress signal. See lib/toolActivity.thinkingToolActivityLabel; the
+// number is `total`, the same run this row expands onto and the same one its digest will state.
 export function WorkingIndicator({ since, activityLabel, run }: { since?: string; activityLabel?: string; run?: { tools: readonly TranscriptToolCall[]; at?: string } }) {
   const [baseline] = useState(() => {
     const t = Date.parse(since ?? "")
@@ -4244,7 +4251,7 @@ export function WorkingIndicator({ since, activityLabel, run }: { since?: string
           the row's `gap-2` before the clock. Those numbers only became the DISTANCES the eye reads once
           transcriptMetaChevronClass collapsed the glyph's box onto its ink; see that constant. */}
       <span className="flex min-w-0 items-baseline gap-1.5">
-        <span className="min-w-0 truncate shimmer-text">{activityLabel ?? "Thinking…"}</span>
+        <span className="min-w-0 truncate shimmer-text">{activityLabel ?? thinkingToolActivityLabel(total)}</span>
         {/* Only when there is a run to open. The glyph places ITSELF off the text baseline — see
             transcriptMetaChevronClass — so this row needs no alignment of its own. */}
         {expandable && (

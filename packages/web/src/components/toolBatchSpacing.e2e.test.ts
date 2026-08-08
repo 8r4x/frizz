@@ -146,7 +146,10 @@ for (const [surface, query, column] of [
       // The INTER-CALL GAP — the same transcript with that one call's result landed, the turn still
       // running. The gerund is a claim that a tool is executing, so it has to end with the call: what the
       // reader is waiting on now is the model reasoning over what came back, and a stale `Final workflow
-      // validation` sat there reading as a tool that had hung (maintainer 2026-08-04). History must NOT
+      // validation` sat there reading as a tool that had hung (maintainer 2026-08-04). The reading it
+      // hands back to STATES THE RUN it is standing in for — the three calls of the live tail — so the
+      // gap reads as a turn that has done something and is deciding what is next, not as a thread that
+      // has sat thinking since the clock beside it started (maintainer 2026-08-08). History must NOT
       // move in the same beat — the digest count is unchanged from the live pass.
       await page.goto(fixtureUrl("gap"), { waitUntil: "networkidle0" })
       await page.waitForFunction((n) => document.querySelectorAll("[data-transcript-column]").length > n, {}, column)
@@ -155,7 +158,10 @@ for (const [surface, query, column] of [
         return scope?.querySelector("[data-working-indicator]") !== null
       }, {}, column)
       const gap = await readWorkingSlot(column)
-      assert.equal(gap.shimmerText, "Thinking…", "a landed result hands the bottom slot back to the generic reading")
+      // Three: the live tail's own calls, the exact set this row expands onto and the exact count the
+      // third digest states once the turn settles (asserted below) — so the number never jumps when the
+      // withheld run finally lands in history.
+      assert.equal(gap.shimmerText, "Ran 3 tool calls. Thinking…", "a landed result hands the bottom slot back to the generic reading, which names the run it is standing in for")
       assert.equal(gap.workingActivity, "generic", "…and the slot reports that it is no longer naming a tool")
       assert.equal(gap.digests, live.labels.length, "the run's digest must not appear in history during the gap")
 

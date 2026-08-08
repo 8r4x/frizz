@@ -542,4 +542,27 @@ export function settledToolActivityLabel(total: number, editedFiles = 0): string
   return `${calls}, edited ${editedFiles} file${editedFiles === 1 ? "" : "s"}`
 }
 
+/**
+ * The bottom runtime slot's reading while the turn runs and NO call is executing — the INTER-CALL GAP.
+ *
+ * A bare `Thinking…` is true and says nothing about what the turn has already done, while the clock
+ * beside it counts the whole TURN — so a model that has run twenty-three calls and paused to reason over
+ * the last result reads as a thread that has sat there thinking for ten minutes (maintainer 2026-08-08:
+ * "there's a period where it's thinking, and it looks like the thread has just been thinking for like ten
+ * minutes"). The run's own count carries that work across the gap, and because the slot alternates
+ * `Ran 23 tool calls. Thinking…` → the next call's gerund → `Ran 24 tool calls. Thinking…`, the number
+ * ticking up is itself the evidence the turn is moving.
+ *
+ * The count is the LIVE RUN's, i.e. exactly the calls history is withholding behind this row
+ * (liveToolActivityRun) — the same number its digest will state once the run settles. So it resets when
+ * prose or a dedicated card ends the run, which is correct: those calls are already stated by a digest the
+ * reader can see, and restating them here would double-count the turn.
+ *
+ * Calls only — never the settled digest's `, edited N files` tail. This is a one-line status that
+ * TRUNCATES, and the half that must survive a narrow pane is the one saying the model is still going.
+ */
+export function thinkingToolActivityLabel(ranCalls: number): string {
+  return ranCalls > 0 ? `${settledToolActivityLabel(ranCalls)}. Thinking…` : "Thinking…"
+}
+
 export type ToolActivityTool = TranscriptMessage["tools"][number]

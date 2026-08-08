@@ -83,37 +83,59 @@ function Transcript({ messages, running = false }: { messages: ChatMessage[]; ru
   )
 }
 
+// The BOTTOM SLOT'S ALTERNATION, one step per click — the reading the maintainer asked for on
+// 2026-08-08 ("Ran 23 tool calls. Thinking…" → the call's own description → "Ran 24 tool calls.
+// Thinking…"). Each step is the whole live run at that moment; the slot's label is derived, so stepping
+// through them is the sequence itself rather than a mock of it.
+//
+// Step 1's path is ABSOLUTE, exactly as a provider reports it: the shimmer must show it
+// project-relative. The count is the LIVE RUN's, so it climbs 1 → 2 across the two landed calls and
+// would reset if prose closed the run — which is correct, since a closed run states itself as a digest.
+const edit = (status: "pending" | "completed") => ({
+  name: "Edit",
+  detail: `${FIXTURE_PROJECT_DIR}/ui/packages/web/src/components/ChatView.tsx`,
+  status,
+})
+const grep = (status: "pending" | "completed") => ({ name: "Grep", detail: "minimal renderer", status })
+
+const LIVE_STEPS: { note: string; messages: ChatMessage[] }[] = [
+  { note: "a call is executing — its gerund owns the slot", messages: [callMessage("live-1", [edit("pending")])] },
+  { note: "its result landed — the gap states the run so far", messages: [callMessage("live-1", [edit("completed")])] },
+  {
+    note: "the next call starts — its own description replaces the count",
+    messages: [callMessage("live-1", [edit("completed")]), callMessage("live-2", [grep("pending")])],
+  },
+  {
+    note: "…and lands: the same reading, one call higher",
+    messages: [callMessage("live-1", [edit("completed")]), callMessage("live-2", [grep("completed")])],
+  },
+]
+
 function Fixture() {
-  const [liveMessages, setLiveMessages] = useState<ChatMessage[]>([
-    // Absolute, exactly as a provider reports it: the shimmer must show it project-relative.
-    callMessage("live-1", [
-      { name: "Edit", detail: `${FIXTURE_PROJECT_DIR}/ui/packages/web/src/components/ChatView.tsx`, status: "pending" },
-    ]),
-  ])
-  const advanced = liveMessages.length > 1
+  const [step, setStep] = useState(0)
+  const liveMessages = LIVE_STEPS[step].messages
   return (
     <main className="min-h-screen bg-bg p-4 text-fg sm:p-8">
       <section className="mx-auto max-w-[760px] rounded-xl border border-border bg-panel px-5 py-5 shadow-xl shadow-black/30 sm:px-7">
         <header className="mb-6 border-b border-border pb-4">
           <h1 className="text-[16px] font-semibold">Minimal tool activity</h1>
-          <p className="mt-1 text-[12px] text-muted">The bottom Working shimmer becomes the current gerund; settled tool runs return as one digest.</p>
+          <p className="mt-1 text-[12px] text-muted">The bottom shimmer alternates between the running call's gerund and the run's own count; settled tool runs return as one digest.</p>
         </header>
 
         <div className="flex flex-col gap-7">
           <section data-fixture-live>
             <div className="mb-2 flex items-center justify-between gap-3">
-              <h2 className="text-[12px] font-medium text-fg/85">Live batch rewrite</h2>
+              <h2 className="text-[12px] font-medium text-fg/85">
+                Live batch rewrite <span data-live-step-note className="font-normal text-muted">— step {step + 1}/{LIVE_STEPS.length}: {LIVE_STEPS[step].note}</span>
+              </h2>
               <button
                 type="button"
                 data-add-tool-batch
-                disabled={advanced}
-                onClick={() => setLiveMessages((messages) => [
-                  { ...messages[0], tools: messages[0].tools.map((tool) => ({ ...tool, status: "completed" as const })), parts: [{ kind: "tools", tools: messages[0].tools.map((tool) => ({ ...tool, status: "completed" as const })) }] },
-                  callMessage("live-2", [{ name: "Grep", detail: "minimal renderer", status: "pending" }]),
-                ])}
+                disabled={step === LIVE_STEPS.length - 1}
+                onClick={() => setStep((s) => Math.min(s + 1, LIVE_STEPS.length - 1))}
                 className="rounded-md border border-border px-2 py-1 text-[11px] text-muted outline-none hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-40"
               >
-                Add next batch
+                Advance
               </button>
             </div>
             <Transcript messages={liveMessages} running />
