@@ -6,7 +6,9 @@ import type { AwaitingHint, BoardSnapshot, PlanView, ThreadView } from "@frizz/s
 import { store, openThread, scrollToQueueCard, pushSubAgentDrawer, pushPlanDrawer, QUEUE_CARD_VIEWPORT_TOP, type ConnectionState } from "../store.ts"
 import { useBoard, asThreads } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
-import { sectionThreads, partitionActive, needsAction, displayTitle, titleIsProvisional, isHeld, parkedAwaitingHint, sessionIndicatorKind, offersRetry, futureSnoozedUntil } from "../groups.ts"
+import { sectionThreads, partitionActive, needsAction, displayTitle, titleIsProvisional, isHeld, parkedAwaitingHint, sessionIndicatorKind, offersRetry, futureSnoozedUntil, lastActiveLabelAt } from "../groups.ts"
+import { ageSpan, relativeAge } from "../lib/activityTime.ts"
+import { useNowMs } from "../lib/liveClock.ts"
 import { BoxSpinner, STATUS_BOX } from "./BoxSpinner.tsx"
 import { ChildOpRow } from "./ChildOpRow.tsx"
 import { visibleChildOps } from "../lib/childOps.ts"
@@ -35,13 +37,14 @@ import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 // drawer (chat / doc via store.openThread); a plan row opens the plan drawer; a legacy row opens its
 // frizz doc.
 //
-// Sections: FOUR bands top→bottom, in the names ARCHITECTURE.md § Board nomenclature fixes — ACTIVE
-// (the rows currently spinning), RESTED (everything at rest = the queue's own rows), then a labeled
-// DIMMED HELD band (every declared clock/hourglass/timed wait), then DONE — each split by a bare <hr>,
-// and Held and Done both collapsible. Active and Rested are ONE uncollapsible <section> (you can't hide
-// your live work or your queue); the <hr> between them is the whole distinction, so never describe a
-// rested row as active. A thread merely awaiting its OWN sub-agents is INTERNAL work and stays spinning
-// in Active undimmed; only external waiters drop into the dimmed band (see groups.ts isHeld).
+// Sections: FOUR bands top→bottom, in the names ARCHITECTURE.md § Board nomenclature fixes — RESTED
+// (everything at rest = the queue's own rows, a.k.a. the cue), ACTIVE (the rows currently spinning),
+// then a labeled DIMMED HELD band (every declared clock/hourglass/timed wait), then DONE — each split
+// by a bare <hr>, and Held and Done both collapsible. Rested and Active are ONE uncollapsible <section>
+// (you can't hide your queue or your live work); the <hr> between them is the whole distinction, so
+// never describe a rested row as active. A thread merely awaiting its OWN sub-agents is INTERNAL work
+// and stays spinning in Active undimmed; only external waiters drop into the dimmed band (groups.ts
+// isHeld).
 // Needs-you renders as the row INDICATOR + the queue; awaiting as the hint gloss.
 // Plans from board.plans; Done = explicitly completed. Legacy .frizz rows and foreign terminal
 // sessions do not render at all.
@@ -181,25 +184,29 @@ export function Sidebar() {
           <DispatchForm />
         </div>
         <div ref={railRef} data-sidebar-rail className="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden max-[800px]:overflow-y-visible">
-          {/* ACTIVE + RESTED — always shown, NEVER collapsible (you can't hide your live work or your
-              queue), no label. Two rule-separated bands (see groups.ts orderActive/partitionActive):
-              ACTIVE — live work that isn't waiting on you — on TOP, then RESTED below, in the EXACT
-              queue order so scrolling the queue walks the scroll marker straight down this rail (an
-              Active row has no queue card — the maintainer's ask: they don't render in the queue). */}
+          {/* RESTED + ACTIVE — always shown, NEVER collapsible (you can't hide your queue or your live
+              work), no label. Two rule-separated bands (see groups.ts orderActive/partitionActive):
+              RESTED — the cue — sits FIRST, right under the prompt box (maintainer 2026-08-08), in the
+              EXACT queue order, so the rail's top row is opposite the queue's top card and scrolling
+              the queue walks the scroll marker straight down this rail. ACTIVE — live work that isn't
+              waiting on you — runs BELOW the rule (an Active row has no queue card — the maintainer's
+              ask: they don't render in the queue), so it stays glanceable without pushing the cue down.
+              Only the cue's rows carry the rest-time column: it dates a HANDOFF, and a row that is
+              still spinning has not made one. */}
           {activeThreads.length > 0 ? (
             (() => {
               const { running, rested } = partitionActive(activeThreads)
-              const renderRow = (t: ThreadView) => (
+              const renderRow = (restedAge: boolean) => (t: ThreadView) => (
                 <div key={t.id}>
-                  <ThreadRow t={t} active={activeId === t.id} onQueueNavigate={navigateToQueueCard} />
+                  <ThreadRow t={t} active={activeId === t.id} onQueueNavigate={navigateToQueueCard} restedAge={restedAge} />
                   <SubAgentRows t={t} />
                 </div>
               )
               return (
                 <>
-                  {running.map(renderRow)}
+                  {rested.map(renderRow(true))}
                   {running.length > 0 && rested.length > 0 && <hr className="my-3 border-border/50" />}
-                  {rested.map(renderRow)}
+                  {running.map(renderRow(false))}
                 </>
               )
             })()
@@ -343,11 +350,14 @@ export const ThreadRow = memo(function ThreadRow({
   legacy,
   active = false,
   onQueueNavigate,
+  restedAge = false,
 }: {
   t: ThreadView
   legacy?: boolean
   active?: boolean
   onQueueNavigate?: (id: string) => void
+  /** Show the right-justified rest-time column. The CUE's rows only — see RestedAge. */
+  restedAge?: boolean
 }) {
   const foreign = !legacy && t.foreign === true
   // Held rows are uniformly grayed as a whole; provisional titles retain their local dim treatment.
@@ -410,20 +420,35 @@ export const ThreadRow = memo(function ThreadRow({
         <span className="w-4 h-[19px] shrink-0 flex items-center justify-center">
           <ThreadIndicator t={t} legacy={legacy} />
         </span>
-          <span className="min-w-0 flex-1 flex flex-col">
-          <span className={`break-words text-[13px] leading-[19px] ${dimLabel ? "text-fg/50" : held ? "text-fg/75" : "text-fg/90"}`}>
-            <TitleWithTrailers title={displayTitle(t)}>
-              {!legacy && <ProviderMark backend={t.backend} className="ml-1" />}
-              {foreign && (
-                <span
-                  className="petite-caps ml-1.5 inline-block rounded border border-border/60 px-1 align-[2px] text-[9.5px] leading-[14px] text-muted/55"
-                  title="Read-only — running in an external terminal"
-                >
-                  terminal
-                </span>
-              )}
-              {legacy && <StatusChip status={t.archived ? "archived" : t.status} />}
-            </TitleWithTrailers>
+        <span className="min-w-0 flex-1 flex flex-col">
+          {/* items-BASELINE, not items-center: the rest time is a smaller type size sitting beside the
+              title, and the eye reads the two as one line only when their baselines agree. On a WRAPPED
+              title flex aligns the FIRST baseline, so the label stays on the title's first line where
+              the row's other right-edge affordance (RowRetryButton) also lives. */}
+          {/* gap-3, not gap-2. The measured gap is usually 20–40px of ink (ragged-right titles rarely
+              reach their box edge), but the case that decides the number is the line that DOES fill:
+              8px is ~2 word spaces at 13px, which reads as the title running into its own timestamp.
+              12px is a gutter, and it costs the title 4px it does not miss. */}
+          <span className="flex min-w-0 items-baseline gap-3">
+            <span className={`min-w-0 flex-1 break-words text-[13px] leading-[19px] ${dimLabel ? "text-fg/50" : held ? "text-fg/75" : "text-fg/90"}`}>
+              <TitleWithTrailers title={displayTitle(t)}>
+                {!legacy && <ProviderMark backend={t.backend} className="ml-1" />}
+                {foreign && (
+                  <span
+                    className="petite-caps ml-1.5 inline-block rounded border border-border/60 px-1 align-[2px] text-[9.5px] leading-[14px] text-muted/55"
+                    title="Read-only — running in an external terminal"
+                  >
+                    terminal
+                  </span>
+                )}
+                {legacy && <StatusChip status={t.archived ? "archived" : t.status} />}
+              </TitleWithTrailers>
+            </span>
+            {/* The Retry verb is an OVERLAY pinned to this same right edge, so on the rows that offer
+                it the two would collide — a 19px opaque button landing halfway across "20 seconds",
+                which reads as a rendering fault rather than an affordance. The label gives way to it
+                on hover instead: the button is why you pointed at the row. */}
+            {restedAge && <RestedAge t={t} yieldsToRetry={canRestart} />}
           </span>
           {hasSubtitle && (
             <span className="mt-0.5 flex flex-col gap-0.5 min-w-0 text-[11.5px] leading-[15px]">
@@ -456,6 +481,44 @@ export const ThreadRow = memo(function ThreadRow({
     </div>
   )
 })
+
+// THE CUE'S RIGHT-HAND COLUMN — how long ago this thread came to REST (maintainer 2026-08-08: "a
+// right-justified label on each item in the cue indicating when the thread came to rest").
+//
+// The instant is `lastActiveLabelAt`, the SAME one the queue card's "Last active" line renders and the
+// same one the band is ORDERED by — so the column reads monotonically down the cue instead of
+// disagreeing with the order it is printed in. That helper is what keeps a completed background
+// sub-agent from bumping a rested row's reading to "just now": at rest it reads the agent's own last
+// output (`lastAssistantAt`), never the tailer's last record of any kind.
+//
+// It carries the SPAN without "ago" (lib/activityTime ageSpan) because the column position is the
+// "ago", and it is right-justified rather than trailing the title so the whole cue reads as one column
+// of times — a title's length must not decide where its timestamp sits. `useNowMs` is the app's single
+// 30s wall clock, so a screenful of these ticks on one timer.
+function RestedAge({ t, yieldsToRetry }: { t: ThreadView; yieldsToRetry?: boolean }) {
+  const now = useNowMs()
+  const at = lastActiveLabelAt(t)
+  const span = ageSpan(at, now)
+  if (!at || !span) return null
+  return (
+    <time
+      dateTime={at}
+      data-rail-rested-age
+      title={relativeAge(at, now) ?? undefined}
+      // The row's accessible name concatenates its parts, and a bare "2 days" arriving after the title
+      // says nothing about WHAT took two days. The label names the reading for that reader; the visible
+      // text stays bare, because sighted readers have the column to tell them.
+      aria-label={`Rested ${relativeAge(at, now) ?? span}`}
+      // shrink-0 + tabular-nums: the column must not compress under a long title, and the digits must
+      // not jitter horizontally when the clock ticks. The title takes the remaining width and wraps.
+      className={`shrink-0 tabular-nums text-[10.5px] leading-[19px] text-muted/55 ${
+        yieldsToRetry ? "transition-opacity group-hover:opacity-0 group-focus-within:opacity-0" : ""
+      }`}
+    >
+      {span}
+    </time>
+  )
+}
 
 // The stalled row's recovery verb: a SMALL GREY icon button that restarts the exited session in ONE
 // click, without opening the thread. Deliberately the SAME verb, icon, message and RPC path as the

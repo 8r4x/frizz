@@ -145,10 +145,12 @@ What actually happens: a Claude thread is `claude_runtime="broker"`, and `claude
 
 # Board nomenclature: "active" means SPINNING, and nothing else
 
-The sidebar's row groups have names the maintainer uses precisely (2026-08-05: *"when I say active, I'm only referring to the things that are currently spinning; the things beneath that, I would refer to as rested, or just items in the queue"*). Use them in code, comments, copy and when reporting back:
+The sidebar's row groups have names the maintainer uses precisely (2026-08-05: *"when I say active, I'm only referring to the things that are currently spinning; the things beneath that, I would refer to as rested, or just items in the queue"*). Use them in code, comments, copy and when reporting back. (The quote says "beneath" because Rested sat below Active when it was said; on 2026-08-08 the two bands SWAPPED position — the cue moved up under the prompt box — and the vocabulary did not change with them.)
 
-- **Active** — only the rows currently spinning, above the rule. Never carries a queue card.
-- **Rested** — everything below that rule; the same set as **"the queue"** / "items in the queue", one row per card.
+Top to bottom:
+
+- **Rested** — the CUE: the top band, directly under the prompt box; the same set as **"the queue"** / "items in the queue", one row per card, each with a right-justified rest time.
+- **Active** — only the rows currently spinning, below that rule. Never carries a queue card, and never a rest time.
 - **Held** — the dimmed, labeled park band (a `human:` gate, a future `timer:`, a wall-clock snooze, an auto-resumed limit pause).
 - **Done** — the collapsed archived section.
 

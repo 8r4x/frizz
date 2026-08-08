@@ -461,7 +461,7 @@ test("sectionOf: an ARCHIVED thread that's ACTIVELY RUNNING goes to Active (neve
   assert.equal(sectionOf(thread({ kind: "session", state: "archived", runtime: "turn-idle", bgShells: [{ label: "watch CI", startedAt: "2026-07-10T00:00:00.000Z", state: "running" }] })), "inactive")
 })
 
-test("sectionThreads v2: Active bands running-on-top then rested (queue order); foreign + legacy excluded", () => {
+test("sectionThreads v2: Active bands rested-on-top (queue order) then running; foreign + legacy excluded", () => {
   const s = sectionThreads([
     thread({ id: "older", kind: "session", state: "open", runtime: "running", lastUserAt: "2026-07-08T01:00:00.000Z" }),
     thread({ id: "newer", kind: "session", state: "open", runtime: "running", lastUserAt: "2026-07-09T01:00:00.000Z" }),
@@ -470,8 +470,9 @@ test("sectionThreads v2: Active bands running-on-top then rested (queue order); 
     thread({ id: "old", status: "done" }),
     thread({ id: "term", kind: "session", foreign: true, runtime: "running" }),
   ])
-  // Running band on top by interaction recency (newer before older); the queued rest sits BELOW it.
-  assert.deepEqual(s.active.map((t) => t.id), ["newer", "older", "queued"])
+  // The CUE leads (the rested rows, in queue order, sit directly under the prompt box); the running
+  // band follows BELOW it, ordered by interaction recency (newer before older).
+  assert.deepEqual(s.active.map((t) => t.id), ["queued", "newer", "older"])
   assert.deepEqual(s.inactive.map((t) => t.id), ["arch"])
   assert.equal("legacy" in s, false)
 })
@@ -488,8 +489,8 @@ test("partitionActive: splits an ordered Active list into running/rested; queued
   ]
   // orderQueue over the rested set is FIFO (oldest first): rest-old (07-05) < spin-ask (07-06) < rest-new (07-11).
   const ordered = [
-    active[0], active[1], // running band (already recency-ordered for this fixture)
-    active[2], active[4], active[3], // rested band in FIFO order
+    active[2], active[4], active[3], // the cue leads, in FIFO order
+    active[0], active[1], // running band below it (already recency-ordered for this fixture)
   ]
   const { running, rested } = partitionActive(ordered)
   assert.deepEqual(running.map((t) => t.id), ["run-b", "run-a"])
@@ -639,8 +640,9 @@ test("sectionThreads: only human/future-timer waits partition into Held; live an
     thread({ id: "shell-wait", kind: "session", state: "open", runtime: "turn-idle", lastFence: awaitingTimer, bgShells: liveShell, lastUserAt: "2026-07-09T02:00:00.000Z" }),
     thread({ id: "legacy-pr", kind: "session", state: "open", runtime: "turn-idle", lastFence: awaitingPr, lastUserAt: "2026-07-09T03:00:00.000Z" }),
   ])
-  // Running band: live-old + the one live-SUB-AGENT waiter lead by recency; the legacy-pr rest sits below.
-  assert.deepEqual(s.active.map((t) => t.id), ["sub-wait", "live-old", "legacy-pr"])
+  // The cue leads with the legacy-pr rest; the running band — live-old + the one live-SUB-AGENT
+  // waiter, by recency — follows below it.
+  assert.deepEqual(s.active.map((t) => t.id), ["legacy-pr", "sub-wait", "live-old"])
   // Held: the two human/future-timer waits — now including shell-wait, whose shell can't hold it Active.
   assert.deepEqual(s.held.map((t) => t.id), ["human-new", "shell-wait", "timer-old"])
 })
@@ -693,8 +695,8 @@ test("a legacy session/hintless declared wait is never Held — at rest it is si
     thread({ id: "wait-new", kind: "session", state: "open", runtime: "turn-idle", lastFence: sessWait, lastUserAt: "2026-07-09T05:00:00.000Z" }),
     thread({ id: "live-old", kind: "session", state: "open", runtime: "running", lastUserAt: "2026-07-08T01:00:00.000Z" }),
   ])
-  // live-old is running → running band on top; the hintless-wait rest (wait-new) files below it.
-  assert.deepEqual(s.active.map((t) => t.id), ["live-old", "wait-new"])
+  // The hintless-wait rest (wait-new) is a cue row, so it leads; live-old is running and files below it.
+  assert.deepEqual(s.active.map((t) => t.id), ["wait-new", "live-old"])
   assert.deepEqual(s.held.map((t) => t.id), [])
 })
 

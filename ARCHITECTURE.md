@@ -107,9 +107,9 @@ need no install or provider CLI; the full suite is local-only by design.
 
 These are the names for the sidebar's four row groups, top to bottom. They are the MAINTAINER's vocabulary (2026-08-05), so they win over whatever a symbol happens to be called; when a comment and this list disagree, the comment is wrong.
 
-- **Active** — ONLY the rows that are currently SPINNING. The top band, above the rule. An Active row NEVER carries a queue card, and that invariant runs both ways: nothing above the rule has a card, and every card has a row below it.
-- **Rested** — everything below that rule, and the same set as **"the queue"** / **"items in the queue"**: one rested row per queue card, in the identical order. Say "rested" or "in the queue"; do NOT say "active" about these rows just because they share a `<section>` with the Active band.
-- **Held** — the dimmed, labeled band under Rested: a declared `human:` gate, a valid future `timer:`, a user wall-clock snooze, or a limit pause frizz will auto-resume. Parked, not asking.
+- **Rested** — the TOP band, directly under the prompt box (maintainer 2026-08-08), and the same set as **"the queue"** / **"the cue"** / **"items in the queue"**: one rested row per queue card, in the identical order, so the rail's first row faces the queue's first card. Say "rested" or "in the queue"; do NOT say "active" about these rows just because they share a `<section>` with the Active band. Each carries a right-justified rest time — when that thread came to rest — reading off the same instant its card's "Last active" line does.
+- **Active** — ONLY the rows that are currently SPINNING, below the rule. An Active row NEVER carries a queue card, and that invariant runs both ways: nothing below the rule has a card, and every card has a row above it. No rest time: a spinning row has not handed anything back.
+- **Held** — the dimmed, labeled band under Active: a declared `human:` gate, a valid future `timer:`, a user wall-clock snooze, or a limit pause frizz will auto-resume. Parked, not asking.
 - **Done** — the collapsed archived section, last of the thread groups (the Plans section renders below it).
 
 Where the CODE disagrees, and it does in two places worth knowing before reading `web/src/groups.ts`:
