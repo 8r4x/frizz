@@ -37,6 +37,23 @@ test("codexMcpConfigArgs: the frizz server carries an ABSOLUTE node path and its
   assert.match(frizz, /env=\{FRIZZ_STATE_DIR="\/abs\/state"\}/)
 })
 
+// Both backends mount the same script through the same env builder. Pinned on the CODEX side too
+// because this is the half that gets forgotten: the claude path is the one anyone tests by hand, and a
+// codex worker whose tools quietly address the launching project's board looks identical until its
+// spawned thread turns up on the wrong card.
+test("codexMcpConfigArgs: the frizz server is told where the lock is and which project it serves", () => {
+  const vals = values(codexMcpConfigArgs({
+    scriptPath: "/abs/plugin/bin/frizz-mcp.mjs",
+    stateDir: "/abs/state",
+    serverLock: "/abs/launcher/server.lock",
+    projectId: "b47f4055-4262-432a-af18-ded4cbfb3071",
+  }, "/abs/node"))
+  const frizz = vals.find((v) => v.startsWith(`mcp_servers.${FRIZZ_MCP.name}=`))
+  assert.ok(frizz, "frizz override missing")
+  assert.match(frizz, /FRIZZ_SERVER_LOCK="\/abs\/launcher\/server\.lock"/)
+  assert.match(frizz, /FRIZZ_PROJECT_ID="b47f4055-4262-432a-af18-ded4cbfb3071"/)
+})
+
 test("codexMcpConfigArgs: approvals are pre-answered — a headless worker cannot click a prompt", () => {
   // Without this a mounted call is CANCELLED at the moment of use ("user cancelled MCP tool call"),
   // which is strictly worse than not mounting the server at all.

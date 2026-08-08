@@ -18,7 +18,7 @@ import { PERM_DIR_ENV, permRequestDir, type Project } from "./project.ts"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { BoardManager } from "./board.ts"
 import type { AgentBackend, BackendKind, BuiltCommand, FrizzMcp } from "./backend/types.ts"
-import { CHROME_DEVTOOLS_MCP, CLAUDE_WORKER_ENV, FRIZZ_MCP, WORKER_DISALLOWED_TOOLS } from "./backend/types.ts"
+import { CHROME_DEVTOOLS_MCP, CLAUDE_WORKER_ENV, FRIZZ_MCP, WORKER_DISALLOWED_TOOLS, frizzMcpEnv } from "./backend/types.ts"
 import { buildWorkerPrompt } from "./workerPrompt.ts"
 import { codexSandbox, CODEX_FIRST_OUTPUT_TITLE_DEVELOPER_INSTRUCTIONS } from "./backend/codex.ts"
 import type { CodexAppServerBridge } from "./backend/codex-app-server.ts"
@@ -449,22 +449,40 @@ function systemPromptFlags(sessionId: string, system: string): string[] {
   return ["--append-system-prompt-file", path]
 }
 
+/** Where the frizz MCP server should look for the running server, and whose board it acts on. */
+export interface FrizzMcpTarget {
+  /** THIS project's state dir. Identity, and the lock path a pre-singleton server published. */
+  stateDir: string
+  /** The LAUNCHING project's `server.lock` — the only one this process writes. See FrizzMcp. */
+  serverLock?: string
+  /** THIS project's registry id, so the script addresses `/_frizz/<id>/rpc/…` and not the launcher's. */
+  projectId?: string
+}
+
 // Resolve the descriptor for the unified frizz MCP server: the abs path to the stdio server script
 // (shipped as a sibling of bin/frizz in the worker plugin dir, so it rides the SAME ship+resolve path
-// that already carries the plugin to prod) + the project state dir the script reads server.lock from.
-// Returns undefined when the plugin dir or script can't be found — the worker then simply lacks the
-// frizz tools rather than failing to spawn. `env`/`moduleUrl` injectable for tests.
+// that already carries the plugin to prod) + where the script finds the running server and which
+// project it addresses. Returns undefined when the plugin dir or script can't be found — the worker
+// then simply lacks the frizz tools rather than failing to spawn. `env`/`moduleUrl` injectable for
+// tests. A bare state dir is still accepted (one project, one server: the pre-singleton shape).
 export function resolveFrizzMcp(
-  stateDir: string,
+  target: string | FrizzMcpTarget,
   moduleUrl = import.meta.url,
   env: NodeJS.ProcessEnv = process.env,
   slug?: string,
 ): FrizzMcp | undefined {
+  const { stateDir, serverLock, projectId } = typeof target === "string" ? { stateDir: target } : target
   const pluginDir = resolveWorkerPluginDir(moduleUrl, env)
   if (!pluginDir) return undefined
   const scriptPath = join(pluginDir, "bin", FRIZZ_MCP.script)
   if (!existsSync(scriptPath)) return undefined
-  return { scriptPath, stateDir, ...(slug ? { slug } : {}) }
+  return {
+    scriptPath,
+    stateDir,
+    ...(serverLock ? { serverLock } : {}),
+    ...(projectId ? { projectId } : {}),
+    ...(slug ? { slug } : {}),
+  }
 }
 
 // Claude flags that mount the frizz-injected MCP servers via ONE inline `--mcp-config` JSON and
@@ -497,8 +515,11 @@ export function claudeMcpConfig(mcp?: FrizzMcp): ClaudeMcpConfig {
     // did, a worker-armed heartbeat, was removed 2026-08-02 in favour of the operator's stop hook, which
     // the board arms directly). Kept because it costs one line and is the whole prerequisite for any
     // future thread-scoped tool.
-    const env: Record<string, string> = { FRIZZ_STATE_DIR: mcp.stateDir }
-    if (mcp.slug) env.FRIZZ_THREAD_SLUG = mcp.slug
+    // FRIZZ_SERVER_LOCK and FRIZZ_PROJECT_ID (frizzMcpEnv) are what make the tools work in a project
+    // the singleton did NOT launch from: the first says where the one published lock is, the second
+    // says whose board to act on. Both omitted ⇒ the script keeps its original behaviour (this
+    // project's own lock, unprefixed RPC), which is exactly right for one project on its own server.
+    const env = frizzMcpEnv(mcp)
     mcpServers[FRIZZ_MCP.name] = { command: process.execPath, args: [mcp.scriptPath], env }
     // Server-level, like chrome-devtools above: every tool the unified frizz server exposes (today
     // `mcp__frizz__spawn_thread`) is pre-approved, so adding one never needs an allow-list edit.

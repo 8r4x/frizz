@@ -230,12 +230,38 @@ export const FRIZZ_MCP = {
 export interface FrizzMcp {
   scriptPath: string
   stateDir: string
+  // WHERE THE PORT ACTUALLY IS. `server.lock` is written for the project the singleton was LAUNCHED
+  // from and for no other (index.ts, "status publication"), so a worker in any OTHER open project
+  // read its own project's state dir and found nothing — every frizz tool died on
+  // "could not read the frizz server lock … ENOENT", or worse, on a stale lock from the last time
+  // that repo ran its own server (a dead port ⇒ "dispatch request failed: fetch failed"). Absent ⇒
+  // the script falls back to `<stateDir>/server.lock`, which is what a pre-singleton server passed.
+  serverLock?: string
+  // WHICH PROJECT the tools act on, as the immutable registry id — the script addresses
+  // `/_frizz/<projectId>/rpc/…`. An UNPREFIXED `/_frizz/rpc/…` is the LAUNCHING project by design
+  // (splitTenantRequest), so without this a worker in project B spawned its thread onto project A's
+  // board. The id rather than the slug because a project can be renamed under a live detached worker.
+  projectId?: string
   // The thread this MCP server belongs to, passed through as FRIZZ_THREAD_SLUG so a tool CAN act on its
   // OWN thread. Nothing in the MCP protocol identifies the caller, and the server is spawned per worker,
   // so its env is the only channel for this. Optional, and currently read by no shipped tool:
   // `spawn_thread` does not need to know who called it, and the one that did — a worker-armed heartbeat
   // — was removed 2026-08-02 in favour of the operator's stop hook. See dispatch.ts for why it stays.
   slug?: string
+}
+
+/**
+ * The env the frizz MCP server process is spawned with — ONE builder, because both backends mount the
+ * same script and a field added on only one side is a capability that silently works under claude and
+ * not under codex (or the reverse), discoverable only by running a worker.
+ */
+export function frizzMcpEnv(mcp: FrizzMcp): Record<string, string> {
+  return {
+    FRIZZ_STATE_DIR: mcp.stateDir,
+    ...(mcp.serverLock ? { FRIZZ_SERVER_LOCK: mcp.serverLock } : {}),
+    ...(mcp.projectId ? { FRIZZ_PROJECT_ID: mcp.projectId } : {}),
+    ...(mcp.slug ? { FRIZZ_THREAD_SLUG: mcp.slug } : {}),
+  }
 }
 
 // The ONE canonical Chrome DevTools MCP server spec both backends inject into every worker they

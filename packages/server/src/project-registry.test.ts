@@ -8,6 +8,7 @@ import {
   deriveSlug,
   findByPath,
   findBySlug,
+  findProjectBySegment,
   forgetProject,
   ICON_SCAN_VERSION,
   listProjects,
@@ -187,6 +188,26 @@ test("rename is the escape hatch, and it refuses a reserved or taken slug", () =
     assert.throws(() => renameProject(A, { slug: "two" }, home), /already uses/)
 
     assert.equal(renameProject(A, { archived: true }, home)?.archived, true)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+// A `/_frizz/<segment>/…` request may name a project either way, and the id exists for exactly the
+// case below: a worker is handed its project segment once, at spawn, and then holds it for hours
+// inside a detached daemon. A slug renamed under it would leave every frizz tool addressing an unknown
+// segment — which falls through to whichever project launched the server, not to an error.
+test("a project segment resolves by slug OR by id, so a rename cannot strand a live worker", () => {
+  const home = sandbox()
+  try {
+    registerProject({ dir: project(home, "one", A), id: A }, home)
+    assert.equal(findProjectBySegment("one", home)?.id, A)
+    assert.equal(findProjectBySegment(A, home)?.id, A)
+
+    renameProject(A, { slug: "renamed" }, home)
+    assert.equal(findProjectBySegment("one", home), undefined)
+    assert.equal(findProjectBySegment(A, home)?.id, A, "the id outlives the rename")
+    assert.equal(findProjectBySegment("nobody", home), undefined)
   } finally {
     rmSync(home, { recursive: true, force: true })
   }

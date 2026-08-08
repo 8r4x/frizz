@@ -64,6 +64,10 @@ test("Claude dispatch mounts chrome-devtools + the unified frizz MCP server and 
     args: ["/abs/plugin/bin/frizz-mcp.mjs"],
     env: { FRIZZ_STATE_DIR: "/home/.frizz/projects/pid" },
   })
+  // No FRIZZ_PROJECT_ID here because this descriptor carries none: the id is stamped by the SERVER at
+  // spawn, from the worker's own project, and is never a tool argument — which is what makes "spawn a
+  // thread on another project's board" unexpressible rather than merely discouraged. The same reason
+  // FRIZZ_THREAD_SLUG is env-only.
   // Tools are pre-approved so a headless worker never blocks on a permission prompt. One comma-joined
   // EQUALS-form token: --allowedTools is variadic, so a space-separated value could swallow a
   // following positional (the prompt) — the equals form binds exactly one token. BOTH rules are
@@ -71,6 +75,31 @@ test("Claude dispatch mounts chrome-devtools + the unified frizz MCP server and 
   assert.ok(argv.includes("--allowedTools=mcp__chrome-devtools,mcp__frizz"))
   // The prompt stays the trailing positional (flags never displace it).
   assert.equal(argv[argv.length - 1], "test")
+})
+
+test("Claude dispatch stamps the singleton's lock path and the worker's OWN project into the frizz MCP env", () => {
+  const argv = buildClaudeCommand({
+    sessionId: "mcp-tenant",
+    permissionMode: "auto",
+    prompt: "test",
+    workerPrompt: "",
+    frizzMcp: {
+      scriptPath: "/abs/plugin/bin/frizz-mcp.mjs",
+      stateDir: "/home/.frizz/projects/tenant",
+      serverLock: "/home/.frizz/projects/launcher/server.lock",
+      projectId: "b47f4055-4262-432a-af18-ded4cbfb3071",
+    },
+  })
+  const cfg = JSON.parse(argv[argv.indexOf("--mcp-config") + 1]!)
+  // One process serves N projects and writes ONE lock (the launcher's), so a tenant's worker is told
+  // where that lock is; and the RPC it POSTs is prefixed with its own project, because unprefixed
+  // means the LAUNCHING project — the difference between spawning onto your board and onto someone
+  // else's. Neither value is derivable inside the worker, and neither is a tool argument.
+  assert.deepEqual(cfg.mcpServers[FRIZZ_MCP.name].env, {
+    FRIZZ_STATE_DIR: "/home/.frizz/projects/tenant",
+    FRIZZ_SERVER_LOCK: "/home/.frizz/projects/launcher/server.lock",
+    FRIZZ_PROJECT_ID: "b47f4055-4262-432a-af18-ded4cbfb3071",
+  })
 })
 
 test("Claude dispatch still mounts + pre-approves chrome-devtools when no frizz-MCP descriptor is supplied", () => {

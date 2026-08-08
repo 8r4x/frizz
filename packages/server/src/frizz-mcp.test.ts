@@ -134,6 +134,60 @@ test("`spawn_thread` POSTs the real dispatch RPC and returns the thread's drawer
   }
 })
 
+// ONE frizz serves every project on the machine, and it publishes exactly ONE `server.lock` — the
+// LAUNCHING project's. A worker in any other open project therefore has to be told two things it
+// cannot derive: where that lock is, and which project it is acting for. Get the first wrong and every
+// frizz tool dies on ENOENT (the observed break: nub, boron and pullfrog-app workers all reported
+// "could not read the frizz server lock … ENOENT", and zod, which still had a stale lock from its own
+// pre-singleton server, reported "dispatch request failed" against a dead port). Get the SECOND wrong
+// and it is worse than an error: an unprefixed `/_frizz/rpc/dispatch` is the LAUNCHING project by
+// definition, so the worker silently spawns its thread onto somebody else's board.
+test("the tools address the CALLING project's RPC, at the lock the singleton actually publishes", async () => {
+  const seen: string[] = []
+  const http = createServer((req, res) => {
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      seen.push(req.url ?? "")
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ result: { slug: "spawned-child" } }))
+    })
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  // The lock lives in the LAUNCHER's state dir; this worker's own project dir has none, exactly as on
+  // a real machine — so a run that still resolved the lock from FRIZZ_STATE_DIR fails here.
+  const launcherStateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-launcher-"))
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-tenant-"))
+  writeFileSync(join(launcherStateDir, "server.lock"), JSON.stringify({ port }))
+  const projectId = "b47f4055-4262-432a-af18-ded4cbfb3071"
+  const rpc = startServer({
+    FRIZZ_STATE_DIR: stateDir,
+    FRIZZ_SERVER_LOCK: join(launcherStateDir, "server.lock"),
+    FRIZZ_PROJECT_ID: projectId,
+    FRIZZ_THREAD_SLUG: "owning-thread",
+  })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+    rpc.send({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name: "spawn_thread", arguments: { prompt: "do the thing", model: "opus", effort: "high" } },
+    })
+    assert.equal((await rpc.next(2)).result.isError, undefined)
+    // Every tool travels the same transport, so the prefix has to be on the shared path and not only
+    // on spawn's: a timer armed on the launcher's board would fire into a thread that is not ours.
+    rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "timer", arguments: { action: "list" } } })
+    assert.equal((await rpc.next(3)).result.isError, undefined)
+    assert.deepEqual(seen, [`/_frizz/${projectId}/rpc/dispatch`, `/_frizz/${projectId}/rpc/listOwnThreadTimers`])
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
+
 // The stop-hook tool's whole reason to exist is that it acts on the CALLING thread, which it can only
 // learn from its env — so what this pins is the slug actually reaching the RPC body, over the real
 // stdio transport against a real HTTP server. A tool that armed a hook on the wrong thread (or on none)

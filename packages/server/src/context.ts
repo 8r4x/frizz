@@ -9,7 +9,7 @@ import { readQuota } from "./quota.ts"
 import { refreshClaudeQuotaInBackground } from "./backend/claude-quota.ts"
 import { createBoard, type BoardManager } from "./board.ts"
 import { createTailer, defaultLogDir, type Tailer } from "./tailer.ts"
-import { createDispatcher, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock, claudeMcpConfig, resolveFrizzMcp, workerPluginDir, type Dispatcher } from "./dispatch.ts"
+import { createDispatcher, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock, claudeMcpConfig, resolveFrizzMcp, workerPluginDir, type Dispatcher, type FrizzMcpTarget } from "./dispatch.ts"
 import { createScheduler, type Scheduler } from "./scheduler.ts"
 import {
 resumeThread,
@@ -176,6 +176,13 @@ export interface ContextOptions {
    * exactly how a test run silently rewrote the maintainer's own `notifications` flag.
    */
   home?: string
+  /**
+   * The `server.lock` THIS PROCESS publishes — the launching project's, since that is the only one
+   * written. Threaded to every tenant so a worker in a project the server did not launch from can
+   * still find the port; omitted ⇒ the frizz MCP server falls back to this project's own state dir,
+   * which is right for a one-project server and is all a pre-singleton build ever passed.
+   */
+  serverLockPath?: string
   /** Internal deterministic construction/rollback seam. */
   startup?: {
     afterPhase?: (phase: ContextStartupPhase) => void
@@ -600,6 +607,15 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   // consistent; the CodexBackend uses $CODEX_HOME (default ~/.codex). `backendFor` maps a row's `backend`
   // column to the right one, DEFAULTING to claude for any unset/unknown kind — so a session is codex ONLY
   // when it was dispatched codex, and every claude path is byte-identical to before.
+  // Where a worker of THIS project reaches the server, and whose board its frizz tools act on. One
+  // process serves N projects but publishes ONE `server.lock` (the launcher's), and an unprefixed
+  // `/_frizz/rpc/…` is the launching project by definition — so a tenant's workers need both halves
+  // spelled out or their tools either cannot find the port at all or act on the wrong board.
+  const frizzMcpTarget: FrizzMcpTarget = {
+    stateDir: project.stateDir,
+    ...(opts.serverLockPath ? { serverLock: opts.serverLockPath } : {}),
+    projectId: project.id,
+  }
   const claudeBackend = createClaudeBackend({ logDir: defaultLogDir(project), claudeBin: opts.claudeBin })
   const codexBackend = createCodexBackend({})
   const backendFor = (kind?: string): AgentBackend => (kind === "codex" ? codexBackend : claudeBackend)
@@ -612,7 +628,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         stateDir: project.stateDir,
         // Codex's MCP servers mount PROCESS-wide on the app-server, not per thread, so the descriptor
         // is resolved once here — the codex twin of the per-dispatch resolveFrizzMcp on the claude side.
-        frizzMcp: resolveFrizzMcp(project.stateDir),
+        frizzMcp: resolveFrizzMcp(frizzMcpTarget),
         dbPath,
         interactions: storage.interactions,
         codexBin: opts.codexBin,
@@ -695,7 +711,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         // gets the frizz sub-agent profiles, the frizz + chrome-devtools MCP, and the cc-worker hooks.
         workerEnv: {
           pluginDir: workerPluginDir(),
-          ...claudeMcpConfig(resolveFrizzMcp(project.stateDir)),
+          ...claudeMcpConfig(resolveFrizzMcp(frizzMcpTarget)),
           permDir: permRequestDir(project),
         },
         // Which broker threads warmUp() may reattach at boot. Same predicate codex's shouldAutoResume

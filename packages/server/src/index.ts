@@ -40,7 +40,7 @@ import {
 import { createBootProgressPublisher } from "./boot-progress.ts"
 import { log as frizzLog } from "./logging.ts"
 import { createTenantMap } from "./tenants.ts"
-import { findBySlug } from "./project-registry.ts"
+import { findProjectBySegment } from "./project-registry.ts"
 import { backfillRegistry } from "./project-registry.ts"
 import { servedByAnotherProcess } from "./project-launch.ts"
 
@@ -197,14 +197,29 @@ export interface StartedServer {
 const isApiUrl = (url: string) => url === FRIZZ_ROUTE_PREFIX || url.startsWith(`${FRIZZ_ROUTE_PREFIX}/`)
 
 /**
- * Split `/_frizz/<slug>/rest` into its project slug and the request the tenant's own app should see.
+ * The liveness record this process publishes: pid, owner tokens and the PORT.
  *
- * A project slug and a route name share this position, so `/_frizz/rpc/board` and
- * `/_frizz/nub/rpc/board` look alike until you know which slugs exist. The registry settles it, and
+ * Written for the LAUNCHING project only — it is a record of a launch, not of a board, and the tokens
+ * in it belong to the launch lease. So it is also the one file a worker in any OTHER open project can
+ * read the port out of, which is why the path is handed to every tenant's context rather than being
+ * rebuilt from whichever project happens to be asking.
+ */
+const serverLockPathFor = (project: Project): string => join(project.stateDir, "server.lock")
+
+/**
+ * Split `/_frizz/<project>/rest` into its project segment and the request the tenant's own app should
+ * see.
+ *
+ * A project segment and a route name share this position, so `/_frizz/rpc/board` and
+ * `/_frizz/nub/rpc/board` look alike until you know which projects exist. The registry settles it, and
  * cannot be ambiguous: it refuses to mint a slug that shadows one of Frizz's own route names.
  *
+ * The segment is a slug OR a project id. The browser uses the slug, because it is what the operator
+ * reads in the URL bar; a worker's frizz MCP server uses the ID, because it is handed the segment once
+ * at spawn and then holds it for hours in a detached daemon — a rename would silently strand it.
+ *
  * An unprefixed `/_frizz/rpc/…` stays the LAUNCHING project, so a client that has not learned about
- * slugs yet keeps working.
+ * project segments yet keeps working.
  */
 export function splitTenantRequest(
   url: string,
@@ -394,7 +409,9 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       if (contextOptions.project) assertNotServedElsewhere(contextOptions.project)
       return runtime.createContext(contextOptions)
     },
-    contextOptions: { claudeBin: opts.claudeBin },
+    // serverLockPath is the LAUNCHING project's: it is the only `server.lock` this process publishes
+    // (see "status publication"), so it is the only file a tenant's worker can read the port out of.
+    contextOptions: { claudeBin: opts.claudeBin, serverLockPath: serverLockPathFor(project) },
     // Each project's app carries ITS OWN owner proof, so /health stays honest per project rather than
     // answering for whichever one happened to launch the server. The transports are per project for a
     // blunter reason: a socket is a live feed of ONE board, so sharing the launcher's would push its
@@ -673,6 +690,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       () => runtime.createContext({
         claudeBin: opts.claudeBin,
         project,
+        serverLockPath: serverLockPathFor(project),
         startup: {
           afterPhase: (p) => {
             bootProgress(`context: ${p}`)
@@ -731,7 +749,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       await phase("wake scheduler", () => undefined)
     }
 
-    statusPath = join(ctx.project.stateDir, "server.lock")
+    statusPath = serverLockPathFor(ctx.project)
     const webRoot = resolve(import.meta.dirname, "..", "..", "web")
     const distDir = opts.webDistDir ? resolve(opts.webDistDir) : join(webRoot, "dist")
     startupPhase = "Vite"
@@ -764,9 +782,9 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     const routeToTenant = async (
       url: string,
     ): Promise<{ surfaces: TenantSurfaces; url: string } | undefined> => {
-      const split = splitTenantRequest(url, (slug) => findBySlug(slug) !== undefined)
+      const split = splitTenantRequest(url, (segment) => findProjectBySegment(segment) !== undefined)
       if (!split) return undefined
-      const entry = findBySlug(split.slug)
+      const entry = findProjectBySegment(split.slug)
       if (!entry) return undefined
       const existing = tenants.appFor(entry.id)
       if (existing) return { surfaces: existing, url: split.rest }

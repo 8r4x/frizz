@@ -13,13 +13,16 @@
  * Future worker-facing frizz tools join the TOOLS registry below rather than mounting a second server:
  * one server keeps the worker's tool namespace coherent and the server-level pre-approval single.
  *
- * spawn_thread wraps frizz's own dispatch RPC: it reads the running server's port from
- * `<state-dir>/server.lock` and POSTs `/_frizz/rpc/dispatch`. The `/_frizz/rpc` surface has no token auth — only a
- * loopback-origin CSRF gate — so a headerless local POST with `sec-fetch-site: same-origin` (undici
- * sends no Origin) satisfies it.
+ * spawn_thread wraps frizz's own dispatch RPC: it reads the running server's port from a server.lock
+ * and POSTs `/_frizz/<project>/rpc/dispatch`. That surface has no token auth — only a loopback-origin
+ * CSRF gate — so a headerless local POST with `sec-fetch-site: same-origin` (undici sends no Origin)
+ * satisfies it.
  *
- * Mounted by the server (dispatch.ts) into the Claude backend via `--mcp-config`. The server passes
- * FRIZZ_STATE_DIR in this process's env so we can locate server.lock without recomputing the project id.
+ * Mounted by the server (dispatch.ts) into the Claude backend via `--mcp-config`, and into codex via
+ * `-c mcp_servers.frizz` (codex-mcp.ts). Both hand this process the same three env values, built once
+ * in frizzMcpEnv: FRIZZ_SERVER_LOCK (the lock this server publishes — the launching project's, the
+ * only one written), FRIZZ_PROJECT_ID (whose board we act on, since ONE frizz serves them all) and
+ * FRIZZ_STATE_DIR (this project's state dir, and the lock fallback for a one-project server).
  *
  * Protocol: MCP over stdio = newline-delimited JSON-RPC 2.0. We implement exactly the four methods a
  * client drives (initialize, tools/list, tools/call, ping) plus the initialized notification. Hand-
@@ -287,6 +290,23 @@ function serverLockPort() {
   return port
 }
 
+/**
+ * The RPC base for OUR project.
+ *
+ * One frizz serves every project on the machine, and an unprefixed `/_frizz/rpc/…` is the project it
+ * was LAUNCHED from — so without the prefix a worker in any other project acted on the launcher's
+ * board (spawn_thread put its new thread there; the thread-scoped tools looked for a slug that lives
+ * in a different registry). FRIZZ_PROJECT_ID is the immutable registry id rather than the slug,
+ * because the value is handed over once at spawn and then held for the life of a detached daemon,
+ * and a project can be renamed under it. Unset ⇒ unprefixed, which is what a server that only ever
+ * serves one project passes, and what the launching project's own workers get.
+ * @param {string} procedure
+ */
+function rpcPath(procedure) {
+  const project = process.env.FRIZZ_PROJECT_ID
+  return `${project ? `/_frizz/${encodeURIComponent(project)}` : "/_frizz"}/rpc/${procedure}`
+}
+
 /** The `spawn_thread` handler: POST /_frizz/rpc/dispatch, return the worker-facing result text.
  * @param {Record<string, unknown>} args @returns {Promise<string>} */
 async function spawnThread(args) {
@@ -310,7 +330,7 @@ async function spawnThread(args) {
   const timer = setTimeout(() => controller.abort(), DISPATCH_TIMEOUT_MS)
   let res
   try {
-    res = await fetch(`http://127.0.0.1:${port}/_frizz/rpc/dispatch`, {
+    res = await fetch(`http://127.0.0.1:${port}${rpcPath("dispatch")}`, {
       method: "POST",
       // No Origin header (undici omits it for non-browser fetch); `sec-fetch-site: same-origin`
       // satisfies the server's loopback-origin gate (app.ts isTrustedLocalHttpRequest).
@@ -347,7 +367,7 @@ async function callRpc(procedure, body) {
   const timer = setTimeout(() => controller.abort(), DISPATCH_TIMEOUT_MS)
   let res
   try {
-    res = await fetch(`http://127.0.0.1:${port}/_frizz/rpc/${procedure}`, {
+    res = await fetch(`http://127.0.0.1:${port}${rpcPath(procedure)}`, {
       method: "POST",
       headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" },
       body: JSON.stringify(body),

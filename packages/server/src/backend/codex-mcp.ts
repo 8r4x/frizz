@@ -1,4 +1,4 @@
-import { CHROME_DEVTOOLS_MCP, FRIZZ_MCP, type FrizzMcp } from "./types.ts"
+import { CHROME_DEVTOOLS_MCP, FRIZZ_MCP, frizzMcpEnv, type FrizzMcp } from "./types.ts"
 
 // ---- Codex MCP injection -------------------------------------------------------------------------
 // The codex twin of dispatch.ts's `claudeMcpFlags`. Claude mounts frizz's MCP servers via one inline
@@ -69,7 +69,7 @@ export function codexMcpConfigArgs(frizzMcp?: FrizzMcp, nodeBin: string = proces
     // start, so the tool merely never appears.
     args.push(
       "-c",
-      `mcp_servers.${FRIZZ_MCP.name}=${serverTable(nodeBin, [frizzMcp.scriptPath], { FRIZZ_STATE_DIR: frizzMcp.stateDir })}`,
+      `mcp_servers.${FRIZZ_MCP.name}=${serverTable(nodeBin, [frizzMcp.scriptPath], frizzMcpEnv(frizzMcp))}`,
     )
   }
   // Headless workers cannot answer an approval prompt, and an unapproved MCP call is cancelled at the
