@@ -45,7 +45,7 @@ import { threadLifecycleAvailability } from "../lib/threadLifecycle.ts"
 import { Tooltip } from "./Tooltip.tsx"
 import { ToolDisclosureHeader } from "./ToolDisclosureHeader.ts"
 import { FOREGROUND_MARK_AFTER_MS, foregroundToolIsRunning, hasRunningToolIndicator, isPendingForegroundTool, liveBackgroundOperationState } from "../lib/operationIndicators.ts"
-import { formatToolDuration } from "../lib/durationLabels.ts"
+import { formatRuntimeElapsed, formatToolDuration } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { CHILD_OPEN_TITLE, CHILD_QUIET_SHELL_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, childOpSubtree, mergeBackgroundShells, shellLinesLabel, visibleChildOps, type TranscriptShellRecord } from "../lib/childOps.ts"
 import { childOpDismisser } from "../lib/dismissChildOp.ts"
@@ -4225,8 +4225,7 @@ export function WorkingIndicator({ since, startedAt, activityLabel, run }: { sin
     const id = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(id)
   }, [])
-  const s = Math.max(0, Math.floor((now - baseline) / 1000))
-  const durationLabel = s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`
+  const durationLabel = formatRuntimeElapsed(Math.max(0, now - baseline))
   // The run the shimmer is standing in for (lib/toolActivity.liveToolActivityRun) — the calls history is
   // withholding until the run settles into its `Ran N tool calls` digest. Same collapse and same cards as
   // that digest, so drilling into a run mid-flight shows exactly what it will show afterwards.
@@ -4249,7 +4248,9 @@ export function WorkingIndicator({ since, startedAt, activityLabel, run }: { sin
   // clipping it. That trade no longer has to be made: the label is a project-relative path
   // now (see relativeToolPaths), so at any realistic width there is nothing left to clip.
   // The duration keeps `shrink-0 whitespace-nowrap` — it is one value and must never break at its
-  // own space, which is exactly how `828m 49s` used to put the minutes outside the panel.
+  // own space, which is exactly how the old `828m 49s` spelling used to put the minutes outside the
+  // panel. Two units is now the ceiling (`13h 48m` for that same span; see formatRuntimeElapsed), so
+  // the reading is short as well as unbreakable.
   const row = (
     <>
       {/* The chevron is the LABEL's control, so it rides in the label's own group — `gap-1` here against

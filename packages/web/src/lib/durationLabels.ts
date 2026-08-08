@@ -38,6 +38,32 @@ export function formatCompactElapsed(ms: number): string {
   return minutes ? `${hours}hr ${minutes}m` : `${hours}hr`
 }
 
+// The BOTTOM RUNTIME SLOT's clock: `42s`, `2m`, `1h 17m`, `3d 4h`, `2w 3d` (maintainer 2026-08-08:
+// `"2m" "1h 17m" etc (smhdw)`). Single-letter units, at most TWO of them, and the ladder runs all the
+// way to weeks because that row times a live stretch of work whose length nobody bounds.
+//
+// SECONDS never appear beside another unit. They used to — the slot read `${m}m ${ss}s`, so a run that
+// crossed an hour rendered `120m 00s`: two units of false precision, the larger one in the wrong scale,
+// and wide enough that `828m 49s` once pushed its own minutes outside the panel. Past a minute the
+// second-hand digits are noise, so the reading drops them; past an hour the next unit down carries the
+// resolution instead. A zero remainder is dropped too — `2h`, not `2h 0m`.
+//
+// Distinct from formatCompactElapsed above, which spells hours `1hr 5m` and stops there. That spelling
+// is the child-op row's own (maintainer 2026-07-28) and this one must not quietly restyle it.
+export function formatRuntimeElapsed(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return ""
+  const seconds = Math.floor(ms / 1_000)
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return minutes % 60 ? `${hours}h ${minutes % 60}m` : `${hours}h`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return hours % 24 ? `${days}d ${hours % 24}h` : `${days}d`
+  const weeks = Math.floor(days / 7)
+  return days % 7 ? `${weeks}w ${days % 7}d` : `${weeks}w`
+}
+
 /** Compact elapsed since an ISO instant, measured against an injectable clock so a live tick drives it. */
 export function compactElapsedSince(startedAt: string | undefined, nowMs = Date.now()): string {
   if (!startedAt) return ""

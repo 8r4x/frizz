@@ -22,10 +22,15 @@ function callMessage(sourceId: string, tools: ChatMessage["tools"], at?: string)
 
 // The live steps carry REAL instants so the runtime clock is exercised, not just the label. The turn
 // opened two hours before the run did: the slot must read the RUN (see lib/toolActivity.liveRuntimeStartedAt).
+//
+// `?ago=<seconds>` ages the run itself, which is the only way to SEE the whole s/m/h/d/w ladder
+// (lib/durationLabels.formatRuntimeElapsed) rendered in the row rather than asserted in a unit test —
+// `?ago=4680` is `1h 18m`, `?ago=1490000` is `2w 3d`.
 const AGO = (seconds: number) => new Date(Date.now() - seconds * 1000).toISOString()
-const TURN_STARTED_AT = AGO(2 * 60 * 60)
-const FIRST_BATCH_AT = AGO(41)
-const SECOND_BATCH_AT = AGO(8)
+const RUN_AGE_SECONDS = Number(new URLSearchParams(location.search).get("ago")) || 41
+const TURN_STARTED_AT = AGO(Math.max(RUN_AGE_SECONDS, 2 * 60 * 60) + 1)
+const FIRST_BATCH_AT = AGO(RUN_AGE_SECONDS)
+const SECOND_BATCH_AT = AGO(Math.floor(RUN_AGE_SECONDS / 5))
 
 const settledMessages = [
   callMessage("settled-1", [
@@ -99,8 +104,8 @@ function Transcript({ messages, running = false }: { messages: ChatMessage[]; ru
 // Step 1's path is ABSOLUTE, exactly as a provider reports it: the shimmer must show it
 // project-relative. The count is the LIVE RUN's, so it climbs 1 → 2 across the two landed calls and
 // would reset if prose closed the run — which is correct, since a closed run states itself as a digest.
-// The CLOCK is the same run's: every step reads ~41s and up from FIRST_BATCH_AT, never the two hours
-// since TURN_STARTED_AT, and it does not restart when the second batch lands.
+// The CLOCK is the same run's: every step reads up from FIRST_BATCH_AT, never the older
+// TURN_STARTED_AT, and it does not restart when the second batch lands.
 const edit = (status: "pending" | "completed") => ({
   name: "Edit",
   detail: `${FIXTURE_PROJECT_DIR}/ui/packages/web/src/components/ChatView.tsx`,
