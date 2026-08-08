@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { test } from "node:test"
-import { frizzPaths, legacyFrizzRoot, projectStateDir } from "./frizz-paths.ts"
+import { frizzPaths, legacyFrizzRoot, projectStateDir, serverAddressPathForStateDir } from "./frizz-paths.ts"
 
 const never = () => false
 
@@ -95,4 +95,26 @@ test("Windows uses Local, never Roaming — a multi-gigabyte cache must not foll
     exists: never,
   })
   assert.match(bare.data, /Users[\\/]x[\\/]AppData[\\/]Local[\\/]Frizz/)
+})
+
+// THE ADDRESS AND THE STATE DIR MUST AGREE, and the agreement is `../..` — the exact derivation the
+// worker shim performs on FRIZZ_STATE_DIR (cc-worker/bin/frizz-mcp.mjs). If these two ever disagree, a
+// worker looks for the machine address somewhere the server never writes it, and the failure is a tool
+// that silently cannot find its server.
+//
+// The second assertion is the one with teeth: deriving the address from `homedir()` instead let a TEST
+// RUN publish and then retire the real machine's `~/.frizz/server.lock`, out from under a live server
+// (2026-08-08). Anything sandboxed must stay sandboxed.
+test("the machine server address is ../.. from a project state dir, in whatever root that is", () => {
+  // Asserted as a RELATIONSHIP, not a spelling: the root differs by platform and by whether a legacy
+  // `~/.frizz` exists, and what must hold everywhere is that the address sits beside `projects/`.
+  for (const base of ["/home/x", "/tmp/sandbox-home"]) {
+    const stateDir = projectStateDir("p1", base)
+    assert.equal(serverAddressPathForStateDir(stateDir), join(dirname(dirname(stateDir)), "server.lock"))
+    assert.equal(dirname(dirname(stateDir)), dirname(dirname(projectStateDir("p2", base))), "one root, whatever the project")
+  }
+  // And the sandbox one must never resolve into the real machine's root — the leak that let a test run
+  // retire `~/.frizz/server.lock` out from under a live server (2026-08-08).
+  const sandboxed = serverAddressPathForStateDir(projectStateDir("p1", "/tmp/sandbox-home"))
+  assert.ok(sandboxed.startsWith("/tmp/sandbox-home"), `sandboxed address escaped: ${sandboxed}`)
 })

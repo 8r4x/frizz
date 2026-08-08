@@ -2,7 +2,7 @@ export type { AppRouter } from "./router.ts"
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { readFileSync, existsSync } from "node:fs"
-import { join, resolve, extname, normalize } from "node:path"
+import { dirname, join, resolve, extname, normalize } from "node:path"
 import { DEFAULT_PORT, FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
 import {
 ContextStartupError,
@@ -37,7 +37,8 @@ import {
   type ProjectLaunchLease,
   type ProcessGeneration,
 } from "./project-launch.ts"
-import { serverAddressPath } from "./frizz-paths.ts"
+import { serverAddressPathForStateDir } from "./frizz-paths.ts"
+import { pidIsAlive } from "./project-identity.ts"
 import { createBootProgressPublisher } from "./boot-progress.ts"
 import { log as frizzLog } from "./logging.ts"
 import { createTenantMap } from "./tenants.ts"
@@ -206,6 +207,17 @@ const isApiUrl = (url: string) => url === FRIZZ_ROUTE_PREFIX || url.startsWith(`
  * rebuilt from whichever project happens to be asking.
  */
 const serverLockPathFor = (project: Project): string => join(project.stateDir, "server.lock")
+
+/** Who currently holds the machine address, if the file is there and readable. */
+function readServerAddressHolder(path: string): { pid: number; port: number } | undefined {
+  try {
+    const value = JSON.parse(readFileSync(path, "utf8")) as { pid?: unknown; port?: unknown }
+    if (typeof value?.pid !== "number") return undefined
+    return { pid: value.pid, port: typeof value.port === "number" ? value.port : -1 }
+  } catch {
+    return undefined
+  }
+}
 
 /**
  * Split `/_frizz/<project>/rest` into its project segment and the request the tenant's own app should
@@ -613,7 +625,9 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       if (statusPath && statusIdentity) runtime.removeStatus(statusPath, statusIdentity)
       // Identity-checked, so a second frizz that has since taken the machine address keeps its own
       // record and only the process that actually published this one retires it.
-      if (statusIdentity) { try { runtime.removeStatus(serverAddressPath(), statusIdentity) } catch {} }
+      if (statusPath && statusIdentity) {
+        try { runtime.removeStatus(serverAddressPathForStateDir(dirname(statusPath)), statusIdentity) } catch {}
+      }
       // Ownership is always the final resource. A thrown status cleanup leaves this exact fence live.
       delegatedLaunch?.release()
       ownedLaunch?.release()
@@ -901,8 +915,31 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       // …and the SAME record at the machine's one fixed address. A worker's frizz MCP server re-reads
       // this on every call, so an "Update & Restart" — which moves the port, and may even move which
       // project is the launcher — reaches every live detached worker without any of them restarting.
-      // Best-effort: failing to publish an alias must never fail a boot that is otherwise serving.
-      try { runtime.writeStatus(serverAddressPath(), status) } catch (error) {
+      //
+      // CLAIMED ONLY IF NOBODY LIVE HOLDS IT. One machine runs one frizz, but "one" is an intent, not
+      // an invariant: a second server really can boot (a stray `frizz` in another repo, a supervised
+      // child racing its parent). Overwriting a live holder's record is the half that bites — the
+      // removal is already identity-checked, so the intruder's own clean exit then RETIRES the address
+      // out from under a server that is still serving, and every live worker loses the one path that
+      // was supposed to survive a restart. Observed exactly once, 2026-08-08 16:45→16:51: the file was
+      // present, then gone, while its publisher on port 50020 was still listening.
+      //
+      // Degrading is survivable (the shim then scans project locks and finds the live one), but the
+      // point of this file is to be the ANSWER, so a live holder keeps it.
+      try {
+        // Derived from THIS project's state dir, never from homedir(): a test or a sandbox stack must
+        // publish inside its own sandbox, not over the real machine's address. See frizz-paths.ts.
+        const addressPath = serverAddressPathForStateDir(ctx!.project.stateDir)
+        const held = readServerAddressHolder(addressPath)
+        if (held && held.pid !== status.pid && pidIsAlive(held.pid)) {
+          frizzLog.warn(
+            "server",
+            `machine server address is held by a live frizz (pid ${held.pid}, port ${held.port}); leaving it — this server is reachable at its project lock`,
+          )
+        } else {
+          runtime.writeStatus(addressPath, status)
+        }
+      } catch (error) {
         frizzLog.warn("server", `could not publish the machine server address: ${error instanceof Error ? error.message : error}`)
       }
     })

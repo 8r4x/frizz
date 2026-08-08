@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 
 // WHERE FRIZZ'S MACHINE-GLOBAL STATE LIVES.
 //
@@ -206,4 +206,22 @@ export function projectStateDir(projectId: string, home?: string): string {
  */
 export function serverAddressPath(home?: string): string {
   return join(home ? frizzPaths({ home }).data : frizzRoots().data, "server.lock")
+}
+
+/**
+ * The machine address for the frizz root a given project state dir lives under — `../..` from it.
+ *
+ * ALWAYS PREFER THIS over the `homedir()` default above. The default reads real machine state, and a
+ * server booted inside a test or a sandbox stack would publish (and then, on its clean exit, RETIRE)
+ * the address of the maintainer's actual running frizz. That is not hypothetical: it happened on
+ * 2026-08-08, when a `startup-transaction.test.ts` run silently deleted `~/.frizz/server.lock` out
+ * from under a live server on port 50020, and it looked exactly like a rogue second instance.
+ *
+ * Deriving it from the state dir instead makes the path follow whatever sandbox the caller is already
+ * in, with no new option to thread and nothing to remember. It is also the SAME derivation the worker
+ * shim uses (`dirname(dirname(FRIZZ_STATE_DIR))`, cc-worker/bin/frizz-mcp.mjs), so the two cannot
+ * disagree about where the address lives.
+ */
+export function serverAddressPathForStateDir(stateDir: string): string {
+  return join(dirname(dirname(stateDir)), "server.lock")
 }
