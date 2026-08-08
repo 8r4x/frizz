@@ -7,4 +7,6 @@ out-cursive/
 out-eight/
 shots/
 fit/cand.*
+fit/spline-cand.*
 fit/ref-mask-*.png
+fit/traced-centreline.json

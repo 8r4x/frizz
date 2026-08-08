@@ -14,15 +14,16 @@ Three sheets of directions for the mark after the `fray` → `frizz` rename, eac
 
 ## Fitting to a reference
 
-`fit-eight.mjs` fits the parametric mark to a reference image by **pixel overlap** rather than by eye: it renders a candidate, compares its ink mask with the reference's, and hill-climbs the parameters to maximise intersection-over-union, then shakes the result loose with a seeded pattern search.
+Both fitters render a candidate, compare its ink mask with the reference's, and hill-climb on **intersection-over-union**. Judging shape by eye is what produced six rounds of near-misses on this brief; a number says whether a change helped.
 
 ```sh
-nub fit-eight.mjs          # fit and write fit/best.json + fit/replica.svg
+nub fit-spline.mjs   # ONE unified spline  -> fit/spline-best.json, fit/spline-replica.svg
+nub fit-eight.mjs    # closed 8 + separate bar (superseded) -> fit/best.json
 ```
 
-The current fit reaches IoU 0.75, which sounds middling and is not: IoU punishes a thin stroke heavily for a sub-pixel offset. The geometric agreement is **mean 0.19–0.33 px on a 10 px stroke**, with the worst 6.7 px confined to the waist.
+**The two fits settled the mark's topology, which inspection had got wrong.** Fitting the reference as a closed figure-eight with a separate crossbar tops out at **IoU 0.75**. Fitting it as a *single open spline* — one path, two free ends, no bar — reaches **IoU 0.955**, with geometric agreement of **mean 0.03 px** and a worst case of 1.4 px.
 
-Judging shape by eye is what produced six rounds of near-misses on this brief. A number says whether a change helped.
+The giveaway is the waist: three strands meet there in a triangle of crossings, which is what one path passing through the middle three times looks like. A closed eight plus a bar would put four strands through a single node. The apparent "crossbar" is just the path's two tails, which leave roughly collinear.
 
 ## Regenerating
 
