@@ -1776,7 +1776,13 @@ export function createRouter(ctx: AppContext) {
     archiveThread: mutation({
       input: SlugInput,
       handler: async ({ input }) => {
-        ctx.storage.setArchived(input.slug, true)
+        // `setState`, NOT the legacy `setArchived`. The two are not synonyms: `setArchived` writes only
+        // the historical `archived` column, and `effectiveSessionState` (board.ts) consults that column
+        // ONLY when `state` is NULL — "an explicit state write wins". Every row the current dispatch
+        // path creates has `state = "open"` written explicitly, so this RPC set a bit nothing reads and
+        // answered success while the card stayed exactly where it was. Caught 2026-08-08 archiving a
+        // thread over the RPC: `archived = 1` in SQLite, `archived: false` on the board, forever.
+        ctx.storage.setState(input.slug, "archived")
         const t = (await ctx.board.snapshot()).threads.find((x) => x.id === input.slug)
         if (!isAutoTitledSession(input.slug) && t && t.status !== "done" && t.status !== "dismissed") {
           await runThreadUpdate(ctx.project.dir, input.slug, ["--status", "done"]).catch(() => {})

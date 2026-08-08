@@ -427,7 +427,6 @@ export interface Storage {
   // Completion is one CAS write: a verified stopped runtime becomes exited + Done together, while
   // clearing stale attention/wake state. A replaced owner/generation observes zero changes.
   completeIfCurrent(slug: string, sessionId: string, generation: number): boolean
-  setArchived(slug: string, archived: boolean): void
   setRestedAt(slug: string, at: string): void
   setRestedAtIfCurrent(slug: string, sessionId: string, generation: number, at: string): boolean
   setSeenAt(slug: string, at: string): void
@@ -439,9 +438,14 @@ export interface Storage {
     generation: number,
     transcriptId: string | null,
   ): boolean
-  // Explicit lifecycle write (Archive button / Reopen). Keeps the legacy `archived` flag in sync so
-  // pre-restart readers of that column stay honest; archiving also clears unread (never badge a
-  // deliberately-shelved thread).
+  // Explicit lifecycle write (Archive button / Reopen), and the ONLY way to archive. Keeps the legacy
+  // `archived` flag in sync so pre-restart readers of that column stay honest; archiving also clears
+  // unread (never badge a deliberately-shelved thread).
+  //
+  // There was a `setArchived` beside this that wrote ONLY that legacy column. It is gone, because the
+  // column is no longer what anything reads: `effectiveSessionState` (board.ts) consults it only when
+  // `state` is NULL, and every row the dispatch path creates has an explicit `state`. So the legacy
+  // setter's one caller (the archiveThread RPC) reported success while the card never moved.
   setState(slug: string, state: "open" | "archived"): void
   setStateIfCurrent(
     slug: string,
@@ -1207,7 +1211,6 @@ export function createStorage(dbPath: string): Storage {
         awaiting_fence_id = NULL, awaiting_confirmed_at = NULL
     WHERE slug = ? AND session_id = ? AND runtime_generation = ?
   `)
-  const archivedStmt = db.prepare("UPDATE session SET archived = ?, unread = CASE WHEN ? = 1 THEN 0 ELSE unread END, snoozed_until = CASE WHEN ? = 1 THEN NULL ELSE snoozed_until END, snooze_prompt = CASE WHEN ? = 1 THEN NULL ELSE snooze_prompt END, awaiting_fence_id = CASE WHEN ? = 1 THEN NULL ELSE awaiting_fence_id END, awaiting_confirmed_at = CASE WHEN ? = 1 THEN NULL ELSE awaiting_confirmed_at END WHERE slug = ?")
   const restedStmt = db.prepare("UPDATE session SET rested_at = ? WHERE slug = ?")
   const restedIfCurrentStmt = db.prepare(`
     UPDATE session SET rested_at = ?
@@ -1923,12 +1926,6 @@ export function createStorage(dbPath: string): Storage {
       completeIfCurrentStmt.run(slug, sessionId, generation).changes === 1,
     // Six flags: archived, then the unread / snoozed_until / snooze_prompt / awaiting_fence_id /
     // awaiting_confirmed_at CASE guards, in statement order.
-    setArchived: (slug, archived) =>
-      void archivedStmt.run(
-        archived ? 1 : 0, archived ? 1 : 0, archived ? 1 : 0,
-        archived ? 1 : 0, archived ? 1 : 0, archived ? 1 : 0,
-        slug,
-      ),
     setRestedAt: (slug, at) => void restedStmt.run(at, slug),
     setRestedAtIfCurrent: (slug, sessionId, generation, at) =>
       restedIfCurrentStmt.run(at, slug, sessionId, generation).changes === 1,

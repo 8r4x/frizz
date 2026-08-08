@@ -297,6 +297,26 @@ test("planBody RPC returns only a securely resolved direct plan file", async () 
   }
 })
 
+// `archived` is a LEGACY column, and writing it is not archiving. `effectiveSessionState` (board.ts)
+// reads it only when `state` is NULL — "an explicit state write wins" — and every row the dispatch path
+// creates has `state = "open"` written explicitly. So an archiveThread that only set the column answered
+// success while the card sat exactly where it was, which is what it did until 2026-08-08.
+test("archiveThread archives the row a dispatch actually creates, not just the legacy bit", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("live-row"))          // state: "open", as dispatch writes it
+    assert.equal(h.storage.getSession("live-row")?.state, "open")
+
+    await h.router.archiveThread.handler({ input: { slug: "live-row" } })
+
+    const after = h.storage.getSession("live-row")
+    assert.equal(after?.state, "archived", "the state is what the board reads — setting `archived` alone is a no-op")
+    assert.equal(after?.archived, 1, "and the legacy column stays in sync for pre-restart readers")
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true })
+  }
+})
+
 test("auto-titled sessions never read or mutate a same-slug legacy file through RPCs", async () => {
   const h = harness()
   const frizz = join(h.dir, ".frizz")
