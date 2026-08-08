@@ -2,7 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { createServer } from "node:http"
-import { mkdtempSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { resolveFrizzMcp } from "./dispatch.ts"
@@ -19,11 +19,15 @@ interface Rpc {
   kill(): void
 }
 
-function startServer(env: Record<string, string>): Rpc {
+// `cwd` matters: with no FRIZZ_PROJECT_ID the shim derives its project by walking UP for `.frizz/.id`,
+// so a child left in this repo would address frizz's own project. Default it to an empty temp dir —
+// "a worker with no stamp and no project in its tree" — and let a test that wants the walk-up ask for it.
+function startServer(env: Record<string, string>, cwd = mkdtempSync(join(tmpdir(), "frizz-mcp-cwd-"))): Rpc {
   const descriptor = resolveFrizzMcp("/unused")
   assert.ok(descriptor, "the packaged frizz MCP script must be resolvable")
   const child = spawn(process.execPath, [descriptor.scriptPath], {
     stdio: ["pipe", "pipe", "inherit"],
+    cwd,
     env: { ...process.env, ...env },
   })
   const pending = new Map<number, (value: any) => void>()
@@ -182,6 +186,94 @@ test("the tools address the CALLING project's RPC, at the lock the singleton act
     rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "timer", arguments: { action: "list" } } })
     assert.equal((await rpc.next(3)).result.isError, undefined)
     assert.deepEqual(seen, [`/_frizz/${projectId}/rpc/dispatch`, `/_frizz/${projectId}/rpc/listOwnThreadTimers`])
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
+
+// AN UPDATE MUST REACH A WORKER THAT IS ALREADY RUNNING.
+//
+// This process lives in a DETACHED daemon that outlives frizz, so anything frozen into its env at spawn
+// is stale the moment "Update & Restart" moves the port — and a worker whose only address was stale lost
+// every frizz tool it had, with no way back short of restarting the worker. Both facts are therefore
+// re-resolved from the filesystem on EVERY call: the address from the machine-wide lock, and the project
+// from the tree the worker is standing in. Neither can be frozen, and neither can be named by the model.
+test("a stale address heals itself: the machine lock wins when the stamped one is dead", async () => {
+  const seen: string[] = []
+  const http = createServer((req, res) => {
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      seen.push(req.url ?? "")
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ result: { slug: "spawned-child" } }))
+    })
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+
+  // The frizz root, laid out as on a real machine: `<root>/server.lock` beside `<root>/projects/<id>/`.
+  const root = mkdtempSync(join(tmpdir(), "frizz-mcp-root-"))
+  const stateDir = join(root, "projects", "11111111-1111-4111-8111-111111111111")
+  mkdirSync(stateDir, { recursive: true })
+  // What the server stamped at spawn, now pointing at a DEAD process on a port nothing serves — exactly
+  // the shape zod's lock had (pid 76070, gone since Aug 1), which reported only "fetch failed".
+  const stale = join(root, "projects", "22222222-2222-4222-8222-222222222222")
+  mkdirSync(stale, { recursive: true })
+  writeFileSync(join(stale, "server.lock"), JSON.stringify({ pid: 999_999, port: port + 1 }))
+  // The machine address, republished by the restart that moved the port.
+  writeFileSync(join(root, "server.lock"), JSON.stringify({ pid: process.pid, port }))
+
+  const rpc = startServer({
+    FRIZZ_STATE_DIR: stateDir,
+    FRIZZ_SERVER_LOCK: join(stale, "server.lock"),
+    FRIZZ_PROJECT_ID: "11111111-1111-4111-8111-111111111111",
+    FRIZZ_THREAD_SLUG: "owning-thread",
+  })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "timer", arguments: { action: "list" } } })
+    assert.equal((await rpc.next(2)).result.isError, undefined, "a dead stamped lock must not be fatal")
+    assert.deepEqual(seen, ["/_frizz/11111111-1111-4111-8111-111111111111/rpc/listOwnThreadTimers"])
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
+
+test("with no stamp at all, the project is the one the worker is STANDING IN", async () => {
+  const seen: string[] = []
+  const http = createServer((req, res) => {
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      seen.push(req.url ?? "")
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ result: { slug: "spawned-child" } }))
+    })
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ pid: process.pid, port }))
+  // A checkout with frizz's own identity file, and the worker two directories down inside it.
+  const repo = mkdtempSync(join(tmpdir(), "frizz-mcp-repo-"))
+  mkdirSync(join(repo, ".frizz"), { recursive: true })
+  writeFileSync(join(repo, ".frizz", ".id"), "33333333-3333-4333-8333-333333333333\n")
+  const deep = join(repo, "packages", "server")
+  mkdirSync(deep, { recursive: true })
+
+  // No FRIZZ_PROJECT_ID: this is a worker spawned by a server that predates the stamp.
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "owning-thread" }, deep)
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "timer", arguments: { action: "list" } } })
+    assert.equal((await rpc.next(2)).result.isError, undefined)
+    assert.deepEqual(seen, ["/_frizz/33333333-3333-4333-8333-333333333333/rpc/listOwnThreadTimers"],
+      "the id walked up from cwd, not the launching project")
   } finally {
     rpc.kill()
     http.close()

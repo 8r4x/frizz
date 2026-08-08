@@ -189,3 +189,21 @@ export function frizzTempDir(name: string, key?: string): string {
 export function projectStateDir(projectId: string, home?: string): string {
   return join(home ? frizzPaths({ home }).data : frizzRoots().data, "projects", projectId)
 }
+
+/**
+ * `<data>/server.lock` — WHERE THE MACHINE'S FRIZZ IS, at one fixed path.
+ *
+ * One frizz per machine, so its address belongs somewhere that does not depend on which project
+ * happened to launch it. The per-project lock is a record of a LAUNCH (pid, owner tokens, the lease);
+ * this is a record of an ADDRESS, and the difference matters to anything long-lived that has to find
+ * the server again later.
+ *
+ * A worker's frizz MCP server is exactly that: a detached daemon outlives restart after restart, and
+ * an address it was handed once at spawn is frozen while the port behind it is not. Reading THIS file
+ * per call is what lets a live worker survive an "Update & Restart" instead of needing one of its own.
+ * `<data>` is the same root `projectStateDir` uses, so it is always `../..` from any state dir — which
+ * is how the dependency-free shim finds it without knowing this module's platform rules.
+ */
+export function serverAddressPath(home?: string): string {
+  return join(home ? frizzPaths({ home }).data : frizzRoots().data, "server.lock")
+}

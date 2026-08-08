@@ -37,6 +37,7 @@ import {
   type ProjectLaunchLease,
   type ProcessGeneration,
 } from "./project-launch.ts"
+import { serverAddressPath } from "./frizz-paths.ts"
 import { createBootProgressPublisher } from "./boot-progress.ts"
 import { log as frizzLog } from "./logging.ts"
 import { createTenantMap } from "./tenants.ts"
@@ -610,6 +611,9 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     const attempt = (async () => {
       removeSignalHandlers()
       if (statusPath && statusIdentity) runtime.removeStatus(statusPath, statusIdentity)
+      // Identity-checked, so a second frizz that has since taken the machine address keeps its own
+      // record and only the process that actually published this one retires it.
+      if (statusIdentity) { try { runtime.removeStatus(serverAddressPath(), statusIdentity) } catch {} }
       // Ownership is always the final resource. A thrown status cleanup leaves this exact fence live.
       delegatedLaunch?.release()
       ownedLaunch?.release()
@@ -885,13 +889,23 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       publisherToken: ctx.bootId,
       ownerToken: effectiveOwnerToken,
     }
-    await phase("status publication", () => runtime.writeStatus(statusPath!, {
-      ...statusIdentity,
-      projectId: project.id,
-      projectDir: project.dir,
-      port,
-      bootId: ctx!.bootId,
-    }))
+    await phase("status publication", () => {
+      const status = {
+        ...statusIdentity!,
+        projectId: project.id,
+        projectDir: project.dir,
+        port,
+        bootId: ctx!.bootId,
+      }
+      runtime.writeStatus(statusPath!, status)
+      // …and the SAME record at the machine's one fixed address. A worker's frizz MCP server re-reads
+      // this on every call, so an "Update & Restart" — which moves the port, and may even move which
+      // project is the launcher — reaches every live detached worker without any of them restarting.
+      // Best-effort: failing to publish an alias must never fail a boot that is otherwise serving.
+      try { runtime.writeStatus(serverAddressPath(), status) } catch (error) {
+        frizzLog.warn("server", `could not publish the machine server address: ${error instanceof Error ? error.message : error}`)
+      }
+    })
     // The launcher owns what the operator sees; this is the control plane's PRIVATE port behind the
     // supervisor proxy, and printing it beside the real one left two addresses on screen with no way
     // to tell which to open. It belongs in the log.

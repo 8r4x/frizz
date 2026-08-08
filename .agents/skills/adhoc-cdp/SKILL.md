@@ -1,6 +1,6 @@
 ---
 name: adhoc-cdp
-description: Ad hoc runtime verification for frizz — boot a fully-ISOLATED disposable stack and drive the REAL app (screenshots, console, network) headless in the background, plus focused real-subsystem harnesses for backend behavior the browser can't reach. Load this when your frizz change is one you need to SEE work before claiming done — a new or restructured surface, anything judged by eye, behavior you can't predict from the code alone, or anything large or uncertain (the worker RUNTIME RELEASE GATE calls for exactly this). A small, certain fix pinned by a test at the right level does not need a stack boot.
+description: Ad hoc runtime verification for frizz — `scripts/adhoc-stack.mjs` boots a fully-ISOLATED disposable stack (real server, sandbox HOME, throwaway port) that you drive headless for screenshots/console/network, with MULTI-PROJECT support and focused real-subsystem harnesses for backend behavior the browser can't reach. LOAD IT BEFORE HAND-ROLLING ANY VERIFICATION HARNESS — the stack, the sandbox HOME, real credentials, extra registered projects and the tenant ids/ports are already flags, and rebuilding them by hand costs a boot cycle per mistake. Reach for it when your change is one you need to SEE work: a new or restructured surface, anything judged by eye, behavior you can't predict from the code alone, anything large or uncertain (the worker RUNTIME RELEASE GATE calls for exactly this), and above all anything touching the SINGLETON — one frizz serving N projects, tenant routing (`/_frizz/<project>/rpc/…`), a project the server did NOT launch from, dispatching a real worker, or the frizz MCP worker tools (`spawn_thread`, `recurring_prompt`, `timer`). A small, certain fix pinned by a test at the right level does not need a stack boot.
 version: 0.1.0
 metadata:
   internal: true
@@ -69,6 +69,53 @@ THAT (`await tag.evaluate((el) => el.remove())`). Never sweep `querySelectorAll(
 content: in dev Vite injects the entire app CSS as a `<style>`, so a predicate like "contains
 `.frizz-todo-row` and `nowrap`" matches the whole stylesheet and deletes it. The page then renders
 unstyled and every geometry assertion after it fails for a reason that has nothing to do with your change.
+
+---
+
+## 1b. TWO projects on one server — the singleton half most bugs hide in
+
+One frizz serves N projects, so "it works" in the LAUNCHING project proves almost nothing about the
+others. A whole class of defect exists only in a *tenant* — a project the server did not launch from —
+because the launcher is the one that gets the `server.lock`, the unprefixed routes and the boot-time
+context. That is exactly where the frizz MCP tools broke (2026-08-08: every worker outside the launching
+project lost `spawn_thread`, `recurring_prompt` and `timer`, because it was reading a lock that only the
+launcher publishes, and POSTing an unprefixed RPC that means "the launching project" by definition).
+
+```bash
+# a launcher + one tenant, with REAL credentials so a dispatched worker can actually start
+nub scripts/adhoc-stack.mjs --port=45571 --project=/abs/launcher --also-project=/abs/tenant --creds \
+  > /tmp/stack.log 2>&1     # Bash run_in_background:true — and never pipe it through head/grep
+# → {"port":45571,"home":"…","launcher":{"id","slug","serverLock"},"tenants":[{"id","slug","dir","stateDir"}]}
+```
+
+Then address a tenant by **id or slug** — both work, and the id is what a worker is stamped with:
+
+```bash
+curl -s -H 'sec-fetch-site: same-origin' "http://127.0.0.1:45571/_frizz/<tenant-id>/rpc/board"
+curl -s -X POST -H 'content-type: application/json' -H 'sec-fetch-site: same-origin' \
+     -d '{"prompt":"…","model":"haiku","effort":"low"}' "http://127.0.0.1:45571/_frizz/<tenant-id>/rpc/dispatch"
+```
+
+The traps, each of which costs a full boot cycle to rediscover:
+
+- **RPC verbs are HTTP verbs.** A `query` is a GET and a `mutation` is a POST; POSTing a query answers
+  `unknown RPC procedure` — which reads exactly like a version mismatch and sends you hunting the wrong bug.
+- **An unprefixed `/_frizz/rpc/…` is the LAUNCHING project**, silently. That is the correct design, and it
+  is why a tenant bug looks like "it worked" — your call landed on the launcher's board. An UNKNOWN project
+  segment 404s instead, which is the safe direction; check for the 404 before assuming your id is wrong.
+- **The broker is the SOLE claude transport.** The tmux/CLI path is retired, so `FRIZZ_CLAUDE_BROKER_BRIDGE=0`
+  does not "fall back" — dispatch fails outright with *"Claude session broker is unavailable"*. You cannot
+  capture a worker's argv with a stub `claude`; to see the env a worker really gets, dispatch a real one and
+  read it off the process table (`ps -Ao pid,command | grep FRIZZ_PROJECT_ID`).
+- **A sandbox HOME has no credentials**, so a real dispatch needs `--creds` (it symlinks `~/.claude*`).
+- **`startServer({port: 0})` does not give you an ephemeral port** — pick a real high port.
+- **Poll with an EARLY EXIT, and always a second one for the failure case.** A loop that only breaks on
+  success burns its entire budget every time the answer is "no" — a 150×2s wait cost five minutes of dead
+  clock on a control run that was *supposed* to fail. Break on the negative signal too (the worker rested,
+  the thread went idle), not just the positive one.
+- **Clean up by exact PID.** A dispatched worker is a DETACHED daemon: it survives the stack it was born in
+  and keeps burning quota. `ps -Ao pid,command | grep <your temp HOME>` → `kill <pid>` each one, then
+  re-check that none survive. Never a broad `pkill -f claude`; other agents are on this machine.
 
 ---
 

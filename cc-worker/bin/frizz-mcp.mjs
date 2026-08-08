@@ -19,10 +19,16 @@
  * satisfies it.
  *
  * Mounted by the server (dispatch.ts) into the Claude backend via `--mcp-config`, and into codex via
- * `-c mcp_servers.frizz` (codex-mcp.ts). Both hand this process the same three env values, built once
- * in frizzMcpEnv: FRIZZ_SERVER_LOCK (the lock this server publishes — the launching project's, the
- * only one written), FRIZZ_PROJECT_ID (whose board we act on, since ONE frizz serves them all) and
- * FRIZZ_STATE_DIR (this project's state dir, and the lock fallback for a one-project server).
+ * `-c mcp_servers.frizz` (codex-mcp.ts). Both hand this process the same env, built once in
+ * frizzMcpEnv: FRIZZ_SERVER_LOCK, FRIZZ_PROJECT_ID and FRIZZ_STATE_DIR.
+ *
+ * BUT NOTHING HERE DEPENDS ON THAT ENV STAYING TRUE. This process lives inside a DETACHED worker
+ * daemon that outlives frizz restart after restart, so anything frozen into it at spawn is a bug
+ * waiting for the next "Update & Restart" to move the port. Both facts we need are therefore resolved
+ * PER CALL, from files: the server's address (serverLockPort — the env hint, then the machine-wide
+ * `<frizz root>/server.lock`, then any live project lock, skipping any whose pid is gone) and our own
+ * project (projectSegment — the stamp, else `.frizz/.id` walked up from our cwd). The env is a hint
+ * that saves a lookup; the filesystem is the truth.
  *
  * Protocol: MCP over stdio = newline-delimited JSON-RPC 2.0. We implement exactly the four methods a
  * client drives (initialize, tools/list, tools/call, ping) plus the initialized notification. Hand-
@@ -31,8 +37,8 @@
  * hand-rolled-RPC aesthetic. The server NEVER crashes on a bad tool call: failures come back as an
  * isError tool result so the worker sees a message instead of a dead tool.
  */
-import { readFileSync } from "node:fs"
-import { join } from "node:path"
+import { readFileSync, readdirSync } from "node:fs"
+import { dirname, join } from "node:path"
 
 const PROTOCOL_FALLBACK = "2025-06-18"
 // Comfortably above a codex dispatch's bounded rollout-discovery wait (~15s) so a legitimate slow
@@ -275,19 +281,86 @@ function replyTool(id, text, isError) {
   reply(id, { content: [{ type: "text", text }], ...(isError ? { isError: true } : {}) })
 }
 
-function serverLockPort() {
-  const lock = process.env.FRIZZ_SERVER_LOCK
-    || (process.env.FRIZZ_STATE_DIR ? join(process.env.FRIZZ_STATE_DIR, "server.lock") : undefined)
-  if (!lock) throw new Error("FRIZZ_STATE_DIR / FRIZZ_SERVER_LOCK not set — cannot locate the frizz server")
-  let parsed
+/**
+ * Whether a pid is running. EPERM means someone else's live process, which is still ALIVE.
+ *
+ * A lock with NO pid reads as alive: absence of evidence is not evidence of death, and discarding a
+ * record written by an older or foreign publisher would turn a working server into "none found".
+ */
+function pidAlive(pid) {
+  if (pid === undefined || pid === null) return true
+  if (!Number.isInteger(pid)) return true
   try {
-    parsed = JSON.parse(readFileSync(lock, "utf8"))
+    process.kill(pid, 0)
+    return true
   } catch (err) {
-    throw new Error(`could not read the frizz server lock at ${lock} (is the server running?): ${err instanceof Error ? err.message : err}`)
+    return err?.code === "EPERM"
   }
-  const port = parsed?.port
-  if (!Number.isInteger(port)) throw new Error(`frizz server lock at ${lock} has no valid port`)
-  return port
+}
+
+/** A lock file's `{port, pid}`, or undefined if it is missing, malformed, or names a DEAD process. */
+function liveLock(path) {
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8"))
+    if (!Number.isInteger(parsed?.port)) return undefined
+    if (!pidAlive(parsed?.pid)) return undefined
+    return { port: parsed.port, path }
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * FIND THE RUNNING FRIZZ — every call, never cached, never frozen at spawn.
+ *
+ * This process is spawned once, inside a DETACHED worker daemon that outlives restart after restart.
+ * An address handed to it in its env is therefore true exactly until the next "Update & Restart", and
+ * a worker whose only address was stale simply lost every frizz tool it had — with no way back short of
+ * restarting the worker itself, which is not what an update button should mean.
+ *
+ * So the env is a HINT and the file is the truth, in this order:
+ *   1. FRIZZ_SERVER_LOCK  — the lock this server published when it spawned us. Right almost always.
+ *   2. `<frizz root>/server.lock` — the MACHINE address (frizz-paths.ts `serverAddressPath`), rewritten
+ *      by every boot whatever project launched it. This is what makes a live worker survive an update.
+ *   3. `<state dir>/server.lock` — our own project's, for a server that only ever serves one project.
+ *   4. any live `<frizz root>/projects/*​/server.lock` — last resort, since one machine runs one frizz.
+ *
+ * A candidate whose PID IS DEAD IS SKIPPED, which is the difference between a legible failure and the
+ * one that cost an afternoon: a stale lock from a long-dead per-project server sent every call at a port
+ * nothing was listening on, and the tool reported only "fetch failed".
+ *
+ * The frizz root is `../..` from the state dir rather than computed: this file is dependency-free and
+ * the real root is platform-dependent (XDG, `~/Library/Application Support`, a legacy `~/.frizz`).
+ */
+function serverLockPort() {
+  const stateDir = process.env.FRIZZ_STATE_DIR
+  const root = stateDir ? dirname(dirname(stateDir)) : undefined
+  const candidates = [
+    process.env.FRIZZ_SERVER_LOCK,
+    root ? join(root, "server.lock") : undefined,
+    stateDir ? join(stateDir, "server.lock") : undefined,
+  ].filter(Boolean)
+  for (const path of candidates) {
+    const live = liveLock(path)
+    if (live) return live.port
+  }
+  // Nothing we were told about is alive. One machine runs one frizz, so any project's live lock names
+  // it — and addressing by project id (rpcPath) means a server that does not serve us answers 404
+  // rather than acting on the wrong board.
+  if (root) {
+    let entries = []
+    try { entries = readdirSync(join(root, "projects")) } catch {}
+    for (const entry of entries) {
+      const live = liveLock(join(root, "projects", entry, "server.lock"))
+      if (live) return live.port
+    }
+  }
+  if (candidates.length === 0) throw new Error("FRIZZ_STATE_DIR / FRIZZ_SERVER_LOCK not set — cannot locate the frizz server")
+  throw new Error(
+    `no running frizz server found (looked at ${candidates.join(", ")} and every project lock under ` +
+    `${root ? join(root, "projects") : "the frizz root"}; each was missing, malformed, or written by a process that is gone). ` +
+    `Is frizz running?`,
+  )
 }
 
 /**
@@ -303,8 +376,34 @@ function serverLockPort() {
  * @param {string} procedure
  */
 function rpcPath(procedure) {
-  const project = process.env.FRIZZ_PROJECT_ID
+  const project = projectSegment()
   return `${project ? `/_frizz/${encodeURIComponent(project)}` : "/_frizz"}/rpc/${procedure}`
+}
+
+/**
+ * WHICH PROJECT WE ACT ON — always the one this worker is actually running in.
+ *
+ * There is deliberately no tool parameter for it and no way to name another project: the id comes from
+ * the server's stamp, or failing that from the tree we are standing in (`<root>/.frizz/.id`, the same
+ * file project-root.ts treats as identity). Spawning a thread onto somebody else's board is therefore
+ * not something a model can express, rather than something it is asked not to do.
+ *
+ * The walk-up is what makes this work for a worker spawned by a server that predates the stamp, and it
+ * is the honest source anyway: a worker's project is wherever its cwd is, and that cannot go stale.
+ */
+function projectSegment() {
+  const stamped = process.env.FRIZZ_PROJECT_ID
+  if (stamped) return stamped
+  let dir = process.cwd()
+  for (;;) {
+    try {
+      const id = readFileSync(join(dir, ".frizz", ".id"), "utf8").trim()
+      if (id) return id
+    } catch {}
+    const parent = dirname(dir)
+    if (parent === dir) return undefined
+    dir = parent
+  }
 }
 
 /** The `spawn_thread` handler: POST /_frizz/rpc/dispatch, return the worker-facing result text.
