@@ -11,7 +11,7 @@
 // row is present: without it the thread is idle, the last row IS the new message, the library follow
 // works on its own, and this harness passes while testing nothing. (It did, before a control run.)
 //
-// Usage — boot a disposable stack first (see .agents/skills/adhoc-cdp), then:
+// Usage — boot a disposable stack first (see .agents/skills/frizz-stack), then:
 //   node scripts/verify-tail-follow.mjs --home=/abs/temp-home --socket=<tmux-socket> --url=http://127.0.0.1:PORT/
 import { execFileSync } from "node:child_process"
 import { mkdirSync, writeFileSync, appendFileSync, globSync } from "node:fs"

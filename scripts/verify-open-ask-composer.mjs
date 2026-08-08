@@ -12,7 +12,7 @@
 //      unanswered, and the card exits through the same dissolve an answer send uses
 //   4. desktop + narrow widths, no console/page errors
 //
-// Seed a stack + an open-ask thread first (see .claude/skills/adhoc-cdp), then:
+// Seed a stack + an open-ask thread first (see .agents/skills/frizz-stack), then:
 //   node scripts/verify-open-ask-composer.mjs --url=http://127.0.0.1:5399 --slug=… [--shots=/tmp/…]
 // The run CONSUMES its seed — step 4's steer is a newer user message, which is exactly what retires the
 // ```question fence — so re-seed a fresh slug for every run rather than re-pointing it at a spent one.

@@ -7,7 +7,7 @@
 // (the shell rows). This is the only state where their shared rhythm is visible, and it is the state
 // the maintainer screenshotted on 2026-07-30 when the agent→shell gap read as a group break.
 //
-// Follows the adhoc-cdp recipe: a session row + a live dummy tmux pane + a JSONL the REAL tailer folds.
+// Follows the frizz-stack recipe: a session row + a live dummy tmux pane + a JSONL the REAL tailer folds.
 //
 // Usage: node scripts/seed-queue-ops-column.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID
 import { execFileSync } from "node:child_process"

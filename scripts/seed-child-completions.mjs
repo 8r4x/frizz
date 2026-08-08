@@ -4,7 +4,7 @@
 // push, real browser. A fixture page proves the components; only this proves the SERVER actually sets
 // `agentCompletion` on the completion copy and not on the launch card.
 //
-// Follows the adhoc-cdp recipe: a session row + a live dummy tmux pane + a JSONL the tailer reads.
+// Follows the frizz-stack recipe: a session row + a live dummy tmux pane + a JSONL the tailer reads.
 //
 // Usage: node scripts/seed-child-completions.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID
 import { execFileSync } from "node:child_process"

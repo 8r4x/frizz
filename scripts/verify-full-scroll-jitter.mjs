@@ -14,7 +14,7 @@
 // and one tracked row must travel by exactly that step every frame. A frame where it travels 0px is a
 // notch the transcript ate.
 //
-// Usage — boot a disposable stack first (see .agents/skills/adhoc-cdp), then:
+// Usage — boot a disposable stack first (see .agents/skills/frizz-stack), then:
 //   node scripts/verify-full-scroll-jitter.mjs --home=… --socket=… --url=… [--steps=200] [--step=40]
 //     [--source=/abs/real.jsonl] [--seed-lines=1200]
 //

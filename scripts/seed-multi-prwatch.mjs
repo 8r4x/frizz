@@ -2,7 +2,7 @@
 // SEVERAL `pr-watch:` lines and a timer backstop. These scheduler instructions must remain parsed and
 // actionable without being echoed as a second imperative after the worker-authored card copy.
 //
-// Follows the adhoc-cdp recipe: a session row + a live dummy tmux pane + a JSONL the REAL tailer reads,
+// Follows the frizz-stack recipe: a session row + a live dummy tmux pane + a JSONL the REAL tailer reads,
 // so the fence is parsed by the production server parser and rendered by the production card — not by a
 // hand-built props fixture.
 //

@@ -10,7 +10,7 @@
 // For each target gap it re-pins to the bottom, wheels up to that gap with real wheel events, lets the
 // reader-gesture window expire, then lands three real appends and reports whether the reader moved.
 //
-// Usage — boot a disposable stack first (see .agents/skills/adhoc-cdp), then:
+// Usage — boot a disposable stack first (see .agents/skills/frizz-stack), then:
 //   node scripts/verify-full-nudge-threshold.mjs --home=… --socket=… --url=… [--gaps=24,48,96,200]
 import { execFileSync } from "node:child_process"
 import { mkdirSync, writeFileSync, appendFileSync, globSync } from "node:fs"

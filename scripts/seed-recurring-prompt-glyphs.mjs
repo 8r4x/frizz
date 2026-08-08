@@ -2,7 +2,7 @@
 // footer trigger in both of its states (armed ⇒ amber, idle ⇒ muted) and both transcript wake dividers
 // (a delivered stop hook, a delivered heartbeat) in one scroll.
 //
-// Follows the adhoc-cdp recipe: a session row + a JSONL the REAL tailer reads, with the delivered text
+// Follows the frizz-stack recipe: a session row + a JSONL the REAL tailer reads, with the delivered text
 // composed by the SAME shared formatters the scheduler uses (`restPromptMessage`/`schedulePromptMessage`) plus
 // the real wake-delivery token — so this exercises the production parse-and-render path rather than a
 // hand-written string that merely looks like one.

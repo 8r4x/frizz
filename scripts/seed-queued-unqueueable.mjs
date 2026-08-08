@@ -9,7 +9,7 @@
 //   · ThreadSlugContext — supplied by the drawer's own ChatView, so open the thread to exercise it.
 //   · backend !== "codex" — the row is a claude row.
 //
-// Follows the adhoc-cdp recipe: a session row + a live dummy tmux pane + a JSONL the tailer reads.
+// Follows the frizz-stack recipe: a session row + a live dummy tmux pane + a JSONL the tailer reads.
 // Usage: node scripts/seed-queued-unqueueable.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID --port=NNNN
 import { execFileSync } from "node:child_process"
 import { globSync, mkdirSync, writeFileSync } from "node:fs"

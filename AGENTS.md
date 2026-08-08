@@ -68,10 +68,18 @@ handoff what you verified and how, so the maintainer can weigh the call. Confide
 asserted: "it should work" is not confidence, a green unit test over a stubbed seam is not either, and
 you never describe something as driven or verified when it was not.
 
-**Load the `adhoc-cdp` skill for how** — the isolated disposable stack, the headless screenshot paths
-(Chrome DevTools MCP preferred, `scripts/shot.mjs` as the reliable background fallback), which states
-and widths to capture, browser process hygiene (one owned instance per task; never a global close or a
-broad `pkill`), and how to embed evidence so frizz renders it inline.
+**Load the skill that matches what you need**, and compose them — they were one 300-line skill until
+2026-08-08, which meant a backend fix had to read the browser rules and a CSS tweak had to read the
+stack rules:
+
+- **`frizz-stack`** — boot a real, fully-isolated disposable Frizz (`scripts/adhoc-stack.mjs`), including
+  the multi-project/tenant case, and seed real state through its own RPC surface.
+- **`headless-browser`** — take the shot without putting a window on the maintainer's screen
+  (`scripts/shot.mjs` is the DEFAULT; Chrome DevTools MCP second, and only because this repo forces it
+  headless), which states and widths to capture, browser process hygiene (one owned instance per task;
+  never a global close or a broad `pkill`), and how to embed evidence so Frizz renders it inline.
+- **`real-subsystem-harness`** — for behavior no browser can reach: the broker socket, a pty, spawn/exec
+  paths, migrations, a detached daemon's environment. Real resource, real function, negative control.
 
 # Visual alignment is the implementer's job, not a review someone else does
 
@@ -160,7 +168,9 @@ discovers — never a per-agent fork. Skills live canonically in `.agents/skills
 discovers this path natively); `.claude/skills/<name>` is a relative symlink into that canonical copy
 so Claude Code discovers the identical content. When adding a skill, create it under
 `.agents/skills/` and add the symlink; verified end-to-end 2026-07-21 with `adhoc-cdp` (Claude lists
-it through the symlink, `codex exec` resolves it at `.agents/skills/adhoc-cdp/SKILL.md`). Shared
+it through the symlink, `codex exec` resolves it at `.agents/skills/<name>/SKILL.md`) — that skill has
+since been split into `frizz-stack` / `headless-browser` / `real-subsystem-harness`, which is also the
+shape to copy: **one skill, one job**, cross-linked, rather than a single file every caller must skim. Shared
 tooling scripts follow the same rule: one copy in an agent-neutral location (e.g. `scripts/`),
 referenced from skills — never duplicated into agent-specific config trees.
 

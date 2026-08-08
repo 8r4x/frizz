@@ -1,4 +1,4 @@
-// Real-subsystem harness for the orphan reaper (frizz:adhoc-cdp §3). Unit tests drive the pure logic
+// Real-subsystem harness for the orphan reaper (the real-subsystem-harness skill). Unit tests drive the pure logic
 // with a FAKE ps; this drives the REAL `ps -axo` + `ps -Eww` env read and a REAL SIGKILL against
 // REAL processes, with a NEGATIVE CONTROL (a live-slug root + its aux that MUST survive). Mocks
 // prove nothing about whether macOS ps actually surfaces FRIZZ_THREAD from the environment.

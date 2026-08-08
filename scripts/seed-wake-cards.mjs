@@ -2,7 +2,7 @@
 // so the first-party wake card can be judged in the REAL app across all its branches — not just the
 // burst shape a live poll happens to produce.
 //
-// Follows the adhoc-cdp recipe: a session row + a live dummy tmux pane + a JSONL the REAL tailer reads.
+// Follows the frizz-stack recipe: a session row + a live dummy tmux pane + a JSONL the REAL tailer reads.
 // The delivered text is composed by the SAME shared formatter the scheduler uses, and carries the real
 // wake-delivery token, so these exercise the production render path rather than a hand-written string.
 //

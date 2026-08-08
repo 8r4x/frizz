@@ -22,7 +22,7 @@
 // So the dequeue case ASSERTS the pin re-expanded. If that assertion stops holding, the case is no
 // longer exercising the bug and must be re-seeded rather than trusted.
 //
-// Usage — boot a disposable stack first (see .agents/skills/adhoc-cdp), then:
+// Usage — boot a disposable stack first (see .agents/skills/frizz-stack), then:
 //   node scripts/verify-midscroll-stability.mjs --home=/abs/temp-home --socket=<tmux-socket> --url=http://127.0.0.1:PORT/
 import { execFileSync } from "node:child_process"
 import { mkdirSync, writeFileSync, appendFileSync, globSync } from "node:fs"

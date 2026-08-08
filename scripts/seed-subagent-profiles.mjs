@@ -3,7 +3,7 @@
 // judged in the REAL app — driven by the REAL tailer off a real transcript, not by a fixture that hands
 // the store a hand-written `subagentType`.
 //
-// Follows the adhoc-cdp recipe: a session row + a live dummy tmux pane + a JSONL the tailer reads.
+// Follows the frizz-stack recipe: a session row + a live dummy tmux pane + a JSONL the tailer reads.
 // Nothing here writes board state directly; the Agent tool_use records drive it.
 //
 // Usage: node scripts/seed-subagent-profiles.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID

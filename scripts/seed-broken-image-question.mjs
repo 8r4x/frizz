@@ -6,7 +6,7 @@
 // Enough filler turns are seeded ahead of it that the transcript is genuinely virtualized, so the row
 // measurement feedback path is the real one and not an artifact of a two-message thread.
 //
-// Follows the adhoc-cdp recipe: a session row + a live dummy tmux pane + a JSONL the REAL tailer reads.
+// Follows the frizz-stack recipe: a session row + a live dummy tmux pane + a JSONL the REAL tailer reads.
 //
 // Usage: node scripts/seed-broken-image-question.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID
 import { execFileSync } from "node:child_process"

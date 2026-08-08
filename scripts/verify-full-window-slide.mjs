@@ -10,7 +10,7 @@
 //
 // Every earlier harness seeded a transcript comfortably UNDER 300 messages, so none of them ever ran it.
 //
-// Usage — boot a disposable stack first (see .agents/skills/adhoc-cdp), then:
+// Usage — boot a disposable stack first (see .agents/skills/frizz-stack), then:
 //   node scripts/verify-full-window-slide.mjs --home=… --socket=… --url=… [--park=900] [--appends=25]
 import { execFileSync } from "node:child_process"
 import { mkdirSync, writeFileSync, appendFileSync, globSync } from "node:fs"

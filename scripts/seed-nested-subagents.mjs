@@ -13,7 +13,7 @@
 //       great-gr.   "Diff the two key shapes"    toolu_n3 / agent-nC   depth 3  (parent nB)
 //   child       "Sweep every call site"         toolu_n4 / agent-nD   depth 1  (no children)
 //
-// Follows the adhoc-cdp recipe: a session row + a live dummy tmux pane + a JSONL the REAL tailer folds.
+// Follows the frizz-stack recipe: a session row + a live dummy tmux pane + a JSONL the REAL tailer folds.
 //
 // Usage: node scripts/seed-nested-subagents.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID
 import { execFileSync } from "node:child_process"

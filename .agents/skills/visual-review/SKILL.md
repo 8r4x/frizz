@@ -5,7 +5,7 @@ description: >-
   optical centering, spacing balance, occlusion and clipping — by MEASURING glyph ink in the running
   browser and by critically reading your own screenshots. Invoke (via the Skill tool) before declaring
   ANY new or changed UI correct, and specifically whenever you place an icon, glyph, emoji, badge,
-  chip, or counter next to text. Pairs with `adhoc-cdp`, which covers how to boot the stack and take
+  chip, or counter next to text. Pairs with `headless-browser`, which covers how to take
   the shot; this skill covers how to JUDGE what the shot shows and how to fix what is off. Carries the
   ink-measurement routine, the per-glyph offsets it produced, and the instrument bug that makes a
   naive baseline probe report ~3x the real error.

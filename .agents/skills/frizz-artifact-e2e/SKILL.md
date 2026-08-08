@@ -1,6 +1,6 @@
 ---
 name: frizz-artifact-e2e
-description: End-to-end verification of a frizz change on a REAL PROMOTED ARTIFACT (not dev source), driven in a real browser. Use this whenever a change could behave differently in a promoted build than in the dev stack — anything touching packaging/bundling, detached daemons (codex app-server, the Claude broker), spawn/exec paths, worker-environment resolution, or "it works in `adhoc-cdp` but does it ship?" The `adhoc-cdp` skill runs `startServer({dev:true})` = SOURCE and will pass while the promoted artifact is broken. This skill launches the actual artifact. Do this before claiming a dispatch/runtime change is done.
+description: End-to-end verification of a frizz change on a REAL PROMOTED ARTIFACT (not dev source), driven in a real browser. Use this whenever a change could behave differently in a promoted build than in the dev stack — anything touching packaging/bundling, detached daemons (codex app-server, the Claude broker), spawn/exec paths, worker-environment resolution, or "it works on the dev stack but does it ship?" The `frizz-stack` skill runs `startServer({dev:true})` = SOURCE and will pass while the promoted artifact is broken. This skill launches the actual artifact. Do this before claiming a dispatch/runtime change is done.
 version: 0.1.0
 metadata:
   internal: true
@@ -9,8 +9,8 @@ metadata:
 # frizz-artifact-e2e — verify on the promoted artifact, not the dev stack
 
 Frizz serves a PROMOTED ARTIFACT from `~/.frizz/builds/<digest>/runtime/`, never the source checkout
-(see the `frizz-servers-run-promoted-artifacts` memory). The `adhoc-cdp` isolated stack runs
-`startServer({dev:true})` — SOURCE. So a green `adhoc-cdp` proves the dev path, NOT the shipped build:
+(see the `frizz-servers-run-promoted-artifacts` memory). The `frizz-stack` isolated stack runs
+`startServer({dev:true})` — SOURCE. So a green `frizz-stack` run proves the dev path, NOT the shipped build:
 bundling, detached-daemon emission (`build-runtime.mjs` writes each `DETACHED_DAEMON_ENTRIES` file beside
 `index.js`), and executable/PATH resolution all differ. A real regression class (e.g. the Claude broker's
 daemon needing an ABSOLUTE claude path — a bare `"claude"` crashes it before it publishes its record, so

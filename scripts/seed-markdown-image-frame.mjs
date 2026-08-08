@@ -13,7 +13,7 @@
 // running it here rather than in a fixture, where an <img> load bypasses the stubbed fetch and every
 // picture silently falls back to its path.
 //
-// Follows the adhoc-cdp recipe: a session row + a JSONL the REAL tailer reads.
+// Follows the frizz-stack recipe: a session row + a JSONL the REAL tailer reads.
 //
 // Usage: nub scripts/seed-markdown-image-frame.mjs --home=/abs/temp-home --shot=/abs/real.png [--slug=x]
 import { execFileSync } from "node:child_process"

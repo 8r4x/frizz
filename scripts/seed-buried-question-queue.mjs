@@ -14,7 +14,7 @@
 //                 own "Send answers" action is down until a chip is filled — but the ask itself, once
 //                 "Load earlier messages" brings it back, still takes chips.
 //
-// Follows the adhoc-cdp recipe: a session row + a live dummy tmux pane + a JSONL the REAL tailer reads.
+// Follows the frizz-stack recipe: a session row + a live dummy tmux pane + a JSONL the REAL tailer reads.
 // Nothing writes board state directly; the transcript records drive it.
 //
 // Usage: node scripts/seed-buried-question-queue.mjs <home> <socket> <projectDir>

@@ -6,7 +6,7 @@
 //   · a LEGACY ```question approval danger block (degrades to a danger-styled two-option card),
 //   · a freetext-only question (no options) — the box that has to take newlines.
 //
-// Follows the adhoc-cdp recipe: a session row + a live dummy tmux pane + a JSONL the REAL tailer reads.
+// Follows the frizz-stack recipe: a session row + a live dummy tmux pane + a JSONL the REAL tailer reads.
 // Nothing writes board state directly; the transcript records drive it.
 //
 // Usage: node scripts/seed-question-cards.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID

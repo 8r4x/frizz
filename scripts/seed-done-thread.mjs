@@ -12,7 +12,7 @@
 // the only writer of state='archived' in production, and using it keeps the fixture honest about the
 // board refresh + SSE delta that follow it.
 //
-// Follows the adhoc-cdp recipe: a session row + a live dummy tmux pane + a JSONL the tailer reads.
+// Follows the frizz-stack recipe: a session row + a live dummy tmux pane + a JSONL the tailer reads.
 // Usage: node scripts/seed-done-thread.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID --port=NNNN
 import { execFileSync } from "node:child_process"
 import { globSync, mkdirSync, writeFileSync } from "node:fs"

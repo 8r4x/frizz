@@ -11,7 +11,7 @@
 //
 // It is a DIAGNOSTIC first: it names the exact record that moved the reader, so a fix has a target.
 //
-// Usage — boot a disposable stack first (see .agents/skills/adhoc-cdp), then:
+// Usage — boot a disposable stack first (see .agents/skills/frizz-stack), then:
 //   node scripts/verify-full-replay-stability.mjs --home=/abs/temp-home --socket=<tmux-socket> \
 //     --url=http://127.0.0.1:PORT/ --source=/abs/real.jsonl [--park=800] [--replay=200] [--seed-lines=600]
 import { execFileSync } from "node:child_process"

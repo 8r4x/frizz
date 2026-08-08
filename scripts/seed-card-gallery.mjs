@@ -2,7 +2,7 @@
 // shape — a ```done fence, an ```awaiting fence (timer + pr-watch), and a ```question block — so the
 // card chrome can be judged in the REAL app (queue + thread drawer), not only in a fixture page.
 //
-// Follows the adhoc-cdp recipe: a session row + a live dummy tmux pane + a JSONL the REAL tailer
+// Follows the frizz-stack recipe: a session row + a live dummy tmux pane + a JSONL the REAL tailer
 // reads. Nothing here writes board state directly; the transcript records drive it.
 //
 // Usage: node scripts/seed-card-gallery.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID

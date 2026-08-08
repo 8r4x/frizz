@@ -13,7 +13,7 @@
 //   context-high  — 87% full  (nearly all the way round)
 //   context-none  — a claude row with a numerator and NO window ⇒ must render NOTHING, not an empty ring
 //
-// Follows the adhoc-cdp recipe: a session row + a live dummy tmux pane + a transcript the tailer reads.
+// Follows the frizz-stack recipe: a session row + a live dummy tmux pane + a transcript the tailer reads.
 // Usage: node scripts/seed-context-meter.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID
 import { execFileSync } from "node:child_process"
 import { globSync, mkdirSync, writeFileSync } from "node:fs"

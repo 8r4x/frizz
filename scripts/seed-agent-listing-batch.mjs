@@ -7,7 +7,7 @@
 // real tailer → projection → push → `/thread/<slug>` render, which is the only way to see the run
 // splitting (ChatView is not unit-renderable and `*-fixture.html` is not servable through the stack).
 //
-// Follows the adhoc-cdp recipe: a session row + a live dummy tmux pane + a transcript the tailer reads.
+// Follows the frizz-stack recipe: a session row + a live dummy tmux pane + a transcript the tailer reads.
 // Usage: node scripts/seed-agent-listing-batch.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID
 import { execFileSync } from "node:child_process"
 import { globSync, mkdirSync, writeFileSync } from "node:fs"

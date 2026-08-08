@@ -17,7 +17,7 @@
 // Two surfaces, one per --surface: the QUEUE card (its own card-level Send) and the thread DRAWER
 // (the per-message [data-send-answers] button). They run the same block through different controllers.
 //
-// Seed a stack + question threads first (scripts/seed-question-cards.mjs, see .claude/skills/adhoc-cdp):
+// Seed a stack + question threads first (scripts/seed-question-cards.mjs, see .agents/skills/frizz-stack):
 //   node scripts/verify-question-answer.mjs --url=http://127.0.0.1:4930 --slug=q-legacy-approval
 //   node scripts/verify-question-answer.mjs --url=… --slug=q-legacy-danger --mode=chip
 import puppeteer from "puppeteer"

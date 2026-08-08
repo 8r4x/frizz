@@ -13,7 +13,7 @@
 // It measures what the READER perceives — the viewport-relative Y of a named row on screen — not
 // scrollTop, which a virtualizer legitimately moves to hold rows still.
 //
-// Usage — boot a disposable stack first (see .agents/skills/adhoc-cdp), then:
+// Usage — boot a disposable stack first (see .agents/skills/frizz-stack), then:
 //   node scripts/verify-full-append-stability.mjs --home=/abs/temp-home --socket=<tmux-socket> --url=http://127.0.0.1:PORT/
 import { execFileSync } from "node:child_process"
 import { mkdirSync, writeFileSync, appendFileSync, globSync } from "node:fs"
