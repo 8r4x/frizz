@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ChatMessage } from "./hooks.ts"
 import { Message, VSpace, WorkingIndicator, withMessageSpacers } from "./components/ChatView.tsx"
-import { coalesceToolActivityMessages, historicalToolActivityMessages, liveToolActivityRun, liveToolActivityTail, toolActivityLabel } from "./lib/toolActivity.ts"
+import { coalesceToolActivityMessages, historicalToolActivityMessages, liveRuntimeStartedAt, liveToolActivityRun, liveToolActivityTail, toolActivityLabel } from "./lib/toolActivity.ts"
 import "./styles.css"
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -16,9 +16,16 @@ const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false 
 document.documentElement.dataset.font =
   new URLSearchParams(location.search).get("font") === "sans" ? "sans" : "mono"
 
-function callMessage(sourceId: string, tools: ChatMessage["tools"]): ChatMessage {
-  return { sourceId, role: "assistant", text: "", tools, parts: [{ kind: "tools", tools }] }
+function callMessage(sourceId: string, tools: ChatMessage["tools"], at?: string): ChatMessage {
+  return { sourceId, role: "assistant", text: "", tools, at, parts: [{ kind: "tools", tools }] }
 }
+
+// The live steps carry REAL instants so the runtime clock is exercised, not just the label. The turn
+// opened two hours before the run did: the slot must read the RUN (see lib/toolActivity.liveRuntimeStartedAt).
+const AGO = (seconds: number) => new Date(Date.now() - seconds * 1000).toISOString()
+const TURN_STARTED_AT = AGO(2 * 60 * 60)
+const FIRST_BATCH_AT = AGO(41)
+const SECOND_BATCH_AT = AGO(8)
 
 const settledMessages = [
   callMessage("settled-1", [
@@ -63,8 +70,9 @@ const FIXTURE_PROJECT_DIR = "/Users/fixture/Documents/projects/frizz"
 
 function Transcript({ messages, running = false }: { messages: ChatMessage[]; running?: boolean }) {
   const coalesced = useMemo(() => coalesceToolActivityMessages(messages), [messages])
-  const liveTool = running ? liveToolActivityTail(coalesced.map((entry) => entry.message)) : undefined
-  const liveRun = running ? liveToolActivityRun(coalesced.map((entry) => entry.message)) : undefined
+  const liveTool = running ? liveToolActivityTail(coalesced) : undefined
+  const liveRun = running ? liveToolActivityRun(coalesced) : undefined
+  const liveRuntimeStart = running ? liveRuntimeStartedAt(coalesced) : undefined
   const activityLabel = liveTool ? toolActivityLabel(liveTool, FIXTURE_PROJECT_DIR) : undefined
   const display = useMemo(
     () => running ? historicalToolActivityMessages(coalesced) : coalesced,
@@ -76,7 +84,7 @@ function Transcript({ messages, running = false }: { messages: ChatMessage[]; ru
       {running && (
         <>
           {messages.length > 0 && <VSpace />}
-          <WorkingIndicator activityLabel={activityLabel} run={liveRun} />
+          <WorkingIndicator since={TURN_STARTED_AT} startedAt={liveRuntimeStart} activityLabel={activityLabel} run={liveRun} />
         </>
       )}
     </div>
@@ -91,6 +99,8 @@ function Transcript({ messages, running = false }: { messages: ChatMessage[]; ru
 // Step 1's path is ABSOLUTE, exactly as a provider reports it: the shimmer must show it
 // project-relative. The count is the LIVE RUN's, so it climbs 1 → 2 across the two landed calls and
 // would reset if prose closed the run — which is correct, since a closed run states itself as a digest.
+// The CLOCK is the same run's: every step reads ~41s and up from FIRST_BATCH_AT, never the two hours
+// since TURN_STARTED_AT, and it does not restart when the second batch lands.
 const edit = (status: "pending" | "completed") => ({
   name: "Edit",
   detail: `${FIXTURE_PROJECT_DIR}/ui/packages/web/src/components/ChatView.tsx`,
@@ -99,15 +109,15 @@ const edit = (status: "pending" | "completed") => ({
 const grep = (status: "pending" | "completed") => ({ name: "Grep", detail: "minimal renderer", status })
 
 const LIVE_STEPS: { note: string; messages: ChatMessage[] }[] = [
-  { note: "a call is executing — its gerund owns the slot", messages: [callMessage("live-1", [edit("pending")])] },
-  { note: "its result landed — the gap states the run so far", messages: [callMessage("live-1", [edit("completed")])] },
+  { note: "a call is executing — its gerund owns the slot", messages: [callMessage("live-1", [edit("pending")], FIRST_BATCH_AT)] },
+  { note: "its result landed — the gap states the run so far", messages: [callMessage("live-1", [edit("completed")], FIRST_BATCH_AT)] },
   {
     note: "the next call starts — its own description replaces the count",
-    messages: [callMessage("live-1", [edit("completed")]), callMessage("live-2", [grep("pending")])],
+    messages: [callMessage("live-1", [edit("completed")], FIRST_BATCH_AT), callMessage("live-2", [grep("pending")], SECOND_BATCH_AT)],
   },
   {
     note: "…and lands: the same reading, one call higher",
-    messages: [callMessage("live-1", [edit("completed")]), callMessage("live-2", [grep("completed")])],
+    messages: [callMessage("live-1", [edit("completed")], FIRST_BATCH_AT), callMessage("live-2", [grep("completed")], SECOND_BATCH_AT)],
   },
 ]
 

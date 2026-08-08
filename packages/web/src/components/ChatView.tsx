@@ -77,7 +77,7 @@ import { PROVIDER_LABEL } from "../lib/signIn.ts"
 import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
 import { prependEarlierPage } from "../lib/transcriptPagination.ts"
 import { buildVirtualTranscriptMessageRows, earlierLoadGate, nextTailFollow, TAIL_FOLLOW_PX, USER_TAIL_EXTRA, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
-import { coalesceToolActivityMessages, editedFileCount, historicalToolActivityMessages, isToolActivityException, liveToolActivityRun, liveToolActivityTail, settledToolActivityLabel, thinkingToolActivityLabel, toolActivityLabel } from "../lib/toolActivity.ts"
+import { coalesceToolActivityMessages, editedFileCount, historicalToolActivityMessages, isToolActivityException, liveRuntimeStartedAt, liveToolActivityRun, liveToolActivityTail, settledToolActivityLabel, thinkingToolActivityLabel, toolActivityLabel } from "../lib/toolActivity.ts"
 import { CodexDirectiveCard, MermaidDiagram } from "./CodexRichOutput.tsx"
 
 // Answer types moved to lib/questionBlocks.ts (shared by the queue card, the thread view, and the
@@ -228,13 +228,11 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   const coalescedActivityMessages = useMemo(() => coalesceToolActivityMessages(presentationMessages), [presentationMessages])
   // The run the shimmer stands for, and its newest call (the one it NAMES). The run is what expanding
   // the shimmer opens — the same calls history is withholding.
-  const liveToolRun = running
-    ? liveToolActivityRun(coalescedActivityMessages.map((entry) => entry.message))
-    : undefined
-  const liveToolActivity = running
-    ? liveToolActivityTail(coalescedActivityMessages.map((entry) => entry.message))
-    : undefined
+  const liveToolRun = running ? liveToolActivityRun(coalescedActivityMessages) : undefined
+  const liveToolActivity = running ? liveToolActivityTail(coalescedActivityMessages) : undefined
   const liveActivityLabel = liveToolActivity ? toolActivityLabel(liveToolActivity, board?.projectDir) : undefined
+  // What the runtime slot's clock counts from — this stretch of work, not the turn. See liveRuntimeStartedAt.
+  const liveRuntimeStart = running ? liveRuntimeStartedAt(coalescedActivityMessages) : undefined
   // A live tool run belongs in the existing bottom runtime slot, never in transcript history. Once
   // it settles, the whole coalesced run returns as one `Ran N tool calls` disclosure.
   const activityMessages = useMemo(
@@ -497,7 +495,7 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
             ) : thread?.runtime === "perm-prompt" ? (
               <PermPromptBanner onTerminal={copyTerminalCommand} />
             ) : showWorking ? (
-              <WorkingIndicator since={thread?.lastUserAt} activityLabel={liveActivityLabel} run={liveToolRun} />
+              <WorkingIndicator since={thread?.lastUserAt} startedAt={liveRuntimeStart} activityLabel={liveActivityLabel} run={liveToolRun} />
             ) : thread?.awaitingBackground ? (
               // The rest itself, stated. Last in the chain because every branch above is a HARDER
               // reading of the same slot; this one is the benign case and never outranks them. It can
@@ -651,13 +649,10 @@ function VirtualizedThreadTranscript({
   const projectDir = useProjectDir()
   const coalescedActivityMessages = useMemo(() => coalesceToolActivityMessages(messages), [messages])
   // See the drawer's copy above: the run backs the shimmer's expansion, its newest call names it.
-  const liveToolRun = running
-    ? liveToolActivityRun(coalescedActivityMessages.map((entry) => entry.message))
-    : undefined
-  const liveToolActivity = running
-    ? liveToolActivityTail(coalescedActivityMessages.map((entry) => entry.message))
-    : undefined
+  const liveToolRun = running ? liveToolActivityRun(coalescedActivityMessages) : undefined
+  const liveToolActivity = running ? liveToolActivityTail(coalescedActivityMessages) : undefined
   const liveActivityLabel = liveToolActivity ? toolActivityLabel(liveToolActivity, projectDir) : undefined
+  const liveRuntimeStart = running ? liveRuntimeStartedAt(coalescedActivityMessages) : undefined
   const activityMessages = useMemo(
     () => running ? historicalToolActivityMessages(coalescedActivityMessages) : coalescedActivityMessages,
     [coalescedActivityMessages, running],
@@ -1245,7 +1240,7 @@ function VirtualizedThreadTranscript({
                 ) : thread?.runtime === "perm-prompt" ? (
                   <PermPromptBanner onTerminal={copyTerminalCommand} />
                 ) : showWorking ? (
-                  <WorkingIndicator since={thread?.lastUserAt} activityLabel={liveActivityLabel} run={liveToolRun} />
+                  <WorkingIndicator since={thread?.lastUserAt} startedAt={liveRuntimeStart} activityLabel={liveActivityLabel} run={liveToolRun} />
                 ) : thread?.awaitingBackground ? (
                   // See the non-virtualized chain above: last branch, benign case, no Snooze here.
                   <AwaitingBackgroundCard thread={thread} />
@@ -4185,9 +4180,10 @@ function Dots() {
 }
 
 // The turn-in-flight banner: the latest tool's gerund replaces "Thinking…" in THIS same bottom slot
-// and THIS same shimmer span. The baseline is the last real user interaction (server-derived, so it
-// reads as true turn duration and survives reloads); a thread with no usable timestamp falls back to
-// mount time. Ticks once a second — cheap, and unmounts with the banner.
+// and THIS same shimmer span. The baseline is `startedAt` — the start of the STRETCH this row is
+// reporting (lib/toolActivity.liveRuntimeStartedAt), server-derived so it survives reloads — with
+// `since` (the last real user interaction) as the fallback and mount time behind that. Ticks once a
+// second — cheap, and unmounts with the banner.
 //
 // The generic reading is "Thinking…", not "Working…". It shows exactly when the turn is running and
 // liveToolActivityTail names nothing — the model is generating and no tool is executing: the opening of
@@ -4207,12 +4203,21 @@ function Dots() {
 // minutes rather than one that has just done twenty-three things (maintainer 2026-08-08). So the slot
 // alternates `Ran 23 tool calls. Thinking…` → the next call's gerund → `Ran 24 tool calls. Thinking…`,
 // and the count ticking up is the progress signal. See lib/toolActivity.thinkingToolActivityLabel; the
-// number is `total`, the same run this row expands onto and the same one its digest will state.
-export function WorkingIndicator({ since, activityLabel, run }: { since?: string; activityLabel?: string; run?: { tools: readonly TranscriptToolCall[]; at?: string } }) {
-  const [baseline] = useState(() => {
-    const t = Date.parse(since ?? "")
-    return Number.isFinite(t) && t <= Date.now() ? t : Date.now()
-  })
+// number is `total`, the same run this row expands onto and the same one its digest will state — and,
+// since the clock moved off the turn, the same run the clock beside it is timing.
+export function WorkingIndicator({ since, startedAt, activityLabel, run }: { since?: string; startedAt?: string; activityLabel?: string; run?: { tools: readonly TranscriptToolCall[]; at?: string } }) {
+  // The clock counts the STRETCH this row is reporting (lib/toolActivity.liveRuntimeStartedAt), not the
+  // turn — so it re-baselines every time the run it stands for changes, and `since` is only the fallback
+  // for a transcript that carries no usable instant at all. It used to latch the turn's start at mount,
+  // which is how `Ran 3 tool calls` came to sit beside a two-hour reading.
+  const [mountedAt] = useState(() => Date.now())
+  const baseline = useMemo(() => {
+    for (const at of [startedAt, since]) {
+      const t = Date.parse(at ?? "")
+      if (Number.isFinite(t) && t <= Date.now()) return t
+    }
+    return mountedAt
+  }, [startedAt, since, mountedAt])
   const [now, setNow] = useState(() => Date.now())
   const [expanded, setExpanded] = useState(false)
   const cardsId = useId()

@@ -7,6 +7,7 @@ import {
   currentToolActivity,
   historicalToolActivityMessages,
   isToolActivityException,
+  liveRuntimeStartedAt,
   liveToolActivityRun,
   liveToolActivityTail,
   editedFileCount,
@@ -211,7 +212,7 @@ test("the runtime gerund ends with its call; only the digest stays hidden across
   }
 
   const compact = coalesceToolActivityMessages([settled, pending, queued])
-  assert.equal(liveToolActivityTail(compact.map((entry) => entry.message)), pending.tools[0])
+  assert.equal(liveToolActivityTail(compact), pending.tools[0])
   const liveHistory = historicalToolActivityMessages(compact)
   assert.deepEqual(liveHistory.map((entry) => entry.message.sourceId), ["queued"])
   assert.equal(
@@ -223,7 +224,7 @@ test("the runtime gerund ends with its call; only the digest stays hidden across
   pending.tools[0].status = "completed"
   const completed = coalesceToolActivityMessages([settled, pending])
   assert.equal(
-    liveToolActivityTail(completed.map((entry) => entry.message)),
+    liveToolActivityTail(completed),
     undefined,
     "with the last result landed nothing is executing — the slot reverts to the generic Thinking reading",
   )
@@ -247,7 +248,7 @@ test("expanding the shimmer opens exactly the run history is withholding, gap in
 
   const compact = coalesceToolActivityMessages([settled, pending])
   assert.deepEqual(
-    liveToolActivityRun(compact.map((entry) => entry.message)),
+    liveToolActivityRun(compact),
     { tools: [first, second], at: "2026-07-30T12:00:02.000Z" },
     "the whole coalesced run backs the disclosure, not just the call the shimmer names — and the newest batch's clock rides with it, so an expanded pending card times itself",
   )
@@ -256,9 +257,9 @@ test("expanding the shimmer opens exactly the run history is withholding, gap in
   // an expanded panel must keep showing it rather than emptying and refilling on the next call.
   second.status = "completed"
   const idle = coalesceToolActivityMessages([settled, pending])
-  assert.equal(liveToolActivityTail(idle.map((entry) => entry.message)), undefined)
+  assert.equal(liveToolActivityTail(idle), undefined)
   assert.deepEqual(
-    liveToolActivityRun(idle.map((entry) => entry.message))?.tools,
+    liveToolActivityRun(idle)?.tools,
     [first, second],
     "a settled-but-still-hidden run stays open across the gap",
   )
@@ -273,9 +274,56 @@ test("expanding the shimmer opens exactly the run history is withholding, gap in
     parts: [{ kind: "text", text: "Found it." }],
   }
   assert.equal(
-    liveToolActivityRun(coalesceToolActivityMessages([settled, pending, prose]).map((entry) => entry.message)),
+    liveToolActivityRun(coalesceToolActivityMessages([settled, pending, prose])),
     undefined,
   )
+})
+
+test("the runtime clock counts the live stretch, not the turn", () => {
+  const first = tool("Read", { detail: "src/a.ts", status: "completed" })
+  const second = tool("Grep", { detail: "renderActivity", status: "pending" })
+  const settled = toolMessage("batch-a", [first])
+  const pending = toolMessage("batch-b", [second], "2026-07-30T12:00:02.000Z")
+
+  // The run opened at batch-a. `at` walks forward to batch-b so a pending card times itself against the
+  // call it represents — the clock must NOT walk with it, or the count and the clock stop describing
+  // the same run.
+  const compact = coalesceToolActivityMessages([settled, pending])
+  assert.equal(compact[0].runStartedAt, "2026-07-30T12:00:00.000Z")
+  assert.equal(compact[0].message.at, "2026-07-30T12:00:02.000Z")
+  assert.equal(liveRuntimeStartedAt(compact), "2026-07-30T12:00:00.000Z")
+
+  // The inter-call gap is the same stretch: `Ran 2 tool calls. Thinking…` keeps the run's own clock.
+  second.status = "completed"
+  assert.equal(
+    liveRuntimeStartedAt(coalesceToolActivityMessages([settled, pending])),
+    "2026-07-30T12:00:00.000Z",
+  )
+
+  // Prose ends the run and opens a fresh stretch — the model is now reasoning past what it just wrote,
+  // so the clock re-bases on that block rather than falling back to the turn's start.
+  const prose: ChatMessage = {
+    sourceId: "prose",
+    role: "assistant",
+    text: "Found it.",
+    tools: [],
+    parts: [{ kind: "text", text: "Found it." }],
+    at: "2026-07-30T12:00:09.000Z",
+  }
+  assert.equal(
+    liveRuntimeStartedAt(coalesceToolActivityMessages([settled, pending, prose])),
+    "2026-07-30T12:00:09.000Z",
+  )
+
+  // A queued steer is pinned to the bottom of the pane, not drawn inline — it interrupts nothing, so it
+  // must not become the stretch the clock times.
+  const queued: ChatMessage = { sourceId: "steer", role: "user", text: "also check the tests", tools: [], queued: true, at: "2026-07-30T12:00:11.000Z" }
+  assert.equal(
+    liveRuntimeStartedAt(coalesceToolActivityMessages([settled, pending, queued])),
+    "2026-07-30T12:00:00.000Z",
+  )
+
+  assert.equal(liveRuntimeStartedAt([]), undefined)
 })
 
 test("a live tool tail is removed without hiding the prose that introduced it", () => {
@@ -293,7 +341,7 @@ test("a live tool tail is removed without hiding the prose that introduced it", 
 
   const compact = coalesceToolActivityMessages([lead])
   const liveHistory = historicalToolActivityMessages(compact)
-  assert.equal(liveToolActivityTail(compact.map((entry) => entry.message)), pending)
+  assert.equal(liveToolActivityTail(compact), pending)
   assert.equal(liveHistory.length, 1)
   assert.equal(liveHistory[0].message.text, "I found the renderer.")
   assert.deepEqual(liveHistory[0].message.tools, [])
@@ -393,20 +441,20 @@ test("the newest call drives the live gerund even when an earlier call remains p
   const earlier = tool("Read", { detail: "src/old.ts", status: "pending" })
   const newest = tool("Bash", { desc: "Inspect PR review state and comments", status: "completed" })
   const compact = coalesceToolActivityMessages([toolMessage("parallel", [earlier, newest])])
-  assert.equal(liveToolActivityTail(compact.map((entry) => entry.message)), newest)
+  assert.equal(liveToolActivityTail(compact), newest)
   assert.equal(toolActivityLabel(newest), "Inspecting PR review state and comments")
 
   // …and when that straggler lands too, nothing in the batch is executing any more.
   earlier.status = "completed"
   const drained = coalesceToolActivityMessages([toolMessage("parallel", [earlier, newest])])
-  assert.equal(liveToolActivityTail(drained.map((entry) => entry.message)), undefined)
+  assert.equal(liveToolActivityTail(drained), undefined)
 })
 
 test("a failed or cancelled result ends the gerund exactly like a completed one", () => {
   for (const status of ["failed", "cancelled"] as const) {
     const compact = coalesceToolActivityMessages([toolMessage(status, [tool("Bash", { detail: "nub test", status })])])
     assert.equal(
-      liveToolActivityTail(compact.map((entry) => entry.message)),
+      liveToolActivityTail(compact),
       undefined,
       `a ${status} call is no longer executing`,
     )
@@ -418,7 +466,7 @@ test("a pre-restart transcript with no statuses keeps naming its newest call", (
   // falling to a permanent `Thinking…` for the whole turn would be strictly worse.
   const newest = tool("Grep", { detail: "resolver" })
   const compact = coalesceToolActivityMessages([toolMessage("legacy", [tool("Read", { detail: "src/a.ts" }), newest])])
-  assert.equal(liveToolActivityTail(compact.map((entry) => entry.message)), newest)
+  assert.equal(liveToolActivityTail(compact), newest)
 })
 
 test("the newest pending call drives the live label, then the final call drives settled history", () => {
@@ -548,7 +596,7 @@ test("the newest call in the landed tail names the live gerund", () => {
   const compact = coalesceToolActivityMessages([
     toolMessage("a", [tool("Bash", { detail: "git log", status: "completed" }), tool("Grep", { detail: "resolver", status: "pending" })]),
   ])
-  const live = liveToolActivityTail(compact.map((entry) => entry.message))
+  const live = liveToolActivityTail(compact)
 
   assert.equal(live?.name, "Grep")
   assert.equal(currentToolActivity(compact[0].message.tools).tool?.name, "Grep")
@@ -567,5 +615,5 @@ test("a retired background op never becomes the live gerund", () => {
 
   assert.equal(isToolActivityException(retired.tools[0]), true, "it is still a background card, not run filler")
   assert.equal(compact.length, 2, "and it never folds into the run above it")
-  assert.equal(liveToolActivityTail(compact.map((entry) => entry.message)), undefined)
+  assert.equal(liveToolActivityTail(compact), undefined)
 })

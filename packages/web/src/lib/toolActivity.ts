@@ -5,6 +5,14 @@ export interface ToolActivityMessage {
   message: ChatMessage
   /** Index in the unmodified transcript array. */
   messageIndex: number
+  /**
+   * When this entry's tool run BEGAN — the first batch's `at`, held still as later batches fold in.
+   *
+   * `message.at` advances to the newest batch (a pending card has to time itself against the call it
+   * represents), so once a run has grown the entry no longer remembers where it started. The bottom
+   * runtime slot's clock needs exactly that instant, and nothing else records it.
+   */
+  runStartedAt?: string
 }
 
 // Calls that DISPATCH a child, address one, or block on one, recognized by NAME — the shapes that carry
@@ -155,7 +163,8 @@ function appendToolTail(message: ChatMessage, tools: TranscriptToolCall[], at?: 
  * records between calls. Neither is visible, so neither can mint another loader/digest. A prose-bearing
  * message's final tools part starts a fresh run after that prose. A dedicated block tool (sub-agent,
  * send, etc.) ends it. The first source id remains stable as the run grows, while `at` advances to the
- * latest batch so a pending card's clock still starts from the call it represents.
+ * latest batch so a pending card's clock still starts from the call it represents. `runStartedAt` keeps
+ * the instant `at` is walking away from — the one the runtime slot's own clock counts from.
  */
 export function coalesceToolActivityMessages(messages: readonly ChatMessage[]): ToolActivityMessage[] {
   const out: ToolActivityMessage[] = []
@@ -178,9 +187,14 @@ export function coalesceToolActivityMessages(messages: readonly ChatMessage[]): 
       activityTail.message = appendToolTail(activityTail.message, tools, message.at)
       return
     }
-    const entry = { message, messageIndex }
+    const entry: ToolActivityMessage = { message, messageIndex }
     out.push(entry)
-    activityTail = messageToolTail(message) ? entry : null
+    if (messageToolTail(message)) {
+      entry.runStartedAt = message.at
+      activityTail = entry
+    } else {
+      activityTail = null
+    }
   })
 
   return out
@@ -215,14 +229,15 @@ function settledToolCall(tool: Pick<TranscriptToolCall, "status">): boolean {
  * (see historicalToolActivityMessages): the digest must not flash in the same gap, which is the other
  * half of what 3386b01 fixed and stays fixed.
  */
-export function liveToolActivityTail(messages: readonly ChatMessage[]): TranscriptToolCall | undefined {
-  const run = liveToolActivityRun(messages)
+export function liveToolActivityTail(entries: readonly ToolActivityMessage[]): TranscriptToolCall | undefined {
+  const run = liveToolActivityRun(entries)
   return run?.tools.some((tool) => !settledToolCall(tool)) ? run.tools.at(-1) : undefined
 }
 
 /**
  * The WHOLE run the shimmer stands for — every call historicalToolActivityMessages is withholding —
- * with the emitting message's `at`, so an expanded pending card can time itself like any other.
+ * with the emitting message's `at`, so an expanded pending card can time itself like any other. The instant
+ * the run OPENED is a different question with a different reader — see liveRuntimeStartedAt.
  *
  * The shimmer names one call; expanding it has to show all of them, so this returns the run rather than
  * its newest member. Deliberately NOT status-gated, unlike liveToolActivityTail: history withholds the
@@ -231,16 +246,41 @@ export function liveToolActivityTail(messages: readonly ChatMessage[]): Transcri
  * exists to prevent. So the label falls to `Thinking…` in that gap while the calls stay put underneath.
  */
 export function liveToolActivityRun(
-  messages: readonly ChatMessage[],
+  entries: readonly ToolActivityMessage[],
 ): { tools: TranscriptToolCall[]; at?: string } | undefined {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i]
-    // Optimistic queued user bubbles are pinned separately and have not interrupted the active turn.
-    if (message.queued) continue
-    const tools = messageToolTail(message)
-    return tools ? { tools, at: message.at } : undefined
+  const entry = newestLandedEntry(entries)
+  if (!entry) return undefined
+  const tools = messageToolTail(entry.message)
+  return tools ? { tools, at: entry.message.at } : undefined
+}
+
+/** The newest entry the turn has actually landed — a queued bubble is pinned elsewhere and interrupts nothing. */
+function newestLandedEntry(entries: readonly ToolActivityMessage[]): ToolActivityMessage | undefined {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    if (!entries[i].message.queued) return entries[i]
   }
   return undefined
+}
+
+/**
+ * When the model's CURRENT stretch of work began — the instant the bottom runtime slot's clock counts from.
+ *
+ * The slot reports one live stretch: the run it names call by call, or the generating pause that follows the
+ * last visible block. So the clock belongs to that stretch, not to the turn. It used to count from
+ * `thread.lastUserAt`, which on an autonomously-driven thread is the last time a HUMAN spoke — hours back —
+ * so a model three calls into a fresh burst was captioned `Ran 3 tool calls` beside `2h 14m` (maintainer
+ * 2026-08-08: "does not reflect the amount of time since the start of that block of tool calls. I believe it
+ * reflects the total session run time thus far"). The count and the clock now describe the same run.
+ *
+ * The newest landed entry supplies it: a live run's own opening batch (`runStartedAt`, which survives the
+ * coalescing that walks `at` forward), or otherwise that block's `at` — the prose the model is reasoning past,
+ * the dispatch it just made, the turn's own opening message. Undefined only for an empty transcript or a
+ * pre-restart record with no timestamp, where the caller falls back to the turn.
+ */
+export function liveRuntimeStartedAt(entries: readonly ToolActivityMessage[]): string | undefined {
+  const entry = newestLandedEntry(entries)
+  if (!entry) return undefined
+  return messageToolTail(entry.message) ? entry.runStartedAt ?? entry.message.at : entry.message.at
 }
 
 function withoutLiveToolTail(message: ChatMessage): ChatMessage {
