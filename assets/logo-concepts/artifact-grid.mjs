@@ -9,6 +9,13 @@ import { fileURLToPath } from "node:url"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const SHEETS = {
+  eight: {
+    dir: "out-eight",
+    file: "frizz-eight.html",
+    title: "Frizz — the figure-eight",
+    lede: `Two tall narrow teardrop loops forming one <b>closed figure-eight</b>, plus a separate gently-arced crossbar — the structure of the reference. <b>Exactly 180&deg; rotationally symmetric.</b> Proportions are measured off the reference rather than guessed: its loops run about 0.28 wide to the mark's full height. Quote an id and I'll refine around it.`,
+    groups: [["bleed", "Crossbar runs off the edge"], ["out", "Crossbar reaches the edge and stops"], ["in", "Crossbar ends inside the tile"]],
+  },
   cursive: {
     dir: "out-cursive",
     file: "frizz-cursive-grid.html",
@@ -43,6 +50,8 @@ const tile = (v) => `
       <figcaption><b>${v.id}</b><span>${
         v.along
           ? `bulb ${v.along}&times;${v.across} &middot; spine ${v.spineAngle}&deg;/${v.spineLen}<br>bend ${v.spineBend}&deg; &middot; tail bend ${v.tailBend}&deg; &middot; ${v.side > 0 ? "side +" : "side −"}${v.dir > 0 ? " dir +" : " dir −"}`
+          : v.loopW
+          ? `loop ${v.loopW}&times;${v.loopH} &middot; lean ${v.shear}<br>bar ${v.barAngle}&deg; &middot; bow ${v.barBend}&deg; &middot; stroke ${v.stroke} &middot; ${v.key}`
           : `bulb ${v.lw}&times;${v.lh} &middot; tilt ${v.tilt ?? v.tiltRel}&deg; &middot; spine ${v.axis}&deg;<br>dist ${v.dist} &middot; ${v.side > 0 ? "side +" : "side −"}${v.dir > 0 ? " dir +" : " dir −"}${v.key ? ` &middot; ${v.key}` : ""}`
       }</span></figcaption>
     </figure>`
