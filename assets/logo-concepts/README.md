@@ -12,6 +12,18 @@ Three sheets of directions for the mark after the `fray` → `frizz` rename, eac
 | The hooked f | [`frizz-cursive-f.html`](frizz-cursive-f.html) | Eight lowercase `f`s built from hooks rather than loops — the favicon-viable family. |
 | Icon concepts | [`frizz-logo-concepts.html`](frizz-logo-concepts.html) | The original fifteen non-letterform directions: fan, curl, spark, lanes, knot and the rest. |
 
+## Fitting to a reference
+
+`fit-eight.mjs` fits the parametric mark to a reference image by **pixel overlap** rather than by eye: it renders a candidate, compares its ink mask with the reference's, and hill-climbs the parameters to maximise intersection-over-union, then shakes the result loose with a seeded pattern search.
+
+```sh
+nub fit-eight.mjs          # fit and write fit/best.json + fit/replica.svg
+```
+
+The current fit reaches IoU 0.75, which sounds middling and is not: IoU punishes a thin stroke heavily for a sub-pixel offset. The geometric agreement is **mean 0.19–0.33 px on a 10 px stroke**, with the worst 6.7 px confined to the waist.
+
+Judging shape by eye is what produced six rounds of near-misses on this brief. A number says whether a change helped.
+
 ## Regenerating
 
 ```sh

@@ -1,4 +1,10 @@
 out/
 out-f/
 out-sig/
+out-grid/
+out-slash/
+out-cursive/
+out-eight/
 shots/
+fit/cand.*
+fit/ref-mask-*.png
