@@ -162,6 +162,52 @@ function svg(head: Buffer): ImageDimensions | undefined {
   return undefined
 }
 
+/**
+ * Colour keywords that carry no colour: an SVG painted only in these is monochrome by construction.
+ *
+ * `currentColor` is the giveaway — it means "whatever the surrounding text colour is", which through
+ * an `<img>` (no CSS inheritance) resolves to plain black.
+ */
+const COLOURLESS = /^(none|transparent|currentcolor|inherit|#000|#000000|black|#fff|#ffffff|white)$/iu
+
+const PAINT_ATTRIBUTE = /(?:\bfill|\bstroke|\bstop-color|\bflood-color|\blighting-color)\s*[=:]\s*["']?\s*([^"';>\s]+)/giu
+
+/**
+ * Does this SVG paint a colour OF ITS OWN?
+ *
+ * The question separates a BRAND LOGO from a GLYPH, and the two want opposite treatment on an icon
+ * rail. A glyph — the Simple Icons shape, `role="img"` with a 24×24 viewBox and a single `<path>`
+ * carrying no `fill` at all — is designed to inherit its colour from CSS. Rendered through an `<img>`
+ * there is nothing to inherit, so it paints SOLID BLACK, which on a dark rail is a black square.
+ *
+ * Measured on bun (2026-08-08): `site/public/icon.svg` declares no colour anywhere and drew as a
+ * black tile, while `logo.svg` beside it carries the six brand colours and is the logo a person means.
+ * Both scored 76 and the tie went alphabetically to the glyph.
+ *
+ * Deliberately conservative: ANY single genuine colour anywhere — a fill, a stroke, a gradient stop —
+ * counts. A one-colour brand mark is still a brand mark; what this catches is the file that specifies
+ * no colour at all, or only black and white.
+ *
+ * Undefined for anything that is not an SVG, and for an SVG we could not read: absence of evidence,
+ * not evidence of absence, so the caller must not treat it as monochrome.
+ */
+export function svgDeclaresColour(path: string): boolean | undefined {
+  if (extname(path).toLowerCase() !== ".svg") return undefined
+  // The whole file, not just a header: a gradient definition can sit anywhere, and an SVG small
+  // enough to be an icon is small enough to read. Capped so a pathological one cannot hurt.
+  const head = readHead(path, 512 * 1024)
+  if (!head) return undefined
+  const source = head.toString("utf8")
+  if (!/<svg\b/iu.test(source)) return undefined
+  for (const match of source.matchAll(PAINT_ATTRIBUTE)) {
+    const value = match[1]!.trim().replace(/[,)]+$/u, "")
+    if (!COLOURLESS.test(value) && !value.startsWith("url(")) return true
+  }
+  // A gradient referenced by url(#…) is only colour if one of its stops is; those stops are
+  // `stop-color` attributes and were already covered by the loop above.
+  return false
+}
+
 /** Every extension `imageDimensions` can measure. */
 export const MEASURABLE_IMAGE_EXTENSIONS = new Set([".png", ".svg", ".ico", ".webp", ".jpg", ".jpeg", ".gif"])
 

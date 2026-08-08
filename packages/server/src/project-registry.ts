@@ -391,6 +391,25 @@ export function findBySlug(slug: string, home = homedir()): RegistryEntry | unde
   return readRegistry(home).projects.find((p) => p.slug === slug)
 }
 
+export function findById(id: string, home = homedir()): RegistryEntry | undefined {
+  return readRegistry(home).projects.find((p) => p.id === id)
+}
+
+/**
+ * The project a `/_frizz/<segment>/…` request names: its slug, or its id.
+ *
+ * The browser addresses a project by SLUG, because that is what the operator reads in the URL bar. A
+ * worker's frizz MCP server addresses it by ID, because it is handed the segment once when it spawns
+ * and then holds it for the life of a detached daemon — a rename would silently strand it, and the
+ * failure would be an unknown segment falling through to whichever project launched the server.
+ *
+ * Slug wins a tie. An id is a UUID and the slug rule cannot mint one from a directory basename
+ * without someone naming a directory after a UUID, so the two do not realistically collide.
+ */
+export function findProjectBySegment(segment: string, home = homedir()): RegistryEntry | undefined {
+  return findBySlug(segment, home) ?? findById(segment, home)
+}
+
 // ── ICONS ───────────────────────────────────────────────────────────────────────────────────────
 //
 // The rail draws one square per project, and the icon behind each square is DERIVED — a path found by
@@ -405,8 +424,11 @@ export function findBySlug(slug: string, home = homedir()): RegistryEntry | unde
  *
  * 2 — `site/public` and its family: hosts (`site`, `web`, `docs`, `frontend`, …) are now crossed with
  *     asset directories instead of hand-listed, so a site in a subdirectory is finally looked in.
+ * 3 — a colourless SVG is demoted below any coloured sibling, so a Simple-Icons-style glyph stops
+ *     winning and rendering as a solid black tile. A cached PICK is as stale as a cached miss here:
+ *     bun had already stored the black one.
  */
-export const ICON_SCAN_VERSION = 2
+export const ICON_SCAN_VERSION = 3
 
 /** Where an uploaded icon lands: the project's own state dir, never inside the repository. */
 export function customIconPath(id: string, extension: string, home = homedir()): string {
@@ -471,15 +493,18 @@ export function resolveProjectIcon(
   const entry = readRegistry(home).projects.find((p) => p.id === id)
   if (!entry) return undefined
 
-  if (entry.icon && existsSync(entry.icon)) return entry.icon
+  const staleScan = (entry.iconScanVersion ?? 0) !== (options.version ?? ICON_SCAN_VERSION)
+  // A stored PICK goes stale exactly as a stored miss does: improving the RANKING (not just the
+  // search) means the file we settled on may no longer be the one this project should wear. bun had
+  // already cached the black glyph, so re-asking only the misses would have left it black.
+  if (entry.icon && existsSync(entry.icon) && !staleScan) return entry.icon
   // An operator's chosen file that has gone missing is a broken square, not an invitation to pick a
   // different picture for them — leave the choice recorded and let them fix it.
   if (entry.iconSource === "custom") return undefined
   // A remembered "nothing here" is only trusted while it came from the CURRENT scanner and is recent.
   // The version check is what makes improving the scan take effect immediately rather than whenever
   // each project's 12 hours happen to elapse.
-  const staleScanner = (entry.iconScanVersion ?? 0) !== version
-  if (!entry.icon && !staleScanner && entry.iconScannedAt && now() - Date.parse(entry.iconScannedAt) < rescanAfterMs) {
+  if (!entry.icon && !staleScan && entry.iconScannedAt && now() - Date.parse(entry.iconScannedAt) < rescanAfterMs) {
     return undefined
   }
   if (!existsSync(entry.path)) return undefined

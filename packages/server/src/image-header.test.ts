@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
-import { imageDimensions } from "./image-header.ts"
+import { imageDimensions, svgDeclaresColour } from "./image-header.ts"
 
 // The scan ranks icons by size, so every wrong number here is a project wearing the wrong picture.
 // These build each format's header by hand rather than checking in binaries: the point is to pin the
@@ -132,4 +132,40 @@ test("unreadable, empty and unrecognised files are undefined rather than a throw
     assert.equal(imageDimensions(path), undefined)
   })
   assert.equal(imageDimensions("/nonexistent/definitely/not/here.png"), undefined)
+})
+
+test("an SVG that paints no colour of its own is recognised as a glyph, not a logo", () => {
+  // The Simple Icons shape: role="img", a 24x24 viewBox, one path, and NO fill anywhere. Through an
+  // <img> there is nothing to inherit from, so it paints solid black — which on a dark rail is a
+  // black tile. bun shipped exactly this as `site/public/icon.svg` beside its real colour logo.
+  const glyph = `<svg role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><title>Bun</title><path d="M11 22c6 0 11-4 11-9Z"/></svg>`
+  withFile(glyph, "icon.svg", (path) => assert.equal(svgDeclaresColour(path), false))
+
+  for (const [name, source] of [
+    ["currentColor is the giveaway — it means 'whatever the text colour is'", `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M0 0h24v24H0z"/></svg>`],
+    ["black only", `<svg viewBox="0 0 24 24"><path fill="#000" d="M0 0z"/><path fill="black" d="M1 1z"/></svg>`],
+    ["black and white only", `<svg viewBox="0 0 24 24"><rect fill="#ffffff"/><path fill="#000000" d="M0 0z"/></svg>`],
+    ["none is not a colour", `<svg viewBox="0 0 24 24"><path fill="none" stroke="none" d="M0 0z"/></svg>`],
+  ] as const) {
+    withFile(source, "icon.svg", (path) => assert.equal(svgDeclaresColour(path), false, name))
+  }
+})
+
+test("any single genuine colour counts — a one-colour brand mark is still a brand mark", () => {
+  for (const [name, source] of [
+    ["a fill", `<svg viewBox="0 0 80 70"><path style="fill:#fbf0df" d="M0 0z"/></svg>`],
+    ["an attribute fill", `<svg viewBox="0 0 24 24"><path fill="#B71422" d="M0 0z"/></svg>`],
+    ["a stroke", `<svg viewBox="0 0 24 24"><path stroke="#4ac97e" d="M0 0z"/></svg>`],
+    ["a gradient stop", `<svg viewBox="0 0 24 24"><defs><linearGradient><stop stop-color="#ff6164"/></linearGradient></defs><path fill="url(#g)" d="M0 0z"/></svg>`],
+    // A colour deep in the file, past any header budget a dimension read would use.
+    ["a colour far down the document", `<svg viewBox="0 0 24 24">${"<!-- pad -->".repeat(500)}<path fill="#e8b923" d="M0 0z"/></svg>`],
+  ] as const) {
+    withFile(source, "logo.svg", (path) => assert.equal(svgDeclaresColour(path), true, name))
+  }
+})
+
+test("colour is an SVG-only question — anything else is undefined, not false", () => {
+  withFile(png(64, 64), "icon.png", (path) => assert.equal(svgDeclaresColour(path), undefined))
+  withFile("not an svg at all", "icon.svg", (path) => assert.equal(svgDeclaresColour(path), undefined))
+  assert.equal(svgDeclaresColour("/nonexistent/nope.svg"), undefined)
 })

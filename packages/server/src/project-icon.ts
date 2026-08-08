@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync, realpathSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { basename, dirname, extname, join, relative, sep } from "node:path"
-import { imageDimensions, MEASURABLE_IMAGE_EXTENSIONS, type ImageDimensions } from "./image-header.ts"
+import { imageDimensions, MEASURABLE_IMAGE_EXTENSIONS, svgDeclaresColour, type ImageDimensions } from "./image-header.ts"
 import { projectStateDir } from "./frizz-paths.ts"
 import { readRegistry, resolveProjectIcon } from "./project-registry.ts"
 
@@ -94,6 +94,17 @@ const NAME_SCORES: [RegExp, number, string][] = [
   [/^logo-|^icon-|-logo$|-icon$/u, 6, "a logo file"],
   [/^favicon$/u, 6, "the favicon"],
 ]
+
+/**
+ * How far a colourless SVG falls.
+ *
+ * Enough that ANY coloured sibling beats it outright, and not so far that a project whose only icon is
+ * a glyph loses it altogether — a dark silhouette on the tile still identifies a project, where the
+ * monogram fallback would not. bun is the measured case: `site/public/icon.svg` (a Simple Icons glyph
+ * with no fill, so solid black through an `<img>`) and `logo.svg` (six brand colours) both scored 76,
+ * and the tie went alphabetically to the black one.
+ */
+const COLOURLESS_SVG_PENALTY = 26
 
 /** Build output. The same icon is in the source tree, and that copy is the one that survives a clean. */
 const GENERATED_DIRECTORIES = new Set(["build", "dist", "out", ".next", ".output", "coverage", "target"])
@@ -344,6 +355,9 @@ export function projectIconCandidates(root: string): ProjectIconCandidate[] {
       // `logo.svg` lost to an `android-chrome-512x512.png` three levels down in a docs site, which is
       // a build artifact of the logo rather than the logo.
       + (segments.length === 0 ? 8 : 0)
+      // A GLYPH is not a logo. `svgDeclaresColour` returns undefined for rasters and unreadable files,
+      // so only a definite "this SVG paints no colour of its own" is penalised.
+      + (svgDeclaresColour(path) === false ? -COLOURLESS_SVG_PENALTY : 0)
       - (variant ? 3 : 0)
       - (generated ? 6 : 0)
       - Math.min(8, segments.length * 2)
@@ -353,7 +367,8 @@ export function projectIconCandidates(root: string): ProjectIconCandidate[] {
       ? "scalable"
       : `${Math.round(dimensions.width)}×${Math.round(dimensions.height)}`
     const why = isProjectNamed && !named ? "named after the project" : named?.reason ?? "listed in the web manifest"
-    candidates.push({ path, score, dimensions, reason: `${size}, ${why}, in ${where}` })
+    const colourless = svgDeclaresColour(path) === false ? ", no colour of its own" : ""
+    candidates.push({ path, score, dimensions, reason: `${size}, ${why}${colourless}, in ${where}` })
   }
 
   // Ties break towards the SHORTER path, which in practice means the less qualified filename: where

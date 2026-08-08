@@ -22,7 +22,17 @@ function png(width: number, height: number): Buffer {
   return buffer
 }
 
-const svg = (width: number, height = width) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}"></svg>`
+/**
+ * A COLOURED svg — which is what a real logo is, and therefore the right default for these fixtures.
+ * The fill matters: a colourless SVG is deliberately demoted (it is a tint-me glyph, not a logo), so a
+ * helper that emitted no colour would quietly make every fixture below test the glyph path instead.
+ */
+const svg = (width: number, height = width) =>
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}"><path fill="#e8b923" d="M0 0z"/></svg>`
+
+/** The Simple-Icons shape: no fill anywhere, so it inherits — and through an `<img>` paints black. */
+const glyph = (width: number, height = width) =>
+  `<svg role="img" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}"><path d="M0 0z"/></svg>`
 
 /** Build a throwaway project tree. Values are file contents; a Buffer is written as bytes. */
 function project(t: TestContext, name: string, files: Record<string, Buffer | string>): string {
@@ -222,4 +232,38 @@ test("every host directory gets its own asset directories", (t) => {
 test("a host that does not exist costs nothing and finds nothing", (t) => {
   const root = project(t, "plain", { "README.md": "# plain", "src/index.ts": "export {}" })
   assert.equal(detectProjectIcon(root), undefined)
+})
+
+test("a colourless glyph loses to the coloured logo beside it (bun)", (t) => {
+  // Measured: bun's `site/public/icon.svg` is a Simple Icons glyph with no fill — solid black through
+  // an <img> — and `logo.svg` next to it carries the six brand colours. Both scored 76 and the tie
+  // went alphabetically to the black one, so the rail wore a black tile for bun.
+  const root = project(t, "bun", {
+    "site/public/icon.svg": glyph(24),
+    "site/public/logo.svg": `<svg viewBox="0 0 80 70"><path style="fill:#fbf0df" d="M0 0z"/><path style="fill:#f6dece" d="M1 1z"/></svg>`,
+  })
+  assert.equal(picked(root), join("site", "public", "logo.svg"))
+})
+
+test("...and the reason says why it lost", (t) => {
+  const root = project(t, "bun", {
+    "public/icon.svg": glyph(24),
+  })
+  assert.match(detectProjectIcon(root)?.reason ?? "", /no colour of its own/u)
+})
+
+test("a colourless glyph is still better than nothing when it is all there is", (t) => {
+  // A dark silhouette on the tile identifies a project; the monogram fallback does not. The penalty
+  // orders candidates, it does not disqualify one.
+  const root = project(t, "glyphy", {
+    "public/icon.svg": glyph(24),
+  })
+  assert.equal(picked(root), join("public", "icon.svg"))
+})
+
+test("a raster is never penalised for colour, because we cannot read it from the header", (t) => {
+  const root = project(t, "app", { "public/icon.png": png(512, 512), "public/logo.svg": svg(24) })
+  // Both are legitimate; the SVG wins on format as it always did, and the PNG is not demoted.
+  assert.equal(picked(root), join("public", "logo.svg"))
+  assert.ok(projectIconCandidates(root).some((c) => c.path.endsWith("icon.png")))
 })
