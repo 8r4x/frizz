@@ -4236,11 +4236,17 @@ export function WorkingIndicator({ since, startedAt, activityLabel, run }: { sin
   // is the LIVE member of that column, and a shorter line box put its ink 1px nearer the card above
   // than a settled "Thought for Ns" in the same slot. Sharing the box is what makes the alternation
   // between them read as one rhythm — the tone stays the shimmer's own.
-  // `gap-3` before the clock against `gap-1.5` inside the label group — the chevron is the label's
-  // handle and the elapsed time is its own field, so the 1:2 reads as one cluster and one readout.
-  // Those are INK distances now (~6.4px and ~11.8px); see transcriptMetaChevronClass for why they
-  // were not before.
-  const rowClass = `group flex min-w-0 items-baseline gap-3 rounded text-left outline-none focus-visible:ring-1 focus-visible:ring-fg/60 ${TRANSCRIPT_META_LABEL_CLASS}`
+  // The clock is RIGHT-JUSTIFIED against the column edge (maintainer 2026-08-09), so it holds one
+  // position instead of sliding with the label. The label alternates between a call's gerund and
+  // `Ran N tool calls. Thinking…` every step or two, and a readout hung off its right edge moved a
+  // dozen characters on each swap — the one thing on the row whose whole job is to be read at a glance
+  // was the one thing that never sat still. `justify-between` also makes `gap-3` a floor rather than
+  // the distance, which it only ever was when the label happened to be short.
+  //
+  // `gap-1.5` INSIDE the label group stays what it was: the chevron is the label's handle, travels with
+  // it, and reads as one cluster at ~6.4px of ink. See transcriptMetaChevronClass for why that number
+  // is an ink distance and not the CSS one.
+  const rowClass = `group flex min-w-0 items-baseline justify-between gap-3 rounded text-left outline-none focus-visible:ring-1 focus-visible:ring-fg/60 ${TRANSCRIPT_META_LABEL_CLASS}`
   // ONE LINE, always — the row is a live status reading, and a status reading that changes height
   // as a path gets longer makes the whole tail jump. The label TRUNCATES (maintainer 2026-07-31:
   // "prevent the actual gerund from ever breaking onto two lines. It should get truncated
@@ -4253,9 +4259,10 @@ export function WorkingIndicator({ since, startedAt, activityLabel, run }: { sin
   // the reading is short as well as unbreakable.
   const row = (
     <>
-      {/* The chevron is the LABEL's control, so it rides in the label's own group — `gap-1` here against
-          the row's `gap-2` before the clock. Those numbers only became the DISTANCES the eye reads once
-          transcriptMetaChevronClass collapsed the glyph's box onto its ink; see that constant. */}
+      {/* The chevron is the LABEL's control, so it rides in the label's own group and travels with it to
+          the left edge, rather than being stranded beside the right-justified clock. `min-w-0` on both
+          this group and the text inside it is what lets the label truncate instead of shoving the clock
+          off the row. */}
       <span className="flex min-w-0 items-baseline gap-1.5">
         <span className="min-w-0 truncate shimmer-text">{activityLabel ?? thinkingToolActivityLabel(total)}</span>
         {/* Only when there is a run to open. The glyph places ITSELF off the text baseline — see
