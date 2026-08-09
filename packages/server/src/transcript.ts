@@ -2206,8 +2206,10 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
           const interruptedOwner = call.name === "Interrupt process" && call.sessionId !== undefined
             ? shellSessions.get(runningKey("Poll process", call.sessionId))
             : undefined
-          // Polls are lifecycle updates, not independent shell work. Keep an unpaired poll visible as
-          // UNKNOWN so a partial/reloaded transcript never fabricates a completed command.
+          // Polls are lifecycle updates, not independent shell work. An unpaired poll is marked UNKNOWN
+          // so a partial/reloaded transcript never fabricates a completed command. That state does NOT
+          // buy it a dedicated card — it launched nothing, so the client folds it into the ordinary
+          // activity run (web/lib/toolActivity.orphanedPoll); only a real detached job keeps a card.
           if (!owner) {
             if (isPoll) call.backgroundState = "unknown"
             pushToolPart(m, call)

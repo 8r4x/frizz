@@ -93,8 +93,8 @@ test("prose, sub-agent cards AND background launches each split the activity run
   )
   assert.deepEqual(compact[1].message.tools.map((call) => call.backgroundState), ["background"])
   // A detached op keeps a dedicated card wherever it renders — the maintainer's whole point is that a
-  // background task must not disappear behind `Ran N tool calls`. `unknown` (a blocked `&` job, an
-  // orphaned poll) is a background shape too and gets the same treatment.
+  // background task must not disappear behind `Ran N tool calls`. A blocked `&` job is a background
+  // shape too (`unknown`) and gets the same treatment.
   assert.equal(isToolActivityException(background.tools[0]), true)
   assert.equal(isToolActivityException(tool("Bash", { backgroundState: "unknown" })), true)
   assert.equal(isToolActivityException(agent.tools[0]), true)
@@ -119,6 +119,29 @@ test("the agent listing folds into the ordinary activity run", () => {
 
   assert.equal(compact.length, 1)
   assert.deepEqual(compact[0].message.tools.map((call) => call.name), ["Read", "Agents", "Grep", "Edit"])
+})
+
+// A codex long-poll gate emits hundreds of `wait` / `write_stdin` calls the projector cannot pair with
+// a launch. They arrive pending + `backgroundState: "unknown"`, which used to buy each one a dedicated
+// card — a queue card of `Wait · cell 29 · unknown` rows with runaway clocks (maintainer 2026-08-09).
+test("an orphaned codex poll folds into the run while a real detached job keeps its card", () => {
+  const cellPoll = tool("Wait", { detail: "cell 29", sessionId: 29, status: "pending", backgroundState: "unknown" })
+  const ptyPoll = tool("Poll process", { detail: "session 98949", sessionId: 98949, status: "pending", backgroundState: "unknown" })
+  assert.equal(isToolActivityException(cellPoll), false)
+  assert.equal(isToolActivityException(ptyPoll), false)
+  // The other `unknown`: a Bash command whose `&` escaped the hook DID launch something that outlives
+  // the call, so it is still a card.
+  assert.equal(isToolActivityException(tool("Bash", { command: "node worker.mjs &", backgroundState: "unknown" })), true)
+
+  const compact = coalesceToolActivityMessages([
+    toolMessage("one", [tool("Read", { detail: "src/a.ts" })]),
+    toolMessage("poll-a", [cellPoll], "2026-07-30T12:00:01.000Z"),
+    toolMessage("poll-b", [ptyPoll], "2026-07-30T12:00:02.000Z"),
+    toolMessage("two", [tool("Grep")], "2026-07-30T12:00:03.000Z"),
+  ])
+
+  assert.equal(compact.length, 1, "the polls no longer split the run into four rows")
+  assert.deepEqual(compact[0].message.tools.map((call) => call.name), ["Read", "Wait", "Poll process", "Grep"])
 })
 
 test("a call whose result is a picture keeps its card and splits the run", () => {

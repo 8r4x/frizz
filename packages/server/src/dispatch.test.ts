@@ -1,11 +1,11 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, dirname } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { DISPATCH_TASK_BANNER_MARKER } from "@frizz/shared"
-import { buildClaudeCommand, loadWorkerPrompt, composePrompt, resolveWorkerPluginDir, scratchpadOrientation, workerPluginDir, frizzConfigBlock, workerDispatchPermission, WORKER_DISPATCH_PERMISSION } from "./dispatch.ts"
+import { buildClaudeCommand, loadWorkerPrompt, composePrompt, monitorScriptsDir, resolveWorkerPluginDir, scratchpadOrientation, workerPluginDir, frizzConfigBlock, workerDispatchPermission, WORKER_DISPATCH_PERMISSION } from "./dispatch.ts"
 import { parseTranscript } from "./transcript.ts"
 import { CHROME_DEVTOOLS_MCP, FRIZZ_MCP } from "./backend/types.ts"
 
@@ -195,8 +195,25 @@ test("loadWorkerPrompt(claude) is BYTE-IDENTICAL to the pre-split contract (the 
   assert.equal(loadWorkerPrompt("claude"), CLAUDE_GOLDEN)
 })
 
+// The codex contract prints the ABSOLUTE path of the bundled CI/review monitors, which differs per
+// checkout — so the golden keeps the unfilled token and the comparison substitutes it back. The fill
+// itself is pinned separately below.
 test("loadWorkerPrompt(codex) is BYTE-IDENTICAL to its golden (regenerate on deliberate codex edits)", () => {
-  assert.equal(loadWorkerPrompt("codex"), CODEX_GOLDEN)
+  const monitors = monitorScriptsDir()
+  const normalized = monitors ? loadWorkerPrompt("codex").replaceAll(monitors, "{{FRIZZ_MONITORS_DIR}}") : loadWorkerPrompt("codex")
+  assert.equal(normalized, CODEX_GOLDEN)
+})
+
+// Codex has no skills and no plugin, so "use the bundled monitors" is only actionable as a path it can
+// actually open — an unresolvable one used to be the reason the model wrote its own short-poll loop.
+test("the codex contract names the bundled monitors by a path that exists", () => {
+  const dir = monitorScriptsDir()
+  assert.ok(dir, "the worker plugin ships the portable monitors; resolving it must not fail in the repo")
+  assert.ok(existsSync(join(dir!, "ci-watch.mjs")))
+  assert.ok(existsSync(join(dir!, "review-watch.mjs")))
+  const escaped = dir!.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  assert.match(loadWorkerPrompt("codex"), new RegExp(`node ${escaped}/ci-watch\\.mjs `))
+  assert.match(loadWorkerPrompt("codex"), new RegExp(`node ${escaped}/review-watch\\.mjs `))
 })
 
 // The contract must govern RESTING, not just asking. Before this, `The stop criterion` covered only

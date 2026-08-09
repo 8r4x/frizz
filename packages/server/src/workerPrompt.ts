@@ -491,7 +491,21 @@ Before launching a CI or GitHub-review monitor, inspect explicit project-local \
 docs, package scripts, and declared monitor tooling. Prefer a declared local tool only after validating
 its absolute command and terminal event/exit semantics. If declared tooling is invalid or lacks
 terminal semantics, report that configuration error visibly; never silently shadow it with Frizz and
-never select a monitor merely by filename. Frizz's bundled portable Node scripts are the fallback.
+never select a monitor merely by filename.
+
+**Otherwise use the monitors Frizz ships — never hand-roll a watch loop.** They are dependency-free
+Node scripts needing only a logged-in \`gh\`, they block until a terminal verdict, and they already
+handle the cases a hand-rolled loop gets wrong (a partial \`gh pr checks\` rollup, an \`ACTION_REQUIRED\`
+fork gate, a retried workflow on the same head):
+
+\`\`\`sh
+node {{FRIZZ_MONITORS_DIR}}/ci-watch.mjs --repo OWNER/REPO --pr NUMBER
+node {{FRIZZ_MONITORS_DIR}}/review-watch.mjs --repo OWNER/REPO --pr NUMBER
+\`\`\`
+
+Each prints NDJSON: non-terminal \`status\` lines, then exactly one \`terminal\` line. \`ci-watch\` exits 0
+green, 2 failed, 3 on an invocation/auth error; \`review-watch\` exits 0 on new review activity. \`--once\`
+takes a single snapshot instead of watching. Read the exit code — it IS the verdict.
 
 Codex owns the selected monitor through one persistent \`exec_command\` / \`write_stdin\` session until its
 terminal NDJSON verdict. Do not detach an OS process or create a monitor fleet. A Luna child is optional
@@ -564,13 +578,30 @@ authorized. Do not emit \`awaiting\` for CI,
 automated review, release, or merge progression. Those tool sessions are process-bound; use a durable
 \`timer:\` awaiting fence only when the next check belongs at a named wall-clock instant. A partial
 \`gh pr checks\` rollup is not a CI-green verdict: inspect workflow runs for the exact PR head too, and
-treat \`ACTION_REQUIRED\` fork gates as pending. When no valid project monitor is declared, use the
-Frizz Codex plugin fallback instead of inventing a detached loop.
+treat \`ACTION_REQUIRED\` fork gates as pending. When no valid project monitor is declared, run the
+bundled \`ci-watch.mjs\` / \`review-watch.mjs\` named above instead of inventing a loop of your own.
 
 **A yielded \`exec_command\` is still FOREGROUND.** Its \`session_id\` only says the command exceeded
 one response budget and must be continued with \`write_stdin\`; it is not a background-task handle and
-does not permit unrelated work to proceed around it. Poll it with a useful wait interval and fully
-drain it instead of emitting a stream of short empty polls.
+does not permit unrelated work to proceed around it.
+
+**NEVER babysit a gate with a stream of short polls.** A run of \`wait\` / \`write_stdin\` calls at a few
+seconds each — cell 29, cell 30, cell 31 — is the single most wasteful shape you can emit: every poll is
+a full model turn that re-reads your whole context to learn nothing, it burns your context window on
+empty output, and it buries the actual work in the board's transcript. One \`gh run watch\` or one
+\`ci-watch.mjs\` blocks until the answer exists and costs one call.
+
+So when a wait is longer than a single yield budget:
+
+1. Run something that BLOCKS to a terminal condition — the bundled monitors above, or \`gh run watch
+   <run-id> --exit-status\`. Prefer it to any loop you would write.
+2. Give the poll a real interval when you must poll: \`yield_time_ms\` in the tens of seconds, sized to how
+   fast the thing you are watching actually changes. Never single-digit seconds, and never a fixed tiny
+   interval repeated dozens of times.
+3. Drain each yield fully before the next one, and stop as soon as the result is terminal.
+
+If you find yourself on the third identical poll with no new output, you are in this anti-pattern:
+switch to a blocking monitor, or emit a \`timer:\` awaiting fence for a genuinely distant check.
 
 When you genuinely need to work alongside a disposable local process (a dev server or long gate), use
 the managed unified-exec handoff: create the \`tools.exec_command(...)\` promise, call
@@ -690,7 +721,18 @@ checks. Add fresh-context reviewer agents only under the explicit delegation pol
 advice is evidence to judge, not a verdict to copy. Depth scales with blast radius.`,
 }
 
-export function buildWorkerPrompt(kind: BackendKind = "claude"): string {
+/**
+ * Where frizz's portable CI/review monitors live on THIS machine.
+ *
+ * Claude reaches them through the `frizz:gh` skill that bundles them, so it never needs the path.
+ * Codex has no skills and no plugin: a prompt that says "use the bundled monitors" without an absolute
+ * path is a pointer to something the model cannot open, and what it does instead is hand-roll a
+ * short-poll loop. The caller resolves the directory (dispatch.ts owns the plugin lookup); an
+ * unresolvable one falls back to the relative spelling rather than emitting a broken absolute path.
+ */
+const MONITORS_DIR_FALLBACK = "<frizz>/cc-worker/skills/gh/scripts"
+
+export function buildWorkerPrompt(kind: BackendKind = "claude", opts: { monitorsDir?: string } = {}): string {
   // Claude gets the LEAN list: frizz mechanics + the autonomy anchor, and nothing that merely narrates
   // good engineering. Codex keeps its own THREAD_EXECUTION (its bounded-delegation policy lives there)
   // and TRIVIAL_PROMPTS. See the SIZING note at the top of this file.
@@ -715,5 +757,6 @@ export function buildWorkerPrompt(kind: BackendKind = "claude"): string {
   ]
   let out = sections.filter((s): s is string => s != null).join("\n\n")
   for (const [token, value] of Object.entries(INLINE[kind])) out = out.replaceAll(`{{FRIZZ_${token}}}`, value)
+  out = out.replaceAll("{{FRIZZ_MONITORS_DIR}}", opts.monitorsDir?.trim() || MONITORS_DIR_FALLBACK)
   return out
 }

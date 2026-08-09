@@ -236,7 +236,19 @@ export function writeScratchDir(projectDir: string, sessionId: string): string {
 // Not user-modifiable — project-specific conventions ride FRIZZ.md (frizzConfigBlock), appended
 // separately. Thin adapter kept so existing callers (spawn/adopt/resume builders + tests) are untouched.
 export function loadWorkerPrompt(kind: BackendKind = "claude"): string {
-  return buildWorkerPrompt(kind)
+  return buildWorkerPrompt(kind, { monitorsDir: monitorScriptsDir() })
+}
+
+// The portable CI/review monitors, which ship inside the worker plugin (`sync-portable-monitors.mjs`
+// copies `monitors/` there, and `runtime/cc-worker` carries them in a published artifact). Claude finds
+// them through the `frizz:gh` skill; codex has no skills, so its prompt needs the absolute path or the
+// model writes its own poll loop instead. Verified against a real file rather than assumed, so a layout
+// change degrades to the prompt's relative fallback instead of naming a directory that isn't there.
+export function monitorScriptsDir(): string | undefined {
+  const plugin = workerPluginDir()
+  if (!plugin) return undefined
+  const dir = join(plugin, "skills", "gh", "scripts")
+  return existsSync(join(dir, "ci-watch.mjs")) ? dir : undefined
 }
 
 // ---- scratch-directory re-orientation (always on) ----

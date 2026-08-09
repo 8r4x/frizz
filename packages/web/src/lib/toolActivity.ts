@@ -26,6 +26,10 @@ const SUB_AGENT_TOOL_NAMES = new Set([
   "wait for agents",
 ])
 
+// Codex's two yielded-process poll cards — `wait` on a script cell, and the `write_stdin` exec wrapper
+// on a PTY session. See orphanedPoll.
+const POLL_TOOL_NAMES = new Set(["poll process", "wait"])
+
 function readableToolName(name: string): string {
   const segment = name.split("__").pop() || name
   return segment.replaceAll("_", " ").trim()
@@ -45,11 +49,12 @@ function normalizedToolName(name: string): string {
  *
  *   • A DISPATCH — it starts, addresses or blocks on a child agent.
  *   • A BACKGROUND op — `run_in_background` Bash and Monitor (`backgroundState: "background"`), plus the
- *     `"unknown"` shapes the parser flags (a blocked `&` job, an orphaned poll). These used to fold into
+ *     blocked `&` job the Bash parser flags `"unknown"`. These used to fold into
  *     the run like any other call, which meant a detached dev server, a CI watcher and a wait-for-agents
  *     poller were all invisible behind `Ran 7 tool calls` — the one class of call whose whole point is
  *     that it is still going after the batch that started it (maintainer 2026-08-01: "eject background
  *     tasks from the tool call collapsing logic. It's important that those show up in the chat").
+ *     An ORPHANED POLL wears the same `"unknown"` and is deliberately NOT here — see orphanedPoll.
  *   • A call whose RESULT IS A PICTURE — an image `Read`, a `take_screenshot`, a SendUserFile delivery
  *     carrying images. The reason is different but no weaker: the whole content of the card is something
  *     the human has to LOOK at, and a digest reduces it to the one thing a picture cannot survive being
@@ -72,10 +77,30 @@ export function isToolActivityException(tool: Pick<
     || tool.agentId !== undefined
     || tool.sendTo !== undefined
     || tool.sendBody !== undefined
-    || tool.backgroundState !== undefined
+    || (tool.backgroundState !== undefined && !orphanedPoll(tool))
     || tool.outputImage !== undefined
     || (tool.sentImages !== undefined && tool.sentImages.length > 0)
     || SUB_AGENT_TOOL_NAMES.has(normalizedToolName(tool.name))
+}
+
+/**
+ * A codex `Wait` / `Poll process` the projector could not pair with the launch it belongs to.
+ *
+ * It reaches the client `pending` and `backgroundState: "unknown"` — honest about the fact that frizz
+ * cannot say whether that process is alive (transcript.ts, the `orphanPoll` branch) — but that is the
+ * one background shape which LAUNCHED NOTHING. It is a read of somebody else's process, so the card is
+ * not a handle on anything: it names a cell id the reader cannot act on, and because the call never
+ * settles it wears a duration that counts up forever. A codex model that long-polls a gate emits
+ * hundreds of them, and every one was landing as its own card — 888 in one measured rollout, rendering
+ * as `Wait · cell 29 · unknown` / `Poll process · session 98949 · unknown` all the way down the queue
+ * card (maintainer 2026-08-09). So an orphaned poll is ordinary disposable chatter and folds into the
+ * run like any other call. The genuinely detached shapes above are untouched.
+ *
+ * Keyed on the poll NAMES rather than on `"unknown"` alone: a Bash command with an escaping `&` job
+ * wears the same state and DID launch something that outlives the call, so it keeps its card.
+ */
+function orphanedPoll(tool: Pick<TranscriptToolCall, "name" | "backgroundState">): boolean {
+  return tool.backgroundState === "unknown" && POLL_TOOL_NAMES.has(normalizedToolName(tool.name))
 }
 
 function pureToolMessage(message: ChatMessage): TranscriptToolCall[] | null {

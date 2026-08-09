@@ -212,7 +212,29 @@ test("the collapsed intermediate run is a hairline divider that names its tool c
     assert.ok(agentFlush[0] > 0, `the running dispatch steps in by the mark slot, got ${agentFlush[0]}px`)
     assert.equal(agentFlush[1], 0, `the resolved dispatch must be flush at 0, got ${agentFlush[1]}px`)
 
-    // ---- 7. control: nothing intermediate, so no divider at all ----
+    // ---- 7. an orphaned codex poll is NOT a background op, and folds into the count ----
+    // A codex long-poll gate emits `wait`/`write_stdin` calls the projector cannot pair with a launch,
+    // so each reaches the client pending + `backgroundState: "unknown"` — which used to buy it the same
+    // dedicated card as a detached shell. A real rollout produced 888 of them, and the queue card was a
+    // wall of `Wait · cell 30 · unknown` rows counting up forever (maintainer 2026-08-09). They launched
+    // nothing, so they are ordinary chatter; the ONE genuinely detached shell in the same run still isn't.
+    await page.goto(variant("codexpolls"), { waitUntil: "networkidle0" })
+    await page.waitForSelector(SEL, { timeout: 10_000 })
+    const pollCards = await page.$$eval(".frizz-bash-header", (ns) =>
+      ns.map((n) => (n as HTMLElement).innerText.replace(/\s+/g, " ").trim()),
+    )
+    assert.deepEqual(
+      pollCards,
+      ["Bash Tailing the release log running"],
+      `only the detached shell keeps a card; every poll folds away, got ${pollCards.join(" | ")}`,
+    )
+    assert.equal(
+      await page.$eval(SEL, (n) => (n as HTMLElement).innerText.replace(/\s+/g, " ").trim()),
+      "12 tool calls · Click to expand",
+      "the ten polls are counted by the divider rather than drawn",
+    )
+
+    // ---- 8. control: nothing intermediate, so no divider at all ----
     await page.goto(variant("single"), { waitUntil: "networkidle0" })
     await page.waitForFunction(() => document.querySelectorAll("[data-frizz-msg]").length > 0, { timeout: 10_000 })
     assert.equal(

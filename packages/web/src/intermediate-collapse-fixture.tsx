@@ -34,6 +34,9 @@ import "./styles.css"
 //   ?variant=dispatches  two sub-agent dispatches inside the collapsed span, one still running (tracked in
 //                      thread.subAgents) and one resolved. Same rule as background tasks: real Agent cards
 //                      under the divider, pulsing accent dot on the live one, nothing on the resolved one.
+//   ?variant=codexpolls a codex long-poll run: ten unpaired `Wait`/`Poll process` cards (pending +
+//                      `backgroundState: "unknown"`) around ONE real detached shell. The polls launched
+//                      nothing, so they collapse into the divider's count; the shell keeps its card.
 //   ?variant=buriedask  a ```question in the MIDDLE of the run, with tool work and a closing summary after
 //                      it. Two guards at once: the ask is lifted OUT of the collapse (a decision the human
 //                      owes is not disposable chatter), and its chips are LIVE even though a newer ask is
@@ -225,6 +228,31 @@ const dispatches: TranscriptMessage[] = [
   withId(asst("**Fixed** — every background lifecycle now keeps its own card.")),
 ]
 
+// The codex LONG-POLL shape: a model babysitting a gate through `wait`/`write_stdin`, whose polls the
+// projector could not pair with a launch, so each arrives pending + `backgroundState: "unknown"`. That
+// state used to make every one of them a lifted-out card, and a real rollout produced 888 of them — a
+// queue card that was nothing but `Wait · cell 30 · unknown` rows with runaway clocks (maintainer
+// 2026-08-09). They are reads of somebody else's process, so they belong in the divider's count like any
+// other call; the genuinely detached `run_in_background` shell below them still keeps its card.
+const orphanPoll = (name: string, detail: string, over: Partial<TranscriptToolCall> = {}) =>
+  tool(name, { detail, status: "pending", backgroundState: "unknown", ...over })
+
+const codexpolls: TranscriptMessage[] = [
+  { sourceId: "u-cur", role: "user", text: "Watch the release workflow and tell me when it lands.", tools: [], parts: [] },
+  withId(asst("Kicking the workflow off, then I'll sit on it until it reaches a terminal state.", [
+    tool("Bash", { detail: "gh workflow run release.yml", desc: "Starting the release workflow" }),
+  ])),
+  withId(asst("", [bgShell("Tailing the release log", "gh run watch 8891241")])),
+  ...[29, 30, 31, 32, 34].flatMap((cell) => [
+    withId(asst("", [orphanPoll("Wait", `cell ${cell}`)])),
+    withId(asst("", [orphanPoll("Poll process", "session 98949", { durationMs: 63_807_000 })])),
+  ]),
+  withId(asst("I'm performing one final lightweight state check before I report back.", [
+    tool("Bash", { detail: "gh run view 8891241 --json conclusion", desc: "Checking the final conclusion" }),
+  ])),
+  withId(asst("**Fixed** — the release workflow finished green.")),
+]
+
 // A second, differently-worded ask so the stacked-question variants are readable apart at a glance.
 const engineQuestion = [
   "```question",
@@ -278,6 +306,7 @@ const messages =
   variant === "single" ? single
   : variant === "bgshells" ? bgshells
   : variant === "dispatches" ? dispatches
+  : variant === "codexpolls" ? codexpolls
   : variant === "notools" ? notools
   : variant === "batchedends" ? batchedends
   : variant === "questionthentool" ? questionthentool
