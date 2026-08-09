@@ -1,0 +1,70 @@
+import { showToast } from "../store.ts"
+import { COPY_COMMAND_FEEDBACK_MS } from "./copyCommandFeedback.ts"
+import { CODE_BLOCK_CLASS, CODE_COPIED_CLASS, CODE_COPY_CLASS, COPY_CODE_LABEL } from "./syntaxHighlight.ts"
+
+// One delegated listener for every fenced code block in every sanitized markdown surface (chat, fence
+// and question cards, the plan and doc drawers), for the same reason lib/local-file-links.ts is
+// delegated: that prose is injected as an HTML string, so there is no React element to hang an onClick
+// on, and the transcript rebuilds those nodes constantly as it re-renders and virtualizes.
+export function installCodeCopyInterceptor(): () => void {
+  const handler = (event: MouseEvent) => {
+    if (event.button !== 0 || event.defaultPrevented) return
+    const button = event.target instanceof Element ? event.target.closest<HTMLElement>(`.${CODE_COPY_CLASS}`) : null
+    if (!button) return
+    event.preventDefault()
+    event.stopPropagation()
+    void copy(button)
+  }
+  document.addEventListener("click", handler)
+  return () => document.removeEventListener("click", handler)
+}
+
+// The `<code>` the button belongs to — `closest` on the wrapper rather than `previousElementSibling`, so
+// the pairing survives any future change to the order the two are emitted in.
+function codeOf(button: HTMLElement): HTMLElement | null {
+  return button.closest(`.${CODE_BLOCK_CLASS}`)?.querySelector<HTMLElement>("pre code") ?? null
+}
+
+async function copy(button: HTMLElement) {
+  const code = codeOf(button)
+  if (!code) return
+  // `textContent`, so highlight.js's own `<span>`s contribute nothing: what lands on the clipboard is the
+  // author's source, byte for byte. The renderer appends exactly one trailing LF (it is what keeps a
+  // still-streaming fence's selection behaving); strip it, because a shell command pasted into a terminal
+  // with a trailing newline RUNS instead of waiting to be read.
+  const text = (code.textContent ?? "").replace(/\n$/, "")
+  if (!text) return
+  if (!navigator.clipboard?.writeText) {
+    showToast("Clipboard access is unavailable; copy the code from a secure Frizz page", { duration: 7000 })
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch (error) {
+    showToast(`Could not copy code: ${(error as Error).message.slice(0, 100)}`, { duration: 7000 })
+    return
+  }
+  flashCopied(button)
+}
+
+// The button swaps to a check for the same window the terminal-command button uses. No success TOAST:
+// that button needs one because it sits in a dense rail where the check is easy to miss, while this one
+// is under the pointer that just clicked it — a toast per code copy would be pure noise in a transcript
+// full of fences. Failures still toast, since a silent no-op there is indistinguishable from a copy.
+//
+// Keyed by ELEMENT, not by a single module-level timer: two blocks can be copied within the window, and
+// the second must not cancel the first block's check. A WeakMap so a node the transcript re-renders away
+// takes its entry with it.
+const resetTimers = new WeakMap<HTMLElement, number>()
+
+function flashCopied(button: HTMLElement) {
+  button.classList.add(CODE_COPIED_CLASS)
+  button.title = "Copied"
+  const pending = resetTimers.get(button)
+  if (pending !== undefined) window.clearTimeout(pending)
+  resetTimers.set(button, window.setTimeout(() => {
+    button.classList.remove(CODE_COPIED_CLASS)
+    button.title = COPY_CODE_LABEL
+    resetTimers.delete(button)
+  }, COPY_COMMAND_FEEDBACK_MS))
+}

@@ -847,6 +847,106 @@ a[href] {
   padding: 0;
   font-size: 0.88em;
 }
+/* ── Fenced-code copy button ────────────────────────────────────────────────────────────────────
+   lib/syntaxHighlight.ts wraps every fenced block in this span and appends the button; one delegated
+   listener (lib/copy-code.ts) does the copying. The wrapper exists because the `<pre>` above SCROLLS:
+   an absolutely-positioned button anchored to it rides the content and slides out of view the moment
+   a long line is scrolled sideways.
+
+   The wrapper is now what stands in the prose flow, so the block rhythm (--md-step) moves onto it and
+   the `pre` inside gives its own margin up. The first/last-child resets have to name it explicitly:
+   `.md-body .md-code` TIES with `.md-body > :first-child` on specificity and, being later in the
+   file, would otherwise win and reopen the leading gap those resets exist to close. */
+.md-body .md-code {
+  display: block;
+  position: relative;
+  margin: var(--md-step) 0;
+}
+.md-body .md-code > pre {
+  margin: 0;
+}
+.md-body > .md-code:first-child {
+  margin-top: 0;
+}
+.md-body > .md-code:last-child {
+  margin-bottom: 0;
+}
+/* Geometry is ExternalTerminalCommand's copy button — the app's existing one — expressed in `em` so it
+   tracks the prose scale instead of being pinned at the transcript's 14px (a card's .md-body renders at
+   13px). That button is a 24px box holding a 14px lucide glyph; 1.7em and 0.58 of the box are those two
+   numbers. Inset 0.35em sits the button inside the `pre`'s own 0.75em/1em padding, so it never overhangs
+   the border. */
+.md-body .md-code-copy {
+  --md-copy-box: 1.7em;
+  position: absolute;
+  top: 0.35em;
+  right: 0.35em;
+  width: var(--md-copy-box);
+  height: var(--md-copy-box);
+  box-sizing: border-box;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: calc(var(--md-copy-box) / 4);
+  /* Opaque, and one step up from the `pre`'s own bg: a code line long enough to run under the button
+     must be occluded rather than showing through it.
+     THE BUTTON OVERLAYS THE FIRST LINE; it does not reserve room. Reserving would mean ~2.5em of
+     right padding on every line of every block, and in the Queue's narrow column (QUEUE_WRAP makes
+     those `pre`s wrap and break-all) that costs about three characters per line on every line — far
+     more than the one character the overlay can hide, on the first line, only while hovered. Every
+     code viewer this is modelled on overlays for the same reason. */
+  background: var(--color-panel-2);
+  color: var(--color-muted);
+  cursor: pointer;
+  /* Quiet until the block is under the pointer — a transcript can hold a dozen fences, and a dozen
+     always-lit buttons would out-shout the code. Focus reveals it for the keyboard, `is-copied` holds
+     it lit through the check so the confirmation is seen even if the pointer has already left. */
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.md-body .md-code:hover .md-code-copy,
+.md-body .md-code-copy:focus-visible,
+.md-body .md-code-copy.is-copied {
+  opacity: 1;
+}
+/* Nothing to hover WITH: on a touch surface the button would be permanently invisible. */
+@media (hover: none) {
+  .md-body .md-code-copy {
+    opacity: 1;
+  }
+}
+.md-body .md-code-copy:hover,
+.md-body .md-code-copy.is-copied {
+  color: var(--color-fg);
+  border-color: color-mix(in srgb, var(--color-muted) 55%, transparent);
+}
+/* The glyph, centred in the button's INTERIOR (inset:0 on a border-box element resolves against the
+   padding box) — lucide `Copy`, and lucide `Check` once copied. Masks rather than inline `<svg>` for the
+   reason the task marks give: the render allowlist drops svg with its subtree, but a stylesheet the
+   sanitizer never sees can still carry lucide's exact geometry and let `currentColor` paint it.
+
+   THE TWO PEN WIDTHS DIFFER, and they are measurements rather than taste — re-measure with
+   scripts/verify-md-code-copy-button.mjs, do not re-guess. The resting icon takes 1.8, which is what
+   ExternalTerminalCommand (the app's other copy button) draws its resting glyph at. The check takes
+   2.4 rather than that button's 2.2, because a single-polyline tick lays down far less ink than an
+   outlined two-sheet icon and reads as the lighter mark: at 2.2 the states measured 4.70% and 2.81%
+   perceived ink (1.67×, over the 1.6× gate); 2.4 puts the check at 3.09% (1.52×). Going further is
+   the wrong lever — closing the RAW-AREA gap (still 2.53×) with the pen alone would need stroke ~3.9,
+   heavier than any other glyph in the app; the tone step below is what actually carries it. */
+.md-body .md-code-copy::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-color: currentColor;
+  -webkit-mask: var(--md-copy-glyph) center / calc(var(--md-copy-box) * 0.58) no-repeat;
+  mask: var(--md-copy-glyph) center / calc(var(--md-copy-box) * 0.58) no-repeat;
+  --md-copy-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='14' height='14' x='8' y='8' rx='2' ry='2'/%3E%3Cpath d='M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2'/%3E%3C/svg%3E");
+}
+/* Same `-0.5` viewBox shift the task list's check carries, and for the same reason: lucide's tick runs
+   (20,6)→(9,17)→(4,12), so its ink centre sits half a unit above the viewBox centre and it renders
+   riding high. Correcting it in the glyph's own coordinates costs no unit and cannot drift with size. */
+.md-body .md-code-copy.is-copied::after {
+  --md-copy-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -0.5 24 24' fill='none' stroke='%23fff' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
+}
 /* Fenced code highlighting: a deliberately restrained dark palette, expressed only through the
    allowlisted classes emitted by our explicit highlight.js core grammars. Block typography,
    line-height, padding, selection, and overflow continue to belong to the existing pre/code rules

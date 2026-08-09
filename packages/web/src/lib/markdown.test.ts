@@ -137,12 +137,12 @@ test("shapes that are not obviously a table stay prose", () => {
   // The closing pipe is escaped, so the row never closes.
   assert.match(renderBlock("| a | b \\|\n| c | d \\|"), /^<p>/)
   // Four-space indent is an indented code block, not a table.
-  assert.match(renderBlock("    | a | b |\n    | c | d |"), /^<pre>/)
+  assert.match(renderBlock("    | a | b |\n    | c | d |"), /^<span class="md-code"><pre>/)
 })
 
 test("pipe rows inside a fence stay code", () => {
   const html = renderBlock("```\n| a | b |\n| c | d |\n```")
-  assert.match(html, /^<pre>/)
+  assert.match(html, /^<span class="md-code"><pre>/)
   assert.doesNotMatch(html, /<table>/)
 })
 

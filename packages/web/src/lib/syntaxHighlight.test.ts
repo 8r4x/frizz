@@ -26,10 +26,18 @@ test("fence aliases resolve without guessing unknown languages", () => {
 
 test("declared languages highlight multiline source and preserve whitespace", () => {
   const html = renderHighlightedCode("const answer: number = 42\n\tconsole.log(answer)\n", "ts")
-  assert.match(html, /^<pre><code class="hljs language-typescript">/)
+  assert.match(html, /^<span class="md-code"><pre><code class="hljs language-typescript">/)
   assert.match(html, /hljs-keyword/)
   assert.match(html, /\n\t<span class="hljs-variable language_">console<\/span>/)
-  assert.match(html, /\n<\/code><\/pre>\n$/)
+  assert.match(html, /\n<\/code><\/pre>/)
+})
+
+// `<pre>` preserves whitespace, so the copy button may not be separated from the code by so much as a
+// newline — one would print as a blank first line in every fenced block in the app.
+test("every fenced block carries a copy button, and no stray whitespace inside the pre", () => {
+  const html = renderHighlightedCode("echo hi\n", "bash")
+  assert.match(html, /<\/code><\/pre><button type="button" class="md-code-copy" title="Copy code"><\/button><\/span>\n$/)
+  assert.equal(html.match(/<pre>([\s\S]*)<\/pre>/)?.[1].startsWith("<code"), true)
 })
 
 test("unknown and missing languages are escaped plaintext, never executable markup", () => {

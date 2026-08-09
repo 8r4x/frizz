@@ -42,6 +42,16 @@
     </main>
     <script type="module">
       import { mdToHtml } from "/src/lib/markdown.ts"
+      import { installCodeCopyInterceptor } from "/src/lib/copy-code.ts"
+
+      // The product installs this in main.tsx; the fixture has no React root, so it installs it itself —
+      // without it the copy button renders but does nothing, which is exactly the seam worth exercising.
+      installCodeCopyInterceptor()
+
+      // The prose font is a user setting (lib/font.ts → html[data-font]), and a fixture that leaves it
+      // unset silently measures the MONO default only. `?font=sans` renders the other one.
+      const font = new URLSearchParams(location.search).get("font")
+      if (font) document.documentElement.dataset.font = font
 
       window.__syntaxFixtureXss = 0
       const threadLongToken = "thread_" + "fedcba9876543210".repeat(28)

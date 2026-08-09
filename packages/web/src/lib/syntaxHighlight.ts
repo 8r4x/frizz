@@ -76,6 +76,25 @@ function escapeHtml(text: string): string {
   })
 }
 
+// The copy affordance is minted HERE, in the HTML string, rather than rendered as a component: a fenced
+// block leaves this pipeline as markup that every surface injects with innerHTML, so there is no React
+// element to hang a button on. That is the same constraint the sanitizer's local-file link already lives
+// under (markdown.ts), and the click is likewise handled by one delegated listener — lib/copy-code.ts.
+//
+// The WRAPPER exists because `<pre>` is the scroller (`overflow-x: auto`): a button positioned inside it
+// rides the content and slides out of view the moment a long line is scrolled, so the anchor has to be an
+// element that does not scroll. A SPAN rather than a div for the reason markdown.ts's frameImage gives —
+// this HTML is re-parsed by the browser when a surface injects it, and a non-phrasing wrapper makes the
+// parser restructure the block around it; `.md-code` supplies the display/position it needs.
+//
+// The button carries no inline `<svg>`: the sanitizer drops svg WITH its subtree, so both glyphs (copy,
+// and the check the delegated handler swaps to) are lucide paths carried as mask-image data URIs in
+// styles.css, exactly as the markdown task marks are.
+export const CODE_BLOCK_CLASS = "md-code"
+export const CODE_COPY_CLASS = "md-code-copy"
+export const CODE_COPIED_CLASS = "is-copied"
+export const COPY_CODE_LABEL = "Copy code"
+
 export function renderHighlightedCode(text: string, infoString?: string): string {
   const language = resolveFenceLanguage(infoString)
   // Match Marked's stock code renderer: exactly one trailing LF is present in the resulting <code>,
@@ -93,5 +112,9 @@ export function renderHighlightedCode(text: string, infoString?: string): string
       value = escapeHtml(code)
     }
   }
-  return `<pre><code class="hljs language-${language}">${value}</code></pre>\n`
+  // No whitespace anywhere inside the <pre>: it preserves it, so a newline before the <code> would print
+  // as a blank first line. The button follows the block in DOM order so a keyboard walk reaches the code
+  // before its affordance, and `title` is the accessible name — `aria-label` is not in the render allowlist.
+  return `<span class="${CODE_BLOCK_CLASS}"><pre><code class="hljs language-${language}">${value}</code></pre>`
+    + `<button type="button" class="${CODE_COPY_CLASS}" title="${COPY_CODE_LABEL}"></button></span>\n`
 }

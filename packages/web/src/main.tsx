@@ -13,6 +13,7 @@ import { initTranscriptLive } from "./api/transcript-live.ts"
 import { initFont } from "./lib/font.ts"
 import { installExternalLinkInterceptor } from "./lib/external-links.ts"
 import { installLocalFileLinkInterceptor } from "./lib/local-file-links.ts"
+import { installCodeCopyInterceptor } from "./lib/copy-code.ts"
 import { installThreadLinkInterceptor } from "./lib/thread-links.ts"
 import { primeRoute } from "./lib/router.ts"
 import { innerPath } from "./lib/base-path.ts"
@@ -47,6 +48,7 @@ if (!settingsFixture) {
   initFont(queryClient)
   installExternalLinkInterceptor()
   installLocalFileLinkInterceptor()
+  installCodeCopyInterceptor()
   installThreadLinkInterceptor()
 }
 
