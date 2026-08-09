@@ -8,5 +8,6 @@ out-eight/
 shots/
 fit/cand.*
 fit/spline-cand.*
+fit/bez-cand.*
 fit/ref-mask-*.png
 fit/traced-centreline.json
