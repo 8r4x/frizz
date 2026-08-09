@@ -56,7 +56,10 @@
      crowding comes back.
 
      This governs OUTER containers only. Anything NESTED inside one — an option row in a question
-     card, a card's action button, a to-do row, an inline code chip — keeps the 6px control radius. */
+     card, a card's action button, a to-do row, an inline code chip — keeps the 6px control radius.
+     ONE CARVE-OUT, and it is a different question rather than an exception: a nested box INSET INTO A
+     CORNER (the fenced-code copy button) has its arc read against this one, so it takes the concentric
+     radius — this value minus the gap — instead. The 6px rule stands for everything that sits in flow. */
   --block-radius: 12px;
 }
 
@@ -878,15 +881,25 @@ a[href] {
    the border. */
 .md-body .md-code-copy {
   --md-copy-box: 1.7em;
+  /* One inset, used three times, because the corner depends on it — see the radius below. */
+  --md-copy-inset: 0.35em;
   position: absolute;
-  top: 0.35em;
-  right: 0.35em;
+  top: var(--md-copy-inset);
+  right: var(--md-copy-inset);
   width: var(--md-copy-box);
   height: var(--md-copy-box);
   box-sizing: border-box;
   padding: 0;
   border: 1px solid var(--color-border);
-  border-radius: calc(var(--md-copy-box) / 4);
+  /* CONCENTRIC with the `pre` it sits in, which is the whole rule for a rounded box nested in a rounded
+     box: the inner radius is the outer one MINUS the gap between them, so the two arcs share a centre
+     and the space between them stays an even band the whole way round. Any other value makes the corner
+     pinch or splay — a fixed `box / 4` read as 5.95px against the block's 12px arc at a 4.89px inset,
+     where concentric asks for 7.11px, and the gap visibly narrowed through the corner.
+     DERIVED, not fitted: --block-radius is the outer arc (`.md-body pre` above) and --md-copy-inset is
+     the gap, so this stays concentric when either moves, and at the 13px card scale where the inset
+     resolves to 4.55px rather than 4.89px. */
+  border-radius: calc(var(--block-radius) - var(--md-copy-inset));
   /* Opaque, and one step up from the `pre`'s own bg: a code line long enough to run under the button
      must be occluded rather than showing through it.
      THE BUTTON OVERLAYS THE FIRST LINE; it does not reserve room. Reserving would mean ~2.5em of

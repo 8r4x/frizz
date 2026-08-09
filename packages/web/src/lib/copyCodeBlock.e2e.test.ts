@@ -50,6 +50,20 @@ test("a fenced code block copies its own source, minus the renderer's trailing n
     assert.equal(counts.buttons, counts.blocks)
     assert.equal(counts.positioned, true)
 
+    // CONCENTRIC CORNERS. The chip is a rounded box inside the block's rounded box, so its arc must
+    // share a centre with the block's — inner radius = outer radius − the gap. Pinned because the
+    // relationship is derived (`calc(var(--block-radius) - var(--md-copy-inset))`) and a plausible-looking
+    // edit to a fixed radius, or to the inset alone, breaks it silently: the band between the two arcs
+    // just pinches through the corner. Checked at BOTH prose scales, since the gap is in `em`.
+    const arcs = await page.evaluate(() => [...document.querySelectorAll(".md-code")].map((wrap) => {
+      const pre = wrap.querySelector("pre")!, btn = wrap.querySelector(".md-code-copy")!
+      const radius = (el: Element) => parseFloat(getComputedStyle(el).borderTopRightRadius)
+      const gap = pre.getBoundingClientRect().right - btn.getBoundingClientRect().right
+      // Each arc's centre, measured in from the same edge.
+      return { outer: +radius(pre).toFixed(2), inner: +(gap + radius(btn)).toFixed(2) }
+    }))
+    for (const { outer, inner } of arcs) assert.ok(Math.abs(outer - inner) < 0.05, `arc centres differ: ${outer} vs ${inner}`)
+
     // Quiet until hovered, so a transcript full of fences is not a wall of buttons.
     assert.equal(await page.$eval("#thread .md-code-copy", (b) => getComputedStyle(b).opacity), "0")
     await page.hover("#thread .md-code")
