@@ -17,6 +17,7 @@ import {
   renameProject,
   reorderProjects,
   resolveProjectIcon,
+  setProjectIcon,
 } from "./project-registry.ts"
 
 const A = "029a30af-f126-40e3-b04c-d80e74e3e090"
@@ -439,4 +440,63 @@ test("the shipped scan version is what an unversioned cache is compared against"
   } finally {
     rmSync(home, { recursive: true, force: true })
   }
+})
+
+test("a scanner version NEVER overrules the operator's own uploaded icon", () => {
+  const home = sandbox()
+  try {
+    const dir = project(home, "code/app", A)
+    registerProject({ dir, id: A }, home)
+    const chosen = join(home, "chosen.png")
+    writeFileSync(chosen, "not really a png, but it exists")
+    setProjectIcon(A, chosen, home)
+
+    // Every entry written before versioning existed has NO iconScanVersion, so it reads as stale. A
+    // version bump discarding those would have thrown away every uploaded icon on the machine at
+    // once — measured on a real registry, where `pullfrog/app` fell back to its monogram with the
+    // file it had been given sitting right there on disk.
+    let scanned = 0
+    const got = resolveProjectIcon(A, () => { scanned++; return join(dir, "detected.png") }, { home, version: 99 })
+    assert.equal(got, chosen)
+    assert.equal(scanned, 0, "a custom icon is not a scan result and must not trigger one")
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("a custom icon that has gone missing stays missing rather than being re-detected", () => {
+  const home = sandbox()
+  try {
+    const dir = project(home, "code/app", A)
+    registerProject({ dir, id: A }, home)
+    setProjectIcon(A, join(home, "deleted.png"), home)
+    let scanned = 0
+    assert.equal(resolveProjectIcon(A, () => { scanned++; return join(dir, "found.png") }, { home }), undefined)
+    assert.equal(scanned, 0, "their choice is recorded; picking a different picture for them is not the fix")
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("a miss from an OLDER scanner reads as unknown, so the client asks again", () => {
+  // The two halves of the version mechanism have to agree. The client suppresses the icon request for
+  // a `none`, and the server can only rescan when a request ARRIVES — so if a pre-versioning miss
+  // still read as `none`, a widened scan would never be asked about the very projects it was widened
+  // for. This is the exact shape of nub on the real machine: its icon resolves correctly on demand,
+  // and the grid never demanded it.
+  //
+  // The derivation lives in router.ts projectCard; this pins the RULE it encodes so the two cannot
+  // drift apart silently.
+  const status = (entry: { icon?: string; iconScannedAt?: string; iconScanVersion?: number }) =>
+    entry.icon
+      ? "icon"
+      : entry.iconScannedAt && (entry.iconScanVersion ?? 0) === ICON_SCAN_VERSION
+        ? "none"
+        : "unknown"
+
+  assert.equal(status({ icon: "/x/icon.svg" }), "icon")
+  assert.equal(status({}), "unknown", "never scanned")
+  assert.equal(status({ iconScannedAt: "2026-08-07T00:00:00.000Z" }), "unknown", "scanned before versioning existed")
+  assert.equal(status({ iconScannedAt: "2026-08-07T00:00:00.000Z", iconScanVersion: ICON_SCAN_VERSION - 1 }), "unknown", "an older scanner")
+  assert.equal(status({ iconScannedAt: "2026-08-07T00:00:00.000Z", iconScanVersion: ICON_SCAN_VERSION }), "none", "the current scanner really did find nothing")
 })

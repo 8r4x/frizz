@@ -113,7 +113,7 @@ import { resolvePlanFile, deletePlanFile } from "./plan-files.ts"
 import { providerResumeCommand } from "./external-terminal.ts"
 import { backgroundShellLineCount, readBackgroundShellOutput } from "./background-shell-output.ts"
 import { projectRetiredBackgroundOps, retiredOpsFor } from "./transcript.ts"
-import { clearProjectIcon, customIconPath, listProjects, reorderProjects, setProjectIcon, type RegistryEntry } from "./project-registry.ts"
+import { clearProjectIcon, customIconPath, ICON_SCAN_VERSION, listProjects, reorderProjects, setProjectIcon, type RegistryEntry } from "./project-registry.ts"
 import { basename, dirname } from "node:path"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { ProjectCard, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS } from "@frizz/shared"
@@ -501,7 +501,18 @@ function projectCard(entry: RegistryEntry, stale: boolean): ProjectCard {
     iconVersion: entry.iconScannedAt,
     // `iconScannedAt` alone cannot answer this: it is stamped whenever a scan RAN, found or not. See
     // ProjectCard.iconStatus for why the never-scanned case has to stay distinguishable.
-    iconStatus: entry.icon ? "icon" : entry.iconScannedAt ? "none" : "unknown",
+    //
+    // AND a miss is only `none` while the scanner that recorded it is the CURRENT one. This pairs with
+    // ICON_SCAN_VERSION and without it the two halves of that mechanism cancel out: the client
+    // suppresses the icon request for a `none`, and the server's rescan-on-version-bump can only run
+    // when a request arrives — so a widened scan would never be asked about the very projects it was
+    // widened for. Measured on the real registry (2026-08-08): nub's `site/public/icon.svg` resolves
+    // correctly on demand, but the grid never demanded it because a pre-versioning miss read as `none`.
+    iconStatus: entry.icon
+      ? "icon"
+      : entry.iconScannedAt && (entry.iconScanVersion ?? 0) === ICON_SCAN_VERSION
+        ? "none"
+        : "unknown",
     iconIsCustom: entry.iconSource === "custom" ? true : undefined,
   }
 }

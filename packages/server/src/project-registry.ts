@@ -494,13 +494,23 @@ export function resolveProjectIcon(
   if (!entry) return undefined
 
   const staleScan = (entry.iconScanVersion ?? 0) !== (options.version ?? ICON_SCAN_VERSION)
-  // A stored PICK goes stale exactly as a stored miss does: improving the RANKING (not just the
-  // search) means the file we settled on may no longer be the one this project should wear. bun had
-  // already cached the black glyph, so re-asking only the misses would have left it black.
+
+  // THE OPERATOR'S OWN CHOICE IS NOT A SCAN RESULT, so no scanner version can overrule it. This is
+  // checked FIRST and on its own for that reason: folding it in below let a version bump discard
+  // every uploaded icon on the machine at once — every entry written before versioning existed has
+  // no `iconScanVersion`, so all of them read as stale, and a project whose icon the operator had
+  // deliberately chosen fell back to its monogram. Measured on a real registry (2026-08-08).
+  //
+  // A chosen file that has gone MISSING is a broken square, not an invitation to pick a different
+  // picture for them — leave the choice recorded and let them fix it.
+  if (entry.iconSource === "custom") {
+    return entry.icon && existsSync(entry.icon) ? entry.icon : undefined
+  }
+
+  // A stored DETECTED pick goes stale exactly as a stored miss does: improving the RANKING (not just
+  // the search) means the file we settled on may no longer be the one this project should wear. bun
+  // had already cached a black glyph, so re-asking only the misses would have left it black.
   if (entry.icon && existsSync(entry.icon) && !staleScan) return entry.icon
-  // An operator's chosen file that has gone missing is a broken square, not an invitation to pick a
-  // different picture for them — leave the choice recorded and let them fix it.
-  if (entry.iconSource === "custom") return undefined
   // A remembered "nothing here" is only trusted while it came from the CURRENT scanner and is recent.
   // The version check is what makes improving the scan take effect immediately rather than whenever
   // each project's 12 hours happen to elapse.
