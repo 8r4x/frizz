@@ -3457,6 +3457,35 @@ export function createTailer(deps: TailerDeps): Tailer {
     return (line: string) => { a(line); b(line) }
   }
 
+  // Drop the sends that died with the process holding them, at the ONE moment that can be said
+  // honestly: after this tick's records have been correlated out of `items`, so anything the agent
+  // actually read is already gone from the list, and only against a daemon frizz can PROVE is dead.
+  //
+  // `pending`/`enqueued` are both claims about a live process — one was handed the message, one
+  // receipted it into its own queue. When that daemon is gone the claim is false, but the row survives
+  // for the rest of UNCONFIRMED_DROP_MS: an hour of a gray "queued" bubble pinned under the transcript
+  // for a message nobody will ever read, and the unqueue click cannot clear it either — it asks the
+  // CURRENT daemon to cancel a uuid it never heard of, gets `false`, and answers "Too late — that
+  // message has already left the queue", which is exactly backwards. Same shape, and the same words, as
+  // the restart path's `retireOutstandingDeliveries`; a death is the same positive evidence a restart is.
+  //
+  // DROPPED, not tombstoned, for that function's reason: a tombstone would suppress a matching JSONL
+  // enqueue bubble, hiding a message that DID land in the sliver before the death. This only stops
+  // frizz projecting its own synthetic bubble; nothing about the real message is touched.
+  //
+  // BROKER-ONLY. `paneDeadForRow` is the reading that fails safe to ALIVE (defaultBrokerDaemonAlive
+  // answers "dead" only on a positively ABSENT discovery record or an ESRCH pid probe), so this can
+  // only ever retire sends frizz can prove are stranded. Observed 2026-08-11 on
+  // `in-codex-threads-tool-calls-ike`: receipted 19:45:05.771, daemon dead 760ms later.
+  function retireDeliveriesLostWithTheDaemon(
+    row: SessionRow,
+    items: DeliveryLedgerItem[],
+  ): DeliveryLedgerItem[] {
+    if (!items.length || !isBrokerClaudeRow(row) || !paneDeadForRow(row)) return items
+    const next = items.filter((item) => item.state !== "pending" && item.state !== "enqueued")
+    return next.length === items.length ? items : next
+  }
+
   function ledgerFold(
     row: SessionRow,
     nowMs: number,
@@ -3479,6 +3508,7 @@ export function createTailer(deps: TailerDeps): Tailer {
         items = correlateDeliveryRecord(items, rec, nowIso)
       },
       finish: () => {
+        items = retireDeliveriesLostWithTheDaemon(row, items)
         items = ageDeliveries(items, nowMs)
         if (items === before) return { changed: false, value: null }
         const value = serializeDeliveryLedger(items)

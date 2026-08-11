@@ -1275,6 +1275,48 @@ test("tailer: a broker daemon that dies UNSTOPPED clears its shells — `exited`
   assert.ok(h.changes.n > before, "the shell vanishing marks the board dirty")
 })
 
+// The DELIVERY twin of the test above, and the same reading answers both. An outstanding send is a claim
+// that a live process is holding the operator's message; a daemon that has died holds nothing, and the
+// row otherwise survives UNCONFIRMED_DROP_MS — an hour of a gray "queued" bubble for a message nobody
+// will read, which the unqueue click cannot clear either. Observed 2026-08-11 on
+// `in-codex-threads-tool-calls-ike`: receipted at 19:45:05.771, daemon dead 760ms later.
+test("tailer: a broker daemon that dies holding a follow-up retires it instead of pinning it for an hour", () => {
+  const h = harness()
+  h.storage.upsertSession(row())
+  h.storage.setBackend("t", "claude")
+  h.storage.setClaudeRuntime("t", "broker")
+  fixture(h.logDir, "sid", [IN_FLIGHT])
+  const at = "2026-07-01T00:00:30.000Z"
+  h.storage.setDeliveryLedger("t", JSON.stringify([
+    { id: "d-live", text: "keep going", state: "enqueued", at, updatedAt: at },
+    { id: "d-warn", text: "an older send frizz could not confirm", state: "unconfirmed", at, updatedAt: at },
+  ]))
+  const daemon = { alive: true }
+  const t = createTailer({
+    project: { cwdSlug: "x" } as Project,
+    storage: h.storage,
+    bus: h.bus,
+    onChange: () => h.changes.n++,
+    now: () => h.clock.ms,
+    paneDead: () => false,
+    capturePane: () => h.pane.text,
+    sessionLogDir: h.logDir,
+    brokerDaemonAlive: () => daemon.alive,
+  })
+
+  h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z")
+  t.tick()
+  const held = JSON.parse(h.storage.getSession("t")?.delivery_ledger ?? "[]") as Array<{ id: string }>
+  assert.deepEqual(held.map((d) => d.id), ["d-live", "d-warn"], "a live daemon really is holding the send")
+
+  daemon.alive = false
+  const before = h.changes.n
+  t.tick()
+  const left = JSON.parse(h.storage.getSession("t")?.delivery_ledger ?? "[]") as Array<{ id: string }>
+  assert.deepEqual(left.map((d) => d.id), ["d-warn"], "the stranded send goes; the unconfirmed warning the human may re-drive stays")
+  assert.ok(h.changes.n > before, "retiring it marks the board dirty so the queue card comes back at once")
+})
+
 // Nothing injected: a real stateDir, a real record file naming a real (dead) pid, the real default probe,
 // through the real read→fold→view. The two tests above each prove one half — that paneDeadForRow consumes
 // the answer, and that the answer is right — and they meet at a single line. This is the whole path.
