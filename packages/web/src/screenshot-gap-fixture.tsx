@@ -25,6 +25,11 @@ import "./styles.css"
 //   ?case=cards             — two pictures stacked, then an ordinary tool band. The pitch BETWEEN
 //                             pictures, and out of one into a compact band.
 //   ?case=prose             — picture → assistant prose, which already took the full step.
+//   ?case=prose-picture     — the two ways a worker EMBEDS a shot in its own prose, in one message: a
+//                             Markdown `![](…)` and a bare absolute PATH. They must render as ONE
+//                             object (see ImageFrame), so both keep the PROSE rhythm — the picture step
+//                             is for the tool CARD, which is its own transcript object rather than part
+//                             of the sentence introducing it. This page is where that is checked.
 //   ?case=control           — the SAME shapes with no picture in them: two background-op cards batched,
 //                             then the shimmer. Both must still sit at the tight run, which is what
 //                             proves PICTURE_STEP is charged to pictures and not to every exception.
@@ -78,7 +83,33 @@ const picture = (detail: string) => ({ name: "Read", detail, outputImage: SHOT, 
 const background = (desc: string, command: string) => ({ ...bash(desc, command, "pending"), backgroundState: "background" })
 
 const tail: TranscriptMessage[] = (
-  CASE === "control"
+  CASE === "prose-picture"
+    ? ([
+        {
+          sourceId: "m3",
+          role: "assistant",
+          text: "",
+          tools: [],
+          parts: [{
+            kind: "text",
+            text: [
+              "The shot a worker embeds in its own handoff, both ways it can write one.",
+              "",
+              "As MARKDOWN — a block inside the prose body, spaced by that body's own paragraph rhythm:",
+              "",
+              `![the reported spacing](${SHOT})`,
+              "",
+              "As a BARE PATH — its own block in the transcript's rhythm, so it takes the picture step:",
+              "",
+              SHOT,
+              "",
+              "Prose closing the message, so both pictures have a neighbour below as well as above.",
+            ].join("\n"),
+          }],
+          at: AGO(40),
+        },
+      ] as unknown as TranscriptMessage[])
+    : CASE === "control"
     ? ([
         {
           sourceId: "m3",

@@ -3098,9 +3098,15 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
   // above earlier prose. A question-block index (`qi`) threads across all text parts so the answering
   // controller (which numbers ```question blocks over the flat text, same order) lines up.
   const blocks: ReactNode[] = []
-  // Runs PARALLEL to `blocks`: which of each block's own edges is a rendered PICTURE. A picture reaches
-  // this list two ways — a tool card whose result is one, and a bare image path a worker wrote in its
-  // prose — and either way it takes PICTURE_STEP against its neighbour instead of the block STEP.
+  // Runs PARALLEL to `blocks`: which of each block's own edges is a rendered PICTURE, so a tool band
+  // that BEGINS or ENDS on one takes PICTURE_STEP against the block beside it rather than the STEP.
+  //
+  // Only a tool CARD counts. A picture a worker writes into its own prose — as a bare absolute path
+  // (BlockImage, below) or as Markdown `![](…)` (inside ProseHtml, where the prose body's own
+  // paragraph margin spaces it) — is part of the sentence that introduces it, and keeps the prose
+  // rhythm. Those two spellings must render as ONE object (see ImageFrame), so neither may move alone:
+  // the Markdown one lives in CSS and the bare path in this list, and giving the bare path the picture
+  // step put 22px under one frame and 14px under the identical frame two paragraphs down.
   const pictureEdges: PictureEdges[] = []
   const push = (node: ReactNode, edges: PictureEdges = NO_PICTURE) => {
     blocks.push(node)
@@ -3136,7 +3142,6 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
               : p.kind === "directive" ? <CodexDirectiveCard key={partKey} directive={p.directive} />
               : p.kind === "mermaid" ? <MermaidDiagram key={partKey} source={p.source} />
               : <ProseHtml key={partKey} md={p.text} wrap={dense} />,
-              p.kind === "image" ? { head: true, tail: true } : NO_PICTURE,
             )
           }
           continue

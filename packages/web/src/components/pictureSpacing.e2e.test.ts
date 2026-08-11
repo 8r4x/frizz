@@ -23,6 +23,7 @@ import test from "node:test"
 const baseUrl = process.env.FRIZZ_PICTURE_SPACING_E2E_URL
 
 const TIGHT = 6
+const STEP = 14
 const PICTURE = 22
 // The virtualizer positions rows at fractional offsets, so a measured gap lands within a sub-pixel of
 // its constant. Assert the pitch, not the rounding.
@@ -136,6 +137,29 @@ test("a picture takes its own gap on both sides, and the compact exceptions arou
       return Math.round((rows[i].getBoundingClientRect().top - rows[i - 1].getBoundingClientRect().bottom) * 10) / 10
     })
     near(prose, PICTURE, "prose under a picture")
+
+    // 5. A picture a worker writes INTO its prose is not a card — it belongs to the sentence that
+    //    introduces it, so both spellings keep the PROSE step. The claim is that they AGREE: the
+    //    Markdown one is spaced in CSS and the bare path in the block list, so moving one alone puts
+    //    two different gaps under two identical frames in the same message.
+    await page.goto(fixtureUrl("?case=prose-picture"), { waitUntil: "domcontentloaded" })
+    await page.waitForSelector(".md-image-frame")
+    await settled(page)
+    const embedded = await page.evaluate(() => {
+      const r = (e: Element) => e.getBoundingClientRect()
+      const paragraphs = [...document.querySelectorAll(".md-body p")]
+      const below = (frame: Element | null) => {
+        if (!frame) return null
+        const next = paragraphs.filter((p) => r(p).top >= r(frame).bottom - 1).sort((a, b) => r(a).top - r(b).top)[0]
+        return next ? Math.round((r(next).top - r(frame).bottom) * 10) / 10 : null
+      }
+      return {
+        markdown: below(document.querySelector(".md-image-frame")),
+        barePath: below(document.querySelector('[data-frizz-msg="m3"] > .frizz-bash')),
+      }
+    })
+    near(embedded.markdown!, STEP, "prose under a Markdown picture")
+    near(embedded.barePath!, STEP, "prose under a bare-path picture")
 
     assert.deepEqual(errors, [], "no console/page errors")
   } finally {
