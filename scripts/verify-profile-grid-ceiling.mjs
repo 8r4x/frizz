@@ -68,7 +68,19 @@ try {
       }))
       return { model: row.dataset.profileGridRow, cells }
     })
-    return { rows }
+    // What the EYE reads is the label, not the padded box: a cell clamped to its 2.75rem minimum is
+    // wider than its word, so measure the rendered text run itself.
+    const labels = [...document.querySelectorAll("[data-profile-grid-row]")].map((row) => {
+      const runs = [...row.querySelectorAll(":scope > [role='menuitemradio']")].map((cell) => {
+        const text = cell.querySelector("span > span:not([aria-hidden='true'])") ?? cell
+        const range = document.createRange()
+        range.selectNodeContents(text)
+        const box = range.getBoundingClientRect()
+        return { label: text.textContent.trim(), left: box.left, right: box.right }
+      })
+      return { model: row.dataset.profileGridRow, runs }
+    })
+    return { rows, labels }
   })
 
   const round = (n) => Math.round(n * 100) / 100
@@ -94,6 +106,19 @@ try {
     ceiling.some((cell) => !cell.ghost && cell.label === "Ultracode") && ceiling.some((cell) => !cell.ghost && cell.label === "Ultra"),
     ceiling.map((cell) => `${cell.model}=${cell.ghost ? "(ghost)" : cell.label}`).join(" "),
   )
+
+  // Every label starts on its column's own left edge — that is what left alignment buys, and the
+  // reason the ceiling's short "Ultra" no longer floats. The TRAILING space after a short label
+  // varies by design (a cell holds its column, a word does not), so it is reported, not asserted.
+  const labelColumns = matrix.labels[0].runs.map((_, i) => matrix.labels.filter((row) => row.runs[i]).map((row) => round(row.runs[i].left)))
+  labelColumns.forEach((lefts, i) => {
+    const spread = round(Math.max(...lefts) - Math.min(...lefts))
+    check(`column ${i}: every label starts on one left edge`, spread < 0.5, `lefts ${lefts.join(", ")}`)
+  })
+  for (const row of matrix.labels) {
+    const gaps = row.runs.slice(1).map((run, i) => round(run.left - row.runs[i].right))
+    console.log(`      ${row.model}: label gaps ${gaps.join(", ")}`)
+  }
 
   const menu = await page.$(".profile-grid-menu")
   await menu.screenshot({ path: join(shotDir, `menu-${font}.png`) })

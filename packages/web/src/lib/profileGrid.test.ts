@@ -116,8 +116,17 @@ test("profile grid cells use pointer affordance and icon-free selection ring/tin
   assert.doesNotMatch(PROFILE_GRID_CELL_CLASS, /pl-/)
 })
 
-test("profile grid keeps the model column bounded beside a five-level effort row", () => {
-  assert.equal(profileGridTemplateColumns(5), "minmax(6rem, 7rem) repeat(5, minmax(2.75rem, auto))")
+test("profile grid keeps the model column bounded and lets every effort column hug its label", () => {
+  // No track minimum: a floor wider than the word leaves slack, and left-aligned slack all lands on
+  // one side — 23px after LOW against 14px after MEDIUM, and a selection ring off-centre on its word.
+  assert.equal(profileGridTemplateColumns(5), "minmax(6rem, 7rem) repeat(5, auto)")
+})
+
+test("profile grid cells hug their label rather than a fixed minimum", () => {
+  assert.doesNotMatch(PROFILE_GRID_CELL_CLASS, /min-w-/, "a minimum width is trailing slack once the label sits left")
+  assert.match(PROFILE_GRID_CELL_CLASS, /justify-start/)
+  assert.match(PROFILE_GRID_CELL_CLASS, /text-left/)
+  assert.doesNotMatch(PROFILE_GRID_CELL_CLASS, /text-center|justify-center/)
 })
 
 // Both ladders top out in ONE column. A column each leaves every Claude row ghosting codex's "ultra",

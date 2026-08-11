@@ -196,7 +196,11 @@ export function ProfileGridSelector({
                   <div
                     key={option.model}
                     data-profile-grid-row={option.model}
-                    className="grid min-w-max items-center gap-1 py-0.5"
+                    // `w-max`, not `min-w-max`: a stretched row hands its leftover width to its own
+                    // `auto` tracks, so a row shorter or narrower than the widest one slid every cell
+                    // in it out of line with the rows above. Sized to its content, a row has no
+                    // leftover to spread, and each column lands where its content puts it.
+                    className="grid w-max items-center gap-1 py-0.5"
                     style={{ gridTemplateColumns: profileGridTemplateColumns(columns.length) }}
                   >
                     <span className={`profile-grid-model-label min-w-0 max-w-[9.5rem] truncate px-1.5 text-left text-muted ${typography}`} title={option.label}>
@@ -206,13 +210,12 @@ export function ProfileGridSelector({
                       // A column can hold more than one effort name — "ultra" and "ultracode" share the
                       // ceiling — so take whichever name this model actually offers.
                       const effort = column.find((candidate) => option.efforts.includes(candidate))
-                      // EVERY cell has to give its column the SAME width in every row. Each row is its own
-                      // grid with `auto` columns, so a row whose content is narrower than the widest row
-                      // takes the leftover width and spreads it across its own columns — which slid every
-                      // cell in that row out of line with the rows above it (measured 9px of drift once
-                      // the ultracode column existed, 25px once codex's shorter "Ultra" shared it, and
-                      // already true of any codex row with fewer levels). So both a missing cell and a
-                      // short one carry the column's widest name.
+                      // An unsupported cell still has to HOLD ITS COLUMN. Each row is its own grid, so a
+                      // column that renders nothing here collapses and every cell to its right slides
+                      // left, out of line with the rows above (already true of any codex row with fewer
+                      // levels, and of Haiku, which cannot honour the ceiling). Ghosting the label keeps
+                      // the column exactly as wide as it is everywhere else — and the widest name in it,
+                      // since one column can hold two ("Ultra" beside "Ultracode").
                       const widest = column.reduce((a, b) => (effortLabel(b).length > effortLabel(a).length ? b : a))
                       if (!effort) {
                         return (
@@ -221,7 +224,7 @@ export function ProfileGridSelector({
                           <span
                             key={widest}
                             aria-hidden="true"
-                            className={`invisible min-w-[2.75rem] cursor-default border border-transparent px-1 text-center ${typography}`}
+                            className={`invisible cursor-default border border-transparent px-1 text-left font-medium ${typography}`}
                           >
                             {effortLabel(widest)}
                           </span>
@@ -252,12 +255,12 @@ export function ProfileGridSelector({
                           className={PROFILE_GRID_CELL_CLASS}
                         >
                           <span className="grid">
-                            {widest !== effort && (
-                              // "Ultra" is four characters shorter than "Ultracode" and they share the
-                              // ceiling column. Stack the wider name invisibly in the SAME grid cell so
-                              // this row still measures the column's full width.
-                              <span aria-hidden="true" className="invisible col-start-1 row-start-1">{effortLabel(widest)}</span>
-                            )}
+                            {/* A checked cell sets its label in `font-medium`, which is 0.82px wider
+                                here — enough to push every cell to its right along the moment the
+                                selection moves, now that a cell is only as wide as its word. Stack an
+                                invisible copy at the heavier weight in the same grid cell so the cell
+                                always reserves its widest state and never resizes. */}
+                            <span aria-hidden="true" className="invisible col-start-1 row-start-1 font-medium">{effortLabel(effort)}</span>
                             <span className="col-start-1 row-start-1">{effortLabel(effort)}</span>
                           </span>
                         </RadixMenu.RadioItem>

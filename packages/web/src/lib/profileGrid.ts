@@ -26,10 +26,17 @@ export interface ProfileGridSelection {
 // Compact changes control density and icon size only; it must never make the text smaller.
 export const PROFILE_GRID_TYPOGRAPHY_CLASS = PROMPT_CONTROL_TYPOGRAPHY_CLASS
 export const PROFILE_GRID_COMPACT_TYPOGRAPHY_CLASS = PROMPT_CONTROL_TYPOGRAPHY_CLASS
-export const PROFILE_GRID_CELL_CLASS = `profile-grid-cell relative flex h-6 min-w-[2.75rem] cursor-pointer select-none items-center justify-center rounded border border-transparent px-1 text-center text-muted outline-none transition-colors ${PROFILE_GRID_TYPOGRAPHY_CLASS} data-[highlighted]:border-border data-[highlighted]:bg-panel-2 data-[highlighted]:text-fg data-[highlighted]:outline data-[highlighted]:outline-1 data-[highlighted]:outline-offset-1 data-[highlighted]:outline-fg/55 data-[state=checked]:border-accent/70 data-[state=checked]:bg-accent/10 data-[state=checked]:font-medium data-[state=checked]:text-fg data-[state=checked]:ring-1 data-[state=checked]:ring-inset data-[state=checked]:ring-accent/90`
+// LEFT-aligned, and every cell HUGS its label. Once the labels sit left, a cell wider than its word
+// leaves that slack trailing: a 2.75rem minimum made the gap after LOW/HIGH/MAX 23px against 14px
+// after MEDIUM/X-HIGH, and hung the selection ring off the right of the word it marks. Hugging gives
+// one uniform 14px gap the whole way across and a ring that is symmetric around every label.
+export const PROFILE_GRID_CELL_CLASS = `profile-grid-cell relative flex h-6 cursor-pointer select-none items-center justify-start rounded border border-transparent px-1 text-left text-muted outline-none transition-colors ${PROFILE_GRID_TYPOGRAPHY_CLASS} data-[highlighted]:border-border data-[highlighted]:bg-panel-2 data-[highlighted]:text-fg data-[highlighted]:outline data-[highlighted]:outline-1 data-[highlighted]:outline-offset-1 data-[highlighted]:outline-fg/55 data-[state=checked]:border-accent/70 data-[state=checked]:bg-accent/10 data-[state=checked]:font-medium data-[state=checked]:text-fg data-[state=checked]:ring-1 data-[state=checked]:ring-inset data-[state=checked]:ring-accent/90`
 
+// Effort tracks are `auto` with NO minimum: a track floor wider than the word it holds is slack, and
+// left-aligned slack all lands on one side. The row itself is `w-max` (see the component), so `auto`
+// resolves to max-content and every column is exactly as wide as its label plus the cell's padding.
 export function profileGridTemplateColumns(columnCount: number): string {
-  return `minmax(6rem, 7rem) repeat(${Math.max(0, columnCount)}, minmax(2.75rem, auto))`
+  return `minmax(6rem, 7rem) repeat(${Math.max(0, columnCount)}, auto)`
 }
 
 export type ProfileGridMoveKey = "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown" | "Home" | "End"
