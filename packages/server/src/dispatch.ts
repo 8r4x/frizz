@@ -14,6 +14,7 @@ import {
   type PermissionMode,
   type ProviderAuth,
 } from "@frizz/shared"
+import { log as frizzLog } from "./logging.ts"
 import { PERM_DIR_ENV, permRequestDir, type Project } from "./project.ts"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { BoardManager } from "./board.ts"
@@ -631,8 +632,40 @@ export function resolveWorkerPluginDir(
   }
 }
 
+// Whether the "no worker plugin" alarm has already sounded in this process — the condition is a
+// property of the INSTALL, not of any one dispatch, so it is worth exactly one loud line.
+let missingPluginReported = false
+
+/**
+ * The production entry point for the plugin directory. `resolveWorkerPluginDir` stays the pure,
+ * injectable one that tests drive with a synthetic module URL and legitimately expect `undefined` from.
+ *
+ * IT SHOUTS WHEN IT CANNOT RESOLVE, because every consumer of this value FAILS OPEN and does so in
+ * silence: `if (opts.pluginDir) argv.push(…)`, `if (!pluginDir) return undefined`, `return plugin ? … :
+ * undefined`. A worker dispatched without it loses the worker-contract hooks, the `frizz:*` sub-agent
+ * profiles, the frizz MCP tools (spawn_thread / recurring_prompt / timer), the on-demand skills AND the
+ * portable monitors — all five ride this one directory — and it still boots perfectly happily.
+ * Measured against the real CLI on 2026-08-11: with the plugin dir a worker reports 16 `frizz:*` agent
+ * types; with a path that does not exist it answers the prompt normally, exit 0, no error, no warning.
+ * Nothing on the board would ever say so.
+ *
+ * That fail-open-and-say-nothing shape is not hypothetical here. The three defects a single directory
+ * rename caused this week — a `core.hooksPath` into the old path, an untrusted codex project, and every
+ * transcript stranded in the old bucket — were each invisible for days for exactly this reason. So the
+ * one thing this MUST not do is fail quietly too.
+ */
 export function workerPluginDir(): string | undefined {
-  return resolveWorkerPluginDir()
+  const dir = resolveWorkerPluginDir()
+  if (!dir && !missingPluginReported) {
+    missingPluginReported = true
+    frizzLog.error(
+      "dispatch",
+      "worker plugin NOT FOUND (no cc-worker/.claude-plugin/plugin.json among this module's ancestors, and " +
+        "FRIZZ_WORKER_PLUGIN_DIR is unset or unverifiable). Workers dispatched now will silently lack the " +
+        "worker contract hooks, the frizz:* sub-agent profiles, the frizz MCP tools and the portable monitors.",
+    )
+  }
+  return dir
 }
 
 // Claude Code caps WebSearch at 200 calls per SESSION (verified in the 2.1.220 bundle:
