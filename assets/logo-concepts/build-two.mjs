@@ -25,7 +25,7 @@ import { bezierSample, catmullPath } from "./fit-two.mjs"
 import { render } from "./lib.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
-const outDir = join(here, "out-two")
+const outDir = join(here, process.argv.includes("--refine") ? "out-two-refined" : "out-two")
 const N = 256
 const CX = 128
 const CY = 128
@@ -112,15 +112,32 @@ const sigDist = (a, b) => Math.max(...a.map((p, i) => Math.hypot(p[0] - b[i][0],
 
 // ------------------------------------------------------------------ the sweep
 
-const SWEEP = {
-  base: ["upper", "lower"],
-  grow: [0.72, 0.86, 1, 1.16, 1.34],
-  twist: [-34, -17, 0, 17, 34],
-  ease: [1, 1.7],
-  aniso: [0.88, 1, 1.14],
-  shear: [-0.16, 0, 0.16],
-  stroke: [7.5, 9.4, 12],
-}
+const REFINE = process.argv.includes("--refine")
+
+// The broad sweep. The refined one is centred on the six the maintainer picked
+// out of it (t043 t085 t100 t058 t062 t098): they share tall narrow loops —
+// aniso 0.88 in five of the six — modest tails, and both halves are represented.
+// So the refined ranges narrow aniso, drop the wide settings entirely, and step
+// twist, grow and shear more finely rather than more widely.
+const SWEEP = REFINE
+  ? {
+      base: ["upper", "lower"],
+      grow: [0.75, 0.85, 0.95, 1.1, 1.25, 1.4],
+      twist: [-40, -30, -20, -12, 12, 20, 30, 40],
+      ease: [1, 1.35, 1.7],
+      aniso: [0.8, 0.86, 0.92],
+      shear: [0, 0.1, 0.2],
+      stroke: [7.5, 9.5, 12],
+    }
+  : {
+      base: ["upper", "lower"],
+      grow: [0.72, 0.86, 1, 1.16, 1.34],
+      twist: [-34, -17, 0, 17, 34],
+      ease: [1, 1.7],
+      aniso: [0.88, 1, 1.14],
+      shear: [-0.16, 0, 0.16],
+      stroke: [7.5, 9.4, 12],
+    }
 
 const halves = baseHalves()
 const combos = []
@@ -146,7 +163,7 @@ for (const p of combos) {
 
 const unique = []
 for (const s of scored) {
-  if (unique.every((u) => u.params.stroke !== s.params.stroke || sigDist(u.sig, s.sig) > 7)) unique.push(s)
+  if (unique.every((u) => u.params.stroke !== s.params.stroke || sigDist(u.sig, s.sig) > (REFINE ? 4 : 7))) unique.push(s)
 }
 
 const TARGET = 144
@@ -165,7 +182,7 @@ const TILE = (d, stroke) => `<svg width="512" height="512" viewBox="0 0 ${N} ${N
 
 const kept = []
 for (const [index, s] of chosen.entries()) {
-  const id = `t${String(index + 1).padStart(3, "0")}`
+  const id = `${REFINE ? "r" : "t"}${String(index + 1).padStart(3, "0")}`
   const src = join(outDir, `${id}.svg`)
   writeFileSync(src, TILE(catmullPath(s.pts.filter((_, i) => i % 6 === 0)), s.params.stroke))
   render(src, join(outDir, `${id}-200.png`), 200)

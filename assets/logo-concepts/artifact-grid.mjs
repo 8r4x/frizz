@@ -9,6 +9,13 @@ import { fileURLToPath } from "node:url"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const SHEETS = {
+  refined: {
+    dir: "out-two-refined",
+    file: "frizz-two-refined.html",
+    title: "Frizz — round two, around your picks",
+    lede: `144 variants swept finely around <b>t043, t085, t100, t058, t062, t098</b>. Those six share tall narrow loops (aniso 0.88 in five of the six) and modest tails, with both halves represented — so this round narrows the loop width, drops the wide settings entirely, and steps twist, growth and shear more finely rather than more widely. Every one is a single stroke, <b>exactly two self-crossings</b>, <b>exactly 180&deg; rotationally symmetric</b>.`,
+    groups: null,
+  },
   two: {
     dir: "out-two",
     file: "frizz-two.html",
