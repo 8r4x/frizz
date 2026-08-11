@@ -1,5 +1,5 @@
 import { readdirSync, statSync, openSync, readSync, closeSync } from "node:fs"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 
 // ---- Read-side transcript DISCOVERY (the fallback for a drifted/missing `<session_id>.jsonl`) ----
 //
@@ -105,6 +105,85 @@ export function discoverTranscriptId(logDir: string, sessionId: string, opts: Di
   cands.sort((a, b) => b.mtime - a.mtime)
   for (const c of cands.slice(0, DISCOVER_MAX_SCAN)) {
     if (readHead(c.path).includes(sentinel)) return c.id
+  }
+  return undefined
+}
+
+// ---- Read-side transcript discovery ACROSS log dirs (the renamed/moved project directory) ----
+//
+// Everything above assumes the transcript is SOMEWHERE IN `logDir`. That assumption breaks the moment
+// the operator renames or moves the checkout, because Claude Code shards its store by the cwd a session
+// was BORN in — `~/.claude/projects/<cwd with / and . replaced by ->/` — and a resumed session KEEPS
+// WRITING TO ITS BIRTH BUCKET FOREVER. Frizz derives that bucket from the project's CURRENT path
+// (project.ts cwdSlug), so after a rename every pre-existing thread points at a file that will never
+// exist, the crash-net reads it as "no transcript after 60s — likely a boot failure", and the board
+// strands the whole history behind a yellow [!] whose Retry can only ever start more work frizz cannot
+// see. Measured on this machine 2026-08-11: `.../projects/fray` → `.../projects/frizz` stranded 417
+// transcripts and froze five live threads.
+//
+// Measured, on the real `claude` CLI with throwaway projects (2026-08-11), because the fix depends on
+// which of these is true:
+//   • create a session in `<p>/alpha`, rename to `<p>/beta`, `--resume` from `beta` → it appends to the
+//     `-alpha` bucket; `-beta` never receives a jsonl. Only the per-line `cwd` field follows the move.
+//   • `mv` the jsonl into the `-beta` bucket first, THEN `--resume` → it follows the file and appends there.
+//   • but `mv` it out from under a LIVE session and that session RE-CREATES the file at the old path,
+//     splitting the transcript in two.
+// The third reading is why frizz must never migrate Claude Code's files to repair this: the threads that
+// need repair most are exactly the ones with a live daemon holding the transcript. So the fix is on the
+// READ side — find the bucket that actually holds the file and bind it — and `~/.claude` is never written.
+//
+// Cost: one `readdirSync` plus one `statSync` per sibling bucket. Measured 0.75ms across 300 buckets on
+// the maintainer's machine, and a hit is memoized (see `strandedLogDirs`) so the sweep runs about once.
+
+// Buckets already caught holding a stranded transcript. A rename strands EVERY session of a project at
+// once, so the first hit answers the other few hundred without re-sweeping. Shared across projects
+// deliberately: a bucket is a cwd, the probe is an exact session-id filename, and session ids are
+// unique — so a cross-project entry can only ever be a cheap miss, never a wrong bind.
+const strandedLogDirs = new Set<string>()
+
+function nonEmptyFile(path: string): boolean {
+  try {
+    return statSync(path).size > 0
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The SIBLING of `logDir` that actually holds a non-empty `<sessionId>.jsonl`, or undefined.
+ *
+ * Siblings, because Claude Code's buckets all live side by side under `~/.claude/projects/` — one per
+ * cwd — so "the same store, a different cwd" is exactly `dirname(logDir)`'s other children. Taking the
+ * root from `logDir` rather than from `homedir()` also keeps the whole search injectable through the
+ * one seam the tailer and the renderer already have.
+ *
+ * Deliberately NOT freshness-filtered, unlike `discoverTranscriptId`: a thread stranded by a rename can
+ * have been idle for weeks and is exactly what we are here to recover. The probe is an exact filename
+ * match on the pinned session id, so — unlike the content-sentinel scan — there is no false-match risk
+ * to bound. Telemetry-grade: any fs surprise degrades to undefined, never throws.
+ */
+export function discoverTranscriptDir(
+  logDir: string,
+  sessionId: string,
+  memo: Set<string> = strandedLogDirs,
+): string | undefined {
+  const name = `${sessionId}.jsonl`
+  for (const dir of memo) {
+    if (dir === logDir) continue
+    if (nonEmptyFile(join(dir, name))) return dir
+  }
+  let entries: string[]
+  try {
+    entries = readdirSync(dirname(logDir), { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name)
+  } catch {
+    return undefined
+  }
+  for (const entry of entries) {
+    const dir = join(dirname(logDir), entry)
+    if (dir === logDir || memo.has(dir)) continue // our own dir is why we are here; the memo already missed
+    if (!nonEmptyFile(join(dir, name))) continue
+    memo.add(dir)
+    return dir
   }
   return undefined
 }

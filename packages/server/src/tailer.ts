@@ -6,7 +6,7 @@ import type { Bus } from "./bus.ts"
 import { permMarkerPath, type Project } from "./project.ts"
 import { isBrokerClaudeRow, isHeadlessRow } from "./storage.ts"
 import type { Storage, SessionRow } from "./storage.ts"
-import { discoverTranscriptId, DISCOVERY_GRACE_MS } from "./discover.ts"
+import { discoverTranscriptDir, discoverTranscriptId, DISCOVERY_GRACE_MS } from "./discover.ts"
 import type { AgentBackend, FoldState, NativeInputRequiredData, NormalizedEvent, NormalizedTail } from "./backend/types.ts"
 import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 import { normalizeObservedThreadModel, validateThreadProfile } from "./backend/thread-profiles.ts"
@@ -3798,6 +3798,22 @@ export function createTailer(deps: TailerDeps): Tailer {
     // Past grace, still missing: attempt discovery (throttled), else declare the transcript missing.
     if (nowMs < state.nextDiscoverMs) return true
     state.nextDiscoverMs = nowMs + DISCOVER_RETRY_MS
+    // FIRST, the cheaper and more specific miss: the file is not drifted, it is in ANOTHER LOG DIR,
+    // because the operator renamed or moved the checkout and Claude Code pins a session's transcript to
+    // the bucket for the cwd it was born in (see discover.ts). The pinned id still names the file, so
+    // this is an exact match rather than a content guess — hence it runs before the sentinel scan.
+    const strandedDir = discoverTranscriptDir(logDir, row.session_id)
+    if (strandedDir) {
+      // Same session id, only a different directory: nothing to claim and no `transcript_id` to commit
+      // (that column records a DRIFTED id, which this is not). Re-link and replay as a fresh prime.
+      state.path = join(strandedDir, `${row.session_id}.jsonl`)
+      state.offset = 0
+      state.partial = ""
+      state.primed = false
+      state.noTranscript = false
+      state.stallLogged = false
+      return true
+    }
     const found = discoverTranscriptId(logDir, row.session_id, { nowMs, exclude: claimedIds(row.slug) })
     if (found && found !== row.session_id) {
       // Commit ownership before touching the in-memory path. A stale A snapshot must never bind A's

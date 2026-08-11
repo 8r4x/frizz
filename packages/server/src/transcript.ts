@@ -26,7 +26,7 @@ import { parseDeliveryLedger, projectDeliveryLedger, suppressCancelledDeliveries
 import { stripDeliveryMarkers } from "./delivery-marker.ts"
 import { RELAYED_MARKER, relayNotificationBlock } from "./completion-relay.ts"
 import { CODEX_FIRST_FINAL_TITLE_TRANSPORT, CODEX_LEGACY_FIRST_FINAL_TITLE_TRANSPORT, parseCodexLine, createCodexBackend, extractCodexFrizzTitle } from "./backend/codex.ts"
-import { discoverTranscriptId, DISCOVERY_GRACE_MS } from "./discover.ts"
+import { discoverTranscriptDir, discoverTranscriptId, DISCOVERY_GRACE_MS } from "./discover.ts"
 import { isClaudeAuthErrorText } from "./tailer.ts"
 import { redactCredentialStructure, redactCredentialSyntax } from "./credential-redaction.ts"
 import { hasEscapingBackgroundJob } from "../../../cc-worker/hooks/bash-background.mjs"
@@ -2001,7 +2001,7 @@ function retainedFoldEntry(path: string, identityPrefix: string, fileId: string,
 }
 
 export function readTranscript(project: Project, sessionId: string): TranscriptMessage[] {
-  const path = join(homedir(), ".claude", "projects", project.cwdSlug, `${sessionId}.jsonl`)
+  const path = resolveTranscriptPath(project, sessionId)
   const identityPrefix = `claude:${sessionId}`
   let fd: number | undefined
   try {
@@ -2072,6 +2072,22 @@ export const FOREIGN_SESSION_ID_RE = /^[0-9a-fA-F][0-9a-fA-F-]{7,63}$/
 // The Claude Code per-project transcript dir: ~/.claude/projects/<cwdSlug>/. (Mirrors the tailer's.)
 function logDirOf(project: Project): string {
   return join(homedir(), ".claude", "projects", project.cwdSlug)
+}
+
+// Where a session's transcript ACTUALLY is. The project's own log dir answers for every thread born
+// under the project's current path; a thread born before the checkout was renamed or moved lives in the
+// bucket for its ORIGINAL cwd and stays there forever, so the drawer has to follow it or it renders an
+// empty conversation over a transcript that is right there on disk (see discover.ts). The miss path is
+// the only one that pays a sweep, and a hit is memoized across the whole project.
+function resolveTranscriptPath(project: Project, sessionId: string): string {
+  const path = join(logDirOf(project), `${sessionId}.jsonl`)
+  try {
+    if (statSync(path).size > 0) return path
+  } catch {
+    // absent — fall through to the cross-dir sweep
+  }
+  const stranded = discoverTranscriptDir(logDirOf(project), sessionId)
+  return stranded ? join(stranded, `${sessionId}.jsonl`) : path
 }
 
 // ---- Codex rollout → renderable conversation ----

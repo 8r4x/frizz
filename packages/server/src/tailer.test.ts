@@ -2,7 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { mkdtempSync, writeFileSync, appendFileSync, utimesSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { createStorage, type Storage, type SessionRow } from "./storage.ts"
 import { Bus } from "./bus.ts"
 import type { ServerEvent } from "@frizz/shared"
@@ -1869,7 +1869,14 @@ interface Harness {
 }
 
 function harness(): Harness {
-  const dir = tmp("frizz-tail-")
+  // The log dir is nested one level, mirroring the real `~/.claude/projects/<cwdSlug>/` layout, because
+  // the tailer's cross-dir recovery (discover.ts discoverTranscriptDir) sweeps `dirname(logDir)` for a
+  // transcript stranded by a renamed project. Rooted straight at `tmpdir()` its siblings would be every
+  // other test's fixture dir, and a case asserting "no transcript → degraded" would find some other
+  // case's `sid.jsonl` and bind it. Each harness gets its OWN projects root, so the sweep sees only
+  // what the case put there.
+  const dir = join(tmp("frizz-tail-"), "-a-project")
+  mkdirSync(dir, { recursive: true })
   const storage = createStorage(join(dir, "ui.db"))
   const bus = new Bus()
   const events: ServerEvent[] = []
@@ -2731,6 +2738,51 @@ test("tailer: discovers a drifted transcript by sentinel, re-links + caches tran
   assert.equal(t.get("t")?.turn, "idle", "the discovered transcript's derivation now drives telemetry")
   assert.equal(t.get("t")?.lastAssistant, "all done")
   assert.equal(h.events.length, before, "a discovered transcript replays as a SILENT prime — no spurious turn-done notify")
+})
+
+// THE RENAMED CHECKOUT (maintainer, 2026-08-11: "all of these threads in /project/frizz are frozen and
+// Retry doesn't work and I can't do a hard restart on the threads"). Claude Code shards its transcript
+// store by the cwd a session was BORN in and a resumed session keeps writing to its birth bucket
+// forever, so renaming `.../projects/fray` to `.../projects/frizz` left 417 transcripts one directory
+// over from where frizz looked. Every one of them read as "no transcript 60s after dispatch" → degraded
+// → board.ts degradeIfNoTranscript turned that into runtime "exited" → the yellow [!] plus a Retry that
+// could only ever start MORE work frizz could not see, while RestartWorkerButton hid itself because the
+// runtime read as exited. One missing file, all three symptoms.
+//
+// The session id is deliberately unique to this case: `discoverTranscriptDir` memoizes a hit dir
+// process-wide, and every other case here reuses the id "sid".
+test("tailer: a transcript stranded in a SIBLING log dir (the project was renamed) rebinds instead of degrading", () => {
+  const h = harness()
+  const slug = "renamed-project-thread"
+  h.storage.upsertSession(row({ slug, session_id: "born-before-the-rename" }))
+  // The bucket the checkout used to be called, beside the one frizz now derives from the current path.
+  const preRename = join(dirname(h.logDir), "-Users-me-projects-fray")
+  mkdirSync(preRename, { recursive: true })
+  fixture(preRename, "born-before-the-rename", [IN_FLIGHT, TOOL, DONE])
+  const t = makeTailer(h)
+
+  h.clock.ms = Date.parse(SPAWN)
+  t.tick() // within grace, the pinned file is simply absent — an ordinary spin-up, nothing to recover yet
+  assert.equal(t.get(slug)?.noTranscript ?? false, false)
+
+  h.clock.ms = PAST_GRACE
+  t.tick()
+  assert.equal(t.get(slug)?.noTranscript ?? false, false, "found one directory over — NOT a boot failure")
+  assert.equal(t.get(slug)?.turn, "idle", "the stranded transcript's own derivation drives the board")
+  assert.equal(t.get(slug)?.lastAssistant, "all done")
+  // Same session, different directory: nothing drifted, so the DRIFTED-id column must stay clean.
+  assert.equal(h.storage.getSession(slug)?.transcript_id ?? null, null, "a moved dir is not a drifted id")
+})
+
+test("tailer: a genuinely missing transcript still degrades — the sibling sweep is a recovery, not a mask", () => {
+  const h = harness()
+  const slug = "really-a-boot-failure"
+  h.storage.upsertSession(row({ slug, session_id: "never-written-anywhere" }))
+  mkdirSync(join(dirname(h.logDir), "-Users-me-projects-fray"), { recursive: true }) // a sibling, but empty
+  const t = makeTailer(h)
+  h.clock.ms = PAST_GRACE
+  t.tick()
+  assert.equal(t.get(slug)?.noTranscript, true, "no transcript in ANY bucket is still a boot failure")
 })
 
 test("tailer: a replacement during transcript discovery cannot inherit or transiently expose the stale transcript", () => {
