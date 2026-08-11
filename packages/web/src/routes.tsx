@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react"
+import { useEffect } from "react"
 import { Outlet, createBrowserRouter, useLocation, useParams } from "react-router"
 import { useQueryClient } from "@tanstack/react-query"
 import { App } from "./App.tsx"
@@ -7,7 +7,7 @@ import { ProjectRail, RAIL_INSET_CLASS } from "./components/ProjectRail.tsx"
 import { StandaloneThreadPage } from "./components/StandaloneThreadPage.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { applyPath } from "./lib/router.ts"
-import { innerPath } from "./lib/base-path.ts"
+import { innerPath, projectSlug } from "./lib/base-path.ts"
 import { rebindProject } from "./api/socket.ts"
 import { resetProjectState } from "./store.ts"
 import { useProjectRailVisible } from "./lib/projectRail.ts"
@@ -58,21 +58,29 @@ function RootLayout() {
 }
 
 /**
- * Re-bind everything that belongs to one project, whenever the project changes.
+ * The project the live feed is CURRENTLY pointed at — module state, seeded with whatever `main.tsx`
+ * bound at module load (it connects the socket from `location` before React renders, which is why the
+ * first binding must not be redone and the board must not flash empty on a cold load).
  *
- * A ref rather than a mount-effect guard: the FIRST binding is what `main.tsx` already did at module
- * load (connect the socket, seed the board), so tearing it down and rebuilding it on mount would make
- * every cold load do the work twice and flash an empty board doing it.
+ * MODULE state, not a ref inside the hook, and that distinction is the whole bug it fixes. Every
+ * project switch that changes which ROUTE matched — the grid to a board, a board to a thread page —
+ * unmounts one element and mounts another, so a ref is born fresh, initialised to the slug it is
+ * looking at, and therefore always reports "already bound". The feed then stayed on the previous
+ * project while the URL, the `<App/>` key and the board header all said the new one, and NOTHING
+ * recovered it short of a document load. Observed 2026-08-11: the grid's project tiles are `<Link>`s,
+ * so clicking any of them showed the LAUNCHING project's board under the clicked project's URL.
  */
+let boundSlug = projectSlug()
+
+/** Re-bind everything that belongs to one project, whenever the project changes. */
 function useProjectBinding(slug: string | undefined) {
   // The hook, not an import of main.tsx's instance: routes.tsx is imported BY main.tsx, and reaching
   // back for its export closes a module cycle whose initialisation order then depends on where the
   // reference happens to be read.
   const queryClient = useQueryClient()
-  const bound = useRef<string | undefined>(slug)
   useEffect(() => {
-    if (bound.current === slug) return
-    bound.current = slug
+    if (boundSlug === slug) return
+    boundSlug = slug
     resetProjectState()
     // Everything EXCEPT the machine-wide project list, which the rail is drawing right now.
     queryClient.removeQueries({
@@ -96,8 +104,16 @@ function BoardRoute() {
   return <App key={slug ?? "__launching__"} />
 }
 
+/**
+ * The all-projects grid, which shows no project's feed and therefore must not disturb the binding.
+ *
+ * It reads only the machine-wide project list, so leaving the feed where it is costs nothing and buys
+ * something: going home and back into the SAME project is free, instead of a teardown plus a
+ * reconnect. (It used to call `useProjectBinding(undefined)`, which meant "the launching project" —
+ * never "no project" — so the grid would have swapped one live feed for another. With the ref bug it
+ * was a no-op in every case, so removing it changes nothing that ever ran.)
+ */
 function GridRoute() {
-  useProjectBinding(undefined)
   return <ProjectGrid />
 }
 
