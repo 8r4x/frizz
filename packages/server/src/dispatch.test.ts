@@ -268,7 +268,7 @@ test("loadWorkerPrompt(codex) OMITS every Claude-Code-only construct a codex wor
 })
 
 test("loadWorkerPrompt(codex) carries codex's OWN session/wake + model/effort/sandbox framing", () => {
-  const c = loadWorkerPrompt("codex")
+  const c = loadWorkerPrompt("codex").replace(/\s+/g, " ") // pin content, not line-wrap
   assert.match(c, /a top-level `codex` session/)
   assert.match(c, /`codex resume`/)
   assert.match(c, /## Own one task/)
@@ -280,7 +280,7 @@ test("loadWorkerPrompt(codex) carries codex's OWN session/wake + model/effort/sa
   assert.match(c, /terminal event\/exit semantics/)
   assert.match(c, /never silently shadow it with Frizz/)
   assert.match(c, /persistent `exec_command` \/ `write_stdin` session/)
-  assert.match(c, /Luna child is optional\nonly/)
+  assert.match(c, /Luna child is optional only/)
   assert.match(c, /active native spawn tool/)
   assert.match(c, /configured namespace is `frizz`/)
   assert.match(c, /context-fork control/)
@@ -302,14 +302,14 @@ test("loadWorkerPrompt(codex) carries codex's OWN session/wake + model/effort/sa
   assert.match(c, /workspace-write/)
   assert.match(c, /danger-full-access/)
   assert.match(c, /## Automated waits in Codex/)
-  assert.match(c, /persistent `exec_command` \/\n`write_stdin` monitor session/)
+  assert.match(c, /persistent `exec_command` \/ `write_stdin` monitor session/)
   assert.match(c, /`write_stdin`/)
-  assert.match(c, /partial\n?`gh pr checks` rollup is not a CI-green verdict/)
+  assert.match(c, /partial `gh pr checks` rollup is not a CI-green verdict/)
   assert.match(c, /`ACTION_REQUIRED` fork gates as pending/)
 })
 
 test("loadWorkerPrompt(codex) requests exactly one first-output invisible title comment", () => {
-  const c = loadWorkerPrompt("codex")
+  const c = loadWorkerPrompt("codex").replace(/\s+/g, " ") // pin content, not line-wrap
   assert.match(c, /## Thread title signal/)
   assert.match(c, /<!-- frizz title="Fix queue focus" -->/)
   assert.match(c, /very FIRST assistant message/)
@@ -317,7 +317,7 @@ test("loadWorkerPrompt(codex) requests exactly one first-output invisible title 
   assert.match(c, /3-8 word title/)
   assert.match(c, /strips this comment from visible chat/)
   assert.match(c, /human rename always wins/)
-  assert.match(c, /Never use an H1\nfor the title signal/)
+  assert.match(c, /Never use an H1 for the title signal/)
   assert.doesNotMatch(loadWorkerPrompt("claude"), /<!-- frizz-title:/)
 })
 
@@ -381,11 +381,13 @@ test("end-state contract: bare rest queues, done checks, awaiting parks human/ti
     assert.match(c, /until the human (?:explicitly )?(?:A|a)rchives? it/)
     // done is gated on LANDED work — merged, not merely committed/pushed/PR-opened (an open PR parks
     // on awaiting until it merges); a pre-fix bug/issue investigation never earns it, while a
-    // commissioned research/audit effort's finished report does (done-requires-landed-work)
+    // commissioned research/audit effort's finished report does (done-requires-landed-work).
+    // The 2026-08-11 pass collapsed these verdicts into ONE table row apiece: the earlier prose said
+    // "code written but not LANDED is not done" AND "an open PR is work still ahead of the merge" AND
+    // "`done` waits for the MERGE" — three spellings of one rule. Pin the row, not the restatements.
     assert.match(c, /COMPLETED\s+the effort's real work/)
     assert.match(c, /code LANDED on the project's mainline/)
-    assert.match(c, /Code written but not LANDED is not done/)
-    assert.match(c, /open PR is work still ahead of the merge/)
+    assert.match(c, /a commit, a pushed branch, an open PR \| NOT done/)
     assert.match(c, /`done` waits for the MERGE/)
     assert.match(c, /park the PR on[\s\S]{0,40}`pr-watch:`/)
     // The git-discipline + implementation-thread surfaces must not contradict it by fencing on a PR.
@@ -393,7 +395,7 @@ test("end-state contract: bare rest queues, done checks, awaiting parks human/ti
     assert.doesNotMatch(c, /done ` fence naming the PR\/paths/)
     assert.doesNotMatch(c, /changes sitting uncommitted/)
     assert.match(c, /investigat(?:ed|ing|ion)[\s\S]{0,300}NOT `?done`?/i)
-    assert.match(c, /research or audit EFFORT[\s\S]{0,200}earns `done`/)
+    assert.match(c, /a commissioned research or audit report, finished \| `done`/)
     assert.match(c, /awaiting[\s\S]{0,140}(?:human|timestamp)/i)
     assert.match(c, /(?:CI|automatable)[\s\S]{0,180}(?:stay ACTIVE|stay active|active wait|live operation)/i)
     // `done` is taught as a DISMISSAL, not a summary: its card is the one-click path into Inactive
@@ -412,9 +414,9 @@ test("end-state contract: bare rest queues, done checks, awaiting parks human/ti
     assert.match(c, /[Uu]ncertain is not done/)
     // Unlanded code and the live code-change discussion remain INSTANCES of the heuristic.
     assert.match(c, /live code-change discussion/)
-    assert.match(c, /PLANNING session whose plan file is FULLY written and PERSISTED/)
+    assert.match(c, /a plan file FULLY written and PERSISTED/)
     assert.match(c, /FULLY written and PERSISTED \(`\.frizz\/plans\/<topic>\.md`\)/)
-    assert.match(c, /artifact already lives outside the thread, so dismissing the thread loses nothing/)
+    assert.match(c, /artifact outlives the thread, so dismissing it loses nothing/)
     // The planning thread type derives the same carve-out where a worker reads its deliverable —
     // codex-only now, since claude's lean contract drops ## Thread types. Claude still carries the
     // rule itself in End-of-turn signals (FULLY written and PERSISTED, asserted above).
@@ -422,8 +424,9 @@ test("end-state contract: bare rest queues, done checks, awaiting parks human/ti
       assert.match(c, /WRITTEN, PERSISTED file is the whole reason a planning thread may/)
       assert.match(c, /design outlives the thread's dismissal/)
     }
-    // The tail recap repeats the heuristic (not the scenario) for a worker skimming the end.
-    assert.match(c, /Nor is a turn on a thread that still points at future work/)
+    // The tail recap that used to repeat the heuristic ("Nor is a turn on a thread that still points at
+    // future work…") is GONE (2026-08-11): it was a third statement of the rule the DISMISSAL paragraph
+    // and the table row already carry, and the live-code-change instance now sits in the table itself.
   }
   // The runtime re-grounding carries the same intent in one line (slim, not a second contract copy).
   assert.match(SESSION_SEED, /```done[^;]*is a DISMISSAL \(its card files the thread away where nobody looks again\)/)
