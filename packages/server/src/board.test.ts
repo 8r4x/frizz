@@ -274,6 +274,29 @@ test("deriveNeedsYou: an UNCONFIRMED delivery does not dequeue — the human may
   assert.equal(deriveNeedsYou(row({ delivery_ledger: ledger("unconfirmed") }), tele({ pendingQuestion: true }), "turn-idle"), true)
 })
 
+// The suppression above is a claim that some PROCESS is holding the message. When the broker daemon
+// that receipted it has died, nothing holds it: the row ages out only after UNCONFIRMED_DROP_MS, so
+// without this the thread spends an hour excused from the queue over a message that will never be
+// read. Observed 2026-08-11 on `in-codex-threads-tool-calls-ike` — a follow-up receipted at
+// 19:45:05.771, the daemon dead 760ms later, and the ```done card that was already in the queue gone
+// with it.
+test("deriveNeedsYou: a dead daemon's outstanding delivery stops excusing the thread from the queue", () => {
+  const done = tele({ lastFence: { kind: "done", body: "landed", hints: [] } })
+  for (const state of ["pending", "enqueued"] as const) {
+    const withSend = row({ delivery_ledger: ledger(state) })
+    assert.equal(
+      deriveNeedsYou(withSend, done, "turn-idle", false, Date.parse(T0), undefined, true, false),
+      false,
+      `${state}: a live daemon is holding it, so the thread stays out of the queue`,
+    )
+    assert.equal(
+      deriveNeedsYou(withSend, done, "turn-idle", false, Date.parse(T0), undefined, true, true),
+      true,
+      `${state}: the daemon is gone, so the done card comes back`,
+    )
+  }
+})
+
 test("deriveNeedsYou: a fresh delivery never hides a crash or a hard live ask", () => {
   // A follow-up delivered to a worker that then died mid-turn is still a stall the human must see.
   assert.equal(deriveNeedsYou(row({ delivery_ledger: ledger("pending") }), tele({ turn: "in-flight" }), "exited"), true)
@@ -988,6 +1011,33 @@ test("a rested broker thread whose daemon died with NO outstanding work stays an
 
   assert.equal(quiet.runtime, "turn-idle", "a finished thread whose daemon idled out is NOT a crash")
   assert.equal(quiet.crashed, false, "nothing was lost, so nothing to card")
+
+  rmSync(dir, { recursive: true, force: true })
+})
+
+// The plumbing, not just the predicate: the daemon probe the board already runs for `headlessStalled`
+// has to reach the delivery gate, or a follow-up receipted by a daemon that then died keeps the
+// thread's own ```done card out of the queue for the rest of UNCONFIRMED_DROP_MS.
+test("a broker thread whose daemon died still holding a follow-up returns to the queue", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-board-deadsend-"))
+  const project: Project = { dir, id: "project-ds", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
+  const storage = createStorage(join(dir, "ui.db"))
+  storage.upsertSession(row({ slug: "stranded", session_id: "sess-stranded", tmux_name: "frizz-stranded", rested_at: T0 }))
+  storage.setBackend("stranded", "claude")
+  storage.setClaudeRuntime("stranded", "broker")
+  storage.setDeliveryLedger("stranded", ledger("enqueued"))
+
+  const tailer = {
+    get: () => tele({ turn: "idle", lastFence: { kind: "done", body: "landed", hints: [] } }),
+    foreignIds: () => [], subAgent: () => undefined, forget: () => {},
+    start: () => {}, stop: () => {}, tick: () => {},
+  } satisfies Tailer
+
+  const live = createBoard(project, storage, new Bus(), tailer, "ds-live", { claudeBrokerDaemonAlive: () => true })
+  assert.equal(live.refresh().threads.find((t) => t.id === "stranded")!.needsYou, false, "a live daemon really is holding it")
+
+  const dead = createBoard(project, storage, new Bus(), tailer, "ds-dead", { claudeBrokerDaemonAlive: () => false })
+  assert.equal(dead.refresh().threads.find((t) => t.id === "stranded")!.needsYou, true, "a dead daemon holds nothing — the done card is owed to the human")
 
   rmSync(dir, { recursive: true, force: true })
 })

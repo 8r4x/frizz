@@ -301,7 +301,19 @@ function hasParkedExternalWait(tele: SessionTelemetry | undefined, nowMs: number
 // delivery ledger as `pending` (injected, no JSONL evidence yet) or `enqueued` (positively receipted by
 // Claude Code's own queue). Both mean the human's message is handled and in flight. `unconfirmed` is
 // NOT fresh — frizz could not confirm that send, so it must stay visible for the human to re-drive.
-function hasFreshDelivery(row: SessionRow): boolean {
+//
+// `processGone` is what keeps "in flight" honest, and it is the whole reason this reads a second
+// argument. Both live states are claims about a process HOLDING the message: `pending` says a process
+// was handed it, `enqueued` says a process receipted it into its own queue. A daemon that has since
+// died holds nothing — the message will never be read, and the ledger row ages out only after
+// UNCONFIRMED_DROP_MS, so an hour of silent suppression follows a death that took milliseconds.
+// Observed 2026-08-11 on `in-codex-threads-tool-calls-ike`: the operator's follow-up was receipted at
+// 19:45:05.771 and the daemon died 760ms later (`session-stream-broken` — its cwd had been renamed out
+// from under it). The thread's ```done card was already sitting in the queue; this excusal took it
+// out, and nothing put it back. Neither queued nor carded: invisible — the delivery twin of the
+// sub-agent phantom deriveRuntime's `headlessLostWork` fixed, and the same lesson.
+function hasFreshDelivery(row: SessionRow, processGone: boolean): boolean {
+  if (processGone) return false
   return parseDeliveryLedger(row.delivery_ledger).some((d) => d.state === "pending" || d.state === "enqueued")
 }
 
@@ -320,6 +332,10 @@ export function deriveNeedsYou(
   // sub-agents until 2026-08-01, when background shells joined the same excusal — the flag was never
   // about which KIND of work, only about queue-vs-fact.)
   excuseLiveOwnWork = true,
+  // BROKER-ONLY, and supplied by the caller because only it has the daemon probe: the process that
+  // received this row's outstanding sends is gone. Read by hasFreshDelivery alone — see there. Defaults
+  // false so every other caller (and every test) keeps today's behaviour.
+  deliveryProcessGone = false,
 ): boolean {
   // Snooze is explicit operator lifecycle state. It must be checked before provider/question/crash
   // gates so choosing Snooze from any queue card actually parks that card until its exact deadline.
@@ -352,7 +368,7 @@ export function deriveNeedsYou(
   // then died must still surface) and the hard live asks, but before the at-rest reasons a steer
   // resolves (a question, a done handoff, bare rest). `unconfirmed` is excluded on purpose: a send frizz
   // could not confirm is one the human may need to re-drive, so the ledger's own aging re-surfaces it.
-  if (hasFreshDelivery(row)) return false
+  if (hasFreshDelivery(row, deliveryProcessGone)) return false
   // An unanswered ```question fence in the last assistant message is an EXPLICIT ask — a hard queue
   // member exactly like a native pendingAsk, NOT subject to interaction-clearance. VIEWING a question
   // is not ANSWERING it, so seen_at must never drop it off the stack (the whole point is that threads
@@ -459,6 +475,7 @@ export function deriveAwaitingBackground(
   hasActionableInteraction = false,
   nowMs = Date.now(),
   limitPause: ThreadView["limitPause"] = undefined,
+  deliveryProcessGone = false,
 ): boolean {
   if (runtime !== "turn-idle" || !hasLiveOwnWork(tele)) return false
   // Any hard human gate or completion signal outranks this reason → the thread cards as THAT, not here.
@@ -479,7 +496,7 @@ export function deriveAwaitingBackground(
   // drawer and full-screen page for a healthy thread resting on its children or on a shell. Since
   // 2026-08-01 that covers a shell-only rest too — it now has NO queue card at all, so this card in the
   // drawer and on the standalone page is the only place that state is stated in words.
-  return deriveNeedsYou({ ...row, bg_snooze_rested_at: null }, tele, runtime, hasActionableInteraction, nowMs, limitPause, false)
+  return deriveNeedsYou({ ...row, bg_snooze_rested_at: null }, tele, runtime, hasActionableInteraction, nowMs, limitPause, false, deliveryProcessGone)
 }
 
 // A REGISTERED session thread's view (id = row.slug). Runtime via the shared deriveRuntime (tmux-aware);
@@ -563,7 +580,7 @@ export function resolveRecurringPrompt(
     SessionRow,
     | "recurring_prompt" | "recurring_armed_at" | "recurring_on_rest" | "recurring_on_schedule"
     | "recurring_on_compact" | "recurring_interval_ms" | "recurring_rest_fired_at"
-    | "recurring_schedule_fired_at" | "recurring_compact_fired_at"
+    | "recurring_schedule_fired_at" | "recurring_compact_fired_at" | "recurring_pause_on_questions"
   >,
 ): ThreadRecurringPrompt | undefined {
   if (!row.recurring_prompt || !row.recurring_armed_at) return undefined
@@ -572,6 +589,7 @@ export function resolveRecurringPrompt(
     stopHook: row.recurring_on_rest === 1,
     heartbeat: row.recurring_on_schedule === 1,
     postCompaction: row.recurring_on_compact === 1,
+    pauseOnQuestions: row.recurring_pause_on_questions === 1,
     // Carried whenever a cadence has ever been chosen, INCLUDING while the heartbeat is off — the
     // minutes field has to read back what switching it on again would use.
     intervalSeconds: row.recurring_interval_ms ? Math.round(row.recurring_interval_ms / 1000) : undefined,
@@ -680,6 +698,13 @@ function sessionThreadView(
   // by definition, so reusing it here would card every quiet codex thread as crashed. The broker arm is a
   // direct pid probe, which means exactly what it says at rest as well as mid-turn.
   const headlessLostWork = isBrokerClaudeRow(row) && headlessStalled && hasUnretiredOwnAgents(tele)
+  // The same dead-daemon reading, asked of the DELIVERY ledger instead of the sub-agent map: a send
+  // still marked pending/enqueued is a claim that a process is holding it, and that process is gone.
+  // BROKER-ONLY for the reason directly above — the codex arm of `headlessStalled` is a mid-turn
+  // predicate, and a rested codex thread trips it by definition, which would retire an outstanding
+  // rollout send early (8 of 75 measured codex sends took over 60s to materialise; three took minutes
+  // to hours). The broker arm is a direct pid probe and means what it says at rest.
+  const deliveryProcessGone = isBrokerClaudeRow(row) && headlessStalled
   const runtime = degradeIfNoTranscript(
     deriveRuntime(row.slug, row, storage, tele?.turn, tele?.permPrompt ?? false, headlessStalled, headlessLostWork),
     isHeadlessRow(row) && !isBrokerClaudeRow(row) ? false : tele?.noTranscript,
@@ -687,8 +712,8 @@ function sessionThreadView(
   const state = effectiveSessionState(row, registeredLegacyTerminal)
   const archived = state === "archived"
   const limitPause = resolveLimitPause(row, tele, nowMs)
-  const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause)
-  const awaitingBackground = archived ? false : deriveAwaitingBackground(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause)
+  const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone)
+  const awaitingBackground = archived ? false : deriveAwaitingBackground(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, deliveryProcessGone)
   // A pane that exited with work still outstanding — a turn in flight, OR a sub-agent still reading
   // "running" (its parent is gone, so it cannot actually be live) — is a crash/stall, not a clean
   // handoff, so it cards as "stalled" not a bare "rest". Mirrors deriveNeedsYou's surfacing above.
@@ -797,7 +822,7 @@ function sessionThreadView(
 // Plan artifacts (.frizz/plans/*.md): title from the first markdown heading in the securely resolved
 // bytes (else the filename stem), mtime, and registered session slugs dispatched from it. Discovery and
 // reading share one stable no-follow resolver; indirect or raced files are omitted.
-function readPlans(projectDir: string, rows: SessionRow[]): PlanView[] {
+function readPlans(projectDir: string, rows: readonly SessionRow[]): PlanView[] {
   return listPlanFiles(projectDir).map((file) => {
     let title = file.filename.replace(/\.md$/, "")
     const head = file.contents.toString("utf8").split("\n").slice(0, 50)
