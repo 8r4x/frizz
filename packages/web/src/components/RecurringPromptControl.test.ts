@@ -40,8 +40,8 @@ test("a cadence the field can only round is left exactly as stored", () => {
 // The panel opens on the standard sentence with the stop hook on, and — there being no Save button —
 // the dismissal that follows WRITES it. That is the whole point: accepting the default costs one click
 // out. It also means the seed has to be withheld wherever the write would be refused, or looking at a
-// panel becomes an error toast. Driven here rather than in the browser because an archived thread's
-// route renders the previously-focused thread's drawer, so that branch is unreachable by clicking.
+// panel becomes an error toast. All three branches are driven in a real browser too; these pin them
+// where a boot is not worth the cycle.
 const view = (over: Partial<ThreadView>) => ({ archived: false, ...over }) as ThreadView
 
 test("an unarmed, open thread opens pre-filled", () => {

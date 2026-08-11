@@ -398,7 +398,7 @@ export const RecurringPromptText = z.string().trim().min(1).max(RECURRING_PROMPT
 // answers a question it cannot resolve by guessing; told this, it hands the question back through the
 // fence the board already renders as an answerable card.
 export const DEFAULT_RECURRING_PROMPT =
-  "If further work towards towards the original task/goal remains, keep going. If there are open questions that require human input, ask them with question fences."
+  "If further work towards the original task/goal remains, keep going. If there are open questions that require human input, ask them with question fences."
 export const RecurringIntervalSeconds = z
   .number()
   .int()

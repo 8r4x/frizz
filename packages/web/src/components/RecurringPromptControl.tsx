@@ -174,8 +174,12 @@ function draftAsSent(d: Draft) {
  *  `assertRecurringPromptArmable`), and since there is no Save button the seeded draft would be written
  *  by the dismissal — so merely LOOKING at a shelved thread's panel would end in an error toast.
  *
- *  Extracted and exported for the test beside this file: the archived branch cannot be driven in the
- *  browser, because opening an archived thread's route renders the previously-focused thread's drawer. */
+ *  Extracted and exported so the test beside this file can pin all three branches cheaply. Both are
+ *  ALSO driven in a real browser — an archived thread's panel opens empty and its dismissal writes
+ *  nothing. Watch the selector when you re-check that: `/thread/<slug>` leaves the BOARD rendered
+ *  behind the drawer, and a rested thread's queue card carries its own footer, so an unscoped
+ *  `querySelector("[data-recurring-prompt]")` finds the board's heart rather than the drawer's and
+ *  reports the wrong thread's panel. Scope to `[role=dialog]`. */
 export function seedsDefaults(
   thread: Pick<ThreadView, "archived">,
   armed: ThreadView["recurringPrompt"],
