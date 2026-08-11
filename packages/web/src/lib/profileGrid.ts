@@ -28,15 +28,21 @@ export const PROFILE_GRID_TYPOGRAPHY_CLASS = PROMPT_CONTROL_TYPOGRAPHY_CLASS
 export const PROFILE_GRID_COMPACT_TYPOGRAPHY_CLASS = PROMPT_CONTROL_TYPOGRAPHY_CLASS
 export const PROFILE_GRID_CELL_CLASS = `profile-grid-cell relative flex h-6 min-w-[2.75rem] cursor-pointer select-none items-center justify-center rounded border border-transparent px-1 text-center text-muted outline-none transition-colors ${PROFILE_GRID_TYPOGRAPHY_CLASS} data-[highlighted]:border-border data-[highlighted]:bg-panel-2 data-[highlighted]:text-fg data-[highlighted]:outline data-[highlighted]:outline-1 data-[highlighted]:outline-offset-1 data-[highlighted]:outline-fg/55 data-[state=checked]:border-accent/70 data-[state=checked]:bg-accent/10 data-[state=checked]:font-medium data-[state=checked]:text-fg data-[state=checked]:ring-1 data-[state=checked]:ring-inset data-[state=checked]:ring-accent/90`
 
-export function profileGridTemplateColumns(effortCount: number): string {
-  return `minmax(6rem, 7rem) repeat(${Math.max(0, effortCount)}, minmax(2.75rem, auto))`
+export function profileGridTemplateColumns(columnCount: number): string {
+  return `minmax(6rem, 7rem) repeat(${Math.max(0, columnCount)}, minmax(2.75rem, auto))`
 }
 
 export type ProfileGridMoveKey = "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown" | "Home" | "End"
 
-// Column order for the matrix. "ultracode" sorts last — the ladder's ceiling, and where Claude Code's
-// own /effort lists it. A model that cannot honour it simply renders an empty cell in that column.
-const EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max", "ultra", "ultracode"]
+// "ultra" (codex) and "ultracode" (Claude Code) are ONE rung under two provider-specific names: the
+// ceiling of each ladder, where each CLI's own /effort lists it. They therefore share one column. Give
+// them a column each and every Claude row holds a ghost where codex's "ultra" sits, which floated
+// ULTRACODE a full 2.75rem clear of MAX with nothing in between (screenshot, 2026-08-11).
+const CEILING_EFFORTS = ["ultra", "ultracode"]
+
+// Column order for the matrix. The ceiling sorts last, and a model that cannot honour it simply
+// renders an empty cell in that column.
+const EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max", ...CEILING_EFFORTS]
 
 export function profileGridEfforts(groups: readonly ProfileGridGroup[]): string[] {
   const efforts = new Set(groups.flatMap((group) => group.options.flatMap((option) => option.efforts)))
@@ -48,6 +54,21 @@ export function profileGridEfforts(groups: readonly ProfileGridGroup[]): string[
     if (bi === -1) return -1
     return ai - bi
   })
+}
+
+// The rendered columns: one entry per column, holding every effort name that shares it. All but the
+// ceiling column carry a single name; the ceiling carries whichever of "ultra"/"ultracode" the loaded
+// providers offer, so a row fills it with the one its own model supports.
+export function profileGridColumns(groups: readonly ProfileGridGroup[]): string[][] {
+  const columns: string[][] = []
+  for (const effort of profileGridEfforts(groups)) {
+    const ceiling = CEILING_EFFORTS.includes(effort)
+      ? columns.find((column) => CEILING_EFFORTS.includes(column[0]!))
+      : undefined
+    if (ceiling) ceiling.push(effort)
+    else columns.push([effort])
+  }
+  return columns
 }
 
 export function profileGridSelections(groups: readonly ProfileGridGroup[]): ProfileGridSelection[] {
@@ -106,7 +127,8 @@ export function moveProfileGridSelection(
   current: ProfileGridSelection,
   key: ProfileGridMoveKey,
 ): ProfileGridSelection | null {
-  const columns = profileGridEfforts(groups)
+  const columns = profileGridColumns(groups)
+  const columnOf = (effort: string) => columns.findIndex((column) => column.includes(effort))
   const rows = groups.flatMap((group) => group.options.map((option) => ({ provider: group.id, option })))
   const rowIndex = rows.findIndex((row) => row.provider === current.provider && row.option.model === current.model)
   if (rowIndex === -1) return null
@@ -126,10 +148,10 @@ export function moveProfileGridSelection(
 
   const nextRow = rows[rowIndex + (key === "ArrowUp" ? -1 : 1)]
   if (!nextRow) return null
-  const currentColumn = columns.indexOf(current.effort)
+  const currentColumn = columnOf(current.effort)
   const effort = nextRow.option.efforts.reduce<string | undefined>((nearest, candidate) => {
     if (!nearest) return candidate
-    return Math.abs(columns.indexOf(candidate) - currentColumn) < Math.abs(columns.indexOf(nearest) - currentColumn)
+    return Math.abs(columnOf(candidate) - currentColumn) < Math.abs(columnOf(nearest) - currentColumn)
       ? candidate
       : nearest
   }, undefined)

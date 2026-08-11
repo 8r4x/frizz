@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import {
   moveProfileGridSelection,
+  profileGridColumns,
   PROFILE_GRID_CELL_CLASS,
   PROFILE_GRID_COMPACT_TYPOGRAPHY_CLASS,
   PROFILE_GRID_TYPOGRAPHY_CLASS,
@@ -117,4 +118,52 @@ test("profile grid cells use pointer affordance and icon-free selection ring/tin
 
 test("profile grid keeps the model column bounded beside a five-level effort row", () => {
   assert.equal(profileGridTemplateColumns(5), "minmax(6rem, 7rem) repeat(5, minmax(2.75rem, auto))")
+})
+
+// Both ladders top out in ONE column. A column each leaves every Claude row ghosting codex's "ultra",
+// so ULTRACODE rendered a full empty column clear of MAX.
+const bothLaddersGroups: ProfileGridGroup[] = [
+  {
+    id: "claude",
+    label: "Claude Code",
+    options: [
+      { model: "opus", label: "Opus", efforts: ["low", "medium", "high", "xhigh", "max", "ultracode"] },
+      { model: "haiku", label: "Haiku", efforts: ["low", "medium", "high", "xhigh", "max"] },
+    ],
+  },
+  {
+    id: "codex",
+    label: "Codex",
+    options: [
+      { model: "gpt-5.6-sol", label: "GPT-5.6 Sol", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
+    ],
+  },
+]
+
+test("profile grid gives ultra and ultracode ONE shared ceiling column", () => {
+  assert.deepEqual(profileGridColumns(bothLaddersGroups), [["low"], ["medium"], ["high"], ["xhigh"], ["max"], ["ultra", "ultracode"]])
+  assert.equal(profileGridEfforts(bothLaddersGroups).length, 7, "the two ladders contribute seven distinct effort NAMES…")
+  assert.equal(profileGridColumns(bothLaddersGroups).length, 6, "…but only six columns — no empty column between max and the ceiling")
+})
+
+test("profile grid movement treats the shared ceiling as one column", () => {
+  assert.deepEqual(
+    moveProfileGridSelection(bothLaddersGroups, { provider: "claude", model: "opus", effort: "ultracode" }, "ArrowDown"),
+    { provider: "claude", model: "haiku", effort: "max" },
+    "the row below has no ceiling rung, so movement falls back to max",
+  )
+  assert.deepEqual(
+    moveProfileGridSelection(bothLaddersGroups, { provider: "claude", model: "haiku", effort: "max" }, "ArrowDown"),
+    { provider: "codex", model: "gpt-5.6-sol", effort: "max" },
+  )
+  assert.deepEqual(
+    moveProfileGridSelection(bothLaddersGroups, { provider: "claude", model: "opus", effort: "max" }, "ArrowUp"),
+    null,
+  )
+  const adjacent = bothLaddersGroups.map((group) => ({ ...group, options: group.options.filter((option) => option.model !== "haiku") }))
+  assert.deepEqual(
+    moveProfileGridSelection(adjacent, { provider: "claude", model: "opus", effort: "ultracode" }, "ArrowDown"),
+    { provider: "codex", model: "gpt-5.6-sol", effort: "ultra" },
+    "the ceiling column is continuous across providers, under each provider's own name",
+  )
 })
