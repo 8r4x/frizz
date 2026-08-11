@@ -927,6 +927,24 @@ test("allSessions: the cached read reflects every write, and repeats are the sam
   assert.equal(s.allSessions().length, 0, "a delete invalidates")
 })
 
+test("allSessions: getSession rides the same snapshot and never lags it", () => {
+  const s = store()
+  s.upsertSession(row({ slug: "one", session_id: "sid-1", title: "before" }))
+  s.allSessions() // prime the snapshot getSession will read off
+  assert.equal(s.getSession("one")?.title, "before")
+
+  s.setTitle("one", "after")
+  assert.equal(s.getSession("one")?.title, "after", "a write invalidates the single-row read too")
+
+  // A row the snapshot has never seen still resolves — a miss falls through to the database.
+  s.upsertSession(row({ slug: "two", session_id: "sid-2" }))
+  assert.equal(s.getSession("two")?.session_id, "sid-2")
+  assert.equal(s.getSession("never-dispatched"), undefined)
+
+  s.forgetSession("one")
+  assert.equal(s.getSession("one"), undefined, "a delete invalidates it")
+})
+
 test("allSessions: a rolled-back transaction never leaves the cache holding data that was undone", () => {
   const s = store()
   s.upsertSession(row({ slug: "keeper", session_id: "sid-1", title: "before" }))

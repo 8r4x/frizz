@@ -1046,22 +1046,45 @@ export function createStorage(dbPath: string): Storage {
   const totalChangesStmt = db.prepare<[], { changes: number }>("SELECT total_changes() AS changes")
   const dataVersionStmt = db.prepare<[], { data_version: number }>("PRAGMA data_version")
   let cachedSessions: SessionRow[] | null = null
+  let cachedBySlug: Map<string, SessionRow> | null = null
   let cachedAtChanges = -1
   let cachedAtDataVersion = -1
   const readAllSessions = () => selAll.all().filter((row) => ThreadSlug.safeParse(row.slug).success)
+  // True while the memoised snapshot is still the database's current state. Both probes are read every
+  // time; see the note above for why neither alone is enough.
+  const cacheIsCurrent = (): boolean => {
+    if (db.inTransaction) return false
+    const changes = totalChangesStmt.get()?.changes ?? -1
+    const dataVersion = dataVersionStmt.get()?.data_version ?? -1
+    if (cachedSessions && changes === cachedAtChanges && dataVersion === cachedAtDataVersion) return true
+    cachedSessions = null
+    cachedBySlug = null
+    cachedAtChanges = changes
+    cachedAtDataVersion = dataVersion
+    return false
+  }
   const allSessions = (): readonly SessionRow[] => {
     // NEVER cache a read taken inside an open transaction. `total_changes()` counts statements as they
     // execute and a ROLLBACK does not wind it back, so a mid-transaction read stored under the
     // post-write watermark would survive the rollback as a view of data that no longer exists. Nothing
     // on the hot path (the tick, board assembly) runs inside a transaction, so this costs nothing.
     if (db.inTransaction) return readAllSessions()
-    const changes = totalChangesStmt.get()?.changes ?? -1
-    const dataVersion = dataVersionStmt.get()?.data_version ?? -1
-    if (cachedSessions && changes === cachedAtChanges && dataVersion === cachedAtDataVersion) return cachedSessions
+    if (cacheIsCurrent() && cachedSessions) return cachedSessions
     cachedSessions = readAllSessions()
-    cachedAtChanges = changes
-    cachedAtDataVersion = dataVersion
     return cachedSessions
+  }
+  // The single-row read rides the SAME snapshot, for the same reason. `tailer.get()` asks
+  // `registeredStateIsCurrent` for every row the board assembles, so a 427-row board ran 427 of these
+  // per build on top of the whole-table read — the residual `plainRow`/`get` cost left over once
+  // allSessions stopped dominating. A slug lookup is answered off a Map built once per snapshot; a MISS
+  // still hits the database, because a row this connection has not read is not a row this cache can
+  // speak for. Freshness is identical to allSessions() by construction: same probes, same invalidation.
+  const getSession = (slug: string): SessionRow | undefined => {
+    if (!ThreadSlug.safeParse(slug).success) return undefined
+    if (db.inTransaction) return selOne.get(slug)
+    if (!cacheIsCurrent() || !cachedSessions) return selOne.get(slug)
+    if (!cachedBySlug) cachedBySlug = new Map(cachedSessions.map((row) => [row.slug, row]))
+    return cachedBySlug.get(slug) ?? selOne.get(slug)
   }
   const upsertStmt = db.prepare(`
     INSERT INTO session (slug, session_id, tmux_name, spawned_at, last_read_at, unread, exited, title_auto, title_locked, title, state, snoozed_until, snooze_prompt, awaiting_fence_id, awaiting_confirmed_at, meta, seen_at, plan_path, transcript_id, model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff, permission_mode, permission_pending, control_error, runtime_generation, runtime_control, runtime_control_revision)
@@ -1897,7 +1920,7 @@ export function createStorage(dbPath: string): Storage {
     // Databases created before the canonical guard may contain an overlong or otherwise unsafe id.
     // Keep those legacy/corrupt rows inert so boot reconciliation and pollers never feed them to
     // tmux, filesystem, transcript, or event boundaries.
-    getSession: (slug) => ThreadSlug.safeParse(slug).success ? selOne.get(slug) : undefined,
+    getSession,
     allSessions,
     subscribeSessionLifecycle(listener) {
       lifecycleListeners.add(listener)
