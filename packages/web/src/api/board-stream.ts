@@ -2,7 +2,7 @@ import type { ServerEvent } from "@frizz/shared"
 import { deltaAction } from "@frizz/shared"
 import { store, setBoard, applyDelta, openThread } from "../store.ts"
 import { noteServerBootId } from "./boot.ts"
-import { basePath } from "../lib/base-path.ts"
+import { basePath, projectHref, projectSlug } from "../lib/base-path.ts"
 
 // The transport-agnostic board/notify handler — the stage-1 delta/seq/boot state machine, extracted so
 // BOTH transports drive it identically: SSE (sse.ts, the fallback) and the /ws multiplex (socket.ts).
@@ -79,9 +79,23 @@ export function notify(event: Extract<ServerEvent, { type: "notify" }>): void {
   // The tag is the browser's REPLACE key, so a bare slug collapses two projects' identically-named
   // threads into one notification — and the click would open whichever tab happened to fire it.
   const n = new Notification(event.title, { body: event.body, tag: `${basePath()}/${event.slug}` })
+  // THE PROJECT THIS NOTIFICATION IS ABOUT, frozen now — the last place in the client where "which
+  // project" was resolved at the moment of USE rather than travelling with the thing that needed it.
+  // A notification is clicked when the operator gets back to their machine, which can be long after it
+  // was raised and in a tab that has since switched projects. `openThread` opens a slug in whatever
+  // project is showing, and slugs are unique only WITHIN a project (see `rebindProject`), so the click
+  // opened a DIFFERENT thread that happened to share the name rather than failing and saying so.
+  const project = projectSlug() ?? store.board?.projectSlug
   n.onclick = () => {
     window.focus()
-    openThread(event.slug) // side drawer: chat, or the frizz doc for a never-spawned thread
+    // Same project (the overwhelmingly common case): the in-app drawer, no reload. Otherwise a real
+    // navigation, because the destination is another project's page — one document load, which is
+    // what switching projects by URL has always been.
+    if (project === undefined || projectSlug() === project) {
+      openThread(event.slug) // side drawer: chat, or the frizz doc for a never-spawned thread
+    } else {
+      location.assign(`${projectHref(project)}/thread/${encodeURIComponent(event.slug)}`)
+    }
     n.close()
   }
 }
