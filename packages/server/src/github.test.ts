@@ -1,5 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { execFileSync } from "node:child_process"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -17,6 +18,8 @@ import {
   renderGithubPrompt,
   effectiveTemplate,
   ghAuthed,
+  gitGithubRemote,
+  githubRemoteNameWithOwner,
   DEFAULT_ISSUE_PROMPT,
   DEFAULT_PR_PROMPT,
   PROMPT_TOKENS,
@@ -495,4 +498,61 @@ test("ghAuthed: genuinely signed out — both probes fail → false", posixOnly,
 
 test("ghAuthed: a blank `gh auth token` is NOT a credential → false", posixOnly, async () => {
   assert.equal(await withStubGh("blank-token", ghAuthed), false)
+})
+
+// ---- githubRemoteNameWithOwner (the local, no-network half of the same gate) ----
+
+test("githubRemoteNameWithOwner: every spelling git writes a github.com remote in", () => {
+  const expected = "colinhacks/frizz"
+  assert.equal(githubRemoteNameWithOwner("git@github.com:colinhacks/frizz.git"), expected)
+  assert.equal(githubRemoteNameWithOwner("git@github.com:colinhacks/frizz"), expected)
+  assert.equal(githubRemoteNameWithOwner("ssh://git@github.com/colinhacks/frizz.git"), expected)
+  assert.equal(githubRemoteNameWithOwner("https://github.com/colinhacks/frizz.git"), expected)
+  assert.equal(githubRemoteNameWithOwner("https://github.com/colinhacks/frizz"), expected)
+  assert.equal(githubRemoteNameWithOwner("https://user@github.com/colinhacks/frizz.git"), expected)
+  assert.equal(githubRemoteNameWithOwner("https://github.com/colinhacks/frizz/"), expected)
+  assert.equal(githubRemoteNameWithOwner("  git@github.com:colinhacks/frizz.git\n"), expected) // trailing newline from git
+  assert.equal(githubRemoteNameWithOwner("git@GitHub.com:colinhacks/frizz.git"), expected) // host is case-insensitive
+})
+
+test("githubRemoteNameWithOwner: a non-github host is not a GitHub repo — including hosts that merely CONTAIN github.com", () => {
+  // The whole point of this probe is to open a feature door, so a near-miss host must read as null
+  // rather than as github.com.
+  assert.equal(githubRemoteNameWithOwner("git@gitlab.com:colinhacks/frizz.git"), null)
+  assert.equal(githubRemoteNameWithOwner("https://bitbucket.org/colinhacks/frizz.git"), null)
+  assert.equal(githubRemoteNameWithOwner("https://github.com.evil.com/colinhacks/frizz.git"), null)
+  assert.equal(githubRemoteNameWithOwner("https://evil.com/github.com/colinhacks/frizz"), null)
+  assert.equal(githubRemoteNameWithOwner("git@github.enterprise.co:colinhacks/frizz.git"), null)
+})
+
+test("githubRemoteNameWithOwner: anything that is not exactly owner/repo → null, never throws", () => {
+  assert.equal(githubRemoteNameWithOwner(""), null)
+  assert.equal(githubRemoteNameWithOwner("   "), null)
+  assert.equal(githubRemoteNameWithOwner("not a url"), null)
+  assert.equal(githubRemoteNameWithOwner("https://github.com/colinhacks"), null) // owner only
+  assert.equal(githubRemoteNameWithOwner("https://github.com/a/b/c"), null) // too deep
+  assert.equal(githubRemoteNameWithOwner("https://github.com/"), null)
+  assert.equal(githubRemoteNameWithOwner("/Users/colinmcd94/some/local/path"), null)
+})
+
+// The regression this whole fallback exists for: gh cannot reach the network, so `gh repo view` fails
+// exactly as it does for a gitlab origin — and the trigger's `inRepo && authed` gate hid the feature.
+// Run against a REAL git repo with a REAL remote, because the seam under test is the subprocess.
+test("gitGithubRemote: reads a real repo's origin with no network and no gh at all", posixOnly, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "git-remote-"))
+  try {
+    const run = (args: string[]) => execFileSync("git", args, { cwd: dir, stdio: "ignore" })
+    run(["init", "-q"])
+    run(["remote", "add", "origin", "git@github.com:colinhacks/frizz.git"])
+    assert.equal(await gitGithubRemote(dir), "colinhacks/frizz")
+    // Negative control: the same real probe on the same real repo must FAIL when origin is not GitHub,
+    // otherwise the test above proves nothing about the host check.
+    run(["remote", "set-url", "origin", "git@gitlab.com:colinhacks/frizz.git"])
+    assert.equal(await gitGithubRemote(dir), null)
+    // …and a repo with no remote at all.
+    run(["remote", "remove", "origin"])
+    assert.equal(await gitGithubRemote(dir), null)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

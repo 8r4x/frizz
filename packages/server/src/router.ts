@@ -94,7 +94,7 @@ import {
 import { openExternalUrl } from "./open-external.ts"
 import { openLocalFile, resolveOpenableFile } from "./local-file.ts"
 import { openableFileRoots } from "./project.ts"
-import { ghInstalled, ghAuthed, ghRepo, listItems, hydrateIssue, hydratePr, renderGithubPrompt, effectiveTemplate, DEFAULT_ISSUE_PROMPT, DEFAULT_PR_PROMPT } from "./github.ts"
+import { ghInstalled, ghAuthed, ghRepo, gitGithubRemote, listItems, hydrateIssue, hydratePr, renderGithubPrompt, effectiveTemplate, DEFAULT_ISSUE_PROMPT, DEFAULT_PR_PROMPT } from "./github.ts"
 import { slugify, resolveSlug, resolveLegacyThreadFile, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock } from "./dispatch.ts"
 import { readCodexModels } from "./backend/codex-models.ts"
 import { codexSandbox } from "./backend/codex.ts"
@@ -1017,8 +1017,13 @@ export function createRouter(ctx: AppContext) {
       } else {
         ctx.github = { installed: true, inRepo: true, nameWithOwner: live }
       }
+      return live
     }
-    return live
+    // gh could not answer. That is USUALLY "not a GitHub repo", but it is also what a network blip
+    // looks like — `gh repo view` is a GraphQL call — so fall back to the local git remote before
+    // hiding the feature. Deliberately NOT cached: gh stays the authority, and the next query
+    // re-probes it, so an outage never freezes a locally-derived name onto the process.
+    return await gitGithubRemote(ctx.project.dir)
   }
 
   return {

@@ -11,7 +11,7 @@ import { GITHUB_DISPATCH_UI_BOUNDARY, type GithubItem } from "@frizz/shared"
 // than swallowing them into an empty, misleading result (see risk 7).
 
 const pexec = promisify(execFile)
-const GH_TIMEOUT = 8000 // ms — every gh call; a slow keyring/network must never wedge an RPC or boot
+const GH_TIMEOUT = 8000 // ms — every gh call (and the local git probe); a slow keyring/network must never wedge an RPC or boot
 const GH_MAXBUF = 16 * 1024 * 1024 // 16MB — a wide `--json` list can be large
 
 // Run gh with an args array (no shell) and return stdout. Throws on non-zero exit / timeout — the
@@ -77,6 +77,60 @@ export async function ghRepo(dir: string): Promise<string | null> {
   } catch {
     return null
   }
+}
+
+// The purely LOCAL answer to "is this a GitHub repo", read off the git remote — no network, no gh.
+//
+// It exists because `gh repo view` is a GraphQL call to api.github.com, so a network blip answers
+// "this is not a GitHub repo" for a repo that plainly is, and the trigger's `inRepo && authed` gate
+// then hides the whole feature with no explanation. That is the same false negative ghAuthed's
+// `gh auth token` fallback was added to kill (2026-08-04) — the auth half got a local fallback and
+// the repo half did not, so a GitHub outage still hid the icon. Measured 2026-08-11 against a dead
+// proxy: `gh --version` 0, `gh auth token` 0, `gh auth status --active` 1, `gh repo view` 1. The
+// server log had named the same window nine minutes earlier ("GitHub GraphQL request failed").
+//
+// Deliberately narrower than gh: only `origin`, only github.com. gh resolves forks/`gh-resolved`/
+// multiple remotes and can name a different repo than origin — so this answer is used to KEEP THE
+// DOOR OPEN during an outage, never cached (see resolveRepo in router.ts), and the next query
+// re-probes gh and self-corrects. A GHE host is not github.com, so it reads null exactly as today.
+export async function gitGithubRemote(dir: string): Promise<string | null> {
+  try {
+    const { stdout } = await pexec("git", ["remote", "get-url", "origin"], { timeout: GH_TIMEOUT, cwd: dir })
+    return githubRemoteNameWithOwner(stdout)
+  } catch {
+    return null
+  }
+}
+
+// "owner/repo" for a github.com remote URL, else null. Pure, so the host-spoof cases are unit-tested:
+// `github.com.evil.com` and `evil.com/github.com/o/r` are NOT github.com and must not open the door.
+export function githubRemoteNameWithOwner(remoteUrl: string): string | null {
+  const url = remoteUrl.trim()
+  if (!url) return null
+  let host: string
+  let path: string
+  if (url.includes("://")) {
+    try {
+      const parsed = new URL(url)
+      host = parsed.hostname
+      path = parsed.pathname
+    } catch {
+      return null
+    }
+  } else {
+    // scp-like: [user@]host:owner/repo — git's other remote spelling, and the one `git@github.com:`
+    // uses, which `new URL()` does not accept.
+    const scp = /^(?:[^@/]+@)?([^:/]+):(.+)$/.exec(url)
+    if (!scp) return null
+    host = scp[1]
+    path = scp[2]
+  }
+  if (host.toLowerCase() !== "github.com") return null
+  const segments = path.replace(/\.git$/, "").split("/").filter((s) => s.length > 0)
+  if (segments.length !== 2) return null
+  const [owner, repo] = segments
+  if (!/^[A-Za-z0-9._-]+$/.test(owner) || !/^[A-Za-z0-9._-]+$/.test(repo)) return null
+  return `${owner}/${repo}`
 }
 
 // The stable (process-lifetime) detection triple, resolved once at boot and cached on ctx.github.
