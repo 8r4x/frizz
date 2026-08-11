@@ -17,7 +17,8 @@ Three sheets of directions for the mark after the `fray` → `frizz` rename, eac
 Both fitters render a candidate, compare its ink mask with the reference's, and hill-climb on **intersection-over-union**. Judging shape by eye is what produced six rounds of near-misses on this brief; a number says whether a change helped.
 
 ```sh
-nub fit-bezier.mjs   # FINAL: 10 cubic segments -> fit/bezier-best.json, fit/bezier-replica.svg
+nub fit-curve.mjs    # FINAL: 12 cubic segments, TWO crossings -> fit/curve-replica.svg
+nub fit-bezier.mjs   # one-crossing replica of the reference -> fit/bezier-replica.svg
 nub fit-spline.mjs   # 28-waypoint Catmull-Rom (its seed)   -> fit/spline-best.json
 nub fit-eight.mjs    # closed 8 + separate bar (superseded) -> fit/best.json
 ```
@@ -26,7 +27,14 @@ nub fit-eight.mjs    # closed 8 + separate bar (superseded) -> fit/best.json
 
 The giveaway is the waist: three strands meet there in a triangle of crossings, which is what one path passing through the middle three times looks like. A closed eight plus a bar would put four strands through a single node. The apparent "crossbar" is just the path's two tails, which leave roughly collinear.
 
-**The final mark is 10 cubic Bézier segments**, not a polyline. The 28-waypoint fit matched the reference but every waypoint had chased pixels independently, so its curvature jittered — smooth to a glance, not a drawn curve. Refitting as a G1-continuous Bézier path with 11 anchors cut curvature roughness from **108.9 to 1.0 per 100 units, a 108× reduction**, while IoU went *up* slightly (0.9554 → 0.9575). Tangent continuity is structural there: each anchor carries one tangent shared by the segments either side, so no amount of fitting can introduce a corner.
+**The mark has exactly TWO self-crossings**, one per loop, and that is what makes it a cursive `f` rather than a figure eight. A single crossing at the waist creates *both* loops at once — that is an `8`, and it is what every earlier attempt produced, including the pixel-exact replica of the reference. Two crossings means each loop shuts on its own with a stem running between them.
+
+`crossings.mjs` counts them, and `fit-curve.mjs` treats the count as a hard constraint. Two things had to be right for that constraint to mean anything:
+
+- The counter skips neighbouring samples as a **fraction** of the path, not a fixed count. A fixed count silently changes meaning with sampling density, and an optimiser found the gap: it satisfied a coarsely-checked "two crossings" and handed back a shape with five.
+- The shape is **constructed** with two crossings and only then curve-fitted. Fitting pixel overlap against the one-crossing reference while forcing two crossings can only tear a loop open, and it did — the descender unrolled into a hook.
+
+**The final mark is 12 cubic Bézier segments**, not a polyline. The 28-waypoint fit matched the reference but every waypoint had chased pixels independently, so its curvature jittered — smooth to a glance, not a drawn curve. Refitting as a G1-continuous Bézier path with 11 anchors cut curvature roughness from **108.9 to 1.0 per 100 units, a 108× reduction**, while IoU went *up* slightly (0.9554 → 0.9575). The final two-crossing mark reaches **0.09 per 100 units**. Tangent continuity is structural there: each anchor carries one tangent shared by the segments either side, so no amount of fitting can introduce a corner.
 
 ## Regenerating
 
