@@ -77,7 +77,7 @@ import { PROVIDER_LABEL } from "../lib/signIn.ts"
 import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
 import { prependEarlierPage } from "../lib/transcriptPagination.ts"
 import { buildVirtualTranscriptMessageRows, earlierLoadGate, nextTailFollow, TAIL_FOLLOW_PX, USER_TAIL_EXTRA, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
-import { coalesceToolActivityMessages, editedFileCount, historicalToolActivityMessages, isToolActivityException, liveRuntimeStartedAt, liveToolActivityRun, liveToolActivityTail, settledToolActivityLabel, thinkingToolActivityLabel, toolActivityLabel } from "../lib/toolActivity.ts"
+import { coalesceToolActivityMessages, editedFileCount, historicalToolActivityMessages, isPictureTool, isToolActivityException, liveRuntimeStartedAt, liveToolActivityRun, liveToolActivityTail, settledToolActivityLabel, thinkingToolActivityLabel, toolActivityLabel } from "../lib/toolActivity.ts"
 import { CodexDirectiveCard, MermaidDiagram } from "./CodexRichOutput.tsx"
 
 // Answer types moved to lib/questionBlocks.ts (shared by the queue card, the thread view, and the
@@ -1526,6 +1526,18 @@ export const STEP = 14
 // the prose→label boundary above them, which inverts the hierarchy and reads as three orphaned lines.
 // What makes these rows recede is their tone and size, never their spacing.
 export const META_CARD_STEP = 6
+// The gap a PICTURE takes, on whichever side it has a neighbour. A rendered screenshot is the one tool
+// card that is not a compact band, and the tight run's premise ("two borders 6px apart already read as
+// two objects") fails twice over on it: the frame is tall enough to be its own region, and the picture
+// inside is usually dark UI whose own edges sit within a few px of the frame's faint one. At 6px the
+// next row lands on the image — measured 6.19px from the frame's bottom border to the shimmer's box
+// (maintainer 2026-08-11: "we need better spacing under the screenshots … it's too close").
+//
+// It is BIGGER than STEP rather than equal to it because STEP separates rows of one weight class from
+// each other; a picture outweighs everything around it, and matching the ordinary between-block gap
+// still reads as the shimmer captioning the image. Symmetric — the air above a picture and the air
+// below it are the same air, and splitting them made the frame look dropped rather than spaced.
+export const PICTURE_STEP = 22
 // Adjacent tool activity must read at the SAME tight run whether it's batched in one message or split
 // across messages (the tailer chunks a burst of tool calls arbitrarily). The boundary between two
 // messages joins that run iff the FIRST ends with a tool band AND the SECOND begins with one (tool-tail
@@ -1600,16 +1612,30 @@ export function messageHeadIsLabel(m: ChatMessage): boolean {
   const tools = messageHeadTools(m)
   return tools !== null && !isToolActivityException(tools[0])
 }
+// …and the OTHER thing an edge can be: a rendered PICTURE, which outweighs both the label and the
+// compact card and therefore sets its own gap (PICTURE_STEP) against whatever it neighbours.
+export function messageTailIsPicture(m: ChatMessage): boolean {
+  const tools = messageTailTools(m)
+  return tools !== null && isPictureTool(tools[tools.length - 1])
+}
+export function messageHeadIsPicture(m: ChatMessage): boolean {
+  const tools = messageHeadTools(m)
+  return tools !== null && isPictureTool(tools[0])
+}
 // THE between-message gap, in one function. Both spacing implementations (this file's plain column and
 // the virtualized row builder) call it, so neither can drift from the other.
 export function messageGap(previous: ChatMessage, next: ChatMessage): number {
   // The tight run needs a CARD on at least one side of the seam — that is the whole of it. Two bare
   // label rows fall through to the ordinary STEP, which is what stops a `Ran N tool calls` / thought /
   // shimmer column from painting as one block of grey. See META_CARD_STEP.
-  const tightRun = messageTailIsMeta(previous)
+  // A picture on either side outranks both of those: it is neither a compact card (so the tight run's
+  // premise fails) nor an ordinary block (so STEP under-spaces it). See PICTURE_STEP.
+  const picture = messageTailIsPicture(previous) || messageHeadIsPicture(next)
+  const tightRun = !picture
+    && messageTailIsMeta(previous)
     && messageHeadIsMeta(next)
     && !(messageTailIsLabel(previous) && messageHeadIsLabel(next))
-  const base = tightRun ? META_CARD_STEP : STEP
+  const base = picture ? PICTURE_STEP : tightRun ? META_CARD_STEP : STEP
   // ...and a little extra under the human's own words, but only where the run of them ENDS — see
   // USER_TAIL_EXTRA. Measured against the NEXT rendered message, so a user message followed by another
   // user message keeps the plain step between them.
@@ -1648,6 +1674,9 @@ export function workingIndicatorGap(messages: readonly ChatMessage[]): number {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]
     if (m.queued || messageRendersNothing(m)) continue
+    // Under a PICTURE it takes the picture's own gap — this is the exact pair the maintainer reported
+    // (an image `Read` with the shimmer under it). See PICTURE_STEP.
+    if (messageTailIsPicture(m)) return PICTURE_STEP
     // The shimmer is itself a bare LABEL, so it joins the tight run only under a CARD — under another
     // label it takes the ordinary step, exactly as messageGap charges that pair.
     if (messageTailIsMeta(m) && !messageTailIsLabel(m)) return META_CARD_STEP
@@ -1710,14 +1739,31 @@ export function normalizeParts(parts: readonly TranscriptPart[]): TranscriptPart
 
 // Interleave a list of block-level nodes with explicit spacers. Nullish entries (e.g. an empty prose
 // run) are dropped BEFORE interleaving so a spacer never leads, trails, or doubles.
-function withSpacers(blocks: ReactNode[], h = STEP): ReactNode[] {
+//
+// `h` may be a FUNCTION of the seam — it receives the index of the block BELOW it — for the one rhythm
+// a single number cannot express: a picture takes PICTURE_STEP against whatever it neighbours while its
+// neighbours keep their own pitch with each other. A caller passing the function form is therefore
+// keying on positions the filter above must not shift, so it must pass real nodes only.
+function withSpacers(blocks: ReactNode[], h: number | ((index: number) => number) = STEP): ReactNode[] {
   const real = blocks.filter((b) => b !== null && b !== undefined && b !== false)
   const out: ReactNode[] = []
   real.forEach((b, i) => {
-    if (i > 0) out.push(<VSpace key={`vs${i}`} h={h} />)
+    if (i > 0) out.push(<VSpace key={`vs${i}`} h={typeof h === "number" ? h : h(i)} />)
     out.push(b)
   })
   return out
+}
+// The seam between two stacked blocks: a picture's own gap where either side of it IS a picture, the
+// caller's ordinary pitch otherwise. `edges` runs parallel to the block list. See PICTURE_STEP.
+type PictureEdges = { head: boolean; tail: boolean }
+const NO_PICTURE: PictureEdges = { head: false, tail: false }
+function pictureAwareGap(edges: readonly PictureEdges[], ordinary: number): (index: number) => number {
+  return (i) => (edges[i - 1]?.tail || edges[i]?.head ? PICTURE_STEP : ordinary)
+}
+// A tool BAND's outer edges: the first and last card it draws. Same question messageHeadIsPicture /
+// messageTailIsPicture ask across a message boundary, asked inside one message instead.
+function toolBandEdges(tools: readonly CollapsedTool[]): PictureEdges {
+  return { head: isPictureTool(tools[0]), tail: isPictureTool(tools[tools.length - 1]) }
 }
 
 export interface CollapsedTool {
@@ -1912,17 +1958,23 @@ function ToolCalls({ tools, at }: { tools: CollapsedTool[]; dense?: boolean; at?
     else runs.push({ exceptional, tools: [tool] })
   }
 
+  // A PICTURE card sets its own gap against both its neighbours here — the cards batched beside it and
+  // the digest below the batch alike — while the compact cards around it keep the tight run between
+  // themselves. See PICTURE_STEP.
   return (
     <div className="flex flex-col">
       {withSpacers(runs.map((run, runIndex) => (
         run.exceptional
           ? (
               <div key={`exceptions-${runIndex}`} className="flex flex-col">
-                {withSpacers(run.tools.map((tool, i) => <ToolCardRouter key={i} t={tool} startedAt={at} />), 6)}
+                {withSpacers(
+                  run.tools.map((tool, i) => <ToolCardRouter key={i} t={tool} startedAt={at} />),
+                  pictureAwareGap(run.tools.map((tool) => toolBandEdges([tool])), META_CARD_STEP),
+                )}
               </div>
             )
           : <MinimalToolActivity key={`activity-${runIndex}`} tools={run.tools} at={at} />
-      )), 6)}
+      )), pictureAwareGap(runs.map((run) => toolBandEdges(run.tools)), META_CARD_STEP))}
     </div>
   )
 }
@@ -3046,6 +3098,14 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
   // above earlier prose. A question-block index (`qi`) threads across all text parts so the answering
   // controller (which numbers ```question blocks over the flat text, same order) lines up.
   const blocks: ReactNode[] = []
+  // Runs PARALLEL to `blocks`: which of each block's own edges is a rendered PICTURE. A picture reaches
+  // this list two ways — a tool card whose result is one, and a bare image path a worker wrote in its
+  // prose — and either way it takes PICTURE_STEP against its neighbour instead of the block STEP.
+  const pictureEdges: PictureEdges[] = []
+  const push = (node: ReactNode, edges: PictureEdges = NO_PICTURE) => {
+    blocks.push(node)
+    pictureEdges.push(edges)
+  }
   const qi = { n: -1 }
   const renderText = (text: string, keyBase: string) => {
     // Split SIGNAL fences (```done / ```awaiting) out first — each renders as a card in place of the
@@ -3054,7 +3114,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
     // controller (which numbers ```question blocks over the flat text in the same order).
     for (const [fi, fseg] of splitFenceBlocks(text).entries()) {
       if (fseg.kind === "fence") {
-        blocks.push(
+        push(
           <FenceCard
             key={`${keyBase}-f${fi}`}
             fenceKind={fseg.fenceKind}
@@ -3069,13 +3129,14 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
         if (seg.kind === "prose") {
           for (const [j, p] of splitProseAttachments(seg.text).entries()) {
             const partKey = `${keyBase}-${fi}-p${si}-${j}`
-            blocks.push(
+            push(
               p.kind === "image" ? <BlockImage key={partKey} path={p.path} />
               : p.kind === "file" ? <BlockFile key={partKey} path={p.path} />
               : p.kind === "visualization" ? <InlineVisualization key={partKey} file={p.file} />
               : p.kind === "directive" ? <CodexDirectiveCard key={partKey} directive={p.directive} />
               : p.kind === "mermaid" ? <MermaidDiagram key={partKey} source={p.source} />
               : <ProseHtml key={partKey} md={p.text} wrap={dense} />,
+              p.kind === "image" ? { head: true, tail: true } : NO_PICTURE,
             )
           }
           continue
@@ -3090,7 +3151,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
               onSubmit: answering.onSubmit,
             }
           : undefined
-        blocks.push(<QuestionBlockCard key={`${keyBase}-${fi}-q${si}`} raw={seg.text} questionKind={seg.questionKind} danger={seg.danger} interactive={interactive} wrap={dense} />)
+        push(<QuestionBlockCard key={`${keyBase}-${fi}-q${si}`} raw={seg.text} questionKind={seg.questionKind} danger={seg.danger} interactive={interactive} wrap={dense} />)
       }
     }
   }
@@ -3110,7 +3171,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
         // the agent's prose remains — its calls live inside the collapsed intermediate bar instead.
         if (textOnly) return
         const collapsed = collapseTools(part.tools)
-        if (collapsed.length) blocks.push(<ToolCalls key={`t${pi}`} tools={collapsed} dense={dense} at={m.at} />)
+        if (collapsed.length) push(<ToolCalls key={`t${pi}`} tools={collapsed} dense={dense} at={m.at} />, toolBandEdges(collapsed))
       } else {
         renderText(part.text, `x${pi}`)
       }
@@ -3120,7 +3181,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
     // then all prose. Degrades to today's (order-lossy) rendering until the server bounce.
     if (!textOnly) {
       const collapsed = collapseTools(m.tools)
-      if (collapsed.length > 0) blocks.push(<ToolCalls key="tools" tools={collapsed} dense={dense} at={m.at} />)
+      if (collapsed.length > 0) push(<ToolCalls key="tools" tools={collapsed} dense={dense} at={m.at} />, toolBandEdges(collapsed))
     }
     renderText(m.text, "leg")
   }
@@ -3133,7 +3194,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
   // message that still carries an open ask, so the button only appears where there's something to send;
   // the queue card leaves showSendButton unset (it owns a single card-level Send instead).
   if (showSendButton && answering) {
-    blocks.push(
+    push(
       <div key="send-answers" className="flex justify-start">
         <button
           type="button"
@@ -3153,7 +3214,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
   // an inspector or an e2e selector, distinct from the pagination-anchor attribute (see the anchor test).
   return (
     <div data-frizz-msg={m.sourceId} className="flex flex-col text-[13px] min-w-0">
-      {withSpacers(blocks)}
+      {withSpacers(blocks, pictureAwareGap(pictureEdges, STEP))}
     </div>
   )
 })

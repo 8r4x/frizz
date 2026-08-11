@@ -78,9 +78,25 @@ export function isToolActivityException(tool: Pick<
     || tool.sendTo !== undefined
     || tool.sendBody !== undefined
     || (tool.backgroundState !== undefined && !orphanedPoll(tool))
-    || tool.outputImage !== undefined
-    || (tool.sentImages !== undefined && tool.sentImages.length > 0)
+    || isPictureTool(tool)
     || SUB_AGENT_TOOL_NAMES.has(normalizedToolName(tool.name))
+}
+
+/**
+ * A call whose card IS a picture — an image `Read`, a `take_screenshot`, a SendUserFile delivery
+ * carrying images.
+ *
+ * Every other exception above renders as a compact band a couple of rows tall, which is what lets the
+ * transcript's tight run (ChatView.META_CARD_STEP) sit them 6px apart: two faint borders with 6px of
+ * clear space between them still read as two objects. A picture breaks that premise on both counts —
+ * it is a tall block of arbitrary content, usually a dark screenshot whose own edges land near the
+ * frame's, so at the run pitch the next row reads as glued to the bottom of the image rather than as
+ * the next statement (maintainer 2026-08-11, on an image `Read` under the live shimmer: "we need better
+ * spacing under the screenshots … it's too close"). ChatView.PICTURE_STEP is the answer; this predicate
+ * is who it applies to.
+ */
+export function isPictureTool(tool: Pick<TranscriptToolCall, "outputImage" | "sentImages">): boolean {
+  return tool.outputImage !== undefined || (tool.sentImages !== undefined && tool.sentImages.length > 0)
 }
 
 /**
