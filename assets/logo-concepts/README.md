@@ -14,6 +14,14 @@ Three sheets of directions for the mark after the `fray` → `frizz` rename, eac
 | The hooked f | [`frizz-cursive-f.html`](frizz-cursive-f.html) | Eight lowercase `f`s built from hooks rather than loops — the favicon-viable family. |
 | Icon concepts | [`frizz-logo-concepts.html`](frizz-logo-concepts.html) | The original fifteen non-letterform directions: fan, curl, spark, lanes, knot and the rest. |
 
+## The shipped mark
+
+`final/favicon.svg` is the icon, installed at `packages/web/public/favicon.svg`. Rebuild it with `nub finalize.mjs [--install]`.
+
+Only HALF the path is fitted; the other half is that half's anchors rotated 180° and reversed with the handles swapped, so the symmetry lives in the path data and cannot drift. **Editing one side without mirroring the other breaks it.** The centre anchor's `in` and `out` must stay equal — letting them differ cost 2.28 units of asymmetry.
+
+`nub build-fff.mjs` chains the glyph into cursive `fff` ([`final/fff.svg`](final/fff.svg)) — one stroke, one free end each side, 6 self-crossings. The copies join by pure translation with no blending: because the glyph is C2, its entry and exit tangents are *identical*, so laying the next copy's start tip on the previous copy's end tip matches position and tangent at once. The shared anchor takes its `in` from the arriving copy and its `out` from the departing one; taking both from either side leaves a bulge and breaks the row's symmetry. `REPEATS=5` for a longer run.
+
 ## Fitting to a reference
 
 Both fitters render a candidate, compare its ink mask with the reference's, and hill-climb on **intersection-over-union**. Judging shape by eye is what produced six rounds of near-misses on this brief; a number says whether a change helped.

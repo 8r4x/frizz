@@ -186,6 +186,8 @@ console.log(`512 grid: ink radius ${inkR.toFixed(1)}, stroke ${stroke.toFixed(2)
 
 const d = bezierPath(scaled)
 writeFileSync(join(finalDir, "path.txt"), `${d}\n`)
+// The anchors, so the mark can be rebuilt or chained without re-deriving it.
+writeFileSync(join(finalDir, "anchors.json"), JSON.stringify({ variant: CHOSEN, stroke, anchors: scaled }, null, 2))
 writeFileSync(join(finalDir, "mark.svg"), `<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
   <path d="${d}" fill="none" stroke="#efbf2e" stroke-width="${stroke.toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
