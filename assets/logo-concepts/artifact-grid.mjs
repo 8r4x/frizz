@@ -9,6 +9,13 @@ import { fileURLToPath } from "node:url"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const SHEETS = {
+  two: {
+    dir: "out-two",
+    file: "frizz-two.html",
+    title: "Frizz — the two-crossing f, symmetric",
+    lede: `The approved mark, made <b>exactly 180&deg; rotationally symmetric</b>, swept into variants. Every one is a single stroke with <b>exactly two self-crossings</b> — one per loop, and they are each other's partners under a half turn. One crossing at the waist would create both loops at once, which is a figure eight; two is what makes it a cursive f. Quote an id and I'll refine around it.`,
+    groups: null,
+  },
   eight: {
     dir: "out-eight",
     file: "frizz-eight.html",
@@ -50,6 +57,8 @@ const tile = (v) => `
       <figcaption><b>${v.id}</b><span>${
         v.along
           ? `bulb ${v.along}&times;${v.across} &middot; spine ${v.spineAngle}&deg;/${v.spineLen}<br>bend ${v.spineBend}&deg; &middot; tail bend ${v.tailBend}&deg; &middot; ${v.side > 0 ? "side +" : "side −"}${v.dir > 0 ? " dir +" : " dir −"}`
+          : v.grow !== undefined
+          ? `base ${v.base} &middot; grow ${v.grow} &middot; twist ${v.twist}&deg;<br>ease ${v.ease} &middot; aniso ${v.aniso} &middot; shear ${v.shear} &middot; stroke ${v.stroke}`
           : v.loopW
           ? `loop ${v.loopW}&times;${v.loopH} &middot; lean ${v.shear}<br>bar ${v.barAngle}&deg; &middot; bow ${v.barBend}&deg; &middot; stroke ${v.stroke} &middot; ${v.key}`
           : `bulb ${v.lw}&times;${v.lh} &middot; tilt ${v.tilt ?? v.tiltRel}&deg; &middot; spine ${v.axis}&deg;<br>dist ${v.dist} &middot; ${v.side > 0 ? "side +" : "side −"}${v.dir > 0 ? " dir +" : " dir −"}${v.key ? ` &middot; ${v.key}` : ""}`
@@ -101,6 +110,7 @@ ${sheet.groups
   : `<h2>The ${variants.length} options</h2>\n<div class="grid">${variants.map(tile).join("")}</div>`}
 
 <div class="foot">
+<p><b>Two crossings, verified on every variant.</b> The count is checked at the same sampling density as the final report — a coarser check is not a weaker check but a different one, and an optimiser will find the gap between them. It did, once: a shape with five crossings passed a coarse test as two.</p>
 <p><b>Symmetry is exact, not approximate.</b> Each half is authored once and the other half is its 180&deg; rotation, so the two can't drift. Measured on the point set, the worst deviation across all ${variants.length} is <code>${worstC2.toExponential(2)}</code> units — floating-point noise. That is a proof, not a pixel comparison.</p>
 <p><b>Nothing here grazes.</b> The stroke meets a blob at a computed <i>tangent</i> point, so joins have no kink, and the two stems form one straight line through the centre rather than a pile-up. Any combination where two parts of the stroke ran closer than 1.7 stroke-widths at under 24&deg; to each other was discarded — that near-parallel graze is what reads as a smudge. Combinations with no crossing (not a letterform) or more than three (a scribble) were dropped too: 8640 combinations became 2815 clean, 657 visually distinct, and these ${variants.length}.</p>
 <p><b>Not yet decided:</b> weight, colour and whether the tile stays. Everything is drawn at a uniform 22-unit stroke purely so the shapes compare fairly.</p>
