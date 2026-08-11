@@ -1573,6 +1573,46 @@ test("pagination: repeated clicks walk exactly one user turn backward", () => {
   assert.deepEqual(second.messages.map((m) => m.sourceId), ["u1", "a1"])
 })
 
+// A renamed checkout strands every pre-rename transcript in the bucket for its ORIGINAL cwd (see
+// discover.ts). readTranscript learned to sweep for it; the PAGED reader — which is what the
+// `threadTranscript` RPC serves to the queue card and the standalone /full page — kept building
+// `join(logDirOf(project), …)` by hand, so the recovery reached one producer and not the other. Measured
+// on the maintainer's own board: 386 of 430 threads returned messages through readThreadTranscript and an
+// EMPTY page through the RPC, which rendered as "No message yet." over a transcript sitting on disk.
+// Pinned at the paged reader, because that is the level the bug lived at.
+test("paged reader: a transcript stranded in a SIBLING log dir (the project was renamed) still pages", () => {
+  const h = txHarness()
+  const strandedDir = join(homedir(), ".claude", "projects", `${h.slug}-before-the-rename`)
+  try {
+    mkdirSync(strandedDir, { recursive: true })
+    h.store.upsertSession(txRow({}))
+    // The birth bucket holds the whole conversation; the project's CURRENT bucket has nothing.
+    writeFileSync(join(strandedDir, "sid.jsonl"), [USER_LINE("u0"), USER_LINE("u1")].map((l) => l + "\n").join(""))
+
+    const latest = readLatestThreadTranscriptPage(h.project, h.store, "t")
+    assert.deepEqual(latest.messages.map((m) => m.text), ["u0", "u1"], "the paged reader follows the transcript across the rename")
+    assert.equal(
+      readThreadTranscript(h.project, h.store, "t").length,
+      latest.messages.length,
+      "both producers agree — the RPC page and the /ws push can never disagree about whether a thread has a conversation",
+    )
+  } finally {
+    try { rmSync(strandedDir, { recursive: true, force: true }) } catch { /* best-effort */ }
+    h.cleanup()
+  }
+})
+
+test("paged reader: a genuinely missing transcript still pages empty — the sibling sweep is a recovery, not a mask", () => {
+  const h = txHarness()
+  try {
+    h.store.upsertSession(txRow({ spawned_at: new Date(Date.now() - (DGRACE_MS + 5000)).toISOString() }))
+    // No jsonl anywhere, in this bucket or any sibling.
+    assert.deepEqual(readLatestThreadTranscriptPage(h.project, h.store, "t").messages, [])
+  } finally {
+    h.cleanup()
+  }
+})
+
 test("pagination cursor survives restart-like replay and concurrent append, but rejects session replacement", () => {
   const h = txHarness()
   try {

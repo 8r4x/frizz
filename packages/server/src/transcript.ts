@@ -2079,6 +2079,15 @@ function logDirOf(project: Project): string {
 // bucket for its ORIGINAL cwd and stays there forever, so the drawer has to follow it or it renders an
 // empty conversation over a transcript that is right there on disk (see discover.ts). The miss path is
 // the only one that pays a sweep, and a hit is memoized across the whole project.
+//
+// EVERY reader resolves through here, and that is the whole point. There are two producers of a rendered
+// transcript — this file's whole-file reader (readTranscript → readThreadTranscript, which the /ws push
+// and the drawer use) and the PAGED one below (sourceForThread → readLatestThreadTranscriptPage, which
+// the `threadTranscript` RPC serves to the queue card and the standalone /full page). The paged one built
+// `join(logDirOf(project), …)` by hand, so the rename recovery reached one producer and not the other:
+// measured on this machine, 386 of 430 frizz threads returned messages through readThreadTranscript and
+// an EMPTY page through the RPC, which is exactly the "No message yet." / "No conversation yet." the
+// maintainer was looking at while the same thread's drawer rendered fine.
 function resolveTranscriptPath(project: Project, sessionId: string): string {
   const path = join(logDirOf(project), `${sessionId}.jsonl`)
   try {
@@ -3479,7 +3488,7 @@ function sourceForThread(
       : row.transcript_id ?? row.session_id
     const path = backend === "codex"
       ? (backendFor?.("codex") ?? defaultCodexBackend()).transcriptPath(nativeId)
-      : join(logDirOf(project), `${nativeId}.jsonl`)
+      : resolveTranscriptPath(project, nativeId)
     if (!path) return undefined
     return {
       slug,
@@ -3497,7 +3506,7 @@ function sourceForThread(
     nativeId: slug,
     backend: "claude",
     runtimeGeneration: 0,
-    path: join(logDirOf(project), `${slug}.jsonl`),
+    path: resolveTranscriptPath(project, slug),
   }
 }
 
@@ -3524,7 +3533,10 @@ function discoveredClaudeSource(
     nativeId,
     backend: "claude",
     runtimeGeneration: row.runtime_generation ?? 0,
-    path: join(logDirOf(project), `${nativeId}.jsonl`),
+    // `nativeId` was just found INSIDE logDirOf, so the resolver's first stat answers and this is the
+    // same path either way. Routed through it anyway: one rule with no exception to remember beats
+    // three call sites where two must resolve and the third happens not to need to.
+    path: resolveTranscriptPath(project, nativeId),
   }
 }
 
