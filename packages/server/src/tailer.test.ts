@@ -2766,12 +2766,18 @@ test("tailer: a transcript stranded in a SIBLING log dir (the project was rename
   assert.equal(t.get(slug)?.noTranscript ?? false, false)
 
   h.clock.ms = PAST_GRACE
+  const before = h.events.length
   t.tick()
   assert.equal(t.get(slug)?.noTranscript ?? false, false, "found one directory over — NOT a boot failure")
   assert.equal(t.get(slug)?.turn, "idle", "the stranded transcript's own derivation drives the board")
   assert.equal(t.get(slug)?.lastAssistant, "all done")
   // Same session, different directory: nothing drifted, so the DRIFTED-id column must stay clean.
   assert.equal(h.storage.getSession(slug)?.transcript_id ?? null, null, "a moved dir is not a drifted id")
+  // SILENT, and this one is load-bearing at scale rather than merely tidy: on the real board 386 of the
+  // frizz project's 427 sessions were stranded by one rename (measured 2026-08-11), so they all bind on
+  // the same tick the operator restarts. A notify per historical turn-done would be 386 notifications
+  // for work that finished days ago. Same discipline as the drifted-id re-link above.
+  assert.equal(h.events.length, before, "a recovered transcript replays as a SILENT prime — no historical notify")
 })
 
 test("tailer: a genuinely missing transcript still degrades — the sibling sweep is a recovery, not a mask", () => {
