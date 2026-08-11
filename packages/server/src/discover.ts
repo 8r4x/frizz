@@ -141,9 +141,15 @@ export function discoverTranscriptId(logDir: string, sessionId: string, opts: Di
 // unique — so a cross-project entry can only ever be a cheap miss, never a wrong bind.
 const strandedLogDirs = new Set<string>()
 
+// `throwIfNoEntry: false` rather than a try/catch, because on this path the MISS is the common case and
+// the throw is not free: the sweep below probes one exact filename in every sibling bucket, so all but at
+// most one probe is an ENOENT. On the maintainer's machine (301 buckets) constructing those 300 exceptions
+// was HALF the sweep — 2.49ms per miss against 1.19ms without them, over a 0.33ms readdir. Every unbound
+// row pays a full sweep each retry interval, so it is the multiplier that matters, not the single call.
+// The catch stays for everything else a stat can raise (EACCES, ELOOP), which must still degrade to false.
 function nonEmptyFile(path: string): boolean {
   try {
-    return statSync(path).size > 0
+    return (statSync(path, { throwIfNoEntry: false })?.size ?? 0) > 0
   } catch {
     return false
   }
