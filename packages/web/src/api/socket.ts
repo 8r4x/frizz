@@ -2,12 +2,12 @@ import type { QueryClient } from "@tanstack/react-query"
 import type { SocketClientMsg, SocketServerMsg } from "@frizz/shared"
 import { store } from "../store.ts"
 import { BoardStream } from "./board-stream.ts"
-import { connectSSE } from "./sse.ts"
+import { connectSSE, rebindSSEProject } from "./sse.ts"
 import { mergeOptimistic, preserveMessageIdentity, type QueuedMessage } from "../lib/transcript-sync.ts"
 import { reconcileLiveMessages, type PaginatedTranscriptData } from "../lib/transcriptPagination.ts"
 import { invalidateInteractionQueries } from "./interaction-cache.ts"
 import { FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
-import { apiBase } from "../lib/base-path.ts"
+import { apiBase, projectSlug } from "../lib/base-path.ts"
 
 // The stage-2 multiplexed client: ONE WebSocket("/ws") carrying the board channel (keyframe + deltas +
 // notify, driven through the shared BoardStream) AND per-thread transcript push (replacing the 1.5s
@@ -54,10 +54,38 @@ function wsUrl(): string {
   return `${location.origin.replace(/^http/, "ws")}${apiBase()}/ws`
 }
 
+// WHICH PROJECT THE LIVE FEED IS ON — one copy of that fact, kept by the module that actually holds the
+// connection, and readable by anyone who needs to ask (`feedIsBoundTo`). It covers BOTH transports,
+// because the SSE fallback is only ever reached through here.
+//
+// The point is that there is no SECOND copy. routes.tsx used to keep its own note of the project it had
+// bound, in a ref, and a remount reset that note to whatever the new route said — so the app believed it
+// was bound to a project it had never connected to, and every board showed the previous one until a
+// document load (`0fb8574`). A bystander cannot get this wrong if it has nothing to remember: the thing
+// that holds the socket is the only thing that says what the socket is for.
+let feedProject: string | undefined
+let feedBound = false
+
+function noteFeedProject(): void {
+  feedProject = projectSlug()
+  feedBound = true
+}
+
+/** Is the live feed already pointed at `slug`? A caller with nothing of its own to remember. */
+export function feedIsBoundTo(slug: string | undefined): boolean {
+  return feedBound && feedProject === slug
+}
+
 function connect(): void {
   if (ws || fellBack) return
   if (store.connection !== "open") store.connection = "connecting"
+  noteFeedProject()
   const sock = new WebSocket(wsUrl())
+  // The project THIS socket was opened for, frozen at construction. Every frame it later delivers is
+  // checked against it: a socket outlives the navigation that supersedes it by however long the close
+  // takes, and a board or a transcript arriving down that pipe belongs to a project nobody is looking
+  // at any more. Frozen rather than re-derived, because re-deriving is how a stale frame passes.
+  const socketProject = projectSlug()
   ws = sock
   protocolReady = false
   lastMsg = Date.now()
@@ -75,6 +103,10 @@ function connect(): void {
   }
 
   sock.onmessage = (e) => {
+    // A frame for the project we have left goes nowhere. `ws !== sock` catches a socket already
+    // superseded here; the project check catches the window before that, where this IS the current
+    // socket and the address bar has already moved on.
+    if (ws !== sock || socketProject !== projectSlug()) return
     lastMsg = Date.now()
     try {
       const msg = JSON.parse(e.data) as SocketServerMsg
@@ -332,13 +364,25 @@ export function rebindProject(): void {
   stream.reset()
   dropWs()
   store.connection = "connecting"
-  if (!fellBack) connect()
+  noteFeedProject()
+  // A session that fell back has no socket to re-open — its board comes down the EventSource, which is
+  // bound to one project in exactly the same way and needs the same instruction. `rebindSSEProject` was
+  // written for this and never wired up: it sat exported with no caller in the repo, so on any server
+  // without `/ws` a project switch left the board fed by the project you just left. Same bug as
+  // `0fb8574`, second instance, found while auditing the first.
+  if (fellBack) rebindSSEProject()
+  else connect()
 }
 
 // Entry point (replaces connectSSE in main.tsx). Deferred to `load` so the socket doesn't consume one of
 // Chrome's 6 per-host connection slots while Vite is still streaming modules in dev.
 export function connectSync(queryClient: QueryClient): void {
   qc = queryClient
+  // Commit to this page's project NOW, not when the socket actually opens. The open is deferred to
+  // `load`, and in between the router renders and asks whether the feed is bound: answering "nothing is
+  // bound yet" would make a cold load tear down and re-establish the connection main.tsx had already
+  // arranged. The module is committed from here, so that is what it reports.
+  noteFeedProject()
   const go = () => connect()
   if (document.readyState === "complete") go()
   else window.addEventListener("load", go, { once: true })

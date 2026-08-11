@@ -22,6 +22,7 @@ import { retrySession } from "../lib/retrySession.ts"
 import { formatSnoozedUntil, formatAutoSnoozedUntil, formatUserSnooze } from "../lib/snooze.ts"
 import { prWatchRefs } from "../lib/awaitingPresentation.ts"
 import { useOptimisticallySteered } from "../lib/steering.ts"
+import { useOptimisticallyArchived } from "../lib/optimisticArchive.ts"
 import { activeSidebarSection, queueNavigationSettled, railRevealDelta, type SidebarSectionGeometry } from "../lib/sidebarScrollspy.ts"
 import type { ReactElement, ReactNode } from "react"
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
@@ -59,7 +60,11 @@ export function Sidebar() {
   // spun while still sitting in the queue-ordered rested band, below the rule, and hopped up to the
   // running band seconds later — measured at 2.0s here with an instantaneous fixture worker, longer in
   // production. See lib/steering.ts.
-  const all = useOptimisticallySteered(asThreads(board?.threads ?? []))
+  // Both optimistic overlays, composed: a just-sent steer pulls a row into Active, a just-clicked
+  // Mark-as-done drops it into Done — each folded in BEFORE any band is derived, so the row's
+  // appearance and its POSITION always land together instead of one waiting on a round-trip the other
+  // already skipped (lib/steering.ts, lib/optimisticArchive.ts).
+  const all = useOptimisticallyArchived(useOptimisticallySteered(asThreads(board?.threads ?? [])))
   const sections = sectionThreads(all, useSnapshot(prefs).queueOrder)
   const plans = (board?.plans ?? []) as PlanView[]
   const collapsed = snap.sidebarCollapsed

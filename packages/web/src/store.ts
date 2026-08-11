@@ -4,6 +4,7 @@ import { applyBoardDelta } from "@frizz/shared"
 import { closeDrawerAnimated, focusDrawer } from "./lib/overlays.ts"
 import { resolveThreadRoute } from "./lib/threadRouteState.ts"
 import { standaloneThreadHref } from "./lib/standaloneThreadRoute.ts"
+import { ownedByThisPage } from "./lib/projectOwnership.ts"
 
 // Where a scroll-to-card lands a card's outer border below the viewport top (px). Exported because the
 // sidebar's reading rail watches for that same landing to know a click-to-card has arrived.
@@ -349,6 +350,16 @@ export function topThreadSlug(): string | null {
   return null
 }
 
+// THE DOOR. Every board that reaches the UI comes through one of these two functions, so this is where
+// "is this even our project's board?" is asked — on the board's OWN evidence (the server stamps it with
+// `projectSlug`), not on any client bookkeeping. Bookkeeping is what failed in `0fb8574`; a payload that
+// names its own project cannot be talked into belonging here by a stale ref, a missed effect or a
+// transport nobody re-pointed. See lib/projectOwnership.ts.
+//
+// Dropping is silent on purpose: the commonest way to arrive here foreign is a perfectly healthy race —
+// a keyframe or an `rpc.board()` seed already on the wire when the operator switched projects — and a
+// console warning per switch would be noise about the system working.
+
 // A full board KEYFRAME arrives from SSE (React-free) — on connect and on resync. Just store it;
 // every surface derives its own view of the thread list per render (there is no selection state to
 // reconcile — the focus machine that needed one is gone).
@@ -356,10 +367,6 @@ export function setBoard(board: BoardSnapshot) {
   store.board = board
 }
 
-// STARTUP seed only (App fires an rpc.board() to paint before SSE connects). Unlike setBoard this must
-// NOT clobber a board the SSE stream has already established + advanced with deltas — a late-resolving
-// seed would otherwise revert applied deltas (the seq keeps advancing but the content rolls back). So
-// it lands only when nothing is there yet; once the SSE keyframe has set the board, the seed is a no-op.
 /**
  * Forget everything that belonged to the project we are leaving.
  *
@@ -385,6 +392,15 @@ export function resetProjectState() {
   store.newThreadPlanPath = null
 }
 
+// STARTUP seed only (App fires an rpc.board() to paint before SSE connects). Unlike setBoard this must
+// NOT clobber a board the SSE stream has already established + advanced with deltas — a late-resolving
+// seed would otherwise revert applied deltas (the seq keeps advancing but the content rolls back). So
+// it lands only when nothing is there yet; once the SSE keyframe has set the board, the seed is a no-op.
+//
+// "Nothing is there yet" is ALSO the state a project switch leaves behind (resetProjectState nulls the
+// board), which is what made the ownership check load-bearing here rather than belt-and-braces: the
+// previous project's in-flight seed lands into the emptied store and paints its threads under the new
+// project's URL. The guard is the only thing standing between that race and the operator.
 export function seedBoard(board: BoardSnapshot) {
   if (store.board === null) store.board = board
 }

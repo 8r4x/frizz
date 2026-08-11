@@ -903,6 +903,48 @@ test("the one-time repair unlocks titles a dispatch minted, and never a human's 
   restarted.close()
 })
 
+// allSessions() is memoised (it was 32% of the server's CPU when it re-read the whole table on every
+// tailer tick). These pin the two things the cache must never get wrong: it has to see EVERY kind of
+// write, and it must never latch a read taken inside a transaction that then rolls back.
+test("allSessions: the cached read reflects every write, and repeats are the same array", () => {
+  const s = store()
+  assert.equal(s.allSessions().length, 0)
+
+  s.upsertSession(row({ slug: "one", session_id: "sid-1" }))
+  assert.deepEqual(s.allSessions().map((r) => r.slug), ["one"], "an insert invalidates")
+  const first = s.allSessions()
+  assert.equal(s.allSessions(), first, "an unchanged table serves the identical array")
+
+  // A narrow column UPDATE — the shape the tailer/board write constantly — has to invalidate too.
+  s.setState("one", "archived")
+  assert.equal(s.allSessions()[0].state, "archived", "an update invalidates")
+  assert.notEqual(s.allSessions(), first, "…with a freshly-read array")
+
+  s.markRead("one", "2026-08-11T00:00:00.000Z")
+  assert.equal(s.allSessions()[0].last_read_at, "2026-08-11T00:00:00.000Z")
+
+  s.forgetSession("one")
+  assert.equal(s.allSessions().length, 0, "a delete invalidates")
+})
+
+test("allSessions: a rolled-back transaction never leaves the cache holding data that was undone", () => {
+  const s = store()
+  s.upsertSession(row({ slug: "keeper", session_id: "sid-1", title: "before" }))
+  assert.equal(s.allSessions()[0].title, "before")
+
+  assert.throws(() => {
+    s.db.transaction(() => {
+      s.setTitle("keeper", "during")
+      // Reading here is what used to poison the cache: total_changes() has already moved, and a
+      // ROLLBACK does not wind it back, so this row would have outlived the transaction that wrote it.
+      assert.equal(s.allSessions()[0].title, "during", "inside the transaction the write is visible")
+      throw new Error("roll it back")
+    })()
+  }, /roll it back/)
+
+  assert.equal(s.allSessions()[0].title, "before", "the rolled-back title is gone from the cache too")
+})
+
 test("forgetSession: DELETEs the row and returns it; the slug is gone", () => {
   const s = store()
   s.upsertSession(row({ slug: "phantom", session_id: "sid-1" }))

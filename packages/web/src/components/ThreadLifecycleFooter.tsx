@@ -4,6 +4,7 @@ import type { CompletionHold, ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 import { threadLifecycleAvailability, completionArchivesImmediately, completionHoldSummary } from "../lib/threadLifecycle.ts"
+import { markArchived, clearArchived } from "../lib/optimisticArchive.ts"
 import { futureSnoozedUntil } from "../groups.ts"
 import { formatSnoozeWake } from "../lib/snooze.ts"
 import { CHILD_ARROW, CHILD_ARROW_CLASS } from "../lib/childOps.ts"
@@ -198,10 +199,17 @@ export function StateButton({
   const complete = (terminateLive: boolean, optimistic: boolean) => {
     setPending(true)
     if (optimistic) onArchived?.() // start the exit animation immediately
+    // Move the SIDEBAR row to Done now, on the same prediction the queue card's fade already runs on —
+    // and gated on the prediction rather than on `optimistic`, because the thread drawer's copy of this
+    // button has no queue card to dismiss and its rail row was left waiting on the round-trip too.
+    // `terminateLive` is the confirmed path: the operator has answered the dialog, so it archives.
+    const expectsArchive = terminateLive || completionArchivesImmediately(thread)
+    if (expectsArchive) markArchived(thread.id)
     rpc
       .completeThread({ slug: thread.id, sessionId: thread.sessionId ?? "", terminateLive })
       .then((result) => {
         if (result.needsConfirmation) {
+          clearArchived(thread.id) // mispredicted: the server wants the dialog, so the row stays put
           // The server wants confirmation after all (an executing/ambiguous turn, or a rare mispredict).
           // Reinstate the optimistically-dismissed card (onDismissCancel cancels its pending unmount too),
           // then open the dialog over it. The server returns needsConfirmation from a cheap liveness/telemetry
@@ -220,6 +228,7 @@ export function StateButton({
         if (!optimistic) onArchived?.() // non-optimistic path dismisses now; optimistic already did
       })
       .catch((error) => {
+        clearArchived(thread.id) // …and the rail row back out of Done
         if (optimistic) onDismissCancel?.() // roll the card back into the queue on failure
         showToast(`Couldn’t finish: ${(error as Error).message.slice(0, 80)}`)
         setPending(false)

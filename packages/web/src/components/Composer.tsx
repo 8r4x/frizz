@@ -23,11 +23,17 @@ import { localImageUrl } from "../lib/markdownTargets.ts"
 // non-image files as an openable chip. The safe-tier allowlist (images + common docs/text/code) is
 // enforced server-side too — the /attach route is the trust gate.
 async function uploadAttachment(file: File, name: string): Promise<string | null> {
+  // The project this upload is FOR, resolved before the file is read rather than after. `apiBase()`
+  // answers for whatever the address bar says at the instant it is called, and reading a large file is
+  // long enough for the operator to switch projects: the attachment then landed in the state directory
+  // of a project the message was never going to, while the message itself went to the thread they
+  // started from. Anything read across an await has to be captured on THIS side of it.
+  const base = apiBase()
   const buf = await file.arrayBuffer()
   let bin = ""
   const bytes = new Uint8Array(buf)
   for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
-  const res = await fetch(`${apiBase()}/attach`, {
+  const res = await fetch(`${base}/attach`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ name, data: btoa(bin) }),

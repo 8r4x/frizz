@@ -7,8 +7,8 @@ import { ProjectRail, RAIL_INSET_CLASS } from "./components/ProjectRail.tsx"
 import { StandaloneThreadPage } from "./components/StandaloneThreadPage.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { applyPath } from "./lib/router.ts"
-import { innerPath, projectSlug } from "./lib/base-path.ts"
-import { rebindProject } from "./api/socket.ts"
+import { innerPath } from "./lib/base-path.ts"
+import { feedIsBoundTo, rebindProject } from "./api/socket.ts"
 import { resetProjectState } from "./store.ts"
 import { useProjectRailVisible } from "./lib/projectRail.ts"
 
@@ -58,29 +58,27 @@ function RootLayout() {
 }
 
 /**
- * The project the live feed is CURRENTLY pointed at — module state, seeded with whatever `main.tsx`
- * bound at module load (it connects the socket from `location` before React renders, which is why the
- * first binding must not be redone and the board must not flash empty on a cold load).
+ * Re-bind everything that belongs to one project, whenever the project changes.
  *
- * MODULE state, not a ref inside the hook, and that distinction is the whole bug it fixes. Every
- * project switch that changes which ROUTE matched — the grid to a board, a board to a thread page —
- * unmounts one element and mounts another, so a ref is born fresh, initialised to the slug it is
- * looking at, and therefore always reports "already bound". The feed then stayed on the previous
- * project while the URL, the `<App/>` key and the board header all said the new one, and NOTHING
- * recovered it short of a document load. Observed 2026-08-11: the grid's project tiles are `<Link>`s,
- * so clicking any of them showed the LAUNCHING project's board under the clicked project's URL.
+ * THE CONDITION IS ASKED OF THE FEED, and that is the whole point. This hook used to keep its own note
+ * of the project it had bound, in a `useRef` — a second copy of a fact it did not own. Every switch
+ * that changes which ROUTE matched (the grid to a board, a board to a thread page) unmounts one element
+ * and mounts another, so the ref was born fresh, initialised to the slug it was looking at, and
+ * therefore always answered "already bound". The feed stayed on the previous project while the URL, the
+ * `<App/>` key and the board header all said the new one, and nothing short of a document load recovered
+ * it (2026-08-11: every board on the machine rendered the launching project's threads).
+ *
+ * `feedIsBoundTo` asks the module that HOLDS the connection. It has nothing to remember and therefore
+ * nothing to get wrong on a remount, and being called redundantly is free — which is what lets this stay
+ * an ordinary effect instead of something that has to fire exactly once.
  */
-let boundSlug = projectSlug()
-
-/** Re-bind everything that belongs to one project, whenever the project changes. */
 function useProjectBinding(slug: string | undefined) {
   // The hook, not an import of main.tsx's instance: routes.tsx is imported BY main.tsx, and reaching
   // back for its export closes a module cycle whose initialisation order then depends on where the
   // reference happens to be read.
   const queryClient = useQueryClient()
   useEffect(() => {
-    if (boundSlug === slug) return
-    boundSlug = slug
+    if (feedIsBoundTo(slug)) return
     resetProjectState()
     // Everything EXCEPT the machine-wide project list, which the rail is drawing right now.
     queryClient.removeQueries({

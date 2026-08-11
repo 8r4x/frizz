@@ -4,7 +4,7 @@ import { store } from "../store.ts"
 import { BoardStream } from "./board-stream.ts"
 import { invalidateInteractionQueries } from "./interaction-cache.ts"
 import { frizzRoute } from "@frizz/shared"
-import { apiBase } from "../lib/base-path.ts"
+import { apiBase, projectSlug } from "../lib/base-path.ts"
 
 // The SSE transport — the FALLBACK path once the /ws multiplex exists (socket.ts calls connectSSE() when
 // a pre-restart server has no /ws route). It carries the board channel (keyframe + deltas + notify) through
@@ -35,6 +35,10 @@ function connect() {
   if (es) return
   if (store.connection !== "open") store.connection = "connecting"
   es = new EventSource(`${apiBase()}/events`)
+  // The project THIS stream was opened for, frozen at construction — the socket freezes the same thing
+  // for the same reason (see api/socket.ts `socketProject`): a stream outlives the navigation that
+  // supersedes it, and what it delivers in that window belongs to a project nobody is looking at.
+  const streamProject = projectSlug()
   lastMsg = Date.now()
 
   es.onopen = () => {
@@ -52,6 +56,7 @@ function connect() {
   })
 
   es.onmessage = (e) => {
+    if (streamProject !== projectSlug()) return
     lastMsg = Date.now()
     try {
       stream.handle(JSON.parse(e.data) as ServerEvent)
@@ -125,6 +130,10 @@ function resync() {
  * and this stream is bound to one project exactly as the socket is — `apiBase()` derives from the
  * page's own path. Without this, switching projects on such a server leaves the board fed by the
  * project you just left.
+ *
+ * Called by `rebindProject` in api/socket.ts, which is the single entry point for "the page is showing
+ * a different project now" and dispatches to whichever transport is live. It went a while with NO
+ * caller at all, which meant the paragraph above described a bug rather than a fix.
  */
 export function rebindSSEProject(): void {
   stream.reset()
