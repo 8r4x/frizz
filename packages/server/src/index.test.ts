@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { splitTenantRequest } from "./index.ts"
+import { splitTenantRequest, unknownProjectPage } from "./index.ts"
 
 // A project slug and one of Frizz's own route names occupy the same position, so `/_frizz/rpc/board`
 // and `/_frizz/nub/rpc/board` are indistinguishable until you know which slugs exist. The registry
@@ -34,4 +34,27 @@ test("splitTenantRequest tells a project slug from one of Frizz's own routes", (
   assert.equal(splitTenantRequest("/nub", known), undefined)
   assert.equal(splitTenantRequest("/nub/thread/x", known), undefined)
   assert.equal(splitTenantRequest("/", known), undefined)
+})
+
+// A page for a project nobody has is the one URL the CLIENT cannot resolve: it renders the app, every
+// call it makes is answered 404 by the launching project, the board never lands, and it sits on
+// "connecting…" retrying forever. The registry is the authority, so the server answers instead.
+test("unknownProjectPage names the slug of a project page that does not exist", () => {
+  const known = (s: string) => ["nub", "frizz", "pullfrog-app"].includes(s)
+
+  assert.equal(unknownProjectPage("/project/deleted-last-week", known), "deleted-last-week")
+  assert.equal(unknownProjectPage("/project/deleted-last-week/thread/fix-auth", known), "deleted-last-week")
+  assert.equal(unknownProjectPage("/project/deleted-last-week/thread/x/full", known), "deleted-last-week")
+  // A slug can be percent-encoded in the address bar and must be compared decoded, or every project
+  // with a character worth encoding looks missing.
+  assert.equal(unknownProjectPage("/project/pullfrog%2Dapp", known), undefined)
+
+  // Everything that is NOT a missing project page is left alone.
+  assert.equal(unknownProjectPage("/project/nub", known), undefined)
+  assert.equal(unknownProjectPage("/project/nub/status/active", known), undefined)
+  assert.equal(unknownProjectPage("/", known), undefined, "the grid")
+  assert.equal(unknownProjectPage("/thread/fix-auth", known), undefined, "the launching project, unprefixed")
+  assert.equal(unknownProjectPage("/project", known), undefined, "no slug to be missing")
+  assert.equal(unknownProjectPage("/project/", known), undefined)
+  assert.equal(unknownProjectPage("/assets/index-D2Pc7U9B.js", known), undefined, "a bundle, not a page")
 })

@@ -247,6 +247,28 @@ export function splitTenantRequest(
   return { slug: first, rest: `${FRIZZ_ROUTE_PREFIX}${rest || "/"}` }
 }
 
+/**
+ * The `<slug>` a PAGE url names, when that project does not exist.
+ *
+ * `/project/<slug>` is the SPA's own route, so the server has always just handed back the app and let
+ * the client sort it out. For a slug nobody has, the client cannot: every call it makes is answered by
+ * the launching project's app with a 404 it has no way to interpret, the board never arrives, and the
+ * page sits on its boot spinner saying "connecting…" while the event stream retries forever. Measured
+ * on a real stack (2026-08-11) — the operator's only way out is the home crumb, if they spot it.
+ *
+ * A renamed project, a deleted one, a stale bookmark and a typo all land here, so the server answers
+ * instead: the registry is the authority on which projects exist, and it is one file read away.
+ */
+export function unknownProjectPage(
+  pathname: string,
+  isKnownSlug: (slug: string) => boolean,
+): string | undefined {
+  const match = /^\/project\/([^/?#]+)/u.exec(pathname)
+  if (!match) return undefined
+  const slug = decodeURIComponent(match[1] ?? "")
+  return slug && !isKnownSlug(slug) ? slug : undefined
+}
+
 const MIME: Record<string, string> = {
   ".html": "text/html",
   ".js": "text/javascript",
@@ -839,6 +861,15 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
             requestTasks.delete(task)
           })
         requestTasks.add(task)
+        return
+      }
+      // A page for a project that does not exist goes to the picker, which is both the answer to
+      // "which projects are there" and the way to open one. The slug rides along so the grid can say
+      // what happened rather than appearing to have swallowed the URL.
+      const missing = unknownProjectPage(url.split("?")[0] ?? "", (slug) => findProjectBySegment(slug) !== undefined)
+      if (missing !== undefined) {
+        res.writeHead(302, { location: `/?unknown=${encodeURIComponent(missing)}` })
+        res.end()
         return
       }
       if (vite) {

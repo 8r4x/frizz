@@ -93,6 +93,11 @@ const GENERIC = new Set([
  */
 const RESERVED = new Set([
   "_frizz", "rpc", "events", "ws", "term", "attach", "local-image", "local-visualization",
+  // `control` answers `/control/stop` and `/control/status` — the supervisor channel the board polls
+  // every few seconds. It was missing from this list, so a directory called `control` could have taken
+  // the segment and routed the whole machine's supervisor polling into one project's app, which has no
+  // such route. Only newly minted slugs consult this, so adding it strands nothing already registered.
+  "control",
   "project-icon", "assets", "favicon", "manifest", "index", "api", "health",
 ])
 

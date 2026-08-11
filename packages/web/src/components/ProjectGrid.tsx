@@ -10,13 +10,14 @@
 // deliberately shows only what the index holds. Visiting a card is what opens that project.
 import * as RadixDialog from "@radix-ui/react-dialog"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { ImagePlus } from "lucide-react"
 import { Link, useNavigate } from "react-router"
 import type { ProjectCard } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { relativeAge } from "../lib/activityTime.ts"
 import { projectHref } from "../lib/base-path.ts"
+import { showToast } from "../store.ts"
 import { ProjectIconMenu, ProjectSquare } from "./ProjectRail.tsx"
 
 /**
@@ -223,6 +224,17 @@ export function ProjectGrid() {
     return value
   })
   const [fallback, setFallback] = useState<{ reason?: string } | null>(proposed ? {} : null)
+  // `?unknown=<slug>` is the SERVER saying it sent a page here rather than let it hang: `/project/<x>`
+  // for a project nobody has used to render the app anyway, where every call came back 404, the board
+  // never arrived, and the page sat on "connecting…" forever (index.ts `unknownProjectPage`). A URL
+  // that silently turns into the picker reads as Frizz having swallowed it, so say what happened. Read
+  // once and stripped, exactly like `?add=` above — it belongs to this arrival, not to the address.
+  useEffect(() => {
+    const slug = new URLSearchParams(location.search).get("unknown")
+    if (!slug) return
+    history.replaceState(null, "", location.pathname)
+    showToast(`No project named ${slug} — showing all projects instead`, { duration: 7000 })
+  }, [])
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const pick = useMutation({

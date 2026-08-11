@@ -5,6 +5,7 @@ import { ProjectGrid } from "./components/ProjectGrid.tsx"
 import { ProjectRail, RAIL_INSET_CLASS } from "./components/ProjectRail.tsx"
 import { StandaloneThreadPage } from "./components/StandaloneThreadPage.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
+import { Toaster } from "./components/Toaster.tsx"
 import { applyPath } from "./lib/router.ts"
 import { innerPath } from "./lib/base-path.ts"
 import { feedIsBoundTo, rebindProject } from "./api/socket.ts"
@@ -55,6 +56,12 @@ function RootLayout() {
       <div className={railVisible ? RAIL_INSET_CLASS : undefined}>
         <Outlet />
       </div>
+      {/* HOSTED BY THE LAYOUT, not by the board. It lived inside <App/>, so `showToast` from anywhere
+          else raised a toast with nowhere to render — silently, since the store field is set either
+          way. The grid is the page that needed one (it is where a bad project URL now lands), and it
+          is exactly the page that could never show one. Fixed-positioned, so it is inert until a
+          toast exists. */}
+      <Toaster />
     </TooltipProvider>
   )
 }
@@ -129,7 +136,15 @@ function useRouteToStore() {
 function StandaloneRoute() {
   const { thread, slug } = useParams()
   useProjectBinding(slug)
-  return <StandaloneThreadPage slug={thread!} />
+  return (
+    <>
+      <StandaloneThreadPage slug={thread!} />
+      {/* Its own, since it is outside the layout. This page renders a full transcript, so it has the
+          copy-a-code-block control — whose only feedback is a toast, which until now had nowhere to
+          go here. Skipping the rail does not mean skipping the feedback. */}
+      <Toaster />
+    </>
+  )
 }
 
 const boardChildren = [

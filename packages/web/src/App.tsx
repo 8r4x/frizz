@@ -20,7 +20,6 @@ import { CommandPalette } from "./components/CommandPalette.tsx"
 import { StatusListView } from "./components/StatusListView.tsx"
 import { ErrorBoundary } from "./components/ErrorBoundary.tsx"
 import { RestartOverlay } from "./components/RestartOverlay.tsx"
-import { Toaster } from "./components/Toaster.tsx"
 import { FRIZZ_SUPERVISOR_STATUS_WAKE_EVENT, getFrizzSupervisorStatus } from "./api/restart.ts"
 
 const RELOAD_AFTER_UPDATE_RESTART = "frizz:reload-after-update-restart"
@@ -315,7 +314,6 @@ export function App() {
       {snap.showNewThread && <NewThreadDialog onClose={() => { store.showNewThread = false; store.newThreadPlanPath = null }} />}
       {snap.showGithubPicker && <GithubPickerModal onClose={closeGithubPicker} />}
       <CommandPalette />
-      <Toaster />
     </div>
     </>
   )
