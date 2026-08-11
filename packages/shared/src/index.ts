@@ -388,6 +388,17 @@ export const RECURRING_PROMPT_MAX = SNOOZE_PROMPT_MAX
 export const RECURRING_MIN_INTERVAL_SECONDS = 60
 export const RECURRING_MAX_INTERVAL_SECONDS = 24 * 60 * 60
 export const RecurringPromptText = z.string().trim().min(1).max(RECURRING_PROMPT_MAX)
+
+// WHAT THE PANEL OPENS WITH on a thread that has never armed one. The overwhelmingly common reason an
+// operator reaches for this control is the same one every time — the thread stopped with work left in it
+// — so the panel writes that sentence for them rather than making them phrase it again. It is a starting
+// point, not a fixed string: it is seeded into an editable textarea and anything typed over it wins.
+//
+// Its second clause is what keeps the arrangement from being a nag. A thread told only to "keep going"
+// answers a question it cannot resolve by guessing; told this, it hands the question back through the
+// fence the board already renders as an answerable card.
+export const DEFAULT_RECURRING_PROMPT =
+  "If further work towards towards the original task/goal remains, keep going. If there are open questions that require human input, ask them with question fences."
 export const RecurringIntervalSeconds = z
   .number()
   .int()
@@ -406,6 +417,12 @@ export const ThreadRecurringPrompt = z.object({
   stopHook: z.boolean(),
   heartbeat: z.boolean(),
   postCompaction: z.boolean(),
+  /** NOT a fourth trigger — a HOLD over all three. While it is on, nothing is sent for as long as the
+   *  thread is blocked on the human: an unanswered ```question fence, a native ask, or a permission
+   *  prompt. Off by default, because the hard rule below already covers the case that actually bites
+   *  (see scheduler.ts `evalRestPrompts`) and a hold that outlives the operator's attention is how a
+   *  thread goes quiet for an hour nobody asked for. */
+  pauseOnQuestions: z.boolean(),
   intervalSeconds: z.number().int().positive().optional(),
   armedAt: z.string(),
   /** Last delivery per trigger; stamped separately so each reads its own clock. */
@@ -1223,6 +1240,9 @@ export const SetThreadRecurringPromptInput = z.object({
   // so a client that predates it — an older tab, an older MCP server — keeps writing the row correctly
   // with the trigger off, which is the honest reading of a caller that has never heard of it.
   postCompaction: z.boolean().default(false),
+  // The QUESTION HOLD (2026-08-11). Defaulted for the same reason as the trigger above: a caller that
+  // has never heard of it means "don't hold", which is also this option's own default.
+  pauseOnQuestions: z.boolean().default(false),
   intervalSeconds: RecurringIntervalSeconds.optional(),
 }).strict()
 // z.input, not z.infer: `postCompaction` is `.default(false)`, so the parsed OUTPUT has it
@@ -1254,6 +1274,8 @@ export const SetOwnThreadRecurringPromptInput = z.object({
   // so a client that predates it — an older tab, an older MCP server — keeps writing the row correctly
   // with the trigger off, which is the honest reading of a caller that has never heard of it.
   postCompaction: z.boolean().default(false),
+  // The QUESTION HOLD (2026-08-11), defaulted exactly as the trigger above and for the same reason.
+  pauseOnQuestions: z.boolean().default(false),
   intervalSeconds: RecurringIntervalSeconds.optional(),
 }).strict()
 // z.input, not z.infer: `postCompaction` is `.default(false)`, so the parsed OUTPUT has it

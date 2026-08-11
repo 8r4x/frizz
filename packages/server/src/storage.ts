@@ -97,6 +97,11 @@ export interface SessionRow {
   // window is summarized away. It replaced a hook that spliced a canonical scratchpad's head into the
   // context — the durable row is visible and editable in the thread footer, where a hook was neither.
   recurring_on_compact?: number
+  // THE QUESTION HOLD (2026-08-11) — not a fourth trigger, a hold over all three. 1 = send nothing while
+  // the thread is blocked on the human (an unanswered ```question fence, a native ask, a permission
+  // prompt). It is stored beside the triggers rather than derived because it is an operator PREFERENCE
+  // about this thread, and the scheduler must be able to read it without the panel being open.
+  recurring_pause_on_questions?: number
   // The ON SCHEDULE trigger's cadence. Kept even while that trigger is off, so switching it back on
   // does not lose the interval the operator chose.
   recurring_interval_ms?: number | null
@@ -234,6 +239,7 @@ export interface RecurringWrite {
   stopHook: boolean // scheduler SOURCE 5 — on every rest
   heartbeat: boolean // scheduler SOURCE 4 — every intervalMs on a clock
   postCompaction: boolean // scheduler SOURCE 7 — on every context compaction
+  pauseOnQuestions: boolean // a HOLD over all three while the thread is blocked on the human
   intervalMs: number | null
   armedAt: string
 }
@@ -362,7 +368,9 @@ export interface Storage {
   db: Database
   interactions: InteractionStore
   getSession(slug: string): SessionRow | undefined
-  allSessions(): SessionRow[]
+  // Every registered row, newest schema first. The array and the rows in it are SHARED and CACHED
+  // between callers (see the cache note at the implementation) — read them, never mutate them.
+  allSessions(): readonly SessionRow[]
   subscribeSessionLifecycle(listener: (event: SessionLifecycleEvent) => void): () => void
   upsertSession(row: SessionRow): void
   // Claim a previously-unowned slug without ever replacing its current owner. This is the registry
@@ -820,6 +828,10 @@ export function createStorage(dbPath: string): Storage {
     // which is the correct default: an existing prompt described the triggers its operator chose.
     "recurring_on_compact INTEGER NOT NULL DEFAULT 0",
     "recurring_compact_fired_at TEXT",
+    // The question hold (2026-08-11). Its own ALTER for the same reason as the trigger above: an existing
+    // armed row picks it up OFF on the next boot, which is the honest reading of a row whose operator has
+    // never been shown the option.
+    "recurring_pause_on_questions INTEGER NOT NULL DEFAULT 0",
     // Title provenance for the CURRENT text (2026-08-07): 1 = the worker's own title signal wrote it,
     // 0 = the dispatch seeded it. DEFAULT 0 is the conservative direction — an existing row is assumed
     // to hold its dispatch chop until the repair below (or the next title signal) says otherwise.
@@ -1005,6 +1017,52 @@ export function createStorage(dbPath: string): Storage {
 
   const selOne = db.prepare<[string], SessionRow>("SELECT * FROM session WHERE slug = ?")
   const selAll = db.prepare<[], SessionRow>("SELECT * FROM session")
+
+  // ---- the whole-table read, memoised --------------------------------------------------------------
+  // `allSessions()` is the single hottest operation in the server. It is not a background chore: the
+  // tailer calls it TWICE per tick (once at the top of tick(), once inside scanForeign), and the tick
+  // is nudge-driven, so on a busy board it runs tens of times a second. A live CPU profile of the
+  // maintainer's own server (290 rows, 60 columns) put it at 32% of the entire process — more than half
+  // of all tailer time — with node:sqlite's row→object conversion (`plainRow`) alone at 24%. Every tick
+  // was re-materialising ~17,000 cells that had not changed, and because a tick runs SYNCHRONOUSLY on
+  // the event loop, that cost lands directly on RPC latency and board pushes. The cost also grows with
+  // HISTORY, not with live work: 267 of those 290 rows were archived threads nobody was watching.
+  //
+  // So keep the last read and re-run the query only when the database actually moved. Two cheap probes
+  // decide that, and they are deliberately BOTH here:
+  //   * `total_changes()` (~0.3µs) counts rows this connection has inserted/updated/deleted. It moves
+  //     for any write we made, whatever table — over-invalidating (a `tail_state` flush re-reads the
+  //     sessions) but never under-invalidating, which is the only direction that could serve stale rows.
+  //     A no-op UPDATE that matches nothing does not move it, so the per-assemble snooze sweep is free.
+  //   * `PRAGMA data_version` (~1.8µs) changes only when ANOTHER connection commits. Today one process
+  //     owns each project DB, so this never fires; it is here so that if that ever stops being true the
+  //     failure mode is a re-read rather than a board frozen forever.
+  // Both are read on every call rather than trusting a hand-maintained version counter: there are ~40
+  // statements that write this table, and a new one added later must not be able to silently serve
+  // stale rows to the board.
+  //
+  // The returned array is SHARED, hence `readonly SessionRow[]` on the interface — the compiler is what
+  // keeps a caller from sorting or splicing the cache out from under the next one.
+  const totalChangesStmt = db.prepare<[], { changes: number }>("SELECT total_changes() AS changes")
+  const dataVersionStmt = db.prepare<[], { data_version: number }>("PRAGMA data_version")
+  let cachedSessions: SessionRow[] | null = null
+  let cachedAtChanges = -1
+  let cachedAtDataVersion = -1
+  const readAllSessions = () => selAll.all().filter((row) => ThreadSlug.safeParse(row.slug).success)
+  const allSessions = (): readonly SessionRow[] => {
+    // NEVER cache a read taken inside an open transaction. `total_changes()` counts statements as they
+    // execute and a ROLLBACK does not wind it back, so a mid-transaction read stored under the
+    // post-write watermark would survive the rollback as a view of data that no longer exists. Nothing
+    // on the hot path (the tick, board assembly) runs inside a transaction, so this costs nothing.
+    if (db.inTransaction) return readAllSessions()
+    const changes = totalChangesStmt.get()?.changes ?? -1
+    const dataVersion = dataVersionStmt.get()?.data_version ?? -1
+    if (cachedSessions && changes === cachedAtChanges && dataVersion === cachedAtDataVersion) return cachedSessions
+    cachedSessions = readAllSessions()
+    cachedAtChanges = changes
+    cachedAtDataVersion = dataVersion
+    return cachedSessions
+  }
   const upsertStmt = db.prepare(`
     INSERT INTO session (slug, session_id, tmux_name, spawned_at, last_read_at, unread, exited, title_auto, title_locked, title, state, snoozed_until, snooze_prompt, awaiting_fence_id, awaiting_confirmed_at, meta, seen_at, plan_path, transcript_id, model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff, permission_mode, permission_pending, control_error, runtime_generation, runtime_control, runtime_control_revision)
     VALUES (@slug, @session_id, @tmux_name, @spawned_at, @last_read_at, @unread, @exited, @title_auto, @title_locked, @title, @state, @snoozed_until, @snooze_prompt, @awaiting_fence_id, @awaiting_confirmed_at, @meta, @seen_at, @plan_path, @transcript_id, @model, @effort, @profile_pending_model, @profile_pending_effort, @profile_revision, @profile_handoff, @permission_mode, @permission_pending, @control_error, @runtime_generation, @runtime_control, @runtime_control_revision)
@@ -1267,6 +1325,10 @@ export function createStorage(dbPath: string): Storage {
       recurring_on_rest = ?,
       recurring_on_schedule = ?,
       recurring_on_compact = ?,
+      -- The hold is deliberately absent from every CASE below it: it changes neither the WORDS nor the
+      -- cadence, so a delivery already queued still describes this row exactly. Flipping it must not
+      -- mint a generation or drop a "last sent" stamp.
+      recurring_pause_on_questions = ?,
       recurring_armed_at = CASE
         WHEN ? IS NULL THEN NULL
         WHEN recurring_armed_at IS NOT NULL AND recurring_prompt IS ? AND recurring_interval_ms IS ? THEN recurring_armed_at
@@ -1283,9 +1345,9 @@ export function createStorage(dbPath: string): Storage {
         WHEN ? IS NULL THEN NULL
         WHEN recurring_armed_at IS NOT NULL AND recurring_prompt IS ? THEN recurring_compact_fired_at
         ELSE NULL END`
-  // The 17 bound values RECURRING_SET consumes, in order. Factored out for the same reason the SET list
+  // The 18 bound values RECURRING_SET consumes, in order. Factored out for the same reason the SET list
   // is: writing this argument list twice is how the two paths silently diverge.
-  const recurringArgs = ({ prompt, stopHook, heartbeat, postCompaction, intervalMs, armedAt }: RecurringWrite) => {
+  const recurringArgs = ({ prompt, stopHook, heartbeat, postCompaction, pauseOnQuestions, intervalMs, armedAt }: RecurringWrite) => {
     // A cleared row keeps nothing: no cadence, and every trigger off. No trigger can be left on over a
     // null prompt, or the scheduler would hold an armed row with nothing to say.
     const ms = prompt === null ? null : intervalMs
@@ -1296,6 +1358,7 @@ export function createStorage(dbPath: string): Storage {
       flag(stopHook),
       flag(heartbeat),
       flag(postCompaction),
+      flag(pauseOnQuestions),
       prompt, prompt, ms, armedAt,
       prompt, prompt,
       prompt, prompt, ms,
@@ -1835,7 +1898,7 @@ export function createStorage(dbPath: string): Storage {
     // Keep those legacy/corrupt rows inert so boot reconciliation and pollers never feed them to
     // tmux, filesystem, transcript, or event boundaries.
     getSession: (slug) => ThreadSlug.safeParse(slug).success ? selOne.get(slug) : undefined,
-    allSessions: () => selAll.all().filter((row) => ThreadSlug.safeParse(row.slug).success),
+    allSessions,
     subscribeSessionLifecycle(listener) {
       lifecycleListeners.add(listener)
       return () => lifecycleListeners.delete(listener)

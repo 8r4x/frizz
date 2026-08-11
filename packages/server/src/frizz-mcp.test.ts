@@ -75,7 +75,7 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     assert.deepEqual(list.result.tools[1].inputSchema.required, ["action"])
     assert.deepEqual(
       Object.keys(list.result.tools[1].inputSchema.properties).sort(),
-      ["action", "heartbeat_seconds", "post_compaction", "prompt", "stop_hook"],
+      ["action", "heartbeat_seconds", "pause_on_questions", "post_compaction", "prompt", "stop_hook"],
     )
     // The READ action is part of the advertised surface, not just the handler — a worker only reaches for
     // what `tools/list` shows it, and writing blind is what having no read at all produced.
@@ -315,7 +315,7 @@ test("`recurring_prompt` arms and disarms the CALLING thread, identified from it
     // a running turn and cannot fire on a thread that has stopped needing it.
     assert.deepEqual(seen.at(-1), {
       url: "/_frizz/rpc/setOwnThreadRecurringPrompt",
-      body: { slug: "owning-thread", prompt: "keep the migration moving", stopHook: true, heartbeat: false, postCompaction: false },
+      body: { slug: "owning-thread", prompt: "keep the migration moving", stopHook: true, heartbeat: false, postCompaction: false, pauseOnQuestions: false },
     })
     // The reply must teach how it ENDS, or a worker only knows how to start one — and it must warn
     // about the sentinel rather than merely offering it, since that exit is permanent.
@@ -332,7 +332,7 @@ test("`recurring_prompt` arms and disarms the CALLING thread, identified from it
     assert.equal(scheduled.result.isError, undefined)
     assert.deepEqual(seen.at(-1), {
       url: "/_frizz/rpc/setOwnThreadRecurringPrompt",
-      body: { slug: "owning-thread", prompt: "check the deploy", stopHook: false, heartbeat: true, postCompaction: false, intervalSeconds: 600 },
+      body: { slug: "owning-thread", prompt: "check the deploy", stopHook: false, heartbeat: true, postCompaction: false, pauseOnQuestions: false, intervalSeconds: 600 },
     }, "giving a cadence and nothing else means the schedule trigger alone")
     assert.match(scheduled.result.content[0].text, /every 10 min/)
 
@@ -343,7 +343,7 @@ test("`recurring_prompt` arms and disarms the CALLING thread, identified from it
     await rpc.next(7)
     assert.deepEqual(seen.at(-1), {
       url: "/_frizz/rpc/setOwnThreadRecurringPrompt",
-      body: { slug: "owning-thread", prompt: "keep going", stopHook: true, heartbeat: true, postCompaction: false, intervalSeconds: 900 },
+      body: { slug: "owning-thread", prompt: "keep going", stopHook: true, heartbeat: true, postCompaction: false, pauseOnQuestions: false, intervalSeconds: 900 },
     }, "both triggers at once is the ordinary keep-this-moving case")
 
     rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "recurring_prompt", arguments: { action: "stop" } } })
@@ -351,7 +351,7 @@ test("`recurring_prompt` arms and disarms the CALLING thread, identified from it
     assert.equal(stopped.result.isError, undefined)
     assert.deepEqual(seen.at(-1), {
       url: "/_frizz/rpc/setOwnThreadRecurringPrompt",
-      body: { slug: "owning-thread", prompt: null, stopHook: false, heartbeat: false, postCompaction: false },
+      body: { slug: "owning-thread", prompt: null, stopHook: false, heartbeat: false, postCompaction: false, pauseOnQuestions: false },
     })
 
     // A `start` with no prompt is refused in the HANDLER, not merely by the schema.

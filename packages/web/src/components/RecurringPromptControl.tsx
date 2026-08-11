@@ -3,6 +3,7 @@ import { HeartPulse } from "lucide-react"
 import {
   RECURRING_PROMPT_MAX,
   ALLDONE_SENTINEL,
+  DEFAULT_RECURRING_PROMPT,
   type ThreadView,
 } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
@@ -10,6 +11,7 @@ import { formatAgo } from "../lib/durationLabels.ts"
 import { INK_TRIM_HEARTBEAT } from "../lib/iconRhythm.ts"
 import { showToast } from "../store.ts"
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/Popover.tsx"
+import { Switch } from "./ui/Switch.tsx"
 
 // THE RECURRING-PROMPT PANEL: one glyph in the thread footer opening frizz's way to re-prompt a thread
 // without the operator typing it again. ONE piece of text, and up to two independent reasons to send it:
@@ -93,7 +95,7 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
         // ring sitting on "Off" reads as the toggle being SET to off by the act of opening the panel.
         onOpenAutoFocus={(e) => e.preventDefault()}
       >
-        <PromptPanel thread={thread} armed={armed} close={() => setOpen(false)} />
+        <PromptPanel thread={thread} armed={armed} />
       </PopoverContent>
     </Popover>
   )
@@ -112,7 +114,58 @@ const MIN_MINUTES = 1
 const MAX_MINUTES = 24 * 60
 const DEFAULT_INTERVAL_SECONDS = 600
 
-interface Draft { text: string; stopHook: boolean; heartbeat: boolean; postCompaction: boolean; seconds: number }
+interface Draft {
+  text: string
+  stopHook: boolean
+  heartbeat: boolean
+  postCompaction: boolean
+  /** The HOLD, not a fourth trigger: while it is on, none of the three is sent for as long as the thread
+   *  is waiting on the human. */
+  pauseOnQuestions: boolean
+  seconds: number
+}
+
+/** The cadence a draft actually carries, resolved from the STRING in the minutes field rather than from
+ *  the last committed number. The field commits on blur, and dismissing the panel does not always blur it
+ *  — Escape removes the input from the DOM before any blur fires — so reading the committed value alone
+ *  silently discarded a cadence the operator had typed and could plainly see. Measured on the running app:
+ *  type 55 over a 25-minute schedule, press Escape, reopen ⇒ still 25.
+ *
+ *  Out of range, empty or unparseable falls back to what is already stored, which is what makes this safe
+ *  to resolve on every draft rather than only on commit. So does the first clause: a cadence the field can
+ *  only ROUND (a worker may arm 90 seconds; the field can only say "2") reads back as the number already
+ *  stored, so a dismiss that changed nothing writes nothing. */
+export function draftIntervalSeconds(minutes: string, seconds: number): number {
+  if (minutes === String(Math.round(seconds / 60))) return seconds
+  const parsed = Math.round(Number(minutes))
+  return Number.isFinite(parsed) && parsed > 0
+    ? Math.min(MAX_MINUTES, Math.max(MIN_MINUTES, parsed)) * 60
+    : seconds
+}
+
+// THE ONE DRAFT WHOSE AUTOSAVE FAILED, held outside the panel because the panel is already gone by the
+// time it can know: dismissing IS the save gesture, so a write that is refused takes the operator's text
+// down with the subtree that was holding it. Reproduced on the running app — arm a thread whose session
+// has since been replaced, type, click out: a toast names the refusal and there is nothing left to retry
+// from. The next open of that same thread seeds from this instead of the server's row, so the text is in
+// front of them again, and the next dismissal tries the write again.
+//
+// ONE entry, not a map: it is a rescue, not a draft store, and a single slot cannot grow without bound.
+let rescued: { slug: string; draft: Draft } | null = null
+
+/** A draft in the shape the `sent` mirror keeps it — the same fields, with the text under the name the
+ *  server row uses. One converter so a new field cannot be added to the draft and silently forgotten by
+ *  the mirror, which is what makes the "nothing changed, send nothing" check trustworthy. */
+function draftAsSent(d: Draft) {
+  return {
+    prompt: d.text.trim(),
+    stopHook: d.stopHook,
+    heartbeat: d.heartbeat,
+    postCompaction: d.postCompaction,
+    pauseOnQuestions: d.pauseOnQuestions,
+    seconds: d.seconds,
+  }
+}
 
 /** What will actually happen, as one clause per ARMED trigger. With three of them a nested ternary can
  *  no longer say what is on — and an operator who misreads which trigger they armed waits for a delivery
@@ -125,56 +178,110 @@ function triggerClauses(d: Pick<Draft, "stopHook" | "heartbeat" | "postCompactio
   ].filter((c): c is string => c !== null)
 }
 
-function PromptPanel({ thread, armed, close }: {
+function PromptPanel({ thread, armed }: {
   thread: ThreadView
   armed: ThreadView["recurringPrompt"]
-  /** Dismiss the popover — Save's second job, once the write has actually landed. */
-  close: () => void
 }) {
   const [busy, setBusy] = useState(false)
-  // The panel's own draft. Seeded from the server row when this MOUNTS (the popover unmounts its content
-  // on close, so that is once per open) rather than tracked live, so a board refresh mid-sentence cannot
-  // rewrite what the operator is typing or dictating.
-  const [text, setText] = useState(armed?.prompt ?? "")
-  const [stopHook, setStopHook] = useState(armed?.stopHook ?? false)
-  const [heartbeat, setHeartbeat] = useState(armed?.heartbeat ?? false)
-  const [postCompaction, setPostCompaction] = useState(armed?.postCompaction ?? false)
-  const [seconds, setSeconds] = useState(armed?.intervalSeconds ?? DEFAULT_INTERVAL_SECONDS)
+  // WHAT AN UNARMED PANEL OPENS WITH, and it is a real default rather than an empty form: the standard
+  // sentence, with the stop hook on. The reason an operator opens this control is almost always the same
+  // one, and there is no Save button to press — so accepting the default costs exactly one dismissal, and
+  // typing over it costs what typing always cost (maintainer 2026-08-11: "default recurring prompt should
+  // be …", "make Stop Hook checked by default").
+  //
+  // NOT on an archived thread. The server refuses to arm one (router `assertRecurringPromptArmable`), so
+  // seeding a default there would turn merely LOOKING at a shelved thread's panel into an error toast.
+  const seedDefaults = !thread.archived && !armed
+  // The panel's own draft. Seeded when this MOUNTS (the popover unmounts its content on close, so that is
+  // once per open) rather than tracked live, so a board refresh mid-sentence cannot rewrite what the
+  // operator is typing or dictating. From the server row — unless the last dismissal of THIS thread's
+  // panel failed to save, in which case that draft is what they were last looking at and the row is not.
+  const carried = rescued?.slug === thread.id ? rescued.draft : null
+  const [text, setText] = useState(carried?.text ?? armed?.prompt ?? (seedDefaults ? DEFAULT_RECURRING_PROMPT : ""))
+  const [stopHook, setStopHook] = useState(carried?.stopHook ?? armed?.stopHook ?? seedDefaults)
+  const [heartbeat, setHeartbeat] = useState(carried?.heartbeat ?? armed?.heartbeat ?? false)
+  const [postCompaction, setPostCompaction] = useState(carried?.postCompaction ?? armed?.postCompaction ?? false)
+  const [pauseOnQuestions, setPauseOnQuestions] = useState(carried?.pauseOnQuestions ?? armed?.pauseOnQuestions ?? false)
+  const [seconds, setSeconds] = useState(carried?.seconds ?? armed?.intervalSeconds ?? DEFAULT_INTERVAL_SECONDS)
   // The minutes field is a STRING while it is being typed, so a half-typed value ("", "1" on the way to
   // "120") is not immediately clamped out from under the caret. It becomes a number on commit.
-  const [minutes, setMinutes] = useState(String(Math.round((armed?.intervalSeconds ?? DEFAULT_INTERVAL_SECONDS) / 60)))
+  const [minutes, setMinutes] = useState(String(Math.round((carried?.seconds ?? armed?.intervalSeconds ?? DEFAULT_INTERVAL_SECONDS) / 60)))
   const textarea = useRef<HTMLTextAreaElement>(null)
   // What was last SENT, so a blur or a close can skip a round-trip when nothing actually changed —
   // otherwise every stray click through the panel re-arms the row and mints a new generation.
+  //
+  // SEEDED FROM THE SERVER ROW, never from the defaults above — which is exactly what makes the default a
+  // default: the panel opens already differing from what is stored, so the dismissal that follows writes
+  // it. An untouched open of an ALREADY-ARMED thread still matches and still writes nothing.
   const sent = useRef({
     prompt: armed?.prompt ?? "",
     stopHook: armed?.stopHook ?? false,
     heartbeat: armed?.heartbeat ?? false,
     postCompaction: armed?.postCompaction ?? false,
+    pauseOnQuestions: armed?.pauseOnQuestions ?? false,
     seconds: armed?.intervalSeconds ?? DEFAULT_INTERVAL_SECONDS,
   })
 
-  // Persist on unmount too: closing the popover destroys this subtree, and without this a prompt typed
-  // and then dismissed with Escape would be silently lost.
-  const latest = useRef<Draft>({ text, stopHook, heartbeat, postCompaction, seconds })
-  latest.current = { text, stopHook, heartbeat, postCompaction, seconds }
-  useEffect(() => () => { void persistNow(latest.current) }, [])
+  /** THE WHOLE PANEL AS ONE VALUE, which is what every save sends. The cadence comes from the minutes
+   *  FIELD (see `draftIntervalSeconds`), so a number typed and never blurred travels with everything else
+   *  instead of being dropped by whichever dismissal did not happen to blur it. */
+  const draft = (over?: Partial<Draft>): Draft => ({
+    text,
+    stopHook,
+    heartbeat,
+    postCompaction,
+    pauseOnQuestions,
+    seconds: draftIntervalSeconds(minutes, seconds),
+    ...over,
+  })
+
+  // AUTOSAVE ON DISMISS. Closing the popover destroys this subtree, and dismissing is how the panel is
+  // normally left — by clicking out of it, by Escape, by clicking the trigger again — so the unmount is
+  // the save, and it is the ONLY save for anything not already written by its own control.
+  const latest = useRef<Draft>(draft())
+  latest.current = draft()
+  // Through a REF, because the cleanup below captures the render that armed it. `persistNow` closes over
+  // the `thread` prop, and a thread whose session was replaced while the panel sat open would otherwise
+  // autosave against the id it had when the panel OPENED — refused by the server, draft lost, for a
+  // reason that had stopped being true.
+  const persistRef = useRef<(next: Draft) => Promise<boolean>>(() => Promise.resolve(true))
+  persistRef.current = (next) => persistNow(next)
+  useEffect(() => () => { void persistRef.current(latest.current) }, [])
+
+  // Writes go ONE AT A TIME. Leaving the panel fires two of them — the focused field's blur and the
+  // unmount — and `sent.current` only catches up when a write RETURNS, so an unserialised pair sends the
+  // same row twice and, if they land out of order, the older one reverts the toggle that was just moved.
+  const queue = useRef<Promise<boolean>>(Promise.resolve(true))
+  function persistNow(next: Draft): Promise<boolean> {
+    const run = queue.current.catch(() => false).then(async () => {
+      const ok = await persistDraft(next)
+      // The rescue slot holds one fact: this thread has a draft the server has NOT got. A refusal puts it
+      // there; anything that leaves the row matching — a landed write, or a draft that already matched —
+      // takes it back out, so a reopen never resurrects text the server is already holding.
+      if (ok) { if (rescued?.slug === thread.id) rescued = null }
+      else rescued = { slug: thread.id, draft: next }
+      return ok
+    })
+    queue.current = run
+    return run
+  }
 
   /** Resolves TRUE when the server row matches this draft — either it already did, or the write landed.
-   *  FALSE only on a failed write, which is what keeps Save from dismissing a panel whose change did not
-   *  stick: the operator needs the text still in front of them to retry. */
-  async function persistNow(next: Draft): Promise<boolean> {
+   *  FALSE only on a failed write, which is what puts the draft in the rescue slot above: the panel is
+   *  already gone by then, and the operator needs the text back in front of them to retry. */
+  async function persistDraft(next: Draft): Promise<boolean> {
     const prompt = next.text.trim() || null
     const unchanged = prompt === (sent.current.prompt || null)
       && next.stopHook === sent.current.stopHook
       && next.heartbeat === sent.current.heartbeat
       && next.postCompaction === sent.current.postCompaction
+      && next.pauseOnQuestions === sent.current.pauseOnQuestions
       && next.seconds === sent.current.seconds
     if (unchanged) return true
     // Nothing armed and nothing typed — flipping a trigger before writing anything has nothing to
     // persist yet. Keep the local flip and let the first real text carry it up.
     if (prompt === null && !armed) {
-      sent.current = { prompt: "", stopHook: next.stopHook, heartbeat: next.heartbeat, postCompaction: next.postCompaction, seconds: next.seconds }
+      sent.current = { ...draftAsSent(next), prompt: "" }
       return true
     }
     setBusy(true)
@@ -186,6 +293,7 @@ function PromptPanel({ thread, armed, close }: {
         stopHook: next.stopHook,
         heartbeat: next.heartbeat,
         postCompaction: next.postCompaction,
+        pauseOnQuestions: next.pauseOnQuestions,
         // ALWAYS sent alongside a prompt, even while the schedule trigger is OFF. Gating this on
         // `heartbeat` looked right and silently destroyed data: switching the schedule off sent no
         // cadence, storage cleared the column, and reopening the panel showed the 10-minute default —
@@ -194,7 +302,7 @@ function PromptPanel({ thread, armed, close }: {
         // test: every unit here asserted on rows that still had a cadence.
         ...(prompt === null ? {} : { intervalSeconds: next.seconds }),
       })
-      sent.current = { prompt: prompt ?? "", stopHook: next.stopHook, heartbeat: next.heartbeat, postCompaction: next.postCompaction, seconds: next.seconds }
+      sent.current = { ...draftAsSent(next), prompt: prompt ?? "" }
       // The toast names WHAT WILL HAPPEN, not which switch moved. "On"/"off" was legible when there was
       // one toggle per feature and is ambiguous the moment two triggers share a row.
       const clauses = triggerClauses(next)
@@ -211,27 +319,15 @@ function PromptPanel({ thread, armed, close }: {
     }
     return true
   }
-  const persist = () => void persistNow({ text, stopHook, heartbeat, postCompaction, seconds })
+  const persist = () => void persistNow(draft())
   // Clamp on COMMIT, not on keystroke. An out-of-range or empty field snaps back to something legal and
   // the field is rewritten to match, so what the operator sees is always what was actually stored.
   function commitMinutes(): void {
-    const parsed = Math.round(Number(minutes))
-    const clamped = Number.isFinite(parsed) && parsed > 0
-      ? Math.min(MAX_MINUTES, Math.max(MIN_MINUTES, parsed))
-      : Math.round(seconds / 60)
-    setMinutes(String(clamped))
-    setSeconds(clamped * 60)
-    void persistNow({ text, stopHook, heartbeat, postCompaction, seconds: clamped * 60 })
+    const next = draftIntervalSeconds(minutes, seconds)
+    setMinutes(String(Math.round(next / 60)))
+    setSeconds(next)
+    void persistNow(draft({ seconds: next }))
   }
-  // Is there anything to save? Compared against what was last SENT, so the button is live exactly when
-  // a click would change something on the server — the alternative (always enabled) makes "Save" a
-  // button you cannot tell the effect of, which is the complaint it exists to answer.
-  const dirty = (text.trim() || null) !== (sent.current.prompt || null)
-    || stopHook !== sent.current.stopHook
-    || heartbeat !== sent.current.heartbeat
-    || postCompaction !== sent.current.postCompaction
-    || seconds !== sent.current.seconds
-
   // The far end of the header belongs to the reading, not to a control. Each trigger keeps its own clock,
   // so this names WHICH one last fired rather than implying they share a stamp — and only while exactly
   // one has ever fired, because "last sent at rest" over a row where the schedule fired more recently
@@ -283,43 +379,57 @@ function PromptPanel({ thread, armed, close }: {
         // mounts behind a Radix portal a render later, and never ran again. Chromium ≥123.
         className="field-sizing-content max-h-[28vh] min-h-[4rem] w-full resize-none overflow-y-auto rounded-md border border-border bg-bg px-2 py-1.5 text-[12px] leading-snug text-fg outline-none placeholder:text-muted/50 focus:border-border-strong"
       />
-      {/* THE TWO MECHANISMS, one per line under the text they both send. They are NAMED — Stop hook and
-          Heartbeat — rather than described, because those are the names everything else in frizz uses for
-          them: the scheduler's two passes, the delivery fence prefixes, the trailer on every delivered
-          message, and the divider the chat renders. A panel that called them anything else would be the
-          only surface with its own vocabulary.
+      {/* THE THREE MECHANISMS, one per line under the text they all send. They are NAMED — Stop hook,
+          Heartbeat, Compaction — rather than described, because those are the names everything else in
+          frizz uses for them: the scheduler's passes, the delivery fence prefixes, the trailer on every
+          delivered message, and the divider the chat renders. A panel that called them anything else
+          would be the only surface with its own vocabulary.
 
-          A THREE-COLUMN GRID (name · switch · gloss), not a flex row. Two mechanisms on one line was
-          unreadable — the eye grouped "…it stops [Off|On] every 30 min" and the first switch read as a
-          separator between the two phrases rather than the end of the first. Stacked, the switches line
-          up in their own column and each row says what it is and when it fires.
+          A THREE-COLUMN GRID (switch · name · gloss), not a flex row. Several mechanisms on one line was
+          unreadable — the eye grouped "…it stops [Off|On] every 30 min" and the first control read as a
+          separator between the two phrases rather than the end of the first. Stacked, each row says what
+          it is and when it fires.
+
+          THE SWITCH LEADS THE ROW, where it used to sit between the name and the gloss. Two reasons, and
+          the second is the one that shows: a column of switches down the left edge is the shape every
+          settings list has, so it scans as one list of booleans rather than three sentences with a
+          control wedged into each; and the name column no longer has to be `auto`-sized against the
+          longest label, so adding a row can never shove the controls sideways (which is precisely the
+          hazard the Compaction row's comment below had to be written about).
 
           `items-center` per row; the grid's own rows are what align the pair, so no nudging. */}
-      <div className="mt-2.5 grid grid-cols-[auto_auto_1fr] items-center gap-x-3 gap-y-1.5">
-        <span className={`font-medium ${stopHook ? "text-fg" : "text-muted"}`}>Stop hook</span>
-        <OnOffToggle
-          kind="stop-hook"
-          value={stopHook}
+      <div className="mt-3 grid grid-cols-[auto_auto_1fr] items-center gap-x-2.5 gap-y-2">
+        <Switch
+          testId="stop-hook"
+          label="Stop hook"
+          checked={stopHook}
           disabled={busy}
           onChange={(next) => {
             setStopHook(next)
-            void persistNow({ text, stopHook: next, heartbeat, postCompaction, seconds })
+            void persistNow(draft({ stopHook: next }))
             if (next && !text.trim()) requestAnimationFrame(() => textarea.current?.focus())
           }}
         />
-        <span className="text-muted">every time the agent comes to rest</span>
+        <span className={`font-medium ${stopHook ? "text-fg" : "text-muted"}`}>Stop hook</span>
+        {/* "WITHOUT ASKING YOU SOMETHING" is not decoration — it is the trigger's actual contract. A rest
+            whose final message carries a ```question fence is never bumped, whatever these switches say
+            (scheduler.ts `restMessageAsksAQuestion`), because the fence IS the answer to the question the
+            stop hook asks. A gloss that still promised "every time" would be the one surface claiming a
+            delivery the scheduler declines to make. */}
+        <span className="text-muted">every rest where it is not asking you something</span>
 
-        <span className={`font-medium ${heartbeat ? "text-fg" : "text-muted"}`}>Heartbeat</span>
-        <OnOffToggle
-          kind="heartbeat"
-          value={heartbeat}
+        <Switch
+          testId="heartbeat"
+          label="Heartbeat"
+          checked={heartbeat}
           disabled={busy}
           onChange={(next) => {
             setHeartbeat(next)
-            void persistNow({ text, stopHook, heartbeat: next, postCompaction, seconds })
+            void persistNow(draft({ heartbeat: next }))
             if (next && !text.trim()) requestAnimationFrame(() => textarea.current?.focus())
           }}
         />
+        <span className={`font-medium ${heartbeat ? "text-fg" : "text-muted"}`}>Heartbeat</span>
         {/* THE CADENCE IS CONDITIONAL: the field exists only while the heartbeat is on, because a number
             you cannot act on is a number you have to ignore. The gloss it leaves behind is not decoration
             — without it the row collapses to a name and a switch, the two rows stop being the same shape,
@@ -356,104 +466,77 @@ function PromptPanel({ thread, armed, close }: {
             frizz-coined term to be consistent with. It sits last because it is the only one that fires on
             something the harness does rather than on something the thread or the clock does.
 
-            ONE WORD, not "After compaction", and the reason is measured rather than stylistic: the label
-            column is `auto`, so it sizes to the LONGEST label and every switch in the grid moves with it.
-            "After compaction" measured 91.61px of ink in a 93px column at 11px/500 — 1.4px of slack, on a
-            surface whose font is a user setting — and it dragged both existing switches ~38px right for a
-            preposition the gloss beside it already supplies. As a bare noun it sits with its siblings
-            (Stop hook · Heartbeat · Compaction) and the column stops being hostage to this row.
+            ONE WORD, not "After compaction". It was measured rather than chosen when the name column led
+            the row and sized every switch with it ("After compaction" measured 91.61px of ink in a 93px
+            column at 11px/500, dragging both existing switches ~38px right for a preposition the gloss
+            already supplies). The switch column leads now, so the measurement no longer binds — but the
+            bare noun is still the right label, because it sits with its siblings as one list of names
+            (Stop hook · Heartbeat · Compaction) rather than one name and two phrases.
 
             The gloss carries the INSTRUCTION, not just the timing, because this trigger is useless
             without it: the prompt has to name a doc for the emptied window to be re-grounded ON. */}
-        <span className={`font-medium ${postCompaction ? "text-fg" : "text-muted"}`}>Compaction</span>
-        <OnOffToggle
-          kind="post-compaction"
-          value={postCompaction}
+        <Switch
+          testId="post-compaction"
+          label="Compaction"
+          checked={postCompaction}
           disabled={busy}
           onChange={(next) => {
             setPostCompaction(next)
-            void persistNow({ text, stopHook, heartbeat, postCompaction: next, seconds })
+            void persistNow(draft({ postCompaction: next }))
             if (next && !text.trim()) requestAnimationFrame(() => textarea.current?.focus())
           }}
         />
+        <span className={`font-medium ${postCompaction ? "text-fg" : "text-muted"}`}>Compaction</span>
         <span className="text-muted">when the context is summarized away — link the doc to re-read</span>
-      </div>
-      {/* The explanation and the Save share one row, which is what puts the button at the panel's
-          bottom-right without a bar of its own. `items-end` rather than `items-center`: the explainer is
-          two lines of prose and the button is one control, so centring them would float the button in
-          the middle of the paragraph — aligning their BASE edges reads as the paragraph and its action.
-          The button keeps its own line-height so its label sits optically centred in its box.
 
-          What the operator needs from this text is WHEN IT FIRES AND WHEN IT WILL NOT, because a prompt
-          they armed sitting silent on a still thread is what looks broken from the outside. */}
-      <div className="mt-2 flex items-end gap-3">
-        <p className="min-w-0 flex-1 text-muted/70">
-          {/* ONE LINE. The rows above now carry when-each-fires, so this is only the two ways it ENDS —
-              which is what an operator actually cannot infer from the panel. An earlier version repeated
-              the mid-turn fact here and wrapped to three lines, parking Save beside a line holding the
-              word "it." */}
-          {!stopHook && !heartbeat && !postCompaction
-            ? <>None is on, so nothing is sent — the text stays here for when you want it back.</>
-            : <>
-                Switch them all off to stop it, or the agent can reply{" "}
-                <code className="font-mono font-medium text-fg/85">{ALLDONE_SENTINEL}</code> — which
-                stalls the run until you move it.
-              </>}
-        </p>
-        <button
-          type="button"
-          data-recurring-save
-          disabled={busy || !dirty}
-          onMouseDown={(e) => e.preventDefault()}
-          // SAVE CLOSES THE PANEL — but only once the write has landed. Dismissing first would hide the
-          // one surface that can report a failure, and the operator would walk away believing a prompt
-          // was armed that never was. The unmount persist is a no-op by then: `sent.current` already
-          // matches this draft, so it returns early rather than sending the same row twice.
-          onClick={() => { void persistNow({ text, stopHook, heartbeat, postCompaction, seconds }).then((ok) => { if (ok) close() }) }}
-          // Small, quiet, and INERT until there is something to save — the disabled state is the whole
-          // signal. `shrink-0` so a long explainer can never squeeze the label; `leading-none` + the
-          // symmetric py keeps the word optically centred rather than riding high on the default
-          // line-box. Same radius and 11px scale as the toggle it answers to.
-          className="shrink-0 rounded-md border border-border-strong bg-panel-2/60 px-2.5 py-[5px] text-[11px] leading-none font-medium text-fg/80 outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-40 disabled:hover:bg-panel-2/60 disabled:hover:text-fg/80"
-        >
-          {/* MEASURED, not guessed: the label's ink sat 0.62px BELOW its box's interior centre, against
-              0.08–0.19px for the Off/On segments in the same panel — a word with no descender in a
-              symmetrically padded box. Corrected in `em` so it tracks the font size rather than pinning
-              to 11px, and re-measured to a 0.02px residual. */}
-          <span className="inline-block translate-y-[-0.056em]">{busy ? "Saving…" : "Save"}</span>
-        </button>
+        {/* THE HOLD, and it is BELOW A RULE because it is not a fourth trigger. Every switch above adds a
+            reason to send; this one takes them all away for as long as the thread is waiting on you, and
+            reading it as a sibling of the three would make "on" look like more delivery rather than less.
+            The rule spans all three columns and carries the row's own top margin.
+
+            Its label is the whole sentence rather than a name, for the same reason: there is nothing
+            elsewhere in frizz called this, so there is no vocabulary to be consistent with — and a name
+            would have to be glossed anyway. The gloss says what COUNTS as a question, which is the part
+            an operator cannot guess (a permission prompt is one; the agent's own rhetorical one is not).
+
+            The stop hook already declines a rest that ends in a ```question fence, always. This is the
+            broader, optional version: it covers the heartbeat and the compaction trigger too, and it
+            counts a native ask and a permission prompt as questions. Off by default — a hold is only as
+            good as the attention behind it. */}
+        <div className="col-span-3 mt-0.5 h-px bg-border/70" />
+        <Switch
+          testId="pause-on-questions"
+          label="Disable when questions are pending"
+          checked={pauseOnQuestions}
+          disabled={busy}
+          onChange={(next) => {
+            setPauseOnQuestions(next)
+            void persistNow(draft({ pauseOnQuestions: next }))
+          }}
+        />
+        <span className={`col-span-2 ${pauseOnQuestions ? "text-fg" : "text-muted"}`}>
+          <span className="font-medium">Disable when questions are pending</span>
+          <span className="text-muted"> — a question fence, a native ask, or a permission prompt</span>
+        </span>
       </div>
+      {/* NO SAVE BUTTON. Every edit here writes itself — a switch on its own click, the text and the
+          cadence on blur, and whatever is still uncommitted on the dismissal that unmounts this subtree
+          (maintainer 2026-08-11: "no save button. (autosaves when you click out)"). A button that only
+          ever duplicated what leaving the panel already did was one more thing to forget to press, and
+          its disabled state was the only place the panel could say "nothing to do" — which nobody needed
+          told. `busy` is the whole in-flight signal now, and it sits on the controls themselves.
+
+          What the operator needs from this line is WHEN IT STOPS, because a prompt they armed sitting
+          silent on a still thread is what looks broken from the outside. */}
+      <p className="mt-3 text-muted/70">
+        {!stopHook && !heartbeat && !postCompaction
+          ? <>None is on, so nothing is sent — the text stays here for when you want it back.</>
+          : <>
+              Saved as you go. Switch them all off to stop it, or the agent can reply{" "}
+              <code className="font-mono font-medium text-fg/85">{ALLDONE_SENTINEL}</code> — which
+              stalls the run until you move it.
+            </>}
+      </p>
     </section>
-  )
-}
-
-// The same segmented Off|On the settings form uses — Off on the LEFT (switch convention, right = on),
-// active segment inverted. Deliberately NOT a second switch idiom invented for this panel: the app
-// already has exactly one shape for a boolean. Sized down from the settings copy because it shares a
-// row with 11px prose, not a form label.
-function OnOffToggle({ kind, value, disabled, onChange }: {
-  kind: string
-  value: boolean
-  disabled?: boolean
-  onChange: (v: boolean) => void
-}) {
-  return (
-    <div className="inline-flex w-fit shrink-0 rounded-md border border-border bg-bg p-0.5" role="group" aria-label={`${kind} trigger`}>
-      {[{ v: false, label: "Off" }, { v: true, label: "On" }].map((o) => (
-        <button
-          key={o.label}
-          type="button"
-          disabled={disabled}
-          aria-pressed={value === o.v}
-          data-recurring-toggle={`${kind}-${o.label.toLowerCase()}`}
-          onClick={() => onChange(o.v)}
-          className={`rounded px-2 py-0.5 text-[11px] outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-45 ${
-            value === o.v ? "bg-fg text-bg" : "text-muted hover:text-fg"
-          }`}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
   )
 }

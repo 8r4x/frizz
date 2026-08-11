@@ -99,6 +99,7 @@ const arm = (): void => {
     stopHook: true,
     heartbeat: false,
     postCompaction: false,
+    pauseOnQuestions: false,
     intervalMs: null,
     armedAt: new Date().toISOString(),
   })

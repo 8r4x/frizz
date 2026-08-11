@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { compactionPromptMessage, formatGithubWakeSteer, isValidAwaitingTimer, restPromptMessage, schedulePromptMessage, timerPromptMessage, wakeDeliveryToken, type QuotaSnapshot } from "@frizz/shared"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
-import type { FenceView } from "./tailer.ts"
+import type { FenceView, SessionTelemetry } from "./tailer.ts"
 import type { LimitFault } from "./backend/types.ts"
 import { limitFaultResetKey, limitPauseIsStale, quotaWindowKeyFor, quotaWindowRecovered, textResetInstant } from "./backend/usage-limit.ts"
 import { createWakeDeliveryStore, type WakeDelivery } from "./wake-store.ts"
@@ -395,9 +395,60 @@ interface ArmedSchedule {
 type RecurringRow = Pick<
   SessionRow,
   | "recurring_prompt" | "recurring_on_rest" | "recurring_on_schedule" | "recurring_on_compact"
-  | "recurring_interval_ms" | "recurring_armed_at"
+  | "recurring_interval_ms" | "recurring_armed_at" | "recurring_pause_on_questions"
   | "recurring_rest_fired_at" | "recurring_schedule_fired_at" | "recurring_compact_fired_at"
 >
+
+// ---- WHAT A PENDING QUESTION DOES TO ALL THREE TRIGGERS -------------------------------------------
+// A thread that has asked the human something is not stalled — it is waiting, correctly, and it is
+// already sitting in the queue as a card with the answer's own input on it. Re-prompting it there is
+// worse than useless: the worker reads "keep going" as an instruction to act, and the honest reply to
+// its own question is to ask it again, so the operator gets the same card twice with a paragraph of
+// agent apology between them.
+//
+// TWO RULES, and they are deliberately different in strength.
+//
+//   THE HARD ONE (`restMessageAsksAQuestion`, below) is not an option: a ```question fence in the very
+//   message that ENDED the turn is the thread's answer to "you stopped — is there more?". The stop hook
+//   asks exactly that question, so firing over the top of a fence is the trigger talking to itself. This
+//   holds for every armed thread whatever its settings, and it holds for the STOP HOOK ONLY — the
+//   heartbeat and the compaction trigger ask different questions ("it has been an hour", "your context
+//   is gone") that a pending fence does not answer.
+//
+//   THE OPTIONAL ONE (`pauseOnQuestions`) is the operator's, off by default, and it is BROADER on both
+//   axes: it holds all three triggers, and it counts every way a thread can be blocked on a human —
+//   a fence, a native ask, a backend modal, an interactive permission prompt. It is off by default
+//   because a hold is only as good as the attention behind it: an operator who is not watching turns
+//   their own unanswered question into an hour of silence, where the hard rule above already covers the
+//   case that actually bites.
+type QuestionTele = Pick<
+  SessionTelemetry,
+  "pendingQuestion" | "pendingAsk" | "permPrompt" | "nativeInputRequired"
+>
+
+/** The thread rested holding an unanswered ```question fence — the stop hook's own question, already
+ *  answered. Bound to REST on purpose: the flag is folded off the FINAL assistant message and cleared by
+ *  the next user record, so an answered question re-opens the trigger with nothing to undo. */
+function restMessageAsksAQuestion(tele: Pick<SessionTelemetry, "pendingQuestion">): boolean {
+  return tele.pendingQuestion === true
+}
+
+/** Is this thread blocked on the human RIGHT NOW, by any means? The `pauseOnQuestions` hold's input.
+ *  Wider than the fence check above because the hold is the operator saying "don't nudge it while it is
+ *  waiting on me", and a native ask or a permission prompt is exactly that. */
+function blockedOnHuman(tele: QuestionTele): boolean {
+  return tele.pendingQuestion === true
+    || tele.pendingAsk !== undefined
+    || tele.permPrompt === true
+    || tele.nativeInputRequired !== undefined
+}
+
+/** Does this row's question hold apply, given what the thread is doing? False when the hold is off, so
+ *  callers read as one line at each of the three fire sites. */
+function heldByQuestion(row: Pick<SessionRow, "recurring_pause_on_questions">, tele: QuestionTele | undefined): boolean {
+  if (row.recurring_pause_on_questions !== 1) return false
+  return tele !== undefined && blockedOnHuman(tele)
+}
 
 // A row's live ON SCHEDULE trigger, if it has one. A switched-off trigger deliberately reads as ABSENT
 // here — off must stop new deliveries AND drop queued ones — while the row keeps the text and the
@@ -1494,6 +1545,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // so anything the thread says or receives afterwards reopens it.
       const beatTele = deps.tailer.get(row.slug)
       if (beatTele?.lastAssistantAllDone) continue
+      // The OPERATOR's hold — the only other thing that silences a beat, and only because they asked
+      // for it. The hard rest-fence rule deliberately does NOT apply here: a beat asks "it has been an
+      // hour", which a pending question does not answer.
+      if (heldByQuestion(row, beatTele)) continue
       // One in flight at a time. Any open scheduled delivery for this thread — whatever its
       // generation — means the previous beat has not landed yet, so this interval is skipped rather
       // than stacked behind it.
@@ -1575,6 +1630,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // until that returns. Per-rest only: the flag is folded off the FINAL assistant message, so the
       // next rest that omits it is bumped as normal. Nothing is written and nothing has to be cleared.
       if (tele.lastAssistantAllDone) continue
+      // The thread rested ASKING SOMETHING. Never bumped, whatever the settings say — see the two rules
+      // above `restMessageAsksAQuestion`. Per-rest like ALLDONE and for the same reason: the flag rides
+      // the final message, so the operator's answer re-opens the trigger with nothing to clear.
+      if (restMessageAsksAQuestion(tele)) continue
+      // And the operator's own broader hold, when they armed it.
+      if (heldByQuestion(row, tele)) continue
       const fenceId = stopHookFenceId(armed.armedAt, tele.lastActivityAt)
       const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
       // Terminal rows stay in the store, so this alone is what makes a rest bump EXACTLY once: the same
@@ -1611,6 +1672,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // a thread that compacted an hour ago delivers immediately for an event the operator never saw —
       // and a thread that has compacted before is the common case, not the exotic one.
       if (tele.lastCompactionAt <= armed.armedAt) continue
+      // The operator's hold applies here too. Nothing else does: re-grounding a worker whose context was
+      // just emptied is worth doing whether or not it is mid-turn, and a fence it wrote before the
+      // compaction says nothing about whether it still remembers what it was doing.
+      if (heldByQuestion(row, tele)) continue
       const fenceId = compactFenceId(armed.armedAt, tele.lastCompactionAt)
       const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
       // Terminal rows stay in the store, so this alone is what makes a compaction bump EXACTLY once: the
