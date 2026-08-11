@@ -172,7 +172,23 @@ function stableFileMap(files: Record<string, string>): Record<string, string> {
   return Object.fromEntries(Object.entries(files).sort(([left], [right]) => left.localeCompare(right)));
 }
 
-/** The directory name is a commitment to source identity, runtime compatibility, and every file. */
+/** The directory name is a commitment to source identity, runtime compatibility, and every file.
+ *
+ * `source` is in the key deliberately — that is what "source identity" means here, and the legacy
+ * verifier below shows it always was, as `basename(sourceDir)` before it became the canonical realpath.
+ * The consequence is worth knowing before it surprises someone: MOVING OR RENAMING THE CHECKOUT
+ * INVALIDATES THE ENTIRE BUILD CACHE, because every cached digest committed to the old path. Measured
+ * on this machine after `.../projects/fray` became `.../projects/frizz` (2026-08-11): `9574d530` and
+ * `f2ac154a` are the same commit with an identical fingerprint, dependency cell and byte-identical
+ * `webFiles`, differing only in that string — 112 builds, 2.3 GB, of which 4 are still reachable for
+ * reuse. That is a one-time rebuild, not a fault, and it is the price of the commitment.
+ *
+ * If a garbage collector is ever written for `~/.frizz/builds`, "unreachable for reuse" is NOT the same
+ * as "safe to delete": a worker's plugin, hooks and MCP entry point all live inside the build it was
+ * spawned on and are re-read from that path for the life of the process (dispatch.ts workerPluginDir).
+ * 11 distinct build dirs were held by live workers at the time of writing, several of them old. Deleting
+ * one under a running worker strips its whole contract, and per that same function's note it would do so
+ * silently. Exclude any build referenced by a live process. */
 function artifactDigestFromIdentity(identity: {
   sourceDir: string;
   sourceRevision: string;
