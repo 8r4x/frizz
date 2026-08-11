@@ -52,6 +52,32 @@ test("authed: GitHub trigger renders between attach and send", { skip: !baseUrl 
   assert.ok(r.github!.right <= r.send!.left, "GitHub trigger sits left of send")
 })
 
+// REGRESSION (2026-08-11). The network to api.github.com dropped for nine minutes. `gh repo view` is a
+// live API call, so the server answered inRepo:false, the trigger vanished — and it STAYED vanished in an
+// open tab long after the network came back, because nothing re-asks a question already answered.
+// useGithubStatus now polls while the answer is NO and stops at the first yes. This drives the real
+// thing: a real browser, a real react-query interval, a real wall-clock minute. No reload.
+const POLL_WINDOW_MS = 90_000
+
+test("a NO heals itself: the trigger comes back with no reload once the answer turns yes", { skip: !baseUrl, timeout: POLL_WINDOW_MS + 30_000 }, async () => {
+  await page!.goto(`${baseUrl}/composer-icons-fixture.html?heals`, { waitUntil: "networkidle0" })
+  await page!.waitForSelector('button[aria-label="Attach files"]')
+  // The outage answer is in: the trigger is genuinely absent, so what follows cannot be a false pass.
+  assert.equal((await rail(page!)).github, null, "the first (outage) answer must hide the trigger")
+  await page!.waitForSelector('button[aria-label^="Investigate"]', { timeout: POLL_WINDOW_MS })
+  const r = await rail(page!)
+  assert.ok(r.github, "the trigger must return on its own once the answer turns yes")
+  assert.ok(r.attach!.right <= r.github!.left && r.github!.right <= r.send!.left, "and it returns to its own slot in the rail")
+})
+
+test("a genuine NO stays no — the poll re-asks, it does not invent an icon", { skip: !baseUrl, timeout: POLL_WINDOW_MS + 30_000 }, async () => {
+  // The control for the test above. Same wall-clock window, same poll, an answer that never turns yes.
+  await page!.goto(`${baseUrl}/composer-icons-fixture.html?unauthed`, { waitUntil: "networkidle0" })
+  await page!.waitForSelector('button[aria-label="Attach files"]')
+  await new Promise((resolve) => setTimeout(resolve, POLL_WINDOW_MS))
+  assert.equal((await rail(page!)).github, null, "an unauthed gh must stay hidden however many times it is re-asked")
+})
+
 test("unauthed: no GitHub slot is reserved — attach sits directly beside send", { skip: !baseUrl }, async () => {
   await page!.goto(`${baseUrl}/composer-icons-fixture.html?unauthed`, { waitUntil: "networkidle0" })
   await page!.waitForSelector('button[aria-label="Attach files"]')

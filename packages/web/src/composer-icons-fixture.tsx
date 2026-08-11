@@ -12,12 +12,21 @@ import "./styles.css"
 // Verifies: (1) the paperclip brightness matches the GitHub icon (both text-muted), (2) the
 // paperclip↔GitHub gap reads even with the GitHub↔send gap, and (3) when unauthed the GitHub slot
 // disappears entirely and the paperclip sits directly beside send — no reserved empty hole.
-const authed = !new URLSearchParams(location.search).has("unauthed")
+// `?heals` is the OUTAGE replay: the first answer is the one a dead network to api.github.com produces
+// (inRepo:false — `gh repo view` is a live API call), every answer after it is healthy. It exists to pin
+// that the trigger comes back on its own, with no reload, because on 2026-08-11 it did not: a nine-minute
+// outage flipped the answer, the tab kept it, and nothing ever re-asked.
+const params = new URLSearchParams(location.search)
+const authed = !params.has("unauthed")
+const heals = params.has("heals")
+let githubStatusCalls = 0
 const originalFetch = window.fetch
 window.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : (input as Request).url ?? input.toString(), location.origin)
   if (url.pathname === "/_frizz/rpc/githubStatus") {
-    return new Response(JSON.stringify({ result: { inRepo: true, authed } }), { headers: { "content-type": "application/json" } })
+    const outage = heals && githubStatusCalls++ === 0
+    const result = outage ? { inRepo: false, authed: true } : { inRepo: true, authed }
+    return new Response(JSON.stringify({ result }), { headers: { "content-type": "application/json" } })
   }
   if (url.pathname.startsWith("/_frizz/rpc/")) return new Response(JSON.stringify({ result: {} }), { headers: { "content-type": "application/json" } })
   return originalFetch(input, init)

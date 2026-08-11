@@ -20,6 +20,25 @@ export function useGithubStatus() {
     queryFn: () => rpc.githubStatus(),
     staleTime: 30_000,
     refetchOnWindowFocus: true,
+    // A NO IS NEVER FINAL — re-ask on a slow interval until it turns yes, then stop.
+    //
+    // Focus-refetch above covers "the user left, ran `gh auth login`, came back". It does NOT cover the
+    // answer going wrong on its own while the tab sits open, and every probe behind this query can do
+    // exactly that: they are subprocesses, and `gh repo view` is a live call to api.github.com. On
+    // 2026-08-11 the network to GitHub dropped for nine minutes, the answer flipped to inRepo:false, and
+    // the icon stayed gone in an open tab long after the network came back — a stuck NO outlives its
+    // cause, because nothing re-asks a question already answered. The server-side half of that outage
+    // is fixed (gitGithubRemote in packages/server/src/github.ts); this is the half that makes any
+    // future false negative — a `gh` that timed out on a loaded machine, a keychain that was briefly
+    // locked — heal itself instead of needing a reload nobody knows to do.
+    //
+    // Only while the answer is NO, so the steady state costs nothing: a yes stops the interval, and the
+    // whole feature being visible is the signal that it is right. 60s because it is a subprocess and the
+    // cost of being wrong for another minute is one hidden icon, not a broken app.
+    refetchInterval: (query) => {
+      const status = query.state.data
+      return status?.inRepo && status.authed ? false : 60_000
+    },
   })
 }
 
