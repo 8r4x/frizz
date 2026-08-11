@@ -17,6 +17,7 @@ import { installCodeCopyInterceptor } from "./lib/copy-code.ts"
 import { installThreadLinkInterceptor } from "./lib/thread-links.ts"
 import { primeRoute } from "./lib/router.ts"
 import { innerPath } from "./lib/base-path.ts"
+import { projectScopedQueryKeyHash } from "./lib/queryKeyScope.ts"
 import { parseStandaloneThreadPath } from "./lib/standaloneThreadRoute.ts"
 
 installRenderScan()
@@ -34,7 +35,16 @@ if (!settingsFixture && !standaloneThreadSlug) {
 }
 
 export const queryClient = new QueryClient({
-  defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
+  defaultOptions: {
+    queries: {
+      retry: false,
+      refetchOnWindowFocus: false,
+      // Every cache entry is scoped to the project the page is showing — see lib/queryKeyScope.ts.
+      // This is a client-level default rather than 19 hand-prefixed key shapes precisely so that the
+      // twentieth is scoped too, without its author knowing this problem exists.
+      queryKeyHashFn: projectScopedQueryKeyHash,
+    },
+  },
 })
 
 // One multiplexed /ws (board + transcript push + notify); falls back to SSE + polling if /ws is

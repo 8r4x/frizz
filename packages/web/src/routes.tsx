@@ -1,6 +1,5 @@
 import { useEffect } from "react"
 import { Outlet, createBrowserRouter, useLocation, useParams } from "react-router"
-import { useQueryClient } from "@tanstack/react-query"
 import { App } from "./App.tsx"
 import { ProjectGrid } from "./components/ProjectGrid.tsx"
 import { ProjectRail, RAIL_INSET_CLASS } from "./components/ProjectRail.tsx"
@@ -22,11 +21,14 @@ import { useProjectRailVisible } from "./lib/projectRail.ts"
 // tooltip provider, and the <Outlet/> below it swaps between the grid and a board.
 //
 // WHAT A PROJECT SWITCH ACTUALLY COSTS, and why the router alone was never the whole job. Four things
-// are bound to one project, and a client-side switch has to re-bind every one of them:
+// are bound to one project, and only the first two are this hook's business:
 //   · the live feed — one socket per project (api/socket.ts rebindProject)
 //   · the board store, the drawer stack and the current view (store.resetProjectState)
-//   · the react-query cache, EXCEPT the project list itself — clearing that would blank the rail on
-//     every switch, which is precisely the flicker this whole change exists to remove
+//   · the react-query cache, which now needs NOTHING here. It used to be swept on every switch,
+//     exempting the project list so the rail would not blank mid-navigation; the cache is scoped by
+//     project at the hash instead (lib/queryKeyScope.ts), so one project's entries are invisible to
+//     another rather than deleted in front of it. Switching back finds a warm cache, and a response
+//     that arrives late has nowhere wrong to land.
 //   · the API base, which needs nothing: base-path.ts derives it from the page's path on every call,
 //     and the router keeps `location` synchronous with navigation.
 //
@@ -73,19 +75,11 @@ function RootLayout() {
  * an ordinary effect instead of something that has to fire exactly once.
  */
 function useProjectBinding(slug: string | undefined) {
-  // The hook, not an import of main.tsx's instance: routes.tsx is imported BY main.tsx, and reaching
-  // back for its export closes a module cycle whose initialisation order then depends on where the
-  // reference happens to be read.
-  const queryClient = useQueryClient()
   useEffect(() => {
     if (feedIsBoundTo(slug)) return
     resetProjectState()
-    // Everything EXCEPT the machine-wide project list, which the rail is drawing right now.
-    queryClient.removeQueries({
-      predicate: (query) => query.queryKey[0] !== "projectsList",
-    })
     rebindProject()
-  }, [slug, queryClient])
+  }, [slug])
 }
 
 /**
