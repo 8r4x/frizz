@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { appendFileSync, mkdtempSync, openSync, closeSync, writeSync, writeFileSync, utimesSync, statSync, rmSync } from "node:fs"
+import { appendFileSync, mkdirSync, mkdtempSync, openSync, closeSync, writeSync, writeFileSync, utimesSync, statSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createStorage, type Storage, type SessionRow } from "./storage.ts"
@@ -300,4 +300,59 @@ test("tail-cache: marker-derived permission state is never restored from the cac
   assert.equal(warm?.lastAssistant, "answer", "the cache still hit — this is a restore, not a re-fold")
   assert.equal(warm?.permPolicy, undefined, "a cached policy decision must not be handed back")
   assert.equal(warm?.permDenies, undefined, "nor its denial count")
+})
+
+// ---- the renamed project directory ----
+//
+// Claude Code pins a session's transcript to the bucket for the cwd it was BORN in, so renaming the
+// checkout leaves `<sessionId>.jsonl` one directory over (discover.ts). The tailer recovers by rebinding
+// to it — but `hydrateFromCache` runs BEFORE that recovery, with `state.path` still derived from the
+// project's CURRENT path. Fenced on the directory alone, every stranded thread's cached entry missed
+// forever: it re-folded from byte 0 on EVERY boot rather than once. On the real board that was 386 of
+// 427 sessions, 1.5 GB (measured 2026-08-11). The filename is the pinned session id and the
+// session/generation fences have already matched, so a same-name entry in another bucket is the same
+// transcript — and accepting it also rebinds the state to where the file actually is.
+
+test("tail-cache: an entry written before the project was renamed still hydrates (and rebinds the path)", () => {
+  const h = harness()
+  const oldBucket = join(h.dir, "-Users-me-projects-fray")
+  const newBucket = join(h.dir, "-Users-me-projects-frizz")
+  mkdirSync(oldBucket, { recursive: true })
+  mkdirSync(newBucket, { recursive: true })
+  h.storage.upsertSession(row())
+  // The transcript never moved: it is still in the bucket the session was born in.
+  writeFileSync(join(oldBucket, "sid.jsonl"), [user(1, "go"), assistant(2, "the real answer")].map((l) => l + "\n").join(""))
+
+  // Boot 1: the sweep finds it one directory over, folds it, and caches it under the OLD bucket path.
+  const first = boot(h, { sessionLogDir: newBucket })
+  assert.equal(first?.lastAssistant, "the real answer")
+  const stored = h.storage.db.prepare<[], { path: string }>("SELECT path FROM tail_state").all()
+  assert.deepEqual(stored.map((r) => r.path), [join(oldBucket, "sid.jsonl")], "cached under the bucket the file is really in")
+
+  // Boot 2 must HYDRATE, not re-fold. Proven by poisoning the cached derivation with a value no fold of
+  // this file could ever produce: if the entry is used, the sentinel surfaces; if it is rejected, the
+  // re-fold overwrites it with the real answer.
+  const blob = h.storage.db.prepare<[], { state: string }>("SELECT state FROM tail_state").get()!
+  const poisoned = JSON.parse(blob.state)
+  assert.equal(poisoned.lastAssistant, "the real answer", "sanity: the codec stores the fold flat")
+  poisoned.lastAssistant = "HYDRATED-FROM-CACHE"
+  h.storage.db.prepare("UPDATE tail_state SET state = ?").run(JSON.stringify(poisoned))
+
+  assert.equal(boot(h, { sessionLogDir: newBucket })?.lastAssistant, "HYDRATED-FROM-CACHE", "the pre-rename entry must be used, not re-folded")
+})
+
+test("tail-cache: a DIFFERENT session's file in another bucket is never mistaken for this one", () => {
+  const h = harness()
+  const other = join(h.dir, "-some-other-project")
+  const mine = join(h.dir, "-my-project")
+  mkdirSync(other, { recursive: true })
+  mkdirSync(mine, { recursive: true })
+  h.storage.upsertSession(row())
+  writeFileSync(join(mine, "sid.jsonl"), [user(1, "go"), assistant(2, "mine")].map((l) => l + "\n").join(""))
+  // A neighbour bucket holding a DIFFERENT session id must not be reachable through the widened fence.
+  writeFileSync(join(other, "someone-elses.jsonl"), [user(1, "go"), assistant(2, "theirs")].map((l) => l + "\n").join(""))
+  boot(h, { sessionLogDir: mine })
+  const stored = h.storage.db.prepare<[], { path: string }>("SELECT path FROM tail_state").all()
+  assert.deepEqual(stored.map((r) => r.path), [join(mine, "sid.jsonl")], "bound to its own file, in its own bucket")
+  assert.equal(boot(h, { sessionLogDir: mine })?.lastAssistant, "mine")
 })

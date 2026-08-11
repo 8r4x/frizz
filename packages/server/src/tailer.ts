@@ -1,5 +1,5 @@
 import { statSync, openSync, readSync, closeSync, readdirSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs"
-import { join } from "node:path"
+import { basename, join } from "node:path"
 import { homedir, tmpdir } from "node:os"
 import { insideFence, PermissionMode, saysAllDone } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
@@ -3575,6 +3575,19 @@ export function createTailer(deps: TailerDeps): Tailer {
   // transcript path, an open delivery ledger, a file whose inode/size/content moved under the cached
   // prefix, an undecodable blob — returns false and leaves the state untouched, which is the full
   // re-read.
+  // The cached entry must name the SAME transcript this state is bound to, which is normally string
+  // equality. ONE widening: a project directory renamed since the entry was written leaves the same
+  // `<sessionId>.jsonl` in a different bucket (see discover.ts), and hydrate runs BEFORE the recovery
+  // in resolveTranscript that rebinds to it — so on the directory alone every stranded thread would
+  // re-fold from byte 0 on EVERY boot, forever, instead of once. The FILENAME is a strong identity
+  // here: it is the pinned session id, and the sessionId / nativeSessionId / generation fences above
+  // have already matched. `measureFence(entry.path, …)` below still validates the file that is actually
+  // there, and `path` round-trips through the encoded state, so accepting the entry also rebinds the
+  // state to the bucket the transcript really lives in — which is exactly what the recovery would do.
+  function samePinnedTranscript(cached: string, bound: string): boolean {
+    return cached === bound || basename(cached) === basename(bound)
+  }
+
   function hydrateFromCache(state: TailState, row: SessionRow | null, nativeId: string): boolean {
     if (!tailCache) return false
     if (cacheEntries === null) cacheEntries = tailCache.load()
@@ -3586,7 +3599,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       entry.sessionId !== (row ? row.session_id : state.sessionId) ||
       entry.nativeSessionId !== nativeId ||
       entry.runtimeGeneration !== (row ? row.runtime_generation ?? 0 : 0) ||
-      entry.path !== state.path
+      !samePinnedTranscript(entry.path, state.path)
     ) return false
     // A row with an OPEN delivery ledger has follow-ups whose evidence may still be sitting in the
     // prefix we would skip. Correlating those records is the ledger's whole job, so such a row keeps
