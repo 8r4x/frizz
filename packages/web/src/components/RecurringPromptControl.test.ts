@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { draftIntervalSeconds } from "./RecurringPromptControl.tsx"
+import type { ThreadView } from "@frizz/shared"
+import { draftIntervalSeconds, seedsDefaults } from "./RecurringPromptControl.tsx"
 
 // Dismissing the recurring-prompt panel IS the save — clicking out of it, Escape, clicking the trigger
 // again. The cadence is the one field that can be mid-edit when that happens, because it commits on blur
@@ -33,4 +34,27 @@ test("a cadence the field can only round is left exactly as stored", () => {
   // the stored value means "unchanged" — the panel writes nothing when the operator touched nothing.
   assert.equal(draftIntervalSeconds("2", 90), 90)
   assert.equal(draftIntervalSeconds("10", 600), 600)
+})
+
+// ---- The pre-filled default -----------------------------------------------------------------------
+// The panel opens on the standard sentence with the stop hook on, and — there being no Save button —
+// the dismissal that follows WRITES it. That is the whole point: accepting the default costs one click
+// out. It also means the seed has to be withheld wherever the write would be refused, or looking at a
+// panel becomes an error toast. Driven here rather than in the browser because an archived thread's
+// route renders the previously-focused thread's drawer, so that branch is unreachable by clicking.
+const view = (over: Partial<ThreadView>) => ({ archived: false, ...over }) as ThreadView
+
+test("an unarmed, open thread opens pre-filled", () => {
+  assert.equal(seedsDefaults(view({}), undefined), true)
+})
+
+test("an ARMED thread shows its own words, never the default", () => {
+  const armed = { prompt: "keep checking the deploy" } as ThreadView["recurringPrompt"]
+  assert.equal(seedsDefaults(view({}), armed), false)
+  // Including one whose triggers are all off — the text is parked, and parked text is still the row's.
+  assert.equal(seedsDefaults(view({}), { ...armed, stopHook: false } as ThreadView["recurringPrompt"]), false)
+})
+
+test("an ARCHIVED thread opens empty — the server would refuse the write the dismissal makes", () => {
+  assert.equal(seedsDefaults(view({ archived: true }), undefined), false)
 })

@@ -167,6 +167,22 @@ function draftAsSent(d: Draft) {
   }
 }
 
+/** Does this panel open PRE-FILLED — the standard sentence, stop hook on — rather than empty?
+ *
+ *  Only for a thread that has nothing armed, because an armed row's own words are the thing to show.
+ *  And never for an ARCHIVED one: the server refuses to arm a shelved thread (router
+ *  `assertRecurringPromptArmable`), and since there is no Save button the seeded draft would be written
+ *  by the dismissal — so merely LOOKING at a shelved thread's panel would end in an error toast.
+ *
+ *  Extracted and exported for the test beside this file: the archived branch cannot be driven in the
+ *  browser, because opening an archived thread's route renders the previously-focused thread's drawer. */
+export function seedsDefaults(
+  thread: Pick<ThreadView, "archived">,
+  armed: ThreadView["recurringPrompt"],
+): boolean {
+  return !thread.archived && !armed
+}
+
 /** What will actually happen, as one clause per ARMED trigger. With three of them a nested ternary can
  *  no longer say what is on — and an operator who misreads which trigger they armed waits for a delivery
  *  that is never coming. Empty when nothing is armed; the callers phrase that case themselves. */
@@ -189,9 +205,8 @@ function PromptPanel({ thread, armed }: {
   // typing over it costs what typing always cost (maintainer 2026-08-11: "default recurring prompt should
   // be …", "make Stop Hook checked by default").
   //
-  // NOT on an archived thread. The server refuses to arm one (router `assertRecurringPromptArmable`), so
-  // seeding a default there would turn merely LOOKING at a shelved thread's panel into an error toast.
-  const seedDefaults = !thread.archived && !armed
+  // NOT on an archived thread — see `seedsDefaults`, which carries the reason and the test.
+  const seedDefaults = seedsDefaults(thread, armed)
   // The panel's own draft. Seeded when this MOUNTS (the popover unmounts its content on close, so that is
   // once per open) rather than tracked live, so a board refresh mid-sentence cannot rewrite what the
   // operator is typing or dictating. From the server row — unless the last dismissal of THIS thread's
@@ -397,8 +412,11 @@ function PromptPanel({ thread, armed }: {
           longest label, so adding a row can never shove the controls sideways (which is precisely the
           hazard the Compaction row's comment below had to be written about).
 
-          `items-center` per row; the grid's own rows are what align the pair, so no nudging. */}
-      <div className="mt-3 grid grid-cols-[auto_auto_1fr] items-center gap-x-2.5 gap-y-2">
+          `items-baseline`, NOT `items-center` — the switch places itself on the text's CAP BAND and needs
+          a shared baseline to do it (see ui/Switch.tsx). Centring the boxes instead read 1.45px low in
+          the mono font while measuring clean in sans, which is the whole reason the correction is
+          computed from `cap` rather than fitted. */}
+      <div className="mt-3 grid grid-cols-[auto_auto_1fr] items-baseline gap-x-2.5 gap-y-2">
         <Switch
           testId="stop-hook"
           label="Stop hook"
