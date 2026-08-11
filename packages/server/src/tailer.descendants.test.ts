@@ -11,7 +11,7 @@
 // states it plainly). This path may add resolutions; it may never invent one.
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createStorage } from "./storage.ts"
@@ -538,5 +538,78 @@ test("subtree: a SETTLED descendant is not stopped again, and an unknown id reso
       "an id no sidecar claims resolves to nothing rather than guessing at a subtree")
   } finally {
     cleanup(f)
+  }
+})
+
+// D3 from the rename audit, closed. Claude Code pins a session's transcript to the bucket for the cwd
+// it was BORN in, so renaming the checkout leaves the transcript — AND the `<sessionId>/subagents/` tree
+// beside it — in a bucket frizz no longer derives. On the real board that is 610 sidecar files, 310 MB.
+// The claim was that the sibling sweep (discover.ts) covers this for free, because `sessionDirOf` builds
+// the sidecar dir from `state.path` and the sweep rebinds `state.path`. That was a CODE READING and the
+// auditor flagged it as the surface most worth running. It could not be settled against the real board
+// (every registered thread with stranded sidecars is archived, so the tailer never tails it), so it is
+// settled here: the whole tree one bucket over, resolved through the drawer's own lookup.
+function strandedFixture() {
+  const root = mkdtempSync(join(tmpdir(), "frizz-stranded-sidecars-"))
+  const born = join(root, "-Users-me-projects-fray") // where the session was born, and still writes
+  const derived = join(root, "-Users-me-projects-frizz") // what frizz derives from the CURRENT path
+  mkdirSync(born, { recursive: true })
+  mkdirSync(derived, { recursive: true })
+  const storage = createStorage(join(root, "ui.db"))
+  const subagents = join(born, SESSION, "subagents")
+  mkdirSync(subagents, { recursive: true })
+
+  writeFileSync(join(born, `${SESSION}.jsonl`), `${assistant([
+    { type: "tool_use", id: "toolu_child", name: "Agent", input: { description: "LEVEL-ONE", subagent_type: "general-purpose", run_in_background: true } },
+  ])}\n`)
+  writeFileSync(join(subagents, "agent-aChild.meta.json"), JSON.stringify({ agentType: "general-purpose", description: "LEVEL-ONE", toolUseId: "toolu_child", spawnDepth: 1 }))
+  // The child dispatches a GRANDCHILD, whose dispatch appears ONLY here — never in the thread's own
+  // transcript. That is the sidecar-resolved path, the one that actually joins `sessionDirOf(state)` to
+  // a file on disk, so it is what proves the rebind carried the whole tree.
+  writeFileSync(join(subagents, "agent-aChild.jsonl"), `${assistant([{ type: "tool_use", id: "toolu_grand", name: "Agent", input: { description: "LEVEL-TWO", run_in_background: true } }])}\n`)
+  writeFileSync(join(subagents, "agent-aGrand.meta.json"), JSON.stringify({ agentType: "general-purpose", description: "LEVEL-TWO", toolUseId: "toolu_grand", parentAgentId: "aChild", spawnDepth: 2 }))
+  writeFileSync(join(subagents, "agent-aGrand.jsonl"), `${assistant([{ type: "text", text: "LEAF-DONE" }])}\n`)
+
+  storage.upsertSession({
+    slug: SLUG, session_id: SESSION, tmux_name: `frizz-${SLUG}`, spawned_at: "2026-07-01T00:00:00.000Z",
+    last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
+    title: SLUG, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
+  })
+  storage.setBackend(SLUG, "claude")
+  storage.setClaudeRuntime(SLUG, "broker")
+
+  const tailer = createTailer({
+    project: { cwdSlug: "x" } as Project,
+    storage, bus: new Bus(), sessionLogDir: derived, // frizz looks HERE; nothing of this session is here
+    onChange: () => {}, paneDead: () => false, capturePane: () => "",
+    now: () => Date.parse("2026-07-01T01:00:00.000Z"), // past the discovery grace window
+  })
+  tailer.tick()
+  tailer.tick()
+  return { tailer, root, derived, subagents }
+}
+
+test("descendants: a sub-agent tree stranded in the PRE-RENAME bucket still resolves through the drawer", () => {
+  const f = strandedFixture()
+  try {
+    // The precondition that makes the assertion mean something: the bucket frizz derives holds nothing.
+    assert.deepEqual(readdirSync(f.derived), [], "the current-path bucket is empty — the pre-fix derivation had nowhere to look")
+
+    // The DESCENDANT is the witness: nothing in this thread's own transcript mentions `toolu_grand`, so
+    // the only way to place it is the sidecar index under `sessionDirOf(state)` — which exists solely in
+    // the pre-rename bucket. `depth` 2 confirms it came from that path and not the tracked-child one.
+    const surfaced = f.tailer.get(SLUG)?.subAgents.find((view) => view.id === "toolu_grand")
+    assert.equal(surfaced?.depth, 2, "the grandchild is placed as a DESCENDANT, via the stranded sidecar index")
+
+    const grand = f.tailer.subAgent(SLUG, "toolu_grand")
+    assert.ok(grand, "the grandchild resolves even though its whole tree is one bucket over")
+    assert.equal(grand.outputFile, join(f.subagents, "agent-aGrand.jsonl"), "resolved into the BORN bucket, not the derived one")
+    assert.equal(grand.taskId, "aGrand", "the sidecar filename supplies the provider's stopTask handle")
+
+    // This path may add resolutions; it may never invent one — the same counterpart the rest of this
+    // file asserts, restated for the widened lookup.
+    assert.equal(f.tailer.subAgent(SLUG, "toolu_nobody"), undefined, "an id no sidecar claims still resolves to nothing")
+  } finally {
+    rmSync(f.root, { recursive: true, force: true })
   }
 })
