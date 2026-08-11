@@ -364,6 +364,7 @@ export function topThreadSlug(): string | null {
 // every surface derives its own view of the thread list per render (there is no selection state to
 // reconcile — the focus machine that needed one is gone).
 export function setBoard(board: BoardSnapshot) {
+  if (!ownedByThisPage(board.projectSlug)) return
   store.board = board
 }
 
@@ -402,6 +403,7 @@ export function resetProjectState() {
 // previous project's in-flight seed lands into the emptied store and paints its threads under the new
 // project's URL. The guard is the only thing standing between that race and the operator.
 export function seedBoard(board: BoardSnapshot) {
+  if (!ownedByThisPage(board.projectSlug)) return
   if (store.board === null) store.board = board
 }
 
