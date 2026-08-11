@@ -175,3 +175,29 @@ test("discoverTranscriptDir: the memo never fabricates a hit for a session that 
   const memo = new Set<string>([old])
   assert.equal(discoverTranscriptDir(bucket(root, "-now"), "absent-id", memo), undefined)
 })
+
+// A session id CAN name a file in two buckets at once. Measured against the real CLI (2026-08-11):
+// moving a transcript out from under a LIVE session makes that session RE-CREATE it at the old path, so
+// the same id then exists twice — a small live file and a large stale one. First-hit-wins made the choice
+// `readdirSync` order, i.e. arbitrary, and losing that coin flip renders a truncated conversation.
+test("discoverTranscriptDir: with the SAME id in two buckets, the most recently written one wins", () => {
+  const root = tmp()
+  const current = bucket(root, "-current")
+  const stale = bucket(root, "-a-stale-copy")
+  const live = bucket(root, "-z-the-live-one")
+  utimesSync(jsonl(stale, "sid", "stale but large\n".repeat(50)), 1000, 1000) // mtime ~1970
+  jsonl(live, "sid", "live\n") // written now
+  // Named so that `readdirSync` order would pick the STALE one first if order decided it.
+  assert.equal(discoverTranscriptDir(current, "sid", new Set()), live)
+})
+
+test("discoverTranscriptDir: a memoized bucket cannot shadow a newer one for the same id", () => {
+  const root = tmp()
+  const current = bucket(root, "-current")
+  const memoized = bucket(root, "-memoized")
+  const newer = bucket(root, "-newer")
+  utimesSync(jsonl(memoized, "sid"), 1000, 1000)
+  jsonl(newer, "sid")
+  // The memo is consulted first and holds a real hit — it must still lose to the newer file.
+  assert.equal(discoverTranscriptDir(current, "sid", new Set([memoized, newer])), newer)
+})

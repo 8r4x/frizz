@@ -141,17 +141,25 @@ export function discoverTranscriptId(logDir: string, sessionId: string, opts: Di
 // unique — so a cross-project entry can only ever be a cheap miss, never a wrong bind.
 const strandedLogDirs = new Set<string>()
 
-// `throwIfNoEntry: false` rather than a try/catch, because on this path the MISS is the common case and
-// the throw is not free: the sweep below probes one exact filename in every sibling bucket, so all but at
-// most one probe is an ENOENT. On the maintainer's machine (301 buckets) constructing those 300 exceptions
-// was HALF the sweep — 2.49ms per miss against 1.19ms without them, over a 0.33ms readdir. Every unbound
-// row pays a full sweep each retry interval, so it is the multiplier that matters, not the single call.
-// The catch stays for everything else a stat can raise (EACCES, ELOOP), which must still degrade to false.
-function nonEmptyFile(path: string): boolean {
+/** The mtime of `path` if it is a non-empty file, else undefined — the sweep's one and only probe.
+ *
+ * `throwIfNoEntry: false` rather than a try/catch, because on this path the MISS is the common case and
+ * the throw is not free: the sweep below probes one exact filename in every sibling bucket, so all but at
+ * most one probe is an ENOENT. On the maintainer's machine (301 buckets) constructing those 300 exceptions
+ * was HALF the sweep — 2.49ms per miss against 1.19ms without them, over a 0.33ms readdir. Every unbound
+ * row pays a full sweep each retry interval, so it is the multiplier that matters, not the single call.
+ * The catch stays for everything else a stat can raise (EACCES, ELOOP), which must still degrade to a miss.
+ *
+ * Size and mtime come from ONE stat deliberately. The size test is the same emptiness rule the tailer's
+ * crash-net uses (a worker that dies before writing a record leaves a permanent 0-byte husk, which must
+ * not count as a hit); the mtime is what breaks a two-bucket tie in favour of the file still being
+ * appended to. Asking for them separately would double the syscall count of the whole sweep. */
+function mtimeOfNonEmpty(path: string): number | undefined {
   try {
-    return (statSync(path, { throwIfNoEntry: false })?.size ?? 0) > 0
+    const st = statSync(path, { throwIfNoEntry: false })
+    return st && st.size > 0 ? st.mtimeMs : undefined
   } catch {
-    return false
+    return undefined
   }
 }
 
@@ -174,22 +182,34 @@ export function discoverTranscriptDir(
   memo: Set<string> = strandedLogDirs,
 ): string | undefined {
   const name = `${sessionId}.jsonl`
-  for (const dir of memo) {
-    if (dir === logDir) continue
-    if (nonEmptyFile(join(dir, name))) return dir
+  // NEWEST WINS, rather than whichever candidate turns up first. One session id CAN legitimately name a
+  // file in two buckets: measured against the real CLI (2026-08-11), moving a transcript out from under a
+  // LIVE session makes that session RE-CREATE it at the old path, so the same id then exists twice — a
+  // small live file and a large stale one. First-hit-wins made the choice `readdirSync` order, i.e.
+  // arbitrary, and losing that coin flip renders a truncated conversation. The live file is by definition
+  // the one still being appended to, so mtime is the right tiebreak. It also removes the memo's ability to
+  // shadow a correct bucket with a stale one, which is how this surfaced: a suite reusing the session id
+  // "sid" across cases passed alone and failed in-file, because an earlier case's bucket was memoized.
+  // A pure fold rather than a closure mutating an outer `let`: TypeScript does not track writes made
+  // inside a callback, so the narrowing after the memo's early return would leave `best` as `never`.
+  type Candidate = { dir: string; mtimeMs: number } | undefined
+  const better = (best: Candidate, dir: string): Candidate => {
+    if (dir === logDir) return best // our own dir already missed; that is why we are here
+    const at = mtimeOfNonEmpty(join(dir, name))
+    if (at === undefined) return best
+    return !best || at > best.mtimeMs ? { dir, mtimeMs: at } : best
   }
+  let best: Candidate
+  for (const dir of memo) best = better(best, dir)
+  if (best) return best.dir // a memo hit answers without paying for the sweep, which is its whole job
   let entries: string[]
   try {
     entries = readdirSync(dirname(logDir), { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name)
   } catch {
     return undefined
   }
-  for (const entry of entries) {
-    const dir = join(dirname(logDir), entry)
-    if (dir === logDir || memo.has(dir)) continue // our own dir is why we are here; the memo already missed
-    if (!nonEmptyFile(join(dir, name))) continue
-    memo.add(dir)
-    return dir
-  }
-  return undefined
+  for (const entry of entries) best = better(best, join(dirname(logDir), entry))
+  if (!best) return undefined
+  memo.add(best.dir)
+  return best.dir
 }
