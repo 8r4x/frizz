@@ -1051,7 +1051,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     // fenceless. A worker that signed off between enqueue and delivery must not then be told how to
     // sign off — which is both useless and, arriving after a ```done, actively confusing.
     if (isSignoffFenceId(item.fenceId)) {
-      if (item.fenceId !== signoffFenceId(tele.lastActivityAt ?? "")) return "superseded"
+      if (item.fenceId !== signoffFenceId(tele.lastAssistantAt ?? "")) return "superseded"
       if (tele.lastFence || tele.pendingQuestion) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
@@ -1588,10 +1588,30 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     for (const row of deps.storage.allSessions()) {
       if (row.state === "archived" || row.archived === 1) continue
       const tele = deps.tailer.get(row.slug)
-      if (!tele || tele.turn !== "idle" || !tele.lastActivityAt) continue
+      if (!tele || tele.turn !== "idle") continue
+      // THE AGENT MUST HAVE SPOKEN LAST, and this is the load-bearing guard rather than a nicety.
+      //
+      // Frizz's own delivery lands in the transcript as a USER record, so it advances `lastActivityAt`
+      // AND `lastUserAt`. Keying on either meant the nudge minted a fresh delivery id for a rest that
+      // had not happened, and reset its own consecutive counter with its own message: measured on a real
+      // stack, 22 deliveries in four minutes to one thread. The cap could not save it, because the thing
+      // being counted was resetting the count.
+      //
+      // `lastAssistantAt > lastUserAt` is the honest question — did the AGENT end the exchange? — and it
+      // is immune to anything frizz says, because frizz only ever speaks as the user. A thread whose last
+      // word is frizz's own nudge is a thread that has not answered it yet.
+      const spokeAt = tele.lastAssistantAt
+      if (!spokeAt) continue
+      if (tele.lastUserAt && Date.parse(tele.lastUserAt) >= Date.parse(spokeAt)) continue
       // ANY fence means the thread already said where it stands — including `awaiting`, which is still
-      // a legitimate sign-off until the registry replaces it. Nothing to teach.
-      if (tele.lastFence || tele.pendingQuestion) continue
+      // a legitimate sign-off until the registry replaces it. Nothing to teach, AND the allowance comes
+      // back: signing off is the only event that proves the nudge worked, and the only one frizz cannot
+      // cause by nudging. (Guarded on a non-zero count in storage, so this is a transition, not a write
+      // on every tick.)
+      if (tele.lastFence || tele.pendingQuestion) {
+        if ((row.signoff_nudges ?? 0) > 0) deps.storage.resetSignoffNudges(row.slug)
+        continue
+      }
       // A native ask is a question by another route: the thread is frozen on a modal the human has to
       // answer, and telling it to write a ```question fence is telling it to do what it already did.
       if (tele.pendingAsk || tele.permPrompt) continue
@@ -1603,13 +1623,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // and reads as frizz talking over itself. When a Goal is armed at rest, `restPromptMessage`
       // carries the sign-off protocol; this source covers the threads that have no Goal at all.
       if (armedRest(row)) continue
-      // The consecutive cap, anchored to the human's last word.
-      const anchor = tele.lastUserAt ?? null
-      if ((row.signoff_nudge_anchor ?? null) === anchor && (row.signoff_nudges ?? 0) >= SIGNOFF_NUDGE_MAX) continue
-      const fenceId = signoffFenceId(tele.lastActivityAt)
+      // THE CONSECUTIVE CAP. It counts fenceless rests and is cleared ONLY by a fence (above) — never by
+      // a user record, because frizz's own delivery is one, and anchoring on that let the nudge reset its
+      // own counter with its own message.
+      if ((row.signoff_nudges ?? 0) >= SIGNOFF_NUDGE_MAX) continue
+      const fenceId = signoffFenceId(spokeAt)
       const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
-      // Bound to the REST instant, so one nudge per rest falls out of delivery-id uniqueness rather
-      // than needing a counter of its own — the same trick the stop hook plays.
+      // Bound to the AGENT'S OWN last word, so one nudge per rest falls out of delivery-id uniqueness.
+      // Deliberately NOT `lastActivityAt`, which frizz's own delivery advances — see the guard above.
       if (outbox.get(deliveryId)) continue
       const item = outbox.enqueue({
         id: deliveryId,
@@ -1629,8 +1650,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // increment by comparing that anchor against the row's own.
   function settleSignoffNudge(item: WakeDelivery): void {
     if (!isSignoffFenceId(item.fenceId)) return
-    const tele = deps.tailer.get(item.slug)
-    deps.storage.countSignoffNudge(item.slug, tele?.lastUserAt ?? null)
+    // Anchored on the REST this nudge was for (the agent's own last word, which is the fence id), so a
+    // retry of the same delivery cannot count twice while a genuinely new fenceless rest does.
+    deps.storage.countSignoffNudge(item.slug, item.fenceId)
   }
 
   // ---- SOURCE 8: THE REGISTERED WATCHERS (`shell` today) ---------------------------------------

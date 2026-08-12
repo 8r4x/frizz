@@ -102,8 +102,8 @@ export interface SessionRow {
   // prompt). It is stored beside the triggers rather than derived because it is an operator PREFERENCE
   // about this thread, and the scheduler must be able to read it without the panel being open.
   recurring_pause_on_questions?: number
-  // The built-in sign-off nudge's consecutive counter and the `lastUserAt` it is anchored to. See the
-  // ALTER list for why it takes two columns.
+  // The built-in sign-off nudge's consecutive counter, and the last delivery id it counted (diagnosis
+  // only). See the ALTER list for what clears the count.
   signoff_nudges?: number
   signoff_nudge_anchor?: string | null
   // The ON SCHEDULE trigger's cadence. Kept even while that trigger is off, so switching it back on
@@ -542,10 +542,15 @@ export interface Storage {
   // written after the worker dropped the row cannot resurrect it.
   setThreadWatchCursor(id: string, cursor: string): boolean
   // ---- THE BUILT-IN SIGN-OFF NUDGE ----------------------------------------------------------------
-  // Count one delivered nudge against this thread, anchored to the human's last word. Passing a
-  // DIFFERENT anchor than the row holds resets the count to 1 — that is how "consecutive" is expressed
-  // without a separate clearing pass: the human speaking is what re-opens the allowance.
+  // Count one delivered nudge against this thread. It only ever INCREMENTS — the count is cleared by
+  // `resetSignoffNudges` when the thread signs off, and by nothing else. It used to reset whenever a
+  // supplied anchor changed, which was wrong twice over: anchored on the human's last word, frizz's own
+  // delivery (a user record) reset it; anchored on the rest, every new rest reset it. Either way the cap
+  // never bit. `anchor` is kept as the last-nudged delivery id, for diagnosis only.
   countSignoffNudge(slug: string, anchor: string | null): void
+  // Give the allowance back. Called when the thread SIGNS OFF — the only event that proves the nudge
+  // worked, and the only one frizz cannot cause by nudging.
+  resetSignoffNudges(slug: string): void
   // Stamp a delivered ON REST prompt, guarded on the generation so one settling after an edit cannot
   // write onto words it no longer describes.
   stampRecurringRestFired(slug: string, armedAt: string, firedAt: string): boolean
@@ -903,9 +908,9 @@ export function createStorage(dbPath: string): Storage {
     // never been shown the option.
     "recurring_pause_on_questions INTEGER NOT NULL DEFAULT 0",
     // THE BUILT-IN SIGN-OFF NUDGE (scheduler SOURCE 9, 2026-08-12). How many times in a row frizz has
-    // told this thread how to sign off without a fence appearing, and the `lastUserAt` that counting
-    // started from. Two columns because the cap is CONSECUTIVE: an agent that keeps resting bare must
-    // not be nudged forever, and any new word from the human re-opens the allowance.
+    // told this thread how to sign off without a fence appearing. Cleared ONLY when the thread signs
+    // off — never by a user record, because frizz's own delivery is one. The second column holds the
+    // last-nudged delivery id, for diagnosis.
     "signoff_nudges INTEGER NOT NULL DEFAULT 0",
     "signoff_nudge_anchor TEXT",
     // Title provenance for the CURRENT text (2026-08-07): 1 = the worker's own title signal wrote it,
@@ -1506,10 +1511,12 @@ export function createStorage(dbPath: string): Storage {
   // ONE statement decides reset-vs-increment, by reading the row's own anchor: SQLite evaluates the SET
   // list against the pre-update values, so a changed anchor restarts the count at 1 in the same write.
   const countNudgeStmt = db.prepare(`
-    UPDATE session SET
-      signoff_nudges = CASE WHEN signoff_nudge_anchor IS ? THEN signoff_nudges + 1 ELSE 1 END,
-      signoff_nudge_anchor = ?
+    UPDATE session SET signoff_nudges = signoff_nudges + 1, signoff_nudge_anchor = ?
     WHERE slug = ?
+  `)
+  const resetNudgesStmt = db.prepare(`
+    UPDATE session SET signoff_nudges = 0, signoff_nudge_anchor = NULL
+    WHERE slug = ? AND signoff_nudges > 0
   `)
   const armWatchStmt = db.prepare(`
     INSERT INTO thread_watch (id, thread_slug, kind, target, state, created_at, settled_at, cursor)
@@ -2169,7 +2176,8 @@ export function createStorage(dbPath: string): Storage {
       recurringStmt.run(...recurringArgs(write), slug, sessionId, generation).changes === 1,
     setRecurringPromptBySlug: (slug, write) =>
       recurringBySlugStmt.run(...recurringArgs(write), slug).changes === 1,
-    countSignoffNudge: (slug, anchor) => void countNudgeStmt.run(anchor, anchor, slug),
+    countSignoffNudge: (slug, anchor) => void countNudgeStmt.run(anchor, slug),
+    resetSignoffNudges: (slug) => void resetNudgesStmt.run(slug),
     armThreadWatch: (watch) => void armWatchStmt.run(watch),
     listThreadWatches: (slug, opts) =>
       (opts?.armedOnly ? armedWatchesBySlugStmt : watchesBySlugStmt).all(slug),

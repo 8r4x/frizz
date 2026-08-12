@@ -30,6 +30,9 @@ function nudger(tele: Partial<SessionTelemetry>, opts: { setting?: string } = {}
     tailer: {
       get: () => ({
         turn: "idle", lastActivityAt: "2026-08-12T00:00:00.000Z",
+        // The AGENT spoke last, which is the shape of a real fenceless rest — and the one thing frizz's
+        // own delivery cannot fake, since frizz only ever speaks as the user.
+        lastAssistantAt: "2026-08-12T00:00:00.000Z",
         subAgents: [], bgShells: [], pendingQuestion: false, permPrompt: false,
         ...tele,
       }),
@@ -95,32 +98,57 @@ test("one nudge per rest, however many ticks run over it", async () => {
   } finally { h.close() }
 })
 
-// THE CONSECUTIVE CAP. Without it, an agent that keeps resting bare is told forever — a nag loop frizz
-// itself generates. After the cap it gives up and the item sits in the queue as a plain bare rest,
-// which is exactly the behaviour that existed before this source.
-test("the cap stops a nag loop, and the human's next word re-opens the allowance", async () => {
-  let restedAt = "2026-08-12T00:00:00.000Z"
-  let lastUserAt: string | undefined = "2026-08-12T00:00:00.000Z"
+// THE LOOP THIS ALMOST SHIPPED WITH. Frizz's own delivery lands as a USER record, so it advances both
+// `lastActivityAt` and `lastUserAt`. The first design keyed the delivery id on the former and the cap's
+// anchor on the latter, which meant the nudge minted a fresh id for a rest that never happened and reset
+// its own counter with its own message: 22 deliveries to one thread in four minutes, measured on a real
+// stack (the unit tests all passed, because they drove those fields by hand).
+//
+// The fix is to ask whether the AGENT spoke last, which nothing frizz says can affect.
+test("a thread whose last word is frizz's own nudge is not nudged again", async () => {
   const h = nudger({
-    get lastActivityAt() { return restedAt },
-    get lastUserAt() { return lastUserAt },
+    lastAssistantAt: "2026-08-12T00:00:00.000Z",
+    lastUserAt: "2026-08-12T00:00:30.000Z", // the delivery landed AFTER the agent's last word
+    lastActivityAt: "2026-08-12T00:00:30.000Z",
+  })
+  try {
+    await h.s.tick()
+    assert.deepEqual(h.delivered, [], "the agent has not answered yet — there is nothing new to nudge")
+  } finally { h.close() }
+})
+
+test("the cap stops a nag loop, and only SIGNING OFF gives the allowance back", async () => {
+  let spokeAt = "2026-08-12T00:01:00.000Z"
+  let fence: SessionTelemetry["lastFence"]
+  const h = nudger({
+    lastUserAt: "2026-08-12T00:00:00.000Z",
+    get lastAssistantAt() { return spokeAt },
+    get lastActivityAt() { return spokeAt },
+    get lastFence() { return fence },
   } as Partial<SessionTelemetry>)
   try {
-    // Three consecutive bare rests; only the first two are nudged.
+    // Three consecutive fenceless rests by the AGENT; only the first two are nudged.
     await h.s.tick()
-    restedAt = "2026-08-12T00:01:00.000Z"
+    spokeAt = "2026-08-12T00:02:00.000Z"
     await h.s.tick()
-    restedAt = "2026-08-12T00:02:00.000Z"
+    spokeAt = "2026-08-12T00:03:00.000Z"
     await h.s.tick()
-    assert.equal(h.delivered.length, 2, `capped at 2 consecutive`)
+    assert.equal(h.delivered.length, 2, "capped at 2 consecutive")
     assert.equal(h.storage.getSession(h.slug)?.signoff_nudges, 2)
 
-    // The human speaks: a new task, so the count was about the old one.
-    lastUserAt = "2026-08-12T00:03:00.000Z"
-    restedAt = "2026-08-12T00:04:00.000Z"
+    // A user record does NOT restore it — that is exactly what frizz's own delivery is.
+    spokeAt = "2026-08-12T00:04:00.000Z"
     await h.s.tick()
-    assert.equal(h.delivered.length, 3, "a new word from the human re-opens it")
-    assert.equal(h.storage.getSession(h.slug)?.signoff_nudges, 1, "and restarts the count")
+    assert.equal(h.delivered.length, 2, "still capped")
+
+    // Signing off does. It is the only event that proves the nudge worked.
+    fence = { kind: "done", body: "", hints: [] }
+    await h.s.tick()
+    assert.equal(h.storage.getSession(h.slug)?.signoff_nudges, 0, "the allowance is back")
+    fence = undefined
+    spokeAt = "2026-08-12T00:05:00.000Z"
+    await h.s.tick()
+    assert.equal(h.delivered.length, 3, "and the next fenceless rest is nudged again")
   } finally { h.close() }
 })
 
