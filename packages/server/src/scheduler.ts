@@ -961,6 +961,36 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   function forgetRegistration(key: string): void {
     if (registrations.delete(key)) saveRegistrations()
   }
+  // ---- the pr-watch INTRODUCTION ledger ------------------------------------------------------------
+  // Which (thread, PR) pairs have already had the PR's pre-existing activity replayed to them. It is a
+  // ledger of its own, and it has to be, because every other piece of watcher state is keyed by FENCE
+  // GENERATION and is therefore wiped between parks: `registrations` is keyed on the fence instant, and
+  // runTick's sweep forgets it outright the moment the thread stops being idle. So "have I already told
+  // this worker what was on this PR?" cannot be answered from any of it.
+  //
+  // Getting that wrong is not a cosmetic bug, it is an infinite loop: replay the backlog on every park
+  // with no durable memory of having done it, and the wake makes the worker turn, the turn makes it
+  // re-park, and the re-park replays the same backlog again, forever. This ledger is the one bit that
+  // makes "once per thread per PR" true across re-parks, restarts and archival.
+  const introduced = new Set<string>(loadIntroduced())
+  function loadIntroduced(): string[] {
+    const raw = deps.storage.getSetting("waker.prwatch.introduced.v1")
+    return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string").slice(-INTRODUCED_CAP) : []
+  }
+  // Same NUL-delimiting rationale as firedKey: neither a slug nor a normalized owner/repo#N can contain
+  // one, so no pair can forge another's key.
+  const introducedKey = (slug: string, ref: PrRef) => `${slug} ${refKey(ref)}`
+  function markIntroduced(slug: string, ref: PrRef): void {
+    const key = introducedKey(slug, ref)
+    if (introduced.has(key)) return
+    introduced.add(key)
+    while (introduced.size > INTRODUCED_CAP) {
+      const oldest = introduced.keys().next().value
+      if (oldest === undefined) break
+      introduced.delete(oldest)
+    }
+    deps.storage.setSetting("waker.prwatch.introduced.v1", [...introduced])
+  }
   // NUL-delimited so no slug/fenceId content can forge a different pair's key (slugs match a
   // space-free regex and actionable hint values carry no NUL, so this is collision-proof).
   const firedKey = (slug: string, fenceId: string) => `${slug}\u0000${fenceId}`
@@ -1631,12 +1661,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (tele.pendingAsk || tele.permPrompt) continue
       // The sentinel still ends the arrangement for sessions that predate the fence (see `saidDone`).
       if (tele.lastAssistantAllDone) continue
-      // IT YIELDS TO THE GOAL'S STOP HOOK, which is the whole reason the instructions ride a trailer
-      // rather than a message of their own. Both fire on the same event, so without this a bare rest
-      // gets TWO deliveries — "keep going" and "you did not sign off" — for one stop, which is noise
-      // and reads as frizz talking over itself. When a Goal is armed at rest, `restPromptMessage`
-      // carries the sign-off protocol; this source covers the threads that have no Goal at all.
-      if (armedRest(row)) continue
+      // IT DOES NOT YIELD TO THE GOAL, and that is a deliberate reversal (maintainer 2026-08-12: "we
+      // should keep it separate from goal… It should just be enabled all the time"). The reminder used
+      // to ride the Goal's at-rest trailer so a rest produced one delivery instead of two — but that
+      // made the protocol a thing a thread only learned if an operator had armed a Goal, and put a copy
+      // of it in the trailer, which is its own kind of repetition. It is frizz's own hook now: identical
+      // on every thread, whatever the operator has configured. The second delivery costs one transcript
+      // record, collapsed to a hairline by the chat.
       // THE CONSECUTIVE CAP. It counts fenceless rests and is cleared ONLY by a fence (above) — never by
       // a user record, because frizz's own delivery is one, and anchoring on that let the nudge reset its
       // own counter with its own message.

@@ -204,6 +204,10 @@ function scheduler(
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
     title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   } as SessionRow)
+  // Frizz's built-in sign-off reminder (SOURCE 9) now fires on EVERY fenceless rest, independently of
+  // the Goal — so it would add a second delivery to every count in this file. Silenced so these stay
+  // about the Goal; the reminder has signoff-nudge.test.ts.
+  storage.setSetting("signoffNudge", "off")
   storage.setRecurringPromptBySlug(slug, { prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false, pauseOnQuestions: opts.pauseOnQuestions === true, intervalMs: null, armedAt: "2026-08-02T00:00:00.000Z" })
   if (opts.lastFiredAt) storage.stampRecurringRestFired(slug, storage.getSession(slug)!.recurring_armed_at!, opts.lastFiredAt)
   const delivered: string[] = []

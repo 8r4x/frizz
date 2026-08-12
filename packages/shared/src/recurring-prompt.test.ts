@@ -39,9 +39,9 @@ for (const [label, message] of [
     assert.ok(message.startsWith("keep fixing the failing tests"), "the operator's text leads, verbatim and trimmed")
     assert.ok(message.includes("```done"), "the trailer names the exact sign-off the scheduler reads")
     assert.match(message, /ONLY when the work is genuinely finished/, "and warns, in the same breath as the offer")
-    // The at-rest trailer also has to say the handoff must stand alone — the human has seen nothing
-    // since their own last message, and everything since came from frizz.
-    if (message.includes("come to rest")) assert.match(message, /read COLD/)
+    // The trailer does NOT carry the sign-off protocol: frizz's reminder is its own delivery now
+    // (scheduler SOURCE 9), and a copy here would be exactly the repetition it was separated to avoid.
+    assert.doesNotMatch(message, /```question/)
     // The RETIRED sentinel must not appear: it is still HONOURED for sessions that predate the change
     // (scheduler `saidDone`), and advertising it would teach it to workers that have no need of it.
     assert.equal(message.includes(ALLDONE_SENTINEL), false, "the legacy sentinel is honoured, never advertised")
@@ -49,15 +49,10 @@ for (const [label, message] of [
     // De-emphasized: one parenthetical line, not a section. A trailer that grows starts competing with
     // the operator's actual instruction for the worker's attention.
     //
-    // The ceiling moved from 240 on 2026-08-12, when the AT-REST trailer took on the sign-off protocol.
-    // That is a deliberate purchase, not drift: the alternative is a SECOND delivery per rest (frizz's
-    // built-in nudge, scheduler SOURCE 9) telling the worker how to sign off while the Goal is telling
-    // it to keep going — two messages for one stop, which reads as frizz talking over itself. The
-    // schedule trailer does NOT carry it and stays under the old ceiling, which is what keeps this an
-    // exception rather than a new normal.
+    // The ceiling briefly moved to 400 when this trailer carried the sign-off protocol; it is back at
+    // 240 now that frizz's reminder is its own delivery.
     const trailer = message.slice(message.indexOf("("))
-    const ceiling = trailer.includes("come to rest") ? 400 : 240
-    assert.ok(trailer.length < ceiling, `trailer should stay a footnote, got ${trailer.length} chars`)
+    assert.ok(trailer.length < 240, `trailer should stay a footnote, got ${trailer.length} chars`)
   })
 }
 

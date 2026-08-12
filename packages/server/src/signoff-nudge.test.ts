@@ -57,11 +57,17 @@ test("a rest with no fence is told how to sign off, and the text names all three
     // SELF-CONTAINEDNESS is the point the first version missed: the human has seen nothing since their
     // own last message, and everything in between came from frizz. An agent that does not know that
     // writes a handoff about the last thing it touched.
-    assert.match(h.delivered[0], /read cold/i)
-    assert.match(h.delivered[0], /came from frizz/)
+    assert.match(h.delivered[0], /readable cold/i)
+    assert.match(h.delivered[0], /came from\s+frizz/)
+    // THE HEADLINE INSTRUCTION: a thread whose handoff already stands alone should answer with the
+    // fence and nothing else. Without this the agent restates its whole summary under the reminder and
+    // the human reads it twice (maintainer 2026-08-12).
+    assert.match(h.delivered[0], /DO NOT REPEAT YOURSELF/)
+    assert.match(h.delivered[0], /reply with the\s+fence ALONE/)
     // The 1-3-sentences shape belongs to a `done` BODY and nowhere else — read as general guidance it
     // made an agent omit most of what had happened (maintainer 2026-08-12, with the screenshot).
-    assert.match(h.delivered[0], /brevity is a RULE is a[\s\S]{0,20}done/)
+    // The 1-3-sentence shape belongs to the `done` entry and nowhere else.
+    assert.match(h.delivered[0], /done[\s\S]{0,220}1-3 sentences/)
     assert.doesNotMatch(h.delivered[0], /^Keep it SHORT/m)
   } finally { h.close() }
 })

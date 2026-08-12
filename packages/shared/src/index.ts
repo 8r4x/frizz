@@ -501,16 +501,6 @@ export function saysAllDone(text: string | undefined): boolean {
 // stays parenthetical — the operator's own words are the message; this is a footnote about the
 // machinery. Expanding it is how a worker starts treating "am I allowed to stop?" as the question,
 // instead of the work it was actually sent.
-// THE SIGN-OFF PROTOCOL, riding the at-rest delivery. It is here rather than in a message of its own
-// because both fire on the same event: a thread that gets its Goal back at a rest would otherwise get a
-// second delivery telling it to sign off, which is frizz talking over itself. A thread with NO Goal
-// gets the same content standalone (scheduler SOURCE 9).
-//
-// One line, because it competes with the operator's own words for attention.
-const SIGNOFF_NOTE =
-  "Sign off with a fence — ```question if you need the human, ```done if truly finished — and write it" +
-  " to be read COLD: they have seen nothing since their own last message."
-
 const OPT_OUT_NOTE =
   "To stop these, sign off with a ```done fence — but ONLY when the work is genuinely finished:" +
   " it files this thread away, and nothing but new work from the human reopens it."
@@ -518,7 +508,7 @@ const OPT_OUT_NOTE =
 /** What frizz delivers when the ON REST trigger fires: the operator's words VERBATIM, then the trailer.
  * Kept beside the parser so the wording sent and the wording recognized can never drift apart. */
 export function restPromptMessage(prompt: string): string {
-  return `${prompt.trim()}\n\n(Goal — sent each time you come to rest. ${OPT_OUT_NOTE} ${SIGNOFF_NOTE})`
+  return `${prompt.trim()}\n\n(Goal — sent each time you come to rest. ${OPT_OUT_NOTE})`
 }
 
 /** What frizz delivers when the POST-COMPACTION trigger fires (scheduler SOURCE 7).
@@ -675,26 +665,22 @@ export function watchWakeMessage(kind: ThreadWatchKind, target: string, detail: 
 export const SIGNOFF_NUDGE_MARKER = "**This message is from frizz, not from the human.**"
 
 export const SIGNOFF_NUDGE_MESSAGE = [
-  `${SIGNOFF_NUDGE_MARKER} Nothing about your task has changed.`,
+  `${SIGNOFF_NUDGE_MARKER} Nothing about your task has changed, and this is not a request to do more work.`,
   "",
-  "You came to rest without signing off, so this thread is an item nobody can triage. Sign off with a",
-  "fence at the END of your final message:",
+  "You rested without a fence, so this thread cannot be triaged. Add one at the END of your next message:",
   "",
-  "- `` ```question `` — you need the human. One question per fence, lettered options, one marked recommended.",
-  "- `` ```done `` — the work is genuinely FINISHED. It is a DISMISSAL: the card is filed away and nobody",
-  "  looks again, so if anything is still owed, it is not done.",
-  "- Blocked on a PR, CI, or your own background shell? Register it with `mcp__frizz__watch` and rest —",
-  "  frizz brings you back. No `watch` tool? Your session's MCP server was pinned before it shipped and",
-  "  can never see it — don't hunt for it, park on an `` ```awaiting `` fence with a `pr-watch:` line.",
+  "- `` ```question `` — you need the human. One question per fence, lettered options, one recommended.",
+  "- `` ```done `` — genuinely FINISHED. A DISMISSAL: the card is filed away and nobody looks again, so",
+  "  if anything is still owed, it is not done. Body: 1-3 sentences, then bullets, each opening with a",
+  "  **bolded verb phrase**.",
+  "- Blocked on a PR, CI, or your own background shell? Register it with `mcp__frizz__watch` and rest.",
   "",
-  "**Write the message to be read cold.** The human reads it in a queue, hours later, with none of your",
-  "context, and they have NOT seen anything since their own last message — every prompt you have had",
-  "since then came from frizz. So summarise everything that matters from that whole stretch: what you",
-  "did, what you found, what changed, and what you would do next. Do not assume they watched.",
+  "**DO NOT REPEAT YOURSELF.** If the message you just wrote already stands on its own, reply with the",
+  "fence ALONE — the human reads both together, so restating it costs them the second read for nothing.",
   "",
-  "Be concise, but do not omit. Use whatever markup makes it readable — headings, bullets, tables, code.",
-  "The one place brevity is a RULE is a `` ```done `` body: there, 1-3 sentences then bullets, each",
-  "starting with a **bolded verb phrase**.",
+  "Only if it does NOT stand alone, fix that first, briefly. It has to be readable cold: the human has",
+  "seen nothing since their own last message — the Goal, this reminder, a watcher wake all came from",
+  "frizz — so anything you assumed they had followed, they have not.",
 ].join("\n")
 
 export function timerPromptMessage(prompt: string, fireAt: string): string {
@@ -1870,9 +1856,28 @@ function wakeReviewTail(steer: GithubWakeSteer): string {
   return reads.length ? `\n\n${WAKE_REVIEW_LEAD}\n${reads.join("\n")}` : ""
 }
 
-export function formatGithubWakeSteer({ ref, items, omitted }: GithubWakeSteer): string {
+// ---- the BACKLOG tail -----------------------------------------------------------------------------
+// The one wake that names activity which is NOT new: the first time a thread parks on a given PR, the
+// watcher hands over whatever was already sitting there (maintainer 2026-08-12, choosing this over a
+// card that merely mentions it). A worker had parked on colinhacks/zod#6318 saying "waiting on review"
+// with two unread reviews already on it, and the old baseline recorded them as handled — so the watcher
+// slept on the very thing it was watching for.
+//
+// It rides as a derived TAIL on the ordinary burst shape rather than a third header, for the reason the
+// parser documents below: an unrecognized line under the header is DROPPED, so every already-open tab
+// renders this card exactly as before. A new header shape would have made them all fall back to prose.
+//
+// `backlog` is deliberately NOT a GithubWakeSteer field — it is an argument. Putting it in the schema
+// would break the parse round-trip (the parser cannot recover it from the text), and that round-trip is
+// the contract that keeps formatter and parser from drifting.
+const WAKE_BACKLOG_TAIL =
+  "These were already on the PR when you parked, so you may have handled some. Check what is still" +
+  " unaddressed, deal with it, and re-park — this is the only time frizz replays a PR's existing" +
+  " activity to you."
+
+export function formatGithubWakeSteer({ ref, items, omitted }: GithubWakeSteer, opts: { backlog?: boolean } = {}): string {
   const icon = items.some((i) => !i.bot) ? "👤" : "🤖"
-  const reviewTail = wakeReviewTail({ ref, items, omitted })
+  const reviewTail = wakeReviewTail({ ref, items, omitted }) + (opts.backlog ? `\n\n${WAKE_BACKLOG_TAIL}` : "")
   if (items.length === 1 && omitted === 0) {
     const item = items[0]
     const url = item.url ? `: ${item.url}` : "."
