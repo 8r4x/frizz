@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { scrollToQueueCard } from "./store.ts"
+import { scrollToQueueCard, store } from "./store.ts"
+import { takeScrollAfterUnlock } from "./lib/pageScrollLock.ts"
 
 test("sidebar queue navigation lands immediately at the card reading line", () => {
   const globals = globalThis as typeof globalThis & {
@@ -90,6 +91,51 @@ test("sidebar queue navigation uses an absolute reading-line target after a narr
     assert.deepEqual(scrolls, [{ top: 1249, left: 0, behavior: "auto" }])
     assert.equal(top, 12)
   } finally {
+    globals.window = previous.window
+    globals.document = previous.document
+    globals.CSS = previous.CSS
+  }
+})
+
+// Clicking a queued row while a drawer is open must do BOTH halves (maintainer 2026-08-11: "clicking a
+// queued item in the sidebar should both DISMISS the current drawer and autoscroll"). Neither half can
+// be done here in the obvious way: the drawer keeps its stack slot for the ~210ms slide-out, so the page
+// is still scroll-LOCKED — `window.scrollTo` would be clamped to a no-op, and App's unlock would then
+// restore the pre-click offset over the top of it anyway. So the landing is PARKED for the unlock, and
+// it is measured off the lock's own offset rather than a window.scrollY the lock has pinned at 0.
+test("a queued row clicked under an open drawer dismisses every layer and parks its landing for the unlock", () => {
+  const globals = globalThis as typeof globalThis & { window?: Window; document?: Document; CSS?: typeof CSS }
+  const previous = { window: globals.window, document: globals.document, CSS: globals.CSS }
+  const drawersBefore = [...store.drawers]
+
+  try {
+    const root = { getBoundingClientRect: () => ({ top: 400 }), setAttribute: () => {}, removeAttribute: () => {} }
+    globals.CSS = { escape: (value: string) => value } as typeof CSS
+    globals.document = {
+      // The page as App leaves it while an overlay is up: pinned at the reader's 1740px offset.
+      body: { style: { position: "fixed", top: "-1740px" } },
+      querySelector: () => ({ getBoundingClientRect: () => ({ top: 400 }), querySelector: () => root, setAttribute: () => {}, removeAttribute: () => {} }),
+    } as unknown as Document
+    globals.window = {
+      scrollY: 0, // what a pinned body reports, whatever the reader's real offset
+      scrollTo: () => assert.fail("a locked page cannot scroll — the landing belongs to the unlock"),
+      clearTimeout: () => {},
+      setTimeout: () => 0,
+    } as unknown as Window
+
+    store.drawers = [
+      { id: 1, kind: "thread", slug: "some-thread" },
+      { id: 2, kind: "subagent", slug: "some-thread", subId: "toolu_1" },
+    ]
+    takeScrollAfterUnlock() // start clean
+
+    assert.equal(scrollToQueueCard("queued-thread"), true)
+    assert.deepEqual(store.drawers, [], "every open layer goes, not just the topmost")
+    // 1740 (the lock's offset) + 400 (the card's box) - 12 (the reading line). Off window.scrollY it
+    // would have been 388 — short by exactly how far the reader had scrolled.
+    assert.equal(takeScrollAfterUnlock(), 2128)
+  } finally {
+    store.drawers = drawersBefore
     globals.window = previous.window
     globals.document = previous.document
     globals.CSS = previous.CSS

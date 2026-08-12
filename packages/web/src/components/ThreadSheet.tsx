@@ -51,12 +51,20 @@ export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id
   const openerRef = useRef<HTMLElement | null>(
     typeof document !== "undefined" && document.activeElement instanceof HTMLElement ? document.activeElement : null,
   )
-  useEffect(() => () => {
+  const restoreOpener = useCallback(() => {
     const opener = openerRef.current
-    window.setTimeout(() => {
-      if (opener?.isConnected) opener.focus({ preventScroll: true })
-    }, 0)
+    // ONLY when the sheet took focus WITH it. Both restore paths fire ~0ms after the layer unmounts,
+    // which is the far end of a ~210ms slide-out — and the click that STARTED that slide-out very often
+    // put focus somewhere deliberate on the way past (the sidebar's prompt box is the case that
+    // reported it: you click in, you type, and a fifth of a second later the sheet you dismissed yanks
+    // the caret back to the row you opened it from). Focus resting on <body> means nothing else claimed
+    // it — the sheet really did leave a hole, and restoring the opener fills it. Anything else is the
+    // reader's own choice and outranks us.
+    const active = document.activeElement
+    if (active && active !== document.body) return
+    if (opener?.isConnected) opener.focus({ preventScroll: true })
   }, [])
+  useEffect(() => () => { window.setTimeout(restoreOpener, 0) }, [restoreOpener])
 
   // Opening a thread IS reading it: record seen/read telemetry without acknowledging its lifecycle
   // handoff (resting queue cards stay present until follow-up, Snooze, or Archive). Re-fire only when
@@ -223,8 +231,7 @@ export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id
           onFocusOutside={(event) => event.preventDefault()}
           onCloseAutoFocus={(event) => {
             event.preventDefault()
-            const opener = openerRef.current
-            if (opener?.isConnected) opener.focus({ preventScroll: true })
+            restoreOpener()
           }}
           onOpenAutoFocus={(event) => {
             event.preventDefault()

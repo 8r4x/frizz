@@ -4,6 +4,7 @@ import { ChevronsUpDown, Hourglass, Inbox } from "lucide-react"
 import type { ThreadView, BoardSnapshot, TranscriptMessage, TranscriptToolCall } from "@frizz/shared"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { queueCardTargetY, showToast } from "../store.ts"
+import { pageScrollY } from "../lib/pageScrollLock.ts"
 import { rpc } from "../api/rpc.ts"
 import { useBoard, asThreads, useTranscript } from "../hooks.ts"
 import { orderQueue, queued, displayTitle, lastActiveLabelAt } from "../groups.ts"
@@ -421,7 +422,10 @@ export function TodosView() {
     suspendNativeAnchoring()
     const land = () => {
       const targetY = queueCardTargetY(pin.slug)
-      if (targetY !== null && Math.abs(window.scrollY - targetY) > 0.5) window.scrollTo({ top: targetY, left: 0, behavior: "auto" })
+      // pageScrollY(), to stay on the same axis queueCardTargetY measures in. Identical to
+      // window.scrollY on the unlocked page this dance actually runs on; it just can't disagree with
+      // the target if an overlay ever holds the lock through a card's exit.
+      if (targetY !== null && Math.abs(pageScrollY() - targetY) > 0.5) window.scrollTo({ top: targetY, left: 0, behavior: "auto" })
     }
     land()
     requestAnimationFrame(() => {

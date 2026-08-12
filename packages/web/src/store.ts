@@ -2,6 +2,7 @@ import { proxy } from "valtio"
 import type { BoardSnapshot, ThreadView, BoardDelta } from "@frizz/shared"
 import { applyBoardDelta } from "@frizz/shared"
 import { closeDrawerAnimated, focusDrawer } from "./lib/overlays.ts"
+import { isPageScrollLocked, pageScrollY, requestScrollAfterUnlock } from "./lib/pageScrollLock.ts"
 import { resolveThreadRoute } from "./lib/threadRouteState.ts"
 import { standaloneThreadHref } from "./lib/standaloneThreadRoute.ts"
 import { ownedByThisPage } from "./lib/projectOwnership.ts"
@@ -26,12 +27,15 @@ function queueCardRoot(slug: string): HTMLElement | null {
 // narrow-layout fixed chrome the cards' sticky headers also dodge (max-[800px]:top-10 → 40px), so a
 // landed card's header sits at its natural position instead of being pushed down into the body.
 // null when the card isn't mounted.
+// `pageScrollY()`, not `window.scrollY`: with a drawer open the page is scroll-LOCKED and window.scrollY
+// reads 0 while the body sits shifted at the real offset, which would put every landing short by
+// however far the reader had scrolled before opening the drawer.
 export function queueCardTargetY(slug: string): number | null {
   const root = queueCardRoot(slug)
   if (!root) return null
   // matchMedia guarded: unit tests stub a minimal window without it (store.queue-navigation.test.ts).
   const navOffset = typeof window.matchMedia === "function" && window.matchMedia("(max-width: 800px)").matches ? 40 : 0
-  return Math.max(0, window.scrollY + root.getBoundingClientRect().top - QUEUE_CARD_VIEWPORT_TOP - navOffset)
+  return Math.max(0, pageScrollY() + root.getBoundingClientRect().top - QUEUE_CARD_VIEWPORT_TOP - navOffset)
 }
 
 export type ConnectionState = "connecting" | "open" | "closed"
@@ -84,7 +88,8 @@ export const store = proxy({
   // Session-scoped UI state (deliberately not persisted).
   sidebarCollapsed: { active: false, held: true, inactive: true, plans: true } as Record<"active" | "held" | "inactive" | "plans", boolean>,
   // The SIDE-DRAWER STACK — arbitrary depth. `thread` layers are full thread views (the Open-thread
-  // sheet); `doc` layers are the frizz-document markdown; `subagent` and `shell` layers are read-only
+  // sheet); `doc` layers are the frizz-document markdown; `markdown` layers are the built-in reader for
+  // a `.md` FILE on disk, opened from any link to one; `subagent` and `shell` layers are read-only
   // operation drill-ins that overlay a thread. A drill-in within one thread's family
   // (its doc, its sub-agents) stacks OVER the previous layer (higher z, slight inset); any lateral open
   // REPLACES the layers it doesn't stack over (one drawer at a time — see openOrRaiseDrawer). Esc /
@@ -93,12 +98,12 @@ export const store = proxy({
   // same entry so App can render its sheet without a board lookup after the operation finishes.
   drawers: [] as {
     id: number
-    kind: "thread" | "doc" | "subagent" | "shell" | "plan"
+    kind: "thread" | "doc" | "subagent" | "shell" | "plan" | "markdown"
     slug: string
     routed?: boolean // URL/deep-link-created thread: visible on first paint, never an invisible animated backdrop
     subId?: string // subagent/shell: the launch tool_use id (the RPC handle + dedupe key)
-    label?: string // subagent: the dispatch description (header title) / plan: the plan title
-    path?: string // plan: the PlanView.path (.frizz/plans/*.md) the drawer renders + dispatches from
+    label?: string // subagent: the dispatch description (header title) / plan: the plan title / markdown: the basename
+    path?: string // plan: the PlanView.path (.frizz/plans/*.md) the drawer renders + dispatches from / markdown: the absolute file path
     subagentType?: string // subagent: the model+effort cell tag
     startedAt?: string // subagent: ISO8601 dispatch time (drives the header's running elapsed)
     openedAt?: number // bumped when an existing logical layer is focused/reopened
@@ -159,7 +164,7 @@ type Drawer = (typeof store.drawers)[number]
 // second request for that same chat (or document) must reuse the existing layer.
 function sameDrawer(a: Drawer, b: Pick<Drawer, "kind" | "slug" | "path" | "subId">): boolean {
   if (a.kind !== b.kind) return false
-  if (a.kind === "plan") return a.path === b.path
+  if (a.kind === "plan" || a.kind === "markdown") return a.path === b.path
   if (a.kind === "subagent" || a.kind === "shell") return a.subId === b.subId
   return a.slug === b.slug
 }
@@ -168,6 +173,11 @@ function sameDrawer(a: Drawer, b: Pick<Drawer, "kind" | "slug" | "path" | "subId
 // transcript over its parent thread/doc, and a thread⇄doc pair sharing a slug. Everything else —
 // sibling threads, sibling sub-agents, plans — is a lateral move, not a drill-in.
 function stacksOver(below: Drawer, next: Pick<Drawer, "kind" | "slug">): boolean {
+  // A `.md` reader is always a DRILL-IN: it is opened by clicking a link inside whatever is already
+  // showing (a chat message, a plan, another document), so replacing that layer would close the very
+  // prose the link was read from. It stacks over anything, its own kind included — following a doc's
+  // link to a sibling doc and pressing Esc to come back is the whole point of a reader.
+  if (next.kind === "markdown") return true
   if (next.kind === "subagent" || next.kind === "shell") return (below.kind === "thread" || below.kind === "doc") && below.slug === next.slug
   if (next.kind === "doc") return below.kind === "thread" && below.slug === next.slug
   if (next.kind === "thread") return below.kind === "doc" && below.slug === next.slug
@@ -256,14 +266,32 @@ export function resolveRoutedThread(): void {
 // (maintainer 2026-07-09: "the queue is how you know"; 2026-07-15: "just auto-scroll to the item in the
 // queue"). Returns false if no card is mounted (not queued / not rendered), so the caller falls back to
 // opening the drawer instead.
+//
+// Any drawer already on screen is DISMISSED here (maintainer 2026-08-11: "clicking a queued item in the
+// sidebar should both DISMISS the current drawer and autoscroll"). It has to happen in this one place
+// rather than at the sidebar's call site: a drawer over the queue is precisely what stops you seeing the
+// card, so every "show me this card" door — the rail, the palette, a deep link, a notification
+// click-through — wants it gone. The plain sheets also spread a full-screen scrim, which the click
+// would otherwise land on instead of the row.
 export function scrollToQueueCard(slug: string): boolean {
   const root = queueCardRoot(slug)
   if (!root) return false
   const targetY = queueCardTargetY(slug)
+  const open = store.drawers.filter((drawer) => !drawer.closing).map((drawer) => drawer.id)
+  if (open.length) closeDrawersById(open)
   // Absolute scroll is intentional. A narrow layout may have just changed document geometry while a
   // drawer finished closing; a relative scroll in that transition can be applied to the old root and
   // strand the reader midway through a tall card. Land the bordered root atomically.
-  if (targetY !== null && Math.abs(window.scrollY - targetY) > 0.5) window.scrollTo({ top: targetY, left: 0, behavior: "auto" })
+  //
+  // But the scroll LOCK outlives this click: a dismissed drawer keeps its stack slot for the ~210ms
+  // slide-out, so the body is still pinned and `window.scrollTo` would be clamped to a no-op — and the
+  // unlock would then restore the pre-click offset over the top of it. Park the landing instead and let
+  // the unlock apply it, which is also what makes the scroll land in ONE step rather than visibly
+  // jumping back to where the reader was first.
+  if (targetY !== null) {
+    if (isPageScrollLocked()) requestScrollAfterUnlock(targetY)
+    else if (Math.abs(window.scrollY - targetY) > 0.5) window.scrollTo({ top: targetY, left: 0, behavior: "auto" })
+  }
   flashQueueCard(slug, root)
   return true
 }
@@ -299,6 +327,15 @@ function flashQueueCard(slug: string, root: HTMLElement): void {
 // layer) — plan layers never resolve a thread, so the slug is only an identity handle here.
 export function pushPlanDrawer(path: string, title: string): void {
   openOrRaiseDrawer({ kind: "plan", slug: path, path, label: title })
+}
+
+// Open a `.md` file that lives on disk in Frizz's OWN reader, rather than handing the path to the
+// desktop opener. Every link to one routes here (lib/local-file-links.ts): agent prose citing a repo
+// doc, an inline-code path that resolved to one, an attached `.md`. `path` is the absolute POSIX path
+// the server will re-gate; the basename is the header title. Deduped on path, like a plan.
+export function pushMarkdownDrawer(path: string): void {
+  const base = path.split("/").filter(Boolean).pop() || path
+  openOrRaiseDrawer({ kind: "markdown", slug: path, path, label: base })
 }
 
 export function popDrawer(): void {

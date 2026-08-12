@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query"
 import { closeGithubPicker, store, seedBoard, pushDrawer, resolveRoutedThread, topDrawer, topThreadSlug, showToast } from "./store.ts"
 import { useBoard } from "./hooks.ts"
 import { closeDrawerAnimated } from "./lib/overlays.ts"
+import { takeScrollAfterUnlock } from "./lib/pageScrollLock.ts"
 import { startRouter } from "./lib/router.ts"
 import { nextSidebarPresence, type SidebarPresence } from "./lib/sidebarPresence.ts"
 import { rpc } from "./api/rpc.ts"
@@ -127,6 +128,9 @@ export function App() {
     if (!overlayOpen) return
     const y = window.scrollY
     const body = document.body
+    // Drop any landing a previous lock left unconsumed, so a stale one can never fire against a page
+    // the reader has since moved on from.
+    takeScrollAfterUnlock()
     body.style.position = "fixed"
     body.style.top = `-${y}px`
     body.style.left = "0"
@@ -138,7 +142,10 @@ export function App() {
       body.style.left = ""
       body.style.right = ""
       body.style.width = ""
-      window.scrollTo(0, y)
+      // A scroll requested WHILE the page was locked couldn't be applied (the body was pinned) and this
+      // restore would have undone it anyway — so it parked its landing. Honour it over the captured
+      // offset: that is what lets a queued sidebar row dismiss its drawer and auto-scroll in one move.
+      window.scrollTo(0, takeScrollAfterUnlock() ?? y)
     }
   }, [overlayOpen])
 

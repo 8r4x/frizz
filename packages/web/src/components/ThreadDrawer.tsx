@@ -81,7 +81,7 @@ export function ThreadDrawer({ id, slug, title, depth, widthDepth }: { id: numbe
     // long-term fix per the audit was a real Chat|Terminal tab strip, deferred this pass: the thread
     // header carries no tabs at all since 2026-08-06 (see ChatView.ThreadView) and the runtime-none entry
     // path — a design call left for the maintainer.
-    <Sheet id={id} depth={depth} widthDepth={widthDepth} widthOffset={1}>
+    <Sheet id={id} depth={depth} widthDepth={widthDepth} widthOffset={1} subagentParent={slug}>
       {(close) => (
         <>
           <SheetHeader title={title} subtitle={`${slug}.md`} onClose={close} />

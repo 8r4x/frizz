@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
 import { Check, ChevronRight, CircleDashed, Clock, Ellipsis, FileText, Github, Hourglass, House, Loader2, RotateCcw, Timer } from "lucide-react"
 import type { AwaitingHint, BoardSnapshot, PlanView, ThreadView } from "@frizz/shared"
-import { store, openThread, scrollToQueueCard, pushSubAgentDrawer, pushPlanDrawer, QUEUE_CARD_VIEWPORT_TOP, type ConnectionState } from "../store.ts"
+import { store, openThread, scrollToQueueCard, queueCardTargetY, pushSubAgentDrawer, pushPlanDrawer, QUEUE_CARD_VIEWPORT_TOP, type ConnectionState } from "../store.ts"
 import { useBoard, asThreads } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
 import { sectionThreads, partitionActive, needsAction, displayTitle, titleIsProvisional, isHeld, parkedAwaitingHint, sessionIndicatorKind, offersRetry, futureSnoozedUntil, lastActiveLabelAt } from "../groups.ts"
@@ -147,9 +147,12 @@ export function Sidebar() {
     if (Math.abs(delta) > 0.5) rail.scrollTop += delta
   }, [activeId])
 
-  // Called AFTER scrollToQueueCard's synchronous window.scrollTo, so scrollY is already the landing.
+  // Called AFTER scrollToQueueCard, which has either scrolled or (with a drawer dismissing over the
+  // still-locked page) parked the landing for the unlock ~210ms out. So the landing is read off the
+  // CARD, not off window.scrollY: the two agree once the page has settled, and only the card knows the
+  // answer while the lock is still holding scrollY at 0.
   const navigateToQueueCard = useCallback((id: string) => {
-    pendingNavigation.current = { id, landedY: window.scrollY }
+    pendingNavigation.current = { id, landedY: queueCardTargetY(id) ?? window.scrollY }
     setActiveId(id)
   }, [])
 
