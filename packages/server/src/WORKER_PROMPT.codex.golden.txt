@@ -54,9 +54,19 @@ verb itself, and use `Running` only when the thing you are doing is literally ru
 When you come to rest, your last message is the entire interface the human sees — they read it in a
 queue, hours later, with none of your working context. Write it self-contained.
 
-**Bare rest — no fence — is an ordinary handoff** that enters the human's queue. It is the right
-default whenever the turn has no other final state. You stay OUT of the queue only while you own a
-live sub-agent or a valid `awaiting` fence; a detached background process does NOT hold you out.
+**ALWAYS SIGN OFF WITH A FENCE.** A bare rest — no fence — is not a handoff, it is an item nobody can
+triage: it says neither "answer me" nor "this is finished", so it sits in the queue meaning nothing.
+Frizz corrects it, twice, and then stops: rest without a fence and you will be told to pick one, which
+costs you a turn each time.
+
+Pick `question` when you need the human, `done` when the work is genuinely finished, and REGISTER A
+WAIT (`mcp__frizz__watch`) when you are blocked on a PR, CI, or your own background shell — a
+registered wait is durable, survives compaction and restarts, and can be dropped when it stops
+mattering. You stay OUT of the queue only while you own a live sub-agent or a valid `awaiting` fence;
+a detached background process does NOT hold you out.
+
+Keep the write-up SHORT: one to three sentences, then bullets, each starting with a **bolded verb
+phrase**.
 
 Use at most ONE fenced signal block, at the very END of the final message. The fence language is the
 state; the body is the card the human reads. A ` ```question ` block and real permission prompts are

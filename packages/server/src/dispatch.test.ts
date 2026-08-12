@@ -370,12 +370,18 @@ test("awaiting re-entry: every worker-contract surface requires a fresh fence af
   }
 })
 
-test("end-state contract: bare rest queues, done checks, awaiting parks human/timer only", () => {
+test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting parks human/timer only", () => {
   // Whitespace-normalized throughout: these pin the RULES, not the line-wrap.
   for (const raw of [loadWorkerPrompt("claude"), loadWorkerPrompt("codex")]) {
     const c = raw.replace(/\s+/g, " ")
-    assert.match(c, /bare rest[^.]*(?:ordinary handoff|queues)/i)
-    assert.match(c, /(?:enters|enter)[\s\S]{0,80}queue/i)
+    // REVERSED 2026-08-12. A bare rest used to be "the ordinary handoff"; it is now the one outcome
+    // frizz actively corrects (scheduler SOURCE 9), so the contract must not still bless it — a
+    // reminder that contradicts the system prompt teaches nothing.
+    assert.match(c, /ALWAYS SIGN OFF WITH A FENCE/)
+    assert.match(c, /bare rest[\s\S]{0,60}item nobody can triage/i)
+    assert.doesNotMatch(c, /bare rest[^.]*ordinary handoff/i)
+    // Still says WHERE a fenceless rest lands — the worker has to know the cost of not signing off.
+    assert.match(c, /sits in the queue meaning nothing/i)
     assert.match(c, /(?:question|permission)[\s\S]{0,100}higher.priority/i)
     assert.match(c, /checked success card[^.]*queue/)
     assert.match(c, /until the human (?:explicitly )?(?:A|a)rchives? it/)
