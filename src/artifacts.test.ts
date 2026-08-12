@@ -93,9 +93,7 @@ function fixture(root: string, content: string): string {
   );
   writeFileSync(join(dir, "runtime", "cc-worker", "hooks", "session-seed.mjs"), "seed");
   writeFileSync(join(dir, "runtime", "cc-worker", "hooks", "agent-bind.mjs"), "bind");
-  writeFileSync(join(dir, "runtime", "cc-worker", "hooks", "stop-fence.mjs"), "fence");
   mkdirSync(join(dir, "runtime", "cc-worker", "scripts", "frizz"), { recursive: true });
-  writeFileSync(join(dir, "runtime", "cc-worker", "scripts", "frizz", "transcript-usage.mjs"), "usage");
   writeFileSync(join(dir, "runtime", "cc-worker", "bin", "frizz"), "board");
   writeFileSync(join(dir, "runtime", "cc-worker", "bin", "frizz-update"), "update");
   writeFileSync(join(dir, "runtime", "board", "config.mjs"), "config");
@@ -119,8 +117,6 @@ function fixture(root: string, content: string): string {
         "cc-worker/.claude-plugin/plugin.json": hash('{"name":"frizz"}'),
         "cc-worker/hooks/session-seed.mjs": hash("seed"),
         "cc-worker/hooks/agent-bind.mjs": hash("bind"),
-        "cc-worker/hooks/stop-fence.mjs": hash("fence"),
-        "cc-worker/scripts/frizz/transcript-usage.mjs": hash("usage"),
         "cc-worker/bin/frizz": hash("board"),
         "cc-worker/bin/frizz-update": hash("update"),
         "board/config.mjs": hash("config"),
@@ -519,8 +515,6 @@ test("a captured source snapshot remains usable after the checkout changes", () 
     "cc-worker/.claude-plugin/plugin.json",
     "cc-worker/hooks/session-seed.mjs",
     "cc-worker/hooks/agent-bind.mjs",
-    "cc-worker/hooks/stop-fence.mjs",
-    "cc-worker/scripts/frizz/transcript-usage.mjs",
     "cc-worker/bin/frizz",
     "cc-worker/bin/frizz-update",
     "board/config.mjs",
@@ -559,8 +553,6 @@ test("a captured source snapshot is its own scan root, so an ancestor .gitignore
     "cc-worker/.claude-plugin/plugin.json",
     "cc-worker/hooks/session-seed.mjs",
     "cc-worker/hooks/agent-bind.mjs",
-    "cc-worker/hooks/stop-fence.mjs",
-    "cc-worker/scripts/frizz/transcript-usage.mjs",
     "cc-worker/bin/frizz",
     "cc-worker/bin/frizz-update",
     "board/config.mjs",
@@ -789,8 +781,6 @@ test.skip("legacy deploy snapshot harness is superseded by the real bundled-arti
     "cc-worker/.claude-plugin/plugin.json",
     "cc-worker/hooks/session-seed.mjs",
     "cc-worker/hooks/agent-bind.mjs",
-    "cc-worker/hooks/stop-fence.mjs",
-    "cc-worker/scripts/frizz/transcript-usage.mjs",
     "cc-worker/bin/frizz",
     "cc-worker/bin/frizz-update",
     "board/config.mjs",
