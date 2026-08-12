@@ -40,13 +40,6 @@
         ]
       }
     ],
-    "Stop": [
-      {
-        "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/stop-fence.mjs\"" }
-        ]
-      }
-    ],
     "PermissionRequest": [
       {
         "matcher": "ExitPlanMode",
