@@ -23,7 +23,11 @@ Only HALF the path is fitted; the other half is that half's anchors rotated 180�
 
 `nub build-fff.mjs` chains the glyph into cursive `fff` ([`final/fff.svg`](final/fff.svg)) — one stroke, one free end each side, 6 self-crossings, the row C2 about its own centre. The connecting tails are trimmed so the glyphs sit close; the full tail is restored only at the far left and right. Trimming equal arc length from both ends keeps the glyph C2, so its ends still leave in the same direction and the copies chain by translation alone.
 
-**Trim first, then level.** Levelling the untrimmed glyph and then cutting its tails leaves the new ends at different heights — 7.3 units apart at trim 0.09 — so a horizontal translation puts a visible step at every join. `TRIM=` adjusts spacing; past about 0.12 the loops interleave and it reads as a thicket. `REPEATS=` for a longer run.
+The locked settings are **f041**: `TRIM=0.11`, `TAIL=0.25` — tight spacing, short outer stubs, aspect 1.02 so it sits in a square tile without letterboxing.
+
+**Trim first, then level.** Levelling the untrimmed glyph and then cutting its tails leaves the new ends at different heights — 7.3 units apart at trim 0.09 — so a horizontal translation puts a visible step at every join. `TRIM=` adjusts spacing (past about 0.12 the loops interleave and it reads as a thicket), `TAIL=` the outer stubs, `REPEATS=` the number of glyphs.
+
+**The fff is the lockup, not the app icon.** At 16 px it puts *more* ink on the tile than the single glyph — 92 of 256 pixels against 34 — and reads worse: three glyphs in 16 px is a striped blob, not a letter. The app icon stays the single glyph. The fff earns its keep at 32 px and above.
 
 ## Fitting to a reference
 

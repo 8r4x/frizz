@@ -31,9 +31,13 @@ const finalDir = join(here, "final")
 mkdirSync(finalDir, { recursive: true })
 
 const REPEATS = Number(process.env.REPEATS ?? 3)
-// 0.11 is as close as the glyphs go before the loops start to interleave and the
-// mark reads as a thicket rather than three letters.
+// f041, locked in. 0.11 is as close as the glyphs go before the loops interleave
+// and the mark reads as a thicket rather than three letters; 0.25 keeps the two
+// outer tails as short stubs, which is what makes the row read as a block rather
+// than as a line with a flourish at each end. Aspect comes out at 1.02, so it
+// sits in a square tile without letterboxing.
 const TRIM = Number(process.env.TRIM ?? 0.11)
+const TAIL = Number(process.env.TAIL ?? 0.25)
 const { stroke, anchors } = JSON.parse(readFileSync(join(finalDir, "anchors.json"), "utf8"))
 
 const dense = bezierSample(anchors, 400)
@@ -55,7 +59,7 @@ const idxAt = (len) => {
 }
 
 const a = idxAt(L * TRIM)
-const b = idxAt(L * (1 - TRIM))
+const b = dense.length - 1 - a
 
 // Level the TRIMMED ends, so the chain runs along a baseline.
 const ang = -Math.atan2(dense[b][1] - dense[a][1], dense[b][0] - dense[a][0])
@@ -64,9 +68,12 @@ const sa = Math.sin(ang)
 const spin = ([x, y]) => [256 + (x - 256) * ca - (y - 256) * sa, 256 + (x - 256) * sa + (y - 256) * ca]
 const rotated = dense.map(spin)
 
-const head = rotated.slice(0, a + 1)
 const core = rotated.slice(a, b + 1)
-const tail = rotated.slice(b)
+let head = rotated.slice(0, a + 1)
+if (TAIL < 1) head = head.slice(idxAt(cum[a] * (1 - TAIL)))
+// The far end is the head's exact 180-degree image about the glyph's centre.
+// Building it independently lets a rounded index desymmetrise the row.
+const tail = head.map(([x, y]) => [512 - x, 512 - y]).reverse()
 const pitch = core[core.length - 1][0] - core[0][0]
 const step = Math.abs(core[core.length - 1][1] - core[0][1])
 console.log(`trim ${TRIM}: pitch ${pitch.toFixed(1)}, vertical step at each join ${step.toFixed(3)} units`)
