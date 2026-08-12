@@ -234,7 +234,28 @@ test("the collapsed intermediate run is a hairline divider that names its tool c
       "the ten polls are counted by the divider rather than drawn",
     )
 
-    // ---- 8. control: nothing intermediate, so no divider at all ----
+    // ---- 8. the window stops at the previous rest, and no rest rule is drawn ----
+    // A thread woken back up carries the whole closed turn above the wake, and the queue card is a
+    // triage surface for the standing signal (maintainer 2026-08-11: "you should only show back to the
+    // most recent 'Agent rested' / stop hook. you shoudl NOT render the hairline for the rest/stop hook
+    // either"). The fixture holds two turns; only the second may render, and neither of its two rest
+    // dividers may appear — not the one it opens after, nor the one that closed it.
+    await page.goto(variant("priorrest"), { waitUntil: "networkidle0" })
+    await page.waitForSelector(SEL, { timeout: 10_000 })
+    const card = await page.evaluate(() => document.body.innerText)
+    assert.equal(
+      await page.$$eval('[data-wake-divider="rest"]', (ns) => ns.length),
+      0,
+      "the rest/stop-hook hairline is never drawn on a queue card",
+    )
+    assert.doesNotMatch(card, /Agent rested/, "…and its label must not survive as any other row either")
+    assert.doesNotMatch(card, /Kick off the release workflow/, "the previous turn's ask is behind Load earlier")
+    assert.doesNotMatch(card, /the workflow is running/, "…and so is the previous turn's sign-off")
+    assert.match(card, /Background task .Watching the release run. exited 0/, "the wake that opened this turn shows")
+    assert.match(card, /The watcher came back green/, "…and so does the turn's opening narration")
+    assert.match(card, /Load earlier messages/, "the closed turn stays one click away")
+
+    // ---- 9. control: nothing intermediate, so no divider at all ----
     await page.goto(variant("single"), { waitUntil: "networkidle0" })
     await page.waitForFunction(() => document.querySelectorAll("[data-frizz-msg]").length > 0, { timeout: 10_000 })
     assert.equal(

@@ -47,6 +47,9 @@ import "./styles.css"
 //   ?variant=humanpast an ask the human already replied PAST (a later user turn), then more agent work.
 //                      Under "Load earlier messages" the old ask must still take chips; the card's own
 //                      "Send answers" action stands down until one is filled (nothing stands at the tail).
+//   ?variant=priorrest TWO turns — an ask, a rest, a background wake, then a second turn ending in a
+//                      question and another rest. The card must open at the WAKE (the previous turn is
+//                      behind "Load earlier messages") and draw NO "Agent rested" rule at either end.
 const params = new URLSearchParams(location.search)
 const variant = params.get("variant") ?? "heavy"
 
@@ -69,6 +72,9 @@ const asst = (text: string, tools: TranscriptToolCall[] = []): TranscriptMessage
 })
 
 const event = (text: string): TranscriptMessage => ({ role: "assistant", kind: "event", text, tools: [], parts: [] })
+
+const boundaryEvent = (boundary: TranscriptMessage["boundary"], text: string): TranscriptMessage =>
+  ({ role: "assistant", kind: "event", boundary, text, tools: [], parts: [] })
 
 // A real ```question block so the queue card renders answer chips + the "Send answers" flow — this is
 // what the trailing-event regression must not hide.
@@ -302,6 +308,30 @@ const humanpast: TranscriptMessage[] = [
   withId(asst("Migrations runner is in and green.")),
 ]
 
+// A thread that RESTED and was then woken again by a background task, so the transcript holds two whole
+// turns. The card must show only the newest one: everything back to (and excluding) the `rest` divider
+// that closed the previous turn, with the trailing rest that closed THIS turn drawn nowhere either. The
+// old ask and its "Fixed —" sign-off stay reachable behind "Load earlier messages".
+const priorrest: TranscriptMessage[] = [
+  { sourceId: "u-old", role: "user", text: "Kick off the release workflow and watch it.", tools: [], parts: [] },
+  withId(asst("Starting the workflow, then I'll sit on the run until it reaches a terminal state.", [
+    tool("Bash", { detail: "gh workflow run release.yml", desc: "Starting the release workflow" }),
+  ])),
+  withId(asst("**Fixed** — the workflow is running; I'll report when the watcher returns.")),
+  withId(boundaryEvent("rest", "Agent rested")),
+  withId(boundaryEvent("wake", "Background task «Watching the release run» exited 0")),
+  withId(asst("The watcher came back green — checking what the run actually published.", [
+    tool("Bash", { detail: "gh run view 8891241 --json conclusion", desc: "Reading the run conclusion" }),
+    tool("Bash", { detail: "gh release view v2.4.0", desc: "Reading the published release" }),
+  ])),
+  withId(asst("The tag is up but the notes are the template default.", [
+    tool("Read", { detail: ".github/workflows/release.yml" }),
+    tool("Edit", { detail: ".github/workflows/release.yml" }),
+  ])),
+  withId(asst(finalQuestion)),
+  withId(boundaryEvent("rest", "Agent rested")),
+]
+
 const messages =
   variant === "single" ? single
   : variant === "bgshells" ? bgshells
@@ -314,6 +344,7 @@ const messages =
   : variant === "buriedask" ? buriedask
   : variant === "twoasks" ? twoasks
   : variant === "humanpast" ? humanpast
+  : variant === "priorrest" ? priorrest
   : heavy
 
 const thread: ThreadViewModel = {
