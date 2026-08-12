@@ -687,15 +687,18 @@ export function timerPromptMessage(prompt: string, fireAt: string): string {
   return `${prompt.trim()}\n\n(One-off timer, set for ${fireAt}. It has fired and will not repeat.)`
 }
 
-/** What is being waited ON. `pr` wakes on any new activity — a review, an approval, a comment, human or
- *  bot; `ci` on the checks for that same ref reaching a terminal state; `shell` on one of the worker's
- *  own background shells finishing. */
-export const ThreadWatchKind = z.enum(["pr", "ci", "shell"])
+/** What is being waited ON — one of the worker's own background shells finishing.
+ *
+ *  IT WAS GOING TO BE THREE. `pr` and `ci` were registerable here on the way to moving PR watching off
+ *  the ```awaiting fence and onto this registry. That plan is dropped (maintainer 2026-08-12: "drop it
+ *  totally. its' obsolete"), and the reason it stopped being a good idea is worth keeping: the fence's
+ *  pr-watch is not a legacy path being tolerated, it is machinery still being improved — `9ebd6b2` gave
+ *  it backlog replay on the first park, which this registry would have had to re-implement to match.
+ *  A PR wait belongs in an ```awaiting fence with a `pr-watch:` line, which is durable and works. */
+export const ThreadWatchKind = z.enum(["shell"])
 export type ThreadWatchKind = z.infer<typeof ThreadWatchKind>
 
-/** The thing being watched, in the grammar of its kind: `owner/repo#N` for `pr` and `ci`, a background
- *  shell's id or label for `shell`. Validated per-kind at the router rather than here, because the two
- *  grammars have nothing in common and one union would only be a longer way to say `string`. */
+/** The thing being watched: a background shell's id, or its label. */
 export const ThreadWatchTarget = z.string().trim().min(1).max(200)
 
 /** One armed (or just-settled) watcher, as the worker's own tool reads it back. */

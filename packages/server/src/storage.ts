@@ -368,12 +368,16 @@ export interface ThreadTimerRow {
   settled_at: number | null
 }
 
-/** One row of `thread_watch` — a worker's registered wait. `target` is the thing being watched, in the
- *  grammar of its kind: `owner/repo#N` for `pr` and `ci`, a background-shell id or label for `shell`. */
+/** One row of `thread_watch` — a worker's registered wait. `target` is a background shell's id or label.
+ *
+ *  The COLUMN still accepts 'pr' and 'ci': they were registerable on the way to moving PR watching onto
+ *  this registry, that plan is dropped (see `ThreadWatchKind`), and narrowing a SQLite CHECK means
+ *  rebuilding the table. No such row can exist — the tool and the router only ever write 'shell' — so the
+ *  looser constraint costs nothing, while a migration to tighten it could only ever go wrong. */
 export interface ThreadWatchRow {
   id: string
   thread_slug: string
-  kind: "pr" | "ci" | "shell"
+  kind: "shell"
   target: string
   state: "armed" | "fired" | "dropped"
   created_at: number

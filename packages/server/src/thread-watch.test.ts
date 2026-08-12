@@ -36,7 +36,7 @@ function fixture() {
 }
 
 const arm = (f: ReturnType<typeof fixture>, over: Partial<Parameters<typeof f.storage.armThreadWatch>[0]> = {}) =>
-  f.storage.armThreadWatch({ id: "w1", slug: "watcher", kind: "pr", target: "acme/app#391", createdAtMs: 1000, ...over })
+  f.storage.armThreadWatch({ id: "w1", slug: "watcher", kind: "shell", target: "nub run test", createdAtMs: 1000, ...over })
 
 test("an armed watcher reads back on its own thread, and only there", () => {
   const f = fixture()
@@ -44,8 +44,8 @@ test("an armed watcher reads back on its own thread, and only there", () => {
     arm(f)
     const [row] = f.storage.listThreadWatches("watcher", { armedOnly: true })
     assert.equal(row?.id, "w1")
-    assert.equal(row?.kind, "pr")
-    assert.equal(row?.target, "acme/app#391")
+    assert.equal(row?.kind, "shell")
+    assert.equal(row?.target, "nub run test")
     assert.equal(row?.state, "armed")
     assert.equal(row?.cursor, null, "a fresh watcher has seen nothing yet")
     assert.deepEqual(f.storage.listThreadWatches("other"), [], "a watcher belongs to ONE thread")
@@ -56,7 +56,7 @@ test("a thread holds MANY watchers at once — that is why this is a table", () 
   const f = fixture()
   try {
     arm(f)
-    arm(f, { id: "w2", kind: "ci", target: "acme/app#391" })
+    arm(f, { id: "w2", kind: "shell", target: "vite dev" })
     arm(f, { id: "w3", kind: "shell", target: "vite dev", createdAtMs: 2000 })
     assert.deepEqual(f.storage.listThreadWatches("watcher", { armedOnly: true }).map((w) => w.id), ["w1", "w2", "w3"])
   } finally { f.close() }
@@ -125,7 +125,7 @@ test("removing a session takes its watchers with it", () => {
   const f = fixture()
   try {
     arm(f)
-    arm(f, { id: "w2", slug: "other", kind: "ci", target: "acme/app#7" })
+    arm(f, { id: "w2", slug: "other", kind: "shell", target: "tsc --watch" })
     f.storage.forgetSession("watcher")
     assert.equal(f.storage.getThreadWatch("w1"), undefined)
     assert.equal(f.storage.getThreadWatch("w2")?.state, "armed", "the other thread's watcher is untouched")
@@ -281,12 +281,12 @@ test("both dispatch transports arm the default Goal", () => {
 test("the thread view carries a thread's armed watchers, and only the armed ones", () => {
   const f = fixture()
   try {
-    f.storage.armThreadWatch({ id: "w1", slug: "watcher", kind: "pr", target: "acme/app#391", createdAtMs: 1000 })
+    f.storage.armThreadWatch({ id: "w1", slug: "watcher", kind: "shell", target: "nub run test", createdAtMs: 1000 })
     f.storage.armThreadWatch({ id: "w2", slug: "watcher", kind: "shell", target: "nub run test", createdAtMs: 2000 })
     f.storage.dropThreadWatch("watcher", "w2", 3000)
     const armed = f.storage.listThreadWatches("watcher", { armedOnly: true })
     assert.deepEqual(armed.map((w) => w.id), ["w1"], "a dropped watcher leaves the operator's view too")
-    assert.equal(armed[0]?.target, "acme/app#391")
+    assert.equal(armed[0]?.target, "nub run test")
   } finally { f.close() }
 })
 

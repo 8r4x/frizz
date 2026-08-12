@@ -271,10 +271,10 @@ const WATCH = {
     "REGISTER something to wait on, so frizz wakes you when it resolves — and DROP it when it stops " +
     "mattering. Your waits have identities: you can list them, and you can withdraw them.\n\n" +
     "  kind: \"shell\"  — one of YOUR OWN background shells finishing. `target` is its id or its label.\n\n" +
-    "FOR A PULL REQUEST, use an ```awaiting fence with a `pr-watch: owner/repo#123` line instead — that " +
-    "watcher is durable and already wired. Registering PRs here lands when its poller moves onto this " +
-    "registry; until then this tool would accept a registration it cannot act on, which is worse than " +
-    "not offering it.\n\n" +
+    "FOR A PULL REQUEST, use an ```awaiting fence with a `pr-watch: owner/repo#123` line instead. That " +
+    "watcher is durable, it replays whatever review is already sitting on the PR the first time you park " +
+    "on it, and it is where PR watching lives — this registry is for the waits that have nowhere else to " +
+    "go.\n\n" +
     "WHY THIS RATHER THAN WAITING YOURSELF: a registered watcher is durable. It survives your turn " +
     "ending, a compaction, a frizz restart, and your own daemon being replaced — none of which a " +
     "blocking call or a monitor survives. Register it, come to rest, and frizz brings you back.\n\n" +
@@ -300,8 +300,7 @@ const WATCH = {
         type: "string",
         enum: ["shell"],
         description:
-          "Required for `add`. What sort of thing is being waited on. Only `shell` today — see the " +
-          "description above for pull requests.",
+          "Required for `add`. The only kind — a PR wait belongs in an ```awaiting fence, see above.",
       },
       target: {
         type: "string",
@@ -859,8 +858,8 @@ async function watch(args) {
     // accepts a wait it cannot honour is how a worker comes to rest believing it is covered.
     throw new Error(
       kind === "pr" || kind === "ci"
-        ? `frizz does not yet wake a registered ${kind} watcher — use an \`\`\`awaiting fence with a \`pr-watch: owner/repo#123\` line, which is durable and already wired`
-        : "`kind` is required to add a watcher, and today the only kind is \"shell\"",
+        ? `a ${kind} wait does not belong here — use an \`\`\`awaiting fence with a \`pr-watch: owner/repo#123\` line, which is durable and replays review that is already on the PR`
+        : "`kind` is required to add a watcher, and the only kind is \"shell\"",
     )
   }
   const target = typeof args.target === "string" ? args.target.trim() : ""

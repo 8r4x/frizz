@@ -679,20 +679,6 @@ export function createRouter(ctx: AppContext) {
     }))
   }
 
-  // THE TARGET GRAMMAR, per kind, rejected HERE rather than in the schema: `pr`/`ci` name a GitHub ref
-  // and `shell` names one of the worker's own background shells, and those two have nothing in common,
-  // so a union in zod would only be a longer way to write `string`.
-  //
-  // The refusal is the point. A `pr` watcher whose target does not parse can never fire, and a worker
-  // that registered one would rest believing it is covered — the exact failure the registry exists to
-  // remove. Better a tool error it can act on than a wait that silently never resolves.
-  function assertWatchTarget(kind: ThreadWatchKind, target: string): void {
-    if (kind === "shell") return // any id or label; the scheduler matches it against live bg shells
-    if (!parsePrRef(target)) {
-      throw new Error(`a ${kind} watcher's target must be a PR reference like "owner/repo#123" — got "${target}"`)
-    }
-  }
-
   // A thread's ARMED one-off timers, in the shape the worker's tool reads back. Instants are epoch ms in
   // the table and ISO on the wire, converted here so the row, the delivered trailer and the tool's own
   // output all name the same string.
@@ -2104,7 +2090,6 @@ export function createRouter(ctx: AppContext) {
         if (row.state === "archived" || row.archived === 1) {
           throw new Error("Reopen this thread before registering a watcher on it")
         }
-        assertWatchTarget(input.kind, input.target)
         const armed = ctx.storage.listThreadWatches(input.slug, { armedOnly: true })
         // IDEMPOTENT ON (kind, target). Re-registering after a compaction is the COMMON case — the
         // worker has forgotten what it holds and is being careful — and minting a duplicate there would

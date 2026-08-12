@@ -190,7 +190,7 @@ function ArmedWatches({ thread }: { thread: ThreadView }) {
   const armed = (thread.watches ?? []).filter((w) => w.state === "armed")
   if (!armed.length) return null
   const detail = armed
-    .map((w) => `${w.kind === "shell" ? "Shell" : w.kind.toUpperCase()}: ${w.target} (since ${formatAgo(w.createdAt)})`)
+    .map((w) => `Shell: ${w.target} (since ${formatAgo(w.createdAt)})`)
     .join("\n")
   const label = armed.length === 1 ? `Watching 1 thing\n${detail}` : `Watching ${armed.length} things\n${detail}`
   return (
