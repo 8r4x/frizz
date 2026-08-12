@@ -512,9 +512,19 @@ function armedSchedule(row: RecurringRow): ArmedSchedule | undefined {
 const STOP_HOOK_FENCE_PREFIX = "stophook"
 const STOP_HOOK_HINT_KEY = "stophook:rest"
 
-// The rest a delivery is bound to. `lastActivityAt` is the thread's own high-water mark, so a NEW rest
-// necessarily carries a new one — which is what makes "at most one per rest" fall out of delivery id
-// uniqueness rather than needing a counter. A thread with no activity clock yet has never rested.
+// The rest a delivery is bound to: the AGENT'S OWN last word.
+//
+// It was `lastActivityAt`, the thread's high-water mark over ANY record, and that was a self-feeding
+// loop for a thread whose worker is gone. Frizz speaks as the USER, so a delivered bump lands in the
+// transcript and advances the high-water mark — minting a new "rest" that nobody rested, and with it a
+// new delivery id. Measured 2026-08-12 on a real stack with the worker absent: 10 bumps in 100 seconds,
+// climbing. It was survivable while a Goal was something an operator opted into on one thread; it stopped
+// being survivable when every dispatched thread started carrying one.
+//
+// `lastAssistantAt` keeps the property that made the old key work — a genuine new rest necessarily
+// carries a new one, so "at most one per rest" still falls out of delivery-id uniqueness — and adds the
+// one frizz needs: nothing frizz says can move it. A thread with no assistant output yet has never
+// rested.
 function stopHookFenceId(armedAt: string, restedAt: string): string {
   return `${STOP_HOOK_FENCE_PREFIX}:${armedAt}:${restedAt}`
 }
@@ -1018,7 +1028,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     // not be handed it anyway.
     if (isStopHookFenceId(item.fenceId)) {
       const armed = armedRest(row)
-      if (!armed || item.fenceId !== stopHookFenceId(armed.armedAt, tele.lastActivityAt ?? "")) return "superseded"
+      if (!armed || item.fenceId !== stopHookFenceId(armed.armedAt, tele.lastAssistantAt ?? "")) return "superseded"
       if (restMessageIsSignedOff(tele)) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
@@ -1603,6 +1613,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const spokeAt = tele.lastAssistantAt
       if (!spokeAt) continue
       if (tele.lastUserAt && Date.parse(tele.lastUserAt) >= Date.parse(spokeAt)) continue
+      // Same trap as the stop hook's: a signed-out provider answers instantly, so the failure LOOKS like
+      // a fenceless rest and satisfies every guard above. Teaching it to sign off cannot help — it never
+      // reached the model.
+      if (tele.authFault) continue
       // ANY fence means the thread already said where it stands — including `awaiting`, which is still
       // a legitimate sign-off until the registry replaces it. Nothing to teach, AND the allowance comes
       // back: signing off is the only event that proves the nudge worked, and the only one frizz cannot
@@ -1853,7 +1867,22 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const armed = armedRest(row)
       if (!armed) continue
       const tele = deps.tailer.get(row.slug)
-      if (!tele || tele.turn !== "idle" || !tele.lastActivityAt) continue
+      if (!tele || tele.turn !== "idle") continue
+      // THE AGENT MUST HAVE SPOKEN LAST. `turn === "idle"` alone is not "the agent rested": a thread
+      // whose worker is gone is idle forever, and frizz's own bump keeps landing in its transcript. This
+      // is the guard that makes the trigger mean "you stopped" rather than "nothing is happening" — see
+      // `stopHookFenceId`. It costs the feature nothing: an agent that genuinely takes a turn and rests
+      // again produces a NEW assistant timestamp, which is exactly when the Goal should fire.
+      const restedAt = tele.lastAssistantAt
+      if (!restedAt) continue
+      if (tele.lastUserAt && Date.parse(tele.lastUserAt) >= Date.parse(restedAt)) continue
+      // A SIGNED-OUT PROVIDER ANSWERS INSTANTLY, and that is a loop this trigger cannot see any other
+      // way. The worker replies "Not logged in · Please run /login" in milliseconds, which is a genuine
+      // new assistant message and therefore a genuine new rest — so every guard above is satisfied and
+      // the bump fires again, ten times in a hundred seconds (measured 2026-08-12). Nothing the operator
+      // has not done can change the outcome, so re-prompting is pure burn: the thread already cards its
+      // auth fault and the sign-in recovery in the queue.
+      if (tele.authFault) continue
       // WHAT THIS DELIBERATELY DOES NOT CONSULT: live sub-agents and background shells. A hold on them
       // shipped briefly and was removed the same day (maintainer 2026-08-02: "the status of any
       // sub-agents or background shells is irrelevant"). The SCHEDULE trigger is the whole rate story — a
@@ -1867,7 +1896,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (restMessageIsSignedOff(tele)) continue
       // And the operator's own broader hold, when they armed it.
       if (heldByQuestion(row, tele)) continue
-      const fenceId = stopHookFenceId(armed.armedAt, tele.lastActivityAt)
+      const fenceId = stopHookFenceId(armed.armedAt, restedAt)
       const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
       // Terminal rows stay in the store, so this alone is what makes a rest bump EXACTLY once: the same
       // rest yields the same delivery id, whatever happened to the first attempt.

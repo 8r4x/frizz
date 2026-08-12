@@ -160,3 +160,15 @@ test("the kill switch silences it everywhere", async () => {
     assert.deepEqual(h.delivered, [])
   } finally { h.close() }
 })
+
+// A SIGNED-OUT PROVIDER answers in milliseconds, so the auth failure is a real assistant message and
+// therefore a real rest — which satisfies every other guard. Measured on a live stack: the bump fired
+// ten times in a hundred seconds against a thread whose worker could only ever reply "Not logged in".
+// Re-prompting cannot help; the thread already cards its auth fault and the sign-in recovery.
+test("an auth-faulted thread is never re-prompted — the nudge cannot fix a signed-out provider", async () => {
+  const h = nudger({ authFault: "authentication_rejected" } as never)
+  try {
+    await h.s.tick()
+    assert.deepEqual(h.delivered, [])
+  } finally { h.close() }
+})

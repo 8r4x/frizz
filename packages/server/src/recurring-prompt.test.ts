@@ -213,6 +213,10 @@ function scheduler(
     tailer: {
       get: () => ({
         turn: "idle", lastActivityAt: "2026-08-02T00:00:00.000Z",
+        // The AGENT spoke last — the shape of a real rest, and the one thing frizz cannot fake, since
+        // frizz only ever speaks as the user. Without it the trigger cannot tell "you stopped" from
+        // "nothing is happening", which is how a worker-less thread was bumped every tick.
+        lastAssistantAt: "2026-08-02T00:00:00.000Z",
         subAgents: [], bgShells: [], pendingQuestion: false, permPrompt: false,
         ...tele,
       }),
@@ -273,6 +277,24 @@ test("heartbeat: live sub-agents and background shells are IRRELEVANT to firing"
     await shell.s.tick()
     assert.equal(shell.delivered.length, 1, "a live shell must not hold the bump either")
   } finally { shell.close() }
+})
+
+// THE LOOP THIS TRIGGER SHIPPED WITH FOR MONTHS, and which only became dangerous when every dispatched
+// thread started carrying a Goal. Frizz speaks as the USER, so its own bump lands in the transcript and
+// advances `lastActivityAt` — the field the delivery id used to key on — minting a "rest" nobody rested.
+// A thread whose worker is gone stays idle forever, so it was bumped every tick: 10 in 100 seconds,
+// measured on a real stack. `turn === "idle"` cannot tell "you stopped" from "nothing is happening";
+// only the agent having spoken LAST can.
+test("a thread whose last word is frizz's own bump is not bumped again", async () => {
+  const h = scheduler({
+    lastAssistantAt: "2026-08-02T00:00:00.000Z",
+    lastUserAt: "2026-08-02T00:00:30.000Z", // the bump landed after the agent's last word
+    lastActivityAt: "2026-08-02T00:00:30.000Z",
+  }, { now: at("2026-08-02T00:01:00.000Z") })
+  try {
+    await h.s.tick()
+    assert.deepEqual(h.delivered, [], "it has not answered the last one yet")
+  } finally { h.close() }
 })
 
 test("ALLDONE holds the bump for that rest only, and nothing is stored to undo", async () => {
@@ -513,6 +535,10 @@ function compactScheduler(
     tailer: {
       get: () => ({
         turn: "idle", lastActivityAt: "2026-08-02T00:00:00.000Z",
+        // The AGENT spoke last — the shape of a real rest, and the one thing frizz cannot fake, since
+        // frizz only ever speaks as the user. Without it the trigger cannot tell "you stopped" from
+        // "nothing is happening", which is how a worker-less thread was bumped every tick.
+        lastAssistantAt: "2026-08-02T00:00:00.000Z",
         subAgents: [], bgShells: [], pendingQuestion: false, permPrompt: false,
         ...tele,
       }),
@@ -730,4 +756,16 @@ test("storage: flipping the question hold keeps the generation and the last-fire
   } finally {
     f.close()
   }
+})
+
+// A SIGNED-OUT PROVIDER answers in milliseconds, so the auth failure is a real assistant message and
+// therefore a real rest — which satisfies every other guard. Measured on a live stack: the bump fired
+// ten times in a hundred seconds against a thread whose worker could only ever reply "Not logged in".
+// Re-prompting cannot help; the thread already cards its auth fault and the sign-in recovery.
+test("an auth-faulted thread is never re-prompted — the Goal cannot fix a signed-out provider", async () => {
+  const h = scheduler({ authFault: "authentication_rejected" } as never)
+  try {
+    await h.s.tick()
+    assert.deepEqual(h.delivered, [])
+  } finally { h.close() }
 })
