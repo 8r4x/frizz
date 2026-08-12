@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
+import { WORKER_PLUGIN_REQUIRED_FILES } from "./worker-plugin-closure.ts";
 
 /**
  * The published package is the REPO ROOT, so `files` is the only thing standing between npm and the
@@ -32,6 +33,19 @@ test("no files entry can escape the package root or widen to the whole checkout"
       !["*", ".", "./", "**", "**/*"].includes(entry),
       `files entry publishes the entire checkout: ${entry}`
     );
+  }
+});
+
+/**
+ * `runtime/` is a COPY of `board/` and `cc-worker/`, so the closure the pack step asserts is only as
+ * good as those source paths still existing. Renaming a required hook is otherwise caught by nothing
+ * until prepack — or, for the frizz-dev path, until a promoted artifact fails to verify.
+ */
+test("every required worker-plugin file exists at the repo root the staged runtime mirrors", () => {
+  const repo = join(import.meta.dirname, "..");
+  assert.ok(WORKER_PLUGIN_REQUIRED_FILES.length > 0);
+  for (const file of WORKER_PLUGIN_REQUIRED_FILES) {
+    assert.ok(existsSync(join(repo, file)), `required worker-plugin file is missing from source: ${file}`);
   }
 });
 

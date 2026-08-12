@@ -26,6 +26,10 @@ import {
   detachedDaemonOutputName,
 } from "@frizz/server/detached-daemons";
 import { frizzPaths } from "@frizz/server/frizz-paths";
+import {
+  WORKER_PLUGIN_REQUIRED_FILES,
+  assertWorkerPluginClosure,
+} from "./worker-plugin-closure.ts";
 
 export interface FrizzArtifactManifest {
   version: 1 | 2;
@@ -311,29 +315,6 @@ function frizzSourceTrees(source: string, destination: string): SnapshotTree[] {
     source: join(source, name),
     destination: join(destination, name),
   }));
-}
-
-const WORKER_PLUGIN_REQUIRED_FILES = [
-  "cc-worker/.claude-plugin/plugin.json",
-  "cc-worker/hooks/session-seed.mjs",
-  "cc-worker/hooks/agent-bind.mjs",
-  "cc-worker/bin/frizz",
-  "cc-worker/bin/frizz-update",
-  "board/config.mjs",
-  "board/agent-bindings.mjs",
-  "board/index.mjs",
-  "board/thread-update.mjs",
-] as const;
-
-// The worker contract used to ship as markdown under runtime/prompts/ and get read at dispatch time;
-// it is now compiled into the server bundle (workerPrompt.ts), so a promoted artifact carries no
-// prompt closure. Old artifacts that still list prompts/ files remain valid (extra runtimeFiles are
-// harmless); nothing reads them.
-function assertWorkerPluginClosure(root: string): void {
-  for (const file of WORKER_PLUGIN_REQUIRED_FILES) {
-    if (!existsSync(join(root, file)))
-      throw new Error(`Frizz worker plugin closure is missing ${file}`);
-  }
 }
 
 // A detached daemon is spawned as its own `node <file>` process, so it must be a REAL FILE beside
