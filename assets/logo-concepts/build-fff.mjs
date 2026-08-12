@@ -1,29 +1,29 @@
 #!/usr/bin/env node
 // The shipped mark written three times in a row — cursive "fff" — as ONE stroke
-// with a single free end at each side, exactly like the single glyph.
+// with a single free end at each side.
 //
-// The copies chain by pure translation, and the joins are seamless for a reason
-// worth stating: because the glyph is C2, its two tails are each other's
-// rotations, which means the direction of travel where the stroke ENTERS equals
-// the direction where it LEAVES. So laying the next copy's start tip on the
-// previous copy's end tip matches position and tangent at once. No blending, no
-// fudge — translation alone.
+// The connecting tails are TRIMMED so the glyphs sit close; the full tail is put
+// back only on the far left and far right. Trimming equal arc length from both
+// ends keeps the glyph C2, so its two ends still leave in the same direction and
+// the copies chain by translation alone, with no blending.
 //
-// The row is first rotated so the two tips are level, otherwise the glyphs climb
-// diagonally instead of sitting on a baseline.
+// Order matters: trim FIRST, then level. Levelling the untrimmed glyph and then
+// cutting its tails leaves the two new ends at different heights — 7.3 units
+// apart at trim 0.09 — and translating horizontally then puts a visible step at
+// every join. Levelling the TRIMMED ends removes it.
 //
-// The result keeps rotational symmetry too: the middle glyph maps to itself
-// under a half turn and the outer two swap, so the whole row is C2 about its
-// centre.
+// The row stays C2 about its own centre: the middle glyph maps to itself under a
+// half turn and the outer two swap.
 //
-//   nub build-fff.mjs            write final/fff.svg and a tile version
-//   REPEATS=5 nub build-fff.mjs  a different number of glyphs
+//   nub build-fff.mjs               default spacing
+//   TRIM=0.06 nub build-fff.mjs     looser; 0 is tails at full length
+//   REPEATS=5 nub build-fff.mjs     a longer run
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { selfCrossings } from "./crossings.mjs"
-import { bezierSample } from "./fit-two.mjs"
+import { bezierSample, catmullPath } from "./fit-two.mjs"
 import { render } from "./lib.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -31,108 +31,99 @@ const finalDir = join(here, "final")
 mkdirSync(finalDir, { recursive: true })
 
 const REPEATS = Number(process.env.REPEATS ?? 3)
+// 0.11 is as close as the glyphs go before the loops start to interleave and the
+// mark reads as a thicket rather than three letters.
+const TRIM = Number(process.env.TRIM ?? 0.11)
 const { stroke, anchors } = JSON.parse(readFileSync(join(finalDir, "anchors.json"), "utf8"))
 
-/** Rotate an anchor list about a centre; tangent angles rotate with it. */
-function rotateAnchors(list, ang, cx, cy) {
-  const ca = Math.cos(ang)
-  const sa = Math.sin(ang)
-  return list.map((a) => ({
-    x: cx + (a.x - cx) * ca - (a.y - cy) * sa,
-    y: cy + (a.x - cx) * sa + (a.y - cy) * ca,
-    th: a.th + ang,
-    in: a.in,
-    out: a.out,
-  }))
+const dense = bezierSample(anchors, 400)
+let L = 0
+const cum = [0]
+for (let i = 1; i < dense.length; i += 1) {
+  L += Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1])
+  cum.push(L)
+}
+const idxAt = (len) => {
+  let lo = 0
+  let hi = cum.length - 1
+  while (lo < hi) {
+    const m = (lo + hi) >> 1
+    if (cum[m] < len) lo = m + 1
+    else hi = m
+  }
+  return lo
 }
 
-const shift = (list, dx, dy) => list.map((a) => ({ ...a, x: a.x + dx, y: a.y + dy }))
+const a = idxAt(L * TRIM)
+const b = idxAt(L * (1 - TRIM))
 
-// Level the two tips so the glyphs sit on a baseline rather than climbing.
-const start = anchors[0]
-const end = anchors[anchors.length - 1]
-const level = rotateAnchors(anchors, -Math.atan2(end.y - start.y, end.x - start.x), 256, 256)
-const s0 = level[0]
-const e0 = level[level.length - 1]
-const pitch = e0.x - s0.x
-console.log(`glyph tips levelled; pitch ${pitch.toFixed(1)} units`)
+// Level the TRIMMED ends, so the chain runs along a baseline.
+const ang = -Math.atan2(dense[b][1] - dense[a][1], dense[b][0] - dense[a][0])
+const ca = Math.cos(ang)
+const sa = Math.sin(ang)
+const spin = ([x, y]) => [256 + (x - 256) * ca - (y - 256) * sa, 256 + (x - 256) * sa + (y - 256) * ca]
+const rotated = dense.map(spin)
 
-// Chain: each copy's start tip lands exactly on the previous copy's end tip, so
-// the two share ONE anchor. Its tangent is unambiguous — the glyph's start and
-// end tangents are identical to the last bit, which is what C2 guarantees — but
-// its handles are not: it must take `in` from the arriving copy and `out` from
-// the departing one. They are the swapped pair (17.28 / 30.27), so inheriting
-// both from either side leaves a visible bulge and breaks the row's symmetry.
-let chain = level
-for (let i = 1; i < REPEATS; i += 1) {
-  const next = shift(level, pitch * i, 0)
-  const join = { ...chain[chain.length - 1], out: next[0].out }
-  chain = [...chain.slice(0, -1), join, ...next.slice(1)]
-}
+const head = rotated.slice(0, a + 1)
+const core = rotated.slice(a, b + 1)
+const tail = rotated.slice(b)
+const pitch = core[core.length - 1][0] - core[0][0]
+const step = Math.abs(core[core.length - 1][1] - core[0][1])
+console.log(`trim ${TRIM}: pitch ${pitch.toFixed(1)}, vertical step at each join ${step.toFixed(3)} units`)
 
-const dense = bezierSample(chain, 60)
-const crossings = selfCrossings(dense)
-console.log(`${REPEATS} glyphs -> ${chain.length - 1} cubic segments, ${crossings.length} self-crossings (expect ${2 * REPEATS})`)
+const shift = (pts, dx) => pts.map(([x, y]) => [x + dx, y])
+let row = [...head]
+for (let i = 0; i < REPEATS; i += 1) row = [...row, ...shift(core, pitch * i).slice(1)]
+row = [...row, ...shift(tail, pitch * (REPEATS - 1)).slice(1)]
 
-// C2 about the row's own centre: the middle glyph maps to itself, the outer pair swaps.
-const cx = (dense[0][0] + dense[dense.length - 1][0]) / 2
-const cy = (dense[0][1] + dense[dense.length - 1][1]) / 2
+const crossings = selfCrossings(row.filter((_, i) => i % 3 === 0))
+console.log(`${REPEATS} glyphs -> ${crossings.length} self-crossings (expect ${2 * REPEATS})`)
+
+const cx = (row[0][0] + row[row.length - 1][0]) / 2
+const cy = (row[0][1] + row[row.length - 1][1]) / 2
 let c2 = 0
-for (let i = 0; i < dense.length; i += 1) {
-  const a = dense[i]
-  const b = dense[dense.length - 1 - i]
-  c2 = Math.max(c2, Math.hypot(a[0] - (2 * cx - b[0]), a[1] - (2 * cy - b[1])))
+for (let i = 0; i < row.length; i += 1) {
+  const p = row[i]
+  const q = row[row.length - 1 - i]
+  c2 = Math.max(c2, Math.hypot(p[0] - (2 * cx - q[0]), p[1] - (2 * cy - q[1])))
 }
 console.log(`row C2 error about its own centre: ${c2.toExponential(2)} units`)
 
-function pathOf(list) {
-  let d = `M${list[0].x.toFixed(2)} ${list[0].y.toFixed(2)}`
-  for (let i = 0; i < list.length - 1; i += 1) {
-    const a = list[i]
-    const b = list[i + 1]
-    d += `C${(a.x + Math.cos(a.th) * a.out).toFixed(2)} ${(a.y + Math.sin(a.th) * a.out).toFixed(2)} ${(b.x - Math.cos(b.th) * b.in).toFixed(2)} ${(b.y - Math.sin(b.th) * b.in).toFixed(2)} ${b.x.toFixed(2)} ${b.y.toFixed(2)}`
-  }
-  return d
-}
-
-const xs = dense.map((p) => p[0])
-const ys = dense.map((p) => p[1])
-const pad = stroke / 2 + 14
+const path = catmullPath(row.filter((_, i) => i % 10 === 0))
+const xs = row.map((p) => p[0])
+const ys = row.map((p) => p[1])
+const pad = stroke / 2 + 16
 const box = {
   x: Math.min(...xs) - pad,
   y: Math.min(...ys) - pad,
   w: Math.max(...xs) - Math.min(...xs) + pad * 2,
   h: Math.max(...ys) - Math.min(...ys) + pad * 2,
 }
-
+const view = `${box.x.toFixed(1)} ${box.y.toFixed(1)} ${box.w.toFixed(1)} ${box.h.toFixed(1)}`
 const INK = `<defs><radialGradient id="ink" gradientUnits="userSpaceOnUse" cx="${(box.x + box.w / 2).toFixed(1)}" cy="${(box.y + box.h / 2).toFixed(1)}" r="${(box.w / 2).toFixed(1)}">
       <stop offset="0" stop-color="#ffdf7f"/><stop offset="0.62" stop-color="#eabe2c"/><stop offset="1" stop-color="#cf9412"/>
     </radialGradient></defs>`
-const d = pathOf(chain)
+const STROKE = `fill="none" stroke="url(#ink)" stroke-width="${stroke.toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"`
 
-writeFileSync(join(finalDir, "fff.svg"), `<svg width="${Math.round(box.w)}" height="${Math.round(box.h)}" viewBox="${box.x.toFixed(1)} ${box.y.toFixed(1)} ${box.w.toFixed(1)} ${box.h.toFixed(1)}" xmlns="http://www.w3.org/2000/svg">
+writeFileSync(join(finalDir, "fff.svg"), `<svg width="${Math.round(box.w)}" height="${Math.round(box.h)}" viewBox="${view}" xmlns="http://www.w3.org/2000/svg">
   ${INK}
-  <path d="${d}" fill="none" stroke="url(#ink)" stroke-width="${stroke.toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="${path}" ${STROKE}/>
 </svg>
 `)
-
-// On the dark field, and a square-tile version for comparison with the icon.
-writeFileSync(join(finalDir, "fff-dark.svg"), `<svg width="${Math.round(box.w)}" height="${Math.round(box.h)}" viewBox="${box.x.toFixed(1)} ${box.y.toFixed(1)} ${box.w.toFixed(1)} ${box.h.toFixed(1)}" xmlns="http://www.w3.org/2000/svg">
+writeFileSync(join(finalDir, "fff-dark.svg"), `<svg width="${Math.round(box.w)}" height="${Math.round(box.h)}" viewBox="${view}" xmlns="http://www.w3.org/2000/svg">
   ${INK}
   <rect x="${box.x.toFixed(1)}" y="${box.y.toFixed(1)}" width="${box.w.toFixed(1)}" height="${box.h.toFixed(1)}" fill="#0d0e10"/>
-  <path d="${d}" fill="none" stroke="url(#ink)" stroke-width="${stroke.toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="${path}" ${STROKE}/>
 </svg>
 `)
-
 const side = Math.max(box.w, box.h)
-writeFileSync(join(finalDir, "fff-tile.svg"), `<svg width="512" height="512" viewBox="${(box.x + box.w / 2 - side / 2).toFixed(1)} ${(box.y + box.h / 2 - side / 2).toFixed(1)} ${side.toFixed(1)} ${side.toFixed(1)}" xmlns="http://www.w3.org/2000/svg">
+const sx = box.x + box.w / 2 - side / 2
+const sy = box.y + box.h / 2 - side / 2
+writeFileSync(join(finalDir, "fff-tile.svg"), `<svg width="512" height="512" viewBox="${sx.toFixed(1)} ${sy.toFixed(1)} ${side.toFixed(1)} ${side.toFixed(1)}" xmlns="http://www.w3.org/2000/svg">
   ${INK}
-  <rect x="${(box.x + box.w / 2 - side / 2).toFixed(1)}" y="${(box.y + box.h / 2 - side / 2).toFixed(1)}" width="${side.toFixed(1)}" height="${side.toFixed(1)}" rx="${(side * 0.226).toFixed(1)}" fill="#0d0e10"/>
-  <path d="${d}" fill="none" stroke="url(#ink)" stroke-width="${stroke.toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="${sx.toFixed(1)}" y="${sy.toFixed(1)}" width="${side.toFixed(1)}" height="${side.toFixed(1)}" rx="${(side * 0.226).toFixed(1)}" fill="#0d0e10"/>
+  <path d="${path}" ${STROKE}/>
 </svg>
 `)
-
-for (const [name, w] of [["fff-dark", 1200], ["fff-tile", 512]]) {
-  render(join(finalDir, `${name}.svg`), join(finalDir, `${name}.png`), w)
-}
+for (const [name, w] of [["fff-dark", 1200], ["fff-tile", 512]]) render(join(finalDir, `${name}.svg`), join(finalDir, `${name}.png`), w)
 console.log(`wrote final/fff.svg, final/fff-dark.svg, final/fff-tile.svg (${Math.round(box.w)}x${Math.round(box.h)})`)

@@ -20,7 +20,9 @@ Three sheets of directions for the mark after the `fray` → `frizz` rename, eac
 
 Only HALF the path is fitted; the other half is that half's anchors rotated 180° and reversed with the handles swapped, so the symmetry lives in the path data and cannot drift. **Editing one side without mirroring the other breaks it.** The centre anchor's `in` and `out` must stay equal — letting them differ cost 2.28 units of asymmetry.
 
-`nub build-fff.mjs` chains the glyph into cursive `fff` ([`final/fff.svg`](final/fff.svg)) — one stroke, one free end each side, 6 self-crossings. The copies join by pure translation with no blending: because the glyph is C2, its entry and exit tangents are *identical*, so laying the next copy's start tip on the previous copy's end tip matches position and tangent at once. The shared anchor takes its `in` from the arriving copy and its `out` from the departing one; taking both from either side leaves a bulge and breaks the row's symmetry. `REPEATS=5` for a longer run.
+`nub build-fff.mjs` chains the glyph into cursive `fff` ([`final/fff.svg`](final/fff.svg)) — one stroke, one free end each side, 6 self-crossings, the row C2 about its own centre. The connecting tails are trimmed so the glyphs sit close; the full tail is restored only at the far left and right. Trimming equal arc length from both ends keeps the glyph C2, so its ends still leave in the same direction and the copies chain by translation alone.
+
+**Trim first, then level.** Levelling the untrimmed glyph and then cutting its tails leaves the new ends at different heights — 7.3 units apart at trim 0.09 — so a horizontal translation puts a visible step at every join. `TRIM=` adjusts spacing; past about 0.12 the loops interleave and it reads as a thicket. `REPEATS=` for a longer run.
 
 ## Fitting to a reference
 
