@@ -92,7 +92,7 @@ import {
   projectTranscriptPageAgentLifecycles,
 } from "./transcript.ts"
 import { openExternalUrl } from "./open-external.ts"
-import { openLocalFile, resolveOpenableFile } from "./local-file.ts"
+import { openLocalFile, readLocalMarkdown, resolveOpenableFile } from "./local-file.ts"
 import { openableFileRoots } from "./project.ts"
 import { ghInstalled, ghAuthed, ghRepo, gitGithubRemote, listItems, hydrateIssue, hydratePr, renderGithubPrompt, effectiveTemplate, DEFAULT_ISSUE_PROMPT, DEFAULT_PR_PROMPT } from "./github.ts"
 import { slugify, resolveSlug, resolveLegacyThreadFile, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock } from "./dispatch.ts"
@@ -2278,6 +2278,17 @@ export function createRouter(ctx: AppContext) {
         openRoots,
         { forceSystem: input.image === true },
       ),
+    }),
+
+    // A local Markdown file's source, for the built-in reader. Same openable-root gate as openLocalFile
+    // — the click that reaches here already had to pass it — plus an extension check on BOTH the
+    // requested and the canonical path, so this route reads Markdown or nothing. It is the only local
+    // gate whose bytes enter the page, which is exactly what a reader is: a link the user clicked,
+    // rendered here instead of thrown at the desktop opener.
+    localMarkdown: query({
+      input: z.object({ path: z.string().max(4096) }).strict(),
+      output: z.object({ path: z.string(), markdown: z.string(), truncated: z.boolean() }),
+      handler: async ({ input }) => readLocalMarkdown(input.path, openRoots),
     }),
 
     // Batch-classify path REFERENCES (as they appear in inline code) → their canonical openable path, or

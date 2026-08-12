@@ -1,5 +1,5 @@
 import { spawn, type SpawnOptions } from "node:child_process"
-import { realpathSync, statSync } from "node:fs"
+import { readFileSync, realpathSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { isAbsolute, join, resolve, sep } from "node:path"
 import type { LocalFileOpener } from "@frizz/shared"
@@ -55,6 +55,33 @@ export function resolveOpenableFile(
   } catch {
     return null
   }
+}
+
+// A local Markdown file is the ONE local-file kind Frizz renders itself instead of handing to the
+// desktop opener, so its bytes are the only ones this gate lets into the page. Both the requested path
+// and its canonical real path must carry the extension: a normal `.md` symlink (a skill file linked out
+// of `.agents/`) still reads, while a symlink whose target is some other file cannot ride a `.md` href
+// into the reader.
+export const MARKDOWN_FILE_EXT = /\.(?:md|markdown)$/i
+
+// Ceiling on one click's read. A rendered document is prose a person is about to read, not a data
+// channel — past a megabyte the renderer is the wrong tool and the browser pays for the whole string.
+// Over the cap the reader still opens, truncated at a line boundary, and says so.
+export const MARKDOWN_READ_LIMIT = 1024 * 1024
+
+export type LocalMarkdownRead = { path: string; markdown: string; truncated: boolean }
+
+export function readLocalMarkdown(rawPath: string, roots: readonly string[]): LocalMarkdownRead {
+  if (!MARKDOWN_FILE_EXT.test(rawPath.trim())) throw new Error("Local file is not a Markdown file")
+  const path = resolveLocalFile(rawPath, roots)
+  if (!MARKDOWN_FILE_EXT.test(path)) throw new Error("Local file is not a Markdown file")
+  const bytes = readFileSync(path)
+  if (bytes.length <= MARKDOWN_READ_LIMIT) return { path, markdown: bytes.toString("utf8"), truncated: false }
+  // Cut on the last newline inside the cap so the tail is a whole line rather than a split multi-byte
+  // character or half a fenced block; fall back to the raw cap if the prefix holds no newline at all.
+  const head = bytes.subarray(0, MARKDOWN_READ_LIMIT)
+  const lastBreak = head.lastIndexOf(0x0a)
+  return { path, markdown: head.subarray(0, lastBreak > 0 ? lastBreak : head.length).toString("utf8"), truncated: true }
 }
 
 function defaultSpawn(command: string, args: readonly string[], options: SpawnOptions) {

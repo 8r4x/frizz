@@ -36,7 +36,7 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
     const rendered = await page.$eval(".md-body", (node) => {
       const img = node.querySelector("img")
       return {
-        button: node.querySelector("button")?.getAttribute("data-local-path"),
+        buttons: [...node.querySelectorAll("button")].map((b) => b.getAttribute("data-local-path")),
         imageSrc: img?.getAttribute("src"),
         imagePath: img?.getAttribute("data-local-path"),
         imageAlt: img?.getAttribute("alt"),
@@ -47,12 +47,27 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
       }
     })
     assert.deepEqual(rendered, {
-      button: "/fixture/report.md",
+      buttons: ["/fixture/report.md", "/fixture/contract.pdf"],
       imageSrc: "/_frizz/local-image?path=%2Ffixture%2Fshot.png",
       imagePath: "/fixture/shot.png",
       imageAlt: "descriptive alt",
       framedIn: "SPAN",
       frameInsideParagraph: true,
+    })
+
+    // The ROUTING split, which the markup above deliberately cannot show: both links are the same
+    // `data-local-path` button, and only the click decides where each one goes. A `.md` file is prose
+    // Frizz renders ITSELF — it must push the reader drawer and never reach the desktop opener — while
+    // any other local file must still be handed to the opener and open no drawer.
+    await page.click('button[data-local-path="/fixture/report.md"]')
+    await page.click('button[data-local-path="/fixture/contract.pdf"]')
+    const routed = await page.evaluate(() => ({
+      opened: (window as unknown as { __localFileFixtureOpened?: string[] }).__localFileFixtureOpened ?? [],
+      drawers: (window as unknown as { __localFileFixtureDrawers: () => unknown[] }).__localFileFixtureDrawers(),
+    }))
+    assert.deepEqual(routed, {
+      opened: ["/fixture/contract.pdf"],
+      drawers: [{ kind: "markdown", path: "/fixture/report.md" }],
     })
     assert.deepEqual(pageErrors, [])
   } finally {

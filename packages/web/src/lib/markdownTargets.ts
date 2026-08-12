@@ -88,3 +88,45 @@ export function localImageUrlForTarget(target: LocalMarkdownTarget): string | nu
     ? localImageUrl(target.posixPath)
     : null
 }
+
+// Must match the server's `MARKDOWN_FILE_EXT`. A local path with this extension is rendered by Frizz's
+// own reader drawer instead of being handed to the desktop opener — the one local file kind the app
+// knows how to show. The strip mirrors an editor cursor suffix (`README.md:12`) the way
+// resolveOpenableFile does, so a line-anchored reference still reads as Markdown.
+const MARKDOWN_FILE_PATH = /\.(?:md|markdown)$/i
+
+export function isLocalMarkdownFile(path: string): boolean {
+  return MARKDOWN_FILE_PATH.test(path.trim().replace(/:\d+(?::\d+)?$/, ""))
+}
+
+// Resolve a RELATIVE Markdown destination against the directory of the document being rendered. Repo
+// docs link to each other relatively on purpose (`./ARCHITECTURE.md`, `../scripts/shot.mjs`), and with
+// no base they are neither a local path nor a working URL — the anchor became a same-origin link that
+// navigated out of Frizz. Only the renderer that knows where a document CAME FROM passes a base, so
+// chat prose (which has no directory) is unaffected. Returns null for anything already absolute, a
+// fragment, a query, or a scheme; the query/fragment tail of a resolved path is dropped, since a
+// filesystem path has neither.
+export function resolveRelativeLocalPath(raw: string | null | undefined, baseDir: string): string | null {
+  const href = raw?.trim()
+  if (!href || !baseDir.startsWith("/")) return null
+  if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return null // http(s):, file:, mailto:, cursor:, …
+  if (href.startsWith("/") || href.startsWith("#") || href.startsWith("?")) return null
+  const relative = decodePath(href.replace(/[?#].*$/u, ""))
+  if (!relative) return null
+  const segments = `${baseDir}/${relative}`.split("/")
+  const stack: string[] = []
+  for (const segment of segments) {
+    if (!segment || segment === ".") continue
+    if (segment === "..") stack.pop()
+    else stack.push(segment)
+  }
+  // `..` may climb above the base; the server's openable-root gate is what actually confines the
+  // result, exactly as it does for an absolute path an author wrote by hand.
+  return `/${stack.join("/")}`
+}
+
+/** The directory a document at `path` lives in — the base for its relative links. */
+export function localFileDir(path: string): string {
+  const cut = path.lastIndexOf("/")
+  return cut > 0 ? path.slice(0, cut) : "/"
+}

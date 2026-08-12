@@ -9,6 +9,7 @@ import { ThreadSheet } from "./ThreadSheet.tsx"
 import { SubAgentSheet } from "./SubAgentSheet.tsx"
 import { BackgroundShellSheet } from "./BackgroundShellSheet.tsx"
 import { PlanDrawer } from "./PlanDrawer.tsx"
+import { MarkdownDrawer } from "./MarkdownDrawer.tsx"
 import { ThreadDrawer } from "./ThreadDrawer.tsx"
 import { ErrorBoundary, DrawerErrorSheet } from "./ErrorBoundary.tsx"
 
@@ -98,6 +99,8 @@ export function DrawerStack() {
           />
         ) : d.kind === "plan" ? (
           <PlanDrawer key={d.id} id={d.id} path={d.path ?? d.slug} title={d.label ?? d.slug} depth={i} widthDepth={widthDepth} />
+        ) : d.kind === "markdown" ? (
+          <MarkdownDrawer key={d.id} id={d.id} path={d.path ?? d.slug} title={d.label ?? d.slug} depth={i} widthDepth={widthDepth} />
         ) : (
           <ThreadDrawer
             key={d.id}

@@ -1,5 +1,6 @@
 import { rpc } from "../api/rpc.ts"
-import { showToast } from "../store.ts"
+import { pushMarkdownDrawer, showToast } from "../store.ts"
+import { isLocalMarkdownFile } from "./markdownTargets.ts"
 
 // One delegated listener covers every sanitized markdown surface (chat, plans, the doc drawer, and
 // drawers). It never follows file:// or an accidental same-origin pathname: only explicit data
@@ -12,6 +13,15 @@ export function installLocalFileLinkInterceptor(): () => void {
     if (!source || !path) return
     event.preventDefault()
     event.stopPropagation()
+    // A `.md` file is prose Frizz can render itself, so it opens in the built-in reader instead of
+    // launching an editor. The decision lives HERE, in the one place every local-path click passes
+    // through, rather than in each producer of a `data-local-path` — markdown links, resolved inline-code
+    // paths, attachment chips and the Codex file rows all get the reader from this single branch. An
+    // image is excluded on its own attribute: those have a viewer of their own.
+    if (source.dataset.localImage !== "true" && isLocalMarkdownFile(path)) {
+      pushMarkdownDrawer(path)
+      return
+    }
     void open(path, source.dataset.localImage === "true")
   }
   document.addEventListener("click", handler)

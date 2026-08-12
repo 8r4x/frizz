@@ -1,7 +1,7 @@
 import { Marked } from "marked"
 import type { Token, Tokens, TokenizerAndRendererExtension } from "marked"
 import { CODE_BLOCK_CLASS, renderHighlightedCode } from "./syntaxHighlight.ts"
-import { localImageUrlForTarget, localMarkdownTarget } from "./markdownTargets.ts"
+import { isLocalMarkdownFile, localImageUrlForTarget, localMarkdownTarget, resolveRelativeLocalPath } from "./markdownTargets.ts"
 import { prefixedAppRoute } from "./base-path.ts"
 import { FRAMED_IMAGE, IMAGE_FRAME, IMAGE_FRAME_MAT } from "../components/ImageFrame.tsx"
 
@@ -248,15 +248,26 @@ export const MARKDOWN_OPTIONS = {
 
 const markdown = new Marked(MARKDOWN_OPTIONS)
 
+// The same renderer with CommonMark's soft-break rule restored, for prose that is a FILE rather than a
+// chat message. A document on disk is routinely hard-wrapped at some column — the whole README ecosystem
+// is — and `breaks: true` turns every one of those wraps into a visible ragged line break. Chat prose
+// keeps the hard-break convention it was written under; a rendered `.md` file gets the one its author
+// used. Nothing else differs, so a document and a message still parse identically in every other way.
+const documentMarkdown = new Marked({ ...MARKDOWN_OPTIONS, breaks: false })
+
 // Agent-written markdown → sanitized HTML. Shared by the chat view, the To-dos pager, and the
 // thread-details drawer. marked output goes through a small allowlist sanitizer (content is only
 // semi-trusted): script-like tags dropped, event handlers and javascript: URLs stripped, links
 // forced to new tabs. Parsing happens in a detached template so nothing executes.
-export function mdToHtml(md: string): string {
+//
+// `baseDir` / `document` are set only by the built-in file reader (MarkdownDrawer), which knows where
+// the prose came from: relative links resolve against that directory, and soft wraps stay soft.
+export function mdToHtml(md: string, opts?: { baseDir?: string; document?: boolean }): string {
   if (!md.trim()) return ""
   // breaks: single newlines are HARD breaks (chat convention — Slack/GitHub-comment style);
   // CommonMark default silently glued "item ✅\nitem ✅" lists onto one line.
-  return sanitize(markdown.parse(md, { async: false }) as string, { block: true })
+  const parser = opts?.document ? documentMarkdown : markdown
+  return sanitize(parser.parse(md, { async: false }) as string, { block: true, baseDir: opts?.baseDir })
 }
 
 // INLINE-only render: emphasis/strong/code/del/links but NO block wrapping (`<p>`, headings, lists).
@@ -313,14 +324,19 @@ const DROP_WITH_CONTENT = new Set([
 // every other rendered picture in the app is. FALSE on the inline path: that result is dropped into a
 // host that is one line tall (an answer chip, a caption), where a block frame would burst the row. The
 // picture still renders there, bare and inline, exactly as it did before frames existed.
-function sanitize(dirty: string, { inertInteractive = false, block = false } = {}): string {
+// `baseDir` — the directory of the FILE this prose was read from, when it came from one. Only the
+// built-in reader has it; every other surface renders prose with no filesystem location of its own.
+type WalkContext = { inertInteractive: boolean; block: boolean; baseDir?: string }
+
+function sanitize(dirty: string, { inertInteractive = false, block = false, baseDir }: Partial<WalkContext> = {}): string {
   const tpl = document.createElement("template")
   tpl.innerHTML = dirty
-  walk(tpl.content, inertInteractive, block)
+  walk(tpl.content, { inertInteractive, block, baseDir })
   return tpl.innerHTML
 }
 
-function walk(node: ParentNode, inertInteractive: boolean, block: boolean) {
+function walk(node: ParentNode, ctx: WalkContext) {
+  const { inertInteractive, block } = ctx
   for (const el of Array.from(node.children)) {
     const tag = el.tagName.toLowerCase()
     if (!ALLOWED_TAGS.has(tag)) {
@@ -329,7 +345,7 @@ function walk(node: ParentNode, inertInteractive: boolean, block: boolean) {
       // the rest of the block, so `el.remove()` silently deleted everything after it. Keeping the
       // children (what DOMPurify does) costs only the bracketed token itself.
       if (DROP_WITH_CONTENT.has(tag)) el.remove()
-      else unwrap(el, inertInteractive, block)
+      else unwrap(el, ctx)
       continue
     }
     if (tag === "a" && inertInteractive) {
@@ -338,9 +354,10 @@ function walk(node: ParentNode, inertInteractive: boolean, block: boolean) {
       const span = document.createElement("span")
       while (el.firstChild) span.append(el.firstChild)
       el.replaceWith(span)
-      walk(span, inertInteractive, block)
+      walk(span, ctx)
       continue
     }
+    if (tag === "a" || tag === "img") rebaseRelative(el, tag === "a" ? "href" : "src", ctx.baseDir)
     if (tag === "a") {
       const inApp = prefixedAppRoute(el.getAttribute("href"))
       if (inApp) el.setAttribute("href", inApp)
@@ -358,11 +375,15 @@ function walk(node: ParentNode, inertInteractive: boolean, block: boolean) {
         } else {
           // Don't turn a filesystem path into a bogus localhost URL or inert code. The app-wide
           // same-origin click handler sends this explicit action to the server, which realpath-gates
-          // it before invoking the selected desktop opener.
+          // it before invoking the selected desktop opener — EXCEPT for a `.md` file, which that same
+          // handler opens in Frizz's own reader drawer instead. The markup is identical either way (one
+          // `data-local-path` button); only the title says which of the two the click will do, because
+          // the routing decision belongs to the click handler and not to every producer of a path.
+          const readable = target.posixPath && isLocalMarkdownFile(target.posixPath)
           const button = document.createElement("button")
           button.type = "button"
           button.className = "local-file-action"
-          button.title = target.display
+          button.title = readable ? `Read ${target.display}` : target.display
           if (target.posixPath) button.setAttribute("data-local-path", target.posixPath)
           while (el.firstChild) button.append(el.firstChild)
           el.replaceWith(button)
@@ -411,8 +432,17 @@ function walk(node: ParentNode, inertInteractive: boolean, block: boolean) {
       el.setAttribute("target", "_blank")
       el.setAttribute("rel", "noopener noreferrer")
     }
-    walk(el, inertInteractive, block)
+    walk(el, ctx)
   }
+}
+
+// Rewrite a relative destination into the absolute path it names on disk, so the branches below see the
+// same thing they would have seen had the author written the path out in full. A no-op without a base
+// directory (every surface but the file reader) and for anything already absolute or schemed.
+function rebaseRelative(el: Element, attr: "href" | "src", baseDir: string | undefined): void {
+  if (!baseDir) return
+  const resolved = resolveRelativeLocalPath(el.getAttribute(attr), baseDir)
+  if (resolved) el.setAttribute(attr, resolved)
 }
 
 // Wrap a local Markdown image in the SAME frame every other rendered picture in the app sits in —
@@ -445,9 +475,9 @@ function frameImage(img: Element) {
 
 // Splice an element's children in where the element stood. They are sanitized BEFORE the splice: the
 // caller is iterating a snapshot of the parent's children and would never revisit them otherwise.
-function unwrap(el: Element, inertInteractive: boolean, block: boolean) {
+function unwrap(el: Element, ctx: WalkContext) {
   const frag = el.ownerDocument.createDocumentFragment()
   while (el.firstChild) frag.append(el.firstChild)
-  walk(frag, inertInteractive, block)
+  walk(frag, ctx)
   el.replaceWith(frag)
 }

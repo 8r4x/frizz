@@ -62,7 +62,9 @@ test("a Markdown image is framed from the same constants, in spans, only in bloc
   // Framing is BLOCK-prose only: the inline path drops its result into a one-line host (an answer chip,
   // a caption) that a block frame would burst.
   assert.match(markdown, /if \(block\) frameImage\(el\)/)
-  assert.match(markdown, /markdown\.parse\(md, \{ async: false \}\) as string, \{ block: true \}/)
+  // `parser` since the built-in `.md` reader added a second Marked instance (soft breaks for a FILE);
+  // both go through this one call, so the block flag is still asserted on the single block path.
+  assert.match(markdown, /parser\.parse\(md, \{ async: false \}\) as string, \{ block: true[,}]/)
   assert.equal(/parseInline\([^)]*\)[^)]*\{[^}]*block: true/.test(markdown), false, "the inline path must not frame")
 })
 

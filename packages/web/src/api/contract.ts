@@ -192,6 +192,9 @@ export interface Api {
   threadTerminalCommand(input: { slug: string }): Promise<{ command: string | null; mode: "attach" | "resume" | "unavailable"; reason: string | null }>
   openExternal(input: { url: string }): Promise<void>
   openLocalFile(input: { path: string; image?: boolean }): Promise<{ action: "opened" | "copy"; path: string }>
+  // A disk-local Markdown file's source, for the built-in reader drawer. Openable-root gated and
+  // extension-locked server-side; `truncated` marks a file cut at the read ceiling.
+  localMarkdown(input: { path: string }): Promise<{ path: string; markdown: string; truncated: boolean }>
   // Classify path references (as they appear in inline code) → canonical openable path, or null when the
   // candidate doesn't resolve to a real file under the server's openable roots. Drives clickable inline code.
   resolveLocalPaths(input: { paths: string[] }): Promise<{ resolved: { input: string; path: string | null }[] }>
@@ -311,6 +314,7 @@ export const PROCEDURES = {
   threadTerminalCommand: "query",
   openExternal: "mutation",
   openLocalFile: "mutation",
+  localMarkdown: "query",
   resolveLocalPaths: "query",
   markComplete: "mutation",
   setThreadStatus: "mutation",

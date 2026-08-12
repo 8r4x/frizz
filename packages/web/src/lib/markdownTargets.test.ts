@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { localImageUrl, localImageUrlForTarget, localMarkdownTarget } from "./markdownTargets.ts"
+import { isLocalMarkdownFile, localFileDir, localImageUrl, localImageUrlForTarget, localMarkdownTarget, resolveRelativeLocalPath } from "./markdownTargets.ts"
 
 test("absolute POSIX and file URLs become local targets with decoded proxy paths", () => {
   assert.deepEqual(
@@ -54,4 +54,35 @@ test("malformed URL encoding cannot throw or become an app navigation", () => {
     display: "/Users/me/bad%ZZ.png",
     posixPath: "/Users/me/bad%ZZ.png",
   })
+})
+
+test("a local Markdown file is recognized by extension, editor suffix and all", () => {
+  for (const path of ["/repo/README.md", "/repo/docs/a.MARKDOWN", "~/.claude/CLAUDE.md", "/repo/AGENTS.md:42", "/repo/AGENTS.md:42:7"])
+    assert.equal(isLocalMarkdownFile(path), true, path)
+  for (const path of ["/repo/notes.txt", "/repo/app.mdx", "/repo/md", "/repo/a.md.bak", "/repo/docs"])
+    assert.equal(isLocalMarkdownFile(path), false, path)
+})
+
+test("a document's relative links resolve against its own directory", () => {
+  const base = "/repo/docs"
+  assert.equal(resolveRelativeLocalPath("guide.md", base), "/repo/docs/guide.md")
+  assert.equal(resolveRelativeLocalPath("./guide.md", base), "/repo/docs/guide.md")
+  assert.equal(resolveRelativeLocalPath("../AGENTS.md", base), "/repo/AGENTS.md")
+  assert.equal(resolveRelativeLocalPath("a/../b/c.md", base), "/repo/docs/b/c.md")
+  assert.equal(resolveRelativeLocalPath("shots/one%20two.png", base), "/repo/docs/shots/one two.png")
+  // A filesystem path has no query or fragment; the tail is dropped rather than baked into the name.
+  assert.equal(resolveRelativeLocalPath("guide.md#section", base), "/repo/docs/guide.md")
+})
+
+test("only a genuinely relative destination is rebased", () => {
+  const base = "/repo/docs"
+  for (const href of ["/abs/x.md", "https://example.com/x.md", "mailto:a@b.c", "file:///x.md", "#anchor", "?q=1", "", "   "])
+    assert.equal(resolveRelativeLocalPath(href, base), null, JSON.stringify(href))
+  // No base (every surface but the file reader) means no rebasing at all.
+  assert.equal(resolveRelativeLocalPath("guide.md", ""), null)
+})
+
+test("a document's base directory is its parent", () => {
+  assert.equal(localFileDir("/repo/docs/guide.md"), "/repo/docs")
+  assert.equal(localFileDir("/README.md"), "/")
 })

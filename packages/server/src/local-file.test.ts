@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { openLocalFile, resolveLocalFile, resolveOpenableFile } from "./local-file.ts"
+import { MARKDOWN_READ_LIMIT, openLocalFile, readLocalMarkdown, resolveLocalFile, resolveOpenableFile } from "./local-file.ts"
 
 test("local opener canonicalizes a regular file inside its trusted root and uses fixed argv", () => {
   const root = mkdtempSync(join(tmpdir(), "frizz-local-file-"))
@@ -61,4 +61,43 @@ test("resolveOpenableFile classifies references: home (~), project-relative, abs
   assert.equal(resolveOpenableFile("packages/web", project, roots, home), null) // a directory, not a file
   assert.equal(resolveOpenableFile("/etc/hosts", project, roots, home), null) // outside the openable roots
   assert.equal(resolveOpenableFile("   ", project, roots, home), null)
+})
+
+test("the Markdown reader admits only Markdown, only inside the roots, and only as a real file", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "frizz-local-md-")))
+  const outside = realpathSync(mkdtempSync(join(tmpdir(), "frizz-local-md-outside-")))
+  writeFileSync(join(root, "README.md"), "# Title\n\nBody.\n")
+  writeFileSync(join(root, "notes.txt"), "not markdown")
+  writeFileSync(join(outside, "secret.md"), "no")
+  // A `.md` name whose canonical target is something else: the extension is on the href, not the file.
+  writeFileSync(join(root, "real.conf"), "PASSWORD=hunter2")
+  symlinkSync(join(root, "real.conf"), join(root, "decoy.md"))
+  // …while an ordinary symlinked doc (a skill file linked out of a shared tree) still reads.
+  symlinkSync(join(root, "README.md"), join(root, "linked.md"))
+
+  assert.deepEqual(readLocalMarkdown(join(root, "README.md"), [root]), {
+    path: join(root, "README.md"),
+    markdown: "# Title\n\nBody.\n",
+    truncated: false,
+  })
+  assert.equal(readLocalMarkdown(join(root, "linked.md"), [root]).path, join(root, "README.md"))
+  assert.throws(() => readLocalMarkdown(join(root, "notes.txt"), [root]), /not a Markdown file/)
+  assert.throws(() => readLocalMarkdown(join(root, "decoy.md"), [root]), /not a Markdown file/)
+  assert.throws(() => readLocalMarkdown(join(outside, "secret.md"), [root]), /trusted roots/)
+  assert.throws(() => readLocalMarkdown(join(root, "gone.md"), [root]), /was not found/)
+  assert.throws(() => readLocalMarkdown("README.md", [root]), /absolute/)
+})
+
+test("an oversized Markdown file is cut at a line boundary and reports the cut", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "frizz-local-md-big-")))
+  const file = join(root, "huge.md")
+  const line = `${"x".repeat(99)}\n`
+  writeFileSync(file, line.repeat(Math.ceil((MARKDOWN_READ_LIMIT * 1.5) / line.length)))
+  const read = readLocalMarkdown(file, [root])
+  assert.equal(read.truncated, true)
+  assert.ok(read.markdown.length <= MARKDOWN_READ_LIMIT, "the cut respects the ceiling")
+  assert.ok(read.markdown.length > MARKDOWN_READ_LIMIT - line.length, "the cut takes the whole prefix it can")
+  // Whole lines only — the tail is never a half-written line (nor a split multi-byte character).
+  assert.equal(read.markdown.endsWith("x".repeat(99)), true)
+  assert.equal(read.markdown.split("\n").every((l) => l === "" || l.length === 99), true)
 })
