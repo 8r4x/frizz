@@ -64,12 +64,25 @@ export function ThreadLifecycleFooter({
       // its two pills against 20.5px between its two icons on one uniform `gap-1.5`).
       className={`${sticky ? "z-20" : BLOCK_RADIUS_INNER_BOTTOM} flex min-h-10 shrink-0 flex-wrap items-center justify-end ${STRIP_INK_GAP} border-t border-border/70 bg-panel/95 px-3 pt-2 text-[12px] ${safeArea ? "pb-[max(0.5rem,env(safe-area-inset-bottom))]" : "pb-2"} backdrop-blur-sm`}
     >
-      {/* Bottom-LEFT cluster: background readings and presence markers, held away from the lifecycle
-          buttons by the one `mr-auto` on this group. The readings render nothing when they have nothing
-          to say — an empty flex box is zero-width, which is what keeps the strip laid out as it was
-          before any of this existed. RecurringPromptControl is the one CONTROL here and therefore the one
-          permanent child: a button that only appears once its feature is armed cannot arm it. */}
+      {/* Bottom-LEFT cluster: the two MAINTENANCE verbs, then the background readings and presence
+          markers, held away from the lifecycle buttons by the one `mr-auto` on this group. The readings
+          render nothing when they have nothing to say — an empty flex box is zero-width, which is what
+          keeps the strip laid out as it was before any of this existed.
+          Reload/Restart lead the cluster rather than trailing it, because everything after them comes
+          and goes over a thread's life (the meter needs context data, the hourglass a live park, the
+          heartbeat an armed prompt) and a clickable target that slides sideways when a readout appears
+          is worse than one pinned to the strip's left edge. Their `-mx` ink trims (lib/iconRhythm.ts)
+          pull the leftmost box inside the footer's `px-3`, which is the point: 12px of PADDING then
+          becomes 12px of ink clearance, the same distance the trims buy between every other pair. */}
       <span className={`mr-auto flex items-center ${STRIP_INK_GAP}`}>
+        {/* Gated on the same `done` as the right-hand verbs: an archived thread offers no verbs at all
+            (threadLifecycleAvailability), and moving these across the strip must not change that. */}
+        {!available.done && (
+          <>
+            <ReloadPluginsButton thread={thread} />
+            <RestartWorkerButton thread={thread} />
+          </>
+        )}
         <ContextMeter thread={thread} />
         <PendingSnooze thread={thread} />
         <RecurringPromptControl thread={thread} />
@@ -80,8 +93,6 @@ export function ThreadLifecycleFooter({
         <DoneReadout />
       ) : (
         <>
-          <ReloadPluginsButton thread={thread} />
-          <RestartWorkerButton thread={thread} />
           {available.snooze && <SnoozeButton thread={thread} onSnoozed={onSnoozed} />}
           <StateButton thread={thread} onArchived={onArchived} onDismissCancel={onDismissCancel} />
         </>
