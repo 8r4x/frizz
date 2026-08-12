@@ -20,6 +20,7 @@ import {
 import {
   acquireGlobalLaunchLock,
   allocatePort,
+  boardAddress,
   EXPOSED_WARNING,
   PUBLIC_ORIGIN_WARNING,
   expectedOwnerHealth,
@@ -29,11 +30,12 @@ import {
   probeFrizz,
   readPreferredPort,
   resolveBindSelection,
-  resolveWorkspace,
+  resolveLaunchIntent,
   waitForWorkspace,
   workspaceFromLaunchTarget,
   workspaceLaunchTarget,
   type CliOptions,
+  type LaunchIntent,
   type Workspace,
 } from "./launcher.ts";
 import {
@@ -136,6 +138,7 @@ const bind = (() => {
   try { return resolveBindSelection(options, process.env); } catch (error) { return fail(error); }
 })();
 
+let launchIntent: LaunchIntent | undefined;
 const workspace: Workspace = (() => {
   try {
   // BEFORE the workspace is resolved, because resolving it already shells out to `git` and to `tmux`
@@ -152,11 +155,23 @@ const workspace: Workspace = (() => {
     else assertLaunchPrerequisites();
   }
   const pinned = projectLaunchTargetFromEnvironment(process.env);
-  if (reexec) {
+  if (reexec || process.env.FRIZZ_PRODUCTION_SUPERVISOR === "1") {
     if (!pinned) throw new Error("registry successor is missing its pinned project identity");
     return workspaceFromLaunchTarget(pinned);
   }
-  return resolveWorkspace(options.repoPath);
+  // ONE launch policy for both launchers. This called resolveWorkspace directly, which adopts
+  // whatever directory it is handed — so `frizz` in $HOME minted a project id inside Frizz's own
+  // `~/.frizz` state root, the failure frizz-dev was fixed for in 95d81bd and this file was not.
+  // A repository still opens as itself and is still adopted on sight; see resolveLaunchIntent.
+  const intent = resolveLaunchIntent(options.repoPath);
+  if (intent.kind === "empty")
+    throw new Error(
+      intent.reason === "home"
+        ? "frizz cannot open your home directory as a project, and there is no other project to show yet. cd into a repository and run frizz there."
+        : `${intent.directory} is not a Frizz project yet, and there is no other project to show. Run frizz inside a repository, or add this one from the projects page once a board is open.`,
+    );
+  launchIntent = intent;
+  return intent.workspace;
   } catch (error) { return fail(error); }
 })();
 process.chdir(workspace.root);
@@ -219,6 +234,25 @@ function ownSlug(): string | undefined {
     // The registry is an INDEX. If it cannot be written, opening the board unprefixed still works.
     return undefined;
   }
+}
+
+let cachedSlugPath: string | undefined;
+/**
+ * Where to land: this project's board, the grid, or the grid with a directory to ask about.
+ *
+ * `?add=` is a REQUEST, not a registration — nothing on disk changes until the operator confirms on
+ * the page, which is the only reason an unmarked directory is safe to point the launcher at at all.
+ */
+function slugPath(): string {
+  if (cachedSlugPath === undefined) {
+    if (launchIntent?.kind === "grid") cachedSlugPath = "/";
+    else if (launchIntent?.kind === "offer") cachedSlugPath = `/?add=${encodeURIComponent(launchIntent.directory)}`;
+    else {
+      const slug = ownSlug();
+      cachedSlugPath = slug ? `/project/${slug}` : "";
+    }
+  }
+  return cachedSlugPath;
 }
 
 async function joinRunningFrizz(): Promise<{ port: number; slug: string } | undefined> {
@@ -284,7 +318,7 @@ async function openOrPrint(port: number, reused: boolean, path = ""): Promise<vo
   const home = homedir();
   readout.ready(
     [
-      { label: "Local", value: `${url}/`, accent: true },
+      { label: "Local", value: boardAddress(url), accent: true },
       ...network.map((address) => ({ label: "Network", value: `${address}/`, accent: true })),
       ...(publicOrigin ? [{ label: "Public", value: `${publicOrigin}/`, accent: true }] : []),
       { label: "Project", value: `${workspace.name} — ${tildePath(workspace.root, home)}` },
@@ -417,12 +451,14 @@ try {
   }
   const existing = await existingPort();
   if (existing) {
-    const slug = ownSlug();
-    await openOrPrint(existing, true, slug ? `/project/${slug}` : "");
+    await openOrPrint(existing, true, slugPath());
     process.exit(0);
   }
+  // slugPath(), not the joined slug: that slug names the project this launch is HOSTED on, which is
+  // the project to open only when the intent is `open`. A `grid`/`offer` launch rides on the most
+  // recent project and must still land on the grid rather than opening someone else's board.
   const joined = await joinRunningFrizz();
-  if (joined) { await openOrPrint(joined.port, true, `/project/${joined.slug}`); process.exit(0); }
+  if (joined) { await openOrPrint(joined.port, true, slugPath()); process.exit(0); }
   const claim = tryAcquireProjectLaunchOwner(target, "launcher");
   if (claim.kind !== "acquired") throw new Error("Frizz is starting for this project; retry shortly");
   let release: (() => void) | undefined = await acquireGlobalLaunchLock();
@@ -461,8 +497,7 @@ try {
     // launch off its remembered port.
     portReservation();
     portReservation = undefined;
-    const slug = ownSlug();
-    await openOrPrint(port, false, slug ? `/project/${slug}` : "");
+    await openOrPrint(port, false, slugPath());
     await running;
   } finally { release?.(); portReservation?.(); claim.lease.release(); }
 } catch (error) {

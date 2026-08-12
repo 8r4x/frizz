@@ -225,6 +225,19 @@ export function isExistingProjectRoot(dir: string): boolean {
   return existingProjectId(dir) !== undefined
 }
 
+/**
+ * Whether this directory is a project in its own right — a VCS checkout, or a language manifest.
+ *
+ * The markers discoverProjectRoot walks UP for, asked about ONE directory. That is what separates the
+ * two cases the launcher has to tell apart: `frizz` in a repository is someone opening that
+ * repository, and Frizz adopts it on the spot; `frizz` in `~/Downloads` is a command typed in the
+ * wrong terminal, and gets offered rather than adopted. Never a substitute for isHomeDirectory —
+ * $HOME frequently carries a marker and is still never a project.
+ */
+export function hasProjectMarker(dir: string): boolean {
+  return hasAny(dir, REPO_MARKERS) || hasAny(dir, PROJECT_MARKERS)
+}
+
 export function discoverProjectRoot(cwd = process.cwd(), home = homedir()): string {
   let dir: string
   try {

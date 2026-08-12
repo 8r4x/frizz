@@ -28,6 +28,7 @@ import { DEFAULT_DEV_PORT, fallbackPort } from "@frizz/shared";
 import {
   acquireGlobalLaunchLock,
   allocatePort,
+  boardAddress,
   resolveLaunchIntent,
   EXPOSED_WARNING,
   PUBLIC_ORIGIN_WARNING,
@@ -674,7 +675,7 @@ async function openOrPrint(
   }
   readout.ready(
     [
-      { label: "Local", value: `${url}/`, accent: true },
+      { label: "Local", value: boardAddress(url), accent: true },
       ...network.map((address) => ({ label: "Network", value: `${address}/`, accent: true })),
       ...(publicOrigin ? [{ label: "Public", value: `${publicOrigin}/`, accent: true }] : []),
       { label: "Project", value: `${workspace.name} — ${tildePath(workspace.root, home)}` },
@@ -859,7 +860,11 @@ try {
   {
     const joined = await joinRunningFrizz();
     if (joined) {
-      await openOrPrint(joined.port, true, `/project/${joined.slug}`);
+      // slugPath(), not the joined slug: the slug names the project this launch is HOSTED on, which
+      // is only the project to open when the intent is `open`. A `grid`/`offer` launch is hosted on
+      // the most recent project and must still land on the grid — hard-coding the host's board here
+      // is what made `frizz-dev` in an unadopted directory open somebody else's board outright.
+      await openOrPrint(joined.port, true, slugPath());
       process.exit(0);
     }
   }
@@ -999,7 +1004,10 @@ try {
     // browser row showed a ✓ while the server row above it was still spinning — a later step
     // finishing before an earlier one, which reads as the display being wrong.
     readout?.settle("server", "done", `port ${port}`);
-    await openOrPrint(port, false);
+    // A COLD launch lands on this project's board too. This call passed no path from before boards had
+    // slugs at all, so `/` — the project grid — was where the one command that definitely knows which
+    // project you meant dropped you, every time it was the first to start the server.
+    await openOrPrint(port, false, slugPath());
     // The normal launcher intentionally remains attached. Its SIGINT/SIGTERM handler is installed
     // by runSupervisor and stops only this workspace's UI control plane.
     await running;

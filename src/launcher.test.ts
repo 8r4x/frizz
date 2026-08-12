@@ -41,6 +41,7 @@ import { frizzPaths, projectStateDir } from "@frizz/server/frizz-paths";
 import {
   acquireGlobalLaunchLock,
   allocatePort,
+  boardAddress,
   canBindPort,
   choosePort,
   portUnavailableMessage,
@@ -51,6 +52,7 @@ import {
   networkUrls,
   parseCliArgs,
   resolveBindSelection,
+  resolveLaunchIntent,
   prepareBeforeGlobalLaunchLock,
   probeFrizz,
   readPreferredPort,
@@ -63,6 +65,7 @@ import {
   type Workspace,
 } from "./launcher.ts";
 import { DEFAULT_PORT, DEFAULT_DEV_PORT } from "@frizz/shared";
+import { registerProject } from "@frizz/server/project-registry";
 
 test("artifact re-exec keeps the original canonical Frizz source directory", () => {
   const source = mkdtempSync(join(tmpdir(), "frizz-canonical-source-"));
@@ -2322,3 +2325,99 @@ test("waitForWorkspace: with no state dir the historical flat deadline is unchan
 
 
 
+
+/**
+ * The launch policy, which is the whole behaviour of typing `frizz` somewhere.
+ *
+ * Untested until 2026-08-11, and the gap showed: running it in a fresh checkout opened the LAST
+ * project instead of that checkout. Each case below is one directory the operator can be standing in.
+ */
+test("launch intent: a repository opens as itself, adopted on sight", () => {
+  const base = mkdtempSync(join(tmpdir(), "frizz launch intent repo "));
+  const home = join(base, "home");
+  const host = join(base, "host repo");
+  const fresh = join(base, "fresh repo");
+  try {
+    mkdirSync(home, { recursive: true });
+    execFileSync("git", ["init", "-q", host]);
+    execFileSync("git", ["init", "-q", fresh]);
+    // A registered project exists and is more recent, which is exactly the state that used to win.
+    const hosted = resolveWorkspace(host, home);
+    registerProject({ dir: hosted.root, id: hosted.id }, home);
+
+    assert.equal(existsSync(join(fresh, ".frizz", ".id")), false);
+    const intent = resolveLaunchIntent(fresh, home, {});
+    assert.equal(intent.kind, "open");
+    assert.ok(intent.kind === "open");
+    assert.equal(intent.workspace.root, realpathSync(fresh));
+    // EAGER: the id is minted by resolving it, not by a confirmation on the grid.
+    assert.equal(existsSync(join(fresh, ".frizz", ".id")), true);
+
+    // A sub-directory of that repository is the same board, not a second one.
+    const child = join(fresh, "packages", "web");
+    mkdirSync(child, { recursive: true });
+    const sub = resolveLaunchIntent(child, home, {});
+    assert.ok(sub.kind === "open");
+    assert.equal(sub.workspace.id, intent.workspace.id);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("launch intent: an unmarked directory is offered, never adopted", () => {
+  const base = mkdtempSync(join(tmpdir(), "frizz launch intent bare "));
+  const home = join(base, "home");
+  const host = join(base, "host repo");
+  const bare = join(base, "downloads");
+  try {
+    mkdirSync(home, { recursive: true });
+    mkdirSync(bare, { recursive: true });
+    execFileSync("git", ["init", "-q", host]);
+
+    // With nothing registered there is no server to host the offer on, so say so rather than guess.
+    const orphan = resolveLaunchIntent(bare, home, {});
+    assert.ok(orphan.kind === "empty");
+    assert.equal(orphan.reason, "unadopted");
+
+    const hosted = resolveWorkspace(host, home);
+    registerProject({ dir: hosted.root, id: hosted.id }, home);
+    const intent = resolveLaunchIntent(bare, home, {});
+    assert.ok(intent.kind === "offer");
+    assert.equal(intent.directory, realpathSync(bare));
+    assert.equal(intent.workspace.root, hosted.root);
+    assert.equal(existsSync(join(bare, ".frizz", ".id")), false);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("launch intent: $HOME is never a project, marker or not", () => {
+  const base = mkdtempSync(join(tmpdir(), "frizz launch intent home "));
+  const home = join(base, "home");
+  const host = join(base, "host repo");
+  try {
+    mkdirSync(home, { recursive: true });
+    // Home directories carry manifests all the time — a package.json, a Makefile. Eager adoption of a
+    // marked directory must not turn that into a project id inside Frizz's own state root.
+    writeFileSync(join(home, "package.json"), "{}\n");
+    execFileSync("git", ["init", "-q", host]);
+    const hosted = resolveWorkspace(host, home);
+    registerProject({ dir: hosted.root, id: hosted.id }, home);
+
+    const intent = resolveLaunchIntent(home, home, {});
+    assert.ok(intent.kind === "grid");
+    assert.equal(intent.workspace.root, hosted.root);
+    assert.equal(existsSync(join(home, ".frizz", ".id")), false);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("boardAddress: a bare origin gains a slash, a grid or an offer does not", () => {
+  assert.equal(boardAddress("http://127.0.0.1:9494"), "http://127.0.0.1:9494/");
+  assert.equal(boardAddress("http://127.0.0.1:9494/project/frizz"), "http://127.0.0.1:9494/project/frizz/");
+  // The grid is already `/`, and `//` reads as a typo in the one line the operator clicks.
+  assert.equal(boardAddress("http://127.0.0.1:9494/"), "http://127.0.0.1:9494/");
+  // A slash here lands INSIDE the query, changing the directory the page is asked about.
+  assert.equal(boardAddress("http://127.0.0.1:9494/?add=%2Ftmp%2Fx"), "http://127.0.0.1:9494/?add=%2Ftmp%2Fx");
+});

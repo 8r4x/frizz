@@ -34,6 +34,7 @@ import { frizzPaths, projectStateDir } from "@frizz/server/frizz-paths";
 import {
   discoverProjectRoot,
   ensureProjectIdFile,
+  hasProjectMarker,
   isExistingProjectRoot,
   isHomeDirectory,
   isNotAGitWorktree,
@@ -330,6 +331,18 @@ export function resolveBindSelection(
 }
 
 /**
+ * The board address as it should READ in the terminal.
+ *
+ * A bare origin gets its trailing slash, because `http://127.0.0.1:9494` alone looks truncated. The
+ * two cases that slash is wrong for are the ones a launch outside a project produces: the grid is
+ * already `/` and would print `//`, and an `?add=<dir>` offer would grow a slash INSIDE the query,
+ * changing the directory the page is being asked about.
+ */
+export function boardAddress(url: string): string {
+  return url.includes("?") || url.endsWith("/") ? url : `${url}/`;
+}
+
+/**
  * The addresses another machine can use to reach an exposed board, for the readout.
  *
  * A wildcard bind is the common case and reports nothing useful by itself, so enumerate the real
@@ -410,14 +423,20 @@ An immutable artifact is the default. --dev is the only explicit unsafe source w
 /**
  * What a `frizz` in THIS directory should actually do.
  *
- * Running the command used to adopt whatever directory it was in, minting `.frizz/.id` on the spot.
- * That is wrong twice over: in $HOME it writes a project id into Frizz's own global state root
- * (see isHomeDirectory), and anywhere else it silently turns "I typed a command in the wrong
- * terminal" into a permanent card on the machine's grid. Adoption is now something the operator
- * SAYS YES TO.
+ * RUNNING FRIZZ IN A REPOSITORY OPENS THAT REPOSITORY, minting `.frizz/.id` on the spot if it has
+ * none. That is the whole command: `cd` somewhere and run it, and the board you get is the board for
+ * where you are. Making adoption a confirmation step instead broke exactly that — running it in a new
+ * checkout hosted on some OTHER project and landed on the grid, so the maintainer's `frizz-dev` in
+ * `ccbroker` opened `frizz` (2026-08-11).
  *
- *  - `open`  — a directory Frizz already knows: its own board, exactly as before.
- *  - `offer` — an unadopted directory: open the grid and let it ask. Nothing is written until then.
+ * What that confirmation step was actually protecting against is narrower, and both halves survive
+ * here. $HOME is never adopted, because minting an id there writes a project into Frizz's own global
+ * state root and every unmarked directory under home then resolves to it (see isHomeDirectory). And a
+ * directory with no marker of its own — `~/Downloads`, a scratch folder, a typo — is a command in the
+ * wrong terminal, not a project, so it is still only OFFERED. A repository is neither of those.
+ *
+ *  - `open`  — a directory Frizz knows, or one that IS a project (hasProjectMarker): its own board.
+ *  - `offer` — an unmarked, unadopted directory: open the grid and let it ask. Nothing is written.
  *  - `grid`  — $HOME, which is never offered at all, because there is no version of this the
  *               operator wants.
  *
@@ -439,8 +458,10 @@ export function resolveLaunchIntent(
   const candidate = realpathSync(discoverProjectRoot(cwd, home))
   const known = isExistingProjectRoot(candidate) || findByPath(candidate, home) !== undefined
   // A directory Frizz already knows opens as itself — including one it knows only from the registry,
-  // so forgetting to commit `.frizz/.id` never costs someone their board.
-  if (known && !isHomeDirectory(candidate, home)) return { kind: "open", workspace: resolveWorkspace(cwd, home, env) }
+  // so forgetting to commit `.frizz/.id` never costs someone their board. So does a repository it has
+  // never seen: that is the eager adoption above, and resolveWorkspace is what mints the id.
+  if ((known || hasProjectMarker(candidate)) && !isHomeDirectory(candidate, home))
+    return { kind: "open", workspace: resolveWorkspace(cwd, home, env) }
 
   const host = mostRecentProject(home, env)
   const reason = isHomeDirectory(candidate, home) ? "home" : "unadopted"
