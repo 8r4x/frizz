@@ -54,9 +54,10 @@
 // tried and REMOVED on 2026-07-02 (maintainer's call): the block-until-file-edited nag forced even
 // trivial workers into Read/Edit dances that render as noise in the chat UI. This nudges; it never
 // blocks.
-import { readFileSync, writeFileSync, mkdirSync, statSync, readdirSync, openSync, readSync, closeSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, statSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { currentSessionId } from '../scripts/frizz/config.mjs';
+import { contextTokens } from '../scripts/frizz/transcript-usage.mjs';
 
 /** How many filenames a listing names before it summarizes the rest. A worker with 200 scratch files
  *  needs to know that, not to be handed 200 lines of them. */
@@ -298,48 +299,7 @@ if (mode === 'precompact') {
 // ── nudge modes (UserPromptSubmit + PostToolUse) ─────────────────────────────────────────────────
 // Everything below answers one question: has the context moved on since the pad was last written?
 
-/** Live context fill in tokens from the transcript's newest usage record, or null.
- *  Reads only the TAIL — transcripts reach tens of megabytes, and on PostToolUse this runs after
- *  every single tool call. Scanning backwards means the one line the tail read may have cut in half
- *  is reached last, and its parse failure is simply skipped.
- *  @param {string} path */
-function contextTokens(path) {
-  let fd = null;
-  try {
-    const size = statSync(path).size;
-    const want = Math.min(size, 128 * 1024);
-    const buf = Buffer.alloc(want);
-    fd = openSync(path, 'r');
-    readSync(fd, buf, 0, want, size - want);
-    const lines = buf.toString('utf8').split('\n');
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const line = lines[i].trim();
-      if (!line) continue;
-      let rec;
-      try {
-        rec = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      const u = rec?.message?.usage;
-      if (!u) continue;
-      const n =
-        (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
-      if (Number.isFinite(n) && n > 0) return n;
-    }
-    return null;
-  } catch {
-    return null;
-  } finally {
-    if (fd !== null) {
-      try {
-        closeSync(fd);
-      } catch {
-        /* ignore */
-      }
-    }
-  }
-}
+// `contextTokens` lives in ../scripts/frizz/transcript-usage.mjs — ONE copy, shared with stop-fence.mjs.
 
 const statePath = join(threadDir, '.scratchpad-state.json');
 /** @returns {{ mtimeMs?: number, tokensAtWrite?: number, tokensAtNudge?: number }} */
