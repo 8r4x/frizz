@@ -597,6 +597,11 @@ export const TIMER_PROMPT_MAX = SNOOZE_PROMPT_MAX
 export const TIMER_MIN_DELAY_SECONDS = 10
 export const TIMER_MAX_DELAY_SECONDS = 30 * 24 * 60 * 60
 export const TIMER_MAX_ARMED = 64
+
+/** The same ceiling on registered WATCHERS, and it is what makes "arbitrarily many" safe to offer: a
+ *  tool call in a loop cannot fill the table, and the refusal names the number so a worker drops one
+ *  rather than retrying. */
+export const WATCH_MAX_ARMED = 32
 export const TimerPromptText = z.string().trim().min(1).max(TIMER_PROMPT_MAX)
 
 /** What frizz delivers when a one-off timer fires: the worker's own words VERBATIM, then a one-line
@@ -1363,6 +1368,78 @@ export const CancelOwnThreadTimerResult = z.object({
   timers: z.array(ThreadTimerView),
 }).strict()
 export type CancelOwnThreadTimerResult = z.infer<typeof CancelOwnThreadTimerResult>
+
+// ---- THE WATCHER REGISTRY's three worker procedures ----------------------------------------------
+// Same caller and the same rules again: no session guard, and no thread parameter a model could aim
+// elsewhere. A worker may only ever register a wait on its OWN thread.
+//
+// WHY THESE EXIST AT ALL. A wait used to be a line of prose in an ```awaiting fence, which meant it had
+// no identity: nothing to list after a compaction, nothing to cancel when it stopped mattering, and
+// nothing for the board to hang a Snooze button on. Maintainer 2026-08-11: "I think we should have
+// built in tool calls for REGISTERING and DISMISSING CI/PR watchers. this way the agent can decide when
+// they're not necessary."
+
+/** What is being waited ON. `pr` wakes on any new activity — a review, an approval, a comment, human or
+ *  bot; `ci` on the checks for that same ref reaching a terminal state; `shell` on one of the worker's
+ *  own background shells finishing. */
+export const ThreadWatchKind = z.enum(["pr", "ci", "shell"])
+export type ThreadWatchKind = z.infer<typeof ThreadWatchKind>
+
+/** The thing being watched, in the grammar of its kind: `owner/repo#N` for `pr` and `ci`, a background
+ *  shell's id or label for `shell`. Validated per-kind at the router rather than here, because the two
+ *  grammars have nothing in common and one union would only be a longer way to say `string`. */
+export const ThreadWatchTarget = z.string().trim().min(1).max(200)
+
+/** One armed (or just-settled) watcher, as the worker's own tool reads it back. */
+export const ThreadWatchView = z.object({
+  id: z.string(),
+  kind: ThreadWatchKind,
+  target: z.string(),
+  state: z.enum(["armed", "fired", "dropped"]),
+  createdAt: z.string(),
+}).strict()
+export type ThreadWatchView = z.infer<typeof ThreadWatchView>
+
+export const AddOwnThreadWatchInput = z.object({
+  slug: ThreadSlug,
+  kind: ThreadWatchKind,
+  target: ThreadWatchTarget,
+}).strict()
+export type AddOwnThreadWatchInput = z.infer<typeof AddOwnThreadWatchInput>
+
+export const DropOwnThreadWatchInput = z.object({
+  slug: ThreadSlug,
+  id: z.string().min(1).max(64),
+}).strict()
+export type DropOwnThreadWatchInput = z.infer<typeof DropOwnThreadWatchInput>
+
+export const ListOwnThreadWatchesInput = z.object({
+  slug: ThreadSlug,
+}).strict()
+export type ListOwnThreadWatchesInput = z.infer<typeof ListOwnThreadWatchesInput>
+
+// Every one of the three answers with the thread's CURRENT armed set, exactly as the timer procedures
+// do: a worker never has to make a second call to see what it now holds.
+export const OwnThreadWatchesResult = z.object({
+  watches: z.array(ThreadWatchView),
+}).strict()
+export type OwnThreadWatchesResult = z.infer<typeof OwnThreadWatchesResult>
+
+export const AddOwnThreadWatchResult = z.object({
+  id: z.string(),
+  /** True when this exact (kind, target) was ALREADY armed on the thread, so the call registered
+   *  nothing new. A worker re-registering after a compaction is the common case, and silently minting a
+   *  duplicate would mean two wakes for one event. */
+  alreadyArmed: z.boolean(),
+  watches: z.array(ThreadWatchView),
+}).strict()
+export type AddOwnThreadWatchResult = z.infer<typeof AddOwnThreadWatchResult>
+
+export const DropOwnThreadWatchResult = z.object({
+  dropped: z.boolean(),
+  watches: z.array(ThreadWatchView),
+}).strict()
+export type DropOwnThreadWatchResult = z.infer<typeof DropOwnThreadWatchResult>
 
 // ---- The SUPERSEDED worker shapes, kept alive for MCP servers already in flight -----------------
 //

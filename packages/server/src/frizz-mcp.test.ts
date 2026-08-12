@@ -64,7 +64,7 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     rpc.send({ jsonrpc: "2.0", method: "notifications/initialized" })
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
     const list = await rpc.next(2)
-    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "recurring_prompt", "timer"])
+    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "recurring_prompt", "timer", "watch"])
     for (const required of ["prompt", "model", "effort"]) {
       assert.ok(list.result.tools[0].inputSchema.required.includes(required))
     }
@@ -87,6 +87,15 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
       Object.keys(list.result.tools[2].inputSchema.properties).sort(),
       ["action", "at", "id", "in_seconds", "prompt"],
     )
+    // `watch` is the registry the ```awaiting fence could not be: `action` alone is required, and like
+    // its siblings it exposes NO THREAD parameter — a worker may only ever register a wait on its own.
+    assert.deepEqual(list.result.tools[3].inputSchema.required, ["action"])
+    assert.deepEqual(
+      Object.keys(list.result.tools[3].inputSchema.properties).sort(),
+      ["action", "id", "kind", "target"],
+    )
+    assert.deepEqual(list.result.tools[3].inputSchema.properties.action.enum, ["add", "list", "drop"])
+
     // An unregistered name is a protocol error, not a crash — the registry routes by name now.
     rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "spawn_frizz_thread", arguments: {} } })
     const gone = await rpc.next(3)
@@ -708,6 +717,82 @@ test("`recurring_prompt` refuses a cadence out of range without contacting the s
     assert.match(noTrigger.result.content[0].text, /at least one is required/)
 
     assert.equal(seen.length, 0, "none of the three reached the server")
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
+
+// The WATCHER REGISTRY over the real stdio transport. What matters here is the same thing the recurring
+// prompt's test pins — the CALLING thread's slug reaching the RPC body from the env, never from the
+// model — plus the two refusals that keep an unusable registration from ever being made, because a
+// watcher that cannot fire is worse than no watcher: the worker rests believing it is covered.
+test("`watch` registers, lists and drops against the CALLING thread", async () => {
+  const seen: Array<{ url: string; body: any }> = []
+  const replies: any[] = [
+    { id: "wch_abc123", alreadyArmed: false, watches: [{ id: "wch_abc123", kind: "pr", target: "acme/app#391", state: "armed", createdAt: "2026-08-12T00:00:00.000Z" }] },
+    { watches: [{ id: "wch_abc123", kind: "pr", target: "acme/app#391", state: "armed", createdAt: "2026-08-12T00:00:00.000Z" }] },
+    { dropped: true, watches: [] },
+  ]
+  const http = createServer((req, res) => {
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      seen.push({ url: req.url ?? "", body: JSON.parse(body || "{}") })
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ result: replies.shift() ?? null }))
+    })
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "watching-thread" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+
+    rpc.send({
+      jsonrpc: "2.0", id: 2, method: "tools/call",
+      params: { name: "watch", arguments: { action: "add", kind: "pr", target: "acme/app#391" } },
+    })
+    const added = await rpc.next(2)
+    assert.equal(added.result.isError, undefined)
+    assert.deepEqual(seen.at(-1), {
+      url: "/_frizz/rpc/addOwnThreadWatch",
+      body: { slug: "watching-thread", kind: "pr", target: "acme/app#391" },
+    })
+    // The reply must carry the id (there is nothing to drop without it), say that the registration is
+    // DURABLE (that is the whole reason to prefer it over blocking), and push dropping it.
+    assert.match(added.result.content[0].text, /wch_abc123/)
+    assert.match(added.result.content[0].text, /survives your turn ending, a compaction and a frizz restart/)
+    assert.match(added.result.content[0].text, /DROP IT when it stops mattering/)
+
+    rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "watch", arguments: { action: "list" } } })
+    const listed = await rpc.next(3)
+    assert.equal(seen.at(-1)?.url, "/_frizz/rpc/listOwnThreadWatches")
+    assert.match(listed.result.content[0].text, /wch_abc123\s+pr\s+acme\/app#391/)
+
+    rpc.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "watch", arguments: { action: "drop", id: "wch_abc123" } } })
+    const dropped = await rpc.next(4)
+    assert.deepEqual(seen.at(-1), {
+      url: "/_frizz/rpc/dropOwnThreadWatch",
+      body: { slug: "watching-thread", id: "wch_abc123" },
+    })
+    assert.match(dropped.result.content[0].text, /Nothing is armed on this thread now/)
+
+    // Both refusals happen in the TOOL, before any RPC: an add with no target, and a drop with no id.
+    const before = seen.length
+    rpc.send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "watch", arguments: { action: "add", kind: "pr" } } })
+    const noTarget = await rpc.next(5)
+    assert.equal(noTarget.result.isError, true)
+    assert.match(noTarget.result.content[0].text, /owner\/repo#123/)
+
+    rpc.send({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "watch", arguments: { action: "drop" } } })
+    const noId = await rpc.next(6)
+    assert.equal(noId.result.isError, true)
+    assert.match(noId.result.content[0].text, /`id` is required/)
+    assert.equal(seen.length, before, "neither refusal reached the server")
   } finally {
     rpc.kill()
     http.close()

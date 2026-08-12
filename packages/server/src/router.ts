@@ -28,6 +28,15 @@ import {
   ListOwnThreadTimersInput,
   OwnThreadTimersResult,
   TIMER_MAX_ARMED,
+  WATCH_MAX_ARMED,
+  AddOwnThreadWatchInput,
+  AddOwnThreadWatchResult,
+  DropOwnThreadWatchInput,
+  DropOwnThreadWatchResult,
+  ListOwnThreadWatchesInput,
+  OwnThreadWatchesResult,
+  type ThreadWatchKind,
+  type ThreadWatchView,
   type ThreadTimerView,
   ThreadPluginReloadResult,
   SetThreadSnoozeInput,
@@ -105,7 +114,7 @@ import { readAuthSnapshot } from "./backend/auth-status.ts"
 import { liveThreadsForBackend, runProviderLogout } from "./backend/account-actions.ts"
 import { threadProfileOptions, validateThreadProfile } from "./backend/thread-profiles.ts"
 import { adoptionRuntimeBinding, type AdoptionPaneLookup, type ExpectedAdoptionPane } from "./adoption-recovery.ts"
-import { awaitingFenceIdentity, isActionableAwaitingHint } from "./awaiting.ts"
+import { awaitingFenceIdentity, isActionableAwaitingHint, parsePrRef } from "./awaiting.ts"
 import { getDispatchPreferences, setDispatchPreference } from "./dispatch-preferences.ts"
 import { isBrokerClaudeRow, type SessionRow, type Storage } from "./storage.ts"
 import type { SessionTelemetry } from "./tailer.ts"
@@ -654,6 +663,32 @@ export function createRouter(ctx: AppContext) {
   function recurringIntervalMs(input: RecurringPromptWrite): number | null {
     if (input.prompt === null || input.intervalSeconds === undefined) return null
     return input.intervalSeconds * 1000
+  }
+
+  // A thread's ARMED watchers, in the shape the worker's tool reads back. Instants are epoch ms in the
+  // table and ISO on the wire, converted here so the row and the tool's output name the same string.
+  function armedWatchViews(slug: string): ThreadWatchView[] {
+    return ctx.storage.listThreadWatches(slug, { armedOnly: true }).map((w) => ({
+      id: w.id,
+      kind: w.kind,
+      target: w.target,
+      state: w.state,
+      createdAt: new Date(w.created_at).toISOString(),
+    }))
+  }
+
+  // THE TARGET GRAMMAR, per kind, rejected HERE rather than in the schema: `pr`/`ci` name a GitHub ref
+  // and `shell` names one of the worker's own background shells, and those two have nothing in common,
+  // so a union in zod would only be a longer way to write `string`.
+  //
+  // The refusal is the point. A `pr` watcher whose target does not parse can never fire, and a worker
+  // that registered one would rest believing it is covered — the exact failure the registry exists to
+  // remove. Better a tool error it can act on than a wait that silently never resolves.
+  function assertWatchTarget(kind: ThreadWatchKind, target: string): void {
+    if (kind === "shell") return // any id or label; the scheduler matches it against live bg shells
+    if (!parsePrRef(target)) {
+      throw new Error(`a ${kind} watcher's target must be a PR reference like "owner/repo#123" — got "${target}"`)
+    }
   }
 
   // A thread's ARMED one-off timers, in the shape the worker's tool reads back. Instants are epoch ms in
@@ -2052,6 +2087,54 @@ export function createRouter(ctx: AppContext) {
       input: ListOwnThreadTimersInput,
       output: OwnThreadTimersResult,
       handler: async ({ input }) => ({ timers: armedTimerViews(input.slug) }),
+    }),
+
+    // ---- THE WATCHER REGISTRY (add / drop / list) ------------------------------------------------
+    // The worker's own waits, from `mcp__frizz__watch`. Same caller and therefore the same rules as the
+    // timers above: slug-only (the MCP server outlives the session ids underneath it), and no thread
+    // parameter a model could aim elsewhere.
+    addOwnThreadWatch: mutation({
+      input: AddOwnThreadWatchInput,
+      output: AddOwnThreadWatchResult,
+      handler: async ({ input }) => {
+        const row = ctx.storage.getSession(input.slug)
+        if (!row) throw new Error(`thread ${input.slug} is not registered`)
+        if (row.state === "archived" || row.archived === 1) {
+          throw new Error("Reopen this thread before registering a watcher on it")
+        }
+        assertWatchTarget(input.kind, input.target)
+        const armed = ctx.storage.listThreadWatches(input.slug, { armedOnly: true })
+        // IDEMPOTENT ON (kind, target). Re-registering after a compaction is the COMMON case — the
+        // worker has forgotten what it holds and is being careful — and minting a duplicate there would
+        // mean two wakes for one event, which reads to the operator as the watcher misfiring.
+        const existing = armed.find((w) => w.kind === input.kind && w.target === input.target)
+        if (existing) return { id: existing.id, alreadyArmed: true, watches: armedWatchViews(input.slug) }
+        if (armed.length >= WATCH_MAX_ARMED) {
+          throw new Error(`this thread already has ${armed.length} armed watchers (the limit is ${WATCH_MAX_ARMED}) — drop one first`)
+        }
+        const id = `wch_${randomUUID().replace(/-/g, "").slice(0, 12)}`
+        ctx.storage.armThreadWatch({ id, slug: input.slug, kind: input.kind, target: input.target, createdAtMs: Date.now() })
+        ctx.board.refresh()
+        return { id, alreadyArmed: false, watches: armedWatchViews(input.slug) }
+      },
+    }),
+
+    dropOwnThreadWatch: mutation({
+      input: DropOwnThreadWatchInput,
+      output: DropOwnThreadWatchResult,
+      handler: async ({ input }) => {
+        // Scoped to the caller's own slug in storage, so an id belonging to another thread cannot be
+        // dropped even if a worker somehow learned it.
+        const dropped = ctx.storage.dropThreadWatch(input.slug, input.id, Date.now())
+        if (dropped) ctx.board.refresh()
+        return { dropped, watches: armedWatchViews(input.slug) }
+      },
+    }),
+
+    listOwnThreadWatches: mutation({
+      input: ListOwnThreadWatchesInput,
+      output: OwnThreadWatchesResult,
+      handler: async ({ input }) => ({ watches: armedWatchViews(input.slug) }),
     }),
 
     // The SUPERSEDED worker procedures, aliased onto the row above — see SetOwnThreadStopHookInput for

@@ -259,6 +259,58 @@ const TIMER = {
   },
 }
 
+const WATCH = {
+  name: "watch",
+  description:
+    "REGISTER something to wait on, so frizz wakes you when it resolves — and DROP it when it stops " +
+    "mattering. Your waits have identities: you can list them, and you can withdraw them.\n\n" +
+    "  kind: \"pr\"     — a GitHub pull request. Wakes you on ANY new activity: a review, an approval, or " +
+    "a comment, from a human or a bot alike. `target` is `owner/repo#123`.\n" +
+    "  kind: \"ci\"     — the checks on that same ref reaching a terminal state. `target` is `owner/repo#123`.\n" +
+    "  kind: \"shell\"  — one of YOUR OWN background shells finishing. `target` is its id or its label.\n\n" +
+    "WHY THIS RATHER THAN WAITING YOURSELF: a registered watcher is durable. It survives your turn " +
+    "ending, a compaction, a frizz restart, and your own daemon being replaced — none of which a " +
+    "blocking call or a monitor survives. Register it, come to rest, and frizz brings you back.\n\n" +
+    "REGISTERING IS IDEMPOTENT on (kind, target): asking twice for the same thing returns the SAME id " +
+    "and tells you it was already armed, so re-registering after a compaction is safe and is the right " +
+    "instinct. Use `list` when you want to know what you are holding without changing anything.\n\n" +
+    "DROP WHAT STOPS MATTERING. A watcher you no longer care about is a wake you did not want and a " +
+    "thread that looks parked when it is not — you are the only one who can know, which is why this " +
+    "tool exists (maintainer: \"this way the agent can decide when they're not necessary\").\n\n" +
+    "You can only ever register a wait on your OWN thread — there is no parameter for anyone else's.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      action: {
+        type: "string",
+        enum: ["add", "list", "drop"],
+        description:
+          "`add` registers a watcher (idempotent on kind+target); `drop` withdraws one by id; `list` " +
+          "reads back everything currently armed on this thread without changing anything. Every action " +
+          "answers with the full armed set, so you never need a second call to see where you stand.",
+      },
+      kind: {
+        type: "string",
+        enum: ["pr", "ci", "shell"],
+        description: "Required for `add`. What sort of thing is being waited on.",
+      },
+      target: {
+        type: "string",
+        description:
+          "Required for `add`. `owner/repo#123` for a pr or ci watcher; a background shell's id or " +
+          "label for a shell watcher. A target that does not parse is REFUSED rather than registered — " +
+          "a watcher that can never fire is worse than no watcher, because you would rest believing you " +
+          "were covered.",
+      },
+      id: {
+        type: "string",
+        description: "Required for `drop`. The watcher id returned by `add` (or listed by `list`).",
+      },
+    },
+    required: ["action"],
+  },
+}
+
 // The unified server's tool registry: `tools/list` returns these and `tools/call` routes by name.
 // Adding a worker-facing frizz tool = one entry here + one handler in `HANDLERS` — never a second
 // MCP server, so every frizz tool stays under the same `mcp__frizz__*` namespace and the same
@@ -266,13 +318,14 @@ const TIMER = {
 const MIN_INTERVAL_SECONDS = 60
 const MAX_INTERVAL_SECONDS = 24 * 60 * 60
 
-const TOOLS = [SPAWN_THREAD, RECURRING_PROMPT, TIMER]
+const TOOLS = [SPAWN_THREAD, RECURRING_PROMPT, TIMER, WATCH]
 
 /** @type {Record<string, (args: Record<string, unknown>) => Promise<string>>} */
 const HANDLERS = {
   [SPAWN_THREAD.name]: spawnThread,
   [RECURRING_PROMPT.name]: recurringPrompt,
   [TIMER.name]: timer,
+  [WATCH.name]: watch,
 }
 
 /** @param {unknown} obj */
@@ -734,6 +787,66 @@ async function timer(args) {
     `Timer ${id} set for ${fireAt} (${Math.round((fireMs - nowMs) / 1000)}s from now). It fires ONCE and ` +
     "then is gone — it may reach you mid-turn, so receiving it does not mean you had stopped. Cancel it " +
     `with \`action: "cancel", id: "${id}"\` if it stops being useful.\n\n${armedList(result)}`
+  )
+}
+
+/** How the armed watcher set reads back, on every action, so a worker never needs a second call.
+ * @param {{ watches?: Array<{id: string, kind: string, target: string}> }|undefined} result */
+function armedWatchList(result) {
+  const watches = Array.isArray(result?.watches) ? result.watches : []
+  if (!watches.length) return "Nothing is armed on this thread now — no watcher will wake you."
+  const lines = watches.map((w) => `  ${w.id}  ${w.kind}  ${w.target}`)
+  return `Armed on this thread now:\n${lines.join("\n")}`
+}
+
+/** The `watch` handler: register, withdraw, or read back this thread's waits.
+ * @param {Record<string, unknown>} args @returns {Promise<string>} */
+async function watch(args) {
+  const slug = threadSlug()
+  const action = typeof args.action === "string" ? args.action.trim() : ""
+  if (action !== "add" && action !== "list" && action !== "drop") {
+    throw new Error("`action` must be one of \"add\", \"list\" or \"drop\"")
+  }
+
+  if (action === "list") {
+    const result = (await callRpc("listOwnThreadWatches", { slug }))?.result
+    return armedWatchList(result)
+  }
+
+  if (action === "drop") {
+    const id = typeof args.id === "string" ? args.id.trim() : ""
+    if (!id) throw new Error("`id` is required to drop a watcher — take it from `add` or from `list`")
+    const result = (await callRpc("dropOwnThreadWatch", { slug, id }))?.result
+    // A drop that matched nothing is reported rather than swallowed: the id was wrong, already settled,
+    // or another thread's — and a worker that believes it withdrew a wait it still holds will rest.
+    const head = result?.dropped
+      ? `Watcher ${id} dropped. It will not wake you.`
+      : `No ARMED watcher ${id} on this thread — it was already settled, or the id is not one of yours.`
+    return `${head}\n\n${armedWatchList(result)}`
+  }
+
+  const kind = typeof args.kind === "string" ? args.kind.trim() : ""
+  if (kind !== "pr" && kind !== "ci" && kind !== "shell") {
+    throw new Error("`kind` is required to add a watcher, and must be one of \"pr\", \"ci\" or \"shell\"")
+  }
+  const target = typeof args.target === "string" ? args.target.trim() : ""
+  if (!target) {
+    throw new Error(
+      kind === "shell"
+        ? "`target` is required — the id or label of one of your own background shells"
+        : "`target` is required — the pull request to watch, as `owner/repo#123`",
+    )
+  }
+
+  const result = (await callRpc("addOwnThreadWatch", { slug, kind, target }))?.result
+  const id = result?.id ?? "(unknown)"
+  const head = result?.alreadyArmed
+    ? `Already watching ${kind} ${target} as ${id} — nothing new was registered, and you will be woken once.`
+    : `Watching ${kind} ${target} as ${id}. Frizz will wake you when it resolves, and the registration ` +
+      "survives your turn ending, a compaction and a frizz restart."
+  return (
+    `${head}\n\nDROP IT when it stops mattering (\`action: "drop", id: "${id}"\`) — a watcher you no ` +
+    `longer care about is a wake you did not want.\n\n${armedWatchList(result)}`
   )
 }
 
