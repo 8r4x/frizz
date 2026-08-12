@@ -29,6 +29,7 @@ import {
   acquireGlobalLaunchLock,
   allocatePort,
   boardAddress,
+  canBindPort,
   resolveLaunchIntent,
   EXPOSED_WARNING,
   PUBLIC_ORIGIN_WARNING,
@@ -40,6 +41,7 @@ import {
   parseCliArgs,
   persistLauncher,
   probeFrizz,
+  JOIN_PROBE_TIMEOUT_MS,
   prepareBeforeGlobalLaunchLock,
   readPreferredPort,
   requestFrizzStop,
@@ -571,6 +573,24 @@ function ownSlug(): string | undefined {
 }
 
 /**
+ * Where a Frizz that could already be serving this project would be listening.
+ *
+ * An explicit `--port` is asked FIRST, for the same reason the well-known ones are asked at all: if a
+ * Frizz is already serving this project there, joining it is the answer and starting a rival is not.
+ * Without it `--port N` skipped the join outright and then died at allocation, because the port it was
+ * told to use was held by the very server it should have been using.
+ */
+function joinCandidatePorts(): number[] {
+  return [
+    ...new Set(
+      [options.port, DEFAULT_DEV_PORT, fallbackPort(DEFAULT_DEV_PORT)].filter(
+        (candidate): candidate is number => candidate !== undefined
+      )
+    ),
+  ];
+}
+
+/**
  * A frizz-dev already running on this machine, serving THIS project under its own slug.
  *
  * The same client-not-a-server move the published launcher makes, and it matters more here: this is
@@ -587,17 +607,41 @@ async function joinRunningFrizz(): Promise<
   const slug = ownSlug();
   if (!slug) return undefined;
   const target = workspaceLaunchTarget(workspace);
-  for (const port of new Set([DEFAULT_DEV_PORT, fallbackPort(DEFAULT_DEV_PORT)])) {
+  for (const port of joinCandidatePorts()) {
     if (
-      await probeFrizz(port, {
-        projectId: target.projectId,
-        projectDir: target.projectDir,
-        slug,
-      })
+      await probeFrizz(
+        port,
+        {
+          projectId: target.projectId,
+          projectDir: target.projectDir,
+          slug,
+        },
+        fetch,
+        JOIN_PROBE_TIMEOUT_MS
+      )
     )
       return { port, slug };
   }
   return undefined;
+}
+
+/**
+ * Say it on screen when this launch is about to become the machine's SECOND Frizz.
+ *
+ * Falling past the join is right when nothing is running and wrong in every other case: two Frizzes
+ * means two schedulers, and one board's timers and recurring prompts firing twice. Until now the only
+ * trace was `machine server address is held by a live frizz …; leaving it` in a per-project log file,
+ * printed by the child a full twenty seconds after the launcher had already committed — so what the
+ * operator saw was a clean startup banner on a port they did not ask for.
+ */
+async function warnAboutStartingASecondFrizz(): Promise<void> {
+  for (const port of joinCandidatePorts()) {
+    if (await canBindPort(port)) continue;
+    const detail = `port ${port} is in use but did not answer for ${workspace.root}; starting a SECOND Frizz`;
+    logger.warn("launcher", detail);
+    console.warn(`warning: ${detail}`);
+    return;
+  }
 }
 
 let cachedSlugPath: string | undefined;
@@ -867,6 +911,7 @@ try {
       await openOrPrint(joined.port, true, slugPath());
       process.exit(0);
     }
+    await warnAboutStartingASecondFrizz();
   }
   if (before.owner && !readProjectLaunchOwner(workspace.stateDir)) {
     const owner = before.owner;

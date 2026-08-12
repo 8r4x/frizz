@@ -248,6 +248,43 @@ export function splitTenantRequest(
 }
 
 /**
+ * Answer `/_frizz/<slug>/health` for a registered project WITHOUT opening it.
+ *
+ * The launcher's join probe asks this exact question to decide whether to use the Frizz already
+ * running on this machine or start a second one (`src/index.ts` joinRunningFrizz). Letting it route
+ * through routeToTenant made "is this machine's Frizz serving my project" cost a full tenant
+ * activation — createContext plus the board/tailer/scheduler cold prime, measured at 34.5s against a
+ * live server on 2026-08-12 and at 1.5-7.5s in plans/singleton-frizz.md §6b. The probe gives up long
+ * before that, so which server the operator got was decided by a race, and LOSING it starts a rival
+ * server: two Frizzes, two schedulers, one board fired twice.
+ *
+ * §4b of that plan specifies this shape directly — assert the machine identity, then confirm the
+ * specific project is REGISTERED. The registry is the authority on which projects this Frizz serves
+ * and answering from it is one file read.
+ *
+ * An already-open project falls through to its own app instead, because that is what carries
+ * `ownerProof` and it costs nothing to reach. A merely-registered project holds no launch lease to
+ * prove, so it reports none — and nothing asks it to: the join probe omits `ownerProof` precisely
+ * because a client holds no lease either.
+ */
+export function registeredTenantHealth(
+  method: string,
+  url: string,
+  bootId: string,
+  lookup: (segment: string) => { id: string; path: string } | undefined,
+  isOpen: (projectId: string) => boolean,
+): { ok: true; projectId: string; projectDir: string; bootId: string } | undefined {
+  if (method !== "GET") return undefined
+  const split = splitTenantRequest(url, (segment) => lookup(segment) !== undefined)
+  if (!split) return undefined
+  const health = `${FRIZZ_ROUTE_PREFIX}/health`
+  if (split.rest !== health && !split.rest.startsWith(`${health}?`)) return undefined
+  const entry = lookup(split.slug)
+  if (!entry || isOpen(entry.id)) return undefined
+  return { ok: true, projectId: entry.id, projectDir: entry.path, bootId }
+}
+
+/**
  * The `<slug>` a PAGE url names, when that project does not exist.
  *
  * `/project/<slug>` is the SPA's own route, so the server has always just handed back the app and let
@@ -842,6 +879,20 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       }
       const url = req.url ?? "/"
       if (isApiUrl(url)) {
+        // Before routeToTenant, because routing there is what would open the project. A launcher
+        // deciding whether to join this server must not pay — or time out on — an activation.
+        const registered = registeredTenantHealth(
+          req.method ?? "GET",
+          url,
+          ctx!.bootId,
+          (segment) => findProjectBySegment(segment),
+          (projectId) => tenants.get(projectId) !== undefined,
+        )
+        if (registered) {
+          res.writeHead(200, { "content-type": "application/json" })
+          res.end(JSON.stringify(registered))
+          return
+        }
         const controller = new AbortController()
         requestControllers.add(controller)
         let task!: Promise<void>

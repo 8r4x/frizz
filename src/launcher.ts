@@ -120,8 +120,12 @@ export interface ExpectedFrizzHealth {
    * Ask a SPECIFIC project's health on a shared server: `/_frizz/nub/health`.
    *
    * One Frizz serves N projects, so "is Frizz on this port" and "is Frizz serving MY project on this
-   * port" stopped being the same question. Probing the slug answers the second one, and — because
-   * the route activates a project on first use — asking is also how a project gets opened.
+   * port" stopped being the same question. Probing the slug answers the second one.
+   *
+   * Asking does NOT open the project. The server answers this route out of its registry for a project
+   * it has not activated (`registeredTenantHealth`), because a launcher deciding whether to join must
+   * not have to wait out a cold tenant activation — when it did, the probe timed out and the launcher
+   * started a rival server instead. Activation stays where it belongs: on the first real request.
    */
   slug?: string;
 }
@@ -692,13 +696,31 @@ export function persistLauncher(
   );
 }
 
+export const HEALTH_PROBE_TIMEOUT_MS = 1000;
+
+/**
+ * How long the JOIN probe waits, versus the second it takes to ask a server about itself.
+ *
+ * These are different questions and only one of them is cheap. "Is the server I started healthy yet"
+ * is answered by a process with nothing else to do. "Is the Frizz already running on this machine
+ * serving my project" is answered by a process that may be mid-prime for some other board, and its
+ * event loop is genuinely busy for seconds at a time.
+ *
+ * Timing out the second question does not degrade — it starts a RIVAL SERVER, which is worse than any
+ * wait: two Frizzes on one machine means two schedulers, and a board whose timers and recurring
+ * prompts fire twice. A dead port fails instantly with ECONNREFUSED, so this patience is only ever
+ * spent when something really is listening, which is exactly when we want to wait rather than race.
+ */
+export const JOIN_PROBE_TIMEOUT_MS = 15_000;
+
 export async function probeFrizz(
   port: number,
   expected: ExpectedFrizzHealth,
-  fetcher: typeof fetch = fetch
+  fetcher: typeof fetch = fetch,
+  timeoutMs = HEALTH_PROBE_TIMEOUT_MS
 ): Promise<FrizzHealth | null> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 1000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   timeout.unref?.();
   try {
     const scope = expected.slug ? `${FRIZZ_ROUTE_PREFIX}/${expected.slug}` : FRIZZ_ROUTE_PREFIX;

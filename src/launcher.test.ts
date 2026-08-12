@@ -55,6 +55,8 @@ import {
   resolveLaunchIntent,
   prepareBeforeGlobalLaunchLock,
   probeFrizz,
+  JOIN_PROBE_TIMEOUT_MS,
+  HEALTH_PROBE_TIMEOUT_MS,
   readPreferredPort,
   waitForWorkspace,
   requestFrizzStop,
@@ -1693,7 +1695,8 @@ test("a health probe can name the project it is asking about", async () => {
   );
   assert.match(asked[0], /\/_frizz\/health$/);
 
-  // A slug asks THAT project — and because the route activates a tenant, asking is also opening.
+  // A slug asks THAT project. The server answers it from the registry without opening the project,
+  // so asking is no longer opening — see registeredTenantHealth.
   assert.ok(
     await probeFrizz(9393, { projectId: "beta-id", projectDir: "/repos/beta", slug: "beta" }, answer(healthy))
   );
@@ -1704,6 +1707,35 @@ test("a health probe can name the project it is asking about", async () => {
     await probeFrizz(9393, { projectId: "alpha-id", projectDir: "/repos/alpha", slug: "beta" }, answer(healthy)),
     null
   );
+});
+
+// THE REGRESSION: the join probe ran on the same 1s budget as "is the server I just started up yet",
+// against a route that could take seconds. Two runs of `frizz dev` in one directory seven minutes
+// apart, 2026-08-12: the first answered in 943ms and joined, the second took 1052ms and started a
+// second Frizz on a second port. Whether the machine ends up with one scheduler or two must not be
+// decided by a coin flip, so the join gets a budget sized for a server that is genuinely busy.
+test("the join probe outwaits a busy server instead of starting a rival one", async () => {
+  const healthy = { ok: true, projectId: "beta-id", projectDir: "/repos/beta", bootId: "b1" };
+  const expected = { projectId: "beta-id", projectDir: "/repos/beta", slug: "beta" };
+  // A server that answers correctly, just not within the liveness budget.
+  const slow = (delayMs: number) =>
+    ((_url: string, init?: { signal?: AbortSignal }) =>
+      new Promise((resolve, reject) => {
+        const timer = setTimeout(
+          () => resolve(new Response(JSON.stringify(healthy), { headers: { "content-type": "application/json" } })),
+          delayMs
+        );
+        init?.signal?.addEventListener("abort", () => {
+          clearTimeout(timer);
+          reject(new Error("aborted"));
+        });
+      })) as unknown as typeof fetch;
+
+  assert.ok(JOIN_PROBE_TIMEOUT_MS > HEALTH_PROBE_TIMEOUT_MS);
+  // A budget shorter than the server's answer gives up on it — this is the bug, pinned.
+  assert.equal(await probeFrizz(9494, expected, slow(60), 20), null);
+  // The join budget waits it out and joins.
+  assert.ok(await probeFrizz(9494, expected, slow(60), 5_000));
 });
 
 test("a port held by a system reservation is not reported as a port in use", () => {
