@@ -77,6 +77,14 @@ export const INK_TRIM_HOURGLASS = "-mx-1"
  *  swap will be to something that does. */
 export const INK_TRIM_GOAL = "-mx-[2.5px]"
 
+/** `ArmedWatches` — lucide `Eye` at 12px inside `px-0.5`.
+ *
+ *  THE SAME VALUE AS THE GOAL'S, and measured rather than copied: both glyphs paint to lucide's outer
+ *  24-unit bound, so inside `px-0.5` both carry 2.4px of dead space a side. Without this the strip read
+ *  11.5px of ink between the plug and the Goal and 14.3px between the Goal and this — a 2.8px step in a
+ *  row whose CSS gap is uniform, which is the whole failure mode `optical-spacing` exists for. */
+export const INK_TRIM_WATCHES = "-mx-[2.5px]"
+
 /** `ReloadPluginsButton` — lucide `Plug` at 13px in a 24px square, painting 8px of it.
  *
  *  SYMMETRIC, and that is a correction of the first attempt here. The instrument read this glyph's

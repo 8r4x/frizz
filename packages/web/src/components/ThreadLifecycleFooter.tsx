@@ -1,11 +1,13 @@
 import { useState } from "react"
-import { Check, Hourglass, Loader2 } from "lucide-react"
+import { Check, Eye, Hourglass, Loader2 } from "lucide-react"
 import type { CompletionHold, ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 import { threadLifecycleAvailability, completionArchivesImmediately, completionHoldSummary } from "../lib/threadLifecycle.ts"
 import { markArchived, clearArchived } from "../lib/optimisticArchive.ts"
 import { futureSnoozedUntil } from "../groups.ts"
+import { INK_TRIM_WATCHES } from "../lib/iconRhythm.ts"
+import { formatAgo } from "../lib/durationLabels.ts"
 import { formatSnoozeWake } from "../lib/snooze.ts"
 import { CHILD_ARROW, CHILD_ARROW_CLASS } from "../lib/childOps.ts"
 import { INK_TRIM_HOURGLASS, STRIP_INK_GAP } from "../lib/iconRhythm.ts"
@@ -86,6 +88,7 @@ export function ThreadLifecycleFooter({
         )}
         <PendingSnooze thread={thread} />
         <RecurringPromptControl thread={thread} />
+        <ArmedWatches thread={thread} />
       </span>
       {/* Done ⇒ the strip states the state; otherwise it offers the verbs. Never both, and never
           neither: the slot on the right always says something about where the thread stands. */}
@@ -162,6 +165,45 @@ function PendingSnooze({ thread }: { thread: ThreadView }) {
           otherwise sit 8px further from its neighbours than the strip's other marks do. */}
       <span data-pending-snooze aria-label={detail} className={`flex items-center px-0.5 text-muted/60 ${INK_TRIM_HOURGLASS}`}>
         <Hourglass size={12} />
+      </span>
+    </Tooltip>
+  )
+}
+
+// WHAT THIS THREAD IS WAITING ON, read from the registry rather than folded from the transcript — which
+// is the whole reason waits moved out of the ```awaiting fence: a registration survives the worker
+// saying one more sentence, and it can be dropped when it stops mattering.
+//
+// A READOUT, NOT A CONTROL. It states a fact and offers nothing: dropping a watcher is the WORKER's
+// call (it is the only party that knows whether the wait still matters), and the human's lever is the
+// Snooze already sitting in this same strip. That is also why an armed watcher does not park the thread
+// — maintainer 2026-08-12, choosing that over auto-Held for every kind, so a wait that may never
+// resolve cannot silently vanish from the queue.
+//
+// The tooltip carries the detail because the strip has room for a mark and nothing else, and one line
+// per watcher is exactly what an operator wants to know: what, and since when.
+function ArmedWatches({ thread }: { thread: ThreadView }) {
+  // `?? []` because the field can genuinely be ABSENT at runtime: the schema defaults it, but a board
+  // pushed by a server that predates it — the window between an update and its restart — carries a
+  // ThreadView without it, and so does any hand-built fixture. Reading it bare threw and blanked the
+  // whole footer, which is a worse failure than the readout being missing.
+  const armed = (thread.watches ?? []).filter((w) => w.state === "armed")
+  if (!armed.length) return null
+  const detail = armed
+    .map((w) => `${w.kind === "shell" ? "Shell" : w.kind.toUpperCase()}: ${w.target} (since ${formatAgo(w.createdAt)})`)
+    .join("\n")
+  const label = armed.length === 1 ? `Watching 1 thing\n${detail}` : `Watching ${armed.length} things\n${detail}`
+  return (
+    <Tooltip label={label} side="top" multiline>
+      {/* AN EYE, and the first choice here was wrong for a reason only the screenshot showed. `Radar`
+          reads better in prose — nobody is looking, frizz is listening — but it is CONCENTRIC CIRCLES,
+          and it sits directly beside the Goal's `Target`, which is also concentric circles. At 12px the
+          two were the same mark twice, which is worse than a slightly loose metaphor. The eye's almond
+          silhouette shares nothing with its neighbours and survives the size; the "already seen"
+          connotation an eye usually carries has nothing to collide with in this strip, where no other
+          mark means read-state. */}
+      <span data-armed-watches={armed.length} aria-label={label} className={`flex items-center px-0.5 text-muted/60 ${INK_TRIM_WATCHES}`}>
+        <Eye size={12} />
       </span>
     </Tooltip>
   )
