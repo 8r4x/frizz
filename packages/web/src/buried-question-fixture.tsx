@@ -17,7 +17,7 @@ const thread: ThreadView = {
   id: slug, title: "Set up the database layer", status: "active", mechanism: null, humanBlocked: false,
   ready: false, dependsOn: [], externalDeps: [], agents: [], errors: [], warnings: [], runtime: "running",
   unread: false, archived: false, hasPlan: false, pendingQuestion: false, kind: "session", foreign: false,
-  backend: "claude", permissionMode: "default", subAgents: [], bgShells: [],
+  backend: "claude", permissionMode: "default", subAgents: [], bgShells: [], watches: [],
 }
 store.board = { projectDir: "/fixture/frizz", threads: [thread] } as BoardSnapshot
 

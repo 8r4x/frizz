@@ -56,6 +56,7 @@ const baseThread = (id: string, title: string, subAgents: ThreadView["subAgents"
   foreign: false,
   subAgents,
   bgShells: [],
+  watches: [],
 })
 
 // A fixed future instant so the timer card renders a real "Confirm snooze" (isValidAwaitingTimer + future).

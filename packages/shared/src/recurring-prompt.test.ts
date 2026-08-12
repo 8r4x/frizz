@@ -45,8 +45,16 @@ for (const [label, message] of [
     assert.equal(saysAllDone(message), false)
     // De-emphasized: one parenthetical line, not a section. A trailer that grows starts competing with
     // the operator's actual instruction for the worker's attention.
+    //
+    // The ceiling moved from 240 on 2026-08-12, when the AT-REST trailer took on the sign-off protocol.
+    // That is a deliberate purchase, not drift: the alternative is a SECOND delivery per rest (frizz's
+    // built-in nudge, scheduler SOURCE 9) telling the worker how to sign off while the Goal is telling
+    // it to keep going — two messages for one stop, which reads as frizz talking over itself. The
+    // schedule trailer does NOT carry it and stays under the old ceiling, which is what keeps this an
+    // exception rather than a new normal.
     const trailer = message.slice(message.indexOf("("))
-    assert.ok(trailer.length < 240, `trailer should stay a footnote, got ${trailer.length} chars`)
+    const ceiling = trailer.includes("come to rest") ? 400 : 240
+    assert.ok(trailer.length < ceiling, `trailer should stay a footnote, got ${trailer.length} chars`)
   })
 }
 

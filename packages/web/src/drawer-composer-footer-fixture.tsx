@@ -34,6 +34,7 @@ const thread: ThreadView = {
     { id: "agent-b", label: "Exercise desktop and narrow viewport behavior", startedAt: "2026-07-14T10:01:00.000Z", state: "running" },
   ],
   bgShells: [{ label: "Watch the production fixture build", startedAt: "2026-07-14T10:02:00.000Z", state: "running" }],
+  watches: [],
 }
 
 store.board = { threads: [thread] } as BoardSnapshot

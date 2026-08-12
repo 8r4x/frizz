@@ -20,6 +20,10 @@ import { DEFAULT_GOAL_TRIGGERS, DEFAULT_RECURRING_PROMPT } from "@frizz/shared"
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), "frizz-watch-"))
   const storage = createStorage(join(dir, "ui.db"))
+  // Frizz's built-in sign-off nudge (scheduler SOURCE 9) fires on any FENCELESS rest with no Goal stop
+  // hook armed, which every thread in this harness is. Silenced so each test counts only the deliveries
+  // it is about; the nudge has its own file.
+  storage.setSetting("signoffNudge", "off")
   const add = (slug: string) =>
     storage.upsertSession({
       slug, session_id: `sid-${slug}`, tmux_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
@@ -135,6 +139,9 @@ test("removing a session takes its watchers with it", () => {
 function watchScheduler(shells: Array<{ id?: string; label: string; state: "running" | "stale" }>, opts: { tele?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-watchsched-"))
   const storage = createStorage(join(dir, "ui.db"))
+  // Same reason as the fixture above: these threads carry no Goal, so the built-in sign-off nudge would
+  // add a delivery to every count here.
+  storage.setSetting("signoffNudge", "off")
   const slug = "watching"
   storage.upsertSession({
     slug, session_id: "sid", tmux_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),

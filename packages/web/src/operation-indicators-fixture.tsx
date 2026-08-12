@@ -66,6 +66,7 @@ const thread: ThreadView = {
     { label: "Dev server (waiting, no recent output)", startedAt: "2026-07-14T09:00:00.000Z", state: "stale", lastActivityAt: agoIso(78) },
     { label: "Monitor: PR checks", startedAt: "2026-07-14T09:30:00.000Z", state: "stale" },
   ],
+  watches: [],
 }
 
 store.board = { threads: [thread] } as BoardSnapshot

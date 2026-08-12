@@ -102,6 +102,10 @@ export interface SessionRow {
   // prompt). It is stored beside the triggers rather than derived because it is an operator PREFERENCE
   // about this thread, and the scheduler must be able to read it without the panel being open.
   recurring_pause_on_questions?: number
+  // The built-in sign-off nudge's consecutive counter and the `lastUserAt` it is anchored to. See the
+  // ALTER list for why it takes two columns.
+  signoff_nudges?: number
+  signoff_nudge_anchor?: string | null
   // The ON SCHEDULE trigger's cadence. Kept even while that trigger is off, so switching it back on
   // does not lose the interval the operator chose.
   recurring_interval_ms?: number | null
@@ -537,6 +541,11 @@ export interface Storage {
   // Persist a watcher's progress marker (the PR activity baseline). Guarded on `armed` so a cursor
   // written after the worker dropped the row cannot resurrect it.
   setThreadWatchCursor(id: string, cursor: string): boolean
+  // ---- THE BUILT-IN SIGN-OFF NUDGE ----------------------------------------------------------------
+  // Count one delivered nudge against this thread, anchored to the human's last word. Passing a
+  // DIFFERENT anchor than the row holds resets the count to 1 — that is how "consecutive" is expressed
+  // without a separate clearing pass: the human speaking is what re-opens the allowance.
+  countSignoffNudge(slug: string, anchor: string | null): void
   // Stamp a delivered ON REST prompt, guarded on the generation so one settling after an edit cannot
   // write onto words it no longer describes.
   stampRecurringRestFired(slug: string, armedAt: string, firedAt: string): boolean
@@ -893,6 +902,12 @@ export function createStorage(dbPath: string): Storage {
     // armed row picks it up OFF on the next boot, which is the honest reading of a row whose operator has
     // never been shown the option.
     "recurring_pause_on_questions INTEGER NOT NULL DEFAULT 0",
+    // THE BUILT-IN SIGN-OFF NUDGE (scheduler SOURCE 9, 2026-08-12). How many times in a row frizz has
+    // told this thread how to sign off without a fence appearing, and the `lastUserAt` that counting
+    // started from. Two columns because the cap is CONSECUTIVE: an agent that keeps resting bare must
+    // not be nudged forever, and any new word from the human re-opens the allowance.
+    "signoff_nudges INTEGER NOT NULL DEFAULT 0",
+    "signoff_nudge_anchor TEXT",
     // Title provenance for the CURRENT text (2026-08-07): 1 = the worker's own title signal wrote it,
     // 0 = the dispatch seeded it. DEFAULT 0 is the conservative direction — an existing row is assumed
     // to hold its dispatch chop until the repair below (or the next title signal) says otherwise.
@@ -1488,6 +1503,14 @@ export function createStorage(dbPath: string): Storage {
     WHERE id = ? AND state = 'armed'
   `)
   const delThreadTimers = db.prepare("DELETE FROM thread_timer WHERE thread_slug = ?")
+  // ONE statement decides reset-vs-increment, by reading the row's own anchor: SQLite evaluates the SET
+  // list against the pre-update values, so a changed anchor restarts the count at 1 in the same write.
+  const countNudgeStmt = db.prepare(`
+    UPDATE session SET
+      signoff_nudges = CASE WHEN signoff_nudge_anchor IS ? THEN signoff_nudges + 1 ELSE 1 END,
+      signoff_nudge_anchor = ?
+    WHERE slug = ?
+  `)
   const armWatchStmt = db.prepare(`
     INSERT INTO thread_watch (id, thread_slug, kind, target, state, created_at, settled_at, cursor)
     VALUES (@id, @slug, @kind, @target, 'armed', @createdAtMs, NULL, NULL)
@@ -2146,6 +2169,7 @@ export function createStorage(dbPath: string): Storage {
       recurringStmt.run(...recurringArgs(write), slug, sessionId, generation).changes === 1,
     setRecurringPromptBySlug: (slug, write) =>
       recurringBySlugStmt.run(...recurringArgs(write), slug).changes === 1,
+    countSignoffNudge: (slug, anchor) => void countNudgeStmt.run(anchor, anchor, slug),
     armThreadWatch: (watch) => void armWatchStmt.run(watch),
     listThreadWatches: (slug, opts) =>
       (opts?.armedOnly ? armedWatchesBySlugStmt : watchesBySlugStmt).all(slug),

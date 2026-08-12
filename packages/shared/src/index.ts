@@ -501,6 +501,16 @@ export function saysAllDone(text: string | undefined): boolean {
 // stays parenthetical — the operator's own words are the message; this is a footnote about the
 // machinery. Expanding it is how a worker starts treating "am I allowed to stop?" as the question,
 // instead of the work it was actually sent.
+// THE SIGN-OFF PROTOCOL, riding the at-rest delivery. It is here rather than in a message of its own
+// because both fire on the same event: a thread that gets its Goal back at a rest would otherwise get a
+// second delivery telling it to sign off, which is frizz talking over itself. A thread with NO Goal
+// gets the same content standalone (scheduler SOURCE 9).
+//
+// One line, because it competes with the operator's own words for attention.
+const SIGNOFF_NOTE =
+  "Sign off either way — ```question if you need the human, ```done if it is truly finished:" +
+  " 1-3 sentences, then **bolded verb phrase** bullets."
+
 const OPT_OUT_NOTE =
   "To stop these, sign off with a ```done fence — but ONLY when the work is genuinely finished:" +
   " it files this thread away, and nothing but new work from the human reopens it."
@@ -508,7 +518,7 @@ const OPT_OUT_NOTE =
 /** What frizz delivers when the ON REST trigger fires: the operator's words VERBATIM, then the trailer.
  * Kept beside the parser so the wording sent and the wording recognized can never drift apart. */
 export function restPromptMessage(prompt: string): string {
-  return `${prompt.trim()}\n\n(Goal — sent each time you come to rest. ${OPT_OUT_NOTE})`
+  return `${prompt.trim()}\n\n(Goal — sent each time you come to rest. ${OPT_OUT_NOTE} ${SIGNOFF_NOTE})`
 }
 
 /** What frizz delivers when the POST-COMPACTION trigger fires (scheduler SOURCE 7).
@@ -640,6 +650,28 @@ export function watchWakeMessage(kind: ThreadWatchKind, target: string, detail: 
     " another with `mcp__frizz__watch` if you need to keep waiting.)"
   )
 }
+
+// ---- THE BUILT-IN SIGN-OFF NUDGE (scheduler SOURCE 9) --------------------------------------------
+// The rules arrive when they are ABOUT TO BE USED, rather than 200k tokens earlier in a system prompt
+// the agent has long since stopped attending to. Maintainer 2026-08-11: "the agent seems to often
+// forget about this stuff when it's added to the additional system prompt anyway."
+//
+// Delivered ONLY to a rest that carried NO fence at all — a thread that signed off correctly never sees
+// it, so the whole cost of the mechanism is paid by exactly the rests that were about to produce an
+// untriageable queue item. That is the invariant it exists to buy: every item in the queue is a
+// question you can answer or a checkmark you can archive.
+//
+// SHORT, because it competes with the agent's own conclusion for attention, and because a long one
+// invites the agent to treat "how do I sign off?" as the task. Three facts and a shape.
+export const SIGNOFF_NUDGE_MESSAGE = [
+  "You came to rest without signing off, so this thread is now an item nobody can triage. Pick one:",
+  "",
+  "- **```question** — you need the human. Put each question in its own fence, with lettered options and a recommendation.",
+  "- **```done** — the work is genuinely finished. It is a DISMISSAL: the card is filed away and nobody looks again, so if anything is still owed, it is not done.",
+  "- **Register a wait** with `mcp__frizz__watch` if you are blocked on a PR, CI, or your own background shell — then rest, and frizz brings you back.",
+  "",
+  "Keep it SHORT: one to three sentences, then bullets, each starting with a **bolded verb phrase**.",
+].join("\n")
 
 export function timerPromptMessage(prompt: string, fireAt: string): string {
   return `${prompt.trim()}\n\n(One-off timer, set for ${fireAt}. It has fired and will not repeat.)`

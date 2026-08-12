@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { compactionPromptMessage, formatGithubWakeSteer, isValidAwaitingTimer, restPromptMessage, schedulePromptMessage, timerPromptMessage, watchWakeMessage, wakeDeliveryToken, type QuotaSnapshot } from "@frizz/shared"
+import { compactionPromptMessage, formatGithubWakeSteer, isValidAwaitingTimer, restPromptMessage, schedulePromptMessage, timerPromptMessage, watchWakeMessage, SIGNOFF_NUDGE_MESSAGE, wakeDeliveryToken, type QuotaSnapshot } from "@frizz/shared"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
 import type { FenceView, SessionTelemetry } from "./tailer.ts"
@@ -604,6 +604,21 @@ const TIMER_HINT_PREFIX = "timer:"
 // A registered watcher's delivery namespace (scheduler SOURCE 8). Safe against every neighbour for the
 // same reason the timer's is: an awaiting fence id begins with its own fence instant, and no other
 // prefix here starts with these characters.
+// The built-in sign-off nudge's delivery namespace (scheduler SOURCE 9), and its consecutive cap.
+const SIGNOFF_FENCE_PREFIX = "signoff"
+const SIGNOFF_HINT_KEY = "signoff:rest"
+const SIGNOFF_NUDGE_MAX = 2
+/** The kill switch. Not in the UI — this lands on every live thread at once, so there has to be a way
+ *  to stop it that is not a code change. Absent (the default) means ON. */
+const SIGNOFF_NUDGE_SETTING = "signoffNudge"
+
+function signoffFenceId(restedAt: string): string {
+  return `${SIGNOFF_FENCE_PREFIX}:${restedAt}`
+}
+function isSignoffFenceId(fenceId: string): boolean {
+  return fenceId.startsWith(`${SIGNOFF_FENCE_PREFIX}:`)
+}
+
 const WATCH_FENCE_PREFIX = "watch"
 const WATCH_HINT_PREFIX = "watch:"
 /** The one bit a shell watcher's `cursor` carries: this target has been OBSERVED ALIVE, so its absence
@@ -1032,6 +1047,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     // This branch is load-bearing in a way the others are not: without it the fallthrough below reads
     // every watcher delivery as an awaiting fence, finds none, and supersedes it — the watcher enqueues
     // on every tick and never delivers, which looks exactly like a watcher that does not work.
+    // The built-in nudge is bound to the exact rest it was queued for, and to that rest still being
+    // fenceless. A worker that signed off between enqueue and delivery must not then be told how to
+    // sign off — which is both useless and, arriving after a ```done, actively confusing.
+    if (isSignoffFenceId(item.fenceId)) {
+      if (item.fenceId !== signoffFenceId(tele.lastActivityAt ?? "")) return "superseded"
+      if (tele.lastFence || tele.pendingQuestion) return "superseded"
+      return tele.turn === "idle" ? "current-idle" : "current-busy"
+    }
     if (isWatchFenceId(item.fenceId)) {
       if (deps.storage.getThreadWatch(watchIdOf(item.fenceId))?.state !== "armed") return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
@@ -1541,6 +1564,75 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // Like the snooze pass, an alarm that came due while frizz was DOWN still fires when it comes back —
   // the row is its own durable registration, and "you asked to be woken at 15:00" does not stop being
   // true because the server restarted at 14:59. Unlike the snooze pass, it does not wait for rest.
+  // ---- SOURCE 9: THE BUILT-IN SIGN-OFF NUDGE ---------------------------------------------------
+  // Frizz's own stop hook. Always on, not disableable per-thread, and invisible in the UI — orthogonal
+  // to the operator's Goal, which keeps its own three triggers.
+  //
+  // It fires on a rest that carried NO FENCE AT ALL, and its message is the sign-off protocol itself.
+  // The rules therefore arrive at the one moment they are about to be used, rather than 200k tokens
+  // earlier in a system prompt the agent stopped attending to (maintainer 2026-08-11: "the agent seems
+  // to often forget about this stuff when it's added to the additional system prompt anyway"). A thread
+  // that signs off correctly never sees it, so the mechanism costs nothing except on exactly the rests
+  // that were about to produce an item nobody can triage.
+  //
+  // THE CAP IS CONSECUTIVE AND IT IS NOT OPTIONAL. An agent that rests bare, is told how to sign off,
+  // and rests bare again would otherwise be told forever — a nag loop frizz itself generates. After
+  // SIGNOFF_NUDGE_MAX in a row with no fence appearing, it gives up and the item sits in the queue as a
+  // plain bare rest, which is exactly today's behaviour. Any new word from the HUMAN re-opens the
+  // allowance, because their message is a new task and the count was about the old one.
+  //
+  // TOP-LEVEL THREADS ONLY — a sub-agent's final message is a report to its parent, not a queue item.
+  // That falls out of this pass reading session rows, which sub-agents do not have.
+  function evalSignoffNudges(nowMs: number): void {
+    if (deps.storage.getSetting(SIGNOFF_NUDGE_SETTING) === "off") return
+    for (const row of deps.storage.allSessions()) {
+      if (row.state === "archived" || row.archived === 1) continue
+      const tele = deps.tailer.get(row.slug)
+      if (!tele || tele.turn !== "idle" || !tele.lastActivityAt) continue
+      // ANY fence means the thread already said where it stands — including `awaiting`, which is still
+      // a legitimate sign-off until the registry replaces it. Nothing to teach.
+      if (tele.lastFence || tele.pendingQuestion) continue
+      // A native ask is a question by another route: the thread is frozen on a modal the human has to
+      // answer, and telling it to write a ```question fence is telling it to do what it already did.
+      if (tele.pendingAsk || tele.permPrompt) continue
+      // The sentinel still ends the arrangement for sessions that predate the fence (see `saidDone`).
+      if (tele.lastAssistantAllDone) continue
+      // IT YIELDS TO THE GOAL'S STOP HOOK, which is the whole reason the instructions ride a trailer
+      // rather than a message of their own. Both fire on the same event, so without this a bare rest
+      // gets TWO deliveries — "keep going" and "you did not sign off" — for one stop, which is noise
+      // and reads as frizz talking over itself. When a Goal is armed at rest, `restPromptMessage`
+      // carries the sign-off protocol; this source covers the threads that have no Goal at all.
+      if (armedRest(row)) continue
+      // The consecutive cap, anchored to the human's last word.
+      const anchor = tele.lastUserAt ?? null
+      if ((row.signoff_nudge_anchor ?? null) === anchor && (row.signoff_nudges ?? 0) >= SIGNOFF_NUDGE_MAX) continue
+      const fenceId = signoffFenceId(tele.lastActivityAt)
+      const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
+      // Bound to the REST instant, so one nudge per rest falls out of delivery-id uniqueness rather
+      // than needing a counter of its own — the same trick the stop hook plays.
+      if (outbox.get(deliveryId)) continue
+      const item = outbox.enqueue({
+        id: deliveryId,
+        slug: row.slug,
+        sessionId: row.session_id,
+        fenceId,
+        hintKey: SIGNOFF_HINT_KEY,
+        message: SIGNOFF_NUDGE_MESSAGE,
+        reason: "rested without signing off",
+      }, nowMs).delivery
+      log(`waker: queued ${row.slug} — ${item.reason}`)
+      checkpoint("after-enqueue", item)
+    }
+  }
+
+  // Count a delivered nudge, anchored to the human's last word — the storage write decides reset vs
+  // increment by comparing that anchor against the row's own.
+  function settleSignoffNudge(item: WakeDelivery): void {
+    if (!isSignoffFenceId(item.fenceId)) return
+    const tele = deps.tailer.get(item.slug)
+    deps.storage.countSignoffNudge(item.slug, tele?.lastUserAt ?? null)
+  }
+
   // ---- SOURCE 8: THE REGISTERED WATCHERS (`shell` today) ---------------------------------------
   // The registry's half of the wake. Unlike every source above it, the record of intent is a ROW the
   // worker created by tool call (`thread_watch`) rather than anything derived from what it wrote — which
@@ -1981,6 +2073,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       settleCompactPrompt(item)
       settleTimer(item)
       settleWatcher(item)
+      settleSignoffNudge(item)
       const acknowledged = outbox.get(item.id)
       if (acknowledged) checkpoint("after-ack", acknowledged)
     }
@@ -2051,6 +2144,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     } catch (err) {
       if (err instanceof InjectedSchedulerCrash) throw err
       log(`waker: recurring-prompt compaction pass failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    try {
+      evalSignoffNudges(now())
+    } catch (err) {
+      if (err instanceof InjectedSchedulerCrash) throw err
+      log(`waker: sign-off nudge pass failed: ${err instanceof Error ? err.message : String(err)}`)
     }
     try {
       evalWatchers(now())

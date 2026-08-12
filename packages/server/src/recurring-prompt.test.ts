@@ -305,6 +305,7 @@ function heartbeatScheduler(
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
     title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   } as SessionRow)
+  storage.setSetting("signoffNudge", "off")
   storage.setRecurringPromptBySlug(slug, { prompt: "check the deploy", stopHook: false, heartbeat: true, postCompaction: false, pauseOnQuestions: false, intervalMs: opts.intervalMs ?? 3_600_000, armedAt: opts.armedAt ?? "2026-08-02T00:00:00.000Z" })
   if (opts.lastFiredAt) storage.stampRecurringScheduleFired(slug, storage.getSession(slug)!.recurring_armed_at!, opts.lastFiredAt)
   const delivered: string[] = []
@@ -499,6 +500,7 @@ function compactScheduler(
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
     title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   } as SessionRow)
+  storage.setSetting("signoffNudge", "off")
   storage.setRecurringPromptBySlug(slug, {
     prompt: "Re-read .frizz/threads/sid/plan.md before continuing",
     stopHook: false, heartbeat: false, postCompaction: true, pauseOnQuestions: false,
