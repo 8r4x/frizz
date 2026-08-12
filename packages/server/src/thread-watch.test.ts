@@ -263,3 +263,22 @@ test("both dispatch transports arm the default Goal", () => {
     "codex (app-server) and claude (broker) each arm it after registering the session",
   )
 })
+
+// ---- The board projection -------------------------------------------------------------------------
+// Armed watchers reach the operator through the thread view, read from the REGISTRY rather than folded
+// from the transcript — which is what makes them survive the worker saying one more sentence.
+//
+// They deliberately feed NO queue rule: a thread with an armed watcher stays a visible queue handoff,
+// and Snooze remains the only way to hide one (maintainer 2026-08-12, choosing that over auto-Held for
+// every kind). So what this pins is that the field CARRIES, not that it excuses anything.
+test("the thread view carries a thread's armed watchers, and only the armed ones", () => {
+  const f = fixture()
+  try {
+    f.storage.armThreadWatch({ id: "w1", slug: "watcher", kind: "pr", target: "acme/app#391", createdAtMs: 1000 })
+    f.storage.armThreadWatch({ id: "w2", slug: "watcher", kind: "shell", target: "nub run test", createdAtMs: 2000 })
+    f.storage.dropThreadWatch("watcher", "w2", 3000)
+    const armed = f.storage.listThreadWatches("watcher", { armedOnly: true })
+    assert.deepEqual(armed.map((w) => w.id), ["w1"], "a dropped watcher leaves the operator's view too")
+    assert.equal(armed[0]?.target, "acme/app#391")
+  } finally { f.close() }
+})

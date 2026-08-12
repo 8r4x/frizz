@@ -755,6 +755,14 @@ function sessionThreadView(
     lastAssistantAt: tele?.lastAssistantAt,
     subAgents: stampStoppable(tele?.subAgents ?? [], row),
     bgShells: stampStoppableShells(tele?.bgShells ?? [], row),
+    // Read from the REGISTRY rather than the fold — the whole point of moving waits out of the fence.
+    watches: storage.listThreadWatches(row.slug, { armedOnly: true }).map((w) => ({
+      id: w.id,
+      kind: w.kind,
+      target: w.target,
+      state: w.state,
+      createdAt: new Date(w.created_at).toISOString(),
+    })),
     pendingAsk: tele?.pendingAsk ? { questions: tele.pendingAsk.questions } : undefined,
     nativeInputRequired: tele?.nativeInputRequired,
     pendingQuestion: tele?.pendingQuestion ?? false,

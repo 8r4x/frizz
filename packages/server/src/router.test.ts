@@ -200,6 +200,7 @@ function harness(tailer: Tailer = noopTailer) {
       archived: false,
       subAgents: [],
       bgShells: [],
+      watches: [],
       pendingQuestion: false,
       kind: "session",
       foreign: false,
@@ -537,6 +538,7 @@ test("followUp yields to a live external writer but still answers a thread whose
       permPrompt: false,
       subAgents: [],
       bgShells: [],
+      watches: [],
       pendingQuestion: false,
       // The external writer is still appending; the stalled one froze before frizz took the thread.
       lastActivityAt: slug === external ? new Date().toISOString() : "2026-07-09T09:59:00.000Z",

@@ -781,6 +781,14 @@ export const ThreadView = z.object({
   // Live background SHELLS the worker launched (tailer-derived). Same default-[] discipline. Rendered
   // in the anchored background-ops strip alongside sub-agents; ids make current rows drillable.
   bgShells: z.array(BgShellView).default([]),
+  // The thread's ARMED WATCHERS — registry-derived, not folded from the transcript, which is what makes
+  // them survive the worker saying one more sentence. Same default-[] discipline as the two above.
+  //
+  // These NEVER park the thread: a row with an armed watcher stays a visible queue handoff, and Snooze
+  // remains the only way to hide one (maintainer 2026-08-12, choosing this over auto-Held for every
+  // kind). So this field is for the operator to SEE what a thread is waiting on — it deliberately feeds
+  // no queue-membership rule.
+  watches: z.array(ThreadWatchView).default([]),
   // A pending native AskUserQuestion the session is frozen on (tailer-derived). Optional — absent
   // when there's no unanswered ask. Feeds needsAction + the read-only question render + "Answer in Terminal".
   pendingAsk: PendingAsk.optional(),
