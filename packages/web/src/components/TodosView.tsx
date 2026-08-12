@@ -1,8 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useSnapshot } from "valtio"
 import { ChevronsUpDown, Hourglass, Inbox } from "lucide-react"
-import { parseRecurringPrompt } from "@frizz/shared"
-import { messagePresentationText } from "../lib/messagePresentation.ts"
 import type { ThreadView, BoardSnapshot, TranscriptMessage, TranscriptToolCall } from "@frizz/shared"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { queueCardTargetY, showToast } from "../store.ts"
@@ -12,6 +10,7 @@ import { useBoard, asThreads, useTranscript } from "../hooks.ts"
 import { orderQueue, queued, displayTitle, lastActiveLabelAt } from "../groups.ts"
 import { useLiveAnswering } from "../lib/answering.ts"
 import { hasQuestionBlock } from "../lib/questionBlocks.ts"
+import { isGoalBump, supersededAskIndices, survivesQueueCollapse } from "../lib/queueCollapse.ts"
 import { pairAllAnswers } from "../lib/answersMessage.ts"
 import { Message, NativeInputRequiredCard, PermPolicyDenialCard, PermPromptBanner, PendingAskCard, StickyUserBand, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText } from "./ChatView.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_TOP, CARD_ACTION_EXPLAINER, CARD_PRIMARY_ACTION } from "./TranscriptCard.tsx"
@@ -755,12 +754,15 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
     }
     return 0
   }, [messages])
-  // …and no further back than the CURRENT TURN. One past the most recent `rest` divider that still has
-  // renderable content after it: an agent that rested and was then woken again (a background task, a
-  // timer, a sub-agent returning) carries the whole PREVIOUS turn above that line, and the queue card is
-  // a triage surface for the standing signal — the closed turn under it is history the drawer already
-  // holds (maintainer 2026-08-11). The TRAILING rest is deliberately not a candidate: nothing renders
-  // after it, so cutting there would leave an empty card. 0 when no rest is followed by anything.
+  // Where the CURRENT TURN starts: one past the most recent `rest` divider that still has renderable
+  // content after it — an agent that rested and was then woken again (a background task, a timer, a
+  // sub-agent returning) carries the whole PREVIOUS turn above that line. The TRAILING rest is
+  // deliberately not a candidate: nothing renders after it, so a cut there would leave an empty card.
+  // 0 when no rest is followed by anything.
+  //
+  // It used to CUT the window here (maintainer 2026-08-11) and then to anchor the collapse. It does
+  // neither now — both reach back to the human's ask instead — and all that survives is its use as the
+  // collapse's "there is something above this" gate, for a wake-driven turn with no ask of its own.
   const restTurnStart = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].boundary !== "rest") continue
@@ -796,23 +798,32 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
     }
     return -1
   }, [messages])
-  // The agent's FIRST TEXT-BEARING message after the pinned ask — its opening narration. Its text is
+  // The agent's FIRST TEXT-BEARING message after the human's ask — its opening narration. Its text is
   // shown (text only) so the card reads: what I asked → what the agent set out to do → [collapsed work]
   // → where it landed. Requires prose for the same reason as lastRenderedIdx: a leading tools-only
   // message (agent dove straight into a tool) has nothing to show text-only, so the anchor skips past it
   // to the real narration (which would otherwise fall into the collapsed middle and be hidden). -1 → no
-  // agent prose yet. Anchored no earlier than the current turn (restTurnStart) for the same reason the
-  // window is: on a wake-driven turn the pinned ask sits above the cut, and scanning from it would put
-  // this anchor on the PREVIOUS turn's narration — off-screen, so the visible turn's opening prose would
-  // fall inside the collapsed middle and vanish.
+  // agent prose yet.
+  //
+  // THE COLLAPSE SPANS THE WHOLE WINDOW, and it must be anchored on the same message the window is —
+  // the human's last ask (lastUserIdx). It used to start at the CURRENT TURN (`Math.max(stickyUserIdx +
+  // 1, restTurnStart)`), from a build whose window was cut at the previous rest, so the two agreed. Once
+  // the window reached back past every rest to the human's task (2026-08-12) they no longer did, and the
+  // gap between them rendered RAW: a thread frizz had driven across seven rests painted all seven turns
+  // in full, and when the last turn held a single prose message `firstRenderedIdx === lastRenderedIdx`
+  // so nothing collapsed at all. Measured on the maintainer's zod board: one card at 122 messages and
+  // 17,854px with no summary divider anywhere in it.
+  //
+  // NOT `visibleStart`: that moves when the reader clicks "View more", and loaded-earlier history is
+  // deliberately shown in full around the collapse rather than swallowed by it.
   const firstRenderedIdx = useMemo(() => {
-    for (let g = Math.max(stickyUserIdx + 1, restTurnStart); g < messages.length; g++) {
+    for (let g = lastUserIdx + 1; g < messages.length; g++) {
       const m = messages[g]
       if (m.queued || !messageHasRenderableText(m)) continue
       return g
     }
     return -1
-  }, [messages, stickyUserIdx, restTurnStart])
+  }, [messages, lastUserIdx])
   // What the summary divider hides. The first and last agent messages render TEXT ONLY (the maintainer: the
   // tool calls batched into them "are almost never useful"), so EVERYTHING between them collapses — the
   // fully-hidden middle messages AND the tool bands batched into the first/last messages themselves.
@@ -824,8 +835,12 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   // divider neither hides nor counts them (maintainer 2026-08-01, on both kinds: "It's important that
   // those show up in the chat"). ONE predicate with the transcript, so a call cannot be a card in the
   // thread view and a hidden statistic on the queue card that summarizes the same turn.
+  // Whole MESSAGES are lifted out on the same reasoning — open asks and the wakes that say what
+  // re-invoked the agent; see lib/queueCollapse.survivesQueueCollapse, which this walk and the render
+  // loop both go through so the divider can't promise the expansion a message it already shows.
   // Zero when the agent answered in a single message (firstRenderedIdx === lastRenderedIdx → nothing
   // intermediate). The pinned ask and loaded-earlier history sit outside this range.
+  const supersededAsks = useMemo(() => supersededAskIndices(messages), [messages])
   const { hiddenStepCount, hiddenToolCount, visibleOperationMessages } = useMemo(() => {
     if (firstRenderedIdx < 0 || firstRenderedIdx === lastRenderedIdx) {
       return { hiddenStepCount: 0, hiddenToolCount: 0, visibleOperationMessages: [] as TranscriptMessage[] }
@@ -863,9 +878,9 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
       if (
         g > firstRenderedIdx &&
         g < lastRenderedIdx &&
-        // A middle message carrying a ```question keeps its row (see the render loop) — counting it as a
-        // hidden step would promise the expansion a message it already shows.
-        !hasQuestionBlock(m.text) &&
+        // A middle message that survives the collapse keeps its row (see the render loop) — counting it
+        // as a hidden step would promise the expansion a message it already shows.
+        !survivesQueueCollapse(m, g, supersededAsks) &&
         (messageHasRenderableText(m) || ordinaryTools.length > 0 || completion !== undefined || m.kind !== undefined)
       ) steps++
     }
@@ -878,7 +893,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
       at: operationAt,
     }]
     return { hiddenStepCount: steps, hiddenToolCount: tools, visibleOperationMessages: operationMessages }
-  }, [messages, firstRenderedIdx, lastRenderedIdx])
+  }, [messages, firstRenderedIdx, lastRenderedIdx, supersededAsks])
   // Collapse the intermediate run behind ONE summary divider unless the reader has opted into the full log.
   // Gated on a real pinned ask (stickyUserIdx >= 0) and a distinct first/last agent message so a single
   // agent turn (nothing intermediate) never hides its own batched tools behind an anchorless divider. Fires
@@ -890,8 +905,9 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   // THE HUMAN'S LAST MESSAGE WINS, even when the agent has rested since. It used to be capped at the
   // current turn (`Math.max` with `restTurnStart`) on the reasoning that a closed turn is history the
   // drawer already holds — but with frizz driving threads across many rests, "the current turn" is a
-  // stretch the reader never saw the start of, and the card was opening mid-conversation. `restTurnStart`
-  // still anchors the COLLAPSE below, which is what it is genuinely good for.
+  // stretch the reader never saw the start of, and the card was opening mid-conversation. The COLLAPSE
+  // above now reaches back to the same message, so the two agree; anchoring only one of them there is
+  // what left seven turns of a Goal-driven thread painted out in full.
   const visibleStart = resolveVisibleStart(messages, visibleStartId, lastUserIdx)
   const visible = useMemo(() => messages.slice(visibleStart), [messages, visibleStart])
   // The SAME presentation-only coalescing the thread view and the sub-agent drawer run (ChatView's
@@ -1264,24 +1280,23 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                 // so removing it would make the agent look like it had answered a question nobody asked.
                 // The drawer keeps both — it is a live transcript, where knowing what re-invoked the agent
                 // is exactly the point.
-                if (m.wake) {
-                  // `messagePresentationText`, NOT `m.text`: the server strips its own delivery token
-                  // into `displayText`, and the trailer this parses is `$`-anchored — so matching the raw
-                  // text silently never fires and the hairline renders anyway.
-                  const bump = parseRecurringPrompt(messagePresentationText(m))
-                  if (bump && bump.kind !== "signoff") return
-                }
-                if (collapseIntermediate && globalIdx >= firstRenderedIdx && globalIdx <= lastRenderedIdx) {
-                  const isFirst = globalIdx === firstRenderedIdx
-                  const isLast = globalIdx === lastRenderedIdx
-                  // Fully-hidden middle message — UNLESS it carries a ```question. An ask the agent then
-                  // kept working past is a decision the human still owes; collapsing it behind the summary
-                  // left the card offering "Send answers" with no question in sight, and the same ask
-                  // answerable one click away in the drawer. Same rule as background tasks and sub-agent
-                  // dispatches below: lifecycle content is lifted OUT of the collapsed span, chatter is not.
-                  // It renders textOnly like the first/last anchors, so its batched tool calls stay counted
-                  // in the summary rather than doubling up as a visible band.
-                  if (!isFirst && !isLast && !hasQuestionBlock(m.text)) return
+                if (isGoalBump(m)) return
+                const inSpan = collapseIntermediate && globalIdx >= firstRenderedIdx && globalIdx <= lastRenderedIdx
+                const isFirst = inSpan && globalIdx === firstRenderedIdx
+                const isLast = inSpan && globalIdx === lastRenderedIdx
+                // A lifted-out WAKE takes the ORDINARY path at the foot of this loop instead of the
+                // collapse branch's textOnly render. Its content IS a card or a rule — a GithubWakeCard
+                // built from `wakeSteer`, a sub-agent or background-shell completion divider — and
+                // messageHasRenderableText reports all of those as no prose at all, so the textOnly path
+                // would drop it on the floor rather than show it.
+                const liftedWake = inSpan && !isFirst && !isLast && !hasQuestionBlock(m.text) && survivesQueueCollapse(m, globalIdx, supersededAsks)
+                if (inSpan && !liftedWake) {
+                  // Fully-hidden middle message — UNLESS survivesQueueCollapse lifts it out. Same rule as
+                  // the background tasks and sub-agent dispatches below: lifecycle content (an open ask,
+                  // and the wake that says what re-invoked the agent) is lifted OUT of the collapsed span,
+                  // chatter is not. It renders textOnly like the first/last anchors, so its batched tool
+                  // calls stay counted in the summary rather than doubling up as a visible band.
+                  if (!isFirst && !isLast && !survivesQueueCollapse(m, globalIdx, supersededAsks)) return
                   // The divider sits between the first message's prose and the last message's prose — emit it
                   // once, just before the last message (firstRenderedIdx !== lastRenderedIdx here, so the
                   // two are distinct rows and the divider always lands after any first-message text).
