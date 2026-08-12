@@ -26,7 +26,7 @@ const FOOTER_STYLE = { paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))
 // The desktop-opener escape hatch. Reading is the default now, but a file you want to EDIT still
 // belongs in the editor, and this is the only affordance left that gets it there. It honours the
 // `localFileOpener` setting, exactly as a click on the link used to.
-function OpenExternallyAction({ path }: { path: string }) {
+function OpenAction({ path }: { path: string }) {
   const open = () => {
     rpc
       .openLocalFile({ path })
@@ -44,9 +44,9 @@ function OpenExternallyAction({ path }: { path: string }) {
       onMouseDown={(e) => e.preventDefault()}
       className="flex items-center gap-1.5 rounded-md border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] font-medium text-fg/80 outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
       title={`Open ${path} outside Frizz`}
-      aria-label="Open externally"
+      aria-label="Open"
     >
-      <ExternalLink size={12} aria-hidden="true" /> Open externally
+      <ExternalLink size={12} aria-hidden="true" /> Open
     </button>
   )
 }
@@ -86,7 +86,7 @@ export function MarkdownDrawer({ id, path, title, depth, widthDepth }: { id: num
                 <div ref={ref} className="md-body" dangerouslySetInnerHTML={inner} />
                 {body.data?.truncated && (
                   <p className="mt-4 border-t border-border/60 pt-3 text-[12px] text-muted">
-                    This file is too long to render in full — everything above the cut is shown. Open it externally for the rest.
+                    This file is too long to render in full — everything above the cut is shown. Open it to read the rest.
                   </p>
                 )}
               </>
@@ -98,7 +98,7 @@ export function MarkdownDrawer({ id, path, title, depth, widthDepth }: { id: num
             className="shrink-0 flex items-center justify-end gap-1.5 border-t border-border/60 bg-panel px-5 pt-3"
             style={FOOTER_STYLE}
           >
-            <OpenExternallyAction path={resolved} />
+            <OpenAction path={resolved} />
           </div>
         </>
       )}

@@ -20,7 +20,7 @@ type NotifPerm = "default" | "granted" | "denied" | "unsupported"
 export const SETTINGS_HELP = {
   permissionMode: "The permission mode new Claude Code threads launch with. Auto runs safe actions and asks you to approve the risky ones in the thread. Bypass launches the worker with --dangerously-skip-permissions: it never asks, so nothing waits on you and nothing is checked either. Takes effect on the next thread you dispatch — a thread already running keeps the mode it launched with. Codex threads always run with full workspace access and are unaffected.",
   font: "Changes the interface reading font for this browser.",
-  localFileOpener: "Chooses how vetted local artifact links open. Markdown files open in Frizz's own reader (with an “Open externally” action inside it), and image clicks always use the OS default viewer.",
+  localFileOpener: "Chooses how vetted local artifact links open. Markdown files open in Frizz's own reader (which carries an Open action that uses this setting), and image clicks always use the OS default viewer.",
   compact: "Collapses long diffs by default in this browser. This takes effect immediately.",
   stickyUserMessage: "Keeps your most recent message stuck to the top of a thread while the reply scrolls underneath. It stays collapsed to a small card (hover to expand it) so a long message never blocks much of the view. Applies immediately in this browser.",
   queueOrder: "Orders the Needs-you queue and the sidebar's rested threads by when each was last active. Oldest first (FIFO, default) surfaces the longest-waiting item first so you cycle through everything; Newest first (LIFO) keeps the most recently active on top. Applies immediately in this browser.",
