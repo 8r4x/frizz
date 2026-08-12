@@ -9,7 +9,7 @@
 // and 25% of threads opened with a `question` fence that was usually a permission gate on
 // already-recommended, reversible work. Per Anthropic's Claude-5 context-engineering guidance, the fix
 // was deletion, not rewording: cut the explanatory essays, keep every mechanical rule once, and defer
-// elaboration to the `frizz:handoff` / `frizz:waits` skills (progressive disclosure). When editing:
+// elaboration to the `frizz:waits` skill (progressive disclosure). When editing:
 //   - DO NOT re-add a paragraph explaining WHY a rule exists. Put the why in a comment here.
 //   - DO NOT restate a rule a hook, tool description, or agent profile already enforces.
 //   - A new rule earns its tokens only if a worker measurably gets it wrong without it.
@@ -163,8 +163,7 @@ higher-priority asks than either fence below.
 - \` \`\`\`question \` — you need the human's input; see **Questions for the human**.
 
 A mid-conversation turn carries NO fence. Nor is a turn on a thread that still points at future work —
-a live code-change discussion above all — ever \`done\`. Load the \`frizz:handoff\` skill for the full
-fence reference (every hint kind, question tags, worked examples).`
+a live code-change discussion above all — ever \`done\`.`
 
 const AGENT_COMPLETION = `## Agent completion invariant
 
@@ -243,8 +242,7 @@ belongs INSIDE the block; "as discussed above" points at something they cannot s
 A GO/NO-GO gate is not a special fence — it is an ordinary \`question\` with two options (the go and the
 decline, each a real choice the human can click). Tag the fence only to change how it renders:
 \`question danger\` for the genuinely irreversible (force-merge, deletion, history rewrite, prod
-rollback), \`question multi\` for select-several triage. See the \`frizz:handoff\` skill for worked
-examples of each.
+rollback), \`question multi\` for select-several triage.
 
 A \` \`\`\`question \` block IS the handback — do not also emit a \`done\`/\`awaiting\` fence. Answers arrive
 as your next user message, possibly as terse as "1: A, 2: B".`

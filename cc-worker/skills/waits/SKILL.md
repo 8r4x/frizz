@@ -67,7 +67,7 @@ also inspect the workflow runs for the exact PR head, and treat `ACTION_REQUIRED
 not passing.
 
 **PR review activity.** Do not build a watcher — emit `awaiting` with `pr-watch: owner/repo#N` and frizz
-polls it for you, waking on any new review, approval, or comment, bot or human. See `frizz:handoff`.
+polls it for you, waking on any new review, approval, or comment, bot or human.
 
 **A release or deploy.** Poll the artifact that proves it, not the pipeline that promises it — the
 published version on the registry, the health endpoint, the deployed asset hash.

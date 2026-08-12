@@ -433,7 +433,11 @@ test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting pa
   }
   // The runtime re-grounding carries the same intent in one line (slim, not a second contract copy).
   assert.match(SESSION_SEED, /```done[^;]*is a DISMISSAL \(its card files the thread away where nobody looks again\)/)
-  assert.match(SESSION_SEED, /points at future work AT ALL[^;]*bare rest instead, and uncertain is not done/)
+  // The escape from `done` is now a QUESTION, not a bare rest — a fenceless rest stopped being an
+  // acceptable outcome on 2026-08-12 (scheduler SOURCE 9 corrects it).
+  assert.match(SESSION_SEED, /points at future work AT ALL[^;]*ask a ```question instead, and uncertain is not done/)
+  assert.match(SESSION_SEED, /ALWAYS SIGN OFF WITH A FENCE/)
+  assert.match(SESSION_SEED, /mcp__frizz__watch/)
   assert.match(SESSION_SEED, /because that artifact outlives the thread/)
   assert.match(SESSION_SEED, /code LANDED on the mainline — an open PR is NOT done, park it on ```awaiting until it MERGES/)
   assert.doesNotMatch(SESSION_SEED, /BARE REST[^\n]*quiet/i)

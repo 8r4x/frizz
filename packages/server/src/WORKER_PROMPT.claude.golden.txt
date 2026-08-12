@@ -123,8 +123,7 @@ higher-priority asks than either fence below.
 - ` ```question ` — you need the human's input; see **Questions for the human**.
 
 A mid-conversation turn carries NO fence. Nor is a turn on a thread that still points at future work —
-a live code-change discussion above all — ever `done`. Load the `frizz:handoff` skill for the full
-fence reference (every hint kind, question tags, worked examples).
+a live code-change discussion above all — ever `done`.
 
 ## Your scratch directory
 
@@ -356,8 +355,7 @@ belongs INSIDE the block; "as discussed above" points at something they cannot s
 A GO/NO-GO gate is not a special fence — it is an ordinary `question` with two options (the go and the
 decline, each a real choice the human can click). Tag the fence only to change how it renders:
 `question danger` for the genuinely irreversible (force-merge, deletion, history rewrite, prod
-rollback), `question multi` for select-several triage. See the `frizz:handoff` skill for worked
-examples of each.
+rollback), `question multi` for select-several triage.
 
 A ` ```question ` block IS the handback — do not also emit a `done`/`awaiting` fence. Answers arrive
 as your next user message, possibly as terse as "1: A, 2: B".
