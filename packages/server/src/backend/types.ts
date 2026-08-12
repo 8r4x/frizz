@@ -342,10 +342,26 @@ export const CHROME_DEVTOOLS_MCP = {
 // operator cannot tell a slow gate from a wedged one. Bouncing at a minute costs a poll cycle to
 // recover the result and keeps the turn moving in the meantime.
 //
-// The ceiling is untouched — BASH_MAX_TIMEOUT_MS defaults to max(600_000, this), so it stays
-// 600_000 and a worker that genuinely wants to block through a long gate still can by passing an
-// explicit `timeout`. The Bash tool's own description interpolates both (`` `timeout` is in
-// milliseconds: default ${...}, max ${...}``), so the worker is told this number, not a stale one.
+// THAT REASONING STILL GOVERNS THE DEFAULT, and only the default. It is about the call the worker did
+// NOT think about: a hung `curl` should bounce in a minute, not sit on the turn. It says nothing about
+// a call the worker sized deliberately, which is the case the CEILING below governs.
+//
+// ── BASH_MAX_TIMEOUT_MS ────────────────────────────────────────────────────────────────────────
+// The ceiling on an EXPLICIT `timeout`, lifted from Claude Code's 600_000 to 24 hours on 2026-08-11
+// (maintainer: "lift the cap globally, so a worker can block on anything it chooses").
+//
+// A worker can now block for as long as the thing it is blocking on actually takes. The value that
+// makes this safe is not the ceiling, it is that a blocking wait is DELIBERATE: frizz's own watcher
+// tools require a timeout, and a Bash call that names one has been sized by a worker that knew what it
+// was waiting for. The failure the old ceiling guarded — an opaque turn nobody can distinguish from a
+// wedged one — is answered instead by the live tool caption, which names what is running for as long as
+// it runs.
+//
+// 24 HOURS rather than "no limit", because that is already frizz's word for the longest thing a worker
+// may ask for anywhere else (RECURRING_MAX_INTERVAL_SECONDS). One ceiling vocabulary, not two.
+//
+// The Bash tool's own description interpolates both (`` `timeout` is in milliseconds: default ${...},
+// max ${...}``), so the worker is told these numbers rather than a stale pair.
 //
 // This does NOT relax the escaping-background-job rule that hooks/bash-background.mjs enforces. That
 // hook is about lifecycle identity (`cmd &` leaves a child frizz and Claude cannot wake on); this is
@@ -359,6 +375,7 @@ export const CHROME_DEVTOOLS_MCP = {
 export const CLAUDE_WORKER_ENV = {
   CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "infinite",
   BASH_DEFAULT_TIMEOUT_MS: "60000",
+  BASH_MAX_TIMEOUT_MS: String(24 * 60 * 60 * 1000),
 } as const
 
 // Tools a TMUX worker never gets — the argv turns this into `--disallowedTools=…`.

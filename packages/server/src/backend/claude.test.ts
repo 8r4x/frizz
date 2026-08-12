@@ -79,6 +79,7 @@ test("createClaudeBackend: buildSpawn pins the session id + prompt and clears in
   assert.deepEqual(env, {
     CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "infinite",
     BASH_DEFAULT_TIMEOUT_MS: "60000",
+    BASH_MAX_TIMEOUT_MS: String(24 * 60 * 60 * 1000),
     CLAUDE_CODE_SUBAGENT_MODEL: "",
     CLAUDE_CODE_EFFORT_LEVEL: "",
     CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION: String(WORKER_MAX_WEB_SEARCHES),
@@ -96,6 +97,7 @@ test("createClaudeBackend sanitizes both spawn and resume without replacing Clau
     assert.deepEqual(built.env, {
       CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "infinite",
       BASH_DEFAULT_TIMEOUT_MS: "60000",
+      BASH_MAX_TIMEOUT_MS: String(24 * 60 * 60 * 1000),
       CLAUDE_CODE_SUBAGENT_MODEL: "",
       CLAUDE_CODE_EFFORT_LEVEL: "",
       CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION: String(WORKER_MAX_WEB_SEARCHES),
