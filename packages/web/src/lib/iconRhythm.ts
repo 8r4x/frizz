@@ -39,17 +39,19 @@
  *  real footer and the real composer rail side by side for exactly this.
  *
  *  THE ORDER ABOVE IS HISTORY, not the shipping strip: on 2026-08-11 Reload plugins and Restart worker
- *  moved from the right cluster to the head of the LEFT one, so the strip now reads plug · restart ·
- *  meter · hourglass · heartbeat … snooze · done. That is the property the trims buy — every mark's box
- *  is collapsed onto its ink, so re-ordering them costs nothing and needs no re-tune. Re-measured after
- *  the move: 11.50 / 12.25 / 12.34 / 12.00 across the left cluster and 12.00 from the snooze split
- *  button to Mark as done, against the 12px target.
+ *  moved out of the right cluster and into the LEFT one, behind the context meter, which stays far left
+ *  (maintainer, same day). The strip now reads meter · plug · restart · hourglass · heartbeat … snooze ·
+ *  done. That re-order cost nothing to place, which is the property the trims buy — every mark's box is
+ *  collapsed onto its own ink, so the container's one gap governs whatever sits beside whatever.
+ *  Re-measured after the move: 11.84 / 12.50 / 12.00 / 12.00 across the left cluster and 12.00 from the
+ *  snooze split button to Mark as done, against the 12px target.
  *
- *  One consequence worth knowing before moving a mark to either END. A trim pulls the outermost box
- *  back INSIDE the footer's `px-3`, which is what makes the padding read as ink clearance rather than
- *  box clearance: the plug's box starts 4px from the footer edge and its ink lands at 12.5px, within
- *  half a pixel of the 12px the right-hand pill keeps on the other side (measured on a real thread
- *  page, 2026-08-11). A mark with no trim, led there instead, would sit a full dead-space width in. */
+ *  One consequence worth knowing before you change which mark comes FIRST. The footer's `px-3` clears
+ *  the leading mark's BOX, so what the eye reads as the left inset is that padding minus the mark's own
+ *  dead space — and the trims are what make the two agree. The meter needs no trim (its ring reaches its
+ *  own svg edge) and its ink lands 12.25px in; the plug, when it led the strip instead, put its box 4px
+ *  from the edge and its ink at 12.5px. Either is within half a pixel of the 12px the right-hand pill
+ *  keeps on the other side. An UNTRIMMED narrow glyph led there would sit a full dead-space width in. */
 
 /** The strip's one optical distance: 12px of clear space between any two marks, whatever they are.
  *
