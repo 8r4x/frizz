@@ -735,10 +735,22 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   // may need messages above the visible window). Indexed by GLOBAL message index — the same one the
   // Message key uses. null at ordinary indices keeps the memoized Message's props stable.
   const paired = useMemo(() => pairAllAnswers(messages), [messages])
-  // Default window: everything back to (and INCLUDING) the most recent user message — a built-in
-  // reminder of what the human last asked for. No user message yet → the whole transcript.
+  // Default window: everything back to (and INCLUDING) the most recent message THE HUMAN wrote — a
+  // built-in reminder of what they last asked for. No such message yet → the whole transcript.
+  //
+  // `role === "user"` alone is not the human. Frizz writes as the user: the Goal delivery, the sign-off
+  // reminder, a watcher wake are all user records carrying `wake` (the server's own tell, set by the
+  // build that composed them). Anchoring on those cut the card at frizz's own boilerplate and hid the
+  // task — the card opened on an answer to a question the reader could no longer see (maintainer
+  // 2026-08-12: "queue cards STILL need to go all the way back to the last user message. that's
+  // important context that needs to be surfaced").
+  //
+  // A queued send is skipped too: it has not been delivered, so nothing after it is a reply to it.
   const lastUserIdx = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) if (messages[i].role === "user") return i
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]
+      if (m.role === "user" && !m.wake && !m.queued) return i
+    }
     return 0
   }, [messages])
   // …and no further back than the CURRENT TURN. One past the most recent `rest` divider that still has
@@ -873,7 +885,12 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   // restTurnStart satisfies the same "there is something above the collapse" requirement.
   const collapseIntermediate =
     !intermediateExpanded && (stickyUserIdx >= 0 || restTurnStart > 0) && firstRenderedIdx !== lastRenderedIdx && (hiddenStepCount >= 1 || hiddenToolCount >= 1)
-  const visibleStart = resolveVisibleStart(messages, visibleStartId, Math.max(lastUserIdx, restTurnStart))
+  // THE HUMAN'S LAST MESSAGE WINS, even when the agent has rested since. It used to be capped at the
+  // current turn (`Math.max` with `restTurnStart`) on the reasoning that a closed turn is history the
+  // drawer already holds — but with frizz driving threads across many rests, "the current turn" is a
+  // stretch the reader never saw the start of, and the card was opening mid-conversation. `restTurnStart`
+  // still anchors the COLLAPSE below, which is what it is genuinely good for.
+  const visibleStart = resolveVisibleStart(messages, visibleStartId, lastUserIdx)
   const visible = useMemo(() => messages.slice(visibleStart), [messages, visibleStart])
   // The SAME presentation-only coalescing the thread view and the sub-agent drawer run (ChatView's
   // coalescedActivityMessages): a provider that chunks one burst into 26 assistant records must not
