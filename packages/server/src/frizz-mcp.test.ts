@@ -95,6 +95,9 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
       ["action", "id", "kind", "target"],
     )
     assert.deepEqual(list.result.tools[3].inputSchema.properties.action.enum, ["add", "list", "drop"])
+    // Only the kind frizz can actually WAKE is offered. `pr`/`ci` rows are valid in the registry and
+    // land with the poller migration; advertising them now would accept a wait nothing honours.
+    assert.deepEqual(list.result.tools[3].inputSchema.properties.kind.enum, ["shell"])
 
     // An unregistered name is a protocol error, not a crash — the registry routes by name now.
     rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "spawn_frizz_thread", arguments: {} } })
@@ -730,8 +733,8 @@ test("`recurring_prompt` refuses a cadence out of range without contacting the s
 test("`watch` registers, lists and drops against the CALLING thread", async () => {
   const seen: Array<{ url: string; body: any }> = []
   const replies: any[] = [
-    { id: "wch_abc123", alreadyArmed: false, watches: [{ id: "wch_abc123", kind: "pr", target: "acme/app#391", state: "armed", createdAt: "2026-08-12T00:00:00.000Z" }] },
-    { watches: [{ id: "wch_abc123", kind: "pr", target: "acme/app#391", state: "armed", createdAt: "2026-08-12T00:00:00.000Z" }] },
+    { id: "wch_abc123", alreadyArmed: false, watches: [{ id: "wch_abc123", kind: "shell", target: "nub run test", state: "armed", createdAt: "2026-08-12T00:00:00.000Z" }] },
+    { watches: [{ id: "wch_abc123", kind: "shell", target: "nub run test", state: "armed", createdAt: "2026-08-12T00:00:00.000Z" }] },
     { dropped: true, watches: [] },
   ]
   const http = createServer((req, res) => {
@@ -754,13 +757,13 @@ test("`watch` registers, lists and drops against the CALLING thread", async () =
 
     rpc.send({
       jsonrpc: "2.0", id: 2, method: "tools/call",
-      params: { name: "watch", arguments: { action: "add", kind: "pr", target: "acme/app#391" } },
+      params: { name: "watch", arguments: { action: "add", kind: "shell", target: "nub run test" } },
     })
     const added = await rpc.next(2)
     assert.equal(added.result.isError, undefined)
     assert.deepEqual(seen.at(-1), {
       url: "/_frizz/rpc/addOwnThreadWatch",
-      body: { slug: "watching-thread", kind: "pr", target: "acme/app#391" },
+      body: { slug: "watching-thread", kind: "shell", target: "nub run test" },
     })
     // The reply must carry the id (there is nothing to drop without it), say that the registration is
     // DURABLE (that is the whole reason to prefer it over blocking), and push dropping it.
@@ -771,7 +774,7 @@ test("`watch` registers, lists and drops against the CALLING thread", async () =
     rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "watch", arguments: { action: "list" } } })
     const listed = await rpc.next(3)
     assert.equal(seen.at(-1)?.url, "/_frizz/rpc/listOwnThreadWatches")
-    assert.match(listed.result.content[0].text, /wch_abc123\s+pr\s+acme\/app#391/)
+    assert.match(listed.result.content[0].text, /wch_abc123\s+shell\s+nub run test/)
 
     rpc.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "watch", arguments: { action: "drop", id: "wch_abc123" } } })
     const dropped = await rpc.next(4)
@@ -783,10 +786,16 @@ test("`watch` registers, lists and drops against the CALLING thread", async () =
 
     // Both refusals happen in the TOOL, before any RPC: an add with no target, and a drop with no id.
     const before = seen.length
-    rpc.send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "watch", arguments: { action: "add", kind: "pr" } } })
+    rpc.send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "watch", arguments: { action: "add", kind: "shell" } } })
     const noTarget = await rpc.next(5)
     assert.equal(noTarget.result.isError, true)
-    assert.match(noTarget.result.content[0].text, /owner\/repo#123/)
+    assert.match(noTarget.result.content[0].text, /background shells/)
+
+    // A pr watcher is REFUSED with the thing that does work, rather than silently stored.
+    rpc.send({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "watch", arguments: { action: "add", kind: "pr", target: "acme/app#391" } } })
+    const noPr = await rpc.next(7)
+    assert.equal(noPr.result.isError, true)
+    assert.match(noPr.result.content[0].text, /pr-watch: owner\/repo#123/)
 
     rpc.send({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "watch", arguments: { action: "drop" } } })
     const noId = await rpc.next(6)

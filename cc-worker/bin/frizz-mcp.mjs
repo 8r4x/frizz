@@ -264,10 +264,11 @@ const WATCH = {
   description:
     "REGISTER something to wait on, so frizz wakes you when it resolves — and DROP it when it stops " +
     "mattering. Your waits have identities: you can list them, and you can withdraw them.\n\n" +
-    "  kind: \"pr\"     — a GitHub pull request. Wakes you on ANY new activity: a review, an approval, or " +
-    "a comment, from a human or a bot alike. `target` is `owner/repo#123`.\n" +
-    "  kind: \"ci\"     — the checks on that same ref reaching a terminal state. `target` is `owner/repo#123`.\n" +
     "  kind: \"shell\"  — one of YOUR OWN background shells finishing. `target` is its id or its label.\n\n" +
+    "FOR A PULL REQUEST, use an ```awaiting fence with a `pr-watch: owner/repo#123` line instead — that " +
+    "watcher is durable and already wired. Registering PRs here lands when its poller moves onto this " +
+    "registry; until then this tool would accept a registration it cannot act on, which is worse than " +
+    "not offering it.\n\n" +
     "WHY THIS RATHER THAN WAITING YOURSELF: a registered watcher is durable. It survives your turn " +
     "ending, a compaction, a frizz restart, and your own daemon being replaced — none of which a " +
     "blocking call or a monitor survives. Register it, come to rest, and frizz brings you back.\n\n" +
@@ -291,16 +292,18 @@ const WATCH = {
       },
       kind: {
         type: "string",
-        enum: ["pr", "ci", "shell"],
-        description: "Required for `add`. What sort of thing is being waited on.",
+        enum: ["shell"],
+        description:
+          "Required for `add`. What sort of thing is being waited on. Only `shell` today — see the " +
+          "description above for pull requests.",
       },
       target: {
         type: "string",
         description:
-          "Required for `add`. `owner/repo#123` for a pr or ci watcher; a background shell's id or " +
-          "label for a shell watcher. A target that does not parse is REFUSED rather than registered — " +
-          "a watcher that can never fire is worse than no watcher, because you would rest believing you " +
-          "were covered.",
+          "Required for `add`. A background shell's id or its label. A target that does not match one " +
+          "of your live shells still registers, but the watcher only fires once frizz has SEEN it " +
+          "alive — so a typo'd label simply never fires rather than reporting a completion that never " +
+          "happened.",
       },
       id: {
         type: "string",
@@ -826,17 +829,18 @@ async function watch(args) {
   }
 
   const kind = typeof args.kind === "string" ? args.kind.trim() : ""
-  if (kind !== "pr" && kind !== "ci" && kind !== "shell") {
-    throw new Error("`kind` is required to add a watcher, and must be one of \"pr\", \"ci\" or \"shell\"")
-  }
-  const target = typeof args.target === "string" ? args.target.trim() : ""
-  if (!target) {
+  if (kind !== "shell") {
+    // REFUSED rather than stored. `pr` and `ci` rows are valid in the registry and the scheduler will
+    // poll them once its PR watcher moves off the fence — but today nothing wakes them, and a tool that
+    // accepts a wait it cannot honour is how a worker comes to rest believing it is covered.
     throw new Error(
-      kind === "shell"
-        ? "`target` is required — the id or label of one of your own background shells"
-        : "`target` is required — the pull request to watch, as `owner/repo#123`",
+      kind === "pr" || kind === "ci"
+        ? `frizz does not yet wake a registered ${kind} watcher — use an \`\`\`awaiting fence with a \`pr-watch: owner/repo#123\` line, which is durable and already wired`
+        : "`kind` is required to add a watcher, and today the only kind is \"shell\"",
     )
   }
+  const target = typeof args.target === "string" ? args.target.trim() : ""
+  if (!target) throw new Error("`target` is required — the id or label of one of your own background shells")
 
   const result = (await callRpc("addOwnThreadWatch", { slug, kind, target }))?.result
   const id = result?.id ?? "(unknown)"
