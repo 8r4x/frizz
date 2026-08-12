@@ -185,3 +185,55 @@ test("an auth-faulted thread is never re-prompted — the nudge cannot fix a sig
     assert.deepEqual(h.delivered, [])
   } finally { h.close() }
 })
+
+// ---- THE TWO-DELIVERY INTERACTION -----------------------------------------------------------------
+// Separating the reminder from the Goal (2026-08-12) means a thread WITH a Goal now has two sources
+// firing on one fenceless rest. That is only safe because of two properties, and both are worth pinning
+// now that they are load-bearing: the deliveries serialise, and a fence supersedes whatever is still
+// queued — otherwise an agent that signed off would be handed "keep going" straight afterwards and the
+// thread it just closed would reopen.
+test("a Goal and the reminder both queue for one rest, and a fence supersedes what is left", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-both-"))
+  const storage = createStorage(join(dir, "ui.db"))
+  const slug = "both"
+  storage.upsertSession({
+    slug, session_id: "sid", tmux_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
+    last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
+    title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
+  } as SessionRow)
+  storage.setRecurringPromptBySlug(slug, {
+    prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false,
+    pauseOnQuestions: false, intervalMs: null, armedAt: "2026-08-12T00:00:00.000Z",
+  })
+  let fence: SessionTelemetry["lastFence"]
+  const delivered: string[] = []
+  const s = createScheduler({
+    storage,
+    tailer: {
+      get: () => ({
+        turn: "idle", lastActivityAt: "2026-08-12T00:01:00.000Z", lastAssistantAt: "2026-08-12T00:01:00.000Z",
+        lastUserAt: "2026-08-12T00:00:00.000Z", subAgents: [], bgShells: [],
+        pendingQuestion: false, permPrompt: false, lastFence: fence,
+      }),
+    } as unknown as Tailer,
+    resume: async (_slug, message) => { delivered.push(message) },
+    log: () => {},
+  })
+  try {
+    await s.tick()
+    // Both fired for this rest: the operator's words AND frizz's protocol, as separate deliveries.
+    assert.equal(delivered.length, 2)
+    assert.ok(delivered.some((m) => m.startsWith("keep going")), "the Goal carries the operator's text")
+    assert.ok(delivered.some((m) => m.includes("without a fence")), "and the reminder is frizz's own")
+    // The reminder no longer carries the protocol twice — the trailer stopped duplicating it.
+    const goal = delivered.find((m) => m.startsWith("keep going"))!
+    assert.doesNotMatch(goal, /```question/)
+
+    // The agent signs off. Neither source may fire again for this thread, and anything still queued for
+    // the old rest is superseded rather than delivered on top of a closed thread.
+    fence = { kind: "done", body: "shipped it", hints: [] }
+    await s.tick()
+    await s.tick()
+    assert.equal(delivered.length, 2, "a signed-off thread is not re-prompted by either source")
+  } finally { void s.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) }
+})
