@@ -42,6 +42,8 @@ import type {
   DropOwnThreadWatchResult,
   ListOwnThreadWatchesInput,
   OwnThreadWatchesResult,
+  PromoteOwnThreadWatchInput,
+  PromoteOwnThreadWatchResult,
   GetOwnThreadRecurringPromptInput,
   OwnThreadRecurringPromptResult,
   SetOwnThreadStopHookInput,
@@ -164,6 +166,7 @@ export interface Api {
   addOwnThreadWatch(input: AddOwnThreadWatchInput): Promise<AddOwnThreadWatchResult>
   dropOwnThreadWatch(input: DropOwnThreadWatchInput): Promise<DropOwnThreadWatchResult>
   listOwnThreadWatches(input: ListOwnThreadWatchesInput): Promise<OwnThreadWatchesResult>
+  promoteOwnThreadWatch(input: PromoteOwnThreadWatchInput): Promise<PromoteOwnThreadWatchResult>
   // The READ half of the same tool (`action: "get"`), so a worker can see the row before it overwrites
   // it — after a compaction, or after the human edited the text in the footer panel.
   getOwnThreadRecurringPrompt(input: GetOwnThreadRecurringPromptInput): Promise<OwnThreadRecurringPromptResult>
@@ -318,6 +321,7 @@ export const PROCEDURES = {
   addOwnThreadWatch: "mutation",
   dropOwnThreadWatch: "mutation",
   listOwnThreadWatches: "mutation",
+  promoteOwnThreadWatch: "mutation",
   cancelOwnThreadTimer: "mutation",
   listOwnThreadTimers: "mutation",
   reloadThreadPlugins: "mutation",

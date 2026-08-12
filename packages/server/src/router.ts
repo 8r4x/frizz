@@ -35,6 +35,8 @@ import {
   DropOwnThreadWatchResult,
   ListOwnThreadWatchesInput,
   OwnThreadWatchesResult,
+  PromoteOwnThreadWatchInput,
+  PromoteOwnThreadWatchResult,
   type ThreadWatchKind,
   type ThreadWatchView,
   type ThreadTimerView,
@@ -2113,7 +2115,7 @@ export function createRouter(ctx: AppContext) {
           throw new Error(`this thread already has ${armed.length} armed watchers (the limit is ${WATCH_MAX_ARMED}) — drop one first`)
         }
         const id = `wch_${randomUUID().replace(/-/g, "").slice(0, 12)}`
-        ctx.storage.armThreadWatch({ id, slug: input.slug, kind: input.kind, target: input.target, createdAtMs: Date.now() })
+        ctx.storage.armThreadWatch({ id, slug: input.slug, kind: input.kind, target: input.target, createdAtMs: Date.now(), foreground: input.foreground })
         ctx.board.refresh()
         return { id, alreadyArmed: false, watches: armedWatchViews(input.slug) }
       },
@@ -2128,6 +2130,19 @@ export function createRouter(ctx: AppContext) {
         const dropped = ctx.storage.dropThreadWatch(input.slug, input.id, Date.now())
         if (dropped) ctx.board.refresh()
         return { dropped, watches: armedWatchViews(input.slug) }
+      },
+    }),
+
+    // Hand a foreground watch back to the scheduler. Called by the blocking tool call when its timeout
+    // expires, so a wait the worker started degrades into a durable one rather than being lost — which
+    // is the property that makes choosing the blocking mode safe.
+    promoteOwnThreadWatch: mutation({
+      input: PromoteOwnThreadWatchInput,
+      output: PromoteOwnThreadWatchResult,
+      handler: async ({ input }) => {
+        const promoted = ctx.storage.promoteThreadWatch(input.slug, input.id)
+        if (promoted) ctx.board.refresh()
+        return { promoted, watches: armedWatchViews(input.slug) }
       },
     }),
 

@@ -92,7 +92,7 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     assert.deepEqual(list.result.tools[3].inputSchema.required, ["action"])
     assert.deepEqual(
       Object.keys(list.result.tools[3].inputSchema.properties).sort(),
-      ["action", "id", "kind", "target"],
+      ["action", "id", "kind", "target", "timeout_seconds", "wait"],
     )
     assert.deepEqual(list.result.tools[3].inputSchema.properties.action.enum, ["add", "list", "drop"])
     // Only the kind frizz can actually WAKE is offered. `pr`/`ci` rows are valid in the registry and
@@ -802,6 +802,80 @@ test("`watch` registers, lists and drops against the CALLING thread", async () =
     assert.equal(noId.result.isError, true)
     assert.match(noId.result.content[0].text, /`id` is required/)
     assert.equal(seen.length, before, "neither refusal reached the server")
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
+
+
+// THE BLOCKING MODE. What matters is the refusal and the DEGRADATION: a blocking wait with no deadline
+// is a hang, and a deadline that expires must hand the wait to frizz rather than lose it — that is the
+// property that makes choosing this mode safe rather than a way to silently drop a wait.
+test("`watch` blocks with a deadline, and hands the wait back when it expires", async () => {
+  const seen: Array<{ url: string; body: any }> = []
+  const http = createServer((req, res) => {
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      const url = req.url ?? ""
+      seen.push({ url, body: JSON.parse(body || "{}") })
+      // The watcher never settles, so the poll always finds it — which drives the timeout path.
+      const armed = [{ id: "wch_block1", kind: "shell", target: "nub run test", state: "armed", createdAt: "2026-08-12T00:00:00.000Z" }]
+      const result = url.endsWith("addOwnThreadWatch") ? { id: "wch_block1", alreadyArmed: false, watches: armed }
+        : url.endsWith("promoteOwnThreadWatch") ? { promoted: true, watches: armed }
+        : { watches: armed }
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ result }))
+    })
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "blocking-thread" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+
+    // A blocking wait with no deadline is refused BEFORE anything is registered.
+    rpc.send({
+      jsonrpc: "2.0", id: 2, method: "tools/call",
+      params: { name: "watch", arguments: { action: "add", kind: "shell", target: "nub run test", wait: true } },
+    })
+    const noDeadline = await rpc.next(2)
+    assert.equal(noDeadline.result.isError, true)
+    assert.match(noDeadline.result.content[0].text, /`timeout_seconds` is required when `wait` is true/)
+    assert.equal(seen.length, 0, "nothing was registered")
+
+    // And an out-of-range one, for the same reason.
+    rpc.send({
+      jsonrpc: "2.0", id: 3, method: "tools/call",
+      params: { name: "watch", arguments: { action: "add", kind: "shell", target: "t", wait: true, timeout_seconds: 1 } },
+    })
+    const tooShort = await rpc.next(3)
+    assert.equal(tooShort.result.isError, true)
+    assert.match(tooShort.result.content[0].text, /must be between 5 and 86400/)
+
+    // A real blocking wait: registers as FOREGROUND (so frizz settles it silently rather than waking a
+    // thread that is already waiting), polls, times out, and PROMOTES rather than losing the wait.
+    rpc.send({
+      jsonrpc: "2.0", id: 4, method: "tools/call",
+      params: { name: "watch", arguments: { action: "add", kind: "shell", target: "nub run test", wait: true, timeout_seconds: 5 } },
+    })
+    const expired = await rpc.next(4)
+    assert.equal(expired.result.isError, undefined)
+    assert.deepEqual(seen[0], {
+      url: "/_frizz/rpc/addOwnThreadWatch",
+      body: { slug: "blocking-thread", kind: "shell", target: "nub run test", foreground: true },
+    })
+    assert.ok(seen.some((c) => c.url.endsWith("listOwnThreadWatches")), "it polled while blocked")
+    assert.deepEqual(seen.at(-1), {
+      url: "/_frizz/rpc/promoteOwnThreadWatch",
+      body: { slug: "blocking-thread", id: "wch_block1" },
+    })
+    assert.match(expired.result.content[0].text, /has NOT resolved yet/)
+    assert.match(expired.result.content[0].text, /you will be woken when it fires/)
   } finally {
     rpc.kill()
     http.close()

@@ -259,6 +259,12 @@ const TIMER = {
   },
 }
 
+// The blocking mode's bounds. The floor is a poll cycle — below it the call is not a wait, it is a
+// round-trip — and the ceiling matches the worker's own foreground Bash ceiling, so one number governs
+// "the longest a worker may block" wherever it blocks.
+const WATCH_MIN_WAIT_SECONDS = 5
+const WATCH_MAX_WAIT_SECONDS = 24 * 60 * 60
+
 const WATCH = {
   name: "watch",
   description:
@@ -308,6 +314,24 @@ const WATCH = {
       id: {
         type: "string",
         description: "Required for `drop`. The watcher id returned by `add` (or listed by `list`).",
+      },
+      wait: {
+        type: "boolean",
+        description:
+          "For `add`: BLOCK here until it resolves, instead of returning immediately. Requires " +
+          "`timeout_seconds`. Use it when the wait is short enough that keeping the work in ONE turn is " +
+          "worth more than the durability of resting — you keep your context and your place in the " +
+          "reasoning, and no wake message interrupts you. For anything long, register it WITHOUT this " +
+          "and rest: a background registration survives your turn ending, a compaction and a frizz " +
+          "restart, none of which a blocking call survives.",
+      },
+      timeout_seconds: {
+        type: "integer",
+        description:
+          `REQUIRED when \`wait\` is true (minimum ${WATCH_MIN_WAIT_SECONDS}, maximum ` +
+          `${WATCH_MAX_WAIT_SECONDS}). When it expires the call RETURNS rather than failing, and the ` +
+          "watcher is handed to frizz to keep — so the wait is never lost by choosing to block on it. " +
+          "You are then free to do something else and be woken.",
       },
     },
     required: ["action"],
@@ -842,8 +866,24 @@ async function watch(args) {
   const target = typeof args.target === "string" ? args.target.trim() : ""
   if (!target) throw new Error("`target` is required — the id or label of one of your own background shells")
 
-  const result = (await callRpc("addOwnThreadWatch", { slug, kind, target }))?.result
+  // THE BLOCKING MODE. `foreground` tells frizz to SETTLE this watcher silently rather than wake us —
+  // we are the ones waiting, and a wake landing mid-turn while this call is still blocked would hand the
+  // worker its own answer twice.
+  const wait = args.wait === true
+  let timeoutSeconds = 0
+  if (wait) {
+    if (typeof args.timeout_seconds !== "number" || !Number.isFinite(args.timeout_seconds)) {
+      throw new Error("`timeout_seconds` is required when `wait` is true — a blocking wait with no deadline is a hang")
+    }
+    timeoutSeconds = Math.round(args.timeout_seconds)
+    if (timeoutSeconds < WATCH_MIN_WAIT_SECONDS || timeoutSeconds > WATCH_MAX_WAIT_SECONDS) {
+      throw new Error(`\`timeout_seconds\` must be between ${WATCH_MIN_WAIT_SECONDS} and ${WATCH_MAX_WAIT_SECONDS}`)
+    }
+  }
+
+  const result = (await callRpc("addOwnThreadWatch", { slug, kind, target, ...(wait ? { foreground: true } : {}) }))?.result
   const id = result?.id ?? "(unknown)"
+  if (wait) return await blockUntilResolved(slug, id, kind, target, timeoutSeconds)
   const head = result?.alreadyArmed
     ? `Already watching ${kind} ${target} as ${id} — nothing new was registered, and you will be woken once.`
     : `Watching ${kind} ${target} as ${id}. Frizz will wake you when it resolves, and the registration ` +
@@ -851,6 +891,48 @@ async function watch(args) {
   return (
     `${head}\n\nDROP IT when it stops mattering (\`action: "drop", id: "${id}"\`) — a watcher you no ` +
     `longer care about is a wake you did not want.\n\n${armedWatchList(result)}`
+  )
+}
+
+/** Block until a foreground watcher settles, or until its deadline — then hand it back to frizz.
+ *
+ * POLLED, not pushed, because the MCP transport has no way to be told. The interval BACKS OFF: a wait
+ * that resolves in ten seconds should not be found thirty seconds late, and a wait that runs for hours
+ * should not cost thousands of round-trips to discover that nothing changed.
+ *
+ * The deadline RETURNS rather than throwing, and promotes the row on the way out. That is the property
+ * that makes choosing this mode safe: the worst case of guessing the timeout too short is that the wait
+ * becomes an ordinary durable one and frizz wakes you, not that the wait is silently lost.
+ *
+ * @param {string} slug @param {string} id @param {string} kind @param {string} target @param {number} timeoutSeconds
+ * @returns {Promise<string>} */
+async function blockUntilResolved(slug, id, kind, target, timeoutSeconds) {
+  const deadline = Date.now() + timeoutSeconds * 1000
+  const started = Date.now()
+  for (;;) {
+    const elapsed = Date.now() - started
+    // 2s for the first minute, then 5s, then 15s — see the back-off note above.
+    const interval = elapsed < 60_000 ? 2_000 : elapsed < 600_000 ? 5_000 : 15_000
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) break
+    await new Promise((r) => setTimeout(r, Math.min(interval, remaining)))
+    const listed = (await callRpc("listOwnThreadWatches", { slug }))?.result
+    const still = Array.isArray(listed?.watches) && listed.watches.some((w) => w.id === id)
+    if (!still) {
+      const waited = Math.round((Date.now() - started) / 1000)
+      return (
+        `${kind === "shell" ? "Your background shell" : target} resolved after ${waited}s — that is what you were ` +
+        `waiting for (${target}). The watcher is spent; you were not interrupted, because you were the one waiting.`
+      )
+    }
+  }
+  // The deadline, not a failure. Hand it to frizz so the wait survives this turn.
+  const promoted = (await callRpc("promoteOwnThreadWatch", { slug, id }))?.result
+  return (
+    `Waited ${timeoutSeconds}s and ${target} has NOT resolved yet. The watcher is still armed and is now ` +
+    `frizz's to keep${promoted?.promoted === false ? " (it had already settled)" : ""} — go do something else ` +
+    `and you will be woken when it fires, or drop it with \`action: "drop", id: "${id}"\` if it has stopped ` +
+    "mattering."
   )
 }
 

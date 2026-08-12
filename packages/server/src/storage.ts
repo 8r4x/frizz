@@ -379,6 +379,7 @@ export interface ThreadWatchRow {
   created_at: number
   settled_at: number | null
   cursor: string | null
+  foreground: number
 }
 
 export interface Storage {
@@ -526,7 +527,10 @@ export interface Storage {
   // The same shape as the timers above and for the same reason: a thread may hold many, each with its
   // own identity, so the record of intent is a TABLE. `id` is minted by the caller so the row and the
   // scheduler's delivery id agree without a read-back.
-  armThreadWatch(watch: { id: string; slug: string; kind: ThreadWatchRow["kind"]; target: string; createdAtMs: number }): void
+  armThreadWatch(watch: { id: string; slug: string; kind: ThreadWatchRow["kind"]; target: string; createdAtMs: number; foreground?: boolean }): void
+  // Hand a foreground watch back to the scheduler: it will deliver a wake when it fires. Called when the
+  // blocking tool call gives up on its timeout, so a wait the worker started is never simply lost.
+  promoteThreadWatch(slug: string, id: string): boolean
   // A thread's watchers, oldest first. `armedOnly` is what the worker's tool reads back; the full set is
   // for diagnostics and for the card that explains why a thread is parked.
   listThreadWatches(slug: string, opts?: { armedOnly?: boolean }): ThreadWatchRow[]
@@ -820,7 +824,13 @@ export function createStorage(dbPath: string): Storage {
       -- Opaque per-kind progress marker: for a pr watcher, the activity baseline that decides what
       -- counts as NEW. Written by the scheduler, never read by anything else, so its grammar can change
       -- without a migration.
-      cursor      TEXT
+      cursor      TEXT,
+      -- FOREGROUND (2026-08-12): the worker is BLOCKING on this one inside its own tool call, so the
+      -- scheduler must SETTLE it without delivering a wake. Waking a thread that is mid-turn waiting for
+      -- the very thing that woke it is noise at best; at worst the message lands while the tool is still
+      -- blocked and the worker reads its own answer twice. The tool polls the row and returns; if its
+      -- timeout expires first it PROMOTES the row (clears this), and the wake comes back.
+      foreground  INTEGER NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS thread_watch_armed
       ON thread_watch(state, kind);
@@ -1519,8 +1529,8 @@ export function createStorage(dbPath: string): Storage {
     WHERE slug = ? AND signoff_nudges > 0
   `)
   const armWatchStmt = db.prepare(`
-    INSERT INTO thread_watch (id, thread_slug, kind, target, state, created_at, settled_at, cursor)
-    VALUES (@id, @slug, @kind, @target, 'armed', @createdAtMs, NULL, NULL)
+    INSERT INTO thread_watch (id, thread_slug, kind, target, state, created_at, settled_at, cursor, foreground)
+    VALUES (@id, @slug, @kind, @target, 'armed', @createdAtMs, NULL, NULL, @foreground)
   `)
   const watchesBySlugStmt = db.prepare<[string], ThreadWatchRow>(
     "SELECT * FROM thread_watch WHERE thread_slug = ? ORDER BY created_at, id",
@@ -1532,6 +1542,9 @@ export function createStorage(dbPath: string): Storage {
   const armedWatchesStmt = db.prepare<[], ThreadWatchRow>(
     "SELECT * FROM thread_watch WHERE state = 'armed' ORDER BY created_at, id",
   )
+  const promoteWatchStmt = db.prepare(`
+    UPDATE thread_watch SET foreground = 0 WHERE id = ? AND thread_slug = ? AND state = 'armed'
+  `)
   const dropWatchStmt = db.prepare(`
     UPDATE thread_watch SET state = 'dropped', settled_at = ?
     WHERE id = ? AND thread_slug = ? AND state = 'armed'
@@ -2178,7 +2191,8 @@ export function createStorage(dbPath: string): Storage {
       recurringBySlugStmt.run(...recurringArgs(write), slug).changes === 1,
     countSignoffNudge: (slug, anchor) => void countNudgeStmt.run(anchor, slug),
     resetSignoffNudges: (slug) => void resetNudgesStmt.run(slug),
-    armThreadWatch: (watch) => void armWatchStmt.run(watch),
+    armThreadWatch: (watch) => void armWatchStmt.run({ ...watch, foreground: watch.foreground ? 1 : 0 }),
+    promoteThreadWatch: (slug, id) => promoteWatchStmt.run(id, slug).changes === 1,
     listThreadWatches: (slug, opts) =>
       (opts?.armedOnly ? armedWatchesBySlugStmt : watchesBySlugStmt).all(slug),
     getThreadWatch: (id) => watchByIdStmt.get(id),

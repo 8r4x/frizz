@@ -1473,8 +1473,28 @@ export const AddOwnThreadWatchInput = z.object({
   slug: ThreadSlug,
   kind: ThreadWatchKind,
   target: ThreadWatchTarget,
+  /** The worker is BLOCKING on this one inside its tool call, so the scheduler settles it silently
+   *  instead of delivering a wake — see the column comment in storage.ts. Defaulted, so a caller that
+   *  has never heard of it registers an ordinary background watch. */
+  foreground: z.boolean().default(false),
 }).strict()
-export type AddOwnThreadWatchInput = z.infer<typeof AddOwnThreadWatchInput>
+// z.input, not z.infer: `foreground` is `.default(false)`, so the parsed OUTPUT has it required while
+// the wire INPUT does not — and rpc-contract.ts compares the client type against z.input.
+export type AddOwnThreadWatchInput = z.input<typeof AddOwnThreadWatchInput>
+
+/** Hand a foreground watch back to the scheduler when the blocking call gives up on its timeout, so a
+ *  wait the worker started is never simply lost. */
+export const PromoteOwnThreadWatchInput = z.object({
+  slug: ThreadSlug,
+  id: z.string().min(1).max(64),
+}).strict()
+export type PromoteOwnThreadWatchInput = z.infer<typeof PromoteOwnThreadWatchInput>
+
+export const PromoteOwnThreadWatchResult = z.object({
+  promoted: z.boolean(),
+  watches: z.array(ThreadWatchView),
+}).strict()
+export type PromoteOwnThreadWatchResult = z.infer<typeof PromoteOwnThreadWatchResult>
 
 export const DropOwnThreadWatchInput = z.object({
   slug: ThreadSlug,

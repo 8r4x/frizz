@@ -1702,6 +1702,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         continue
       }
       if (watch.cursor !== SHELL_SEEN) continue // never observed alive — see SEEN-THEN-GONE above
+      // FOREGROUND: the worker is blocking on this inside its own tool call, so the scheduler's job is
+      // to SETTLE it and say nothing. The tool is polling this very row and returns the moment it leaves
+      // `armed`. Delivering a wake as well would arrive mid-turn, while the tool is still blocked, and
+      // the worker would read its own answer twice.
+      if (watch.foreground === 1) {
+        deps.storage.markThreadWatchFired(watch.id, nowMs)
+        log(`waker: settled ${row.slug} — foreground watcher ${watch.id} resolved (shell ${watch.target})`)
+        continue
+      }
       const fenceId = watchFenceId(watch.id)
       const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
       if (outbox.get(deliveryId)) continue // this watcher already has its one wake

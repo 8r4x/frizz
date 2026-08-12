@@ -289,3 +289,35 @@ test("the thread view carries a thread's armed watchers, and only the armed ones
     assert.equal(armed[0]?.target, "acme/app#391")
   } finally { f.close() }
 })
+
+// A FOREGROUND watch is one the worker is blocking on inside its own tool call. The scheduler's job is
+// to SETTLE it and say nothing: a wake would arrive mid-turn, while the tool is still blocked, and the
+// worker would read its own answer twice.
+test("a foreground watcher is settled silently — no wake is delivered", async () => {
+  const h = watchScheduler([])
+  try {
+    h.storage.dropThreadWatch("watching", "w1", 1)
+    h.storage.armThreadWatch({ id: "fg1", slug: "watching", kind: "shell", target: "vite dev", createdAtMs: 1000, foreground: true })
+    h.storage.setThreadWatchCursor("fg1", "seen")
+    await h.s.tick()
+    assert.deepEqual(h.delivered, [], "the tool is the one waiting; frizz must not talk over it")
+    assert.equal(h.storage.getThreadWatch("fg1")?.state, "fired", "but it IS settled, which is what the tool polls for")
+  } finally { h.close() }
+})
+
+// Promotion is what makes choosing the blocking mode safe: a timeout hands the wait back rather than
+// losing it, and the wake comes with it.
+test("promoting a foreground watcher restores its wake", async () => {
+  const h = watchScheduler([])
+  try {
+    h.storage.dropThreadWatch("watching", "w1", 1)
+    h.storage.armThreadWatch({ id: "fg2", slug: "watching", kind: "shell", target: "vite dev", createdAtMs: 1000, foreground: true })
+    h.storage.setThreadWatchCursor("fg2", "seen")
+    assert.equal(h.storage.promoteThreadWatch("watching", "fg2"), true)
+    await h.s.tick()
+    assert.equal(h.delivered.length, 1, "once promoted it wakes the thread like any other")
+    assert.equal(h.storage.getThreadWatch("fg2")?.state, "fired")
+    // Scoped to the owner, and only while ARMED — the same rules drop follows.
+    assert.equal(h.storage.promoteThreadWatch("watching", "fg2"), false, "a settled watcher cannot be promoted")
+  } finally { h.close() }
+})
