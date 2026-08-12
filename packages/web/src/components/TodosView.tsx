@@ -1,6 +1,8 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useSnapshot } from "valtio"
 import { ChevronsUpDown, Hourglass, Inbox } from "lucide-react"
+import { parseRecurringPrompt } from "@frizz/shared"
+import { messagePresentationText } from "../lib/messagePresentation.ts"
 import type { ThreadView, BoardSnapshot, TranscriptMessage, TranscriptToolCall } from "@frizz/shared"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { queueCardTargetY, showToast } from "../store.ts"
@@ -1251,6 +1253,24 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                 // 2026-08-11). The thread drawer, where the reader is following a live transcript and
                 // genuinely cannot tell "finished" from "still going", keeps it.
                 if (m.boundary === "rest") return
+                // …and neither is the GOAL firing. On a thread being driven by one, a legitimate rest
+                // followed by a bump is the normal cycle, and the card's job is to show where the thread
+                // stands now — not to narrate the machinery that got it there. The hairline sat directly
+                // above the final message and read as part of the handoff (maintainer 2026-08-12: "do not
+                // include 'Agent rested' above it or the stop hook firing").
+                //
+                // FRIZZ'S SIGN-OFF REMINDER IS DELIBERATELY EXEMPT. That one is not machinery the reader
+                // can ignore: it explains why a fence appeared in a message that had already been written,
+                // so removing it would make the agent look like it had answered a question nobody asked.
+                // The drawer keeps both — it is a live transcript, where knowing what re-invoked the agent
+                // is exactly the point.
+                if (m.wake) {
+                  // `messagePresentationText`, NOT `m.text`: the server strips its own delivery token
+                  // into `displayText`, and the trailer this parses is `$`-anchored — so matching the raw
+                  // text silently never fires and the hairline renders anyway.
+                  const bump = parseRecurringPrompt(messagePresentationText(m))
+                  if (bump && bump.kind !== "signoff") return
+                }
                 if (collapseIntermediate && globalIdx >= firstRenderedIdx && globalIdx <= lastRenderedIdx) {
                   const isFirst = globalIdx === firstRenderedIdx
                   const isLast = globalIdx === lastRenderedIdx
