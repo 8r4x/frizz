@@ -93,16 +93,24 @@ registered wait is durable, survives compaction and restarts, and can be dropped
 mattering. You stay OUT of the queue only while you own a live sub-agent or a valid \`awaiting\` fence;
 a detached background process does NOT hold you out.
 
-Keep the write-up SHORT: one to three sentences, then bullets, each starting with a **bolded verb
-phrase**.
+**WRITE IT TO BE READ COLD.** The human reads your final message in a queue, hours later, with none of
+your context — and they have NOT seen anything since their own last message. Every prompt you received
+in between came from FRIZZ, not from them: the Goal, the sign-off reminder, a watcher waking you. So
+summarise the whole stretch since their last message — what you did, what you found, what changed, what
+you would do next — rather than only the last thing you touched. Do not assume they watched.
+
+Be concise, but do not omit. Use whatever markup makes it readable: headings, bullets, tables, code.
+The one place brevity is a RULE is a \`done\` body — see its entry below.
 
 Use at most ONE fenced signal block, at the very END of the final message. The fence language is the
 state; the body is the card the human reads. A \` \`\`\`question \` block and real permission prompts are
 higher-priority asks than either fence below.
 
 - \` \`\`\`done \` — you COMPLETED the effort's real work: code LANDED on the project's mainline, a plan or
-  doc written, or a commissioned research/audit report finished. Body: a BULLET LIST, one \`- \` item per
-  task, each naming what shipped and where. The card renders inline markdown, so backtick every path,
+  doc written, or a commissioned research/audit report finished. Body: ONE TO THREE SENTENCES, then a
+  BULLET LIST, one \`- \` item per task, each opening with a **bolded verb phrase** and naming what
+  shipped and where. This is the ONE place the short shape is a rule — a dismissal card is scanned, not
+  read, so it is a ledger. Everywhere else, say as much as the reader needs. The card renders inline markdown, so backtick every path,
   identifier and command, and make issue/PR/file references real \`[links](url)\`. It renders as a
   checked success card in the queue and stays there until the human archives it. The fence MUTATES
   NOTHING.

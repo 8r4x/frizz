@@ -39,6 +39,9 @@ for (const [label, message] of [
     assert.ok(message.startsWith("keep fixing the failing tests"), "the operator's text leads, verbatim and trimmed")
     assert.ok(message.includes("```done"), "the trailer names the exact sign-off the scheduler reads")
     assert.match(message, /ONLY when the work is genuinely finished/, "and warns, in the same breath as the offer")
+    // The at-rest trailer also has to say the handoff must stand alone — the human has seen nothing
+    // since their own last message, and everything since came from frizz.
+    if (message.includes("come to rest")) assert.match(message, /read COLD/)
     // The RETIRED sentinel must not appear: it is still HONOURED for sessions that predate the change
     // (scheduler `saidDone`), and advertising it would teach it to workers that have no need of it.
     assert.equal(message.includes(ALLDONE_SENTINEL), false, "the legacy sentinel is honoured, never advertised")

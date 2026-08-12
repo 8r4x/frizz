@@ -1,4 +1,4 @@
-import { Repeat, Timer } from "lucide-react"
+import { Repeat, Timer, Signpost } from "lucide-react"
 import type { RecurringPrompt } from "@frizz/shared"
 import { WakeDivider } from "./WakeDivider.tsx"
 
@@ -28,6 +28,18 @@ import { WakeDivider } from "./WakeDivider.tsx"
 // renderings shared.
 export function RecurringPromptLine({ bump, sourceId }: { bump: RecurringPrompt; sourceId?: string }) {
   const scheduled = bump.kind === "schedule"
+  // FRIZZ'S OWN SIGN-OFF REMINDER collapses hardest of all, because it is the only delivery here whose
+  // body says nothing about this thread: it is the protocol, restated. Rendered in full it sat as a card
+  // ABOVE the agent's actual handoff and read as the more important of the two (maintainer 2026-08-12:
+  // "We shouldn't show the stop hook message in the UI, at least not by default").
+  if (bump.kind === "signoff") {
+    const label = "Frizz asked for a sign-off"
+    return (
+      <WakeDivider icon={Signpost} sourceId={sourceId} marker="rest" ariaLabel={label}>
+        {label}
+      </WakeDivider>
+    )
+  }
   // WHICH TRIGGER FIRED is the whole label, because it is the one thing the footer panel cannot tell you
   // about THIS delivery — the text is shared, so "the agent stopped" and "an hour elapsed" are otherwise
   // indistinguishable in the transcript. The cadence rides along for the same reason: it names the

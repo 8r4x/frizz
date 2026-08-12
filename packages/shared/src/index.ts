@@ -508,8 +508,8 @@ export function saysAllDone(text: string | undefined): boolean {
 //
 // One line, because it competes with the operator's own words for attention.
 const SIGNOFF_NOTE =
-  "Sign off either way — ```question if you need the human, ```done if it is truly finished:" +
-  " 1-3 sentences, then **bolded verb phrase** bullets."
+  "Sign off with a fence — ```question if you need the human, ```done if truly finished — and write it" +
+  " to be read COLD: they have seen nothing since their own last message."
 
 const OPT_OUT_NOTE =
   "To stop these, sign off with a ```done fence — but ONLY when the work is genuinely finished:" +
@@ -571,7 +571,7 @@ export function formatIntervalLabel(seconds: number): string {
  * in this file so they cannot drift. Anything that does not match returns undefined and renders as it
  * did before — text is never lost to a parse. */
 export interface RecurringPrompt {
-  kind: "rest" | "schedule" | "compaction"
+  kind: "rest" | "schedule" | "compaction" | "signoff"
   /** The cadence as the trailer stated it ("10 min"); absent for a rest or post-compaction delivery. */
   every?: string
   /** The operator's own words, with the trailer removed. */
@@ -589,6 +589,11 @@ const RECURRING_TRAILER =
   /\n\n\((?:Goal|Recurring prompt|Stop hook|Heartbeat) — (?:sent (?:(each time you come to rest)|every ([^.)]+))|(your context was just compacted))\. [^)]*\)$/
 export function parseRecurringPrompt(text: string | undefined): RecurringPrompt | undefined {
   if (typeof text !== "string") return undefined
+  // Frizz's built-in sign-off reminder (scheduler SOURCE 9). It carries no trailer — it is not the
+  // operator's text with a note attached, it IS frizz's text — so it is matched on its own opening
+  // marker and collapsed like any other repeating frizz delivery. Left as a card it dominated the queue
+  // item it was complaining about (maintainer 2026-08-12, with a screenshot of exactly that).
+  if (text.trimStart().startsWith(SIGNOFF_NUDGE_MARKER)) return { kind: "signoff", prompt: "" }
   const m = RECURRING_TRAILER.exec(text.trimEnd())
   if (!m) return undefined
   const prompt = text.trimEnd().slice(0, m.index).trim()
@@ -663,14 +668,34 @@ export function watchWakeMessage(kind: ThreadWatchKind, target: string, detail: 
 //
 // SHORT, because it competes with the agent's own conclusion for attention, and because a long one
 // invites the agent to treat "how do I sign off?" as the task. Three facts and a shape.
+/** The nudge's opening line, exported because it does DOUBLE DUTY: it tells the agent whose message
+ *  this is, and it is what the transcript matches on to collapse the delivery to one hairline rather
+ *  than rendering frizz's boilerplate as a card over the agent's own words. A text match is honest here
+ *  — frizz writes this string and frizz reads it, both from this file. */
+export const SIGNOFF_NUDGE_MARKER = "**This message is from frizz, not from the human.**"
+
 export const SIGNOFF_NUDGE_MESSAGE = [
-  "You came to rest without signing off, so this thread is now an item nobody can triage. Pick one:",
+  `${SIGNOFF_NUDGE_MARKER} Nothing about your task has changed.`,
   "",
-  "- **```question** — you need the human. Put each question in its own fence, with lettered options and a recommendation.",
-  "- **```done** — the work is genuinely finished. It is a DISMISSAL: the card is filed away and nobody looks again, so if anything is still owed, it is not done.",
-  "- **Register a wait** with `mcp__frizz__watch` if you are blocked on a PR, CI, or your own background shell — then rest, and frizz brings you back.",
+  "You came to rest without signing off, so this thread is an item nobody can triage. Sign off with a",
+  "fence at the END of your final message:",
   "",
-  "Keep it SHORT: one to three sentences, then bullets, each starting with a **bolded verb phrase**.",
+  "- `` ```question `` — you need the human. One question per fence, lettered options, one marked recommended.",
+  "- `` ```done `` — the work is genuinely FINISHED. It is a DISMISSAL: the card is filed away and nobody",
+  "  looks again, so if anything is still owed, it is not done.",
+  "- Blocked on a PR, CI, or your own background shell? Register it with `mcp__frizz__watch` and rest —",
+  "  frizz brings you back. NO `watch` TOOL IN YOUR BUILD? A session's MCP server is pinned at spawn, so",
+  "  one started before that tool shipped can never see it — do NOT hunt for it. Park on a",
+  "  `` ```awaiting `` fence with a `pr-watch: owner/repo#N` line instead; the scheduler honours it.",
+  "",
+  "**Write the message to be read cold.** The human reads it in a queue, hours later, with none of your",
+  "context, and they have NOT seen anything since their own last message — every prompt you have had",
+  "since then came from frizz. So summarise everything that matters from that whole stretch: what you",
+  "did, what you found, what changed, and what you would do next. Do not assume they watched.",
+  "",
+  "Be concise, but do not omit. Use whatever markup makes it readable — headings, bullets, tables, code.",
+  "The one place brevity is a RULE is a `` ```done `` body: there, 1-3 sentences then bullets, each",
+  "starting with a **bolded verb phrase**.",
 ].join("\n")
 
 export function timerPromptMessage(prompt: string, fireAt: string): string {
