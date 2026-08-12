@@ -1,20 +1,25 @@
 import { useEffect, useRef, useState } from "react"
-import { HeartPulse } from "lucide-react"
+import { Target } from "lucide-react"
 import {
   RECURRING_PROMPT_MAX,
-  ALLDONE_SENTINEL,
   DEFAULT_RECURRING_PROMPT,
   type ThreadView,
 } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { formatAgo } from "../lib/durationLabels.ts"
-import { INK_TRIM_HEARTBEAT } from "../lib/iconRhythm.ts"
+import { INK_TRIM_GOAL } from "../lib/iconRhythm.ts"
 import { showToast } from "../store.ts"
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/Popover.tsx"
 import { Switch } from "./ui/Switch.tsx"
 
-// THE RECURRING-PROMPT PANEL: one glyph in the thread footer opening frizz's way to re-prompt a thread
-// without the operator typing it again. ONE piece of text, and up to two independent reasons to send it:
+// THE GOAL PANEL: one glyph in the thread footer holding what this thread is TRYING TO ACHIEVE, which
+// frizz re-sends so the operator does not have to type it again.
+//
+// It was called "the recurring prompt" until 2026-08-11, which named the MECHANISM rather than the
+// content and left the panel describing itself by how it is delivered. What an operator writes here is
+// the goal; the switches below it are only WHEN it arrives.
+//
+// ONE piece of text, and up to three independent reasons to send it:
 //
 //   STOP HOOK  (scheduler SOURCE 5) — every time the thread comes to REST. No clock, nothing to tune:
 //     if it stopped, it is prompted. This is the one that drives an effort forward.
@@ -51,23 +56,23 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
           type="button"
           data-recurring-prompt
           data-recurring-prompt-on={live ? "true" : "false"}
-          aria-label={live ? "Recurring prompt (on)" : "Recurring prompt"}
-          className={`flex items-center rounded-md px-0.5 py-0.5 outline-none ${INK_TRIM_HEARTBEAT}`}
+          aria-label={live ? "Goal (on)" : "Goal"}
+          className={`flex items-center rounded-md px-0.5 py-0.5 outline-none ${INK_TRIM_GOAL}`}
         >
-          {/* A HEART WITH A PULSE THROUGH IT, and the ONLY surface that says this exists (the rail
-              deliberately carries no mark — see groups.ts).
+          {/* A TARGET, and the ONLY surface that says this exists (the rail deliberately carries no
+              mark — see groups.ts).
 
-              It was a square-in-a-circle (`CircleStop`) and that was the wrong mark for a reason no
-              amount of tooltip could fix: in a strip whose other children are live verbs, a stop
-              button reads as one — "it seems like clicking it would cause the entire session to stop"
-              (maintainer 2026-08-03). A glyph that looks destructive on the way to a settings panel is
-              worse than no glyph. A heartbeat says the opposite thing, which is also the true thing:
+              The mark has now been three things, and each replacement fixed a real misreading. It was a
+              square-in-a-circle (`CircleStop`), which in a strip whose other children are live verbs
+              read as a stop button — "it seems like clicking it would cause the entire session to stop"
+              (maintainer 2026-08-03). It became a `HeartPulse`, which said the true opposite thing:
               something is keeping this thread beating.
 
-              The HEART, not the bare pulse line (`Activity`) this shipped as for an afternoon: the line
-              on its own reads as a metrics sparkline, and it is the enclosing heart that names the mark
-              a HEARTBEAT — this thread has one, which is the entire state the glyph reports (maintainer
-              2026-08-03: "I want it to be the heart icon with the pulse inside").
+              The heartbeat stopped being true on 2026-08-11, when the panel was renamed GOAL. A
+              heartbeat names ONE of the three triggers — and not the important one. What the panel
+              holds is the thing the thread is trying to achieve, re-sent on whichever triggers the
+              operator picked, so the mark is the goal rather than the delivery mechanism. Concentric
+              rings survive 12px where lucide's `Goal` (a post and a ball) turns to mush.
 
               GREY by default and coloured only while something is actually armed: the footer's left
               cluster is a status strip first, so a control with nothing to report has to read as quiet
@@ -80,7 +85,7 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
               look absolutely terrible"). The cluster is one status group, so it takes one tone — the
               armed/idle distinction is carried by the amber, which is the state worth seeing, and not
               by holding the resting glyph a step below the readouts beside it. */}
-          <HeartPulse size={12} className={live ? "text-amber-400/90" : "text-muted/60 hover:text-muted"} />
+          <Target size={12} className={live ? "text-amber-400/90" : "text-muted/60 hover:text-muted"} />
         </button>
       </PopoverTrigger>
       <PopoverContent
@@ -330,9 +335,9 @@ function PromptPanel({ thread, armed }: {
       // one toggle per feature and is ambiguous the moment two triggers share a row.
       const clauses = triggerClauses(next)
       showToast(
-        prompt === null ? "Recurring prompt cleared"
-          : clauses.length === 0 ? "Recurring prompt off — no trigger is on"
-          : `Recurring prompt: ${clauses.join(", ")}`,
+        prompt === null ? "Goal cleared"
+          : clauses.length === 0 ? "Goal saved — no trigger is on, so nothing is sent"
+          : `Goal: sent ${clauses.join(", ")}`,
       )
     } catch (error) {
       showToast((error instanceof Error ? error.message : "Could not save the recurring prompt").slice(0, 100))
@@ -371,7 +376,7 @@ function PromptPanel({ thread, armed }: {
   return (
     <section data-recurring-panel>
       <div className="mb-2 flex items-center gap-3">
-        <span className="font-medium">Recurring prompt</span>
+        <span className="font-medium">Goal</span>
         {lastLabel && <span className="ml-auto truncate text-muted/55">{lastLabel}</span>}
       </div>
       {/* ALWAYS EDITABLE. It used to be `readOnly` until a master toggle was on, which made sense while
@@ -391,7 +396,7 @@ function PromptPanel({ thread, armed }: {
             persist()
           }
         }}
-        placeholder="What should this thread be told, again and again?"
+        placeholder="What is this thread trying to achieve?"
         // `field-sizing: content` — the browser sizes the box from what is in it. It replaced a flat
         // `rows={4}`, which made a prompt that can run to 4000 chars a four-line peephole you scrolled
         // your own writing through. `min-h`/`max-h` are the only bounds it needs.
@@ -534,7 +539,7 @@ function PromptPanel({ thread, armed }: {
         <div className="col-span-3 mt-0.5 h-px bg-border/70" />
         <Switch
           testId="pause-on-questions"
-          label="Disable when questions are pending"
+          label="Autonomous mode"
           checked={pauseOnQuestions}
           disabled={busy}
           onChange={(next) => {
@@ -543,7 +548,7 @@ function PromptPanel({ thread, armed }: {
           }}
         />
         <span className={`col-span-2 ${pauseOnQuestions ? "text-fg" : "text-muted"}`}>
-          <span className="font-medium">Disable when questions are pending</span>
+          <span className="font-medium">Autonomous mode</span>
           <span className="text-muted"> — a question fence, a native ask, or a permission prompt</span>
         </span>
       </div>
@@ -560,9 +565,9 @@ function PromptPanel({ thread, armed }: {
         {!stopHook && !heartbeat && !postCompaction
           ? <>None is on, so nothing is sent — the text stays here for when you want it back.</>
           : <>
-              Saved as you go. Switch them all off to stop it, or the agent can reply{" "}
-              <code className="font-mono font-medium text-fg/85">{ALLDONE_SENTINEL}</code> — which
-              stalls the run until you move it.
+              Saved as you go. Switch them all off to stop it, or the agent stops it itself by signing
+              off with a <code className="font-mono font-medium text-fg/85">```done</code> fence — which
+              files the thread away until you send more work.
             </>}
       </p>
     </section>

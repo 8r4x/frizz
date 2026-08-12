@@ -336,8 +336,8 @@ test("heartbeat: nothing before the interval elapses, then the beat with its tra
     await due.s.tick()
     assert.equal(due.delivered.length, 1)
     assert.ok(due.delivered[0].startsWith("check the deploy"), "the operator's text leads, verbatim")
-    assert.match(due.delivered[0], /Recurring prompt — sent every 1 hr/, "and the trailer names the cadence")
-    assert.match(due.delivered[0], /permanently stalls/, "and warns about the opt-out it offers")
+    assert.match(due.delivered[0], /Goal — sent every 1 hr/, "and the trailer names the cadence")
+    assert.match(due.delivered[0], /ONLY when the work is genuinely finished/, "and warns about the opt-out it offers")
   } finally { due.close() }
 })
 

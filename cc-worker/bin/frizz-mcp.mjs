@@ -137,8 +137,9 @@ const RECURRING_PROMPT = {
     "DELIVERED, so you can never be handed a backlog at once.\n\n" +
     "STOP IT when the work it drives is done (`action: \"stop\"`) — one left armed on a finished thread " +
     "wakes it forever. The human sees it in the thread footer and can edit or switch it off there. " +
-    "Replying ALLDONE on its own line also stops it, both triggers at once, but be sure before you do: " +
-    "it permanently stalls the run, and a run nobody is watching does not restart itself.\n\n" +
+    "Signing off with a ```done fence stops it too, every trigger at once — but only when the work is " +
+    "genuinely finished, because that files the thread away and a thread nobody is watching does not " +
+    "restart itself.\n\n" +
     "You can only ever arm your OWN thread — there is no parameter for anyone else's.",
   inputSchema: {
     type: "object",
@@ -208,7 +209,7 @@ const TIMER = {
     "matters: the delivery reaches you MID-TURN — a queued message you read at your next tool boundary — " +
     "so it arrives when you asked for it whether or not you have stopped, and it never aborts what you " +
     "are running. Unlike a recurring prompt it fires exactly once and then is gone, so there is nothing " +
-    "to switch off afterwards and no ALLDONE involved.\n\n" +
+    "to switch off afterwards and nothing to sign off from.\n\n" +
     "You may have MANY armed at the same time, each with its own instant and its own text — they are " +
     "independent, unlike the single recurring prompt this thread can hold.\n\n" +
     "USE IT for anything you want to come back to at a specific time: re-check a deploy in ten minutes, " +
@@ -653,8 +654,8 @@ async function recurringPrompt(args) {
     `Recurring prompt armed — frizz will send you this ${when}.${held}${superseded}\n\n` +
     "Call this tool again with `action: \"stop\"` once the work it drives is finished — one left armed on " +
     "a finished thread wakes it forever. The human can also edit or switch it off in the thread footer. " +
-    "Replying ALLDONE stops it too, but only use that when there is genuinely nothing left: it " +
-    "permanently stalls the run."
+    "Signing off with a ```done fence stops it too, but only when there is genuinely nothing left: it " +
+    "files the thread away until the human sends more work."
   )
 }
 

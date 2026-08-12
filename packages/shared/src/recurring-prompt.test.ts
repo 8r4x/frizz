@@ -28,8 +28,8 @@ test("saysAllDone: the sentinel embedded in prose does NOT opt out", () => {
   assert.equal(saysAllDone(undefined), false)
 })
 
-// Both trailers carry the same two obligations, so both are held to them: name the exact token the
-// parser reads, and WARN. Naming it without the warning is how a worker learns to end its own run for
+// Both trailers carry the same two obligations, so both are held to them: name the exact sign-off the
+// scheduler reads, and WARN. Naming it without the warning is how a worker learns to end its own run for
 // tidiness; warning without naming it leaves the opt-out undiscoverable.
 for (const [label, message] of [
   ["restPromptMessage", restPromptMessage("  keep fixing the failing tests  ")],
@@ -37,10 +37,11 @@ for (const [label, message] of [
 ] as const) {
   test(`${label}: the operator's words come first, then an offer AND a warning`, () => {
     assert.ok(message.startsWith("keep fixing the failing tests"), "the operator's text leads, verbatim and trimmed")
-    assert.ok(message.includes(ALLDONE_SENTINEL), "the trailer names the exact token the parser reads")
-    assert.match(message, /permanently stalls/, "and warns, in the same breath as the offer")
-    // The trailer SAYS the word — and must not read as the worker having said it. This is delivered as
-    // a USER turn so it never reaches the fold, but the shape is pinned regardless.
+    assert.ok(message.includes("```done"), "the trailer names the exact sign-off the scheduler reads")
+    assert.match(message, /ONLY when the work is genuinely finished/, "and warns, in the same breath as the offer")
+    // The RETIRED sentinel must not appear: it is still HONOURED for sessions that predate the change
+    // (scheduler `saidDone`), and advertising it would teach it to workers that have no need of it.
+    assert.equal(message.includes(ALLDONE_SENTINEL), false, "the legacy sentinel is honoured, never advertised")
     assert.equal(saysAllDone(message), false)
     // De-emphasized: one parenthetical line, not a section. A trailer that grows starts competing with
     // the operator's actual instruction for the worker's attention.
@@ -53,8 +54,8 @@ for (const [label, message] of [
 // this distinction load-bearing rather than cosmetic: a worker reading a scheduled delivery has NOT
 // necessarily stopped, and must not conclude it has.
 test("the two trailers are distinguishable — each says why it arrived, and the scheduled one how often", () => {
-  assert.match(schedulePromptMessage("check the deploy", 600), /Recurring prompt — sent every 10 min/)
-  assert.match(restPromptMessage("check the deploy"), /Recurring prompt — sent each time you come to rest/)
+  assert.match(schedulePromptMessage("check the deploy", 600), /Goal — sent every 10 min/)
+  assert.match(restPromptMessage("check the deploy"), /Goal — sent each time you come to rest/)
 })
 
 test("formatIntervalLabel renders whole units", () => {

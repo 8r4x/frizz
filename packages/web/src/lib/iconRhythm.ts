@@ -68,8 +68,14 @@ export const STRIP_INK_GAP = "gap-3"
  *  It is measured, not missed. */
 export const INK_TRIM_HOURGLASS = "-mx-1"
 
-/** `RecurringPromptControl` — lucide `HeartPulse` at 12px (ink 11px) inside `px-0.5`. */
-export const INK_TRIM_HEARTBEAT = "-mx-[2.5px]"
+/** `RecurringPromptControl` (the Goal control) — lucide `Target` at 12px inside `px-0.5`.
+ *
+ *  The trim is UNCHANGED from the `HeartPulse` it replaced on 2026-08-11, and that is measured rather
+ *  than assumed: both glyphs are drawn to lucide's outer 24-unit bound, so both paint ~11px of their
+ *  12px box and carry the same ~0.5px a side of inset. A mark swap only forces a re-measure when the
+ *  new glyph's ink sits differently INSIDE the viewBox — a rule worth stating here, because the next
+ *  swap will be to something that does. */
+export const INK_TRIM_GOAL = "-mx-[2.5px]"
 
 /** `ReloadPluginsButton` — lucide `Plug` at 13px in a 24px square, painting 8px of it.
  *

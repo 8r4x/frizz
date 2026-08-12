@@ -433,22 +433,32 @@ export const ThreadRecurringPrompt = z.object({
 export type ThreadRecurringPrompt = z.infer<typeof ThreadRecurringPrompt>
 
 // ---- The opt-out ---------------------------------------------------------------------------------
-// THE OPT-OUT, shared by both triggers and deliberately hard to reach for.
+// THE OPT-OUT IS THE ```done FENCE, as of 2026-08-11. A worker that signs off as done has said "there
+// is no further work here", and frizz stops prompting it — every trigger, because a run that keeps
+// being woken has not stalled and the whole point of the signal is that it has finished.
 //
-// A worker that replies ALLDONE is saying "there is no further work here", and frizz stops prompting it
-// — BOTH triggers, because a run that keeps being woken has not stalled and the whole point of the word
-// is that it has. It is not a "skip this one" — it is the end of the arrangement, and nothing but new
-// activity on the thread reopens it. Both delivered messages therefore OFFER it in one de-emphasized
-// line and warn against it in the same breath: the failure it guards is a worker that says it to look
-// tidy and silently parks an effort nobody is watching.
+// IT USED TO BE A SENTINEL WORD, `ALLDONE`, and collapsing the two is the change. One vocabulary beats
+// two: the worker already has to end its turn with a fence, and a second magic token that ALSO means
+// "stop" was a rule to remember on top of a rule to remember. Maintainer 2026-08-11: "we should drop
+// ALLDONE in favor of simply ```done".
 //
-// Mechanically it needs no stored state at all, which is what makes it honest: the flag is folded off
-// the FINAL assistant message, so it holds for exactly as long as that message is the thread's last
-// word. Anything the thread says or receives afterwards reopens the loop by itself.
+// It is not a "skip this one" — it is the end of the arrangement, and nothing but new activity on the
+// thread reopens it. Every delivered message therefore names it in one de-emphasized line and warns
+// against it in the same breath: the failure it guards is a worker that signs off to look tidy and
+// silently parks an effort nobody is watching.
+//
+// Mechanically it needs no stored state at all, which is what makes it honest: both the fence and the
+// legacy sentinel are folded off the FINAL assistant message, so either holds for exactly as long as
+// that message is the thread's last word. Anything the thread says or receives afterwards reopens the
+// loop by itself.
 
-/** The worker's "there is no further work here" reply, which stops BOTH triggers. Recognized only as
- * its OWN line (see `saysAllDone`), so a worker discussing the protocol — which the delivered trailers
- * invite by naming it — never ends its own run by talking about it. */
+/** LEGACY. The sentinel that used to be the opt-out, superseded by the ```done fence on 2026-08-11.
+ *
+ * STILL HONOURED, and deliberately: workers dispatched before the change are running right now with
+ * trailers that told them to reply `ALLDONE`, and a scheduler that stopped recognizing it the same day
+ * would silently take their exit away and loop them forever. It is no longer ADVERTISED anywhere — see
+ * `OPT_OUT_NOTE` — so nothing new learns it, and the recogniser can be deleted once no session predates
+ * the change. */
 export const ALLDONE_SENTINEL = "ALLDONE"
 
 /** Does this assistant text defer its recurring prompt? True iff some line, stripped of markdown
@@ -477,13 +487,13 @@ export function saysAllDone(text: string | undefined): boolean {
 // machinery. Expanding it is how a worker starts treating "am I allowed to stop?" as the question,
 // instead of the work it was actually sent.
 const OPT_OUT_NOTE =
-  `If there is genuinely no further work, reply ${ALLDONE_SENTINEL} on its own line to stop these prompts` +
-  " — but be sure, because it permanently stalls this run."
+  "To stop these, sign off with a ```done fence — but ONLY when the work is genuinely finished:" +
+  " it files this thread away, and nothing but new work from the human reopens it."
 
 /** What frizz delivers when the ON REST trigger fires: the operator's words VERBATIM, then the trailer.
  * Kept beside the parser so the wording sent and the wording recognized can never drift apart. */
 export function restPromptMessage(prompt: string): string {
-  return `${prompt.trim()}\n\n(Recurring prompt — sent each time you come to rest. ${OPT_OUT_NOTE})`
+  return `${prompt.trim()}\n\n(Goal — sent each time you come to rest. ${OPT_OUT_NOTE})`
 }
 
 /** What frizz delivers when the POST-COMPACTION trigger fires (scheduler SOURCE 7).
@@ -498,7 +508,7 @@ export function restPromptMessage(prompt: string): string {
  * Like the schedule trigger's, it may arrive MID-TURN — a compaction does not stop the work. */
 export function compactionPromptMessage(prompt: string): string {
   return (
-    `${prompt.trim()}\n\n(Recurring prompt — your context was just compacted. This is what you asked to` +
+    `${prompt.trim()}\n\n(Goal — your context was just compacted. This is what you asked to` +
     " be handed back: re-ground on it before doing anything else, and treat it as authoritative over" +
     " anything the summary implies. The window is close to empty again, which is normal and not a reason" +
     ` to wind down or hand off. ${OPT_OUT_NOTE})`
@@ -513,7 +523,7 @@ export function compactionPromptMessage(prompt: string): string {
  * The trailer's exact wording is pinned by `parseRecurringPrompt` below and by the prompt goldens —
  * change one and you must change all three. */
 export function schedulePromptMessage(prompt: string, intervalSeconds: number): string {
-  return `${prompt.trim()}\n\n(Recurring prompt — sent every ${formatIntervalLabel(intervalSeconds)}. ${OPT_OUT_NOTE})`
+  return `${prompt.trim()}\n\n(Goal — sent every ${formatIntervalLabel(intervalSeconds)}. ${OPT_OUT_NOTE})`
 }
 
 /** "10 min" / "2 hr" / "90s" — whole units only, because a cadence printed to the second promises a
@@ -551,7 +561,7 @@ export interface RecurringPrompt {
 // where they are, because it lands in a window that was just emptied. So it is matched on its own
 // opening clause rather than bent into the shared "sent X" shape.
 const RECURRING_TRAILER =
-  /\n\n\((?:Recurring prompt|Stop hook|Heartbeat) — (?:sent (?:(each time you come to rest)|every ([^.)]+))|(your context was just compacted))\. [^)]*\)$/
+  /\n\n\((?:Goal|Recurring prompt|Stop hook|Heartbeat) — (?:sent (?:(each time you come to rest)|every ([^.)]+))|(your context was just compacted))\. [^)]*\)$/
 export function parseRecurringPrompt(text: string | undefined): RecurringPrompt | undefined {
   if (typeof text !== "string") return undefined
   const m = RECURRING_TRAILER.exec(text.trimEnd())

@@ -408,12 +408,16 @@ type RecurringRow = Pick<
 //
 // TWO RULES, and they are deliberately different in strength.
 //
-//   THE HARD ONE (`restMessageAsksAQuestion`, below) is not an option: a ```question fence in the very
-//   message that ENDED the turn is the thread's answer to "you stopped — is there more?". The stop hook
-//   asks exactly that question, so firing over the top of a fence is the trigger talking to itself. This
-//   holds for every armed thread whatever its settings, and it holds for the STOP HOOK ONLY — the
-//   heartbeat and the compaction trigger ask different questions ("it has been an hour", "your context
-//   is gone") that a pending fence does not answer.
+//   THE HARD ONE (`restMessageIsSignedOff`, below) is not an option: the stop hook asks "you stopped —
+//   is there more?", and a ```question or ```done fence in the very message that ENDED the turn has
+//   already answered it. Firing over either is the trigger talking to itself. This holds for every armed
+//   thread whatever its settings.
+//
+//   The two halves reach different distances, though. A ```done fence ends the arrangement, so it also
+//   stops the HEARTBEAT (`saidDone`) — it is the successor to the ALLDONE sentinel and inherits its
+//   reach exactly. A pending QUESTION stops the stop hook alone: the heartbeat asks "it has been an
+//   hour" and the compaction trigger asks "your context is gone", and a question the human has not
+//   answered yet is not an answer to either.
 //
 //   THE SWITCHED ONE (`pauseOnQuestions`) is the operator's, and it is BROADER on both axes: it holds
 //   all three triggers, and it counts every way a thread can be blocked on a human — a fence, a native
@@ -430,11 +434,29 @@ type QuestionTele = Pick<
   "pendingQuestion" | "pendingAsk" | "permPrompt" | "nativeInputRequired"
 >
 
-/** The thread rested holding an unanswered ```question fence — the stop hook's own question, already
- *  answered. Bound to REST on purpose: the flag is folded off the FINAL assistant message and cleared by
- *  the next user record, so an answered question re-opens the trigger with nothing to undo. */
-function restMessageAsksAQuestion(tele: Pick<SessionTelemetry, "pendingQuestion">): boolean {
-  return tele.pendingQuestion === true
+/** The thread SIGNED OFF: the message that ended the turn declares the work finished.
+ *
+ *  That is the ```done fence as of 2026-08-11, and the legacy `ALLDONE` sentinel for as long as sessions
+ *  dispatched before the change are still running — they were told to reply it, and dropping the
+ *  recogniser the same day would take their exit away and loop them forever.
+ *
+ *  Needs no stored state: both facts are folded off the FINAL assistant message, so either holds for
+ *  exactly as long as that message is the thread's last word, and anything said afterwards re-opens the
+ *  loop by itself. */
+function saidDone(tele: Pick<SessionTelemetry, "lastFence" | "lastAssistantAllDone">): boolean {
+  return tele.lastFence?.kind === "done" || tele.lastAssistantAllDone === true
+}
+
+/** The stop hook asks "you stopped — is there more?", and this is the message that ALREADY ANSWERED it:
+ *  the thread asked the human something, or it declared itself finished. Firing over either is the
+ *  trigger talking to itself.
+ *
+ *  Deliberately NOT `awaiting`: that fence names a wait the scheduler itself manages, and the stop hook
+ *  is the one thing that rescues a thread parked behind something that will never report. */
+function restMessageIsSignedOff(
+  tele: Pick<SessionTelemetry, "pendingQuestion" | "lastFence" | "lastAssistantAllDone">,
+): boolean {
+  return tele.pendingQuestion === true || saidDone(tele)
 }
 
 /** Is this thread blocked on the human RIGHT NOW, by any means? The `pauseOnQuestions` hold's input.
@@ -479,10 +501,11 @@ function armedSchedule(row: RecurringRow): ArmedSchedule | undefined {
 //
 // The loop's OFF SWITCH belongs to the worker, and it is the one part of this that is not optional. A
 // rest trigger with no terminating condition is an infinite bump generator, so the delivered text
-// carries a trailer (shared `restPromptMessage`) teaching the worker to answer ALLDONE when nothing in
-// it is actionable. The tailer folds that sentinel onto the final message (`lastAssistantAllDone`) and
-// this pass simply declines to fire while it stands — no state to write, and it re-opens by itself the
-// moment the thread produces any other final message.
+// carries a trailer (shared `restPromptMessage`) teaching the worker to sign off with a ```done fence
+// when the work is genuinely finished. The tailer folds that fence onto the final message (`lastFence`)
+// and this pass simply declines to fire while it stands — no state to write, and it re-opens by itself
+// the moment the thread produces any other final message. See `saidDone`, which also still honours the
+// legacy `ALLDONE` sentinel for sessions dispatched before 2026-08-11.
 //
 // Same generation as SOURCE 4 (`recurring_armed_at`), because it is the same prompt: editing the text
 // supersedes a delivery queued for the old words on BOTH triggers at once.
@@ -564,7 +587,7 @@ function armedCompact(row: RecurringRow): ArmedRest | undefined {
 // for 15:00 that a busy thread only hears at 15:50 has not kept the promise it made, and "in ten
 // minutes" is the instruction being obeyed. See `isDeliverableNow`.
 //
-// It does NOT inherit the ALLDONE opt-out. That sentinel exists because a recurring trigger is an
+// It does NOT inherit the sign-off opt-out. That exists because a recurring trigger is an
 // infinite bump generator with no terminating condition; a one-off has exactly one delivery in it, and a
 // worker that scheduled an alarm and then said "nothing further right now" still wants the alarm.
 //
@@ -962,13 +985,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (isStopHookFenceId(item.fenceId)) {
       const armed = armedRest(row)
       if (!armed || item.fenceId !== stopHookFenceId(armed.armedAt, tele.lastActivityAt ?? "")) return "superseded"
-      if (tele.lastAssistantAllDone) return "superseded"
+      if (restMessageIsSignedOff(tele)) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
     // A post-compaction delivery is bound to the generation AND to the exact compaction it was queued
     // for — a SECOND compaction between enqueue and delivery supersedes the first, because re-grounding
     // on the older window is not what the operator asked for. Unlike the rest trigger it does NOT check
-    // `lastAssistantAllDone`: that sentinel is an answer about resting, and this delivery is not one.
+    // whether the thread signed off: `done` answers "you stopped, is there more?", and a compaction is
+    // not that question.
     if (isCompactFenceId(item.fenceId)) {
       const armed = armedCompact(row)
       if (!armed || item.fenceId !== compactFenceId(armed.armedAt, tele.lastCompactionAt ?? "")) return "superseded"
@@ -1548,7 +1572,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // not stalled at all. Needs no stored state: the flag is folded off the FINAL assistant message,
       // so anything the thread says or receives afterwards reopens it.
       const beatTele = deps.tailer.get(row.slug)
-      if (beatTele?.lastAssistantAllDone) continue
+      if (beatTele && saidDone(beatTele)) continue
       // The OPERATOR's hold — the only other thing that silences a beat, and only because they asked
       // for it. The hard rest-fence rule deliberately does NOT apply here: a beat asks "it has been an
       // hour", which a pending question does not answer.
@@ -1630,14 +1654,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // thread parked behind children is bumped on the same schedule as any other, which is also what
       // makes this able to rescue one parked behind a child that will never report. A worker that
       // genuinely has nothing to do until something returns says AWAITING.
-      // The worker itself asked to skip THIS rest — it is parked on something and has nothing to do
-      // until that returns. Per-rest only: the flag is folded off the FINAL assistant message, so the
-      // next rest that omits it is bumped as normal. Nothing is written and nothing has to be cleared.
-      if (tele.lastAssistantAllDone) continue
-      // The thread rested ASKING SOMETHING. Never bumped, whatever the settings say — see the two rules
-      // above `restMessageAsksAQuestion`. Per-rest like ALLDONE and for the same reason: the flag rides
-      // the final message, so the operator's answer re-opens the trigger with nothing to clear.
-      if (restMessageAsksAQuestion(tele)) continue
+      // THE REST ALREADY ANSWERED THIS TRIGGER'S QUESTION — the thread asked the human something, or it
+      // signed off as done. Never bumped, whatever the settings say; see `restMessageIsSignedOff`.
+      // Per-rest, and that is what makes it free: every fact it reads rides the FINAL assistant message,
+      // so the next word on the thread re-opens the trigger with nothing stored to clear.
+      if (restMessageIsSignedOff(tele)) continue
       // And the operator's own broader hold, when they armed it.
       if (heldByQuestion(row, tele)) continue
       const fenceId = stopHookFenceId(armed.armedAt, tele.lastActivityAt)
@@ -1661,10 +1682,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
   // ---- The ON COMPACTION pass -----------------------------------------------------------------
   // Deliberately does NOT filter on `turn === "idle"` (see SOURCE 7): the point is to reach the worker
-  // in the emptied window, and a compaction happens while it is working. Nor does it consult
-  // `lastAssistantAllDone` — that sentinel answers "you stopped, is there more?", which is not the
-  // question a compaction asks. A worker that genuinely wants these to stop replies ALLDONE, and the
-  // shared opt-out disarms every trigger at once.
+  // in the emptied window, and a compaction happens while it is working. Nor does it consult whether the
+  // thread signed off — a ```done fence answers "you stopped, is there more?", which is not the question
+  // a compaction asks. A worker that genuinely wants these to stop clears the Goal, or the operator does
+  // it in the footer.
   function evalCompactPrompts(nowMs: number): void {
     for (const row of deps.storage.allSessions()) {
       if (row.state === "archived" || row.archived === 1) continue

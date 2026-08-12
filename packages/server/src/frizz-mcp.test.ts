@@ -318,10 +318,10 @@ test("`recurring_prompt` arms and disarms the CALLING thread, identified from it
       body: { slug: "owning-thread", prompt: "keep the migration moving", stopHook: true, heartbeat: false, postCompaction: false, pauseOnQuestions: true },
     })
     // The reply must teach how it ENDS, or a worker only knows how to start one — and it must warn
-    // about the sentinel rather than merely offering it, since that exit is permanent.
+    // about the sign-off rather than merely offering it, since that exit files the thread away.
     assert.match(armed.result.content[0].text, /action.{0,4}stop/)
-    assert.match(armed.result.content[0].text, /ALLDONE/)
-    assert.match(armed.result.content[0].text, /permanently stalls/)
+    assert.match(armed.result.content[0].text, /```done/)
+    assert.match(armed.result.content[0].text, /only when there is genuinely nothing left/)
 
     // BOTH triggers named on a schedule-only start, and the cadence carried through as seconds.
     rpc.send({
