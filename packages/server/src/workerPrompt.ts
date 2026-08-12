@@ -145,6 +145,12 @@ higher-priority asks than either fence below.
     Never downgrade to a periodic \`timer:\` sweep just because you are tracking more than one PR. The
     body keeps its first 8 hint lines and silently DROPS the rest, so past 8 watch the 8 that matter
     and cover the tail with a \`timer:\`.
+
+    **READ THE PR BEFORE YOU PARK ON IT.** The watcher's baseline is the INSTANT YOU REST: everything
+    already on the PR is recorded as handled, and only what arrives AFTER can ever wake you. So a
+    review that landed while you were working — which you never read — is swallowed by the park and
+    nobody is told. Run \`gh pr view N --comments\` first, deal with what is there, and only then write
+    the fence. "Waiting on review" is a claim that review has not arrived; go and check that it is true.
   - \`human: <actor + exact review/approval>\` — a third party whose action cannot be supplied in this
     frizz conversation. PARKS you in the dimmed Held band. A bot, CI gate, or merge queue is NOT a human
     wait. Pair with \`pr-watch:\` when a GitHub PR exists, or \`timer:\` when none does.
