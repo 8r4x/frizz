@@ -5,6 +5,7 @@ Three sheets of directions for the mark after the `fray` → `frizz` rename, eac
 | Sheet | Open | What it covers |
 | --- | --- | --- |
 | Figure-eight | [`frizz-eight.html`](frizz-eight.html) | 144 variants matching the reference in [`reference/`](reference/): a closed figure-eight of two tall teardrop loops plus a separate arced crossbar. **Current direction.** |
+| fff variants | [`frizz-fff.html`](frizz-fff.html) | 75 rows varying spacing and outer tail length independently, at three weights. |
 | Round two, refined | [`frizz-two-refined.html`](frizz-two-refined.html) | 144 variants swept finely around the six picked from the grid above. **Current direction.** |
 | Two-crossing f, symmetric | [`frizz-two.html`](frizz-two.html) | 144 variants of the approved mark, made exactly 180° rotationally symmetric. Every one is a single stroke with exactly two self-crossings. **Current direction.** |
 | Cursive family | [`frizz-cursive-grid.html`](frizz-cursive-grid.html) | 77 variants: one swooping path, a bulb at each end, a curved spine that cannot kink. One bulb wholly in the upper-right quadrant, the other wholly in the lower-left. Three terminal treatments. **Current direction.** |
@@ -52,12 +53,14 @@ The giveaway is the waist: three strands meet there in a triangle of crossings, 
 
 ```sh
 nub build-eight.mjs       # the figure-eight sweep      -> out-eight/
+nub build-fff-grid.mjs    # fff rows: spacing x tail x weight -> out-fff/
 nub build-two.mjs --refine  # refined sweep around the picks -> out-two-refined/
 nub build-two.mjs         # the symmetric two-crossing sweep -> out-two/
 nub build-cursive.mjs     # the cursive sweep           -> out-cursive/
 nub build-slash.mjs       # the slash-spine sweep       -> out-slash/
 nub build-grid.mjs        # the earlier parametric sweep -> out-grid/
 nub artifact-grid.mjs eight   # out-eight/   -> frizz-eight.html
+nub artifact-grid.mjs fff     # out-fff/     -> frizz-fff.html
 nub artifact-grid.mjs refined # out-two-refined/ -> frizz-two-refined.html
 nub artifact-grid.mjs two     # out-two/     -> frizz-two.html
 nub artifact-grid.mjs cursive # out-cursive/ -> frizz-cursive-grid.html

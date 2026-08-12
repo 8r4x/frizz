@@ -9,6 +9,14 @@ import { fileURLToPath } from "node:url"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const SHEETS = {
+  fff: {
+    dir: "out-fff",
+    file: "frizz-fff.html",
+    title: "Frizz — fff, spacing and tails",
+    lede: `The shipped glyph written three times, as ONE stroke with a single free end at each side. <b>Spacing and tail length are independent</b>: <code>gap</code> is how much is cut from both ends of each inner copy, which alone sets the pitch; <code>tail</code> is the outer free ends as a multiple of the glyph's own tail — under 1 it is cut back, over 1 it is extended straight along the end tangent. Every row has <b>6 self-crossings</b> and is <b>exactly C2</b> about its own centre. Quote an id.`,
+    wide: true,
+    groups: null,
+  },
   refined: {
     dir: "out-two-refined",
     file: "frizz-two-refined.html",
@@ -60,12 +68,14 @@ const uri = (n) => `data:image/png;base64,${readFileSync(join(here, sheet.dir, n
 const worstC2 = Math.max(...variants.map((v) => v.c2Error))
 const tile = (v) => `
     <figure>
-      <img src="${uri(`${v.id}-200.png`)}" width="150" height="150" alt="Mark variant ${v.id}">
+      ${sheet.wide ? `<img src="${uri(`${v.id}-480.png`)}" alt="Row variant ${v.id}">` : `<img src="${uri(`${v.id}-200.png`)}" width="150" height="150" alt="Mark variant ${v.id}">`}
       <figcaption><b>${v.id}</b><span>${
         v.along
           ? `bulb ${v.along}&times;${v.across} &middot; spine ${v.spineAngle}&deg;/${v.spineLen}<br>bend ${v.spineBend}&deg; &middot; tail bend ${v.tailBend}&deg; &middot; ${v.side > 0 ? "side +" : "side −"}${v.dir > 0 ? " dir +" : " dir −"}`
           : v.grow !== undefined
           ? `base ${v.base} &middot; grow ${v.grow} &middot; twist ${v.twist}&deg;<br>ease ${v.ease} &middot; aniso ${v.aniso} &middot; shear ${v.shear} &middot; stroke ${v.stroke}`
+          : v.gap !== undefined
+          ? `gap ${v.gap} &middot; tail ${v.tail}&times; &middot; stroke ${v.stroke}<br>pitch ${v.pitch} &middot; aspect ${v.aspect}`
           : v.loopW
           ? `loop ${v.loopW}&times;${v.loopH} &middot; lean ${v.shear}<br>bar ${v.barAngle}&deg; &middot; bow ${v.barBend}&deg; &middot; stroke ${v.stroke} &middot; ${v.key}`
           : `bulb ${v.lw}&times;${v.lh} &middot; tilt ${v.tilt ?? v.tiltRel}&deg; &middot; spine ${v.axis}&deg;<br>dist ${v.dist} &middot; ${v.side > 0 ? "side +" : "side −"}${v.dir > 0 ? " dir +" : " dir −"}${v.key ? ` &middot; ${v.key}` : ""}`
@@ -94,7 +104,7 @@ figcaption{margin-top:8px;font-family:var(--mono);font-size:10px;color:var(--mut
 figcaption b{display:block;color:var(--fg);font-size:12px;margin-bottom:3px}
 .foot{margin-top:48px;border-top:1px solid var(--border);padding-top:22px;color:var(--muted);font-size:13.5px;max-width:76ch}
 .foot b{color:var(--fg)}
-</style></head><body><div class="wrap">
+</style></head><body><div class="wrap${sheet.wide ? " wide" : ""}">
 <h1>${sheet.title}</h1>
 <p class="lede">${variants.length} options. ${sheet.lede}</p>
 
