@@ -304,7 +304,11 @@ test("registered future timer crosses during server downtime and fires exactly o
   assert.equal(h.resumes.length, 1)
 })
 
-test("pr-watch baselines existing activity, then wakes once on a new review across restart", async () => {
+// THE FIRST PARK REPLAYS WHAT IS ALREADY THERE (maintainer 2026-08-12). The old contract baselined it
+// silently, which let a worker park on a PR saying "waiting on review" with review already sitting on it
+// — colinhacks/zod#6318, two unread reviews, watcher asleep on the thing it was watching for. The cost is
+// one redundant wake for a worker that HAD answered its review; the steer's backlog tail says so.
+test("pr-watch replays the PR's existing activity on the FIRST park, then wakes on what is genuinely new", async () => {
   const h = harness()
   const fenceAt = iso(h.clock.ms)
   h.storage.upsertSession(row("r"))
@@ -317,8 +321,26 @@ test("pr-watch baselines existing activity, then wakes once on a new review acro
   })
   const old: GithubReviewActivity = { id: "review:old", actor: "alice", actorType: "User", at: iso(h.clock.ms - 1000), kind: "review" }
   h.review.result = [old]
-  await h.make().tick() // persist baseline, no wake for existing review
-  assert.equal(h.resumes.length, 0)
+  await h.make().tick()
+  assert.equal(h.resumes.length, 1, "the review already on the PR is replayed once")
+  assert.match(h.resumes[0].message, /@alice/)
+  assert.match(h.resumes[0].message, /already on the PR when you parked/, "the steer says these are not new")
+
+  // The worker deals with it and re-parks: a NEW fence generation on the SAME PR. This is the loop
+  // guard — replaying per park rather than per (thread, PR) would wake it again here, forever.
+  h.clock.ms += 10_000
+  const reparked = iso(h.clock.ms)
+  h.tele.set("r", {
+    ...tele(awaiting([
+      { kind: "human", value: "repo maintainer review" },
+      { kind: "pr-watch", value: "acme/app#391" },
+    ])),
+    lastActivityAt: reparked,
+  })
+  const settled = h.make()
+  await settled.tick()
+  await settled.tick()
+  assert.equal(h.resumes.length, 1, "the same backlog is never replayed to the same thread twice")
 
   h.clock.ms += 10_000
   h.review.result = [
@@ -328,8 +350,10 @@ test("pr-watch baselines existing activity, then wakes once on a new review acro
   const restarted = h.make()
   await restarted.tick()
   await restarted.tick()
-  assert.equal(h.resumes.length, 1)
-  assert.match(h.resumes[0].message, /@bob/)
+  assert.equal(h.resumes.length, 2)
+  assert.match(h.resumes[1].message, /@bob/)
+  assert.doesNotMatch(h.resumes[1].message, /@alice/, "the replayed review is not named again")
+  assert.doesNotMatch(h.resumes[1].message, /already on the PR when you parked/, "a genuinely new review is not a backlog")
 })
 
 test("pr-watch: a bot review AGENT's review (Pullfrog/Copilot) wakes the watcher — a review is the signal whoever files it", async () => {
@@ -431,8 +455,18 @@ test("pr-watch retries a failed resume from its durable pending cursor across re
   })
   const old: GithubReviewActivity = { id: "review:old", actor: "alice", actorType: "User", at: iso(h.clock.ms - 1000), kind: "review" }
   h.review.result = [old]
-  await h.make().tick() // durable baseline
+  await h.make().tick() // durable baseline — and the first-park replay of `old`, which is not the subject here
+  h.resumes.length = 0
 
+  // Re-park, so the thread is past its one backlog replay and only genuinely new activity can wake it.
+  h.clock.ms += 10_000
+  h.tele.set("r", {
+    ...tele(awaiting([
+      { kind: "human", value: "repo maintainer review" },
+      { kind: "pr-watch", value: "acme/app#391" },
+    ])),
+    lastActivityAt: iso(h.clock.ms),
+  })
   h.clock.ms += 10_000
   h.review.result = [
     { id: "review:new", actor: "bob", actorType: "User", at: iso(h.clock.ms), kind: "review" },
@@ -471,13 +505,16 @@ test("pr-watch: baselines, then bumps on a new human comment", async () => {
   h.storage.upsertSession(row("r"))
   h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "acme/app#391" }])), lastActivityAt: fenceAt })
   h.review.result = [{ id: "comment:old", actor: "alice", actorType: "User", at: iso(h.clock.ms - 1000), kind: "comment" }]
-  await h.make().tick() // baseline existing activity, no wake
-  assert.equal(h.resumes.length, 0)
+  await h.make().tick() // baseline, plus the first-park replay of `comment:old` — not the subject here
+  h.resumes.length = 0
 
+  // Re-park past the one-time replay, so what follows tests the bump alone.
+  h.clock.ms += 10_000
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "acme/app#391" }])), lastActivityAt: iso(h.clock.ms) })
   h.clock.ms += 10_000
   h.review.result = [
     { id: "comment:new", actor: "carol", actorType: "User", at: iso(h.clock.ms), kind: "comment" },
-    { id: "comment:old", actor: "alice", actorType: "User", at: iso(h.clock.ms - 1000), kind: "comment" },
+    { id: "comment:old", actor: "alice", actorType: "User", at: iso(h.clock.ms - 20_000), kind: "comment" },
   ]
   const s = h.make()
   await s.tick()
@@ -498,9 +535,12 @@ test("pr-watch: the bump steer carries the item's permalink and timestamp, not j
   h.storage.upsertSession(row("r"))
   h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "nubjs/nub#587" }])), lastActivityAt: fenceAt })
   h.review.result = [{ id: "comment:stale", actor: "colinhacks", actorType: "User", at: iso(h.clock.ms - 1000), kind: "comment", url: "https://github.com/nubjs/nub/pull/587#issuecomment-1" }]
-  await h.make().tick()
-  assert.equal(h.resumes.length, 0)
+  await h.make().tick() // first-park replay of the stale comment — not the subject here
+  h.resumes.length = 0
 
+  // Re-park past the one-time replay: from here the stale comment must never be named again.
+  h.clock.ms += 10_000
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "nubjs/nub#587" }])), lastActivityAt: iso(h.clock.ms) })
   h.clock.ms += 10_000
   const at = iso(h.clock.ms)
   h.review.result = [

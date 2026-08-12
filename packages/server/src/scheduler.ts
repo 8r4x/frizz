@@ -761,6 +761,10 @@ interface ThreadWake {
 const FIRED_CAP = 500 // legacy pre-outbox marker cap (read during rolling upgrade, never newly added)
 const REGISTRATION_CAP = 500
 const REVIEW_SEEN_CAP = 300
+// (thread, PR) pairs whose pre-existing activity has already been replayed once. Sized like the other
+// ledgers; an eviction costs at most one extra backlog wake on a thread that has been idle for hundreds
+// of other parks, which is exactly the wake it would have wanted anyway.
+const INTRODUCED_CAP = 500
 // How many fresh activities a single wake steer enumerates. One poll interval can collect a whole
 // review app's burst; naming ten of them is already a long steer, and the count line tells the worker
 // how many it did not get named individually.
@@ -979,7 +983,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   }
   // Same NUL-delimiting rationale as firedKey: neither a slug nor a normalized owner/repo#N can contain
   // one, so no pair can forge another's key.
-  const introducedKey = (slug: string, ref: PrRef) => `${slug} ${refKey(ref)}`
+  const introducedKey = (slug: string, ref: PrRef) => `${slug}\u0000${refKey(ref)}`
   function markIntroduced(slug: string, ref: PrRef): void {
     const key = introducedKey(slug, ref)
     if (introduced.has(key)) return
@@ -1186,7 +1190,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // `activities` is chronological and may hold several: one poll interval routinely collects a burst,
   // and every one of them is marked seen, so anything this steer does not name is never mentioned to
   // anyone again. `omitted` is how many more than the cap were dropped from the enumeration.
-  function activitySteer(activities: GithubReviewActivity[], ref: PrRef, omitted = 0): string {
+  function activitySteer(activities: GithubReviewActivity[], ref: PrRef, omitted = 0, backlog = false): string {
     return formatGithubWakeSteer({
       ref: refKey(ref),
       omitted,
@@ -1197,7 +1201,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         ...(a.at ? { at: a.at } : {}),
         ...(a.url ? { url: a.url } : {}),
       })),
-    })
+    }, { backlog })
   }
 
   // The operator-facing log line for this wake. Names the distinct actors rather than a count, since
@@ -1209,6 +1213,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   }
 
   function reviewVerdict(
+    slug: string,
     persistKey: string,
     hint: FenceView["hints"][number],
     activities: GithubReviewActivity[],
@@ -1234,9 +1239,23 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       return Number.isFinite(at) && at !== 0 ? at : b.id.localeCompare(a.id)
     })
     const priorSeen = new Set(prior?.seen ?? [])
+    // THE FIRST PARK OF THIS THREAD ON THIS PR replays whatever is already there, once (maintainer
+    // 2026-08-12, choosing this over merely showing it on the card). "Waiting on review" is a claim that
+    // review has not arrived, and a worker that never read the PR makes that claim wrongly: one parked on
+    // colinhacks/zod#6318 with two unaddressed reviews sitting on it, the old baseline recorded them as
+    // handled, and the watcher slept on exactly what it was watching for. The trade is knowing and
+    // accepted — a worker that DID answer its review gets one redundant wake, and the steer's backlog
+    // tail tells it so — because being asleep on real review costs incomparably more.
+    //
+    // Once per (thread, PR), never once per park: see the introduction ledger for why that distinction
+    // is the difference between a fix and a wake loop.
+    const firstSight = !prior && !introduced.has(introducedKey(slug, ref))
+    if (firstSight) markIntroduced(slug, ref)
     let fresh: GithubReviewActivity[]
     if (prior) {
       fresh = newestFirst.filter((a) => !priorSeen.has(a.id))
+    } else if (firstSight) {
+      fresh = newestFirst
     } else {
       // A review may land between the final fence and this scheduler's first poll (or while the server
       // is restarting before the baseline is persisted). The fence timestamp lets a brand-new grammar
@@ -1263,7 +1282,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     const omitted = fresh.length - named.length
     const chronological = [...named].reverse()
     saveReviewCursor(persistKey, hintKey, [...newestFirst.map((a) => a.id), ...(prior?.seen ?? [])], chronological, omitted)
-    return { met: true, steer: activitySteer(chronological, ref, omitted), reason: reviewReason(ref, chronological, omitted) }
+    return {
+      met: true,
+      steer: activitySteer(chronological, ref, omitted, firstSight),
+      reason: `${reviewReason(ref, chronological, omitted)}${firstSight ? " — already on the PR at park" : ""}`,
+    }
   }
 
   function normalizeReviewResult(
@@ -1377,7 +1400,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const pendingReview = registrations.get(persistKey)?.reviews[key]?.pending
       const verdict = isPrWatchHint(h.kind)
         ? reviewActivity || pendingReview
-          ? reviewVerdict(persistKey, h, reviewActivity ?? [], fenceAt)
+          ? reviewVerdict(slug, persistKey, h, reviewActivity ?? [], fenceAt)
           : undefined
         : evalHint(h, nowMs, st.prCache, fence.body)
       if (!verdict) continue // indeterminate this tick
