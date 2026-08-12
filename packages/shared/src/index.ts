@@ -612,6 +612,20 @@ export const TimerPromptText = z.string().trim().min(1).max(TIMER_PROMPT_MAX)
  *  parser exists because a recurring prompt repeats the same paragraph down the whole transcript and has
  *  to collapse to a divider; a one-off is said once, so the chat's generic first-party wake card — the
  *  one already written for "a CI/timer/limit wake" — shows it correctly with no new component. */
+/** What frizz delivers when a REGISTERED WATCHER resolves (scheduler SOURCE 8).
+ *
+ * Unlike every other wake here there is no operator text to carry — a watcher holds no prompt, only a
+ * thing it was waiting for. So the message IS the news, and it has exactly two jobs: say what resolved
+ * precisely enough to act on, and say that the registration is spent. A worker that thinks the watcher
+ * is still armed will rest expecting a second wake that is never coming. */
+export function watchWakeMessage(kind: ThreadWatchKind, target: string, detail: string): string {
+  const what = kind === "shell" ? `your background shell \`${target}\`` : `${target}`
+  return (
+    `⏰ ${detail} (${what}).\n\n(Registered watcher — it has fired and is no longer armed. Register` +
+    " another with `mcp__frizz__watch` if you need to keep waiting.)"
+  )
+}
+
 export function timerPromptMessage(prompt: string, fireAt: string): string {
   return `${prompt.trim()}\n\n(One-off timer, set for ${fireAt}. It has fired and will not repeat.)`
 }
