@@ -189,7 +189,12 @@ Two entry points, deliberately distinct:
   stages the full runtime closure at prepack: `web-dist/` (built client), `runtime/board/` (the board
   parser the server shells out to), and `runtime/cc-worker/` (the worker plugin dispatch loads).
   `production.ts` points `FRIZZ_SCRIPTS_DIR` / `FRIZZ_WORKER_PLUGIN_DIR` at those. `runtime/` MUST
-  mirror the repo root, because cc-worker's shims reach back relatively (`../../board`).
+  mirror the repo root, because cc-worker's shims reach back relatively (`../../board`) — and it is a
+  COPY rather than a `files` entry naming `board/` and `cc-worker/` directly, so that every published
+  path stays build output and the allowlist can never name repository content. `prepare-package.mjs
+  --clean` sweeps both staged trees at postpack, so a checkout never carries a frozen duplicate of the
+  worker plugin for agents to grep. Both build paths assert the same closure
+  (`src/worker-plugin-closure.ts`); widening it is one edit.
 - **`frizz-dev`** (`nub run frizz-dev:install`) is source-backed at launch only: the shim holds an
   absolute pointer to this checkout's CLI entrypoint. On each fresh launch it selects a
   verified immutable artifact matching the current source fingerprint, reuses an identical global one,
