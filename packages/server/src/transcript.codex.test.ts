@@ -1287,3 +1287,32 @@ test("codex tool cards are titled with human labels, including unknown and MCP-n
     ["Navigate", "Snapshot", "Resize", "Nextjs index", "SomeVendorTool"],
   )
 })
+
+// THE PAGE REACHES THE HUMAN'S LAST MESSAGE, not merely the last `user` record. Frizz writes as the
+// user — a Goal delivery, the sign-off reminder, a watcher wake are all `user` records carrying
+// `wake: true` — so stopping at one cuts the page in the middle of a stretch the human never saw, which
+// is the opposite of what a queue card is for.
+test("pageProjectedTranscript walks past frizz's own deliveries to the human's message", () => {
+  const at = "2026-08-12T00:00:00.000Z"
+  const msg = (role: "user" | "assistant", text: string, extra: Record<string, unknown> = {}) =>
+    ({ sourceId: text, role, text, tools: [], parts: [], at, ...extra }) as never
+  const messages = [
+    msg("user", "human: do the thing"),
+    msg("assistant", "starting"),
+    msg("user", "goal bump", { wake: true }),
+    msg("assistant", "still going"),
+    msg("user", "sign-off reminder", { wake: true }),
+    msg("assistant", "here is the handoff"),
+  ]
+  const page = pageProjectedTranscript(messages, messages.length)
+  assert.equal(page.start, 0, "the page starts at the human's message, not at the nearest wake")
+  assert.equal(page.reachedTurnBoundary, true)
+  assert.deepEqual(page.messages.map((m) => m.text), [
+    "human: do the thing",
+    "starting",
+    "goal bump",
+    "still going",
+    "sign-off reminder",
+    "here is the handoff",
+  ])
+})

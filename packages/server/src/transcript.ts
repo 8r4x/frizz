@@ -3740,9 +3740,21 @@ export function pageProjectedTranscript(
   if (!Number.isSafeInteger(anchor) || anchor <= 0 || anchor > messages.length) {
     return { start: Math.max(0, Math.min(messages.length, anchor || 0)), messages: [], reachedTurnBoundary: true }
   }
+  // THE BOUNDARY IS THE HUMAN'S LAST MESSAGE, not merely the last `user` record.
+  //
+  // Frizz writes as the user — a Goal delivery, the sign-off reminder, a watcher wake are all `user`
+  // records (`wake: true`, set by the server that composed them). Stopping at one cuts the page in the
+  // middle of a stretch the human has never seen, which is the opposite of what this page is for: the
+  // reader is opening a card cold and needs everything back to the last thing THEY said (maintainer
+  // 2026-08-12: "queue cards STILL need to go all the way back to the last user message. that's
+  // important context that needs to be surfaced").
+  //
+  // A queued send is skipped for a different reason: it has not been delivered, so it is not yet part of
+  // the exchange being summarised.
   let boundary = 0
   for (let i = anchor - 1; i >= 0; i--) {
-    if (messages[i].role === "user") {
+    const m = messages[i]
+    if (m.role === "user" && !m.wake && !m.queued) {
       boundary = i
       break
     }
