@@ -44,9 +44,11 @@ export function RecurringPromptLine({ bump, sourceId }: { bump: RecurringPrompt;
   // about THIS delivery — the text is shared, so "the agent stopped" and "an hour elapsed" are otherwise
   // indistinguishable in the transcript. The cadence rides along for the same reason: it names the
   // schedule that was in force when this one fired, not the one armed now.
+  // "Goal", because that is what the panel, the footer mark and the delivered trailer all call it since
+  // 2026-08-11. The divider kept the old name for a day and was the only surface still saying it.
   const label = scheduled
-    ? `Recurring prompt${bump.every ? ` · every ${bump.every}` : ""}`
-    : "Recurring prompt · at rest"
+    ? `Goal${bump.every ? ` · every ${bump.every}` : ""}`
+    : "Goal · at rest"
   return (
     <WakeDivider
       // TWO glyphs, one per TRIGGER, because a divider marks ONE delivery and the two triggers answer
