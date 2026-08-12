@@ -364,6 +364,19 @@ export interface ThreadTimerRow {
   settled_at: number | null
 }
 
+/** One row of `thread_watch` — a worker's registered wait. `target` is the thing being watched, in the
+ *  grammar of its kind: `owner/repo#N` for `pr` and `ci`, a background-shell id or label for `shell`. */
+export interface ThreadWatchRow {
+  id: string
+  thread_slug: string
+  kind: "pr" | "ci" | "shell"
+  target: string
+  state: "armed" | "fired" | "dropped"
+  created_at: number
+  settled_at: number | null
+  cursor: string | null
+}
+
 export interface Storage {
   db: Database
   interactions: InteractionStore
@@ -505,6 +518,25 @@ export interface Storage {
   // Terminal for the scheduler: this timer's delivery has settled, so it must never be queued again.
   // Guarded on `armed` so a cancel that raced the delivery keeps its own verdict.
   markThreadTimerFired(id: string, settledAtMs: number): boolean
+  // ---- REGISTERED WATCHERS ------------------------------------------------------------------------
+  // The same shape as the timers above and for the same reason: a thread may hold many, each with its
+  // own identity, so the record of intent is a TABLE. `id` is minted by the caller so the row and the
+  // scheduler's delivery id agree without a read-back.
+  armThreadWatch(watch: { id: string; slug: string; kind: ThreadWatchRow["kind"]; target: string; createdAtMs: number }): void
+  // A thread's watchers, oldest first. `armedOnly` is what the worker's tool reads back; the full set is
+  // for diagnostics and for the card that explains why a thread is parked.
+  listThreadWatches(slug: string, opts?: { armedOnly?: boolean }): ThreadWatchRow[]
+  getThreadWatch(id: string): ThreadWatchRow | undefined
+  // Every armed watcher across all threads — the scheduler's one read per tick.
+  armedThreadWatches(): ThreadWatchRow[]
+  // Withdraw one. Scoped to the slug so a worker can only ever drop its OWN, and only an ARMED row
+  // moves: dropping one that already fired is a no-op, not a rewrite of history.
+  dropThreadWatch(slug: string, id: string, settledAtMs: number): boolean
+  // Terminal for the scheduler: this watcher resolved and its wake was delivered.
+  markThreadWatchFired(id: string, settledAtMs: number): boolean
+  // Persist a watcher's progress marker (the PR activity baseline). Guarded on `armed` so a cursor
+  // written after the worker dropped the row cannot resurrect it.
+  setThreadWatchCursor(id: string, cursor: string): boolean
   // Stamp a delivered ON REST prompt, guarded on the generation so one settling after an edit cannot
   // write onto words it no longer describes.
   stampRecurringRestFired(slug: string, armedAt: string, firedAt: string): boolean
@@ -751,6 +783,35 @@ export function createStorage(dbPath: string): Storage {
       ON thread_timer(state, fire_at);
     CREATE INDEX IF NOT EXISTS thread_timer_slug
       ON thread_timer(thread_slug, state, fire_at);
+    -- A worker's registered WATCHERS (2026-08-12). One row per thing a thread is waiting on, so a wait
+    -- has an IDENTITY: it can be listed after a compaction and DROPPED when it stops mattering.
+    --
+    -- This is the table the awaiting FENCE could never be. That fence is derived state — recomputed
+    -- from the final assistant message on every fold, and cleared by any newer record — so a park was
+    -- lost the moment the worker said one more sentence, there was no id to cancel, and nothing for a
+    -- Snooze button to be about. Maintainer 2026-08-11: "seems a little weird to register these watchers
+    -- with no identifer and no elegant mechanism for dismissing the watcher. they just live forever in
+    -- markdown…i think that's why we dropped awaiting before."
+    --
+    -- Shaped on thread_timer deliberately, which is the same lesson already learned once: a thread may
+    -- hold MANY, so the record of intent is a table rather than a column on the session row.
+    CREATE TABLE IF NOT EXISTS thread_watch (
+      id          TEXT PRIMARY KEY,
+      thread_slug TEXT NOT NULL,
+      kind        TEXT NOT NULL CHECK (kind IN ('pr', 'ci', 'shell')),
+      target      TEXT NOT NULL,
+      state       TEXT NOT NULL CHECK (state IN ('armed', 'fired', 'dropped')),
+      created_at  INTEGER NOT NULL,
+      settled_at  INTEGER,
+      -- Opaque per-kind progress marker: for a pr watcher, the activity baseline that decides what
+      -- counts as NEW. Written by the scheduler, never read by anything else, so its grammar can change
+      -- without a migration.
+      cursor      TEXT
+    );
+    CREATE INDEX IF NOT EXISTS thread_watch_armed
+      ON thread_watch(state, kind);
+    CREATE INDEX IF NOT EXISTS thread_watch_slug
+      ON thread_watch(thread_slug, state, created_at);
   `)
   // Best-effort inline migration for older DBs. Session-first/profile columns are nullable ADDs
   // (except the existing boolean/backend defaults) — additive + idempotent, safe while another server
@@ -1427,6 +1488,32 @@ export function createStorage(dbPath: string): Storage {
     WHERE id = ? AND state = 'armed'
   `)
   const delThreadTimers = db.prepare("DELETE FROM thread_timer WHERE thread_slug = ?")
+  const armWatchStmt = db.prepare(`
+    INSERT INTO thread_watch (id, thread_slug, kind, target, state, created_at, settled_at, cursor)
+    VALUES (@id, @slug, @kind, @target, 'armed', @createdAtMs, NULL, NULL)
+  `)
+  const watchesBySlugStmt = db.prepare<[string], ThreadWatchRow>(
+    "SELECT * FROM thread_watch WHERE thread_slug = ? ORDER BY created_at, id",
+  )
+  const armedWatchesBySlugStmt = db.prepare<[string], ThreadWatchRow>(
+    "SELECT * FROM thread_watch WHERE thread_slug = ? AND state = 'armed' ORDER BY created_at, id",
+  )
+  const watchByIdStmt = db.prepare<[string], ThreadWatchRow>("SELECT * FROM thread_watch WHERE id = ?")
+  const armedWatchesStmt = db.prepare<[], ThreadWatchRow>(
+    "SELECT * FROM thread_watch WHERE state = 'armed' ORDER BY created_at, id",
+  )
+  const dropWatchStmt = db.prepare(`
+    UPDATE thread_watch SET state = 'dropped', settled_at = ?
+    WHERE id = ? AND thread_slug = ? AND state = 'armed'
+  `)
+  const fireWatchStmt = db.prepare(`
+    UPDATE thread_watch SET state = 'fired', settled_at = ?
+    WHERE id = ? AND state = 'armed'
+  `)
+  const watchCursorStmt = db.prepare(`
+    UPDATE thread_watch SET cursor = ? WHERE id = ? AND state = 'armed'
+  `)
+  const delThreadWatches = db.prepare("DELETE FROM thread_watch WHERE thread_slug = ?")
   const confirmAwaitingWaitStmt = db.prepare(`
     UPDATE session
     SET awaiting_fence_id = ?, awaiting_confirmed_at = ?, snoozed_until = ?
@@ -1507,6 +1594,9 @@ export function createStorage(dbPath: string): Storage {
     // Same reasoning for the thread's one-off timers: an alarm set for a thread that no longer exists
     // has nothing to wake, and the scheduler would otherwise carry the armed row for up to thirty days.
     delThreadTimers.run(existing.slug)
+    // And its registered watchers, for the same reason: a watcher on a thread that no longer exists has
+    // nothing to wake, and the scheduler polls every armed row on every tick.
+    delThreadWatches.run(existing.slug)
     delSession.run(existing.slug)
     return existing
   }
@@ -2056,6 +2146,15 @@ export function createStorage(dbPath: string): Storage {
       recurringStmt.run(...recurringArgs(write), slug, sessionId, generation).changes === 1,
     setRecurringPromptBySlug: (slug, write) =>
       recurringBySlugStmt.run(...recurringArgs(write), slug).changes === 1,
+    armThreadWatch: (watch) => void armWatchStmt.run(watch),
+    listThreadWatches: (slug, opts) =>
+      (opts?.armedOnly ? armedWatchesBySlugStmt : watchesBySlugStmt).all(slug),
+    getThreadWatch: (id) => watchByIdStmt.get(id),
+    armedThreadWatches: () => armedWatchesStmt.all(),
+    dropThreadWatch: (slug, id, settledAtMs) =>
+      dropWatchStmt.run(settledAtMs, id, slug).changes === 1,
+    markThreadWatchFired: (id, settledAtMs) => fireWatchStmt.run(settledAtMs, id).changes === 1,
+    setThreadWatchCursor: (id, cursor) => watchCursorStmt.run(cursor, id).changes === 1,
     armThreadTimer: (timer) => void armTimerStmt.run(timer),
     listThreadTimers: (slug, opts) =>
       (opts?.armedOnly ? armedTimersBySlugStmt : timersBySlugStmt).all(slug),
