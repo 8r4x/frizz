@@ -397,6 +397,21 @@ export const RecurringPromptText = z.string().trim().min(1).max(RECURRING_PROMPT
 // Its second clause is what keeps the arrangement from being a nag. A thread told only to "keep going"
 // answers a question it cannot resolve by guessing; told this, it hands the question back through the
 // fence the board already renders as an answerable card.
+/** The triggers a Goal carries when nobody has chosen otherwise — the stop hook on, and the question
+ *  hold with it. ONE definition, read by BOTH the dispatch that arms a brand-new thread and the footer
+ *  panel that seeds an unarmed one, because a default that lives in two places is a default that
+ *  eventually disagrees with itself.
+ *
+ *  `heartbeat` off: a cadence nobody chose is exactly the ambiguity the minutes field exists to remove.
+ *  `postCompaction` off: it is useless without a prompt that LINKS the doc to re-read, which only the
+ *  worker can write. */
+export const DEFAULT_GOAL_TRIGGERS = {
+  stopHook: true,
+  heartbeat: false,
+  postCompaction: false,
+  pauseOnQuestions: true,
+} as const
+
 export const DEFAULT_RECURRING_PROMPT =
   "If further work towards the original task/goal remains, keep going. If there are open questions that require human input, ask them with question fences."
 export const RecurringIntervalSeconds = z
@@ -629,6 +644,27 @@ export function watchWakeMessage(kind: ThreadWatchKind, target: string, detail: 
 export function timerPromptMessage(prompt: string, fireAt: string): string {
   return `${prompt.trim()}\n\n(One-off timer, set for ${fireAt}. It has fired and will not repeat.)`
 }
+
+/** What is being waited ON. `pr` wakes on any new activity — a review, an approval, a comment, human or
+ *  bot; `ci` on the checks for that same ref reaching a terminal state; `shell` on one of the worker's
+ *  own background shells finishing. */
+export const ThreadWatchKind = z.enum(["pr", "ci", "shell"])
+export type ThreadWatchKind = z.infer<typeof ThreadWatchKind>
+
+/** The thing being watched, in the grammar of its kind: `owner/repo#N` for `pr` and `ci`, a background
+ *  shell's id or label for `shell`. Validated per-kind at the router rather than here, because the two
+ *  grammars have nothing in common and one union would only be a longer way to say `string`. */
+export const ThreadWatchTarget = z.string().trim().min(1).max(200)
+
+/** One armed (or just-settled) watcher, as the worker's own tool reads it back. */
+export const ThreadWatchView = z.object({
+  id: z.string(),
+  kind: ThreadWatchKind,
+  target: z.string(),
+  state: z.enum(["armed", "fired", "dropped"]),
+  createdAt: z.string(),
+}).strict()
+export type ThreadWatchView = z.infer<typeof ThreadWatchView>
 
 /** One armed (or just-settled) timer, as the worker's own tool reads it back. */
 export const ThreadTimerView = z.object({
@@ -1392,27 +1428,6 @@ export type CancelOwnThreadTimerResult = z.infer<typeof CancelOwnThreadTimerResu
 // nothing for the board to hang a Snooze button on. Maintainer 2026-08-11: "I think we should have
 // built in tool calls for REGISTERING and DISMISSING CI/PR watchers. this way the agent can decide when
 // they're not necessary."
-
-/** What is being waited ON. `pr` wakes on any new activity — a review, an approval, a comment, human or
- *  bot; `ci` on the checks for that same ref reaching a terminal state; `shell` on one of the worker's
- *  own background shells finishing. */
-export const ThreadWatchKind = z.enum(["pr", "ci", "shell"])
-export type ThreadWatchKind = z.infer<typeof ThreadWatchKind>
-
-/** The thing being watched, in the grammar of its kind: `owner/repo#N` for `pr` and `ci`, a background
- *  shell's id or label for `shell`. Validated per-kind at the router rather than here, because the two
- *  grammars have nothing in common and one union would only be a longer way to say `string`. */
-export const ThreadWatchTarget = z.string().trim().min(1).max(200)
-
-/** One armed (or just-settled) watcher, as the worker's own tool reads it back. */
-export const ThreadWatchView = z.object({
-  id: z.string(),
-  kind: ThreadWatchKind,
-  target: z.string(),
-  state: z.enum(["armed", "fired", "dropped"]),
-  createdAt: z.string(),
-}).strict()
-export type ThreadWatchView = z.infer<typeof ThreadWatchView>
 
 export const AddOwnThreadWatchInput = z.object({
   slug: ThreadSlug,

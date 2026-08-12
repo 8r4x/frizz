@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { Target } from "lucide-react"
 import {
   RECURRING_PROMPT_MAX,
+  DEFAULT_GOAL_TRIGGERS,
   DEFAULT_RECURRING_PROMPT,
   type ThreadView,
 } from "@frizz/shared"
@@ -222,14 +223,14 @@ function PromptPanel({ thread, armed }: {
   // panel failed to save, in which case that draft is what they were last looking at and the row is not.
   const carried = rescued?.slug === thread.id ? rescued.draft : null
   const [text, setText] = useState(carried?.text ?? armed?.prompt ?? (seedDefaults ? DEFAULT_RECURRING_PROMPT : ""))
-  const [stopHook, setStopHook] = useState(carried?.stopHook ?? armed?.stopHook ?? seedDefaults)
+  const [stopHook, setStopHook] = useState(carried?.stopHook ?? armed?.stopHook ?? (seedDefaults && DEFAULT_GOAL_TRIGGERS.stopHook))
   const [heartbeat, setHeartbeat] = useState(carried?.heartbeat ?? armed?.heartbeat ?? false)
   const [postCompaction, setPostCompaction] = useState(carried?.postCompaction ?? armed?.postCompaction ?? false)
   // ON with the stop hook, and for the stop hook's sake: a thread told "keep going" that has stopped to
   // ASK you something must not be told it again while it waits (maintainer 2026-08-11, of this switch:
   // "shoujld be ON BY DEFAULT"). Seeded like every other default here — only for an unarmed, unshelved
   // thread — so an existing row keeps whatever its operator chose.
-  const [pauseOnQuestions, setPauseOnQuestions] = useState(carried?.pauseOnQuestions ?? armed?.pauseOnQuestions ?? seedDefaults)
+  const [pauseOnQuestions, setPauseOnQuestions] = useState(carried?.pauseOnQuestions ?? armed?.pauseOnQuestions ?? (seedDefaults && DEFAULT_GOAL_TRIGGERS.pauseOnQuestions))
   const [seconds, setSeconds] = useState(carried?.seconds ?? armed?.intervalSeconds ?? DEFAULT_INTERVAL_SECONDS)
   // The minutes field is a STRING while it is being typed, so a half-typed value ("", "1" on the way to
   // "120") is not immediately clamped out from under the caret. It becomes a number on commit.

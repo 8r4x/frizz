@@ -6,6 +6,8 @@ import {
   AdoptThreadInput,
   DISPATCH_TASK_BANNER_MARKER,
   DispatchInput,
+  DEFAULT_GOAL_TRIGGERS,
+  DEFAULT_RECURRING_PROMPT,
   THREAD_SLUG_MAX_CHARS,
   ThreadSlug,
   slugify,
@@ -825,6 +827,30 @@ export interface DispatchDeps {
   adoptionAttemptToken?: () => string
 }
 
+// EVERY NEW THREAD IS BORN WITH A GOAL (2026-08-12). Arming it at dispatch rather than leaving the row
+// empty is what makes the footer's mark mean something on a thread nobody has touched yet: the operator
+// sees at a glance that frizz will keep this effort moving, and the worker gets the stop hook without
+// anyone having to remember to switch it on.
+//
+// It is armed with EXACTLY what the footer panel seeds an unarmed thread with — one
+// `DEFAULT_GOAL_TRIGGERS` read by both — so the dispatch default and the panel default can never drift
+// into disagreeing about what "the default" is.
+//
+// BEST-EFFORT. A dispatch that spawned a live worker must not fail because its Goal row did not write:
+// the thread works without one, and the operator can arm it in the footer.
+export function armDefaultGoal(storage: DispatchDeps["storage"], slug: string): void {
+  try {
+    storage.setRecurringPromptBySlug(slug, {
+      prompt: DEFAULT_RECURRING_PROMPT,
+      ...DEFAULT_GOAL_TRIGGERS,
+      intervalMs: null,
+      armedAt: new Date().toISOString(),
+    })
+  } catch {
+    // A Goal is an accelerant, never a precondition — see BEST-EFFORT above.
+  }
+}
+
 export function createDispatcher(deps: DispatchDeps): Dispatcher {
   const readBoardSource = deps.readBoard ?? readBoard
   const frizzDir = join(deps.project.dir, ".frizz")
@@ -957,6 +983,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
             effort: effort ?? null,
             permission_mode: permissionMode,
           })
+          armDefaultGoal(deps.storage, slug)
           deps.storage.setBackend(slug, "codex")
           // The codex SESSION id (not the thread id) matches the rollout filename the tailer scans for.
           deps.storage.setAgentSession(slug, spawned.binding.codexSessionId)
@@ -1029,6 +1056,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
             effort: effort ?? null,
             permission_mode: permissionMode,
           })
+          armDefaultGoal(deps.storage, slug)
           deps.storage.setBackend(slug, "claude")
           deps.storage.setClaudeRuntime(slug, "broker")
           void deps.board.rebuild().catch(() => {})

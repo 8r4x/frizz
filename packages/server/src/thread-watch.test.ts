@@ -7,12 +7,15 @@
 // the owning slug, a settled row is terminal, and the rows die with the session they belong to.
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createStorage, type SessionRow } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
 import { createScheduler } from "./scheduler.ts"
+import { armDefaultGoal } from "./dispatch.ts"
+import { resolveRecurringPrompt } from "./board.ts"
+import { DEFAULT_GOAL_TRIGGERS, DEFAULT_RECURRING_PROMPT } from "@frizz/shared"
 
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), "frizz-watch-"))
@@ -219,4 +222,44 @@ test("the target matches a shell's id as well as its label", async () => {
     await h.s.tick()
     assert.equal(h.storage.getThreadWatch("w1")?.cursor, "seen", "matched on id")
   } finally { h.close() }
+})
+
+// ---- EVERY NEW THREAD IS BORN WITH A GOAL ---------------------------------------------------------
+// Maintainer 2026-08-12: "A new chat should have the recurring prompt enabled, and the heart icon
+// should be yellow." Before this, dispatch armed nothing — a freshly spawned thread had no Goal row at
+// all, so its footer mark was grey and the stop hook never fired until someone opened the panel.
+test("armDefaultGoal arms a brand-new thread exactly as the footer panel would seed it", () => {
+  const f = fixture()
+  try {
+    armDefaultGoal(f.storage, "watcher")
+    const row = f.storage.getSession("watcher")!
+    assert.equal(row.recurring_prompt, DEFAULT_RECURRING_PROMPT)
+    assert.equal(row.recurring_on_rest, 1, "the stop hook is what makes a new thread keep going")
+    assert.equal(row.recurring_pause_on_questions, 1, "and it must not nag a thread that stopped to ask")
+    assert.equal(row.recurring_on_schedule, 0, "a cadence nobody chose is the ambiguity the field exists to remove")
+    assert.equal(row.recurring_on_compact, 0, "useless without a prompt that links the doc to re-read")
+    assert.ok(row.recurring_armed_at, "and it is ARMED — without a generation the projection is absent")
+
+    // The projection is what decides whether the footer mark is coloured: `live` is any trigger on.
+    const view = resolveRecurringPrompt(row)!
+    assert.equal(view.stopHook, true)
+    assert.equal(view.pauseOnQuestions, true)
+  } finally { f.close() }
+})
+
+// The two defaults must be ONE default. A panel that seeded something else would mean a brand-new
+// thread and a thread the operator armed by hand disagree about what "the default" is.
+test("the dispatch default and the panel's seeded default are the same object", () => {
+  assert.deepEqual(DEFAULT_GOAL_TRIGGERS, { stopHook: true, heartbeat: false, postCompaction: false, pauseOnQuestions: true })
+})
+
+// A real dispatch needs credentials and burns quota, so what is pinned here is that BOTH transports
+// call the arming — the one thing a storage-level test cannot see.
+test("both dispatch transports arm the default Goal", () => {
+  const src = readFileSync(join(import.meta.dirname, "dispatch.ts"), "utf8")
+  assert.equal(
+    src.split("armDefaultGoal(deps.storage, slug)").length - 1,
+    2,
+    "codex (app-server) and claude (broker) each arm it after registering the session",
+  )
 })
