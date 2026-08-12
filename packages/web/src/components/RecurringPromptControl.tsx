@@ -443,12 +443,13 @@ function PromptPanel({ thread, armed }: {
           }}
         />
         <span className={`font-medium ${stopHook ? "text-fg" : "text-muted"}`}>Stop hook</span>
-        {/* "WITHOUT ASKING YOU SOMETHING" is not decoration — it is the trigger's actual contract. A rest
-            whose final message carries a ```question fence is never bumped, whatever these switches say
-            (scheduler.ts `restMessageAsksAQuestion`), because the fence IS the answer to the question the
-            stop hook asks. A gloss that still promised "every time" would be the one surface claiming a
-            delivery the scheduler declines to make. */}
-        <span className="text-muted">every rest where it is not asking you something</span>
+        {/* "NOT ALREADY WAITING ON SOMETHING" is not decoration — it is the trigger's actual contract. A
+            rest whose final message carries a ```question fence is never bumped, and neither is one
+            parked on an ```awaiting fence naming a wait the scheduler itself owns — a `pr-watch:` PR, a
+            `timer:`, a named `human:` (scheduler.ts `restMessageIsSignedOff`). Both fences ARE the answer
+            to the question the stop hook asks. A gloss that still promised "every time" would be the one
+            surface claiming a delivery the scheduler declines to make. */}
+        <span className="text-muted">every rest that is not already waiting on something</span>
 
         <Switch
           testId="heartbeat"

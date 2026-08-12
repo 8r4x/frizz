@@ -506,7 +506,14 @@ const OPT_OUT_NOTE =
   " it files this thread away, and nothing but new work from the human reopens it."
 
 /** What frizz delivers when the ON REST trigger fires: the operator's words VERBATIM, then the trailer.
- * Kept beside the parser so the wording sent and the wording recognized can never drift apart. */
+ * Kept beside the parser so the wording sent and the wording recognized can never drift apart.
+ *
+ * IT DOES NOT ADVERTISE THE OTHER EXIT, and that is a budget decision rather than an oversight. An
+ * ```awaiting fence on a wait the scheduler owns now holds this trigger too (scheduler
+ * `parkedOnAWaitItCannotAdvance`), so a parked worker could in principle be told so here — but the
+ * trailer is capped at a footnote, the shared note already spends all of it, and the worker contract
+ * teaches the park at length. A worker that parks stops being bumped, so it never reads this line
+ * again; the one that does read it is mid-work, where ```done is the only exit worth naming. */
 export function restPromptMessage(prompt: string): string {
   return `${prompt.trim()}\n\n(Goal — sent each time you come to rest. ${OPT_OUT_NOTE})`
 }

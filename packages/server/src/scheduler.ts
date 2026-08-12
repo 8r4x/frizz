@@ -409,15 +409,15 @@ type RecurringRow = Pick<
 // TWO RULES, and they are deliberately different in strength.
 //
 //   THE HARD ONE (`restMessageIsSignedOff`, below) is not an option: the stop hook asks "you stopped —
-//   is there more?", and a ```question or ```done fence in the very message that ENDED the turn has
-//   already answered it. Firing over either is the trigger talking to itself. This holds for every armed
-//   thread whatever its settings.
+//   is there more?", and a ```question, a ```done, or an ```awaiting on a wait somebody else owns has
+//   already answered it in the very message that ENDED the turn. Firing over any of them is the trigger
+//   talking to itself. This holds for every armed thread whatever its settings.
 //
-//   The two halves reach different distances, though. A ```done fence ends the arrangement, so it also
+//   Its parts reach different distances, though. A ```done fence ends the arrangement, so it also
 //   stops the HEARTBEAT (`saidDone`) — it is the successor to the ALLDONE sentinel and inherits its
-//   reach exactly. A pending QUESTION stops the stop hook alone: the heartbeat asks "it has been an
-//   hour" and the compaction trigger asks "your context is gone", and a question the human has not
-//   answered yet is not an answer to either.
+//   reach exactly. A pending QUESTION and a parked ```awaiting stop the stop hook alone: the heartbeat
+//   asks "it has been an hour" and the compaction trigger asks "your context is gone", and neither a
+//   question the human has not answered nor a PR nobody has reviewed is an answer to either.
 //
 //   THE SWITCHED ONE (`pauseOnQuestions`) is the operator's, and it is BROADER on both axes: it holds
 //   all three triggers, and it counts every way a thread can be blocked on a human — a fence, a native
@@ -448,15 +448,36 @@ function saidDone(tele: Pick<SessionTelemetry, "lastFence" | "lastAssistantAllDo
 }
 
 /** The stop hook asks "you stopped — is there more?", and this is the message that ALREADY ANSWERED it:
- *  the thread asked the human something, or it declared itself finished. Firing over either is the
- *  trigger talking to itself.
- *
- *  Deliberately NOT `awaiting`: that fence names a wait the scheduler itself manages, and the stop hook
- *  is the one thing that rescues a thread parked behind something that will never report. */
+ *  the thread asked the human something, it declared itself finished, or it parked on a wait somebody
+ *  else owns. Firing over any of them is the trigger talking to itself. */
 function restMessageIsSignedOff(
   tele: Pick<SessionTelemetry, "pendingQuestion" | "lastFence" | "lastAssistantAllDone">,
 ): boolean {
-  return tele.pendingQuestion === true || saidDone(tele)
+  return tele.pendingQuestion === true || saidDone(tele) || parkedOnAWaitItCannotAdvance(tele)
+}
+
+/** The rest parked on a wait THIS TRIGGER CANNOT ADVANCE: an `awaiting` fence naming either a durable
+ *  wake the scheduler itself will deliver (a parseable `pr-watch:`/`pr:`/`ci:` ref, a valid `timer:`)
+ *  or a `human:` gate only the operator can open.
+ *
+ *  IT USED TO FIRE OVER THESE, on the reasoning that the stop hook is the one thing that rescues a
+ *  thread parked behind something that will never report. That rescue is real, and it is kept below —
+ *  but it never applied to these two shapes, and firing over them was a self-feeding loop rather than a
+ *  rescue. Measured on the maintainer's own board 2026-08-12 (project zod): a worker parked on
+ *  `pr-watch: colinhacks/zod#6382` was bumped 7 times in 46 minutes, each bump costing a turn whose only
+ *  product was the SAME fence reworded, because "keep going" has no answer while a PR sits unreviewed. A
+ *  second thread added `human: Colin to merge — the task barred me from merging` and was bumped anyway,
+ *  until it escaped the loop the only way left to it: a ```done fence on a PR nobody had merged. The
+ *  trigger corrupted the signal it exists to produce.
+ *
+ *  WHAT STILL GETS THE RESCUE: an `awaiting` fence with no hint at all, an unparseable PR ref, a
+ *  malformed `timer:`, a bare `session:` — every park frizz has no way to fire. Those are the threads
+ *  that genuinely wait forever, and this deliberately reads the SAME `isActionable` the waker's own
+ *  poller arms from, so the hold and the wake can never disagree about which is which. */
+function parkedOnAWaitItCannotAdvance(tele: Pick<SessionTelemetry, "lastFence">): boolean {
+  const fence = tele.lastFence
+  if (fence?.kind !== "awaiting") return false
+  return fence.hints.some((h) => isActionable(h) || h.kind === "human")
 }
 
 /** Is this thread blocked on the human RIGHT NOW, by any means? The `pauseOnQuestions` hold's input.
@@ -1951,9 +1972,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // sub-agents or background shells is irrelevant"). The SCHEDULE trigger is the whole rate story — a
       // thread parked behind children is bumped on the same schedule as any other, which is also what
       // makes this able to rescue one parked behind a child that will never report. A worker that
-      // genuinely has nothing to do until something returns says AWAITING.
-      // THE REST ALREADY ANSWERED THIS TRIGGER'S QUESTION — the thread asked the human something, or it
-      // signed off as done. Never bumped, whatever the settings say; see `restMessageIsSignedOff`.
+      // genuinely has nothing to do until something returns says AWAITING — and an AWAITING naming a
+      // wait the scheduler itself will fire is honoured, not bumped (`parkedOnAWaitItCannotAdvance`).
+      // THE REST ALREADY ANSWERED THIS TRIGGER'S QUESTION — the thread asked the human something, signed
+      // off as done, or parked on a wait it cannot advance by working. Never bumped, whatever the
+      // settings say; see `restMessageIsSignedOff`.
       // Per-rest, and that is what makes it free: every fact it reads rides the FINAL assistant message,
       // so the next word on the thread re-opens the trigger with nothing stored to clear.
       if (restMessageIsSignedOff(tele)) continue

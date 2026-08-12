@@ -15,7 +15,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createStorage, type SessionRow } from "./storage.ts"
-import { applyEvent, applyRecord, newTailState, type SessionTelemetry, type Tailer } from "./tailer.ts"
+import { applyEvent, applyRecord, newTailState, type FenceView, type SessionTelemetry, type Tailer } from "./tailer.ts"
 import { createScheduler } from "./scheduler.ts"
 
 const assistant = (text: string, at = "2026-08-02T00:00:01.000Z") => ({
@@ -227,11 +227,17 @@ function scheduler(
     } as unknown as Tailer,
     resume: async (_slug, message) => { delivered.push(message) },
     log: () => {},
+    // The awaiting poller runs on the same tick as the Goal, so a `pr-watch:` hint in any fence below
+    // would otherwise shell out to `gh`. Stubbed to "reachable, nothing new", which is the state a
+    // freshly parked PR watcher is actually in.
+    fetchPr: async () => undefined,
+    fetchGithubReview: async () => [],
   })
   return { s, storage, slug, delivered, close: () => { void s.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) } }
 }
 
 const at = (iso: string) => () => Date.parse(iso)
+const awaiting = (...hints: FenceView["hints"]): FenceView => ({ kind: "awaiting", body: "parked", hints })
 const child = (state: "running" | "stale" | "rested") =>
   ({ label: "worker", startedAt: "2026-08-02T00:00:00.000Z", state, id: `t-${state}` })
 
@@ -314,6 +320,62 @@ test("ALLDONE holds the bump for that rest only, and nothing is stored to undo",
     await resumed.s.tick()
     assert.equal(resumed.delivered.length, 1)
   } finally { resumed.close() }
+})
+
+// ---- The PARK (`parkedOnAWaitItCannotAdvance`) --------------------------------------------------
+// THE LOOP THE MAINTAINER WATCHED, 2026-08-12, on the zod board. A worker parked on
+// `pr-watch: colinhacks/zod#6382` was bumped 7 times in 46 minutes: each bump cost a whole turn whose
+// only product was the same fence reworded, because "keep going" has no answer while a PR sits
+// unreviewed. A second thread wrote `human: Colin to merge — the task barred me from merging` and was
+// bumped anyway, until it took the only exit the trailer had ever shown it and signed off ```done on an
+// unmerged PR. These pin both halves: the Goal does not bump a wait somebody else owns, and it still
+// rescues a park nothing will ever fire.
+test("an awaiting fence on a PR the scheduler is watching holds the bump", async () => {
+  const h = scheduler({ lastFence: awaiting({ kind: "pr-watch", value: "colinhacks/zod#6382" }) }, { now: at("2026-08-02T00:00:05.000Z") })
+  try {
+    await h.s.tick()
+    assert.deepEqual(h.delivered, [], "the waker already owns this thread's next wake")
+  } finally { h.close() }
+})
+
+test("a `human:` gate holds it too — only the operator can open that one", async () => {
+  const h = scheduler({ lastFence: awaiting({ kind: "human", value: "Colin to merge — I am barred from merging" }) }, { now: at("2026-08-02T00:00:05.000Z") })
+  try {
+    await h.s.tick()
+    assert.deepEqual(h.delivered, [])
+  } finally { h.close() }
+})
+
+test("a future `timer:` holds it, and the same fence with a malformed instant does not", async () => {
+  const parked = scheduler({ lastFence: awaiting({ kind: "timer", value: "2026-08-02T06:00:00Z" }) }, { now: at("2026-08-02T00:00:05.000Z") })
+  try {
+    await parked.s.tick()
+    assert.deepEqual(parked.delivered, [])
+  } finally { parked.close() }
+
+  const malformed = scheduler({ lastFence: awaiting({ kind: "timer", value: "tomorrow morning" }) }, { now: at("2026-08-02T00:00:05.000Z") })
+  try {
+    await malformed.s.tick()
+    assert.equal(malformed.delivered.length, 1, "nothing will ever fire that, so the rescue stands")
+  } finally { malformed.close() }
+})
+
+// THE RESCUE, which is the whole reason this trigger fired over `awaiting` for months. A park frizz has
+// no way to honour is a thread that waits forever, and these are exactly the shapes it cannot honour:
+// no hint at all, a PR ref that does not parse, and the presentation-only `session:` kind.
+test("an awaiting fence naming nothing frizz can fire is still bumped", async () => {
+  const shapes: FenceView[] = [
+    awaiting(),
+    awaiting({ kind: "pr-watch", value: "the auth PR" }),
+    awaiting({ kind: "session", value: "the reviewer's thread" }),
+  ]
+  for (const lastFence of shapes) {
+    const h = scheduler({ lastFence }, { now: at("2026-08-02T00:00:05.000Z") })
+    try {
+      await h.s.tick()
+      assert.equal(h.delivered.length, 1, `${JSON.stringify(lastFence.hints)} is a park nothing will ever settle`)
+    } finally { h.close() }
+  }
 })
 
 // ---- The HEARTBEAT (scheduler SOURCE 4) ----------------------------------------------------------
