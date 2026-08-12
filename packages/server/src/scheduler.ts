@@ -415,12 +415,16 @@ type RecurringRow = Pick<
 //   heartbeat and the compaction trigger ask different questions ("it has been an hour", "your context
 //   is gone") that a pending fence does not answer.
 //
-//   THE OPTIONAL ONE (`pauseOnQuestions`) is the operator's, off by default, and it is BROADER on both
-//   axes: it holds all three triggers, and it counts every way a thread can be blocked on a human —
-//   a fence, a native ask, a backend modal, an interactive permission prompt. It is off by default
-//   because a hold is only as good as the attention behind it: an operator who is not watching turns
-//   their own unanswered question into an hour of silence, where the hard rule above already covers the
-//   case that actually bites.
+//   THE SWITCHED ONE (`pauseOnQuestions`) is the operator's, and it is BROADER on both axes: it holds
+//   all three triggers, and it counts every way a thread can be blocked on a human — a fence, a native
+//   ask, a backend modal, an interactive permission prompt. The panel seeds it ON alongside the stop
+//   hook (maintainer 2026-08-11), because the two are one intent: "keep going" is not something to say
+//   to a thread that stopped to ask you a question, whichever way it asked.
+//
+//   IT IS STILL A SWITCH, and the row's COLUMN still defaults to 0 — an existing armed row picks it up
+//   off, and so does any caller that has never heard of it. The default lives in the panel, where a
+//   default is a thing an operator can see and change, and not in the storage layer, where flipping it
+//   would silently re-interpret every row already on disk.
 type QuestionTele = Pick<
   SessionTelemetry,
   "pendingQuestion" | "pendingAsk" | "permPrompt" | "nativeInputRequired"

@@ -315,7 +315,7 @@ test("`recurring_prompt` arms and disarms the CALLING thread, identified from it
     // a running turn and cannot fire on a thread that has stopped needing it.
     assert.deepEqual(seen.at(-1), {
       url: "/_frizz/rpc/setOwnThreadRecurringPrompt",
-      body: { slug: "owning-thread", prompt: "keep the migration moving", stopHook: true, heartbeat: false, postCompaction: false, pauseOnQuestions: false },
+      body: { slug: "owning-thread", prompt: "keep the migration moving", stopHook: true, heartbeat: false, postCompaction: false, pauseOnQuestions: true },
     })
     // The reply must teach how it ENDS, or a worker only knows how to start one — and it must warn
     // about the sentinel rather than merely offering it, since that exit is permanent.
@@ -332,7 +332,7 @@ test("`recurring_prompt` arms and disarms the CALLING thread, identified from it
     assert.equal(scheduled.result.isError, undefined)
     assert.deepEqual(seen.at(-1), {
       url: "/_frizz/rpc/setOwnThreadRecurringPrompt",
-      body: { slug: "owning-thread", prompt: "check the deploy", stopHook: false, heartbeat: true, postCompaction: false, pauseOnQuestions: false, intervalSeconds: 600 },
+      body: { slug: "owning-thread", prompt: "check the deploy", stopHook: false, heartbeat: true, postCompaction: false, pauseOnQuestions: true, intervalSeconds: 600 },
     }, "giving a cadence and nothing else means the schedule trigger alone")
     assert.match(scheduled.result.content[0].text, /every 10 min/)
 
@@ -343,8 +343,17 @@ test("`recurring_prompt` arms and disarms the CALLING thread, identified from it
     await rpc.next(7)
     assert.deepEqual(seen.at(-1), {
       url: "/_frizz/rpc/setOwnThreadRecurringPrompt",
-      body: { slug: "owning-thread", prompt: "keep going", stopHook: true, heartbeat: true, postCompaction: false, pauseOnQuestions: false, intervalSeconds: 900 },
+      body: { slug: "owning-thread", prompt: "keep going", stopHook: true, heartbeat: true, postCompaction: false, pauseOnQuestions: true, intervalSeconds: 900 },
     }, "both triggers at once is the ordinary keep-this-moving case")
+
+    // THE HOLD DEFAULTS ON (matching the footer panel), so the only interesting case is opting OUT of
+    // it: a worker that genuinely wants a beat to reach it mid-question has to say so.
+    rpc.send({
+      jsonrpc: "2.0", id: 8, method: "tools/call",
+      params: { name: "recurring_prompt", arguments: { action: "start", prompt: "beat me anyway", heartbeat_seconds: 600, pause_on_questions: false } },
+    })
+    await rpc.next(8)
+    assert.equal((seen.at(-1) as { body: { pauseOnQuestions: boolean } }).body.pauseOnQuestions, false)
 
     rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "recurring_prompt", arguments: { action: "stop" } } })
     const stopped = await rpc.next(3)

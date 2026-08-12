@@ -220,7 +220,11 @@ function PromptPanel({ thread, armed }: {
   const [stopHook, setStopHook] = useState(carried?.stopHook ?? armed?.stopHook ?? seedDefaults)
   const [heartbeat, setHeartbeat] = useState(carried?.heartbeat ?? armed?.heartbeat ?? false)
   const [postCompaction, setPostCompaction] = useState(carried?.postCompaction ?? armed?.postCompaction ?? false)
-  const [pauseOnQuestions, setPauseOnQuestions] = useState(carried?.pauseOnQuestions ?? armed?.pauseOnQuestions ?? false)
+  // ON with the stop hook, and for the stop hook's sake: a thread told "keep going" that has stopped to
+  // ASK you something must not be told it again while it waits (maintainer 2026-08-11, of this switch:
+  // "shoujld be ON BY DEFAULT"). Seeded like every other default here — only for an unarmed, unshelved
+  // thread — so an existing row keeps whatever its operator chose.
+  const [pauseOnQuestions, setPauseOnQuestions] = useState(carried?.pauseOnQuestions ?? armed?.pauseOnQuestions ?? seedDefaults)
   const [seconds, setSeconds] = useState(carried?.seconds ?? armed?.intervalSeconds ?? DEFAULT_INTERVAL_SECONDS)
   // The minutes field is a STRING while it is being typed, so a half-typed value ("", "1" on the way to
   // "120") is not immediately clamped out from under the caret. It becomes a number on commit.
@@ -522,9 +526,11 @@ function PromptPanel({ thread, armed }: {
             an operator cannot guess (a permission prompt is one; the agent's own rhetorical one is not).
 
             The stop hook already declines a rest that ends in a ```question fence, always. This is the
-            broader, optional version: it covers the heartbeat and the compaction trigger too, and it
-            counts a native ask and a permission prompt as questions. Off by default — a hold is only as
-            good as the attention behind it. */}
+            broader version, ON by default: it covers the heartbeat and the compaction trigger too, and it
+            counts a native ask and a permission prompt as questions — every way a thread can be waiting
+            on you, not just the one it wrote down. Switching it off is the deliberate act, because the
+            behaviour it buys is what the stop hook's own default assumes: a thread told "keep going"
+            should not be told it again while it is holding a question up. */}
         <div className="col-span-3 mt-0.5 h-px bg-border/70" />
         <Switch
           testId="pause-on-questions"

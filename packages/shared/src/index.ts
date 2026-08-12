@@ -419,9 +419,9 @@ export const ThreadRecurringPrompt = z.object({
   postCompaction: z.boolean(),
   /** NOT a fourth trigger — a HOLD over all three. While it is on, nothing is sent for as long as the
    *  thread is blocked on the human: an unanswered ```question fence, a native ask, or a permission
-   *  prompt. Off by default, because the hard rule below already covers the case that actually bites
-   *  (see scheduler.ts `evalRestPrompts`) and a hold that outlives the operator's attention is how a
-   *  thread goes quiet for an hour nobody asked for. */
+   *  prompt. The footer panel seeds it ON for a fresh arming, with the stop hook, because they are one
+   *  intent — see scheduler.ts, "WHAT A PENDING QUESTION DOES TO ALL THREE TRIGGERS". The stored column
+   *  still defaults OFF, so an existing row and an older caller both keep the behaviour they had. */
   pauseOnQuestions: z.boolean(),
   intervalSeconds: z.number().int().positive().optional(),
   armedAt: z.string(),

@@ -652,7 +652,9 @@ test("stop hook: a native ask alone does NOT hold it — that is the toggle's jo
   } finally { held.close() }
 })
 
-// A permission prompt is a question with a "Do you want to proceed?" on it. It counts.
+// A permission prompt is a question with a "Do you want to proceed?" on it. It counts. The panel seeds
+// the hold ON, but the COLUMN defaults off — an existing row, an older caller — so both states have to
+// behave, and the harness sets each explicitly rather than leaning on either default.
 test("the question hold counts a permission prompt, and does nothing while it is off", async () => {
   const held = scheduler({ permPrompt: true }, { now: at("2026-08-02T00:00:05.000Z"), pauseOnQuestions: true })
   try {
@@ -663,7 +665,7 @@ test("the question hold counts a permission prompt, and does nothing while it is
   const unheld = scheduler({ permPrompt: true }, { now: at("2026-08-02T00:00:05.000Z") })
   try {
     await unheld.s.tick()
-    assert.equal(unheld.delivered.length, 1, "off by default means off")
+    assert.equal(unheld.delivered.length, 1, "a row without the hold is not held")
   } finally { unheld.close() }
 })
 

@@ -182,10 +182,11 @@ const RECURRING_PROMPT = {
         type: "boolean",
         description:
           "Send NOTHING — on any trigger — for as long as you are waiting on the human: an unanswered " +
-          "```question fence, a native ask, or a permission prompt. Defaults to false. You rarely need " +
-          "it: the stop hook ALREADY declines to fire over a rest that ends in a question fence, always " +
-          "and regardless of this. Set it when a heartbeat talking over your own pending question would " +
-          "be worse than the beat being late.",
+          "```question fence, a native ask, or a permission prompt. DEFAULTS TO TRUE, matching the " +
+          "thread footer, because being told \"keep going\" while you are holding a question up is the " +
+          "one delivery that can only make things worse. Pass false only if you genuinely want a beat " +
+          "to reach you mid-question. (The stop hook declines a rest that ends in a question fence " +
+          "always, whatever this says; this is the wider version and it covers the other triggers.)",
       },
     },
     required: ["action"],
@@ -601,7 +602,9 @@ async function recurringPrompt(args) {
     }
   }
   const postCompaction = args.post_compaction === true
-  const pauseOnQuestions = args.pause_on_questions === true
+  // ON unless the caller says otherwise — the same default the footer panel seeds, so a worker-armed row
+  // and a human-armed one read identically in the panel. An older frizz server ignores the field.
+  const pauseOnQuestions = typeof args.pause_on_questions === "boolean" ? args.pause_on_questions : true
   // DEFAULTED, not required: a `start` that names no trigger at all is a model asking to be re-prompted
   // and leaving the mechanism to us, and the rest trigger is the safe reading of that — it cannot talk
   // over a running turn, and it cannot fire on a thread that has stopped needing it.
