@@ -26,7 +26,7 @@
 // and the parent genuinely resumes; measured 15/15 times on a live worker thread, with idle windows as
 // short as 0.13s. This card is what makes that alternation legible.)
 import type { ReactNode } from "react"
-import { Github, Hourglass, TerminalSquare } from "lucide-react"
+import { Hourglass, TerminalSquare } from "lucide-react"
 import type { ThreadView } from "@frizz/shared"
 import { isDirectSubAgent } from "@frizz/shared"
 import { CARD_BODY, CardActions, TranscriptCard } from "./TranscriptCard.tsx"
@@ -102,18 +102,23 @@ function hasWatcher(thread: Pick<ThreadView, "watches">): boolean {
 // The GLYPH follows the title. An hourglass is a WAIT, which is true of the sub-agent rest and false of
 // the shell one: a queued handoff behind a detached shell is not waiting on anything, and stamping the
 // wait mark on it would contradict the whole reason it is in the queue.
-// A WATCHER-ONLY rest gets its own title, because "Background shells running" would name work the
-// thread never launched — the same objection that keeps the sub-agent rest on the older title. It also
-// has to be a title the human recognises as the park their worker declared, since the awaiting fence no
-// longer carries "PR watcher armed" (2026-08-13). A thread holding BOTH reads as shells: those are the
-// thing that is actually executing, and the watcher is named in the sentence beneath.
+// NO KIND-SPECIFIC TITLE FOR A WATCHER. This briefly read "PR watcher armed" here, which quietly
+// rebuilt the very card the consolidation removed — a bespoke PR-watcher card, just on a different
+// surface (maintainer 2026-08-13: "the card that you're showing me still says 'PR watcher armed'. It is
+// not a generic card, snooze card. I thought we decided to go generic").
+//
+// So the kind-naming title survives for EXACTLY the case the maintainer named it for — a rest on
+// background shells and nothing else (2026-08-04) — and every other shape takes the generic one. That
+// keeps it honest in both directions: "Background shells running" never names work the thread did not
+// launch, and no new kind gets a heading of its own. The sentence beneath is where the specifics live.
 export function awaitingBackgroundLabel(thread: Pick<ThreadView, "subAgents" | "bgShells" | "watches">): string {
-  if (awaitsResults(thread)) return "Awaiting background work"
+  return shellsAlone(thread) ? "Background shells running" : "Awaiting background work"
+}
+
+/** Background shells and nothing else — the one shape with a title of its own. */
+function shellsAlone(thread: Pick<ThreadView, "subAgents" | "bgShells" | "watches">): boolean {
   const shells = (thread.bgShells ?? []).filter((s) => s.state === "running").length
-  if (shells === 0 && prWatcherCount(thread) > 0) {
-    return prWatcherCount(thread) === 1 ? "PR watcher armed" : "PR watchers armed"
-  }
-  return "Background shells running"
+  return shells > 0 && !awaitsResults(thread) && prWatcherCount(thread) === 0
 }
 
 export function AwaitingBackgroundCard({ thread, actions }: {
@@ -124,19 +129,18 @@ export function AwaitingBackgroundCard({ thread, actions }: {
   actions?: ReactNode
 }) {
   const waiting = awaitsResults(thread)
-  const watcherOnly = !waiting && hasWatcher(thread) && (thread.bgShells ?? []).every((sh) => sh.state !== "running")
   return (
     // The SAME shell as every transcript card (TranscriptCard). This card stacks directly under an
     // awaiting fence card on a queue card, and it used to be a visibly different object there —
     // smaller radius, a washed-out fill, its own padding, no kind header — for the same job.
     <TranscriptCard
       data-awaiting-background
-      // THE GLYPH FOLLOWS THE TITLE, which is the rule this card already had for the hourglass: an
-      // hourglass is a WAIT, true of the sub-agent rest and false of a detached shell. A watcher-only
-      // rest is a third case — a terminal square on a card headed "PR watcher armed" names the wrong
-      // runtime entirely — so it takes the same GitHub mark its row in the ops strip and its wake
-      // hairline wear.
-      icon={waiting ? Hourglass : watcherOnly ? Github : TerminalSquare}
+      // THE GLYPH FOLLOWS THE TITLE, and there are exactly two of each. The terminal square goes with
+      // the one kind-naming heading ("Background shells running"); everything else takes the generic
+      // heading and the hourglass, which is honest for it — a thread holding a sub-agent or a PR
+      // watcher genuinely IS waiting on something to come back. A per-kind glyph would rebuild the
+      // per-kind card the consolidation removed, exactly as a per-kind title did.
+      icon={shellsAlone(thread) ? TerminalSquare : Hourglass}
       label={awaitingBackgroundLabel(thread)}
     >
       {/* Both sentences are BODY text (maintainer 2026-07-24): the self-return is a fact about the
@@ -162,9 +166,15 @@ export function AwaitingBackgroundCard({ thread, actions }: {
           // What is true is the resumption: a finished shell notifies its worker, which picks the thread
           // back up on its own. Kept SHORT because the Snooze beside it says the longer version — the
           // body and its action's caption are two surfaces, not one sentence written twice.
+          // ONE SENTENCE SHAPE FOR EVERY KIND, and the verbs are chosen so it is idiomatic in all of
+          // them. This briefly read "it left 1 PR watcher out", which is not English (maintainer
+          // 2026-08-13: "this does not make idiomatic sense") — it came from bending the shells-only
+          // "left N background shells running" to cover a thing that does not run. "…is still active"
+          // is true of a detached shell and of a parked watcher alike, and needs no per-kind branch.
           <>
-            This agent has come to rest, but it left {awaitingBackgroundSubject(thread)} {hasWatcher(thread) ? "out" : "running"}. It
-            resumes on its own when {liveShellCount(thread) === 1 ? "it" : "one of them"}{" "}
+            This agent has come to rest, but {awaitingBackgroundSubject(thread)}{" "}
+            {liveShellCount(thread) === 1 ? "is" : "are"} still active. It resumes on its own when{" "}
+            {liveShellCount(thread) === 1 ? "it" : "one of them"}{" "}
             {/* A shell FINISHES; a watcher never does — it fires when somebody else acts on the PR. One
                 verb has to cover both when a thread holds both, and "reports" is the honest one: a
                 finished shell notifies its worker and a fired watcher hands it the new activity. */}

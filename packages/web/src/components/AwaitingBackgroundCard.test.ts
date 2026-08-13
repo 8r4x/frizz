@@ -93,11 +93,14 @@ test("the card's verb matches what is actually running: results are AWAITED, a s
   assert.match(agentsOnly, /when the work comes back/)
 
   const shellsOnly = render(thread([], [shell("running"), shell("running")]))
-  assert.match(shellsOnly, /it left 2 background shells running/)
+  // ONE SENTENCE SHAPE for every kind since 2026-08-13 — "left N running" could not be bent to cover a
+  // PR watcher, which does not run ("this does not make idiomatic sense"). "…are still active" is true
+  // of a detached shell and a parked watcher alike.
+  assert.match(shellsOnly, /but 2 background shells are still active/)
   assert.match(shellsOnly, /resumes on its own when one of them finishes/)
   // ONE shell is the common case on a real board, and "one of them" is false of it.
   const oneShell = render(thread([], [shell("running")]))
-  assert.match(oneShell, /it left 1 background shell running. It resumes on its own when it finishes/)
+  assert.match(oneShell, /but 1 background shell is still active. It resumes on its own when it finishes/)
   assert.doesNotMatch(shellsOnly, /awaiting the results/, "a launched shell returns nothing to await")
   // AND IT MUST NOT SAY "returns to the queue": since 2026-08-04 this card IS the queue card for a
   // shell-only rest, so promising the human it will arrive where they are already looking is the one
@@ -109,4 +112,42 @@ test("the card's verb matches what is actually running: results are AWAITED, a s
   const both = render(thread([agent("running")], [shell("running")]))
   assert.match(both, /awaiting the results from 1 sub-agent and 1 background shell it dispatched/)
   assert.match(both, /returns to the queue on its own/)
+})
+
+// ---- PR watchers are in the ranks, and they get NO card of their own ----
+//
+// The awaiting fence stopped offering a `pr-watch` park on 2026-08-13, so this card and its snooze are
+// the one place a parked watcher is stated and controlled. The trap that came with it was rebuilding the
+// bespoke card on this surface instead — a "PR watcher armed" heading and a GitHub glyph — which is what
+// the consolidation was for (maintainer: "It is not a generic card, snooze card. I thought we decided to
+// go generic"). So the assertion that matters is the NEGATIVE one.
+const watcher = () => ({ id: "github:t:acme/app#1", kind: "github" as const, target: "acme/app#1", state: "armed" as const, createdAt: "2026-07-28T09:00:00.000Z" })
+
+test("a watcher-only rest takes the GENERIC heading — no kind of its own gets one", () => {
+  const html = renderToStaticMarkup(createElement(AwaitingBackgroundCard, { thread: { ...thread([], []), watches: [watcher()] } }))
+  const text = html.replace(/<[^>]+>/g, "").replace(/&#x27;|&rsquo;/g, "’")
+  assert.doesNotMatch(text, /PR watcher armed/, "the retired card must not come back on this surface")
+  assert.match(text, /Awaiting background work/)
+  assert.match(text, /but 1 PR watcher is still active/)
+  // A shell FINISHES; a watcher never does — it fires when somebody else acts on the PR.
+  assert.match(text, /resumes on its own when it reports/)
+  assert.doesNotMatch(html, /lucide-github/, "…and neither does a per-kind glyph")
+  // The kind-naming heading survives for exactly the shape the maintainer named it for, and nothing else.
+  const shellsOnly = renderToStaticMarkup(createElement(AwaitingBackgroundCard, { thread: thread([], [shell("running")]) }))
+  assert.match(shellsOnly.replace(/<[^>]+>/g, ""), /Background shells running/)
+  const mixed = renderToStaticMarkup(createElement(AwaitingBackgroundCard, { thread: { ...thread([], [shell("running")]), watches: [watcher()] } }))
+  const mixedText = mixed.replace(/<[^>]+>/g, "").replace(/&#x27;|&rsquo;/g, "’")
+  assert.match(mixedText, /Awaiting background work/, "a watcher in the mix drops the shells-only heading")
+  assert.match(mixedText, /but 1 background shell and 1 PR watcher are still active/)
+})
+
+// A watcher is PARKED ON, not dispatched — folding it into the dispatch sentence made the card claim the
+// agent had dispatched a pull request.
+test("the dispatch sentence never counts a watcher; it gets its own clause", () => {
+  const text = renderToStaticMarkup(createElement(AwaitingBackgroundCard, {
+    thread: { ...thread([agent("running")], []), watches: [watcher()] },
+  })).replace(/<[^>]+>/g, "").replace(/&#x27;|&rsquo;/g, "’")
+  assert.match(text, /awaiting the results from 1 sub-agent it dispatched/)
+  assert.doesNotMatch(text, /1 sub-agent and 1 PR watcher it dispatched/)
+  assert.match(text, /It is also watching 1 pull request\./)
 })
