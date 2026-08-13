@@ -235,6 +235,20 @@ export interface ClaudeAgentBrokerBridge {
    *  (idle-timeout / signal-SIGTERM / self-collected-record-reassigned / …). `null` means it left no
    *  record at all — killed outright, or a daemon older than exit breadcrumbs. */
   daemonExit(sessionId: string): ClaudeBrokerExitRecord | null
+  /**
+   * Retire this thread's daemon WITHOUT ending the conversation: the `claude` process goes away, the
+   * transcript stays on disk, and the next follow-up cold-resumes it in a freshly started one. Answers
+   * whether a live daemon was actually taken down (false ⇒ there was nothing running to retire).
+   *
+   * The one thing a running session can NEVER change about itself is the flag it was launched with, so
+   * this is how a permission-mode change is applied: measured against real `claude`, a live
+   * `setPermissionMode("bypassPermissions")` on a session launched under `auto` is REFUSED outright —
+   * "Cannot set permission mode to bypassPermissions because the session was not launched with
+   * --dangerously-skip-permissions" (`_live_sdk_mode_switch.mts`). Same shape as `freshProcess` on
+   * followUp and as the Restart worker verb; the cost is the in-memory sub-agents, which is why the
+   * caller must not reach for this while any of them is running.
+   */
+  retireDaemon(input: { threadSlug: string; sessionId: string }): boolean
   releaseSession(threadSlug: string, sessionId: string, reason: "session-replaced" | "session-deleted"): boolean
   close(): void
 }
@@ -711,6 +725,23 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
 
     daemonExit(sessionId) {
       try { return readClaudeBrokerExit(deps.stateDir, sessionId) } catch { return null }
+    },
+
+    retireDaemon(input) {
+      // Killed BY RECORD, exactly like releaseSession, rather than only when this bridge holds the
+      // session live: after a frizz restart the daemon is running and unattached, and that is precisely
+      // the session whose launch flags are stale. `isDaemonAlive` is read FIRST so the answer describes
+      // what was actually retired — the caller turns it into "takes effect on the next turn" versus
+      // "saved for the next resume", and those must not be interchangeable.
+      const alive = liveBrokerRecord(claudeBrokerRecordPath(deps.stateDir, input.sessionId)) !== null
+      const held = current(input.threadSlug, input.sessionId)
+      if (held) { held.client.close(); sessions.delete(input.threadSlug) }
+      killBroker(deps.stateDir, input.sessionId)
+      // NOTHING is terminalized here — no `retirePendingFor`, no pendingPerms sweep. This is not the end
+      // of a session, it is the end of a PROCESS, and the conversation carries on in the next one. (The
+      // caller refuses to run while a turn, a sub-agent or an approval is outstanding, so there is
+      // nothing in flight for this to have orphaned.)
+      return alive
     },
 
     releaseSession(threadSlug, sessionId, reason) {

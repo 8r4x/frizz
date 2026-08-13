@@ -76,6 +76,10 @@ const thread = {
   context: { tokens: 124_000, window: 200_000 },
   // Drives PendingSnooze's hourglass. Far enough out that it stays in the future for any run.
   snoozedUntil: new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString(),
+  // Drives ArmedWatches' eye — the Goal mark's RIGHT-HAND neighbour, and therefore half of the pair
+  // INK_TRIM_GOAL is fitted against. It was missing, which made this fixture unable to measure the one
+  // gap it exists to measure whenever the Goal glyph changes (as it did on 2026-08-13).
+  watches: [{ id: "watch-1", kind: "pr", target: "acme/app#391", state: "armed", createdAt: new Date().toISOString() }],
 } as unknown as ThreadView
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })

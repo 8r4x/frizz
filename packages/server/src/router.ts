@@ -1762,21 +1762,37 @@ export function createRouter(ctx: AppContext) {
           }
           return { effect: "next-resume" as const }
         }
-        // Claude: persist the operator's intent and carry it on the next cold-resume fork.
+        // Claude: persist the operator's intent, then RETIRE THE WORKER PROCESS so the next turn starts
+        // under the new launch flag.
+        //
+        // Retiring it is not a heavy-handed reading of "change the mode" — it is the only reading real
+        // `claude` allows. A live session cannot be moved to bypass at all: the SDK's `setPermissionMode`
+        // is refused with "Cannot set permission mode to bypassPermissions because the session was not
+        // launched with --dangerously-skip-permissions", measured against the real binary in
+        // `_live_sdk_mode_switch.mts` (the session survives the refusal; it simply stays as it was). And
+        // a daemon idles for six hours before it exits on its own, so a mode that waits for the process
+        // to die naturally is a mode the operator does not get today.
+        //
+        // Nothing durable is lost. This is the Restart worker verb's mechanism — the transcript is on
+        // disk and the next follow-up cold-resumes it with the worker contract rebuilt — and its cost is
+        // the in-memory sub-agents. That cost is why the client fences this control on a thread that is
+        // idle and has no unresolved background operation (threadPermissions.ts), and why the effect
+        // reported below is `next-turn` rather than `applied`: no turn is running to apply it TO.
         //
         // This used to branch — a broker row persisted and reported next-resume, while a PANE row went
         // through the permission controller, which inspected the live TUI's composer to protect an
         // unsent draft and then relaunched the conversation with a different launch flag. There are no
         // pane rows any more, so that whole apparatus (permission-controller.ts, 421 lines of pane
         // scraping) went with the tmux transport and this is the only path left.
-        //
-        // Deliberately still `next-resume` rather than `applied`: the broker's `set-mode` frame is
-        // fire-and-forget with no acknowledgement, and this codebase does not call an unconfirmed write
-        // "applied" — that is the same rule cancel-input and stop-task are built on. Confirming it would
-        // need a response frame on set-mode, which is its own change.
         ctx.storage.setPermissionMode(input.slug, input.permissionMode)
         ctx.board.refresh()
-        return { effect: "next-resume" as const }
+        // `next-resume` is the honest answer when there was no process to retire: the intent is stored
+        // and the next start — whenever that is — reads it.
+        const retired = permRow?.session_id !== undefined && ctx.claudeBroker?.retireDaemon({
+          threadSlug: input.slug,
+          sessionId: permRow.session_id,
+        }) === true
+        return { effect: retired ? "next-turn" as const : "next-resume" as const }
       },
     }),
 

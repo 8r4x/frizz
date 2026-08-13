@@ -153,6 +153,79 @@ test("followUp: freshProcess retires the live daemon and cold-resumes; a plain f
   }
 })
 
+// THE MECHANISM BEHIND THE COMPOSER'S Auto/Bypass PICKER, and the reason it is a process restart rather
+// than a live retune: a permission mode is a LAUNCH FLAG. Real `claude` refuses to move a running
+// session to bypass at all — "Cannot set permission mode to bypassPermissions because the session was
+// not launched with --dangerously-skip-permissions" (measured in `_live_sdk_mode_switch.mts`) — so the
+// router persists the operator's choice, retires the daemon, and lets the next follow-up cold-resume the
+// same conversation under the new flag.
+//
+// What this pins is the half a live probe cannot cheaply re-run: the retire leaves the SESSION intact
+// (`--resume`, same session id), and the mode the next process is actually STARTED with is the new one.
+// The fake CLI records its own argv, so these are the flags a real `claude` would have received.
+test("retireDaemon retires the process without ending the conversation, and the next turn starts under the NEW permission mode", { timeout: 25_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cbrk-retire-"))
+  const exe = join(dir, "fake-claude--retire.mjs")
+  copyFileSync(fakeCli, exe); chmodSync(exe, 0o700)
+  const bridge = createClaudeAgentBrokerBridge({
+    stateDir: dir, executablePath: exe,
+    env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" },
+  })
+  const sessionId = randomUUID()
+  const slug = "permission-thread"
+  const recordOf = () => readBrokerRecord(claudeBrokerRecordPath(dir, sessionId))
+  const startups = () => {
+    try {
+      return readFileSync(join(dir, "capture.jsonl"), "utf8")
+        .split("\n").filter(Boolean).map((l) => JSON.parse(l) as { kind: string; argv?: string[] })
+        .filter((r) => r.kind === "startup")
+    } catch { return [] }
+  }
+  const waitForStartups = async (n: number) => {
+    const deadline = Date.now() + 10_000
+    while (startups().length < n && Date.now() < deadline) await sleep(50)
+    assert.equal(startups().length, n, `expected ${n} claude process(es) by now`)
+  }
+  const modeOf = (argv: string[] | undefined) => argv?.[(argv?.indexOf("--permission-mode") ?? -1) + 1]
+  try {
+    await bridge.spawnDispatch({ threadSlug: slug, sessionId, cwd: dir, prompt: "start the work", permissionMode: "auto" })
+    const first = recordOf()
+    assert.ok(first, "the dispatch forked a daemon")
+    await waitForStartups(1)
+    // The NEGATIVE CONTROL. Without it, "the second process runs under bypass" proves nothing about the
+    // change — it could have been launched that way all along.
+    assert.equal(modeOf(startups()[0].argv), "auto", "the original process runs under the mode it was dispatched with")
+
+    assert.equal(bridge.retireDaemon({ threadSlug: slug, sessionId }), true, "a live daemon was retired")
+    assert.equal(recordOf(), null, "…and its record is gone, so nothing will reattach to it")
+    // Nothing here spawns a replacement: retiring is not restarting. The process comes back when there
+    // is a turn for it to run, which is exactly what "takes effect on the next turn" promises.
+    assert.equal(startups().length, 1, "retiring on its own starts no new process")
+
+    await bridge.followUp({ threadSlug: slug, sessionId, cwd: dir, text: "carry on", permissionMode: "bypassPermissions" })
+    const second = recordOf()
+    assert.ok(second, "the follow-up cold-started a replacement daemon")
+    assert.notEqual(second.daemonPid, first.daemonPid, "…a genuinely different process")
+    assert.equal(second.sessionId, sessionId, "…on the same session — the thread keeps its identity")
+    await waitForStartups(2)
+    const replacement = startups()[1]
+    assert.equal(modeOf(replacement.argv), "bypassPermissions", "THE POINT: the new process carries the operator's new mode")
+    assert.ok(replacement.argv?.includes("--resume"), "…and resumes the conversation rather than starting a blank one")
+    assert.ok(replacement.argv?.includes(sessionId), "…for this exact session")
+
+    // Retiring what is already gone is not an error and must not CLAIM one: the router turns this false
+    // into "saved for the next resume" rather than "takes effect on the next turn", and those are
+    // different promises.
+    bridge.releaseSession(slug, sessionId, "session-deleted")
+    assert.equal(bridge.retireDaemon({ threadSlug: slug, sessionId }), false, "no live daemon ⇒ nothing was retired")
+  } finally {
+    bridge.releaseSession(slug, sessionId, "session-deleted")
+    bridge.close()
+    try { const r = recordOf(); if (r) process.kill(r.daemonPid, "SIGKILL") } catch {}
+    await rmEventually(dir)
+  }
+})
+
 // THE HANDLER `context.ts` INSTALLS IS THIS ONE, so this is where a refused input has to arrive. The
 // `input` frame carries no reply by design, so `deps.onDiagnostic` is the only channel by which the
 // frizz server can ever learn that a message the scheduler already recorded as `delivered` was thrown

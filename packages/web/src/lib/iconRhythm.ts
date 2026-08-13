@@ -68,21 +68,41 @@ export const STRIP_INK_GAP = "gap-3"
  *  It is measured, not missed. */
 export const INK_TRIM_HOURGLASS = "-mx-1"
 
-/** `RecurringPromptControl` (the Goal control) — lucide `Target` at 12px inside `px-0.5`.
+/** `RecurringPromptControl` (the Goal control) — the hand-drawn `GoalMark` at 12px inside `px-0.5`.
  *
- *  The trim is UNCHANGED from the `HeartPulse` it replaced on 2026-08-11, and that is measured rather
- *  than assumed: both glyphs are drawn to lucide's outer 24-unit bound, so both paint ~11px of their
- *  12px box and carry the same ~0.5px a side of inset. A mark swap only forces a re-measure when the
- *  new glyph's ink sits differently INSIDE the viewBox — a rule worth stating here, because the next
- *  swap will be to something that does. */
-export const INK_TRIM_GOAL = "-mx-[2.5px]"
+ *  THE SWAP THE PREVIOUS NOTE PREDICTED. It said a mark swap forces a re-measure only when the new
+ *  glyph's ink sits differently inside the viewBox, "because the next swap will be to something that
+ *  does" — and on 2026-08-13 it was: a bullseye whose ring stops at r=8.6 with an arrow reaching out to
+ *  the top-right corner, where lucide's `Target` painted a full-bleed circle to the outer 24-unit bound.
+ *  So the ink no longer starts ~0.5px inside the 12px box; it starts 1.2px in on the left (the ring) and
+ *  0.75px in on the right (the arrow's cap).
+ *
+ *  Measured on the running app rather than derived: the strip read 12.88px of ink between the hourglass
+ *  and this mark on the old -2.5px trim, against the 12px every other pair holds.
+ *
+ *  ASYMMETRIC, and this is the one place in this file where that is CORRECT rather than an instrument
+ *  artifact. The note on `INK_TRIM_PLUG` below is about a 0.5px lean that SWAPPED SIDES when the element
+ *  moved — a rasterisation phase, not a shape. This one cannot swap: the ring's own edge sets the left
+ *  inset and the arrow's cap sets the right, they differ by a fixed 0.45px in the path itself, and a
+ *  symmetric trim therefore leaves the two neighbouring gaps split either side of 12 (measured 12.38 and
+ *  11.75 on `-mx-[3px]`). Split to match the glyph, the strip reads 11.99 and 12.00.
+ *
+ *  RE-MEASURE, DON'T RE-GUESS, if the mark changes again: `nub scripts/ink-gaps.mjs
+ *  http://localhost:<vite>/icon-rhythm-fixture.html "[data-pending-snooze],[data-recurring-prompt],[data-armed-watches]"`.
+ *  Both of that strip's neighbours are in the fixture for exactly this measurement. */
+export const INK_TRIM_GOAL = "-ml-[3.4px] -mr-[2.75px]"
 
 /** `ArmedWatches` — lucide `Eye` at 12px inside `px-0.5`.
  *
- *  THE SAME VALUE AS THE GOAL'S, and measured rather than copied: both glyphs paint to lucide's outer
- *  24-unit bound, so inside `px-0.5` both carry 2.4px of dead space a side. Without this the strip read
- *  11.5px of ink between the plug and the Goal and 14.3px between the Goal and this — a 2.8px step in a
- *  row whose CSS gap is uniform, which is the whole failure mode `optical-spacing` exists for. */
+ *  2.4px of dead space a side, because this glyph paints to lucide's outer 24-unit bound. Without the
+ *  trim the strip read 11.5px of ink between the plug and the Goal and 14.3px between the Goal and this
+ *  — a 2.8px step in a row whose CSS gap is uniform, which is the whole failure mode `optical-spacing`
+ *  exists for.
+ *
+ *  This used to note that it was THE SAME VALUE AS THE GOAL'S, which stopped being true on 2026-08-13
+ *  when the Goal stopped being a full-bleed lucide glyph. That the two ever matched was a fact about
+ *  two glyphs, never a rule — see INK_TRIM_GOAL for what a mark whose ink does not reach the bound
+ *  costs. */
 export const INK_TRIM_WATCHES = "-mx-[2.5px]"
 
 /** `ReloadPluginsButton` — lucide `Plug` at 13px in a 24px square, painting 8px of it.

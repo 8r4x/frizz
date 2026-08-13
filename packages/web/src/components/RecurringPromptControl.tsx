@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react"
-import { Target } from "lucide-react"
 import {
   RECURRING_PROMPT_MAX,
   DEFAULT_GOAL_TRIGGERS,
@@ -10,8 +9,50 @@ import { rpc } from "../api/rpc.ts"
 import { formatAgo } from "../lib/durationLabels.ts"
 import { INK_TRIM_GOAL } from "../lib/iconRhythm.ts"
 import { showToast } from "../store.ts"
-import { Popover, PopoverContent, PopoverTrigger } from "./ui/Popover.tsx"
+import { Popover, PopoverAnchor, PopoverContent } from "./ui/Popover.tsx"
 import { Switch } from "./ui/Switch.tsx"
+
+// THE GOAL MARK — a bullseye with an arrow flying into it, drawn here rather than imported because
+// lucide has no such glyph (0.525 ships `Target`, `Crosshair`, `Goal`, `CircleDot`; none of them is an
+// arrow hitting a mark). Drawn to lucide's own grid — 24 viewBox, 2px stroke, round caps — so it sits
+// in the footer's strip as one of the family rather than as a foreign mark.
+//
+// It replaces lucide's `Target`, which the maintainer read as not-a-target at all (2026-08-13:
+// "Targets are supposed to have a filled circle in the middle. Maybe you should find a different icon
+// that has an arrow sticking out of it"). They are right about the geometry: lucide's `Target` is three
+// CONCENTRIC OUTLINES, and its innermost ring is a 2-unit circle drawn with a 2-unit stroke — so at
+// 12px the whole mark collapses into an even weave of rings with a HOLE where the bullseye should be.
+//
+// So: one ring, a genuinely FILLED centre, and the arrow. Three marks is the ceiling at 12px — the
+// two-ring variant was drawn and measured and its inner ring merges with the dot at this size.
+//
+// The ring carries a GAP at the upper right and the arrow enters through it. That gap is the whole
+// reason the arrow reads as an arrow rather than as a detached tick floating beside a circle (the
+// variant where it sat outside the ring reads as the Mars symbol at 12px, which is not a thing to ship
+// beside a hourglass and an eye). The arrowhead stops SHORT of the centre dot on purpose: run it all
+// the way in and the head and the dot fuse into one blob.
+function GoalMark({ size = 12, className = "" }: { size?: number; className?: string }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      {/* The ring, opened between roughly -20° and -70° so the shaft crosses clear air. */}
+      <path d="M20.4 8.2 A8.6 8.6 0 1 1 15.8 3.6" />
+      <circle cx="12" cy="12" r="3.2" fill="currentColor" stroke="none" />
+      <path d="M21.5 2.5 14.6 9.4" />
+      <path d="M18.2 9.4H14.6V5.8" />
+    </svg>
+  )
+}
 
 // THE GOAL PANEL: one glyph in the thread footer holding what this thread is TRYING TO ACHIEVE, which
 // frizz re-sends so the operator does not have to type it again.
@@ -40,30 +81,72 @@ import { Switch } from "./ui/Switch.tsx"
 // feature is on cannot be used to turn the feature on. That makes it the one permanent child of the
 // footer's left cluster, where everything else is a reading that hides itself when it has nothing to say.
 export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
-  const [open, setOpen] = useState(false)
+  // THREE STATES, not two: shut, the HOVER PREVIEW, and the full panel. A single boolean cannot hold
+  // them, because the preview and the panel are the same anchored surface showing different things and
+  // dismissed by different gestures.
+  const [mode, setMode] = useState<"closed" | "preview" | "full">("closed")
+  const trigger = useRef<HTMLButtonElement>(null)
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  useEffect(() => () => clearTimeout(hoverTimer.current), [])
   const armed = thread.recurringPrompt
   // COLOURED IF ANY MECHANISM IS LIVE. The glyph answers one question — "is frizz going to re-prompt
   // this thread on its own?" — and any one of them is a yes.
   const live = armed?.stopHook === true || armed?.heartbeat === true || armed?.postCompaction === true
 
+  // The preview NEVER interrupts the panel: once it is open, crossing the glyph again must not swap the
+  // writing surface out from under the pointer on its way there.
+  function openPreview() {
+    clearTimeout(hoverTimer.current)
+    hoverTimer.current = setTimeout(() => setMode((m) => (m === "closed" ? "preview" : m)), HOVER_DELAY_MS)
+  }
+  function closePreview() {
+    clearTimeout(hoverTimer.current)
+    setMode((m) => (m === "preview" ? "closed" : m))
+  }
+  // THE GLYPH IS NOT "OUTSIDE". Radix dismisses on any pointerdown beyond the content, and with no
+  // Trigger element that includes the anchor itself — so a click on an open panel would close it and
+  // then be re-opened by the handler below, and the panel would refuse to shut. Letting the click
+  // through to the button, and only to the button, keeps one gesture with one meaning.
+  const keepAnchorClicks = (e: { detail: { originalEvent: Event }; preventDefault: () => void }) => {
+    if (trigger.current?.contains(e.detail.originalEvent.target as Node)) e.preventDefault()
+  }
+
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      {/* No tooltip. This trigger used to carry one that printed the WHOLE armed prompt on hover — a
-          second, uninvited panel covering the footer every time the pointer crossed a 12px glyph
-          (maintainer 2026-08-02: "the hover-based popover is silly"). The prompt has one home now, and
-          you get there by clicking. */}
-      <PopoverTrigger asChild>
+    // ANCHOR + a plain button, NOT PopoverTrigger. A Trigger owns the open state as a TOGGLE, which is
+    // exactly wrong here: with the preview already open, a click would read as "it is open, so close it"
+    // and the click that is supposed to reach the panel would shut it instead. Owning the state means
+    // the click always means the same thing whatever the pointer did on the way in.
+    <Popover
+      open={mode !== "closed"}
+      // Radix's own dismissals — Escape, a click outside — travel through here whether or not there is
+      // a Trigger; they only ever mean "shut", never "step back to the preview".
+      onOpenChange={(next) => { if (!next) { clearTimeout(hoverTimer.current); setMode("closed") } }}
+    >
+      <PopoverAnchor asChild>
         <button
+          ref={trigger}
           type="button"
           data-recurring-prompt
           data-recurring-prompt-on={live ? "true" : "false"}
           aria-label={live ? "Goal (on)" : "Goal"}
+          aria-haspopup="dialog"
+          aria-expanded={mode === "full"}
+          onClick={() => { clearTimeout(hoverTimer.current); setMode((m) => (m === "full" ? "closed" : "full")) }}
+          // POINTER-typed, so a touch tap does not paint a preview the finger is already covering and
+          // then have to unpaint it — a touch device goes straight from the tap to the panel.
+          onPointerEnter={(e) => { if (e.pointerType === "mouse") openPreview() }}
+          onPointerLeave={(e) => { if (e.pointerType === "mouse") closePreview() }}
+          // Keyboard reaches the same reading the pointer does: tab to the glyph and the preview says
+          // what is armed, exactly as hovering it would.
+          onFocus={() => setMode((m) => (m === "closed" ? "preview" : m))}
+          onBlur={closePreview}
           className={`flex items-center rounded-md px-0.5 py-0.5 outline-none ${INK_TRIM_GOAL}`}
         >
-          {/* A TARGET, and the ONLY surface that says this exists (the rail deliberately carries no
-              mark — see groups.ts).
+          {/* A TARGET WITH AN ARROW IN IT (see GoalMark for the geometry and why it is drawn rather
+              than imported), and the ONLY surface that says this exists (the rail deliberately carries
+              no mark — see groups.ts).
 
-              The mark has now been three things, and each replacement fixed a real misreading. It was a
+              The mark has now been four things, and each replacement fixed a real misreading. It was a
               square-in-a-circle (`CircleStop`), which in a strip whose other children are live verbs
               read as a stop button — "it seems like clicking it would cause the entire session to stop"
               (maintainer 2026-08-03). It became a `HeartPulse`, which said the true opposite thing:
@@ -72,8 +155,9 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
               The heartbeat stopped being true on 2026-08-11, when the panel was renamed GOAL. A
               heartbeat names ONE of the three triggers — and not the important one. What the panel
               holds is the thing the thread is trying to achieve, re-sent on whichever triggers the
-              operator picked, so the mark is the goal rather than the delivery mechanism. Concentric
-              rings survive 12px where lucide's `Goal` (a post and a ball) turns to mush.
+              operator picked, so the mark is the goal rather than the delivery mechanism. That put
+              lucide's `Target` here — and it did not read as one, because its centre is a HOLE where a
+              bullseye should be (maintainer 2026-08-13).
 
               GREY by default and coloured only while something is actually armed: the footer's left
               cluster is a status strip first, so a control with nothing to report has to read as quiet
@@ -86,24 +170,84 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
               look absolutely terrible"). The cluster is one status group, so it takes one tone — the
               armed/idle distinction is carried by the amber, which is the state worth seeing, and not
               by holding the resting glyph a step below the readouts beside it. */}
-          <Target size={12} className={live ? "text-amber-400/90" : "text-muted/60 hover:text-muted"} />
+          <GoalMark size={12} className={live ? "text-amber-400/90" : "text-muted/60 hover:text-muted"} />
         </button>
-      </PopoverTrigger>
-      <PopoverContent
-        side="top"
-        align="start"
-        // WIDE, and it takes the whole viewport when the viewport is small. A 21rem cap made this a
-        // narrow column for prose that can run to 4000 characters, and on a phone-width screen it was
-        // narrower than the space actually available. The panel is a writing surface, so it is sized
-        // like one: ~110 columns where there is room, everything-minus-a-margin where there is not.
-        className="w-[min(46rem,calc(100vw-1.5rem))] p-3 text-[11px] leading-relaxed text-fg"
-        // Radix otherwise autofocuses the first focusable child, which is a toggle segment — and a focus
-        // ring sitting on "Off" reads as the toggle being SET to off by the act of opening the panel.
-        onOpenAutoFocus={(e) => e.preventDefault()}
-      >
-        <PromptPanel thread={thread} armed={armed} />
-      </PopoverContent>
+      </PopoverAnchor>
+      {mode === "preview" ? (
+        <PopoverContent
+          side="top"
+          align="start"
+          data-recurring-preview
+          onPointerDownOutside={keepAnchorClicks}
+          // INERT. The preview is a reading, not a surface: it must never take the pointer, because the
+          // pointer's next move is either back out (which dismisses it) or a click on the glyph under
+          // it (which opens the panel). A preview that swallowed either would be a trap.
+          // `max-w`, NOT `w` — the panel below is a writing surface and takes a fixed column, but this
+          // one is a READING and has to be the size of what it says. A goal of three words in a
+          // 22rem-wide box reads as a panel that failed to load the rest of itself.
+          className="pointer-events-none max-w-[min(22rem,calc(100vw-1.5rem))] p-2.5 text-[11px] leading-snug text-fg"
+          onOpenAutoFocus={(e) => e.preventDefault()}
+        >
+          <GoalPreview armed={armed} />
+        </PopoverContent>
+      ) : (
+        <PopoverContent
+          side="top"
+          align="start"
+          // WIDE, and it takes the whole viewport when the viewport is small. A 21rem cap made this a
+          // narrow column for prose that can run to 4000 characters, and on a phone-width screen it was
+          // narrower than the space actually available. The panel is a writing surface, so it is sized
+          // like one: ~110 columns where there is room, everything-minus-a-margin where there is not.
+          className="w-[min(46rem,calc(100vw-1.5rem))] p-3 text-[11px] leading-relaxed text-fg"
+          onPointerDownOutside={keepAnchorClicks}
+          // Radix otherwise autofocuses the first focusable child, which is a toggle segment — and a focus
+          // ring sitting on "Off" reads as the toggle being SET to off by the act of opening the panel.
+          onOpenAutoFocus={(e) => e.preventDefault()}
+        >
+          <PromptPanel thread={thread} armed={armed} />
+        </PopoverContent>
+      )}
     </Popover>
+  )
+}
+
+// Long enough that dragging the pointer ACROSS the strip on the way to the send button does not flash a
+// panel over the footer, short enough that deliberately resting on the glyph answers immediately.
+const HOVER_DELAY_MS = 260
+
+// WHAT THE HOVER SAYS. Not the panel in miniature and not the whole prompt — the two questions you ask
+// a glyph before deciding to click it: is anything armed, and what is it trying to achieve.
+//
+// This surface existed once before as a plain tooltip that printed the ENTIRE armed prompt, and it was
+// removed on 2026-08-02 ("the hover-based popover is silly") because a 4000-character prompt dumped over
+// the footer every time the pointer crossed a 12px glyph is not a reading, it is an ambush. The
+// maintainer asked for the hover back on 2026-08-13 — "There should be a hover popover, then I should be
+// able to click on it to see the full popover" — so it returns CLAMPED and bounded, which is the part
+// that was wrong the first time.
+function GoalPreview({ armed }: { armed: ThreadView["recurringPrompt"] }) {
+  const text = armed?.prompt?.trim()
+  const clauses = armed
+    ? triggerClauses({
+      stopHook: armed.stopHook === true,
+      heartbeat: armed.heartbeat === true,
+      postCompaction: armed.postCompaction === true,
+      seconds: armed.intervalSeconds ?? DEFAULT_INTERVAL_SECONDS,
+    })
+    : []
+  return (
+    <div data-recurring-preview-body>
+      <div className="mb-1 flex items-baseline gap-2">
+        <span className="font-medium">Goal</span>
+        <span className="text-muted/70">
+          {clauses.length > 0 ? `sent ${clauses.join(", ")}` : text ? "no trigger is on" : "not set"}
+        </span>
+      </div>
+      {/* FOUR LINES, then an ellipsis — `line-clamp` rather than a character cut, so the clamp lands on
+          whatever the panel's own width actually renders instead of on a guessed column count. */}
+      <p className={`line-clamp-4 whitespace-pre-wrap ${text ? "text-fg/90" : "text-muted"}`}>
+        {text || "Click to write what this thread is trying to achieve."}
+      </p>
+    </div>
   )
 }
 

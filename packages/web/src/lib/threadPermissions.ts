@@ -36,11 +36,17 @@ export function threadPermissionBlockedReason(thread: ThreadPermissionState): st
   if (thread.pendingAsk || thread.nativeInputRequired || thread.runtime === "perm-prompt") {
     return "Resolve the current terminal approval or question first"
   }
-  // ---- everything below this line fences the CLAUDE reattach specifically ----
-  // Claude applies a permission change by RESTARTING the tmux pane (permission-controller.ts does a
-  // controlled idle reattach and inspects the composer first so it does not destroy an unsent draft).
-  // That genuinely cannot happen while a turn — or a sub-agent, or a background shell — is running:
-  // the restart would kill the work.
+  // ---- everything below this line fences the CLAUDE process restart specifically ----
+  // Claude applies a permission change by RETIRING THE WORKER PROCESS: the mode is a launch flag, and a
+  // running session cannot be moved to bypass at all (real `claude` refuses — "the session was not
+  // launched with --dangerously-skip-permissions"; measured in `_live_sdk_mode_switch.mts`). So the
+  // server persists the intent and kills the daemon, and the next turn cold-resumes the same
+  // conversation in a process that carries the new flag. That genuinely cannot happen while a turn — or
+  // a sub-agent, or a background shell — is running: the restart would kill the work.
+  //
+  // (This used to say "restarting the tmux pane", and named permission-controller.ts, which inspected
+  // the live TUI's composer to protect an unsent draft. Both went with the tmux transport. The GATE is
+  // unchanged, because the new mechanism needs exactly the same idleness the old one did.)
   //
   // A Codex app-server row has no pane and no restart. Its change rides `thread/settings/update`,
   // which the app-server accepts MID-TURN and applies from the next turn on (verified live), exactly
@@ -67,12 +73,22 @@ export function threadFollowUpBlocked(thread: ThreadPermissionState): boolean {
 // RUNNING turn is accepted and durable but does not reach the turn already executing — verified live:
 // a turn that attempted a write after the flip to danger-full-access was still refused and said so.
 // Claiming "applied to the live session" there would be a lie the operator could catch in one turn.
+//
+// The same word covers the CLAUDE outcome for the opposite reason — the mode is a launch flag, so the
+// server retired the worker process and the next turn brings it back under the new one — and there the
+// sentence NAMES THE RESTART. It has to: the operator's thread just lost its live process and its
+// in-memory sub-agents, and a message that said only "takes effect on the next turn" would leave them
+// to discover that by watching a cold resume replay.
 export function threadPermissionEffectMessage(
   effect: "applied" | "next-turn" | "next-resume",
   backend: "claude" | "codex",
 ): string {
   const noun = backend === "codex" ? "Sandbox" : "Permissions"
   if (effect === "applied") return `${noun} applied to the live session`
-  if (effect === "next-turn") return `${noun} applied — takes effect on the next turn`
+  if (effect === "next-turn") {
+    return backend === "codex"
+      ? `${noun} applied — takes effect on the next turn`
+      : `${noun} saved — the worker restarts on the next turn`
+  }
   return `${noun} saved for the next resume`
 }

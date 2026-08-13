@@ -1,22 +1,32 @@
 import { useMutation, useQuery } from "@tanstack/react-query"
 import type { ReactNode } from "react"
 import { useSnapshot } from "valtio"
+import type { PermissionMode } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
-import { threadFollowUpBlocked, threadComposerStatus } from "../lib/threadPermissions.ts"
+import { threadFollowUpBlocked, threadComposerStatus, threadPermissionBlockedReason, threadPermissionEffectMessage } from "../lib/threadPermissions.ts"
 import { showToast, store } from "../store.ts"
 import { ProfileGridSelector } from "../components/ProfileGridSelector.tsx"
+import { Select } from "../components/ui/Select.tsx"
+import { CLAUDE_DISPATCH_PERMISSION_OPTIONS, claudePermValue } from "../lib/options.ts"
 import { threadProfileControlState } from "../lib/threadProfile.ts"
 
-// One control strip for every place a registered thread can be steered. This lives outside the
-// component module so exporting the hook does not invalidate Vite Fast Refresh for ThreadActionBar.
+// One control strip for every place a registered thread can be steered: the model/effort selector, and
+// — for a Claude thread — the Auto/Bypass permission picker beside it. This lives outside the component
+// module so exporting the hook does not invalidate Vite Fast Refresh for ThreadActionBar.
 //
-// The per-thread permission/sandbox picker was REMOVED from this strip (2026-07-23). Frizz workers run
-// non-interactively (`-a never` codex / auto claude), so no restrictive mode has an interactive-approval
-// story to satisfy — a narrowed sandbox just wedges the thread on a prompt nobody is watching, and a
-// codex `workspace-write` the operator never chose kept leaking in from terminal `codex resume`
-// excursions on the shared rollout. Dispatch already exposes no permission choice; this drops the last
-// two surfaces that did (queue card + drawer). The backend setThreadPermission plumbing is left in place
-// for now — only the UI affordance is gone. What remains here is the model/effort selector.
+// THE PERMISSION PICKER CAME BACK, NARROWED. Every per-thread permission/sandbox control was removed
+// from this strip on 2026-07-23, and the reason was sound for the controls that existed: they offered
+// the RESTRICTIVE modes, and a headless worker narrowed to `default` or `acceptEdits` or a codex
+// `read-only` just wedges on an approval nobody is watching. What the maintainer asked for on
+// 2026-08-13 is the other half of that axis — "for Claude Code specifically, I'm curious if there's a
+// way for us to switch between Auto mode and Bypass Permissions mode" — and neither of those two can
+// wedge anything: `auto` is what dispatch already launches with, and bypass is strictly more permissive
+// still. So the options here are exactly the two Settings offers for a NEW worker
+// (CLAUDE_DISPATCH_PERMISSION_OPTIONS), which is also what keeps the launch default and the per-thread
+// override speaking one vocabulary.
+//
+// CODEX IS DELIBERATELY LEFT OUT. Its axis is a sandbox rather than a permission mode, its restrictive
+// end is the one that caused the 2026-07-23 removal, and the ask was Claude-specific.
 export function useThreadComposerControls(slug: string): { busy: boolean; footer: ReactNode; status: ReactNode } {
   const snap = useSnapshot(store)
   const thread = snap.board?.threads.find((candidate) => candidate.id === slug)
@@ -29,7 +39,10 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
   const profile = useMutation({
     mutationFn: (target: { model: string; effort: string }) => rpc.setThreadProfile({ slug, ...target }),
   })
-  const localBusy = profile.isPending
+  const permission = useMutation({
+    mutationFn: (permissionMode: PermissionMode) => rpc.setThreadPermission({ slug, permissionMode }),
+  })
+  const localBusy = profile.isPending || permission.isPending
 
   // Legacy/rowless and foreign transcripts have no Frizz-owned runtime profile to mutate. Keep their
   // existing composer behavior, but never render a misleading disabled control.
@@ -64,6 +77,26 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
   }]
   const composerStatus = threadComposerStatus(profiles.isError ? (profiles.error as Error).message : undefined)
 
+  // WHAT THE OPERATOR IS LOOKING AT, and it is deliberately not `thread.permissionMode` raw: a thread
+  // whose stored mode is one of the restrictive ones (an adopted foreign session, or a row left over
+  // from before this control narrowed to two) has no option to select, and a Select with a value that
+  // matches nothing renders empty. `claudePermValue` folds the one such mode Claude can carry back onto
+  // `auto`; anything else unrecognised does the same here, so the readout always names a real row.
+  const storedPermission = thread.permissionMode ? claudePermValue(thread.permissionMode) : "auto"
+  const permissionValue = CLAUDE_DISPATCH_PERMISSION_OPTIONS.some((o) => o.value === storedPermission) ? storedPermission : "auto"
+  // OPTIMISTIC, exactly like the profile control above: the write is a round trip, and a picker that
+  // snaps back to the old value for its duration reads as a dropped click.
+  const shownPermission = permission.isPending ? (permission.variables as PermissionMode) : permissionValue
+  const permissionBlocked = threadPermissionBlockedReason(thread)
+
+  function changePermission(next: PermissionMode) {
+    if (next === permissionValue) return
+    permission.mutate(next, {
+      onSuccess: (result) => showToast(threadPermissionEffectMessage(result.effect, "claude")),
+      onError: (e) => showToast(`Permission change failed: ${(e as Error).message.slice(0, 120)}`),
+    })
+  }
+
   function changeProfile(target: { model: string; effort: string }) {
     profile.mutate(target, {
       onSuccess: (result) => showToast(result.effect === "next-resume"
@@ -78,7 +111,12 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
     footer: (
       <div
         data-thread-composer-controls
-        className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-0.5"
+        // gap-x-1.5, MEASURED. The row held one pill and a quiet text readout on `gap-x-1`; a SECOND
+        // bordered pill beside the first turned that 4px box gap into 3.69px of ink between two
+        // borders, and two pills that close read as one segmented control rather than as two
+        // independent choices. 6px of box is 5.7px of ink, which separates them without letting the
+        // pair drift apart from each other.
+        className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-0.5"
       >
         <ProfileGridSelector
           groups={profileGroups}
@@ -100,6 +138,31 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
           side="top"
           className="min-w-0 max-w-[min(72%,20rem)] px-1.5 py-0.5"
         />
+        {backend === "claude" && (
+          <Select
+            variant="readout"
+            side="top"
+            value={shownPermission}
+            onValueChange={(v) => changePermission(v as PermissionMode)}
+            options={CLAUDE_DISPATCH_PERMISSION_OPTIONS}
+            ariaLabel="Thread permission mode"
+            // The title carries the COST, because this control's cost is the one thing the two words in
+            // the trigger cannot say: a Claude permission mode is a launch flag, so changing it retires
+            // the worker process and the next turn resumes the same conversation in a new one. An
+            // operator who expected a live retune would otherwise discover the restart by watching it.
+            title={permissionBlocked
+              ? `${permissionBlocked} — changing permissions restarts this thread's worker process`
+              : shownPermission === "bypassPermissions"
+                ? "Bypass: the worker never asks for approval. Changing this restarts the worker process; the conversation resumes from disk on the next turn."
+                : "Auto: risky actions raise an approval card here. Changing this restarts the worker process; the conversation resumes from disk on the next turn."}
+            disabled={busy || permissionBlocked !== null}
+            // NO padding override: the readout variant's own box (4px/8px, 12px type) already matches
+            // the profile pill beside it exactly — measured, both 26px tall — and passing one would only
+            // look like it was doing something. `shrink-0` keeps the two words whole when the profile
+            // pill beside it takes its 20rem.
+            className="shrink-0"
+          />
+        )}
         {pendingModel && pendingEffort && (
           <span className="min-w-0 truncate text-[9px] text-muted/50">
             → {pendingModel} · {pendingEffort} pending

@@ -68,5 +68,10 @@ test("thread permission control: feedback distinguishes a live apply from next r
   // against codex app-server 0.144.6), so it must not borrow the "applied to the live session" copy.
   assert.equal(threadPermissionEffectMessage("next-turn", "codex"), "Sandbox applied — takes effect on the next turn")
   assert.equal(threadPermissionEffectMessage("applied", "claude"), "Permissions applied to the live session")
-  assert.equal(threadPermissionEffectMessage("next-turn", "claude"), "Permissions applied — takes effect on the next turn")
+  // Claude reaches "next-turn" by RETIRING the worker process — a permission mode is a launch flag
+  // there, and real `claude` refuses to move a live session to bypass at all. So its sentence names the
+  // restart rather than borrowing codex's retune wording: the thread just lost its process and its
+  // in-memory sub-agents, and the operator has to be told that rather than discover it.
+  assert.equal(threadPermissionEffectMessage("next-turn", "claude"), "Permissions saved — the worker restarts on the next turn")
+  assert.equal(threadPermissionEffectMessage("next-resume", "claude"), "Permissions saved for the next resume")
 })

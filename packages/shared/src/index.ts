@@ -1663,6 +1663,11 @@ export const SetThreadPermissionResult = z.object({
   // attempted a write after the flip to danger-full-access was still refused). So the change is real and
   // durable, yet it does not reach work already executing. Distinct from "next-resume", which means
   // nothing was applied to the live session at all.
+  //
+  // It is ALSO the Claude answer, arrived at from the opposite direction: a permission mode is a LAUNCH
+  // flag there, so frizz retires the idle worker process and the next turn cold-resumes under the new
+  // one (router `setThreadPermission`). Same promise to the operator — stored, and true from the next
+  // turn on — reached by restarting rather than by retuning.
   effect: z.enum(["applied", "next-turn", "next-resume"]),
 })
 export type SetThreadPermissionResult = z.infer<typeof SetThreadPermissionResult>
