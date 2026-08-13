@@ -1255,12 +1255,21 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                   // chatter is not. It renders textOnly like the first/last anchors, so its batched tool
                   // calls stay counted in the summary rather than doubling up as a visible band.
                   if (!isFirst && !isLast && !survivesQueueCollapse(m, globalIdx, supersededAsks)) return
-                  // This RUN's divider, emitted once, just before the run's closing prose — so it always
-                  // lands after the opening text and before the message the reader is meant to read. A
-                  // woken run may have one prose message doing both jobs (`open === close`); the divider
-                  // then sits directly under that run's wake hairline, which is exactly the shape asked
-                  // for: what re-invoked the agent, what it did, where it landed.
-                  if (isLast && segIdx !== undefined && !barEmitted.has(segIdx)) {
+                  // This RUN's divider, emitted once, before the FIRST thing in the run that renders after
+                  // the opening prose — not at the closing prose.
+                  //
+                  // `isLast` was wrong and it showed. Anything lifted OUT of the collapse — an open ask, or
+                  // the wake hairline that says what re-invoked the agent — renders at its own position,
+                  // which is BEFORE the closing prose. Deferring the divider to `isLast` therefore printed
+                  // the work AFTER the thing that came after it: a card read "…let me set that up" → "Frizz
+                  // asked for a sign-off" → "18 tool calls" → the done card, when the eighteen calls had of
+                  // course all happened before the sign-off (maintainer 2026-08-13, with a screenshot: "the
+                  // opposite of what actually happened").
+                  //
+                  // Anchoring on `!isFirst` puts it against the hidden span's END instead, which is what it
+                  // is a summary OF. With no lifted message in between, the first non-opening row IS the
+                  // closing prose and the divider lands exactly where it used to.
+                  if (!isFirst && segIdx !== undefined && !barEmitted.has(segIdx)) {
                     if (prevTailIsMeta !== null) out.push(<VSpace key={`im-space-${segIdx}`} h={STEP} />)
                     out.push(
                       <IntermediateSummary
