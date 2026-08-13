@@ -78,16 +78,24 @@ export function supersededAskIndices(messages: readonly CollapseMsgLike[]): Set<
 //   - A ```question. An ask the agent kept working past is a decision the human still owes; collapsing it
 //     left the card offering "Send answers" with no question in sight, and the same ask answerable one
 //     click away in the drawer. A SUPERSEDED copy is the exception — the newer one carries the decision.
-//   - A WAKE: a scheduler delivery, or the `boundary:"wake"` divider a sub-agent or background-shell
-//     completion draws. It names WHAT RE-INVOKED THE AGENT, which is the one thing a reader cannot
-//     reconstruct from the messages around it. Hiding it left a card that showed a park on a PR watcher
-//     and then, with nothing in between, more work — reading as a watcher wake that had never happened
-//     (maintainer 2026-08-12: "there's no indication of the PR Watcher triggering and actually causing
-//     the additional follow-ups"). The Goal's own bump stays out, per isGoalBump.
+//   - A SCHEDULER WAKE (`wake: true` — a pr-watch delivery, a timer, a watcher). It names WHAT
+//     RE-INVOKED THE AGENT, and NOTHING ELSE on the card represents it. Hiding it left a card that
+//     showed a park on a PR watcher and then, with nothing in between, more work — reading as a watcher
+//     wake that had never happened (maintainer 2026-08-12: "there's no indication of the PR Watcher
+//     triggering and actually causing the additional follow-ups"). The Goal's own bump stays out, per
+//     isGoalBump.
+//
+// A `boundary:"wake"` divider does NOT survive, and the asymmetry is the point. That one is a background
+// task or sub-agent COMPLETION, and its LAUNCH card is already lifted out of this same span carrying the
+// terminal state and the duration — so keeping it renders one event twice, and in the wrong order, since
+// the completions flow in transcript order while the launches are one synthesized row emitted at the
+// foot of the span (maintainer 2026-08-12, on exactly that card: "The ordering here just seems totally
+// fucked … four background task completion notifications … then a bunch of bash calls show up right at
+// the end"). The launch card is the better of the two: it says both what started and how it ended.
 //
 // The counting walk and the render loop BOTH go through this, so the divider can never promise the
 // expansion a message it is already showing.
 export function survivesQueueCollapse(m: CollapseMsgLike, index: number, superseded: ReadonlySet<number>): boolean {
   if (hasQuestionBlock(m.text)) return !superseded.has(index)
-  return (m.wake === true || m.boundary === "wake") && !isGoalBump(m)
+  return m.wake === true && !isGoalBump(m)
 }

@@ -1301,6 +1301,27 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                   // once, just before the last message (firstRenderedIdx !== lastRenderedIdx here, so the
                   // two are distinct rows and the divider always lands after any first-message text).
                   if (isLast && !intermediateBarEmitted) {
+                    // Background tasks and sub-agent dispatches are lifecycle state, not disposable
+                    // intermediate chatter. Keep their real cards visible while ordinary tool/prose
+                    // activity stays behind the summary. This is also where historical `unknown`
+                    // shell-job calls surface.
+                    //
+                    // ABOVE THE DIVIDER, not below it. They ran DURING the elided run, so the fold is the
+                    // last thing standing between the agent's opening narration and where it landed —
+                    // "the user's most recent message, some bit of text, then the click to expand section
+                    // followed by more text" (maintainer 2026-08-12). Emitted below, they read as work the
+                    // agent did AFTER everything the divider stands for, and butted straight up against
+                    // the closing prose.
+                    visibleOperationMessages.forEach((operations, operationIndex) => {
+                      if (prevTailIsMeta !== null) out.push(<VSpace key={`bg-space-${operationIndex}`} h={STEP} />)
+                      const operationKey = operations.sourceId ?? `visible-background-${operationIndex}`
+                      out.push(
+                        <div key={operationKey} data-transcript-source-id={operationKey} className="flex flex-col">
+                          <Message m={operations} dense />
+                        </div>,
+                      )
+                      prevTailIsMeta = true
+                    })
                     if (hiddenToolCount > 0 || hiddenStepCount > 0) {
                       if (prevTailIsMeta !== null) out.push(<VSpace key="im-space" h={STEP} />)
                       out.push(
@@ -1312,20 +1333,6 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                       )
                       prevTailIsMeta = false
                     }
-                    // Background tasks and sub-agent dispatches are lifecycle state, not disposable
-                    // intermediate chatter. Keep their real cards visible while ordinary tool/prose
-                    // activity stays behind the summary. This is also where historical `unknown`
-                    // shell-job calls surface.
-                    visibleOperationMessages.forEach((operations, operationIndex) => {
-                      if (prevTailIsMeta !== null) out.push(<VSpace key={`bg-space-${operationIndex}`} h={STEP} />)
-                      const operationKey = operations.sourceId ?? `visible-background-${operationIndex}`
-                      out.push(
-                        <div key={operationKey} data-transcript-source-id={operationKey} className="flex flex-col">
-                          <Message m={operations} dense />
-                        </div>,
-                      )
-                      prevTailIsMeta = true
-                    })
                     intermediateBarEmitted = true
                   }
                   // A first/last message that is pure batched tool calls (no prose) contributes no row —

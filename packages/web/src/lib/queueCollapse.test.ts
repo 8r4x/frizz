@@ -73,12 +73,17 @@ test("an open ask survives the collapse; a superseded one does not", () => {
   assert.equal(survivesQueueCollapse(messages[1], 1, superseded), true, "the newest copy carries the decision")
 })
 
-test("a wake survives the collapse — it is what says the agent was re-invoked", () => {
+test("a SCHEDULER wake survives — nothing else on the card represents it", () => {
   const none = new Set<number>()
-  // A scheduler delivery (a pr-watch wake), and the `boundary:"wake"` divider a sub-agent or
-  // background-shell completion draws.
   assert.equal(survivesQueueCollapse({ text: "👤 Review from @colinhacks on acme/app#391", wake: true }, 3, none), true)
-  assert.equal(survivesQueueCollapse({ text: "Sub-agent « Watching CI » finished", boundary: "wake" }, 4, none), true)
+})
+
+test("a background-task/sub-agent COMPLETION does not survive — its launch card already stands for it", () => {
+  const none = new Set<number>()
+  // Keeping it renders one event twice, and inverted: the completion flows in transcript order while the
+  // launch is one synthesized row at the foot of the span.
+  assert.equal(survivesQueueCollapse({ text: "Sub-agent « Watching CI » finished", boundary: "wake" }, 4, none), false)
+  assert.equal(survivesQueueCollapse({ text: "Background task «Running the full suite» finished", boundary: "wake" }, 5, none), false)
 })
 
 test("the GOAL's own bump does not survive — the card refuses to narrate it", () => {
