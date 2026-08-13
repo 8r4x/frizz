@@ -5,10 +5,14 @@
 // opinion about it: `artifacts.ts` (the frizz-dev promoted artifact, `~/.frizz/builds/<digest>/runtime`)
 // and `scripts/prepare-package.mjs` (the published package, `<pkg>/runtime`). Each used to keep its own
 // hand-copy of the list, so widening the closure meant editing both — and the two were only ever in
-// agreement between the first edit and the second. Requiring `stop-fence.mjs` and
-// `transcript-usage.mjs` is what made that obvious: the same two strings had to be typed into the
-// artifact builder, the pack script and four test fixtures, and a worker whose plugin lacks them
-// degrades in SILENCE, which is precisely the failure this assertion exists to prevent.
+// agreement between the first edit and the second. Widening it used to mean typing the same string
+// into the artifact builder, the pack script and four test fixtures, and a worker whose plugin lacks
+// a file degrades in SILENCE, which is precisely the failure this assertion exists to prevent.
+//
+// Narrowing it is the same hazard pointed the other way: a file the list still names but the tree no
+// longer holds fails NOTHING until `prepack` runs, so the break surfaces at the release. Reverting
+// the Stop hook left `stop-fence.mjs` and `transcript-usage.mjs` here after both were deleted, and
+// the tree could not be packed until this list caught up. When a listed file goes, it goes here too.
 //
 // `scripts/*.mjs` imports this .ts directly, as publish-manifest.mjs already does with its own half.
 import { existsSync } from "node:fs";
@@ -22,10 +26,6 @@ export const WORKER_PLUGIN_REQUIRED_FILES = [
   "cc-worker/.claude-plugin/plugin.json",
   "cc-worker/hooks/session-seed.mjs",
   "cc-worker/hooks/agent-bind.mjs",
-  "cc-worker/hooks/stop-fence.mjs",
-  // scratchpad.mjs and stop-fence.mjs both IMPORT this one, so an artifact missing it does not degrade
-  // — the hooks throw on load and the worker silently loses its nudges and its fence check.
-  "cc-worker/scripts/frizz/transcript-usage.mjs",
   "cc-worker/bin/frizz",
   "cc-worker/bin/frizz-update",
   "board/config.mjs",
