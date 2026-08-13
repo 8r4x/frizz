@@ -68,29 +68,23 @@ export const STRIP_INK_GAP = "gap-3"
  *  It is measured, not missed. */
 export const INK_TRIM_HOURGLASS = "-mx-1"
 
-/** `RecurringPromptControl` (the Goal control) — the hand-drawn `GoalMark` at 12px inside `px-0.5`.
+/** `RecurringPromptControl` (the Goal control) — Tabler's `target-arrow` at 12px inside `px-0.5`.
  *
  *  THE SWAP THE PREVIOUS NOTE PREDICTED. It said a mark swap forces a re-measure only when the new
  *  glyph's ink sits differently inside the viewBox, "because the next swap will be to something that
- *  does" — and on 2026-08-13 it was: a bullseye whose ring stops at r=8.6 with an arrow reaching out to
- *  the top-right corner, where lucide's `Target` painted a full-bleed circle to the outer 24-unit bound.
- *  So the ink no longer starts ~0.5px inside the 12px box; it starts 1.2px in on the left (the ring) and
- *  0.75px in on the right (the arrow's cap).
+ *  does" — and on 2026-08-13 it was. lucide's `Target` painted a full-bleed circle out to the 24-unit
+ *  bound (0.5px of inset a side inside the 12px box, hence the old -2.5px). Tabler's arcs stop at r=9
+ *  and its dart stops at 21, so the ink starts a full unit further in: 3.0px of dead space on the left
+ *  and 2.88px on the right, measured, once `px-0.5` is counted.
  *
- *  Measured on the running app rather than derived: the strip read 12.88px of ink between the hourglass
- *  and this mark on the old -2.5px trim, against the 12px every other pair holds.
- *
- *  ASYMMETRIC, and this is the one place in this file where that is CORRECT rather than an instrument
- *  artifact. The note on `INK_TRIM_PLUG` below is about a 0.5px lean that SWAPPED SIDES when the element
- *  moved — a rasterisation phase, not a shape. This one cannot swap: the ring's own edge sets the left
- *  inset and the arrow's cap sets the right, they differ by a fixed 0.45px in the path itself, and a
- *  symmetric trim therefore leaves the two neighbouring gaps split either side of 12 (measured 12.38 and
- *  11.75 on `-mx-[3px]`). Split to match the glyph, the strip reads 11.99 and 12.00.
+ *  SYMMETRIC at 3px, because the glyph is: those two readings differ by 0.12px, which is far under the
+ *  floor where a correction smears a mark instead of moving it. The strip then reads 12.00px and 11.87px
+ *  to the hourglass and the eye, against its 12px target.
  *
  *  RE-MEASURE, DON'T RE-GUESS, if the mark changes again: `nub scripts/ink-gaps.mjs
  *  http://localhost:<vite>/icon-rhythm-fixture.html "[data-pending-snooze],[data-recurring-prompt],[data-armed-watches]"`.
  *  Both of that strip's neighbours are in the fixture for exactly this measurement. */
-export const INK_TRIM_GOAL = "-ml-[3.4px] -mr-[2.75px]"
+export const INK_TRIM_GOAL = "-mx-[3px]"
 
 /** `ArmedWatches` — lucide `Eye` at 12px inside `px-0.5`.
  *

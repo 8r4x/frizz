@@ -12,25 +12,24 @@ import { showToast } from "../store.ts"
 import { Popover, PopoverAnchor, PopoverContent } from "./ui/Popover.tsx"
 import { Switch } from "./ui/Switch.tsx"
 
-// THE GOAL MARK — a bullseye with an arrow flying into it, drawn here rather than imported because
-// lucide has no such glyph (0.525 ships `Target`, `Crosshair`, `Goal`, `CircleDot`; none of them is an
-// arrow hitting a mark). Drawn to lucide's own grid — 24 viewBox, 2px stroke, round caps — so it sits
-// in the footer's strip as one of the family rather than as a foreign mark.
+// THE GOAL MARK — `target-arrow` from Tabler Icons 3.46.0 (MIT, https://tabler.io/icons/icon/target-arrow),
+// inlined rather than pulled in as a dependency: it is one glyph out of a 5,900-icon package, and this
+// file is the only caller. Tabler draws on the SAME grid as lucide — 24 viewBox, 2px stroke, round caps
+// and joins — so it sits in the footer strip as one of the family rather than as a foreign mark.
 //
-// It replaces lucide's `Target`, which the maintainer read as not-a-target at all (2026-08-13:
-// "Targets are supposed to have a filled circle in the middle. Maybe you should find a different icon
-// that has an arrow sticking out of it"). They are right about the geometry: lucide's `Target` is three
-// CONCENTRIC OUTLINES, and its innermost ring is a 2-unit circle drawn with a 2-unit stroke — so at
-// 12px the whole mark collapses into an even weave of rings with a HOLE where the bullseye should be.
+// It replaces lucide's `Target`, which the maintainer read as not-a-target at all (2026-08-13: "Targets
+// are supposed to have a filled circle in the middle. Maybe you should find a different icon that has an
+// arrow sticking out of it"). They are right about the geometry: lucide's `Target` is three CONCENTRIC
+// OUTLINES whose innermost ring is a 2-unit circle drawn with a 2-unit stroke — so at 12px the mark
+// collapses into an even weave of rings with a HOLE where the bullseye should be. Tabler's centre is a
+// 1-unit circle under the same 2-unit stroke, which paints SOLID at any size, and the dart arrives
+// through a gap in both arcs so it reads as having hit the mark rather than sitting beside it.
 //
-// So: one ring, a genuinely FILLED centre, and the arrow. Three marks is the ceiling at 12px — the
-// two-ring variant was drawn and measured and its inner ring merges with the dot at this size.
-//
-// The ring carries a GAP at the upper right and the arrow enters through it. That gap is the whole
-// reason the arrow reads as an arrow rather than as a detached tick floating beside a circle (the
-// variant where it sat outside the ring reads as the Mars symbol at 12px, which is not a thing to ship
-// beside a hourglass and an eye). The arrowhead stops SHORT of the centre dot on purpose: run it all
-// the way in and the head and the dot fuse into one blob.
+// A HAND-DRAWN VERSION SHIPPED HERE FIRST, for a few hours on 2026-08-13, and the maintainer's reply is
+// the note worth keeping: "Are you just generating these icons yourself? This does not look like a good
+// icon for a target." It was — one ring, an oversized dot and a bare corner for an arrowhead — and beside
+// this one it reads as a record button with a stick through it. Reach for a real icon set (Tabler,
+// Phosphor, Remix and Bootstrap were all compared here at 12px) before drawing anything.
 function GoalMark({ size = 12, className = "" }: { size?: number; className?: string }) {
   return (
     <svg
@@ -45,11 +44,14 @@ function GoalMark({ size = 12, className = "" }: { size?: number; className?: st
       className={className}
       aria-hidden="true"
     >
-      {/* The ring, opened between roughly -20° and -70° so the shaft crosses clear air. */}
-      <path d="M20.4 8.2 A8.6 8.6 0 1 1 15.8 3.6" />
-      <circle cx="12" cy="12" r="3.2" fill="currentColor" stroke="none" />
-      <path d="M21.5 2.5 14.6 9.4" />
-      <path d="M18.2 9.4H14.6V5.8" />
+      {/* Tabler's paths, byte-for-byte, minus its `M0 0h24v24H0z` sizing rect (React needs no such
+          spacer, and a transparent full-box path would break the ink measurements in iconRhythm.ts).
+          The bullseye, the inner arc, the outer arc, the dart's fletching, the dart's shaft. */}
+      <path d="M11 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />
+      <path d="M12 7a5 5 0 1 0 5 5" />
+      <path d="M13 3.055a9 9 0 1 0 7.941 7.945" />
+      <path d="M15 6v3h3l3 -3h-3v-3l-3 3" />
+      <path d="M15 9l-3 3" />
     </svg>
   )
 }
@@ -146,7 +148,7 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
               than imported), and the ONLY surface that says this exists (the rail deliberately carries
               no mark — see groups.ts).
 
-              The mark has now been four things, and each replacement fixed a real misreading. It was a
+              The mark has now been five things, and each replacement fixed a real misreading. It was a
               square-in-a-circle (`CircleStop`), which in a strip whose other children are live verbs
               read as a stop button — "it seems like clicking it would cause the entire session to stop"
               (maintainer 2026-08-03). It became a `HeartPulse`, which said the true opposite thing:
