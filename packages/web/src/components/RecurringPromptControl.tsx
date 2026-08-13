@@ -550,7 +550,7 @@ function PromptPanel({ thread, armed }: {
         />
         <span className={`col-span-2 ${!pauseOnQuestions ? "text-fg" : "text-muted"}`}>
           <span className="font-medium">Autonomous mode</span>
-          <span className="text-muted"> — keep sending the goal even while it is waiting on you, so it decides rather than waits</span>
+          <span className="text-muted"> — sends goal prompt when the agent asks questions instead of waiting for an answer</span>
         </span>
       </div>
       {/* NO SAVE BUTTON, AND NO EXPLAINER. Every edit writes itself — a switch on its own click, the text
