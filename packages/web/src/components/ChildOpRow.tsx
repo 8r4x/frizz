@@ -18,7 +18,11 @@ import {
   CHILD_STALE_TITLE,
 } from "../lib/childOps.ts"
 
-export type ChildOpKind = "AGENT" | "SHELL"
+// GITHUB is a PR watcher the worker parked on. It is a child op in every way that matters to this row —
+// something running underneath the thread that will wake it — even though nothing of ours is executing:
+// it is GitHub that is being watched (maintainer 2026-08-13: "now GitHub watchers can be included in the
+// ranks of those").
+export type ChildOpKind = "AGENT" | "SHELL" | "GITHUB"
 
 // The ONE surface knob, and the only thing any caller may vary. It encodes REAL information-density
 // differences between the three places a child row appears — not styling preference:
@@ -106,6 +110,20 @@ export function ChildOpRow({
   title?: string
 }): ReactElement {
   const running = isRunningOperation(state)
+  // ONE HUE PER RUNTIME CONCERN, and the row is the only place they are named. A sub-agent pulses the
+  // accent-yellow, a background shell the azure blue, a PR watcher the green.
+  const LIVE_DOT_HUE = { AGENT: "frizz-live-dot--agent", SHELL: "frizz-live-dot--shell", GITHUB: "frizz-live-dot--github" } as const
+  // THE TAG IS FIVE CHARACTERS ON EVERY KIND, and that is a LAYOUT constraint rather than a naming
+  // preference. There is no shared track behind this column — each row is its own flex line — so the
+  // labels line up only while the tags measure the same. `GITHUB` is six, and under the mono stack
+  // (where five-letter tags are pixel-identical at 21.39px) it pushed its own label 4.3px right of every
+  // other row. `WATCH` is also the more accurate word: the row is a watch on a PR, and the green dot
+  // beside it already says which service.
+  //
+  // The SANS stack is a different story and is NOT fixed here: AGENT measures 30.33px against SHELL's
+  // 28.33px, so that column has always been ~2px ragged there. Closing it needs a grid track shared
+  // across rows, which is a real refactor of this component; this only declines to make it worse.
+  const KIND_TAG = { AGENT: "AGENT", SHELL: "SHELL", GITHUB: "WATCH" } as const
   const clickable = !!onOpen
   const rail = density === "rail"
   const sheet = density === "sheet"
@@ -140,7 +158,7 @@ export function ChildOpRow({
         // A running SHELL pulses blue, a running sub-AGENT pulses the accent-yellow.
         <span
           aria-hidden
-          className={`frizz-live-dot ${kind === "SHELL" ? "frizz-live-dot--shell" : "frizz-live-dot--agent"}`}
+          className={`frizz-live-dot ${LIVE_DOT_HUE[kind]}`}
           data-running-indicator={density === "card" ? "queue-subagent" : "operation"}
         />
       ) : kind === "SHELL" ? (
@@ -167,7 +185,7 @@ export function ChildOpRow({
     <>
       <span aria-hidden className={CHILD_ARROW_CLASS}>{CHILD_ARROW}</span>
       {indicator}
-      {sheet && <span className="petite-caps shrink-0 text-[9.5px] text-muted/45">{kind}</span>}
+      {sheet && <span className="petite-caps shrink-0 text-[9.5px] text-muted/45">{KIND_TAG[kind]}</span>}
       <span className={`min-w-0 truncate text-muted/70 ${rail ? "leading-[16px]" : clickable ? "group-hover:text-fg/80 group-hover:underline" : ""}`}>{label}</span>
     </>
   )

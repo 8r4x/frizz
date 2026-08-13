@@ -468,7 +468,16 @@ const thread: ThreadViewModel = {
   subAgents: variant === "dispatches"
     ? [{ id: LIVE_AGENT_ID, label: "Audit the queue card's collapse", state: "running", startedAt: new Date(Date.now() - 186_000).toISOString(), depth: 1 }]
     : [],
-  bgShells: [],
+  // A live board shell, so the ops strip shows the BLUE hue beside the green one — the fixture is where
+  // the three-hue family (yellow sub-agent, blue shell, green PR watcher) can be compared at a glance.
+  bgShells: variant === "dispatches"
+    ? [{ id: "sh-live-1", label: "Tailing the release log", state: "running", startedAt: new Date(Date.now() - 512_000).toISOString() }]
+    : [],
+  // The board synthesizes one of these per parseable pr-watch hint on a standing fence (see
+  // board.githubWatchViews). The strip under the prompt box lists them beside sub-agents and shells.
+  watches: variant === "prwakes" || variant === "bgshells" || variant === "dispatches"
+    ? [{ id: "github:demo:colinhacks/zod#6382", kind: "github", target: "colinhacks/zod#6382", state: "armed", createdAt: new Date(Date.now() - 37 * 60_000).toISOString() }]
+    : [],
   lastActivityAt: new Date().toISOString(),
 } as unknown as ThreadViewModel
 

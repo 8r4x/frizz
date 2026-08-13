@@ -240,9 +240,24 @@ html[data-font="sans"] .frizz-bash .md-body {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--live-dot) 28%, transparent);
   animation: frizz-live-pulse 1.25s ease-in-out infinite;
 }
-/* Two runtime concerns, two hues: background shells pulse blue, sub-agents pulse the accent-yellow. */
+/* Three runtime concerns, three hues: background shells pulse blue, sub-agents pulse the accent-yellow,
+   and a parked PR watcher pulses green.
+
+   THE GREEN IS `--color-live`, AND IT ALREADY FITS — measured rather than eyeballed, because "make sure
+   the green looks of a piece with the yellow and the blue" (maintainer 2026-08-13) is a question about
+   perceptual lightness and chroma, which hex triples do not answer. In OKLCH:
+
+     accent yellow  #e8b923   L 0.806   C 0.157   H 89.1
+     shell blue     #4a9eff   L 0.693   C 0.165   H 254.0
+     --color-live   #4ac97e   L 0.747   C 0.156   H 153.9
+
+   The pair's midpoint is L 0.749 / C 0.161, so the existing green sits 0.002 off in lightness and 0.005
+   off in chroma — already the exact fit, and its hue lands roughly between the two the long way round.
+   Nothing to retune; the token was simply never used. Re-measure before changing any of the three, and
+   move all of them together if you move one. */
 .frizz-live-dot--shell { --live-dot: var(--color-shell); }
 .frizz-live-dot--agent { --live-dot: var(--color-accent); }
+.frizz-live-dot--github { --live-dot: var(--color-live); }
 /* THE RAIL's rest-with-live-work mark — a pulsing dot centred in the sidebar's 15px StatusBox. Same
    hue, same cadence and the same meaning as `.frizz-live-dot` above, but it is a mark INSIDE the
    checkbox family's box, so it takes THAT family's geometry rather than the transcript's. Two
