@@ -30,14 +30,14 @@ Frizz is for you if you have any of these opinions:
 Then run it in any directory — a repo, a jj checkout, or a folder of scripts. Frizz has no opinion about version control and does not require Git.
 
 ```sh
-$ cd path/to/project
+$ cd path/to/acme
 $ npx frizz
 
-  FRIZZ v0.2.0  ready in 4.0s
+  FRIZZ v0.3.0  ready in 4.0s
 
-  ➜  Local:    http://127.0.0.1:4922/
-  ➜  Project:  project — path/to/project
-  ➜  Logs:     ~/.frizz/projects/979dae3c-fe15-4038-817e-11d0e7491959/logs/frizz-2026-08-01T13-44-43-16931.log
+  ➜  Local:    http://127.0.0.1:9393/project/acme/
+  ➜  Project:  acme — path/to/acme
+  ➜  Logs:     ~/Library/Application Support/Frizz/projects/979dae3c-fe15-4038-817e-11d0e7491959/logs/frizz-2026-08-01T13-44-43-16931.log
 
   press ctrl-c to stop · run with --debug for the full event feed
 ```
@@ -62,7 +62,7 @@ Frizz is a browser tab, a queue, and the agent CLIs you already pay for. It brin
 - 🐙 **GitHub integration.** Browse your repo's issues and pull requests without leaving the composer, and turn a selection of them into threads. Workers can read issues, diffs, and CI on their own.
 - 👀 **Built-in CI and PR watchers.** A worker waiting on a build or a review doesn't hand the thread back to you to be told "keep going." It watches, and picks the work back up when the run goes green or a review lands.
 - 📝 **No magic.** A thread behaves like a Claude Code session you started yourself. Frizz adds no worktrees, no branches, no dev server, no build integration, no workflow engine to fight with.
-- 🔒 **Local only.** No cloud, no account, no telemetry. The server binds `127.0.0.1` by default and its state lives in `~/.frizz/`, never in your checkout.
+- 🔒 **Local only.** No cloud, no account, no telemetry. The server binds `127.0.0.1` by default and its state lives in your user directory, never in your checkout.
 
 ### The queue
 
@@ -129,7 +129,7 @@ only for a source checkout.
 Options:
   --app                  use the legacy dedicated app window instead of a browser tab
   --no-app               print the URL without opening a browser
-  --port <port>          request a fixed port when starting the machine's Frizz
+  --port <port>          request a fixed port for a new workspace server
   --host [address]       serve on a network address instead of loopback (bare --host means 0.0.0.0)
   --allowed-host <name>  with --host, also accept this DNS name as the board's address (repeatable)
   --public-origin <url>  serve behind a proxy/tunnel reachable at this exact origin
@@ -137,13 +137,13 @@ Options:
   -h, --help             show this help
 
 Environment:
-  FRIZZ_HOST             same as --host
-  FRIZZ_ALLOWED_HOSTS    same as --allowed-host, comma separated
-  FRIZZ_PUBLIC_ORIGIN    same as --public-origin
+  FRIZZ_HOST              same as --host
+  FRIZZ_ALLOWED_HOSTS     same as --allowed-host, comma separated
+  FRIZZ_PUBLIC_ORIGIN     same as --public-origin
 
---host puts a board that can run shell commands as you on the network, and Frizz has no login:
-anyone who reaches the port controls it. Only do this on a network you trust. An IP address works
-as-is; to reach the board by DNS name you must list that name with --allowed-host ("*" allows any).
+--host puts a board that can run shell commands as you on the network, and Frizz has no login: anyone
+who reaches the port controls it. Only do this on a network you trust. An IP address works as-is; to
+reach the board by DNS name you must list that name with --allowed-host ("*" allows any).
 
 --public-origin serves the board through a tunnel or reverse proxy without putting it on the LAN
 at all — Frizz stays on loopback and the tunnel dials it. Frizz still has no login, so require
@@ -178,7 +178,7 @@ authentication at the proxy: with Cloudflare Access, that is the whole of your a
 <details>
 <summary><b>Does it put junk in my repo?</b></summary>
 
-> Barely. Dispatching a thread writes no thread file into your repo — the agent session *is* the thread. All Frizz adds to your working tree is a `.frizz/` directory holding a scratch directory per thread (empty unless the agent writes something in it) plus a couple of tiny hook state files. Everything durable lives outside your checkout in `~/.frizz/projects/<id>/`, so you can delete `.frizz/` and keep every thread and setting. Frizz does not touch your `.gitignore`, so add `.frizz/` yourself if you don't want it in `git status`.
+> Barely. Dispatching a thread writes no thread file into your repo — the agent session *is* the thread. All Frizz adds to your working tree is a `.frizz/` directory holding a scratch directory per thread (empty unless the agent writes something in it) plus a couple of tiny hook state files. Everything durable lives outside your checkout, under `~/.frizz/` if you already have one and otherwise in your platform's own data directory (`~/Library/Application Support/Frizz` on macOS, `$XDG_DATA_HOME/frizz` on Linux, LocalAppData on Windows), so you can delete `.frizz/` and keep every thread and setting. Frizz does not touch your `.gitignore`, so add `.frizz/` yourself if you don't want it in `git status`.
 
 </details>
 
@@ -208,7 +208,7 @@ authentication at the proxy: with Cloudflare Access, that is the whole of your a
 >
 > Frizz prints the addresses to use and warns you as it starts. Reaching it by IP works as-is; reach it by name and you have to say so — `--host --allowed-host frizz.local` — because an unlisted name is how DNS rebinding gets a browser to treat an attacker's page as same-origin with your board. `FRIZZ_HOST` and `FRIZZ_ALLOWED_HOSTS` do the same thing when the launch command lives in an image or a unit file.
 >
-> Understand what you're turning on. Frizz has no login: reaching the port *is* the authorization, and the board runs shell commands as you. Only do this on a network you trust, and prefer a tunnel (`ssh -L 4922:127.0.0.1:4922 you@box`, using the port Frizz printed, the same on both ends) if you just want your own board from your own laptop — that needs no flag at all.
+> Understand what you're turning on. Frizz has no login: reaching the port *is* the authorization, and the board runs shell commands as you. Only do this on a network you trust, and prefer a tunnel (`ssh -L 9393:127.0.0.1:9393 you@box`, using the port Frizz printed, the same on both ends) if you just want your own board from your own laptop — that needs no flag at all.
 
 </details>
 
@@ -219,7 +219,7 @@ authentication at the proxy: with Cloudflare Access, that is the whole of your a
 >
 > ```sh
 > npx frizz --public-origin https://frizz.example.com
-> cloudflared tunnel --url http://127.0.0.1:4922   # the port Frizz printed
+> cloudflared tunnel --url http://127.0.0.1:9393   # the port Frizz printed
 > ```
 >
 > Frizz stays bound to `127.0.0.1` — `--public-origin` is not `--host` and does not put anything on your LAN. The tunnel runs on the same machine and dials the loopback port, so the only way in is through the tunnel. That is also what makes this the *good* remote option rather than merely a working one: the tunnel terminates TLS, so the board is a real `https://` origin and therefore a secure context, which plain `--host` over a LAN IP is not. Copy buttons and desktop notifications work again, and it works on a phone.
