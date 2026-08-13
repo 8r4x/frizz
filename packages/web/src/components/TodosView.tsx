@@ -129,10 +129,17 @@ function resumeNativeAnchoring(): void {
 // re-surfaces on its own when a shell finishes and the worker acts on it. Distinct from the footer's
 // wall-clock Snooze (a fixed deadline); this one has no deadline and expires itself on the next rest.
 //
-// In practice this is the SHELL card's control: a rest on a live sub-agent is excused from the queue
-// outright, so the shape that reaches here is the shell-only rest (board.deriveNeedsYou). Hence the
-// copy names shells rather than the older "until a sub-agent returns".
-const BG_SNOOZE_EXPLAINER = "Removes this from the queue until the background work reports — the agent resumes automatically."
+// The shapes that reach here are the shell-only rest and — since 2026-08-13 — the pr-watch park, whose
+// own fence card no longer offers a Snooze (lib/awaitingPresentation). A rest on a live sub-agent is
+// excused from the queue outright.
+//
+// IT HAS TO FIT ON ONE LINE beside the button, and that is a hard constraint rather than a preference:
+// the pair reads as one control with its caption, and a caption that wraps stops being one
+// (maintainer 2026-08-13: "I hate that the 'removes this from the queue…' label is breaking onto two
+// lines here"). The wording is theirs, verbatim. It also stopped naming a kind, which is what let it
+// shrink — the card above it has already said what is out, so the caption only has to say what the
+// button does and what brings the card back.
+const BG_SNOOZE_EXPLAINER = "Hides card until new activity is detected"
 
 function AwaitingBackgroundBanner({ thread, onSnooze, onSnoozeFailed }: {
   thread: ThreadView
@@ -1222,8 +1229,10 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                 // "Agent rested" is the queue card's own PREMISE, not news: every card here is a rested
                 // thread, the row states how long ago it rested, and the window is already cut at the
                 // previous rest — so the rule can only ever restate the frame around it (maintainer
-                // 2026-08-11). The thread drawer, where the reader is following a live transcript and
-                // genuinely cannot tell "finished" from "still going", keeps it.
+                // 2026-08-11). The thread drawer keeps the ONE position where it still says something
+                // the reader cannot already see — above the human's own next message, where it tells a
+                // reply to a finished agent apart from a steer typed mid-turn (lib/restDividers.ts).
+                // Everywhere else the drawer now drops it for the same reason this card drops all of it.
                 if (m.boundary === "rest") return
                 // …and neither is the GOAL firing. On a thread being driven by one, a legitimate rest
                 // followed by a bump is the normal cycle, and the card's job is to show where the thread
