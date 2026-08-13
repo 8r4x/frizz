@@ -271,8 +271,10 @@ function manifestIcons(manifestPath: string): string[] {
     .map((icon) => (typeof icon?.src === "string" ? icon.src : undefined))
     .filter((src): src is string => !!src && !/^(https?:)?\/\//u.test(src) && !src.startsWith("data:"))
     // A manifest's src is relative to the manifest, and a leading `/` means the site root — which for
-    // a static site is the directory the manifest itself sits in.
-    .map((src) => join(directory, src.replace(/^\//u, "")))
+    // a static site is the directory the manifest itself sits in. Strip any query or fragment first:
+    // cache-busted srcs like `/icon-192.png?v=5` are ordinary, and joining one verbatim yields a path
+    // that cannot exist, so the project silently loses every icon its manifest declares.
+    .map((src) => join(directory, src.replace(/[?#].*$/u, "").replace(/^\//u, "")))
 }
 
 /**

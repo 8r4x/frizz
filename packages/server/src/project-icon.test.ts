@@ -133,6 +133,22 @@ test("a web manifest's icons[] are candidates, resolved against the manifest (vi
   assert.equal(picked(root), join("packages", "app", "public", "logo512.png"))
 })
 
+test("a cache-busted manifest src still resolves (frizz's own manifest carries ?v=)", (t) => {
+  // `/logo512.png?v=5` joined verbatim is a path that cannot exist, which would
+  // drop every icon the manifest declares and leave the project with none.
+  const root = project(t, "busted", {
+    "public/manifest.webmanifest": JSON.stringify({
+      icons: [
+        { src: "/logo512.png?v=5", sizes: "512x512" },
+        { src: "/logo192.png#hash", sizes: "192x192" },
+      ],
+    }),
+    "public/logo512.png": png(512, 512),
+    "public/logo192.png": png(192, 192),
+  })
+  assert.equal(picked(root), join("public", "logo512.png"))
+})
+
 test("a monorepo's web package is reached, though no fixed table could name it", (t) => {
   const root = project(t, "mono", { "apps/whatever-we-called-it/public/icon.png": png(512, 512) })
   assert.equal(picked(root), join("apps", "whatever-we-called-it", "public", "icon.png"))
