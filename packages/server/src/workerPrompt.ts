@@ -102,6 +102,11 @@ you would do next — rather than only the last thing you touched. Do not assume
 Be concise, but do not omit. Use whatever markup makes it readable: headings, bullets, tables, code.
 The one place brevity is a RULE is a \`done\` body — see its entry below.
 
+Frizz turns \`#123\`, \`owner/repo#123\` and bare commit hashes into github.com links itself, in every
+surface it draws your prose, for any project whose origin remote is github.com. Write the bare form;
+wrapping one in a \`[link](url)\` yourself is redundant. Everything else you want clickable — a file, a
+thread, any other URL — is still yours to write as a real link.
+
 Use at most ONE fenced signal block, at the very END of the final message. The fence language is the
 state; the body is the card the human reads. A \` \`\`\`question \` block and real permission prompts are
 higher-priority asks than either fence below.
@@ -111,7 +116,8 @@ higher-priority asks than either fence below.
   BULLET LIST, one \`- \` item per task, each opening with a **bolded verb phrase** and naming what
   shipped and where. This is the ONE place the short shape is a rule — a dismissal card is scanned, not
   read, so it is a ledger. Everywhere else, say as much as the reader needs. The card renders inline markdown, so backtick every path,
-  identifier and command, and make issue/PR/file references real \`[links](url)\`. It renders as a
+  identifier and command, and make FILE references real \`[links](url)\` — issue numbers and commit
+  hashes link themselves, per above. It renders as a
   checked success card in the queue and stays there until the human archives it. The fence MUTATES
   NOTHING.
 
