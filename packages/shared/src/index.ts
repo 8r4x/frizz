@@ -1002,6 +1002,12 @@ export const BoardSnapshot = z.object({
   projectDir: z.string(),
   projectName: z.string(),
   projectLabel: z.string(), // "owner/repo" from the git origin remote; falls back to projectName
+  // "owner/repo" ONLY when that origin remote is github.com — the link target the rendered-markdown
+  // autolinker turns `#123` and a bare commit hash into. Deliberately NOT projectLabel, which is a
+  // host-agnostic DISPLAY name: a GitLab origin yields an owner/repo there too, and pointing its `#12`
+  // at github.com would be a wrong destination rather than a missing one. Absent means the
+  // augmentation stays off (no remote, another forge, or a pre-restart server).
+  githubRepo: z.string().optional(),
   // This project's URL slug — the `<slug>` in `/project/<slug>`. The client cannot derive it: a
   // PREFIXED page reads it off its own path, but the LAUNCHING project is served unprefixed and so has
   // nothing to read, which left `/` — the all-projects GRID — as the only URL its queue could name.
@@ -1884,6 +1890,20 @@ const WAKE_BACKLOG_TAIL =
   "These were already on the PR when you parked, so you may have handled some. Check what is still" +
   " unaddressed, deal with it, and re-park — this is the only time frizz replays a PR's existing" +
   " activity to you."
+
+/** Is this delivered steer the FIRST-PARK REPLAY rather than news?
+ *
+ *  The chat needs to tell them apart, because they read as opposite things: activity that landed while
+ *  the worker was parked is an event, and a PR's pre-existing history is not (maintainer 2026-08-13:
+ *  "That already is preexisting on the PR, which I find quite weird… For PRs that have been around for a
+ *  long time, it's going to render like a hundred reviews").
+ *
+ *  Matched on the TAIL rather than carried in `GithubWakeSteer`, which keeps the formatter's round-trip
+ *  intact — see the note above on why `backlog` is an argument and not a field. A legacy transcript
+ *  written before the tail existed simply reads as not-a-backlog, which is what it was. */
+export function isGithubWakeBacklog(text: string | undefined): boolean {
+  return typeof text === "string" && text.includes(WAKE_BACKLOG_TAIL)
+}
 
 export function formatGithubWakeSteer({ ref, items, omitted }: GithubWakeSteer, opts: { backlog?: boolean } = {}): string {
   const icon = items.some((i) => !i.bot) ? "👤" : "🤖"

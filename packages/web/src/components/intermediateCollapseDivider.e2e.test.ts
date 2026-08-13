@@ -222,18 +222,27 @@ test("the collapsed intermediate run is a hairline divider that names its tool c
       ladder.map((row) => row.replace(/ · \d+m ago$/, "")),
       [
         "intermediate-summary: 6 tool calls · Click to expand",
-        "github: 2 new items on colinhacks/zod#6382",
+        // THE FIRST PARK IS NOT NEWS. The watcher replays everything already sitting on the PR — eleven
+        // items in this fixture, a hundred on a long-lived PR — and that used to render one row each
+        // (maintainer 2026-08-13: "it's going to render like a hundred reviews, so let's hide all of
+        // that on the initial watcher registration"). One honest line, and the worker still gets the
+        // full list in the delivered steer.
+        "github: 11 items already on colinhacks/zod#6382",
         "intermediate-summary: 7 tool calls · Click to expand",
         "github: New approval from @colinhacks on colinhacks/zod#6382",
         "intermediate-summary: 4 tool calls · Click to expand",
       ],
       `each run folds on its own, between the wakes that bound it, got ${ladder.join(" | ")}`,
     )
-    // The PR ACTIVITY is what the hairline must name — "that's actually more important than showing the
-    // watcher being armed" — so the actors survive on the line, and the burst lists its items beneath.
     const prCard = await page.evaluate(() => document.body.innerText)
-    assert.match(prCard, /@copilot-pull-request-reviewer/, "the burst names who filed each item")
-    assert.match(prCard, /@pullfrog/)
+    // NOT ONE ROW PER ITEM, at any count. This is the assertion that would catch the list coming back.
+    assert.doesNotMatch(prCard, /@copilot-pull-request-reviewer/, "no per-item row survives the replay")
+    assert.doesNotMatch(prCard, /@pullfrog/)
+    // ONE CASE TREATMENT on the whole line — no run may escape the divider's petite-caps back to
+    // ordinary case ("it's mixing small caps with regular font"). The ref is a LINK, and its underline
+    // is what marks it; it needs no second signal in a different alphabet.
+    const escapes = await page.$$eval('[data-wake-divider="github"] [class*="font-variant-caps"]', (ns) => ns.length)
+    assert.equal(escapes, 0, "nothing on the GitHub hairline opts out of the divider's own casing")
     // Every run's closing message stays in full: the card reads down the page as the thread actually ran.
     assert.match(prCard, /PR #6382 is open against main/, "run 1's rest")
     assert.match(prCard, /Both review findings are addressed/, "run 2's rest")

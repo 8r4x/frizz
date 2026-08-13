@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
+import { formatGithubWakeSteer } from "@frizz/shared"
 import type { BoardSnapshot, ThreadView as ThreadViewModel, TranscriptMessage, TranscriptToolCall } from "@frizz/shared"
 import { TodosView } from "./components/TodosView.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
@@ -351,20 +352,29 @@ const priorrest: TranscriptMessage[] = [
 // GithubWakeCard rather than the parser fallback. The third run is deliberately ONE prose message with a
 // pile of calls behind it: a woken run folds on the strength of its own wake hairline, which is the case
 // the old single-span collapse could not fold at all.
-const prWake = (ref: string, items: { label: string; actor: string; bot: boolean; at: string }[]): TranscriptMessage => withId({
-  role: "user",
-  wake: true,
-  // Each item gets its OWN permalink, as a real steer does — GithubWakeCard keys its rows on the url,
-  // and two items sharing one would collide.
-  wakeSteer: {
+// The `text` is built by the REAL formatter, not hand-written, because the card reads it: a first-park
+// replay is told apart from genuine news by the backlog tail `formatGithubWakeSteer` appends, and a
+// hand-rolled string would silently render every wake as news.
+const prWake = (
+  ref: string,
+  items: { label: string; actor: string; bot: boolean; at: string }[],
+  opts: { backlog?: boolean } = {},
+): TranscriptMessage => {
+  const steer = {
     ref,
+    // Each item gets its OWN permalink, as a real steer does.
     items: items.map((i, n) => ({ ...i, url: `https://github.com/${ref.split("#")[0]}/pull/${ref.split("#")[1]}#pullrequestreview-49222${n}` })),
     omitted: 0,
-  },
-  text: `🤖 ${items.length} new GitHub items on ${ref}. Read exactly these — ignore older activity you have already handled — and continue:`,
-  tools: [],
-  parts: [],
-} as unknown as TranscriptMessage)
+  }
+  return withId({
+    role: "user",
+    wake: true,
+    wakeSteer: steer,
+    text: formatGithubWakeSteer(steer, opts),
+    tools: [],
+    parts: [],
+  } as unknown as TranscriptMessage)
+}
 
 const prwakes: TranscriptMessage[] = [
   { sourceId: "u-cur", role: "user", text: "Fix #5178 — the v3→v4 optional key behavior change — and get it merged.", tools: [], parts: [] },
@@ -380,10 +390,14 @@ const prwakes: TranscriptMessage[] = [
   ])),
   withId(asst("PR #6382 is open against main, mergeable, all checks green. Waiting on your review — I'll address comments as they land.")),
   withId(boundaryEvent("rest", "Agent rested")),
-  prWake("colinhacks/zod#6382", [
-    { label: "review comment", actor: "copilot-pull-request-reviewer", bot: true, at: new Date(Date.now() - 46 * 60_000).toISOString() },
-    { label: "review comment", actor: "pullfrog", bot: true, at: new Date(Date.now() - 41 * 60_000).toISOString() },
-  ]),
+  // THE FIRST PARK: the watcher hands over everything already sitting on the PR. Eleven items here,
+  // which used to mean eleven rows in the card; a long-lived PR means a hundred.
+  prWake("colinhacks/zod#6382", Array.from({ length: 11 }, (_, n) => ({
+    label: n % 3 === 0 ? "review" : "review comment",
+    actor: n % 2 === 0 ? "copilot-pull-request-reviewer" : "pullfrog",
+    bot: true,
+    at: new Date(Date.now() - (600 - n * 40) * 60_000).toISOString(),
+  })), { backlog: true }),
   withId(asst("Reading both reviews before I change anything.", [
     tool("Bash", { detail: "gh api repos/colinhacks/zod/pulls/6382/reviews/4922222194/comments", desc: "Reading the first review's inline comments" }),
     tool("Bash", { detail: "gh api repos/colinhacks/zod/pulls/6382/reviews/4922256690/comments", desc: "Reading the second review's inline comments" }),

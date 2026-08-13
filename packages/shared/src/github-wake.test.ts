@@ -2,6 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import {
   formatGithubWakeSteer,
+  isGithubWakeBacklog,
   parseGithubWakeSteer,
   splitWakeDeliveries,
   stripWakeDeliveryToken,
@@ -195,4 +196,26 @@ test("a token on its own line is stripped from anywhere, quoted prose is not", (
   const quoting = `Why is ${t} showing up in the bubble?`
   assert.equal(stripWakeDeliveryToken(quoting), quoting)
   assert.equal(stripWakeDeliveryToken("ordinary text\n"), "ordinary text\n", "no token, no rewrite")
+})
+
+// ---- isGithubWakeBacklog ----
+//
+// The chat has to tell a FIRST-PARK REPLAY apart from news, because they read as opposite things and
+// only one of them is an event (maintainer 2026-08-13: "That already is preexisting on the PR, which I
+// find quite weird"). The flag rides the delivered TEXT rather than the steer, which is what keeps the
+// formatter's round-trip above intact — so this is the test that the two stay in step.
+test("a backlog replay is recognizable from its delivered text, and ordinary news is not", () => {
+  assert.equal(isGithubWakeBacklog(formatGithubWakeSteer(burst, { backlog: true })), true)
+  assert.equal(isGithubWakeBacklog(formatGithubWakeSteer(single, { backlog: true })), true)
+  assert.equal(isGithubWakeBacklog(formatGithubWakeSteer(burst)), false, "an ordinary burst is news")
+  assert.equal(isGithubWakeBacklog(formatGithubWakeSteer(single)), false)
+  assert.equal(isGithubWakeBacklog(undefined), false)
+  // A legacy transcript written before the tail existed reads as not-a-backlog, which is what it was.
+  assert.equal(isGithubWakeBacklog("🤖 New GitHub comment on acme/app#1 from @dana."), false)
+})
+
+// Marking it must not cost the round trip — the whole reason `backlog` is an argument and not a field.
+test("the backlog tail leaves the steer parseable, unchanged", () => {
+  assert.deepEqual(parseGithubWakeSteer(formatGithubWakeSteer(burst, { backlog: true })), burst)
+  assert.deepEqual(parseGithubWakeSteer(formatGithubWakeSteer(single, { backlog: true })), single)
 })
