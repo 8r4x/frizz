@@ -208,7 +208,16 @@ function PromptPanel({ thread, armed }: {
   thread: ThreadView
   armed: ThreadView["recurringPrompt"]
 }) {
-  const [busy, setBusy] = useState(false)
+  // NO `busy` STATE, and that is the fix for a visible flash rather than a missing feature. Every write
+  // here used to flip one, which put `disabled` on all four switches and the minutes field — and
+  // `disabled:opacity-45` is not transitioned, so a click dropped the whole panel to 45% and snapped it
+  // back the instant the RPC returned, tens of milliseconds later (maintainer 2026-08-12: "there is a
+  // terrible render flash everytimem you check one of these fucking toggles").
+  //
+  // Disabling bought nothing anyway. The switch is already OPTIMISTIC — local state moves on click and
+  // the panel reads from it — and writes are serialised through `queue` below, so a second click while
+  // one is in flight simply queues behind it and the last draft wins. The only thing the flag added was
+  // the flash.
   // WHAT AN UNARMED PANEL OPENS WITH, and it is a real default rather than an empty form: the standard
   // sentence, with the stop hook on. The reason an operator opens this control is almost always the same
   // one, and there is no Save button to press — so accepting the default costs exactly one dismissal, and
@@ -313,7 +322,6 @@ function PromptPanel({ thread, armed }: {
       sent.current = { ...draftAsSent(next), prompt: "" }
       return true
     }
-    setBusy(true)
     try {
       await rpc.setThreadRecurringPrompt({
         slug: thread.id,
@@ -343,8 +351,6 @@ function PromptPanel({ thread, armed }: {
     } catch (error) {
       showToast((error instanceof Error ? error.message : "Could not save the recurring prompt").slice(0, 100))
       return false
-    } finally {
-      setBusy(false)
     }
     return true
   }
@@ -435,7 +441,6 @@ function PromptPanel({ thread, armed }: {
           testId="stop-hook"
           label="Stop hook"
           checked={stopHook}
-          disabled={busy}
           onChange={(next) => {
             setStopHook(next)
             void persistNow(draft({ stopHook: next }))
@@ -455,7 +460,6 @@ function PromptPanel({ thread, armed }: {
           testId="heartbeat"
           label="Heartbeat"
           checked={heartbeat}
-          disabled={busy}
           onChange={(next) => {
             setHeartbeat(next)
             void persistNow(draft({ heartbeat: next }))
@@ -480,7 +484,6 @@ function PromptPanel({ thread, armed }: {
               inputMode="numeric"
               min={MIN_MINUTES}
               max={MAX_MINUTES}
-              disabled={busy}
               value={minutes}
               onChange={(e) => setMinutes(e.target.value)}
               onBlur={commitMinutes}
@@ -512,7 +515,6 @@ function PromptPanel({ thread, armed }: {
           testId="post-compaction"
           label="Compaction"
           checked={postCompaction}
-          disabled={busy}
           onChange={(next) => {
             setPostCompaction(next)
             void persistNow(draft({ postCompaction: next }))
@@ -542,7 +544,6 @@ function PromptPanel({ thread, armed }: {
           testId="autonomous-mode"
           label="Autonomous mode"
           checked={!pauseOnQuestions}
-          disabled={busy}
           onChange={(next) => {
             setPauseOnQuestions(!next)
             void persistNow(draft({ pauseOnQuestions: !next }))

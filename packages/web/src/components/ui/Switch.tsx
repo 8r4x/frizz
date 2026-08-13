@@ -29,6 +29,15 @@ const SIZES = {
   md: { track: "h-[20px] w-[34px]", thumb: "size-[16px]", travel: "translate-x-[14px]", onCap: "translate-y-[calc(8px_-_0.5cap)]" },
 } as const
 
+// A NOTE ON `disabled`, because getting this wrong is what made the Goal panel flash. Do NOT wire it to
+// an in-flight mutation. A switch is OPTIMISTIC — its `checked` moves the instant it is clicked — so
+// disabling it during the write buys nothing and costs a visible dim: `disabled:opacity-45` is not
+// transitioned, so a 40ms round-trip drops the control to 45% for ~3 frames and snaps it back. Measured
+// exactly that, and reproduced it by hand as a control (maintainer 2026-08-12: "there is a terrible
+// render flash everytimem you check one of these fucking toggles").
+//
+// Reserve `disabled` for a switch the operator genuinely may not move right now — a setting the current
+// state forbids — where the dim IS the message and stays put long enough to read.
 export function Switch({ checked, onChange, disabled, label, size = "sm", testId }: {
   checked: boolean
   onChange: (next: boolean) => void
