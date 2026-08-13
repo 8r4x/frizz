@@ -90,7 +90,9 @@ export const draftKey = {
   adopt: (projectDir: string | undefined, slug: string) => `adopt:${projectDraftScope(projectDir)}:${encodeURIComponent(slug)}`,
   answer: (projectDir: string | undefined, slug: string, sessionId: string | undefined, messageId: string, block: number) => `answer:${projectDraftScope(projectDir)}:${encodeURIComponent(slug)}:${encodeURIComponent(sessionId ?? "unowned")}:${encodeURIComponent(messageId)}:${block}`,
   interaction: (projectDir: string | undefined, projectId: string, slug: string, sessionId: string, epoch: number, id: string, field: string) => `interaction:${projectDraftScope(projectDir)}:${encodeURIComponent(projectId)}:${encodeURIComponent(slug)}:${encodeURIComponent(sessionId)}:${epoch}:${encodeURIComponent(id)}:${encodeURIComponent(field)}`,
-  settings: (projectDir: string | undefined, field: string) => `settings:${projectDraftScope(projectDir)}:${field}`,
+  // There is no `settings:` key: the Settings drawer autosaves, so the server IS its draft store. A
+  // sessionStorage mirror could only ever hold the ~500ms of typing the debounce has not written yet,
+  // and it outlived the save — a stale entry that reappeared over the stored value on the next open.
 }
 
 export function useProjectDir(): string | undefined { return useSnapshot(store).board?.projectDir }

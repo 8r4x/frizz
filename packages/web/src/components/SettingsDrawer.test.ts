@@ -18,6 +18,25 @@ test("settings maps each contextual explanation to a help control", () => {
   assert.doesNotMatch(source, /label="GitHub picker prompts"/)
 })
 
+// The BEHAVIOUR of the autosave — one write per click, one write per typing burst, and a flush on
+// close — is pinned in a real browser by settingsAutosave.e2e.test.ts. This test guards the shape it
+// depends on: nothing here may reintroduce a button that the operator has to press.
+test("settings save themselves — no Save button, no Cancel, no unsaved marker", () => {
+  assert.doesNotMatch(source, />\s*Save\s*</)
+  assert.doesNotMatch(source, />\s*Cancel\s*</)
+  assert.doesNotMatch(source, /● unsaved/)
+  // The footer those two buttons lived in went with them; the sheet is header + scroll body.
+  assert.doesNotMatch(source, /<footer/)
+  // Every control routes through the one updater, and only free text debounces.
+  assert.match(source, /const \{ state: saveState, queue, flush \} = useAutosave\(\)/)
+  assert.match(source, /onChange=\{\(e\) => onChange\(e\.target\.value === "" \? undefined : e\.target\.value, \{ debounce: true \}\)\}/)
+  // Closing must not strand the keystrokes still sitting in the debounce.
+  const close = source.slice(source.indexOf("function close()"), source.indexOf("async function toggleNotifications"))
+  assert.match(close, /flush\(\)/)
+  // Writes are serialized: a whole-object payload delivered out of order silently reverts settings.
+  assert.match(source, /chain\.current = chain\.current\s*\n\s*\.then\(\(\) => rpc\.settingsSet\(next\)\)/)
+})
+
 test("the drawer no longer duplicates the composer's controls or offers vestigial toggles", () => {
   // Model and effort are chosen per-dispatch in the prompt box (DispatchPreferences), so a second,
   // divergent copy of them here was only ever a way to confuse which one applied.

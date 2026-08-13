@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react"
-import { useMutation, useQuery } from "@tanstack/react-query"
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { useQuery } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
 import { Check, Copy, HelpCircle } from "lucide-react"
 import { type Settings } from "@frizz/shared"
-import { rpc } from "../api/rpc.ts"
+import { isRetryableRpcError, rpc } from "../api/rpc.ts"
 import { store } from "../store.ts"
 import { prefs } from "../lib/prefs.ts"
 import { registerSettingsClose } from "../lib/overlays.ts"
@@ -13,7 +13,6 @@ import { SheetHeader } from "./ui/SheetHeader.tsx"
 import { Select } from "./ui/Select.tsx"
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/Popover.tsx"
 import { Tooltip } from "./Tooltip.tsx"
-import { draftKey, useDraft, useProjectDir } from "../lib/drafts.ts"
 import { CLAUDE_DISPATCH_PERMISSION_OPTIONS } from "../lib/options.ts"
 
 type NotifPerm = "default" | "granted" | "denied" | "unsupported"
@@ -32,13 +31,104 @@ function currentPerm(): NotifPerm {
   return Notification.permission as NotifPerm
 }
 
+// Every control here WRITES AS YOU TOUCH IT — there is no Save button and no Cancel. A picker or a
+// toggle persists on the click; a textarea persists this long after the last keystroke, so a long
+// prompt is one write instead of one per character.
+const SAVE_DEBOUNCE_MS = 500
+// How long "Saved" lingers in the header before the row goes quiet again.
+const SAVED_LINGER_MS = 1600
+// A REPLAYABLE failure — a mutation refused because Frizz is mid-update — is worth waiting out rather
+// than reporting. A promotion takes a few seconds; six tries covers it without becoming a poller.
+const RETRY_DELAY_MS = 2000
+const MAX_RETRIES = 6
+
+type SaveState = "idle" | "saving" | "saved" | "error"
+
+// The write side of the drawer. Three invariants, all silent when broken:
+//
+//  - WRITES ARE SERIALIZED. Every payload is a WHOLE Settings object, so two overlapping requests that
+//    land out of order leave the server holding the older snapshot. Chaining each write onto the
+//    previous one's settled promise makes the last thing touched the last thing stored.
+//  - A PENDING DEBOUNCE IS FLUSHED ON CLOSE. Otherwise the last half-second of typing dies with the
+//    unmount — precisely the keystrokes the Save button used to capture.
+//  - A RETRYABLE FAILURE IS RETRIED. Removing the Save button also removed the operator's way to try
+//    again, so the one failure the RPC layer certifies as side-effect-free — `isRetryableRpcError`,
+//    which the composer already leans on during a control-plane restart — has to be replayed here.
+//    Anything else is AMBIGUOUS (it may have landed) and must be reported, never re-sent.
+function useAutosave() {
+  const [state, setState] = useState<SaveState>("idle")
+  const pending = useRef<Settings | null>(null)
+  const timer = useRef<number | undefined>(undefined)
+  const chain = useRef<Promise<unknown>>(Promise.resolve())
+  const inflight = useRef(0)
+  const linger = useRef<number | undefined>(undefined)
+  const retries = useRef(0)
+  // `flush` schedules its own retry, so it needs a handle to itself that doesn't make the callback
+  // depend on its own identity. Assigned immediately below.
+  const flushRef = useRef<() => void>(() => {})
+
+  const flush = useCallback(() => {
+    if (timer.current !== undefined) window.clearTimeout(timer.current)
+    timer.current = undefined
+    const next = pending.current
+    if (!next) return
+    pending.current = null
+    inflight.current += 1
+    setState("saving")
+    chain.current = chain.current
+      .then(() => rpc.settingsSet(next))
+      .then((saved) => {
+        // Publish the SERVER's validated copy instead of invalidating: this drawer is the only writer,
+        // so a refetch would re-read what we just sent — and could race a write still queued behind it.
+        queryClient.setQueryData(["settingsGet"], saved)
+        inflight.current -= 1
+        retries.current = 0
+        if (inflight.current > 0 || pending.current) return
+        setState("saved")
+        if (linger.current !== undefined) window.clearTimeout(linger.current)
+        linger.current = window.setTimeout(() => setState("idle"), SAVED_LINGER_MS)
+      })
+      .catch((error: unknown) => {
+        inflight.current -= 1
+        setState("error")
+        // A newer value is already queued behind this one — it supersedes this payload entirely, so
+        // replaying the stale one would undo the newer edit.
+        if (pending.current || !isRetryableRpcError(error) || retries.current >= MAX_RETRIES) return
+        retries.current += 1
+        pending.current = next
+        timer.current = window.setTimeout(flushRef.current, RETRY_DELAY_MS)
+      })
+  }, [])
+  flushRef.current = flush
+
+  const queue = useCallback(
+    (next: Settings, debounce = false) => {
+      pending.current = next
+      retries.current = 0
+      if (timer.current !== undefined) window.clearTimeout(timer.current)
+      timer.current = undefined
+      if (!debounce) return flush()
+      timer.current = window.setTimeout(flush, SAVE_DEBOUNCE_MS)
+    },
+    [flush],
+  )
+
+  useEffect(
+    () => () => {
+      flush()
+      if (linger.current !== undefined) window.clearTimeout(linger.current)
+    },
+    [flush],
+  )
+
+  return { state, queue, flush }
+}
+
 export function SettingsDrawer() {
   const settings = useQuery({ queryKey: ["settingsGet"], queryFn: () => rpc.settingsGet() })
-  const projectDir = useProjectDir()
-  const [issueDraft, setIssueDraft, clearIssueDraft] = useDraft(draftKey.settings(projectDir, "githubIssuePrompt"))
-  const [prDraft, setPrDraft, clearPrDraft] = useDraft(draftKey.settings(projectDir, "githubPrPrompt"))
   const [draft, setDraft] = useState<Settings | null>(null)
   const [perm, setPerm] = useState<NotifPerm>(currentPerm())
+  const { state: saveState, queue, flush } = useAutosave()
 
   // Enter/exit animation. `shown` drives the slide (mount → next frame flips it true → slides in;
   // close flips it false → slides out). App renders <SettingsDrawer> only while showSettings is true,
@@ -58,36 +148,30 @@ export function SettingsDrawer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // The server's copy seeds the form once. It is never re-seeded afterwards: every save publishes the
+  // stored value straight into this query's cache, so a later fetch can only agree with what is here.
   useEffect(() => {
-    if (settings.data && !draft) setDraft({
-      ...settings.data,
-      ...(issueDraft ? { githubIssuePrompt: issueDraft } : {}),
-      ...(prDraft ? { githubPrPrompt: prDraft } : {}),
-    })
-  }, [settings.data, draft, issueDraft, prDraft])
+    if (settings.data && !draft) setDraft(settings.data)
+  }, [settings.data, draft])
 
-  const setTrackedDraft = useCallback((next: Settings) => {
-    if (next.githubIssuePrompt !== draft?.githubIssuePrompt) setIssueDraft(next.githubIssuePrompt ?? "")
-    if (next.githubPrPrompt !== draft?.githubPrPrompt) setPrDraft(next.githubPrPrompt ?? "")
-    setDraft(next)
-  }, [draft, setIssueDraft, setPrDraft])
+  // The one entry point for every control: render the change, then persist it. `debounce` is for the
+  // free-text fields alone — a picker or a toggle is a single discrete intent and writes on the spot.
+  const update = useCallback(
+    (next: Settings, opts?: { debounce?: boolean }) => {
+      setDraft(next)
+      queue(next, opts?.debounce)
+    },
+    [queue],
+  )
 
   function close() {
     if (closing) return
+    // Send whatever is still sitting in the debounce before the drawer goes away.
+    flush()
     setClosing(true)
     setShown(false)
     window.setTimeout(() => (store.showSettings = false), prefersReducedMotion() ? 0 : SHEET_CLOSE_MS)
   }
-
-  const save = useMutation({
-    mutationFn: (s: Settings) => rpc.settingsSet(s),
-    onSuccess: () => {
-      clearIssueDraft()
-      clearPrDraft()
-      queryClient.invalidateQueries({ queryKey: ["settingsGet"] })
-      close()
-    },
-  })
 
   // Turning notifications on requests browser permission if not yet decided; we keep the toggle
   // truthful about the OS-level grant so a green checkbox can't imply notifications that won't fire.
@@ -97,10 +181,8 @@ export function SettingsDrawer() {
       const result = (await Notification.requestPermission()) as NotifPerm
       setPerm(result)
     }
-    setTrackedDraft({ ...draft, notifications: on })
+    update({ ...draft, notifications: on })
   }
-
-  const dirty = !!(draft && settings.data && JSON.stringify(draft) !== JSON.stringify(settings.data))
 
   return (
     <div
@@ -110,11 +192,7 @@ export function SettingsDrawer() {
       <div
         className={`${SHEET_PANEL_CLASS} w-[560px] max-w-[94vw] ${shown ? "translate-x-0" : "translate-x-full"}`}
       >
-        <SheetHeader
-          title="Settings"
-          actions={dirty ? <span className="text-[11px] font-normal text-accent">● unsaved</span> : undefined}
-          onClose={close}
-        />
+        <SheetHeader title="Settings" actions={<SaveStatus state={saveState} />} onClose={close} />
 
         {!draft ? (
           <div className="p-4 text-[13px] text-muted">Loading…</div>
@@ -129,7 +207,7 @@ export function SettingsDrawer() {
               <Select
                 variant="bordered"
                 value={draft.permissionMode === "bypassPermissions" ? "bypassPermissions" : "auto"}
-                onValueChange={(v) => setTrackedDraft({ ...draft, permissionMode: v as Settings["permissionMode"] })}
+                onValueChange={(v) => update({ ...draft, permissionMode: v as Settings["permissionMode"] })}
                 options={CLAUDE_DISPATCH_PERMISSION_OPTIONS}
                 indicatorPosition="right"
                 ariaLabel="Claude permission mode"
@@ -138,14 +216,14 @@ export function SettingsDrawer() {
             </SettingsField>
 
             <SettingsField label="Font" help={SETTINGS_HELP.font}>
-              <FontToggle value={draft.font ?? "mono"} onChange={(font) => setTrackedDraft({ ...draft, font })} />
+              <FontToggle value={draft.font ?? "mono"} onChange={(font) => update({ ...draft, font })} />
             </SettingsField>
 
             <SettingsField label="Project sidebar" help={SETTINGS_HELP.projectRail}>
               <Select
                 variant="bordered"
                 value={draft.projectRail ? "shown" : "hidden"}
-                onValueChange={(v) => setTrackedDraft({ ...draft, projectRail: v === "shown" })}
+                onValueChange={(v) => update({ ...draft, projectRail: v === "shown" })}
                 options={[
                   { value: "hidden", label: "Hidden" },
                   { value: "shown", label: "Always shown" },
@@ -159,7 +237,7 @@ export function SettingsDrawer() {
               <Select
                 variant="bordered"
                 value={draft.localFileOpener ?? "system"}
-                onValueChange={(v) => setTrackedDraft({ ...draft, localFileOpener: v as Settings["localFileOpener"] })}
+                onValueChange={(v) => update({ ...draft, localFileOpener: v as Settings["localFileOpener"] })}
                 options={[
                   { value: "system", label: "System default" },
                   { value: "cursor", label: "Cursor" },
@@ -172,8 +250,8 @@ export function SettingsDrawer() {
               />
             </SettingsField>
 
-            {/* A client-only VIEW preference (localStorage, not server Settings): applies IMMEDIATELY,
-                not on Save, so it's wired straight to the prefs proxy rather than the draft. */}
+            {/* A client-only VIEW preference (localStorage, not server Settings): it never travels to
+                the server at all, so it's wired straight to the prefs proxy rather than the draft. */}
             <SettingsField label="Compact mode" help={SETTINGS_HELP.compact}>
               <CompactToggle />
             </SettingsField>
@@ -195,24 +273,24 @@ export function SettingsDrawer() {
               {draft.notifications && <PermHint perm={perm} />}
             </SettingsField>
 
-            <PromptsSection draft={draft} setDraft={setTrackedDraft} />
+            <PromptsSection draft={draft} setDraft={update} />
           </div>
         )}
-
-        <footer className="px-4 py-3 flex items-center justify-end gap-2 border-t border-border shrink-0">
-          <button className="btn-ghost" onClick={close}>
-            Cancel
-          </button>
-          <button
-            className="btn-accent"
-            onClick={() => draft && save.mutate(draft)}
-            disabled={!draft || save.isPending || !dirty}
-          >
-            {save.isPending ? "Saving…" : "Save"}
-          </button>
-        </footer>
       </div>
     </div>
+  )
+}
+
+// The header's whole account of persistence, now that no button carries it. Quiet by design: the form
+// writes itself, so the only states worth a word are the write in flight, the moment it lands, and the
+// one that matters — a write that did NOT land, in the accent that means "this wants you".
+function SaveStatus({ state }: { state: SaveState }) {
+  if (state === "idle") return null
+  if (state === "error") return <span className="text-[11px] font-normal text-accent">Couldn't save</span>
+  return (
+    <span className={`text-[11px] font-normal text-muted transition-opacity ${state === "saved" ? "opacity-70" : "opacity-100"}`}>
+      {state === "saving" ? "Saving…" : "Saved"}
+    </span>
   )
 }
 
@@ -256,7 +334,13 @@ const GH_PROMPT_TOKENS: { token: string; gloss: string }[] = [
 // EVERY dispatched agent) plus the two GitHub-picker investigation templates (Issue, PR). The two
 // picker editors PREFILL with the shipped default (fetched from the server, the single source of truth)
 // so the user edits from the real prompt; a stored override supersedes it. Empty override = default.
-function PromptsSection({ draft, setDraft }: { draft: Settings; setDraft: (s: Settings) => void }) {
+function PromptsSection({
+  draft,
+  setDraft,
+}: {
+  draft: Settings
+  setDraft: (s: Settings, opts?: { debounce?: boolean }) => void
+}) {
   const defaults = useQuery({ queryKey: ["githubPromptDefaults"], queryFn: () => rpc.githubPromptDefaults() })
   return (
     <div className="flex flex-col gap-6">
@@ -277,14 +361,14 @@ function PromptsSection({ draft, setDraft }: { draft: Settings; setDraft: (s: Se
             help="The prompt for each ISSUE dispatched from the picker. The default has the worker classify the issue as a bug or feature and branch: reproduce + fix-plan for a bug, or a plan + impact analysis for a feature."
             value={draft.githubIssuePrompt}
             fallback={defaults.data.issue}
-            onChange={(v) => setDraft({ ...draft, githubIssuePrompt: v })}
+            onChange={(v, opts) => setDraft({ ...draft, githubIssuePrompt: v }, opts)}
           />
           <GithubPromptField
             label="PR investigation prompt"
             help="The prompt for each PR dispatched from the picker. The default runs an adversarial review/audit — read the diff, verify correctness/edges/tests/CI, then recommend approve / request-changes."
             value={draft.githubPrPrompt}
             fallback={defaults.data.pr}
-            onChange={(v) => setDraft({ ...draft, githubPrPrompt: v })}
+            onChange={(v, opts) => setDraft({ ...draft, githubPrPrompt: v }, opts)}
           />
         </div>
       )}
@@ -344,6 +428,8 @@ function TokenHelpPopover() {
 // One prompt editor. `value` is the stored override (undefined = "use default"); `fallback` is the
 // shipped default shown when there is no override, so the box always renders the effective prompt.
 // Typing sets a concrete override; "Reset to default" clears it back to undefined (server default).
+// Typing is the one input in the drawer that DEBOUNCES its write — a keystroke is not an intent, a
+// pause is; "Reset to default" is a click, so it saves at once like every other control here.
 function GithubPromptField({
   label,
   help,
@@ -355,7 +441,7 @@ function GithubPromptField({
   help: string
   value: string | undefined
   fallback: string
-  onChange: (v: string | undefined) => void
+  onChange: (v: string | undefined, opts?: { debounce?: boolean }) => void
 }) {
   const customized = value != null
   return (
@@ -377,7 +463,7 @@ function GithubPromptField({
         // Emptying the box clears the override (→ undefined), so it snaps back to showing the default
         // and drops the "Reset" affordance — matching the server's blank-means-default semantics
         // instead of leaving a confusing empty box that still reads as "customized".
-        onChange={(e) => onChange(e.target.value === "" ? undefined : e.target.value)}
+        onChange={(e) => onChange(e.target.value === "" ? undefined : e.target.value, { debounce: true })}
         rows={10}
         className="input resize-none text-[12px] leading-relaxed font-mono-keep"
         spellCheck={false}
@@ -436,7 +522,7 @@ function OnOffToggle({ value, onChange }: { value: boolean; onChange: (v: boolea
 }
 
 // Compact-diff preference: client-only (localStorage prefs proxy), applies live — diff blocks across
-// the app collapse/expand the instant it flips, no Save round-trip.
+// the app collapse/expand the instant it flips, with no server round-trip at all.
 function CompactToggle() {
   const { compactDiffs } = useSnapshot(prefs)
   return <OnOffToggle value={compactDiffs} onChange={(v) => (prefs.compactDiffs = v)} />
