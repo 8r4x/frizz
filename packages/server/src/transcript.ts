@@ -82,6 +82,13 @@ function compactionMessage(sourceId: string, at: string | undefined, preTokens?:
 // and this is just the newest thing it has said" — the transcript looks identical either way
 // (maintainer 2026-08-02).
 //
+// That ambiguity turned out to be POSITIONAL, and the projection deliberately does not encode which
+// position a boundary landed in: every rest is emitted here, and the client drops the ones whose
+// surroundings already say it (web/src/lib/restDividers.ts). Filtering server-side would mean a
+// trailing rest that disappears and then reappears the moment a human replies — a mid-array insertion
+// the live transcript push has no reason to handle — and the queue card would lose the flag it keys its
+// own suppression on.
+//
 // Both providers hand us an authoritative signal for it, which is why this is a server projection and
 // not the client sniffing the shape of the messages around it: claude writes `stop_reason:"end_turn"`
 // on the record that ends the turn, codex brackets the turn with task_complete/turn_aborted. Those are

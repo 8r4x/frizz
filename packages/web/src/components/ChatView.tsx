@@ -79,6 +79,7 @@ import { PROVIDER_LABEL } from "../lib/signIn.ts"
 import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
 import { prependEarlierPage } from "../lib/transcriptPagination.ts"
 import { buildVirtualTranscriptMessageRows, earlierLoadGate, nextTailFollow, TAIL_FOLLOW_PX, USER_TAIL_EXTRA, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
+import { withoutRedundantRestDividers } from "../lib/restDividers.ts"
 import { coalesceToolActivityMessages, editedFileCount, historicalToolActivityMessages, isPictureTool, isToolActivityException, liveRuntimeStartedAt, liveToolActivityRun, liveToolActivityTail, settledToolActivityLabel, thinkingToolActivityLabel, toolActivityLabel } from "../lib/toolActivity.ts"
 import { CodexDirectiveCard, MermaidDiagram } from "./CodexRichOutput.tsx"
 
@@ -237,8 +238,15 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   const liveRuntimeStart = running ? liveRuntimeStartedAt(coalescedActivityMessages) : undefined
   // A live tool run belongs in the existing bottom runtime slot, never in transcript history. Once
   // it settles, the whole coalesced run returns as one `Ran N tool calls` disclosure.
+  //
+  // …and the rest hairlines that only restate their own surroundings drop out here — see
+  // isRedundantRestDivider. It runs LAST, on the coalesced list, so "the next thing the reader sees"
+  // means the next thing this surface will actually draw.
   const activityMessages = useMemo(
-    () => running ? historicalToolActivityMessages(coalescedActivityMessages) : coalescedActivityMessages,
+    () => withoutRedundantRestDividers(
+      running ? historicalToolActivityMessages(coalescedActivityMessages) : coalescedActivityMessages,
+      messageRendersNothing,
+    ),
     [coalescedActivityMessages, running],
   )
   const showWorking = running
@@ -655,8 +663,12 @@ function VirtualizedThreadTranscript({
   const liveToolActivity = running ? liveToolActivityTail(coalescedActivityMessages) : undefined
   const liveActivityLabel = liveToolActivity ? toolActivityLabel(liveToolActivity, projectDir) : undefined
   const liveRuntimeStart = running ? liveRuntimeStartedAt(coalescedActivityMessages) : undefined
+  // Redundant rest hairlines dropped exactly as in the drawer's copy above.
   const activityMessages = useMemo(
-    () => running ? historicalToolActivityMessages(coalescedActivityMessages) : coalescedActivityMessages,
+    () => withoutRedundantRestDividers(
+      running ? historicalToolActivityMessages(coalescedActivityMessages) : coalescedActivityMessages,
+      messageRendersNothing,
+    ),
     [coalescedActivityMessages, running],
   )
   const showWorking = running
@@ -4199,9 +4211,12 @@ function EventLine({ text, boundary, sourceId }: { text: string; boundary?: Tran
   // background shell/task coming back, and it takes the terminal glyph the rest of the app already uses
   // for a background shell (BackgroundShellSheet, ExternalTerminalCommand). A `compaction` is not a
   // child returning at all — nothing ran, the provider just dropped the conversation above this line —
-  // so it takes NO glyph rather than borrowing one that would misname it. Nor does a `rest`: it is the
+  // so it takes NO glyph rather than borrowing one that would misname it. Nor does a `rest`: it was the
   // most FREQUENT divider by far — one per turn — and a mark on every one of them is noise the quieter
-  // bare rule does not make (maintainer 2026-08-02, on the ellipsis this shipped with).
+  // bare rule does not make (maintainer 2026-08-02, on the ellipsis this shipped with). It is far rarer
+  // now that lib/restDividers.ts drops the ones that only restate their neighbours, and the bare rule is
+  // still right: what survives sits directly above the human's own next message, where a glyph would
+  // compete with the bubble rather than quietly close the turn under it.
   if (boundary) {
     return (
       <WakeDivider
