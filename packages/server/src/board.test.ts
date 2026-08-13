@@ -618,12 +618,22 @@ test("deriveAwaitingBackground: true only when own-work rest is the SOLE reason 
   assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), tele({ ...child, pendingQuestion: true }), "turn-idle"), false, "a question outranks it")
   assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), tele({ ...child, pendingAsk: { id: "x", questions: [] } }), "turn-idle"), false, "a native ask outranks it")
   assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), tele({ ...child, lastFence: { kind: "done", body: "", hints: [] } }), "turn-idle"), false, "a done fence outranks it")
-  // A pr-watch ```awaiting fence renders its own "PR watcher armed" card, so it outranks this banner even
-  // though the thread stays QUEUED (pr-watch is a visible handoff, not a Held park) — the fence card
-  // wins, no double-card. deriveNeedsYou still queues it; only the banner is suppressed.
+  // A NON-pr-watch awaiting fence still outranks the banner: it renders its own titled card with its own
+  // park control, so showing both would be the double-card this rule exists to prevent.
+  const humanPark = tele({ ...child, lastFence: { kind: "awaiting", body: "", hints: [{ kind: "human", value: "Alice" }] } })
+  assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), humanPark, "turn-idle"), false, "an awaiting fence outranks it → no double-card")
+  // A pr-watch PARK IS THE EXCEPTION (2026-08-13). Its fence card no longer offers a park action at all
+  // (lib/awaitingPresentation), so this banner is the only place the wait is stated in words AND the only
+  // place its snooze lives. Suppressing it would leave a titleless fence card with no control anywhere.
   const prWatch = tele({ ...child, lastFence: { kind: "awaiting", body: "PR up.", hints: [{ kind: "pr-watch", value: "acme/app#1" }] } })
-  assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), prWatch, "turn-idle"), false, "an awaiting fence outranks it → no double-card")
-  assert.equal(deriveNeedsYou(row({ rested_at: T0 }), prWatch, "turn-idle"), true, "…but the pr-watch thread still queues")
+  assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), prWatch, "turn-idle"), true, "the pr-watch park cards here now")
+  assert.equal(deriveNeedsYou(row({ rested_at: T0 }), prWatch, "turn-idle"), true, "…and the thread still queues")
+  // …and it qualifies on the WATCHER ALONE, with no sub-agent or shell out — which is the common shape.
+  const watcherOnly = tele({ lastActivityAt: LATER, lastFence: { kind: "awaiting", body: "PR up.", hints: [{ kind: "pr-watch", value: "acme/app#1" }] } })
+  assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), watcherOnly, "turn-idle"), true, "a watcher is live own work")
+  // An unparseable ref arms nothing, so it is not live work and must not conjure a card.
+  const bogus = tele({ lastActivityAt: LATER, lastFence: { kind: "awaiting", body: "", hints: [{ kind: "pr-watch", value: "the auth PR" }] } })
+  assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), bogus, "turn-idle"), false, "no parseable ref, no watcher")
   // An EXITED parent with a 'running' child is a crash, not this card.
   assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), child, "exited"), false)
   // No live own work → not this card.

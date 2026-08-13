@@ -132,7 +132,7 @@ function resumeNativeAnchoring(): void {
 // In practice this is the SHELL card's control: a rest on a live sub-agent is excused from the queue
 // outright, so the shape that reaches here is the shell-only rest (board.deriveNeedsYou). Hence the
 // copy names shells rather than the older "until a sub-agent returns".
-const BG_SNOOZE_EXPLAINER = "Removes this from the queue until one of the background shells completes — the agent resumes automatically."
+const BG_SNOOZE_EXPLAINER = "Removes this from the queue until the background work reports — the agent resumes automatically."
 
 function AwaitingBackgroundBanner({ thread, onSnooze, onSnoozeFailed }: {
   thread: ThreadView

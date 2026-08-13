@@ -22,7 +22,16 @@ import "./styles.css"
 // rest with live children, then /thread/<slug> and /thread/<slug>/full show the button-less card.
 
 const SLUG = "awaiting-bg-demo"
-const shellOnly = new URLSearchParams(location.search).get("agents") !== "1"
+const params = new URLSearchParams(location.search)
+// ?watch=1 — the PR-WATCH PARK, which reaches this card as of 2026-08-13: its awaiting fence no longer
+// offers a park action, so this card is where the wait is stated and its event-snooze is the one control.
+// ?watch=both — a thread holding a shell AND a watcher, so the sentence has to name both kinds.
+const watchMode = params.get("watch")
+const wantAgents = params.get("agents") === "1"
+const wantWatch = watchMode !== null
+// Shells are the DEFAULT shape; ?agents=1 swaps them for sub-agents, and ?watch=1 for a lone watcher.
+const wantShells = !wantAgents && watchMode !== "1"
+const shellOnly = wantShells && !wantAgents
 
 const tail = shellOnly
   ? "Left the dev server and the CI poller running; I'll pick this back up when they report."
@@ -57,15 +66,16 @@ const thread = {
   foreign: false,
   backend: "claude",
   permissionMode: "default",
-  subAgents: shellOnly ? [] : [
+  subAgents: !wantAgents ? [] : [
     { id: "agent-a", label: "Audit the parser for edge cases", subagentType: "frizz:opus-high", startedAt: "2026-07-23T09:05:00.000Z", state: "running" },
     { id: "agent-b", label: "Write property tests for the tiers", subagentType: "frizz:sonnet-high", startedAt: "2026-07-23T09:05:20.000Z", state: "running" },
   ],
-  bgShells: shellOnly
-    ? [
+  bgShells: !wantShells ? [] : [
         { label: "vite dev --host", startedAt: "2026-07-23T09:06:00.000Z", state: "running" },
         { label: "gh run watch 1842", startedAt: "2026-07-23T09:06:10.000Z", state: "running" },
-      ]
+      ],
+  watches: wantWatch
+    ? [{ id: "github:demo:acme/app#391", kind: "github", target: "acme/app#391", state: "armed", createdAt: "2026-07-23T09:04:00.000Z" }]
     : [],
   lastActivityAt: "2026-07-23T09:07:00.000Z",
 } as unknown as ThreadViewModel

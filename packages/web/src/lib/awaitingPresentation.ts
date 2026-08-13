@@ -7,30 +7,21 @@ import { formatSnoozeWake } from "./snooze.ts"
 export const AWAITING_FALLBACK_TITLE = "Awaiting"
 
 /** The verb every park button wears. It is deliberately ONE word for every kind: the card's TITLE
- *  already names the specific wait ("PR watcher armed"), and the explainer already spells out the
+ *  already names the specific wait ("Awaiting human"), and the explainer already spells out the
  *  effect, so the button only has to say what it does (maintainer 2026-07-24). */
 export const AWAITING_PARK_BUTTON = "Snooze"
 
 /** What the awaiting card's park control offers for these hints, or null when no hint is parkable
- *  (legacy pr/ci/session, or an elapsed/malformed timer) — there is then nothing to confirm.
+ *  (a `pr-watch`, legacy pr/ci/session, or an elapsed/malformed timer) — there is then nothing to confirm.
  *
  *  `title` is the card's HEADING, not a button label: a future `timer` → "Scheduled snooze" to that
- *  exact instant; `pr-watch` → "PR watcher armed" — the STATE the thread is already in, since the
- *  scheduler auto-arms off the fence and a pr-watch card is a VISIBLE queue handoff by default; a
- *  plain `human` gate → "Awaiting human". A `pr-watch` OUTRANKS a co-declared timer here, because the
- *  watcher is the live wake and the instant is only its backstop — reading the clock first titled a
- *  watching thread "Scheduled snooze" and hid the watcher outright. Without a declared time (the usual
- *  pr-watch/human fence) the caller parks for the user's default snooze preset — for pr-watch that
- *  preset is only a SAFETY timeout: the scheduler clears the snooze the moment new PR activity arrives
- *  (scheduler.ts, the clear-snooze-on-pr-watch-wake), so ACTIVITY is the real wake and the timeout just
- *  guards against a dead PR hiding forever. That is why pr-watch's explainer leads with PR activity
- *  rather than a clock, and only names the instant when the fence actually declared one.
+ *  exact instant; a plain `human` gate → "Awaiting human". Without a declared time the caller parks for
+ *  the user's default snooze preset.
  *
- *  NB the title STATES the wait, it does not offer it: the scheduler polls a pr-watch thread whether
- *  or not the button is ever pressed (it auto-arms off the fence), so "PR watcher armed" is the literal
- *  standing fact. The imperative it replaced ("Arm watcher") described the button instead, which read
- *  as an offer to start something that was already running. What the button actually does is PARK the
- *  visible card and let the watcher bring it back (maintainer 2026-07-29).
+ *  `pr-watch` USED TO BE HERE, titling the card "PR watcher armed" and carrying the thread's Snooze.
+ *  Both moved on 2026-08-13: the watcher is listed under the prompt box beside the sub-agents and
+ *  background shells, and the snooze is the generic resting card's event-snooze, which every other
+ *  background wait already uses. One control, not one per kind. See the branch note below.
  *
  *  `timerUntil` is CANONICALIZED, never the raw hint: the fence grammar admits instants the durable
  *  snooze grammar rejects (no millis, a numeric offset), and setThreadSnooze rejects those as invalid
@@ -43,15 +34,19 @@ export function awaitingParkAction(
   const timerUntil = hints
     .flatMap((hint) => (hint.kind === "timer" ? [canonicalSnoozeInstant(hint.value)] : []))
     .find((instant): instant is string => instant !== null && Date.parse(instant) > nowMs)
-  if (hints.some((hint) => hint.kind === "pr-watch")) {
-    const backstop = timerUntil ? `, or until ${lowerCalendarLead(formatSnoozeWake(timerUntil, nowMs))}` : ""
-    return {
-      title: "PR watcher armed",
-      explainer: `${dismiss} PR activity is detected${backstop}.`,
-      toastVerb: "Watcher armed",
-      timerUntil: timerUntil ?? null,
-    }
-  }
+  // ---- `pr-watch` NO LONGER PARKS FROM HERE (2026-08-13) ------------------------------------------
+  // This branch titled the card "PR watcher armed" and hung the thread's Snooze off it. Both moved:
+  // the watcher is now listed under the prompt box beside the sub-agents and background shells
+  // (ChildOpRow's GITHUB kind, fed by board.githubWatchViews), and the SNOOZE is the generic resting
+  // card's event-snooze, which every other background wait already uses. The maintainer chose that
+  // consolidation over keeping a second, kind-specific park control: "the user can just use the generic
+  // snooze card that shows up any time an agent rests while there are background tasks like shells or
+  // subagents, and now GitHub watchers can be included in the ranks of those."
+  //
+  // A pr-watch fence that ALSO declares a `timer:` still parks on the clock below — that instant is a
+  // real declared wait and nothing else offers it. A pr-watch fence alone falls through to `null`, so
+  // the card renders under AWAITING_FALLBACK_TITLE with no button, which is honest: there is nothing
+  // left for it to offer that the strip and the resting card do not already carry.
   if (timerUntil) {
     return {
       title: "Scheduled snooze",

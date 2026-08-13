@@ -258,8 +258,22 @@ function stampStoppableShells(shells: ThreadView["bgShells"], row: SessionRow): 
 function hasLiveOwnWork(tele: SessionTelemetry | undefined): boolean {
   return Boolean(
     tele?.subAgents?.some((agent) => isDirectSubAgent(agent) && agent.state === "running") ||
-    tele?.bgShells?.some((shell) => shell.state === "running"),
+    tele?.bgShells?.some((shell) => shell.state === "running") ||
+    // A PARKED PR WATCHER COUNTS (2026-08-13). It is the same shape of thing as a detached shell: the
+    // worker left it running, it will re-invoke the thread on its own, and until it does there is
+    // nothing for the human to do. That makes it eligible for the resting card and — the point of
+    // counting it — for that card's event-snooze, which is now the ONE control for hiding a parked
+    // watcher (maintainer: "the user can just use the generic snooze card… now GitHub watchers can be
+    // included in the ranks of those").
+    hasParkedPrWatch(tele),
   )
+}
+
+/** A standing `pr-watch:` park the scheduler will actually fire — the same parse `githubWatchViews`
+ *  renders and the waker's own poller arms from, so "there is a watcher" means one thing everywhere. */
+function hasParkedPrWatch(tele: SessionTelemetry | undefined): boolean {
+  if (tele?.lastFence?.kind !== "awaiting") return false
+  return tele.lastFence.hints.some((hint) => hint.kind === "pr-watch" && parsePrRef(hint.value) !== undefined)
 }
 
 // The awaiting-background event-snooze is armed for the CURRENT rest iff the captured rested_at still
@@ -524,10 +538,17 @@ export function deriveAwaitingBackground(
   // stopped, and it renders its own card in the transcript body. That is strictly more specific than
   // "it has background work running", so it wins: show the fence card ALONE, never both. This is the
   // pr-watch double-card fix (maintainer 2026-07-24): a pr-watch thread with a live sub-agent stays
-  // queued (deriveNeedsYou keeps it, since pr-watch is a visible handoff) but now cards as its "Arm
-  // watcher" fence, not as this banner. A parked human/timer fence never reached here anyway (it's
-  // Held, not queued); this only changes the non-parked awaiting fences (pr-watch, legacy, hintless).
-  if (tele?.lastFence?.kind === "done" || tele?.lastFence?.kind === "awaiting") return false
+  // queued (deriveNeedsYou keeps it, since pr-watch is a visible handoff) but cards as its fence rather
+  // than as this banner. A parked human/timer fence never reached here anyway (it's Held, not queued).
+  //
+  // A pr-watch PARK IS NOW THE EXCEPTION, and the exception is what makes it one card again rather than
+  // two (maintainer 2026-08-13, choosing this): the awaiting card no longer offers a park action for
+  // `pr-watch` at all — see lib/awaitingPresentation.awaitingParkAction, where the branch that titled it
+  // "PR watcher armed" and carried its Snooze is gone. The watcher itself is listed under the prompt box
+  // with the sub-agents and shells, and THIS card carries the one snooze. Without this line the parked
+  // thread would show a titleless fence card and no snooze anywhere.
+  if (tele?.lastFence?.kind === "done") return false
+  if (tele?.lastFence?.kind === "awaiting" && !hasParkedPrWatch(tele)) return false
   // Every OTHER excusal deriveNeedsYou applies still outranks the card (a user wall-clock snooze, a
   // limit pause, a delivered-but-unobserved follow-up); only the queue-owned event-snooze is dropped,
   // and the queue's live-OWN-WORK excusal is opted out of (excuseLiveOwnWork: false). That opt-out is

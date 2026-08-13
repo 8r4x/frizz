@@ -749,9 +749,11 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     // clock is only the backstop: the scheduler polls the PR and CLEARS the park the moment new
     // activity lands (scheduler.ts, the clear-snooze-on-pr-watch-wake), so what actually wakes this row
     // is GitHub. pr-watch never parks itself — parkedAwaitingHint excludes it so a watch stays a
-    // visible queue handoff — so the rows that reach here are the two that get parked ANYWAY: one the
-    // human snoozed off the "PR watcher armed" card, and one whose worker co-declared a `human:` gate
-    // beside the watch. Both were previously indistinguishable from a plain timer park.
+    // visible queue handoff — so the rows that reach here are the ones parked ANYWAY: one whose worker
+    // co-declared a `human:` gate beside the watch, and one the human snoozed on a wall clock. (Until
+    // 2026-08-13 the commonest source was the awaiting card's own "PR watcher armed" Snooze; that
+    // control is gone, and the resting card's event-snooze that replaced it drops the queue card
+    // without parking the thread in Held.) All were previously indistinguishable from a plain timer park.
     const watched = t.lastFence?.kind === "awaiting" ? prWatchRefs(t.lastFence.hints) : []
     const heldMark = watched.length > 0 ? github : hourglass
     // The refs are what the watch is ABOUT and they live nowhere else on the row (hintGloss keeps

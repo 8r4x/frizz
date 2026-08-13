@@ -42,32 +42,29 @@ test("actionable hints win and elapsed timers remain stable instead of becoming 
   assert.equal(awaitingHintSentence([{ kind: "timer", value: "not-a-time" }], now), "Snooze schedule unavailable")
 })
 
-test("pr-watch: internal ping instructions stay out of the card while the park action remains", () => {
-  assert.equal(
-    awaitingHintSentence([{ kind: "pr-watch", value: "acme/app#391" }], now),
-    null,
-  )
-  assert.deepEqual(awaitingParkAction([{ kind: "pr-watch", value: "acme/app#391" }], now), {
-    title: "PR watcher armed",
-    explainer: "This will dismiss the card from the queue until PR activity is detected.",
-    toastVerb: "Watcher armed",
-    timerUntil: null,
-  })
+// A pr-watch fence OFFERS NOTHING HERE any more (2026-08-13). Its park control and its "PR watcher
+// armed" heading both moved to the generic resting card, whose event-snooze already covers every other
+// background wait — the maintainer chose that consolidation over a second, kind-specific control:
+// "the user can just use the generic snooze card that shows up any time an agent rests while there are
+// background tasks like shells or subagents, and now GitHub watchers can be included in the ranks of
+// those." So the fence card falls back to the plain heading and no button.
+test("pr-watch alone offers no park action — the resting card carries it now", () => {
+  assert.equal(awaitingHintSentence([{ kind: "pr-watch", value: "acme/app#391" }], now), null)
+  assert.equal(awaitingParkAction([{ kind: "pr-watch", value: "acme/app#391" }], now), null)
 })
 
 // A timer co-declared as a watcher's safety backstop is scheduler input too, so neither parsed hint
-// becomes a second set of instructions under the worker-authored status.
-test("pr-watch suppresses co-declared timer instructions without changing the park target", () => {
+// becomes a second set of instructions under the worker-authored status. The INSTANT still parks,
+// though: it is a real declared wait and nothing else offers it.
+test("a co-declared timer still parks, and now titles the card on its own terms", () => {
   const hints = [
     { kind: "pr-watch", value: "acme/app#391" },
     { kind: "timer", value: "2026-07-21T21:00:00.000Z" },
   ] as const
   assert.equal(awaitingHintSentence([...hints], now), null)
   const park = awaitingParkAction([...hints], now)
-  assert.equal(park?.title, "PR watcher armed")
-  assert.match(park?.explainer ?? "", /^This will dismiss the card from the queue until PR activity is detected, or until today at .+\.$/)
-  // The declared instant still drives the park, so confirming snoozes to the fence's own backstop
-  // rather than the user's default preset.
+  assert.equal(park?.title, "Scheduled snooze")
+  assert.match(park?.explainer ?? "", /^This will dismiss the card from the queue until today at .+\.$/)
   assert.equal(park?.timerUntil, "2026-07-21T21:00:00.000Z")
 })
 
@@ -116,12 +113,8 @@ test("a park target is always an instant setThreadSnooze accepts, whatever shape
 })
 
 test("park kinds without a declared instant defer to the caller's preset, and unparkable hints offer nothing", () => {
-  assert.deepEqual(awaitingParkAction([{ kind: "pr-watch", value: "owner/repo#42" }], now), {
-    title: "PR watcher armed",
-    explainer: "This will dismiss the card from the queue until PR activity is detected.",
-    toastVerb: "Watcher armed",
-    timerUntil: null,
-  })
+  // `pr-watch` is no longer one of them — see the dedicated test above.
+  assert.equal(awaitingParkAction([{ kind: "pr-watch", value: "owner/repo#42" }], now), null)
   assert.deepEqual(awaitingParkAction([{ kind: "human", value: "Alice to approve" }], now), {
     title: "Awaiting human",
     explainer: "This will dismiss the card from the queue until your default snooze elapses.",
