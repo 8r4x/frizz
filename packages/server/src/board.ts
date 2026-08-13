@@ -15,6 +15,7 @@ import { normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
 import type { Tailer, SessionTelemetry } from "./tailer.ts"
 import type { InteractionChange } from "./interaction-store.ts"
 import { frizzDirExists } from "./frizz.ts"
+import { parsePrRef } from "./awaiting.ts"
 import { findByPath } from "./project-registry.ts"
 import { parseDeliveryLedger } from "./delivery-ledger.ts"
 import { effectivePermissionMode, resolveLegacyThreadFile } from "./dispatch.ts"
@@ -290,6 +291,45 @@ function hasParkedExternalWait(tele: SessionTelemetry | undefined, nowMs: number
     hint.kind === "human" ||
     (hint.kind === "timer" && isValidAwaitingTimer(hint.value) && Date.parse(hint.value) > nowMs),
   )
+}
+
+// The thread's standing PR WATCHERS, synthesized as watch rows so the ops strip under the prompt box
+// can list them beside the sub-agents and background shells the worker also has out (maintainer
+// 2026-08-13: "showing the active watchers underneath the prompt box, similar to how subagents work").
+//
+// DERIVED FROM THE FENCE, not from `thread_watch`. A PR wait deliberately has no registry row — the
+// fence owns PR watching (`f366e2d`) — so this reads the same `pr-watch:` hints the scheduler's own
+// poller arms from. That coupling is the point: the strip lists exactly what will actually wake the
+// thread, and the two cannot drift into claiming different things.
+//
+// It therefore has the fence's lifetime: it stands while the park is the worker's last word and
+// disappears the moment the worker says anything else, which is correct — that is also the instant the
+// scheduler stops watching. The ID is stable across ticks (slug + ref) so a row does not remount on
+// every board delta, and there is nothing to DROP: the affordance for hiding one is the snooze the
+// operator already uses for a thread resting on background work.
+function githubWatchViews(slug: string, tele: SessionTelemetry | undefined, fenceAt: string | undefined): ThreadView["watches"] {
+  if (tele?.lastFence?.kind !== "awaiting") return []
+  const seen = new Set<string>()
+  const out: ThreadView["watches"] = []
+  for (const hint of tele.lastFence.hints) {
+    if (hint.kind !== "pr-watch") continue
+    const ref = parsePrRef(hint.value)
+    if (!ref) continue // an unparseable ref arms nothing, so it may not claim a row either
+    const target = `${ref.owner}/${ref.repo}#${ref.number}`
+    if (seen.has(target)) continue
+    seen.add(target)
+    out.push({
+      id: `github:${slug}:${target}`,
+      kind: "github" as const,
+      target,
+      state: "armed" as const,
+      // When the worker PARKED — which is what the strip's duration should count from, and what the
+      // watcher's own activity baseline is keyed on. Falls back to the thread's last activity when the
+      // fold has no instant for the fence.
+      createdAt: fenceAt ?? tele.lastAssistantAt ?? new Date().toISOString(),
+    })
+  }
+  return out
 }
 
 // SERVER-DERIVED queue membership for a REGISTERED session thread (foreign/archived → false at the
@@ -755,14 +795,20 @@ function sessionThreadView(
     lastAssistantAt: tele?.lastAssistantAt,
     subAgents: stampStoppable(tele?.subAgents ?? [], row),
     bgShells: stampStoppableShells(tele?.bgShells ?? [], row),
-    // Read from the REGISTRY rather than the fold — the whole point of moving waits out of the fence.
-    watches: storage.listThreadWatches(row.slug, { armedOnly: true }).map((w) => ({
-      id: w.id,
-      kind: w.kind,
-      target: w.target,
-      state: w.state,
-      createdAt: new Date(w.created_at).toISOString(),
-    })),
+    // TWO SOURCES, one list. A `shell` watch is a REGISTRATION the worker made by tool call, read from
+    // the registry — the whole point of moving that kind of wait out of the fence. A `github` watch has
+    // no row and never will (`f366e2d`); it is derived from the standing fence, so that the strip lists
+    // every wait the thread actually has out rather than only the ones with a table behind them.
+    watches: [
+      ...storage.listThreadWatches(row.slug, { armedOnly: true }).map((w) => ({
+        id: w.id,
+        kind: w.kind,
+        target: w.target,
+        state: w.state,
+        createdAt: new Date(w.created_at).toISOString(),
+      })),
+      ...githubWatchViews(row.slug, tele, tele?.lastAssistantAt),
+    ],
     pendingAsk: tele?.pendingAsk ? { questions: tele.pendingAsk.questions } : undefined,
     nativeInputRequired: tele?.nativeInputRequired,
     pendingQuestion: tele?.pendingQuestion ?? false,
@@ -1011,6 +1057,7 @@ export function createBoard(
       projectDir: project.dir,
       projectName: project.name,
       projectLabel: project.label,
+      ...(project.githubRepo ? { githubRepo: project.githubRepo } : {}),
       projectSlug: findByPath(project.dir)?.slug,
     }
     const sessionThreads = buildSessionThreads(assembledAtMs)

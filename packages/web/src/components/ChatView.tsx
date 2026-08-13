@@ -10,7 +10,8 @@ import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShel
 import { useBackgroundShellLines, useBoard, useProjectDir, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
 import { displayTitle, lastActiveLabelAt } from "../groups.ts"
-import { mdToHtml, mdInlineToHtml, stripFrontmatter } from "../lib/markdown.ts"
+import { stripFrontmatter } from "../lib/markdown.ts"
+import { useMarkdownHtml, useInlineMarkdownHtml } from "../lib/useMarkdown.ts"
 import { splitComposerValue, splitProseAttachments } from "../lib/imagePaths.ts"
 import { localImageUrl } from "../lib/markdownTargets.ts"
 import { apiBase } from "../lib/base-path.ts"
@@ -46,6 +47,7 @@ import { Tooltip } from "./Tooltip.tsx"
 import { ToolDisclosureHeader } from "./ToolDisclosureHeader.ts"
 import { FOREGROUND_MARK_AFTER_MS, foregroundToolIsRunning, hasRunningToolIndicator, isPendingForegroundTool, liveBackgroundOperationState } from "../lib/operationIndicators.ts"
 import { formatRuntimeElapsed, formatToolDuration } from "../lib/durationLabels.ts"
+import { githubRefUrl } from "../lib/githubRef.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { CHILD_OPEN_TITLE, CHILD_QUIET_SHELL_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, childOpSubtree, mergeBackgroundShells, shellLinesLabel, visibleChildOps, type TranscriptShellRecord } from "../lib/childOps.ts"
 import { childOpDismisser } from "../lib/dismissChildOp.ts"
@@ -2735,7 +2737,7 @@ function SendMessageCard({ to, summary, body, type, status, durationMs }: { to?:
   const [open, setOpen] = useState(!summary)
   const [expanded, setExpanded] = useState(false)
   const bodyId = useId()
-  const html = useMemo(() => mdToHtml(body), [body])
+  const html = useMarkdownHtml(body)
   const inner = useInnerHtml(html)
   const lineCount = useMemo(() => body.split("\n").length, [body])
   const long = lineCount > SEND_MAX_LINES
@@ -3282,7 +3284,7 @@ function AnswersCard({ answers, queued, sourceId }: { answers: PairedAnswer[]; q
 
 
 function ProseHtml({ md, wrap }: { md: string; wrap?: boolean }) {
-  const html = useMemo(() => mdToHtml(md), [md])
+  const html = useMarkdownHtml(md)
   const inner = useInnerHtml(html)
   const ref = useRef<HTMLDivElement>(null)
   // Make inline-code file references clickable (opens in the user's editor/default app) once the server
@@ -3427,11 +3429,11 @@ export function InlineVisualization({ file }: { file: string }) {
 // heading naming the wait ("PR watcher armed"), the body prose plus a plain-English action summary
 // for non-watcher waits (with legacy pr/ci/session support), then the park button + its explainer.
 export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKind; body: string; hints: AwaitingHint[]; wrap?: boolean }) {
-  const html = useMemo(() => (body ? mdToHtml(body) : ""), [body])
+  const html = useMarkdownHtml(body)
   const doneInner = useInnerHtml(html)
   const awaitingHint = awaitingHintSentence(hints)
   const awaitingLine = awaitingPresentationLine(body, awaitingHint)
-  const awaitingInner = useInnerHtml(useMemo(() => mdInlineToHtml(awaitingLine), [awaitingLine]))
+  const awaitingInner = useInnerHtml(useInlineMarkdownHtml(awaitingLine))
   // The owning thread's slug — set by the thread view AND the queue card — so the confirm button
   // resolves its thread and renders on both surfaces (null in a sub-agent's own transcript → no button).
   const slug = useContext(ThreadSlugContext)
@@ -3858,7 +3860,11 @@ export function BackgroundOpsStrip({
   // A single shell arrives through BOTH provider board telemetry and transcript projection; they are
   // reconciled on the launch tool_use id (see mergeBackgroundShells for why label+startedAt could not).
   const shells = parentAgentId ? [...transcriptShells] : mergeBackgroundShells(thread?.bgShells ?? [], transcriptShells)
-  const total = agents.length + shells.length
+  // PR WATCHERS the thread has parked on. Thread-wide only: a sub-agent cannot park on a fence, so the
+  // drawer's scoped reading ("the ops running underneath THIS child") has none by construction, and
+  // listing the parent's here would credit the child with its parent's wait.
+  const watchers = parentAgentId ? [] : (thread?.watches ?? []).filter((w) => w.kind === "github")
+  const total = agents.length + shells.length + watchers.length
   // This is intentionally independent of transcript cards: it sits immediately below the affected
   // prompt box so a resting worker that owns a live shell still reads as active at a glance. Do not
   // add a thread-wide “Running” marker here: a foreground turn and several independent children are
@@ -3914,6 +3920,23 @@ export function BackgroundOpsStrip({
           // that could only report "unavailable".
           onOpen={s.id && !s.outputUnavailable ? () => pushBackgroundShellDrawer(slug, s.id!, { label: s.label, startedAt: s.startedAt }) : undefined}
           onDismiss={childOpDismisser(slug, s, "SHELL")}
+        />
+      ))}
+      {/* THE PR WATCHERS, last, because they are the least likely to change while you are looking: a
+          sub-agent and a shell are running RIGHT NOW, and a watcher is waiting on somebody else.
+          They are always `running` — a parked watcher IS live, and the row vanishes the moment the
+          fence stops standing (see board.githubWatchViews), so there is no settled state to draw.
+          NO DISMISS ×: there is no registration to drop. The worker owns the fence, and the operator's
+          control for "stop showing me this" is the snooze on the resting card. */}
+      {watchers.map((w) => (
+        <ChildOpRow
+          key={w.id}
+          kind="GITHUB"
+          label={w.target}
+          state="running"
+          density="sheet"
+          startedAt={w.createdAt}
+          onOpen={() => window.open(githubRefUrl(w.target) ?? `https://github.com/${w.target.replace("#", "/pull/")}`, "_blank", "noreferrer,noopener")}
         />
       ))}
     </div>

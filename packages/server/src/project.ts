@@ -11,16 +11,39 @@ import type { ProjectLaunchTarget } from "./project-launch.ts"
 import { discoverProjectRoot, ensureProjectIdFile, writeProjectIdFile } from "./project-root.ts"
 import { registerProject } from "./project-registry.ts"
 import { projectStateDir } from "./frizz-paths.ts"
-import { resolveProjectLabel } from "./project-identity.ts"
+import { originRemoteUrl, parseRepoLabel, resolveProjectLabel } from "./project-identity.ts"
+import { githubRemoteNameWithOwner } from "./github.ts"
 
 // Workspace resolution + on-disk locations. Everything here is derived once at boot and
 // threaded through the AppContext — no module reads cwd on its own.
+
+/**
+ * A project's display name and its github.com link target, from ONE `git remote get-url origin`.
+ *
+ * Two answers because they are two different questions, and conflating them would ship a wrong URL.
+ * `label` is DISPLAY, so it is host-agnostic: a GitLab or Gitea origin gets its "owner/repo" shown
+ * just the same, and falls back to the directory name when there is no remote at all. `githubRepo` is
+ * a LINK TARGET — what the rendered-markdown autolinker turns `#123` and a bare commit hash into — so
+ * it goes through the host-strict parser whose spoof cases (`github.com.evil.com`) are unit-tested in
+ * github.test.ts. Rendering a GitLab project's `#12` as a github.com URL is a WRONG destination, which
+ * is worse than no link at all; absent here simply means the augmentation stays off.
+ *
+ * No `gh`, no network: this is the local git remote, so autolinking works signed out and with gh
+ * absent entirely (the picker's `githubStatus` gate is a different, gh-authoritative question).
+ */
+export function projectRepoIdentity(dir: string, name: string): { label: string; githubRepo?: string } {
+  const url = originRemoteUrl(dir)
+  if (!url) return { label: name }
+  const githubRepo = githubRemoteNameWithOwner(url)
+  return { label: parseRepoLabel(url) ?? name, ...(githubRepo ? { githubRepo } : {}) }
+}
 
 export interface Project {
   dir: string // repo root (git toplevel of the server's cwd)
   id: string // stable checkout UUID; common config for main, private Git metadata for linked worktrees
   name: string // basename of dir, for display
   label: string // "owner/repo" from the git origin remote, else name (repos with no remote)
+  githubRepo?: string // "owner/repo" ONLY when that origin remote is github.com — see projectRepoIdentity
   stateDir: string // ~/.frizz/projects/<id>/ — SQLite + server.lock live here
   cwdSlug: string // ~/.claude/projects/<slug>/ session-log dir name
   // Present for linked worktrees; ordinary/main worktrees use the repository-scoped identity.
@@ -187,7 +210,7 @@ export function projectFromRegistryEntry(
     dir: entry.path,
     id: entry.id,
     name,
-    label: resolveProjectLabel(entry.path) ?? name,
+    ...projectRepoIdentity(entry.path, name),
     stateDir,
     cwdSlug: cwdSlug(entry.path),
   }
@@ -214,7 +237,7 @@ export function resolveProject(
     dir,
     id,
     name,
-    label: resolveProjectLabel(dir) ?? name,
+    ...projectRepoIdentity(dir, name),
     stateDir,
     cwdSlug: cwdSlug(dir),
     ...(identity.scope === "worktree" ? { identityScope: "worktree" as const } : {}),
@@ -262,7 +285,7 @@ export function projectFromLaunchTarget(
     dir,
     id: target.projectId,
     name,
-    label: resolveProjectLabel(dir) ?? name,
+    ...projectRepoIdentity(dir, name),
     stateDir: target.stateDir,
     cwdSlug: cwdSlug(dir),
     ...(target.identityScope === "worktree" ? { identityScope: "worktree" as const } : {}),

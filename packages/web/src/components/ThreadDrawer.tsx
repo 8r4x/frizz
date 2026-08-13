@@ -1,11 +1,12 @@
-import { useEffect, useMemo } from "react"
+import { useEffect } from "react"
 import { useSnapshot } from "valtio"
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { store, threadBySlug, showToast } from "../store.ts"
 import type { BoardSnapshot } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { useInnerHtml } from "../lib/innerHtml.ts"
-import { mdToHtml, stripFrontmatter } from "../lib/markdown.ts"
+import { stripFrontmatter } from "../lib/markdown.ts"
+import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { canAdoptThread } from "../lib/adoption.ts"
 import { Composer } from "./Composer.tsx"
 import { Sheet } from "./ui/Sheet.tsx"
@@ -69,7 +70,7 @@ export function ThreadDrawer({ id, slug, title, depth, widthDepth }: { id: numbe
     },
   })
 
-  const html = useMemo(() => mdToHtml(stripFrontmatter(body.data?.markdown ?? "")), [body.data?.markdown])
+  const html = useMarkdownHtml(stripFrontmatter(body.data?.markdown ?? ""))
   const inner = useInnerHtml(html)
 
   return (

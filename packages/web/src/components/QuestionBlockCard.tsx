@@ -17,7 +17,7 @@
 import { Fragment, useLayoutEffect, useMemo, useRef } from "react"
 import { AlertTriangle, Check, HelpCircle, ListChecks } from "lucide-react"
 import { useInnerHtml } from "../lib/innerHtml.ts"
-import { mdInlineToHtml, mdToHtml } from "../lib/markdown.ts"
+import { useInlineMarkdownHtml, useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { parseQuestionBlock, type BlockAnswer, type ParsedQuestion, type QuestionKind } from "../lib/questionBlocks.ts"
 import { QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
@@ -66,11 +66,11 @@ export function QuestionBlockCard({
     () => question ?? parseQuestionBlock(raw ?? "", questionKind ?? "question", danger),
     [question, raw, questionKind, danger],
   )
-  const html = useMemo(() => mdToHtml(parsed.contextMd), [parsed.contextMd])
+  const html = useMarkdownHtml(parsed.contextMd)
   const contextHtml = useInnerHtml(html)
-  const trailingInner = useInnerHtml(useMemo(() => (parsed.trailingMd ? mdToHtml(parsed.trailingMd) : ""), [parsed.trailingMd]))
+  const trailingInner = useInnerHtml(useMarkdownHtml(parsed.trailingMd ?? ""))
   const recIdx = parsed.recommendedIdx
-  const recInner = useInnerHtml(useMemo(() => (parsed.recommendation ? mdInlineToHtml(parsed.recommendation) : ""), [parsed.recommendation]))
+  const recInner = useInnerHtml(useInlineMarkdownHtml(parsed.recommendation ?? ""))
   const isMulti = parsed.kind === "multi"
   const isDanger = parsed.danger
   const chosen = interactive?.answer.chosen ?? null
@@ -222,7 +222,7 @@ export function QuestionBlockCard({
 // options .map(), and an inline `{ __html }` literal there would rebuild the DOM on every render
 // (see useInnerHtml).
 function OptionHeading({ md, wrap }: { md: string; wrap?: boolean }) {
-  const inner = useInnerHtml(useMemo(() => mdInlineToHtml(md.split("\n").join(" ")), [md]))
+  const inner = useInnerHtml(useInlineMarkdownHtml(md.split("\n").join(" ")))
   return (
     <div className="mt-1 text-fg">
       <div className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={inner} />
@@ -267,7 +267,7 @@ function Chip({
   // inertInteractive: the chip is itself a <button>, so a link/local-file path in the option text must
   // NOT become a nested interactive element (invalid HTML + a click that both opens the link and selects
   // the option). Flatten links to spans; emphasis/code still render.
-  const labelInner = useInnerHtml(useMemo(() => mdInlineToHtml(label, { inertInteractive: true }), [label]))
+  const labelInner = useInnerHtml(useInlineMarkdownHtml(label, { inertInteractive: true }))
   return (
     <button
       type="button"

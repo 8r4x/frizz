@@ -702,8 +702,25 @@ export function timerPromptMessage(prompt: string, fireAt: string): string {
  *  pr-watch is not a legacy path being tolerated, it is machinery still being improved — `9ebd6b2` gave
  *  it backlog replay on the first park, which this registry would have had to re-implement to match.
  *  A PR wait belongs in an ```awaiting fence with a `pr-watch:` line, which is durable and works. */
-export const ThreadWatchKind = z.enum(["shell"])
+// `shell` is the only kind a WORKER can register — `mcp__frizz__watch` refuses everything else, and it
+// is the only kind the `thread_watch` table's CHECK constraint admits.
+//
+// `github` is a VIEW kind with no registry row behind it (2026-08-13). A PR wait lives in the worker's
+// ```awaiting fence — that is deliberate and settled (`f366e2d`, "the fence owns PR watching") — but the
+// operator still wants to SEE it standing, in the same strip under the prompt box that lists sub-agents
+// and background shells: "showing the active watchers underneath the prompt box, similar to how
+// subagents work… now GitHub watchers can be included in the ranks of those" (maintainer 2026-08-13).
+// So the board SYNTHESIZES one row per parseable `pr-watch:` hint on the thread's standing fence. It is
+// derived state, not a registration: it appears when the worker parks, vanishes when it says anything
+// else, and carries no drop affordance, because there is no row to drop.
+export const ThreadWatchKind = z.enum(["shell", "github"])
 export type ThreadWatchKind = z.infer<typeof ThreadWatchKind>
+
+/** The kinds a WORKER may actually register — the `thread_watch` table's own domain. Split out from the
+ *  view enum above so the RPC boundary and the storage layer cannot silently widen when a view-only kind
+ *  is added to it. */
+export const RegisterableThreadWatchKind = z.enum(["shell"])
+export type RegisterableThreadWatchKind = z.infer<typeof RegisterableThreadWatchKind>
 
 /** The thing being watched: a background shell's id, or its label. */
 export const ThreadWatchTarget = z.string().trim().min(1).max(200)
@@ -1497,7 +1514,11 @@ export type CancelOwnThreadTimerResult = z.infer<typeof CancelOwnThreadTimerResu
 
 export const AddOwnThreadWatchInput = z.object({
   slug: ThreadSlug,
-  kind: ThreadWatchKind,
+  // REGISTERABLE kinds only, which is `shell` and nothing else — deliberately narrower than
+  // `ThreadWatchKind`, whose `github` member is a board-derived VIEW row with no registration behind it.
+  // The MCP tool already refuses a PR here in words ("a pr wait does not belong here — use an ```awaiting
+  // fence"); this is the same refusal at the wire, where it cannot be talked past.
+  kind: RegisterableThreadWatchKind,
   target: ThreadWatchTarget,
   /** The worker is BLOCKING on this one inside its tool call, so the scheduler settles it silently
    *  instead of delivering a wake — see the column comment in storage.ts. Defaulted, so a caller that

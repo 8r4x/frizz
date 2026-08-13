@@ -564,16 +564,25 @@ function normalizeOwnerRepo(path: string): string | null {
   return parts.slice(-2).join("/")
 }
 
-// The origin remote's "owner/repo", or null when there's no remote (fresh/scratch repos have none).
-export function resolveProjectLabel(dir: string): string | null {
+// The origin remote's URL, or null when there's no remote (fresh/scratch repos have none).
+//
+// Exported raw because two different questions are asked of it — the host-agnostic display label
+// below, and the host-STRICT github.com link target (see projectRepoIdentity in project.ts) — and a
+// caller that wants both should pay for one subprocess, not two.
+export function originRemoteUrl(dir: string): string | null {
   try {
-    const url = execFileSync("git", ["remote", "get-url", "origin"], {
+    return execFileSync("git", ["remote", "get-url", "origin"], {
       cwd: dir,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
-    }).trim()
-    return parseRepoLabel(url)
+    }).trim() || null
   } catch {
     return null // no origin remote, or not a git repo
   }
+}
+
+// The origin remote's "owner/repo", or null when there's no remote (fresh/scratch repos have none).
+export function resolveProjectLabel(dir: string): string | null {
+  const url = originRemoteUrl(dir)
+  return url ? parseRepoLabel(url) : null
 }

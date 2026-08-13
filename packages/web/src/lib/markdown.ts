@@ -3,6 +3,7 @@ import type { Token, Tokens, TokenizerAndRendererExtension } from "marked"
 import { CODE_BLOCK_CLASS, renderHighlightedCode } from "./syntaxHighlight.ts"
 import { isLocalMarkdownFile, localImageUrlForTarget, localMarkdownTarget, resolveRelativeLocalPath } from "./markdownTargets.ts"
 import { prefixedAppRoute } from "./base-path.ts"
+import { linkifyGithubRefs } from "./githubAutolink.ts"
 import { FRAMED_IMAGE, IMAGE_FRAME, IMAGE_FRAME_MAT } from "../components/ImageFrame.tsx"
 
 // marked's GFM strikethrough opener is `~~?` — ONE tilde is enough. That misreads the tilde agents
@@ -233,6 +234,15 @@ export const MARKDOWN_OPTIONS = {
   breaks: true,
   extensions: [headerlessTableExtension, customTaskStatusExtension, taskTextExtension],
   tokenizer: strikethroughTokenizer,
+  // GitHub-style `#123` / commit-hash autolinking (githubAutolink.ts). A hook rather than an extension or
+  // a walkTokens branch: it needs the ROOT token array, which is the whole document on the parseInline
+  // path, and marked hands that to `processAllTokens` alone.
+  hooks: {
+    processAllTokens(tokens: Token[]) {
+      linkifyGithubRefs(tokens)
+      return tokens
+    },
+  },
   walkTokens(token: Token) {
     if (token.type === "list_item") promoteTaskItem(token as Tokens.ListItem)
   },

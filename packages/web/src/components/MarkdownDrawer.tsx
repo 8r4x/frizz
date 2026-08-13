@@ -1,11 +1,11 @@
-import { useMemo, useRef } from "react"
+import { useRef } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { ExternalLink } from "lucide-react"
 import { showToast } from "../store.ts"
 import { rpc } from "../api/rpc.ts"
 import { useInnerHtml } from "../lib/innerHtml.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
-import { mdToHtml } from "../lib/markdown.ts"
+import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { localFileDir } from "../lib/markdownTargets.ts"
 import { Sheet } from "./ui/Sheet.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
@@ -57,10 +57,7 @@ export function MarkdownDrawer({ id, path, title, depth, widthDepth }: { id: num
   // a link through a symlinked directory would otherwise rebase its neighbours onto a directory the
   // gate never admitted, and every one of them would 404.
   const resolved = body.data?.path ?? path
-  const html = useMemo(
-    () => mdToHtml(body.data?.markdown ?? "", { baseDir: localFileDir(resolved), document: true }),
-    [body.data?.markdown, resolved],
-  )
+  const html = useMarkdownHtml(body.data?.markdown ?? "", { baseDir: localFileDir(resolved), asDocument: true })
   const inner = useInnerHtml(html)
   const ref = useRef<HTMLDivElement>(null)
   useLocalFileCodeLinks(ref, html)

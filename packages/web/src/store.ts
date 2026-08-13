@@ -6,6 +6,7 @@ import { isPageScrollLocked, pageScrollY, requestScrollAfterUnlock } from "./lib
 import { resolveThreadRoute } from "./lib/threadRouteState.ts"
 import { standaloneThreadHref } from "./lib/standaloneThreadRoute.ts"
 import { ownedByThisPage } from "./lib/projectOwnership.ts"
+import { setGithubRepo } from "./lib/githubAutolink.ts"
 
 // Where a scroll-to-card lands a card's outer border below the viewport top (px). Exported because the
 // sidebar's reading rail watches for that same landing to know a click-to-card has arrived.
@@ -402,6 +403,7 @@ export function topThreadSlug(): string | null {
 // reconcile — the focus machine that needed one is gone).
 export function setBoard(board: BoardSnapshot) {
   if (!ownedByThisPage(board.projectSlug)) return
+  setGithubRepo(board.githubRepo)
   store.board = board
 }
 
@@ -417,6 +419,7 @@ export function setBoard(board: BoardSnapshot) {
  * is open) is deliberately NOT touched — none of it changes when the project does.
  */
 export function resetProjectState() {
+  setGithubRepo(null)
   store.board = null
   store.view = "todos"
   store.connection = "connecting"
@@ -441,7 +444,9 @@ export function resetProjectState() {
 // project's URL. The guard is the only thing standing between that race and the operator.
 export function seedBoard(board: BoardSnapshot) {
   if (!ownedByThisPage(board.projectSlug)) return
-  if (store.board === null) store.board = board
+  if (store.board !== null) return
+  setGithubRepo(board.githubRepo)
+  store.board = board
 }
 
 // Apply a per-thread delta IN PLACE (upsert/remove threads, patch board-level meta) — valtio's

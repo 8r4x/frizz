@@ -1,10 +1,10 @@
-import { useMemo, useState } from "react"
+import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { FilePlus2, Loader2, Trash2 } from "lucide-react"
 import { openNewThread, showToast } from "../store.ts"
 import { rpc } from "../api/rpc.ts"
 import { useInnerHtml } from "../lib/innerHtml.ts"
-import { mdToHtml } from "../lib/markdown.ts"
+import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { Dialog } from "./ui/Dialog.tsx"
 import { Sheet } from "./ui/Sheet.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
@@ -109,7 +109,7 @@ export function PlanDeleteAction({ path, onDeleted }: { path: string; onDeleted:
 
 export function PlanDrawer({ id, path, title, depth, widthDepth }: { id: number; path: string; title: string; depth: number; widthDepth: number }) {
   const body = useQuery({ queryKey: ["planBody", path], queryFn: () => rpc.planBody({ path }) })
-  const html = useMemo(() => mdToHtml(body.data?.markdown ?? ""), [body.data?.markdown])
+  const html = useMarkdownHtml(body.data?.markdown ?? "")
   const inner = useInnerHtml(html)
 
   return (
