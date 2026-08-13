@@ -6,13 +6,16 @@ import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
 import "./styles.css"
 
-// Browser QA for the higher-level "intermediate logs collapse" in the queue card (QCard). The card shows
-// the TEXT ONLY of the agent's first and last messages; EVERYTHING between their prose — the fully-hidden
-// middle messages AND the tool calls batched into the first/last messages themselves — collapses behind
-// ONE HAIRLINE DIVIDER (the transcript's WakeDivider chrome) whose label is the stacked-chevron
-// ChevronsUpDown expand glyph, the tool-call count, and "Click to expand". So the card reads: pinned ask →
-// first message's narration (text only) → collapse divider → final message (text only). Clicking is
-// one-way: the full log (all tool bands restored) renders and the divider unmounts.
+// Browser QA for the higher-level "intermediate logs collapse" in the queue card (QCard).
+//
+// ONE FOLD PER RUN. A run is [what re-invoked the agent → the prose it rested on]; the human's ask opens
+// the first one and every scheduler WAKE cuts a new one. Within a run the card shows the TEXT ONLY of its
+// opening and closing messages, and everything else — the fully-hidden middles, the tool bands batched
+// into those two, and any calls made after the closing prose — collapses behind that run's own HAIRLINE
+// DIVIDER (the transcript's WakeDivider chrome: the stacked-chevron ChevronsUpDown glyph, the tool-call
+// count, and "Click to expand"). So a card reads: pinned ask → narration → fold → where it landed →
+// ⟨why it woke⟩ → narration → fold → where it landed → … Clicking is one-way and card-wide: every run's
+// full log renders at once and all the dividers unmount.
 //   ?variant=heavy   (default) a user ask + an opening narration (WITH batched tools) + several tool-heavy
 //                    intermediate steps + a final question. First message's tools must fold into the divider.
 //   ?variant=single  user ask + ONE assistant reply (no middle → NO collapse divider, control case)
@@ -21,22 +24,24 @@ import "./styles.css"
 //   ?variant=batchedends  user ask + first(narration + tools) + ONE middle step + final(summary text + a
 //                         trailing tool). BOTH ends' tools fold into the divider; both texts show tool-free.
 //   ?variant=questionthentool  user ask + narration + a FINAL question + a trailing TOOLS-ONLY message.
-//                         Regression guard: the final-text anchor stays on the question (chips stay live);
-//                         the text-less tool message must NOT steal the anchor and hide the question.
+//                         Regression guard: the closing-text anchor stays on the question (chips stay live);
+//                         the text-less tool message must NOT steal the anchor and hide the question. Its
+//                         call folds into the run's divider — a segment spans its WHOLE run, so work done
+//                         after the closing prose is that run's work.
 //   ?variant=trailingevent  user ask + intermediate steps + a FINAL question, then a sub-agent completion
 //                           event AFTER it. Regression guard: the question (with answer chips) must stay
 //                           visible — a trailing event must NOT pull it into the collapsed range.
 //   ?variant=bgshells  three background shells launched in three SEPARATE assistant records across the
-//                      collapsed span (the real shape from thread `started-three-frizz-in-quick-succession`),
-//                      one of them already finished. Background tasks are lifted out of the collapse and
-//                      render as REAL CARDS — never a `Ran N tool calls` band — with a pulsing blue dot
-//                      while live and NO mark at all once done.
-//   ?variant=dispatches  two sub-agent dispatches inside the collapsed span, one still running (tracked in
-//                      thread.subAgents) and one resolved. Same rule as background tasks: real Agent cards
-//                      under the divider, pulsing accent dot on the live one, nothing on the resolved one.
+//                      collapsed run (the real shape from thread `started-three-frizz-in-quick-succession`),
+//                      one of them already finished. They FOLD IN like any other call (2026-08-12) — the
+//                      card is a triage surface, a live task is already listed under its prompt box from
+//                      board telemetry, and a finished one is history the fold carries. The THREAD VIEW
+//                      still gives each its own card with the pulsing live mark.
+//   ?variant=dispatches  two sub-agent dispatches inside the collapsed run, one still running (tracked in
+//                      thread.subAgents) and one resolved. Same rule as background tasks: both fold in.
 //   ?variant=codexpolls a codex long-poll run: ten unpaired `Wait`/`Poll process` cards (pending +
-//                      `backgroundState: "unknown"`) around ONE real detached shell. The polls launched
-//                      nothing, so they collapse into the divider's count; the shell keeps its card.
+//                      `backgroundState: "unknown"`) around ONE real detached shell. All of it folds; the
+//                      variant survives as the guard that 888 poll rows can never reach the card.
 //   ?variant=buriedask  a ```question in the MIDDLE of the run, with tool work and a closing summary after
 //                      it. Two guards at once: the ask is lifted OUT of the collapse (a decision the human
 //                      owes is not disposable chatter), and its chips are LIVE even though a newer ask is
@@ -47,9 +52,13 @@ import "./styles.css"
 //   ?variant=humanpast an ask the human already replied PAST (a later user turn), then more agent work.
 //                      Under "Load earlier messages" the old ask must still take chips; the card's own
 //                      "Send answers" action stands down until one is filled (nothing stands at the tail).
+//   ?variant=prwakes  THE SEGMENTED SHAPE: one ask, then three runs separated by two real pr-watch wakes
+//                     (served `wakeSteer`, so the real GithubWakeCard renders). Each run must get its OWN
+//                     fold, each wake its own hairline BETWEEN the run it ended and the run it caused, and
+//                     the third run — one prose message over four calls — must fold on its wake alone.
 //   ?variant=priorrest TWO turns — an ask, a rest, a background wake, then a second turn ending in a
-//                      question and another rest. The card must open at the WAKE (the previous turn is
-//                      behind "Load earlier messages") and draw NO "Agent rested" rule at either end.
+//                      question and another rest. The window reaches back to the HUMAN's ask, so both
+//                      turns render; neither "Agent rested" rule may be drawn at either end.
 const params = new URLSearchParams(location.search)
 const variant = params.get("variant") ?? "heavy"
 
@@ -157,9 +166,9 @@ const batchedends: TranscriptMessage[] = [
 ]
 
 // REGRESSION GUARD: the agent asks a ```question, THEN emits a TOOLS-ONLY message (text "") after it —
-// e.g. it kept working past the ask. The final-text anchor must stay on the QUESTION (not slide onto the
-// text-less tool message), so its answer chips remain visible + interactive. The trailing tool renders in
-// full below the question (it is outside the collapsed span). Pre-fix this hid the question and killed the
+// e.g. it kept working past the ask. The closing-text anchor must stay on the QUESTION (not slide onto the
+// text-less tool message), so its answer chips remain visible + interactive. The trailing call itself folds
+// into the divider, because a segment spans its whole run. Pre-fix this hid the question and killed the
 // answer flow.
 const questionthentool: TranscriptMessage[] = [
   { sourceId: "u-cur", role: "user", text: "Wire up the one-way expand and ask me about the label.", tools: [], parts: [] },
@@ -332,8 +341,78 @@ const priorrest: TranscriptMessage[] = [
   withId(boundaryEvent("rest", "Agent rested")),
 ]
 
+// THE SHAPE THIS COLLAPSE EXISTS FOR (maintainer 2026-08-12): an agent parks on a PR watcher, the
+// watcher fires, it works, it rests, the watcher fires AGAIN. Three runs, three folds, with each wake's
+// hairline sitting between the run it ended and the run it caused — "multiple messages in their complete
+// form, with various collapsed tool call blocks between them, plus some hairline indicators showing why
+// they were reawoken."
+//
+// The wake messages carry a SERVED `wakeSteer`, exactly as the server sends it, so this drives the real
+// GithubWakeCard rather than the parser fallback. The third run is deliberately ONE prose message with a
+// pile of calls behind it: a woken run folds on the strength of its own wake hairline, which is the case
+// the old single-span collapse could not fold at all.
+const prWake = (ref: string, items: { label: string; actor: string; bot: boolean; at: string }[]): TranscriptMessage => withId({
+  role: "user",
+  wake: true,
+  // Each item gets its OWN permalink, as a real steer does — GithubWakeCard keys its rows on the url,
+  // and two items sharing one would collide.
+  wakeSteer: {
+    ref,
+    items: items.map((i, n) => ({ ...i, url: `https://github.com/${ref.split("#")[0]}/pull/${ref.split("#")[1]}#pullrequestreview-49222${n}` })),
+    omitted: 0,
+  },
+  text: `🤖 ${items.length} new GitHub items on ${ref}. Read exactly these — ignore older activity you have already handled — and continue:`,
+  tools: [],
+  parts: [],
+} as unknown as TranscriptMessage)
+
+const prwakes: TranscriptMessage[] = [
+  { sourceId: "u-cur", role: "user", text: "Fix #5178 — the v3→v4 optional key behavior change — and get it merged.", tools: [], parts: [] },
+  withId(asst("Reproducing the report against v4 before I touch anything.", [
+    tool("Bash", { detail: "nub scripts/repro-5178.mts", desc: "Reproducing the reported behavior" }),
+    tool("Read", { detail: "packages/zod/src/v4/classic/schemas.ts", read: "…2140 lines…" }),
+  ])),
+  withId(asst("Real regression. Fixing it and pinning it with a test.", [
+    tool("Edit", { detail: "packages/zod/src/v4/classic/schemas.ts" }),
+    tool("Edit", { detail: "packages/zod/src/v4/classic/tests/object.test.ts" }),
+    tool("Bash", { detail: "nub --test", desc: "Running the suite" }),
+    tool("Bash", { detail: "gh pr create --fill", desc: "Opening the PR" }),
+  ])),
+  withId(asst("PR #6382 is open against main, mergeable, all checks green. Waiting on your review — I'll address comments as they land.")),
+  withId(boundaryEvent("rest", "Agent rested")),
+  prWake("colinhacks/zod#6382", [
+    { label: "review comment", actor: "copilot-pull-request-reviewer", bot: true, at: new Date(Date.now() - 46 * 60_000).toISOString() },
+    { label: "review comment", actor: "pullfrog", bot: true, at: new Date(Date.now() - 41 * 60_000).toISOString() },
+  ]),
+  withId(asst("Reading both reviews before I change anything.", [
+    tool("Bash", { detail: "gh api repos/colinhacks/zod/pulls/6382/reviews/4922222194/comments", desc: "Reading the first review's inline comments" }),
+    tool("Bash", { detail: "gh api repos/colinhacks/zod/pulls/6382/reviews/4922256690/comments", desc: "Reading the second review's inline comments" }),
+    tool("Read", { detail: "packages/zod/src/v4/core/parse.ts" }),
+  ])),
+  withId(asst("One of the two is a real defect — the JIT path skips the same guard. Fixing both.", [
+    tool("Edit", { detail: "packages/zod/src/v4/core/parse.ts" }),
+    tool("Edit", { detail: "packages/zod/src/v4/classic/tests/object.test.ts" }),
+    tool("Bash", { detail: "nub --test", desc: "Re-running the suite" }),
+    tool("Bash", { detail: "git push", desc: "Pushing the review fixes" }),
+  ])),
+  withId(asst("Both review findings are addressed and pushed. CI is green again on the new head.")),
+  withId(boundaryEvent("rest", "Agent rested")),
+  prWake("colinhacks/zod#6382", [
+    { label: "approval", actor: "colinhacks", bot: false, at: new Date(Date.now() - 4 * 60_000).toISOString() },
+  ]),
+  withId(asst("Approved — merging.", [
+    tool("Bash", { detail: "gh pr checks 6382", desc: "Confirming every check is still green" }),
+    tool("Bash", { detail: "gh pr merge 6382 --squash", desc: "Merging the PR" }),
+    tool("Bash", { detail: "git fetch origin main", desc: "Syncing the merged head" }),
+    tool("Bash", { detail: "nub --test", desc: "Re-running the suite on merged main" }),
+  ])),
+  withId(asst("**Fixed** — #5178 is merged as `d7bc1c3e`, and the JIT defect the review caught went with it.")),
+  withId(boundaryEvent("rest", "Agent rested")),
+]
+
 const messages =
-  variant === "single" ? single
+  variant === "prwakes" ? prwakes
+  : variant === "single" ? single
   : variant === "bgshells" ? bgshells
   : variant === "dispatches" ? dispatches
   : variant === "codexpolls" ? codexpolls

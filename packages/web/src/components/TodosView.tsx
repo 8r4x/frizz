@@ -10,7 +10,7 @@ import { useBoard, asThreads, useTranscript } from "../hooks.ts"
 import { orderQueue, queued, displayTitle, lastActiveLabelAt } from "../groups.ts"
 import { useLiveAnswering } from "../lib/answering.ts"
 import { hasQuestionBlock } from "../lib/questionBlocks.ts"
-import { isGoalBump, supersededAskIndices, survivesQueueCollapse } from "../lib/queueCollapse.ts"
+import { isGoalBump, opensQueueSegment, queueCollapseSegments, segmentFolds, supersededAskIndices, survivesQueueCollapse } from "../lib/queueCollapse.ts"
 import { pairAllAnswers } from "../lib/answersMessage.ts"
 import { Message, NativeInputRequiredCard, PermPolicyDenialCard, PermPromptBanner, PendingAskCard, StickyUserBand, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText } from "./ChatView.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_TOP, CARD_ACTION_EXPLAINER, CARD_PRIMARY_ACTION } from "./TranscriptCard.tsx"
@@ -781,54 +781,26 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
     for (let i = messages.length - 1; i >= 0; i--) if (messages[i].role === "user" && !messages[i].queued) return i
     return -1
   }, [messages])
-  // The last TEXT-BEARING agent message — the agent's CURRENT standing signal, shown (text only) below
-  // the collapse divider. Requires renderable PROSE (messageHasRenderableText), not just "renders something":
-  // because this anchor is rendered `textOnly`, a trailing TOOLS-ONLY message (text "") has nothing to
-  // show, so it must NOT become the anchor. When the agent asked and then RESTED, this trailing text
-  // message IS the ```question that carries the answer chips; when the agent kept working past its ask
-  // (a background wake), the ask is answered per-message via answeringForMessage regardless of which
-  // message is the anchor. Admitting a tools-only trailing message would still be wrong — it would
-  // become `lastRenderedIdx` with nothing to show — so queued sends and punctuation kinds (event /
-  // reasoning), all text-less, are excluded by messageHasRenderableText.
-  const lastRenderedIdx = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i]
-      if (m.queued || !messageHasRenderableText(m)) continue
-      return i
-    }
-    return -1
-  }, [messages])
-  // The agent's FIRST TEXT-BEARING message after the human's ask — its opening narration. Its text is
-  // shown (text only) so the card reads: what I asked → what the agent set out to do → [collapsed work]
-  // → where it landed. Requires prose for the same reason as lastRenderedIdx: a leading tools-only
-  // message (agent dove straight into a tool) has nothing to show text-only, so the anchor skips past it
-  // to the real narration (which would otherwise fall into the collapsed middle and be hidden). -1 → no
-  // agent prose yet.
+  // What a summary divider hides. Each RUN's opening and closing prose render TEXT ONLY (the maintainer:
+  // the tool calls batched into them "are almost never useful"), so everything else in that run
+  // collapses — the fully-hidden middle messages, the tool bands batched into those two, and any calls
+  // made after the closing prose.
   //
-  // THE COLLAPSE SPANS THE WHOLE WINDOW, and it must be anchored on the same message the window is —
-  // the human's last ask (lastUserIdx). It used to start at the CURRENT TURN (`Math.max(stickyUserIdx +
-  // 1, restTurnStart)`), from a build whose window was cut at the previous rest, so the two agreed. Once
-  // the window reached back past every rest to the human's task (2026-08-12) they no longer did, and the
-  // gap between them rendered RAW: a thread frizz had driven across seven rests painted all seven turns
-  // in full, and when the last turn held a single prose message `firstRenderedIdx === lastRenderedIdx`
-  // so nothing collapsed at all. Measured on the maintainer's zod board: one card at 122 messages and
-  // 17,854px with no summary divider anywhere in it.
+  // A RUN'S ANCHORS REQUIRE PROSE (messageHasRenderableText), not merely "renders something": they are
+  // rendered `textOnly`, so a tools-only message has nothing to show and must not become one. When the
+  // agent asked and then RESTED, the closing message IS the ```question carrying the answer chips; when
+  // it kept working past its ask, the ask is answered per-message via answeringForMessage regardless of
+  // which message anchors the run.
+  //
+  // THE FIRST RUN STARTS AT THE HUMAN'S LAST ASK (lastUserIdx), which is the same message the window is
+  // anchored on. It used to start at the CURRENT TURN (`Math.max(stickyUserIdx + 1, restTurnStart)`),
+  // from a build whose window was cut at the previous rest, so the two agreed. Once the window reached
+  // back past every rest to the human's task (2026-08-12) they no longer did, and the gap between them
+  // rendered RAW: a thread frizz had driven across seven rests painted all seven turns in full. Measured
+  // on the maintainer's zod board: one card at 122 messages and 17,854px with no summary divider in it.
   //
   // NOT `visibleStart`: that moves when the reader clicks "View more", and loaded-earlier history is
   // deliberately shown in full around the collapse rather than swallowed by it.
-  const firstRenderedIdx = useMemo(() => {
-    for (let g = lastUserIdx + 1; g < messages.length; g++) {
-      const m = messages[g]
-      if (m.queued || !messageHasRenderableText(m)) continue
-      return g
-    }
-    return -1
-  }, [messages, lastUserIdx])
-  // What the summary divider hides. The first and last agent messages render TEXT ONLY (the maintainer: the
-  // tool calls batched into them "are almost never useful"), so EVERYTHING between them collapses — the
-  // fully-hidden middle messages AND the tool bands batched into the first/last messages themselves.
-  //   hiddenToolCount = every tool call across [firstRenderedIdx .. lastRenderedIdx] inclusive.
-  //   hiddenStepCount = the middle messages hidden in their entirety (strictly between first and last).
   //
   // BACKGROUND TASKS AND SUB-AGENT DISPATCHES ARE COUNTED AND HIDDEN LIKE ANY OTHER CALL. They used to
   // be lifted out into their own row (maintainer 2026-08-01: "It's important that those show up in the
@@ -845,38 +817,48 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   // Zero when the agent answered in a single message (firstRenderedIdx === lastRenderedIdx → nothing
   // intermediate). The pinned ask and loaded-earlier history sit outside this range.
   const supersededAsks = useMemo(() => supersededAskIndices(messages), [messages])
-  const { hiddenStepCount, hiddenToolCount } = useMemo(() => {
-    if (firstRenderedIdx < 0 || firstRenderedIdx === lastRenderedIdx) return { hiddenStepCount: 0, hiddenToolCount: 0 }
-    let steps = 0
-    let tools = 0
-    for (let g = firstRenderedIdx; g <= lastRenderedIdx; g++) {
-      const m = messages[g]
-      if (!m || m.queued || messageRendersNothing(m)) continue
-      // A sub-agent completion marker carries a tool call but renders as a wake DIVIDER, not a card
-      // (see ChatView.agentCompletionCall) — counting it would promise a tool the expansion never shows.
-      // It still counts as a step, exactly like the background-shell wake divider beside it.
-      const completion = agentCompletionCall(m)
-      const countable = completion ? [] : m.tools
-      tools += countable.length
-      if (
-        g > firstRenderedIdx &&
-        g < lastRenderedIdx &&
-        // A middle message that survives the collapse keeps its row (see the render loop) — counting it
-        // as a hidden step would promise the expansion a message it already shows.
-        !survivesQueueCollapse(m, g, supersededAsks) &&
-        (messageHasRenderableText(m) || countable.length > 0 || completion !== undefined || m.kind !== undefined)
-      ) steps++
+  // The per-message facts the segment walk needs, evaluated here because they need the transcript schema
+  // and this card's own render predicates. The walk itself is pure — see lib/queueCollapse.
+  const collapseSteps = useMemo(() => messages.map((m, g) => {
+    if (!m || m.queued || messageRendersNothing(m)) return { skip: true }
+    // DROPPED BY THE RENDER LOOP OUTRIGHT, expanded or not (see below): the rest divider, which is the
+    // card's own premise, and the Goal firing, which is machinery. Neither may anchor a run's opening or
+    // closing prose — a divider emitted before a row that never renders would never appear at all — and
+    // neither may count as a hidden step, since expanding reveals nothing where they stood.
+    if (m.boundary === "rest" || isGoalBump(m)) return { skip: true }
+    // A sub-agent completion marker carries a tool call but renders as a wake DIVIDER, not a card
+    // (see ChatView.agentCompletionCall) — counting it would promise a tool the expansion never shows.
+    // It still counts as a step, exactly like the background-shell wake divider beside it.
+    const completion = agentCompletionCall(m)
+    const tools = completion ? 0 : m.tools.length
+    return {
+      text: messageHasRenderableText(m),
+      tools,
+      countable: messageHasRenderableText(m) || tools > 0 || completion !== undefined || m.kind !== undefined,
+      // A middle message that survives the collapse keeps its own row (see the render loop) — counting it
+      // as a hidden step would promise the expansion a message it already shows.
+      survives: survivesQueueCollapse(m, g, supersededAsks),
+      opens: opensQueueSegment(m),
     }
-    return { hiddenStepCount: steps, hiddenToolCount: tools }
-  }, [messages, firstRenderedIdx, lastRenderedIdx, supersededAsks])
-  // Collapse the intermediate run behind ONE summary divider unless the reader has opted into the full log.
-  // Gated on a real pinned ask (stickyUserIdx >= 0) and a distinct first/last agent message so a single
-  // agent turn (nothing intermediate) never hides its own batched tools behind an anchorless divider. Fires
-  // when there is ANYTHING to hide — middle steps OR tool calls batched into the first/last message.
-  // A wake-driven turn has no ask of its own — the rest divider it opens on is the anchor instead — so
-  // restTurnStart satisfies the same "there is something above the collapse" requirement.
+  }), [messages, supersededAsks])
+  // ONE FOLD PER WAKE. Every run between the human's ask and the agent's rest, and between each
+  // subsequent wake and the rest it produced, is its own segment with its own divider. See
+  // lib/queueCollapse for why a wake CUTS rather than merely surviving the fold.
+  const segments = useMemo(
+    () => queueCollapseSegments(collapseSteps, lastUserIdx + 1).filter(segmentFolds),
+    [collapseSteps, lastUserIdx],
+  )
+  // Index → the segment folding it, for the render loop. Only folding segments are indexed: a run with
+  // nothing worth hiding renders exactly as it did before.
+  const segmentAt = useMemo(() => {
+    const at = new Map<number, number>()
+    segments.forEach((seg, si) => { for (let i = seg.start; i <= seg.end; i++) at.set(i, si) })
+    return at
+  }, [segments])
+  // Collapse unless the reader has opted into the full log. Gated on there being something ABOVE the
+  // first fold to anchor it — a pinned ask, or a rest divider a wake-driven turn opens on.
   const collapseIntermediate =
-    !intermediateExpanded && (stickyUserIdx >= 0 || restTurnStart > 0) && firstRenderedIdx !== lastRenderedIdx && (hiddenStepCount >= 1 || hiddenToolCount >= 1)
+    !intermediateExpanded && (stickyUserIdx >= 0 || restTurnStart > 0) && segments.length > 0
   // THE HUMAN'S LAST MESSAGE WINS, even when the agent has rested since. It used to be capped at the
   // current turn (`Math.max` with `restTurnStart`) on the reasoning that a closed turn is history the
   // drawer already holds — but with frizz driving threads across many rests, "the current turn" is a
@@ -894,19 +876,16 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   // Each entry keeps its ORIGINAL index so every index-addressed prop below — paired answers, the
   // sticky ask, the collapse span — keeps addressing server truth rather than the compacted array.
   //
-  // The run is CUT after the last agent prose (lastRenderedIdx). That message renders `textOnly` under
-  // the collapse, so anything absorbed into it is dropped from the page — and calls made AFTER the
-  // agent's closing prose sit OUTSIDE the collapsed span (they are not in hiddenToolCount), so they
-  // would vanish with nothing standing in for them. Cutting there keeps them their own rows.
-  const coalescedVisible = useMemo(() => {
-    const cut = lastRenderedIdx >= visibleStart ? lastRenderedIdx - visibleStart + 1 : 0
-    const coalesce = (slice: TranscriptMessage[], offset: number) =>
-      coalesceToolActivityMessages(slice).map((entry) => ({ ...entry, messageIndex: entry.messageIndex + offset }))
-    return [
-      ...coalesce(visible.slice(0, cut), visibleStart),
-      ...coalesce(visible.slice(cut), visibleStart + cut),
-    ]
-  }, [visible, visibleStart, lastRenderedIdx])
+  // ONE pass, uncut. It used to be cut after the last agent prose, because a fold that stopped at that
+  // message left the calls made AFTER it outside the span — absorbing them into a `textOnly` row would
+  // have dropped them from the page with nothing standing in for them. A segment now spans its whole run
+  // (queueCollapseSegments), so those calls are counted and hidden like every other call in the run, and
+  // the cut has nothing left to protect. A wake ends a coalescing run by itself (it is not a pure-tool
+  // message), so no run can span a segment boundary either.
+  const coalescedVisible = useMemo(
+    () => coalesceToolActivityMessages(visible).map((entry) => ({ ...entry, messageIndex: entry.messageIndex + visibleStart })),
+    [visible, visibleStart],
+  )
   const hasMore = visibleStart > 0 || q.data?.hasEarlier === true
 
   useLayoutEffect(() => {
@@ -1230,11 +1209,13 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
               const base = visibleStart
               const out: ReactNode[] = []
               let prevTailIsMeta: boolean | null = null
-              // Higher-level turn collapse. The first and last agent messages render TEXT ONLY; the whole
-              // span [firstRenderedIdx .. lastRenderedIdx] between their prose — the fully-hidden middle
-              // messages plus the tool bands batched into the first/last messages — is replaced by ONE
-              // summary divider. The pinned ask and loaded-earlier history still render in full around it.
-              let intermediateBarEmitted = false
+              // Higher-level turn collapse, ONE FOLD PER RUN. Each segment is [what re-invoked the agent
+              // → the prose it rested on]: its opening and closing prose render TEXT ONLY, and everything
+              // else in the run — the fully-hidden middle messages, the tool bands batched into those two,
+              // and any calls made after the closing prose — is replaced by that segment's own summary
+              // divider. The wake hairlines sit BETWEEN the segments, where the reader can read each one
+              // against the work it caused. The pinned ask and loaded-earlier history render in full.
+              const barEmitted = new Set<number>()
               coalescedVisible.forEach(({ message: m, messageIndex: globalIdx }, i) => {
                 if (m.queued) return
                 if (messageRendersNothing(m)) return
@@ -1256,9 +1237,11 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                 // The drawer keeps both — it is a live transcript, where knowing what re-invoked the agent
                 // is exactly the point.
                 if (isGoalBump(m)) return
-                const inSpan = collapseIntermediate && globalIdx >= firstRenderedIdx && globalIdx <= lastRenderedIdx
-                const isFirst = inSpan && globalIdx === firstRenderedIdx
-                const isLast = inSpan && globalIdx === lastRenderedIdx
+                const segIdx = collapseIntermediate ? segmentAt.get(globalIdx) : undefined
+                const seg = segIdx === undefined ? undefined : segments[segIdx]
+                const inSpan = seg !== undefined
+                const isFirst = seg !== undefined && globalIdx === seg.open
+                const isLast = seg !== undefined && globalIdx === seg.close
                 // A lifted-out WAKE takes the ORDINARY path at the foot of this loop instead of the
                 // collapse branch's textOnly render. Its content IS a card or a rule — a GithubWakeCard
                 // built from `wakeSteer`, a sub-agent or background-shell completion divider — and
@@ -1272,22 +1255,22 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                   // chatter is not. It renders textOnly like the first/last anchors, so its batched tool
                   // calls stay counted in the summary rather than doubling up as a visible band.
                   if (!isFirst && !isLast && !survivesQueueCollapse(m, globalIdx, supersededAsks)) return
-                  // The divider sits between the first message's prose and the last message's prose — emit it
-                  // once, just before the last message (firstRenderedIdx !== lastRenderedIdx here, so the
-                  // two are distinct rows and the divider always lands after any first-message text).
-                  if (isLast && !intermediateBarEmitted) {
-                    if (hiddenToolCount > 0 || hiddenStepCount > 0) {
-                      if (prevTailIsMeta !== null) out.push(<VSpace key="im-space" h={STEP} />)
-                      out.push(
-                        <IntermediateSummary
-                          key="intermediate-summary"
-                          toolCount={hiddenToolCount}
-                          onExpand={() => setIntermediateExpanded(true)}
-                        />,
-                      )
-                      prevTailIsMeta = false
-                    }
-                    intermediateBarEmitted = true
+                  // This RUN's divider, emitted once, just before the run's closing prose — so it always
+                  // lands after the opening text and before the message the reader is meant to read. A
+                  // woken run may have one prose message doing both jobs (`open === close`); the divider
+                  // then sits directly under that run's wake hairline, which is exactly the shape asked
+                  // for: what re-invoked the agent, what it did, where it landed.
+                  if (isLast && segIdx !== undefined && !barEmitted.has(segIdx)) {
+                    if (prevTailIsMeta !== null) out.push(<VSpace key={`im-space-${segIdx}`} h={STEP} />)
+                    out.push(
+                      <IntermediateSummary
+                        key={`intermediate-summary-${segIdx}`}
+                        toolCount={seg.tools}
+                        onExpand={() => setIntermediateExpanded(true)}
+                      />,
+                    )
+                    prevTailIsMeta = false
+                    barEmitted.add(segIdx)
                   }
                   // A first/last message that is pure batched tool calls (no prose) contributes no row —
                   // its calls are already folded into the divider — so skip it and leave no dangling spacer.

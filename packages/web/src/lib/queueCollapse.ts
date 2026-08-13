@@ -99,3 +99,122 @@ export function survivesQueueCollapse(m: CollapseMsgLike, index: number, superse
   if (hasQuestionBlock(m.text)) return !superseded.has(index)
   return m.wake === true && !isGoalBump(m)
 }
+
+/** Does this message OPEN a new collapse segment — i.e. is it the scheduler wake that re-invoked a
+ *  rested agent? An open ask survives the fold too (above) but does not start a segment: the agent asked
+ *  and kept working, which is one continuous run of work, not a new one. */
+export function opensQueueSegment(m: CollapseMsgLike): boolean {
+  return m.wake === true && !isGoalBump(m)
+}
+
+// ---- SEGMENTS -------------------------------------------------------------------------------------
+//
+// ONE FOLD PER WAKE, not one fold per card.
+//
+// The card used to compute a single span — the agent's first prose after the human's ask through its
+// last prose anywhere — and hang one divider off it. Wakes were lifted OUT of that span but did not
+// SPLIT it, so a thread frizz had driven across five wakes rendered as: opening prose, five hairlines in
+// a row, one fold, closing prose. Every hairline was detached from the work it explained, and the fold
+// claimed a single run for five separate ones.
+//
+// A wake now CUTS. Each segment is [what re-invoked the agent → the prose it rested on], folds its own
+// calls, and shows its own closing message, so the card reads down the page as the thread actually ran
+// (maintainer 2026-08-12: "collapse everything starting at the point where the watcher was triggered up
+// until it comes to rest… multiple messages in their complete form, with various collapsed tool call
+// blocks between them, plus some hairline indicators showing why they were reawoken").
+//
+// THE SEGMENT SPANS THE WHOLE RUN, not just [open..close]. Calls made after the closing prose used to
+// sit outside the fold and render as raw rows at the foot of the card — the tail of exactly the ordering
+// the maintainer reported ("a bunch of bash calls show up right at the end"). They are the same run's
+// work and they fold with it.
+
+/** One message's shape, reduced to the six facts the segment walk needs. The caller evaluates them
+ *  (they need the transcript schema and the card's own render predicates); this stays pure so the walk
+ *  itself is unit-testable. */
+export interface CollapseStep {
+  /** Contributes nothing to the card at all — a queued send, or a message that renders nothing. */
+  skip?: boolean
+  /** Contributes visible PROSE, so it can anchor a segment's opening or closing row. */
+  text?: boolean
+  /** Tool calls this message would hand to a fold. Zero for a sub-agent completion marker, which renders
+   *  as a divider rather than a card — counting it would promise a tool the expansion never shows. */
+  tools?: number
+  /** Would read as a hidden STEP if folded (it renders something a reader could have seen). */
+  countable?: boolean
+  /** Lifted out of the fold onto its own row — an open ask, or a wake. */
+  survives?: boolean
+  /** Starts a new segment (`opensQueueSegment`). The wake itself belongs to no segment. */
+  opens?: boolean
+}
+
+export interface CollapseSegment {
+  /** First index in the run — the message after the wake, or the first after the human's ask. */
+  start: number
+  /** Last index in the run — the message before the next wake, or the last message. */
+  end: number
+  /** First index contributing prose, rendered text-only above the fold; -1 when the run has none. */
+  open: number
+  /** Last index contributing prose, rendered text-only below the fold; -1 when the run has none. */
+  close: number
+  /** Messages hidden whole. */
+  steps: number
+  /** Tool calls the fold carries. */
+  tools: number
+  /** This run opened on a WAKE rather than on the human's ask. */
+  woken: boolean
+}
+
+/** Split `[from .. end]` into one segment per wake. The wake messages themselves are excluded — they
+ *  render as their own hairline at each boundary. */
+export function queueCollapseSegments(steps: readonly CollapseStep[], from: number): CollapseSegment[] {
+  const segments: CollapseSegment[] = []
+  let current: CollapseSegment | undefined
+  const close = () => {
+    if (current && current.start <= current.end) segments.push(current)
+    current = undefined
+  }
+  for (let i = Math.max(0, from); i < steps.length; i++) {
+    const s = steps[i]
+    if (s.skip === true) continue
+    if (s.opens === true) {
+      close()
+      current = { start: i + 1, end: i, open: -1, close: -1, steps: 0, tools: 0, woken: true }
+      continue
+    }
+    if (!current) current = { start: i, end: i, open: -1, close: -1, steps: 0, tools: 0, woken: false }
+    current.end = i
+    current.tools += s.tools ?? 0
+    if (s.text === true) {
+      if (current.open < 0) current.open = i
+      current.close = i
+    }
+  }
+  close()
+  // The hidden-step count is a SECOND pass because it needs the run's own open/close, which is only
+  // known once the run has ended.
+  for (const seg of segments) {
+    for (let i = seg.start; i <= seg.end; i++) {
+      const s = steps[i]
+      if (s.skip === true || s.survives === true) continue
+      if (i === seg.open || i === seg.close) continue
+      if (s.countable === true) seg.steps++
+    }
+  }
+  return segments
+}
+
+/** Is this run worth folding?
+ *
+ *  A WOKEN run folds on the strength of anything hidden at all: its wake hairline is the anchor above it,
+ *  and "the watcher fired and then twelve calls happened" is precisely the run the maintainer asked to
+ *  see collapsed — even when the agent narrated it in a single message.
+ *
+ *  THE FIRST run, which opens on the human's ask, additionally needs DISTINCT opening and closing prose.
+ *  That is today's rule kept deliberately: a lone agent turn has nothing intermediate, and hiding its own
+ *  batched calls behind a divider that stands between the ask and the only answer reads as the card
+ *  withholding the answer rather than summarizing the work. */
+export function segmentFolds(seg: CollapseSegment): boolean {
+  if (seg.open < 0) return false
+  if (seg.tools < 1 && seg.steps < 1) return false
+  return seg.woken || seg.open !== seg.close
+}

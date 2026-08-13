@@ -119,127 +119,73 @@ test("the collapsed intermediate run is a hairline divider that names its tool c
     assert.equal(bare.text, "Click to expand", "with nothing to count, the label is just the affordance")
     assert.equal(bare.aria, "Expand intermediate agent activity")
 
-    // ---- 5. background tasks under the divider are REAL CARDS, never a `Ran N` band ----
-    // They are lifted out of the collapsed span because a detached process is the one class of call
-    // still going after the batch that started it (maintainer 2026-08-01: "eject background tasks from
-    // the tool call collapsing logic. It's important that those show up in the chat"). Three shells
-    // launched from three separate assistant records therefore land as three cards — the collapsing
-    // path must not reclaim them as one batched disclosure either.
+    // ---- 5. background tasks and sub-agent dispatches FOLD IN with everything else ----
+    // They used to be lifted out as their own cards (maintainer 2026-08-01: "It's important that those
+    // show up in the chat"), and that was reversed for the QUEUE CARD on 2026-08-12 — the card is a
+    // triage surface whose shape is "the user's most recent message, some bit of text, then the click to
+    // expand section followed by more text" ("I don't know why the bash calls weren't folded in to the
+    // click to expand section that's kind of weird" … "Fold them in"). Nothing is lost: a task still
+    // RUNNING is listed under the card's own prompt box from live board telemetry, and a finished one is
+    // history the fold carries. The THREAD VIEW still gives every one its own card, with the mark and
+    // flush rules this section used to pin here.
     await page.goto(variant("bgshells"), { waitUntil: "networkidle0" })
     await page.waitForSelector(SEL, { timeout: 10_000 })
-    const shells = await page.$$eval(".frizz-bash-header", (ns) =>
-      ns.map((n) => (n as HTMLElement).innerText.replace(/\s+/g, " ").trim()),
-    )
     assert.deepEqual(
-      shells,
-      [
-        "Bash Starting the first server in the sandbox running",
-        "Bash Capturing a genuine cold start panel running",
-        "Bash Waiting for the cold start to serve done · 42 sec",
-      ],
-      `each background task keeps its own card under the divider, got ${shells.join(" | ")}`,
+      await page.$$eval(".frizz-bash-header", (ns) => ns.map((n) => (n as HTMLElement).innerText.replace(/\s+/g, " ").trim())),
+      [],
+      "no background task keeps a card of its own on a queue card",
     )
     assert.deepEqual(
       await page.$$eval("[data-tool-activity] button", (ns) => ns.map((n) => (n as HTMLElement).innerText.trim())),
       [],
-      "no ordinary-activity band may swallow a background task",
-    )
-
-    // …and ONLY the live ones are marked. The finished task states its outcome in words and draws no
-    // glyph at all — the liveness column means "something is alive behind this row", so a completed op
-    // has nothing to say in it (maintainer 2026-08-01). Read as computed style so a mark that stopped
-    // animating but stayed on screen would still fail here.
-    const marksIn = (selector: string) =>
-      page.$$eval(selector, (ns) =>
-        ns.map((n) => {
-          const el = n as HTMLElement
-          const cs = getComputedStyle(el)
-          return { kind: el.dataset.runningIndicator, animated: cs.animationName !== "none" }
-        }),
-      )
-    assert.deepEqual(
-      await marksIn(".frizz-bash-header [data-running-indicator]"),
-      [{ kind: "tool-disclosure", animated: true }, { kind: "tool-disclosure", animated: true }],
-      "the two live shells pulse — and the finished one is not among them",
-    )
-    assert.deepEqual(
-      await page.$$eval(".frizz-bash-header [data-done-indicator], .frizz-bash-header .frizz-tool-spinner", (ns) => ns.length),
-      0,
-      "no finished glyph and no spinner may exist on a background card",
-    )
-    // The finished card's slot is GONE, not merely empty: its label starts flush at the header's left
-    // edge, exactly like the settled foreground cards elsewhere in the transcript.
-    const flush = await page.$$eval(".frizz-bash-header", (ns) =>
-      ns.map((n) => {
-        const left = n.firstElementChild as HTMLElement
-        const label = left.querySelector(".frizz-bash-label") as HTMLElement
-        return Math.round(label.getBoundingClientRect().left - left.getBoundingClientRect().left)
-      }),
-    )
-    assert.ok(flush[0] > 0 && flush[1] > 0, `the two live cards step in by the mark slot, got ${flush.join(", ")}`)
-    assert.equal(flush[2], 0, `the finished card must be flush at 0, got ${flush[2]}px`)
-
-    // ---- 6. sub-agent dispatches get exactly the same treatment ----
-    // "Same for sub-agent dispatches" (maintainer 2026-08-01) — the ejection AND the mark rule. A running
-    // child pulses; a resolved one draws nothing at all and reads its runtime in words.
-    await page.goto(variant("dispatches"), { waitUntil: "networkidle0" })
-    await page.waitForSelector(SEL, { timeout: 10_000 })
-    const agentCards = await page.$$eval(".frizz-bash-header", (ns) =>
-      ns.map((n) => (n as HTMLElement).innerText.replace(/\s+/g, " ").trim()),
-    )
-    assert.deepEqual(
-      agentCards.map((label) => label.replace(/\b\d+ min\b/, "N min")),
-      ["Agent Audit the queue card's collapse N min", "Agent Cross-check the sub-agent drawer N min"],
-      `both dispatches keep their card under the divider, got ${agentCards.join(" | ")}`,
-    )
-    assert.deepEqual(
-      await marksIn(".frizz-bash-header [data-running-indicator]"),
-      [{ kind: "subagent-disclosure", animated: true }],
-      "only the running child is marked",
-    )
-    assert.equal(
-      await page.$$eval(".frizz-bash-header [data-done-indicator], .frizz-bash-header .frizz-tool-spinner", (ns) => ns.length),
-      0,
-      "a resolved dispatch draws no finished glyph, and nothing spins",
-    )
-    const agentFlush = await page.$$eval(".frizz-bash-header", (ns) =>
-      ns.map((n) => {
-        const left = n.firstElementChild as HTMLElement
-        const label = left.querySelector(".frizz-bash-label") as HTMLElement
-        return Math.round(label.getBoundingClientRect().left - left.getBoundingClientRect().left)
-      }),
-    )
-    assert.ok(agentFlush[0] > 0, `the running dispatch steps in by the mark slot, got ${agentFlush[0]}px`)
-    assert.equal(agentFlush[1], 0, `the resolved dispatch must be flush at 0, got ${agentFlush[1]}px`)
-
-    // ---- 7. an orphaned codex poll is NOT a background op, and folds into the count ----
-    // A codex long-poll gate emits `wait`/`write_stdin` calls the projector cannot pair with a launch,
-    // so each reaches the client pending + `backgroundState: "unknown"` — which used to buy it the same
-    // dedicated card as a detached shell. A real rollout produced 888 of them, and the queue card was a
-    // wall of `Wait · cell 30 · unknown` rows counting up forever (maintainer 2026-08-09). They launched
-    // nothing, so they are ordinary chatter; the ONE genuinely detached shell in the same run still isn't.
-    await page.goto(variant("codexpolls"), { waitUntil: "networkidle0" })
-    await page.waitForSelector(SEL, { timeout: 10_000 })
-    const pollCards = await page.$$eval(".frizz-bash-header", (ns) =>
-      ns.map((n) => (n as HTMLElement).innerText.replace(/\s+/g, " ").trim()),
-    )
-    assert.deepEqual(
-      pollCards,
-      ["Bash Tailing the release log running"],
-      `only the detached shell keeps a card; every poll folds away, got ${pollCards.join(" | ")}`,
+      "…and nothing escapes as a batched activity band either",
     )
     assert.equal(
       await page.$eval(SEL, (n) => (n as HTMLElement).innerText.replace(/\s+/g, " ").trim()),
-      "12 tool calls · Click to expand",
+      "8 tool calls · Click to expand",
+      "every launch is counted by the divider instead",
+    )
+
+    // ---- 6. sub-agent dispatches get exactly the same treatment ----
+    await page.goto(variant("dispatches"), { waitUntil: "networkidle0" })
+    await page.waitForSelector(SEL, { timeout: 10_000 })
+    assert.deepEqual(
+      await page.$$eval(".frizz-bash-header", (ns) => ns.map((n) => (n as HTMLElement).innerText.replace(/\s+/g, " ").trim())),
+      [],
+      "no dispatch keeps a card of its own on a queue card",
+    )
+    assert.equal(
+      await page.$eval(SEL, (n) => (n as HTMLElement).innerText.replace(/\s+/g, " ").trim()),
+      "6 tool calls · Click to expand",
+      "both dispatches are counted by the divider",
+    )
+
+    // ---- 7. an orphaned codex poll is chatter, and folds into the count ----
+    // A codex long-poll gate emits `wait`/`write_stdin` calls the projector cannot pair with a launch, so
+    // each reaches the client pending + `backgroundState: "unknown"` — which used to buy it a dedicated
+    // card. A real rollout produced 888 of them, and the queue card was a wall of `Wait · cell 30 ·
+    // unknown` rows counting up forever (maintainer 2026-08-09). Everything in the run folds now, polls
+    // and the genuinely detached shell alike, so the count is the whole assertion.
+    await page.goto(variant("codexpolls"), { waitUntil: "networkidle0" })
+    await page.waitForSelector(SEL, { timeout: 10_000 })
+    assert.deepEqual(
+      await page.$$eval(".frizz-bash-header", (ns) => ns.map((n) => (n as HTMLElement).innerText.replace(/\s+/g, " ").trim())),
+      [],
+      "not even the detached shell keeps a card here",
+    )
+    assert.equal(
+      await page.$eval(SEL, (n) => (n as HTMLElement).innerText.replace(/\s+/g, " ").trim()),
+      "13 tool calls · Click to expand",
       "the ten polls are counted by the divider rather than drawn",
     )
 
-    // ---- 8. the window stops at the previous rest, and no rest rule is drawn ----
-    // A thread woken back up carries the whole closed turn above the wake, and the queue card is a
-    // triage surface for the standing signal (maintainer 2026-08-11: "you should only show back to the
-    // most recent 'Agent rested' / stop hook. you shoudl NOT render the hairline for the rest/stop hook
-    // either"). The fixture holds two turns; only the second may render, and neither of its two rest
-    // dividers may appear — not the one it opens after, nor the one that closed it.
+    // ---- 8. no rest rule is drawn, and the window reaches back to the human's own ask ----
+    // The queue card is a triage surface for the standing signal, and the rest hairline is its own
+    // premise (maintainer 2026-08-11: "you shoudl NOT render the hairline for the rest/stop hook"). The
+    // WINDOW, though, reaches back to the human's last message rather than to the previous rest — with
+    // frizz driving threads across many rests, "the current turn" is a stretch the reader never saw the
+    // start of, and the card was opening mid-conversation. So the earlier turn renders too; only its
+    // rest rules do not.
     await page.goto(variant("priorrest"), { waitUntil: "networkidle0" })
     await page.waitForSelector(SEL, { timeout: 10_000 })
     const card = await page.evaluate(() => document.body.innerText)
@@ -249,11 +195,57 @@ test("the collapsed intermediate run is a hairline divider that names its tool c
       "the rest/stop-hook hairline is never drawn on a queue card",
     )
     assert.doesNotMatch(card, /Agent rested/, "…and its label must not survive as any other row either")
-    assert.doesNotMatch(card, /Kick off the release workflow/, "the previous turn's ask is behind Load earlier")
-    assert.doesNotMatch(card, /the workflow is running/, "…and so is the previous turn's sign-off")
-    assert.match(card, /Background task .Watching the release run. exited 0/, "the wake that opened this turn shows")
-    assert.match(card, /The watcher came back green/, "…and so does the turn's opening narration")
-    assert.match(card, /Load earlier messages/, "the closed turn stays one click away")
+    assert.match(card, /Kick off the release workflow/, "the human's own ask anchors the window")
+    // THE COMPLETION MARKER IS NOT A WAKE DELIVERY, and only the delivery cuts a run. This fixture holds
+    // `boundary: "wake"` — the transcript's own "that task finished" hairline, whose LAUNCH already folds
+    // into the count, so keeping it would render one event twice and inverted (see
+    // queueCollapse.survivesQueueCollapse). What actually re-invokes a rested agent is the scheduler's
+    // wake, a real user record carrying frizz's delivery token (`wake: true`), and that is section 9.
+    assert.doesNotMatch(card, /Watching the release run/, "a completion marker folds like the launch it echoes")
+    assert.doesNotMatch(card, /The watcher came back green/, "…so the run around it is one fold, not two")
+
+    // ---- 9. ONE FOLD PER WAKE ----
+    // The shape this collapse exists for (maintainer 2026-08-12): an agent parks on a PR watcher, the
+    // watcher fires, it works, it rests, the watcher fires again. Each run folds SEPARATELY, and each
+    // wake's hairline sits BETWEEN the run it ended and the run it caused — "multiple messages in their
+    // complete form, with various collapsed tool call blocks between them, plus some hairline indicators
+    // showing why they were reawoken". One global span produced the opposite: every hairline clustered
+    // above a single fold, detached from the work it explained.
+    await page.goto(variant("prwakes"), { waitUntil: "networkidle0" })
+    await page.waitForSelector(SEL, { timeout: 10_000 })
+    // Read the whole ladder IN DOCUMENT ORDER — the interleaving is the entire claim, and three folds in
+    // the right count but the wrong places would pass a per-selector check.
+    const ladder = await page.$$eval("[data-wake-divider]", (ns) =>
+      ns.map((n) => `${n.getAttribute("data-wake-divider")}: ${(n as HTMLElement).innerText.replace(/\s+/g, " ").trim()}`),
+    )
+    assert.deepEqual(
+      ladder.map((row) => row.replace(/ · \d+m ago$/, "")),
+      [
+        "intermediate-summary: 6 tool calls · Click to expand",
+        "github: 2 new items on colinhacks/zod#6382",
+        "intermediate-summary: 7 tool calls · Click to expand",
+        "github: New approval from @colinhacks on colinhacks/zod#6382",
+        "intermediate-summary: 4 tool calls · Click to expand",
+      ],
+      `each run folds on its own, between the wakes that bound it, got ${ladder.join(" | ")}`,
+    )
+    // The PR ACTIVITY is what the hairline must name — "that's actually more important than showing the
+    // watcher being armed" — so the actors survive on the line, and the burst lists its items beneath.
+    const prCard = await page.evaluate(() => document.body.innerText)
+    assert.match(prCard, /@copilot-pull-request-reviewer/, "the burst names who filed each item")
+    assert.match(prCard, /@pullfrog/)
+    // Every run's closing message stays in full: the card reads down the page as the thread actually ran.
+    assert.match(prCard, /PR #6382 is open against main/, "run 1's rest")
+    assert.match(prCard, /Both review findings are addressed/, "run 2's rest")
+    assert.match(prCard, /#5178 is merged as/, "run 3's rest")
+    // Expanding is still ONE-WAY and card-wide: one press restores every run's hidden log at once.
+    await page.click(SEL)
+    await page.waitForFunction((sel) => document.querySelectorAll(sel).length === 0, {}, SEL)
+    assert.equal(
+      await page.$$eval('[data-wake-divider="github"]', (ns) => ns.length),
+      2,
+      "…and the wake hairlines survive the expansion, still one per run",
+    )
 
     // ---- 9. control: nothing intermediate, so no divider at all ----
     await page.goto(variant("single"), { waitUntil: "networkidle0" })

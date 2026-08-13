@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { isGoalBump, supersededAskIndices, survivesQueueCollapse } from "./queueCollapse.ts"
+import { isGoalBump, queueCollapseSegments, segmentFolds, supersededAskIndices, survivesQueueCollapse } from "./queueCollapse.ts"
 
 // The REAL Goal delivery frizz wrote into the maintainer's zod thread on 2026-08-12, verbatim — trailer,
 // the `<!-- frizz-wake:… -->` token and all. The token is the whole reason `text` cannot be matched
@@ -95,4 +95,87 @@ test("ordinary chatter collapses", () => {
   const none = new Set<number>()
   assert.equal(survivesQueueCollapse({ text: "Let me read the implementation." }, 2, none), false)
   assert.equal(survivesQueueCollapse({ text: "", boundary: "rest" }, 2, none), false)
+})
+
+// ---- queueCollapseSegments ----
+//
+// ONE FOLD PER WAKE. These are the shapes the maintainer described on 2026-08-12 — a thread driven
+// across several watcher wakes, and the run whose calls landed after its closing prose.
+
+// Shorthand: `p` prose, `t` a tools-only step, `w` a wake, `x` a message the card drops outright.
+const p = (tools = 0) => ({ text: true, tools, countable: true })
+const t = (tools = 1) => ({ tools, countable: true })
+const w = () => ({ opens: true, survives: true, countable: true })
+const x = () => ({ skip: true })
+
+test("with no wake the whole run is one segment, anchored on the first and last prose", () => {
+  const segs = queueCollapseSegments([x(), p(), t(3), t(2), p()], 1)
+  assert.equal(segs.length, 1)
+  assert.deepEqual(
+    { start: segs[0].start, end: segs[0].end, open: segs[0].open, close: segs[0].close, woken: segs[0].woken },
+    { start: 1, end: 4, open: 1, close: 4, woken: false },
+  )
+  assert.equal(segs[0].tools, 5)
+  assert.equal(segs[0].steps, 2, "the two tools-only middles are hidden whole")
+})
+
+test("a wake CUTS: each run gets its own fold, and the wake itself belongs to neither", () => {
+  //  0 ask · 1 prose · 2 tools · 3 prose · 4 WAKE · 5 tools · 6 tools · 7 prose
+  const segs = queueCollapseSegments([x(), p(), t(4), p(), w(), t(3), t(2), p()], 1)
+  assert.equal(segs.length, 2)
+  assert.deepEqual([segs[0].start, segs[0].end, segs[0].woken], [1, 3, false])
+  assert.deepEqual([segs[1].start, segs[1].end, segs[1].woken], [5, 7, true])
+  assert.equal(segs[0].tools, 4)
+  assert.equal(segs[1].tools, 5, "the second run's calls are ITS run's, not the first's")
+})
+
+// The screenshot that started this: "a bunch of bash calls show up right at the end". They are the same
+// run's work — the agent simply stopped narrating before it stopped working — so they fold with it.
+test("calls made AFTER the closing prose stay inside that run's fold", () => {
+  const segs = queueCollapseSegments([x(), p(), p(), t(6), t(1)], 1)
+  assert.equal(segs.length, 1)
+  assert.equal(segs[0].end, 4, "the run reaches past its closing prose")
+  assert.equal(segs[0].close, 2)
+  assert.equal(segs[0].tools, 7)
+})
+
+test("a message the card drops outright anchors nothing and counts as nothing", () => {
+  // A Goal bump / rest divider sits at 2. Expanding reveals nothing where it stood, so counting it as a
+  // hidden step would promise a row the expansion never shows.
+  const segs = queueCollapseSegments([x(), p(), x(), t(2), p()], 1)
+  assert.equal(segs[0].steps, 1)
+  assert.equal(segs[0].tools, 2)
+})
+
+test("a mid-run ask keeps its own row, so it is not counted as hidden", () => {
+  const segs = queueCollapseSegments([x(), p(), { text: true, countable: true, survives: true }, t(3), p()], 1)
+  assert.equal(segs[0].steps, 1, "only the tools-only middle is hidden")
+})
+
+// ---- segmentFolds ----
+
+test("a WOKEN run folds even when one message both opens and closes it", () => {
+  const [seg] = queueCollapseSegments([w(), t(9), p()], 0)
+  assert.equal(seg.open, seg.close, "one prose message doing both jobs")
+  assert.equal(segmentFolds(seg), true, "its wake hairline is the anchor above the fold")
+})
+
+// Today's rule, kept deliberately: a lone agent turn has nothing intermediate, and a divider standing
+// between the human's ask and the only answer reads as the card withholding the answer.
+test("the FIRST run does NOT fold when one message both opens and closes it", () => {
+  const [seg] = queueCollapseSegments([x(), t(9), p()], 1)
+  assert.equal(segmentFolds(seg), false)
+})
+
+test("a run with nothing hidden never folds", () => {
+  const [seg] = queueCollapseSegments([x(), p(), p()], 1)
+  assert.equal(seg.tools, 0)
+  assert.equal(seg.steps, 0)
+  assert.equal(segmentFolds(seg), false)
+})
+
+test("a run with no prose at all never folds — it has no anchor to render", () => {
+  const [seg] = queueCollapseSegments([w(), t(4)], 0)
+  assert.equal(seg.open, -1)
+  assert.equal(segmentFolds(seg), false)
 })
