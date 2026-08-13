@@ -449,7 +449,7 @@ function PromptPanel({ thread, armed }: {
             `timer:`, a named `human:` (scheduler.ts `restMessageIsSignedOff`). Both fences ARE the answer
             to the question the stop hook asks. A gloss that still promised "every time" would be the one
             surface claiming a delivery the scheduler declines to make. */}
-        <span className="text-muted">every rest that is not already waiting on something</span>
+        <span className="text-muted">every rest — unless it signed off, or is waiting on you</span>
 
         <Switch
           testId="heartbeat"
@@ -522,56 +522,46 @@ function PromptPanel({ thread, armed }: {
         <span className={`font-medium ${postCompaction ? "text-fg" : "text-muted"}`}>Compaction</span>
         <span className="text-muted">when the context is summarized away — link the doc to re-read</span>
 
-        {/* THE HOLD, and it is BELOW A RULE because it is not a fourth trigger. Every switch above adds a
-            reason to send; this one takes them all away for as long as the thread is waiting on you, and
-            reading it as a sibling of the three would make "on" look like more delivery rather than less.
-            The rule spans all three columns and carries the row's own top margin.
-
-            Its label is the whole sentence rather than a name, for the same reason: there is nothing
-            elsewhere in frizz called this, so there is no vocabulary to be consistent with — and a name
-            would have to be glossed anyway. The gloss says what COUNTS as a question, which is the part
-            an operator cannot guess (a permission prompt is one; the agent's own rhetorical one is not).
-
-            The stop hook already declines a rest that ends in a ```question fence, always. This is the
-            broader version, ON by default: it covers the heartbeat and the compaction trigger too, and it
-            counts a native ask and a permission prompt as questions — every way a thread can be waiting
-            on you, not just the one it wrote down. Switching it off is the deliberate act, because the
-            behaviour it buys is what the stop hook's own default assumes: a thread told "keep going"
-            should not be told it again while it is holding a question up. */}
+        {/* AUTONOMOUS MODE, below a rule because it is not a fourth trigger: the three above add reasons to
+            send, this one changes what happens when the thread is WAITING ON YOU.
+            
+            IT READS INVERTED AGAINST THE STORED FLAG, deliberately. The column is `pause_on_questions`
+            — the mechanism — and by default it is ON, so frizz holds the goal while a question fence, a
+            native ask or a permission prompt is unanswered. That default is right, but "Disable when
+            questions are pending" named the mechanism rather than the behaviour, and the gloss under it
+            listed what COUNTS as a question instead of saying what changes (maintainer 2026-08-12: "This
+            doesn't make any sense. It needs to say how it actually behaves differently when it's
+            checked"). Turning the switch ON now means what its name says: keep driving even while an
+            answer is outstanding, so the agent decides for itself instead of waiting for you. Same
+            default behaviour, a name that is finally true, and no migration — the inversion lives here.
+            
+            IT DOES NOT AFFECT `done`. A finished thread is finished in either mode; see the scheduler's
+            note on why that carve-out is the loop's off switch rather than an exception to it. */}
         <div className="col-span-3 mt-0.5 h-px bg-border/70" />
         <Switch
-          testId="pause-on-questions"
+          testId="autonomous-mode"
           label="Autonomous mode"
-          checked={pauseOnQuestions}
+          checked={!pauseOnQuestions}
           disabled={busy}
           onChange={(next) => {
-            setPauseOnQuestions(next)
-            void persistNow(draft({ pauseOnQuestions: next }))
+            setPauseOnQuestions(!next)
+            void persistNow(draft({ pauseOnQuestions: !next }))
           }}
         />
-        <span className={`col-span-2 ${pauseOnQuestions ? "text-fg" : "text-muted"}`}>
+        <span className={`col-span-2 ${!pauseOnQuestions ? "text-fg" : "text-muted"}`}>
           <span className="font-medium">Autonomous mode</span>
-          <span className="text-muted"> — a question fence, a native ask, or a permission prompt</span>
+          <span className="text-muted"> — keep sending the goal even while it is waiting on you, so it decides rather than waits</span>
         </span>
       </div>
-      {/* NO SAVE BUTTON. Every edit here writes itself — a switch on its own click, the text and the
-          cadence on blur, and whatever is still uncommitted on the dismissal that unmounts this subtree
-          (maintainer 2026-08-11: "no save button. (autosaves when you click out)"). A button that only
-          ever duplicated what leaving the panel already did was one more thing to forget to press, and
-          its disabled state was the only place the panel could say "nothing to do" — which nobody needed
-          told. `busy` is the whole in-flight signal now, and it sits on the controls themselves.
+      {/* NO SAVE BUTTON, AND NO EXPLAINER. Every edit writes itself — a switch on its own click, the text
+          and the cadence on blur, and whatever is still uncommitted on the dismissal that unmounts this
+          subtree (maintainer 2026-08-11: "no save button. (autosaves when you click out)").
 
-          What the operator needs from this line is WHEN IT STOPS, because a prompt they armed sitting
-          silent on a still thread is what looks broken from the outside. */}
-      <p className="mt-3 text-muted/70">
-        {!stopHook && !heartbeat && !postCompaction
-          ? <>None is on, so nothing is sent — the text stays here for when you want it back.</>
-          : <>
-              Saved as you go. Switch them all off to stop it, or the agent stops it itself by signing
-              off with a <code className="font-mono font-medium text-fg/85">```done</code> fence — which
-              files the thread away until you send more work.
-            </>}
-      </p>
+          The paragraph that used to sit here — "Saved as you go. Switch them all off to stop it, or the
+          agent stops it itself…" — is gone at the maintainer's instruction (2026-08-12: "drop this"). It
+          was explaining the panel to someone already looking at it: the switches say what they do, the
+          toast says what was saved, and how the AGENT ends the loop is the agent's business, told to it
+          in the delivery's own trailer. */}
     </section>
   )
 }

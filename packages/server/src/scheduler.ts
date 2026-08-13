@@ -425,6 +425,17 @@ type RecurringRow = Pick<
 //   hook (maintainer 2026-08-11), because the two are one intent: "keep going" is not something to say
 //   to a thread that stopped to ask you a question, whichever way it asked.
 //
+//   THE PANEL SHOWS IT INVERTED, as "Autonomous mode" — switching that ON clears this flag, so the goal
+//   keeps arriving while an answer is outstanding and the agent decides for itself instead of waiting.
+//   Same default, a name that describes the behaviour rather than the mechanism. The inversion lives in
+//   the component; this column stays the mechanism it always was.
+//
+//   THE `done` CARVE-OUT IS NOT ONE OF THESE, and is not switchable. It is the loop's OFF SWITCH: the
+//   delivered trailer tells the worker to sign off with `done` to stop the prompts, so a goal that kept
+//   firing over a `done` fence would be a loop with no terminating condition that frizz had also
+//   promised terminates. Predictability cuts the other way here — an unconditional trigger is only
+//   simpler until it is the thing reopening finished threads.
+//
 //   IT IS STILL A SWITCH, and the row's COLUMN still defaults to 0 — an existing armed row picks it up
 //   off, and so does any caller that has never heard of it. The default lives in the panel, where a
 //   default is a thing an operator can see and change, and not in the storage layer, where flipping it
