@@ -132,5 +132,66 @@ writeFileSync(join(finalDir, "fff-tile.svg"), `<svg width="512" height="512" vie
   <path d="${path}" ${STROKE}/>
 </svg>
 `)
+// ---------------------------------------------------------------- the icon
+//
+// The production favicon, in the structure scripts/generate-icons.mjs requires:
+// one #icon-background, one #icon-border, one #icon-glow and one untransformed
+// #icon-mark. The maskable build scales the mark to 0.78 and asserts it stays
+// inside the central 80% safe circle, so the mark's ink radius has to clear
+// 204.8/0.78 = 262. A near-square mark's corners sit at half-width x sqrt(2),
+// which is what caps the size here rather than the tile's own edges.
+const ICON_R = 240
+let markR = 0
+for (const [x, y] of row) markR = Math.max(markR, Math.hypot(x - (box.x + box.w / 2), y - (box.y + box.h / 2)))
+const k = (ICON_R - stroke / 2) / markR
+const mcx = box.x + box.w / 2
+const mcy = box.y + box.h / 2
+const iconRow = row.map(([x, y]) => [256 + (x - mcx) * k, 256 + (y - mcy) * k])
+const iconStroke = stroke * k
+const iconPath = catmullPath(iconRow.filter((_, i) => i % 10 === 0))
+console.log(`icon: ink radius ${(markR * k + iconStroke / 2).toFixed(1)}, stroke ${iconStroke.toFixed(2)} (maskable needs ${((markR * k + iconStroke / 2) * 0.78).toFixed(1)} <= 204.8)`)
+
+const favicon = `<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <clipPath id="tile">
+      <rect x="16" y="16" width="480" height="480" rx="116"/>
+    </clipPath>
+    <linearGradient id="background" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#191a20"/>
+      <stop offset="1" stop-color="#0d0e10"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#e8b923" stop-opacity="0.14"/>
+      <stop offset="1" stop-color="#e8b923" stop-opacity="0"/>
+    </radialGradient>
+    <!-- Radial and centred: a linear gradient reverses under a half turn, which
+         would render a rotationally symmetric mark asymmetric. -->
+    <radialGradient id="ink" gradientUnits="userSpaceOnUse" cx="256" cy="256" r="250">
+      <stop offset="0" stop-color="#ffdf7f"/>
+      <stop offset="0.62" stop-color="#eabe2c"/>
+      <stop offset="1" stop-color="#cf9412"/>
+    </radialGradient>
+  </defs>
+
+  <rect id="icon-background" x="16" y="16" width="480" height="480" rx="116" fill="url(#background)"/>
+  <rect id="icon-border" x="16.5" y="16.5" width="479" height="479" rx="115.5" fill="none" stroke="#2b2e35"/>
+  <circle id="icon-glow" cx="256" cy="256" r="205" fill="url(#glow)"/>
+
+  <!-- The cursive f written three times as ONE stroke: two free ends, six
+       self-crossings, exact 180-degree rotational symmetry about the middle
+       glyph. Rebuild with assets/logo-concepts/build-fff.mjs; do not hand-edit
+       one side without mirroring the other. -->
+  <g id="icon-mark" clip-path="url(#tile)">
+    <path d="${iconPath}" fill="none" stroke="url(#ink)" stroke-width="${iconStroke.toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>
+`
+writeFileSync(join(finalDir, "fff-favicon.svg"), favicon)
+
 for (const [name, w] of [["fff-dark", 1200], ["fff-tile", 512]]) render(join(finalDir, `${name}.svg`), join(finalDir, `${name}.png`), w)
+
+if (process.argv.includes("--install")) {
+  writeFileSync(join(here, "../../packages/web/public/favicon.svg"), favicon)
+  console.log("installed -> packages/web/public/favicon.svg")
+}
 console.log(`wrote final/fff.svg, final/fff-dark.svg, final/fff-tile.svg (${Math.round(box.w)}x${Math.round(box.h)})`)

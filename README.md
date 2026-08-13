@@ -1,5 +1,5 @@
 <p align="center">
-  <h1 align="center">🧵<br/>Frizz</h1>
+  <h1 align="center"><img src="assets/logo-concepts/final/fff-tile.png" alt="" width="104" height="104"><br/>Frizz</h1>
   <p align="center">A local web UI for running many coding agents at once.
     <br/>
     by <a href="https://x.com/colinhacks">@colinhacks</a>
