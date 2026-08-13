@@ -153,7 +153,10 @@ export function ChildOpRow({
       {running ? <BoxSpinner size={12} /> : quiet}
     </span>
   ) : (
-    <span className="flex w-[9px] shrink-0 justify-center">
+    // THE DOT IS LIFTED OFF THE FLEX CENTRE — see `.frizz-op-dot-slot` in styles.css for the readings
+    // and for why the correction is font-scoped. `items-center` centres the dot's BOX on the line; the
+    // eye reads it against the CAP BAND of the label beside it, and the two are not the same place.
+    <span className="frizz-op-dot-slot flex w-[9px] shrink-0 justify-center">
       {running ? (
         // A running SHELL pulses blue, a running sub-AGENT pulses the accent-yellow.
         <span

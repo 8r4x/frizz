@@ -16,6 +16,10 @@
   --color-muted: #8b8f96;
   --color-accent: #e8b923;
   --color-live: #4ac97e;
+  /* A parked PR watcher's mark. Fitted to the accent-yellow/shell-blue pair in OKLCH rather than picked
+     — see the .frizz-live-dot--github rule below for the numbers and for why it is violet and not the
+     green that fits the same numbers. */
+  --color-watch: #b47feb;
   --color-idle: #6b7280;
   /* Live-work indicators split by runtime concern: a background SHELL/Monitor pulses blue, a
      sub-agent pulses the accent-yellow. The blue is a clear azure, kept distinct from --color-live
@@ -241,23 +245,59 @@ html[data-font="sans"] .frizz-bash .md-body {
   animation: frizz-live-pulse 1.25s ease-in-out infinite;
 }
 /* Three runtime concerns, three hues: background shells pulse blue, sub-agents pulse the accent-yellow,
-   and a parked PR watcher pulses green.
+   and a parked PR watcher pulses violet.
 
-   THE GREEN IS `--color-live`, AND IT ALREADY FITS — measured rather than eyeballed, because "make sure
-   the green looks of a piece with the yellow and the blue" (maintainer 2026-08-13) is a question about
-   perceptual lightness and chroma, which hex triples do not answer. In OKLCH:
+   FITTED, NOT PICKED, because "make sure it looks of a piece with the yellow and the blue" is a question
+   about perceptual lightness and chroma, which hex triples do not answer. In OKLCH:
 
-     accent yellow  #e8b923   L 0.806   C 0.157   H 89.1
+     accent yellow  #e8b923   L 0.806   C 0.157   H  89.1
      shell blue     #4a9eff   L 0.693   C 0.165   H 254.0
-     --color-live   #4ac97e   L 0.747   C 0.156   H 153.9
+     watch violet   #b47feb   L 0.693   C 0.161   H 305.0
 
-   The pair's midpoint is L 0.749 / C 0.161, so the existing green sits 0.002 off in lightness and 0.005
-   off in chroma — already the exact fit, and its hue lands roughly between the two the long way round.
-   Nothing to retune; the token was simply never used. Re-measure before changing any of the three, and
-   move all of them together if you move one. */
+   The violet is the SHELL BLUE'S OWN lightness and chroma, rotated in hue — both to within 0.004, so the
+   two are the same mark in two colours. H=305 is chosen rather than tuned by eye: it is the LOWEST hue
+   at which that chroma still fits inside sRGB (285° clips to C 0.134, 295° to 0.144, 300° to 0.151), so
+   it stays as tight to the blue as a violet can without giving up chroma and drifting toward magenta.
+
+   IT IS THE BLUE'S LIGHTNESS AND NOT THE PAIR'S MIDPOINT, which is where the fit landed first (L 0.749,
+   #c691ff). Numerically that was the better centre; in place it read HOT. Measured with ink-pixels at
+   dsf 6 — peak contrast against the surface: agent 240, shell 262, midpoint-violet 331, a third louder
+   than either peer, because a light violet carries far more total channel energy against a near-black
+   panel than a mid blue does. Dropping to the blue's own lightness puts it at the quiet end of the
+   family's existing 0.693–0.806 band rather than above both.
+
+   IT WAS GREEN FIRST, at `--color-live` #4ac97e, which fits the pair just as exactly (L 0.747 / C 0.156)
+   and still looked wrong in place: "the green looks kind of weird alongside the yellow and blue, I'll be
+   honest. Maybe we should do purple instead" (maintainer 2026-08-13). A numeric fit is necessary and not
+   sufficient — green sits between yellow and blue on the wheel, so the trio read as a traffic light
+   rather than as three peers. Violet sits outside that arc. Re-measure before changing any of the three,
+   and move all of them together if you move one. */
 .frizz-live-dot--shell { --live-dot: var(--color-shell); }
 .frizz-live-dot--agent { --live-dot: var(--color-accent); }
-.frizz-live-dot--github { --live-dot: var(--color-live); }
+.frizz-live-dot--github { --live-dot: var(--color-watch); }
+
+/* THE LIVENESS DOT'S SLOT on a child-op row (ChildOpRow, the card and sheet densities). The row is
+   `items-center`, which centres the dot's BOX on the flex line — but the eye reads the dot against the
+   CAP BAND of the label beside it, baseline to cap height, and that band sits above the line box's
+   centre because the box also has to hold descender space the label is not using (maintainer
+   2026-08-13: "the vertical alignment of these labels with the status indicator dots… they're not
+   looking so hot").
+
+   MEASURED IN BOTH FONTS, because this app ships in two (html[data-font], applied before first paint)
+   and a constant fitted in one is only ever right in one. Canvas cap-band reference, 11.5px rows, ops
+   strip, live and quiet dots alike — the dot's centre minus the label's cap-band centre:
+
+     mono   -1.29px   → wants a lift of 0.112em (1.29 / 11.5)
+     sans   +0.32px   → sub-pixel, wants nothing
+
+   So the lift is scoped to mono and sans is left alone: below ~0.3px you are under the device grid and
+   a nudge only blurs the mark. Applying the mono constant to both put sans 1.61px HIGH, which is worse
+   than the error it was fixing. Residual after correcting: -0.01px mono, +0.32px sans.
+
+   The readings live here rather than at the call site so the next reader knows to RE-MEASURE rather than
+   re-guess — and if the row's type scale or its line-height moves, both numbers are stale together. */
+.frizz-op-dot-slot { transform: translateY(var(--op-dot-nudge, -0.112em)); }
+html[data-font="sans"] .frizz-op-dot-slot { --op-dot-nudge: 0em; }
 /* THE RAIL's rest-with-live-work mark — a pulsing dot centred in the sidebar's 15px StatusBox. Same
    hue, same cadence and the same meaning as `.frizz-live-dot` above, but it is a mark INSIDE the
    checkbox family's box, so it takes THAT family's geometry rather than the transcript's. Two

@@ -307,7 +307,7 @@ function hasParkedExternalWait(tele: SessionTelemetry | undefined, nowMs: number
 // scheduler stops watching. The ID is stable across ticks (slug + ref) so a row does not remount on
 // every board delta, and there is nothing to DROP: the affordance for hiding one is the snooze the
 // operator already uses for a thread resting on background work.
-function githubWatchViews(slug: string, tele: SessionTelemetry | undefined, fenceAt: string | undefined): ThreadView["watches"] {
+export function githubWatchViews(slug: string, tele: SessionTelemetry | undefined, fenceAt: string | undefined): ThreadView["watches"] {
   if (tele?.lastFence?.kind !== "awaiting") return []
   const seen = new Set<string>()
   const out: ThreadView["watches"] = []
