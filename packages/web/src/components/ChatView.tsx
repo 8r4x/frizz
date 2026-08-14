@@ -17,6 +17,8 @@ import { localImageUrl } from "../lib/markdownTargets.ts"
 import { apiBase } from "../lib/base-path.ts"
 import { queueDestination } from "../lib/router.ts"
 import { DiffBlock, PathLink } from "./DiffBlock.tsx"
+import { CodeBody } from "./CodeBody.tsx"
+import { resolveFileLanguage } from "../lib/syntaxHighlight.ts"
 import { TodoBlock } from "./TodoBlock.tsx"
 import { splitQuestionBlocks, parseQuestionBlock, type QuestionKind, type BlockAnswer, type MessageAnswering } from "../lib/questionBlocks.ts"
 import { splitFenceBlocks, type FenceKind } from "../lib/fenceBlocks.ts"
@@ -2399,7 +2401,14 @@ function BashBlock({
           {open && command && (
             <>
               {inputLabel && <div className="frizz-bash-output-label petite-caps">{inputLabel}</div>}
-              <pre className={`frizz-bash-body${inputLabel ? " frizz-bash-output-body" : ""}${long && !expanded ? " frizz-bash-clamp" : ""}`}>{command}</pre>
+              {/* A Bash card's body is a shell command, so it highlights as one. A card carrying an
+                  `inputLabel` is NOT shell — that is codex's structured tool input reusing this card
+                  family — and stays plaintext rather than being painted in a grammar it isn't. */}
+              <CodeBody
+                text={command}
+                language={inputLabel ? "plaintext" : "bash"}
+                className={`frizz-bash-body${inputLabel ? " frizz-bash-output-body" : ""}${long && !expanded ? " frizz-bash-clamp" : ""}`}
+              />
               {long && (
                 <button
                   type="button"
@@ -2473,7 +2482,14 @@ function ReadBlock({ detail, read, status, durationMs }: { detail?: string; read
       <div id={bodyId} hidden={!open}>
         {open && (
           <>
-            <pre className={`frizz-bash-body${long && !expanded ? " frizz-bash-clamp" : ""}`}>{read}</pre>
+            {/* The excerpt highlights in the grammar of the file that was READ — the same path the
+                header links to. An unrecognized extension stays plaintext (no guessing), and the
+                `cat -n` line numbers are separated out before the grammar sees them. */}
+            <CodeBody
+              text={read}
+              language={resolveFileLanguage(detail)}
+              className={`frizz-bash-body${long && !expanded ? " frizz-bash-clamp" : ""}`}
+            />
             {long && (
               <button
                 type="button"

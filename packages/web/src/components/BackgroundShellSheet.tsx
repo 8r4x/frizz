@@ -8,6 +8,10 @@ import { elapsedSince } from "../lib/durationLabels.ts"
 import { Sheet } from "./ui/Sheet.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
 import { BLOCK_RADIUS } from "./TranscriptCard.tsx"
+import { CodeBody } from "./CodeBody.tsx"
+
+// Shared by the command block and its no-command fallback so the two cannot drift apart.
+const commandBlockClass = `font-mono-keep overflow-x-auto whitespace-pre-wrap break-words ${BLOCK_RADIUS} border border-border bg-bg/75 px-4 py-2.5 text-[12px] leading-relaxed text-fg/85`
 
 export function BackgroundShellSheet({
   id,
@@ -111,7 +115,14 @@ export function BackgroundShellSheet({
                       </button>
                     )}
                   </div>
-                  <pre data-background-shell-command className={`font-mono-keep overflow-x-auto whitespace-pre-wrap break-words ${BLOCK_RADIUS} border border-border bg-bg/75 px-4 py-2.5 text-[12px] leading-relaxed text-fg/85`}>{command || (query.isLoading ? "Loading…" : "Command unavailable for this background operation.")}</pre>
+                  {/* Highlighted only when there IS a command: the fallbacks below are prose, and
+                      painting "Command unavailable for this background operation." in shell grammar
+                      would colour a sentence as though it were a script. */}
+                  {command ? (
+                    <CodeBody data-background-shell-command text={command} language="bash" className={commandBlockClass} />
+                  ) : (
+                    <pre data-background-shell-command className={commandBlockClass}>{query.isLoading ? "Loading…" : "Command unavailable for this background operation."}</pre>
+                  )}
                 </section>
                 <section>
                   <div className="mb-2 flex items-center gap-2">

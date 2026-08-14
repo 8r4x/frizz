@@ -3,6 +3,7 @@ import test from "node:test"
 import {
   renderHighlightedCode,
   resolveFenceLanguage,
+  resolveFileLanguage,
   SUPPORTED_FENCE_LANGUAGES,
 } from "./syntaxHighlight.ts"
 
@@ -22,6 +23,29 @@ test("fence aliases resolve without guessing unknown languages", () => {
   assert.equal(resolveFenceLanguage("yml"), "yaml")
   assert.equal(resolveFenceLanguage("totally-made-up"), "plaintext")
   assert.equal(resolveFenceLanguage(), "plaintext")
+})
+
+// A Read card highlights by the PATH in its header rather than a declared fence, so the two resolvers
+// have to agree about what a `.ts` file is. They share one alias table for exactly that reason.
+test("file paths resolve to the same grammars fences do", () => {
+  assert.equal(resolveFileLanguage("/repo/packages/web/src/App.tsx"), "typescript")
+  assert.equal(resolveFileLanguage("scripts/shot.mjs"), "javascript")
+  assert.equal(resolveFileLanguage(".github/workflows/ci.yml"), "yaml")
+  assert.equal(resolveFileLanguage("a/b/index.HTML"), "xml")
+  assert.equal(resolveFileLanguage("styles.scss"), "css")
+  assert.equal(resolveFileLanguage("README.md"), "markdown")
+  assert.equal(resolveFileLanguage("C:\\repo\\main.py"), "python")
+})
+
+test("extensionless and unrecognized files stay plaintext rather than guess", () => {
+  assert.equal(resolveFileLanguage("Dockerfile"), "bash")
+  assert.equal(resolveFileLanguage("/home/me/.zshrc"), "bash")
+  assert.equal(resolveFileLanguage("LICENSE"), "plaintext")
+  assert.equal(resolveFileLanguage("build/output.bin"), "plaintext")
+  assert.equal(resolveFileLanguage("src/main.go"), "plaintext")
+  assert.equal(resolveFileLanguage(), "plaintext")
+  assert.equal(resolveFileLanguage(""), "plaintext")
+  assert.equal(resolveFileLanguage("/some/dir/"), "plaintext")
 })
 
 test("declared languages highlight multiline source and preserve whitespace", () => {

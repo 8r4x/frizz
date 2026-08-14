@@ -26,6 +26,29 @@
      green and the accent gold so the two live states never blur. */
   --color-shell: #4a9eff;
 
+  /* CODE TOKEN COLOURS — one palette, every code surface in the app.
+
+     There are two highlighting ENGINES here and there always will be: highlight.js for anything that
+     is a whole code body (markdown fences, a Bash card's command, a Read card's excerpt), and the
+     hand-rolled per-line scanner in lib/diff/highlight.ts for diffs, which needs tokens sliced by
+     source line to align an old side against a new one. Two engines is fine. Two PALETTES was not:
+     a keyword in a ```ts fence rendered muted purple while the same keyword in the Edit diff directly
+     below it rendered salmon, so one screen showed the same file in two colour languages.
+
+     These are GitHub's dark-dimmed values, which is the theme the diff was already carrying — a real,
+     tuned set rather than a hand-picked one, and it survives this app's darker background (#0d0e10 vs
+     dark-dimmed's own #22272e) with room to spare. Both engines map onto these vars and neither one
+     may hard-code a colour: `.hljs-*` below, `ftk-*` in lib/diff/diff.css. */
+  --code-kw: #f47067; /* keywords, doctags, template tags */
+  --code-op: var(--code-kw); /* operators track keywords, as the diff has always drawn them */
+  --code-fn: #dcbdfb; /* function/class names at their definition or call */
+  --code-num: #6cb6ff; /* numbers, literals, attributes, plain variables */
+  --code-str: #96d0ff; /* strings, regexps */
+  --code-type: #f69d50; /* built-ins, declared types, symbols */
+  --code-com: #768390; /* comments and quotes */
+  --code-tag: #8ddb8c; /* markup element and selector names */
+  --code-punct: #adbac7; /* brackets, separators — dark-dimmed's own base text tone */
+
   --font-mono: ui-monospace, "JetBrains Mono", "Fira Code", "SF Mono", "Cascadia Mono", Consolas,
     Menlo, "DejaVu Sans Mono", monospace;
   /* System-native sans (SF Pro on macOS) — the Inter-first stack read poorly. */
@@ -1015,63 +1038,109 @@ a[href] {
 .md-body .md-code-copy.is-copied::after {
   --md-copy-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -0.5 24 24' fill='none' stroke='%23fff' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
 }
-/* Fenced code highlighting: a deliberately restrained dark palette, expressed only through the
-   allowlisted classes emitted by our explicit highlight.js core grammars. Block typography,
-   line-height, padding, selection, and overflow continue to belong to the existing pre/code rules
-   above; inline code never receives .hljs and is therefore unaffected. */
+/* Highlight.js token colours, expressed only through the allowlisted classes our explicit core
+   grammars emit and drawn entirely from the shared --code-* palette at the top of this file. Block
+   typography, line-height, padding, selection, and overflow continue to belong to the existing
+   pre/code rules above; inline code never receives .hljs and is therefore unaffected.
+
+   The scope is `.hljs` — the class hljs's own container carries — rather than `.md-body`, because the
+   markdown fence is no longer the only surface running this engine: a Bash card's command and a Read
+   card's excerpt (components/CodeBody.tsx) put the same class on the `<pre>` they already own. Keying
+   the palette to the engine's own marker is what lets a surface opt in by rendering through CodeBody
+   and get the app's colours with no CSS of its own.
+
+   Only the TOKEN spans are coloured here. The base text colour deliberately stays with each surface
+   (`.md-body .hljs` below, `.frizz-bash-body` in diff.css), because unclassified code should read as
+   that surface's own foreground rather than pull a second grey into the card. */
 .md-body .hljs {
   color: #d5d8dc;
 }
-.md-body .hljs-comment,
-.md-body .hljs-quote {
-  color: #747b85;
+.hljs .hljs-comment,
+.hljs .hljs-code,
+.hljs .hljs-formula {
+  color: var(--code-com);
   font-style: italic;
 }
-.md-body .hljs-keyword,
-.md-body .hljs-selector-tag,
-.md-body .hljs-doctag {
-  color: #c5a3d8;
+.hljs .hljs-doctag,
+.hljs .hljs-keyword,
+.hljs .hljs-meta .hljs-keyword,
+.hljs .hljs-template-tag,
+.hljs .hljs-template-variable,
+.hljs .hljs-type,
+.hljs .hljs-variable.language_ {
+  color: var(--code-kw);
 }
-.md-body .hljs-string,
-.md-body .hljs-regexp,
-.md-body .hljs-addition,
-.md-body .hljs-attribute {
-  color: #a9c48c;
+.hljs .hljs-operator {
+  color: var(--code-op);
 }
-.md-body .hljs-number,
-.md-body .hljs-literal,
-.md-body .hljs-symbol,
-.md-body .hljs-bullet {
-  color: #d5a66f;
+.hljs .hljs-title,
+.hljs .hljs-title.class_,
+.hljs .hljs-title.function_,
+.hljs .hljs-section {
+  color: var(--code-fn);
 }
-.md-body .hljs-title,
-.md-body .hljs-section,
-.md-body .hljs-property,
-.md-body .hljs-selector-id,
-.md-body .hljs-selector-class {
-  color: #87b6d4;
+.hljs .hljs-attr,
+.hljs .hljs-attribute,
+.hljs .hljs-literal,
+.hljs .hljs-meta,
+.hljs .hljs-number,
+.hljs .hljs-property,
+.hljs .hljs-variable,
+.hljs .hljs-selector-attr,
+.hljs .hljs-selector-class,
+.hljs .hljs-selector-id,
+.hljs .hljs-params {
+  color: var(--code-num);
 }
-.md-body .hljs-type,
-.md-body .hljs-built_in,
-.md-body .hljs-name,
-.md-body .hljs-tag {
-  color: #d1bd7d;
+.hljs .hljs-regexp,
+.hljs .hljs-string,
+.hljs .hljs-meta .hljs-string {
+  color: var(--code-str);
 }
-.md-body .hljs-meta,
-.md-body .hljs-meta .hljs-keyword {
-  color: #a8a0c7;
+.hljs .hljs-built_in,
+.hljs .hljs-symbol {
+  color: var(--code-type);
 }
-.md-body .hljs-variable,
-.md-body .hljs-template-variable,
-.md-body .hljs-params {
-  color: #c9a5ae;
+/* A yaml sequence dash and a markdown list marker are PUNCTUATION, and the rendered diff has always
+   drawn them that way. Grouping them with the built-ins gave a `- name:` block a row of orange dashes
+   in a Read card and grey ones in the Edit diff below it. */
+.hljs .hljs-bullet {
+  color: var(--code-punct);
 }
-.md-body .hljs-deletion {
-  color: #d98d8d;
+.hljs .hljs-name,
+.hljs .hljs-quote,
+.hljs .hljs-tag,
+.hljs .hljs-selector-tag,
+.hljs .hljs-selector-pseudo {
+  color: var(--code-tag);
 }
-.md-body .hljs-addition,
-.md-body .hljs-deletion {
-  background: color-mix(in srgb, currentColor 9%, transparent);
+.hljs .hljs-punctuation,
+.hljs .hljs-subst {
+  color: var(--code-punct);
+}
+.hljs .hljs-emphasis {
+  font-style: italic;
+}
+.hljs .hljs-strong {
+  font-weight: 700;
+}
+/* A ```diff fence, which is the one grammar that paints WHOLE LINES rather than tokens. The tints
+   match the rendered Edit diff's own add/del rows (lib/diff/diff.css) so a diff pasted into prose and
+   a diff frizz rendered itself do not read as two different things. */
+.hljs .hljs-addition {
+  color: #b4f1b4;
+  background: rgba(87, 171, 90, 0.15);
+}
+.hljs .hljs-deletion {
+  color: #ffd8d3;
+  background: rgba(229, 83, 75, 0.15);
+}
+/* The `cat -n` line numbers a Read excerpt carries. They are not source and must never compete with
+   it: the same tone the rendered diff gives its own gutter, and unselectable-looking but still
+   SELECTABLE, because copying the excerpt has always yielded the numbers and quietly changing that
+   would break anyone who pastes a line reference out of a card. */
+.frizz-code-gutter {
+  color: #4b4f57;
 }
 .md-body blockquote {
   border-left: 2px solid var(--color-border-strong);

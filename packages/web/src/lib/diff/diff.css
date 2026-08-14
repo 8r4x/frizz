@@ -209,13 +209,19 @@
   border-top: none;
 }
 
-/* Token colours — coarse kinds emitted by highlight.ts */
-.ftk-kw    { color: #f47067; }
-.ftk-type  { color: #f69d50; }
-.ftk-str   { color: #96d0ff; }
-.ftk-com   { color: #6b7280; font-style: italic; }
-.ftk-num   { color: #6cb6ff; }
-.ftk-fn    { color: #dcbdfb; }
-.ftk-punct { color: #adbac7; }
-.ftk-op    { color: #f47067; }
+/* Token colours — the coarse kinds highlight.ts emits, drawn from the app's shared --code-* palette
+   (styles.css) so a keyword in a rendered diff and a keyword in a Read card or a ```ts fence are the
+   same colour. These values USED to live here as literals, which is how the app ended up rendering
+   one file's source in two palettes on one screen. Never hard-code a colour in this block. */
+.ftk-kw    { color: var(--code-kw); }
+.ftk-type  { color: var(--code-type); }
+.ftk-str   { color: var(--code-str); }
+.ftk-com   { color: var(--code-com); font-style: italic; }
+.ftk-num   { color: var(--code-num); }
+.ftk-fn    { color: var(--code-fn); }
+/* A yaml/toml key, an html attribute — the bucket highlight.js spells `hljs-attr`, so it takes the
+   same colour that does. */
+.ftk-key   { color: var(--code-num); }
+.ftk-punct { color: var(--code-punct); }
+.ftk-op    { color: var(--code-op); }
 .ftk-plain { color: var(--color-fg); }

@@ -78,6 +78,72 @@ test("detectLang maps by extension and known filenames", () => {
   assert.equal(detectLang("a/b/style.css"), "css")
   assert.equal(detectLang("Dockerfile"), "shell")
   assert.equal(detectLang("data.bin"), "text")
+  assert.equal(detectLang(".github/workflows/ci.yml"), "yaml")
+  assert.equal(detectLang("page.html"), "html")
+})
+
+// The map used to name grammars the tokenizer had no entry for (.yaml, .toml, .md, .html), which
+// rendered those files with no colour and no way to tell that from "nothing to colour". detectLang
+// now answers only with ids highlightLines can actually serve, so the pair cannot drift apart again.
+test("detectLang never names a language the tokenizer cannot highlight", () => {
+  for (const path of ["a.ts", "a.yml", "a.toml", "a.html", "a.md", "a.go", "a.unknown", "Makefile"]) {
+    const lang = detectLang(path)
+    if (lang === "text") continue
+    const lines = highlightLines("x", lang)
+    assert.ok(lines[0]?.length, `detectLang("${path}") → "${lang}", which highlightLines does not know`)
+  }
+})
+
+test("markdown stays deliberately plain rather than half-highlighted", () => {
+  assert.equal(detectLang("README.md"), "text")
+})
+
+test("yaml colours its keys, comments and scalars", () => {
+  const k = kinds("  retries: 3 # how many", "yaml")
+  assert.ok(k.includes("key:retries"), `expected a key in ${k.join(",")}`)
+  assert.ok(k.includes("num:3"), `expected a number in ${k.join(",")}`)
+  assert.ok(k.some((t) => t.startsWith("com:# how many")), `expected a comment in ${k.join(",")}`)
+})
+
+// A colon inside a VALUE is not a second key — the key rule only fires at a line start, and this is
+// the case that proves it (a bare `url: https://x` would otherwise paint `https` as a key too).
+test("yaml does not mistake a colon inside a value for a key", () => {
+  const k = kinds("url: https://example.com", "yaml")
+  assert.equal(k.filter((t) => t.startsWith("key:")).length, 1)
+  assert.ok(k.includes("key:url"))
+})
+
+test("yaml reads a key under a sequence marker", () => {
+  assert.ok(kinds("  - name: build", "yaml").includes("key:name"))
+})
+
+test("toml colours table headers and keys", () => {
+  assert.ok(kinds("[tool.frizz]", "toml").includes("fn:[tool.frizz]"))
+  assert.ok(kinds('port = 8080', "toml").includes("key:port"))
+})
+
+test("html colours element names, attributes and comments", () => {
+  const k = kinds('<a href="/x">hi</a>', "html")
+  assert.ok(k.includes("kw:a"), `expected a tag name in ${k.join(",")}`)
+  assert.ok(k.includes("key:href"), `expected an attribute in ${k.join(",")}`)
+  assert.ok(k.some((t) => t === 'str:"/x"'), `expected an attribute value in ${k.join(",")}`)
+  assert.ok(kinds("<!-- note -->", "html")[0].startsWith("com:"))
+})
+
+// Every new grammar has to keep the aligner's contract: one token array per source line, and the
+// tokens of a line concatenating back to that exact line.
+test("the added grammars stay 1:1 with their source lines and lose no text", () => {
+  const samples: Array<[string, string]> = [
+    ["yaml", "on:\n  push:\n    branches: [main]\n\n# trailing"],
+    ["toml", '[pkg]\nname = "frizz"\nver = 1'],
+    ["html", '<div class="a">\n  <!-- c\n  ontinued -->\n</div>'],
+  ]
+  for (const [lang, src] of samples) {
+    const raw = src.split("\n")
+    const lines = highlightLines(src, lang)
+    assert.equal(lines.length, raw.length, `${lang} line count`)
+    lines.forEach((tokens, i) => assert.equal(tokens.map((t) => t.text).join(""), raw[i], `${lang} line ${i}`))
+  }
 })
 
 test("highlightLines is 1:1 with source lines and classifies TS tokens", () => {

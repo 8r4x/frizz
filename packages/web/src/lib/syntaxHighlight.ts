@@ -57,6 +57,42 @@ for (const [language, aliases] of Object.entries(SUPPORTED_FENCE_LANGUAGES)) {
 
 const PLAINTEXT_ALIASES = new Set(["", "text", "txt", "plain", "plaintext"])
 
+// Filename → grammar, for the surfaces that highlight a FILE rather than a declared fence: a Read
+// card's excerpt, a Write body. Deliberately derived from SUPPORTED_FENCE_LANGUAGES' own aliases —
+// most extensions already ARE the fence alias (`ts`, `py`, `rs`, `yml`) — with only the handful that
+// differ listed explicitly below. That way a grammar added to the set above reaches both surfaces at
+// once and the two can never drift into disagreeing about what `.ts` is.
+const EXTRA_EXTENSIONS: Readonly<Record<string, SupportedFenceLanguage>> = Object.freeze({
+  htm: "xml",
+  scss: "css",
+  less: "css",
+})
+
+// Extensionless files whose NAME is the type. Kept short and certain: a wrong guess here paints a
+// whole file in the wrong grammar, which reads worse than no colour at all.
+const FILENAME_LANGUAGES: Readonly<Record<string, SupportedFenceLanguage>> = Object.freeze({
+  dockerfile: "bash",
+  makefile: "bash",
+  ".bashrc": "bash",
+  ".zshrc": "bash",
+  ".profile": "bash",
+  ".gitignore": "bash",
+  ".env": "bash",
+})
+
+// Resolve an absolute or repo-relative path to a grammar; anything unrecognized stays plaintext, for
+// the same reason fences never guess. A dotfile with no other dot (`.gitignore`) has no extension —
+// `lastIndexOf(".") > 0` is what keeps its leading dot from being read as one.
+export function resolveFileLanguage(path?: string): FenceLanguage {
+  const name = (path ?? "").split(/[/\\]/).pop()?.trim().toLowerCase() ?? ""
+  if (!name) return "plaintext"
+  if (FILENAME_LANGUAGES[name]) return FILENAME_LANGUAGES[name]
+  const dot = name.lastIndexOf(".")
+  if (dot <= 0) return "plaintext"
+  const ext = name.slice(dot + 1)
+  return EXTRA_EXTENSIONS[ext] ?? ALIAS_TO_LANGUAGE.get(ext) ?? "plaintext"
+}
+
 // Marked passes the whole fence info string as `lang`; highlighting uses its first whitespace-delimited
 // word just as Marked's stock renderer does. The remaining metadata is intentionally left untouched for
 // the upstream signal/question fence parsers, which remove their special blocks before markdown render.
@@ -95,23 +131,32 @@ export const CODE_COPY_CLASS = "md-code-copy"
 export const CODE_COPIED_CLASS = "is-copied"
 export const COPY_CODE_LABEL = "Copy code"
 
+// Escaped, `hljs-*`-classed markup for one code body — WITHOUT any block chrome. The fenced-block
+// renderer below wraps it in its own <pre>/<code>/copy-button; the transcript's non-markdown code
+// surfaces (a Bash card's command, a Read card's excerpt — components/CodeBody.tsx) drop it straight
+// into the <pre> they already own, so their layout, clamping and wrapping rules stay untouched.
+//
+// The output is safe to inject as-is: the input is PLAIN TEXT, so every character either comes back
+// escaped by hljs or by escapeHtml, and the only markup in the result is hljs's own token spans.
+// That is why this needs no sanitizer pass, unlike the markdown pipeline (which has other HTML
+// sources and therefore sanitizes everything).
+export function highlightToHtml(text: string, language: FenceLanguage): string {
+  if (language === "plaintext") return escapeHtml(text)
+  try {
+    return hljs.highlight(text, { language, ignoreIllegals: true }).value
+  } catch {
+    // A malformed grammar input must never take down transcript rendering. The raw text remains
+    // visible, escaped, and selectable; there is deliberately no automatic language guessing.
+    return escapeHtml(text)
+  }
+}
+
 export function renderHighlightedCode(text: string, infoString?: string): string {
   const language = resolveFenceLanguage(infoString)
   // Match Marked's stock code renderer: exactly one trailing LF is present in the resulting <code>,
   // preserving selection/copy behavior for both complete and still-streaming (unclosed) fences.
   const code = `${text.replace(/\n$/, "")}\n`
-  let value: string
-  if (language === "plaintext") {
-    value = escapeHtml(code)
-  } else {
-    try {
-      value = hljs.highlight(code, { language, ignoreIllegals: true }).value
-    } catch {
-      // A malformed grammar input must never take down transcript rendering. The raw text remains
-      // visible, escaped, and selectable; there is deliberately no automatic language guessing.
-      value = escapeHtml(code)
-    }
-  }
+  const value = highlightToHtml(code, language)
   // No whitespace anywhere inside the <pre>: it preserves it, so a newline before the <code> would print
   // as a blank first line. The button follows the block in DOM order so a keyboard walk reaches the code
   // before its affordance, and `title` is the accessible name — `aria-label` is not in the render allowlist.

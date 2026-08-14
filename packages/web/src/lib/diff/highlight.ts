@@ -7,7 +7,11 @@
 // It returns one token array PER LINE (aligned 1:1 with text.split("\n")), because the diff aligner
 // needs to pull the tokens for a specific old/new line number.
 
-export type TokenKind = "kw" | "type" | "str" | "com" | "num" | "fn" | "punct" | "op" | "plain"
+// Colour buckets, not grammar categories. `key` is the newest and exists to MATCH highlight.js: hljs
+// classes a yaml key, a toml key and an html attribute alike as `hljs-attr`, and reusing `type` here
+// painted the same `timeout-minutes:` orange in an Edit diff and blue in the Read card above it —
+// measured in the running app, which is the only place the two engines are ever seen side by side.
+export type TokenKind = "kw" | "type" | "str" | "com" | "num" | "fn" | "key" | "punct" | "op" | "plain"
 
 export interface DiffToken {
   text: string
@@ -20,6 +24,17 @@ interface LangConfig {
   quotes: string[] // string delimiters; a backtick, when present, allows multi-line strings
   keywords: Set<string>
   types: Set<string>
+  // Rules tried in order at the START of every line, before the character scan resumes. The
+  // config-driven languages above are all statement-oriented, where position in the line carries no
+  // meaning; the DATA formats are the opposite — what makes `retries:` a key in yaml is that it opens
+  // its line, and nothing about the identifier itself says so. Each capture group becomes one token
+  // with the kind at the same index; an unmatched optional group is skipped.
+  lineStart?: Array<{ re: RegExp; kinds: TokenKind[] }>
+  // An identifier followed (across spaces and tabs) by one of these characters reads as a KEY —
+  // a toml `key = …`, an html `attr="…"`.
+  keyChars?: string
+  // An identifier sitting immediately after `<` or `</` reads as a markup element name.
+  tagNames?: boolean
 }
 
 const set = (s: string) => new Set(s.split(/\s+/).filter(Boolean))
@@ -63,7 +78,58 @@ const LANGS: Record<string, LangConfig> = {
     keywords: set("if then else elif fi for while do done case esac in function return export local echo cd exit set unset source"),
     types: new Set(),
   },
+  // The DATA formats below exist because lang.ts was mapping .yaml / .toml / .html to language ids
+  // this table had no entry for. `highlightLines` falls through to one plain token per line for an
+  // unknown id, so every yaml, toml and html diff in the app rendered completely uncoloured — and
+  // silently, since nothing distinguishes "no grammar" from "nothing to colour".
+  yaml: {
+    line: "#", block: null, quotes: ['"', "'"],
+    keywords: set("true false null yes no on off ~"),
+    types: new Set(),
+    // A key is the run that OPENS a line (optionally after a `- ` sequence marker) and ends at a
+    // colon. Quoted keys are matched too, so a key holding a space or a colon still reads as one.
+    lineStart: [{
+      re: /^([ \t]*)(- +)?("[^"\n]*"|'[^'\n]*'|[A-Za-z_][\w.\-/]*)([ \t]*)(:)/,
+      kinds: ["plain", "punct", "key", "plain", "punct"],
+    }],
+  },
+  toml: {
+    line: "#", block: null, quotes: ['"', "'"],
+    keywords: set("true false"),
+    types: new Set(),
+    keyChars: "=",
+    // `[table]` / `[[array.of.tables]]` — a header, not an array literal, so it takes the section
+    // colour rather than being scanned as brackets around identifiers.
+    lineStart: [{ re: /^([ \t]*)(\[\[?[^\]\n]*\]\]?)/, kinds: ["plain", "fn"] }],
+  },
+  html: {
+    line: null, block: ["<!--", "-->"], quotes: ['"', "'"],
+    keywords: new Set(),
+    types: new Set(),
+    keyChars: "=",
+    tagNames: true,
+  },
 }
+
+// End of the line containing index `i` — the window a lineStart rule is matched against, so an
+// unanchored `.` in one of those regexes can never run past its own line.
+const lineEnd = (text: string, i: number) => {
+  const at = text.indexOf("\n", i)
+  return at === -1 ? text.length : at
+}
+
+// The next character at or after `j` that is not a space or tab; "" at end of text. Used to decide
+// whether an identifier is a KEY, which stays true across the padding in `key   = value`.
+const nextNonSpace = (text: string, j: number) => {
+  let k = j
+  while (k < text.length && (text[k] === " " || text[k] === "\t")) k++
+  return text[k] ?? ""
+}
+
+// The language ids this tokenizer can actually colour. lang.ts checks its filename map against this
+// rather than trusting it, so a map entry for a grammar that was never written degrades to "text"
+// (visibly unhighlighted) instead of silently reaching `highlightLines` and falling out as plain.
+export const HIGHLIGHTED_LANGUAGES: ReadonlySet<string> = new Set(Object.keys(LANGS))
 
 const isIdentStart = (c: string) => /[A-Za-z_$]/.test(c)
 const isIdent = (c: string) => /[A-Za-z0-9_$]/.test(c)
@@ -81,6 +147,21 @@ function scan(text: string, cfg: LangConfig): DiffToken[] {
 
   while (i < n) {
     const c = text[i]
+
+    // Line-start rules run before everything else, and only at a real line start, so a colon inside a
+    // yaml VALUE (`url: https://x`) can never be mistaken for a second key.
+    if (cfg.lineStart && (i === 0 || text[i - 1] === "\n")) {
+      let matched = false
+      for (const rule of cfg.lineStart) {
+        const m = rule.re.exec(text.slice(i, lineEnd(text, i)))
+        if (!m) continue
+        for (let g = 1; g < m.length; g++) push(m[g] ?? "", rule.kinds[g - 1] ?? "plain")
+        i += m[0].length
+        matched = true
+        break
+      }
+      if (matched) continue
+    }
 
     if (cfg.block && text.startsWith(cfg.block[0], i)) {
       const at = text.indexOf(cfg.block[1], i + cfg.block[0].length)
@@ -134,9 +215,13 @@ function scan(text: string, cfg: LangConfig): DiffToken[] {
         ? "kw"
         : cfg.types.has(word)
           ? "type"
-          : text[j] === "(" // an identifier immediately followed by "(" reads as a call/definition
-            ? "fn"
-            : "plain"
+          : cfg.tagNames && (text[i - 1] === "<" || (text[i - 1] === "/" && text[i - 2] === "<"))
+            ? "kw" // a markup element name, opening or closing
+            : cfg.keyChars && cfg.keyChars.includes(nextNonSpace(text, j))
+              ? "key" // `key = value`, `attr="value"`
+              : text[j] === "(" // an identifier immediately followed by "(" reads as a call/definition
+                ? "fn"
+                : "plain"
       push(word, kind)
       i = j
       continue
