@@ -51,6 +51,21 @@ export function isInjectedNoise(text: string): boolean {
   return NOISE_PREFIXES.some((p) => t.startsWith(p))
 }
 
+// Claude Code narrates its OWN control action into the transcript: every turn cut short leaves a bare
+// `[Request interrupted by user]` user record. Frizz cuts turns short as a feature — "send now" (⌘⏎ and
+// the queue's push-through button) interrupts the running turn so the worker reads the queue at once —
+// so the marker landed as a human bubble directly above the very message that caused it, saying nothing
+// the reader did not just do (maintainer 2026-08-14). The broker's own shutdown writes the same record,
+// which is worse: nobody typed anything at all.
+//
+// EXACT match on the trimmed text, deliberately not a prefix: all 306 of these records across the 3933
+// transcripts on this machine are one of these two strings ALONE in a single text block, so a human
+// message that opens by quoting the marker keeps its bubble.
+const INTERRUPT_MARKERS = ["[Request interrupted by user]", "[Request interrupted by user for tool use]"]
+export function isInterruptMarker(text: string): boolean {
+  return INTERRUPT_MARKERS.includes(text.trim())
+}
+
 // ---- context compaction ------------------------------------------------------------------------
 // BOTH providers rewrite a long conversation into a summary and drop everything above it, and until
 // this landed neither said so in the chat: claude's carry-over summary rendered as a 20 000-character
@@ -774,6 +789,10 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
       // Harness/orchestrator injections that arrive as ordinary user records (task-notifications,
       // system reminders, frizz pulses) are ALSO not the human's words — drop them from the chat.
       if (text && isAllInjectedNoise(text)) return
+      // …and so is the runtime's own interrupt receipt (see isInterruptMarker). Dropped BEFORE the
+      // queued-bubble matching below: it resolves nothing, and every shape there keys on the human's
+      // words, which this record does not carry.
+      if (text && isInterruptMarker(text)) return
       if (text) {
         // Claude Code 2.1.207's print/SDK path emits enqueue → empty dequeue → the ordinary user
         // record (no queued_command attachment). Resolve an identical pending bubble in place; adding

@@ -1693,6 +1693,40 @@ test("claude compaction renders a boundary divider carrying its token bracket, a
   assert.equal(msgs[1].at, "2026-07-21T00:05:00.000Z")
 })
 
+// ---- the runtime's interrupt receipt ------------------------------------------------------------
+// Shape captured from real sessions (2026-08-14: 306 such records across the 3933 transcripts under
+// ~/.claude/projects — every one of them one of the two strings ALONE in a single text block).
+test("a force-pushed follow-up renders as ONE bubble — the runtime's interrupt receipt never becomes a human message", () => {
+  const pushed = "actually, do it the other way round"
+  const raw = [
+    JSON.stringify({ type: "user", timestamp: "2026-08-14T00:00:00.000Z", message: { content: "orientation\n\nTASK:\nthe original task" } }),
+    JSON.stringify({ type: "assistant", timestamp: "2026-08-14T00:00:05.000Z", message: { id: "m1", content: [{ type: "text", text: "Starting on it." }] } }),
+    // "Send now": frizz queues the words FIRST and interrupts second (the SDK's interrupt does not
+    // discard queued input), so the receipt lands BETWEEN the enqueue and its delivery.
+    JSON.stringify({ type: "queue-operation", timestamp: "2026-08-14T00:00:09.000Z", operation: "enqueue", content: pushed }),
+    JSON.stringify({ type: "user", timestamp: "2026-08-14T00:00:10.000Z", message: { role: "user", content: [{ type: "text", text: "[Request interrupted by user]" }] } }),
+    JSON.stringify({ type: "user", timestamp: "2026-08-14T00:00:11.000Z", message: { role: "user", content: [{ type: "text", text: pushed }] } }),
+  ].join("\n")
+  const msgs = projectClaudeTranscript(raw)
+  assert.deepEqual(msgs.map((m) => `${m.role}:${m.displayText ?? m.text}`), [
+    "user:the original task",
+    "assistant:Starting on it.",
+    `user:${pushed}`,
+  ])
+  assert.equal(msgs[2].queued, false, "dropping the receipt must not strand the gray bubble it sits above")
+})
+
+test("a decline receipt is dropped too, and a human message that merely QUOTES one keeps its bubble", () => {
+  const quoting = "[Request interrupted by user] — why does this keep showing up in my chat?"
+  const raw = [
+    JSON.stringify({ type: "user", timestamp: "2026-08-14T00:00:00.000Z", message: { content: "orientation\n\nTASK:\nthe original task" } }),
+    JSON.stringify({ type: "user", timestamp: "2026-08-14T00:00:10.000Z", message: { role: "user", content: [{ type: "text", text: "[Request interrupted by user for tool use]" }] } }),
+    JSON.stringify({ type: "user", timestamp: "2026-08-14T00:00:11.000Z", message: { role: "user", content: [{ type: "text", text: quoting }] } }),
+  ].join("\n")
+  const msgs = projectClaudeTranscript(raw)
+  assert.deepEqual(msgs.map((m) => m.displayText ?? m.text), ["the original task", quoting])
+})
+
 test("claude compaction without usable metadata still renders the divider (bare label, never a guessed bracket)", () => {
   const raw = JSON.stringify({ type: "system", subtype: "compact_boundary", content: "Conversation compacted", timestamp: "2026-07-21T00:05:00.000Z" })
   const msgs = projectClaudeTranscript(raw)
