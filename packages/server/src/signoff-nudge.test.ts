@@ -10,7 +10,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createStorage, type RecurringWrite, type SessionRow } from "./storage.ts"
+import { createStorage, type SessionRow } from "./storage.ts"
 import type { SessionTelemetry, Tailer } from "./tailer.ts"
 import { createScheduler } from "./scheduler.ts"
 
@@ -212,9 +212,9 @@ test("a Goal and the reminder both queue for one rest, and a fence supersedes wh
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
     title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   } as SessionRow)
-  // The PANEL'S default: the question hold on, i.e. Autonomous mode OFF. With it off the reminder is the
-  // frizz-wide default it always was, which is what this test is about; the autonomous case is the block
-  // below.
+  // The PANEL'S default: the question hold on, i.e. Autonomous mode OFF. The autonomous row is the test
+  // at the bottom of this file, and both must land the same two deliveries — the mode does not reach this
+  // source.
   storage.setRecurringPromptBySlug(slug, {
     prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false,
     pauseOnQuestions: true, intervalMs: null, armedAt: "2026-08-12T00:00:00.000Z",
@@ -252,50 +252,36 @@ test("a Goal and the reminder both queue for one rest, and a fence supersedes wh
   } finally { void s.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) }
 })
 
-// ---- AUTONOMOUS MODE, THE ONE PER-THREAD OFF SWITCH ----------------------------------------------
-// The reminder buys a queue A HUMAN READS. Autonomous mode is the operator saying nobody is reading this
-// one — keep driving, decide for yourself — so the two deliveries above become one Goal telling the
-// thread to keep going and one frizz message whose entire content is how to STOP (maintainer 2026-08-13).
+// ---- AND AUTONOMOUS MODE DOES NOT SWITCH IT OFF ---------------------------------------------------
+// It did, for one day (2026-08-13 → 2026-08-14), on the reading that this reminder buys a queue A HUMAN
+// triages and autonomous mode is the operator saying nobody is triaging this one. Two facts killed it and
+// this test is the guard against re-deriving the same argument:
 //
-// The trap this pins is the DEFAULT: `recurring_pause_on_questions` defaults to 0, so a row that never
-// armed a Goal reads as autonomous on the column alone, and a bare column check would silence the
-// reminder for the whole board. It takes a live at-rest trigger as well.
-function armGoal(h: ReturnType<typeof nudger>, write: Partial<RecurringWrite>): void {
-  h.storage.setRecurringPromptBySlug(h.slug, {
-    prompt: "keep going", stopHook: false, heartbeat: false, postCompaction: false,
-    // Autonomous mode ON unless a case says otherwise, so every row below reads autonomous ON THE COLUMN
-    // and the only thing separating the two blocks is whether a trigger is actually driving the thread.
-    pauseOnQuestions: false, intervalMs: null, armedAt: "2026-08-12T00:00:00.000Z", ...write,
-  })
-}
-const remindedIn = (delivered: string[]) => delivered.some((m) => m.includes("without a fence"))
-
-for (const [what, write] of [
-  ["the stop hook", { stopHook: true }],
-  ["the heartbeat", { heartbeat: true, intervalMs: 600_000 }],
-] as Array<[string, Partial<RecurringWrite>]>) {
-  test(`autonomous mode silences the reminder while ${what} drives the thread`, async () => {
-    const h = nudger({})
-    try {
-      armGoal(h, write)
-      await h.s.tick()
-      assert.equal(remindedIn(h.delivered), false, "an autonomously-driven thread is not taught to stop")
-    } finally { h.close() }
-  })
-}
-
-for (const [what, write] of [
-  ["no Goal is armed at all", undefined],
-  ["the Goal's triggers are all off", {}],
-  ["only the compaction trigger is armed", { postCompaction: true }],
-  ["autonomous mode is off", { stopHook: true, pauseOnQuestions: true }],
-] as Array<[string, Partial<RecurringWrite> | undefined]>) {
-  test(`the reminder still fires when ${what}`, async () => {
-    const h = nudger({})
-    try {
-      if (write) armGoal(h, write)
-      await h.s.tick()
-      assert.equal(remindedIn(h.delivered), true, "the reminder is still frizz's default")
-    } finally { h.close() }
-  })
-}
+//   THE REMINDER STOPPED BEING A MENU OF WAYS TO STOP. It now OPENS by sending a half-finished thread back
+//   to the work, which is the Goal's own instruction — so the "two deliveries pulling opposite ways" the
+//   suppression was built on no longer describes anything.
+//
+//   IT IS THE ONLY DELIVERY THAT NAMES THE PARK. The Goal's trailer names ```done and deliberately not
+//   ```awaiting (see restPromptMessage — a budget decision), so silencing this left the threads most
+//   likely to be holding background work with no way to learn how to park on it. Measured over five
+//   consecutive bare rests with the suppression in: five Goal bumps, no reminder, the park never
+//   mentioned once.
+test("autonomous mode does not silence the reminder — the Goal and the reminder both land", async () => {
+  const h = nudger({})
+  try {
+    // Autonomous mode ON (`pauseOnQuestions: false`) with the at-rest trigger driving: the exact row the
+    // reverted gate keyed on.
+    h.storage.setRecurringPromptBySlug(h.slug, {
+      prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false,
+      pauseOnQuestions: false, intervalMs: null, armedAt: "2026-08-12T00:00:00.000Z",
+    })
+    await h.s.tick()
+    assert.ok(h.delivered.some((m) => m.startsWith("keep going")), "the Goal fires")
+    const reminder = h.delivered.find((m) => m.includes("without a fence"))
+    assert.ok(reminder, "and so does the reminder")
+    // The park is the thing the Goal's trailer cannot supply, so it is what the assertion is really
+    // about. Matched on the FENCE rather than on whatever tool registers it, so a change to the
+    // registration mechanism cannot silently turn this into a test of nothing.
+    assert.match(reminder, /```awaiting/)
+  } finally { h.close() }
+})

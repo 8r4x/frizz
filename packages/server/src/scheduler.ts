@@ -452,10 +452,13 @@ type RecurringRow = Pick<
 //   Same default, a name that describes the behaviour rather than the mechanism. The inversion lives in
 //   the component; this column stays the mechanism it always was.
 //
-//   IT ALSO SILENCES FRIZZ'S OWN SIGN-OFF REMINDER (SOURCE 9) for the thread, which is the one place this
-//   switch reaches outside the Goal. Both halves are the same sentence — nobody is waiting on this
-//   thread's queue card, so neither hold the goal for a question nor teach it how to stop. See
-//   `autonomousGoalDrivesRests`.
+//   IT STOPS AT THE GOAL. It reached SOURCE 9 as well for one day (2026-08-13 → 2026-08-14), silencing
+//   frizz's own sign-off reminder on an autonomously-driven thread, and that is reverted rather than
+//   re-tuned: the reminder now OPENS by sending a half-finished thread back to the work, which is the
+//   Goal's own instruction, so the "two deliveries pulling opposite ways" the suppression was built on no
+//   longer exists — and the suppression cost the ```awaiting park, which the Goal's
+//   trailer deliberately does not name (see restPromptMessage). Measured over five consecutive bare
+//   rests: five bumps, no reminder, the park never mentioned. This column is about QUESTIONS.
 //
 //   THE `done` CARVE-OUT IS NOT ONE OF THESE, and is not switchable. It is the loop's OFF SWITCH: the
 //   delivered trailer tells the worker to sign off with `done` to stop the prompts, so a goal that kept
@@ -545,28 +548,12 @@ function heldByQuestion(row: Pick<SessionRow, "recurring_pause_on_questions">, t
 /** The panel's "Autonomous mode": the same column `heldByQuestion` reads, inverted.
  *
  *  READING THE COLUMN ALONE IS SAFE HERE and nowhere else. It DEFAULTS TO 0, so on an arbitrary row
- *  "autonomous" and "never armed a Goal" are the same value — the trap `autonomousGoalDrivesRests` has
- *  to work around by also demanding a live trigger. Both callers of this one have already established
+ *  "autonomous" and "never armed a Goal" are the same value, and a site that asks before establishing a
+ *  live trigger reads the whole board as autonomous. Both callers of this one have already established
  *  an armed REST trigger before they ask, so the row in their hands is a Goal the operator configured
  *  and the 0 means what the switch says. Do not lift this to a site that has not. */
 function autonomousModeOn(row: Pick<SessionRow, "recurring_pause_on_questions">): boolean {
   return row.recurring_pause_on_questions !== 1
-}
-
-/** Is the operator's Goal DRIVING this thread autonomously — armed with a trigger that bumps it at or
- *  after a rest, and with the question hold switched off (the panel's "Autonomous mode")?
- *
- *  The sign-off nudge's per-thread off switch (SOURCE 9), and the reason it takes this shape rather than
- *  reading the column alone: `recurring_pause_on_questions` DEFAULTS TO 0, so every row that never armed
- *  a Goal already "reads autonomous", and a bare column check would silence the reminder for the whole
- *  board. A live trigger is what makes the switch mean anything.
- *
- *  COMPACTION DOES NOT COUNT. It fires on something the harness does, not on the thread stopping — a
- *  thread armed with only that one rests bare and stays there, so suppressing its reminder would leave it
- *  untriageable AND undriven, which is neither of the two states this whole mechanism allows. */
-function autonomousGoalDrivesRests(row: RecurringRow): boolean {
-  if (row.recurring_pause_on_questions === 1) return false
-  return armedRest(row) !== undefined || armedSchedule(row) !== undefined
 }
 
 // A row's live ON SCHEDULE trigger, if it has one. A switched-off trigger deliberately reads as ABSENT
@@ -1756,10 +1743,16 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // the row is its own durable registration, and "you asked to be woken at 15:00" does not stop being
   // true because the server restarted at 14:59. Unlike the snooze pass, it does not wait for rest.
   // ---- SOURCE 9: THE BUILT-IN SIGN-OFF NUDGE ---------------------------------------------------
-  // Frizz's own stop hook. On by default on every thread, with no trigger of its own to configure —
-  // orthogonal to the operator's Goal, which keeps its own three triggers. The ONE thing that switches it
-  // off per-thread is that Goal's AUTONOMOUS MODE, which is the operator declaring that nobody is waiting
-  // on this thread's queue card (see `autonomousGoalDrivesRests`).
+  // Frizz's own stop hook. Always on, not disableable per-thread, and invisible in the UI — orthogonal
+  // to the operator's Goal, which keeps its own three triggers.
+  //
+  // THE PER-THREAD OFF SWITCH WAS TRIED AND REVERTED (2026-08-13 → 2026-08-14): the Goal's AUTONOMOUS
+  // MODE silenced this for a day, on the argument that a thread told to keep going should not also be
+  // handed a menu of ways to stop. What killed it is that the reminder no longer IS that menu — it opens
+  // by sending a half-finished thread back to the work — and that suppressing it took the
+  // ```awaiting park with it, which nothing else on that thread's deliveries names.
+  // The maintainer's 2026-08-12 call stands: keep it separate from the Goal, enabled all the time, and
+  // pay the one extra transcript record.
   //
   // It fires on a rest that carried NO FENCE AT ALL, and its message is the sign-off protocol itself.
   // The rules therefore arrive at the one moment they are about to be used, rather than 200k tokens
@@ -1821,17 +1814,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // of it in the trailer, which is its own kind of repetition. It is frizz's own hook now: identical
       // on every thread, whatever the operator has configured. The second delivery costs one transcript
       // record, collapsed to a hairline by the chat.
-      // AUTONOMOUS MODE TURNS IT OFF FOR THIS THREAD, and it is the one exception to "always on"
-      // (maintainer 2026-08-13). The reminder exists to keep the queue triageable BY A HUMAN; autonomous
-      // mode is the operator saying the opposite — keep driving, decide for yourself, do not stop for me.
-      // The two would arrive on the same rest pulling opposite ways: the Goal says keep going, and frizz's
-      // own second delivery says here is how to STOP, in a message whose only shapes are a question for
-      // the human and a dismissal. The Goal is not leaving the thread untaught either — its trailer names
-      // the ```done exit, which is the one an autonomously-driven thread actually needs.
-      //
-      // Placed AFTER the fence check on purpose, so a suppressed thread still clears any count it carried
-      // from before the switch was flipped.
-      if (autonomousGoalDrivesRests(row)) continue
+      // NO AUTONOMOUS-MODE EXEMPTION HERE — see the SOURCE 9 header for the day it had one.
       // THE CONSECUTIVE CAP. It counts fenceless rests and is cleared ONLY by a fence (above) — never by
       // a user record, because frizz's own delivery is one, and anchoring on that let the nudge reset its
       // own counter with its own message.

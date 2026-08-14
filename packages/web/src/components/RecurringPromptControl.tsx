@@ -686,13 +686,14 @@ function PromptPanel({ thread, armed }: {
             IT DOES NOT AFFECT `done`. A finished thread is finished in either mode; see the scheduler's
             note on why that carve-out is the loop's off switch rather than an exception to it.
 
-            IT ALSO SILENCES FRIZZ'S OWN SIGN-OFF REMINDER on this thread (scheduler SOURCE 9), which is
-            the one thing here that reaches outside the Goal — hence the second clause in the gloss, and
-            hence naming BOTH effects rather than letting the reminder vanish unexplained. It is the same
-            sentence twice: nobody is waiting on this thread's card, so frizz neither holds the goal for
-            an unanswered question nor spends a turn teaching it how to stop. That reminder only ever
-            offers a question for the human and a dismissal, so on a thread told to keep going it is the
-            one delivery pulling directly against the Goal it arrives beside. */}
+            IT DOES NOT REACH FRIZZ'S OWN SIGN-OFF REMINDER EITHER, and that was tried: this switch also
+            silenced it for the thread between 2026-08-13 and 2026-08-14, on the argument that the two
+            deliveries landed on one rest pulling opposite ways. Both legs of that argument are gone. The
+            reminder now LEADS with "if the task still has parts left, the fence is not what you owe — the
+            work is", which is the Goal's own instruction, so there is nothing left pulling; and
+            suppressing it took the `` ```awaiting `` park with it, which the Goal's
+            trailer does not name — measured over five bare rests, an autonomous thread got five bumps and
+            was never told how to park. This switch is about QUESTIONS. Keep it about questions. */}
         <div className="col-span-3 mt-0.5 h-px bg-border/70" />
         <Switch
           testId="autonomous-mode"
@@ -705,11 +706,7 @@ function PromptPanel({ thread, armed }: {
         />
         <span className={`col-span-2 ${!pauseOnQuestions ? "text-fg" : "text-muted"}`}>
           <span className="font-medium">Autonomous mode</span>
-          {/* `sign-off reminder` HELD TOGETHER: this is the only gloss long enough to wrap, and the
-              clause's one hyphen sat within a few characters of the wrap point — so the second line
-              opened with a bare "off reminder" and the reader parsed "sign-" as a word. A nowrap span
-              moves the whole noun down instead of splitting it, and costs nothing when it does fit. */}
-          <span className="text-muted"> — sends goal prompt when the agent asks questions instead of waiting for an answer, and drops the <span className="whitespace-nowrap">sign-off reminder</span></span>
+          <span className="text-muted"> — sends goal prompt when the agent asks questions instead of waiting for an answer</span>
         </span>
       </div>
       {/* NO SAVE BUTTON, AND NO EXPLAINER. Every edit writes itself — a switch on its own click, the text
