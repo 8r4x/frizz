@@ -218,6 +218,27 @@ function GithubWatchRow({ watch }: { watch: ThreadWatchView }) {
   )
 }
 
+/** Does the CHAT show the resting card at the bottom of this thread?
+ *
+ *  Three conditions, and the last two were added on 2026-08-14 after the maintainer found it on threads
+ *  it had no business being on: "this snooze card only shows up at the bottom of a rendered chat thread
+ *  inside of an agent that has actually come to rest. Doesn't make sense for it to be showing up in a
+ *  currently running thread. Or a thread that is currently snoozed."
+ *
+ *  - `awaitingBackground` — the server says the thread is waiting on something it NAMED.
+ *  - AT REST, checked here rather than inferred. The card's slot already loses to the working indicator,
+ *    but that indicator keys on `running`/`spawning` alone, so every other non-resting runtime — a
+ *    permission prompt, an exited pane — fell through to a card claiming a rest that is not happening.
+ *  - NOT EVENT-SNOOZED. This one reverses a dated decision rather than extending it: the snooze was
+ *    deliberately confined to the queue, because the drawer showing NOTHING at rest reads as "the agent
+ *    died". That argument is about a thread nobody has parked. Once the human has parked THIS rest, the
+ *    same card with the same button one surface over is not information. */
+export function showsRestingCard(
+  thread: Pick<ThreadView, "awaitingBackground" | "runtime" | "bgSnoozed"> | undefined,
+): boolean {
+  return thread?.awaitingBackground === true && thread.runtime === "turn-idle" && thread.bgSnoozed !== true
+}
+
 export function AwaitingBackgroundCard({ thread, actions }: {
   thread: Pick<ThreadView, "subAgents" | "bgShells" | "watches">
   // The queue card's event-Snooze. Only the QUEUE passes one, and the shapes that reach the queue are

@@ -748,3 +748,37 @@ test("Codex automatic titles follow runtime and never expose the raw initial-pro
     "Human rename",
   )
 })
+
+// A THREAD THAT IS TRULY AWAITING SOMETHING SITS IN THE ACTIVE RAIL WITH ITS OWN DOT, and never in the
+// queue (maintainer 2026-08-14: "If the subagent is truly awaiting something, it should remain in the
+// active rail with a distinct dot… if there is a GitHub watcher registered and the GitHub actions are
+// still running, then that should remain in the running active rail").
+//
+// Every part of that is decided SERVER-side and lands here as two flags — `needsYou: false` (excused
+// from the queue) and `awaitingBackground: true` (it is waiting on something named). This pins the
+// reading those two produce, because the same pair now arrives from two new server rules that never
+// existed when the reading was written: a declared `watch:` park, and a pr-watch park whose CI is
+// still running.
+test("sessionIndicatorKind: a declared wait draws the quiet dot in the ACTIVE band, not a spinner", () => {
+  const awaiting = thread({ kind: "session", runtime: "turn-idle", needsYou: false, awaitingBackground: true })
+  assert.equal(sessionIndicatorKind(awaiting), "background", "its own mark — not the spinner, not the at-rest ellipsis")
+  assert.deepEqual(partitionActive([awaiting]).running.map((t) => t.id), [awaiting.id], "and it bands ACTIVE")
+  assert.equal(queued(awaiting), false, "…so it is not in the queue")
+  // A LIVE SUB-AGENT STILL SPINS. It is not the same state: a child returns and re-invokes its parent
+  // within seconds, so the thread is mid-flight in substance, and the spinner tells the truth. The dot
+  // is for a wait on something that merely runs on.
+  const withChild = thread({
+    kind: "session", runtime: "turn-idle", needsYou: false, awaitingBackground: true,
+    subAgents: [{ label: "reviewer", startedAt: "2026-08-14T00:00:00.000Z", state: "running", id: "a1" }],
+  })
+  assert.equal(sessionIndicatorKind(withChild), "working")
+  // BACK IN THE QUEUE the moment the server says so — CI finished, the shell retired. The BAND is what
+  // moves: `needsYou` bands it below the rule regardless of what it still has running (inActiveBand).
+  // The MARK deliberately does not: the dot says "something it launched is still going", which is still
+  // true of a thread whose second shell is running, and that reading predates this change (2026-08-04,
+  // when a shell-only rest started carding while keeping its dot).
+  const requeued = thread({ kind: "session", runtime: "turn-idle", needsYou: true, awaitingBackground: true })
+  assert.equal(queued(requeued), true)
+  assert.deepEqual(partitionActive([requeued]).running, [], "it leaves the Active band for the queue's own")
+  assert.equal(sessionIndicatorKind(requeued), "background", "…while the dot keeps stating the live work")
+})

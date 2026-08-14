@@ -1022,6 +1022,10 @@ function sessionThreadView(
     // Only meaningful while the snooze is still pending — a prompt without a live deadline is an
     // already-delivered (or superseded) bump the row has not been swept clean of yet.
     snoozePrompt: snoozedUntil ? row.snooze_prompt ?? undefined : undefined,
+    // The event-snooze, as a fact the CHAT can read. `awaitingBackground` still ignores it — that flag
+    // states whether the thread is waiting, which the snooze does not change — so the suppression is a
+    // presentation rule the client applies, not a second opinion about the thread's state.
+    bgSnoozed: bgSnoozeArmed(row) || undefined,
     claudeRuntime: row.claude_runtime === "broker" ? "broker" as const : row.claude_runtime === "tmux" ? "tmux" as const : undefined,
     // The recurring prompt — the same projection the worker's own `action: "get"` reads back.
     recurringPrompt: resolveRecurringPrompt(row),

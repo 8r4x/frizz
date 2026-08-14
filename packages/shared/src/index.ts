@@ -1045,6 +1045,16 @@ export const ThreadView = z.object({
   // AUTO-bump (the scheduler resumes the agent with exactly this text) rather than a reminder, which is
   // the distinction the held row's tooltip renders. Absent ⇒ the card merely re-surfaces.
   snoozePrompt: z.string().optional(),
+  /** The EVENT snooze on the resting card is armed for this exact rest — the human has said "hide this
+   *  until something reports". Distinct from `snoozedUntil`, which is a wall-clock park on the whole
+   *  thread: this one has no deadline and clears itself when the thread comes to a NEW rest.
+   *
+   *  It travels because the chat has to honour it too (2026-08-14). Until then only the QUEUE did, on
+   *  the reasoning that the card states a FACT the drawer must keep showing or it blanks at rest and
+   *  reads as "the agent died". That reasoning holds for a thread nobody has parked; once the human has
+   *  explicitly parked THIS rest, showing them the same card with the same button one surface over is
+   *  not information, and they said so. */
+  bgSnoozed: z.boolean().optional(),
   // Which Claude transport serves this thread: "broker" = a session-broker-owned Agent SDK session
   // (typed control channel), "tmux" = the interactive TUI in a pane. Only the broker can be asked to
   // reload its plugin closure in place, so the board needs it to decide whether to offer that verb at

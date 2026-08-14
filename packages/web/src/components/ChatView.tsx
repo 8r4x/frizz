@@ -69,7 +69,7 @@ import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
 import { FRAMED_IMAGE, ImageFrame } from "./ImageFrame.tsx"
 // The resting card, shared with the queue (TodosView passes it the event-Snooze; these two surfaces
 // deliberately pass no action — see the module header).
-import { AwaitingBackgroundCard } from "./AwaitingBackgroundCard.tsx"
+import { AwaitingBackgroundCard, showsRestingCard } from "./AwaitingBackgroundCard.tsx"
 // Re-exported from their new homes so existing importers (TodosView, the fixtures) keep one
 // import path while the definitions live where both question producers can reach them.
 export { CARD_BODY, CARD_PRIMARY_BUTTON, CardActions, TranscriptCard } from "./TranscriptCard.tsx"
@@ -508,11 +508,12 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
               <PermPromptBanner onTerminal={copyTerminalCommand} />
             ) : showWorking ? (
               <WorkingIndicator since={thread?.lastUserAt} startedAt={liveRuntimeStart} activityLabel={liveActivityLabel} run={liveToolRun} />
-            ) : thread?.awaitingBackground ? (
+            ) : showsRestingCard(thread) ? (
               // The rest itself, stated. Last in the chain because every branch above is a HARDER
-              // reading of the same slot; this one is the benign case and never outranks them. It can
-              // never collide with `running` anyway — the server only sets it at turn-idle.
-              <AwaitingBackgroundCard thread={thread} />
+              // reading of the same slot; this one is the benign case and never outranks them. The
+              // predicate is what keeps it off a thread that is not actually resting or that the human
+              // has already parked — see showsRestingCard.
+              <AwaitingBackgroundCard thread={thread!} />
             ) : null}
             {/* SIBLING of the chain above, not a branch in it. Those are mutually exclusive because they
                 all describe the ONE thing currently blocking; a policy denial already happened and
@@ -1257,9 +1258,9 @@ function VirtualizedThreadTranscript({
                   <PermPromptBanner onTerminal={copyTerminalCommand} />
                 ) : showWorking ? (
                   <WorkingIndicator since={thread?.lastUserAt} startedAt={liveRuntimeStart} activityLabel={liveActivityLabel} run={liveToolRun} />
-                ) : thread?.awaitingBackground ? (
+                ) : showsRestingCard(thread) ? (
                   // See the non-virtualized chain above: last branch, benign case, no Snooze here.
-                  <AwaitingBackgroundCard thread={thread} />
+                  <AwaitingBackgroundCard thread={thread!} />
                 ) : null}
                 {/* Sibling, not a branch — see the runtime-status block above. */}
                 {thread?.permPolicy ? (
