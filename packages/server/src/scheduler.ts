@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { compactionPromptMessage, formatGithubWakeSteer, isValidAwaitingTimer, restPromptMessage, schedulePromptMessage, timerPromptMessage, watchWakeMessage, SIGNOFF_NUDGE_MESSAGE, wakeDeliveryToken, type QuotaSnapshot } from "@frizz/shared"
+import { compactionPromptMessage, formatGithubWakeSteer, isValidAwaitingTimer, restPromptMessage, schedulePromptMessage, timerPromptMessage, watchWakeMessage, SHELL_WATCH_SEEN, SIGNOFF_NUDGE_MESSAGE, wakeDeliveryToken, type QuotaSnapshot } from "@frizz/shared"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
 import type { FenceView, SessionTelemetry } from "./tailer.ts"
@@ -724,8 +724,9 @@ function isSignoffFenceId(fenceId: string): boolean {
 const WATCH_FENCE_PREFIX = "watch"
 const WATCH_HINT_PREFIX = "watch:"
 /** The one bit a shell watcher's `cursor` carries: this target has been OBSERVED ALIVE, so its absence
- *  from here on means it finished rather than that it never started. */
-const SHELL_SEEN = "seen"
+ *  from here on means it finished rather than that it never started. Shared, because the board and the
+ *  router put the same bit on the wire as `ThreadWatchView.seen`. */
+const SHELL_SEEN = SHELL_WATCH_SEEN
 
 function watchFenceId(watchId: string): string {
   return `${WATCH_FENCE_PREFIX}:${watchId}`
@@ -1853,8 +1854,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // Telemetry we cannot read is INDETERMINATE, never "gone". Treating a missing tail as completion
       // would fire every armed shell watcher on the machine the moment the tailer hiccups.
       if (!tele) continue
+      // THREE HANDLES, one shell, and the third one is the whole ballgame. `id` is the launch tool_use
+      // id and `label` is the command summary — neither is a string the worker has ever been shown. What
+      // the runtime actually tells it is "Command running in background with ID: bzvtnt3ig", which is
+      // `taskId`, so that is what a worker naturally registers. Matching only the first two meant every
+      // shell watcher armed the obvious way never observed its target alive, never fired, and sat armed
+      // forever while its shell finished unnoticed (maintainer 2026-08-14, on two such rows).
       const live = tele.bgShells.some(
-        (sh) => sh.state === "running" && (sh.id === watch.target || sh.label === watch.target),
+        (sh) => sh.state === "running" && (sh.id === watch.target || sh.taskId === watch.target || sh.label === watch.target),
       )
       if (live) {
         if (watch.cursor !== SHELL_SEEN) deps.storage.setThreadWatchCursor(watch.id, SHELL_SEEN)

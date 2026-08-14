@@ -88,6 +88,7 @@ import {
   isDirectSubAgent,
   DirectoryPickResult,
   ThreadLocation,
+  SHELL_WATCH_SEEN,
 } from "@frizz/shared"
 import { mayHaveLiveBackgroundWork, needsFreshProcessForLimit, type AppContext } from "./context.ts"
 import { appServerTurnStalled, resolveRecurringPrompt } from "./board.ts"
@@ -676,6 +677,7 @@ export function createRouter(ctx: AppContext) {
       target: w.target,
       state: w.state,
       createdAt: new Date(w.created_at).toISOString(),
+      seen: w.cursor === SHELL_WATCH_SEEN,
     }))
   }
 

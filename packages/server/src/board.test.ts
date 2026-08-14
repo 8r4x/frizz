@@ -1425,6 +1425,9 @@ test("a parked pr-watch fence yields one armed github row per PR", () => {
     target: "colinhacks/zod#6382",
     state: "armed",
     createdAt: FENCE_AT,
+    // A PR watcher has nothing to observe alive first, so it is never in the wedged state the shell
+    // registry's seen-then-gone rule can leave a row in.
+    seen: true,
   }])
 })
 

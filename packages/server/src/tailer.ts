@@ -418,6 +418,9 @@ export interface BgShellView {
    */
   stoppable?: boolean
   lastActivityAt?: string // ISO8601 of the shell output file's last write
+  /** The runtime's own background-task handle — the id the MODEL was given, and therefore the one a
+   *  `shell` watcher is registered against. Full contract on the shared schema. */
+  taskId?: string
 }
 
 // A pending native AskUserQuestion (structured, capped). Mirrors @frizz/shared PendingAsk; `id` is
@@ -2740,7 +2743,9 @@ export function createTailer(deps: TailerDeps): Tailer {
       // board.ts ANDs it with the thread's transport before the × is offered (see BgShellView.stoppable).
       // Emitted only when a handle exists, so the row cannot advertise a control during the window
       // between its tool_use (which creates the entry) and its launch ack (which names the task).
-      out.push({ label: e.label, startedAt: e.startedAt, state: "running", id: e.toolUseId, ...(e.taskId ? { stoppable: true } : {}), ...(lastActivityAt ? { lastActivityAt } : {}) })
+      // `taskId` travels as well as gating `stoppable`: it is the handle the RUNTIME hands the model, so
+      // it is the id a worker registers a `shell` watcher against (see BgShellView.taskId).
+      out.push({ label: e.label, startedAt: e.startedAt, state: "running", id: e.toolUseId, ...(e.taskId ? { stoppable: true, taskId: e.taskId } : {}), ...(lastActivityAt ? { lastActivityAt } : {}) })
     }
     return out
   }

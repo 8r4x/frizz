@@ -232,6 +232,14 @@ export const BgShellView = z.object({
   // ISO8601 of the shell output file's last write — "last active 6 min ago" for a quiet-but-live
   // watcher. Optional (see SubAgentView.lastActivityAt).
   lastActivityAt: z.string().optional(),
+  // The PROVIDER's session-wide background-task handle (`bzvtnt3ig`), as distinct from `id`, which is
+  // the launch tool_use id. Both name the same shell and neither is a substitute for the other:
+  // `id` is what the two copies of a row reconcile on, and this is the handle the runtime hands the
+  // MODEL — "Command running in background with ID: bzvtnt3ig" is the only id a worker ever sees, so
+  // it is the one it registers a `shell` watcher against. Matching on `id`/`label` alone meant every
+  // such watcher was unfireable (scheduler.evalWatchers, 2026-08-14). Absent for a CODEX row, whose
+  // single `processId` IS its `id`, and for a Claude row between its tool_use and its launch ack.
+  taskId: z.string().optional(),
 })
 export type BgShellView = z.infer<typeof BgShellView>
 
@@ -775,8 +783,13 @@ export type ThreadWatchKind = z.infer<typeof ThreadWatchKind>
 export const RegisterableThreadWatchKind = z.enum(["shell"])
 export type RegisterableThreadWatchKind = z.infer<typeof RegisterableThreadWatchKind>
 
-/** The thing being watched: a background shell's id, or its label. */
+/** The thing being watched: a background shell's task id, its launch id, or its label. */
 export const ThreadWatchTarget = z.string().trim().min(1).max(200)
+
+/** The one bit a shell watcher's `cursor` column carries: this target has been OBSERVED ALIVE, so its
+ *  absence from here on means it finished rather than that it never started. Named here rather than in
+ *  the scheduler because the board and the router both put it on the wire (`ThreadWatchView.seen`). */
+export const SHELL_WATCH_SEEN = "seen"
 
 /** One armed (or just-settled) watcher, as the worker's own tool reads it back. */
 export const ThreadWatchView = z.object({
@@ -785,6 +798,14 @@ export const ThreadWatchView = z.object({
   target: z.string(),
   state: z.enum(["armed", "fired", "dropped"]),
   createdAt: z.string(),
+  // Has frizz ever seen this target ALIVE? A `shell` watcher only fires SEEN-THEN-GONE, so one whose
+  // target never matched a live row is not waiting — it is WEDGED, and will stay armed until the worker
+  // drops it. The readout has to be able to say so: two such watchers, both naming shells that had long
+  // since finished, is exactly the state that read as "watching 2 things I cannot find anywhere"
+  // (maintainer 2026-08-14). Defaults true so a `github` watch — which has no registry row and no
+  // seen-then-gone rule — and any snapshot from a server that predates this field read as armed rather
+  // than as freshly-broken.
+  seen: z.boolean().default(true),
 }).strict()
 export type ThreadWatchView = z.infer<typeof ThreadWatchView>
 

@@ -275,7 +275,8 @@ const WATCH = {
   description:
     "REGISTER something to wait on, so frizz wakes you when it resolves — and DROP it when it stops " +
     "mattering. Your waits have identities: you can list them, and you can withdraw them.\n\n" +
-    "  kind: \"shell\"  — one of YOUR OWN background shells finishing. `target` is its id or its label.\n\n" +
+    "  kind: \"shell\"  — one of YOUR OWN background shells finishing. `target` is the id your runtime " +
+    "gave you when it launched it (\"Command running in background with ID: bzvtnt3ig\"), or its label.\n\n" +
     "FOR A PULL REQUEST, use an ```awaiting fence with a `pr-watch: owner/repo#123` line instead. That " +
     "watcher is durable, it replays whatever review is already sitting on the PR the first time you park " +
     "on it, and it is where PR watching lives — this registry is for the waits that have nowhere else to " +
@@ -310,10 +311,11 @@ const WATCH = {
       target: {
         type: "string",
         description:
-          "Required for `add`. A background shell's id or its label. A target that does not match one " +
-          "of your live shells still registers, but the watcher only fires once frizz has SEEN it " +
-          "alive — so a typo'd label simply never fires rather than reporting a completion that never " +
-          "happened.",
+          "Required for `add`. A background shell's id or its label — the id being the one your runtime " +
+          "handed you when it launched (\"Command running in background with ID: bzvtnt3ig\"), which is " +
+          "the string to prefer. A target that does not match one of your live shells still registers, " +
+          "but the watcher only fires once frizz has SEEN it alive — so a typo'd label simply never " +
+          "fires rather than reporting a completion that never happened.",
       },
       id: {
         type: "string",

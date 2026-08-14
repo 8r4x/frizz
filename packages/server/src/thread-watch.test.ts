@@ -136,7 +136,10 @@ test("removing a session takes its watchers with it", () => {
 // The shell watcher driven through the REAL scheduler pass over REAL storage, with only the tailer
 // stubbed — it is the input being varied. What these pin is the rule that makes the watcher trustworthy:
 // absence of a shell means "finished" ONLY after it has been observed alive.
-function watchScheduler(shells: Array<{ id?: string; label: string; state: "running" | "stale" }>, opts: { tele?: boolean } = {}) {
+function watchScheduler(
+  shells: Array<{ id?: string; taskId?: string; label: string; state: "running" | "stale" }>,
+  opts: { tele?: boolean; target?: string } = {},
+) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-watchsched-"))
   const storage = createStorage(join(dir, "ui.db"))
   // Same reason as the fixture above: these threads carry no Goal, so the built-in sign-off nudge would
@@ -148,7 +151,7 @@ function watchScheduler(shells: Array<{ id?: string; label: string; state: "runn
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
     title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   } as SessionRow)
-  storage.armThreadWatch({ id: "w1", slug, kind: "shell", target: "vite dev", createdAtMs: 1000 })
+  storage.armThreadWatch({ id: "w1", slug, kind: "shell", target: opts.target ?? "vite dev", createdAtMs: 1000 })
   const delivered: string[] = []
   const s = createScheduler({
     storage,
@@ -229,6 +232,33 @@ test("the target matches a shell's id as well as its label", async () => {
     await h.s.tick()
     assert.equal(h.storage.getThreadWatch("w1")?.cursor, "seen", "matched on id")
   } finally { h.close() }
+})
+
+// THE ID THE WORKER WAS ACTUALLY GIVEN. Neither of the two matches above is a string the model has ever
+// seen: `id` is the launch tool_use id and `label` is frizz's own summary of the command. What the
+// runtime tells it is "Command running in background with ID: bzvtnt3ig" — the task id — so that is what
+// it registers. Until 2026-08-14 that matched nothing, so a watcher armed the obvious way never saw its
+// target alive, never fired, and sat armed forever after its shell had quietly finished. Measured on the
+// maintainer's own thread: two rows, both with a null cursor, one having blocked its full 1500s timeout
+// while the shell it was waiting on completed 25 minutes in.
+test("the target matches the runtime's background-task id, which is the id the worker was handed", async () => {
+  const h = watchScheduler(
+    [{ id: "toolu_01MkxJgNuEsDomuqLTFqzzjU", taskId: "bzvtnt3ig", label: "nub run test", state: "running" }],
+    { target: "bzvtnt3ig" },
+  )
+  try {
+    await h.s.tick()
+    assert.equal(h.storage.getThreadWatch("w1")?.cursor, "seen", "matched on the task id")
+  } finally { h.close() }
+
+  // …and it goes on to actually FIRE once that shell leaves, which is the property the null cursor denied.
+  const gone = watchScheduler([], { target: "bzvtnt3ig" })
+  try {
+    gone.storage.setThreadWatchCursor("w1", "seen")
+    await gone.s.tick()
+    assert.equal(gone.delivered.length, 1)
+    assert.match(gone.delivered[0], /bzvtnt3ig/)
+  } finally { gone.close() }
 })
 
 // ---- EVERY NEW THREAD IS BORN WITH A GOAL ---------------------------------------------------------

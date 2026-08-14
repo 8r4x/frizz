@@ -189,9 +189,7 @@ function ArmedWatches({ thread }: { thread: ThreadView }) {
   // whole footer, which is a worse failure than the readout being missing.
   const armed = (thread.watches ?? []).filter((w) => w.state === "armed")
   if (!armed.length) return null
-  const detail = armed
-    .map((w) => `Shell: ${w.target} (since ${formatAgo(w.createdAt)})`)
-    .join("\n")
+  const detail = armed.map((w) => watchLine(w, thread)).join("\n")
   const label = armed.length === 1 ? `Watching 1 thing\n${detail}` : `Watching ${armed.length} things\n${detail}`
   return (
     <Tooltip label={label} side="top" multiline>
@@ -207,6 +205,34 @@ function ArmedWatches({ thread }: { thread: ThreadView }) {
       </span>
     </Tooltip>
   )
+}
+
+// ONE LINE OF THE EYE'S TOOLTIP. Three things it must get right, all of them learned from one screenshot
+// reading "Watching 2 things / Shell: bzvtnt3ig / Shell: b8m0w8qjk" (maintainer 2026-08-14: "shells are
+// not watchers… I don't see either of them as background shells underneath the prompt box"):
+//
+//  · NAME THE WAIT, not the kind of thing. The row is a WATCHER; the shell is what it is watching. So the
+//    line reads "waiting on <x>" and the `github` kind — which shares this readout and would otherwise
+//    have been labelled `Shell: acme/app#391` — says PR.
+//  · NAME IT THE WAY THE STRIP DOES. A worker registers against the handle the runtime handed it
+//    (`bzvtnt3ig`), which is a string that appears NOWHERE else in the UI. When that target resolves to a
+//    live background shell, print that row's own label instead, so the tooltip and the row under the
+//    prompt box name the same shell.
+//  · ADMIT WHEN IT CANNOT FIRE. A shell watcher only fires seen-then-gone, so one whose target frizz has
+//    never observed alive is not waiting on anything — it is wedged until the worker drops it. That is
+//    the whole of what the maintainer could not find, and stating it beats implying a live wait.
+//
+// The elapsed rides here rather than being appended by the caller so that the WARNING can land after it:
+// the tooltip wraps at 22rem, and "…will not fire (since 34 min ago)" put the caveat mid-line with its
+// own timestamp orphaned past the wrap.
+function watchLine(w: ThreadView["watches"][number], thread: ThreadView): string {
+  const since = ` (since ${formatAgo(w.createdAt)})`
+  if (w.kind === "github") return `PR ${w.target}${since}`
+  const shell = (thread.bgShells ?? []).find((s) => s.taskId === w.target || s.id === w.target || s.label === w.target)
+  if (shell) return `Shell: ${shell.label}${since}`
+  // `seen` defaults TRUE (an older server, or a `github` row), so the warning only ever appears on a
+  // board that positively reports the cursor still unset — never on the mere absence of the field.
+  return `Shell: ${w.target}${since}${w.seen ? "" : " — never seen running, so this will not fire"}`
 }
 
 // Also rendered — deliberately redundant — as a white primary button at the bottom of the in-chat
