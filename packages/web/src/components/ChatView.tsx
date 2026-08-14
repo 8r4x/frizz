@@ -3533,8 +3533,8 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   const watched = prWatchRefs(hints)
   // TWO CARDS SAYING "AWAITING" IS ONE TOO MANY. Since `pr-watch` stopped carrying a park action
   // (2026-08-13), this card falls back to a bare "Awaiting" heading — and directly beneath it the
-  // resting card says "Awaiting background work… 1 background shell and 2 PR watchers", with the counts
-  // and the only control. The maintainer read the pair as a duplicate, and it is: the heading is the
+  // resting card says "Awaiting background work", lists the watched PRs with their live check state, and
+  // carries the only control. The maintainer read the pair as a duplicate, and it is: the heading is the
   // only part that repeats (2026-08-13, with a screenshot of the two stacked).
   //
   // So when this card has NOTHING the resting card does not already say — no park action to offer — and

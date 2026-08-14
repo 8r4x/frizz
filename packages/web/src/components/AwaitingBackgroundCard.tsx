@@ -82,16 +82,18 @@ function awaitsResults(thread: Pick<ThreadView, "subAgents">): boolean {
 }
 
 // "when one of them finishes" is false of a single thing, and a thread with exactly one is the common
-// case — so the pronoun agrees with the count rather than assuming the plural. Counts BOTH non-agent
-// kinds, since either can be the single thing the sentence is about.
-function liveShellCount(thread: Pick<ThreadView, "bgShells" | "watches">): number {
-  return (thread.bgShells ?? []).filter((s) => s.state === "running").length + prWatcherCount(thread)
+// case — so the pronoun agrees with the count rather than assuming the plural. SHELLS ONLY: a watcher is
+// never the subject of this sentence any more, because it has a row of its own further down.
+function liveShellCount(thread: Pick<ThreadView, "bgShells">): number {
+  return (thread.bgShells ?? []).filter((s) => s.state === "running").length
 }
 
-/** Does the non-waiting sentence's verb have to cover a WATCHER? A shell "finishes"; a watcher never
- *  does — it fires when somebody else acts on the PR — so a thread holding one needs the wider verb. */
-function hasWatcher(thread: Pick<ThreadView, "watches">): boolean {
-  return prWatcherCount(thread) > 0
+/** Is there any work the SENTENCE has to name — i.e. work with no row of its own? A watched PR gets a
+ *  row, so a rest on watchers alone needs no prose at all: the heading says the thread is waiting and the
+ *  rows say on what. Counting the same watchers in a sentence directly above the rows is the restatement
+ *  the maintainer called busy (2026-08-14). */
+function hasUnrowedWork(thread: Pick<ThreadView, "subAgents" | "bgShells">): boolean {
+  return awaitsResults(thread) || liveShellCount(thread) > 0
 }
 
 // The title, and it is CONDITIONAL for the same reason the body sentence is. "Background shells running"
@@ -128,28 +130,40 @@ function shellsAlone(thread: Pick<ThreadView, "subAgents" | "bgShells" | "watche
 // in the UI. We should basically have it evoke the GitHub UI that shows up for running versus completed
 // checks."
 //
-// So the row is GitHub's merge box in one line: its own state glyph, the ref, the check counts, and the
-// merge verdict beneath. The VOCABULARY is GitHub's too, because the human has just come from there and
-// a second set of words for one fact is a second thing to learn.
+// So the row is GitHub's merge box on ONE line: its own state glyph, the ref, the check counts and the
+// merge verdict. The count VOCABULARY is GitHub's, because the human has just come from there and a
+// second set of words for one fact is a second thing to learn.
+//
+// IT WAS THREE LINES UNTIL 2026-08-14 — a prose verdict ("All checks have passed"), the same verdict as
+// counts ("— 7 successful"), and a merge sentence under it ("This branch has no conflicts with the base
+// branch") — and four PRs then filled eleven lines with three ways of saying green (maintainer: "this
+// looks busy and shitty"). Each fact now appears exactly once, in its shortest true form:
+//   • the GLYPH carries the verdict, so the words carry only what the glyph cannot: the numbers.
+//   • the counts drop the prose headline that restated them.
+//   • the merge verdict joins the same line, and only when it is not already implied (below).
 //
 // AN UNPOLLED PR SAYS "Checking…", not "no checks". They are different facts — frizz has not looked yet
 // versus this PR has no CI — and only the second of them means the wait is nearly over. The same
 // distinction decides the queue rule server-side, where not-knowing never parks a thread.
 
-const CHECKS_HEADLINE: Record<GithubWatchStatus["checks"], string> = {
-  running: "Some checks haven’t completed yet",
-  passing: "All checks have passed",
-  failing: "Some checks were not successful",
-  none: "No checks reported",
+// The merge verdict, appended to the counts. Two of GitHub's four states are SILENT here, for two
+// different reasons:
+//   • UNKNOWN — GitHub computes mergeability asynchronously and reports it while still thinking, so a
+//     phrase for it would say "frizz has not heard back" in words that sound like a verdict.
+//   • BLOCKED WHILE CI IS RED OR RUNNING — "blocked" is then just the checks restated, which is the
+//     doubling this row exists to remove. It survives on a GREEN PR, where it is the one thing the
+//     counts do not say: CI is done and something else (a review, a required branch) still holds it.
+const MERGE_CLAUSE: Record<GithubWatchStatus["merge"], string | null> = {
+  mergeable: "no conflicts",
+  blocked: "merge blocked",
+  conflicting: "has conflicts",
+  unknown: null,
 }
 
-const MERGE_LINE: Record<GithubWatchStatus["merge"], string | null> = {
-  mergeable: "This branch has no conflicts with the base branch",
-  blocked: "Merging is blocked",
-  conflicting: "This branch has conflicts that must be resolved",
-  // UNKNOWN IS SILENT. GitHub computes mergeability asynchronously and reports UNKNOWN while it is
-  // thinking, so a line for it would say "frizz has not heard back" in words that sound like a verdict.
-  unknown: null,
+function mergeClause(status: GithubWatchStatus): string | null {
+  if (status.state !== "open") return null
+  if (status.merge === "blocked" && status.checks !== "passing" && status.checks !== "none") return null
+  return MERGE_CLAUSE[status.merge]
 }
 
 function ChecksGlyph({ status }: { status: GithubWatchStatus | undefined }) {
@@ -172,30 +186,40 @@ function ChecksGlyph({ status }: { status: GithubWatchStatus | undefined }) {
   return <CircleDashed size={12} className={`${cls} text-muted/60`} />
 }
 
-/** "3 in progress, 12 successful, 1 failing" — GitHub's own counts, and only the ones that are nonzero:
- *  a row of zeroes reads as noise, and every count that is there is a count worth reading. */
+/** "2 failing, 1 in progress, 9 successful" — GitHub's own count words, and only the counts that are
+ *  nonzero: a row of zeroes reads as noise, and every count that is there is a count worth reading.
+ *
+ *  SEVERITY FIRST, and the order is fixed rather than per-state: the number that decides what the human
+ *  does is the failing one, and a reader scanning four rows should find it in the same place on each.
+ *  It is also what survives the row's `truncate` on a narrow queue card — measured at a 368px card, a
+ *  red PR renders "2 failing, 1 in progress, 9 succ…", losing the count that matters least. */
 export function checkCountLine(status: GithubWatchStatus): string {
   const parts = [
+    status.failed > 0 ? `${status.failed} failing` : null,
     status.running > 0 ? `${status.running} in progress` : null,
     status.passed > 0 ? `${status.passed} successful` : null,
-    status.failed > 0 ? `${status.failed} failing` : null,
   ].filter((p): p is string => p !== null)
   return parts.join(", ")
 }
 
-/** The one-line state, as GitHub says it. Merged/closed outrank the checks: a merged PR's CI is history. */
-export function checksHeadline(status: GithubWatchStatus | undefined): string {
-  if (!status) return "Checking…"
+/** The whole right-hand side of a row: what the checks say, then the merge verdict, on one line.
+ *
+ *  Merged/closed outrank everything — a merged PR's CI is history. Otherwise the counts speak and the
+ *  glyph beside them carries the verdict they used to spell out in prose. */
+export function watchStatusLine(status: GithubWatchStatus | undefined): string {
+  if (!status) return "Checking…" // frizz has not polled yet — NOT "no checks"
   if (status.state === "merged") return "Merged"
   if (status.state === "closed") return "Closed"
-  return CHECKS_HEADLINE[status.checks]
+  const counts = checkCountLine(status)
+  const merge = mergeClause(status)
+  // "No checks" rather than an empty left half: a PR with no CI at all is a real state, and the wait
+  // then hangs entirely on the merge verdict beside it.
+  return [counts || "No checks", merge].filter((p): p is string => p !== null).join(" · ")
 }
 
 function GithubWatchRow({ watch }: { watch: ThreadWatchView }) {
   const status = watch.github
   const url = githubRefUrl(watch.target)
-  const counts = status ? checkCountLine(status) : ""
-  const merge = status && status.state === "open" ? MERGE_LINE[status.merge] : null
   return (
     <div className="flex flex-col gap-0.5">
       {/* items-baseline, not items-center: `self-baseline` on the glyph needs a shared baseline to
@@ -206,14 +230,14 @@ function GithubWatchRow({ watch }: { watch: ThreadWatchView }) {
         {url
           ? <a data-pr-ref href={url} target="_blank" rel="noreferrer noopener" className="font-medium text-fg/90 underline decoration-border-strong underline-offset-2 hover:decoration-fg/60">{watch.target}</a>
           : <span data-pr-ref className="font-medium text-fg/90">{watch.target}</span>}
-        <span data-pr-headline className="min-w-0 truncate text-muted/80">{checksHeadline(status)}{counts ? ` — ${counts}` : ""}</span>
+        <span data-pr-headline className="min-w-0 truncate text-muted/80">{watchStatusLine(status)}</span>
       </div>
-      {/* The failing JOBS, named. "Some checks were not successful" costs the reader a click to learn
-          which; the names cost nothing here and are the whole reason to look. */}
+      {/* The one thing that earns a SECOND line, and only on a red PR: WHICH jobs failed. "2 failing"
+          costs the reader a click to learn that; the names cost nothing here and are the whole reason to
+          look. Every other fact fits on the line above. */}
       {status && status.failing.length > 0 && (
         <div className="pl-[18px] text-[11.5px] leading-4 text-red-400/85">{status.failing.join(", ")}</div>
       )}
-      {merge && <div className="pl-[18px] text-[11.5px] leading-4 text-muted/70">{merge}</div>}
     </div>
   )
 }
@@ -261,54 +285,56 @@ export function AwaitingBackgroundCard({ thread, actions }: {
       icon={shellsAlone(thread) ? TerminalSquare : Hourglass}
       label={awaitingBackgroundLabel(thread)}
     >
-      {/* Both sentences are BODY text (maintainer 2026-07-24): the self-return is a fact about the
-          thread, not a caption for the button, so it reads as prose rather than as a label the Snooze
-          control drags around with it — and it therefore stays on the surfaces that have no button. */}
-      <p className={CARD_BODY}>
-        {waiting ? (
-          <>
-            This agent has come to rest, but it’s awaiting the results from{" "}
-            {awaitingBackgroundSubject(thread, { watchers: false })} it dispatched. It returns to the queue on its own
-            when the work comes back.
-            {/* Its own clause, because a watcher is PARKED ON rather than dispatched — folding it into
-                the subject above made the sentence claim the thread had dispatched a PR. */}
-            {hasWatcher(thread) && (
-              <>
-                {" "}It is also watching {prWatcherCount(thread)} pull request{prWatcherCount(thread) === 1 ? "" : "s"}.
-              </>
-            )}
-          </>
-        ) : (
-          // NOT "it returns to the queue" — this card IS the queue card now, and telling the human it
-          // will arrive somewhere they are already looking is the one sentence that cannot be true here.
-          // What is true is the resumption: a finished shell notifies its worker, which picks the thread
-          // back up on its own. Kept SHORT because the Snooze beside it says the longer version — the
-          // body and its action's caption are two surfaces, not one sentence written twice.
-          // ONE SENTENCE SHAPE FOR EVERY KIND, and the verbs are chosen so it is idiomatic in all of
-          // them. This briefly read "it left 1 PR watcher out", which is not English (maintainer
-          // 2026-08-13: "this does not make idiomatic sense") — it came from bending the shells-only
-          // "left N background shells running" to cover a thing that does not run. "…is still active"
-          // is true of a detached shell and of a parked watcher alike, and needs no per-kind branch.
-          <>
-            This agent has come to rest, but {awaitingBackgroundSubject(thread)}{" "}
-            {liveShellCount(thread) === 1 ? "is" : "are"} still active. It resumes on its own when{" "}
-            {liveShellCount(thread) === 1 ? "it" : "one of them"}{" "}
-            {/* A shell FINISHES; a watcher never does — it fires when somebody else acts on the PR. One
-                verb has to cover both when a thread holds both, and "reports" is the honest one: a
-                finished shell notifies its worker and a fired watcher hands it the new activity. */}
-            {hasWatcher(thread) ? "reports" : "finishes"}.
-          </>
-        )}
-      </p>
-      {/* THE WATCHED PRs, one row each, under the sentence that counts them. The prose says how many and
-          the rows say which — two surfaces, not one fact written twice.
+      {/* The sentence is BODY text (maintainer 2026-07-24): the self-return is a fact about the thread,
+          not a caption for the button, so it reads as prose rather than as a label the Snooze control
+          drags around with it — and it therefore stays on the surfaces that have no button.
 
-          gap-3 BETWEEN rows against the 2px inside one, and the ratio is the point: a row can be three
-          lines deep (ref, failing jobs, merge verdict), and at `gap-1.5` a sub-line sat 12.5px from the
-          NEXT ref against 10px from its own — near enough to read as belonging to the row below.
-          Measured on the four-state fixture at dsf 6. */}
-      {(thread.watches ?? []).filter((w) => w.kind === "github" && w.state === "armed").length > 0 && (
-        <div className="mt-2 flex flex-col gap-3">
+          AND IT ONLY NAMES WORK THAT HAS NO ROW. A watched PR is listed below with its own live check
+          state, so a sentence counting the same watchers above it is one fact written twice; on a rest
+          held by watchers ALONE there is no sentence at all, and the heading plus the rows say the
+          whole thing (maintainer 2026-08-14: "this looks busy and shitty"). */}
+      {hasUnrowedWork(thread) && (
+        <p className={CARD_BODY}>
+          {waiting ? (
+            // The subject never counts a watcher: a watcher is PARKED ON rather than dispatched, and
+            // folding it in made the sentence claim the thread had dispatched a pull request.
+            //
+            // "It’s awaiting", not "Awaiting": the heading one line above already opens on that word,
+            // and two lines starting with it read as a stutter. The verb still has to be AWAIT, which is
+            // the distinction this branch exists for — a dispatched sub-agent returns and re-invokes its
+            // parent, while a launched shell returns nothing there is anything to await.
+            <>
+              It’s awaiting the results from {awaitingBackgroundSubject(thread, { watchers: false })} it dispatched. It
+              returns to the queue on its own when the work comes back.
+            </>
+          ) : (
+            // NOT "it returns to the queue" — this card IS the queue card now, and telling the human it
+            // will arrive somewhere they are already looking is the one sentence that cannot be true
+            // here. What is true is the resumption: a finished shell notifies its worker, which picks
+            // the thread back up on its own. Kept SHORT because the Snooze beside it says the longer
+            // version — the body and its action's caption are two surfaces, not one sentence twice.
+            <>
+              {awaitingBackgroundSubject(thread, { watchers: false })}{" "}
+              {liveShellCount(thread) === 1 ? "is" : "are"} still running. It resumes on its own when{" "}
+              {liveShellCount(thread) === 1 ? "it finishes" : "one of them finishes"}.
+            </>
+          )}
+        </p>
+      )}
+      {/* THE WATCHED PRs, one row each — the card's real content, not an appendix to a sentence.
+
+          gap-2.5 BETWEEN rows against the 2px inside one, and the ratio is the point: a red row carries
+          a second line naming the failing jobs, and it must read as belonging to the ref ABOVE it rather
+          than to the ref below. The gap was 3 while a row could be three lines deep; folding the merge
+          verdict onto the ref line made rows one line each, and 12px between single lines read as a list
+          of unrelated items. Measured on the four-state fixture at dsf 6.
+
+          mt-3 UNCONDITIONALLY — 12px, a shade MORE than the 10px between rows, so the heading reads as
+          the list's heading rather than as its first item. It is the WHOLE gap rather than an addition:
+          CardContent's own mt-1 collapses into it, which is why mt-2 measured 8px and put the first row
+          closer to the title than to the row beneath it (measured, sans and mono, dsf 3). */}
+      {prWatcherCount(thread) > 0 && (
+        <div className="mt-3 flex flex-col gap-2.5">
           {(thread.watches ?? []).filter((w) => w.kind === "github" && w.state === "armed").map((w) => (
             <GithubWatchRow key={w.id} watch={w} />
           ))}

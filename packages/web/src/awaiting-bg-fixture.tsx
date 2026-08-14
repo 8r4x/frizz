@@ -26,6 +26,8 @@ const params = new URLSearchParams(location.search)
 // ?watch=1 — the PR-WATCH PARK, which reaches this card as of 2026-08-13: its awaiting fence no longer
 // offers a park action, so this card is where the wait is stated and its event-snooze is the one control.
 // ?watch=both — a thread holding a shell AND a watcher, so the sentence has to name both kinds.
+// ?watch=one — ONE green, mergeable PR and nothing else. The shape the maintainer actually meets on a
+// real board, and the one they were looking at when they called the old three-line row busy (2026-08-14).
 const watchMode = params.get("watch")
 // THIS APP RENDERS IN TWO FONTS and a fixture that sets neither silently takes the MONO default, which
 // is how a glyph measured at a 0.00px residual once rode visibly high in the maintainer's sans window.
@@ -34,7 +36,7 @@ document.documentElement.dataset.font = params.get("font") === "sans" ? "sans" :
 const wantAgents = params.get("agents") === "1"
 const wantWatch = watchMode !== null
 // Shells are the DEFAULT shape; ?agents=1 swaps them for sub-agents, and ?watch=1 for a lone watcher.
-const wantShells = !wantAgents && watchMode !== "1"
+const wantShells = !wantAgents && watchMode !== "1" && watchMode !== "one"
 const shellOnly = wantShells && !wantAgents
 
 const tail = shellOnly
@@ -81,7 +83,14 @@ const thread = {
   // ?watch=1|both seeds FOUR PRs, one per check state, so the row's whole vocabulary is on screen at
   // once: running with counts, all-green-and-mergeable, red with the failing jobs named, and one frizz
   // has not polled yet ("Checking…", which must not read as "no checks").
-  watches: wantWatch
+  watches: watchMode === "one"
+    ? [
+        {
+          id: "github:demo:colinhacks/zod#5928", kind: "github", target: "colinhacks/zod#5928", state: "armed", createdAt: "2026-07-23T09:04:00.000Z",
+          github: { checks: "passing", running: 0, passed: 7, failed: 0, failing: [], merge: "mergeable", state: "open", polledAt: "2026-07-23T09:06:50.000Z" },
+        },
+      ]
+    : wantWatch
     ? [
         {
           id: "github:demo:acme/app#391", kind: "github", target: "acme/app#391", state: "armed", createdAt: "2026-07-23T09:04:00.000Z",

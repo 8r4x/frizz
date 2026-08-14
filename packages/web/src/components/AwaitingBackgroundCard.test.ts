@@ -57,7 +57,7 @@ test("the card carries the snooze ONLY when a surface passes one", () => {
   assert.doesNotMatch(bare, /Snooze/)
   // …while still saying the same thing, on the same card chrome, with the same kind header.
   assert.match(bare, /Awaiting background work/)
-  assert.match(bare, /has come to rest/)
+  assert.match(bare, /It’s awaiting the results from 1 sub-agent/)
   assert.match(bare, /data-awaiting-background/)
 })
 
@@ -89,18 +89,15 @@ test("the card's verb matches what is actually running: results are AWAITED, a s
     renderToStaticMarkup(createElement(AwaitingBackgroundCard, { thread: t })).replace(/<[^>]+>/g, "").replace(/&#x27;|&rsquo;/g, "’")
 
   const agentsOnly = render(thread([agent("running")], []))
-  assert.match(agentsOnly, /awaiting the results from 1 sub-agent it dispatched/)
+  assert.match(agentsOnly, /It’s awaiting the results from 1 sub-agent it dispatched/)
   assert.match(agentsOnly, /when the work comes back/)
 
   const shellsOnly = render(thread([], [shell("running"), shell("running")]))
-  // ONE SENTENCE SHAPE for every kind since 2026-08-13 — "left N running" could not be bent to cover a
-  // PR watcher, which does not run ("this does not make idiomatic sense"). "…are still active" is true
-  // of a detached shell and a parked watcher alike.
-  assert.match(shellsOnly, /but 2 background shells are still active/)
+  assert.match(shellsOnly, /2 background shells are still running/)
   assert.match(shellsOnly, /resumes on its own when one of them finishes/)
   // ONE shell is the common case on a real board, and "one of them" is false of it.
   const oneShell = render(thread([], [shell("running")]))
-  assert.match(oneShell, /but 1 background shell is still active. It resumes on its own when it finishes/)
+  assert.match(oneShell, /1 background shell is still running. It resumes on its own when it finishes/)
   assert.doesNotMatch(shellsOnly, /awaiting the results/, "a launched shell returns nothing to await")
   // AND IT MUST NOT SAY "returns to the queue": since 2026-08-04 this card IS the queue card for a
   // shell-only rest, so promising the human it will arrive where they are already looking is the one
@@ -110,7 +107,7 @@ test("the card's verb matches what is actually running: results are AWAITED, a s
   // BOTH live → there IS something to await, so the dispatch sentence wins and still names the shells.
   // That shape is excused from the queue, so "returns to the queue" is still the true promise for it.
   const both = render(thread([agent("running")], [shell("running")]))
-  assert.match(both, /awaiting the results from 1 sub-agent and 1 background shell it dispatched/)
+  assert.match(both, /It’s awaiting the results from 1 sub-agent and 1 background shell it dispatched/)
   assert.match(both, /returns to the queue on its own/)
 })
 
@@ -128,9 +125,7 @@ test("a watcher-only rest takes the GENERIC heading — no kind of its own gets 
   const text = html.replace(/<[^>]+>/g, "").replace(/&#x27;|&rsquo;/g, "’")
   assert.doesNotMatch(text, /PR watcher armed/, "the retired card must not come back on this surface")
   assert.match(text, /Awaiting background work/)
-  assert.match(text, /but 1 PR watcher is still active/)
-  // A shell FINISHES; a watcher never does — it fires when somebody else acts on the PR.
-  assert.match(text, /resumes on its own when it reports/)
+  assert.match(text, /acme\/app#1/, "the row is the content — the watcher is stated by listing it")
   assert.doesNotMatch(html, /lucide-github/, "…and neither does a per-kind glyph")
   // The kind-naming heading survives for exactly the shape the maintainer named it for, and nothing else.
   const shellsOnly = renderToStaticMarkup(createElement(AwaitingBackgroundCard, { thread: thread([], [shell("running")]) }))
@@ -138,16 +133,27 @@ test("a watcher-only rest takes the GENERIC heading — no kind of its own gets 
   const mixed = renderToStaticMarkup(createElement(AwaitingBackgroundCard, { thread: { ...thread([], [shell("running")]), watches: [watcher()] } }))
   const mixedText = mixed.replace(/<[^>]+>/g, "").replace(/&#x27;|&rsquo;/g, "’")
   assert.match(mixedText, /Awaiting background work/, "a watcher in the mix drops the shells-only heading")
-  assert.match(mixedText, /but 1 background shell and 1 PR watcher are still active/)
 })
 
-// A watcher is PARKED ON, not dispatched — folding it into the dispatch sentence made the card claim the
-// agent had dispatched a pull request.
-test("the dispatch sentence never counts a watcher; it gets its own clause", () => {
-  const text = renderToStaticMarkup(createElement(AwaitingBackgroundCard, {
-    thread: { ...thread([agent("running")], []), watches: [watcher()] },
-  })).replace(/<[^>]+>/g, "").replace(/&#x27;|&rsquo;/g, "’")
-  assert.match(text, /awaiting the results from 1 sub-agent it dispatched/)
-  assert.doesNotMatch(text, /1 sub-agent and 1 PR watcher it dispatched/)
-  assert.match(text, /It is also watching 1 pull request\./)
+// THE SENTENCE NAMES ONLY WORK WITH NO ROW OF ITS OWN. Counting the watchers in prose directly above the
+// rows that list them is one fact written twice — the restatement that made this card busy (2026-08-14).
+// On a rest held by watchers ALONE the card drops the sentence outright.
+test("the sentence never counts a watcher, and disappears when the rows say everything", () => {
+  const render = (t: Parameters<typeof AwaitingBackgroundCard>[0]["thread"]) =>
+    renderToStaticMarkup(createElement(AwaitingBackgroundCard, { thread: t })).replace(/<[^>]+>/g, "").replace(/&#x27;|&rsquo;/g, "’")
+
+  const withAgent = render({ ...thread([agent("running")], []), watches: [watcher()] })
+  assert.match(withAgent, /It’s awaiting the results from 1 sub-agent it dispatched/)
+  assert.doesNotMatch(withAgent, /PR watcher/)
+  assert.doesNotMatch(withAgent, /also watching/, "the rows below already say which pull request")
+
+  const withShell = render({ ...thread([], [shell("running")]), watches: [watcher()] })
+  assert.match(withShell, /1 background shell is still running/)
+  assert.doesNotMatch(withShell, /PR watcher/)
+
+  // Watchers alone: heading, rows, nothing in between.
+  const watchersOnly = render({ ...thread([], []), watches: [watcher()] })
+  assert.doesNotMatch(watchersOnly, /still running/)
+  assert.doesNotMatch(watchersOnly, /PR watcher/)
+  assert.doesNotMatch(watchersOnly, /come to rest/)
 })
