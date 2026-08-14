@@ -3530,6 +3530,37 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   // row of their own under the prose, because `aside` is shrink-0 and a six-PR fence would shove the
   // heading off a narrow queue card.
   const watched = prWatchRefs(hints)
+  // TWO CARDS SAYING "AWAITING" IS ONE TOO MANY. Since `pr-watch` stopped carrying a park action
+  // (2026-08-13), this card falls back to a bare "Awaiting" heading — and directly beneath it the
+  // resting card says "Awaiting background work… 1 background shell and 2 PR watchers", with the counts
+  // and the only control. The maintainer read the pair as a duplicate, and it is: the heading is the
+  // only part that repeats (2026-08-13, with a screenshot of the two stacked).
+  //
+  // So when this card has NOTHING the resting card does not already say — no park action to offer — and
+  // the resting card is actually showing, the chrome goes and the CONTENT stays: the worker's own prose
+  // and the PR links, rendered as the ordinary final message they are. A fence with a real park action
+  // (a `human` gate, a future `timer`) still earns its card, because that control lives nowhere else.
+  //
+  // Guarded on `awaitingBackground` rather than assumed: a thread parked on a watcher with no live shell
+  // or sub-agent shows no resting card at all, and dropping the chrome there would leave the wait
+  // unstated.
+  const restingCardStatesIt = parkAction === null && fenceThread?.awaitingBackground === true
+  if (restingCardStatesIt) {
+    // The refs come too, UNLESS the watcher rows under the prompt box already list them — which they do
+    // whenever the fence armed real watches. Printing both put `colinhacks/zod#6412` twice on one card,
+    // which is the same duplication one level down.
+    const listedBelow = (fenceThread?.watches ?? []).some((w) => w.state === "armed")
+    return (
+      <div data-awaiting-fence className="flex flex-col">
+        <div className={`md-inline ${wrap ? QUEUE_WRAP : ""}`} dangerouslySetInnerHTML={awaitingInner} />
+        {watched.length > 0 && !listedBelow && (
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5">
+            {watched.map((watch) => <WatchedRef key={watch.ref} watch={watch} />)}
+          </div>
+        )}
+      </div>
+    )
+  }
   return (
     <TranscriptCard data-awaiting-fence icon={AwaitingIcon} label={parkTitle} aside={watched.length === 1 ? <WatchedRef watch={watched[0]} /> : undefined}>
       <div
