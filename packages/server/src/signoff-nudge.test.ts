@@ -50,7 +50,8 @@ test("a rest with no fence is told how to sign off, and the text names all three
     assert.equal(h.delivered.length, 1)
     assert.match(h.delivered[0], /```question/)
     assert.match(h.delivered[0], /```done/)
-    assert.match(h.delivered[0], /mcp__frizz__watch/)
+    assert.match(h.delivered[0], /```awaiting/)
+    assert.match(h.delivered[0], /`watch: <id>`/)
     // `done` must arrive with its COST attached, or it becomes the cheapest way to stop being nudged —
     // the exact failure the retired ALLDONE warning existed for.
     assert.match(h.delivered[0], /DISMISSAL/)

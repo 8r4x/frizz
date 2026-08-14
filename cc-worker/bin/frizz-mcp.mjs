@@ -263,74 +263,6 @@ const TIMER = {
   },
 }
 
-const WATCH = {
-  name: "watch",
-  description:
-    "REGISTER a background shell you intend to REST on, so frizz wakes you when it finishes — and DROP " +
-    "it when it stops mattering. Your waits have identities: you can list them, and you can withdraw " +
-    "them.\n\n" +
-    "  kind: \"shell\"  — one of YOUR OWN background shells finishing. `target` is the id your runtime " +
-    "gave you when it launched it (\"Command running in background with ID: bzvtnt3ig\"), or its label.\n\n" +
-    "REGISTER IT ONLY IF YOU ARE ABOUT TO REST, and this is the whole of when it earns its place. While " +
-    "your turn is RUNNING your runtime already re-invokes you the moment a background shell exits, so a " +
-    "watcher adds nothing — just keep working and read the notification when it lands. What the runtime " +
-    "does NOT do is reach you once you have come to rest: measured across this machine's whole session " +
-    "history, 1601 background shells outlived their worker's rest and 1191 of them never delivered a " +
-    "notification at all, though the session went on working for minutes to days afterwards. That gap " +
-    "is what this closes.\n\n" +
-    "NEVER BLOCK ON A SHELL — not with this tool (there is no `wait`; it was removed because it made " +
-    "things worse), and not with a poll loop of your own. Blocking holds your turn open, and the " +
-    "runtime's own completion notification then sits in your queue undelivered until you stop. One real " +
-    "case cost 25 minutes: the shell finished one second into the block, and the blocked call still " +
-    "reported it unresolved when it timed out.\n\n" +
-    "FOR A PULL REQUEST, use an ```awaiting fence with a `pr-watch: owner/repo#123` line instead. That " +
-    "watcher is durable, it replays whatever review is already sitting on the PR the first time you park " +
-    "on it, and it is where PR watching lives — this registry is for the waits that have nowhere else to " +
-    "go.\n\n" +
-    "A registered watcher is DURABLE. It survives your turn ending, a compaction, a frizz restart, and " +
-    "your own daemon being replaced. Register it, come to rest, and frizz brings you back.\n\n" +
-    "REGISTERING IS IDEMPOTENT on (kind, target): asking twice for the same thing returns the SAME id " +
-    "and tells you it was already armed, so re-registering after a compaction is safe and is the right " +
-    "instinct. Use `list` when you want to know what you are holding without changing anything.\n\n" +
-    "DROP WHAT STOPS MATTERING. A watcher you no longer care about is a wake you did not want and a " +
-    "thread that looks parked when it is not — you are the only one who can know, which is why this " +
-    "tool exists (maintainer: \"this way the agent can decide when they're not necessary\").\n\n" +
-    "You can only ever register a wait on your OWN thread — there is no parameter for anyone else's.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      action: {
-        type: "string",
-        enum: ["add", "list", "drop"],
-        description:
-          "`add` registers a watcher (idempotent on kind+target); `drop` withdraws one by id; `list` " +
-          "reads back everything currently armed on this thread without changing anything. Every action " +
-          "answers with the full armed set, so you never need a second call to see where you stand.",
-      },
-      kind: {
-        type: "string",
-        enum: ["shell"],
-        description:
-          "Required for `add`. The only kind — a PR wait belongs in an ```awaiting fence, see above.",
-      },
-      target: {
-        type: "string",
-        description:
-          "Required for `add`. A background shell's id or its label — the id being the one your runtime " +
-          "handed you when it launched (\"Command running in background with ID: bzvtnt3ig\"), which is " +
-          "the string to prefer. A target that does not match one of your live shells still registers, " +
-          "but the watcher only fires once frizz has SEEN it alive — so a typo'd label simply never " +
-          "fires rather than reporting a completion that never happened.",
-      },
-      id: {
-        type: "string",
-        description: "Required for `drop`. The watcher id returned by `add` (or listed by `list`).",
-      },
-    },
-    required: ["action"],
-  },
-}
-
 // The unified server's tool registry: `tools/list` returns these and `tools/call` routes by name.
 // Adding a worker-facing frizz tool = one entry here + one handler in `HANDLERS` — never a second
 // MCP server, so every frizz tool stays under the same `mcp__frizz__*` namespace and the same
@@ -338,14 +270,13 @@ const WATCH = {
 const MIN_INTERVAL_SECONDS = 60
 const MAX_INTERVAL_SECONDS = 24 * 60 * 60
 
-const TOOLS = [SPAWN_THREAD, RECURRING_PROMPT, TIMER, WATCH]
+const TOOLS = [SPAWN_THREAD, RECURRING_PROMPT, TIMER]
 
 /** @type {Record<string, (args: Record<string, unknown>) => Promise<string>>} */
 const HANDLERS = {
   [SPAWN_THREAD.name]: spawnThread,
   [RECURRING_PROMPT.name]: recurringPrompt,
   [TIMER.name]: timer,
-  [WATCH.name]: watch,
 }
 
 /** @param {unknown} obj */
@@ -807,84 +738,6 @@ async function timer(args) {
     `Timer ${id} set for ${fireAt} (${Math.round((fireMs - nowMs) / 1000)}s from now). It fires ONCE and ` +
     "then is gone — it may reach you mid-turn, so receiving it does not mean you had stopped. Cancel it " +
     `with \`action: "cancel", id: "${id}"\` if it stops being useful.\n\n${armedList(result)}`
-  )
-}
-
-/** How the armed watcher set reads back, on every action, so a worker never needs a second call.
- * @param {{ watches?: Array<{id: string, kind: string, target: string}> }|undefined} result */
-function armedWatchList(result) {
-  const watches = Array.isArray(result?.watches) ? result.watches : []
-  if (!watches.length) return "Nothing is armed on this thread now — no watcher will wake you."
-  const lines = watches.map((w) => `  ${w.id}  ${w.kind}  ${w.target}`)
-  return `Armed on this thread now:\n${lines.join("\n")}`
-}
-
-/** The `watch` handler: register, withdraw, or read back this thread's waits.
- * @param {Record<string, unknown>} args @returns {Promise<string>} */
-async function watch(args) {
-  const slug = threadSlug()
-  const action = typeof args.action === "string" ? args.action.trim() : ""
-  if (action !== "add" && action !== "list" && action !== "drop") {
-    throw new Error("`action` must be one of \"add\", \"list\" or \"drop\"")
-  }
-
-  if (action === "list") {
-    const result = (await callRpc("listOwnThreadWatches", { slug }))?.result
-    return armedWatchList(result)
-  }
-
-  if (action === "drop") {
-    const id = typeof args.id === "string" ? args.id.trim() : ""
-    if (!id) throw new Error("`id` is required to drop a watcher — take it from `add` or from `list`")
-    const result = (await callRpc("dropOwnThreadWatch", { slug, id }))?.result
-    // A drop that matched nothing is reported rather than swallowed: the id was wrong, already settled,
-    // or another thread's — and a worker that believes it withdrew a wait it still holds will rest.
-    const head = result?.dropped
-      ? `Watcher ${id} dropped. It will not wake you.`
-      : `No ARMED watcher ${id} on this thread — it was already settled, or the id is not one of yours.`
-    return `${head}\n\n${armedWatchList(result)}`
-  }
-
-  const kind = typeof args.kind === "string" ? args.kind.trim() : ""
-  if (kind !== "shell") {
-    // REFUSED rather than stored. `pr` and `ci` rows are valid in the registry and the scheduler will
-    // poll them once its PR watcher moves off the fence — but today nothing wakes them, and a tool that
-    // accepts a wait it cannot honour is how a worker comes to rest believing it is covered.
-    throw new Error(
-      kind === "pr" || kind === "ci"
-        ? `a ${kind} wait does not belong here — use an \`\`\`awaiting fence with a \`pr-watch: owner/repo#123\` line, which is durable and replays review that is already on the PR`
-        : "`kind` is required to add a watcher, and the only kind is \"shell\"",
-    )
-  }
-  const target = typeof args.target === "string" ? args.target.trim() : ""
-  if (!target) throw new Error("`target` is required — the id or label of one of your own background shells")
-
-  // THE BLOCKING MODE IS GONE, and it was not merely redundant — it was the one thing guaranteed to lose
-  // the answer. The runtime already re-invokes a worker when a background shell exits, but only while the
-  // worker is MID-TURN; a blocking `watch` call IS mid-turn, so the completion notification enqueues and
-  // then sits undelivered until the tool returns. Measured on the maintainer's own thread: shell finished
-  // and the runtime enqueued its notification at 15:30:00.032, one second after the block began — and the
-  // call sat there until 15:54:59 before reporting that the shell "has NOT resolved yet", about a shell
-  // that had been done for 25 minutes. Registering and RESTING is the whole value of this tool, because
-  // rest is exactly where the runtime's own notification stops arriving (1191 measured losses).
-  if (args.wait !== undefined || args.timeout_seconds !== undefined) {
-    throw new Error(
-      "`wait` is gone — blocking here is strictly worse than not calling this at all. Your runtime already " +
-      "notifies you when a background shell exits WHILE YOUR TURN IS RUNNING, and blocking in this tool " +
-      "holds that notification in the queue undelivered until the call returns. Register the watcher and " +
-      "COME TO REST: rest is the only case the runtime does not cover, and it is what this tool is for.",
-    )
-  }
-
-  const result = (await callRpc("addOwnThreadWatch", { slug, kind, target }))?.result
-  const id = result?.id ?? "(unknown)"
-  const head = result?.alreadyArmed
-    ? `Already watching ${kind} ${target} as ${id} — nothing new was registered, and you will be woken once.`
-    : `Watching ${kind} ${target} as ${id}. Frizz will wake you when it resolves, and the registration ` +
-      "survives your turn ending, a compaction and a frizz restart."
-  return (
-    `${head}\n\nDROP IT when it stops mattering (\`action: "drop", id: "${id}"\`) — a watcher you no ` +
-    `longer care about is a wake you did not want.\n\n${armedWatchList(result)}`
   )
 }
 

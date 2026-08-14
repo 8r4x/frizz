@@ -64,7 +64,7 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     rpc.send({ jsonrpc: "2.0", method: "notifications/initialized" })
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
     const list = await rpc.next(2)
-    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "recurring_prompt", "timer", "watch"])
+    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "recurring_prompt", "timer"])
     for (const required of ["prompt", "model", "effort"]) {
       assert.ok(list.result.tools[0].inputSchema.required.includes(required))
     }
@@ -87,21 +87,9 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
       Object.keys(list.result.tools[2].inputSchema.properties).sort(),
       ["action", "at", "id", "in_seconds", "prompt"],
     )
-    // `watch` is the registry the ```awaiting fence could not be: `action` alone is required, and like
-    // its siblings it exposes NO THREAD parameter — a worker may only ever register a wait on its own.
-    assert.deepEqual(list.result.tools[3].inputSchema.required, ["action"])
-    // NO `wait`/`timeout_seconds`: blocking on a shell inside this tool is strictly worse than not
-    // calling it, because the runtime's own completion notification only reaches a RUNNING turn and a
-    // blocked call is a running turn that cannot receive it. Removed 2026-08-14 after one real case sat
-    // blocked for 25 minutes on a shell that had finished one second in.
-    assert.deepEqual(
-      Object.keys(list.result.tools[3].inputSchema.properties).sort(),
-      ["action", "id", "kind", "target"],
-    )
-    assert.deepEqual(list.result.tools[3].inputSchema.properties.action.enum, ["add", "list", "drop"])
-    // Only the kind frizz can actually WAKE is offered. `pr`/`ci` rows are valid in the registry and
-    // land with the poller migration; advertising them now would accept a wait nothing honours.
-    assert.deepEqual(list.result.tools[3].inputSchema.properties.kind.enum, ["shell"])
+    // NO `watch` TOOL. The registry is retired (2026-08-14): a wait is a `watch:` line in the worker's
+    // own ```awaiting fence, which is both the park and the wake, so there is nothing to register.
+    assert.equal(list.result.tools.length, 3)
 
     // An unregistered name is a protocol error, not a crash — the registry routes by name now.
     rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "spawn_frizz_thread", arguments: {} } })
@@ -730,147 +718,5 @@ test("`recurring_prompt` refuses a cadence out of range without contacting the s
   }
 })
 
-// The WATCHER REGISTRY over the real stdio transport. What matters here is the same thing the recurring
-// prompt's test pins — the CALLING thread's slug reaching the RPC body from the env, never from the
-// model — plus the two refusals that keep an unusable registration from ever being made, because a
-// watcher that cannot fire is worse than no watcher: the worker rests believing it is covered.
-test("`watch` registers, lists and drops against the CALLING thread", async () => {
-  const seen: Array<{ url: string; body: any }> = []
-  const replies: any[] = [
-    { id: "wch_abc123", alreadyArmed: false, watches: [{ id: "wch_abc123", kind: "shell", target: "nub run test", state: "armed", createdAt: "2026-08-12T00:00:00.000Z" }] },
-    { watches: [{ id: "wch_abc123", kind: "shell", target: "nub run test", state: "armed", createdAt: "2026-08-12T00:00:00.000Z" }] },
-    { dropped: true, watches: [] },
-  ]
-  const http = createServer((req, res) => {
-    let body = ""
-    req.on("data", (c) => (body += c))
-    req.on("end", () => {
-      seen.push({ url: req.url ?? "", body: JSON.parse(body || "{}") })
-      res.writeHead(200, { "content-type": "application/json" })
-      res.end(JSON.stringify({ result: replies.shift() ?? null }))
-    })
-  })
-  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
-  const port = (http.address() as { port: number }).port
-  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
-  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
-  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "watching-thread" })
-  try {
-    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
-    await rpc.next(1)
-
-    rpc.send({
-      jsonrpc: "2.0", id: 2, method: "tools/call",
-      params: { name: "watch", arguments: { action: "add", kind: "shell", target: "nub run test" } },
-    })
-    const added = await rpc.next(2)
-    assert.equal(added.result.isError, undefined)
-    assert.deepEqual(seen.at(-1), {
-      url: "/_frizz/rpc/addOwnThreadWatch",
-      body: { slug: "watching-thread", kind: "shell", target: "nub run test" },
-    })
-    // The reply must carry the id (there is nothing to drop without it), say that the registration is
-    // DURABLE (that is the whole reason to prefer it over blocking), and push dropping it.
-    assert.match(added.result.content[0].text, /wch_abc123/)
-    assert.match(added.result.content[0].text, /survives your turn ending, a compaction and a frizz restart/)
-    assert.match(added.result.content[0].text, /DROP IT when it stops mattering/)
-
-    rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "watch", arguments: { action: "list" } } })
-    const listed = await rpc.next(3)
-    assert.equal(seen.at(-1)?.url, "/_frizz/rpc/listOwnThreadWatches")
-    assert.match(listed.result.content[0].text, /wch_abc123\s+shell\s+nub run test/)
-
-    rpc.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "watch", arguments: { action: "drop", id: "wch_abc123" } } })
-    const dropped = await rpc.next(4)
-    assert.deepEqual(seen.at(-1), {
-      url: "/_frizz/rpc/dropOwnThreadWatch",
-      body: { slug: "watching-thread", id: "wch_abc123" },
-    })
-    assert.match(dropped.result.content[0].text, /Nothing is armed on this thread now/)
-
-    // Both refusals happen in the TOOL, before any RPC: an add with no target, and a drop with no id.
-    const before = seen.length
-    rpc.send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "watch", arguments: { action: "add", kind: "shell" } } })
-    const noTarget = await rpc.next(5)
-    assert.equal(noTarget.result.isError, true)
-    assert.match(noTarget.result.content[0].text, /background shells/)
-
-    // A pr watcher is REFUSED with the thing that does work, rather than silently stored.
-    rpc.send({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "watch", arguments: { action: "add", kind: "pr", target: "acme/app#391" } } })
-    const noPr = await rpc.next(7)
-    assert.equal(noPr.result.isError, true)
-    assert.match(noPr.result.content[0].text, /pr-watch: owner\/repo#123/)
-
-    rpc.send({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "watch", arguments: { action: "drop" } } })
-    const noId = await rpc.next(6)
-    assert.equal(noId.result.isError, true)
-    assert.match(noId.result.content[0].text, /`id` is required/)
-    assert.equal(seen.length, before, "neither refusal reached the server")
-  } finally {
-    rpc.kill()
-    http.close()
-  }
-})
 
 
-// THE BLOCKING MODE IS GONE, and the refusal has to TEACH rather than just reject: a worker reaching for
-// `wait` is trying to solve a real problem (it does not want to lose the shell's result), and the answer
-// is that its runtime already covers the running-turn case while REST is the case this tool covers.
-// Blocking was the one move that guaranteed the loss — the runtime's completion notification only reaches
-// a RUNNING turn, and a blocked call is a running turn that cannot receive it, so the notification queues
-// until the block ends. Measured on a real thread: 25 minutes, on a shell that finished one second in.
-test("`watch` refuses to block, and says what to do instead", async () => {
-  const seen: Array<{ url: string; body: any }> = []
-  const http = createServer((req, res) => {
-    let body = ""
-    req.on("data", (c) => (body += c))
-    req.on("end", () => {
-      seen.push({ url: req.url ?? "", body: JSON.parse(body || "{}") })
-      res.writeHead(200, { "content-type": "application/json" })
-      res.end(JSON.stringify({ result: { id: "wch_1", alreadyArmed: false, watches: [] } }))
-    })
-  })
-  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
-  const port = (http.address() as { port: number }).port
-  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
-  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
-  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "blocking-thread" })
-  try {
-    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
-    await rpc.next(1)
-
-    // Every spelling of the old blocking call is refused, INCLUDING a bare `timeout_seconds` — a worker
-    // whose training reaches for the deadline alone must not have it silently ignored and then rest
-    // believing it blocked.
-    for (const [id, args] of [
-      [2, { action: "add", kind: "shell", target: "nub run test", wait: true }],
-      [3, { action: "add", kind: "shell", target: "nub run test", wait: true, timeout_seconds: 30 }],
-      [4, { action: "add", kind: "shell", target: "nub run test", timeout_seconds: 30 }],
-    ] as [number, Record<string, unknown>][]) {
-      rpc.send({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "watch", arguments: args } })
-      const refused = await rpc.next(id)
-      assert.equal(refused.result.isError, true, `${JSON.stringify(args)} must be refused`)
-      assert.match(refused.result.content[0].text, /`wait` is gone/)
-      // The refusal names BOTH halves, because a worker told only "no" reaches for its own poll loop.
-      assert.match(refused.result.content[0].text, /already notifies you when a background shell exits/)
-      assert.match(refused.result.content[0].text, /COME TO REST/)
-    }
-    assert.equal(seen.length, 0, "a refused call registers nothing — the refusal is BEFORE the round-trip")
-
-    // …and the ordinary registration still works, with no `foreground` and no polling.
-    rpc.send({
-      jsonrpc: "2.0", id: 5, method: "tools/call",
-      params: { name: "watch", arguments: { action: "add", kind: "shell", target: "nub run test" } },
-    })
-    const armed = await rpc.next(5)
-    assert.equal(armed.result.isError, undefined)
-    assert.deepEqual(seen[0], {
-      url: "/_frizz/rpc/addOwnThreadWatch",
-      body: { slug: "blocking-thread", kind: "shell", target: "nub run test" },
-    })
-    assert.equal(seen.length, 1, "no polling: the call returns immediately")
-  } finally {
-    rpc.kill()
-    http.close()
-  }
-})

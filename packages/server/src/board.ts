@@ -405,41 +405,44 @@ function hasParkedExternalWait(tele: SessionTelemetry | undefined, nowMs: number
   )
 }
 
-// The thread's standing PR WATCHERS, synthesized as watch rows so the ops strip under the prompt box
-// can list them beside the sub-agents and background shells the worker also has out (maintainer
+// Every wait the thread has out, synthesized as watch rows so the ops strip under the prompt box can
+// list them beside the sub-agents and background shells the worker also has running (maintainer
 // 2026-08-13: "showing the active watchers underneath the prompt box, similar to how subagents work").
 //
-// DERIVED FROM THE FENCE, not from `thread_watch`. A PR wait deliberately has no registry row — the
-// fence owns PR watching (`f366e2d`) — so this reads the same `pr-watch:` hints the scheduler's own
-// poller arms from. That coupling is the point: the strip lists exactly what will actually wake the
-// thread, and the two cannot drift into claiming different things.
+// DERIVED FROM THE FENCE, and as of 2026-08-14 that is the ONLY source — the `thread_watch` registry is
+// retired. A `pr-watch:` line becomes a github row and a `watch:` line a shell row, read from exactly the
+// hints the scheduler's own passes act on. That coupling is the point: the strip lists precisely what
+// will wake the thread, and the two cannot drift into claiming different things.
 //
 // It therefore has the fence's lifetime: it stands while the park is the worker's last word and
 // disappears the moment the worker says anything else, which is correct — that is also the instant the
-// scheduler stops watching. The ID is stable across ticks (slug + ref) so a row does not remount on
+// scheduler stops watching. The ID is stable across ticks (slug + target) so a row does not remount on
 // every board delta, and there is nothing to DROP: the affordance for hiding one is the snooze the
 // operator already uses for a thread resting on background work.
-export function githubWatchViews(slug: string, tele: SessionTelemetry | undefined, fenceAt: string | undefined): ThreadView["watches"] {
+export function fenceWatchViews(slug: string, tele: SessionTelemetry | undefined, fenceAt: string | undefined): ThreadView["watches"] {
   if (tele?.lastFence?.kind !== "awaiting") return []
   const seen = new Set<string>()
   const out: ThreadView["watches"] = []
+  // When the worker PARKED — what the strip's duration counts from, and what a PR watcher's own activity
+  // baseline is keyed on. Falls back to the thread's last activity when the fold has no fence instant.
+  const createdAt = fenceAt ?? tele.lastAssistantAt ?? new Date().toISOString()
   for (const hint of tele.lastFence.hints) {
-    if (hint.kind !== "pr-watch") continue
-    const ref = parsePrRef(hint.value)
-    if (!ref) continue // an unparseable ref arms nothing, so it may not claim a row either
-    const target = `${ref.owner}/${ref.repo}#${ref.number}`
-    if (seen.has(target)) continue
-    seen.add(target)
-    out.push({
-      id: `github:${slug}:${target}`,
-      kind: "github" as const,
-      target,
-      state: "armed" as const,
-      // When the worker PARKED — which is what the strip's duration should count from, and what the
-      // watcher's own activity baseline is keyed on. Falls back to the thread's last activity when the
-      // fold has no instant for the fence.
-      createdAt: fenceAt ?? tele.lastAssistantAt ?? new Date().toISOString(),
-    })
+    if (hint.kind === "pr-watch") {
+      const ref = parsePrRef(hint.value)
+      if (!ref) continue // an unparseable ref arms nothing, so it may not claim a row either
+      const target = `${ref.owner}/${ref.repo}#${ref.number}`
+      if (seen.has(`github:${target}`)) continue
+      seen.add(`github:${target}`)
+      out.push({ id: `github:${slug}:${target}`, kind: "github" as const, target, state: "armed" as const, createdAt })
+      continue
+    }
+    if (hint.kind !== "watch") continue
+    const target = hint.value.trim()
+    // A name matching nothing live is not a wait — the same integrity rule the park itself is held to,
+    // applied to the readout, so the strip can never list something the thread is not really waiting on.
+    if (!target || seen.has(`shell:${target}`) || !liveWaitHandles(tele).has(target)) continue
+    seen.add(`shell:${target}`)
+    out.push({ id: `shell:${slug}:${target}`, kind: "shell" as const, target, state: "armed" as const, createdAt })
   }
   return out
 }
@@ -934,20 +937,11 @@ function sessionThreadView(
     lastAssistantAt: tele?.lastAssistantAt,
     subAgents: stampStoppable(tele?.subAgents ?? [], row),
     bgShells: stampStoppableShells(tele?.bgShells ?? [], row),
-    // TWO SOURCES, one list. A `shell` watch is a REGISTRATION the worker made by tool call, read from
-    // the registry — the whole point of moving that kind of wait out of the fence. A `github` watch has
-    // no row and never will (`f366e2d`); it is derived from the standing fence, so that the strip lists
-    // every wait the thread actually has out rather than only the ones with a table behind them.
-    watches: [
-      ...storage.listThreadWatches(row.slug, { armedOnly: true }).map((w) => ({
-        id: w.id,
-        kind: w.kind,
-        target: w.target,
-        state: w.state,
-        createdAt: new Date(w.created_at).toISOString(),
-      })),
-      ...githubWatchViews(row.slug, tele, tele?.lastAssistantAt),
-    ],
+    // ONE SOURCE: the FENCE. Both kinds are derived from what the worker wrote — `pr-watch:` lines
+    // become the github rows, `watch:` lines the shell rows — so this strip lists exactly what will
+    // actually wake the thread, and the two cannot drift into claiming different things. There is no
+    // registry behind either any more (`thread_watch`, retired 2026-08-14).
+    watches: fenceWatchViews(row.slug, tele, tele?.lastAssistantAt),
     pendingAsk: tele?.pendingAsk ? { questions: tele.pendingAsk.questions } : undefined,
     nativeInputRequired: tele?.nativeInputRequired,
     pendingQuestion: tele?.pendingQuestion ?? false,

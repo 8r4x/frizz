@@ -36,14 +36,6 @@ import type {
   SetThreadRecurringPromptInput,
   SetOwnThreadRecurringPromptInput,
   SetOwnThreadRecurringPromptResult,
-  AddOwnThreadWatchInput,
-  AddOwnThreadWatchResult,
-  DropOwnThreadWatchInput,
-  DropOwnThreadWatchResult,
-  ListOwnThreadWatchesInput,
-  OwnThreadWatchesResult,
-  PromoteOwnThreadWatchInput,
-  PromoteOwnThreadWatchResult,
   GetOwnThreadRecurringPromptInput,
   OwnThreadRecurringPromptResult,
   SetOwnThreadStopHookInput,
@@ -160,13 +152,6 @@ export interface Api {
   // Declared here because rpc-contract.ts proves the two procedure NAME SETS are equal — an RPC the
   // client cannot name is one nothing checks the shape of. No browser call site uses it.
   setOwnThreadRecurringPrompt(input: SetOwnThreadRecurringPromptInput): Promise<SetOwnThreadRecurringPromptResult>
-  // THE WATCHER REGISTRY, called by `mcp__frizz__watch` rather than by this client. Declared here for
-  // the same reason as its neighbours: rpc-contract.ts proves the two procedure NAME SETS are equal, so
-  // an RPC the client cannot name is one nothing checks the shape of. No browser call site uses these.
-  addOwnThreadWatch(input: AddOwnThreadWatchInput): Promise<AddOwnThreadWatchResult>
-  dropOwnThreadWatch(input: DropOwnThreadWatchInput): Promise<DropOwnThreadWatchResult>
-  listOwnThreadWatches(input: ListOwnThreadWatchesInput): Promise<OwnThreadWatchesResult>
-  promoteOwnThreadWatch(input: PromoteOwnThreadWatchInput): Promise<PromoteOwnThreadWatchResult>
   // The READ half of the same tool (`action: "get"`), so a worker can see the row before it overwrites
   // it — after a compaction, or after the human edited the text in the footer panel.
   getOwnThreadRecurringPrompt(input: GetOwnThreadRecurringPromptInput): Promise<OwnThreadRecurringPromptResult>
@@ -318,10 +303,6 @@ export const PROCEDURES = {
   setOwnThreadHeartbeat: "mutation",
   setThreadHeartbeat: "mutation",
   setOwnThreadTimer: "mutation",
-  addOwnThreadWatch: "mutation",
-  dropOwnThreadWatch: "mutation",
-  listOwnThreadWatches: "mutation",
-  promoteOwnThreadWatch: "mutation",
   cancelOwnThreadTimer: "mutation",
   listOwnThreadTimers: "mutation",
   reloadThreadPlugins: "mutation",

@@ -316,20 +316,24 @@ export type NativeInputRequired = z.infer<typeof NativeInputRequired>
 // and new activity re-surfaces it. The human can park it via the "PR watcher armed" card's Snooze button
 // (a hold the next activity clears). Pair `pr-watch:` with `human:` only when the worker is genuinely
 // blocked on a NAMED reviewer — then `human:` supplies the Held/park while pr-watch supplies the cursor.
-// `watch: <watcher id>` — the thread is parked on a wait it ALREADY REGISTERED through
-// `mcp__frizz__watch`. One line per watcher, and the id is the one `add` handed back.
+// `watch: <background shell id or label>` — the thread is parked on its OWN background work, named.
 //
-// IT REFERENCES, IT NEVER ARMS. A fence that could invent a wait can strand a thread: a background shell
-// finishing wakes nobody by itself — only a registered watcher does (scheduler SOURCE 8) — so a fence
-// naming a bare shell would park a thread nothing will ever re-invoke. Referencing keeps one registry,
-// one wake path, and one way to drop a wait. (Maintainer 2026-08-14 asked for exactly this shape: the
-// agent listing "the exact things that it's actually waiting for". Every earlier version of this syntax
-// was free text, which frizz could not check; an id it can.)
+// IT IS BOTH THE PARK AND THE WAKE, and it needs no registration behind it (2026-08-14). The scheduler
+// matches the name against the thread's live shells and its retired-shell ring, so the same line that
+// keeps the thread out of the queue is what brings it back when the shell finishes. The `thread_watch`
+// registry that used to own that wake is retired: it existed because a fence had no identity to DROP,
+// and a park nobody has to drop needs none — the fence's own lifetime ends it.
 //
-// The fence is a DECLARATION and the registry is the fact. A declared park counts only while every id it
-// names is still an ARMED watch on this thread — an unknown id, a settled one, or someone else's is not a
-// park at all, and the thread queues as usual. It fails OPEN on purpose: a typo must not be a way to
-// vanish from the board.
+// WHY FRIZZ HAS TO DO THIS AT ALL. A background shell re-invokes its worker when it exits, but only
+// while the worker's turn is RUNNING. Measured over this machine's whole session history (3972 shells):
+// all 3011 delivered notifications landed on an assistant record with stop_reason "tool_use", while 1601
+// shells outlived their worker's rest and 1191 of those were never delivered at all. Rest is the gap.
+//
+// THE NAME IS CHECKED (maintainer 2026-08-14: "Make sure that the items therein correspond to actual
+// background shells or agents or watchers"). A park counts only while every name it carries matches
+// something the thread actually has running — the runtime handle it was shown, the launch id, or the
+// label. An unknown name is not a park at all, and the thread queues as usual. It fails OPEN on purpose:
+// a typo must not be a way to vanish from the board.
 export const AwaitingHint = z.object({
   kind: z.enum(["watch", "pr-watch", "human", "timer", "pr", "ci", "session"]),
   value: z.string(),
@@ -680,10 +684,6 @@ export const TIMER_MIN_DELAY_SECONDS = 10
 export const TIMER_MAX_DELAY_SECONDS = 30 * 24 * 60 * 60
 export const TIMER_MAX_ARMED = 64
 
-/** The same ceiling on registered WATCHERS, and it is what makes "arbitrarily many" safe to offer: a
- *  tool call in a loop cannot fill the table, and the refusal names the number so a worker drops one
- *  rather than retrying. */
-export const WATCH_MAX_ARMED = 32
 export const TimerPromptText = z.string().trim().min(1).max(TIMER_PROMPT_MAX)
 
 /** What frizz delivers when a one-off timer fires: the worker's own words VERBATIM, then a one-line
@@ -694,17 +694,18 @@ export const TimerPromptText = z.string().trim().min(1).max(TIMER_PROMPT_MAX)
  *  parser exists because a recurring prompt repeats the same paragraph down the whole transcript and has
  *  to collapse to a divider; a one-off is said once, so the chat's generic first-party wake card — the
  *  one already written for "a CI/timer/limit wake" — shows it correctly with no new component. */
-/** What frizz delivers when a REGISTERED WATCHER resolves (scheduler SOURCE 8).
+/** What frizz delivers when a thread's `watch:` line resolves — the background work it parked on has
+ *  finished.
  *
- * Unlike every other wake here there is no operator text to carry — a watcher holds no prompt, only a
- * thing it was waiting for. So the message IS the news, and it has exactly two jobs: say what resolved
- * precisely enough to act on, and say that the registration is spent. A worker that thinks the watcher
- * is still armed will rest expecting a second wake that is never coming. */
-export function watchWakeMessage(kind: ThreadWatchKind, target: string, detail: string): string {
+ * Unlike every other wake here there is no operator text to carry: a park holds no prompt, only a thing
+ * it was waiting for. So the message IS the news, and it has exactly two jobs — say what resolved
+ * precisely enough to act on, and say that the park is spent. A worker that thinks it is still parked
+ * will rest expecting a second wake that is never coming. */
+export function watchWakeMessage(kind: "shell", target: string, detail: string): string {
   const what = kind === "shell" ? `your background shell \`${target}\`` : `${target}`
   return (
-    `⏰ ${detail} (${what}).\n\n(Registered watcher — it has fired and is no longer armed. Register` +
-    " another with `mcp__frizz__watch` if you need to keep waiting.)"
+    `⏰ ${detail} (${what}).\n\n(You parked on this in an \`\`\`awaiting fence. That park is now spent —` +
+    " write a new fence if you need to keep waiting.)"
   )
 }
 
@@ -752,28 +753,24 @@ export const SIGNOFF_NUDGE_MARKER = "**This message is from frizz, not from the 
  *  It goes at the END and stays short. A long preamble is what made an agent omit half its handoff once
  *  already, and this section is a lookup table, not an instruction. */
 export interface SignoffLiveOps {
-  /** Armed watchers — the ONLY ids a `watch:` line may name. */
-  watches: { id: string; target: string }[]
-  /** Running background shells. Nothing wakes the thread when one finishes unless a watcher is armed on
-   *  it, which is exactly why they are listed separately from the watchers above. */
+  /** Running background shells, named by the handle the RUNTIME gave the worker — the string it was
+   *  actually shown ("Command running in background with ID: bzvtnt3ig"), not the launch tool_use id.
+   *  These are what a `watch:` line names. */
   shells: { id?: string; label: string }[]
-  /** Running sub-agents. Listed for completeness and deliberately NOT parkable: a finished sub-agent
-   *  re-invokes its parent by itself, so a fence naming one would add nothing. */
-  subAgents: { label: string }[]
+  /** Running sub-agents. Listed so the agent knows what it has out, and named the same way — a fence may
+   *  park on one, though it does not need to: a finished sub-agent re-invokes its parent by itself. */
+  subAgents: { id?: string; label: string }[]
 }
 
 export function signoffNudgeMessage(ops?: SignoffLiveOps): string {
   const lines: string[] = []
-  if (ops?.watches.length) {
-    lines.push("", "Armed watchers — name these on `watch:` lines to park on them:")
-    for (const w of ops.watches) lines.push(`- \`${w.id}\` — ${w.target}`)
-  }
   if (ops?.shells.length) {
-    lines.push("", "Background shells still running (register a watcher first if you mean to wait on one):")
+    lines.push("", "Background shells still running — name one on a `watch:` line to park on it:")
     for (const sh of ops.shells) lines.push(`- ${sh.label}${sh.id ? ` — \`${sh.id}\`` : ""}`)
   }
   if (ops?.subAgents.length) {
-    lines.push("", `Sub-agents still running: ${ops.subAgents.map((a) => a.label).join(", ")}. They re-invoke you on their own — do not park on them.`)
+    lines.push("", "Sub-agents still running (they re-invoke you on their own, so parking on one is optional):")
+    for (const a of ops.subAgents) lines.push(`- ${a.label}${a.id ? ` — \`${a.id}\`` : ""}`)
   }
   return lines.length === 0 ? SIGNOFF_NUDGE_MESSAGE : `${SIGNOFF_NUDGE_MESSAGE}\n${lines.join("\n")}`
 }
@@ -793,10 +790,11 @@ export const SIGNOFF_NUDGE_MESSAGE = [
   "- `` ```done `` — genuinely FINISHED. A DISMISSAL: the card is filed away and nobody looks again, so",
   "  if anything is still owed, it is not done. Body: 1-3 sentences, then bullets, each opening with a",
   "  **bolded verb phrase**.",
-  "- `` ```awaiting `` — you are waiting on background work that will report on its own. Register it with",
-  "  `mcp__frizz__watch` first, then name each watcher id on its own `watch: <id>` line inside the fence.",
-  "  Frizz checks those ids: name only what you are ACTUALLY waiting for, never a dev server you left",
-  "  running, and the thread stays out of the human's queue until one of them reports.",
+  "- `` ```awaiting `` — you are waiting on background work. Name each thing on its own `watch: <id>`",
+  "  line inside the fence, using the id or label listed at the end of this message. That line is BOTH",
+  "  the park and the wake: frizz checks every name against what you actually have running, and brings",
+  "  you back when it finishes. Name only what you are ACTUALLY waiting for, never a dev server you left",
+  "  running — a name matching nothing live is not a park, and the thread queues as usual.",
   "",
   "**DO NOT REPEAT YOURSELF.** If the message you just wrote already stands on its own, reply with the",
   "fence ALONE — the human reads both together, so restating it costs them the second read for nothing.",
@@ -810,18 +808,12 @@ export function timerPromptMessage(prompt: string, fireAt: string): string {
   return `${prompt.trim()}\n\n(One-off timer, set for ${fireAt}. It has fired and will not repeat.)`
 }
 
-/** What is being waited ON — one of the worker's own background shells finishing.
- *
- *  IT WAS GOING TO BE THREE. `pr` and `ci` were registerable here on the way to moving PR watching off
- *  the ```awaiting fence and onto this registry. That plan is dropped (maintainer 2026-08-12: "drop it
- *  totally. its' obsolete"), and the reason it stopped being a good idea is worth keeping: the fence's
- *  pr-watch is not a legacy path being tolerated, it is machinery still being improved — `9ebd6b2` gave
- *  it backlog replay on the first park, which this registry would have had to re-implement to match.
- *  A PR wait belongs in an ```awaiting fence with a `pr-watch:` line, which is durable and works. */
-// `shell` is the only kind a WORKER can register — `mcp__frizz__watch` refuses everything else, and it
-// is the only kind the `thread_watch` table's CHECK constraint admits.
+/** What is being waited ON: one of the worker's own background shells, or a pull request. */
+// NEITHER KIND HAS A REGISTRY ROW BEHIND IT any more (2026-08-14). Both are derived from the worker's
+// own ```awaiting fence — `shell` from a `watch:` line, `github` from a `pr-watch:` one — so this strip
+// lists exactly what will wake the thread and cannot drift from it.
 //
-// `github` is a VIEW kind with no registry row behind it (2026-08-13). A PR wait lives in the worker's
+// `github` became a view kind first (2026-08-13). A PR wait lives in the worker's
 // ```awaiting fence — that is deliberate and settled (`f366e2d`, "the fence owns PR watching") — but the
 // operator still wants to SEE it standing, in the same strip under the prompt box that lists sub-agents
 // and background shells: "showing the active watchers underneath the prompt box, similar to how
@@ -832,30 +824,55 @@ export function timerPromptMessage(prompt: string, fireAt: string): string {
 export const ThreadWatchKind = z.enum(["shell", "github"])
 export type ThreadWatchKind = z.infer<typeof ThreadWatchKind>
 
-/** The kinds a WORKER may actually register — the `thread_watch` table's own domain. Split out from the
- *  view enum above so the RPC boundary and the storage layer cannot silently widen when a view-only kind
- *  is added to it. */
-export const RegisterableThreadWatchKind = z.enum(["shell"])
-export type RegisterableThreadWatchKind = z.infer<typeof RegisterableThreadWatchKind>
-
-/** The thing being watched: a background shell's task id, its launch id, or its label. */
-export const ThreadWatchTarget = z.string().trim().min(1).max(200)
-
-/** One armed (or just-settled) watcher, as the worker's own tool reads it back.
+/** How a watched PR's checks stand right now, in the shape GitHub's own merge box states it: a rollup
+ *  verdict plus the counts behind it, and whether the PR can actually be merged.
  *
- *  NO `seen` FIELD, and it is worth saying why not, because it was added and then removed inside one
- *  day (2026-08-14). A shell watcher only fires seen-then-gone, so "frizz has never observed this target
- *  alive" is a real and useful distinction — it means the watcher is wedged rather than waiting. It went
- *  on the wire to let the footer's armed-watchers readout say so, and then that readout was deleted
- *  outright for duplicating the rows under the prompt box. Nothing reads the bit now, so it does not
- *  travel: the seen-then-gone cursor stays a scheduler-internal fact (scheduler.ts SHELL_SEEN). If a
- *  surface ever needs to distinguish wedged from waiting again, this is the field to bring back. */
+ *  IT DECIDES A QUEUE RULE, not just a readout (maintainer 2026-08-14: "if there is a GitHub watcher
+ *  registered and the GitHub actions are still running, then that should remain in the running active
+ *  rail. Only if CI has failed or completed successfully should it show up back in the queue"). So it
+ *  has to travel — a card that renders check state the board cannot also read would put the two out of
+ *  step, which is the drift that produced two cards saying different things about the same wait. */
+export const GithubChecksState = z.enum(["none", "running", "passing", "failing"])
+export type GithubChecksState = z.infer<typeof GithubChecksState>
+
+/** Can GitHub merge it? `blocked` covers a required review or a failing required check — GitHub reports
+ *  the two the same way, and neither is something frizz should claim to distinguish. */
+export const GithubMergeState = z.enum(["mergeable", "blocked", "conflicting", "unknown"])
+export type GithubMergeState = z.infer<typeof GithubMergeState>
+
+export const GithubWatchStatus = z.object({
+  checks: GithubChecksState,
+  /** The counts behind the verdict, so the card can say "3 running, 12 passed" the way GitHub does
+   *  rather than only "checks are running". */
+  running: z.number().int().nonnegative(),
+  passed: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  /** The failing job NAMES, capped — what a human actually needs to decide whether to look. */
+  failing: z.array(z.string()).max(8).default([]),
+  merge: GithubMergeState,
+  /** OPEN | CLOSED | MERGED, lowercased. A merged or closed PR ends the wait outright. */
+  state: z.enum(["open", "closed", "merged"]),
+  /** When frizz last heard from GitHub. A poll can fail or be rate-limited, and a stale reading stated
+   *  as current is worse than no reading. */
+  polledAt: z.string(),
+}).strict()
+export type GithubWatchStatus = z.infer<typeof GithubWatchStatus>
+
+/** One wait the thread has out, as the board states it.
+ *
+ *  A `github` row is DERIVED FROM THE FENCE — a `pr-watch:` line — and has no registration behind it. A
+ *  `shell` row is derived the same way, from a `watch:` line. Neither is a record: both live exactly as
+ *  long as the fence that declares them, which is also exactly as long as the scheduler watches them.
+ *  That coupling is the point — the strip lists what will actually wake the thread, and the two cannot
+ *  drift into claiming different things. */
 export const ThreadWatchView = z.object({
   id: z.string(),
   kind: ThreadWatchKind,
   target: z.string(),
   state: z.enum(["armed", "fired", "dropped"]),
   createdAt: z.string(),
+  /** `github` rows only, and absent until the first successful poll. */
+  github: GithubWatchStatus.optional(),
 }).strict()
 export type ThreadWatchView = z.infer<typeof ThreadWatchView>
 
@@ -1632,81 +1649,6 @@ export const CancelOwnThreadTimerResult = z.object({
   timers: z.array(ThreadTimerView),
 }).strict()
 export type CancelOwnThreadTimerResult = z.infer<typeof CancelOwnThreadTimerResult>
-
-// ---- THE WATCHER REGISTRY's three worker procedures ----------------------------------------------
-// Same caller and the same rules again: no session guard, and no thread parameter a model could aim
-// elsewhere. A worker may only ever register a wait on its OWN thread.
-//
-// WHY THESE EXIST AT ALL. A wait used to be a line of prose in an ```awaiting fence, which meant it had
-// no identity: nothing to list after a compaction, nothing to cancel when it stopped mattering, and
-// nothing for the board to hang a Snooze button on. Maintainer 2026-08-11: "I think we should have
-// built in tool calls for REGISTERING and DISMISSING CI/PR watchers. this way the agent can decide when
-// they're not necessary."
-
-export const AddOwnThreadWatchInput = z.object({
-  slug: ThreadSlug,
-  // REGISTERABLE kinds only, which is `shell` and nothing else — deliberately narrower than
-  // `ThreadWatchKind`, whose `github` member is a board-derived VIEW row with no registration behind it.
-  // The MCP tool already refuses a PR here in words ("a pr wait does not belong here — use an ```awaiting
-  // fence"); this is the same refusal at the wire, where it cannot be talked past.
-  kind: RegisterableThreadWatchKind,
-  target: ThreadWatchTarget,
-  /** The worker is BLOCKING on this one inside its tool call, so the scheduler settles it silently
-   *  instead of delivering a wake — see the column comment in storage.ts. Defaulted, so a caller that
-   *  has never heard of it registers an ordinary background watch. */
-  foreground: z.boolean().default(false),
-}).strict()
-// z.input, not z.infer: `foreground` is `.default(false)`, so the parsed OUTPUT has it required while
-// the wire INPUT does not — and rpc-contract.ts compares the client type against z.input.
-export type AddOwnThreadWatchInput = z.input<typeof AddOwnThreadWatchInput>
-
-/** Hand a foreground watch back to the scheduler when the blocking call gives up on its timeout, so a
- *  wait the worker started is never simply lost. */
-export const PromoteOwnThreadWatchInput = z.object({
-  slug: ThreadSlug,
-  id: z.string().min(1).max(64),
-}).strict()
-export type PromoteOwnThreadWatchInput = z.infer<typeof PromoteOwnThreadWatchInput>
-
-export const PromoteOwnThreadWatchResult = z.object({
-  promoted: z.boolean(),
-  watches: z.array(ThreadWatchView),
-}).strict()
-export type PromoteOwnThreadWatchResult = z.infer<typeof PromoteOwnThreadWatchResult>
-
-export const DropOwnThreadWatchInput = z.object({
-  slug: ThreadSlug,
-  id: z.string().min(1).max(64),
-}).strict()
-export type DropOwnThreadWatchInput = z.infer<typeof DropOwnThreadWatchInput>
-
-export const ListOwnThreadWatchesInput = z.object({
-  slug: ThreadSlug,
-}).strict()
-export type ListOwnThreadWatchesInput = z.infer<typeof ListOwnThreadWatchesInput>
-
-// Every one of the three answers with the thread's CURRENT armed set, exactly as the timer procedures
-// do: a worker never has to make a second call to see what it now holds.
-export const OwnThreadWatchesResult = z.object({
-  watches: z.array(ThreadWatchView),
-}).strict()
-export type OwnThreadWatchesResult = z.infer<typeof OwnThreadWatchesResult>
-
-export const AddOwnThreadWatchResult = z.object({
-  id: z.string(),
-  /** True when this exact (kind, target) was ALREADY armed on the thread, so the call registered
-   *  nothing new. A worker re-registering after a compaction is the common case, and silently minting a
-   *  duplicate would mean two wakes for one event. */
-  alreadyArmed: z.boolean(),
-  watches: z.array(ThreadWatchView),
-}).strict()
-export type AddOwnThreadWatchResult = z.infer<typeof AddOwnThreadWatchResult>
-
-export const DropOwnThreadWatchResult = z.object({
-  dropped: z.boolean(),
-  watches: z.array(ThreadWatchView),
-}).strict()
-export type DropOwnThreadWatchResult = z.infer<typeof DropOwnThreadWatchResult>
 
 // ---- The SUPERSEDED worker shapes, kept alive for MCP servers already in flight -----------------
 //

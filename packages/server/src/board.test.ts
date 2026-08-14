@@ -4,7 +4,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { InteractionRequest } from "@frizz/shared"
-import { appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfNoTranscript, githubWatchViews, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle } from "./board.ts"
+import { appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfNoTranscript, fenceWatchViews, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle } from "./board.ts"
 import { Bus } from "./bus.ts"
 import { createStorage } from "./storage.ts"
 import type { Project } from "./project.ts"
@@ -1434,7 +1434,7 @@ test("board exposes a typed providerFault from tailer auth telemetry — categor
   }
 })
 
-// ---- githubWatchViews ----
+// ---- fenceWatchViews ----
 //
 // A PR wait has no `thread_watch` row and never will — the fence owns PR watching (`f366e2d`) — so the
 // strip under the prompt box gets its rows from the standing fence instead (maintainer 2026-08-13:
@@ -1446,7 +1446,7 @@ const parked = (...hints: { kind: string; value: string }[]) =>
   tele({ lastFence: { kind: "awaiting", body: "", hints } as SessionTelemetry["lastFence"], lastAssistantAt: FENCE_AT })
 
 test("a parked pr-watch fence yields one armed github row per PR", () => {
-  const views = githubWatchViews("t", parked({ kind: "pr-watch", value: "colinhacks/zod#6382" }), FENCE_AT)
+  const views = fenceWatchViews("t", parked({ kind: "pr-watch", value: "colinhacks/zod#6382" }), FENCE_AT)
   assert.deepEqual(views, [{
     id: "github:t:colinhacks/zod#6382",
     kind: "github",
@@ -1457,7 +1457,7 @@ test("a parked pr-watch fence yields one armed github row per PR", () => {
 })
 
 test("several PRs each get a row, and a repeat of one does not", () => {
-  const views = githubWatchViews("t", parked(
+  const views = fenceWatchViews("t", parked(
     { kind: "pr-watch", value: "acme/app#1" },
     { kind: "pr-watch", value: "https://github.com/acme/app/pull/2" },
     { kind: "pr-watch", value: "acme/app#1 — still the same one" },
@@ -1468,11 +1468,11 @@ test("several PRs each get a row, and a repeat of one does not", () => {
 // The row must claim only what the scheduler will actually fire, so it reads the SAME parse the waker's
 // own poller arms from. An unparseable ref arms nothing and therefore may not stand in the strip.
 test("a ref the scheduler cannot parse arms nothing and shows nothing", () => {
-  assert.deepEqual(githubWatchViews("t", parked({ kind: "pr-watch", value: "the auth PR" }), FENCE_AT), [])
+  assert.deepEqual(fenceWatchViews("t", parked({ kind: "pr-watch", value: "the auth PR" }), FENCE_AT), [])
 })
 
 test("hints that are not pr-watch never produce a row", () => {
-  assert.deepEqual(githubWatchViews("t", parked(
+  assert.deepEqual(fenceWatchViews("t", parked(
     { kind: "human", value: "Alice must approve" },
     { kind: "timer", value: "2099-07-15T17:00:00Z" },
     { kind: "session", value: "the reviewer's thread" },
@@ -1482,7 +1482,7 @@ test("hints that are not pr-watch never produce a row", () => {
 // IT HAS THE FENCE'S LIFETIME, which is the whole reason it needs no registry row: the instant the
 // worker says anything else the park is over, and that is also the instant the scheduler stops watching.
 test("no standing awaiting fence, no rows", () => {
-  assert.deepEqual(githubWatchViews("t", tele({ lastFence: { kind: "done", body: "landed", hints: [] } }), FENCE_AT), [])
-  assert.deepEqual(githubWatchViews("t", tele(), FENCE_AT), [])
-  assert.deepEqual(githubWatchViews("t", undefined, FENCE_AT), [])
+  assert.deepEqual(fenceWatchViews("t", tele({ lastFence: { kind: "done", body: "landed", hints: [] } }), FENCE_AT), [])
+  assert.deepEqual(fenceWatchViews("t", tele(), FENCE_AT), [])
+  assert.deepEqual(fenceWatchViews("t", undefined, FENCE_AT), [])
 })

@@ -28,17 +28,6 @@ import {
   ListOwnThreadTimersInput,
   OwnThreadTimersResult,
   TIMER_MAX_ARMED,
-  WATCH_MAX_ARMED,
-  AddOwnThreadWatchInput,
-  AddOwnThreadWatchResult,
-  DropOwnThreadWatchInput,
-  DropOwnThreadWatchResult,
-  ListOwnThreadWatchesInput,
-  OwnThreadWatchesResult,
-  PromoteOwnThreadWatchInput,
-  PromoteOwnThreadWatchResult,
-  type ThreadWatchKind,
-  type ThreadWatchView,
   type ThreadTimerView,
   ThreadPluginReloadResult,
   SetThreadSnoozeInput,
@@ -665,18 +654,6 @@ export function createRouter(ctx: AppContext) {
   function recurringIntervalMs(input: RecurringPromptWrite): number | null {
     if (input.prompt === null || input.intervalSeconds === undefined) return null
     return input.intervalSeconds * 1000
-  }
-
-  // A thread's ARMED watchers, in the shape the worker's tool reads back. Instants are epoch ms in the
-  // table and ISO on the wire, converted here so the row and the tool's output name the same string.
-  function armedWatchViews(slug: string): ThreadWatchView[] {
-    return ctx.storage.listThreadWatches(slug, { armedOnly: true }).map((w) => ({
-      id: w.id,
-      kind: w.kind,
-      target: w.target,
-      state: w.state,
-      createdAt: new Date(w.created_at).toISOString(),
-    }))
   }
 
   // A thread's ARMED one-off timers, in the shape the worker's tool reads back. Instants are epoch ms in
@@ -2093,65 +2070,12 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => ({ timers: armedTimerViews(input.slug) }),
     }),
 
-    // ---- THE WATCHER REGISTRY (add / drop / list) ------------------------------------------------
-    // The worker's own waits, from `mcp__frizz__watch`. Same caller and therefore the same rules as the
-    // timers above: slug-only (the MCP server outlives the session ids underneath it), and no thread
-    // parameter a model could aim elsewhere.
-    addOwnThreadWatch: mutation({
-      input: AddOwnThreadWatchInput,
-      output: AddOwnThreadWatchResult,
-      handler: async ({ input }) => {
-        const row = ctx.storage.getSession(input.slug)
-        if (!row) throw new Error(`thread ${input.slug} is not registered`)
-        if (row.state === "archived" || row.archived === 1) {
-          throw new Error("Reopen this thread before registering a watcher on it")
-        }
-        const armed = ctx.storage.listThreadWatches(input.slug, { armedOnly: true })
-        // IDEMPOTENT ON (kind, target). Re-registering after a compaction is the COMMON case — the
-        // worker has forgotten what it holds and is being careful — and minting a duplicate there would
-        // mean two wakes for one event, which reads to the operator as the watcher misfiring.
-        const existing = armed.find((w) => w.kind === input.kind && w.target === input.target)
-        if (existing) return { id: existing.id, alreadyArmed: true, watches: armedWatchViews(input.slug) }
-        if (armed.length >= WATCH_MAX_ARMED) {
-          throw new Error(`this thread already has ${armed.length} armed watchers (the limit is ${WATCH_MAX_ARMED}) — drop one first`)
-        }
-        const id = `wch_${randomUUID().replace(/-/g, "").slice(0, 12)}`
-        ctx.storage.armThreadWatch({ id, slug: input.slug, kind: input.kind, target: input.target, createdAtMs: Date.now(), foreground: input.foreground })
-        ctx.board.refresh()
-        return { id, alreadyArmed: false, watches: armedWatchViews(input.slug) }
-      },
-    }),
-
-    dropOwnThreadWatch: mutation({
-      input: DropOwnThreadWatchInput,
-      output: DropOwnThreadWatchResult,
-      handler: async ({ input }) => {
-        // Scoped to the caller's own slug in storage, so an id belonging to another thread cannot be
-        // dropped even if a worker somehow learned it.
-        const dropped = ctx.storage.dropThreadWatch(input.slug, input.id, Date.now())
-        if (dropped) ctx.board.refresh()
-        return { dropped, watches: armedWatchViews(input.slug) }
-      },
-    }),
-
-    // Hand a foreground watch back to the scheduler. Called by the blocking tool call when its timeout
-    // expires, so a wait the worker started degrades into a durable one rather than being lost — which
-    // is the property that makes choosing the blocking mode safe.
-    promoteOwnThreadWatch: mutation({
-      input: PromoteOwnThreadWatchInput,
-      output: PromoteOwnThreadWatchResult,
-      handler: async ({ input }) => {
-        const promoted = ctx.storage.promoteThreadWatch(input.slug, input.id)
-        if (promoted) ctx.board.refresh()
-        return { promoted, watches: armedWatchViews(input.slug) }
-      },
-    }),
-
-    listOwnThreadWatches: mutation({
-      input: ListOwnThreadWatchesInput,
-      output: OwnThreadWatchesResult,
-      handler: async ({ input }) => ({ watches: armedWatchViews(input.slug) }),
-    }),
+    // THE WATCHER REGISTRY IS GONE (2026-08-14). `mcp__frizz__watch` and its four procedures are
+    // deleted rather than shimmed: a wait is now a `watch:` line in the worker's own ```awaiting fence,
+    // which is BOTH the park and the wake (scheduler `watchVerdict`), so there is nothing to register and
+    // nothing an alias could usefully do. A session dispatched before the change still holds the old MCP
+    // binary and will get a 404 from it — which is the honest answer, and the tool it should not be
+    // calling is the only casualty.
 
     // The SUPERSEDED worker procedures, aliased onto the row above — see SetOwnThreadStopHookInput for
     // why they cannot simply be deleted. A worker's MCP server outlives every server restart, so these
