@@ -61,6 +61,21 @@ test("with the rail SHOWING, the bar steps aside for it", () => {
   assert.match(html, /max-\[800px\]:left-3/)
 })
 
+test("the strip's gap is 12px of INK: one flex gap, and every icon square trimmed onto its glyph", () => {
+  const html = render()
+
+  // The pair is the whole point and neither half works alone. `gap-3` without the trims puts 20px of
+  // ink between the gear and the reload icon and 8px beside the quota chips (measured 2026-08-14 with
+  // scripts/ink-gaps.mjs — the readings are in StatusBar.tsx); the trims without a matching gap pull
+  // the icons on top of each other. Both buttons take theirs from STATUS_BAR_ACTION, so a new bar
+  // action inherits the rhythm instead of re-deriving it — and a glyph that paints something other
+  // than 12px needs a fresh measurement, not this class.
+  assert.match(html, /items-center gap-3 rounded-lg/)
+  assert.match(html, /class="-mx-1\.5 inline-flex h-6 w-6/)
+  // The quota chips are IN this strip, so they keep the strip's distance rather than one of their own.
+  assert.match(html, /data-quota-bar="true" class="flex shrink-0 items-center gap-3/)
+})
+
 test("the bar is an OPAQUE surface stacked above the sidebar, not bare glyphs on the page", () => {
   const html = render()
 

@@ -85,7 +85,13 @@ export function QuotaChips() {
   }
 
   return (
-    <div data-quota-bar className="flex shrink-0 items-center gap-2.5 text-[11px]">
+    // `gap-3` is the STATUS BAR's one optical distance, not a value of this component's own: these two
+    // chips sit in that strip, and a chip-to-chip gap that differs from the strip's is exactly the
+    // inconsistency the trims in lib/statusBar.ts were cut to remove. Both provider marks reach their
+    // own box edge, so this gap needs no trim to mean 12px of ink (measured 12.25). The 6px INSIDE a
+    // chip (mark → percentage) is deliberately half of it — that is what keeps each mark reading as
+    // one pill rather than four loose glyphs.
+    <div data-quota-bar className="flex shrink-0 items-center gap-3 text-[11px]">
       <QuotaChip backend="claude" quota={quota.data?.claude} auth={auth.data?.claude} email={auth.data?.emails?.claude} loading={quota.isLoading} fetching={quota.isFetching || rechecking} onRecheck={() => recheck("claude")} />
       <QuotaChip backend="codex" quota={quota.data?.codex} auth={auth.data?.codex} email={auth.data?.emails?.codex} loading={quota.isLoading} fetching={quota.isFetching || rechecking} onRecheck={() => recheck("codex")} />
     </div>

@@ -20,6 +20,28 @@ import { useProjectRailVisible } from "../lib/projectRail.ts"
 // identity text, 11px quota chips, 24px icon buttons (STATUS_BAR_ACTION). Hairline dividers segment the
 // three groups; without them the run of unrelated glyphs reads as a pile rather than a bar.
 //
+// THE GAP IS 12px OF INK, not 12px of box — the same law lib/iconRhythm.ts states for the thread
+// footer, solved here for a strip that mixes text, hairlines, 24px icon squares and quota pills. Each
+// of those wears a different amount of dead space inside its own layout box, so a uniform `gap-2` drew
+// six different distances (measured 2026-08-14, `scripts/ink-gaps.mjs --pad=0`, every CSS gap 8px):
+//
+//     "connected" → divider      8.86px ink
+//     divider → gear            14.00px
+//     gear → reload             20.00px   ← widest, and what the maintainer saw
+//     reload → divider          14.00px
+//     divider → Claude chip      8.00px   ← narrowest
+//     Claude chip → Codex chip  10.25px
+//
+// A 2.5× spread on one provably uniform gap. The fix is per-mark, not per-gap: STATUS_BAR_ACTION
+// collapses each icon square onto its glyph's ink, and then this one `gap-3` is the whole rhythm.
+// Nothing else needs a trim — the identity label ends 0.86px inside its box, the hairlines ARE their
+// own ink, and the quota chips' provider marks reach their box edge. Re-measured after: 12.86 / 12.00
+// / 12.00 / 12.00 / 12.00 / 12.25 against the 12px target.
+//
+// 12px, and not the 8px the bar used to keep at its two loosest-looking joints, because 8px of ink
+// between two 24px hover targets overlaps them by 4px, and because it is the distance the footer strip
+// already settled on for a row of small marks — one optical distance for both strips beats two.
+//
 // THE BAR IS AN OPAQUE SURFACE OF ITS OWN, not bare glyphs floating on the page. It used to have no
 // background at all, so anything that reached this corner painted THROUGH it: a full sidebar pushes the
 // dispatch composer up to the viewport top, and on a narrow viewport the whole rail scrolls past — both
@@ -58,7 +80,7 @@ export function StatusBar({
       // holding a lane open for a column that is not there. (With the rail showing at left-3 the
       // bar's own project mark rendered ON TOP of the rail's home mark — measured, which is why the
       // offset exists at all.) Below 800px the rail never shows, so the gutter always wins there.
-      className={`fixed top-2.5 ${railVisible ? "left-[69px] max-[800px]:left-3" : "left-3"} z-20 flex h-7 max-w-[calc(100vw-1.5rem)] items-center gap-2 rounded-lg border border-border bg-panel px-2 text-[12px] shadow-sm shadow-black/30`}
+      className={`fixed top-2.5 ${railVisible ? "left-[69px] max-[800px]:left-3" : "left-3"} z-20 flex h-7 max-w-[calc(100vw-1.5rem)] items-center gap-3 rounded-lg border border-border bg-panel px-2 text-[12px] shadow-sm shadow-black/30`}
     >
       <IdentityMark identity={identity} state={connection} boardFallback={boardFallback} railVisible={railVisible} />
       <Divider />

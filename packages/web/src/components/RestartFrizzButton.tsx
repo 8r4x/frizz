@@ -17,8 +17,14 @@ const restartCopy = "Restart Frizz. Your running threads will not be affected."
 // lives in the top-left status bar now, so the old right-0 anchor pushed a 23rem panel straight off
 // the left of the viewport. z-50 rides inside the bar's own z-20 stacking context, which is what
 // puts either panel over the sidebar and the composer.
+//
+// `-left-1.5` (not `left-0`) because this wrapper is no longer the width of the 24px button: the ink
+// trim on STATUS_BAR_ACTION (lib/statusBar.ts) collapses that square onto its 12px glyph, so the
+// wrapper's own left edge now sits 6px INSIDE the target. Backing the panel out by that same 6px puts
+// it exactly where it was before the trim, which is what keeps both panels' `left-1.5` arrows centred
+// on the mark. Moving the arrows instead would have hung their rotated corner outside the panel.
 const ANCHORED_PANEL =
-  "fixed left-3 right-3 top-12 z-50 w-auto text-left font-sans sm:absolute sm:right-auto sm:left-0 sm:top-[calc(100%+0.65rem)]"
+  "fixed left-3 right-3 top-12 z-50 w-auto text-left font-sans sm:absolute sm:right-auto sm:-left-1.5 sm:top-[calc(100%+0.65rem)]"
 
 // Width is per-panel and each panel applies EXACTLY ONE of these — never both. Tailwind resolves a
 // same-property collision by CSS source order, not class order, so stacking two `sm:w-*` utilities on

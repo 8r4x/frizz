@@ -1,5 +1,9 @@
 <!doctype html>
-<html lang="en">
+<!-- `data-font="sans"` because the prose/UI font is a SETTING (lib/font.ts → html[data-font], applied in
+     index.html before first paint) and a fixture that leaves it unset silently renders the MONO default.
+     The bar's identity label and quota percentages are text, so their ink — and every gap measured
+     against it — moves with this. Flip it to "mono" to judge the other half of what ships. -->
+<html lang="en" data-font="sans">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />

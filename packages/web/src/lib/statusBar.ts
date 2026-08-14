@@ -9,8 +9,23 @@
 // The hover fill is bg-elevated, one step ABOVE the bar's own bg-panel surface. It was bg-panel back
 // when the bar had no background of its own; once the bar became an opaque panel chip, a bg-panel
 // hover was the same colour as the thing behind it and the hover simply stopped reading.
+//
+// `-mx-1.5` IS THE 24px SQUARE'S DEAD SPACE, and it is what makes the bar's one `gap` mean one
+// distance. The square is the HOVER TARGET; the mark is the 14px glyph inside it, which paints 12px
+// (measured, both glyphs, `scripts/ink-gaps.mjs --pad=0`) — so each button wears 6px of nothing a
+// side. On a uniform `gap-2` that drew 20px of ink between the gear and the reload icon against 8px
+// between the divider and the first quota chip, and the maintainer read the widest of them straight
+// off the pixels (2026-08-14: "there's too much space between these two icons"). Collapsing the box
+// onto the ink is the same fix lib/iconRhythm.ts documents for the thread footer, and it leaves the
+// two squares exactly touching at the bar's `gap-3` rather than overlapping.
+//
+// RE-MEASURE, DON'T RE-GUESS, if STATUS_BAR_ICON or the square changes, or if a bar action ever
+// carries a glyph whose ink does NOT reach lucide's outer 24-unit bound — this constant is one
+// number for both buttons only because their two glyphs happen to paint the same 12px:
+//   nub scripts/ink-gaps.mjs http://localhost:<vite>/status-bar-fixture.html \
+//     "[data-status-bar] > button:nth-child(3),[data-status-bar] > div:nth-child(4)" --dsf=4 --pad=0
 export const STATUS_BAR_ACTION =
-  "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-fg/75 outline-none transition-colors hover:bg-elevated hover:text-fg focus-visible:ring-1 focus-visible:ring-border-strong disabled:opacity-55"
+  "-mx-1.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-fg/75 outline-none transition-colors hover:bg-elevated hover:text-fg focus-visible:ring-1 focus-visible:ring-border-strong disabled:opacity-55"
 
 /** Icon size for every glyph in the bar. Matched to the 24px target so no button reads heavier. */
 export const STATUS_BAR_ICON = 14
