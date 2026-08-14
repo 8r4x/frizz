@@ -2118,6 +2118,61 @@ export const GithubStatus = z.object({
 })
 export type GithubStatus = z.infer<typeof GithubStatus>
 
+// ── Hovercards for the GitHub references autolinked into prose ───────────────────────────────────
+//
+// One card = one `#123` / `owner/repo#123` / commit hash the autolinker turned into an anchor
+// (web/lib/githubAutolink.ts). The wire shape is FLAT and every field past `kind` is optional rather
+// than a discriminated union, because the same card renders an issue, a PR and a commit: a union
+// would triple the schema and the rpc-contract gate for three shapes that differ by four fields.
+//
+// `ref` is the canonical key both sides cache on — `owner/repo#123` for an issue or PR,
+// `owner/repo@<sha>` for a commit — and it is echoed back so a batched response can be matched to
+// its request without positional assumptions.
+export const GithubRefCard = z.object({
+  ref: z.string(),
+  kind: z.enum(["issue", "pr", "commit"]),
+  repo: z.string(), // owner/repo, for the card's header line
+  url: z.string(),
+  title: z.string(),
+  body: z.string(), // already truncated server-side to the card's excerpt budget
+  state: z.string(), // OPEN | CLOSED | MERGED | DRAFT — empty for a commit, which has no state
+  stateReason: z.string().optional(), // COMPLETED | NOT_PLANNED | REOPENED — GitHub's closed-issue nuance
+  at: z.string().optional(), // ISO: opened-at for an issue/PR, committed-at for a commit
+  authorLogin: z.string().optional(),
+  authorName: z.string().optional(), // commits carry a git author name with no GitHub account behind it
+  authorAvatar: z.string().optional(),
+  labels: z.array(z.object({ name: z.string(), color: z.string() })).default([]),
+  additions: z.number().int().nonnegative().optional(),
+  deletions: z.number().int().nonnegative().optional(),
+  changedFiles: z.number().int().nonnegative().optional(),
+  comments: z.number().int().nonnegative().optional(),
+  // Epoch ms of the fetch this card came from. The CLIENT owns the freshness decision (render the
+  // cached card instantly, then revalidate if it is old), so it has to be able to see the age.
+  fetchedAt: z.number().int().nonnegative(),
+})
+export type GithubRefCard = z.infer<typeof GithubRefCard>
+
+// ONE request for every reference on the page. The whole point of the batch is that a hover costs no
+// round trip at all: the client asks for a screenful of refs as the prose renders and answers the
+// hover out of its own store. `refresh` is the revalidation half — set only for the handful of refs
+// the client is actually looking at, it makes the server bypass its TTL for those.
+export const GithubRefPreviewInput = z.object({
+  refs: z.array(z.string().min(3).max(120)).min(1).max(100),
+  refresh: z.boolean().default(false),
+})
+export type GithubRefPreviewInput = z.infer<typeof GithubRefPreviewInput>
+
+// `missing` is a real answer, not a failure: a `#123` in prose can name an issue that does not exist
+// (a worker misremembered, or the repo is private to someone else). The client caches it so the
+// anchor never asks twice. `error` is set only when the whole batch failed — no gh, no token, rate
+// limit — and the client keeps the plain link with no card rather than showing a broken one.
+export const GithubRefPreviewResult = z.object({
+  cards: z.array(GithubRefCard),
+  missing: z.array(z.string()),
+  error: z.string().optional(),
+})
+export type GithubRefPreviewResult = z.infer<typeof GithubRefPreviewResult>
+
 // One row in the picker list. `reactions` is summed server-side across reactionGroups (the list ORDER
 // already reflects the sort; this is a display badge). `comments` is optional (present for issues).
 export const GithubItem = z.object({

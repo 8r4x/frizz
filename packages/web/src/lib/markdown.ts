@@ -3,7 +3,7 @@ import type { Token, Tokens, TokenizerAndRendererExtension } from "marked"
 import { CODE_BLOCK_CLASS, renderHighlightedCode } from "./syntaxHighlight.ts"
 import { isLocalMarkdownFile, localImageUrlForTarget, localMarkdownTarget, resolveRelativeLocalPath } from "./markdownTargets.ts"
 import { prefixedAppRoute } from "./base-path.ts"
-import { linkifyGithubRefs } from "./githubAutolink.ts"
+import { githubRefFromUrl, linkifyGithubRefs } from "./githubAutolink.ts"
 import { FRAMED_IMAGE, IMAGE_FRAME, IMAGE_FRAME_MAT } from "../components/ImageFrame.tsx"
 
 // marked's GFM strikethrough opener is `~~?` — ONE tilde is enough. That misreads the tilde agents
@@ -445,6 +445,13 @@ function walk(node: ParentNode, ctx: WalkContext) {
     if (tag === "a") {
       el.setAttribute("target", "_blank")
       el.setAttribute("rel", "noopener noreferrer")
+      // The hovercard handle (components/GithubHovercards.tsx reads it off a delegated pointerover).
+      // Set from the DESTINATION and set LAST — after the allowlist loop above, which is what strips
+      // any `data-gh-ref` an author hand-wrote in raw HTML. So the attribute always describes the URL
+      // the anchor actually points at, and is never a value the prose chose.
+      el.removeAttribute("data-gh-ref")
+      const ghRef = githubRefFromUrl(el.getAttribute("href"))
+      if (ghRef) el.setAttribute("data-gh-ref", ghRef)
     }
     walk(el, ctx)
   }

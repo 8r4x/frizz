@@ -35,6 +35,8 @@ import {
   canonicalSnoozeInstant,
   GithubStatus,
   GithubListInput,
+  GithubRefPreviewInput,
+  GithubRefPreviewResult,
   GithubListResult,
   GithubBatchInput,
   GithubBatchResult,
@@ -95,6 +97,7 @@ import { openExternalUrl } from "./open-external.ts"
 import { openLocalFile, readLocalMarkdown, resolveOpenableFile } from "./local-file.ts"
 import { openableFileRoots } from "./project.ts"
 import { ghInstalled, ghAuthed, ghRepo, gitGithubRemote, listItems, hydrateIssue, hydratePr, renderGithubPrompt, effectiveTemplate, DEFAULT_ISSUE_PROMPT, DEFAULT_PR_PROMPT } from "./github.ts"
+import { createGithubHovercardService } from "./github-hovercard.ts"
 import { slugify, resolveSlug, resolveLegacyThreadFile, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock } from "./dispatch.ts"
 import { readCodexModels } from "./backend/codex-models.ts"
 import { codexSandbox } from "./backend/codex.ts"
@@ -593,6 +596,12 @@ function setProjectIconFromFile(id: string, file: string): ProjectCard {
   if (bytes.length > (PROJECT_ICON_MAX_BASE64_CHARS / 4) * 3) throw new Error("That image is too large.")
   return storeProjectIcon(id, file, bytes)
 }
+
+// MODULE level, not per-router: one Frizz serves N projects, each with its own router instance, and
+// every cache key here is a fully-qualified `owner/repo#N` — so sharing the cache across tenants is
+// both safe and the point (a monorepo's threads and a sibling project's threads referencing the same
+// upstream issue pay for it once).
+const githubHovercards = createGithubHovercardService()
 
 export function createRouter(ctx: AppContext) {
   const frizzDir = join(ctx.project.dir, ".frizz")
@@ -2752,6 +2761,19 @@ export function createRouter(ctx: AppContext) {
         if (!repo) return { items: [], total: 0, page: 1, pageCount: 1 }
         return await listItems(repo, input.kind, input.sort, input.page, input.perPage)
       },
+    }),
+
+    // Hovercard data for every GitHub reference the client autolinked into the prose on screen —
+    // ONE request for a whole page of refs, answered from a process-lifetime cache (see
+    // github-hovercard.ts). The client asks as the prose renders, so the hover itself never waits on
+    // the network; `refresh` is its revalidation of the handful it is actually pointing at.
+    //
+    // Never throws: a missing gh, an unauthenticated one, a rate limit and a network stall all come
+    // back as `error` with whatever cards the cache already holds, and the anchor stays a plain link.
+    githubRefPreview: query({
+      input: GithubRefPreviewInput,
+      output: GithubRefPreviewResult,
+      handler: async ({ input }) => await githubHovercards.preview(input.refs, { refresh: input.refresh }),
     }),
 
     // Spin up one frizz thread per checked item: hydrate each fresh from gh, template a server-side

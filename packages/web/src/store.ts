@@ -7,6 +7,7 @@ import { resolveThreadRoute } from "./lib/threadRouteState.ts"
 import { standaloneThreadHref } from "./lib/standaloneThreadRoute.ts"
 import { ownedByThisPage } from "./lib/projectOwnership.ts"
 import { setGithubRepo } from "./lib/githubAutolink.ts"
+import { resetGithubCards } from "./lib/githubHovercards.ts"
 import { setLocalPathBase } from "./lib/localPathBase.ts"
 
 // Where a scroll-to-card lands a card's outer border below the viewport top (px). Exported because the
@@ -423,6 +424,7 @@ export function setBoard(board: BoardSnapshot) {
 export function resetProjectState() {
   setGithubRepo(null)
   setLocalPathBase(null)
+  resetGithubCards()
   store.board = null
   store.view = "todos"
   store.connection = "connecting"

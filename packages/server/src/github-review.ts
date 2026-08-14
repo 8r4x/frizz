@@ -78,7 +78,10 @@ function conciseError(error: unknown): string {
   return raw.trim().split(/\r?\n/, 1)[0]?.slice(0, 300) || "unknown error"
 }
 
-async function defaultGetToken(): Promise<string> {
+// Exported because the hovercard fetcher (github-hovercard.ts) needs the SAME token, read the same
+// way: `gh auth token` is the one credential source frizz has, and duplicating this would mean two
+// copies of the ENOENT/timeout/`githubFailureKind` classification drifting apart.
+export async function defaultGetToken(): Promise<string> {
   try {
     const { stdout } = await execFileAsync(
       "gh",

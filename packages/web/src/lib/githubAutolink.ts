@@ -64,6 +64,27 @@ export function subscribeGithubRepo(listener: () => void): () => void {
 // One repo path segment: GitHub's own owner/name character set.
 const SEG = "[A-Za-z0-9][A-Za-z0-9._-]*"
 
+// A github.com issue/PR/commit destination → the canonical hovercard key (`owner/repo#123`,
+// `owner/repo@<sha>`), or null for anything else on the site (a tree, a release, the repo root).
+//
+// It reads the HREF rather than the anchor's `title`, and that is deliberate: the same rule then
+// covers a reference the AUTOLINKER minted and a full URL the author simply pasted or wrote as
+// `[the fix](https://github.com/…/pull/12)`, which are the same thing to a reader. `/issues/N` and
+// `/pull/N` collapse to one `#N` key because the API resolves either from the number alone — which is
+// also why the autolinker can mint `/issues/N` for a ref that turns out to be a PR.
+const GITHUB_URL = new RegExp(
+  `^https://github\\.com/(${SEG})/(${SEG})/(?:(issues|pull)/([1-9]\\d{0,9})|commit/([0-9a-f]{7,40}))(?:[/?#].*)?$`,
+  "i",
+)
+
+export function githubRefFromUrl(href: string | null | undefined): string | null {
+  if (!href) return null
+  const match = GITHUB_URL.exec(href.trim())
+  if (!match) return null
+  const [, owner, name, , number, sha] = match
+  return number ? `${owner}/${name}#${number}` : `${owner}/${name}@${sha.toLowerCase()}`
+}
+
 // The three shapes, tried in that order against a boundary-anchored position.
 //
 // The LEADING class is what keeps a reference out of the middle of a word or a path. `#` is excluded

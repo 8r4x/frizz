@@ -1,6 +1,7 @@
-import { useMemo, useSyncExternalStore } from "react"
+import { useEffect, useMemo, useSyncExternalStore } from "react"
 import { mdToHtml, mdInlineToHtml } from "./markdown.ts"
 import { githubRepoForLinks, subscribeGithubRepo } from "./githubAutolink.ts"
+import { githubRefsInHtml, noteGithubRefs } from "./githubHovercards.ts"
 import { localPathBase, subscribeLocalPathBase, type LocalPathBase } from "./localPathBase.ts"
 
 // Memoized markdown rendering, for every surface that drops agent prose into `dangerouslySetInnerHTML`.
@@ -43,10 +44,28 @@ export function useMarkdownHtml(md: string, opts?: { baseDir?: string; asDocumen
   const dir = baseDir ?? base.dir
   // `repo` is deliberately a dependency without appearing in the body — it is an input to mdToHtml
   // through githubAutolink.ts's module state, not through this argument list.
-  return useMemo(
+  const html = useMemo(
     () => mdToHtml(md, { baseDir: dir, homeDir: base.home, document: asDocument }),
     [md, dir, base.home, asDocument, repo],
   )
+  useGithubHovercardRefs(html)
+  return html
+}
+
+/**
+ * Queue every GitHub reference this prose contains for the batched hovercard fetch.
+ *
+ * IT LIVES IN THE RENDER HOOK, not in a component, so a hovercard is available on EVERY surface that
+ * renders agent prose — the transcript, the signal cards, the question blocks, the plan and file
+ * drawers — without each of them remembering to opt in. The scan is a string match guarded by an
+ * `includes` (lib/githubHovercards.ts), and registration is idempotent, so prose with no references
+ * costs one substring search per render.
+ */
+function useGithubHovercardRefs(html: string): void {
+  const refs = useMemo(() => githubRefsInHtml(html), [html])
+  useEffect(() => {
+    if (refs.length > 0) noteGithubRefs(refs)
+  }, [refs])
 }
 
 /** Inline-only prose → sanitized HTML, for hosts that are one line tall (see mdInlineToHtml). */
@@ -54,8 +73,10 @@ export function useInlineMarkdownHtml(md: string, opts?: { inertInteractive?: bo
   const repo = useGithubRepoForLinks()
   const base = useLocalPathBase()
   const inertInteractive = opts?.inertInteractive
-  return useMemo(
+  const html = useMemo(
     () => mdInlineToHtml(md, { inertInteractive, baseDir: base.dir, homeDir: base.home }),
     [md, inertInteractive, base.dir, base.home, repo],
   )
+  useGithubHovercardRefs(html)
+  return html
 }

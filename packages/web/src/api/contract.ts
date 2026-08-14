@@ -55,6 +55,7 @@ import type {
   GithubListResult,
   GithubBatchInput,
   GithubBatchResult,
+  GithubRefPreviewResult,
   CodexModel,
   QuotaSnapshot,
   AuthSnapshot,
@@ -260,6 +261,10 @@ export interface Api {
   githubStatus(): Promise<GithubStatus>
   githubList(input: { kind: "issues" | "prs"; sort: "recent" | "reactions"; page?: number; perPage?: number }): Promise<GithubListResult>
   githubDispatchBatch(input: GithubBatchInput): Promise<GithubBatchResult>
+  // Hovercards for the `#123` / commit-hash anchors the autolinker mints in prose. ONE call carries
+  // every reference on the page so a hover reads out of the client's store instead of the network;
+  // `refresh` revalidates the few the reader is actually pointing at. See lib/githubHovercards.ts.
+  githubRefPreview(input: { refs: string[]; refresh?: boolean }): Promise<GithubRefPreviewResult>
 }
 
 export type ProcType = "query" | "mutation"
@@ -348,4 +353,5 @@ export const PROCEDURES = {
   githubStatus: "query",
   githubList: "query",
   githubDispatchBatch: "mutation",
+  githubRefPreview: "query",
 } as const satisfies Record<keyof Api, ProcType>
