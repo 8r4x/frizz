@@ -294,7 +294,13 @@ function liveWaitHandles(tele: SessionTelemetry | undefined): Set<string> {
   const handles = new Set<string>()
   for (const shell of tele?.bgShells ?? []) {
     if (shell.state !== "running") continue
+    // THREE HANDLES, and the third is the one that matters most: `taskId` is what the runtime actually
+    // told the worker ("Command running in background with ID: bzvtnt3ig"), while `id` is the launch
+    // tool_use id and `label` the command summary. A worker naturally names the string it was shown, so
+    // omitting it would make the honest fence fail its own integrity check (measured 2026-08-14: every
+    // shell watcher armed the obvious way missed its target for exactly this reason).
     if (shell.id) handles.add(shell.id)
+    if (shell.taskId) handles.add(shell.taskId)
     if (shell.label) handles.add(shell.label)
   }
   for (const agent of tele?.subAgents ?? []) {

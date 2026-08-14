@@ -200,6 +200,7 @@ function isPrWatchHint(kind: FenceView["hints"][number]["kind"]): boolean {
 // definition and `session:` has no cross-session liveness signal, so neither is resolved here.
 function isActionable(hint: FenceView["hints"][number]): boolean {
   if (hint.kind === "timer") return isValidAwaitingTimer(hint.value)
+  if (hint.kind === "watch") return hint.value.trim().length > 0
   if (isPrWatchHint(hint.kind) || hint.kind === "pr" || hint.kind === "ci") return parsePrRef(hint.value) !== undefined
   return false
 }
@@ -721,22 +722,6 @@ function isSignoffFenceId(fenceId: string): boolean {
   return fenceId.startsWith(`${SIGNOFF_FENCE_PREFIX}:`)
 }
 
-const WATCH_FENCE_PREFIX = "watch"
-const WATCH_HINT_PREFIX = "watch:"
-/** The one bit a shell watcher's `cursor` carries: this target has been OBSERVED ALIVE, so its absence
- *  from here on means it finished rather than that it never started. SCHEDULER-INTERNAL: it briefly
- *  travelled on ThreadWatchView, for a readout that has since been deleted (see that schema). */
-const SHELL_SEEN = "seen"
-
-function watchFenceId(watchId: string): string {
-  return `${WATCH_FENCE_PREFIX}:${watchId}`
-}
-function isWatchFenceId(fenceId: string): boolean {
-  return fenceId.startsWith(`${WATCH_FENCE_PREFIX}:`)
-}
-function watchIdOf(fenceId: string): string {
-  return fenceId.slice(WATCH_FENCE_PREFIX.length + 1)
-}
 
 function timerFenceId(timerId: string): string {
   return `${TIMER_FENCE_PREFIX}:${timerId}`
@@ -1192,10 +1177,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (tele.lastFence || tele.pendingQuestion) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
-    if (isWatchFenceId(item.fenceId)) {
-      if (deps.storage.getThreadWatch(watchIdOf(item.fenceId))?.state !== "armed") return "superseded"
-      return tele.turn === "idle" ? "current-idle" : "current-busy"
-    }
     // A report repair is bound to a report that is STILL missing from the model's context. If the
     // runtime delivered it late — between the tick that queued this repair and the tick that would
     // send it — the fold drops it out of `droppedReports` and the repair reads as superseded here.
@@ -1412,6 +1393,55 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     reviewFailures.delete(key)
   }
 
+  // ---- THE FENCE'S OWN SHELL WAKE (`watch:`) -------------------------------------------------------
+  // A background shell DOES re-invoke its worker when it exits — but only while the worker's turn is
+  // RUNNING. Measured over this machine's whole session history (3972 shells, 2026-08-14): all 3011
+  // delivered notifications landed on an assistant record with stop_reason "tool_use", while 1601 shells
+  // outlived their worker's rest and 1191 of those were never delivered at all, though the session
+  // provably kept writing for minutes to days afterwards. THAT is the gap, and it is the only reason
+  // frizz touches shells at all.
+  //
+  // It is closed by the FENCE, not by a registration tool. The worker already has to say what it is
+  // waiting on for the park to count (`hasDeclaredBackgroundPark`), so the same line is the wake: one
+  // sentence, no id to remember across a compaction, and no registry row that can outlive the park it
+  // describes. Its lifetime is the fence's lifetime — the worker says anything else, the wait is gone,
+  // which is exactly when the scheduler should stop watching.
+  //
+  // TWO WAYS A SHELL CAN BE DONE, and the first is why absence alone was not enough:
+  //
+  //  1. IT RETIRED. The fold saw the shell's own terminal <task-notification>. Positive evidence, no
+  //     prior sighting needed, no race.
+  //  2. SEEN-THEN-GONE. Observed alive on an earlier tick and now absent — the fallback for a finish this
+  //     thread holds no retirement for (the ring keeps 20).
+  //
+  // (2) ALONE ATE SHORT SHELLS. This pass runs every 10s, so a shell finishing within one tick of the
+  // park is never observed alive and its absence never counts. Measured on the thread that found it: of
+  // three watched shells one lived 0.98s past the park, and could not have fired under (2) at any tick
+  // rate short of continuous polling.
+  //
+  // A TARGET THAT NAMES NOTHING NEVER FIRES. No live row and no retirement is INDETERMINATE, not "done"
+  // — so a typo cannot report a completion that never happened, and cannot wake the thread on a wait it
+  // never really had.
+  function watchVerdict(value: string, tele: SessionTelemetry | undefined, seenAlive: boolean): Verdict | undefined {
+    if (!tele) return undefined // telemetry we cannot read is indeterminate, never "gone"
+    const target = value.trim()
+    const namesShell = (sh: { id?: string; taskId?: string; label: string }) =>
+      sh.id === target || sh.taskId === target || sh.label === target
+    const unmet = { met: false, steer: "", reason: "" }
+    if (tele.bgShells.some((sh) => sh.state === "running" && namesShell(sh))) return unmet
+    // A SUB-AGENT NEEDS NO WAKE FROM HERE — its return re-invokes its parent by construction — but it may
+    // legitimately be named in the fence, so treat a running one as an unmet wait rather than as a target
+    // that does not exist. Otherwise the thread would fire the moment it parked.
+    if (tele.subAgents.some((a) => a.state === "running" && (a.id === target || a.label === target))) return unmet
+    const retired = (tele.retiredShells ?? []).some(namesShell)
+    if (!retired && !seenAlive) return undefined
+    return {
+      met: true,
+      steer: watchWakeMessage("shell", target, "The background work you were waiting on has finished"),
+      reason: `watch ${target} finished`,
+    }
+  }
+
   async function evalThread(slug: string, sessionId: string, fence: FenceView, nowMs: number, fenceAt?: string): Promise<void> {
     const actionable = fence.hints.filter(isActionable)
     if (actionable.length === 0) {
@@ -1491,7 +1521,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const reviewRef = isPrWatchHint(h.kind) ? parsePrRef(h.value) : undefined
       const reviewActivity = reviewRef ? st.reviewCache.get(refKey(reviewRef)) : undefined
       const pendingReview = registrations.get(persistKey)?.reviews[key]?.pending
-      const verdict = isPrWatchHint(h.kind)
+      const verdict = h.kind === "watch"
+        ? watchVerdict(h.value, deps.tailer.get(slug), st.armed.get(key) === true)
+        : isPrWatchHint(h.kind)
         ? reviewActivity || pendingReview
           ? reviewVerdict(slug, persistKey, h, reviewActivity ?? [], fenceAt)
           : undefined
@@ -1502,9 +1534,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         if (h.kind === "timer") armTimer(persistKey, key, h.value)
         continue
       }
-      // PR-watch hints are eligible once a persisted baseline detects an unseen human id. Timer/legacy
-      // conditions still require arming; for timers that arming was restored from durable registration.
-      if (!isPrWatchHint(h.kind) && !st.armed.get(key)) continue
+      // PR-watch hints are eligible once a persisted baseline detects an unseen human id, and a `watch:`
+      // once the shell's own RETIREMENT is on the ring — neither needs to have witnessed the wait unmet
+      // first, which is the whole point of both (a short shell is never seen alive; review may already be
+      // sitting on the PR at the park). Timer/legacy conditions still require arming; for timers that
+      // arming was restored from durable registration.
+      if (!isPrWatchHint(h.kind) && h.kind !== "watch" && !st.armed.get(key)) continue
       const item = outbox.enqueue({
         id: deliveryId,
         slug,
@@ -1813,13 +1848,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         fenceId,
         hintKey: SIGNOFF_HINT_KEY,
         // The reminder plus THIS THREAD's live ops and their ids, so the agent can write a correct
-        // `watch:` line without going looking for an id it cannot see. Only armed watchers are nameable
-        // (see the fence grammar); the shells are listed so it knows what it could register, and the
-        // sub-agents so it knows not to park on them.
+        // `watch:` line without going looking for an id it cannot see. Shells are named by `taskId` —
+        // the handle the runtime actually showed the worker — because that is the string it will
+        // naturally reach for, and the one the fence's own integrity check matches on.
         message: signoffNudgeMessage({
-          watches: deps.storage.listThreadWatches(row.slug, { armedOnly: true }).map((w) => ({ id: w.id, target: w.target })),
-          shells: (tele.bgShells ?? []).filter((sh) => sh.state === "running").map((sh) => ({ id: sh.id, label: sh.label })),
-          subAgents: (tele.subAgents ?? []).filter((a) => a.state === "running").map((a) => ({ label: a.label })),
+          shells: (tele.bgShells ?? []).filter((sh) => sh.state === "running").map((sh) => ({ id: sh.taskId ?? sh.id, label: sh.label })),
+          subAgents: (tele.subAgents ?? []).filter((a) => a.state === "running").map((a) => ({ id: a.id, label: a.label })),
         }),
         reason: "rested without signing off",
       }, nowMs).delivery
@@ -1835,105 +1869,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     // Anchored on the REST this nudge was for (the agent's own last word, which is the fence id), so a
     // retry of the same delivery cannot count twice while a genuinely new fenceless rest does.
     deps.storage.countSignoffNudge(item.slug, item.fenceId)
-  }
-
-  // ---- SOURCE 8: THE REGISTERED WATCHERS (`shell` today) ---------------------------------------
-  // The registry's half of the wake. Unlike every source above it, the record of intent is a ROW the
-  // worker created by tool call (`thread_watch`) rather than anything derived from what it wrote — which
-  // is the whole point: a wait with an id can be listed after a compaction and dropped when it stops
-  // mattering, and neither was possible while a wait was a line of prose in a fence.
-  //
-  // ONLY `shell` FIRES HERE SO FAR. The `pr` and `ci` kinds register and list, but their wake still
-  // belongs to the fence-keyed poller above; migrating that poller onto these rows is the next step and
-  // is deliberately NOT bundled here, because it means moving working machinery rather than adding to it.
-  //
-  // TWO WAYS A SHELL CAN BE DONE, and the first one is why this used to miss.
-  //
-  //  1. IT RETIRED. The fold saw the shell's own terminal <task-notification> (tailer.retiredShellViews).
-  //     Positive evidence, no prior sighting needed, no race.
-  //  2. SEEN-THEN-GONE. It was observed ALIVE on an earlier tick and is now absent. The fallback for a
-  //     retirement this thread no longer holds — the ring keeps 20 — or an owner that died without one.
-  //
-  // (2) ALONE WAS A RACE, and it silently ate short shells. This pass runs every 10s (`tickMs`), so a
-  // shell that finishes within one tick of its watcher being armed is never observed alive, its absence
-  // therefore never counts, and the watcher stays armed forever. Measured on the thread that started this
-  // (2026-08-14): of three watched shells, one lived 0.98s past its arming and could never have fired
-  // under (2) at any tick rate short of continuous polling. Sub-10s background shells are ordinary here.
-  //
-  // Neither path can fire on a target that names nothing: a typo matches no live row AND no retirement,
-  // which is the protection seen-then-gone was carrying, kept intact and made positive.
-  function evalWatchers(nowMs: number): void {
-    for (const watch of deps.storage.armedThreadWatches()) {
-      if (watch.kind !== "shell") continue
-      const row = deps.storage.getSession(watch.thread_slug)
-      // No thread, or a shelved one: nothing to wake. The row is left ARMED rather than settled — an
-      // archived thread can be reopened, and the wait is still the worker's own outstanding intent.
-      if (!row || row.state === "archived" || row.archived === 1) continue
-      const tele = deps.tailer.get(row.slug)
-      // Telemetry we cannot read is INDETERMINATE, never "gone". Treating a missing tail as completion
-      // would fire every armed shell watcher on the machine the moment the tailer hiccups.
-      if (!tele) continue
-      // THREE HANDLES, one shell, and the third one is the whole ballgame. `id` is the launch tool_use
-      // id and `label` is the command summary — neither is a string the worker has ever been shown. What
-      // the runtime actually tells it is "Command running in background with ID: bzvtnt3ig", which is
-      // `taskId`, so that is what a worker naturally registers. Matching only the first two meant every
-      // shell watcher armed the obvious way never observed its target alive, never fired, and sat armed
-      // forever while its shell finished unnoticed (maintainer 2026-08-14, on two such rows).
-      const names = (sh: { id?: string; taskId?: string; label: string }) =>
-        sh.id === watch.target || sh.taskId === watch.target || sh.label === watch.target
-      const live = tele.bgShells.some((sh) => sh.state === "running" && names(sh))
-      if (live) {
-        if (watch.cursor !== SHELL_SEEN) deps.storage.setThreadWatchCursor(watch.id, SHELL_SEEN)
-        continue
-      }
-      // PATH 1 — it retired. Checked BEFORE the cursor, because the whole point is that this does not
-      // need the shell to have been observed alive first.
-      const retired = (tele.retiredShells ?? []).some(names)
-      // PATH 2 — seen-then-gone, for a finish this thread holds no retirement for.
-      if (!retired && watch.cursor !== SHELL_SEEN) continue
-      // FOREGROUND: the worker is blocking on this inside its own tool call, so the scheduler's job is
-      // to SETTLE it and say nothing. The tool is polling this very row and returns the moment it leaves
-      // `armed`. Delivering a wake as well would arrive mid-turn, while the tool is still blocked, and
-      // the worker would read its own answer twice.
-      //
-      // LEGACY ONLY as of 2026-08-14 — `watch` no longer takes `wait`, so nothing new sets this. The
-      // branch stays because a worker's MCP server outlives every frizz restart, so an already-dispatched
-      // session still holds the old binary and can still arm a foreground row. Blocking was removed
-      // because it is strictly harmful: the runtime's own shell-completion notification is delivered only
-      // to a RUNNING turn, and a blocked tool call is a running turn that cannot receive it, so the
-      // notification sits queued until the block ends (measured: 25 minutes, on a shell that finished one
-      // second in). Do not reintroduce it; the tool's value is entirely at REST.
-      if (watch.foreground === 1) {
-        deps.storage.markThreadWatchFired(watch.id, nowMs)
-        log(`waker: settled ${row.slug} — foreground watcher ${watch.id} resolved (shell ${watch.target})`)
-        continue
-      }
-      const fenceId = watchFenceId(watch.id)
-      const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
-      if (outbox.get(deliveryId)) continue // this watcher already has its one wake
-      const item = outbox.enqueue({
-        id: deliveryId,
-        slug: row.slug,
-        sessionId: row.session_id,
-        fenceId,
-        hintKey: `${WATCH_HINT_PREFIX}${watch.id}`,
-        message: watchWakeMessage("shell", watch.target, "The background shell you were waiting on has finished"),
-        reason: `watcher ${watch.id} resolved (shell ${watch.target})`,
-      }, nowMs).delivery
-      log(`waker: queued ${row.slug} — ${item.reason}`)
-      checkpoint("after-enqueue", item)
-    }
-  }
-
-  // Settle the watcher a wake came from — the row's OWN "never again" record, which outlives the pruning
-  // of the terminal outbox row that would otherwise dedupe it. Guarded on `armed` in storage, so a
-  // settlement racing the worker's own `drop` cannot resurrect the row.
-  //
-  // Deliberately NOT called on SUPERSESSION, for the timer's reason exactly: a superseded delivery means
-  // the session moved underneath it, and the wait itself has not happened yet.
-  function settleWatcher(item: WakeDelivery): void {
-    if (!isWatchFenceId(item.fenceId)) return
-    deps.storage.markThreadWatchFired(watchIdOf(item.fenceId), now())
   }
 
   function evalTimers(nowMs: number): void {
@@ -2212,7 +2147,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         settleRestPrompt(item)
         settleCompactPrompt(item)
         settleTimer(item)
-        settleWatcher(item)
         continue
       }
       if (context === "superseded") {
@@ -2241,7 +2175,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (recovered?.state === "exhausted") {
         settleSnooze(item)
         settleTimer(item)
-        settleWatcher(item)
         log(`waker: delivery EXHAUSTED for ${item.slug} after ${recovered.attempts} attempts — ${recovered.lastError ?? "unknown error"}`)
       }
     }
@@ -2265,7 +2198,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         settleRestPrompt(item)
         settleCompactPrompt(item)
         settleTimer(item)
-        settleWatcher(item)
         continue
       }
       if (context === "superseded") {
@@ -2299,7 +2231,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           outbox.supersede(item.id, failedAt, message)
           settleSnooze(item)
           settleTimer(item)
-          settleWatcher(item)
           log(`waker: delivery ABANDONED for ${item.slug} (terminal, no retry): ${message}`)
           continue
         }
@@ -2334,7 +2265,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       settleRestPrompt(item)
       settleCompactPrompt(item)
       settleTimer(item)
-      settleWatcher(item)
       settleSignoffNudge(item)
       const acknowledged = outbox.get(item.id)
       if (acknowledged) checkpoint("after-ack", acknowledged)
@@ -2412,12 +2342,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     } catch (err) {
       if (err instanceof InjectedSchedulerCrash) throw err
       log(`waker: sign-off nudge pass failed: ${err instanceof Error ? err.message : String(err)}`)
-    }
-    try {
-      evalWatchers(now())
-    } catch (err) {
-      if (err instanceof InjectedSchedulerCrash) throw err
-      log(`waker: watcher pass failed: ${err instanceof Error ? err.message : String(err)}`)
     }
     try {
       evalTimers(now())
