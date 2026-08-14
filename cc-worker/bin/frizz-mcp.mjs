@@ -264,26 +264,32 @@ const TIMER = {
   },
 }
 
-// The blocking mode's bounds. The floor is a poll cycle — below it the call is not a wait, it is a
-// round-trip — and the ceiling matches the worker's own foreground Bash ceiling, so one number governs
-// "the longest a worker may block" wherever it blocks.
-const WATCH_MIN_WAIT_SECONDS = 5
-const WATCH_MAX_WAIT_SECONDS = 24 * 60 * 60
-
 const WATCH = {
   name: "watch",
   description:
-    "REGISTER something to wait on, so frizz wakes you when it resolves — and DROP it when it stops " +
-    "mattering. Your waits have identities: you can list them, and you can withdraw them.\n\n" +
+    "REGISTER a background shell you intend to REST on, so frizz wakes you when it finishes — and DROP " +
+    "it when it stops mattering. Your waits have identities: you can list them, and you can withdraw " +
+    "them.\n\n" +
     "  kind: \"shell\"  — one of YOUR OWN background shells finishing. `target` is the id your runtime " +
     "gave you when it launched it (\"Command running in background with ID: bzvtnt3ig\"), or its label.\n\n" +
+    "REGISTER IT ONLY IF YOU ARE ABOUT TO REST, and this is the whole of when it earns its place. While " +
+    "your turn is RUNNING your runtime already re-invokes you the moment a background shell exits, so a " +
+    "watcher adds nothing — just keep working and read the notification when it lands. What the runtime " +
+    "does NOT do is reach you once you have come to rest: measured across this machine's whole session " +
+    "history, 1601 background shells outlived their worker's rest and 1191 of them never delivered a " +
+    "notification at all, though the session went on working for minutes to days afterwards. That gap " +
+    "is what this closes.\n\n" +
+    "NEVER BLOCK ON A SHELL — not with this tool (there is no `wait`; it was removed because it made " +
+    "things worse), and not with a poll loop of your own. Blocking holds your turn open, and the " +
+    "runtime's own completion notification then sits in your queue undelivered until you stop. One real " +
+    "case cost 25 minutes: the shell finished one second into the block, and the blocked call still " +
+    "reported it unresolved when it timed out.\n\n" +
     "FOR A PULL REQUEST, use an ```awaiting fence with a `pr-watch: owner/repo#123` line instead. That " +
     "watcher is durable, it replays whatever review is already sitting on the PR the first time you park " +
     "on it, and it is where PR watching lives — this registry is for the waits that have nowhere else to " +
     "go.\n\n" +
-    "WHY THIS RATHER THAN WAITING YOURSELF: a registered watcher is durable. It survives your turn " +
-    "ending, a compaction, a frizz restart, and your own daemon being replaced — none of which a " +
-    "blocking call or a monitor survives. Register it, come to rest, and frizz brings you back.\n\n" +
+    "A registered watcher is DURABLE. It survives your turn ending, a compaction, a frizz restart, and " +
+    "your own daemon being replaced. Register it, come to rest, and frizz brings you back.\n\n" +
     "REGISTERING IS IDEMPOTENT on (kind, target): asking twice for the same thing returns the SAME id " +
     "and tells you it was already armed, so re-registering after a compaction is safe and is the right " +
     "instinct. Use `list` when you want to know what you are holding without changing anything.\n\n" +
@@ -320,24 +326,6 @@ const WATCH = {
       id: {
         type: "string",
         description: "Required for `drop`. The watcher id returned by `add` (or listed by `list`).",
-      },
-      wait: {
-        type: "boolean",
-        description:
-          "For `add`: BLOCK here until it resolves, instead of returning immediately. Requires " +
-          "`timeout_seconds`. Use it when the wait is short enough that keeping the work in ONE turn is " +
-          "worth more than the durability of resting — you keep your context and your place in the " +
-          "reasoning, and no wake message interrupts you. For anything long, register it WITHOUT this " +
-          "and rest: a background registration survives your turn ending, a compaction and a frizz " +
-          "restart, none of which a blocking call survives.",
-      },
-      timeout_seconds: {
-        type: "integer",
-        description:
-          `REQUIRED when \`wait\` is true (minimum ${WATCH_MIN_WAIT_SECONDS}, maximum ` +
-          `${WATCH_MAX_WAIT_SECONDS}). When it expires the call RETURNS rather than failing, and the ` +
-          "watcher is handed to frizz to keep — so the wait is never lost by choosing to block on it. " +
-          "You are then free to do something else and be woken.",
       },
     },
     required: ["action"],
@@ -872,24 +860,25 @@ async function watch(args) {
   const target = typeof args.target === "string" ? args.target.trim() : ""
   if (!target) throw new Error("`target` is required — the id or label of one of your own background shells")
 
-  // THE BLOCKING MODE. `foreground` tells frizz to SETTLE this watcher silently rather than wake us —
-  // we are the ones waiting, and a wake landing mid-turn while this call is still blocked would hand the
-  // worker its own answer twice.
-  const wait = args.wait === true
-  let timeoutSeconds = 0
-  if (wait) {
-    if (typeof args.timeout_seconds !== "number" || !Number.isFinite(args.timeout_seconds)) {
-      throw new Error("`timeout_seconds` is required when `wait` is true — a blocking wait with no deadline is a hang")
-    }
-    timeoutSeconds = Math.round(args.timeout_seconds)
-    if (timeoutSeconds < WATCH_MIN_WAIT_SECONDS || timeoutSeconds > WATCH_MAX_WAIT_SECONDS) {
-      throw new Error(`\`timeout_seconds\` must be between ${WATCH_MIN_WAIT_SECONDS} and ${WATCH_MAX_WAIT_SECONDS}`)
-    }
+  // THE BLOCKING MODE IS GONE, and it was not merely redundant — it was the one thing guaranteed to lose
+  // the answer. The runtime already re-invokes a worker when a background shell exits, but only while the
+  // worker is MID-TURN; a blocking `watch` call IS mid-turn, so the completion notification enqueues and
+  // then sits undelivered until the tool returns. Measured on the maintainer's own thread: shell finished
+  // and the runtime enqueued its notification at 15:30:00.032, one second after the block began — and the
+  // call sat there until 15:54:59 before reporting that the shell "has NOT resolved yet", about a shell
+  // that had been done for 25 minutes. Registering and RESTING is the whole value of this tool, because
+  // rest is exactly where the runtime's own notification stops arriving (1191 measured losses).
+  if (args.wait !== undefined || args.timeout_seconds !== undefined) {
+    throw new Error(
+      "`wait` is gone — blocking here is strictly worse than not calling this at all. Your runtime already " +
+      "notifies you when a background shell exits WHILE YOUR TURN IS RUNNING, and blocking in this tool " +
+      "holds that notification in the queue undelivered until the call returns. Register the watcher and " +
+      "COME TO REST: rest is the only case the runtime does not cover, and it is what this tool is for.",
+    )
   }
 
-  const result = (await callRpc("addOwnThreadWatch", { slug, kind, target, ...(wait ? { foreground: true } : {}) }))?.result
+  const result = (await callRpc("addOwnThreadWatch", { slug, kind, target }))?.result
   const id = result?.id ?? "(unknown)"
-  if (wait) return await blockUntilResolved(slug, id, kind, target, timeoutSeconds)
   const head = result?.alreadyArmed
     ? `Already watching ${kind} ${target} as ${id} — nothing new was registered, and you will be woken once.`
     : `Watching ${kind} ${target} as ${id}. Frizz will wake you when it resolves, and the registration ` +
@@ -897,48 +886,6 @@ async function watch(args) {
   return (
     `${head}\n\nDROP IT when it stops mattering (\`action: "drop", id: "${id}"\`) — a watcher you no ` +
     `longer care about is a wake you did not want.\n\n${armedWatchList(result)}`
-  )
-}
-
-/** Block until a foreground watcher settles, or until its deadline — then hand it back to frizz.
- *
- * POLLED, not pushed, because the MCP transport has no way to be told. The interval BACKS OFF: a wait
- * that resolves in ten seconds should not be found thirty seconds late, and a wait that runs for hours
- * should not cost thousands of round-trips to discover that nothing changed.
- *
- * The deadline RETURNS rather than throwing, and promotes the row on the way out. That is the property
- * that makes choosing this mode safe: the worst case of guessing the timeout too short is that the wait
- * becomes an ordinary durable one and frizz wakes you, not that the wait is silently lost.
- *
- * @param {string} slug @param {string} id @param {string} kind @param {string} target @param {number} timeoutSeconds
- * @returns {Promise<string>} */
-async function blockUntilResolved(slug, id, kind, target, timeoutSeconds) {
-  const deadline = Date.now() + timeoutSeconds * 1000
-  const started = Date.now()
-  for (;;) {
-    const elapsed = Date.now() - started
-    // 2s for the first minute, then 5s, then 15s — see the back-off note above.
-    const interval = elapsed < 60_000 ? 2_000 : elapsed < 600_000 ? 5_000 : 15_000
-    const remaining = deadline - Date.now()
-    if (remaining <= 0) break
-    await new Promise((r) => setTimeout(r, Math.min(interval, remaining)))
-    const listed = (await callRpc("listOwnThreadWatches", { slug }))?.result
-    const still = Array.isArray(listed?.watches) && listed.watches.some((w) => w.id === id)
-    if (!still) {
-      const waited = Math.round((Date.now() - started) / 1000)
-      return (
-        `${kind === "shell" ? "Your background shell" : target} resolved after ${waited}s — that is what you were ` +
-        `waiting for (${target}). The watcher is spent; you were not interrupted, because you were the one waiting.`
-      )
-    }
-  }
-  // The deadline, not a failure. Hand it to frizz so the wait survives this turn.
-  const promoted = (await callRpc("promoteOwnThreadWatch", { slug, id }))?.result
-  return (
-    `Waited ${timeoutSeconds}s and ${target} has NOT resolved yet. The watcher is still armed and is now ` +
-    `frizz's to keep${promoted?.promoted === false ? " (it had already settled)" : ""} — go do something else ` +
-    `and you will be woken when it fires, or drop it with \`action: "drop", id: "${id}"\` if it has stopped ` +
-    "mattering."
   )
 }
 

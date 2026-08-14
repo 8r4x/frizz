@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { compactionPromptMessage, formatGithubWakeSteer, isValidAwaitingTimer, restPromptMessage, schedulePromptMessage, timerPromptMessage, watchWakeMessage, SHELL_WATCH_SEEN, SIGNOFF_NUDGE_MESSAGE, wakeDeliveryToken, type QuotaSnapshot } from "@frizz/shared"
+import { compactionPromptMessage, formatGithubWakeSteer, isValidAwaitingTimer, restPromptMessage, schedulePromptMessage, timerPromptMessage, watchWakeMessage, signoffNudgeMessage, wakeDeliveryToken, type QuotaSnapshot } from "@frizz/shared"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
 import type { FenceView, SessionTelemetry } from "./tailer.ts"
@@ -724,9 +724,9 @@ function isSignoffFenceId(fenceId: string): boolean {
 const WATCH_FENCE_PREFIX = "watch"
 const WATCH_HINT_PREFIX = "watch:"
 /** The one bit a shell watcher's `cursor` carries: this target has been OBSERVED ALIVE, so its absence
- *  from here on means it finished rather than that it never started. Shared, because the board and the
- *  router put the same bit on the wire as `ThreadWatchView.seen`. */
-const SHELL_SEEN = SHELL_WATCH_SEEN
+ *  from here on means it finished rather than that it never started. SCHEDULER-INTERNAL: it briefly
+ *  travelled on ThreadWatchView, for a readout that has since been deleted (see that schema). */
+const SHELL_SEEN = "seen"
 
 function watchFenceId(watchId: string): string {
   return `${WATCH_FENCE_PREFIX}:${watchId}`
@@ -1812,7 +1812,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         sessionId: row.session_id,
         fenceId,
         hintKey: SIGNOFF_HINT_KEY,
-        message: SIGNOFF_NUDGE_MESSAGE,
+        // The reminder plus THIS THREAD's live ops and their ids, so the agent can write a correct
+        // `watch:` line without going looking for an id it cannot see. Only armed watchers are nameable
+        // (see the fence grammar); the shells are listed so it knows what it could register, and the
+        // sub-agents so it knows not to park on them.
+        message: signoffNudgeMessage({
+          watches: deps.storage.listThreadWatches(row.slug, { armedOnly: true }).map((w) => ({ id: w.id, target: w.target })),
+          shells: (tele.bgShells ?? []).filter((sh) => sh.state === "running").map((sh) => ({ id: sh.id, label: sh.label })),
+          subAgents: (tele.subAgents ?? []).filter((a) => a.state === "running").map((a) => ({ label: a.label })),
+        }),
         reason: "rested without signing off",
       }, nowMs).delivery
       log(`waker: queued ${row.slug} — ${item.reason}`)
@@ -1872,6 +1880,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // to SETTLE it and say nothing. The tool is polling this very row and returns the moment it leaves
       // `armed`. Delivering a wake as well would arrive mid-turn, while the tool is still blocked, and
       // the worker would read its own answer twice.
+      //
+      // LEGACY ONLY as of 2026-08-14 — `watch` no longer takes `wait`, so nothing new sets this. The
+      // branch stays because a worker's MCP server outlives every frizz restart, so an already-dispatched
+      // session still holds the old binary and can still arm a foreground row. Blocking was removed
+      // because it is strictly harmful: the runtime's own shell-completion notification is delivered only
+      // to a RUNNING turn, and a blocked tool call is a running turn that cannot receive it, so the
+      // notification sits queued until the block ends (measured: 25 minutes, on a shell that finished one
+      // second in). Do not reintroduce it; the tool's value is entirely at REST.
       if (watch.foreground === 1) {
         deps.storage.markThreadWatchFired(watch.id, nowMs)
         log(`waker: settled ${row.slug} — foreground watcher ${watch.id} resolved (shell ${watch.target})`)

@@ -1,16 +1,20 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
 import type { BoardSnapshot, ThreadView as ThreadViewModel } from "@frizz/shared"
+import { BackgroundOpsStrip } from "./components/ChatView.tsx"
 import { ThreadLifecycleFooter } from "./components/ThreadLifecycleFooter.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
 import "./styles.css"
 
-// Browser QA for the EYE's tooltip — the footer readout of a thread's armed watchers. It was read once
-// as "Watching 2 things / Shell: bzvtnt3ig / Shell: b8m0w8qjk" and produced the wrong reading twice over
-// (maintainer 2026-08-14: "shells are not watchers… I don't see either of them as background shells
-// underneath the prompt box"), so what this surface is for is checking the copy AS IT WRAPS: the tooltip
-// caps at 22rem, and the unseen-watcher caveat is the longest line the readout can draw.
+// Browser QA for HOW MANY PLACES ONE BACKGROUND SHELL IS DESCRIBED IN. It used to be two: a row under
+// the prompt box, and a line in the footer eye's menu naming the same shell by a runtime handle that
+// appears nowhere else — which read as two unrelated things ("shells are not watchers… I don't see
+// either of them as background shells underneath the prompt box", then "we do not need to redundantly
+// list out background shells inside of the watcher icon menu", maintainer 2026-08-14).
+//
+// It is now ONE: the shell's own row, blue dot and all. So this surface renders the strip AND the footer
+// together, because the property under test is what the two say about the same shell at the same time.
 //
 // `?case=` picks the state. `?font=sans|mono` sets `data-font`, because this app renders in two type
 // stacks and a line that fits on one can wrap on the other.
@@ -23,37 +27,30 @@ const SHELL = { id: "toolu_01MkxJgNuEsDomuqLTFqzzjU", taskId: "bzvtnt3ig", label
 // did (`since 34 min ago`) rather than an ever-growing distance from a frozen anchor.
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString()
 
-// Each case is [what it is testing, the armed watchers, the live shells the strip would also be drawing].
 const CASES: Record<string, { watches: ThreadViewModel["watches"]; bgShells: ThreadViewModel["bgShells"] }> = {
-  // THE SHIPPED FIX: the target resolves to a live shell, so the tooltip names it the way the row under
-  // the prompt box does instead of printing a runtime handle that appears nowhere else.
-  resolved: {
-    watches: [{ id: "wch_1", kind: "shell", target: "bzvtnt3ig", state: "armed", createdAt: ago(34), seen: true }],
+  // THE SHIPPED SHAPE: a watched background shell. One row, one blue dot, and NO eye in the footer —
+  // the watcher is a property of that row, stated in its tooltip, not a second listing.
+  watched: {
+    watches: [{ id: "wch_1", kind: "shell", target: "bzvtnt3ig", state: "armed", createdAt: ago(34) }],
     bgShells: [SHELL],
   },
-  // THE MAINTAINER'S OWN SCREENSHOT: two watchers, neither target ever observed alive, no shells left to
-  // point at. This is the longest the readout ever gets, and the case the wrap has to survive.
-  wedged: {
-    watches: [
-      { id: "wch_1", kind: "shell", target: "bzvtnt3ig", state: "armed", createdAt: ago(34), seen: false },
-      { id: "wch_2", kind: "shell", target: "b8m0w8qjk", state: "armed", createdAt: ago(8), seen: false },
-    ],
-    bgShells: [],
-  },
-  // The `github` kind shares this readout and has no registry row behind it.
-  mixed: {
-    watches: [
-      { id: "wch_1", kind: "shell", target: "bzvtnt3ig", state: "armed", createdAt: ago(34), seen: true },
-      { id: "github:t:colinhacks/zod#6382", kind: "github", target: "colinhacks/zod#6382", state: "armed", createdAt: ago(120), seen: true },
-    ],
+  // THE CONTROL: the identical shell with no watcher armed. The row must be indistinguishable, so that
+  // the marker above is genuinely the exception rather than a new reading every row carries.
+  unwatched: { watches: [], bgShells: [SHELL] },
+  // A PR watcher DOES keep its eye line: it has no row of its own in this footer, so this menu is the
+  // only place it can be said.
+  pr: {
+    watches: [{ id: "github:t:colinhacks/zod#6382", kind: "github", target: "colinhacks/zod#6382", state: "armed", createdAt: ago(120) }],
     bgShells: [SHELL],
   },
 }
 
-const active = CASES[params.get("case") ?? "wedged"] ?? CASES.wedged
+const active = CASES[params.get("case") ?? "watched"] ?? CASES.watched
+
+const SLUG = "watch-readout-demo"
 
 const thread = {
-  id: "watch-readout-demo",
+  id: SLUG,
   title: "Watch readout",
   status: "active",
   kind: "session",
@@ -88,7 +85,9 @@ function Fixture() {
       {/* The footer is normally the bottom edge of a card, so give it one: the tooltip opens upward and
           needs somewhere to land, and the strip's own corner radius only reads against a border. */}
       <div className="overflow-hidden rounded-lg border border-border bg-panel">
-        <div className="h-40 p-4 text-[12px] text-muted">…transcript…</div>
+        <div className="h-32 p-4 text-[12px] text-muted">…transcript…</div>
+        <div className="mx-3 rounded-md border border-border/70 px-3 py-2 text-[12px] text-muted/50">…prompt box…</div>
+        <BackgroundOpsStrip slug={SLUG} />
         <ThreadLifecycleFooter thread={thread} />
       </div>
     </div>

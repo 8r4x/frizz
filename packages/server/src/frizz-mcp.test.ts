@@ -90,9 +90,13 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     // `watch` is the registry the ```awaiting fence could not be: `action` alone is required, and like
     // its siblings it exposes NO THREAD parameter — a worker may only ever register a wait on its own.
     assert.deepEqual(list.result.tools[3].inputSchema.required, ["action"])
+    // NO `wait`/`timeout_seconds`: blocking on a shell inside this tool is strictly worse than not
+    // calling it, because the runtime's own completion notification only reaches a RUNNING turn and a
+    // blocked call is a running turn that cannot receive it. Removed 2026-08-14 after one real case sat
+    // blocked for 25 minutes on a shell that had finished one second in.
     assert.deepEqual(
       Object.keys(list.result.tools[3].inputSchema.properties).sort(),
-      ["action", "id", "kind", "target", "timeout_seconds", "wait"],
+      ["action", "id", "kind", "target"],
     )
     assert.deepEqual(list.result.tools[3].inputSchema.properties.action.enum, ["add", "list", "drop"])
     // Only the kind frizz can actually WAKE is offered. `pr`/`ci` rows are valid in the registry and
@@ -809,24 +813,21 @@ test("`watch` registers, lists and drops against the CALLING thread", async () =
 })
 
 
-// THE BLOCKING MODE. What matters is the refusal and the DEGRADATION: a blocking wait with no deadline
-// is a hang, and a deadline that expires must hand the wait to frizz rather than lose it — that is the
-// property that makes choosing this mode safe rather than a way to silently drop a wait.
-test("`watch` blocks with a deadline, and hands the wait back when it expires", async () => {
+// THE BLOCKING MODE IS GONE, and the refusal has to TEACH rather than just reject: a worker reaching for
+// `wait` is trying to solve a real problem (it does not want to lose the shell's result), and the answer
+// is that its runtime already covers the running-turn case while REST is the case this tool covers.
+// Blocking was the one move that guaranteed the loss — the runtime's completion notification only reaches
+// a RUNNING turn, and a blocked call is a running turn that cannot receive it, so the notification queues
+// until the block ends. Measured on a real thread: 25 minutes, on a shell that finished one second in.
+test("`watch` refuses to block, and says what to do instead", async () => {
   const seen: Array<{ url: string; body: any }> = []
   const http = createServer((req, res) => {
     let body = ""
     req.on("data", (c) => (body += c))
     req.on("end", () => {
-      const url = req.url ?? ""
-      seen.push({ url, body: JSON.parse(body || "{}") })
-      // The watcher never settles, so the poll always finds it — which drives the timeout path.
-      const armed = [{ id: "wch_block1", kind: "shell", target: "nub run test", state: "armed", createdAt: "2026-08-12T00:00:00.000Z" }]
-      const result = url.endsWith("addOwnThreadWatch") ? { id: "wch_block1", alreadyArmed: false, watches: armed }
-        : url.endsWith("promoteOwnThreadWatch") ? { promoted: true, watches: armed }
-        : { watches: armed }
+      seen.push({ url: req.url ?? "", body: JSON.parse(body || "{}") })
       res.writeHead(200, { "content-type": "application/json" })
-      res.end(JSON.stringify({ result }))
+      res.end(JSON.stringify({ result: { id: "wch_1", alreadyArmed: false, watches: [] } }))
     })
   })
   await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
@@ -838,44 +839,36 @@ test("`watch` blocks with a deadline, and hands the wait back when it expires", 
     rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
     await rpc.next(1)
 
-    // A blocking wait with no deadline is refused BEFORE anything is registered.
-    rpc.send({
-      jsonrpc: "2.0", id: 2, method: "tools/call",
-      params: { name: "watch", arguments: { action: "add", kind: "shell", target: "nub run test", wait: true } },
-    })
-    const noDeadline = await rpc.next(2)
-    assert.equal(noDeadline.result.isError, true)
-    assert.match(noDeadline.result.content[0].text, /`timeout_seconds` is required when `wait` is true/)
-    assert.equal(seen.length, 0, "nothing was registered")
+    // Every spelling of the old blocking call is refused, INCLUDING a bare `timeout_seconds` — a worker
+    // whose training reaches for the deadline alone must not have it silently ignored and then rest
+    // believing it blocked.
+    for (const [id, args] of [
+      [2, { action: "add", kind: "shell", target: "nub run test", wait: true }],
+      [3, { action: "add", kind: "shell", target: "nub run test", wait: true, timeout_seconds: 30 }],
+      [4, { action: "add", kind: "shell", target: "nub run test", timeout_seconds: 30 }],
+    ] as [number, Record<string, unknown>][]) {
+      rpc.send({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "watch", arguments: args } })
+      const refused = await rpc.next(id)
+      assert.equal(refused.result.isError, true, `${JSON.stringify(args)} must be refused`)
+      assert.match(refused.result.content[0].text, /`wait` is gone/)
+      // The refusal names BOTH halves, because a worker told only "no" reaches for its own poll loop.
+      assert.match(refused.result.content[0].text, /already notifies you when a background shell exits/)
+      assert.match(refused.result.content[0].text, /COME TO REST/)
+    }
+    assert.equal(seen.length, 0, "a refused call registers nothing — the refusal is BEFORE the round-trip")
 
-    // And an out-of-range one, for the same reason.
+    // …and the ordinary registration still works, with no `foreground` and no polling.
     rpc.send({
-      jsonrpc: "2.0", id: 3, method: "tools/call",
-      params: { name: "watch", arguments: { action: "add", kind: "shell", target: "t", wait: true, timeout_seconds: 1 } },
+      jsonrpc: "2.0", id: 5, method: "tools/call",
+      params: { name: "watch", arguments: { action: "add", kind: "shell", target: "nub run test" } },
     })
-    const tooShort = await rpc.next(3)
-    assert.equal(tooShort.result.isError, true)
-    assert.match(tooShort.result.content[0].text, /must be between 5 and 86400/)
-
-    // A real blocking wait: registers as FOREGROUND (so frizz settles it silently rather than waking a
-    // thread that is already waiting), polls, times out, and PROMOTES rather than losing the wait.
-    rpc.send({
-      jsonrpc: "2.0", id: 4, method: "tools/call",
-      params: { name: "watch", arguments: { action: "add", kind: "shell", target: "nub run test", wait: true, timeout_seconds: 5 } },
-    })
-    const expired = await rpc.next(4)
-    assert.equal(expired.result.isError, undefined)
+    const armed = await rpc.next(5)
+    assert.equal(armed.result.isError, undefined)
     assert.deepEqual(seen[0], {
       url: "/_frizz/rpc/addOwnThreadWatch",
-      body: { slug: "blocking-thread", kind: "shell", target: "nub run test", foreground: true },
+      body: { slug: "blocking-thread", kind: "shell", target: "nub run test" },
     })
-    assert.ok(seen.some((c) => c.url.endsWith("listOwnThreadWatches")), "it polled while blocked")
-    assert.deepEqual(seen.at(-1), {
-      url: "/_frizz/rpc/promoteOwnThreadWatch",
-      body: { slug: "blocking-thread", id: "wch_block1" },
-    })
-    assert.match(expired.result.content[0].text, /has NOT resolved yet/)
-    assert.match(expired.result.content[0].text, /you will be woken when it fires/)
+    assert.equal(seen.length, 1, "no polling: the call returns immediately")
   } finally {
     rpc.kill()
     http.close()

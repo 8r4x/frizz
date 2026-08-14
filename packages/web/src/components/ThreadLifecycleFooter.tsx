@@ -1,12 +1,11 @@
 import { useState } from "react"
-import { Check, Eye, Hourglass, Loader2 } from "lucide-react"
+import { Check, Hourglass, Loader2 } from "lucide-react"
 import type { CompletionHold, ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 import { threadLifecycleAvailability, completionArchivesImmediately, completionHoldSummary } from "../lib/threadLifecycle.ts"
 import { markArchived, clearArchived } from "../lib/optimisticArchive.ts"
 import { futureSnoozedUntil } from "../groups.ts"
-import { INK_TRIM_WATCHES } from "../lib/iconRhythm.ts"
 import { formatAgo } from "../lib/durationLabels.ts"
 import { formatSnoozeWake } from "../lib/snooze.ts"
 import { CHILD_ARROW, CHILD_ARROW_CLASS } from "../lib/childOps.ts"
@@ -88,7 +87,6 @@ export function ThreadLifecycleFooter({
         )}
         <PendingSnooze thread={thread} />
         <RecurringPromptControl thread={thread} />
-        <ArmedWatches thread={thread} />
       </span>
       {/* Done ⇒ the strip states the state; otherwise it offers the verbs. Never both, and never
           neither: the slot on the right always says something about where the thread stands. */}
@@ -170,70 +168,24 @@ function PendingSnooze({ thread }: { thread: ThreadView }) {
   )
 }
 
-// WHAT THIS THREAD IS WAITING ON, read from the registry rather than folded from the transcript — which
-// is the whole reason waits moved out of the ```awaiting fence: a registration survives the worker
-// saying one more sentence, and it can be dropped when it stops mattering.
+// THE ARMED-WATCHERS EYE USED TO SIT HERE, and it is gone on purpose (2026-08-14). It listed one line
+// per armed watcher — `Shell: bzvtnt3ig`, `PR acme/app#391` — which described objects the row strip
+// directly above this footer was ALREADY drawing, one row each, with their own liveness dots. Two
+// surfaces for one fact, and the duplicate was the confusing one: it named a shell by the runtime handle
+// (`bzvtnt3ig`) that appears nowhere else in the UI, so the same shell read as two unrelated things
+// ("shells are not watchers… I don't see either of them as background shells underneath the prompt
+// box… we do not need to redundantly list out background shells inside of the watcher icon menu").
 //
-// A READOUT, NOT A CONTROL. It states a fact and offers nothing: dropping a watcher is the WORKER's
-// call (it is the only party that knows whether the wait still matters), and the human's lever is the
-// Snooze already sitting in this same strip. That is also why an armed watcher does not park the thread
-// — maintainer 2026-08-12, choosing that over auto-Held for every kind, so a wait that may never
-// resolve cannot silently vanish from the queue.
+// It is drift, not a design: the eye came first, and the maintainer then asked for the watchers to be
+// shown "underneath the prompt box, similar to how subagents work" (2026-08-13, `githubWatchViews`).
+// That strip SUPERSEDED this readout and nobody removed it. Every surface rendering this footer — the
+// queue card (TodosView) and the thread drawer (ChatView.ThreadView) — renders BackgroundOpsStrip one
+// line above it, so nothing lost a home.
 //
-// The tooltip carries the detail because the strip has room for a mark and nothing else, and one line
-// per watcher is exactly what an operator wants to know: what, and since when.
-function ArmedWatches({ thread }: { thread: ThreadView }) {
-  // `?? []` because the field can genuinely be ABSENT at runtime: the schema defaults it, but a board
-  // pushed by a server that predates it — the window between an update and its restart — carries a
-  // ThreadView without it, and so does any hand-built fixture. Reading it bare threw and blanked the
-  // whole footer, which is a worse failure than the readout being missing.
-  const armed = (thread.watches ?? []).filter((w) => w.state === "armed")
-  if (!armed.length) return null
-  const detail = armed.map((w) => watchLine(w, thread)).join("\n")
-  const label = armed.length === 1 ? `Watching 1 thing\n${detail}` : `Watching ${armed.length} things\n${detail}`
-  return (
-    <Tooltip label={label} side="top" multiline>
-      {/* AN EYE, and the first choice here was wrong for a reason only the screenshot showed. `Radar`
-          reads better in prose — nobody is looking, frizz is listening — but it is CONCENTRIC CIRCLES,
-          and it sits directly beside the Goal's `Target`, which is also concentric circles. At 12px the
-          two were the same mark twice, which is worse than a slightly loose metaphor. The eye's almond
-          silhouette shares nothing with its neighbours and survives the size; the "already seen"
-          connotation an eye usually carries has nothing to collide with in this strip, where no other
-          mark means read-state. */}
-      <span data-armed-watches={armed.length} aria-label={label} className={`flex items-center px-0.5 text-muted/60 ${INK_TRIM_WATCHES}`}>
-        <Eye size={12} />
-      </span>
-    </Tooltip>
-  )
-}
-
-// ONE LINE OF THE EYE'S TOOLTIP. Three things it must get right, all of them learned from one screenshot
-// reading "Watching 2 things / Shell: bzvtnt3ig / Shell: b8m0w8qjk" (maintainer 2026-08-14: "shells are
-// not watchers… I don't see either of them as background shells underneath the prompt box"):
-//
-//  · NAME THE WAIT, not the kind of thing. The row is a WATCHER; the shell is what it is watching. So the
-//    line reads "waiting on <x>" and the `github` kind — which shares this readout and would otherwise
-//    have been labelled `Shell: acme/app#391` — says PR.
-//  · NAME IT THE WAY THE STRIP DOES. A worker registers against the handle the runtime handed it
-//    (`bzvtnt3ig`), which is a string that appears NOWHERE else in the UI. When that target resolves to a
-//    live background shell, print that row's own label instead, so the tooltip and the row under the
-//    prompt box name the same shell.
-//  · ADMIT WHEN IT CANNOT FIRE. A shell watcher only fires seen-then-gone, so one whose target frizz has
-//    never observed alive is not waiting on anything — it is wedged until the worker drops it. That is
-//    the whole of what the maintainer could not find, and stating it beats implying a live wait.
-//
-// The elapsed rides here rather than being appended by the caller so that the WARNING can land after it:
-// the tooltip wraps at 22rem, and "…will not fire (since 34 min ago)" put the caveat mid-line with its
-// own timestamp orphaned past the wrap.
-function watchLine(w: ThreadView["watches"][number], thread: ThreadView): string {
-  const since = ` (since ${formatAgo(w.createdAt)})`
-  if (w.kind === "github") return `PR ${w.target}${since}`
-  const shell = (thread.bgShells ?? []).find((s) => s.taskId === w.target || s.id === w.target || s.label === w.target)
-  if (shell) return `Shell: ${shell.label}${since}`
-  // `seen` defaults TRUE (an older server, or a `github` row), so the warning only ever appears on a
-  // board that positively reports the cursor still unset — never on the mere absence of the field.
-  return `Shell: ${w.target}${since}${w.seen ? "" : " — never seen running, so this will not fire"}`
-}
+// DO NOT REINTRODUCE A WATCHER LIST HERE. If a wait needs to be visible, it belongs in that strip, as a
+// row, beside the sub-agents and shells it is a peer of. What a shell's row cannot say on its own — that
+// a watcher is armed on it, so this thread will actually wake when it ends — is stated in that row's own
+// tooltip (see BackgroundOpsStrip).
 
 // Also rendered — deliberately redundant — as a white primary button at the bottom of the in-chat
 // ```done card (see FenceCard). Same completion mutation and live-session confirmation flow; only the

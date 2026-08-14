@@ -198,7 +198,7 @@ export interface SubAgentView {
 export interface FenceView {
   kind: "done" | "awaiting"
   body: string
-  hints: { kind: "pr-watch" | "human" | "timer" | "pr" | "ci" | "session"; value: string }[]
+  hints: { kind: "watch" | "pr-watch" | "human" | "timer" | "pr" | "ci" | "session"; value: string }[]
 }
 
 // Per-session derived telemetry surfaced to the board overlay. Structurally a NormalizedTail (the
@@ -815,7 +815,7 @@ export function parseSignalFence(text: string | undefined): FenceView | undefine
     const k = hm?.[1].toLowerCase()
     // Only real hint kinds become hints; any other `word:` line is prose (a stray colon-line
     // like "note: …" must not mint a phantom hint that then glosses as leaked internals). 2026-07-10.
-    if (hm && (k === "pr-watch" || k === "human" || k === "timer" || k === "pr" || k === "ci" || k === "session")) {
+    if (hm && (k === "watch" || k === "pr-watch" || k === "human" || k === "timer" || k === "pr" || k === "ci" || k === "session")) {
       const value = hm[2].trim()
       hints.push({ kind: k, value: value.length > HINT_VALUE_MAX ? value.slice(0, HINT_VALUE_MAX) : value })
     } else {

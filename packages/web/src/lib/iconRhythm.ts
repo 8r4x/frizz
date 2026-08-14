@@ -78,26 +78,17 @@ export const INK_TRIM_HOURGLASS = "-mx-1"
  *  and 2.88px on the right, measured, once `px-0.5` is counted.
  *
  *  SYMMETRIC at 3px, because the glyph is: those two readings differ by 0.12px, which is far under the
- *  floor where a correction smears a mark instead of moving it. The strip then reads 12.00px and 11.87px
- *  to the hourglass and the eye, against its 12px target.
+ *  floor where a correction smears a mark instead of moving it. The strip then read 12.00px and 11.87px
+ *  to the hourglass on its left and the armed-watchers eye on its right, against its 12px target.
+ *
+ *  THAT EYE IS GONE (2026-08-14 — it duplicated the rows under the prompt box; see
+ *  ThreadLifecycleFooter), so the Goal is now the LAST mark in the cluster and only its left-hand gap is
+ *  still drawn. The 3px stands unchanged: it is a property of this glyph's own dead space, measured on
+ *  the mark rather than fitted to a neighbour, which is exactly why losing the neighbour costs nothing.
  *
  *  RE-MEASURE, DON'T RE-GUESS, if the mark changes again: `nub scripts/ink-gaps.mjs
- *  http://localhost:<vite>/icon-rhythm-fixture.html "[data-pending-snooze],[data-recurring-prompt],[data-armed-watches]"`.
- *  Both of that strip's neighbours are in the fixture for exactly this measurement. */
+ *  http://localhost:<vite>/icon-rhythm-fixture.html "[data-pending-snooze],[data-recurring-prompt]"`. */
 export const INK_TRIM_GOAL = "-mx-[3px]"
-
-/** `ArmedWatches` — lucide `Eye` at 12px inside `px-0.5`.
- *
- *  2.4px of dead space a side, because this glyph paints to lucide's outer 24-unit bound. Without the
- *  trim the strip read 11.5px of ink between the plug and the Goal and 14.3px between the Goal and this
- *  — a 2.8px step in a row whose CSS gap is uniform, which is the whole failure mode `optical-spacing`
- *  exists for.
- *
- *  This used to note that it was THE SAME VALUE AS THE GOAL'S, which stopped being true on 2026-08-13
- *  when the Goal stopped being a full-bleed lucide glyph. That the two ever matched was a fact about
- *  two glyphs, never a rule — see INK_TRIM_GOAL for what a mark whose ink does not reach the bound
- *  costs. */
-export const INK_TRIM_WATCHES = "-mx-[2.5px]"
 
 /** `ReloadPluginsButton` — lucide `Plug` at 13px in a 24px square, painting 8px of it.
  *

@@ -3924,6 +3924,21 @@ export function BackgroundOpsStrip({
   // listing the parent's here would credit the child with its parent's wait.
   const watchers = parentAgentId ? [] : (thread?.watches ?? []).filter((w) => w.kind === "github")
   const total = agents.length + shells.length + watchers.length
+  // IS A WATCHER ARMED ON THIS SHELL? A `shell` watch gets NO row of its own — it is not a second thing
+  // running, it is a property of the row already here, and drawing both listed one object twice
+  // (maintainer 2026-08-14: "we do not need to redundantly list out background shells inside of the
+  // watcher icon menu"). So the fact rides the shell's own row, in its tooltip.
+  //
+  // It is worth saying at all because the runtime's own completion notification does NOT survive the
+  // worker coming to rest: measured over ~/.claude/projects, 1601 background shells whose worker rested
+  // before the shell finished, and 1191 of them never received a notification even though the session
+  // provably kept working for minutes-to-days afterwards. An armed watcher is what closes that, so
+  // "will this thread actually hear about this" is a real question about a shell row, with two answers.
+  const watchedTargets = new Set(
+    (thread?.watches ?? []).filter((w) => w.kind === "shell" && w.state === "armed").map((w) => w.target),
+  )
+  const isWatched = (s: { id?: string; taskId?: string; label: string }) =>
+    watchedTargets.has(s.taskId ?? "") || watchedTargets.has(s.id ?? "") || watchedTargets.has(s.label)
   // This is intentionally independent of transcript cards: it sits immediately below the affected
   // prompt box so a resting worker that owns a live shell still reads as active at a glance. Do not
   // add a thread-wide “Running” marker here: a foreground turn and several independent children are
@@ -3979,6 +3994,10 @@ export function BackgroundOpsStrip({
           // that could only report "unavailable".
           onOpen={s.id && !s.outputUnavailable ? () => pushBackgroundShellDrawer(slug, s.id!, { label: s.label, startedAt: s.startedAt }) : undefined}
           onDismiss={childOpDismisser(slug, s, "SHELL")}
+          // Overriding the row's default open-tooltip only when there IS a watcher: an unwatched shell
+          // keeps exactly the row it has always had, so the marker is the exception rather than a new
+          // reading every row has to carry.
+          title={isWatched(s) ? `${s.label}\nWatched — this thread wakes when it finishes` : undefined}
         />
       ))}
       {/* THE PR WATCHERS, last, because they are the least likely to change while you are looking: a

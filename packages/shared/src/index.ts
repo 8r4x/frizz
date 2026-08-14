@@ -316,8 +316,22 @@ export type NativeInputRequired = z.infer<typeof NativeInputRequired>
 // and new activity re-surfaces it. The human can park it via the "PR watcher armed" card's Snooze button
 // (a hold the next activity clears). Pair `pr-watch:` with `human:` only when the worker is genuinely
 // blocked on a NAMED reviewer — then `human:` supplies the Held/park while pr-watch supplies the cursor.
+// `watch: <watcher id>` — the thread is parked on a wait it ALREADY REGISTERED through
+// `mcp__frizz__watch`. One line per watcher, and the id is the one `add` handed back.
+//
+// IT REFERENCES, IT NEVER ARMS. A fence that could invent a wait can strand a thread: a background shell
+// finishing wakes nobody by itself — only a registered watcher does (scheduler SOURCE 8) — so a fence
+// naming a bare shell would park a thread nothing will ever re-invoke. Referencing keeps one registry,
+// one wake path, and one way to drop a wait. (Maintainer 2026-08-14 asked for exactly this shape: the
+// agent listing "the exact things that it's actually waiting for". Every earlier version of this syntax
+// was free text, which frizz could not check; an id it can.)
+//
+// The fence is a DECLARATION and the registry is the fact. A declared park counts only while every id it
+// names is still an ARMED watch on this thread — an unknown id, a settled one, or someone else's is not a
+// park at all, and the thread queues as usual. It fails OPEN on purpose: a typo must not be a way to
+// vanish from the board.
 export const AwaitingHint = z.object({
-  kind: z.enum(["pr-watch", "human", "timer", "pr", "ci", "session"]),
+  kind: z.enum(["watch", "pr-watch", "human", "timer", "pr", "ci", "session"]),
   value: z.string(),
 })
 export type AwaitingHint = z.infer<typeof AwaitingHint>
@@ -726,6 +740,40 @@ export function watchWakeMessage(kind: ThreadWatchKind, target: string, detail: 
  *  — frizz writes this string and frizz reads it, both from this file. */
 export const SIGNOFF_NUDGE_MARKER = "**This message is from frizz, not from the human.**"
 
+/** The live things a thread could legitimately park on, appended to the reminder so the agent does not
+ *  have to go looking for ids it cannot see. Maintainer 2026-08-14: "the handoff lists out all of the
+ *  background shells and sub-agents with their identifiers so that it's really easy for the agent to
+ *  produce an awaiting fence that lists out the IDs properly."
+ *
+ *  It goes at the END and stays short. A long preamble is what made an agent omit half its handoff once
+ *  already, and this section is a lookup table, not an instruction. */
+export interface SignoffLiveOps {
+  /** Armed watchers — the ONLY ids a `watch:` line may name. */
+  watches: { id: string; target: string }[]
+  /** Running background shells. Nothing wakes the thread when one finishes unless a watcher is armed on
+   *  it, which is exactly why they are listed separately from the watchers above. */
+  shells: { id?: string; label: string }[]
+  /** Running sub-agents. Listed for completeness and deliberately NOT parkable: a finished sub-agent
+   *  re-invokes its parent by itself, so a fence naming one would add nothing. */
+  subAgents: { label: string }[]
+}
+
+export function signoffNudgeMessage(ops?: SignoffLiveOps): string {
+  const lines: string[] = []
+  if (ops?.watches.length) {
+    lines.push("", "Armed watchers — name these on `watch:` lines to park on them:")
+    for (const w of ops.watches) lines.push(`- \`${w.id}\` — ${w.target}`)
+  }
+  if (ops?.shells.length) {
+    lines.push("", "Background shells still running (register a watcher first if you mean to wait on one):")
+    for (const sh of ops.shells) lines.push(`- ${sh.label}${sh.id ? ` — \`${sh.id}\`` : ""}`)
+  }
+  if (ops?.subAgents.length) {
+    lines.push("", `Sub-agents still running: ${ops.subAgents.map((a) => a.label).join(", ")}. They re-invoke you on their own — do not park on them.`)
+  }
+  return lines.length === 0 ? SIGNOFF_NUDGE_MESSAGE : `${SIGNOFF_NUDGE_MESSAGE}\n${lines.join("\n")}`
+}
+
 export const SIGNOFF_NUDGE_MESSAGE = [
   `${SIGNOFF_NUDGE_MARKER} Nothing about your task has changed, and no new work is being asked of you.`,
   "",
@@ -741,7 +789,10 @@ export const SIGNOFF_NUDGE_MESSAGE = [
   "- `` ```done `` — genuinely FINISHED. A DISMISSAL: the card is filed away and nobody looks again, so",
   "  if anything is still owed, it is not done. Body: 1-3 sentences, then bullets, each opening with a",
   "  **bolded verb phrase**.",
-  "- Blocked on a PR, CI, or your own background shell? Register it with `mcp__frizz__watch` and rest.",
+  "- `` ```awaiting `` — you are waiting on background work that will report on its own. Register it with",
+  "  `mcp__frizz__watch` first, then name each watcher id on its own `watch: <id>` line inside the fence.",
+  "  Frizz checks those ids: name only what you are ACTUALLY waiting for, never a dev server you left",
+  "  running, and the thread stays out of the human's queue until one of them reports.",
   "",
   "**DO NOT REPEAT YOURSELF.** If the message you just wrote already stands on its own, reply with the",
   "fence ALONE — the human reads both together, so restating it costs them the second read for nothing.",
@@ -786,26 +837,21 @@ export type RegisterableThreadWatchKind = z.infer<typeof RegisterableThreadWatch
 /** The thing being watched: a background shell's task id, its launch id, or its label. */
 export const ThreadWatchTarget = z.string().trim().min(1).max(200)
 
-/** The one bit a shell watcher's `cursor` column carries: this target has been OBSERVED ALIVE, so its
- *  absence from here on means it finished rather than that it never started. Named here rather than in
- *  the scheduler because the board and the router both put it on the wire (`ThreadWatchView.seen`). */
-export const SHELL_WATCH_SEEN = "seen"
-
-/** One armed (or just-settled) watcher, as the worker's own tool reads it back. */
+/** One armed (or just-settled) watcher, as the worker's own tool reads it back.
+ *
+ *  NO `seen` FIELD, and it is worth saying why not, because it was added and then removed inside one
+ *  day (2026-08-14). A shell watcher only fires seen-then-gone, so "frizz has never observed this target
+ *  alive" is a real and useful distinction — it means the watcher is wedged rather than waiting. It went
+ *  on the wire to let the footer's armed-watchers readout say so, and then that readout was deleted
+ *  outright for duplicating the rows under the prompt box. Nothing reads the bit now, so it does not
+ *  travel: the seen-then-gone cursor stays a scheduler-internal fact (scheduler.ts SHELL_SEEN). If a
+ *  surface ever needs to distinguish wedged from waiting again, this is the field to bring back. */
 export const ThreadWatchView = z.object({
   id: z.string(),
   kind: ThreadWatchKind,
   target: z.string(),
   state: z.enum(["armed", "fired", "dropped"]),
   createdAt: z.string(),
-  // Has frizz ever seen this target ALIVE? A `shell` watcher only fires SEEN-THEN-GONE, so one whose
-  // target never matched a live row is not waiting — it is WEDGED, and will stay armed until the worker
-  // drops it. The readout has to be able to say so: two such watchers, both naming shells that had long
-  // since finished, is exactly the state that read as "watching 2 things I cannot find anywhere"
-  // (maintainer 2026-08-14). Defaults true so a `github` watch — which has no registry row and no
-  // seen-then-gone rule — and any snapshot from a server that predates this field read as armed rather
-  // than as freshly-broken.
-  seen: z.boolean().default(true),
 }).strict()
 export type ThreadWatchView = z.infer<typeof ThreadWatchView>
 

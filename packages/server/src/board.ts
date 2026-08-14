@@ -7,7 +7,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import watcher from "@parcel/watcher"
 import type { BoardSnapshot, ThreadView, RuntimeState, PlanView, ThreadRecurringPrompt } from "@frizz/shared"
-import { BoardDiffer, PermissionMode, SHELL_WATCH_SEEN, SnoozeUntil, ThreadSlug, isDirectSubAgent, isValidAwaitingTimer, type PermissionMode as PermissionModeValue } from "@frizz/shared"
+import { BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isDirectSubAgent, isValidAwaitingTimer, type PermissionMode as PermissionModeValue } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import type { Project } from "./project.ts"
 import { isHeadlessRow, isBrokerClaudeRow, sessionTitleLocked } from "./storage.ts"
@@ -342,10 +342,6 @@ export function githubWatchViews(slug: string, tele: SessionTelemetry | undefine
       // watcher's own activity baseline is keyed on. Falls back to the thread's last activity when the
       // fold has no instant for the fence.
       createdAt: fenceAt ?? tele.lastAssistantAt ?? new Date().toISOString(),
-      // Always true: seen-then-gone is a SHELL rule (the target has to be observed alive before its
-      // absence can mean "finished"). A PR watcher polls GitHub directly and has nothing to observe
-      // first, so there is no wedged state for the readout to warn about.
-      seen: true,
     })
   }
   return out
@@ -832,9 +828,6 @@ function sessionThreadView(
         target: w.target,
         state: w.state,
         createdAt: new Date(w.created_at).toISOString(),
-        // The seen-then-gone bit, so the footer readout can distinguish a watcher that is WAITING from
-        // one that is wedged on a target frizz has never observed alive (see ThreadWatchView.seen).
-        seen: w.cursor === SHELL_WATCH_SEEN,
       })),
       ...githubWatchViews(row.slug, tele, tele?.lastAssistantAt),
     ],
