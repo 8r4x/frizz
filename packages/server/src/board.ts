@@ -16,7 +16,7 @@ import { normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
 import type { Tailer, SessionTelemetry } from "./tailer.ts"
 import type { InteractionChange } from "./interaction-store.ts"
 import { frizzDirExists } from "./frizz.ts"
-import { parsePrRef } from "./awaiting.ts"
+import { githubStatusKey, parsePrRef, readGithubStatusBook, GITHUB_STATUS_SETTING, type GithubStatusBook } from "./awaiting.ts"
 import { findByPath } from "./project-registry.ts"
 import { parseDeliveryLedger } from "./delivery-ledger.ts"
 import { effectivePermissionMode, resolveLegacyThreadFile } from "./dispatch.ts"
@@ -353,6 +353,38 @@ export function hasDeclaredWait(tele: SessionTelemetry | undefined, nowMs: numbe
   return (tele?.subAgents ?? []).some((a) => isDirectSubAgent(a) && a.state === "running")
 }
 
+// IS THE THREAD PARKED BEHIND CI THAT IS STILL RUNNING?
+//
+// A pr-watch thread is normally a VISIBLE queue handoff, and that is deliberate — a PR whose reviews may
+// never arrive must not silently vanish (2026-07-22). But CI running is a wait with a KNOWN TERMINAL
+// CONDITION, which review does not have, so it is the one case where hiding the card cannot lose
+// anything: the checks finish, and the thread comes straight back (maintainer 2026-08-14: "if there is a
+// GitHub watcher registered and the GitHub actions are still running, then that should remain in the
+// running active rail. Only if CI has failed or completed successfully should it show up back in the
+// queue").
+//
+// ALL of them, not any. With several PRs watched, one finishing is something the human can act on, so
+// the thread queues — the same all-or-nothing reading the declared park uses.
+//
+// AN UNPOLLED PR DOES NOT HOLD. No reading means frizz does not know, and not-knowing must never be a
+// reason a thread leaves the queue; nor does a PR with no checks at all (`none`), which would otherwise
+// wait forever for CI that is never coming. Only a live `running` reading holds, and only while the PR
+// is still open.
+function heldByRunningChecks(tele: SessionTelemetry | undefined, github: GithubStatusBook): boolean {
+  if (tele?.lastFence?.kind !== "awaiting") return false
+  const refs: string[] = []
+  for (const hint of tele.lastFence.hints) {
+    if (hint.kind !== "pr-watch") continue
+    const ref = parsePrRef(hint.value)
+    if (ref) refs.push(githubStatusKey(ref))
+  }
+  if (refs.length === 0) return false
+  return refs.every((key) => {
+    const status = github[key]
+    return status?.checks === "running" && status.state === "open"
+  })
+}
+
 function hasLiveOwnWork(tele: SessionTelemetry | undefined): boolean {
   return Boolean(
     tele?.subAgents?.some((agent) => isDirectSubAgent(agent) && agent.state === "running") ||
@@ -419,7 +451,12 @@ function hasParkedExternalWait(tele: SessionTelemetry | undefined, nowMs: number
 // scheduler stops watching. The ID is stable across ticks (slug + target) so a row does not remount on
 // every board delta, and there is nothing to DROP: the affordance for hiding one is the snooze the
 // operator already uses for a thread resting on background work.
-export function fenceWatchViews(slug: string, tele: SessionTelemetry | undefined, fenceAt: string | undefined): ThreadView["watches"] {
+export function fenceWatchViews(
+  slug: string,
+  tele: SessionTelemetry | undefined,
+  fenceAt: string | undefined,
+  github: GithubStatusBook = {},
+): ThreadView["watches"] {
   if (tele?.lastFence?.kind !== "awaiting") return []
   const seen = new Set<string>()
   const out: ThreadView["watches"] = []
@@ -433,7 +470,16 @@ export function fenceWatchViews(slug: string, tele: SessionTelemetry | undefined
       const target = `${ref.owner}/${ref.repo}#${ref.number}`
       if (seen.has(`github:${target}`)) continue
       seen.add(`github:${target}`)
-      out.push({ id: `github:${slug}:${target}`, kind: "github" as const, target, state: "armed" as const, createdAt })
+      out.push({
+        id: `github:${slug}:${target}`,
+        kind: "github" as const,
+        target,
+        state: "armed" as const,
+        createdAt,
+        // Absent until the poller's first successful read of this PR. The card says "checking…" then,
+        // rather than inventing a verdict — an unpolled PR and a PR with no CI are different facts.
+        ...(github[target] ? { github: github[target] } : {}),
+      })
       continue
     }
     if (hint.kind !== "watch") continue
@@ -491,6 +537,7 @@ export function deriveNeedsYou(
   // received this row's outstanding sends is gone. Read by hasFreshDelivery alone — see there. Defaults
   // false so every other caller (and every test) keeps today's behaviour.
   deliveryProcessGone = false,
+  github: GithubStatusBook = {},
 ): boolean {
   // Snooze is explicit operator lifecycle state. It must be checked before provider/question/crash
   // gates so choosing Snooze from any queue card actually parks that card until its exact deadline.
@@ -596,6 +643,11 @@ export function deriveNeedsYou(
   // card would be false for exactly the threads it exists to describe — the drawer and the full-screen
   // page would blank out at rest and read as "the agent died".
   if (excuseLiveOwnWork && runtime !== "exited" && hasDeclaredBackgroundPark(tele, nowMs)) return false
+  // CI STILL RUNNING ON EVERY WATCHED PR. Ahead of the live-own-work line below, which would otherwise
+  // queue the same thread on the strength of the watcher being armed at all. Rides `excuseLiveOwnWork`
+  // for the reason that flag exists: the CARD must still state the wait (deriveAwaitingBackground opts
+  // out), or the drawer blanks at rest and reads as "the agent died".
+  if (excuseLiveOwnWork && runtime !== "exited" && heldByRunningChecks(tele, github)) return false
   if (runtime !== "exited" && hasLiveOwnWork(tele) && tele?.lastFence?.kind !== "done") return !bgSnoozeArmed(row)
   // A final ```done fence is a CHECKED completion handoff: show its success card in the queue until the
   // human explicitly Archives the thread. Like a question, merely viewing it does not resolve it. The
@@ -641,6 +693,7 @@ export function deriveAwaitingBackground(
   nowMs = Date.now(),
   limitPause: ThreadView["limitPause"] = undefined,
   deliveryProcessGone = false,
+  github: GithubStatusBook = {},
 ): boolean {
   // DECLARED, not inferred. This card used to appear whenever the thread had anything running, which is
   // how it came to announce a wait on a dev server nobody tore down. It now states what the worker said
@@ -851,6 +904,11 @@ function sessionThreadView(
   nowMs: number,
   codexTurnLiveness: CodexTurnLivenessReader,
   claudeBrokerDaemonAlive: ClaudeBrokerLivenessReader,
+  // Every watched PR's checks/mergeability as the poller last saw it, read once per build by the caller.
+  // It decides a QUEUE RULE (checks still running → the active rail, not the queue) as well as what the
+  // card renders, so both read the same book — a card stating check state the board could not see is
+  // exactly the drift that once produced two cards disagreeing about one wait.
+  github: GithubStatusBook = {},
 ): ThreadView {
   // A headless thread mid-turn with nobody driving it is a crash/stall, not a rest. For codex that is
   // an app-server that stopped advancing the rollout; for the broker it is a dead ownerless daemon (its
@@ -894,8 +952,8 @@ function sessionThreadView(
   const state = effectiveSessionState(row, registeredLegacyTerminal)
   const archived = state === "archived"
   const limitPause = resolveLimitPause(row, tele, nowMs)
-  const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone)
-  const awaitingBackground = archived ? false : deriveAwaitingBackground(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, deliveryProcessGone)
+  const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github)
+  const awaitingBackground = archived ? false : deriveAwaitingBackground(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, deliveryProcessGone, github)
   // A pane that exited with work still outstanding — a turn in flight, OR a sub-agent still reading
   // "running" (its parent is gone, so it cannot actually be live) — is a crash/stall, not a clean
   // handoff, so it cards as "stalled" not a bare "rest". Mirrors deriveNeedsYou's surfacing above.
@@ -941,7 +999,7 @@ function sessionThreadView(
     // become the github rows, `watch:` lines the shell rows — so this strip lists exactly what will
     // actually wake the thread, and the two cannot drift into claiming different things. There is no
     // registry behind either any more (`thread_watch`, retired 2026-08-14).
-    watches: fenceWatchViews(row.slug, tele, tele?.lastAssistantAt),
+    watches: fenceWatchViews(row.slug, tele, tele?.lastAssistantAt, github),
     pendingAsk: tele?.pendingAsk ? { questions: tele.pendingAsk.questions } : undefined,
     nativeInputRequired: tele?.nativeInputRequired,
     pendingQuestion: tele?.pendingQuestion ?? false,
@@ -1127,6 +1185,9 @@ export function createBoard(
     // Old/corrupt databases predate the canonical storage guard. Keep such rows inert instead of
     // emitting an invalid board id or allowing it to reach tailer/tmux consumers.
     const rows = storage.allSessions().filter((row) => ThreadSlug.safeParse(row.slug).success)
+    // ONE READ PER BUILD, not per thread: the watched-PR book is keyed by ref and shared by every thread
+    // watching that PR, and it is parsed on the way in.
+    const github = readGithubStatusBook(storage.getSetting(GITHUB_STATUS_SETTING))
     const currentInteractionKeys = new Set<string>()
     const out: ThreadView[] = []
     for (const row of rows) {
@@ -1165,6 +1226,7 @@ export function createBoard(
         nowMs,
         codexTurnLiveness,
         claudeBrokerDaemonAlive,
+        github,
       ))
     }
     for (const key of pendingInteractionCache.keys()) {

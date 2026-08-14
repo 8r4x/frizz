@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { compactionPromptMessage, formatGithubWakeSteer, isValidAwaitingTimer, restPromptMessage, schedulePromptMessage, timerPromptMessage, watchWakeMessage, signoffNudgeMessage, wakeDeliveryToken, type QuotaSnapshot } from "@frizz/shared"
+import { compactionPromptMessage, formatGithubWakeSteer, type GithubWatchStatus, isValidAwaitingTimer, restPromptMessage, schedulePromptMessage, timerPromptMessage, watchWakeMessage, signoffNudgeMessage, wakeDeliveryToken, type QuotaSnapshot } from "@frizz/shared"
+import { GITHUB_STATUS_SETTING } from "./awaiting.ts"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
 import type { FenceView, SessionTelemetry } from "./tailer.ts"
@@ -61,6 +62,11 @@ export interface PrStatus {
   state: string // OPEN | CLOSED | MERGED
   mergedAt: string | null
   rollup: RollupEntry[] // statusCheckRollup entries (CheckRun and/or StatusContext shapes)
+  // GitHub's own merge verdict, as the merge box states it. MERGEABLE | CONFLICTING | UNKNOWN, plus the
+  // review gate (APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED | "") — the two facts behind "can this
+  // actually land", which the card renders and the queue rule reads.
+  mergeable?: string
+  reviewDecision?: string
   // Workflow runs queried by the PR's exact head SHA. statusCheckRollup can omit a fork-gated
   // ACTION_REQUIRED run, so it is never sufficient evidence that a legacy `ci:` fence passed.
   workflowRuns?: WorkflowRun[]
@@ -103,7 +109,7 @@ function refKey(r: PrRef): string {
 // numeric selector plus an explicit repository. Kept pure/exported so a regression cannot silently
 // turn every healthy legacy PR/CI poll into an "unavailable" result again.
 export function ghPrViewArgs(ref: PrRef): string[] {
-  return ["pr", "view", String(ref.number), "--repo", `${ref.owner}/${ref.repo}`, "--json", "state,mergedAt,statusCheckRollup,headRefOid"]
+  return ["pr", "view", String(ref.number), "--repo", `${ref.owner}/${ref.repo}`, "--json", "state,mergedAt,statusCheckRollup,headRefOid,mergeable,reviewDecision"]
 }
 
 // Retries preserve obsolete failed/ACTION_REQUIRED runs on the same SHA. Match the plugin monitor:
@@ -186,6 +192,56 @@ export function failedCheckNames(rollup: RollupEntry[], runs: WorkflowRun[] = []
     push(run.workflowName ?? run.name)
   }
   return { names: names.slice(0, cap), omitted: Math.max(0, names.length - cap) }
+}
+
+// ---- WHAT A WATCHED PR'S CHECKS LOOK LIKE FROM OUTSIDE ------------------------------------------
+// The same rollup the legacy `ci:` verdict reads, projected into the shape GitHub's own merge box
+// states — because it now DECIDES A QUEUE RULE and not just a readout (maintainer 2026-08-14: "if
+// there is a GitHub watcher registered and the GitHub actions are still running, then that should
+// remain in the running active rail. Only if CI has failed or completed successfully should it show up
+// back in the queue").
+//
+// `none` and `running` are deliberately different answers. An EMPTY rollup means no check has reported
+// yet, which `evalRollup` already treats as pending — but a PR with no CI at all would then wait
+// forever for checks that are never coming, so the two are split here: `none` lets the thread queue
+// immediately, `running` is what parks it.
+export function githubWatchStatus(pr: PrStatus, polledAt: string): GithubWatchStatus {
+  const entries = Array.isArray(pr.rollup) ? pr.rollup.filter((c) => c && typeof c === "object") : []
+  let running = 0
+  let passed = 0
+  let failed = 0
+  for (const c of entries) {
+    const status = typeof c.status === "string" ? c.status : undefined
+    const state = typeof c.state === "string" ? c.state : undefined
+    const conclusion = typeof c.conclusion === "string" ? c.conclusion : undefined
+    // Terminal ONLY if it AFFIRMATIVELY says so, exactly as `evalRollup` reads it: an unrecognizable
+    // entry counts as still running, never as quietly green.
+    const terminal = status ? status === "COMPLETED" : state ? state !== "PENDING" && state !== "EXPECTED" : false
+    if (!terminal) running++
+    else if (rollupEntryFailed(conclusion, state)) failed++
+    else passed++
+  }
+  const state = pr.state === "MERGED" ? "merged" as const : pr.state === "CLOSED" ? "closed" as const : "open" as const
+  const checks: GithubWatchStatus["checks"] =
+    entries.length === 0 ? "none" : failed > 0 ? "failing" : running > 0 ? "running" : "passing"
+  // MERGEABILITY, in GitHub's own three words plus the review gate. `blocked` is deliberately coarse:
+  // a required review and a failing required check are reported the same way, and frizz has no business
+  // claiming to tell them apart.
+  const merge: GithubWatchStatus["merge"] =
+    pr.mergeable === "CONFLICTING" ? "conflicting"
+    : pr.mergeable !== "MERGEABLE" ? "unknown"
+    : checks === "failing" || pr.reviewDecision === "CHANGES_REQUESTED" || pr.reviewDecision === "REVIEW_REQUIRED" ? "blocked"
+    : "mergeable"
+  return {
+    checks,
+    running,
+    passed,
+    failed,
+    failing: failedCheckNames(entries, pr.workflowRuns ?? []).names,
+    merge,
+    state,
+    polledAt,
+  }
 }
 
 // The PR-activity watcher hint. A one-line predicate (rather than inlining `=== "pr-watch"`) keeps
@@ -789,7 +845,10 @@ async function defaultFetchPr(ref: PrRef): Promise<PrStatus | undefined> {
       ghPrViewArgs(ref),
       { timeout: 15_000, maxBuffer: 8_000_000, env: { ...process.env, GH_PAGER: "cat", GH_PROMPT_DISABLED: "1" } },
     )
-    const j = JSON.parse(stdout) as { state?: unknown; mergedAt?: unknown; statusCheckRollup?: unknown; headRefOid?: unknown }
+    const j = JSON.parse(stdout) as {
+      state?: unknown; mergedAt?: unknown; statusCheckRollup?: unknown; headRefOid?: unknown
+      mergeable?: unknown; reviewDecision?: unknown
+    }
     // A SHAPE SURPRISE (valid JSON, but no string `state`) is INDETERMINATE, not "OPEN with no
     // checks" — returning a fabricated `{state:"", rollup:[]}` would read as UNMET and ARM the hint,
     // so a later accurate read could then fire an already-merged PR. Undefined = try again next poll.
@@ -806,6 +865,8 @@ async function defaultFetchPr(ref: PrRef): Promise<PrStatus | undefined> {
       state: j.state,
       mergedAt: typeof j.mergedAt === "string" ? j.mergedAt : null,
       rollup: Array.isArray(j.statusCheckRollup) ? (j.statusCheckRollup as RollupEntry[]) : [],
+      mergeable: typeof j.mergeable === "string" ? j.mergeable : undefined,
+      reviewDecision: typeof j.reviewDecision === "string" ? j.reviewDecision : undefined,
       workflowRuns: workflowRuns as WorkflowRun[],
     }
   } catch {
@@ -824,6 +885,9 @@ interface ThreadWake {
 }
 
 const FIRED_CAP = 500 // legacy pre-outbox marker cap (read during rolling upgrade, never newly added)
+/** How many PRs' readings the book keeps. Shared by ref, so two threads watching one PR see one reading
+ *  and cost one fetch. The key itself lives in awaiting.ts, beside the parser the board reads it with. */
+const GITHUB_STATUS_CAP = 200
 const REGISTRATION_CAP = 500
 const REVIEW_SEEN_CAP = 300
 // (thread, PR) pairs whose pre-existing activity has already been replayed once. Sized like the other
@@ -937,6 +1001,25 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   let timer: NodeJS.Timeout | null = null
   let activeTick: Promise<void> | null = null // guard + shutdown drain for a slow poll/delivery
   let stopped = false
+
+  // ---- THE WATCHED-PR STATUS LEDGER ---------------------------------------------------------------
+  // The poller is the only thing here that talks to GitHub, and the BOARD is what has to render the
+  // result and decide the queue rule from it. So the poll publishes into a setting keyed by PR ref, and
+  // the board reads it — one shared reading per PR, however many threads are watching it.
+  //
+  // A setting rather than a table because there is nothing to reconcile: it is a pure CACHE of GitHub's
+  // own answer, every entry is replaceable, and an entry for a PR nobody watches any more is stale data
+  // that costs a few bytes until it is evicted. Bounded like the ledgers beside it.
+  function publishGithubStatus(key: string, pr: PrStatus, nowMs: number): void {
+    const raw = deps.storage.getSetting(GITHUB_STATUS_SETTING)
+    const book = raw && typeof raw === "object" && !Array.isArray(raw) ? { ...(raw as Record<string, unknown>) } : {}
+    book[key] = githubWatchStatus(pr, new Date(nowMs).toISOString())
+    const keys = Object.keys(book)
+    // Newest-wins eviction on insertion order, which for this book is poll order — the entry evicted is
+    // the one longest unpolled, i.e. the PR nobody is watching any more.
+    for (const stale of keys.slice(0, Math.max(0, keys.length - GITHUB_STATUS_CAP))) delete book[stale]
+    deps.storage.setSetting(GITHUB_STATUS_SETTING, book)
+  }
 
   function loadFired(): string[] {
     const raw = deps.storage.getSetting("waker.fired")
@@ -1460,26 +1543,37 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (st.fired) return // already queued/resumed for this rest — wait for delivery or fence supersession
 
     // Refresh PR statuses/review activity on the slow cadence (one fetch per distinct ref per kind).
-    const needsPr = actionable.some((h) => h.kind === "pr" || h.kind === "ci")
+    const needsPr = actionable.some((h) => h.kind === "pr" || h.kind === "ci" || isPrWatchHint(h.kind))
     const needsReview = actionable.some((h) => isPrWatchHint(h.kind))
     if ((needsPr || needsReview) && (st.lastPollAt === 0 || nowMs - st.lastPollAt >= pollMs)) {
       st.lastPollAt = nowMs
       const refs = new Map<string, PrRef>()
       const reviewRefs = new Map<string, PrRef>()
+      // Which refs a legacy `pr:`/`ci:` VERDICT depends on. A `pr-watch:` ref is fetched too — its
+      // check/merge status feeds the board's watched-PR rows and the queue rule that holds a thread out
+      // of the queue while CI runs — but that reading is PRESENTATION, so a failed fetch for one of those
+      // is silent. The card says "Checking…", the thread queues as usual, and nothing is lost. Logging it
+      // would put a line on every poll of every parked PR, forever, for a thing nothing waits on.
+      const verdictRefs = new Set<string>()
       for (const h of actionable) {
         const ref = parsePrRef(h.value)
         if (!ref) continue
-        if (h.kind === "pr" || h.kind === "ci") refs.set(refKey(ref), ref)
+        if (h.kind === "pr" || h.kind === "ci") verdictRefs.add(refKey(ref))
+        if (h.kind === "pr" || h.kind === "ci" || isPrWatchHint(h.kind)) refs.set(refKey(ref), ref)
         if (isPrWatchHint(h.kind)) reviewRefs.set(refKey(ref), ref)
       }
       await Promise.all([
         ...[...refs].map(async ([k, ref]) => {
           try {
             const s = await fetchPr(ref)
-            if (s) st.prCache.set(k, s) // keep the last-known status on a transient failure
-            else log(`waker: gh check skipped for ${k} (${slug}) — gh unavailable / not authed / rate-limited`)
+            if (s) {
+              st.prCache.set(k, s) // keep the last-known status on a transient failure
+              publishGithubStatus(k, s, nowMs)
+            } else if (verdictRefs.has(k)) {
+              log(`waker: gh check skipped for ${k} (${slug}) — gh unavailable / not authed / rate-limited`)
+            }
           } catch (err) {
-            log(`waker: gh check errored for ${k} (${slug}): ${err instanceof Error ? err.message : String(err)}`)
+            if (verdictRefs.has(k)) log(`waker: gh check errored for ${k} (${slug}): ${err instanceof Error ? err.message : String(err)}`)
           }
         }),
         ...[...reviewRefs].map(async ([k, ref]) => {

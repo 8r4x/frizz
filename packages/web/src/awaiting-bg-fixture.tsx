@@ -27,6 +27,10 @@ const params = new URLSearchParams(location.search)
 // offers a park action, so this card is where the wait is stated and its event-snooze is the one control.
 // ?watch=both — a thread holding a shell AND a watcher, so the sentence has to name both kinds.
 const watchMode = params.get("watch")
+// THIS APP RENDERS IN TWO FONTS and a fixture that sets neither silently takes the MONO default, which
+// is how a glyph measured at a 0.00px residual once rode visibly high in the maintainer's sans window.
+// `?font=sans|mono`, applied before first paint exactly as index.html does it.
+document.documentElement.dataset.font = params.get("font") === "sans" ? "sans" : "mono"
 const wantAgents = params.get("agents") === "1"
 const wantWatch = watchMode !== null
 // Shells are the DEFAULT shape; ?agents=1 swaps them for sub-agents, and ?watch=1 for a lone watcher.
@@ -74,8 +78,25 @@ const thread = {
         { label: "vite dev --host", startedAt: "2026-07-23T09:06:00.000Z", state: "running" },
         { label: "gh run watch 1842", startedAt: "2026-07-23T09:06:10.000Z", state: "running" },
       ],
+  // ?watch=1|both seeds FOUR PRs, one per check state, so the row's whole vocabulary is on screen at
+  // once: running with counts, all-green-and-mergeable, red with the failing jobs named, and one frizz
+  // has not polled yet ("Checking…", which must not read as "no checks").
   watches: wantWatch
-    ? [{ id: "github:demo:acme/app#391", kind: "github", target: "acme/app#391", state: "armed", createdAt: "2026-07-23T09:04:00.000Z" }]
+    ? [
+        {
+          id: "github:demo:acme/app#391", kind: "github", target: "acme/app#391", state: "armed", createdAt: "2026-07-23T09:04:00.000Z",
+          github: { checks: "running", running: 3, passed: 12, failed: 0, failing: [], merge: "blocked", state: "open", polledAt: "2026-07-23T09:06:50.000Z" },
+        },
+        {
+          id: "github:demo:acme/app#392", kind: "github", target: "acme/app#392", state: "armed", createdAt: "2026-07-23T09:04:10.000Z",
+          github: { checks: "passing", running: 0, passed: 15, failed: 0, failing: [], merge: "mergeable", state: "open", polledAt: "2026-07-23T09:06:50.000Z" },
+        },
+        {
+          id: "github:demo:acme/app#393", kind: "github", target: "acme/app#393", state: "armed", createdAt: "2026-07-23T09:04:20.000Z",
+          github: { checks: "failing", running: 1, passed: 9, failed: 2, failing: ["lint", "e2e (chromium)"], merge: "blocked", state: "open", polledAt: "2026-07-23T09:06:50.000Z" },
+        },
+        { id: "github:demo:acme/app#394", kind: "github", target: "acme/app#394", state: "armed", createdAt: "2026-07-23T09:04:30.000Z" },
+      ]
     : [],
   lastActivityAt: "2026-07-23T09:07:00.000Z",
 } as unknown as ThreadViewModel

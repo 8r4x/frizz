@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { isValidAwaitingTimer, type AwaitingHint } from "@frizz/shared"
+import { GithubWatchStatus, isValidAwaitingTimer, type AwaitingHint } from "@frizz/shared"
 
 // The PR-reference vocabulary shared by the pr-watch scheduler and the awaiting-confirmation RPC.
 // It lives here rather than in scheduler.ts so the router can validate a confirmation without pulling
@@ -47,4 +47,34 @@ export function awaitingFenceIdentity(hint: AwaitingHint, fenceAt: string): stri
     .update("\0")
     .update(hint.value)
     .digest("hex")
+}
+
+// ---- THE WATCHED-PR STATUS BOOK -------------------------------------------------------------------
+// One reading per PR, published by the scheduler's poller and read by the board. It lives in a setting
+// rather than a table because it is a pure CACHE of GitHub's own answer: every entry is replaceable,
+// nothing reconciles against it, and an entry for a PR nobody watches any more is a few stale bytes.
+//
+// The KEY and the parser live here, beside `parsePrRef`, so the board can read the book without pulling
+// in the whole waker — the same reason `parsePrRef` moved here in the first place.
+export const GITHUB_STATUS_SETTING = "waker.github.status.v1"
+
+export type GithubStatusBook = Record<string, GithubWatchStatus>
+
+/** The book as stored, validated entry by entry. A malformed entry is DROPPED rather than failing the
+ *  whole read: this decides a queue rule, and one bad row must not take a whole board's worth of PR
+ *  status with it. An older frizz's book simply reads as fewer entries. */
+export function readGithubStatusBook(raw: unknown): GithubStatusBook {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {}
+  const out: GithubStatusBook = {}
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    const parsed = GithubWatchStatus.safeParse(value)
+    if (parsed.success) out[key] = parsed.data
+  }
+  return out
+}
+
+/** The book's key for a ref — the same `owner/repo#N` string the fence's watch row is targeted by, so
+ *  the card, the queue rule and the poller all name one PR one way. */
+export function githubStatusKey(ref: PrRef): string {
+  return `${ref.owner}/${ref.repo}#${ref.number}`
 }

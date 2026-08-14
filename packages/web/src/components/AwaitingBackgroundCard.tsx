@@ -26,9 +26,10 @@
 // and the parent genuinely resumes; measured 15/15 times on a live worker thread, with idle windows as
 // short as 0.13s. This card is what makes that alternation legible.)
 import type { ReactNode } from "react"
-import { Hourglass, TerminalSquare } from "lucide-react"
-import type { ThreadView } from "@frizz/shared"
+import { CircleCheck, CircleDashed, CircleDot, CircleX, GitMerge, GitPullRequestClosed, Hourglass, TerminalSquare } from "lucide-react"
+import type { GithubWatchStatus, ThreadView, ThreadWatchView } from "@frizz/shared"
 import { isDirectSubAgent } from "@frizz/shared"
+import { githubRefUrl } from "../lib/githubRef.ts"
 import { CARD_BODY, CardActions, TranscriptCard } from "./TranscriptCard.tsx"
 
 // Name what the thread is ACTUALLY waiting on. Three real cases, and the sentence has to be true in all
@@ -121,6 +122,102 @@ function shellsAlone(thread: Pick<ThreadView, "subAgents" | "bgShells" | "watche
   return shells > 0 && !awaitsResults(thread) && prWatcherCount(thread) === 0
 }
 
+// ---- ONE ROW PER WATCHED PR ----------------------------------------------------------------------
+// Maintainer 2026-08-14: "in the card that renders all of the 'awaiting background tasks' stuff, we
+// should have a row for each GitHub watcher. If the PRs are mergeable, then we should indicate as much
+// in the UI. We should basically have it evoke the GitHub UI that shows up for running versus completed
+// checks."
+//
+// So the row is GitHub's merge box in one line: its own state glyph, the ref, the check counts, and the
+// merge verdict beneath. The VOCABULARY is GitHub's too, because the human has just come from there and
+// a second set of words for one fact is a second thing to learn.
+//
+// AN UNPOLLED PR SAYS "Checking…", not "no checks". They are different facts — frizz has not looked yet
+// versus this PR has no CI — and only the second of them means the wait is nearly over. The same
+// distinction decides the queue rule server-side, where not-knowing never parks a thread.
+
+const CHECKS_HEADLINE: Record<GithubWatchStatus["checks"], string> = {
+  running: "Some checks haven’t completed yet",
+  passing: "All checks have passed",
+  failing: "Some checks were not successful",
+  none: "No checks reported",
+}
+
+const MERGE_LINE: Record<GithubWatchStatus["merge"], string | null> = {
+  mergeable: "This branch has no conflicts with the base branch",
+  blocked: "Merging is blocked",
+  conflicting: "This branch has conflicts that must be resolved",
+  // UNKNOWN IS SILENT. GitHub computes mergeability asynchronously and reports UNKNOWN while it is
+  // thinking, so a line for it would say "frizz has not heard back" in words that sound like a verdict.
+  unknown: null,
+}
+
+function ChecksGlyph({ status }: { status: GithubWatchStatus | undefined }) {
+  // `1cap` is the RESOLVED font's cap height, so this puts a symmetric 1em glyph's ink on the cap band
+  // in either font at any size — nothing to re-measure when the font setting flips or the type scale
+  // moves. It needs a shared baseline to align against, hence `items-baseline` on the row.
+  //
+  // NO INK TRIM HERE, and that is a MEASURED result rather than an omission. The usual glyph-beside-text
+  // problem is a bare glyph wearing dead box on both sides; a lucide CIRCLE at size 12 paints ~11.5 of
+  // its 12 box px, so it behaves like a text run. Measured on this row (scripts/ink-gaps.mjs, dsf 4,
+  // sans): glyph→ref 6.50px against ref→headline 6.27px, both on one `gap-1.5`. A -1px trim "to be
+  // safe" made it WORSE (5.50 vs 6.27). 0.23px is inside the instrument's own noise floor — leave it.
+  const cls = "shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)]"
+  if (!status) return <CircleDashed size={12} className={`${cls} text-muted/60`} />
+  if (status.state === "merged") return <GitMerge size={12} className={`${cls} text-purple-400`} />
+  if (status.state === "closed") return <GitPullRequestClosed size={12} className={`${cls} text-red-400`} />
+  if (status.checks === "failing") return <CircleX size={12} className={`${cls} text-red-400`} />
+  if (status.checks === "passing") return <CircleCheck size={12} className={`${cls} text-emerald-500`} />
+  if (status.checks === "running") return <CircleDot size={12} className={`${cls} text-amber-400`} />
+  return <CircleDashed size={12} className={`${cls} text-muted/60`} />
+}
+
+/** "3 in progress, 12 successful, 1 failing" — GitHub's own counts, and only the ones that are nonzero:
+ *  a row of zeroes reads as noise, and every count that is there is a count worth reading. */
+export function checkCountLine(status: GithubWatchStatus): string {
+  const parts = [
+    status.running > 0 ? `${status.running} in progress` : null,
+    status.passed > 0 ? `${status.passed} successful` : null,
+    status.failed > 0 ? `${status.failed} failing` : null,
+  ].filter((p): p is string => p !== null)
+  return parts.join(", ")
+}
+
+/** The one-line state, as GitHub says it. Merged/closed outrank the checks: a merged PR's CI is history. */
+export function checksHeadline(status: GithubWatchStatus | undefined): string {
+  if (!status) return "Checking…"
+  if (status.state === "merged") return "Merged"
+  if (status.state === "closed") return "Closed"
+  return CHECKS_HEADLINE[status.checks]
+}
+
+function GithubWatchRow({ watch }: { watch: ThreadWatchView }) {
+  const status = watch.github
+  const url = githubRefUrl(watch.target)
+  const counts = status ? checkCountLine(status) : ""
+  const merge = status && status.state === "open" ? MERGE_LINE[status.merge] : null
+  return (
+    <div className="flex flex-col gap-0.5">
+      {/* items-baseline, not items-center: `self-baseline` on the glyph needs a shared baseline to
+          align against, and the 1em-symmetric correction beside it puts the ink on the cap band in
+          EITHER font (this app renders in two, and a hand-fitted constant is right in only one). */}
+      <div className="flex items-baseline gap-1.5 text-[12px] leading-5" data-pr-watch-row={watch.target}>
+        <span data-pr-glyph className="flex shrink-0"><ChecksGlyph status={status} /></span>
+        {url
+          ? <a data-pr-ref href={url} target="_blank" rel="noreferrer noopener" className="font-medium text-fg/90 underline decoration-border-strong underline-offset-2 hover:decoration-fg/60">{watch.target}</a>
+          : <span data-pr-ref className="font-medium text-fg/90">{watch.target}</span>}
+        <span data-pr-headline className="min-w-0 truncate text-muted/80">{checksHeadline(status)}{counts ? ` — ${counts}` : ""}</span>
+      </div>
+      {/* The failing JOBS, named. "Some checks were not successful" costs the reader a click to learn
+          which; the names cost nothing here and are the whole reason to look. */}
+      {status && status.failing.length > 0 && (
+        <div className="pl-[18px] text-[11.5px] leading-4 text-red-400/85">{status.failing.join(", ")}</div>
+      )}
+      {merge && <div className="pl-[18px] text-[11.5px] leading-4 text-muted/70">{merge}</div>}
+    </div>
+  )
+}
+
 export function AwaitingBackgroundCard({ thread, actions }: {
   thread: Pick<ThreadView, "subAgents" | "bgShells" | "watches">
   // The queue card's event-Snooze. Only the QUEUE passes one, and the shapes that reach the queue are
@@ -182,6 +279,20 @@ export function AwaitingBackgroundCard({ thread, actions }: {
           </>
         )}
       </p>
+      {/* THE WATCHED PRs, one row each, under the sentence that counts them. The prose says how many and
+          the rows say which — two surfaces, not one fact written twice.
+
+          gap-3 BETWEEN rows against the 2px inside one, and the ratio is the point: a row can be three
+          lines deep (ref, failing jobs, merge verdict), and at `gap-1.5` a sub-line sat 12.5px from the
+          NEXT ref against 10px from its own — near enough to read as belonging to the row below.
+          Measured on the four-state fixture at dsf 6. */}
+      {(thread.watches ?? []).filter((w) => w.kind === "github" && w.state === "armed").length > 0 && (
+        <div className="mt-2 flex flex-col gap-3">
+          {(thread.watches ?? []).filter((w) => w.kind === "github" && w.state === "armed").map((w) => (
+            <GithubWatchRow key={w.id} watch={w} />
+          ))}
+        </div>
+      )}
       {actions ? <CardActions>{actions}</CardActions> : null}
     </TranscriptCard>
   )

@@ -33,7 +33,9 @@ test("ghPrViewArgs uses numeric selector + explicit normalized repo (never owner
     "--repo",
     "acme/app",
     "--json",
-    "state,mergedAt,statusCheckRollup,headRefOid",
+    // `mergeable,reviewDecision` joined on 2026-08-14: the same one fetch now also feeds the board's
+    // watched-PR rows and the queue rule that keeps a thread out of the queue while CI runs.
+    "state,mergedAt,statusCheckRollup,headRefOid,mergeable,reviewDecision",
   ])
 })
 
