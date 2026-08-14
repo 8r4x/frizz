@@ -365,7 +365,7 @@ function PromptPanel({ thread, armed }: {
   // one is in flight simply queues behind it and the last draft wins. The only thing the flag added was
   // the flash.
   // WHAT AN UNARMED PANEL OPENS WITH, and it is a real default rather than an empty form: the standard
-  // sentence, with the stop hook on. The reason an operator opens this control is almost always the same
+  // text, with the stop hook on. The reason an operator opens this control is almost always the same
   // one, and there is no Save button to press — so accepting the default costs exactly one dismissal, and
   // typing over it costs what typing always cost (maintainer 2026-08-11: "default recurring prompt should
   // be …", "make Stop Hook checked by default").

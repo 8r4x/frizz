@@ -389,14 +389,27 @@ export const RECURRING_MIN_INTERVAL_SECONDS = 60
 export const RECURRING_MAX_INTERVAL_SECONDS = 24 * 60 * 60
 export const RecurringPromptText = z.string().trim().min(1).max(RECURRING_PROMPT_MAX)
 
-// WHAT THE PANEL OPENS WITH on a thread that has never armed one. The overwhelmingly common reason an
-// operator reaches for this control is the same one every time — the thread stopped with work left in it
-// — so the panel writes that sentence for them rather than making them phrase it again. It is a starting
-// point, not a fixed string: it is seeded into an editable textarea and anything typed over it wins.
+// WHAT THE PANEL OPENS WITH on a thread that has never armed one, and what every new thread is born
+// carrying. The overwhelmingly common reason an operator reaches for this control is the same one every
+// time — the thread stopped with work left in it — so the panel writes that sentence for them rather
+// than making them phrase it again. It is a starting point, not a fixed string: it is seeded into an
+// editable textarea and anything typed over it wins.
 //
-// Its second clause is what keeps the arrangement from being a nag. A thread told only to "keep going"
-// answers a question it cannot resolve by guessing; told this, it hands the question back through the
-// fence the board already renders as an answerable card.
+// IT IS DELIBERATELY LOPSIDED (maintainer 2026-08-14: "should bias the agent strongly towards continuing
+// with its work if there is incomplete work, unless there is a pressing or imminent decision that is
+// needed from the human"). The two clauses used to read as equal branches — keep going, or ask — and an
+// even split is not what this delivery is for: it lands on a thread that has already stopped, so the
+// only outcome worth buying is the one where it starts again. Hence the first sentence sends the worker
+// straight back to the work and NAMES the endings a worker mistakes for one, because the ordinary
+// failure is not a worker that refuses to continue, it is one that mistook a milestone for the finish.
+//
+// The stop clause is what keeps that from being a nag, and it is narrowed rather than dropped. A thread
+// told only to "keep going" answers a question it cannot resolve by guessing; told this, it hands back
+// the one class of question worth stopping for — the human's own, and blocking NOW — through the fence
+// the board already renders as an answerable card, and decides the rest itself.
+//
+// Nothing here teaches the ```done exit, because the trailer already does (`OPT_OUT_NOTE`), on every
+// delivery, whatever the operator has typed over this text.
 /** The triggers a Goal carries when nobody has chosen otherwise — the stop hook on, and the question
  *  hold with it. ONE definition, read by BOTH the dispatch that arms a brand-new thread and the footer
  *  panel that seeds an unarmed one, because a default that lives in two places is a default that
@@ -412,8 +425,11 @@ export const DEFAULT_GOAL_TRIGGERS = {
   pauseOnQuestions: true,
 } as const
 
+// NO BACKTICKED FENCE NAMES IN HERE. This text is rendered as markdown wherever the operator sees it,
+// and a lone ``` opens a code block that swallows the rest of the card. The trailer can afford them; the
+// prompt says "question fence" in words instead.
 export const DEFAULT_RECURRING_PROMPT =
-  "If further work towards the original task/goal remains, keep going. If there are open questions that require human input, ask them with question fences."
+  "Keep going. If ANY part of the original task is unfinished, unverified, or deferred, resume it NOW — a milestone, a green test run, a written-up plan and a long turn are none of them endings. Stop only for a decision that is genuinely the human's AND that blocks you right now: ask that one in a question fence. Every other open choice — a name, a default, a reversible design call — is yours to make: decide it, say in one line which way you went, and carry on."
 export const RecurringIntervalSeconds = z
   .number()
   .int()
@@ -687,6 +703,15 @@ export function watchWakeMessage(kind: ThreadWatchKind, target: string, detail: 
 //
 // SHORT, because it competes with the agent's own conclusion for attention, and because a long one
 // invites the agent to treat "how do I sign off?" as the task. Three facts and a shape.
+//
+// IT LEADS WITH "GO BACK TO THE WORK", not with the fence menu (2026-08-14, the same change that made
+// `DEFAULT_RECURRING_PROMPT` lopsided — see the comment there). The two deliveries land on the SAME rest
+// and must not pull against each other: a nudge whose first instruction is "pick one of these three ways
+// to stop" hands a half-finished thread a menu with no correct entry on it, and the agent picks the
+// closest — usually `done`, which is a dismissal. So the fence menu is now the OTHERWISE branch, and the
+// first branch says the fence is not what a thread with parts left owes. Nothing is lost from the
+// invariant: a thread that goes back to work leaves the queue by SPINNING, which is the outcome the
+// reminder wanted anyway.
 /** The nudge's opening line, exported because it does DOUBLE DUTY: it tells the agent whose message
  *  this is, and it is what the transcript matches on to collapse the delivery to one hairline rather
  *  than rendering frizz's boilerplate as a card over the agent's own words. A text match is honest here
@@ -694,9 +719,15 @@ export function watchWakeMessage(kind: ThreadWatchKind, target: string, detail: 
 export const SIGNOFF_NUDGE_MARKER = "**This message is from frizz, not from the human.**"
 
 export const SIGNOFF_NUDGE_MESSAGE = [
-  `${SIGNOFF_NUDGE_MARKER} Nothing about your task has changed, and this is not a request to do more work.`,
+  `${SIGNOFF_NUDGE_MARKER} Nothing about your task has changed, and no new work is being asked of you.`,
   "",
-  "You rested without a fence, so this thread cannot be triaged. Add one at the END of your next message:",
+  "You rested without a fence, so this thread cannot be triaged.",
+  "",
+  "**IF THE TASK STILL HAS PARTS LEFT, THE FENCE IS NOT WHAT YOU OWE — THE WORK IS.** Pick that back up",
+  "in THIS turn and sign off once it is genuinely finished. A milestone, a green test run and a long turn",
+  "are not endings, and neither is naming the next step or writing it into a scratch file.",
+  "",
+  "Otherwise, add a fence at the END of your next message:",
   "",
   "- `` ```question `` — you need the human. One question per fence, lettered options, one recommended.",
   "- `` ```done `` — genuinely FINISHED. A DISMISSAL: the card is filed away and nobody looks again, so",

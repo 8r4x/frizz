@@ -3,7 +3,37 @@
 // wording delivered and the wording recognized have to agree, and nothing else in the system checks it.
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { ALLDONE_SENTINEL, saysAllDone, restPromptMessage, schedulePromptMessage, formatIntervalLabel, parseRecurringPrompt } from "./index.ts"
+import { ALLDONE_SENTINEL, DEFAULT_RECURRING_PROMPT, saysAllDone, restPromptMessage, schedulePromptMessage, formatIntervalLabel, parseRecurringPrompt } from "./index.ts"
+
+// THE DEFAULT TEXT IS THE ONE GOAL MOST THREADS EVER RUN: every new thread is born carrying it (dispatch
+// `armDefaultGoal`) and the footer panel seeds an unarmed one from it, so almost nobody types their own.
+// Its BIAS is therefore a product decision rather than a wording choice, and it is deliberately lopsided
+// (maintainer 2026-08-14: bias "strongly towards continuing with its work if there is incomplete work,
+// unless there is a pressing or imminent decision that is needed from the human"). It used to read as two
+// equal branches — keep going, or ask — which is not what a delivery that lands on an ALREADY-STOPPED
+// thread is for.
+test("the default Goal sends a stopped thread back to the work, and narrows what earns a stop", () => {
+  assert.match(DEFAULT_RECURRING_PROMPT, /^Keep going\./, "continuing leads; it is not one branch of two")
+  assert.match(DEFAULT_RECURRING_PROMPT, /unfinished, unverified, or deferred/, "and it says what counts as left over")
+  // The endings a worker mistakes for one. Naming them is the whole difference between "keep going" and a
+  // thread that stops at the first green test run believing it is finished.
+  assert.match(DEFAULT_RECURRING_PROMPT, /are none of them endings/)
+  // The stop is NARROWED, not dropped: it still exists, still lands as a card the board can render, and
+  // still costs the human nothing to answer — but only for a decision that is theirs AND blocking now.
+  assert.match(DEFAULT_RECURRING_PROMPT, /genuinely the human's AND that blocks you right now/)
+  assert.match(DEFAULT_RECURRING_PROMPT, /question fence/)
+  // NO BACKTICKED FENCE NAMES. This text renders as markdown in the panel and in the transcript, where a
+  // lone ``` opens a code block that swallows everything after it. The trailer can afford them; this
+  // cannot, because the operator edits it.
+  assert.doesNotMatch(DEFAULT_RECURRING_PROMPT, /```/)
+  // …and it teaches no stopping protocol of its own: `restPromptMessage` appends the ```done exit to
+  // every delivery, whatever the operator has typed over this.
+  assert.match(restPromptMessage(DEFAULT_RECURRING_PROMPT), /```done/)
+  assert.deepEqual(parseRecurringPrompt(restPromptMessage(DEFAULT_RECURRING_PROMPT)), {
+    kind: "rest",
+    prompt: DEFAULT_RECURRING_PROMPT,
+  })
+})
 
 test("saysAllDone: the sentinel opts out on its own line, however the worker dressed it", () => {
   assert.equal(saysAllDone("ALLDONE"), true)

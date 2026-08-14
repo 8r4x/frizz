@@ -62,6 +62,17 @@ test("a rest with no fence is told how to sign off, and the text names all three
     // THE HEADLINE INSTRUCTION: a thread whose handoff already stands alone should answer with the
     // fence and nothing else. Without this the agent restates its whole summary under the reminder and
     // the human reads it twice (maintainer 2026-08-12).
+    // THE MENU IS THE SECOND BRANCH, NOT THE FIRST (2026-08-14). This delivery lands on a rest that may
+    // simply be premature, and a fence menu handed to a half-finished thread has no correct entry on it —
+    // the agent picks the closest, which is `done`, which files the thread away. So the reminder tells it
+    // to resume first and only then offers the shapes. The Goal arriving on the same rest says the same
+    // thing; two frizz deliveries pulling opposite ways is the failure this pins against.
+    assert.match(h.delivered[0], /THE FENCE IS NOT WHAT YOU OWE — THE WORK IS/)
+    assert.ok(
+      h.delivered[0].indexOf("THE WORK IS") < h.delivered[0].indexOf("```question"),
+      "resuming the work is offered BEFORE the fence menu, not as a footnote under it",
+    )
+    assert.match(h.delivered[0], /are not endings/, "and the endings a worker mistakes for one are named")
     assert.match(h.delivered[0], /DO NOT REPEAT YOURSELF/)
     assert.match(h.delivered[0], /reply with the\s+fence ALONE/)
     // The 1-3-sentences shape belongs to a `done` BODY and nowhere else — read as general guidance it
