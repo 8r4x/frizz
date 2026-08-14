@@ -10,7 +10,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createStorage, type SessionRow } from "./storage.ts"
+import { createStorage, type RecurringWrite, type SessionRow } from "./storage.ts"
 import type { SessionTelemetry, Tailer } from "./tailer.ts"
 import { createScheduler } from "./scheduler.ts"
 
@@ -201,9 +201,12 @@ test("a Goal and the reminder both queue for one rest, and a fence supersedes wh
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
     title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   } as SessionRow)
+  // The PANEL'S default: the question hold on, i.e. Autonomous mode OFF. With it off the reminder is the
+  // frizz-wide default it always was, which is what this test is about; the autonomous case is the block
+  // below.
   storage.setRecurringPromptBySlug(slug, {
     prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false,
-    pauseOnQuestions: false, intervalMs: null, armedAt: "2026-08-12T00:00:00.000Z",
+    pauseOnQuestions: true, intervalMs: null, armedAt: "2026-08-12T00:00:00.000Z",
   })
   let fence: SessionTelemetry["lastFence"]
   const delivered: string[] = []
@@ -237,3 +240,51 @@ test("a Goal and the reminder both queue for one rest, and a fence supersedes wh
     assert.equal(delivered.length, 2, "a signed-off thread is not re-prompted by either source")
   } finally { void s.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) }
 })
+
+// ---- AUTONOMOUS MODE, THE ONE PER-THREAD OFF SWITCH ----------------------------------------------
+// The reminder buys a queue A HUMAN READS. Autonomous mode is the operator saying nobody is reading this
+// one — keep driving, decide for yourself — so the two deliveries above become one Goal telling the
+// thread to keep going and one frizz message whose entire content is how to STOP (maintainer 2026-08-13).
+//
+// The trap this pins is the DEFAULT: `recurring_pause_on_questions` defaults to 0, so a row that never
+// armed a Goal reads as autonomous on the column alone, and a bare column check would silence the
+// reminder for the whole board. It takes a live at-rest trigger as well.
+function armGoal(h: ReturnType<typeof nudger>, write: Partial<RecurringWrite>): void {
+  h.storage.setRecurringPromptBySlug(h.slug, {
+    prompt: "keep going", stopHook: false, heartbeat: false, postCompaction: false,
+    // Autonomous mode ON unless a case says otherwise, so every row below reads autonomous ON THE COLUMN
+    // and the only thing separating the two blocks is whether a trigger is actually driving the thread.
+    pauseOnQuestions: false, intervalMs: null, armedAt: "2026-08-12T00:00:00.000Z", ...write,
+  })
+}
+const remindedIn = (delivered: string[]) => delivered.some((m) => m.includes("without a fence"))
+
+for (const [what, write] of [
+  ["the stop hook", { stopHook: true }],
+  ["the heartbeat", { heartbeat: true, intervalMs: 600_000 }],
+] as Array<[string, Partial<RecurringWrite>]>) {
+  test(`autonomous mode silences the reminder while ${what} drives the thread`, async () => {
+    const h = nudger({})
+    try {
+      armGoal(h, write)
+      await h.s.tick()
+      assert.equal(remindedIn(h.delivered), false, "an autonomously-driven thread is not taught to stop")
+    } finally { h.close() }
+  })
+}
+
+for (const [what, write] of [
+  ["no Goal is armed at all", undefined],
+  ["the Goal's triggers are all off", {}],
+  ["only the compaction trigger is armed", { postCompaction: true }],
+  ["autonomous mode is off", { stopHook: true, pauseOnQuestions: true }],
+] as Array<[string, Partial<RecurringWrite> | undefined]>) {
+  test(`the reminder still fires when ${what}`, async () => {
+    const h = nudger({})
+    try {
+      if (write) armGoal(h, write)
+      await h.s.tick()
+      assert.equal(remindedIn(h.delivered), true, "the reminder is still frizz's default")
+    } finally { h.close() }
+  })
+}

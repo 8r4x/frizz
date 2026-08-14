@@ -663,6 +663,11 @@ export function watchWakeMessage(kind: ThreadWatchKind, target: string, detail: 
 // untriageable queue item. That is the invariant it exists to buy: every item in the queue is a
 // question you can answer or a checkmark you can archive.
 //
+// The invariant is about a queue A HUMAN READS, which is why the Goal's AUTONOMOUS MODE switches this off
+// for that thread (scheduler `autonomousGoalDrivesRests`): an operator who has said "keep driving, decide
+// for yourself" is not triaging its cards, and this is the one delivery that would answer their Goal with
+// instructions for stopping.
+//
 // SHORT, because it competes with the agent's own conclusion for attention, and because a long one
 // invites the agent to treat "how do I sign off?" as the task. Three facts and a shape.
 /** The nudge's opening line, exported because it does DOUBLE DUTY: it tells the agent whose message
