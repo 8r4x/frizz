@@ -718,10 +718,14 @@ export function watchWakeMessage(kind: ThreadWatchKind, target: string, detail: 
 // untriageable queue item. That is the invariant it exists to buy: every item in the queue is a
 // question you can answer or a checkmark you can archive.
 //
-// The invariant is about a queue A HUMAN READS, which is why the Goal's AUTONOMOUS MODE switches this off
-// for that thread (scheduler `autonomousGoalDrivesRests`): an operator who has said "keep driving, decide
-// for yourself" is not triaging its cards, and this is the one delivery that would answer their Goal with
-// instructions for stopping.
+// IT REACHES EVERY THREAD, including one the operator has put in AUTONOMOUS MODE. That case was carved
+// out for a day (2026-08-13 → 2026-08-14) on the reading that the invariant is about a queue a HUMAN
+// triages, so a thread nobody is waiting on does not need it. Two things sank that: this text now opens
+// by sending a half-finished thread back to the WORK rather than offering a menu of ways to stop, so it
+// no longer pulls against the Goal arriving beside it; and it is the only delivery that names the
+// ```awaiting park at all (the Goal's own trailer deliberately does not — see restPromptMessage), so
+// silencing it left the longest-running threads — the autonomous ones, the ones most likely to hold
+// background work — with no way to learn how to park on it.
 //
 // SHORT, because it competes with the agent's own conclusion for attention, and because a long one
 // invites the agent to treat "how do I sign off?" as the task. Three facts and a shape.
