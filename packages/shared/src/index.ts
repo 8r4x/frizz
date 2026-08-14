@@ -513,10 +513,27 @@ const OPT_OUT_NOTE =
  * `parkedOnAWaitItCannotAdvance`), so a parked worker could in principle be told so here — but the
  * trailer is capped at a footnote, the shared note already spends all of it, and the worker contract
  * teaches the park at length. A worker that parks stops being bumped, so it never reads this line
- * again; the one that does read it is mid-work, where ```done is the only exit worth naming. */
-export function restPromptMessage(prompt: string): string {
-  return `${prompt.trim()}\n\n(Goal — sent each time you come to rest. ${OPT_OUT_NOTE})`
+ * again; the one that does read it is mid-work, where ```done is the only exit worth naming.
+ *
+ * `overQuestion` IS THE ONE CASE THAT NEEDS MORE THAN A FOOTNOTE. In Autonomous mode the rest trigger
+ * fires over an unanswered ```question fence (scheduler `restMessageIsSignedOff`), so this delivery can
+ * land on a worker whose own last word was a question to the human. Handed the bare goal there, the
+ * honest thing for it to do is ask again — its question really is unanswered — and the operator gets the
+ * same card twice, which is precisely the loop the unconditional hold used to prevent. So the delivery
+ * that crosses a pending question SAYS SO: no answer is coming, make the call yourself. The clause
+ * carries no parenthesis, because `RECURRING_TRAILER` matches the trailer up to the first one. */
+export function restPromptMessage(prompt: string, opts: { overQuestion?: boolean } = {}): string {
+  const note = opts.overQuestion ? `${AUTONOMOUS_OVER_QUESTION_NOTE} ${OPT_OUT_NOTE}` : OPT_OUT_NOTE
+  return `${prompt.trim()}\n\n(Goal — sent each time you come to rest. ${note})`
 }
+
+// What the trailer adds when the bump crosses the worker's own unanswered question. It has to do two
+// things the plain note does not: overrule the worker's correct instinct to re-ask, and tell it what to
+// do with the decision instead — because a call the operator cannot see is worse than the question.
+const AUTONOMOUS_OVER_QUESTION_NOTE =
+  "Your ```question is still unanswered and the operator has AUTONOMOUS MODE on for this thread," +
+  " which means they are not coming to answer it: decide it yourself, say in one line which way you" +
+  " went and what would reverse it, and carry on. Do NOT re-ask it."
 
 /** What frizz delivers when the POST-COMPACTION trigger fires (scheduler SOURCE 7).
  *

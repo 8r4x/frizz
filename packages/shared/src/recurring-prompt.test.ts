@@ -56,6 +56,28 @@ for (const [label, message] of [
   })
 }
 
+// THE ONE DELIVERY ALLOWED TO EXCEED THE FOOTNOTE. In Autonomous mode the at-rest trigger fires over an
+// unanswered ```question fence, so this bump can land on a worker whose own last word was a question to
+// the human — and there, silence is the expensive option: it re-asks, and the operator gets the same
+// card twice. The clause therefore has to overrule that instinct AND say what to do with the decision
+// instead, which is more than the shared note's budget. Every other trailer stays capped above.
+test("restPromptMessage names the autonomous override when the bump crosses a pending question", () => {
+  const crossing = restPromptMessage("keep going", { overQuestion: true })
+  assert.match(crossing, /AUTONOMOUS MODE/, "the worker is told why its question is being talked over")
+  assert.match(crossing, /Do NOT re-ask it/, "…and the instinct it must overrule is named outright")
+  assert.match(crossing, /which way you went/, "a decision the operator cannot see is worse than the question")
+  assert.ok(crossing.includes("```done"), "the opt-out survives the longer note")
+
+  // OPT-IN, and the plain trailer is unchanged: a worker bumped mid-work has no question outstanding,
+  // and telling it not to re-ask one would be frizz inventing a state the thread is not in.
+  assert.doesNotMatch(restPromptMessage("keep going"), /AUTONOMOUS MODE|re-ask/)
+  assert.equal(restPromptMessage("keep going", {}), restPromptMessage("keep going"))
+
+  // The longer trailer is still a TRAILER: the parser reads the delivery back as an ordinary rest bump,
+  // so the chat collapses it into a wake divider like any other rather than dropping to raw prose.
+  assert.deepEqual(parseRecurringPrompt(crossing), { kind: "rest", prompt: "keep going" })
+})
+
 // The prompt is SHARED now, so the trailer is the only thing that says which trigger fired. That makes
 // this distinction load-bearing rather than cosmetic: a worker reading a scheduled delivery has NOT
 // necessarily stopped, and must not conclude it has.

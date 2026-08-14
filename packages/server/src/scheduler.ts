@@ -408,10 +408,31 @@ type RecurringRow = Pick<
 //
 // TWO RULES, and they are deliberately different in strength.
 //
-//   THE HARD ONE (`restMessageIsSignedOff`, below) is not an option: the stop hook asks "you stopped —
-//   is there more?", and a ```question, a ```done, or an ```awaiting on a wait somebody else owns has
-//   already answered it in the very message that ENDED the turn. Firing over any of them is the trigger
-//   talking to itself. This holds for every armed thread whatever its settings.
+//   THE HARD ONE (`restMessageIsSignedOff`, below): the stop hook asks "you stopped — is there more?",
+//   and a ```question, a ```done, or an ```awaiting on a wait somebody else owns has already answered it
+//   in the very message that ENDED the turn. Firing over any of them is the trigger talking to itself.
+//
+//   ITS QUESTION LIMB IS THE ONE PART AUTONOMOUS MODE OVERRIDES, and that is not a softening of the rule
+//   — it is the rule reading the operator's answer. "Is there more?" is answered by a question fence
+//   only because the thread is waiting for a human; a thread whose operator has said "decide for
+//   yourself, do not stop for me" is not waiting, so the fence has answered nothing. The other two limbs
+//   are NOT settings-dependent and never become so: `done` is the loop's off switch (below), and a park
+//   on a wake the scheduler itself will deliver is a duplicate wake rather than a rescue whatever mode
+//   the thread is in — including a `human:` gate, which stays held because bumping one is measured
+//   harm (see `parkedOnAWaitItCannotAdvance`) and because the fix for it is the operator, not a bump.
+//
+//   IT SHIPPED UNCONDITIONAL AND THAT WAS A BUG (maintainer 2026-08-14, "came to rest with a question,
+//   despite the fact that I have a goal set and its autonomous mode is enabled"). The panel's own gloss
+//   already promised this exact behaviour — "sends goal prompt when the agent asks questions instead of
+//   waiting for an answer" — while this line silently held the ON REST trigger, which on a thread armed
+//   at rest is the whole feature. Measured on the maintainer's board: project nub, thread
+//   `read-the-file-read-up`, `recurring_pause_on_questions = 0` and `recurring_on_rest = 1`, rested
+//   14:54:49Z on a ```question fence, and the Goal armed five minutes earlier never fired.
+//
+//   THE BUMP THAT CROSSES A QUESTION SAYS SO. A worker handed the bare goal on top of its own unanswered
+//   question re-asks it, correctly — so `restPromptMessage(prompt, {overQuestion:true})` tells it no
+//   answer is coming and to record the call instead. Without that clause this override would produce the
+//   duplicate card the unconditional hold existed to prevent, rather than the forward motion asked for.
 //
 //   Its parts reach different distances, though. A ```done fence ends the arrangement, so it also
 //   stops the HEARTBEAT (`saidDone`) — it is the successor to the ALLDONE sentinel and inherits its
@@ -464,12 +485,19 @@ function saidDone(tele: Pick<SessionTelemetry, "lastFence" | "lastAssistantAllDo
 }
 
 /** The stop hook asks "you stopped — is there more?", and this is the message that ALREADY ANSWERED it:
- *  the thread asked the human something, it declared itself finished, or it parked on a wait somebody
- *  else owns. Firing over any of them is the trigger talking to itself. */
+ *  the thread declared itself finished, it parked on a wait somebody else owns, or it asked the human
+ *  something AND is in a mode where waiting for the human is what it should do. Firing over any of them
+ *  is the trigger talking to itself.
+ *
+ *  `autonomous` reaches the QUESTION limb only, and the asymmetry is the point — see the header block.
+ *  Both callers must pass the same value or a bump would be enqueued and then superseded before it was
+ *  ever delivered, so it is read from the row by `autonomousModeOn` at each. */
 function restMessageIsSignedOff(
   tele: Pick<SessionTelemetry, "pendingQuestion" | "lastFence" | "lastAssistantAllDone">,
+  autonomous: boolean,
 ): boolean {
-  return tele.pendingQuestion === true || saidDone(tele) || parkedOnAWaitItCannotAdvance(tele)
+  if (saidDone(tele) || parkedOnAWaitItCannotAdvance(tele)) return true
+  return tele.pendingQuestion === true && !autonomous
 }
 
 /** The rest parked on a wait THIS TRIGGER CANNOT ADVANCE: an `awaiting` fence naming either a durable
@@ -511,6 +539,17 @@ function blockedOnHuman(tele: QuestionTele): boolean {
 function heldByQuestion(row: Pick<SessionRow, "recurring_pause_on_questions">, tele: QuestionTele | undefined): boolean {
   if (row.recurring_pause_on_questions !== 1) return false
   return tele !== undefined && blockedOnHuman(tele)
+}
+
+/** The panel's "Autonomous mode": the same column `heldByQuestion` reads, inverted.
+ *
+ *  READING THE COLUMN ALONE IS SAFE HERE and nowhere else. It DEFAULTS TO 0, so on an arbitrary row
+ *  "autonomous" and "never armed a Goal" are the same value — the trap `autonomousGoalDrivesRests` has
+ *  to work around by also demanding a live trigger. Both callers of this one have already established
+ *  an armed REST trigger before they ask, so the row in their hands is a Goal the operator configured
+ *  and the 0 means what the switch says. Do not lift this to a site that has not. */
+function autonomousModeOn(row: Pick<SessionRow, "recurring_pause_on_questions">): boolean {
+  return row.recurring_pause_on_questions !== 1
 }
 
 /** Is the operator's Goal DRIVING this thread autonomously — armed with a trigger that bumps it at or
@@ -1116,7 +1155,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (isStopHookFenceId(item.fenceId)) {
       const armed = armedRest(row)
       if (!armed || item.fenceId !== stopHookFenceId(armed.armedAt, tele.lastAssistantAt ?? "")) return "superseded"
-      if (restMessageIsSignedOff(tele)) return "superseded"
+      if (restMessageIsSignedOff(tele, autonomousModeOn(row))) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
     // A post-compaction delivery is bound to the generation AND to the exact compaction it was queued
@@ -2019,12 +2058,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // makes this able to rescue one parked behind a child that will never report. A worker that
       // genuinely has nothing to do until something returns says AWAITING — and an AWAITING naming a
       // wait the scheduler itself will fire is honoured, not bumped (`parkedOnAWaitItCannotAdvance`).
-      // THE REST ALREADY ANSWERED THIS TRIGGER'S QUESTION — the thread asked the human something, signed
-      // off as done, or parked on a wait it cannot advance by working. Never bumped, whatever the
-      // settings say; see `restMessageIsSignedOff`.
+      // THE REST ALREADY ANSWERED THIS TRIGGER'S QUESTION — the thread signed off as done, parked on a
+      // wait it cannot advance by working, or asked the human something while still in a mode that waits
+      // for the human. The first two hold whatever the settings say; the question limb is the one
+      // Autonomous mode overrides, and the bump it lets through is worded for it. See
+      // `restMessageIsSignedOff`.
       // Per-rest, and that is what makes it free: every fact it reads rides the FINAL assistant message,
       // so the next word on the thread re-opens the trigger with nothing stored to clear.
-      if (restMessageIsSignedOff(tele)) continue
+      const autonomous = autonomousModeOn(row)
+      if (restMessageIsSignedOff(tele, autonomous)) continue
       // And the operator's own broader hold, when they armed it.
       if (heldByQuestion(row, tele)) continue
       const fenceId = stopHookFenceId(armed.armedAt, restedAt)
@@ -2038,7 +2080,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         sessionId: row.session_id,
         fenceId,
         hintKey: STOP_HOOK_HINT_KEY,
-        message: restPromptMessage(armed.prompt),
+        message: restPromptMessage(armed.prompt, { overQuestion: autonomous && tele.pendingQuestion === true }),
         reason: "recurring prompt at rest",
       }, nowMs).delivery
       log(`waker: queued ${row.slug} — ${item.reason}`)

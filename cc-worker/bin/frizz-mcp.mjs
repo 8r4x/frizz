@@ -186,11 +186,13 @@ const RECURRING_PROMPT = {
           "```question fence, a native ask, or a permission prompt. DEFAULTS TO TRUE, matching the " +
           "thread footer, because being told \"keep going\" while you are holding a question up is the " +
           "one delivery that can only make things worse. Pass false only if you genuinely want a beat " +
-          "to reach you mid-question. (The stop hook declines a rest that ends in a question fence " +
-          "always, whatever this says; this is the wider version and it covers the other triggers.) " +
-          "Passing false is what the thread footer calls AUTONOMOUS MODE, and it does one more thing: it " +
-          "silences frizz's built-in sign-off reminder on this thread, so a fenceless rest is no longer " +
-          "answered with the protocol. Sign off from the contract you already have.",
+          "to reach you mid-question. Passing false is what the thread footer calls AUTONOMOUS MODE, and " +
+          "it does two more things: the at-rest trigger fires OVER your own unanswered ```question — the " +
+          "delivery says so, and you are expected to decide the question yourself rather than re-ask it " +
+          "— and it silences frizz's built-in sign-off reminder on this thread, so a fenceless rest is " +
+          "no longer answered with the protocol. Sign off from the contract you already have. (A ```done " +
+          "fence and an ```awaiting on a wait frizz itself will deliver still stop the at-rest trigger " +
+          "in either mode.)",
       },
     },
     required: ["action"],

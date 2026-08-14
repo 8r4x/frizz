@@ -697,36 +697,75 @@ test("post-compaction: switching the trigger off supersedes a queued delivery", 
 // makes the worker re-ask its own question with a paragraph of apology in front, and the operator gets
 // the same card twice.
 //
-// So there are two rules, and these pin them apart:
-//   the HARD one — a fence in the rest message holds the STOP HOOK, always, whatever is configured;
-//   the OPTIONAL one (`pauseOnQuestions`, off by default) — ANY way of waiting on the human holds ALL
-//   THREE triggers, because the operator asked for that.
+// UNLESS THE OPERATOR SAID OTHERWISE, which is the whole of Autonomous mode: "it needs the human" is
+// only an answer while the thread is one that waits for the human. So the question limb tracks the same
+// column the wider hold does, inverted — and the two rules that remain are:
+//   the HARD one — a ```done fence, or an ```awaiting on a wake frizz itself will deliver, holds the
+//   STOP HOOK always, whatever is configured (pinned elsewhere in this file);
+//   the SWITCHED one (`pauseOnQuestions`) — ANY way of waiting on the human holds ALL THREE triggers,
+//   and its OFF position additionally lets the at-rest bump cross a question fence.
+//
+// The harness defaults `pauseOnQuestions` to FALSE, so an `opts`-less case here is AUTONOMOUS.
 const nativeAsk = { id: "ask-1", questions: [{ question: "Which one?", header: "Pick", multiSelect: false, options: [] }] } as SessionTelemetry["pendingAsk"]
 
-test("stop hook: a rest that ends in a question fence is NEVER bumped, with nothing configured", async () => {
+// The maintainer's report, 2026-08-14: a thread with a Goal armed at rest and Autonomous mode ON came to
+// rest on a ```question and was never bumped, though the panel's gloss promises exactly this delivery.
+test("stop hook: AUTONOMOUS mode bumps a rest that ends in a question fence", async () => {
   const asking = scheduler({ pendingQuestion: true }, { now: at("2026-08-02T00:00:05.000Z") })
   try {
     await asking.s.tick()
-    assert.deepEqual(asking.delivered, [], "the fence is the answer to the question the stop hook asks")
+    assert.equal(asking.delivered.length, 1, "autonomous mode is the operator saying they are not coming to answer it")
+    // And the delivery is WORDED for it. Handed the bare goal on top of its own unanswered question, the
+    // honest move for a worker is to ask again — which is the duplicate card the hold existed to prevent.
+    assert.match(asking.delivered[0], /AUTONOMOUS MODE/)
+    assert.match(asking.delivered[0], /Do NOT re-ask it/)
   } finally { asking.close() }
 
   // The control, on identical telemetry but for the flag — without it this test would pass against a
-  // scheduler that had simply stopped firing.
+  // scheduler that had simply started firing at everything.
+  const held = scheduler({ pendingQuestion: true }, { now: at("2026-08-02T00:00:05.000Z"), pauseOnQuestions: true })
+  try {
+    await held.s.tick()
+    assert.deepEqual(held.delivered, [], "with the hold armed the fence still answers the stop hook")
+  } finally { held.close() }
+})
+
+// The extra clause is for the crossing ONLY. A worker bumped on an ordinary rest is mid-work and has no
+// question outstanding; telling it not to re-ask one would be frizz inventing a state it is not in.
+test("stop hook: an ordinary autonomous rest is bumped with the plain trailer", async () => {
   const quiet = scheduler({ pendingQuestion: false }, { now: at("2026-08-02T00:00:05.000Z") })
   try {
     await quiet.s.tick()
     assert.equal(quiet.delivered.length, 1)
+    assert.doesNotMatch(quiet.delivered[0], /Do NOT re-ask it/)
   } finally { quiet.close() }
 })
 
 // Per-rest, exactly like ALLDONE: the flag rides the FINAL assistant message and the fold clears it on
 // the next user record, so answering the question re-opens the trigger with nothing stored to undo.
 test("stop hook: answering the question re-opens the trigger by itself", async () => {
-  const answered = scheduler({ pendingQuestion: false }, { lastFiredAt: "2026-08-02T00:00:05.000Z", now: at("2026-08-02T00:00:20.000Z") })
+  const answered = scheduler({ pendingQuestion: false }, { lastFiredAt: "2026-08-02T00:00:05.000Z", now: at("2026-08-02T00:00:20.000Z"), pauseOnQuestions: true })
   try {
     await answered.s.tick()
     assert.equal(answered.delivered.length, 1, "nothing was written when the fence held it, so nothing has to be cleared")
   } finally { answered.close() }
+})
+
+// THE OVERRIDE REACHES THE QUESTION LIMB AND NOTHING ELSE. `done` is the loop's off switch, and a park on
+// a wake frizz itself will deliver is a duplicate wake rather than a rescue — neither becomes negotiable
+// because the operator asked the thread to decide its own questions. Both rows below are AUTONOMOUS.
+test("stop hook: autonomous mode does NOT reopen the done fence or a scheduler-owned park", async () => {
+  const done = scheduler({ lastFence: { kind: "done", body: "shipped", hints: [] }, pendingQuestion: false }, { now: at("2026-08-02T00:00:05.000Z") })
+  try {
+    await done.s.tick()
+    assert.deepEqual(done.delivered, [], "a finished thread is finished in either mode")
+  } finally { done.close() }
+
+  const parked = scheduler({ lastFence: awaiting({ kind: "human", value: "Colin to merge" }), pendingQuestion: false }, { now: at("2026-08-02T00:00:05.000Z") })
+  try {
+    await parked.s.tick()
+    assert.deepEqual(parked.delivered, [], "bumping a human gate is measured harm, whatever the mode")
+  } finally { parked.close() }
 })
 
 // The HARD rule is the FENCE and only the fence. A native ask is a different signal — the thread is
