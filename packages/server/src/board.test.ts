@@ -612,22 +612,22 @@ test("deriveNeedsYou: the event-snooze parks a shell-only rest for exactly the c
 test("deriveAwaitingBackground: true only when own-work rest is the SOLE reason for the card", () => {
   const child = tele({ subAgents: [{ label: "c", startedAt: T0, state: "running", id: "a1" }], lastActivityAt: LATER })
   assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), child, "turn-idle"), true)
-  // A SHELL-ONLY REST NO LONGER QUALIFIES ON ITS OWN (2026-08-14). Nothing wakes the thread when a
-  // background shell finishes unless a watcher is armed on it, so an undeclared shell is not evidence of
-  // a wait — it is evidence of a process the worker left running, and this card spent months announcing
-  // a wait on dev servers nobody tore down. It has to be DECLARED now: an ```awaiting fence naming the
-  // watcher's id, checked against the registry (declared-park.test.ts).
+  // A SHELL-ONLY REST NO LONGER QUALIFIES ON ITS OWN (2026-08-14). A shell is not necessarily work anyone
+  // is waiting ON — a dev server, a log tail and a test run are the same row here — so an undeclared one
+  // is not evidence of a wait, and this card spent months announcing a wait on dev servers nobody tore
+  // down. It has to be DECLARED now: an ```awaiting fence naming the shell, checked against the live
+  // ones (declared-park.test.ts).
   const shellOnly = tele({ bgShells: [{ label: "w", startedAt: T0, state: "running" }] })
   assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), shellOnly, "turn-idle"), false, "an undeclared shell is not a wait")
   const declaredShell = tele({
     bgShells: [{ label: "w", startedAt: T0, state: "running" }],
     lastAssistantAt: LATER,
-    lastFence: { kind: "awaiting", body: "Waiting on the suite.", hints: [{ kind: "watch", value: "wch_1" }] },
+    lastFence: { kind: "awaiting", body: "Waiting on the suite.", hints: [{ kind: "watch", value: "w" }] },
   })
   assert.equal(
-    deriveAwaitingBackground(row({ rested_at: T0 }), declaredShell, "turn-idle", false, Date.parse(LATER) + 1000, undefined, false, new Set(["wch_1"])),
+    deriveAwaitingBackground(row({ rested_at: T0 }), declaredShell, "turn-idle", false, Date.parse(LATER) + 1000),
     true,
-    "…and it does once the worker names the watcher it is parked on",
+    "…and it does once the worker names the shell it is parked on",
   )
   // Any stronger reason renders its OWN card instead → not awaiting-background.
   assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), tele({ ...child, pendingQuestion: true }), "turn-idle"), false, "a question outranks it")
@@ -670,14 +670,14 @@ test("deriveAwaitingBackground: the event-snooze hides the QUEUE card, never the
   const declared = tele({
     bgShells: [{ label: "Poll CI to terminal", startedAt: T0, state: "running" }],
     lastAssistantAt: LATER,
-    lastFence: { kind: "awaiting", body: "Waiting on CI.", hints: [{ kind: "watch", value: "wch_1" }] },
+    lastFence: { kind: "awaiting", body: "Waiting on CI.", hints: [{ kind: "watch", value: "Poll CI to terminal" }] },
   })
   void shell
-  for (const [what, t, ids] of [["sub-agent", child, new Set<string>()], ["declared shell", declared, new Set(["wch_1"])]] as const) {
+  for (const [what, t] of [["sub-agent", child], ["declared shell", declared]] as const) {
     const snoozed = row({ rested_at: T0, bg_snooze_rested_at: T0 })
     assert.equal(deriveNeedsYou(snoozed, t, "turn-idle"), false, `${what}: snoozed → out of the queue`)
     assert.equal(
-      deriveAwaitingBackground(snoozed, t, "turn-idle", false, Date.parse(LATER) + 1000, undefined, false, ids),
+      deriveAwaitingBackground(snoozed, t, "turn-idle", false, Date.parse(LATER) + 1000),
       true,
       `${what}: …but the card still states the rest`,
     )
