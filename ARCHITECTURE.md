@@ -108,7 +108,7 @@ need no install or provider CLI; the full suite is local-only by design.
 These are the names for the sidebar's four row groups, top to bottom. They are the MAINTAINER's vocabulary (2026-08-05), so they win over whatever a symbol happens to be called; when a comment and this list disagree, the comment is wrong.
 
 - **Rested** — the TOP band, directly under the prompt box (maintainer 2026-08-08), and the same set as **"the queue"** / **"the cue"** / **"items in the queue"**: one rested row per queue card, in the identical order, so the rail's first row faces the queue's first card. Say "rested" or "in the queue"; do NOT say "active" about these rows just because they share a `<section>` with the Active band. Each carries a right-justified rest time — when that thread came to rest — reading off the same instant its card's "Last active" line does.
-- **Active** — ONLY the rows that are currently SPINNING, below the rule. An Active row NEVER carries a queue card, and that invariant runs both ways: nothing below the rule has a card, and every card has a row above it. No rest time: a spinning row has not handed anything back.
+- **Active** — the rows below the rule, in practice the ones currently SPINNING. The rule is drawn on the CARD, both ways: nothing below it has a queue card, and every card has a row above it. So the band also takes the occasional row that is neither spinning nor asking — a thread the server excused from the queue while it rests (a live sub-agent, a background shell, CI running on a watched PR, a follow-up still in flight). That is the honest place for it, and it wears its own at-rest mark rather than a spinner; the alternative, tried until 2026-08-14, was a cue row with no card behind it, which looks queued and opens a drawer on click. No rest time: nothing below the rule has handed anything back.
 - **Held** — the dimmed, labeled band under Active: a declared `human:` gate, a valid future `timer:`, a user wall-clock snooze, or a limit pause frizz will auto-resume. Parked, not asking.
 - **Done** — the collapsed archived section, last of the thread groups (the Plans section renders below it).
 
@@ -117,7 +117,7 @@ Where the CODE disagrees, and it does in two places worth knowing before reading
 - `sectionOf` returns `"active"` for Active AND Rested rows alike. That key names the `<section>` that holds both bands, not the maintainer's "Active". `partitionActive` splits it: `.running` is Active, `.rested` is Rested.
 - The archived section's `SectionKey` is `"inactive"`, but its rendered label is **Done**.
 
-Neither name is worth a rename sweep — but every new comment says Active / Rested / Held / Done in the sense above, and `inActiveBand` (the predicate for "is this row spinning AND cardless") is the one function that means "Active" exactly.
+Neither name is worth a rename sweep — but every new comment says Active / Rested / Held / Done in the sense above, and `inActiveBand` (the predicate for "this row has no queue card") is the one function that means "Active" exactly.
 
 ## Packages
 

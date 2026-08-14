@@ -355,6 +355,46 @@ test("aging is identity-stable when nothing changes", () => {
   assert.equal(ageDeliveries(items, T0 + 5000), items)
 })
 
+// The escape hatch for a send whose delivery record the correlator could not attribute. The provider's
+// queue is FIFO, so a user turn at or after the send's own instant means the queue already moved past it.
+// Every live state goes — `unconfirmed`'s amber "check the terminal" warning is falsified by a later user
+// turn exactly as squarely as an `enqueued` claim is.
+test("a user turn at/after an outstanding send is proof it was delivered — every live state drops", () => {
+  const live = [
+    item({ id: "d-pending", state: "pending" }),
+    item({ id: "d-enqueued", state: "enqueued" }),
+    item({ id: "d-unconfirmed", state: "unconfirmed" }),
+  ]
+  assert.deepEqual(ageDeliveries(live, T0 + 5000, iso(T0 + 1)), [])
+  assert.deepEqual(ageDeliveries(live, T0 + 5000, iso(T0)), [], "same instant counts — the record can share the send's ms")
+})
+
+test("a user turn BEFORE the send proves nothing, and neither does a missing/garbage one", () => {
+  const items = [item({ state: "enqueued" })]
+  assert.equal(ageDeliveries(items, T0 + 5000, iso(T0 - 1)), items, "the turn this send is answering is not evidence of its delivery")
+  assert.equal(ageDeliveries(items, T0 + 5000, undefined), items, "a thread with no observed user turn ages exactly as before")
+  assert.equal(ageDeliveries(items, T0 + 5000, "not a date"), items)
+})
+
+test("a tombstone survives a later user turn — it is suppressing a record, not describing a send", () => {
+  const items = [item({ state: "cancelled" })]
+  assert.equal(ageDeliveries(items, T0 + 5000, iso(T0 + 90_000)), items)
+})
+
+// THE BUG THIS EXISTS FOR (nub `idea-from-jdx-creator-of-mise`, 2026-08-14). Two follow-ups were queued
+// and submitted as ONE composed record; the live fold never attributed the first, so it sat `enqueued`
+// for the hour before UNCONFIRMED_DROP_MS. `hasFreshDelivery` (board.ts) reads an outstanding send as
+// "the human already answered, so this thread is not waiting on them" and had the thread OUT of the queue
+// that whole time: it answered, asked a fresh ```question, and still showed a rested rail row with no
+// card behind it — clicking it opened a drawer instead of scrolling to one.
+test("a send stranded by a missed correlation drops on the next user turn, not an hour later", () => {
+  const stranded = [item({ id: "d-stranded", state: "enqueued", text: "Should this field be artifacts level or slot level?" })]
+  const answeredAt = T0 + 57_000 // the composed record that delivered it, un-attributed
+  assert.deepEqual(ageDeliveries(stranded, answeredAt + 1000, iso(answeredAt)), [])
+  // …and without the evidence it really would have sat there for the full hour.
+  assert.equal(ageDeliveries(stranded, answeredAt + 1000), stranded)
+})
+
 // ---- projection ----
 test("an untracked send projects as a queued bubble at the tail", () => {
   const out = projectDeliveryLedger([msg({ text: "earlier", sourceId: "s:1" })], [item()])

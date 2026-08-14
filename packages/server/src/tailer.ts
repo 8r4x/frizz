@@ -3535,9 +3535,13 @@ export function createTailer(deps: TailerDeps): Tailer {
     return next.length === items.length ? items : next
   }
 
+  // `state` is read ONLY in finish(), and that is load-bearing: `ageDeliveries` needs the newest user
+  // record this thread has produced INCLUDING the lines this very tick just folded, which is what makes a
+  // send the correlator failed to attribute drop on the same pass that recorded its delivery.
   function ledgerFold(
     row: SessionRow,
     nowMs: number,
+    state: TailState,
   ): { onLine?: (line: string) => void; finish: () => { changed: boolean; value: string | null } } {
     if (!row.delivery_ledger) {
       return { finish: () => ({ changed: false, value: null }) }
@@ -3558,7 +3562,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       },
       finish: () => {
         items = retireDeliveriesLostWithTheDaemon(row, items)
-        items = ageDeliveries(items, nowMs)
+        items = ageDeliveries(items, nowMs, state.lastUserAt)
         if (items === before) return { changed: false, value: null }
         const value = serializeDeliveryLedger(items)
         deps.storage.setDeliveryLedger(row.slug, value)
@@ -4033,7 +4037,7 @@ export function createTailer(deps: TailerDeps): Tailer {
         }
         primedRows++
         const primeOffset = state.offset
-        const primeLedger = ledgerFold(row, nowMs)
+        const primeLedger = ledgerFold(row, nowMs, state)
         consume(state, backend, chainOnLine(primeLedger.onLine, codexSubAgentOnLine(row, state)))
         state.codexSubAgents?.poll(nowMs)
         const primedLedger = primeLedger.finish()
@@ -4107,7 +4111,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       const prevTurn = state.turn
       const rowLedger = row.delivery_ledger ?? null
       const ledgerDrifted = rowLedger !== (state.deliveryLedgerSeen ?? null) // a router write with no JSONL advance
-      const ledger = ledgerFold(row, nowMs)
+      const ledger = ledgerFold(row, nowMs, state)
       consume(state, backend, chainOnLine(ledger.onLine, codexSubAgentOnLine(row, state)))
       // Child rollouts advance on their OWN clock, so poll every tick — not only when the parent
       // appended. This is what flips a finished codex child out of the live set (and, once every

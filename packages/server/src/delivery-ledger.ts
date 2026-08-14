@@ -20,8 +20,12 @@ import { decodeDeliveryMarkers, deliveryTag, stripDeliveryMarkers } from "./deli
 // bubble (sourceId `delivery:<id>`) so the queued affordance is server truth — reload-safe, and consumed
 // by the client's optimistic bubble via deliveryId rather than text.
 //
-// 'enqueued' deliberately never times out: an enqueue record is positive evidence Claude Code holds the
-// message in its own queue, and a mid-turn queue legitimately lasts as long as the turn does.
+// An enqueue record is positive evidence Claude Code holds the message in its own queue, and a mid-turn
+// queue legitimately lasts as long as the turn does — so `enqueued` outlives the pending timeout. It is
+// not IMMORTAL, though, and both of its escape hatches exist because a missed correlation left one
+// pinned to a row it no longer described: a LATER USER TURN drops it on the spot (the queue is FIFO, so
+// the transcript has moved past it), and failing that it ages out with the unconfirmed items. See
+// ageDeliveries.
 
 export const PENDING_TIMEOUT_MS = 60_000
 export const UNCONFIRMED_DROP_MS = 60 * 60_000
@@ -524,9 +528,35 @@ export function matchComposedText(
 // Level-triggered aging, run every tick: a pending item with no evidence for PENDING_TIMEOUT_MS becomes
 // 'unconfirmed' (the injection likely mutated or never landed — the projection flags it); an unconfirmed
 // item older than UNCONFIRMED_DROP_MS is dropped entirely.
-export function ageDeliveries(items: DeliveryLedgerItem[], nowMs: number): DeliveryLedgerItem[] {
+//
+// `observedUserAt` is the timestamp of the newest USER RECORD the tailer has folded out of this thread's
+// transcript, and it is the escape hatch for a send whose own delivery record the correlator missed. The
+// provider's queue is FIFO, so a user turn at or after an outstanding send's `at` means the queue has
+// ALREADY moved past that send — it was delivered, and the transcript record the correlator failed to
+// attribute is sitting right there. Keeping the item past that point is not a cautious guess, it is a
+// claim the transcript contradicts, and it costs more than a stale bubble: `hasFreshDelivery` (board.ts)
+// reads pending/enqueued as "the human already answered, so this thread is not waiting on them" and
+// takes the thread OUT OF THE QUEUE. Observed 2026-08-14 on nub's `idea-from-jdx-creator-of-mise`: one
+// `enqueued` item from 22:37:14, delivered at 22:38:11 inside a COMPOSED record (two queued sends
+// submitted as one message), left un-correlated by the live fold. The thread answered, asked a fresh
+// ```question at 22:59, and never carded — it sat in the rested rail with no card behind it, which is
+// exactly the 2026-07-29 report ("there's no card for it in the UI — when I click it, it opens it in a
+// drawer") reaching the same place down a different path. `enqueued` only ages out after an HOUR, so
+// that is how long the thread stayed invisible.
+//
+// It cannot fire early on a send that really is still queued: an undelivered message is BEHIND every
+// user record in the transcript by construction, so nothing newer than it exists until it lands — and
+// the record that DOES land is both the thing that bumps this timestamp and the thing the correlator
+// consumes the item on. The window this closes is only the one where those two disagree.
+export function ageDeliveries(items: DeliveryLedgerItem[], nowMs: number, observedUserAt?: string): DeliveryLedgerItem[] {
   if (!items.length) return items
   let changed = false
+  const userAtMs = Date.parse(observedUserAt ?? "")
+  const supersededByUserTurn = (item: DeliveryLedgerItem): boolean => {
+    if (!Number.isFinite(userAtMs)) return false
+    const born = Date.parse(item.at)
+    return Number.isFinite(born) && userAtMs >= born
+  }
   const next: DeliveryLedgerItem[] = []
   for (const item of items) {
     // A tombstone never ages. It is not describing a send in flight — it is suppressing a JSONL record
@@ -534,6 +564,10 @@ export function ageDeliveries(items: DeliveryLedgerItem[], nowMs: number): Deliv
     // hour later. It is bounded the other way instead: MAX_LEDGER_ITEMS evicts the oldest rows as new
     // sends arrive, by which point the orphaned enqueue is far up in settled history.
     if (item.state === "cancelled") { next.push(item); continue }
+    // Delivered, on the transcript's own evidence — see `supersededByUserTurn`. Applies to `unconfirmed`
+    // as well: that state's amber "check the terminal" warning is a claim about a send nobody read, and a
+    // later user turn falsifies it just as squarely as it does a live one.
+    if (supersededByUserTurn(item)) { changed = true; continue }
     const born = Date.parse(item.at)
     if (item.state === "pending" && Number.isFinite(born) && nowMs - born > PENDING_TIMEOUT_MS) {
       next.push({ ...item, state: "unconfirmed", updatedAt: new Date(nowMs).toISOString() })

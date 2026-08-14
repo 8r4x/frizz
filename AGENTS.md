@@ -152,7 +152,7 @@ The sidebar's row groups have names the maintainer uses precisely (2026-08-05: *
 Top to bottom:
 
 - **Rested** — the CUE: the top band, directly under the prompt box; the same set as **"the queue"** / "items in the queue", one row per card, each with a right-justified rest time.
-- **Active** — only the rows currently spinning, below that rule. Never carries a queue card, and never a rest time.
+- **Active** — the rows below that rule, in practice the ones currently spinning. Never carries a queue card, and never a rest time — the rule is drawn on the CARD, so a thread the server excused from the queue while it rests lands here too (see `ARCHITECTURE.md`).
 - **Held** — the dimmed, labeled park band (a `human:` gate, a future `timer:`, a wall-clock snooze, an auto-resumed limit pause).
 - **Done** — the collapsed archived section.
 

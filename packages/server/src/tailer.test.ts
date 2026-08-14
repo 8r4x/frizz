@@ -1362,6 +1362,44 @@ test("tailer: a broker daemon that dies holding a follow-up retires it instead o
   assert.ok(h.changes.n > before, "retiring it marks the board dirty so the queue card comes back at once")
 })
 
+// The OTHER way a send outlives its own delivery: the daemon is alive and the message really did land,
+// but the correlator could not attribute the record that carried it (2026-08-14, nub
+// `idea-from-jdx-creator-of-mise` — two queued follow-ups submitted as one composed record, the first
+// left `enqueued`). The ledger then claims the human's message is still in flight, which takes the thread
+// OUT of the queue (board.ts hasFreshDelivery) for the full hour before UNCONFIRMED_DROP_MS: it answered,
+// asked a fresh question, and showed a rested rail row with no card behind it the whole time.
+//
+// The wiring under test is that `finish()` reads the tail state AFTER this tick's lines are folded, so
+// the send drops on the very pass that records the user turn superseding it — not a tick later.
+test("tailer: a follow-up the correlator missed drops on the user turn that superseded it", () => {
+  const h = harness()
+  h.storage.upsertSession(row())
+  h.storage.setBackend("t", "claude")
+  fixture(h.logDir, "sid", [IN_FLIGHT, DONE])
+  const at = "2026-07-01T00:00:30.000Z"
+  h.storage.setDeliveryLedger("t", JSON.stringify([
+    { id: "d-stranded", text: "text the channel mangled beyond recognition", state: "enqueued", at, updatedAt: at },
+  ]))
+  const t = makeTailer(h)
+
+  h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z")
+  t.tick() // prime: the only user turn on file is the one this send is answering
+  assert.equal(t.get("t")?.lastUserAt, "2026-07-01T00:00:00.000Z")
+  assert.equal(JSON.parse(h.storage.getSession("t")?.delivery_ledger ?? "[]").length, 1, "an unanswered send is left alone")
+
+  // The delivery lands as a record the correlator cannot attribute to the item.
+  appendFileSync(join(h.logDir, "sid.jsonl"), JSON.stringify({
+    type: "user",
+    timestamp: "2026-07-01T00:00:45.000Z",
+    message: { role: "user", content: "text the channel mangled — but into different WORDS" },
+  }) + "\n")
+  const before = h.changes.n
+  t.tick()
+  assert.equal(t.get("t")?.lastUserAt, "2026-07-01T00:00:45.000Z")
+  assert.equal(h.storage.getSession("t")?.delivery_ledger, null, "the queue moved past it — it is not in flight")
+  assert.ok(h.changes.n > before, "dropping it marks the board dirty so the queue card comes back at once")
+})
+
 // Nothing injected: a real stateDir, a real record file naming a real (dead) pid, the real default probe,
 // through the real read→fold→view. The two tests above each prove one half — that paneDeadForRow consumes
 // the answer, and that the answer is right — and they meet at a single line. This is the whole path.

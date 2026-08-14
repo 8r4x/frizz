@@ -270,10 +270,11 @@ export function foreignThreads(threads: readonly ThreadView[]): ThreadView[] {
 // (2026-08-05: "when I say active, I'm only referring to the things that are currently spinning; the
 // things beneath that I would refer to as rested, or just items in the queue"). Written out in full in
 // ARCHITECTURE.md § Board nomenclature; the short form, top of the rail to the bottom:
-//   RESTED   — the cue: everything at rest, the same set as "the queue", one row per card. It sits
-//              DIRECTLY UNDER THE PROMPT BOX (maintainer 2026-08-08) — what is waiting on the human is
-//              what the human came to read, so it gets the rail's best position.
-//   ACTIVE   — the rows currently SPINNING, below the rule. Never carries a queue card.
+//   RESTED   — the cue: the same set as "the queue", exactly one row per card. It sits DIRECTLY UNDER
+//              THE PROMPT BOX (maintainer 2026-08-08) — what is waiting on the human is what the human
+//              came to read, so it gets the rail's best position.
+//   ACTIVE   — below the rule, in practice the rows currently SPINNING. Never carries a queue card, and
+//              that is the actual rule of the split — see inActiveBand for the rows it also takes.
 //   HELD     — the dimmed, labeled park band.
 //   DONE     — the collapsed archived section.
 // Say "rested" or "in the queue" for a card's row. NEVER call it active merely because this key does.
@@ -592,15 +593,16 @@ export function sectionOf(t: ThreadView): SectionKey | null {
 }
 
 // This section is TWO rule-separated bands (the Sidebar draws the rule): the RESTED band (a.k.a. the
-// queue, a.k.a. the cue) on TOP, directly beneath the prompt box, then the ACTIVE band — the rows
-// currently spinning — BELOW it. Rested is ordered by the EXACT queue comparator (orderQueue), so the
-// rested rows and the queue cards share ONE order. That shared order is what makes the scroll-position
-// marker monotonic: scrolling the queue down walks the marker straight down the rail instead of hopping
-// around (maintainer 2026-07-15: the queue/sidebar mismatch "totally defeats the purpose of the scroll
-// position indicator"; running agents "should not render in the queue at all"). Putting the cue first
-// (maintainer 2026-08-08) aligns the rail's top with the workpane's top: the first card in the queue is
-// now opposite the first row in the rail. Active rows have no queue card, so their interaction-recency
-// order never affects the marker — grouping them below just keeps live work out of the rested run.
+// queue, a.k.a. the cue) on TOP, directly beneath the prompt box, then the ACTIVE band — everything the
+// human has nothing to answer, spinning or merely in flight — BELOW it. Rested is ordered by the EXACT
+// queue comparator (orderQueue), so the rested rows and the queue cards share ONE order. That shared
+// order is what makes the scroll-position marker monotonic: scrolling the queue down walks the marker
+// straight down the rail instead of hopping around (maintainer 2026-07-15: the queue/sidebar mismatch
+// "totally defeats the purpose of the scroll position indicator"; running agents "should not render in
+// the queue at all"). Putting the cue first (maintainer 2026-08-08) aligns the rail's top with the
+// workpane's top: the first card in the queue is now opposite the first row in the rail. Active rows have
+// no queue card, so their interaction-recency order never affects the marker — grouping them below just
+// keeps everything that isn't waiting on the human out of the rested run.
 //
 // This ORDER IS THE RENDER ORDER: the Sidebar splits the result with partitionActive and draws the two
 // bands in the order they come out of here, so the array and the rail can never disagree about which
@@ -611,27 +613,38 @@ export function orderActive(threads: readonly ThreadView[], direction: QueueDire
   return [...orderQueue(rested, direction), ...orderByInteraction(running)]
 }
 
-// ACTIVE, in the maintainer's exact sense: currently SPINNING. This one predicate is what that word
-// means in this codebase — strictly live work that ISN'T waiting on the human, and the conjunction is
-// the load-bearing part: a queued thread ALWAYS belongs to the rested band, so its queue card maps to a
-// rested-band row and the scroll marker walks straight down the rail.
+// THE RULE THE CUE IS DRAWN ON: a row belongs above it EXACTLY WHEN it has a queue card. Everything
+// else in this section — spinning or not — belongs below, in the Active band.
 //
 // THE INVARIANT, both directions (maintainer 2026-08-01: "if something is listed as currently running,
-// then it should never show up in the queue"): nothing in this band has a card, and every card has a
-// row in the cue above the rule. It holds BY CONSTRUCTION here — `needsYou` is the queue — so the only way to put
-// a rested-with-live-work thread in this band is for the SERVER to excuse it from the queue, which is
-// exactly what board.deriveNeedsYou does for a live sub-agent (2026-07-30) and for an event-snoozed
-// shell-only rest. A brief attempt to band a shell-only rest here regardless of `needsYou` is what
-// produced the card-and-running-row pair the maintainer then reported; the fix belonged upstream, not
-// here — and it is why re-queueing shells on 2026-08-04 needed no change in this file at all.
+// then it should never show up in the queue"): nothing in this band has a card, and every card has a row
+// in the cue above the rule. `needsYou` IS the queue (see `queued`, which within this section reduces to
+// exactly this field — foreign rows never section, and the server clears needsYou on an archived row),
+// so keying the split on it alone is what makes both halves true by construction rather than by every
+// upstream excusal remembering to band its own threads.
+//
+// It used to read `isActivelyRunning(t) && t.needsYou !== true`, which enforced only the first half. The
+// second half was left to the SERVER: a thread it excused from the queue was expected to be either Held
+// or visibly alive (`awaitingBackground`, which is what puts a shell-only or CI-holding rest in this
+// band). Every excusal that forgot dropped its thread into the cue with nothing behind it — a row that
+// looks queued, has no card, and opens a DRAWER on click instead of scrolling to one. Reported
+// 2026-07-29 on a snoozed shell-only rest ("there's no card for it in the UI — when I click it, it opens
+// it in a drawer") and again 2026-08-14 on a stale delivery ledger, which is a queue excusal with no
+// banding of its own at all (board.ts hasFreshDelivery). Two different upstream bugs, one symptom,
+// because the rule the maintainer actually reads the rail by was never written down here.
+//
+// A cardless row below the rule states the truth in every case that reaches it: the human has nothing to
+// answer, and something — a child, a shell, CI, a follow-up in flight — is between this thread and its
+// next rest. It wears its own at-rest mark there (sessionIndicatorKind), so it never fakes a spinner.
 function inActiveBand(t: ThreadView): boolean {
-  return isActivelyRunning(t) && t.needsYou !== true
+  return t.needsYou !== true
 }
 
 // Split an ALREADY-ordered list (see orderActive) into its Active/Rested bands WITHOUT re-sorting —
 // filter() preserves orderActive's order — so the Sidebar can render the separating rule. `.running` is
-// the ACTIVE band (the spinning rows); `.rested` is the queue's rows. The key is named for the spinner,
-// the band is named for the maintainer's word — see the vocabulary at the top of this section.
+// the ACTIVE band (spinning, plus the handful of rows that are in flight without a card of their own);
+// `.rested` is the queue's rows, exactly one per card. The key is named for the spinner that dominates
+// it, the band is named for the maintainer's word — see the vocabulary at the top of this section.
 export function partitionActive(active: readonly ThreadView[]): { running: ThreadView[]; rested: ThreadView[] } {
   return {
     running: active.filter(inActiveBand),

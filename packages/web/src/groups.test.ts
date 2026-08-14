@@ -257,6 +257,12 @@ test("partitionActive: NOTHING in the running band has a queue card, and every c
     thread({ ...base, id: "done-fenced", runtime: "turn-idle", needsYou: true, lastFence: { kind: "done", body: "shipped", hints: [] } }),
     // The rare spinning-yet-queued shape: its own turn is in flight AND the server queued it.
     thread({ ...base, id: "spin-ask", runtime: "running", needsYou: true }),
+    // AT REST, NOT SPINNING, AND EXCUSED FROM THE QUEUE ANYWAY — the shape that has now broken the cue
+    // twice. The server takes a thread out of the queue for reasons the client cannot see and does not
+    // always band it (`awaitingBackground`): a snoozed shell-only rest in 2026-07-29, a stale delivery
+    // ledger in 2026-08-14. Wherever the next one comes from, it belongs BELOW the rule — a cue row with
+    // no card looks queued, answers nothing, and opens a drawer on click instead of scrolling to a card.
+    thread({ ...base, id: "excused-at-rest", runtime: "turn-idle", needsYou: false }),
   ]
   const { running, rested } = partitionActive(shapes)
   assert.equal(running.length + rested.length, shapes.length, "every thread lands in exactly one band")
@@ -264,9 +270,11 @@ test("partitionActive: NOTHING in the running band has a queue card, and every c
   for (const t of shapes.filter(queued)) {
     assert.ok(rested.some((r) => r.id === t.id), `${t.id} has a queue card but no rested-band row to map it to`)
   }
+  // THE OTHER DIRECTION, which is the half that kept breaking: the cue is EXACTLY the cards.
+  for (const t of rested) assert.equal(queued(t), true, `${t.id} sits in the cue with no queue card behind it`)
   // …and the rested-with-live-work rows are exactly the ones that made this worth pinning: the excused
   // child and the snoozed shell band on top, while the QUEUED shell sits below the rule with its card.
-  assert.deepEqual(running.map((t) => t.id), ["own-turn", "spawning", "rested-on-child", "snoozed-on-shell"])
+  assert.deepEqual(running.map((t) => t.id), ["own-turn", "spawning", "rested-on-child", "snoozed-on-shell", "excused-at-rest"])
 })
 
 // ── THE STALLED/RETRY CONTRACT ────────────────────────────────────────────────────────────────────
