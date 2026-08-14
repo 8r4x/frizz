@@ -1858,8 +1858,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // THE CAP IS CONSECUTIVE AND IT IS NOT OPTIONAL. An agent that rests bare, is told how to sign off,
   // and rests bare again would otherwise be told forever — a nag loop frizz itself generates. After
   // SIGNOFF_NUDGE_MAX in a row with no fence appearing, it gives up and the item sits in the queue as a
-  // plain bare rest, which is exactly today's behaviour. Any new word from the HUMAN re-opens the
-  // allowance, because their message is a new task and the count was about the old one.
+  // plain bare rest, which is exactly today's behaviour.
+  //
+  // ONLY A FENCE GIVES THE ALLOWANCE BACK. This used to say a new word from the HUMAN did too, on the
+  // reasoning that their message is a new task and the count was about the old one — but that was written
+  // before the delivery-id fix below, and the code has never done it. It cannot: frizz's own nudge lands
+  // as a USER record, so "the human spoke" is a condition the nudge satisfies by nudging, which is the
+  // 22-deliveries-in-four-minutes loop that fix exists to close. The consequence is worth stating plainly
+  // rather than leaving as a footnote — on a thread with a Goal armed, two bare rests exhaust this
+  // permanently, and everything after is the Goal alone.
   //
   // TOP-LEVEL THREADS ONLY — a sub-agent's final message is a report to its parent, not a queue item.
   // That falls out of this pass reading session rows, which sub-agents do not have.
