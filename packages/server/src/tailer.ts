@@ -233,6 +233,10 @@ export interface SessionTelemetry extends NormalizedTail {
   // fixture valid — this is an additive observation, not a new required fact about a session.
   droppedReports?: QueuedReport[]
   bgShells: BgShellView[] // live background shells this session launched (empty when none)
+  // Background shells that have FINISHED, newest-wins ring (RETAINED_SHELLS_MAX). Server-internal —
+  // deliberately not on the board's wire, because no surface draws a finished shell; the scheduler's
+  // watcher pass is the only consumer. See retiredShellViews for what it is for.
+  retiredShells?: RetiredShellView[]
   pendingAsk?: PendingAskData // a pending native AskUserQuestion the session is frozen on (else absent)
   pendingQuestion: boolean // at rest with an unanswered ```question block as the last assistant message
   lastUserAt?: string // ISO8601 of the newest USER-role record (answer/steer/dispatch) — the listing sort key
@@ -423,6 +427,15 @@ export interface BgShellView {
   taskId?: string
 }
 
+/** A background shell that has FINISHED, in the shape the scheduler's watcher pass matches against.
+ *  Carries the three handles a watcher target can name and nothing else — this never reaches a client. */
+export interface RetiredShellView {
+  id: string // the launch tool_use id
+  taskId?: string // the runtime handle the worker was given
+  label: string
+  status: "completed" | "failed" | "killed"
+}
+
 // A pending native AskUserQuestion (structured, capped). Mirrors @frizz/shared PendingAsk; `id` is
 // the tool_use id used to clear it when its tool_result lands.
 interface AskOptionData {
@@ -469,6 +482,11 @@ interface RetiredShell {
   command?: string
   outputFile?: string
   status: "completed" | "failed" | "killed"
+  // The two handles a WATCHER can be armed against (scheduler SOURCE 8 matches a target against id,
+  // taskId or label). Retained here because a watcher has to be able to fire on a shell it never saw
+  // ALIVE — see retiredShellViews for why absence alone cannot be the signal.
+  taskId?: string
+  label: string
 }
 // How many terminal sub-agents to retain per thread for drawer review (newest-wins ring).
 const RETAINED_SUBAGENTS_MAX = 20
@@ -1020,7 +1038,7 @@ function retireLive(state: TailState, entry: SubAgentEntry, finishedAt: string |
   state.subAgents.delete(entry.toolUseId)
   if (entry.kind === "shell") {
     state.retiredShells.delete(entry.toolUseId)
-    state.retiredShells.set(entry.toolUseId, { toolUseId: entry.toolUseId, command: entry.command, outputFile: entry.outputFile, status })
+    state.retiredShells.set(entry.toolUseId, { toolUseId: entry.toolUseId, command: entry.command, outputFile: entry.outputFile, status, taskId: entry.taskId, label: entry.label })
     while (state.retiredShells.size > RETAINED_SHELLS_MAX) {
       const oldest = state.retiredShells.keys().next().value
       if (oldest === undefined) break
@@ -2750,6 +2768,26 @@ export function createTailer(deps: TailerDeps): Tailer {
     return out
   }
 
+  // THE SHELLS THAT HAVE FINISHED, and the reason a watcher needs them at all.
+  //
+  // `evalWatchers` used to infer "this shell is done" from its ABSENCE, gated on having first observed
+  // it ALIVE (seen-then-gone) so that a typo'd target could not report a completion that never happened.
+  // That gate is a RACE, because the scheduler ticks every 10s: a shell that finishes inside one tick of
+  // its watcher being armed is never observed alive, so its absence never counts and the watcher stays
+  // armed forever. Not hypothetical — measured on the thread that started this (2026-08-14): three
+  // watched shells lived 0.98s, 16.4s and 19.3s past their arming, and the first could never have fired.
+  // Sub-10s background shells are ordinary, so the hole is ordinary too.
+  //
+  // A RETIREMENT is the positive signal absence was standing in for: the fold saw the shell's own
+  // terminal <task-notification>. Matching against it needs no prior sighting, so the race disappears —
+  // and it keeps the property seen-then-gone existed to protect, more strongly: a target naming no real
+  // shell matches no retirement either, so a typo still never fires.
+  function retiredShellViews(state: TailState): RetiredShellView[] {
+    const out: RetiredShellView[] = []
+    for (const r of state.retiredShells.values()) out.push({ id: r.toolUseId, taskId: r.taskId, label: r.label, status: r.status })
+    return out
+  }
+
   // CODEX's background shells, which come from the app-server's item stream rather than from the fold.
   // They are a separate function and not a branch inside `bgShellViews` because they share nothing with
   // it: no `subAgents` entry, no output file to stat, no launch ack to parse. What they DO share is the
@@ -4412,7 +4450,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       // an unanswered ```question fence (a user reply clears the flag and flips the turn in-flight).
       const pendingQuestion = s.turn === "idle" && s.lastAssistantHasQuestion
       const nowMs = now()
-      return { turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, nativeInputRequired: s.nativeInputRequired, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: s.lastAssistantAllDone, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt }
+      return { turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, nativeInputRequired: s.nativeInputRequired, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: s.lastAssistantAllDone, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt }
     },
     // The CURRENT fresh foreign session ids (mtime within FOREIGN_FRESH_MS, capped), mtime-desc. Kept
     // as the last scan's result — recomputed at most every FOREIGN_SCAN_EVERY ticks.

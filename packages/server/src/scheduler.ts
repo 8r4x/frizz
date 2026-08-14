@@ -1847,10 +1847,21 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // belongs to the fence-keyed poller above; migrating that poller onto these rows is the next step and
   // is deliberately NOT bundled here, because it means moving working machinery rather than adding to it.
   //
-  // SEEN-THEN-GONE, not merely gone. A shell watcher must first observe its target ALIVE before absence
-  // can mean "finished" — otherwise a watcher registered a beat before the shell appears, or one whose
-  // label is a typo, fires instantly and reports a completion that never happened. The row's `cursor`
-  // carries that one bit, which is exactly the kind of durable per-watcher progress it exists for.
+  // TWO WAYS A SHELL CAN BE DONE, and the first one is why this used to miss.
+  //
+  //  1. IT RETIRED. The fold saw the shell's own terminal <task-notification> (tailer.retiredShellViews).
+  //     Positive evidence, no prior sighting needed, no race.
+  //  2. SEEN-THEN-GONE. It was observed ALIVE on an earlier tick and is now absent. The fallback for a
+  //     retirement this thread no longer holds — the ring keeps 20 — or an owner that died without one.
+  //
+  // (2) ALONE WAS A RACE, and it silently ate short shells. This pass runs every 10s (`tickMs`), so a
+  // shell that finishes within one tick of its watcher being armed is never observed alive, its absence
+  // therefore never counts, and the watcher stays armed forever. Measured on the thread that started this
+  // (2026-08-14): of three watched shells, one lived 0.98s past its arming and could never have fired
+  // under (2) at any tick rate short of continuous polling. Sub-10s background shells are ordinary here.
+  //
+  // Neither path can fire on a target that names nothing: a typo matches no live row AND no retirement,
+  // which is the protection seen-then-gone was carrying, kept intact and made positive.
   function evalWatchers(nowMs: number): void {
     for (const watch of deps.storage.armedThreadWatches()) {
       if (watch.kind !== "shell") continue
@@ -1868,14 +1879,18 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // `taskId`, so that is what a worker naturally registers. Matching only the first two meant every
       // shell watcher armed the obvious way never observed its target alive, never fired, and sat armed
       // forever while its shell finished unnoticed (maintainer 2026-08-14, on two such rows).
-      const live = tele.bgShells.some(
-        (sh) => sh.state === "running" && (sh.id === watch.target || sh.taskId === watch.target || sh.label === watch.target),
-      )
+      const names = (sh: { id?: string; taskId?: string; label: string }) =>
+        sh.id === watch.target || sh.taskId === watch.target || sh.label === watch.target
+      const live = tele.bgShells.some((sh) => sh.state === "running" && names(sh))
       if (live) {
         if (watch.cursor !== SHELL_SEEN) deps.storage.setThreadWatchCursor(watch.id, SHELL_SEEN)
         continue
       }
-      if (watch.cursor !== SHELL_SEEN) continue // never observed alive — see SEEN-THEN-GONE above
+      // PATH 1 — it retired. Checked BEFORE the cursor, because the whole point is that this does not
+      // need the shell to have been observed alive first.
+      const retired = (tele.retiredShells ?? []).some(names)
+      // PATH 2 — seen-then-gone, for a finish this thread holds no retirement for.
+      if (!retired && watch.cursor !== SHELL_SEEN) continue
       // FOREGROUND: the worker is blocking on this inside its own tool call, so the scheduler's job is
       // to SETTLE it and say nothing. The tool is polling this very row and returns the moment it leaves
       // `armed`. Delivering a wake as well would arrive mid-turn, while the tool is still blocked, and

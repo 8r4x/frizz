@@ -589,7 +589,23 @@ test("applyRecord: a shell leaves the live view on completion and retains bounde
   applyRecord(s, bashBg("toolu_sh", "Watch CI", "gh run watch"))
   applyRecord(s, taskNotification("toolu_sh", "completed"))
   assert.equal(s.subAgents.size, 0)
-  assert.deepEqual(s.retiredShells.get("toolu_sh"), { toolUseId: "toolu_sh", command: "gh run watch", outputFile: undefined, status: "completed" })
+  // `label` and `taskId` joined the record so a WATCHER can be matched against a shell it never saw
+  // alive (scheduler SOURCE 8 fires on the retirement, not on absence — see retiredShellViews). `taskId`
+  // is undefined here because this fixture retires the shell without a launch ack; the ack path is
+  // covered by the auto-background case below, which asserts the id is captured.
+  assert.deepEqual(s.retiredShells.get("toolu_sh"), { toolUseId: "toolu_sh", command: "gh run watch", outputFile: undefined, status: "completed", label: "Watch CI", taskId: undefined })
+})
+
+// The pairing that matters for the watcher: a shell retired AFTER its launch ack keeps the runtime
+// handle the worker was given, so `bzvtnt3ig` is still matchable once the shell itself is gone.
+test("applyRecord: a retired shell keeps the runtime task id its launch ack named", () => {
+  const s = newTailState("t", "s", "/x")
+  applyRecord(s, bashBg("toolu_sh", "Running a larger spot-check batch", "node spotcheck.mjs"))
+  applyRecord(s, resultText("toolu_sh", "Command running in background with ID: bzvtnt3ig. Output is being written to: /tmp/tasks/bzvtnt3ig.output."))
+  applyRecord(s, taskNotification("toolu_sh", "completed"))
+  const dead = s.retiredShells.get("toolu_sh")
+  assert.equal(dead?.taskId, "bzvtnt3ig", "the handle a watcher is armed against survives the shell")
+  assert.equal(dead?.label, "Running a larger spot-check batch")
 })
 
 test("applyRecord: a manual TaskStop clears a background Bash shell (the phantom-row leak fix)", () => {

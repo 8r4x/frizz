@@ -138,7 +138,7 @@ test("removing a session takes its watchers with it", () => {
 // absence of a shell means "finished" ONLY after it has been observed alive.
 function watchScheduler(
   shells: Array<{ id?: string; taskId?: string; label: string; state: "running" | "stale" }>,
-  opts: { tele?: boolean; target?: string } = {},
+  opts: { tele?: boolean; target?: string; retired?: Array<{ id: string; taskId?: string; label: string }> } = {},
 ) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-watchsched-"))
   const storage = createStorage(join(dir, "ui.db"))
@@ -159,6 +159,7 @@ function watchScheduler(
       get: () => opts.tele === false ? undefined : ({
         turn: "idle", lastActivityAt: "2026-08-12T00:00:00.000Z",
         subAgents: [], bgShells: shells.map((sh) => ({ startedAt: "2026-08-12T00:00:00.000Z", ...sh })),
+        retiredShells: (opts.retired ?? []).map((r) => ({ status: "completed" as const, ...r })),
         pendingQuestion: false, permPrompt: false,
       }),
     } as unknown as Tailer,
@@ -259,6 +260,50 @@ test("the target matches the runtime's background-task id, which is the id the w
     assert.equal(gone.delivered.length, 1)
     assert.match(gone.delivered[0], /bzvtnt3ig/)
   } finally { gone.close() }
+})
+
+// A SHELL SHORTER THAN ONE TICK. This pass runs every 10s, so seen-then-gone alone could never fire on a
+// shell that finished inside that window — no tick ever observed it alive, so its absence never counted
+// and the watcher wedged permanently. Measured on the thread that started this (2026-08-14): the shell
+// `bzvtnt3ig` was launched at 15:29:23, its watcher armed at 15:29:59, and it completed at 15:30:00.03 —
+// 0.98s of overlap, against a 10s tick. The RETIREMENT is what makes that case winnable: the fold saw the
+// shell's own terminal notification, so no prior sighting is needed.
+test("a shell that finishes inside one tick still fires, off its retirement rather than a sighting", async () => {
+  const h = watchScheduler([], { target: "bzvtnt3ig", retired: [{ id: "toolu_01Mk", taskId: "bzvtnt3ig", label: "Running a larger spot-check batch" }] })
+  try {
+    assert.equal(h.storage.getThreadWatch("w1")?.cursor, null, "precondition: never observed alive")
+    await h.s.tick()
+    assert.equal(h.delivered.length, 1, "the retirement fires it without a sighting")
+    assert.match(h.delivered[0], /bzvtnt3ig/)
+    assert.equal(h.storage.getThreadWatch("w1")?.state, "fired")
+  } finally { h.close() }
+})
+
+// The protection seen-then-gone was carrying, kept: a target naming nothing matches no live row AND no
+// retirement, so it still cannot report a completion that never happened. This is the NEGATIVE CONTROL
+// for the test above — without it, "fires without a sighting" would also describe a typo firing instantly.
+test("a target that matches no live shell and no retirement still never fires", async () => {
+  const h = watchScheduler(
+    [{ id: "toolu_other", taskId: "bOTHER", label: "something else", state: "running" }],
+    { target: "bTYPOEDoo", retired: [{ id: "toolu_done", taskId: "bDIFFERENT", label: "a different shell" }] },
+  )
+  try {
+    for (let i = 0; i < 3; i++) await h.s.tick()
+    assert.deepEqual(h.delivered, [], "neither a live row nor a retirement names this target")
+    assert.equal(h.storage.getThreadWatch("w1")?.state, "armed")
+  } finally { h.close() }
+})
+
+// A retirement matches on the SAME three handles a live row does, because a worker may have registered
+// against any of them and the retirement is the only record left once the shell is gone.
+test("a retirement matches by launch id and by label, not only by task id", async () => {
+  for (const target of ["toolu_01Mk", "Running a larger spot-check batch"]) {
+    const h = watchScheduler([], { target, retired: [{ id: "toolu_01Mk", taskId: "bzvtnt3ig", label: "Running a larger spot-check batch" }] })
+    try {
+      await h.s.tick()
+      assert.equal(h.delivered.length, 1, `target ${target} should fire off the retirement`)
+    } finally { h.close() }
+  }
 })
 
 // ---- EVERY NEW THREAD IS BORN WITH A GOAL ---------------------------------------------------------
