@@ -270,14 +270,15 @@ const documentMarkdown = new Marked({ ...MARKDOWN_OPTIONS, breaks: false })
 // semi-trusted): script-like tags dropped, event handlers and javascript: URLs stripped, links
 // forced to new tabs. Parsing happens in a detached template so nothing executes.
 //
-// `baseDir` / `document` are set only by the built-in file reader (MarkdownDrawer), which knows where
-// the prose came from: relative links resolve against that directory, and soft wraps stay soft.
-export function mdToHtml(md: string, opts?: { baseDir?: string; document?: boolean }): string {
+// `baseDir` is the directory a relative link resolves against — the document's own directory from the
+// built-in file reader, the project root from every other surface (see lib/localPathBase.ts). `homeDir`
+// expands a `~`-anchored one. `document` is the file reader's alone: soft wraps stay soft.
+export function mdToHtml(md: string, opts?: { baseDir?: string; homeDir?: string; document?: boolean }): string {
   if (!md.trim()) return ""
   // breaks: single newlines are HARD breaks (chat convention — Slack/GitHub-comment style);
   // CommonMark default silently glued "item ✅\nitem ✅" lists onto one line.
   const parser = opts?.document ? documentMarkdown : markdown
-  return sanitize(parser.parse(md, { async: false }) as string, { block: true, baseDir: opts?.baseDir })
+  return sanitize(parser.parse(md, { async: false }) as string, { block: true, baseDir: opts?.baseDir, homeDir: opts?.homeDir })
 }
 
 // INLINE-only render: emphasis/strong/code/del/links but NO block wrapping (`<p>`, headings, lists).
@@ -290,9 +291,10 @@ export function mdToHtml(md: string, opts?: { baseDir?: string; document?: boole
 // `<button>`): a nested `<a>`/`<button>` there is invalid interactive-in-interactive HTML and a click
 // would both follow the link and trigger the host (open a file AND select the option). Emphasis/code
 // still render; only the interactivity is stripped.
-export function mdInlineToHtml(md: string, opts?: { inertInteractive?: boolean }): string {
+export function mdInlineToHtml(md: string, opts?: { inertInteractive?: boolean; baseDir?: string; homeDir?: string }): string {
   if (!md.trim()) return ""
-  return sanitize(markdown.parseInline(md, { async: false }) as string, { inertInteractive: opts?.inertInteractive ?? false })
+  const { inertInteractive = false, baseDir, homeDir } = opts ?? {}
+  return sanitize(markdown.parseInline(md, { async: false }) as string, { inertInteractive, baseDir, homeDir })
 }
 
 export function stripFrontmatter(md: string): string {
@@ -334,14 +336,16 @@ const DROP_WITH_CONTENT = new Set([
 // every other rendered picture in the app is. FALSE on the inline path: that result is dropped into a
 // host that is one line tall (an answer chip, a caption), where a block frame would burst the row. The
 // picture still renders there, bare and inline, exactly as it did before frames existed.
-// `baseDir` — the directory of the FILE this prose was read from, when it came from one. Only the
-// built-in reader has it; every other surface renders prose with no filesystem location of its own.
-type WalkContext = { inertInteractive: boolean; block: boolean; baseDir?: string }
+// `baseDir` — the directory a relative destination resolves against: the FILE's own directory in the
+// built-in reader, and the PROJECT ROOT everywhere else, which is the base the server already uses for
+// a bare path in inline code. `homeDir` — the expansion of a leading `~`. Both come from the caller;
+// see lib/localPathBase.ts for where the non-reader surfaces get them.
+type WalkContext = { inertInteractive: boolean; block: boolean; baseDir?: string; homeDir?: string }
 
-function sanitize(dirty: string, { inertInteractive = false, block = false, baseDir }: Partial<WalkContext> = {}): string {
+function sanitize(dirty: string, { inertInteractive = false, block = false, baseDir, homeDir }: Partial<WalkContext> = {}): string {
   const tpl = document.createElement("template")
   tpl.innerHTML = dirty
-  walk(tpl.content, { inertInteractive, block, baseDir })
+  walk(tpl.content, { inertInteractive, block, baseDir, homeDir })
   return tpl.innerHTML
 }
 
@@ -367,7 +371,7 @@ function walk(node: ParentNode, ctx: WalkContext) {
       walk(span, ctx)
       continue
     }
-    if (tag === "a" || tag === "img") rebaseRelative(el, tag === "a" ? "href" : "src", ctx.baseDir)
+    if (tag === "a" || tag === "img") rebaseRelative(el, tag === "a" ? "href" : "src", ctx)
     if (tag === "a") {
       const inApp = prefixedAppRoute(el.getAttribute("href"))
       if (inApp) el.setAttribute("href", inApp)
@@ -446,12 +450,12 @@ function walk(node: ParentNode, ctx: WalkContext) {
   }
 }
 
-// Rewrite a relative destination into the absolute path it names on disk, so the branches below see the
-// same thing they would have seen had the author written the path out in full. A no-op without a base
-// directory (every surface but the file reader) and for anything already absolute or schemed.
-function rebaseRelative(el: Element, attr: "href" | "src", baseDir: string | undefined): void {
-  if (!baseDir) return
-  const resolved = resolveRelativeLocalPath(el.getAttribute(attr), baseDir)
+// Rewrite a relative or `~`-anchored destination into the absolute path it names on disk, so the
+// branches below see the same thing they would have seen had the author written the path out in full.
+// A no-op when the caller supplied no base at all, and for anything already absolute or schemed.
+function rebaseRelative(el: Element, attr: "href" | "src", { baseDir, homeDir }: WalkContext): void {
+  if (!baseDir && !homeDir) return
+  const resolved = resolveRelativeLocalPath(el.getAttribute(attr), baseDir ?? "", homeDir)
   if (resolved) el.setAttribute(attr, resolved)
 }
 

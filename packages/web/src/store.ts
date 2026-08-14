@@ -7,6 +7,7 @@ import { resolveThreadRoute } from "./lib/threadRouteState.ts"
 import { standaloneThreadHref } from "./lib/standaloneThreadRoute.ts"
 import { ownedByThisPage } from "./lib/projectOwnership.ts"
 import { setGithubRepo } from "./lib/githubAutolink.ts"
+import { setLocalPathBase } from "./lib/localPathBase.ts"
 
 // Where a scroll-to-card lands a card's outer border below the viewport top (px). Exported because the
 // sidebar's reading rail watches for that same landing to know a click-to-card has arrived.
@@ -404,6 +405,7 @@ export function topThreadSlug(): string | null {
 export function setBoard(board: BoardSnapshot) {
   if (!ownedByThisPage(board.projectSlug)) return
   setGithubRepo(board.githubRepo)
+  setLocalPathBase(board.projectDir, board.homeDir)
   store.board = board
 }
 
@@ -420,6 +422,7 @@ export function setBoard(board: BoardSnapshot) {
  */
 export function resetProjectState() {
   setGithubRepo(null)
+  setLocalPathBase(null)
   store.board = null
   store.view = "todos"
   store.connection = "connecting"
@@ -446,6 +449,7 @@ export function seedBoard(board: BoardSnapshot) {
   if (!ownedByThisPage(board.projectSlug)) return
   if (store.board !== null) return
   setGithubRepo(board.githubRepo)
+  setLocalPathBase(board.projectDir, board.homeDir)
   store.board = board
 }
 

@@ -37,6 +37,9 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
       const img = node.querySelector("img")
       return {
         buttons: [...node.querySelectorAll("button")].map((b) => b.getAttribute("data-local-path")),
+        // The failure this whole page exists to catch is an anchor SURVIVING: a local path left as an
+        // href is a same-origin URL, and one click leaves Frizz for a 404. Nothing here may be one.
+        anchors: [...node.querySelectorAll("a")].map((a) => a.getAttribute("href")),
         imageSrc: img?.getAttribute("src"),
         imagePath: img?.getAttribute("data-local-path"),
         imageAlt: img?.getAttribute("alt"),
@@ -47,7 +50,16 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
       }
     })
     assert.deepEqual(rendered, {
-      buttons: ["/fixture/report.md", "/fixture/contract.pdf"],
+      // The last two are the reported bug: a path a worker wrote the way it typed it — relative to the
+      // project, and home-anchored — has to arrive here as an absolute local-file button. Before the
+      // rebase both stayed relative anchors the browser resolved against the PAGE.
+      buttons: [
+        "/fixture/report.md",
+        "/fixture/contract.pdf",
+        "/fixture/.frizz/threads/6d56ea2f/HANDOFF.md",
+        "/fixture/home/.claude/CLAUDE.md",
+      ],
+      anchors: [],
       imageSrc: "/_frizz/local-image?path=%2Ffixture%2Fshot.png",
       imagePath: "/fixture/shot.png",
       imageAlt: "descriptive alt",
@@ -61,13 +73,19 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
     // any other local file must still be handed to the opener and open no drawer.
     await page.click('button[data-local-path="/fixture/report.md"]')
     await page.click('button[data-local-path="/fixture/contract.pdf"]')
+    // And the rebased one routes by the SAME rule — the click handler never learns which syntax the
+    // author used, only that the path it holds ends in `.md`.
+    await page.click('button[data-local-path="/fixture/.frizz/threads/6d56ea2f/HANDOFF.md"]')
     const routed = await page.evaluate(() => ({
       opened: (window as unknown as { __localFileFixtureOpened?: string[] }).__localFileFixtureOpened ?? [],
       drawers: (window as unknown as { __localFileFixtureDrawers: () => unknown[] }).__localFileFixtureDrawers(),
     }))
     assert.deepEqual(routed, {
       opened: ["/fixture/contract.pdf"],
-      drawers: [{ kind: "markdown", path: "/fixture/report.md" }],
+      drawers: [
+        { kind: "markdown", path: "/fixture/report.md" },
+        { kind: "markdown", path: "/fixture/.frizz/threads/6d56ea2f/HANDOFF.md" },
+      ],
     })
     assert.deepEqual(pageErrors, [])
   } finally {

@@ -78,8 +78,31 @@ test("only a genuinely relative destination is rebased", () => {
   const base = "/repo/docs"
   for (const href of ["/abs/x.md", "https://example.com/x.md", "mailto:a@b.c", "file:///x.md", "#anchor", "?q=1", "", "   "])
     assert.equal(resolveRelativeLocalPath(href, base), null, JSON.stringify(href))
-  // No base (every surface but the file reader) means no rebasing at all.
+  // No base at all (a page whose board keyframe has not landed yet) means no rebasing.
   assert.equal(resolveRelativeLocalPath("guide.md", ""), null)
+})
+
+test("chat prose rebases a project-relative path the way a worker writes it", () => {
+  // The reported bug verbatim: a worker linking its own scratch file wrote the path relative to the
+  // project root, the anchor stayed relative, and the browser resolved it against the THREAD PAGE.
+  const project = "/Users/me/projects/nub"
+  assert.equal(
+    resolveRelativeLocalPath(".frizz/threads/6d56ea2f/HANDOFF.md", project),
+    "/Users/me/projects/nub/.frizz/threads/6d56ea2f/HANDOFF.md",
+  )
+  assert.equal(resolveRelativeLocalPath("packages/web/src/App.tsx", project), "/Users/me/projects/nub/packages/web/src/App.tsx")
+})
+
+test("a home-anchored path expands against home, never onto the base directory", () => {
+  const base = "/repo/docs"
+  const home = "/Users/me"
+  assert.equal(resolveRelativeLocalPath("~/.claude/CLAUDE.md", base, home), "/Users/me/.claude/CLAUDE.md")
+  assert.equal(resolveRelativeLocalPath("~", base, home), "/Users/me")
+  // Without a home from the board there is nothing to expand against, and gluing `~` onto the base
+  // would invent a directory nobody has: leave it alone so it renders as plain text.
+  assert.equal(resolveRelativeLocalPath("~/.claude/CLAUDE.md", base), null)
+  // `~` only anchors at the START. A file whose own name begins with one is still relative.
+  assert.equal(resolveRelativeLocalPath("notes/~draft.md", base, home), "/repo/docs/notes/~draft.md")
 })
 
 test("a document's base directory is its parent", () => {

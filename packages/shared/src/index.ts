@@ -1031,6 +1031,13 @@ export const BoardSnapshot = z.object({
   // Optional so a pre-restart server keeps working; absent means "fall back to `/`", i.e. the old
   // behaviour. Registry-derived, so it is the same slug every other surface links to.
   projectSlug: z.string().optional(),
+  // The server's home directory — the expansion of a `~` a worker wrote in prose. Agents reference
+  // files that way constantly (`~/.claude/CLAUDE.md`), and the browser has no way to derive it, so a
+  // `~`-anchored Markdown link had no absolute path to become and stayed a same-origin anchor that
+  // navigated out of Frizz. The client only ever uses it to build a path it then hands BACK to the
+  // server, which realpath-gates it exactly as it gates one the author typed in full. Optional so a
+  // pre-restart server keeps working; absent means `~` links stay unresolved, i.e. the old behaviour.
+  homeDir: z.string().optional(),
   // (No `.frizz/ exists` bit here on purpose. Threads are session-first — the ui.db registry IS the
   // board — so `.frizz/` presence says nothing about whether this project has one. Its only consumer
   // was a shell gate that dead-ended `.frizz`-less repos; the server still probes the directory

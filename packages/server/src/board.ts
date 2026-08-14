@@ -3,6 +3,7 @@ import {
   watch as fsWatch,
   type FSWatcher,
 } from "node:fs"
+import { homedir } from "node:os"
 import { join } from "node:path"
 import watcher from "@parcel/watcher"
 import type { BoardSnapshot, ThreadView, RuntimeState, PlanView, ThreadRecurringPrompt } from "@frizz/shared"
@@ -1080,6 +1081,8 @@ export function createBoard(
       projectLabel: project.label,
       ...(project.githubRepo ? { githubRepo: project.githubRepo } : {}),
       projectSlug: findByPath(project.dir)?.slug,
+      // So the client can expand a `~` a worker wrote in prose (see BoardSnapshot.homeDir).
+      homeDir: homedir(),
     }
     const sessionThreads = buildSessionThreads(assembledAtMs)
     armSnoozeWake(sessionThreads, assembledAtMs)

@@ -99,21 +99,38 @@ export function isLocalMarkdownFile(path: string): boolean {
   return MARKDOWN_FILE_PATH.test(path.trim().replace(/:\d+(?::\d+)?$/, ""))
 }
 
-// Resolve a RELATIVE Markdown destination against the directory of the document being rendered. Repo
-// docs link to each other relatively on purpose (`./ARCHITECTURE.md`, `../scripts/shot.mjs`), and with
-// no base they are neither a local path nor a working URL — the anchor became a same-origin link that
-// navigated out of Frizz. Only the renderer that knows where a document CAME FROM passes a base, so
-// chat prose (which has no directory) is unaffected. Returns null for anything already absolute, a
-// fragment, a query, or a scheme; the query/fragment tail of a resolved path is dropped, since a
-// filesystem path has neither.
-export function resolveRelativeLocalPath(raw: string | null | undefined, baseDir: string): string | null {
+// Resolve a RELATIVE Markdown destination against the directory the prose belongs to. Repo docs link
+// to each other relatively on purpose (`./ARCHITECTURE.md`, `../scripts/shot.mjs`) and so does chat
+// prose — a worker writing up its own scratch file names it `.frizz/threads/<id>/HANDOFF.md`, exactly
+// as it typed it into the shell. With no base, none of those is a local path OR a working URL: the
+// anchor stayed relative and the browser resolved it against the PAGE, so clicking a handoff link
+// navigated to `/project/nub/thread/<slug>/.frizz/threads/<id>/HANDOFF.md` and out of Frizz entirely.
+//
+// The base is the rendering document's own directory for the file reader, and the PROJECT DIRECTORY
+// for every other surface — the same root the server resolves a bare inline-code path against
+// (local-file.ts `resolveOpenableFile`), so a path written in backticks and the same path written as a
+// link now land on the same file. `~`/`~/` expands against `home` when the board supplied one, which
+// is the other half of that parity. Returns null for anything already absolute, a fragment, a query,
+// or a scheme; the query/fragment tail of a resolved path is dropped, since a filesystem path has
+// neither.
+export function resolveRelativeLocalPath(
+  raw: string | null | undefined,
+  baseDir: string,
+  home?: string,
+): string | null {
   const href = raw?.trim()
-  if (!href || !baseDir.startsWith("/")) return null
+  if (!href) return null
   if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return null // http(s):, file:, mailto:, cursor:, …
   if (href.startsWith("/") || href.startsWith("#") || href.startsWith("?")) return null
   const relative = decodePath(href.replace(/[?#].*$/u, ""))
   if (!relative) return null
-  const segments = `${baseDir}/${relative}`.split("/")
+  // A home-anchored path carries its own root, so it needs no base at all — and must never be glued
+  // onto one, which is what turned `~/.claude/CLAUDE.md` into `<baseDir>/~/.claude/CLAUDE.md`.
+  const homeAnchored = relative === "~" || relative.startsWith("~/")
+  if (homeAnchored && !home?.startsWith("/")) return null
+  const root = homeAnchored ? home! : baseDir
+  if (!root.startsWith("/")) return null
+  const segments = `${root}/${homeAnchored ? relative.slice(1) : relative}`.split("/")
   const stack: string[] = []
   for (const segment of segments) {
     if (!segment || segment === ".") continue
