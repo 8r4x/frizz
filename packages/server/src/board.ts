@@ -256,6 +256,71 @@ function stampStoppableShells(shells: ThreadView["bgShells"], row: SessionRow): 
 // hasLiveBackgroundWork also owns the CRASH bit, where the same distinction is real: a dead pane with a
 // child still reading "running" died mid-work, while a dead pane with a shell behind it is just a shell
 // whose owner is gone.
+// ---- THE DECLARED PARK ---------------------------------------------------------------------------
+// A thread is "awaiting background work" when it SAYS SO, naming what it waits on — not when frizz
+// notices it happens to have something running.
+//
+// That inference is what put the resting card on a thread whose only background work was a dev server
+// nobody ever tore down: true by the letter, useless as a signal (maintainer 2026-08-14, asking for
+// this: "For it to be truly awaiting something, it needs to list it explicitly"). An `awaiting` fence
+// with `watch: <id>` lines is that declaration, and because the ids come from the registry frizz can
+// CHECK it — which is what every earlier free-text version of this syntax could not do.
+//
+// IT FAILS OPEN. A park counts only while every id it names is still an armed watch on THIS thread; an
+// unknown id, one that already settled, someone else's, or a fence older than the cap is not a park, and
+// the thread queues exactly as it would have. A typo must never be a way to disappear from the board.
+const DECLARED_PARK_MAX_MS = 24 * 60 * 60 * 1000
+
+export function declaredWaitIds(tele: SessionTelemetry | undefined): string[] {
+  if (tele?.lastFence?.kind !== "awaiting") return []
+  return tele.lastFence.hints.filter((h) => h.kind === "watch").map((h) => h.value.trim()).filter(Boolean)
+}
+
+/** Is this thread parked on its OWN BACKGROUND WORK, declared by id and still true?
+ *
+ *  `pr-watch:` is deliberately NOT this. A PR wait is also a declaration, and it also cards — but it must
+ *  stay a VISIBLE queue handoff, because a PR whose reviews never arrive would otherwise vanish silently
+ *  (maintainer 2026-07-22, reaffirmed 2026-08-12: no watcher parks its thread). Own background work is
+ *  the opposite case: it reports on its own, on a timescale the worker chose, and there is nothing for
+ *  the human to do meanwhile. So this predicate — the one that takes a thread OUT of the queue — reads
+ *  `watch:` ids only. `hasDeclaredWait` below is the wider one, for the card. */
+export function hasDeclaredBackgroundPark(
+  tele: SessionTelemetry | undefined,
+  armedWatchIds: ReadonlySet<string>,
+  nowMs: number,
+): boolean {
+  const ids = declaredWaitIds(tele)
+  if (ids.length === 0) return false
+  if (!ids.every((id) => armedWatchIds.has(id))) return false
+  // A park with no expiry is a thread that can vanish forever behind a wait that never resolves — the
+  // dev-server case again, inverted. The fence's own instant bounds it without new syntax.
+  const restedMs = Date.parse(tele?.lastAssistantAt ?? "")
+  if (Number.isFinite(restedMs) && nowMs - restedMs > DECLARED_PARK_MAX_MS) return false
+  return true
+}
+
+/** Does the thread DECLARE a wait of any kind — its own background work, or a parked PR watcher? This is
+ *  what the resting card states. It is wider than the queue excusal above by exactly `pr-watch`, which
+ *  cards but never parks. */
+export function hasDeclaredWait(
+  tele: SessionTelemetry | undefined,
+  armedWatchIds: ReadonlySet<string>,
+  nowMs: number,
+): boolean {
+  if (hasDeclaredBackgroundPark(tele, armedWatchIds, nowMs)) return true
+  if (tele?.lastFence?.kind === "awaiting" && hasParkedPrWatch(tele)) return true
+  // A RUNNING SUB-AGENT NEEDS NO DECLARATION, and this is the line that keeps the change surgical. The
+  // complaint was never about sub-agents — it was "the background work that it is theoretically waiting
+  // on is just like a dev server that it never tore down" (maintainer 2026-08-14). A dispatched sub-agent
+  // is the opposite of that dev server: it RETURNS, and its return re-invokes this thread, so "resting
+  // until it reports" is true whether or not the worker thought to say so.
+  //
+  // A background SHELL is the case that must be declared: nothing wakes the thread when one finishes
+  // unless a watcher is armed on it, so an undeclared shell is not evidence of a wait — it is evidence
+  // of a process the worker left running, which is exactly what made this card lie.
+  return (tele?.subAgents ?? []).some((a) => isDirectSubAgent(a) && a.state === "running")
+}
+
 function hasLiveOwnWork(tele: SessionTelemetry | undefined): boolean {
   return Boolean(
     tele?.subAgents?.some((agent) => isDirectSubAgent(agent) && agent.state === "running") ||
@@ -391,6 +456,7 @@ export function deriveNeedsYou(
   // received this row's outstanding sends is gone. Read by hasFreshDelivery alone — see there. Defaults
   // false so every other caller (and every test) keeps today's behaviour.
   deliveryProcessGone = false,
+  armedWatchIds: ReadonlySet<string> = new Set(),
 ): boolean {
   // Snooze is explicit operator lifecycle state. It must be checked before provider/question/crash
   // gates so choosing Snooze from any queue card actually parks that card until its exact deadline.
@@ -486,6 +552,11 @@ export function deriveNeedsYou(
   // drops it to the crash/bare-rest net below (a dead pane's children keep reading "running" until their
   // transcript goes stale; the parent cannot actually still be waiting on them). A done fence outranks
   // this too: respect the worker's completion signal (show the done card).
+  // A DECLARED PARK KEEPS THE THREAD OUT OF THE QUEUE. The worker named what it is waiting on and every
+  // id is still armed, so there is nothing for the human to do until one of them reports — which is the
+  // difference between this and the line below, where frizz merely NOTICED something running. See
+  // `hasDeclaredPark`. Honours the event-snooze like every other reason here.
+  if (runtime !== "exited" && hasDeclaredBackgroundPark(tele, armedWatchIds, nowMs)) return false
   if (runtime !== "exited" && hasLiveOwnWork(tele) && tele?.lastFence?.kind !== "done") return !bgSnoozeArmed(row)
   // A final ```done fence is a CHECKED completion handoff: show its success card in the queue until the
   // human explicitly Archives the thread. Like a question, merely viewing it does not resolve it. The
@@ -531,8 +602,12 @@ export function deriveAwaitingBackground(
   nowMs = Date.now(),
   limitPause: ThreadView["limitPause"] = undefined,
   deliveryProcessGone = false,
+  armedWatchIds: ReadonlySet<string> = new Set(),
 ): boolean {
-  if (runtime !== "turn-idle" || !hasLiveOwnWork(tele)) return false
+  // DECLARED, not inferred. This card used to appear whenever the thread had anything running, which is
+  // how it came to announce a wait on a dev server nobody tore down. It now states what the worker said
+  // it is waiting on, and says nothing when the worker said nothing.
+  if (runtime !== "turn-idle" || !hasDeclaredWait(tele, armedWatchIds, nowMs)) return false
   // Any hard human gate or completion signal outranks this reason → the thread cards as THAT, not here.
   if (hasActionableInteraction || tele?.pendingAsk || tele?.nativeInputRequired || tele?.pendingQuestion) return false
   // A signal fence — ```done OR ```awaiting — is the worker's OWN explicit statement about why it
@@ -549,7 +624,14 @@ export function deriveAwaitingBackground(
   // with the sub-agents and shells, and THIS card carries the one snooze. Without this line the parked
   // thread would show a titleless fence card and no snooze anywhere.
   if (tele?.lastFence?.kind === "done") return false
-  if (tele?.lastFence?.kind === "awaiting" && !hasParkedPrWatch(tele)) return false
+  // A DECLARED BACKGROUND PARK IS THE SAME EXCEPTION as the pr-watch one directly above, for the same
+  // reason: its fence has no park action of its own (awaitingParkAction returns null for `watch:`), so
+  // suppressing this card would leave the thread stating its wait nowhere and offering no snooze.
+  if (
+    tele?.lastFence?.kind === "awaiting" &&
+    !hasParkedPrWatch(tele) &&
+    !hasDeclaredBackgroundPark(tele, armedWatchIds, nowMs)
+  ) return false
   // Every OTHER excusal deriveNeedsYou applies still outranks the card (a user wall-clock snooze, a
   // limit pause, a delivered-but-unobserved follow-up); only the queue-owned event-snooze is dropped,
   // and the queue's live-OWN-WORK excusal is opted out of (excuseLiveOwnWork: false). That opt-out is
@@ -774,8 +856,12 @@ function sessionThreadView(
   const state = effectiveSessionState(row, registeredLegacyTerminal)
   const archived = state === "archived"
   const limitPause = resolveLimitPause(row, tele, nowMs)
-  const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone)
-  const awaitingBackground = archived ? false : deriveAwaitingBackground(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, deliveryProcessGone)
+  // The ids a `watch:` hint may legally name — this thread's own ARMED watchers, read from the registry.
+  // Reading them here (once) is what lets both derivations CHECK the fence's declaration rather than
+  // trust it: see `hasDeclaredPark`.
+  const armedWatchIds = new Set(storage.listThreadWatches(row.slug, { armedOnly: true }).map((w) => w.id))
+  const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, armedWatchIds)
+  const awaitingBackground = archived ? false : deriveAwaitingBackground(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, deliveryProcessGone, armedWatchIds)
   // A pane that exited with work still outstanding — a turn in flight, OR a sub-agent still reading
   // "running" (its parent is gone, so it cannot actually be live) — is a crash/stall, not a clean
   // handoff, so it cards as "stalled" not a bare "rest". Mirrors deriveNeedsYou's surfacing above.

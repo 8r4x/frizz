@@ -612,8 +612,23 @@ test("deriveNeedsYou: the event-snooze parks a shell-only rest for exactly the c
 test("deriveAwaitingBackground: true only when own-work rest is the SOLE reason for the card", () => {
   const child = tele({ subAgents: [{ label: "c", startedAt: T0, state: "running", id: "a1" }], lastActivityAt: LATER })
   assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), child, "turn-idle"), true)
-  // A shell-only rest also qualifies.
-  assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), tele({ bgShells: [{ label: "w", startedAt: T0, state: "running" }] }), "turn-idle"), true)
+  // A SHELL-ONLY REST NO LONGER QUALIFIES ON ITS OWN (2026-08-14). Nothing wakes the thread when a
+  // background shell finishes unless a watcher is armed on it, so an undeclared shell is not evidence of
+  // a wait — it is evidence of a process the worker left running, and this card spent months announcing
+  // a wait on dev servers nobody tore down. It has to be DECLARED now: an ```awaiting fence naming the
+  // watcher's id, checked against the registry (declared-park.test.ts).
+  const shellOnly = tele({ bgShells: [{ label: "w", startedAt: T0, state: "running" }] })
+  assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), shellOnly, "turn-idle"), false, "an undeclared shell is not a wait")
+  const declaredShell = tele({
+    bgShells: [{ label: "w", startedAt: T0, state: "running" }],
+    lastAssistantAt: LATER,
+    lastFence: { kind: "awaiting", body: "Waiting on the suite.", hints: [{ kind: "watch", value: "wch_1" }] },
+  })
+  assert.equal(
+    deriveAwaitingBackground(row({ rested_at: T0 }), declaredShell, "turn-idle", false, Date.parse(LATER) + 1000, undefined, false, new Set(["wch_1"])),
+    true,
+    "…and it does once the worker names the watcher it is parked on",
+  )
   // Any stronger reason renders its OWN card instead → not awaiting-background.
   assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), tele({ ...child, pendingQuestion: true }), "turn-idle"), false, "a question outranks it")
   assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), tele({ ...child, pendingAsk: { id: "x", questions: [] } }), "turn-idle"), false, "a native ask outranks it")
@@ -649,10 +664,23 @@ test("deriveAwaitingBackground: true only when own-work rest is the SOLE reason 
 test("deriveAwaitingBackground: the event-snooze hides the QUEUE card, never the fact", () => {
   const child = tele({ subAgents: [{ label: "c", startedAt: T0, state: "running", id: "a1" }], lastActivityAt: LATER })
   const shell = tele({ bgShells: [{ label: "Poll CI to terminal", startedAt: T0, state: "running" }], lastActivityAt: LATER })
-  for (const [what, t] of [["sub-agent", child], ["shell-only", shell]] as const) {
+  // The SHELL case now needs a declaration to card at all (see the note in the test above), so the
+  // snooze's own invariant — it hides the QUEUE card, never the fact — is exercised on the two shapes
+  // that still state a fact without one: a running sub-agent, and a declared park.
+  const declared = tele({
+    bgShells: [{ label: "Poll CI to terminal", startedAt: T0, state: "running" }],
+    lastAssistantAt: LATER,
+    lastFence: { kind: "awaiting", body: "Waiting on CI.", hints: [{ kind: "watch", value: "wch_1" }] },
+  })
+  void shell
+  for (const [what, t, ids] of [["sub-agent", child, new Set<string>()], ["declared shell", declared, new Set(["wch_1"])]] as const) {
     const snoozed = row({ rested_at: T0, bg_snooze_rested_at: T0 })
     assert.equal(deriveNeedsYou(snoozed, t, "turn-idle"), false, `${what}: snoozed → out of the queue`)
-    assert.equal(deriveAwaitingBackground(snoozed, t, "turn-idle"), true, `${what}: …but the card still states the rest`)
+    assert.equal(
+      deriveAwaitingBackground(snoozed, t, "turn-idle", false, Date.parse(LATER) + 1000, undefined, false, ids),
+      true,
+      `${what}: …but the card still states the rest`,
+    )
   }
 })
 
@@ -1425,9 +1453,6 @@ test("a parked pr-watch fence yields one armed github row per PR", () => {
     target: "colinhacks/zod#6382",
     state: "armed",
     createdAt: FENCE_AT,
-    // A PR watcher has nothing to observe alive first, so it is never in the wedged state the shell
-    // registry's seen-then-gone rule can leave a row in.
-    seen: true,
   }])
 })
 
