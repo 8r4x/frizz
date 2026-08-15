@@ -283,13 +283,15 @@ function Chevron() {
   //     ink to the card's content edge  3.88px   — while the mark on the left sits flush at 0
   //     status ink → chevron ink       14.88px   — wider than the 13.00px that got "fix the fucking
   //                                                optical spacing on that chevron" (FRIZZ.md)
-  //   AFTER, with these two:            1.88px and  7.88px.
+  //   AFTER, with these two:            1.88px and  7.88px — identical in BOTH fonts, which is the point
+  //                                     of setting them in px against an ink measurement rather than in
+  //                                     em against a cap height that moves.
   //
   // `ml-[3px]` sets the pair distance (3 + ~4.9px of dead box ≈ 8px of ink, so the chevron reads as the
   // status's handle rather than floating between it and the card edge); `-mr-[4px]` pulls the ink back
-  // toward the content edge the mark column already sits on. Both numbers are the MEASURED ones — a
-  // further -1px was drafted to close the last 1.88px and is NOT here, because the tree could not render
-  // when it came time to check it and an unmeasured constant is exactly what this comment exists to stop.
+  // toward the content edge the mark column already sits on. A further -1px to close the last 1.88px was
+  // drafted and rejected: 1.88px of optical inset at a card's edge reads as intentional, and dead flush
+  // against a 12px rounded corner does not.
   return <ChevronRight size={13} aria-hidden className={`${ON_CAP} ml-[3px] -mr-[4px] text-muted/35 transition-colors group-hover:text-muted/70`} />
 }
 
