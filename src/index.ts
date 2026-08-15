@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { bindHostIsExposed } from "@frizz/server/local-origin";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -33,6 +34,7 @@ import {
   resolveLaunchIntent,
   EXPOSED_WARNING,
   PUBLIC_ORIGIN_WARNING,
+  REUSED_NETWORK_FLAGS_WARNING,
   expectedOwnerHealth,
   FIRST_ARTIFACT_LAUNCH_LOCK_TIMEOUT_MS,
   helpText,
@@ -704,9 +706,12 @@ async function openOrPrint(
   // A reuse did not choose this server's bind address or its proxy origin, so it must not claim either.
   const network = reused ? [] : networkUrls(port, bind.host);
   const publicOrigin = reused ? undefined : bind.publicOrigin;
+  // A reused server was started by someone else's invocation, so these flags did nothing. Say so.
+  const networkFlagsIgnored = reused && (bind.publicOrigin !== undefined || bindHostIsExposed(bind.host));
   const warnings = [
     ...(network.length > 0 ? [EXPOSED_WARNING] : []),
     ...(publicOrigin ? [PUBLIC_ORIGIN_WARNING] : []),
+    ...(networkFlagsIgnored ? [REUSED_NETWORK_FLAGS_WARNING] : []),
   ];
   if (!readout) {
     // `--status`, internal launches and pipes keep the plain, parseable records.

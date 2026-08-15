@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { bindHostIsExposed } from "@frizz/server/local-origin";
 // The registry launcher is intentionally separate from index.ts. `frizz-dev` follows mutable
 // checkout source; `frizz` runs the package that npm resolved and never turns an npx cache into a
 // deployment directory.
@@ -23,6 +24,7 @@ import {
   boardAddress,
   EXPOSED_WARNING,
   PUBLIC_ORIGIN_WARNING,
+  REUSED_NETWORK_FLAGS_WARNING,
   expectedOwnerHealth,
   liveWorkspaceOwner,
   networkUrls,
@@ -305,9 +307,12 @@ async function openOrPrint(port: number, reused: boolean, path = ""): Promise<vo
   // A reuse did not choose this server's bind address or its proxy origin, so it must not claim either.
   const network = reused ? [] : networkUrls(port, bind.host);
   const publicOrigin = reused ? undefined : bind.publicOrigin;
+  // A reused server was started by someone else's invocation, so these flags did nothing. Say so.
+  const networkFlagsIgnored = reused && (bind.publicOrigin !== undefined || bindHostIsExposed(bind.host));
   const warnings = [
     ...(network.length > 0 ? [EXPOSED_WARNING] : []),
     ...(publicOrigin ? [PUBLIC_ORIGIN_WARNING] : []),
+    ...(networkFlagsIgnored ? [REUSED_NETWORK_FLAGS_WARNING] : []),
   ];
   if (!readout) {
     console.log(`${reused ? "reusing" : "started"} Frizz ${PACKAGE_VERSION} for ${workspace.root}`);

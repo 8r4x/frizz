@@ -297,6 +297,19 @@ export const EXPOSED_WARNING =
  * radius than a LAN. Frizz still has no login of its own, so the authenticator in front is not an
  * optional hardening step — it is the entire access control, and saying so is the point of this line.
  */
+/**
+ * Printed when a network flag was supplied to an invocation that JOINED an already-running Frizz.
+ *
+ * Frizz is a singleton: one server per machine serving every project. So `--host` / `--public-origin`
+ * only take effect on the invocation that actually STARTS it, and on every later one they are silently
+ * dropped. Silently is the problem — these are the two flags that decide who can reach a board that
+ * runs shell commands, and an operator who believes a tunnel is armed when it is not is worse off than
+ * one who got an error. Measured 2026-08-15: a second launch with --public-origin joined the running
+ * server on 9494 and reported nothing.
+ */
+export const REUSED_NETWORK_FLAGS_WARNING =
+  "This joined the Frizz already running on this machine, so --host/--public-origin were ignored. Stop it first (frizz --stop) and relaunch with the flag to change how the board is reached.";
+
 export const PUBLIC_ORIGIN_WARNING =
   "Frizz has no login of its own, so whatever sits in front of this origin IS the access control. Require authentication there (Cloudflare Access, Tailscale) — an unauthenticated tunnel lets anyone with the URL run commands on this machine as you.";
 
