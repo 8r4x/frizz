@@ -44,7 +44,15 @@ export async function parseRpcResponse(res: Response, name: string): Promise<unk
     if (res.status === 404 || res.status === 405) {
       throw new Error("Frizz server restart required — this control is newer than the running server")
     }
-    throw new Error(`RPC ${name} returned an invalid response`)
+    // SAY THE STATUS. A non-JSON body is always something OTHER than the RPC answering, and which
+    // something is the entire diagnosis — 403 is the local-origin gate refusing (a stale tab, a
+    // host/origin mismatch), 5xx is the server failing, 200-with-HTML is a dev restart window serving
+    // the SPA shell. Reporting all of them as "invalid response" sent one debugging session down the
+    // wrong path entirely (2026-08-15: a 403 read as a schema problem and cost half an hour).
+    if (res.status === 403) {
+      throw new Error(`RPC ${name} was refused (403) — the page's origin does not match the server it is talking to. Reload from the URL frizz is actually serving.`)
+    }
+    throw new Error(`RPC ${name} returned a non-JSON response (HTTP ${res.status})`)
   }
   if (!res.ok) {
     const error = new Error(typeof json.error === "string" ? json.error : `RPC ${name} failed`)
