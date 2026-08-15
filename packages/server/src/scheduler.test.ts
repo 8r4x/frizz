@@ -275,26 +275,30 @@ test("human/session hints are descriptive, not scheduler-actionable — no fire,
   assert.equal(h.resumes.length, 0)
 })
 
-// ---- re-await after a fence clears arms fresh ----
-
-test("a NEW awaiting rest (after the fence cleared) arms and fires again", async () => {
+// ---- a SECOND timer, set after the first has rung, fires on its own ----
+//
+// This used to read "a new awaiting rest arms fresh", because arming WAS the fence and a spent fence had
+// to be cleared before a new one could arm. A timer is a ROW now, so there is nothing to clear: each row
+// rings once and is spent, and the property worth pinning is that a worker which sets another after the
+// first has fired is woken again rather than deduped against the delivery it already had.
+test("a SECOND timer set after the first has rung fires on its own", async () => {
   const h = harness()
   const t1 = h.clock.ms + 10_000
   h.storage.upsertSession(row("t"))
-  h.tele.set("t", tele(awaiting([{ kind: "timer", value: iso(t1) }])))
+  armTimer(h, "t", t1)
+  h.tele.set("t", tele())
   const s = h.make()
-  await s.tick() // arm #1
+  await s.tick() // not due yet
   h.clock.ms = t1 + 1000
   await s.tick() // fire #1
   assert.equal(h.resumes.length, 1)
-  // The agent's turn supersedes the fence → tailer clears it.
-  h.tele.set("t", tele(undefined))
-  await s.tick() // prune
-  // Later the worker re-awaits a NEW timer.
-  const t2 = h.clock.ms + 10_000
-  h.tele.set("t", tele(awaiting([{ kind: "timer", value: iso(t2) }])))
-  await s.tick() // arm #2 (fresh)
+  await s.tick() // the row is spent — no second wake from it
   assert.equal(h.resumes.length, 1)
+  // Later the worker sets ANOTHER one.
+  const t2 = h.clock.ms + 10_000
+  armTimer(h, "t", t2)
+  await s.tick()
+  assert.equal(h.resumes.length, 1, "not due yet either")
   h.clock.ms = t2 + 1000
   await s.tick() // fire #2
   assert.equal(h.resumes.length, 2)
@@ -306,13 +310,15 @@ test("restart idempotency: a delivered outbox wake is not re-fired by a fresh sc
   const h = harness()
   const target = h.clock.ms + 10_000
   h.storage.upsertSession(row("t"))
-  h.tele.set("t", tele(awaiting([{ kind: "timer", value: iso(target) }])))
+  armTimer(h, "t", target)
+  h.tele.set("t", tele())
   const s1 = h.make()
-  await s1.tick() // arm
+  await s1.tick() // not due yet
   h.clock.ms = target + 1000
-  await s1.tick() // fire (persists the marker)
+  await s1.tick() // fire (persists the terminal outbox row)
   assert.equal(h.resumes.length, 1)
-  // Server restarts BEFORE the agent's superseding turn lands — the fence is still present.
+  // Server restarts BEFORE the agent's next turn lands. The outbox row is what has to stop the
+  // re-fire — the timer row settling is a second guard, and this pins the first.
   const s2 = h.make()
   await s2.tick()
   await s2.tick()
@@ -323,8 +329,9 @@ test("registered future timer crosses during server downtime and fires exactly o
   const h = harness()
   const target = h.clock.ms + 10_000
   h.storage.upsertSession(row("t"))
-  h.tele.set("t", { ...tele(awaiting([{ kind: "timer", value: iso(target) }])), lastActivityAt: iso(h.clock.ms) })
-  await h.make().tick() // future timer registration is persisted
+  armTimer(h, "t", target)
+  h.tele.set("t", { ...tele(), lastActivityAt: iso(h.clock.ms) })
+  await h.make().tick() // not due yet; the ROW is what survives the restart
   h.clock.ms = target + 60_000 // server was down across the crossing
   const restarted = h.make()
   await restarted.tick()
@@ -925,9 +932,17 @@ test("hard crash after ack leaves an exact delivered terminal state and never re
   reopened.close()
 })
 
-test("a pending wake whose exact fence is replaced becomes superseded without delivery", async () => {
+// SUPERSESSION, rebuilt on what actually supersedes a timer now.
+//
+// This used to clear the awaiting FENCE between enqueue and delivery — that was how a wake stopped being
+// wanted when the fence WAS the registration. A timer is a row, so the equivalent is the worker
+// CANCELLING it, and the rule is the same one and the same line of code: a delivery is bound to its row
+// still being armed (`getThreadTimer(...)?.state !== "armed"` → superseded). It matters for the same
+// reason it always did — withdrawing a wait is the whole point of being able to hold one — and it is
+// exercised across the crash boundary, where a durable row is already enqueued and waiting to go out.
+test("a pending wake whose timer is cancelled becomes superseded without delivery", async () => {
   const h = harness()
-  const { target } = dueTimer(h, "human-won")
+  const { target, id } = dueTimer(h, "human-won")
   const scheduler = h.make({
     crashPoint: (point) => {
       if (point === "after-enqueue") throw new Error("stop after durable enqueue")
@@ -936,7 +951,8 @@ test("a pending wake whose exact fence is replaced becomes superseded without de
   await scheduler.tick()
   h.clock.ms = target + 1
   await assert.rejects(scheduler.tick(), /simulated scheduler hard crash/)
-  h.tele.set("human-won", tele(undefined)) // a human follow-up superseded the awaiting fence
+  // The worker withdrew it (`mcp__frizz__timer` action "cancel") before the enqueued wake went out.
+  h.storage.cancelThreadTimer("human-won", id, h.clock.ms)
 
   await h.make().tick()
   const item = createWakeDeliveryStore(h.storage.db).list()[0]
@@ -995,8 +1011,8 @@ test("the happy path logs one delivery CONFIRMATION, with no attempt counter", a
   await scheduler.tick() // crosses → queue + deliver
   assert.equal(h.resumes.length, 1)
   assert.deepEqual(logs, [
-    `waker: queued quiet — timer ${iso(target)}`,
-    `waker: delivered quiet — timer ${iso(target)}`,
+    `waker: queued quiet — one-off timer elapsed (${iso(target)})`,
+    `waker: delivered quiet — one-off timer elapsed (${iso(target)})`,
   ])
 })
 
@@ -1024,9 +1040,9 @@ test("attempt counts surface only where they inform: the failure, then the deliv
   await scheduler.tick() // attempt 2 lands
   assert.equal(h.resumes.length, 1)
   assert.deepEqual(logs, [
-    `waker: queued flaky — timer ${iso(target)}`,
+    `waker: queued flaky — one-off timer elapsed (${iso(target)})`,
     "waker: delivery FAILED for flaky (attempt 1 of 3): tmux pane busy",
-    `waker: delivered flaky — timer ${iso(target)} (on attempt 2)`,
+    `waker: delivered flaky — one-off timer elapsed (${iso(target)}) (on attempt 2)`,
   ])
 })
 

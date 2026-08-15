@@ -88,6 +88,7 @@ import {
   ListOwnPrWatchesInput,
   OwnPrWatchesResult,
   PR_WATCH_MAX_ARMED,
+  PR_WATCH_DEFAULT_FOR_MS,
   type PrWatchView,
 } from "@frizz/shared"
 import { mayHaveLiveBackgroundWork, needsFreshProcessForLimit, type AppContext } from "./context.ts"
@@ -2184,9 +2185,12 @@ export function createRouter(ctx: AppContext) {
         if (armed.length >= PR_WATCH_MAX_ARMED) {
           throw new Error(`this thread already watches ${armed.length} pull requests (the limit is ${PR_WATCH_MAX_ARMED}) — drop one first`)
         }
-        // REFUSED, not defaulted. A watcher with no expiry is the unbounded poll this field exists to
-        // end, and silently picking one for the worker would hide that it never chose.
-        const forMs = parseAwaitingDuration(input.for)
+        // A MISSING `for` IS AN OLD WORKER, not a bad one — its MCP binary predates the field and
+        // cannot send it (see AddOwnPrWatchInput). It gets a bounded default rather than an error,
+        // because refusing would break `watch_pr` for every session already running. A PRESENT-but-
+        // unparseable one IS a bad one and is refused: the worker tried to choose and got it wrong,
+        // and silently substituting a number would hide that.
+        const forMs = input.for === undefined ? PR_WATCH_DEFAULT_FOR_MS : parseAwaitingDuration(input.for)
         if (forMs === null) {
           throw new Error(`\`for: ${input.for}\` is not a duration — give one like \`30m\`, \`2h\` or \`3d\` (max 24h)`)
         }

@@ -937,6 +937,11 @@ export type ThreadWatchView = z.infer<typeof ThreadWatchView>
 
 /** The ceiling on registered PR watchers per thread. A tool call in a loop cannot fill the table, and
  *  the refusal names the number so a worker drops one rather than retrying. */
+/** What an old worker's `watch_pr` gets when its MCP binary predates `for` and cannot send one.
+ *  Bounded deliberately: long enough for an ordinary review round, short enough that a watcher nobody
+ *  renews stops polling on its own. */
+export const PR_WATCH_DEFAULT_FOR_MS = 6 * 60 * 60 * 1000
+
 export const PR_WATCH_MAX_ARMED = 32
 
 /** One registered PR watcher, as the worker's own tool reads it back. */
@@ -956,13 +961,20 @@ export const AddOwnPrWatchInput = z.object({
   /** `owner/repo#123` or a PR URL. Parsed server-side; an unparseable ref is refused rather than stored,
    *  because a watcher that can never fire is worse than none — the worker rests believing it is covered. */
   target: z.string().trim().min(1).max(200),
-  /** REQUIRED. How long to watch, as a DURATION (`30m`, `2h`, `3d` — parseAwaitingDuration).
+  /** How long to watch, as a DURATION (`30m`, `2h`, `3d` — parseAwaitingDuration).
    *
    *  A PR nobody ever reviews would otherwise be polled forever, and a thread parked on it would wait
    *  forever with it — the same unbounded wait the awaiting fence's `for:` closes, one level down. A
    *  duration rather than an instant for the same reason it is one there: it cannot be written in the
-   *  past (maintainer 2026-08-15, asking for it explicitly). */
-  for: z.string().trim().min(1).max(16),
+   *  past (maintainer 2026-08-15, asking for it explicitly).
+   *
+   *  REQUIRED BY THE TOOL, OPTIONAL ON THE WIRE, and the asymmetry is deliberate. A worker's MCP server
+   *  outlives every frizz restart, so a session dispatched before this existed still holds a binary that
+   *  cannot send it — and making the RPC reject that would break `watch_pr` outright for every thread
+   *  already running, with no recourse from inside those threads. Absent ⇒ PR_WATCH_DEFAULT_FOR, which
+   *  still BOUNDS the poll; the point of the field is that a worker chooses, and one that cannot choose
+   *  is better bounded than broken. */
+  for: z.string().trim().min(1).max(16).optional(),
 }).strict()
 export type AddOwnPrWatchInput = z.infer<typeof AddOwnPrWatchInput>
 
