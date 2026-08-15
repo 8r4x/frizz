@@ -486,19 +486,25 @@ function labelsLine(labels: string[]): string {
   return labels.join(", ") || "none"
 }
 
-// --- Default templates (exported; the batch handler prefers the user's Settings override) ---
+// --- The default template (exported; the batch handler prefers the user's Settings override) ---
 //
-// These are TEMPLATE STRINGS with {token} placeholders that renderGithubPrompt substitutes:
-// {repo} {n} {title} {url} {labels} {body}. They deliberately do NOT carry the leading generated
+// This is a TEMPLATE STRING with {token} placeholders that renderGithubPrompt substitutes:
+// {repo} {n} {title} {url} {labels} {body}. It deliberately does NOT carry the leading generated
 // envelope (`THREAD`, compact UI lead, presentation boundary) — renderGithubPrompt prepends that so a
 // user's custom template can never omit/mangle the thread binding or flood the first bubble. Edit
-// these to change the shipped defaults; a user override supersedes at dispatch time.
+// this to change the shipped default; a user override supersedes at dispatch time.
 //
-// SHAPE, and it is the point of the defaults: ONE concise instruction paragraph carrying NO tokens,
-// then a trailing metadata block that carries all of them, alongside the exact `gh` commands. Someone
-// tuning the prompt in Settings rewrites the paragraph in plain prose and leaves the block alone —
-// they never have to know the token vocabulary to make the edit they came for. Keep that split when
-// editing: a token that creeps back into the paragraph puts the tags right where the user is typing.
+// ONE template covers BOTH kinds. There were two — an issue one and a PR one — until 2026-08-15, and
+// keeping them in step was pure tax: the instructions overlapped almost entirely, and the only real
+// per-kind difference is which `gh` command reads the item, which the metadata block below states for
+// each. The template branches in PROSE ("If it is a BUG REPORT…", "If it is a PR: review it") and the
+// worker picks the branch that applies. See the `githubPrompt` comment in shared for the settings side.
+//
+// SHAPE, and it is the point of the default: instruction PARAGRAPHS carrying NO tokens, then a trailing
+// metadata block that carries all of them, alongside the exact `gh` commands. Someone tuning the prompt
+// in Settings rewrites the prose and leaves the block alone — they never have to know the token
+// vocabulary to make the edit they came for. Keep that split when editing: a token that creeps back
+// into the prose puts the tags right where the user is typing.
 //
 // {body} is deliberately NOT inlined. The picker that dispatches these prompts is gated on gh being
 // installed AND authed, so the worker can always read the body itself — the block hands it the exact
@@ -506,14 +512,28 @@ function labelsLine(labels: string[]): string {
 // same call. That also keeps prompt transport small (the task prompt is a CLI arg, not the
 // system-prompt file — see dispatch.ts).
 //
-// The paragraph is ONE unwrapped line on purpose. It is edited in a fixed-width textarea (Settings →
+// Each paragraph is ONE unwrapped line on purpose. It is edited in a fixed-width textarea (Settings →
 // Prompts), which soft-wraps: hard newlines at some source column would mix with that wrap and render
-// ragged in the box the user actually types in. The metadata block below it wraps naturally, one field
-// per line, so its newlines are structural.
+// ragged in the box the user actually types in. Blank lines BETWEEN paragraphs are structural and fine;
+// a hard newline INSIDE one is the regression the golden test guards. The metadata block wraps
+// naturally, one field per line, so its newlines are structural too.
+//
+// The prose below is the maintainer's own, reproduced verbatim (2026-08-15) — including "thoroug",
+// "theads" and the fixed "Issue #{n}" heading that a PR also renders under. Do not quietly tidy them;
+// this string is the shipped copy they wrote, and the compact lead above it already names the kind.
+export const DEFAULT_GITHUB_PROMPT = `Triage this GitHub issue/PR and make recommendations. Be thoughtful, thoroug, and dubious. Think through whether this is truly a good idea or not. Many ideas are bad.
 
-// The ISSUE default: classify bug-vs-feature, then reproduce → trace → recommend for a bug, or
-// clarify → impact → plan for a feature. Research only; the thread is headed for a fix, not a fix.
-export const DEFAULT_ISSUE_PROMPT = `Triage this GitHub issue and recommend what to do about it. This is a RESEARCH thread: the deliverable is FINDINGS and a recommendation, NOT a landed fix. Read the full thread first — body, labels, and the whole discussion — then classify the report as a BUG or a FEATURE request and say which it is and why. If it is a BUG: establish whether the reported behavior actually happens on the current tree (capture the exact steps, command and output if it reproduces; say what you saw instead if it does not), trace the cause to concrete code, and state the smallest correct fix — or the top 2 options with the tradeoff of each — plus the files it touches and the risk. If it is a FEATURE: restate the request precisely (the use-case behind it and any ambiguity a maintainer must resolve), map where it lands in the code and what public API / UX surface it changes, and sketch a concrete plan for the smallest viable version with its risks, open design questions and a rough size estimate. Cite exact file:line for every load-bearing claim — an uncited claim is a LEAD, so flag it. Do NOT implement anything unasked, and post NOTHING to GitHub (no comments, no labels, no close) unless the human explicitly asks — read-only. Put your findings and recommendation in your FINAL MESSAGE: this one is headed for a fix, so it is NOT \`\`\`done\`\`\` — close with a \`\`\`question\`\`\` when there's a fix to choose (recommendation marked, so one reply rolls into implementation), or bare-rest.
+Read the full thread first — body, labels, and the whole discussion — then classify the report as a BUG or a FEATURE request and say which it is and why.
+
+If it is a BUG REPORT: establish whether the reported behavior actually happens on the current tree (capture the exact steps, command and output if it reproduces; say what you saw instead if it does not), trace the cause to concrete code, and state the smallest correct fix — or the top 2 options with the tradeoff of each — plus the files it touches and the risk.  Be sure you have high confidence that the bug is real. There should be a clean and elegant solution. If there isn't an elegant way to do something, then it often means that it's not a good idea or that we are in need of a larger codebase refactor. The issue: you should stay in the codebase for similar categories of bugs. We are constantly seeking to proactively self-improve the codebase.
+
+If it is a FEATURE REQUEST: restate the request precisely (the use-case behind it and any ambiguity a maintainer must resolve), map where it lands in the code and what public API / UX surface it changes, and sketch a concrete plan for the smallest viable version with its risks, open design questions and a rough size estimate.
+
+If it is a PR: review it. Read the PR description, comments, and changes. You should be dubious. Do not assume that the PR is high quality, many are not. For each substantive change ask: is there a better approach? Is it correct? Does it handle edges? Is it elegant? Does it break existing behavior or the public API? Are there tests, and do they actually cover the change? Trace the impact the of changes thoughtfully. Check CI too. Recommend either closing, making changes (explain them), or merging. Test the changes yourself if necessary/possible.
+
+If it is a DOCS CHANGE: make sure that it is well written, minimal, no walls of text, well structured, consistent tonally with others docs/prose, and not AI slop.
+
+Bias always towards proactivity and taking immediate action. If you encounter issues, feel free to add fixes for those in the same PR. Do not worry about perfect git hygiene.
 
 ---
 
@@ -521,20 +541,10 @@ Issue #{n}: {title}
 Repository: {repo}
 URL: {url}
 Labels: {labels}
-Body + full thread: \`gh issue view {n} -R {repo} --comments\``
-
-// The PR default: an adversarial review/audit before recommending merge. Read-only.
-export const DEFAULT_PR_PROMPT = `Review this open pull request. This is an AUDIT thread: adversarially verify the change is correct, safe and complete before recommending merge. Read the PR description and discussion first, then read the full diff — the changed files in context, not just the hunks (pipe large output through toon). For each substantive change ask: is it correct? does it handle edges? does it break existing behavior or the public API? are there tests, and do they actually cover the change? Check CI too: pending automation is evidence to report, not a reason to park this audit; if later scope explicitly includes shepherding the PR, keep CI/bot/merge progression active with the backend wait primitive from the worker contract. Then recommend approve / request-changes / needs-discussion with a concise findings list — each concern citing exact file:line in the diff, blocking issues distinguished from nits. Post NOTHING to GitHub (no review, no comment, no approve/merge) unless the human explicitly asks — read-only. Put your review in your FINAL MESSAGE and close with a \`\`\`done\`\`\` fence listing the completed audit/evidence, or a two-option \`\`\`question\`\`\` if you want a go/no-go on posting the review to GitHub.
-
----
-
-PR #{n}: {title}
-Repository: {repo}
-URL: {url}
-Labels: {labels}
-Description + discussion: \`gh pr view {n} -R {repo} --comments\`
-Diff: \`gh pr diff {n} -R {repo}\`
-CI: \`gh pr checks {n} -R {repo}\``
+Body + thread (issues): \`gh issue view {n} -R {repo} --comments\`
+Body + theads (PRs): \`gh pr view {n} -R {repo} --comments\`
+Diff (PRs): \`gh pr diff {n} -R {repo}\`
+CI (PRs): \`gh pr checks {n} -R {repo}\``
 
 // --- Pure templater (unit-tested seam) ---
 
@@ -579,7 +589,9 @@ export function renderGithubPrompt(template: string, repo: string, it: PromptIte
 
 // Pick the EFFECTIVE template: the user's Settings override when it is present and non-blank, else the
 // shipped default. Whitespace-only is treated as unset so a stray space/newline can't blank the prompt.
-export function effectiveTemplate(kind: "issue" | "pr", custom: string | undefined): string {
+// Kind-independent since the two templates merged — renderGithubPrompt still takes the kind, because
+// the generated lead and the {body} truncation pointer do differ.
+export function effectiveTemplate(custom: string | undefined): string {
   if (custom && custom.trim().length > 0) return custom
-  return kind === "issue" ? DEFAULT_ISSUE_PROMPT : DEFAULT_PR_PROMPT
+  return DEFAULT_GITHUB_PROMPT
 }

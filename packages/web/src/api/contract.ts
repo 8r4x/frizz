@@ -267,9 +267,9 @@ export interface Api {
   settingsReset(input: Record<never, never>): Promise<Settings>
   dispatchPreferencesGet(): Promise<DispatchPreferences>
   dispatchPreferenceSet(input: SetDispatchPreferenceInput): Promise<DispatchPreferences>
-  // The shipped GitHub batch-dispatch prompt templates — the Settings UI prefills its editors from
-  // these and resets to them (an empty githubIssuePrompt/githubPrPrompt setting = the server default).
-  githubPromptDefaults(): Promise<{ issue: string; pr: string }>
+  // The shipped GitHub batch-dispatch prompt template — the Settings UI prefills its editor from this
+  // and resets to it (an empty githubPrompt setting = the server default). One template, issues and PRs.
+  githubPromptDefaults(): Promise<{ prompt: string }>
   // GitHub-first batch dispatch. Detection (installed/inRepo/nameWithOwner) is cached server-side;
   // `authed` is re-checked live per call. githubList reads the repo's issues/PRs; githubDispatchBatch
   // hydrates each selected item fresh + spins up one thread per item (sequential, reuses dispatch).

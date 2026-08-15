@@ -108,3 +108,33 @@ test("an unreadable machine file degrades to the project's values rather than th
     box.done()
   }
 })
+
+// The GitHub picker's issue and PR prompts merged into ONE `githubPrompt` on 2026-08-15. The backfill
+// is the schema itself: Settings is a non-strict z.object, so a blob still carrying the two old keys
+// has them STRIPPED on read, and the reader falls through to the new shipped default. That is the
+// maintainer's intended migration — drop every stored override rather than guess how to fuse two
+// customized templates into one. This test is what keeps it true if Settings ever turns strict/
+// passthrough, which would either throw on an old blob or leak a dead key back out.
+test("an old blob's githubIssuePrompt/githubPrPrompt are dropped, not carried into githubPrompt", () => {
+  const box = sandbox()
+  try {
+    const alpha = box.open("alpha")
+    alpha.setSetting("settings", {
+      ...defaultSettings(),
+      githubIssuePrompt: "my hand-tuned issue template",
+      githubPrPrompt: "my hand-tuned PR template",
+    })
+
+    const seen = getSettings(alpha, box.home) as Record<string, unknown>
+    assert.equal(seen.githubPrompt, undefined, "unset ⇒ the server uses the shipped default")
+    assert.equal(seen.githubIssuePrompt, undefined, "the old key does not survive the read")
+    assert.equal(seen.githubPrPrompt, undefined)
+    // …and the next save writes the stripped shape back, so the dead keys leave the DB for good.
+    setSettings(alpha, getSettings(alpha, box.home), box.home)
+    const stored = alpha.getSetting("settings") as Record<string, unknown>
+    assert.equal("githubIssuePrompt" in stored, false)
+    assert.equal("githubPrPrompt" in stored, false)
+  } finally {
+    box.done()
+  }
+})

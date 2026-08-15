@@ -330,10 +330,12 @@ const GH_PROMPT_TOKENS: { token: string; gloss: string }[] = [
   { token: "body", gloss: "description" },
 ]
 
-// "Prompts" — every user-editable prompt in one place: the Subagent instructions preamble (appended to
-// EVERY dispatched agent) plus the two GitHub-picker investigation templates (Issue, PR). The two
-// picker editors PREFILL with the shipped default (fetched from the server, the single source of truth)
+// "Prompts" — the user-editable prompt text, which is now exactly one box: the GitHub-picker triage
+// template. It PREFILLS with the shipped default (fetched from the server, the single source of truth)
 // so the user edits from the real prompt; a stored override supersedes it. Empty override = default.
+//
+// ONE editor, not two. Issue and PR had a box each until 2026-08-15; the two prompts said much the same
+// thing, so "make triage more skeptical" meant the same edit twice and a pair that drifted apart.
 function PromptsSection({
   draft,
   setDraft,
@@ -346,9 +348,8 @@ function PromptsSection({
     <div className="flex flex-col gap-6">
       <DividerLabel label="Prompts" />
 
-      {/* The two GitHub-picker investigation templates. Each field carries its own label, so no group
-          label is needed; tokens apply to BOTH, so the "?" popover lives once, right-aligned above them,
-          rather than being repeated per field. */}
+      {/* The GitHub-picker triage template. The field carries its own label, so no group label is
+          needed; the "?" popover lives once, right-aligned above it. */}
       {!defaults.data ? (
         <div className="text-[12px] text-muted">Loading defaults…</div>
       ) : (
@@ -357,18 +358,11 @@ function PromptsSection({
             <TokenHelpPopover />
           </div>
           <GithubPromptField
-            label="Issue investigation prompt"
-            help="The prompt for each ISSUE dispatched from the picker. The default has the worker classify the issue as a bug or feature and branch: reproduce + fix-plan for a bug, or a plan + impact analysis for a feature."
-            value={draft.githubIssuePrompt}
-            fallback={defaults.data.issue}
-            onChange={(v, opts) => setDraft({ ...draft, githubIssuePrompt: v }, opts)}
-          />
-          <GithubPromptField
-            label="PR investigation prompt"
-            help="The prompt for each PR dispatched from the picker. The default runs an adversarial review/audit — read the diff, verify correctness/edges/tests/CI, then recommend approve / request-changes."
-            value={draft.githubPrPrompt}
-            fallback={defaults.data.pr}
-            onChange={(v, opts) => setDraft({ ...draft, githubPrPrompt: v }, opts)}
+            label="Issue and PR triage prompt"
+            help="The prompt for every item dispatched from the GitHub picker, issues and PRs alike. The default has the worker read the whole thread, classify it, and branch — reproduce + fix-plan for a bug, a plan for a feature, an adversarial review for a PR."
+            value={draft.githubPrompt}
+            fallback={defaults.data.prompt}
+            onChange={(v, opts) => setDraft({ ...draft, githubPrompt: v }, opts)}
           />
         </div>
       )}
@@ -394,7 +388,7 @@ function DividerLabel({ label }: { label: string }) {
 // on-screen. Opens on click; dismisses on outside-click or Esc (Radix handles both, and — being a
 // non-modal Popover portaled to <body> — its Esc does not bubble to App's window-level Esc, so it
 // closes only the panel, never the whole Settings drawer). Prefers opening UPWARD: the "?" lives low
-// in the scroll body, and the roomy Subagent editor sits above it.
+// in the scroll body, so there is room above it and rarely any below.
 function TokenHelpPopover() {
   const [open, setOpen] = useState(false)
   return (

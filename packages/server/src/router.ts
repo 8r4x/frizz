@@ -107,7 +107,7 @@ import {
 import { openExternalUrl } from "./open-external.ts"
 import { openLocalFile, readLocalMarkdown, resolveOpenableFile } from "./local-file.ts"
 import { openableFileRoots } from "./project.ts"
-import { ghInstalled, ghAuthed, ghRepo, gitGithubRemote, listItems, hydrateIssue, hydratePr, renderGithubPrompt, effectiveTemplate, DEFAULT_ISSUE_PROMPT, DEFAULT_PR_PROMPT } from "./github.ts"
+import { ghInstalled, ghAuthed, ghRepo, gitGithubRemote, listItems, hydrateIssue, hydratePr, renderGithubPrompt, effectiveTemplate, DEFAULT_GITHUB_PROMPT } from "./github.ts"
 import { createGithubHovercardService } from "./github-hovercard.ts"
 import { slugify, resolveSlug, resolveLegacyThreadFile, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock } from "./dispatch.ts"
 import { readCodexModels } from "./backend/codex-models.ts"
@@ -2856,12 +2856,12 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => setDispatchPreference(ctx.storage, ctx.getSettings(), input, readCodexModels()),
     }),
 
-    // The shipped GitHub batch-dispatch prompt templates (single source of truth: server/github.ts).
-    // The Settings UI reads these to prefill the editors for editing and to power "reset to default";
-    // an empty/unset githubIssuePrompt/githubPrPrompt setting means the server uses exactly these.
+    // The shipped GitHub batch-dispatch prompt template (single source of truth: server/github.ts).
+    // The Settings UI reads it to prefill the editor and to power "reset to default"; an empty/unset
+    // githubPrompt setting means the server uses exactly this. One template serves issues AND PRs.
     githubPromptDefaults: query({
-      output: z.object({ issue: z.string(), pr: z.string() }),
-      handler: async () => ({ issue: DEFAULT_ISSUE_PROMPT, pr: DEFAULT_PR_PROMPT }),
+      output: z.object({ prompt: z.string() }),
+      handler: async () => ({ prompt: DEFAULT_GITHUB_PROMPT }),
     }),
 
     // ---- GitHub-first batch dispatch ----
@@ -2921,9 +2921,11 @@ export function createRouter(ctx: AppContext) {
         validateGithubDispatchProfile(input)
         const repo = await resolveRepo()
         if (!repo) throw new Error("not a GitHub repo")
-        // Read the templates ONCE per batch: the user's Settings override (githubIssuePrompt /
-        // githubPrPrompt) when non-blank, else the exported default (effectiveTemplate decides).
-        const settings = ctx.getSettings()
+        // Read the template ONCE per batch: the user's Settings override (githubPrompt) when non-blank,
+        // else the exported default (effectiveTemplate decides). One template serves both kinds, so this
+        // no longer varies per item — renderGithubPrompt still gets the kind for the lead and the body
+        // truncation pointer.
+        const template = effectiveTemplate(ctx.getSettings().githubPrompt)
         const dispatched: { number: number; kind: string; slug: string }[] = []
         const failed: { number: number; kind: string; error: string }[] = []
         for (const it of input.items) {
@@ -2935,7 +2937,6 @@ export function createRouter(ctx: AppContext) {
             // .frizz/<base>.md disjoint from the -2 registry row (resolveSlug is idempotent on a free slug).
             const title = `${it.kind === "issue" ? "Investigate" : "Review"} ${repo}#${it.number}`
             const slug = resolveSlug(frizzDir, slugify(title), (s) => ctx.storage.getSession(s) !== undefined)
-            const template = effectiveTemplate(it.kind, it.kind === "issue" ? settings.githubIssuePrompt : settings.githubPrPrompt)
             const hydrated = it.kind === "issue" ? await hydrateIssue(repo, it.number) : await hydratePr(repo, it.number)
             const prompt = renderGithubPrompt(template, repo, hydrated, slug, it.kind)
             const request = githubDispatcherRequest(input, { prompt, title, slug })

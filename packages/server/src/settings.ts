@@ -112,7 +112,7 @@ export function setSettings(storage: Storage, next: Settings, home: string): Set
   return validated
 }
 
-// Clear the stored blob so getSettings falls back to defaults (incl. the shipped default preamble).
+// Clear the stored blob so getSettings falls back to defaults (incl. the shipped default prompt).
 // A reset means DEFAULTS, so the machine file goes too — leaving it would resurrect the old font.
 export function resetSettings(storage: Storage, home: string): Settings {
   storage.deleteSetting(SETTINGS_KEY)

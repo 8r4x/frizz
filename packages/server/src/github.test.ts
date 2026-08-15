@@ -20,8 +20,7 @@ import {
   ghAuthed,
   gitGithubRemote,
   githubRemoteNameWithOwner,
-  DEFAULT_ISSUE_PROMPT,
-  DEFAULT_PR_PROMPT,
+  DEFAULT_GITHUB_PROMPT,
   PROMPT_TOKENS,
   type HydratedIssue,
   type HydratedPr,
@@ -263,62 +262,54 @@ test("renderGithubPrompt: unknown {placeholder} in the template is left verbatim
   assert.ok(p.includes("known cli/cli unknown {frobnicate}"))
 })
 
-test("DEFAULT_ISSUE_PROMPT: branches on bug vs feature; DEFAULT_PR_PROMPT is the audit template", () => {
-  // Issue default instructs classify + both branches.
-  assert.ok(/classify/i.test(DEFAULT_ISSUE_PROMPT))
-  assert.ok(/if it is a BUG/i.test(DEFAULT_ISSUE_PROMPT))
-  assert.ok(/if it is a FEATURE/i.test(DEFAULT_ISSUE_PROMPT))
-  assert.ok(/reproduce/i.test(DEFAULT_ISSUE_PROMPT))
-  assert.ok(DEFAULT_ISSUE_PROMPT.includes("public API / UX surface"))
-  assert.ok(DEFAULT_ISSUE_PROMPT.includes("read-only"))
-  // Issue investigations are headed for a fix: NOT a done fence (that reads as complete), but the other
-  // fences are the worker's to use — the handback nudges toward a question. Mirrors the contract's
-  // bug/issue rule (workerPrompt.ts).
-  assert.ok(DEFAULT_ISSUE_PROMPT.includes("```question```"))
-  assert.ok(DEFAULT_ISSUE_PROMPT.includes("NOT ```done```"))
-  // The defaults are TEMPLATES: they carry {token}s and NOT the THREAD tag (the server prepends it).
-  assert.ok(DEFAULT_ISSUE_PROMPT.includes("{repo}") && DEFAULT_ISSUE_PROMPT.includes("{n}"))
-  assert.ok(!DEFAULT_ISSUE_PROMPT.includes("THREAD:"))
-  // PR default is the adversarial audit template.
-  assert.ok(DEFAULT_PR_PROMPT.includes("AUDIT thread"))
-  assert.ok(DEFAULT_PR_PROMPT.includes("gh pr diff {n} -R {repo}"))
-  assert.ok(DEFAULT_PR_PROMPT.includes("keep CI/bot/merge"))
-  assert.ok(DEFAULT_PR_PROMPT.includes("backend wait primitive"))
-  assert.ok(DEFAULT_PR_PROMPT.includes("```done```"))
-  assert.ok(!DEFAULT_PR_PROMPT.includes("bare rest"))
-  assert.ok(!DEFAULT_PR_PROMPT.includes("THREAD:"))
-  assert.ok(DEFAULT_ISSUE_PROMPT.includes("gh issue view {n} -R {repo}"))
-  assert.ok(DEFAULT_PR_PROMPT.includes("gh pr view {n} -R {repo}"))
+// ONE template now serves both kinds, so the guard is that it branches in PROSE and hands the worker
+// the read commands for BOTH — a merged default that only knew how to read an issue would silently
+// under-serve every PR dispatched from the same picker.
+test("DEFAULT_GITHUB_PROMPT: classifies, then branches on bug / feature / PR / docs", () => {
+  assert.ok(/classify/i.test(DEFAULT_GITHUB_PROMPT))
+  assert.ok(/if it is a BUG REPORT/i.test(DEFAULT_GITHUB_PROMPT))
+  assert.ok(/if it is a FEATURE REQUEST/i.test(DEFAULT_GITHUB_PROMPT))
+  assert.ok(/if it is a PR/i.test(DEFAULT_GITHUB_PROMPT))
+  assert.ok(/if it is a DOCS CHANGE/i.test(DEFAULT_GITHUB_PROMPT))
+  assert.ok(/reproduce/i.test(DEFAULT_GITHUB_PROMPT))
+  assert.ok(DEFAULT_GITHUB_PROMPT.includes("public API / UX surface"))
+  // Both kinds' read commands, because either kind can arrive under this one template.
+  assert.ok(DEFAULT_GITHUB_PROMPT.includes("gh issue view {n} -R {repo}"))
+  assert.ok(DEFAULT_GITHUB_PROMPT.includes("gh pr view {n} -R {repo}"))
+  assert.ok(DEFAULT_GITHUB_PROMPT.includes("gh pr diff {n} -R {repo}"))
+  assert.ok(DEFAULT_GITHUB_PROMPT.includes("gh pr checks {n} -R {repo}"))
+  // The default is a TEMPLATE: it carries {token}s and NOT the THREAD tag (the server prepends it).
+  assert.ok(DEFAULT_GITHUB_PROMPT.includes("{repo}") && DEFAULT_GITHUB_PROMPT.includes("{n}"))
+  assert.ok(!DEFAULT_GITHUB_PROMPT.includes("THREAD:"))
 })
 
-// The shipped defaults are shaped so a user can rewrite the INSTRUCTIONS without touching the template
-// tags: one prose paragraph carrying no tokens at all, then a trailing metadata block that carries every
-// one of them. This test is the guard on that split — a {token} creeping back up into the paragraph is
-// exactly the regression it exists to catch.
-test("the defaults keep every {token} in the trailing metadata block, none in the instruction paragraph", () => {
-  for (const [kind, template] of [
-    ["issue", DEFAULT_ISSUE_PROMPT],
-    ["pr", DEFAULT_PR_PROMPT],
-  ] as const) {
-    const [instructions, metadata, ...rest] = template.split("\n\n---\n\n")
-    assert.equal(rest.length, 0, `${kind}: exactly one metadata block`)
-    assert.ok(metadata, `${kind}: has a trailing metadata block`)
-    assert.equal(instructions.match(/\{(repo|n|title|url|labels|body)\}/g), null, `${kind}: paragraph is token-free`)
-    // ONE unwrapped line: the Settings textarea soft-wraps, so a hard newline at some source column
-    // would render ragged in the box the user edits it in.
-    assert.ok(!instructions.includes("\n"), `${kind}: instruction paragraph is a single unwrapped line`)
-    // Every token the defaults use lives in the block. {body} is the deliberate exception: the picker
-    // is gated on an installed + authed gh, so the block hands the worker the `gh … view` command
-    // instead of a truncatable copy of the text.
-    for (const token of PROMPT_TOKENS.filter((t) => t !== "body")) {
-      assert.ok(metadata.includes(`{${token}}`), `${kind}: metadata block carries {${token}}`)
-    }
-    assert.ok(!template.includes("{body}"), `${kind}: default must not inline the body`)
+// The shipped default is shaped so a user can rewrite the INSTRUCTIONS without touching the template
+// tags: prose paragraphs carrying no tokens at all, then a trailing metadata block that carries every
+// one of them. This test is the guard on that split — a {token} creeping up into the prose is exactly
+// the regression it exists to catch.
+test("the default keeps every {token} in the trailing metadata block, none in the instructions", () => {
+  const [instructions, metadata, ...rest] = DEFAULT_GITHUB_PROMPT.split("\n\n---\n\n")
+  assert.equal(rest.length, 0, "exactly one metadata block")
+  assert.ok(metadata, "has a trailing metadata block")
+  assert.equal(instructions.match(/\{(repo|n|title|url|labels|body)\}/g), null, "instructions are token-free")
+  // Each PARAGRAPH is one unwrapped line: the Settings textarea soft-wraps, so a hard newline at some
+  // source column would render ragged in the box the user edits it in. Blank lines between paragraphs
+  // are structural, so the check is per-paragraph rather than "no newline at all".
+  for (const [i, para] of instructions.split("\n\n").entries()) {
+    assert.ok(!para.includes("\n"), `instruction paragraph ${i + 1} is a single unwrapped line`)
+    assert.ok(para.trim().length > 0, `instruction paragraph ${i + 1} is not blank`)
   }
+  // Every token the default uses lives in the block. {body} is the deliberate exception: the picker is
+  // gated on an installed + authed gh, so the block hands the worker the `gh … view` command instead of
+  // a truncatable copy of the text.
+  for (const token of PROMPT_TOKENS.filter((t) => t !== "body")) {
+    assert.ok(metadata.includes(`{${token}}`), `metadata block carries {${token}}`)
+  }
+  assert.ok(!DEFAULT_GITHUB_PROMPT.includes("{body}"), "default must not inline the body")
 })
 
-test("DEFAULT_ISSUE_PROMPT renders into a real issue prompt (round-trip through renderGithubPrompt)", () => {
-  const p = renderGithubPrompt(DEFAULT_ISSUE_PROMPT, "cli/cli", issue, "investigate-cli-cli-326", "issue")
+test("DEFAULT_GITHUB_PROMPT renders into a real issue prompt (round-trip through renderGithubPrompt)", () => {
+  const p = renderGithubPrompt(DEFAULT_GITHUB_PROMPT, "cli/cli", issue, "investigate-cli-cli-326", "issue")
   assert.ok(p.startsWith("THREAD: investigate-cli-cli-326\n\n"))
   assert.ok(p.includes("Issue #326: Support multiple accounts"))
   assert.ok(p.includes("gh issue view 326 -R cli/cli --comments"))
@@ -335,14 +326,16 @@ const pr: HydratedPr = {
   files: 2,
 }
 
-test("DEFAULT_PR_PROMPT renders into a real PR prompt (diff/checks by number)", () => {
-  const p = renderGithubPrompt(DEFAULT_PR_PROMPT, "cli/cli", pr, "review-cli-cli-13844", "pr")
+test("DEFAULT_GITHUB_PROMPT renders into a real PR prompt (diff/checks by number)", () => {
+  const p = renderGithubPrompt(DEFAULT_GITHUB_PROMPT, "cli/cli", pr, "review-cli-cli-13844", "pr")
   assert.ok(p.startsWith("THREAD: review-cli-cli-13844\n\n"))
+  // The generated lead is what names the kind — the merged template's own heading line says "Issue".
   assert.ok(p.includes("PR #13844: perf(status): O(1) map lookup"))
+  assert.ok(p.includes("gh pr view 13844 -R cli/cli --comments"))
   assert.ok(p.includes("gh pr diff 13844 -R cli/cli"))
   assert.ok(p.includes("gh pr checks 13844 -R cli/cli"))
   assert.ok(!p.includes("Replaces the O(n) scan with a map.")) // description fetched, not inlined
-  assert.ok(p.includes("read-only"))
+  assert.ok(!p.includes("{repo}") && !p.includes("{n}")) // every token filled
 })
 
 // ---- linked closing PRs ----
@@ -421,16 +414,13 @@ test("parseLinkedPrJson: malformed body / null alias / error payload → empty m
 // ---- effectiveTemplate (settings override vs default fallback) ----
 
 test("effectiveTemplate: unset/blank falls back to the shipped default", () => {
-  assert.equal(effectiveTemplate("issue", undefined), DEFAULT_ISSUE_PROMPT)
-  assert.equal(effectiveTemplate("issue", ""), DEFAULT_ISSUE_PROMPT)
-  assert.equal(effectiveTemplate("issue", "   \n\t "), DEFAULT_ISSUE_PROMPT) // whitespace-only = unset
-  assert.equal(effectiveTemplate("pr", undefined), DEFAULT_PR_PROMPT)
-  assert.equal(effectiveTemplate("pr", ""), DEFAULT_PR_PROMPT)
+  assert.equal(effectiveTemplate(undefined), DEFAULT_GITHUB_PROMPT)
+  assert.equal(effectiveTemplate(""), DEFAULT_GITHUB_PROMPT)
+  assert.equal(effectiveTemplate("   \n\t "), DEFAULT_GITHUB_PROMPT) // whitespace-only = unset
 })
 
-test("effectiveTemplate: a non-blank override is used verbatim (per kind)", () => {
-  assert.equal(effectiveTemplate("issue", "my custom {title}"), "my custom {title}")
-  assert.equal(effectiveTemplate("pr", "review {n}"), "review {n}")
+test("effectiveTemplate: a non-blank override is used verbatim", () => {
+  assert.equal(effectiveTemplate("my custom {title}"), "my custom {title}")
 })
 
 // ---- ghAuthed (the ONLY tests here that shell out — through a stub `gh` on PATH) ----

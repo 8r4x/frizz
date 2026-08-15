@@ -47,8 +47,7 @@ window.fetch = async (input, init) => {
   if (url.pathname === "/_frizz/rpc/codexModels") return rpcResult([])
   if (url.pathname === "/_frizz/rpc/githubPromptDefaults") {
     return rpcResult({
-      issue: "Investigate the reported issue. Classify it, reproduce it when possible, and give an evidence-backed implementation plan.",
-      pr: "Audit this pull request adversarially. Verify behavior, edge cases, tests, and CI before recommending approve or request changes.",
+      prompt: "Triage this GitHub issue/PR and make recommendations. Classify it, be dubious, and say what you actually checked.",
     })
   }
   return nativeFetch(input, init)

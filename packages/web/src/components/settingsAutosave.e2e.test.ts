@@ -79,7 +79,7 @@ test("typing debounces to ONE write, and it carries the last keystroke", { skip:
 
     const writes = await readWrites(page)
     assert.equal(writes.length, 1, `one write for a burst of typing, got ${writes.length}`)
-    assert.equal(writes[0]!.body.githubIssuePrompt, "Investigate", "the write carries the final text")
+    assert.equal(writes[0]!.body.githubPrompt, "Investigate", "the write carries the final text")
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()
@@ -126,7 +126,7 @@ test("closing the drawer flushes a pending keystroke instead of dropping it", { 
 
     await page.waitForFunction(() => (window as unknown as { __settingsWrites: Write[] }).__settingsWrites.length === 1, { timeout: 2000 })
     const writes = await readWrites(page)
-    assert.equal(writes[0]!.body.githubIssuePrompt, "Audit", "the half-typed value survived the close")
+    assert.equal(writes[0]!.body.githubPrompt, "Audit", "the half-typed value survived the close")
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()

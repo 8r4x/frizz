@@ -1474,13 +1474,23 @@ export const Settings = z.object({
   // Default action for a vetted non-image local path in agent markdown. Image clicks always use the
   // OS default viewer so screenshots retain their expected behavior.
   localFileOpener: LocalFileOpener.optional(),
-  // GitHub batch-dispatch prompt templates (the picker's per-item worker prompt). Optional: when
-  // unset OR blank the server falls back to its exported DEFAULT_ISSUE_PROMPT / DEFAULT_PR_PROMPT.
-  // Substitution tokens the server fills: {repo} {n} {title} {url} {labels} {body}. The leading
-  // `THREAD: <slug>` tag is prepended by the server (not part of the editable template) so a custom
-  // prompt can never break the thread↔.frizz-file binding. Optional so old settings blobs parse.
-  githubIssuePrompt: z.string().optional(),
-  githubPrPrompt: z.string().optional(),
+  // The GitHub batch-dispatch prompt template (the picker's per-item worker prompt). Optional: when
+  // unset OR blank the server falls back to its exported DEFAULT_GITHUB_PROMPT. Substitution tokens
+  // the server fills: {repo} {n} {title} {url} {labels} {body}. The leading `THREAD: <slug>` tag is
+  // prepended by the server (not part of the editable template) so a custom prompt can never break the
+  // thread↔.frizz-file binding. Optional so old settings blobs parse.
+  //
+  // ONE field, not one per kind. Issue and PR each had their own template until 2026-08-15, and the two
+  // said the same thing twice: read the whole thread, be skeptical, cite what you checked, post nothing.
+  // A person tuning "be more dubious" had to make the same edit in two boxes and keep them in step. The
+  // ONE thing that genuinely differs per kind — which `gh` command reads the item — is a line in the
+  // metadata block, so the merged template just carries both, and the worker picks the one that applies.
+  //
+  // There is no migration off the two old keys, and that is deliberate (the maintainer's call): Settings
+  // is a non-strict z.object, so `githubIssuePrompt`/`githubPrPrompt` are STRIPPED the moment an old
+  // blob is parsed. Any existing override is dropped and the reader gets the new shipped default —
+  // exactly the intended backfill. Merging two customized templates into one has no correct answer.
+  githubPrompt: z.string().optional(),
 })
 export type Settings = z.infer<typeof Settings>
 
