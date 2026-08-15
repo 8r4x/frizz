@@ -185,12 +185,23 @@ function harness(): Harness {
 
 const iso = (ms: number) => new Date(ms).toISOString()
 
+// ARM A REAL TIMER ROW. The `timer: <ISO instant>` fence these tests used to arm from is deleted
+// (2026-08-15) — a worker computed that instant, and one wrote it 5h55m in the past, which parsed,
+// armed nothing and stalled its thread for 5.5 hours. `mcp__frizz__timer` creates the row; the
+// scheduler fires it (SOURCE: evalTimers) through the same outbox path the fence used to feed.
+let timerSeq = 0
+function armTimer(h: Harness, slug: string, fireAtMs: number, prompt = "Re-poll the rollout."): string {
+  const id = `tmr_${slug}_${++timerSeq}`
+  h.storage.armThreadTimer({ id, slug, prompt, fireAtMs, createdAtMs: h.clock.ms })
+  return id
+}
+
 // ---- THE SAFETY GUARD: no boot mass-fire ----
 
 test("boot-safety: a long-PAST timer fence never fires (only a witnessed crossing does)", async () => {
   const h = harness()
   h.storage.upsertSession(row("t"))
-  h.tele.set("t", tele(awaiting([{ kind: "timer", value: iso(h.clock.ms - 60_000) }], "re-check")))
+  h.tele.set("t", tele())
   const s = h.make()
   await s.tick()
   h.clock.ms += 60_000
@@ -216,16 +227,17 @@ test("timer: fires exactly once on the witnessed crossing, with the prose in the
   const h = harness()
   const target = h.clock.ms + 30_000
   h.storage.upsertSession(row("t"))
-  h.tele.set("t", tele(awaiting([{ kind: "timer", value: iso(target) }], "Re-poll the rollout.")))
+  armTimer(h, "t", target)
+  h.tele.set("t", tele())
   const s = h.make()
-  await s.tick() // armed (unmet)
+  await s.tick() // not due yet
   assert.equal(h.resumes.length, 0)
   h.clock.ms = target + 1000
   await s.tick() // crosses → fire
-  await s.tick() // fence still present → must NOT re-fire (single-fire)
+  await s.tick() // the row is spent → must NOT re-fire (single-fire)
   assert.equal(h.resumes.length, 1)
   assert.equal(h.resumes[0].slug, "t")
-  assert.equal(h.resumes[0].message, "⏰ Your timer fired: Re-poll the rollout.. Continue.")
+  assert.match(h.resumes[0].message, /Re-poll the rollout\./)
 })
 
 test("only-at-rest: an in-flight thread with a (stale) awaiting fence never fires", async () => {
@@ -319,6 +331,13 @@ test("registered future timer crosses during server downtime and fires exactly o
   await restarted.tick()
   assert.equal(h.resumes.length, 1)
 })
+
+// THE LEGACY `pr:` / `ci:` FENCE CONDITIONS ARE GONE, and the tests for them went with them
+// (2026-08-15). A fence used to name a PR or a CI target as free text and the scheduler polled it; that
+// is deleted, because a line frizz cannot check is a wait that can silently never resolve. A PR is now a
+// REGISTERED watcher — `mcp__frizz__watch_pr`, scheduler SOURCE 11 — and its coverage lives under
+// "THE REGISTERED PR WATCHERS" below, including CI waking on every terminal transition in both
+// directions, which is strictly more than these ever pinned.
 
 // ---- THE REGISTERED PR WATCHERS (scheduler SOURCE 11) ----
 // A watcher exists because a worker called `mcp__frizz__watch_pr`, never because it wrote a fence line
@@ -728,112 +747,23 @@ test("pr-watch: precise failures are coalesced in logs and recovery is explicit"
   ])
 })
 
-// ---- PR / CI transitions + graceful gh failure ----
-
-test("pr: open→merged transition fires with the merged steer", async () => {
-  const h = harness()
-  h.storage.upsertSession(row("p"))
-  h.tele.set("p", tele(awaiting([{ kind: "pr", value: "acme/app#391" }])))
-  const s = h.make()
-  h.pr.result = { state: "OPEN", mergedAt: null, rollup: [] }
-  await s.tick() // armed (open)
-  assert.equal(h.resumes.length, 0)
-  h.pr.result = { state: "MERGED", mergedAt: "2026-07-09T12:05:00Z", rollup: [] }
-  await s.tick() // merged → fire
-  assert.equal(h.resumes.length, 1)
-  assert.equal(h.resumes[0].message, "✅ PR acme/app#391 merged. Continue.")
-})
-
-test("ci: pending→(gh failure)→green; a transient gh failure is skipped, never fires early or crashes", async () => {
-  const h = harness()
-  h.storage.upsertSession(row("c"))
-  h.tele.set("c", tele(awaiting([{ kind: "shell", value: "acme/app#391" }])))
-  const s = h.make()
-  h.pr.result = { state: "OPEN", mergedAt: null, rollup: [{ status: "IN_PROGRESS" }], workflowRuns: [{ workflowName: "CI", event: "pull_request", status: "IN_PROGRESS" }] }
-  await s.tick() // armed (pending)
-  h.pr.result = undefined // gh unavailable this tick
-  await s.tick() // indeterminate → no fire, no crash
-  assert.equal(h.resumes.length, 0)
-  h.pr.result = { state: "OPEN", mergedAt: null, rollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }], workflowRuns: [{ workflowName: "CI", event: "pull_request", status: "COMPLETED", conclusion: "SUCCESS" }] }
-  await s.tick() // checks green → fire
-  assert.equal(h.resumes.length, 1)
-  assert.equal(h.resumes[0].message, "✅ CI is green on acme/app#391. Continue.")
-})
-
-// "CI failed" alone sent every woken worker straight back to `gh pr checks` to learn WHICH job went
-// red. The rollup already carries the job names, so the steer names them.
-test("ci: a failing check still wakes the worker, and the steer NAMES the failed jobs", async () => {
-  const h = harness()
-  h.storage.upsertSession(row("c"))
-  h.tele.set("c", tele(awaiting([{ kind: "shell", value: "acme/app#391" }])))
-  const s = h.make()
-  h.pr.result = { state: "OPEN", mergedAt: null, rollup: [{ status: "IN_PROGRESS" }], workflowRuns: [{ workflowName: "CI", event: "pull_request", status: "IN_PROGRESS" }] }
-  await s.tick()
-  h.pr.result = {
-    state: "OPEN",
-    mergedAt: null,
-    rollup: [
-      { name: "typecheck", status: "COMPLETED", conclusion: "SUCCESS" },
-      { name: "test (node 24)", status: "COMPLETED", conclusion: "FAILURE" },
-      { context: "vercel/preview", state: "ERROR" },
-    ],
-    workflowRuns: [{ workflowName: "CI", event: "pull_request", status: "COMPLETED", conclusion: "FAILURE" }],
-  }
-  await s.tick()
-  assert.equal(h.resumes.length, 1)
-  assert.equal(h.resumes[0].message, "❌ CI failed on acme/app#391 — test (node 24), vercel/preview, CI. Continue.")
-})
-
-// A green check must never leak into the failed list, and a red one with no reportable name must not
-// produce a dangling "— " tail.
-test("ci: an unnamed failure degrades to the bare failed steer rather than an empty list", async () => {
-  const h = harness()
-  h.storage.upsertSession(row("c"))
-  h.tele.set("c", tele(awaiting([{ kind: "shell", value: "acme/app#391" }])))
-  const s = h.make()
-  h.pr.result = { state: "OPEN", mergedAt: null, rollup: [{ status: "IN_PROGRESS" }], workflowRuns: [{ event: "pull_request", status: "IN_PROGRESS" }] }
-  await s.tick()
-  h.pr.result = { state: "OPEN", mergedAt: null, rollup: [{ status: "COMPLETED", conclusion: "FAILURE" }], workflowRuns: [{ event: "pull_request", status: "COMPLETED", conclusion: "FAILURE" }] }
-  await s.tick()
-  assert.equal(h.resumes.length, 1)
-  assert.equal(h.resumes[0].message, "❌ CI failed on acme/app#391. Continue.")
-})
-
-test("ci: a partial green rollup remains pending for an exact-head fork gate, then an approved rerun wakes once", async () => {
-  const h = harness()
-  h.storage.upsertSession(row("fork-gate"))
-  h.tele.set("fork-gate", tele(awaiting([{ kind: "shell", value: "acme/app#391" }])))
-  const s = h.make()
-  h.pr.result = {
-    state: "OPEN", mergedAt: null,
-    rollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }],
-    workflowRuns: [{ workflowName: "CI", event: "pull_request", status: "COMPLETED", conclusion: "ACTION_REQUIRED", databaseId: 1, createdAt: "2026-07-14T10:00:00Z" }],
-  }
-  await s.tick()
-  assert.equal(h.resumes.length, 0, "fork approval is pending even when statusCheckRollup is green")
-  h.pr.result = {
-    state: "OPEN", mergedAt: null,
-    // GitHub can retain the old ACTION_REQUIRED check in the rollup after approval.
-    rollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }, { status: "COMPLETED", conclusion: "ACTION_REQUIRED" }],
-    workflowRuns: [
-      { workflowName: "CI", event: "pull_request", status: "COMPLETED", conclusion: "ACTION_REQUIRED", databaseId: 1, createdAt: "2026-07-14T10:00:00Z" },
-      { workflowName: "CI", event: "pull_request", status: "COMPLETED", conclusion: "SUCCESS", databaseId: 2, createdAt: "2026-07-14T10:02:00Z" },
-    ],
-  }
-  await s.tick()
-  await s.tick()
-  assert.equal(h.resumes.length, 1, "only the latest approved rerun may satisfy the fence")
-  assert.match(h.resumes[0].message, /CI is green/)
-})
-
 // ---- durable delivery outbox: crash boundaries, recovery, retries, and concurrency ----
 
-function dueTimer(h: Harness, slug: string, delayMs = 1_000): { target: number; fence: FenceView } {
+// THE OUTBOX'S VEHICLE IS A REAL TIMER ROW, not an awaiting fence.
+//
+// These tests are about the DELIVERY MACHINERY — crash boundaries, leases, retry windows, supersession
+// — and they only ever needed some source that fires at a known instant. That used to be a
+// `timer: <ISO instant>` fence, which is deleted (2026-08-15): a worker computed that instant and one
+// wrote it 5h55m in the past. The timer is now a ROW the worker creates through `mcp__frizz__timer`,
+// so that is what arms these. Same enqueue → lease → deliver → ack path; only the source differs.
+let dueTimerSeq = 0
+function dueTimer(h: Harness, slug: string, delayMs = 1_000): { target: number; id: string } {
   const target = h.clock.ms + delayMs
-  const fence = awaiting([{ kind: "timer", value: iso(target) }], `Wake ${slug}.`)
+  const id = `tmr_${slug}_${++dueTimerSeq}`
   h.storage.upsertSession(row(slug))
-  h.tele.set(slug, { ...tele(fence), lastActivityAt: iso(h.clock.ms) })
-  return { target, fence }
+  h.storage.armThreadTimer({ id, slug, prompt: `Wake ${slug}.`, fireAtMs: target, createdAtMs: h.clock.ms })
+  h.tele.set(slug, { ...tele(), lastActivityAt: iso(h.clock.ms) })
+  return { target, id }
 }
 
 test("hard crash after enqueue recovers the pending wake on restart", async () => {
@@ -905,7 +835,7 @@ test("hard crash after atomic claim leaves a lease; restart retries only after i
 
 test("hard crash after successful delivery but before ack is confirmed by the stable token, never replayed", async () => {
   const h = harness()
-  const { target, fence } = dueTimer(h, "delivery-crash")
+  const { target } = dueTimer(h, "delivery-crash")
   let deliveredId = ""
   const scheduler = h.make({
     deliveryLeaseMs: 100,
@@ -927,7 +857,7 @@ test("hard crash after successful delivery but before ack is confirmed by the st
   assert.equal(store.list()[0].attempts, 1)
   // The backend transcript consumed the exact idempotency token before the control plane restarted.
   h.tele.set("delivery-crash", {
-    ...tele(fence),
+    ...tele(),
     lastActivityAt: iso(target - 1_000),
     lastUserText: `wake input ${wakeDeliveryToken(deliveredId)}`,
   })
@@ -947,14 +877,14 @@ test("hard crash after successful delivery but before ack is confirmed by the st
 
 test("an ambiguous delivery error is not replayed when the transcript already confirms its token", async () => {
   const h = harness()
-  const { target, fence } = dueTimer(h, "ambiguous")
+  const { target } = dueTimer(h, "ambiguous")
   let calls = 0
   const scheduler = h.make({
     deliveryLeaseMs: 100,
     resume: (_slug, _message, deliveryId) => {
       calls++
       h.tele.set("ambiguous", {
-        ...tele(fence),
+        ...tele(),
         lastActivityAt: iso(target - 1_000),
         lastUserText: `accepted ${wakeDeliveryToken(deliveryId)}`,
       })
