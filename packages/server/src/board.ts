@@ -462,38 +462,36 @@ export function fenceWatchViews(
   tele: SessionTelemetry | undefined,
   fenceAt: string | undefined,
   github: GithubStatusBook = {},
-  /** This thread's REGISTERED PR watchers, by `owner/repo#N`. A `pr-watch:` line names one of these; it
-   *  does not create one, so a line naming nothing registered is a claim frizz will not repeat. */
-  registered: ReadonlySet<string> = new Set(),
+  /** This thread's REGISTERED PR watchers — `{ target, createdAt }` per armed row. These get a row
+   *  whether or not the fence mentions them: a registration is live work the thread has out, and the
+   *  strip's job is to list what will actually wake it. The fence's `pr-watch:` line is a separate
+   *  thing — it states a WAIT, and it is checked against this set elsewhere (heldByRunningChecks). */
+  registered: readonly { target: string; createdAt: string }[] = [],
 ): ThreadView["watches"] {
-  if (tele?.lastFence?.kind !== "awaiting") return []
   const seen = new Set<string>()
   const out: ThreadView["watches"] = []
+  for (const w of registered) {
+    if (seen.has(`github:${w.target}`)) continue
+    seen.add(`github:${w.target}`)
+    out.push({
+      id: `github:${slug}:${w.target}`,
+      kind: "github" as const,
+      target: w.target,
+      state: "armed" as const,
+      createdAt: w.createdAt,
+      // Absent until the poller's first successful read. The card says "checking…" then, rather than
+      // inventing a verdict — an unpolled PR and a PR with no CI are different facts.
+      ...(github[w.target] ? { github: github[w.target] } : {}),
+    })
+  }
+  if (tele?.lastFence?.kind !== "awaiting") return out
   // When the worker PARKED — what the strip's duration counts from. Falls back to the thread's last
   // activity when the fold has no fence instant.
   const createdAt = fenceAt ?? tele.lastAssistantAt ?? new Date().toISOString()
   for (const hint of tele.lastFence.hints) {
-    if (hint.kind === "pr-watch") {
-      const ref = parsePrRef(hint.value)
-      if (!ref) continue // an unparseable ref names no PR, so it may not claim a row either
-      const target = `${ref.owner}/${ref.repo}#${ref.number}`
-      // THE SAME INTEGRITY RULE THE SHELL LINE GETS. A fence declares; the tool registers. A `pr-watch:`
-      // line with no registered watcher behind it describes a wait nothing will ever deliver, so the
-      // strip does not list it and the thread queues as usual.
-      if (!registered.has(target) || seen.has(`github:${target}`)) continue
-      seen.add(`github:${target}`)
-      out.push({
-        id: `github:${slug}:${target}`,
-        kind: "github" as const,
-        target,
-        state: "armed" as const,
-        createdAt,
-        // Absent until the poller's first successful read of this PR. The card says "checking…" then,
-        // rather than inventing a verdict — an unpolled PR and a PR with no CI are different facts.
-        ...(github[target] ? { github: github[target] } : {}),
-      })
-      continue
-    }
+    // A `pr-watch:` line adds NO row of its own: the registry above already listed every PR this thread
+    // watches, and a line naming an unregistered PR describes a wait nothing will deliver. Listing it
+    // would put a row on the strip that nothing behind it can ever fire.
     if (hint.kind !== "watch") continue
     const target = hint.value.trim()
     // A name matching nothing live is not a wait — the same rule, applied to the shells the thread owns.
@@ -925,9 +923,11 @@ function sessionThreadView(
 ): ThreadView {
   // The PRs this thread has actually REGISTERED, by `owner/repo#N` — what a `pr-watch:` declaration is
   // checked against. Read per thread because the registry is per thread, unlike the status book above.
-  const registeredPrWatches = new Set(
-    storage.listPrWatches(row.slug, { armedOnly: true }).map((w) => `${w.owner}/${w.repo}#${w.number}`),
-  )
+  const armedPrWatches = storage.listPrWatches(row.slug, { armedOnly: true }).map((w) => ({
+    target: `${w.owner}/${w.repo}#${w.number}`,
+    createdAt: new Date(w.created_at).toISOString(),
+  }))
+  const registeredPrWatches = new Set(armedPrWatches.map((w) => w.target))
   // A headless thread mid-turn with nobody driving it is a crash/stall, not a rest. For codex that is
   // an app-server that stopped advancing the rollout; for the broker it is a dead ownerless daemon (its
   // liveness is the daemon record, resolved live). Either way the (exited + in-flight) pair trips the
@@ -1017,7 +1017,7 @@ function sessionThreadView(
     // become the github rows, `watch:` lines the shell rows — so this strip lists exactly what will
     // actually wake the thread, and the two cannot drift into claiming different things. There is no
     // registry behind either any more (`thread_watch`, retired 2026-08-14).
-    watches: fenceWatchViews(row.slug, tele, tele?.lastAssistantAt, github, registeredPrWatches),
+    watches: fenceWatchViews(row.slug, tele, tele?.lastAssistantAt, github, armedPrWatches),
     pendingAsk: tele?.pendingAsk ? { questions: tele.pendingAsk.questions } : undefined,
     nativeInputRequired: tele?.nativeInputRequired,
     pendingQuestion: tele?.pendingQuestion ?? false,

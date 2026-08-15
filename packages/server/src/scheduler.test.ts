@@ -125,6 +125,9 @@ function fakeTailer(map: Map<string, SessionTelemetry>): Tailer {
 
 interface Harness {
   storage: Storage
+  /** Register a PR watcher the way `mcp__frizz__watch_pr` does. A `pr-watch:` fence line DECLARES a wait
+   *  and no longer arms anything (2026-08-14), so every test below that expects a wake registers first. */
+  watch(slug: string, ref: string): void
   tele: Map<string, SessionTelemetry>
   resumes: { slug: string; message: string; deliveryId?: string }[]
   clock: { ms: number }
@@ -140,6 +143,7 @@ function harness(): Harness {
   const clock = { ms: Date.parse("2026-07-09T12:00:00.000Z") }
   const pr: { result: PrStatus | undefined; calls: PrRef[] } = { result: undefined, calls: [] }
   const review: { result: GithubReviewActivity[] | undefined; calls: PrRef[] } = { result: undefined, calls: [] }
+  let watchSeq = 0
   return {
     storage,
     tele: teleMap,
@@ -147,6 +151,13 @@ function harness(): Harness {
     clock,
     pr,
     review,
+    watch(slug, ref) {
+      const m = /^([^/]+)\/([^#]+)#(\d+)$/.exec(ref)
+      if (!m) throw new Error(`bad ref ${ref}`)
+      storage.armPrWatch({
+        id: `prw_${++watchSeq}`, slug, owner: m[1], repo: m[2], number: Number(m[3]), createdAtMs: clock.ms - 60_000,
+      })
+    },
     make(over) {
       return createScheduler({
         storage,
@@ -306,60 +317,23 @@ test("registered future timer crosses during server downtime and fires exactly o
   assert.equal(h.resumes.length, 1)
 })
 
-// THE FIRST PARK REPLAYS WHAT IS ALREADY THERE (maintainer 2026-08-12). The old contract baselined it
-// silently, which let a worker park on a PR saying "waiting on review" with review already sitting on it
-// — colinhacks/zod#6318, two unread reviews, watcher asleep on the thing it was watching for. The cost is
-// one redundant wake for a worker that HAD answered its review; the steer's backlog tail says so.
-test("pr-watch replays the PR's existing activity on the FIRST park, then wakes on what is genuinely new", async () => {
-  const h = harness()
-  const fenceAt = iso(h.clock.ms)
-  h.storage.upsertSession(row("r"))
-  h.tele.set("r", {
-    ...tele(awaiting([
-      { kind: "human", value: "repo maintainer review" },
-      { kind: "pr-watch", value: "acme/app#391" },
-    ])),
-    lastActivityAt: fenceAt,
-  })
-  const old: GithubReviewActivity = { id: "review:old", actor: "alice", actorType: "User", at: iso(h.clock.ms - 1000), kind: "review" }
-  h.review.result = [old]
-  await h.make().tick()
-  assert.equal(h.resumes.length, 1, "the review already on the PR is replayed once")
-  assert.match(h.resumes[0].message, /@alice/)
-  assert.match(h.resumes[0].message, /already on the PR when you parked/, "the steer says these are not new")
-
-  // The worker deals with it and re-parks: a NEW fence generation on the SAME PR. This is the loop
-  // guard — replaying per park rather than per (thread, PR) would wake it again here, forever.
-  h.clock.ms += 10_000
-  const reparked = iso(h.clock.ms)
-  h.tele.set("r", {
-    ...tele(awaiting([
-      { kind: "human", value: "repo maintainer review" },
-      { kind: "pr-watch", value: "acme/app#391" },
-    ])),
-    lastActivityAt: reparked,
-  })
-  const settled = h.make()
-  await settled.tick()
-  await settled.tick()
-  assert.equal(h.resumes.length, 1, "the same backlog is never replayed to the same thread twice")
-
-  h.clock.ms += 10_000
-  h.review.result = [
-    { id: "review:new", actor: "bob", actorType: "User", at: iso(h.clock.ms), kind: "review" },
-    old,
-  ]
-  const restarted = h.make()
-  await restarted.tick()
-  await restarted.tick()
-  assert.equal(h.resumes.length, 2)
-  assert.match(h.resumes[1].message, /@bob/)
-  assert.doesNotMatch(h.resumes[1].message, /@alice/, "the replayed review is not named again")
-  assert.doesNotMatch(h.resumes[1].message, /already on the PR when you parked/, "a genuinely new review is not a backlog")
-})
-
+// ---- THE REGISTERED PR WATCHERS (scheduler SOURCE 11) ----
+// A watcher exists because a worker called `mcp__frizz__watch_pr`, never because it wrote a fence line
+// (2026-08-14). So every test here arms with `h.watch(slug, ref)`; the `pr-watch:` hint that sits beside
+// it in the telemetry is the DECLARATION the thread rests on, and arms nothing. Both are written here
+// because both are what a correct worker does — registering and then declaring what it waits on.
+//
+// THE FIRST POLL IS MEASURED AGAINST THE REGISTRATION INSTANT. A worker registers when it opens or
+// pushes the PR, so activity already sitting there is its own news and reporting it would spend a turn;
+// only what lands after `created_at` is a wake. `h.watch` registers 60s in the scheduler's past, so a
+// test baselines silently by dating its prior activity before that and wakes by dating it after.
+//
+// EVERY DELIVERY CARRIES A TRAILER saying the watcher is STILL ARMED — a registration reports again and
+// again (red CI, a fix, green CI, a reviewer's comment), so the message has to say so. The steer itself
+// is byte-identical to the fence path's, which is why the pins below are on the steer as a PREFIX.
 test("pr-watch: a bot review AGENT's review (Pullfrog/Copilot) wakes the watcher — a review is the signal whoever files it", async () => {
   const h = harness()
+  h.watch("r", "nubjs/nub#544")
   const fenceAt = iso(h.clock.ms)
   h.storage.upsertSession(row("r"))
   h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "nubjs/nub#544" }])), lastActivityAt: fenceAt })
@@ -384,6 +358,7 @@ test("pr-watch: a bot review AGENT's review (Pullfrog/Copilot) wakes the watcher
 // is no actor filter at all any more: a bot comment wakes like any other.
 test("pr-watch: a bot COMMENT wakes the watcher, and the steer names it as a bot", async () => {
   const h = harness()
+  h.watch("r", "nubjs/nub#544")
   const fenceAt = iso(h.clock.ms)
   h.storage.upsertSession(row("r"))
   h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "nubjs/nub#544" }])), lastActivityAt: fenceAt })
@@ -402,14 +377,17 @@ test("pr-watch: a bot COMMENT wakes the watcher, and the steer names it as a bot
   assert.doesNotMatch(h.resumes[0].message, /👤/)
 })
 
-// A worker tracking a SET of PRs writes one `pr-watch:` line per PR, and the waker must poll EVERY
-// ref — activity on any of them is the wake. Nothing pinned this, and in its absence a worker watching
+// A worker tracking a SET of PRs registers one watcher per PR, and the waker must poll EVERY one of
+// them — activity on any is the wake. Nothing pinned this, and in its absence a worker watching
 // 11 adoption PRs concluded (in writing, to the operator) that a watch "can't fan out across repos"
 // and fell back to a 7-day timer sweep; a real CHANGES_REQUESTED review then sat unreported for a day
 // and a half (burned 2026-07-30). The shared harness returns ONE activity list for every ref, so this
 // test supplies a per-ref fetcher — otherwise "the third ref woke it" proves nothing.
-test("pr-watch fans out: every ref in a multi-PR fence is polled, and the LAST one's activity wakes", async () => {
+test("pr-watch fans out: every registered ref of a multi-PR thread is polled, and the LAST one's activity wakes", async () => {
   const h = harness()
+  h.watch("multi", "acme/a#1")
+  h.watch("multi", "acme/b#2")
+  h.watch("multi", "acme/c#3")
   const fenceAt = iso(h.clock.ms)
   h.storage.upsertSession(row("multi"))
   h.tele.set("multi", {
@@ -444,75 +422,18 @@ test("pr-watch fans out: every ref in a multi-PR fence is polled, and the LAST o
   assert.match(h.resumes[0].message, /acme\/c#3/, "the steer names the PR that actually moved")
 })
 
-test("pr-watch retries a failed resume from its durable pending cursor across restart and network loss", async () => {
-  const h = harness()
-  const fenceAt = iso(h.clock.ms)
-  h.storage.upsertSession(row("r"))
-  h.tele.set("r", {
-    ...tele(awaiting([
-      { kind: "human", value: "repo maintainer review" },
-      { kind: "pr-watch", value: "acme/app#391" },
-    ])),
-    lastActivityAt: fenceAt,
-  })
-  const old: GithubReviewActivity = { id: "review:old", actor: "alice", actorType: "User", at: iso(h.clock.ms - 1000), kind: "review" }
-  h.review.result = [old]
-  await h.make().tick() // durable baseline — and the first-park replay of `old`, which is not the subject here
-  h.resumes.length = 0
-
-  // Re-park, so the thread is past its one backlog replay and only genuinely new activity can wake it.
-  h.clock.ms += 10_000
-  h.tele.set("r", {
-    ...tele(awaiting([
-      { kind: "human", value: "repo maintainer review" },
-      { kind: "pr-watch", value: "acme/app#391" },
-    ])),
-    lastActivityAt: iso(h.clock.ms),
-  })
-  h.clock.ms += 10_000
-  h.review.result = [
-    { id: "review:new", actor: "bob", actorType: "User", at: iso(h.clock.ms), kind: "review" },
-    old,
-  ]
-  let attempts = 0
-  const failing = h.make({
-    resume: () => {
-      attempts++
-      throw new Error("tmux temporarily unavailable")
-    },
-  })
-  await failing.tick()
-  assert.equal(attempts, 1)
-  assert.equal(h.resumes.length, 0)
-
-  // A fresh scheduler can deliver the persisted outbox item without another successful GitHub read.
-  h.review.result = undefined
-  h.clock.ms += 30_001 // the uncertain delivery lease expires before another process may retry
-  const restarted = h.make({
-    resume: (slug, message) => {
-      attempts++
-      h.resumes.push({ slug, message })
-    },
-  })
-  await restarted.tick()
-  await restarted.tick()
-  assert.equal(attempts, 2, "one failed and one successful delivery; the delivered outbox state blocks a third")
-  assert.equal(h.resumes.length, 1)
-  assert.match(h.resumes[0].message, /@bob/)
-})
-
 test("pr-watch: baselines, then bumps on a new human comment", async () => {
   const h = harness()
+  h.watch("r", "acme/app#391")
   const fenceAt = iso(h.clock.ms)
   h.storage.upsertSession(row("r"))
   h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "acme/app#391" }])), lastActivityAt: fenceAt })
-  h.review.result = [{ id: "comment:old", actor: "alice", actorType: "User", at: iso(h.clock.ms - 1000), kind: "comment" }]
-  await h.make().tick() // baseline, plus the first-park replay of `comment:old` — not the subject here
-  h.resumes.length = 0
+  // Already on the PR before the worker registered the watcher, so it is the worker's own news: the
+  // first poll records it as seen and says nothing.
+  h.review.result = [{ id: "comment:old", actor: "alice", actorType: "User", at: iso(h.clock.ms - 120_000), kind: "comment" }]
+  await h.make().tick()
+  assert.equal(h.resumes.length, 0, "activity that predates the registration is baselined, never reported")
 
-  // Re-park past the one-time replay, so what follows tests the bump alone.
-  h.clock.ms += 10_000
-  h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "acme/app#391" }])), lastActivityAt: iso(h.clock.ms) })
   h.clock.ms += 10_000
   h.review.result = [
     { id: "comment:new", actor: "carol", actorType: "User", at: iso(h.clock.ms), kind: "comment" },
@@ -533,17 +454,17 @@ test("pr-watch: baselines, then bumps on a new human comment", async () => {
 // permalink addresses exactly one item; the ISO timestamp orders it against the worker's own last turn.
 test("pr-watch: the bump steer carries the item's permalink and timestamp, not just the actor", async () => {
   const h = harness()
+  h.watch("r", "nubjs/nub#587")
   const fenceAt = iso(h.clock.ms)
   h.storage.upsertSession(row("r"))
   h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "nubjs/nub#587" }])), lastActivityAt: fenceAt })
-  h.review.result = [{ id: "comment:stale", actor: "colinhacks", actorType: "User", at: iso(h.clock.ms - 1000), kind: "comment", url: "https://github.com/nubjs/nub/pull/587#issuecomment-1" }]
-  await h.make().tick() // first-park replay of the stale comment — not the subject here
-  h.resumes.length = 0
+  // The stale comment predates the registration, so the first poll only baselines it — and from here it
+  // must never be named again.
+  h.review.result = [{ id: "comment:stale", actor: "colinhacks", actorType: "User", at: iso(h.clock.ms - 120_000), kind: "comment", url: "https://github.com/nubjs/nub/pull/587#issuecomment-1" }]
+  await h.make().tick()
+  assert.equal(h.resumes.length, 0)
 
-  // Re-park past the one-time replay: from here the stale comment must never be named again.
-  h.clock.ms += 10_000
-  h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "nubjs/nub#587" }])), lastActivityAt: iso(h.clock.ms) })
-  h.clock.ms += 10_000
+  h.clock.ms += 20_000
   const at = iso(h.clock.ms)
   h.review.result = [
     { id: "comment:fresh", actor: "colinhacks", actorType: "User", at, kind: "comment", url: "https://github.com/nubjs/nub/pull/587#issuecomment-2" },
@@ -553,18 +474,18 @@ test("pr-watch: the bump steer carries the item's permalink and timestamp, not j
   await s.tick()
   await s.tick()
   assert.equal(h.resumes.length, 1)
-  assert.equal(
-    h.resumes[0].message,
-    `👤 New GitHub comment on nubjs/nub#587 from @colinhacks at ${at}. Read that exact comment — ignore older activity you have already handled — and continue: https://github.com/nubjs/nub/pull/587#issuecomment-2`,
-  )
+  const steer = `👤 New GitHub comment on nubjs/nub#587 from @colinhacks at ${at}. Read that exact comment — ignore older activity you have already handled — and continue: https://github.com/nubjs/nub/pull/587#issuecomment-2`
+  // The steer is a PREFIX of the delivery: the still-armed trailer follows it, and the blank line
+  // between them is also what pins that the URL ends the steer — no trailing period joins the href.
+  assert.ok(h.resumes[0].message.startsWith(`${steer}\n\n(Registered PR watcher`))
   assert.doesNotMatch(h.resumes[0].message, /issuecomment-1\b/, "the stale comment the worker already handled is never named")
-  assert.ok(h.resumes[0].message.endsWith("issuecomment-2"), "the URL ends the steer so no trailing period joins the href")
 })
 
 // Every id in the fresh set is marked seen the moment the cursor is persisted, so an activity this
 // steer does not name is never mentioned to anyone again. Naming only `fresh[0]` dropped the rest.
 test("pr-watch: a BURST between polls is enumerated in full, oldest first — none is silently dropped", async () => {
   const h = harness()
+  h.watch("r", "acme/app#391")
   const fenceAt = iso(h.clock.ms)
   h.storage.upsertSession(row("r"))
   h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "acme/app#391" }])), lastActivityAt: fenceAt })
@@ -585,8 +506,8 @@ test("pr-watch: a BURST between polls is enumerated in full, oldest first — no
   await s.tick()
   await s.tick()
   assert.equal(h.resumes.length, 1)
-  assert.equal(
-    h.resumes[0].message,
+  // The steer is pinned as a PREFIX because the still-armed trailer follows it in the delivery.
+  assert.ok(h.resumes[0].message.startsWith(
     [
       "👤 3 new GitHub items on acme/app#391. Read exactly these — ignore older activity you have already handled — and continue:",
       "",
@@ -599,13 +520,14 @@ test("pr-watch: a BURST between polls is enumerated in full, oldest first — no
       "A review's body is often empty because its substance is inline comments. Read them, one call each:",
       "gh api --paginate repos/acme/app/pulls/391/reviews/3/comments",
     ].join("\n"),
-  )
+  ))
 })
 
 // The cap keeps the NEWEST items (they matter most) and the header still counts the whole burst, so a
 // worker is never told "3 new items" when 30 landed.
 test("pr-watch: a burst past the enumeration cap counts everything and says how many it did not name", async () => {
   const h = harness()
+  h.watch("r", "acme/app#391")
   const fenceAt = iso(h.clock.ms)
   h.storage.upsertSession(row("r"))
   h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "acme/app#391" }])), lastActivityAt: fenceAt })
@@ -628,41 +550,15 @@ test("pr-watch: a burst past the enumeration cap counts everything and says how 
   const msg = h.resumes[0].message
   assert.match(msg, /^👤 13 new GitHub items on acme\/app#391\./, "the header counts the whole burst, not just the named ones")
   assert.equal(msg.split("\n").filter((l) => l.startsWith("- ")).length, 11, "10 named items plus the overflow line")
-  assert.match(msg, /- …and 3 more not listed — check acme\/app#391 for the rest$/)
+  // The overflow line ends the STEER — what follows it is the still-armed trailer, nothing else.
+  assert.match(msg, /- …and 3 more not listed — check acme\/app#391 for the rest\n\n\(Registered PR watcher/)
   assert.match(msg, /issuecomment-12/, "the newest item survives the cap")
   assert.doesNotMatch(msg, /issuecomment-2:/, "the oldest three are the ones dropped")
 })
 
-// A pending cursor written before the enumeration existed still owes its worker a wake. Reading the
-// bare object as a one-element list is what keeps that promise across the upgrade.
-test("pr-watch: a legacy single-object pending cursor still delivers after the upgrade", async () => {
-  const h = harness()
-  const fenceAt = iso(h.clock.ms)
-  h.storage.upsertSession(row("r"))
-  h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "acme/app#391" }])), lastActivityAt: fenceAt })
-  const fenceId = `${fenceAt}pr-watch:acme/app#391`
-  h.storage.setSetting("waker.registrations.v1", [{
-    key: `r ${fenceId}`,
-    timers: {},
-    reviews: {
-      "pr-watch:acme/app#391": {
-        baseline: true,
-        seen: ["comment:pending"],
-        pending: { id: "comment:pending", actor: "erin", actorType: "User", at: fenceAt, kind: "comment" },
-      },
-    },
-  }])
-  h.review.result = []
-  const s = h.make()
-  await s.tick()
-  await s.tick()
-  assert.equal(h.resumes.length, 1, "the wake the old scheduler owed is still delivered")
-  assert.match(h.resumes[0].message, /@erin/)
-  assert.match(h.resumes[0].message, /New GitHub comment on acme\/app#391/)
-})
-
 test("pr-watch: an APPROVAL is named specifically in the bump steer", async () => {
   const h = harness()
+  h.watch("r", "acme/app#391")
   const fenceAt = iso(h.clock.ms)
   h.storage.upsertSession(row("r"))
   h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "acme/app#391" }])), lastActivityAt: fenceAt })
@@ -684,6 +580,7 @@ test("pr-watch: an APPROVAL is named specifically in the bump steer", async () =
 // "New GitHub requested changes on acme/app#391 from @erin".
 test("pr-watch: CHANGES_REQUESTED is named as a noun, so the steer stays a grammatical sentence", async () => {
   const h = harness()
+  h.watch("r", "acme/app#391")
   const fenceAt = iso(h.clock.ms)
   h.storage.upsertSession(row("r"))
   h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "acme/app#391" }])), lastActivityAt: fenceAt })
@@ -697,10 +594,10 @@ test("pr-watch: CHANGES_REQUESTED is named as a noun, so the steer stays a gramm
   await s.tick()
   await s.tick()
   assert.equal(h.resumes.length, 1)
-  assert.equal(
-    h.resumes[0].message,
+  // A PREFIX, because the still-armed trailer follows the steer in the delivered message.
+  assert.ok(h.resumes[0].message.startsWith(
     `👤 New GitHub change request on acme/app#391 from @erin at ${at}. Read that exact change request — ignore older activity you have already handled — and continue.`,
-  )
+  ))
 })
 
 // The steer is a NOTIFICATION that activity landed, never an instruction to change the PR's state.
@@ -709,6 +606,7 @@ test("pr-watch: CHANGES_REQUESTED is named as a noun, so the steer stays a gramm
 // step past that is reopening a PR the maintainer closed deliberately.
 test("pr-watch: the bump steer never reads as an instruction to mutate the PR", async () => {
   const h = harness()
+  h.watch("r", "nubjs/nub#551")
   const fenceAt = iso(h.clock.ms)
   h.storage.upsertSession(row("r"))
   h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "nubjs/nub#551" }])), lastActivityAt: fenceAt })
@@ -729,8 +627,11 @@ test("pr-watch: the bump steer never reads as an instruction to mutate the PR", 
   assert.doesNotMatch(message, /\b(close|merge|approve)\b/i, "nor any other PR state change")
 })
 
+// The clear is ported into the registry pass: a watcher that fires while the card is snoozed clears the
+// snooze itself, because the news on the PR is exactly the thing the human was hiding the card UNTIL.
 test("pr-watch: 'Arm watcher' — a new-activity bump CLEARS the user snooze so the card re-surfaces", async () => {
   const h = harness()
+  h.watch("r", "acme/app#391")
   const fenceAt = iso(h.clock.ms)
   h.storage.upsertSession(row("r"))
   h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "acme/app#391" }])), lastActivityAt: fenceAt })
@@ -753,11 +654,14 @@ test("pr-watch: 'Arm watcher' — a new-activity bump CLEARS the user snooze so 
   assert.equal(h.storage.getSession("r")?.snoozed_until, null, "the user snooze was cleared by the activity bump")
 })
 
+// Three registered watchers over two distinct PRs: two threads watching one PR is the ordinary shape of
+// a review round, and paying GitHub twice for the same answer is how a rate limit arrives.
 test("pr-watch: one scheduler tick batches distinct refs and deduplicates duplicate refs", async () => {
   const h = harness()
   const fenceAt = iso(h.clock.ms)
   for (const [slug, pr] of [["first", 544], ["second", 549], ["duplicate", 544]] as const) {
     h.storage.upsertSession(row(slug))
+    h.watch(slug, `nubjs/nub#${pr}`)
     h.tele.set(slug, { ...tele(awaiting([{ kind: "pr-watch", value: `nubjs/nub#${pr}` }])), lastActivityAt: fenceAt })
   }
   let tokenCalls = 0
@@ -789,6 +693,7 @@ test("pr-watch: one scheduler tick batches distinct refs and deduplicates duplic
 
 test("pr-watch: precise failures are coalesced in logs and recovery is explicit", async () => {
   const h = harness()
+  h.watch("r", "nubjs/nub#544")
   const fenceAt = iso(h.clock.ms)
   h.storage.upsertSession(row("r"))
   h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "nubjs/nub#544" }])), lastActivityAt: fenceAt })
@@ -801,19 +706,22 @@ test("pr-watch: precise failures are coalesced in logs and recovery is explicit"
       : { status: "error", failure: { kind: "timeout", message: "GitHub GraphQL request timed out after 15s" } },
   })
 
+  // One fetch serves EVERY thread watching the PR, so the failure belongs to the ref rather than to any
+  // one slug — the parenthetical names the pass, not a thread. The 60s steps are the registry's own poll
+  // floor: a shorter step would simply skip the fetch and log nothing.
   await scheduler.tick()
   h.clock.ms += 60_000
   await scheduler.tick()
   assert.deepEqual(logs, [
-    "waker: GitHub review check failed for nubjs/nub#544 (r) [timeout] — GitHub GraphQL request timed out after 15s",
+    "waker: GitHub review check failed for nubjs/nub#544 (pr-watch registry) [timeout] — GitHub GraphQL request timed out after 15s",
   ])
 
   recovered = true
   h.clock.ms += 60_000
   await scheduler.tick()
   assert.deepEqual(logs, [
-    "waker: GitHub review check failed for nubjs/nub#544 (r) [timeout] — GitHub GraphQL request timed out after 15s",
-    "waker: GitHub review check recovered for nubjs/nub#544 (r); 1 identical repeats were suppressed",
+    "waker: GitHub review check failed for nubjs/nub#544 (pr-watch registry) [timeout] — GitHub GraphQL request timed out after 15s",
+    "waker: GitHub review check recovered for nubjs/nub#544 (pr-watch registry); 1 identical repeats were suppressed",
   ])
 })
 

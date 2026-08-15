@@ -1435,21 +1435,29 @@ test("board exposes a typed providerFault from tailer auth telemetry — categor
 })
 
 // ---- fenceWatchViews ----
-// A `pr-watch:` line is a DECLARATION; `mcp__frizz__watch_pr` is what registers the watcher. The row is
-// drawn only when both are true, so these pass the registered set the board reads from storage.
-const REGISTERED_PRS = new Set(["colinhacks/zod#6382", "withastro/astro#17487", "vitejs/vite#23019", "acme/app#1", "acme/app#2", "acme/app#391"])
 //
-// A PR wait has no `thread_watch` row and never will — the fence owns PR watching (`f366e2d`) — so the
-// strip under the prompt box gets its rows from the standing fence instead (maintainer 2026-08-13:
-// "showing the active watchers underneath the prompt box, similar to how subagents work"). These pin the
-// two properties that make that safe: it says exactly what the SCHEDULER will act on, and it has the
-// fence's lifetime rather than a registration's.
+// The strip under the prompt box lists what this thread has OUT — the same place its sub-agents and
+// background shells are listed (maintainer 2026-08-13: "showing the active watchers underneath the
+// prompt box, similar to how subagents work"). Its two kinds come from two different places, and that
+// split is the thing to hold on to:
+//
+//   • a GITHUB row is one REGISTERED PR watcher (`mcp__frizz__watch_pr`). It stands whether or not the
+//     fence mentions it, because a registration is live work regardless of what the worker wrote.
+//   • a SHELL row is a `watch:` line in the standing fence, checked against a live shell. It is a
+//     DECLARATION, so it lives and dies with the fence.
+//
+// A `pr-watch:` fence line produces NO row of its own. It states a wait the tool created; the registry
+// above has already listed it, and a line naming a PR nobody registered describes a wake that will never
+// arrive.
 const FENCE_AT = "2026-08-13T04:00:00.000Z"
+const REGISTERED_PRS = ["colinhacks/zod#6382", "acme/app#1", "acme/app#2"]
+  .map((target) => ({ target, createdAt: FENCE_AT }))
+const registeredOf = (...targets: string[]) => REGISTERED_PRS.filter((w) => targets.includes(w.target))
 const parked = (...hints: { kind: string; value: string }[]) =>
   tele({ lastFence: { kind: "awaiting", body: "", hints } as SessionTelemetry["lastFence"], lastAssistantAt: FENCE_AT })
 
-test("a parked pr-watch fence yields one armed github row per PR", () => {
-  const views = fenceWatchViews("t", parked({ kind: "pr-watch", value: "colinhacks/zod#6382" }), FENCE_AT, {}, REGISTERED_PRS)
+test("every registered PR watcher gets a row, with the instant it was registered", () => {
+  const views = fenceWatchViews("t", parked({ kind: "pr-watch", value: "colinhacks/zod#6382" }), FENCE_AT, {}, registeredOf("colinhacks/zod#6382"))
   assert.deepEqual(views, [{
     id: "github:t:colinhacks/zod#6382",
     kind: "github",
@@ -1459,33 +1467,37 @@ test("a parked pr-watch fence yields one armed github row per PR", () => {
   }])
 })
 
-test("several PRs each get a row, and a repeat of one does not", () => {
-  const views = fenceWatchViews("t", parked(
-    { kind: "pr-watch", value: "acme/app#1" },
-    { kind: "pr-watch", value: "https://github.com/acme/app/pull/2" },
-    { kind: "pr-watch", value: "acme/app#1 — still the same one" },
-  ), FENCE_AT, {}, REGISTERED_PRS)
+// THE ROW FOLLOWS THE REGISTRATION, NOT THE FENCE. A worker that registered a PR and has not written (or
+// has since replaced) its fence still has that watcher out, and the strip's job is to say so.
+test("a registered watcher shows with no fence at all", () => {
+  assert.deepEqual(
+    fenceWatchViews("t", tele({ lastFence: { kind: "done", body: "landed", hints: [] } }), FENCE_AT, {}, registeredOf("acme/app#1")).map((w) => w.target),
+    ["acme/app#1"],
+  )
+  assert.deepEqual(fenceWatchViews("t", tele(), FENCE_AT, {}, registeredOf("acme/app#1")).map((w) => w.target), ["acme/app#1"])
+})
+
+// …AND A DECLARATION WITH NOTHING BEHIND IT SHOWS NOTHING. The fence can name any PR it likes; only a
+// registration makes frizz watch one, so an unregistered line would put a row on the strip that nothing
+// can ever fire.
+test("a pr-watch line with no registration behind it yields no row", () => {
+  assert.deepEqual(fenceWatchViews("t", parked({ kind: "pr-watch", value: "colinhacks/zod#6382" }), FENCE_AT, {}, []), [])
+  assert.deepEqual(fenceWatchViews("t", parked({ kind: "pr-watch", value: "the auth PR" }), FENCE_AT, {}, []), [])
+})
+
+test("several registered PRs each get a row, and a repeat of one does not", () => {
+  const views = fenceWatchViews("t", parked(), FENCE_AT, {}, [...registeredOf("acme/app#1", "acme/app#2"), { target: "acme/app#1", createdAt: FENCE_AT }])
   assert.deepEqual(views.map((w) => w.target), ["acme/app#1", "acme/app#2"])
 })
 
-// The row must claim only what the scheduler will actually fire, so it reads the SAME parse the waker's
-// own poller arms from. An unparseable ref arms nothing and therefore may not stand in the strip.
-test("a ref the scheduler cannot parse arms nothing and shows nothing", () => {
-  assert.deepEqual(fenceWatchViews("t", parked({ kind: "pr-watch", value: "the auth PR" }), FENCE_AT, {}, REGISTERED_PRS), [])
-})
-
-test("hints that are not pr-watch never produce a row", () => {
+test("hints that are neither pr-watch nor watch never produce a row", () => {
   assert.deepEqual(fenceWatchViews("t", parked(
     { kind: "human", value: "Alice must approve" },
     { kind: "timer", value: "2099-07-15T17:00:00Z" },
     { kind: "session", value: "the reviewer's thread" },
-  ), FENCE_AT, {}, REGISTERED_PRS), [])
+  ), FENCE_AT, {}, []), [])
 })
 
-// IT HAS THE FENCE'S LIFETIME, which is the whole reason it needs no registry row: the instant the
-// worker says anything else the park is over, and that is also the instant the scheduler stops watching.
-test("no standing awaiting fence, no rows", () => {
-  assert.deepEqual(fenceWatchViews("t", tele({ lastFence: { kind: "done", body: "landed", hints: [] } }), FENCE_AT, {}, REGISTERED_PRS), [])
-  assert.deepEqual(fenceWatchViews("t", tele(), FENCE_AT, {}, REGISTERED_PRS), [])
+test("nothing registered and nothing declared, no rows", () => {
   assert.deepEqual(fenceWatchViews("t", undefined, FENCE_AT), [])
 })

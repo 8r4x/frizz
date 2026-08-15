@@ -256,7 +256,13 @@ function isPrWatchHint(kind: FenceView["hints"][number]["kind"]): boolean {
 // definition and `session:` has no cross-session liveness signal, so neither is resolved here.
 function isActionable(hint: FenceView["hints"][number]): boolean {
   if (hint.kind === "timer") return isValidAwaitingTimer(hint.value)
-  if (isPrWatchHint(hint.kind) || hint.kind === "pr" || hint.kind === "ci") return parsePrRef(hint.value) !== undefined
+  // `pr-watch` IS NOT ACTIONABLE HERE ANY MORE (2026-08-14). It is a DECLARATION of a wait that
+  // `mcp__frizz__watch_pr` created, and the registry pass (SOURCE 11) is what fires it. Leaving it armed
+  // here too would wake a correctly-behaved worker TWICE for one review — register the PR, name it in
+  // the fence, get told everything twice — which is the shape of bug that reads as "the watcher is
+  // misfiring". A `pr-watch:` line with no registration behind it therefore wakes nobody, and the board
+  // queues that thread as usual rather than parking it (fenceWatchViews / heldByRunningChecks).
+  if (hint.kind === "pr" || hint.kind === "ci") return parsePrRef(hint.value) !== undefined
   return false
 }
 
@@ -554,8 +560,9 @@ function saidDone(tele: Pick<SessionTelemetry, "lastFence" | "lastAssistantAllDo
 function restMessageIsSignedOff(
   tele: Pick<SessionTelemetry, "pendingQuestion" | "lastFence" | "lastAssistantAllDone">,
   autonomous: boolean,
+  registeredPrWatches: ReadonlySet<string> = new Set(),
 ): boolean {
-  if (saidDone(tele) || parkedOnAWaitItCannotAdvance(tele)) return true
+  if (saidDone(tele) || parkedOnAWaitItCannotAdvance(tele, registeredPrWatches)) return true
   return tele.pendingQuestion === true && !autonomous
 }
 
@@ -575,12 +582,32 @@ function restMessageIsSignedOff(
  *
  *  WHAT STILL GETS THE RESCUE: an `awaiting` fence with no hint at all, an unparseable PR ref, a
  *  malformed `timer:`, a bare `session:` — every park frizz has no way to fire. Those are the threads
- *  that genuinely wait forever, and this deliberately reads the SAME `isActionable` the waker's own
- *  poller arms from, so the hold and the wake can never disagree about which is which. */
-function parkedOnAWaitItCannotAdvance(tele: Pick<SessionTelemetry, "lastFence">): boolean {
+ *  that genuinely wait forever, and this reads the SAME predicates the waker's own passes fire from, so
+ *  the hold and the wake can never disagree about which is which.
+ *
+ *  A `pr-watch:` LINE IS THE ONE THAT NEEDS A SECOND FACT, since 2026-08-14: the fence no longer arms
+ *  anything, so the line alone says nothing about whether a wake is coming. A REGISTERED watcher
+ *  (`mcp__frizz__watch_pr`) will fire, so the Goal holds; a line with no registration behind it is a
+ *  park frizz cannot honour, so it gets the rescue like any other unfireable hint. Without the first
+ *  half this reintroduces the measured loop above verbatim. */
+function parkedOnAWaitItCannotAdvance(
+  tele: Pick<SessionTelemetry, "lastFence">,
+  registeredPrWatches: ReadonlySet<string>,
+): boolean {
   const fence = tele.lastFence
   if (fence?.kind !== "awaiting") return false
-  return fence.hints.some((h) => isActionable(h) || h.kind === "human")
+  return fence.hints.some((h) => {
+    if (isActionable(h) || h.kind === "human") return true
+    if (h.kind !== "pr-watch") return false
+    const ref = parsePrRef(h.value)
+    return ref !== undefined && registeredPrWatches.has(refKey(ref))
+  })
+}
+
+/** The PRs a thread has actually registered, by `owner/repo#N`. Read where the Goal decides whether to
+ *  bump, because a declaration alone no longer means a wake is coming. */
+function registeredPrWatchesOf(storage: Storage, slug: string): ReadonlySet<string> {
+  return new Set(storage.listPrWatches(slug, { armedOnly: true }).map((w) => `${w.owner}/${w.repo}#${w.number}`))
 }
 
 /** Is this thread blocked on the human RIGHT NOW, by any means? The `pauseOnQuestions` hold's input.
@@ -1249,7 +1276,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (isStopHookFenceId(item.fenceId)) {
       const armed = armedRest(row)
       if (!armed || item.fenceId !== stopHookFenceId(armed.armedAt, tele.lastAssistantAt ?? "")) return "superseded"
-      if (restMessageIsSignedOff(tele, autonomousModeOn(row))) return "superseded"
+      if (restMessageIsSignedOff(tele, autonomousModeOn(row), registeredPrWatchesOf(deps.storage, item.slug))) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
     // A post-compaction delivery is bound to the generation AND to the exact compaction it was queued
@@ -1532,7 +1559,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (st.fired) return // already queued/resumed for this rest — wait for delivery or fence supersession
 
     // Refresh PR statuses/review activity on the slow cadence (one fetch per distinct ref per kind).
-    const needsPr = actionable.some((h) => h.kind === "pr" || h.kind === "ci" || isPrWatchHint(h.kind))
+    // LEGACY ONLY. `pr-watch` stopped being actionable on 2026-08-14 — the registry pass (SOURCE 11)
+    // owns PR watching now — so nothing here can be a pr-watch hint any more, and both of these are
+    // about the `pr:`/`ci:` spellings that pre-date it.
+    const needsPr = actionable.some((h) => h.kind === "pr" || h.kind === "ci")
     const needsReview = actionable.some((h) => isPrWatchHint(h.kind))
     if ((needsPr || needsReview) && (st.lastPollAt === 0 || nowMs - st.lastPollAt >= pollMs)) {
       st.lastPollAt = nowMs
@@ -1547,8 +1577,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       for (const h of actionable) {
         const ref = parsePrRef(h.value)
         if (!ref) continue
-        if (h.kind === "pr" || h.kind === "ci") verdictRefs.add(refKey(ref))
-        if (h.kind === "pr" || h.kind === "ci" || isPrWatchHint(h.kind)) refs.set(refKey(ref), ref)
+        if (h.kind === "pr" || h.kind === "ci") { verdictRefs.add(refKey(ref)); refs.set(refKey(ref), ref) }
         if (isPrWatchHint(h.kind)) reviewRefs.set(refKey(ref), ref)
       }
       await Promise.all([
@@ -2000,10 +2029,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       }
       try {
         const result = normalizeReviewResult(await fetchGithubReview(ref))
-        if (result.status === "ok") activity.set(key, result.activity)
-        else if (result.status === "error") recordReviewFailure(key, key, result, nowMs)
+        if (result.status === "ok") {
+          activity.set(key, result.activity)
+          // RECOVERY IS SAID OUT LOUD, and it also clears the suppression counter. Without this the
+          // failure entry for a ref lives forever, so a PR that failed once and then healed keeps
+          // suppressing its own diagnostics and the operator is never told the outage ended.
+          recordReviewSuccess(key, "pr-watch registry")
+        } else if (result.status === "error") recordReviewFailure(key, "pr-watch registry", result, nowMs)
       } catch (err) {
-        recordReviewFailure(key, key, {
+        recordReviewFailure(key, "pr-watch registry", {
           status: "error",
           failure: { kind: "network", message: err instanceof Error ? err.message : String(err) },
         }, nowMs)
@@ -2025,7 +2059,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // say, and an armed row on a finished PR is a poll that can never produce another wake.
       if (st && st.state !== "open") {
         deps.storage.settlePrWatch(w.id, nowMs)
-        enqueuePrWatchWake(row, w.id, cursor, prWatchWakeMessage({
+        enqueuePrWatchWake(row, w.id, nextReport(cursor), prWatchWakeMessage({
           target: key, merged: st.state === "merged", closed: st.state === "closed",
         }), `pr-watch ${key} ${st.state}`, nowMs)
         continue
@@ -2035,17 +2069,35 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // news; going from either to green or red is the whole reason CI is watched.
       const terminal = st && (st.checks === "passing" || st.checks === "failing") ? st.checks : undefined
       const checksChanged = terminal !== undefined && cursor.checks !== terminal
-      // NEW review activity, against everything already reported. The FIRST poll of a watcher reports
-      // nothing: a worker registers the instant it opens the PR, and telling it about its own PR body
-      // and the reviews it just read would spend a turn on news it already has.
+      // NEW review activity, against everything already reported. On the FIRST poll there is nothing
+      // reported yet, so the baseline is the REGISTRATION INSTANT: a worker registers when it opens or
+      // pushes a PR, so anything already there is its own news and telling it would spend a turn — while
+      // anything arriving in the up-to-60s before the first poll is real and must not be swallowed.
+      // (Registering on an OLD PR is the same rule read the other way: the review you never read is
+      // yours to go and read, and only what lands afterwards is a wake.)
       const seen = new Set(cursor.seen)
-      const fresh = (acts ?? []).filter((a) => !seen.has(a.id))
       const firstPoll = w.cursor === null
-      const reviewSteer = !firstPoll && fresh.length > 0
+      // NEWEST FIRST, and it is load-bearing twice over: the cap must keep the items that matter MOST,
+      // and the steer must then read in the order the conversation was written. The fetcher's own order
+      // is neither — `parseGithubReviewActivities` returns every review, then every comment — so slicing
+      // its front would enumerate a burst out of order AND, past the cap, drop the newest activity while
+      // keeping the oldest. Same three lines as the fence path this replaced, for the same reasons.
+      const newestFirst = [...(acts ?? [])].sort((a, b) => {
+        const at = Date.parse(b.at ?? "") - Date.parse(a.at ?? "")
+        return Number.isFinite(at) && at !== 0 ? at : b.id.localeCompare(a.id)
+      })
+      const fresh = newestFirst.filter((a) => {
+        if (seen.has(a.id)) return false
+        if (!firstPoll) return true
+        const landed = Date.parse(a.at ?? "")
+        return Number.isFinite(landed) && landed > w.created_at
+      })
+      const named = fresh.slice(0, REVIEW_STEER_CAP)
+      const reviewSteer = fresh.length > 0
         ? formatGithubWakeSteer({
           ref: key,
-          omitted: Math.max(0, fresh.length - REVIEW_STEER_CAP),
-          items: fresh.slice(0, REVIEW_STEER_CAP).map((a) => ({
+          omitted: fresh.length - named.length,
+          items: [...named].reverse().map((a) => ({
             label: activityLabel(a),
             actor: a.actor,
             bot: isBotGithubActor(a),
@@ -2069,26 +2121,38 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         }
         continue
       }
-      enqueuePrWatchWake(row, w.id, cursor, prWatchWakeMessage({
+      // "PR watcher armed": if the human parked this thread's card with a user snooze, news on the PR is
+      // exactly the thing it was hiding UNTIL — so clear it here, the moment we enqueue, and the card
+      // re-surfaces. A no-op when nothing was snoozed. (Ported from the fence poller this replaced.)
+      deps.storage.setSnoozedUntil(row.slug, null)
+      const report = nextReport(cursor)
+      enqueuePrWatchWake(row, w.id, report, prWatchWakeMessage({
         target: key,
         ...(checksChanged && terminal
           ? { checks: { verdict: terminal, passed: st!.passed, failed: st!.failed, failing: st!.failing } }
           : {}),
         ...(reviewSteer ? { review: reviewSteer } : {}),
       }), `pr-watch ${key}${checksChanged ? ` CI ${terminal}` : ""}${reviewSteer ? " review" : ""}`, nowMs)
-      deps.storage.setPrWatchCursor(w.id, JSON.stringify({ ...nextCursor, report: (cursor.report ?? 0) + 1 }))
+      deps.storage.setPrWatchCursor(w.id, JSON.stringify({ ...nextCursor, report }))
     }
+  }
+
+  /** The next report number for a watcher — ONE derivation, used both for the delivery id and for the
+   *  cursor that records it. They were computed separately at two call sites and had to be kept in step
+   *  by hand, which is a silent double-report waiting to happen. */
+  function nextReport(cursor: { report?: number }): number {
+    return (cursor.report ?? 0) + 1
   }
 
   function enqueuePrWatchWake(
     row: SessionRow,
     watchId: string,
-    cursor: { report?: number },
+    report: number,
     message: string,
     reason: string,
     nowMs: number,
   ): void {
-    const fenceId = prWatchFenceId(watchId, (cursor.report ?? 0) + 1)
+    const fenceId = prWatchFenceId(watchId, report)
     const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
     if (outbox.get(deliveryId)) return
     const item = outbox.enqueue({
@@ -2323,7 +2387,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // Per-rest, and that is what makes it free: every fact it reads rides the FINAL assistant message,
       // so the next word on the thread re-opens the trigger with nothing stored to clear.
       const autonomous = autonomousModeOn(row)
-      if (restMessageIsSignedOff(tele, autonomous)) continue
+      if (restMessageIsSignedOff(tele, autonomous, registeredPrWatchesOf(deps.storage, row.slug))) continue
       // And the operator's own broader hold, when they armed it.
       if (heldByQuestion(row, tele)) continue
       const fenceId = stopHookFenceId(armed.armedAt, restedAt)

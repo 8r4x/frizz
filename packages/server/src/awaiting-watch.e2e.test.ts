@@ -287,7 +287,7 @@ test("a poll publishes a reading the BOARD can actually read, and the queue rule
     assert.equal(deriveNeedsYou(row, tele, "turn-idle", false, Date.now(), undefined, true, false, book, registered), false)
     assert.equal(deriveAwaitingBackground(row, tele, "turn-idle", false, Date.now(), undefined, false, book, registered), true)
     // …and the row the card draws carries the same reading, off the same book.
-    assert.deepEqual(fenceWatchViews(SLUG, tele, tele?.lastAssistantAt, book, registered)[0]?.github, status)
+    assert.deepEqual(fenceWatchViews(SLUG, tele, tele?.lastAssistantAt, book, [{ target: "acme/app#391", createdAt: at }])[0]?.github, status)
 
     // CHECKS DONE → straight back into the queue, with no new fence and no worker turn.
     const done = { "acme/app#391": { ...status, checks: "passing" as const, running: 0, passed: 2 } }
@@ -363,11 +363,25 @@ async function prHarness() {
 test("a registered watcher reports CI, then review, then says nothing while nothing changes", async () => {
   const h = await prHarness()
   try {
-    // THE FIRST POLL IS SILENT even though there is already a comment on the PR. A worker registers the
-    // instant it opens the PR; telling it about the state it just created spends a turn on its own news.
-    h.setActivity([{ id: "c1", actor: "reviewer", kind: "comment", at: new Date().toISOString() }])
+    // THE FIRST POLL DOES NOT REPORT THE BACKLOG. A worker registers when it opens or pushes the PR, so
+    // whatever is already sitting there is its own news; telling it would spend a turn. The baseline is
+    // the REGISTRATION INSTANT rather than "everything present", which is the sharper rule — see below.
+    h.setActivity([{ id: "c1", actor: "reviewer", kind: "comment", at: new Date(Date.now() - 120_000).toISOString() }])
     await h.tick()
-    assert.deepEqual(h.delivered, [], "CI still running and the backlog is the baseline — nothing to say")
+    assert.deepEqual(h.delivered, [], "CI still running and the backlog predates the watcher — nothing to say")
+
+    // …AND THAT IS WHY THE BASELINE IS THE REGISTRATION INSTANT AND NOT THE FIRST POLL. A comment that
+    // lands in the up-to-60s between registering and the first poll is real, unread news, and a blanket
+    // "the first poll is silent" rule would swallow it forever.
+    h.setActivity([
+      { id: "c1", actor: "reviewer", kind: "comment", at: new Date(Date.now() - 120_000).toISOString() },
+      { id: "c0", actor: "carol", kind: "comment", at: new Date().toISOString() },
+    ])
+    await h.tick()
+    assert.equal(h.delivered.length, 1, "the comment that landed after registration is reported")
+    assert.match(h.delivered[0], /@carol/)
+    assert.doesNotMatch(h.delivered[0], /@reviewer/, "…and the backlog it was registered on top of is not")
+    h.delivered.length = 0
 
     // CI GOES RED.
     h.setChecks([{ status: "COMPLETED", conclusion: "FAILURE", name: "lint" }])
@@ -390,7 +404,8 @@ test("a registered watcher reports CI, then review, then says nothing while noth
 
     // A FOLLOW-UP REVIEW — a third report from the same registration, and only the NEW item.
     h.setActivity([
-      { id: "c1", actor: "reviewer", kind: "comment", at: new Date().toISOString() },
+      { id: "c1", actor: "reviewer", kind: "comment", at: new Date(Date.now() - 120_000).toISOString() },
+      { id: "c0", actor: "carol", kind: "comment", at: new Date().toISOString() },
       { id: "c2", actor: "reviewer", kind: "review", at: new Date().toISOString() },
     ])
     await h.tick()

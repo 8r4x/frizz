@@ -333,8 +333,22 @@ test("ALLDONE holds the bump for that rest only, and nothing is stored to undo",
 test("an awaiting fence on a PR the scheduler is watching holds the bump", async () => {
   const h = scheduler({ lastFence: awaiting({ kind: "pr-watch", value: "colinhacks/zod#6382" }) }, { now: at("2026-08-02T00:00:05.000Z") })
   try {
+    // REGISTERED, which is what makes a wake actually coming. Since 2026-08-14 the fence line alone arms
+    // nothing — `mcp__frizz__watch_pr` does — so the hold reads the registry rather than the hint.
+    h.storage.armPrWatch({ id: "prw_1", slug: h.slug, owner: "colinhacks", repo: "zod", number: 6382, createdAtMs: 1 })
     await h.s.tick()
     assert.deepEqual(h.delivered, [], "the waker already owns this thread's next wake")
+  } finally { h.close() }
+})
+
+// …AND THE SAME LINE WITH NOTHING REGISTERED GETS THE RESCUE. A `pr-watch:` line frizz will never fire is
+// a thread that waits forever, which is exactly the shape this trigger exists to rescue — the same
+// reading an unparseable ref has always had.
+test("an awaiting fence on a PR NOBODY registered is bumped, like any other unfireable park", async () => {
+  const h = scheduler({ lastFence: awaiting({ kind: "pr-watch", value: "colinhacks/zod#6382" }) }, { now: at("2026-08-02T00:00:05.000Z") })
+  try {
+    await h.s.tick()
+    assert.equal(h.delivered.length, 1, "nothing will ever fire that, so the rescue stands")
   } finally { h.close() }
 })
 

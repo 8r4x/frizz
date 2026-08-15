@@ -25,6 +25,8 @@ const REF = "acme/app#391"
 // only when a registered watcher stands behind it — otherwise the thread is claiming a wait nothing will
 // ever deliver. Every case here therefore carries the registered set explicitly.
 const REGISTERED = new Set([REF])
+/** The same watchers as rows, for `fenceWatchViews` — which lists the REGISTRY, not the fence. */
+const REGISTERED_ROWS = [{ target: REF, createdAt: LATER }]
 
 const check = (over: Record<string, unknown>) => over
 const pr = (over: Partial<PrStatus> = {}): PrStatus =>
@@ -178,9 +180,9 @@ test("one finished PR among several requeues the thread", () => {
 
 test("a github watch row carries its PR's status once polled, and nothing before", () => {
   const status = { ...githubWatchStatus(pr(), AT), checks: "running" as const, running: 2 }
-  const [polled] = fenceWatchViews("t", watching(), LATER, { [REF]: status }, REGISTERED)
+  const [polled] = fenceWatchViews("t", watching(), LATER, { [REF]: status }, REGISTERED_ROWS)
   assert.deepEqual(polled.github, status)
-  const [unpolled] = fenceWatchViews("t", watching(), LATER, {}, REGISTERED)
+  const [unpolled] = fenceWatchViews("t", watching(), LATER, {}, REGISTERED_ROWS)
   assert.equal(unpolled.github, undefined, "an unpolled PR and a PR with no CI are different facts")
   assert.equal(unpolled.target, REF)
   assert.equal(unpolled.kind, "github")
@@ -194,5 +196,5 @@ test("a github watch row carries its PR's status once polled, and nothing before
 test("an unregistered pr-watch line neither cards nor leaves the queue", () => {
   const running = book({ checks: "running", running: 2 })
   assert.equal(deriveNeedsYou(row(), watching(), "turn-idle", false, NOW, undefined, true, false, running, new Set()), true)
-  assert.deepEqual(fenceWatchViews("t", watching(), LATER, running, new Set()), [])
+  assert.deepEqual(fenceWatchViews("t", watching(), LATER, running, []), [])
 })

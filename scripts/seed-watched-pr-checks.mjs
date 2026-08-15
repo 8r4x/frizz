@@ -94,11 +94,13 @@ const CASES = [
   {
     slug: "watch-ci-running",
     title: "watch · CI still running on every PR",
+    prs: ["acme/app#391"],
     tail: "Both PRs are pushed.\n\n```awaiting\npr-watch: acme/app#391\nWatching CI and review.\n```",
   },
   {
     slug: "watch-ci-mixed",
     title: "watch · three PRs, three check states",
+    prs: ["acme/app#391", "acme/app#392", "acme/app#393"],
     tail: "Three PRs up.\n\n```awaiting\npr-watch: acme/app#391\npr-watch: acme/app#392\npr-watch: acme/app#393\nWatching CI and review across all three.\n```",
   },
 ]
@@ -124,6 +126,16 @@ for (const [n, c] of CASES.entries()) {
   ]
   writeFileSync(join(jsonlDir, `${sessionId}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
   brokerRecord(sessionId)
+  // THE WATCHERS, registered the way the tool registers them. A `pr-watch:` fence line only DECLARES a
+  // wait now; without a row here the board refuses the declaration and the thread queues as usual.
+  for (const [n2, ref] of (c.prs ?? []).entries()) {
+    const m = /^([^/]+)\/([^#]+)#(\d+)$/.exec(ref)
+    execFileSync("sqlite3", [
+      db,
+      `INSERT OR REPLACE INTO pr_watch (id, thread_slug, owner, repo, number, state, created_at, settled_at, cursor)
+       VALUES ('prw-${c.slug}-${n2}', '${c.slug}', '${m[1]}', '${m[2]}', ${m[3]}, 'armed', ${Date.parse(at)}, NULL, NULL)`,
+    ])
+  }
   execFileSync("sqlite3", [
     db,
     // BROKER, and it has to be: a non-headless row has no live transport any more, so `deriveRuntime`
