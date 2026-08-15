@@ -728,3 +728,93 @@ test("`recurring_prompt` refuses a cadence out of range without contacting the s
 
 
 
+
+// `watch_pr` OVER THE REAL STDIO TRANSPORT, against a real http server standing in for frizz's RPC.
+//
+// This is the test the tool-list assertion above is NOT: `tools/list` proves a worker can SEE
+// `mcp__frizz__watch_pr`, and proves nothing about whether calling it does anything. The handler is a
+// separate body of code that has to reach the right procedure with the right shape, and this file has
+// caught that exact class of break before — an MCP server that threw at import, so every `mcp__frizz__*`
+// tool was dead while every unit test stayed green (a temporal dead zone, 2026-08-12).
+//
+// What it pins: the CALLING THREAD's slug reaches the RPC body from the env and never from the model,
+// each action hits its own procedure, and the two refusals happen in the HANDLER rather than only in the
+// schema — a lenient client must not be able to register a watcher that can never fire.
+test("`watch_pr` registers, lists and drops against the CALLING thread", async () => {
+  const seen: Array<{ url: string; body: any }> = []
+  const replies: any[] = [
+    { id: "prw_abc123", target: "acme/app#391", alreadyArmed: false, watches: [{ id: "prw_abc123", target: "acme/app#391", state: "armed", createdAt: "2026-08-14T00:00:00.000Z" }] },
+    {
+      watches: [{
+        id: "prw_abc123", target: "acme/app#391", state: "armed", createdAt: "2026-08-14T00:00:00.000Z",
+        github: { checks: "failing", running: 0, passed: 9, failed: 2, failing: ["lint", "e2e"], merge: "blocked", state: "open", polledAt: "2026-08-14T00:05:00.000Z" },
+      }],
+    },
+    { dropped: true, watches: [] },
+  ]
+  const http = createServer((req, res) => {
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      seen.push({ url: req.url ?? "", body: JSON.parse(body) })
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ result: replies.shift() ?? null }))
+    })
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "watching-thread" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+
+    rpc.send({
+      jsonrpc: "2.0", id: 2, method: "tools/call",
+      params: { name: "watch_pr", arguments: { action: "add", target: "acme/app#391" } },
+    })
+    const added = await rpc.next(2)
+    assert.equal(added.result.isError, undefined)
+    assert.deepEqual(seen[0], { url: "/_frizz/rpc/addOwnPrWatch", body: { slug: "watching-thread", target: "acme/app#391" } })
+    assert.match(added.result.content[0].text, /Watching acme\/app#391 as prw_abc123/)
+    // It must TELL THE WORKER THE OTHER HALF. Registering is the wait; the fence is how it comes to rest
+    // and shows the human — a worker that only registers sits in the queue being asked for a handoff.
+    assert.match(added.result.content[0].text, /pr-watch: acme\/app#391/)
+
+    // `list` carries each PR's CHECK STATE, which is the reason a worker lists at all — "where do my PRs
+    // stand" answered in one call rather than one `gh` round-trip per PR.
+    rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "watch_pr", arguments: { action: "list" } } })
+    const listed = await rpc.next(3)
+    assert.equal(seen[1].url, "/_frizz/rpc/listOwnPrWatches")
+    assert.deepEqual(seen[1].body, { slug: "watching-thread" })
+    assert.match(listed.result.content[0].text, /checks FAILING: lint, e2e/)
+
+    rpc.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "watch_pr", arguments: { action: "drop", id: "prw_abc123" } } })
+    const dropped = await rpc.next(4)
+    assert.deepEqual(seen[2], { url: "/_frizz/rpc/dropOwnPrWatch", body: { slug: "watching-thread", id: "prw_abc123" } })
+    assert.match(dropped.result.content[0].text, /Watcher prw_abc123 dropped/)
+    assert.match(dropped.result.content[0].text, /No pull requests are watched/)
+
+    // THE REFUSALS, both in the handler. Neither reaches the server: a call that cannot name what it
+    // wants must not create a row, and must not look like it did.
+    const before = seen.length
+    rpc.send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "watch_pr", arguments: { action: "add" } } })
+    const noTarget = await rpc.next(5)
+    assert.equal(noTarget.result.isError, true)
+    assert.match(noTarget.result.content[0].text, /`target` is required/)
+
+    rpc.send({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "watch_pr", arguments: { action: "drop" } } })
+    const noId = await rpc.next(6)
+    assert.equal(noId.result.isError, true)
+    assert.match(noId.result.content[0].text, /`id` is required/)
+
+    rpc.send({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "watch_pr", arguments: { action: "watch" } } })
+    const badAction = await rpc.next(7)
+    assert.equal(badAction.result.isError, true)
+    assert.equal(seen.length, before, "not one of the three reached the server")
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
