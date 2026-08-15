@@ -25,11 +25,14 @@
 // on afterwards is CORRECT, not a bug — a child's <task-notification> lands as a re-invoking user record
 // and the parent genuinely resumes; measured 15/15 times on a live worker thread, with idle windows as
 // short as 0.13s. This card is what makes that alternation legible.)
-import type { ReactNode } from "react"
-import { CircleCheck, CircleDashed, CircleDot, CircleX, GitMerge, GitPullRequestClosed, Hourglass, TerminalSquare } from "lucide-react"
+import { Fragment, type ReactNode } from "react"
+import { Bot, ChevronRight, CircleCheck, CircleDashed, CircleX, GitMerge, GitPullRequestClosed, Hourglass, TerminalSquare } from "lucide-react"
 import type { GithubWatchStatus, ThreadView, ThreadWatchView } from "@frizz/shared"
 import { isDirectSubAgent } from "@frizz/shared"
 import { githubRefUrl } from "../lib/githubRef.ts"
+import { compactElapsedSince } from "../lib/durationLabels.ts"
+import { useNowMs } from "../lib/liveClock.ts"
+import { pushBackgroundShellDrawer, pushSubAgentDrawer } from "../store.ts"
 import { CARD_BODY, CardActions, TranscriptCard } from "./TranscriptCard.tsx"
 
 // Name what the thread is ACTUALLY waiting on. Three real cases, and the sentence has to be true in all
@@ -166,24 +169,37 @@ function mergeClause(status: GithubWatchStatus): string | null {
   return MERGE_CLAUSE[status.merge]
 }
 
+// `1cap` is the RESOLVED font's cap height, so this puts a symmetric 1em glyph's ink on the cap band in
+// either font at any size — nothing to re-measure when the font setting flips or the type scale moves.
+// It needs a shared baseline to align against, hence `items-baseline` on every row.
+//
+// NO INK TRIM ON THE MARK, and that is a MEASURED result rather than an omission. The usual
+// glyph-beside-text problem is a bare glyph wearing dead box on both sides; a lucide CIRCLE at size 12
+// paints ~11.5 of its 12 box px, so it behaves like a text run. Measured on this row
+// (scripts/ink-gaps.mjs, dsf 4, sans): glyph→ref 6.50px against ref→headline 6.27px, both on one
+// `gap-1.5`. A -1px trim "to be safe" made it WORSE (5.50 vs 6.27). 0.23px is inside the instrument's
+// own noise floor — leave it.
+const ON_CAP = "shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)]"
+
+/** RUNNING CHECKS SPIN (maintainer 2026-08-14: "the yellow should be a spinner if the checks are still
+ *  running. A yellow spinner"). A static amber dot claimed "in progress" without showing it.
+ *
+ *  A RING, not lucide's Loader2: the row's other three marks are 12px circles, so a ring keeps ONE
+ *  circular footprint down the mark column and the gutter does not jitter as a PR goes running → green.
+ *  Same idiom as the inline ring ChatView already uses. `motion-safe:` because a continuous animation is
+ *  exempt from the micro-interaction default only when the reader has not asked for stillness. */
+function Spinner({ tone }: { tone: string }) {
+  return <span aria-hidden className={`inline-block size-3 rounded-full border ${tone} border-t-transparent motion-safe:animate-spin ${ON_CAP}`} />
+}
+
 function ChecksGlyph({ status }: { status: GithubWatchStatus | undefined }) {
-  // `1cap` is the RESOLVED font's cap height, so this puts a symmetric 1em glyph's ink on the cap band
-  // in either font at any size — nothing to re-measure when the font setting flips or the type scale
-  // moves. It needs a shared baseline to align against, hence `items-baseline` on the row.
-  //
-  // NO INK TRIM HERE, and that is a MEASURED result rather than an omission. The usual glyph-beside-text
-  // problem is a bare glyph wearing dead box on both sides; a lucide CIRCLE at size 12 paints ~11.5 of
-  // its 12 box px, so it behaves like a text run. Measured on this row (scripts/ink-gaps.mjs, dsf 4,
-  // sans): glyph→ref 6.50px against ref→headline 6.27px, both on one `gap-1.5`. A -1px trim "to be
-  // safe" made it WORSE (5.50 vs 6.27). 0.23px is inside the instrument's own noise floor — leave it.
-  const cls = "shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)]"
-  if (!status) return <CircleDashed size={12} className={`${cls} text-muted/60`} />
-  if (status.state === "merged") return <GitMerge size={12} className={`${cls} text-purple-400`} />
-  if (status.state === "closed") return <GitPullRequestClosed size={12} className={`${cls} text-red-400`} />
-  if (status.checks === "failing") return <CircleX size={12} className={`${cls} text-red-400`} />
-  if (status.checks === "passing") return <CircleCheck size={12} className={`${cls} text-emerald-500`} />
-  if (status.checks === "running") return <CircleDot size={12} className={`${cls} text-amber-400`} />
-  return <CircleDashed size={12} className={`${cls} text-muted/60`} />
+  if (!status) return <CircleDashed size={12} className={`${ON_CAP} text-muted/60`} />
+  if (status.state === "merged") return <GitMerge size={12} className={`${ON_CAP} text-purple-400`} />
+  if (status.state === "closed") return <GitPullRequestClosed size={12} className={`${ON_CAP} text-red-400`} />
+  if (status.checks === "failing") return <CircleX size={12} className={`${ON_CAP} text-red-400`} />
+  if (status.checks === "passing") return <CircleCheck size={12} className={`${ON_CAP} text-emerald-500`} />
+  if (status.checks === "running") return <Spinner tone="border-amber-400" />
+  return <CircleDashed size={12} className={`${ON_CAP} text-muted/60`} />
 }
 
 /** "2 failing, 1 in progress, 9 successful" — GitHub's own count words, and only the counts that are
@@ -217,28 +233,233 @@ export function watchStatusLine(status: GithubWatchStatus | undefined): string {
   return [counts || "No checks", merge].filter((p): p is string => p !== null).join(" · ")
 }
 
+// ---- ONE ROW SHAPE, EVERY KIND -------------------------------------------------------------------
+// Maintainer 2026-08-15, choosing the shape off the mockup sheet: "Definitely group them by kind. They
+// should all consistently use the chevron […] and right justify the status label, the light gray status
+// label."
+//
+// So: mark · name · light-gray status right-justified · chevron. Four tracks shared by every row through
+// `grid-cols-subgrid`, so the statuses line up down ONE edge across the group headings instead of
+// starting wherever each name happened to end. The same right-justified light-gray reading the child-op
+// rows already use under the prompt box (ChildOpRow, maintainer 2026-07-27) — one language, two surfaces.
+//
+// THE CHEVRON IS THE SAME GLYPH ON EVERY ROW even though the destinations differ (GitHub in a new tab,
+// the shell's output drawer, the sub-agent's transcript). An earlier draft split it — an external arrow
+// for a PR, a chevron for the rest — which is more literal and reads as two kinds of affordance on one
+// list. The maintainer chose consistency, and it is the better call: the chevron means "this row opens",
+// which is true of all three.
+//
+// A ROW WITH NOTHING TO OPEN RENDERS NON-INTERACTIVE — no chevron, no hover, no focus stop. Never a
+// disabled control (which announces an affordance that is not there) and never a dropped row (which
+// hides live work). That is ChildOpRow's settled policy for an id-less child, applied here.
+
+// NO `gap-x` ON THE ROW, and that is the whole reason the margins below exist. One grid gap sets ONE
+// distance, and this row's three boundaries want three: the mark belongs to the name (tight), the name
+// and the status are opposite ends of the row (the 1fr owns that space), and the chevron is the status's
+// handle (medium). A gap is also a BOX distance, and two of the four cells are mostly empty box — so the
+// numbers here are INK, measured with the row's own probe at dsf 6, sans and mono.
+const ROW = "group relative col-span-4 grid grid-cols-subgrid items-baseline rounded-sm text-[12px] leading-5"
+// ml-1.5 → 6.5px of ink between the mark and the name, which is the figure the old single-row layout was
+// measured and left at (a -1px "safety" trim made it worse). A lucide circle at 12 inks ~10 of its box,
+// so it behaves like a text run and needs no trim of its own.
+const NAME = "ml-1.5 min-w-0 truncate font-medium text-fg/90"
+/** The light-gray status column. `text-right` right-justifies it inside its own track; the name's `1fr`
+ *  eats the slack, so the status lands against the chevron at the card's right edge. `ml-3` is only a
+ *  floor — the distance the reader actually sees is whatever the truncating name leaves. */
+const STATUS = "ml-3 min-w-0 truncate text-right text-muted/70"
+
+/** The whole row is the target, so the name's link stretches over it (`after:inset-0` against the row's
+ *  `relative`). A real <a>/<button> rather than a click handler on the div: right-click, middle-click and
+ *  the keyboard all keep working, and any OTHER link in the row — the failures link — sits above the
+ *  overlay as a sibling rather than nesting inside it, which is invalid and would swallow its own click. */
+const STRETCH = "outline-none after:absolute after:inset-0 after:rounded-sm focus-visible:after:ring-1 focus-visible:after:ring-fg/60"
+
+function Chevron() {
+  // A CHEVRON IS MOSTLY EMPTY BOX — lucide's paints ~4.3 of its 13 box px, ~4.9 of dead space on each
+  // side — so both of its distances have to be set in INK, not in box. Measured on this row at dsf 6
+  // (the probe reads an SVG child's getBoundingClientRect, which IS its ink box):
+  //
+  //   BEFORE, at `-mr-0.5` and the row's shared `gap-x-2.5`:
+  //     ink to the card's content edge  3.88px   — while the mark on the left sits flush at 0
+  //     status ink → chevron ink       14.88px   — wider than the 13.00px that got "fix the fucking
+  //                                                optical spacing on that chevron" (FRIZZ.md)
+  //   AFTER, with these two:            1.88px and  7.88px.
+  //
+  // `ml-[3px]` sets the pair distance (3 + ~4.9px of dead box ≈ 8px of ink, so the chevron reads as the
+  // status's handle rather than floating between it and the card edge); `-mr-[4px]` pulls the ink back
+  // toward the content edge the mark column already sits on. Both numbers are the MEASURED ones — a
+  // further -1px was drafted to close the last 1.88px and is NOT here, because the tree could not render
+  // when it came time to check it and an unmeasured constant is exactly what this comment exists to stop.
+  return <ChevronRight size={13} aria-hidden className={`${ON_CAP} ml-[3px] -mr-[4px] text-muted/35 transition-colors group-hover:text-muted/70`} />
+}
+
+function WaitRow({ mark, name, status, onOpen, href, title, testKind, testId }: {
+  mark: ReactNode
+  name: string
+  status: ReactNode
+  onOpen?: () => void
+  href?: string
+  title?: string
+  testKind: "github" | "shell" | "agent"
+  testId: string
+}) {
+  const open = href
+    ? (
+      <a
+        href={href}
+        target="_blank"
+        rel="noreferrer noopener"
+        title={title}
+        // The QUEUE card and the drawer both act on their own pointer-down; a row press must not reach
+        // them, exactly as the ops strip's rows already stop it.
+        onMouseDown={(e) => e.stopPropagation()}
+        className={`${NAME} ${STRETCH} group-hover:underline group-hover:decoration-fg/40 group-hover:underline-offset-2`}
+      >
+        {name}
+      </a>
+    )
+    : onOpen
+    ? (
+      <button
+        type="button"
+        onClick={onOpen}
+        onMouseDown={(e) => e.stopPropagation()}
+        title={title}
+        className={`${NAME} ${STRETCH} text-left group-hover:underline group-hover:decoration-fg/40 group-hover:underline-offset-2`}
+      >
+        {name}
+      </button>
+    )
+    : <span className={NAME} title={title}>{name}</span>
+  const interactive = !!(href || onOpen)
+  return (
+    <div
+      data-wait-row={testId}
+      data-wait-kind={testKind}
+      className={`${ROW} ${interactive ? "cursor-pointer transition-colors hover:bg-fg/[0.045]" : ""}`}
+    >
+      <span className="flex shrink-0">{mark}</span>
+      {open}
+      <span data-wait-status className={STATUS}>{status}</span>
+      {interactive ? <Chevron /> : <span />}
+    </div>
+  )
+}
+
 function GithubWatchRow({ watch }: { watch: ThreadWatchView }) {
   const status = watch.github
   const url = githubRefUrl(watch.target)
   return (
-    <div className="flex flex-col gap-0.5">
-      {/* items-baseline, not items-center: `self-baseline` on the glyph needs a shared baseline to
-          align against, and the 1em-symmetric correction beside it puts the ink on the cap band in
-          EITHER font (this app renders in two, and a hand-fitted constant is right in only one). */}
-      <div className="flex items-baseline gap-1.5 text-[12px] leading-5" data-pr-watch-row={watch.target}>
-        <span data-pr-glyph className="flex shrink-0"><ChecksGlyph status={status} /></span>
-        {url
-          ? <a data-pr-ref href={url} target="_blank" rel="noreferrer noopener" className="font-medium text-fg/90 underline decoration-border-strong underline-offset-2 hover:decoration-fg/60">{watch.target}</a>
-          : <span data-pr-ref className="font-medium text-fg/90">{watch.target}</span>}
-        <span data-pr-headline className="min-w-0 truncate text-muted/80">{watchStatusLine(status)}</span>
-      </div>
-      {/* The one thing that earns a SECOND line, and only on a red PR: WHICH jobs failed. "2 failing"
-          costs the reader a click to learn that; the names cost nothing here and are the whole reason to
-          look. Every other fact fits on the line above. */}
-      {status && status.failing.length > 0 && (
-        <div className="pl-[18px] text-[11.5px] leading-4 text-red-400/85">{status.failing.join(", ")}</div>
-      )}
-    </div>
+    <WaitRow
+      testKind="github"
+      testId={watch.target}
+      mark={<ChecksGlyph status={status} />}
+      name={watch.target}
+      href={url ?? undefined}
+      title={url ? `Open ${watch.target} on GitHub` : watch.target}
+      status={
+        <>
+          {watchStatusLine(status)}
+          {/* THE FAILING JOBS ARE NOT LISTED ANY MORE (maintainer 2026-08-15: "I don't think we should
+              list out the failed checks. I think there should just be a button to view the failures, and
+              it can just link out to the PR"). The names cost a whole second line on every red row for
+              something the reader has to go to GitHub to act on anyway. The count still speaks — "2
+              failing" says HOW red — and this goes to the PR's own CHECKS tab, which is where they are.
+              `relative` lifts it over the stretched overlay so it keeps its own click. */}
+          {status && status.failing.length > 0 && url && (
+            <>
+              {" · "}
+              <a
+                href={`${url}/checks`}
+                target="_blank"
+                rel="noreferrer noopener"
+                onMouseDown={(e) => e.stopPropagation()}
+                className="relative text-red-400/85 underline decoration-red-400/30 underline-offset-2 hover:decoration-red-400"
+              >
+                view failures
+              </a>
+            </>
+          )}
+        </>
+      }
+    />
+  )
+}
+
+// ---- THE DECLARED BACKGROUND SHELLS --------------------------------------------------------------
+// A shell reaches this card only when the WORKER NAMED IT in a `watch:` hint, which is the same rule the
+// server already applies to decide the card exists at all: "a background SHELL is the case that must be
+// declared […] a dev server, a log tail and a test run are the same row here, and only the worker knows
+// which of them it is actually resting behind" (board.hasDeclaredWait). So the list here is
+// `watches[kind: "shell"]`, NOT `bgShells` — an undeclared dev server says nothing and gets no row.
+//
+// That watch was rendered NOWHERE until now (maintainer 2026-08-15: "My understanding was that the agent
+// could mark at least background shells as things that it is explicitly waiting on"). It was: the fence
+// parsed, the server built the row, and this card filtered for `kind === "github"` and dropped it.
+//
+// The watch's `target` is whichever handle the worker wrote, and there are three legal ones — the launch
+// tool_use id, the runtime's task id, and the label (board.liveWaitHandles). Resolving back to the shell
+// is what gets a readable NAME and the id the output drawer needs; an unresolvable target still renders,
+// naming itself, rather than vanishing.
+function resolveShell(thread: Pick<ThreadView, "bgShells">, target: string) {
+  return (thread.bgShells ?? []).find((s) => s.id === target || s.taskId === target || s.label === target)
+}
+
+function declaredShellWatches(thread: Pick<ThreadView, "watches">): ThreadWatchView[] {
+  return (thread.watches ?? []).filter((w) => w.kind === "shell" && w.state === "armed")
+}
+
+function ShellWatchRow({ watch, thread, slug, now }: {
+  watch: ThreadWatchView
+  thread: Pick<ThreadView, "bgShells">
+  slug: string
+  now: number
+}) {
+  const shell = resolveShell(thread, watch.target)
+  const elapsed = compactElapsedSince(shell?.startedAt ?? watch.createdAt, now)
+  // A CODEX shell has an id (its processId) but no readable output — codex keeps that inside its own
+  // session — so the row states its wait and declines the drill-in rather than opening a drawer that
+  // could only report "unavailable". Same parting of the two affordances as the ops strip.
+  const openable = shell?.id && !shell.outputUnavailable
+  return (
+    <WaitRow
+      testKind="shell"
+      testId={watch.target}
+      mark={<TerminalSquare size={12} className={`${ON_CAP} text-shell`} />}
+      name={shell?.label ?? watch.target}
+      onOpen={openable ? () => pushBackgroundShellDrawer(slug, shell.id!, { label: shell.label, startedAt: shell.startedAt }) : undefined}
+      title={openable ? `Read this shell's output — running for ${elapsed}` : shell?.label ?? watch.target}
+      status={elapsed ? `running · ${elapsed}` : "running"}
+    />
+  )
+}
+
+// ---- THE LIVE SUB-AGENTS -------------------------------------------------------------------------
+// DIRECT children only. A descendant rides `subAgents` so other surfaces can nest the tree, but it was
+// dispatched by the child rather than by this thread's worker — and it has no retirement signal in this
+// thread's transcript, so a stale grandchild would sit on this card indefinitely.
+function liveAgents(thread: Pick<ThreadView, "subAgents">) {
+  return (thread.subAgents ?? []).filter((a) => isDirectSubAgent(a) && a.state === "running")
+}
+
+function AgentRow({ agent, slug, now }: { agent: ThreadView["subAgents"][number]; slug: string; now: number }) {
+  const elapsed = compactElapsedSince(agent.startedAt, now)
+  // The profile without its namespace: `frizz:opus-high` is how it is dispatched, `opus-high` is how the
+  // maintainer says it, and the row has no width to spend on a prefix every row would repeat.
+  const profile = agent.subagentType?.replace(/^frizz:/, "")
+  return (
+    <WaitRow
+      testKind="agent"
+      testId={agent.id ?? agent.label}
+      // A sub-agent is ALWAYS in motion while it is on this card — it returns and re-invokes its parent —
+      // so it is always the spinner, never a static mark. Accent-yellow rather than the checks' amber,
+      // matching the rail's one-hue-per-runtime-concern (a sub-agent pulses accent, a shell pulses blue).
+      mark={<Spinner tone="border-accent" />}
+      name={agent.label}
+      onOpen={agent.id ? () => pushSubAgentDrawer(slug, agent.id!, { label: agent.label, subagentType: agent.subagentType, startedAt: agent.startedAt }) : undefined}
+      title={agent.id ? `Open this sub-agent — working for ${elapsed}` : agent.label}
+      status={[profile, elapsed].filter(Boolean).join(" · ")}
+    />
   )
 }
 
@@ -264,13 +485,30 @@ export function showsRestingCard(
 }
 
 export function AwaitingBackgroundCard({ thread, actions }: {
-  thread: Pick<ThreadView, "subAgents" | "bgShells" | "watches">
+  // `id` joins the Pick because the rows OPEN things now: a shell's output drawer and a sub-agent's
+  // transcript are both addressed by the parent thread's slug.
+  thread: Pick<ThreadView, "id" | "subAgents" | "bgShells" | "watches">
   // The queue card's event-Snooze. Only the QUEUE passes one, and the shapes that reach the queue are
   // the shell-only rest and — since 2026-08-13 — the pr-watch park, whose own fence card no longer
   // offers one. So this is the control for both.
   actions?: ReactNode
 }) {
   const waiting = awaitsResults(thread)
+  // Live-ticking, so a shell's "running · 4m" keeps counting while the board sends nothing (a quiet
+  // child pushes no delta). One clock read for the whole card rather than one per row.
+  const now = useNowMs()
+  const prs = (thread.watches ?? []).filter((w) => w.kind === "github" && w.state === "armed")
+  const shells = declaredShellWatches(thread)
+  const agents = liveAgents(thread)
+  // GROUPED BY KIND (maintainer 2026-08-15: "Definitely group them by kind"), and the order is the one
+  // the ops strip already settled, for the same reason: a sub-agent and a shell are running RIGHT NOW,
+  // a watched PR is waiting on somebody else. Read most-alive first. An empty group renders nothing —
+  // never a heading over no rows.
+  const groups: Array<{ head: string; rows: ReactNode[] }> = [
+    { head: "Sub-agents", rows: agents.map((a) => <AgentRow key={a.id ?? a.label} agent={a} slug={thread.id} now={now} />) },
+    { head: "Background shells", rows: shells.map((w) => <ShellWatchRow key={w.id} watch={w} thread={thread} slug={thread.id} now={now} />) },
+    { head: "Pull requests", rows: prs.map((w) => <GithubWatchRow key={w.id} watch={w} />) },
+  ].filter((g) => g.rows.length > 0)
   return (
     // The SAME shell as every transcript card (TranscriptCard). This card stacks directly under an
     // awaiting fence card on a queue card, and it used to be a visibly different object there —
@@ -289,11 +527,12 @@ export function AwaitingBackgroundCard({ thread, actions }: {
           not a caption for the button, so it reads as prose rather than as a label the Snooze control
           drags around with it — and it therefore stays on the surfaces that have no button.
 
-          AND IT ONLY NAMES WORK THAT HAS NO ROW. A watched PR is listed below with its own live check
-          state, so a sentence counting the same watchers above it is one fact written twice; on a rest
-          held by watchers ALONE there is no sentence at all, and the heading plus the rows say the
-          whole thing (maintainer 2026-08-14: "this looks busy and shitty"). */}
-      {hasUnrowedWork(thread) && (
+          AND IT ONLY SURVIVES WHEN THERE ARE NO ROWS AT ALL, which since 2026-08-15 means almost never:
+          every kind the card can be waiting on now has a row that names it, and a sentence counting the
+          same things above them is one fact written twice ("this looks busy and shitty"). It stays as
+          the honest fallback for the one reachable gap — a declared wait whose rows all failed to
+          resolve — because a card with a heading and nothing under it says less than a sentence. */}
+      {groups.length === 0 && hasUnrowedWork(thread) && (
         <p className={CARD_BODY}>
           {waiting ? (
             // The subject never counts a watcher: a watcher is PARKED ON rather than dispatched, and
@@ -321,22 +560,26 @@ export function AwaitingBackgroundCard({ thread, actions }: {
           )}
         </p>
       )}
-      {/* THE WATCHED PRs, one row each — the card's real content, not an appendix to a sentence.
+      {/* THE TABLE — the card's real content, not an appendix to a sentence.
+          ONE grid for every group, so `grid-cols-subgrid` on each row shares FOUR tracks across the whole
+          card and the light-gray statuses line up down one edge even across a heading. Per-group grids
+          would each size their own name column and the statuses would step.
 
-          gap-2.5 BETWEEN rows against the 2px inside one, and the ratio is the point: a red row carries
-          a second line naming the failing jobs, and it must read as belonging to the ref ABOVE it rather
-          than to the ref below. The gap was 3 while a row could be three lines deep; folding the merge
-          verdict onto the ref line made rows one line each, and 12px between single lines read as a list
-          of unrelated items. Measured on the four-state fixture at dsf 6.
-
-          mt-3 UNCONDITIONALLY — 12px, a shade MORE than the 10px between rows, so the heading reads as
-          the list's heading rather than as its first item. It is the WHOLE gap rather than an addition:
-          CardContent's own mt-1 collapses into it, which is why mt-2 measured 8px and put the first row
-          closer to the title than to the row beneath it (measured, sans and mono, dsf 3). */}
-      {prWatcherCount(thread) > 0 && (
-        <div className="mt-3 flex flex-col gap-2.5">
-          {(thread.watches ?? []).filter((w) => w.kind === "github" && w.state === "armed").map((w) => (
-            <GithubWatchRow key={w.id} watch={w} />
+          mt-3 UNCONDITIONALLY — 12px, and it is the WHOLE gap rather than an addition: CardContent's own
+          mt-1 collapses into it, which is why an earlier mt-2 measured 8px and put the first row closer
+          to the card title than to the row beneath it (measured, sans and mono, dsf 3). */}
+      {groups.length > 0 && (
+        <div className="mt-3 grid grid-cols-[auto_1fr_auto_auto] gap-y-px">
+          {groups.map((g, i) => (
+            <Fragment key={g.head}>
+              {/* The heading spans all four tracks. `mt-*` on every group but the first: the gap between
+                  a group and the one above it has to beat the gap between two rows, or the heading reads
+                  as belonging to the rows above rather than the ones below. */}
+              <div className={`col-span-4 text-[10.5px] uppercase tracking-wide text-muted/45 ${i > 0 ? "mt-2.5" : ""}`}>
+                {g.head}
+              </div>
+              {g.rows}
+            </Fragment>
           ))}
         </div>
       )}

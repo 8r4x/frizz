@@ -33,10 +33,16 @@ const watchMode = params.get("watch")
 // is how a glyph measured at a 0.00px residual once rode visibly high in the maintainer's sans window.
 // `?font=sans|mono`, applied before first paint exactly as index.html does it.
 document.documentElement.dataset.font = params.get("font") === "sans" ? "sans" : "mono"
-const wantAgents = params.get("agents") === "1"
-const wantWatch = watchMode !== null
+// The card renders LIVE elapsed durations now, so a hardcoded instant reads as "550hr 27m" and the
+// fixture stops being judgeable the day after it is written. Everything dates off NOW.
+const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString()
+// ?all=1 — every kind at once (sub-agents AND shells AND PRs), which is the only way to see the three
+// group headings together. Without it `agents=1` suppresses shells, as it always has.
+const wantAll = params.get("all") === "1"
+const wantAgents = wantAll || params.get("agents") === "1"
+const wantWatch = wantAll || watchMode !== null
 // Shells are the DEFAULT shape; ?agents=1 swaps them for sub-agents, and ?watch=1 for a lone watcher.
-const wantShells = !wantAgents && watchMode !== "1" && watchMode !== "one"
+const wantShells = wantAll || (!wantAgents && watchMode !== "1" && watchMode !== "one")
 const shellOnly = wantShells && !wantAgents
 
 const tail = shellOnly
@@ -73,41 +79,54 @@ const thread = {
   backend: "claude",
   permissionMode: "default",
   subAgents: !wantAgents ? [] : [
-    { id: "agent-a", label: "Audit the parser for edge cases", subagentType: "frizz:opus-high", startedAt: "2026-07-23T09:05:00.000Z", state: "running" },
-    { id: "agent-b", label: "Write property tests for the tiers", subagentType: "frizz:sonnet-high", startedAt: "2026-07-23T09:05:20.000Z", state: "running" },
+    { id: "agent-a", label: "Audit the parser for edge cases", subagentType: "frizz:opus-high", startedAt: ago(2), state: "running" },
+    { id: "agent-b", label: "Write property tests for the tiers", subagentType: "frizz:sonnet-high", startedAt: ago(6), state: "running" },
   ],
+  // BOTH shells are always present; only ONE is declared (the `watch:` below). That pairing is the
+  // point — the card must list the declared one and say nothing about the dev server nobody tore down.
   bgShells: !wantShells ? [] : [
-        { label: "vite dev --host", startedAt: "2026-07-23T09:06:00.000Z", state: "running" },
-        { label: "gh run watch 1842", startedAt: "2026-07-23T09:06:10.000Z", state: "running" },
+        { id: "toolu_vite", taskId: "b7k2m1xq0", label: "vite dev --host", startedAt: ago(18), state: "running" },
+        { id: "toolu_ci", taskId: "bzvtnt3ig", label: "gh run watch 1842", startedAt: ago(4), state: "running" },
       ],
   // ?watch=1|both seeds FOUR PRs, one per check state, so the row's whole vocabulary is on screen at
-  // once: running with counts, all-green-and-mergeable, red with the failing jobs named, and one frizz
-  // has not polled yet ("Checking…", which must not read as "no checks").
-  watches: watchMode === "one"
+  // once: running with counts, all-green-and-mergeable, red (whose failing jobs are now a `view failures`
+  // link rather than a listed second line), and one frizz has not polled yet ("Checking…", which must not
+  // read as "no checks").
+  //
+  // THE DECLARED SHELL WAIT rides the same array — a `watch: bzvtnt3ig` fence hint becomes a
+  // `kind: "shell"` row server-side (board.fenceWatchViews). Seeded whenever shells are, because the
+  // card's whole rule is that a shell is listed when the worker NAMED it: the CI poller is declared and
+  // gets a row, the dev server beside it never does.
+  watches: [
+    ...(wantShells
+      ? [{ id: "shell:demo:bzvtnt3ig", kind: "shell", target: "bzvtnt3ig", state: "armed", createdAt: ago(4) }]
+      : []),
+    ...(watchMode === "one"
     ? [
         {
-          id: "github:demo:colinhacks/zod#5928", kind: "github", target: "colinhacks/zod#5928", state: "armed", createdAt: "2026-07-23T09:04:00.000Z",
-          github: { checks: "passing", running: 0, passed: 7, failed: 0, failing: [], merge: "mergeable", state: "open", polledAt: "2026-07-23T09:06:50.000Z" },
+          id: "github:demo:colinhacks/zod#5928", kind: "github", target: "colinhacks/zod#5928", state: "armed", createdAt: ago(12),
+          github: { checks: "passing", running: 0, passed: 7, failed: 0, failing: [], merge: "mergeable", state: "open", polledAt: ago(1) },
         },
       ]
     : wantWatch
     ? [
         {
-          id: "github:demo:acme/app#391", kind: "github", target: "acme/app#391", state: "armed", createdAt: "2026-07-23T09:04:00.000Z",
-          github: { checks: "running", running: 3, passed: 12, failed: 0, failing: [], merge: "blocked", state: "open", polledAt: "2026-07-23T09:06:50.000Z" },
+          id: "github:demo:acme/app#391", kind: "github", target: "acme/app#391", state: "armed", createdAt: ago(12),
+          github: { checks: "running", running: 3, passed: 12, failed: 0, failing: [], merge: "blocked", state: "open", polledAt: ago(1) },
         },
         {
-          id: "github:demo:acme/app#392", kind: "github", target: "acme/app#392", state: "armed", createdAt: "2026-07-23T09:04:10.000Z",
-          github: { checks: "passing", running: 0, passed: 15, failed: 0, failing: [], merge: "mergeable", state: "open", polledAt: "2026-07-23T09:06:50.000Z" },
+          id: "github:demo:acme/app#392", kind: "github", target: "acme/app#392", state: "armed", createdAt: ago(21),
+          github: { checks: "passing", running: 0, passed: 15, failed: 0, failing: [], merge: "mergeable", state: "open", polledAt: ago(1) },
         },
         {
-          id: "github:demo:acme/app#393", kind: "github", target: "acme/app#393", state: "armed", createdAt: "2026-07-23T09:04:20.000Z",
-          github: { checks: "failing", running: 1, passed: 9, failed: 2, failing: ["lint", "e2e (chromium)"], merge: "blocked", state: "open", polledAt: "2026-07-23T09:06:50.000Z" },
+          id: "github:demo:acme/app#393", kind: "github", target: "acme/app#393", state: "armed", createdAt: ago(33),
+          github: { checks: "failing", running: 1, passed: 9, failed: 2, failing: ["lint", "e2e (chromium)"], merge: "blocked", state: "open", polledAt: ago(1) },
         },
-        { id: "github:demo:acme/app#394", kind: "github", target: "acme/app#394", state: "armed", createdAt: "2026-07-23T09:04:30.000Z" },
+        { id: "github:demo:acme/app#394", kind: "github", target: "acme/app#394", state: "armed", createdAt: ago(1) },
       ]
-    : [],
-  lastActivityAt: "2026-07-23T09:07:00.000Z",
+    : []),
+  ],
+  lastActivityAt: ago(1),
 } as unknown as ThreadViewModel
 
 store.board = { projectDir: "/fixture/frizz", threads: [thread] } as BoardSnapshot
