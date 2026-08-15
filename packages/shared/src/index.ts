@@ -701,6 +701,44 @@ export const TimerPromptText = z.string().trim().min(1).max(TIMER_PROMPT_MAX)
  *  why frizz is the one saying it. The second matters because the agent has a runtime notification for
  *  exactly this event and will reasonably wonder why it did not arrive: it only ever reaches a RUNNING
  *  turn, so a shell that finishes behind a rested worker is never reported by anyone else. */
+/** What frizz delivers when a REGISTERED PR WATCHER has something to report.
+ *
+ *  Two things can move and the message names which: CI reaching a terminal verdict, and new review or
+ *  comment activity. Both in one message when both happened in one poll — a worker woken twice for one
+ *  glance at the same PR is a wasted turn.
+ *
+ *  It says the watcher is STILL ARMED, because the opposite is the expensive mistake: a worker that
+ *  thinks its watcher is spent will re-register (a duplicate, so two wakes per event) or stop waiting. */
+export function prWatchWakeMessage(input: {
+  target: string
+  checks?: { verdict: "passing" | "failing"; passed: number; failed: number; failing: string[] }
+  review?: string
+  merged?: boolean
+  closed?: boolean
+}): string {
+  const lines: string[] = []
+  if (input.merged || input.closed) {
+    lines.push(`\u23f0 ${input.target} was ${input.merged ? "MERGED" : "CLOSED"}.`, "")
+    lines.push("(This watcher is spent — there is nothing further to report on a finished PR.)")
+    return lines.join("\n")
+  }
+  if (input.checks) {
+    const c = input.checks
+    lines.push(
+      c.verdict === "passing"
+        ? `\u2705 CI PASSED on ${input.target} — ${c.passed} check${c.passed === 1 ? "" : "s"} green.`
+        : `\u274c CI FAILED on ${input.target}${c.failing.length ? `: ${c.failing.join(", ")}` : ""}.`,
+    )
+  }
+  if (input.review) {
+    if (lines.length) lines.push("")
+    lines.push(input.review)
+  }
+  lines.push("", "(Registered PR watcher — STILL ARMED. It reports again on the next CI change, review or" +
+    " comment. Drop it with `mcp__frizz__watch_pr` when it stops mattering.)")
+  return lines.join("\n")
+}
+
 export function shellDoneMessage(shell: { taskId?: string; label: string; status: "completed" | "failed" | "killed" }): string {
   const what = shell.taskId ? `\`${shell.taskId}\` — ${shell.label}` : shell.label
   const verb = shell.status === "failed" ? "FAILED" : shell.status === "killed" ? "was STOPPED" : "finished"
@@ -877,6 +915,58 @@ export const ThreadWatchView = z.object({
   github: GithubWatchStatus.optional(),
 }).strict()
 export type ThreadWatchView = z.infer<typeof ThreadWatchView>
+
+/** The ceiling on registered PR watchers per thread. A tool call in a loop cannot fill the table, and
+ *  the refusal names the number so a worker drops one rather than retrying. */
+export const PR_WATCH_MAX_ARMED = 32
+
+/** One registered PR watcher, as the worker's own tool reads it back. */
+export const PrWatchView = z.object({
+  id: z.string(),
+  /** `owner/repo#N`, normalized — the same string the board's row and the status book are keyed by. */
+  target: z.string(),
+  state: z.enum(["armed", "dropped", "settled"]),
+  createdAt: z.string(),
+  /** The PR's checks/mergeability as the poller last saw it. Absent until the first successful poll. */
+  github: GithubWatchStatus.optional(),
+}).strict()
+export type PrWatchView = z.infer<typeof PrWatchView>
+
+export const AddOwnPrWatchInput = z.object({
+  slug: ThreadSlug,
+  /** `owner/repo#123` or a PR URL. Parsed server-side; an unparseable ref is refused rather than stored,
+   *  because a watcher that can never fire is worse than none — the worker rests believing it is covered. */
+  target: z.string().trim().min(1).max(200),
+}).strict()
+export type AddOwnPrWatchInput = z.infer<typeof AddOwnPrWatchInput>
+
+export const AddOwnPrWatchResult = z.object({
+  id: z.string(),
+  target: z.string(),
+  /** True when this exact PR was ALREADY watched by this thread, so the call registered nothing new.
+   *  Re-registering after a compaction is the common case, and a duplicate would double every wake. */
+  alreadyArmed: z.boolean(),
+  watches: z.array(PrWatchView),
+}).strict()
+export type AddOwnPrWatchResult = z.infer<typeof AddOwnPrWatchResult>
+
+export const DropOwnPrWatchInput = z.object({
+  slug: ThreadSlug,
+  id: z.string().min(1).max(64),
+}).strict()
+export type DropOwnPrWatchInput = z.infer<typeof DropOwnPrWatchInput>
+
+export const DropOwnPrWatchResult = z.object({
+  dropped: z.boolean(),
+  watches: z.array(PrWatchView),
+}).strict()
+export type DropOwnPrWatchResult = z.infer<typeof DropOwnPrWatchResult>
+
+export const ListOwnPrWatchesInput = z.object({ slug: ThreadSlug }).strict()
+export type ListOwnPrWatchesInput = z.infer<typeof ListOwnPrWatchesInput>
+
+export const OwnPrWatchesResult = z.object({ watches: z.array(PrWatchView) }).strict()
+export type OwnPrWatchesResult = z.infer<typeof OwnPrWatchesResult>
 
 /** One armed (or just-settled) timer, as the worker's own tool reads it back. */
 export const ThreadTimerView = z.object({

@@ -79,6 +79,14 @@ import {
   isDirectSubAgent,
   DirectoryPickResult,
   ThreadLocation,
+  AddOwnPrWatchInput,
+  AddOwnPrWatchResult,
+  DropOwnPrWatchInput,
+  DropOwnPrWatchResult,
+  ListOwnPrWatchesInput,
+  OwnPrWatchesResult,
+  PR_WATCH_MAX_ARMED,
+  type PrWatchView,
 } from "@frizz/shared"
 import { mayHaveLiveBackgroundWork, needsFreshProcessForLimit, type AppContext } from "./context.ts"
 import { appServerTurnStalled, resolveRecurringPrompt } from "./board.ts"
@@ -108,7 +116,7 @@ import { readAuthSnapshot } from "./backend/auth-status.ts"
 import { liveThreadsForBackend, runProviderLogout } from "./backend/account-actions.ts"
 import { threadProfileOptions, validateThreadProfile } from "./backend/thread-profiles.ts"
 import { adoptionRuntimeBinding, type AdoptionPaneLookup, type ExpectedAdoptionPane } from "./adoption-recovery.ts"
-import { awaitingFenceIdentity, isActionableAwaitingHint, parsePrRef } from "./awaiting.ts"
+import { awaitingFenceIdentity, isActionableAwaitingHint, parsePrRef, readGithubStatusBook, GITHUB_STATUS_SETTING } from "./awaiting.ts"
 import { getDispatchPreferences, setDispatchPreference } from "./dispatch-preferences.ts"
 import { isBrokerClaudeRow, type SessionRow, type Storage } from "./storage.ts"
 import type { SessionTelemetry } from "./tailer.ts"
@@ -668,6 +676,23 @@ export function createRouter(ctx: AppContext) {
   // A thread's ARMED one-off timers, in the shape the worker's tool reads back. Instants are epoch ms in
   // the table and ISO on the wire, converted here so the row, the delivered trailer and the tool's own
   // output all name the same string.
+  // A thread's ARMED PR watchers, in the shape the worker's tool and the board both read. Each carries
+  // the PR's last-polled checks/mergeability, so the tool's read-back and the resting card's row cannot
+  // disagree about the same PR — they are one projection of one book.
+  function armedPrWatchViews(slug: string): PrWatchView[] {
+    const github = readGithubStatusBook(ctx.storage.getSetting(GITHUB_STATUS_SETTING))
+    return ctx.storage.listPrWatches(slug, { armedOnly: true }).map((w) => {
+      const target = `${w.owner}/${w.repo}#${w.number}`
+      return {
+        id: w.id,
+        target,
+        state: w.state,
+        createdAt: new Date(w.created_at).toISOString(),
+        ...(github[target] ? { github: github[target] } : {}),
+      }
+    })
+  }
+
   function armedTimerViews(slug: string): ThreadTimerView[] {
     return ctx.storage.listThreadTimers(slug, { armedOnly: true }).map((t) => ({
       id: t.id,
@@ -2085,6 +2110,60 @@ export function createRouter(ctx: AppContext) {
     // nothing an alias could usefully do. A session dispatched before the change still holds the old MCP
     // binary and will get a 404 from it — which is the honest answer, and the tool it should not be
     // calling is the only casualty.
+
+    // ---- REGISTERED PR WATCHERS (add / drop / list) ---------------------------------------------
+    // The worker's own PR watchers, from `mcp__frizz__watch_pr`. Same caller and therefore the same rules
+    // as the timers above: slug-only (the MCP server outlives the session ids underneath it), and no
+    // thread parameter a model could aim elsewhere.
+    addOwnPrWatch: mutation({
+      input: AddOwnPrWatchInput,
+      output: AddOwnPrWatchResult,
+      handler: async ({ input }) => {
+        const row = ctx.storage.getSession(input.slug)
+        if (!row) throw new Error(`thread ${input.slug} is not registered`)
+        if (row.state === "archived" || row.archived === 1) {
+          throw new Error("Reopen this thread before registering a watcher on it")
+        }
+        // REFUSED, not stored. A watcher on a ref frizz cannot parse is one that can never fire, and a
+        // worker that registers one comes to rest believing it is covered.
+        const ref = parsePrRef(input.target)
+        if (!ref) {
+          throw new Error(`\`${input.target}\` is not a pull request I can watch — give owner/repo#123 or a PR URL`)
+        }
+        const armed = ctx.storage.listPrWatches(input.slug, { armedOnly: true })
+        // IDEMPOTENT ON THE PR. Re-registering after a compaction is the COMMON case — the worker has
+        // forgotten what it holds and is being careful — and a duplicate would mean two wakes per event,
+        // which reads to the operator as the watcher misfiring.
+        const existing = armed.find((w) => w.owner === ref.owner && w.repo === ref.repo && w.number === ref.number)
+        const target = `${ref.owner}/${ref.repo}#${ref.number}`
+        if (existing) return { id: existing.id, target, alreadyArmed: true, watches: armedPrWatchViews(input.slug) }
+        if (armed.length >= PR_WATCH_MAX_ARMED) {
+          throw new Error(`this thread already watches ${armed.length} pull requests (the limit is ${PR_WATCH_MAX_ARMED}) — drop one first`)
+        }
+        const id = `prw_${randomUUID().replace(/-/g, "").slice(0, 12)}`
+        ctx.storage.armPrWatch({ id, slug: input.slug, owner: ref.owner, repo: ref.repo, number: ref.number, createdAtMs: Date.now() })
+        ctx.board.refresh()
+        return { id, target, alreadyArmed: false, watches: armedPrWatchViews(input.slug) }
+      },
+    }),
+
+    dropOwnPrWatch: mutation({
+      input: DropOwnPrWatchInput,
+      output: DropOwnPrWatchResult,
+      handler: async ({ input }) => {
+        // Scoped to the caller's own slug in storage, so an id belonging to another thread cannot be
+        // dropped even if a worker somehow learned it.
+        const dropped = ctx.storage.dropPrWatch(input.slug, input.id, Date.now())
+        if (dropped) ctx.board.refresh()
+        return { dropped, watches: armedPrWatchViews(input.slug) }
+      },
+    }),
+
+    listOwnPrWatches: mutation({
+      input: ListOwnPrWatchesInput,
+      output: OwnPrWatchesResult,
+      handler: async ({ input }) => ({ watches: armedPrWatchViews(input.slug) }),
+    }),
 
     // The SUPERSEDED worker procedures, aliased onto the row above — see SetOwnThreadStopHookInput for
     // why they cannot simply be deleted. A worker's MCP server outlives every server restart, so these

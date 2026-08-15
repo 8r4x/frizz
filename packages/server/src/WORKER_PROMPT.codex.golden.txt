@@ -131,20 +131,14 @@ higher-priority asks than either fence below.
     its completion wakes you like any other shell. (For a wall-clock checkpoint that must survive a
     restart, `timer:` below is the durable one — a background shell dies with your session.)
 
-  - `pr-watch: owner/repo#NUMBER` — frizz polls the PR and resumes you on ANY new review, approval, or
-    comment, from a HUMAN OR A BOT alike. Your thread STAYS IN THE QUEUE as a visible "watching it"
-    handoff. This is the default for a PR you opened. ONE line watches ONE PR, and a fence may carry
-    SEVERAL — repeat the line per PR, across any mix of repos, and activity on ANY of them wakes you.
-    Never downgrade to a periodic `timer:` sweep just because you are tracking more than one PR. The
-    body keeps its first 8 hint lines and silently DROPS the rest, so past 8 watch the 8 that matter
-    and cover the tail with a `timer:`.
+  - `pr-watch: owner/repo#NUMBER` — you are waiting on a pull request you have REGISTERED with
+    `mcp__frizz__watch_pr`. Register FIRST; this line states the wait, it does not create one, and a
+    line naming a PR you never registered is a wait nothing will ever deliver (frizz checks, and your
+    thread simply queues as usual). ONE line per PR, repeatable.
 
-    **READ THE PR BEFORE YOU PARK ON IT.** After your first park on a given PR the baseline is the
-    INSTANT YOU REST — only what arrives AFTER can wake you again. Frizz covers the first park by
-    replaying whatever was already sitting there, once, so review you never read cannot be lost; but
-    that replay costs you a whole turn to answer something you could have read before resting. Run
-    `gh pr view N --comments` first, deal with what is there, and only then write the fence.
-    "Waiting on review" is a claim that review has not arrived; go and check that it is true.
+    **THE TOOL IS WHAT WAKES YOU**, and it keeps doing it: CI turning green or red, and every later
+    review, approval or comment, from a human or a bot alike — as many times as the PR moves, from one
+    registration. It settles itself when the PR merges or closes.
   - `human: <actor + exact review/approval>` — a third party whose action cannot be supplied in this
     frizz conversation. PARKS you in the dimmed Held band. A bot, CI gate, or merge queue is NOT a human
     wait. Pair with `pr-watch:` when a GitHub PR exists, or `timer:` when none does.
@@ -159,9 +153,10 @@ higher-priority asks than either fence below.
   `pr:` / `ci:` / `session:` remain parser compatibility for existing transcripts only; never emit
   them. The operator's own answer or approval is a ` ```question `, not `awaiting`.
 
-  **CI, releases, deploys and merge progression are automatable — never `awaiting` them.** They stay
-  ACTIVE: dispatch a sub-agent to own the wait (its liveness keeps you Active and its return re-invokes
-  you), or use a timer when the next check genuinely belongs at a later wall-clock time.
+  **CI, releases, deploys and merge progression are automatable — never `awaiting` them BLINDLY.** For a
+  PULL REQUEST that is what `mcp__frizz__watch_pr` is: register it and you are told when CI settles, so
+  the wait is real rather than a hope. For anything else, stay ACTIVE — dispatch a sub-agent to own the
+  wait (its return re-invokes you), or set a timer for a later check.
 
   **A follow-up clears the previous fence.** If the human says "back to awaiting", never answer that it
   is already parked and never rely on the old fence: re-check the blocker, then re-emit a fresh

@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { compactionPromptMessage, formatGithubWakeSteer, type GithubWatchStatus, shellDoneMessage, isValidAwaitingTimer, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, wakeDeliveryToken, type QuotaSnapshot } from "@frizz/shared"
+import { compactionPromptMessage, formatGithubWakeSteer, type GithubWatchStatus, prWatchWakeMessage, shellDoneMessage, isValidAwaitingTimer, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, wakeDeliveryToken, type QuotaSnapshot } from "@frizz/shared"
 import { GITHUB_STATUS_SETTING } from "./awaiting.ts"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
@@ -760,6 +760,20 @@ function isShellFenceId(fenceId: string): boolean {
   return fenceId.startsWith(`${SHELL_FENCE_PREFIX}:`)
 }
 
+/** A registered PR watcher's delivery namespace. The id plus a monotonically-increasing REPORT number,
+ *  because this watcher fires many times over one PR's life — the id alone would dedupe every wake after
+ *  the first, which is exactly the bug a one-shot namespace would hide. */
+const PR_WATCH_FENCE_PREFIX = "prwatch"
+function prWatchFenceId(watchId: string, report: number): string {
+  return `${PR_WATCH_FENCE_PREFIX}:${watchId}:${report}`
+}
+function isPrWatchFenceId(fenceId: string): boolean {
+  return fenceId.startsWith(`${PR_WATCH_FENCE_PREFIX}:`)
+}
+/** How often a registered watcher re-reads GitHub, per PR. The fence poller's floor, for the same
+ *  reason: this is somebody else's API and the answer changes on a human's timescale. */
+const PR_WATCH_POLL_MS = 60_000
+
 const SIGNOFF_FENCE_PREFIX = "signoff"
 const SIGNOFF_HINT_KEY = "signoff:rest"
 const SIGNOFF_NUDGE_MAX = 2
@@ -1206,6 +1220,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     // the delivery against the thread's CURRENT fence and superseded every wake for a bare rest: queued
     // on every tick, delivered never.)
     if (isShellFenceId(item.fenceId)) {
+      return tele.turn === "idle" ? "current-idle" : "current-busy"
+    }
+    // A REGISTERED PR WATCHER's report is bound to something that happened on GitHub, not to anything
+    // this thread wrote, so no fence, rest or edit can supersede it either. Same reasoning as the shell
+    // wake directly above, and the same bug if it is missing.
+    if (isPrWatchFenceId(item.fenceId)) {
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
     if (isSnoozeFenceId(item.fenceId)) {
@@ -1919,6 +1939,166 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     deps.storage.countSignoffNudge(item.slug, item.fenceId)
   }
 
+  // ---- SOURCE 11: THE REGISTERED PR WATCHERS ------------------------------------------------------
+  // A worker registers a pull request with `mcp__frizz__watch_pr` and frizz brings it back whenever
+  // something happens on it (maintainer 2026-08-14: "The agent should have a tool to register a PR
+  // watcher… it should get notified when CI either succeeds or failed and on follow-up reviews and
+  // comments").
+  //
+  // IT REPORTS REPEATEDLY, which is what makes it unlike every other source here. A timer rings once and
+  // is spent; this one stays armed across CI going red, a fix, CI going green and a reviewer's comment —
+  // four wakes from one registration. So the delivery id carries a REPORT NUMBER: keyed on the watcher
+  // id alone, the outbox would dedupe every wake after the first and the watcher would look broken from
+  // the second event onward.
+  //
+  // ONLY A CHANGE FIRES. The cursor holds what has already been reported — the review activity ids, and
+  // the last check verdict announced — so a poll that finds the same red CI and the same three comments
+  // says nothing. A watcher that re-reported its own last message on every tick is a nag loop with an
+  // API bill.
+  //
+  // THE FENCE IS NOT CONSULTED HERE, deliberately. Registration is a tool call and watching is a fact;
+  // the ```awaiting fence separately STATES what the thread waits on, and a thread with no fence at all
+  // is woken exactly the same way.
+  interface PrWatchCursor { seen: string[]; checks?: string; report?: number }
+  const prWatchPolledAt = new Map<string, number>() // refKey → last fetch, shared across threads
+
+  function readPrWatchCursor(raw: string | null): PrWatchCursor {
+    try {
+      const parsed = raw ? JSON.parse(raw) : null
+      if (!parsed || typeof parsed !== "object") return { seen: [] }
+      const seen = Array.isArray(parsed.seen) ? parsed.seen.filter((x: unknown): x is string => typeof x === "string") : []
+      return { seen, checks: typeof parsed.checks === "string" ? parsed.checks : undefined, report: Number(parsed.report) || 0 }
+    } catch {
+      return { seen: [] }
+    }
+  }
+
+  async function evalPrWatches(nowMs: number): Promise<void> {
+    const armed = deps.storage.armedPrWatches()
+    if (armed.length === 0) return
+    // ONE FETCH PER PR, however many threads watch it. Two workers on the same PR is the ordinary shape
+    // of a review round, and paying GitHub twice for one answer is how a rate limit arrives.
+    const refs = new Map<string, PrRef>()
+    for (const w of armed) {
+      const key = `${w.owner}/${w.repo}#${w.number}`
+      const last = prWatchPolledAt.get(key) ?? 0
+      if (nowMs - last < PR_WATCH_POLL_MS) continue
+      refs.set(key, { owner: w.owner, repo: w.repo, number: w.number })
+    }
+    const status = new Map<string, GithubWatchStatus>()
+    const activity = new Map<string, GithubReviewActivity[]>()
+    await Promise.all([...refs].map(async ([key, ref]) => {
+      prWatchPolledAt.set(key, nowMs)
+      try {
+        const pr = await fetchPr(ref)
+        if (pr) {
+          status.set(key, githubWatchStatus(pr, new Date(nowMs).toISOString()))
+          publishGithubStatus(key, pr, nowMs)
+        }
+      } catch (err) {
+        log(`waker: pr-watch status fetch failed for ${key}: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      try {
+        const result = normalizeReviewResult(await fetchGithubReview(ref))
+        if (result.status === "ok") activity.set(key, result.activity)
+        else if (result.status === "error") recordReviewFailure(key, key, result, nowMs)
+      } catch (err) {
+        recordReviewFailure(key, key, {
+          status: "error",
+          failure: { kind: "network", message: err instanceof Error ? err.message : String(err) },
+        }, nowMs)
+      }
+    }))
+
+    for (const w of armed) {
+      const row = deps.storage.getSession(w.thread_slug)
+      // No thread, or a shelved one: nothing to wake. The row is left ARMED rather than settled — an
+      // archived thread can be reopened, and the watch is still the worker's own outstanding intent.
+      if (!row || row.state === "archived" || row.archived === 1) continue
+      const key = `${w.owner}/${w.repo}#${w.number}`
+      const st = status.get(key)
+      const acts = activity.get(key)
+      if (!st && !acts) continue // nothing fetched for this PR this tick
+      const cursor = readPrWatchCursor(w.cursor)
+
+      // A MERGED OR CLOSED PR ends the watch. Report it once, then settle: there is nothing further to
+      // say, and an armed row on a finished PR is a poll that can never produce another wake.
+      if (st && st.state !== "open") {
+        deps.storage.settlePrWatch(w.id, nowMs)
+        enqueuePrWatchWake(row, w.id, cursor, prWatchWakeMessage({
+          target: key, merged: st.state === "merged", closed: st.state === "closed",
+        }), `pr-watch ${key} ${st.state}`, nowMs)
+        continue
+      }
+
+      // CI reaching a TERMINAL verdict, and only on the transition to it. `running` and `none` are not
+      // news; going from either to green or red is the whole reason CI is watched.
+      const terminal = st && (st.checks === "passing" || st.checks === "failing") ? st.checks : undefined
+      const checksChanged = terminal !== undefined && cursor.checks !== terminal
+      // NEW review activity, against everything already reported. The FIRST poll of a watcher reports
+      // nothing: a worker registers the instant it opens the PR, and telling it about its own PR body
+      // and the reviews it just read would spend a turn on news it already has.
+      const seen = new Set(cursor.seen)
+      const fresh = (acts ?? []).filter((a) => !seen.has(a.id))
+      const firstPoll = w.cursor === null
+      const reviewSteer = !firstPoll && fresh.length > 0
+        ? formatGithubWakeSteer({
+          ref: key,
+          omitted: Math.max(0, fresh.length - REVIEW_STEER_CAP),
+          items: fresh.slice(0, REVIEW_STEER_CAP).map((a) => ({
+            label: activityLabel(a),
+            actor: a.actor,
+            bot: isBotGithubActor(a),
+            ...(a.at ? { at: a.at } : {}),
+            ...(a.url ? { url: a.url } : {}),
+          })),
+        })
+        : undefined
+
+      const nextCursor: PrWatchCursor = {
+        seen: acts ? [...new Set([...cursor.seen, ...acts.map((a) => a.id)])].slice(-REVIEW_SEEN_CAP) : cursor.seen,
+        checks: terminal ?? cursor.checks,
+        report: cursor.report ?? 0,
+      }
+      if (!checksChanged && !reviewSteer) {
+        // Nothing to say, but the baseline moved: record what was seen so the FIRST poll's backlog is
+        // never re-reported, and so a later comment is measured against today rather than against the
+        // registration.
+        if (JSON.stringify(nextCursor) !== JSON.stringify(cursor)) {
+          deps.storage.setPrWatchCursor(w.id, JSON.stringify(nextCursor))
+        }
+        continue
+      }
+      enqueuePrWatchWake(row, w.id, cursor, prWatchWakeMessage({
+        target: key,
+        ...(checksChanged && terminal
+          ? { checks: { verdict: terminal, passed: st!.passed, failed: st!.failed, failing: st!.failing } }
+          : {}),
+        ...(reviewSteer ? { review: reviewSteer } : {}),
+      }), `pr-watch ${key}${checksChanged ? ` CI ${terminal}` : ""}${reviewSteer ? " review" : ""}`, nowMs)
+      deps.storage.setPrWatchCursor(w.id, JSON.stringify({ ...nextCursor, report: (cursor.report ?? 0) + 1 }))
+    }
+  }
+
+  function enqueuePrWatchWake(
+    row: SessionRow,
+    watchId: string,
+    cursor: { report?: number },
+    message: string,
+    reason: string,
+    nowMs: number,
+  ): void {
+    const fenceId = prWatchFenceId(watchId, (cursor.report ?? 0) + 1)
+    const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
+    if (outbox.get(deliveryId)) return
+    const item = outbox.enqueue({
+      id: deliveryId, slug: row.slug, sessionId: row.session_id, fenceId,
+      hintKey: `${PR_WATCH_FENCE_PREFIX}:${watchId}`, message, reason,
+    }, nowMs).delivery
+    log(`waker: queued ${row.slug} — ${item.reason}`)
+    checkpoint("after-enqueue", item)
+  }
+
   // ---- SOURCE 10: A BACKGROUND SHELL FINISHED WHILE ITS AGENT WAS RESTING -------------------------
   // AUTOMATIC, for every thread, with nothing to register and nothing to declare. Maintainer 2026-08-14:
   // "the agent just uses the built-in tool from the harness to start a background shell. It should be
@@ -2446,6 +2626,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     } catch (err) {
       if (err instanceof InjectedSchedulerCrash) throw err
       log(`waker: sign-off nudge pass failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    try {
+      await evalPrWatches(now())
+    } catch (err) {
+      if (err instanceof InjectedSchedulerCrash) throw err
+      log(`waker: pr-watch registry pass failed: ${err instanceof Error ? err.message : String(err)}`)
     }
     try {
       evalShellCompletions(now())

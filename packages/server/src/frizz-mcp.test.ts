@@ -64,7 +64,7 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     rpc.send({ jsonrpc: "2.0", method: "notifications/initialized" })
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
     const list = await rpc.next(2)
-    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "recurring_prompt", "timer"])
+    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "recurring_prompt", "timer", "watch_pr"])
     for (const required of ["prompt", "model", "effort"]) {
       assert.ok(list.result.tools[0].inputSchema.required.includes(required))
     }
@@ -87,9 +87,17 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
       Object.keys(list.result.tools[2].inputSchema.properties).sort(),
       ["action", "at", "id", "in_seconds", "prompt"],
     )
-    // NO `watch` TOOL. The registry is retired (2026-08-14): a wait is a `watch:` line in the worker's
-    // own ```awaiting fence, which is both the park and the wake, so there is nothing to register.
-    assert.equal(list.result.tools.length, 3)
+    // NO SHELL `watch` TOOL, and there never will be: a background shell is watched AUTOMATICALLY, so
+    // there is nothing for a worker to register. `watch_pr` exists because the opposite is true of a
+    // pull request — nothing watches one unless the worker says so. Same shape as its siblings: `action`
+    // alone is required, and NO thread parameter a model could aim elsewhere.
+    assert.equal(list.result.tools.length, 4)
+    assert.deepEqual(list.result.tools[3].inputSchema.required, ["action"])
+    assert.deepEqual(list.result.tools[3].inputSchema.properties.action.enum, ["add", "list", "drop"])
+    assert.deepEqual(
+      Object.keys(list.result.tools[3].inputSchema.properties).sort(),
+      ["action", "id", "target"],
+    )
 
     // An unregistered name is a protocol error, not a crash — the registry routes by name now.
     rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "spawn_frizz_thread", arguments: {} } })

@@ -263,6 +263,55 @@ const TIMER = {
   },
 }
 
+
+const WATCH_PR = {
+  name: "watch_pr",
+  description:
+    "REGISTER A PULL REQUEST and frizz brings you back whenever something happens on it — CI turning " +
+    "green or red, and every later review, approval or comment, from a human or a bot alike. Register " +
+    "it, come to rest, and you are woken. Drop it when it stops mattering.\n\n" +
+    "IT REPORTS REPEATEDLY, unlike a timer. One registration covers the whole life of the PR: CI goes " +
+    "red, you push a fix, CI goes green, a reviewer comments — that is four wakes from one call, and you " +
+    "never have to re-register between them. It settles itself when the PR merges or closes, because " +
+    "there is then nothing left to report.\n\n" +
+    "REGISTER IT THE MOMENT YOU OPEN OR PUSH A PR. Nothing else watches for you: your runtime knows " +
+    "nothing about GitHub, and an ```awaiting fence STATES what you are waiting on without creating any " +
+    "wait at all. This tool is the wait.\n\n" +
+    "THE ```awaiting FENCE IS STILL WORTH WRITING, and it is a different job: it is how you come to REST " +
+    "without frizz asking you for a handoff, and how the human sees what you are waiting for. Register " +
+    "the watcher with this tool, then name the same PR on a `pr-watch:` line in your fence.\n\n" +
+    "REGISTERING IS IDEMPOTENT per pull request: asking twice returns the SAME id and tells you it was " +
+    "already armed, so re-registering after a compaction is safe and is the right instinct. Use `list` " +
+    "when you want to know what you are holding without changing anything — it answers with each PR's " +
+    "current check state too.\n\n" +
+    "You can only ever watch a PR on your OWN thread — there is no parameter for anyone else's.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      action: {
+        type: "string",
+        enum: ["add", "list", "drop"],
+        description:
+          "`add` registers a watcher (idempotent per PR); `drop` withdraws one by id; `list` reads back " +
+          "everything armed on this thread, with each PR's latest check state, without changing " +
+          "anything. Every action answers with the full armed set.",
+      },
+      target: {
+        type: "string",
+        description:
+          "Required for `add`. The pull request, as `owner/repo#123` or a GitHub PR URL. A ref that " +
+          "cannot be parsed is REFUSED rather than stored — a watcher that can never fire is worse than " +
+          "no watcher, because you would come to rest believing you were covered.",
+      },
+      id: {
+        type: "string",
+        description: "Required for `drop`. The watcher id returned by `add` (or listed by `list`).",
+      },
+    },
+    required: ["action"],
+  },
+}
+
 // The unified server's tool registry: `tools/list` returns these and `tools/call` routes by name.
 // Adding a worker-facing frizz tool = one entry here + one handler in `HANDLERS` — never a second
 // MCP server, so every frizz tool stays under the same `mcp__frizz__*` namespace and the same
@@ -270,13 +319,14 @@ const TIMER = {
 const MIN_INTERVAL_SECONDS = 60
 const MAX_INTERVAL_SECONDS = 24 * 60 * 60
 
-const TOOLS = [SPAWN_THREAD, RECURRING_PROMPT, TIMER]
+const TOOLS = [SPAWN_THREAD, RECURRING_PROMPT, TIMER, WATCH_PR]
 
 /** @type {Record<string, (args: Record<string, unknown>) => Promise<string>>} */
 const HANDLERS = {
   [SPAWN_THREAD.name]: spawnThread,
   [RECURRING_PROMPT.name]: recurringPrompt,
   [TIMER.name]: timer,
+  [WATCH_PR.name]: watchPr,
 }
 
 /** @param {unknown} obj */
@@ -738,6 +788,70 @@ async function timer(args) {
     `Timer ${id} set for ${fireAt} (${Math.round((fireMs - nowMs) / 1000)}s from now). It fires ONCE and ` +
     "then is gone — it may reach you mid-turn, so receiving it does not mean you had stopped. Cancel it " +
     `with \`action: "cancel", id: "${id}"\` if it stops being useful.\n\n${armedList(result)}`
+  )
+}
+
+
+/** How the armed PR-watcher set reads back, on every action, so a worker never needs a second call.
+ * @param {{ watches?: Array<{id: string, target: string, github?: {checks: string, running: number, passed: number, failed: number, failing: string[], merge: string, state: string}}> }|undefined} result */
+function armedPrWatchList(result) {
+  const watches = Array.isArray(result?.watches) ? result.watches : []
+  if (!watches.length) return "No pull requests are watched on this thread — nothing will wake you."
+  const lines = watches.map((w) => {
+    const g = w.github
+    // The CHECK STATE rides the read-back because it is the reason a worker is listing at all: "where do
+    // my PRs stand" is one call, not one per PR through `gh`.
+    const state = !g
+      ? "not polled yet"
+      : g.state !== "open"
+        ? g.state
+        : g.checks === "passing" ? `checks green (${g.passed})`
+        : g.checks === "failing" ? `checks FAILING${g.failing.length ? `: ${g.failing.join(", ")}` : ""}`
+        : g.checks === "running" ? `checks running (${g.running} left)`
+        : "no checks"
+    return `  ${w.id}  ${w.target}  —  ${state}${g && g.state === "open" && g.merge === "mergeable" ? ", mergeable" : ""}`
+  })
+  return `Watched on this thread now:\n${lines.join("\n")}`
+}
+
+/** The `watch_pr` handler: register, withdraw, or read back this thread's PR watchers.
+ * @param {Record<string, unknown>} args @returns {Promise<string>} */
+async function watchPr(args) {
+  const slug = threadSlug()
+  const action = typeof args.action === "string" ? args.action.trim() : ""
+  if (action !== "add" && action !== "list" && action !== "drop") {
+    throw new Error("`action` must be one of \"add\", \"list\" or \"drop\"")
+  }
+
+  if (action === "list") {
+    return armedPrWatchList((await callRpc("listOwnPrWatches", { slug }))?.result)
+  }
+
+  if (action === "drop") {
+    const id = typeof args.id === "string" ? args.id.trim() : ""
+    if (!id) throw new Error("`id` is required to drop a watcher — take it from `add` or from `list`")
+    const result = (await callRpc("dropOwnPrWatch", { slug, id }))?.result
+    // A drop that matched nothing is reported rather than swallowed: the id was wrong, already settled,
+    // or another thread's — and a worker that believes it withdrew a wait it still holds will rest.
+    const head = result?.dropped
+      ? `Watcher ${id} dropped. It will not wake you.`
+      : `No ARMED watcher ${id} on this thread — it was already settled, or the id is not one of yours.`
+    return `${head}\n\n${armedPrWatchList(result)}`
+  }
+
+  const target = typeof args.target === "string" ? args.target.trim() : ""
+  if (!target) throw new Error("`target` is required — the pull request, as `owner/repo#123` or a PR URL")
+  const result = (await callRpc("addOwnPrWatch", { slug, target }))?.result
+  const id = result?.id ?? "(unknown)"
+  const ref = result?.target ?? target
+  const head = result?.alreadyArmed
+    ? `Already watching ${ref} as ${id} — nothing new was registered, and you will be woken once per event.`
+    : `Watching ${ref} as ${id}. Frizz wakes you when CI passes or fails and on every later review or ` +
+      "comment, and the registration survives your turn ending, a compaction and a frizz restart."
+  return (
+    `${head}\n\nNAME IT IN YOUR \`\`\`awaiting FENCE TOO (\`pr-watch: ${ref}\`) — the watcher does the ` +
+    `waking, the fence is what lets you come to rest and shows the human what you are waiting for.\n\n` +
+    `DROP IT when it stops mattering (\`action: "drop", id: "${id}"\`).\n\n${armedPrWatchList(result)}`
   )
 }
 

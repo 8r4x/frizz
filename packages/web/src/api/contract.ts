@@ -79,6 +79,12 @@ import type {
   ProjectCard,
   ThreadLocation,
   DirectoryPickResult,
+  AddOwnPrWatchInput,
+  AddOwnPrWatchResult,
+  DropOwnPrWatchInput,
+  DropOwnPrWatchResult,
+  ListOwnPrWatchesInput,
+  OwnPrWatchesResult,
 } from "@frizz/shared"
 
 // Per-call transport options — declared here (not in rpc.ts) only because two procedures name it in
@@ -156,6 +162,12 @@ export interface Api {
   // The READ half of the same tool (`action: "get"`), so a worker can see the row before it overwrites
   // it — after a compaction, or after the human edited the text in the footer panel.
   getOwnThreadRecurringPrompt(input: GetOwnThreadRecurringPromptInput): Promise<OwnThreadRecurringPromptResult>
+  // THE PR WATCHER REGISTRY, called by `mcp__frizz__watch_pr` rather than by this client. Declared here
+  // for the same reason as its neighbours: rpc-contract.ts proves the two procedure NAME SETS are equal,
+  // so an RPC the client cannot name is one nothing checks the shape of. No browser call site uses these.
+  addOwnPrWatch(input: AddOwnPrWatchInput): Promise<AddOwnPrWatchResult>
+  dropOwnPrWatch(input: DropOwnPrWatchInput): Promise<DropOwnPrWatchResult>
+  listOwnPrWatches(input: ListOwnPrWatchesInput): Promise<OwnPrWatchesResult>
   // THE SUPERSEDED WORKER PROCEDURES, declared here only so the drift gate can see them. A worker's MCP
   // server outlives every frizz restart, so a session dispatched before the stop hook and the heartbeat
   // merged is still POSTing these names; the router aliases them onto the one recurring-prompt row
@@ -303,6 +315,9 @@ export const PROCEDURES = {
   setThreadSnooze: "mutation",
   setThreadRecurringPrompt: "mutation",
   setOwnThreadRecurringPrompt: "mutation",
+  addOwnPrWatch: "mutation",
+  dropOwnPrWatch: "mutation",
+  listOwnPrWatches: "mutation",
   getOwnThreadRecurringPrompt: "mutation",
   setOwnThreadStopHook: "mutation",
   setOwnThreadHeartbeat: "mutation",

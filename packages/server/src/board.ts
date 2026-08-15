@@ -370,13 +370,19 @@ export function hasDeclaredWait(tele: SessionTelemetry | undefined, nowMs: numbe
 // reason a thread leaves the queue; nor does a PR with no checks at all (`none`), which would otherwise
 // wait forever for CI that is never coming. Only a live `running` reading holds, and only while the PR
 // is still open.
-function heldByRunningChecks(tele: SessionTelemetry | undefined, github: GithubStatusBook): boolean {
+function heldByRunningChecks(
+  tele: SessionTelemetry | undefined,
+  github: GithubStatusBook,
+  registered: ReadonlySet<string>,
+): boolean {
   if (tele?.lastFence?.kind !== "awaiting") return false
   const refs: string[] = []
   for (const hint of tele.lastFence.hints) {
     if (hint.kind !== "pr-watch") continue
     const ref = parsePrRef(hint.value)
-    if (ref) refs.push(githubStatusKey(ref))
+    // DECLARED AND REGISTERED, both. The declaration is what says the thread is waiting; the
+    // registration is what will actually wake it. A line with no watcher behind it is neither.
+    if (ref && registered.has(githubStatusKey(ref))) refs.push(githubStatusKey(ref))
   }
   if (refs.length === 0) return false
   return refs.every((key) => {
@@ -456,19 +462,25 @@ export function fenceWatchViews(
   tele: SessionTelemetry | undefined,
   fenceAt: string | undefined,
   github: GithubStatusBook = {},
+  /** This thread's REGISTERED PR watchers, by `owner/repo#N`. A `pr-watch:` line names one of these; it
+   *  does not create one, so a line naming nothing registered is a claim frizz will not repeat. */
+  registered: ReadonlySet<string> = new Set(),
 ): ThreadView["watches"] {
   if (tele?.lastFence?.kind !== "awaiting") return []
   const seen = new Set<string>()
   const out: ThreadView["watches"] = []
-  // When the worker PARKED — what the strip's duration counts from, and what a PR watcher's own activity
-  // baseline is keyed on. Falls back to the thread's last activity when the fold has no fence instant.
+  // When the worker PARKED — what the strip's duration counts from. Falls back to the thread's last
+  // activity when the fold has no fence instant.
   const createdAt = fenceAt ?? tele.lastAssistantAt ?? new Date().toISOString()
   for (const hint of tele.lastFence.hints) {
     if (hint.kind === "pr-watch") {
       const ref = parsePrRef(hint.value)
-      if (!ref) continue // an unparseable ref arms nothing, so it may not claim a row either
+      if (!ref) continue // an unparseable ref names no PR, so it may not claim a row either
       const target = `${ref.owner}/${ref.repo}#${ref.number}`
-      if (seen.has(`github:${target}`)) continue
+      // THE SAME INTEGRITY RULE THE SHELL LINE GETS. A fence declares; the tool registers. A `pr-watch:`
+      // line with no registered watcher behind it describes a wait nothing will ever deliver, so the
+      // strip does not list it and the thread queues as usual.
+      if (!registered.has(target) || seen.has(`github:${target}`)) continue
       seen.add(`github:${target}`)
       out.push({
         id: `github:${slug}:${target}`,
@@ -484,8 +496,7 @@ export function fenceWatchViews(
     }
     if (hint.kind !== "watch") continue
     const target = hint.value.trim()
-    // A name matching nothing live is not a wait — the same integrity rule the park itself is held to,
-    // applied to the readout, so the strip can never list something the thread is not really waiting on.
+    // A name matching nothing live is not a wait — the same rule, applied to the shells the thread owns.
     if (!target || seen.has(`shell:${target}`) || !liveWaitHandles(tele).has(target)) continue
     seen.add(`shell:${target}`)
     out.push({ id: `shell:${slug}:${target}`, kind: "shell" as const, target, state: "armed" as const, createdAt })
@@ -538,6 +549,7 @@ export function deriveNeedsYou(
   // false so every other caller (and every test) keeps today's behaviour.
   deliveryProcessGone = false,
   github: GithubStatusBook = {},
+  registeredPrWatches: ReadonlySet<string> = new Set(),
 ): boolean {
   // Snooze is explicit operator lifecycle state. It must be checked before provider/question/crash
   // gates so choosing Snooze from any queue card actually parks that card until its exact deadline.
@@ -647,7 +659,7 @@ export function deriveNeedsYou(
   // queue the same thread on the strength of the watcher being armed at all. Rides `excuseLiveOwnWork`
   // for the reason that flag exists: the CARD must still state the wait (deriveAwaitingBackground opts
   // out), or the drawer blanks at rest and reads as "the agent died".
-  if (excuseLiveOwnWork && runtime !== "exited" && heldByRunningChecks(tele, github)) return false
+  if (excuseLiveOwnWork && runtime !== "exited" && heldByRunningChecks(tele, github, registeredPrWatches)) return false
   if (runtime !== "exited" && hasLiveOwnWork(tele) && tele?.lastFence?.kind !== "done") return !bgSnoozeArmed(row)
   // A final ```done fence is a CHECKED completion handoff: show its success card in the queue until the
   // human explicitly Archives the thread. Like a question, merely viewing it does not resolve it. The
@@ -694,6 +706,7 @@ export function deriveAwaitingBackground(
   limitPause: ThreadView["limitPause"] = undefined,
   deliveryProcessGone = false,
   github: GithubStatusBook = {},
+  registeredPrWatches: ReadonlySet<string> = new Set(),
 ): boolean {
   // DECLARED, not inferred. This card used to appear whenever the thread had anything running, which is
   // how it came to announce a wait on a dev server nobody tore down. It now states what the worker said
@@ -910,6 +923,11 @@ function sessionThreadView(
   // exactly the drift that once produced two cards disagreeing about one wait.
   github: GithubStatusBook = {},
 ): ThreadView {
+  // The PRs this thread has actually REGISTERED, by `owner/repo#N` — what a `pr-watch:` declaration is
+  // checked against. Read per thread because the registry is per thread, unlike the status book above.
+  const registeredPrWatches = new Set(
+    storage.listPrWatches(row.slug, { armedOnly: true }).map((w) => `${w.owner}/${w.repo}#${w.number}`),
+  )
   // A headless thread mid-turn with nobody driving it is a crash/stall, not a rest. For codex that is
   // an app-server that stopped advancing the rollout; for the broker it is a dead ownerless daemon (its
   // liveness is the daemon record, resolved live). Either way the (exited + in-flight) pair trips the
@@ -952,8 +970,8 @@ function sessionThreadView(
   const state = effectiveSessionState(row, registeredLegacyTerminal)
   const archived = state === "archived"
   const limitPause = resolveLimitPause(row, tele, nowMs)
-  const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github)
-  const awaitingBackground = archived ? false : deriveAwaitingBackground(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, deliveryProcessGone, github)
+  const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches)
+  const awaitingBackground = archived ? false : deriveAwaitingBackground(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, deliveryProcessGone, github, registeredPrWatches)
   // A pane that exited with work still outstanding — a turn in flight, OR a sub-agent still reading
   // "running" (its parent is gone, so it cannot actually be live) — is a crash/stall, not a clean
   // handoff, so it cards as "stalled" not a bare "rest". Mirrors deriveNeedsYou's surfacing above.
@@ -999,7 +1017,7 @@ function sessionThreadView(
     // become the github rows, `watch:` lines the shell rows — so this strip lists exactly what will
     // actually wake the thread, and the two cannot drift into claiming different things. There is no
     // registry behind either any more (`thread_watch`, retired 2026-08-14).
-    watches: fenceWatchViews(row.slug, tele, tele?.lastAssistantAt, github),
+    watches: fenceWatchViews(row.slug, tele, tele?.lastAssistantAt, github, registeredPrWatches),
     pendingAsk: tele?.pendingAsk ? { questions: tele.pendingAsk.questions } : undefined,
     nativeInputRequired: tele?.nativeInputRequired,
     pendingQuestion: tele?.pendingQuestion ?? false,

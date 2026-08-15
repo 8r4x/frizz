@@ -21,6 +21,10 @@ const AT = "2026-08-14T00:00:00.000Z"
 const LATER = "2026-08-14T00:10:00.000Z"
 const NOW = Date.parse(LATER) + 1000
 const REF = "acme/app#391"
+// A `pr-watch:` line DECLARES a wait; `mcp__frizz__watch_pr` CREATES one. The board honours a declaration
+// only when a registered watcher stands behind it — otherwise the thread is claiming a wait nothing will
+// ever deliver. Every case here therefore carries the registered set explicitly.
+const REGISTERED = new Set([REF])
 
 const check = (over: Record<string, unknown>) => over
 const pr = (over: Partial<PrStatus> = {}): PrStatus =>
@@ -119,9 +123,9 @@ const book = (over: Partial<ReturnType<typeof githubWatchStatus>>) =>
 
 test("checks still running hold the thread OUT of the queue — the active rail, not a card", () => {
   const running = book({ checks: "running", running: 2, passed: 1 })
-  assert.equal(deriveNeedsYou(row(), watching(), "turn-idle", false, NOW, undefined, true, false, running), false)
+  assert.equal(deriveNeedsYou(row(), watching(), "turn-idle", false, NOW, undefined, true, false, running, REGISTERED), false)
   // …and the CARD still states the wait, or the drawer blanks at rest and reads as "the agent died".
-  assert.equal(deriveAwaitingBackground(row(), watching(), "turn-idle", false, NOW, undefined, false, running), true)
+  assert.equal(deriveAwaitingBackground(row(), watching(), "turn-idle", false, NOW, undefined, false, running, REGISTERED), true)
 })
 
 test("every terminal reading puts it back in the queue", () => {
@@ -133,7 +137,7 @@ test("every terminal reading puts it back in the queue", () => {
     ["closed", { checks: "running" as const, running: 1, state: "closed" as const }],
   ] as const) {
     assert.equal(
-      deriveNeedsYou(row(), watching(), "turn-idle", false, NOW, undefined, true, false, book(over)),
+      deriveNeedsYou(row(), watching(), "turn-idle", false, NOW, undefined, true, false, book(over), REGISTERED),
       true,
       `${what}: the human has something to look at`,
     )
@@ -144,15 +148,16 @@ test("every terminal reading puts it back in the queue", () => {
 // for its first few seconds, and the state every park stays in if `gh` is unavailable — reads exactly
 // like today: a visible queue handoff.
 test("an unpolled PR does not hold, and neither does a reading for a different PR", () => {
-  assert.equal(deriveNeedsYou(row(), watching(), "turn-idle", false, NOW, undefined, true, false, {}), true)
+  assert.equal(deriveNeedsYou(row(), watching(), "turn-idle", false, NOW, undefined, true, false, {}, REGISTERED), true)
   assert.equal(
-    deriveNeedsYou(row(), watching(), "turn-idle", false, NOW, undefined, true, false, { "other/repo#1": { ...githubWatchStatus(pr(), AT), checks: "running", running: 1 } }),
+    deriveNeedsYou(row(), watching(), "turn-idle", false, NOW, undefined, true, false, { "other/repo#1": { ...githubWatchStatus(pr(), AT), checks: "running" as const, running: 1 } }, REGISTERED),
     true,
   )
 })
 
 // ALL of them, not any: with several PRs watched, one finishing is something the human can act on.
 test("one finished PR among several requeues the thread", () => {
+  const REGISTERED = new Set([REF, "acme/app#392"])
   const two = {
     turn: "idle", permPrompt: false, subAgents: [], bgShells: [], pendingQuestion: false,
     lastActivityAt: LATER, lastAssistantAt: LATER,
@@ -165,18 +170,29 @@ test("one finished PR among several requeues the thread", () => {
   const running = { ...githubWatchStatus(pr(), AT), checks: "running" as const, running: 1 }
   const bothRunning = { [REF]: running, "acme/app#392": running }
   const onePassed = { [REF]: running, "acme/app#392": { ...running, checks: "passing" as const } }
-  assert.equal(deriveNeedsYou(row(), two, "turn-idle", false, NOW, undefined, true, false, bothRunning), false)
-  assert.equal(deriveNeedsYou(row(), two, "turn-idle", false, NOW, undefined, true, false, onePassed), true)
+  assert.equal(deriveNeedsYou(row(), two, "turn-idle", false, NOW, undefined, true, false, bothRunning, REGISTERED), false)
+  assert.equal(deriveNeedsYou(row(), two, "turn-idle", false, NOW, undefined, true, false, onePassed, REGISTERED), true)
 })
 
 // ---- the card's rows ----
 
 test("a github watch row carries its PR's status once polled, and nothing before", () => {
   const status = { ...githubWatchStatus(pr(), AT), checks: "running" as const, running: 2 }
-  const [polled] = fenceWatchViews("t", watching(), LATER, { [REF]: status })
+  const [polled] = fenceWatchViews("t", watching(), LATER, { [REF]: status }, REGISTERED)
   assert.deepEqual(polled.github, status)
-  const [unpolled] = fenceWatchViews("t", watching(), LATER, {})
+  const [unpolled] = fenceWatchViews("t", watching(), LATER, {}, REGISTERED)
   assert.equal(unpolled.github, undefined, "an unpolled PR and a PR with no CI are different facts")
   assert.equal(unpolled.target, REF)
   assert.equal(unpolled.kind, "github")
+})
+
+// A DECLARATION WITH NO REGISTRATION BEHIND IT IS NOT A WAIT. The fence states what the thread waits on;
+// the tool is what makes anything happen. A `pr-watch:` line naming a PR nobody registered describes a
+// wake that will never arrive, so it neither cards nor excuses the queue — the same fail-open rule the
+// shell declaration gets (maintainer 2026-08-14: "The fence syntax itself is not used to register a
+// watcher or a background, anything").
+test("an unregistered pr-watch line neither cards nor leaves the queue", () => {
+  const running = book({ checks: "running", running: 2 })
+  assert.equal(deriveNeedsYou(row(), watching(), "turn-idle", false, NOW, undefined, true, false, running, new Set()), true)
+  assert.deepEqual(fenceWatchViews("t", watching(), LATER, running, new Set()), [])
 })

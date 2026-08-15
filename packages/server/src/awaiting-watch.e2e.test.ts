@@ -246,6 +246,9 @@ test("a poll publishes a reading the BOARD can actually read, and the queue rule
   })
   storage.setBackend(SLUG, "claude")
   storage.setClaudeRuntime(SLUG, "broker")
+  // The WATCHER, registered the way a worker registers it — by tool call, through the same storage the
+  // router writes. The fence's `pr-watch:` line declares the wait; this is what creates it.
+  storage.armPrWatch({ id: "prw_1", slug: SLUG, owner: "acme", repo: "app", number: 391, createdAtMs: Date.parse(at) })
   tailer.tick()
   const s = createScheduler({
     storage,
@@ -280,15 +283,141 @@ test("a poll publishes a reading the BOARD can actually read, and the queue rule
 
     const row = storage.getSession(SLUG)!
     // CI IS RUNNING → out of the queue, into the active rail. The card still states the wait.
-    assert.equal(deriveNeedsYou(row, tele, "turn-idle", false, Date.now(), undefined, true, false, book), false)
-    assert.equal(deriveAwaitingBackground(row, tele, "turn-idle", false, Date.now(), undefined, false, book), true)
+    const registered = new Set(["acme/app#391"])
+    assert.equal(deriveNeedsYou(row, tele, "turn-idle", false, Date.now(), undefined, true, false, book, registered), false)
+    assert.equal(deriveAwaitingBackground(row, tele, "turn-idle", false, Date.now(), undefined, false, book, registered), true)
     // …and the row the card draws carries the same reading, off the same book.
-    assert.deepEqual(fenceWatchViews(SLUG, tele, tele?.lastAssistantAt, book)[0]?.github, status)
+    assert.deepEqual(fenceWatchViews(SLUG, tele, tele?.lastAssistantAt, book, registered)[0]?.github, status)
 
     // CHECKS DONE → straight back into the queue, with no new fence and no worker turn.
     const done = { "acme/app#391": { ...status, checks: "passing" as const, running: 0, passed: 2 } }
-    assert.equal(deriveNeedsYou(row, tele, "turn-idle", false, Date.now(), undefined, true, false, done), true)
+    assert.equal(deriveNeedsYou(row, tele, "turn-idle", false, Date.now(), undefined, true, false, done, registered), true)
+    // AND AN UNREGISTERED DECLARATION IS NOT A WAIT. Same fence, same green-CI reading, no watcher: the
+    // thread queues, because nothing will ever wake it.
+    assert.equal(deriveNeedsYou(row, tele, "turn-idle", false, Date.now(), undefined, true, false, book, new Set()), true)
   } finally {
     void s.stop(); tailer.stop(); storage.close(); rmSync(dir, { recursive: true, force: true })
   }
+})
+
+// ---- THE REGISTERED PR WATCHER, over the real scheduler ---------------------------------------------
+// Maintainer 2026-08-14: "We should have a fucking tool for this. The agent should have a tool to
+// register a PR watcher… it should get notified when CI either succeeds or failed and on follow-up
+// reviews and comments."
+//
+// The property that makes this unlike every other source here is that it reports REPEATEDLY: CI goes
+// red, the worker pushes a fix, CI goes green, a reviewer comments — four wakes from ONE registration.
+// So the assertions are about the SEQUENCE, and about what must NOT fire: a poll that finds the same
+// state says nothing, and the first poll never reports the backlog it was registered on top of.
+async function prHarness() {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-prwatch-e2e-"))
+  const at = new Date(Date.now() - 60_000).toISOString()
+  const transcript = join(dir, `${SESSION}.jsonl`)
+  writeFileSync(transcript, line({
+    type: "assistant", timestamp: at, sessionId: SESSION, uuid: "p1",
+    message: { role: "assistant", content: [{ type: "text", text: "PR is up." }] },
+  }))
+  const storage = createStorage(join(dir, "ui.db"))
+  storage.setSetting("signoffNudge", "off")
+  storage.upsertSession({
+    slug: SLUG, session_id: SESSION, tmux_name: `frizz-${SLUG}`, spawned_at: at,
+    last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: at, title_auto: 1,
+    title: SLUG, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
+  } as SessionRow)
+  const tailer = createTailer({
+    project: { cwdSlug: "x" } as Project,
+    storage, bus: new Bus(), sessionLogDir: dir,
+    onChange: () => {}, paneDead: () => false, capturePane: () => "",
+  })
+  storage.setBackend(SLUG, "claude")
+  storage.setClaudeRuntime(SLUG, "broker")
+  storage.armPrWatch({ id: "prw_1", slug: SLUG, owner: "acme", repo: "app", number: 391, createdAtMs: Date.parse(at) })
+  tailer.tick()
+  // What GitHub currently says. Mutated between ticks to play the PR's life forward; the poll interval
+  // is stepped past with an explicit clock so the test never sleeps.
+  let rollup: Record<string, unknown>[] = [{ status: "IN_PROGRESS", name: "test" }]
+  let prState = "OPEN"
+  let activity: { id: string; actor: string; kind: "review" | "comment"; at: string }[] = []
+  let clock = Date.now()
+  const delivered: string[] = []
+  const s = createScheduler({
+    storage,
+    tailer,
+    resume: async (_slug, message) => { delivered.push(message) },
+    log: () => {},
+    now: () => clock,
+    fetchPr: async () => ({ state: prState, mergedAt: null, mergeable: "MERGEABLE", rollup, workflowRuns: [] } as never),
+    fetchGithubReview: async () => activity as never,
+  })
+  return {
+    delivered, storage,
+    setChecks: (next: Record<string, unknown>[]) => { rollup = next },
+    setPrState: (next: string) => { prState = next },
+    setActivity: (next: typeof activity) => { activity = next },
+    // Each tick steps past the per-PR poll floor, so every call really re-reads GitHub.
+    tick: async () => { clock += 90_000; await s.tick() },
+    close: () => { void s.stop(); tailer.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) },
+  }
+}
+
+test("a registered watcher reports CI, then review, then says nothing while nothing changes", async () => {
+  const h = await prHarness()
+  try {
+    // THE FIRST POLL IS SILENT even though there is already a comment on the PR. A worker registers the
+    // instant it opens the PR; telling it about the state it just created spends a turn on its own news.
+    h.setActivity([{ id: "c1", actor: "reviewer", kind: "comment", at: new Date().toISOString() }])
+    await h.tick()
+    assert.deepEqual(h.delivered, [], "CI still running and the backlog is the baseline — nothing to say")
+
+    // CI GOES RED.
+    h.setChecks([{ status: "COMPLETED", conclusion: "FAILURE", name: "lint" }])
+    await h.tick()
+    assert.equal(h.delivered.length, 1)
+    assert.match(h.delivered[0], /CI FAILED/)
+    assert.match(h.delivered[0], /lint/)
+    assert.match(h.delivered[0], /STILL ARMED/, "the worker must not think this watcher is spent")
+
+    // THE SAME RED CI ON THE NEXT POLL IS NOT NEWS. Without this the watcher is a nag loop with an API
+    // bill — it would re-announce its own last message on every tick, forever.
+    await h.tick()
+    assert.equal(h.delivered.length, 1, "nothing changed, so nothing is said")
+
+    // CI GOES GREEN — the same watcher, a second report, no re-registration in between.
+    h.setChecks([{ status: "COMPLETED", conclusion: "SUCCESS", name: "lint" }])
+    await h.tick()
+    assert.equal(h.delivered.length, 2)
+    assert.match(h.delivered[1], /CI PASSED/)
+
+    // A FOLLOW-UP REVIEW — a third report from the same registration, and only the NEW item.
+    h.setActivity([
+      { id: "c1", actor: "reviewer", kind: "comment", at: new Date().toISOString() },
+      { id: "c2", actor: "reviewer", kind: "review", at: new Date().toISOString() },
+    ])
+    await h.tick()
+    assert.equal(h.delivered.length, 3)
+    assert.match(h.delivered[2], /reviewer/)
+    assert.doesNotMatch(h.delivered[2], /CI (PASSED|FAILED)/, "CI did not move; only the review did")
+  } finally { h.close() }
+})
+
+// A MERGED PR ENDS THE WATCH. There is nothing further to report, and an armed row on a finished PR is a
+// poll that can never produce another wake — so it reports once and settles itself.
+test("a merged PR reports once and settles the watcher", async () => {
+  const h = await prHarness()
+  try {
+    await h.tick()
+    assert.equal(h.storage.getPrWatch("prw_1")?.state, "armed", "precondition: still watching")
+
+    h.setPrState("MERGED")
+    await h.tick()
+    assert.equal(h.delivered.length, 1)
+    assert.match(h.delivered[0], /was MERGED/)
+    assert.match(h.delivered[0], /spent/, "and it says so, so the worker does not sit waiting for more")
+    assert.equal(h.storage.getPrWatch("prw_1")?.state, "settled")
+
+    // SETTLED IS TERMINAL. A settled row is not polled again, so a merged PR cannot keep costing GitHub
+    // calls or produce a second announcement.
+    await h.tick()
+    assert.equal(h.delivered.length, 1)
+  } finally { h.close() }
 })
