@@ -156,6 +156,9 @@ function harness(): Harness {
       if (!m) throw new Error(`bad ref ${ref}`)
       storage.armPrWatch({
         id: `prw_${++watchSeq}`, slug, owner: m[1], repo: m[2], number: Number(m[3]), createdAtMs: clock.ms - 60_000,
+        // Far out: these cases are about ACTIVITY, not the expiry sweep, which would otherwise settle
+        // the watcher out from under them.
+        expiresAtMs: clock.ms + 24 * 3600_000,
       })
     },
     make(over) {
@@ -1647,4 +1650,43 @@ test("a resume that REJECTS asynchronously is retried, exactly like a synchronou
   await restarted.tick()
   assert.equal(attempts, 2, "the async rejection was retried, not swallowed")
   assert.equal(h.resumes.length, 1, "and the retry delivered exactly once")
+})
+
+// CI TRANSITIONS WAKE EVERY TIME, IN BOTH DIRECTIONS — maintainer 2026-08-15, asked as "every time".
+//
+// One registration covers the whole life of the PR: red, a fix, green, a break, green again. Each of
+// those is news the worker acts on, and a watcher that reported only the first would be worse than
+// useless — the agent that pushed a fix would never learn whether it worked. The cursor holds the last
+// TERMINAL verdict, so what fires is the CHANGE, never the repetition: polling green twice is silence.
+test("pr-watch: CI wakes on every terminal transition, both directions, and never on a repeat", async () => {
+  const h = harness()
+  h.watch("r", "acme/app#7")
+  h.storage.upsertSession(row("r"))
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr", value: "acme/app#7" }])), lastActivityAt: iso(h.clock.ms) })
+  h.review.result = []
+
+  const poll = async (checks: "passing" | "failing") => {
+    h.clock.ms += 10 * 60_000
+    h.pr.result = {
+      state: "OPEN",
+      mergedAt: null,
+      rollup: checks === "passing"
+        ? [{ __typename: "CheckRun", name: "ci", conclusion: "SUCCESS", status: "COMPLETED" }]
+        : [{ __typename: "CheckRun", name: "ci", conclusion: "FAILURE", status: "COMPLETED" }],
+    } as unknown as PrStatus
+    const s = h.make()
+    await s.tick()
+    await s.tick()
+  }
+
+  await poll("failing")
+  assert.equal(h.resumes.length, 1, "red is news")
+  await poll("failing")
+  assert.equal(h.resumes.length, 1, "…still red is not")
+  await poll("passing")
+  assert.equal(h.resumes.length, 2, "the fix landing is news — this is the one a worker is waiting for")
+  await poll("passing")
+  assert.equal(h.resumes.length, 2, "…still green is not")
+  await poll("failing")
+  assert.equal(h.resumes.length, 3, "and breaking again is news, from the SAME registration")
 })

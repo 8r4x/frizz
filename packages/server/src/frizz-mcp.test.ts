@@ -99,9 +99,11 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     assert.deepEqual(Object.keys(list.result.tools[4].inputSchema.properties), [])
     assert.deepEqual(list.result.tools[3].inputSchema.required, ["action"])
     assert.deepEqual(list.result.tools[3].inputSchema.properties.action.enum, ["add", "list", "drop"])
+    // `for` is REQUIRED for `add` (enforced in the handler, like its siblings): a PR watcher with no
+    // expiry polls forever and holds whatever thread parked on it (2026-08-15).
     assert.deepEqual(
       Object.keys(list.result.tools[3].inputSchema.properties).sort(),
-      ["action", "id", "target"],
+      ["action", "for", "id", "target"],
     )
 
     // An unregistered name is a protocol error, not a crash — the registry routes by name now.
@@ -777,11 +779,11 @@ test("`watch_pr` registers, lists and drops against the CALLING thread", async (
 
     rpc.send({
       jsonrpc: "2.0", id: 2, method: "tools/call",
-      params: { name: "watch_pr", arguments: { action: "add", target: "acme/app#391" } },
+      params: { name: "watch_pr", arguments: { action: "add", target: "acme/app#391", for: "2h" } },
     })
     const added = await rpc.next(2)
     assert.equal(added.result.isError, undefined)
-    assert.deepEqual(seen[0], { url: "/_frizz/rpc/addOwnPrWatch", body: { slug: "watching-thread", target: "acme/app#391" } })
+    assert.deepEqual(seen[0], { url: "/_frizz/rpc/addOwnPrWatch", body: { slug: "watching-thread", target: "acme/app#391", for: "2h" } })
     assert.match(added.result.content[0].text, /Watching acme\/app#391 as prw_abc123/)
     // It must TELL THE WORKER THE OTHER HALF. Registering is the wait; the fence is how it comes to rest
     // and shows the human — a worker that only registers sits in the queue being asked for a handoff.

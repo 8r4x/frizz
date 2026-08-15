@@ -248,7 +248,7 @@ test("a poll publishes a reading the BOARD can actually read, and the queue rule
   storage.setClaudeRuntime(SLUG, "broker")
   // The WATCHER, registered the way a worker registers it — by tool call, through the same storage the
   // router writes. The fence's `pr-watch:` line declares the wait; this is what creates it.
-  storage.armPrWatch({ id: "prw_1", slug: SLUG, owner: "acme", repo: "app", number: 391, createdAtMs: Date.parse(at) })
+  storage.armPrWatch({ id: "prw_1", slug: SLUG, owner: "acme", repo: "app", number: 391, createdAtMs: Date.parse(at), expiresAtMs: Date.parse(at) + 2 * 3600_000 })
   tailer.tick()
   const s = createScheduler({
     storage,
@@ -335,7 +335,7 @@ async function prHarness() {
   })
   storage.setBackend(SLUG, "claude")
   storage.setClaudeRuntime(SLUG, "broker")
-  storage.armPrWatch({ id: "prw_1", slug: SLUG, owner: "acme", repo: "app", number: 391, createdAtMs: Date.parse(at) })
+  storage.armPrWatch({ id: "prw_1", slug: SLUG, owner: "acme", repo: "app", number: 391, createdAtMs: Date.parse(at), expiresAtMs: Date.parse(at) + 2 * 3600_000 })
   tailer.tick()
   // What GitHub currently says. Mutated between ticks to play the PR's life forward; the poll interval
   // is stepped past with an explicit clock so the test never sleeps.

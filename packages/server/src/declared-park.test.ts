@@ -15,7 +15,12 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { declaredWaitIds, hasDeclaredBackgroundPark, hasDeclaredWait } from "./board.ts"
-import type { SessionTelemetry } from "./tailer.ts"
+import { createScheduler } from "./scheduler.ts"
+import type { FenceView, SessionTelemetry } from "./tailer.ts"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { createStorage, type SessionRow } from "./storage.ts"
 
 const AT = "2026-08-14T00:00:00.000Z"
 const NOW = Date.parse("2026-08-14T00:05:00.000Z")
@@ -140,4 +145,107 @@ test("own background work does both — it cards AND it leaves the queue", () =>
   const own = parked(["bash_1"], { bgShells: [shell("nub run test", "bash_1")] })
   assert.equal(hasDeclaredWait(own, NOW), true)
   assert.equal(hasDeclaredBackgroundPark(own, NOW), true)
+})
+
+// ---- SOURCE 12: THE PARK THAT STOPPED BEING TRUE --------------------------------------------------
+// The two ways an awaiting fence goes stale, and the property that matters is that NEITHER is silent.
+// Every stall this grammar replaced was silent: a watcher matched on ids the worker never saw, a
+// blocking call that starved its own notification, a timer written in the past. Each one left a thread
+// looking parked forever, and frizz said nothing.
+
+function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; restedAt?: string } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-park-"))
+  const storage = createStorage(join(dir, "ui.db"))
+  storage.setSetting("signoffNudge", "off") // isolate SOURCE 12 from the nudge
+  const slug = "parked"
+  const restedAt = opts.restedAt ?? new Date(Date.now() - 60_000).toISOString()
+  storage.upsertSession({
+    slug, session_id: "sid", tmux_name: `frizz-${slug}`, spawned_at: "2026-08-15T11:00:00.000Z",
+    last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: restedAt, title_auto: 0,
+    title: null, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
+  } as SessionRow)
+  const s = createScheduler({
+    storage,
+    tailer: {
+      get: () => ({
+        turn: "idle",
+        lastAssistantAt: restedAt,
+        lastActivityAt: restedAt,
+        subAgents: [],
+        bgShells: opts.shells ?? [],
+        pendingQuestion: false,
+        permPrompt: false,
+        lastFence: { kind: "awaiting", body: "", hints },
+      }),
+    } as never,
+    resume: async () => {},
+    log: () => {},
+  })
+  const queued = () => storage.db.prepare("SELECT fence_id, message FROM wake_delivery WHERE thread_slug = ?").all(slug) as { fence_id: string; message: string }[]
+  return { s, storage, queued, close: () => { void s.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) } }
+}
+
+const LIVE_SHELL = { label: "the suite", startedAt: "2026-08-15T11:59:00.000Z", state: "running" as const, id: "toolu_x", taskId: "bzvtnt3ig" }
+
+test("a park naming something that is NOT running bumps the worker, and says which", async () => {
+  const h = parkHarness([
+    { kind: "shell", value: "bzvtnt3ig" },
+    { kind: "shell", value: "bGONE" },
+    { kind: "for", value: "2h" },
+  ], { shells: [LIVE_SHELL] })
+  try {
+    await h.s.tick()
+    const rows = h.queued()
+    assert.equal(rows.length, 1, "a park that cannot resolve is never silent")
+    assert.match(rows[0].fence_id, /^park:dead:/)
+    // NAMING WHICH is the whole point: "your fence is wrong" sends a worker back to hunt for an id it
+    // has already lost, which is how it got the id wrong in the first place.
+    assert.match(rows[0].message, /bGONE.*NOT RUNNING/s)
+    assert.match(rows[0].message, /bzvtnt3ig.*still running/s)
+    assert.match(rows[0].message, /mcp__frizz__activity/, "…and points at the tool that hands the ids back")
+  } finally { h.close() }
+})
+
+test("a park whose every item is live is left alone", async () => {
+  const h = parkHarness([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "2h" }], { shells: [LIVE_SHELL] })
+  try {
+    await h.s.tick()
+    assert.deepEqual(h.queued(), [], "an honest park is not interrupted")
+  } finally { h.close() }
+})
+
+// `for:` ELAPSED. The wait did not fail — it simply outlived its own estimate, which is a checkpoint
+// rather than an error, so the worker is brought back to look rather than told off.
+test("a park whose `for:` runs out bumps with the status of every item, and re-parking is unlimited", async () => {
+  const h = parkHarness([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "30s" }], {
+    shells: [LIVE_SHELL],
+    restedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+  })
+  try {
+    await h.s.tick()
+    const rows = h.queued()
+    assert.equal(rows.length, 1)
+    assert.match(rows[0].fence_id, /^park:expired:/)
+    assert.match(rows[0].message, /Your wait expired, nothing resolved\. Check back in on everything\./)
+    assert.match(rows[0].message, /bzvtnt3ig.*still running/s, "the status list says what is and is not going")
+    assert.match(rows[0].message, /no limit on that/, "re-parking is explicitly unlimited")
+    // ONE bump per rest per cause — not one per tick, which would be a loop.
+    for (let i = 0; i < 3; i++) await h.s.tick()
+    assert.equal(h.queued().length, 1, "one rest, one expiry bump")
+  } finally { h.close() }
+})
+
+// A fence that is not structurally a park at all belongs to the sign-off nudge, which teaches the whole
+// grammar in one message. Bumping here too would say the same thing twice for one rest.
+test("a fence with no items and a fence with no `for:` are left to the sign-off nudge", async () => {
+  for (const hints of [
+    [{ kind: "for" as const, value: "2h" }],
+    [{ kind: "shell" as const, value: "bGONE" }],
+  ]) {
+    const h = parkHarness(hints)
+    try {
+      await h.s.tick()
+      assert.deepEqual(h.queued(), [], `${JSON.stringify(hints)} is not SOURCE 12's to report`)
+    } finally { h.close() }
+  }
 })

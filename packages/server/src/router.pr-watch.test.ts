@@ -67,7 +67,7 @@ test("add registers the PR, normalizes the ref, and answers with the thread's ar
     // A PR URL, because that is what a worker pastes out of `gh pr create` — and it must normalize to
     // the same `owner/repo#N` the board's rows and the poller's status book are keyed by, or the same
     // PR registered two ways would be two watchers and two wakes.
-    const added = await h.router.addOwnPrWatch.handler({ input: { slug: "t", target: "https://github.com/acme/app/pull/391" } })
+    const added = await h.router.addOwnPrWatch.handler({ input: { slug: "t", target: "https://github.com/acme/app/pull/391", for: "2h" } })
     assert.equal(added.target, "acme/app#391")
     assert.equal(added.alreadyArmed, false)
     assert.deepEqual(added.watches.map((w) => w.target), ["acme/app#391"])
@@ -87,8 +87,8 @@ test("registering the same PR twice returns the SAME watcher rather than a dupli
   const h = harness()
   try {
     h.storage.upsertSession(row("t"))
-    const first = await h.router.addOwnPrWatch.handler({ input: { slug: "t", target: "acme/app#391" } })
-    const again = await h.router.addOwnPrWatch.handler({ input: { slug: "t", target: "https://github.com/acme/app/pull/391" } })
+    const first = await h.router.addOwnPrWatch.handler({ input: { slug: "t", target: "acme/app#391", for: "2h" } })
+    const again = await h.router.addOwnPrWatch.handler({ input: { slug: "t", target: "https://github.com/acme/app/pull/391", for: "2h" } })
     assert.equal(again.id, first.id)
     assert.equal(again.alreadyArmed, true)
     assert.equal(h.storage.listPrWatches("t", { armedOnly: true }).length, 1)
@@ -103,7 +103,7 @@ test("a ref that names no pull request is refused, and nothing is written", asyn
   try {
     h.storage.upsertSession(row("t"))
     await assert.rejects(
-      () => h.router.addOwnPrWatch.handler({ input: { slug: "t", target: "the auth PR" } }),
+      () => h.router.addOwnPrWatch.handler({ input: { slug: "t", target: "the auth PR", for: "2h" } }),
       /is not a pull request I can watch/,
     )
     assert.deepEqual(h.storage.listPrWatches("t"), [])
@@ -114,12 +114,12 @@ test("an unregistered or archived thread cannot register a watcher", async () =>
   const h = harness()
   try {
     await assert.rejects(
-      () => h.router.addOwnPrWatch.handler({ input: { slug: "ghost", target: "acme/app#391" } }),
+      () => h.router.addOwnPrWatch.handler({ input: { slug: "ghost", target: "acme/app#391", for: "2h" } }),
       /is not registered/,
     )
     h.storage.upsertSession(row("shelved", { archived: 1, state: "archived" }))
     await assert.rejects(
-      () => h.router.addOwnPrWatch.handler({ input: { slug: "shelved", target: "acme/app#391" } }),
+      () => h.router.addOwnPrWatch.handler({ input: { slug: "shelved", target: "acme/app#391", for: "2h" } }),
       /Reopen this thread/,
     )
   } finally { h.close() }
@@ -132,10 +132,10 @@ test("the armed cap refuses the next one and says what to do about it", async ()
   try {
     h.storage.upsertSession(row("t"))
     for (let i = 1; i <= PR_WATCH_MAX_ARMED; i++) {
-      await h.router.addOwnPrWatch.handler({ input: { slug: "t", target: `acme/app#${i}` } })
+      await h.router.addOwnPrWatch.handler({ input: { slug: "t", target: `acme/app#${i}`, for: "2h" } })
     }
     await assert.rejects(
-      () => h.router.addOwnPrWatch.handler({ input: { slug: "t", target: "acme/app#999" } }),
+      () => h.router.addOwnPrWatch.handler({ input: { slug: "t", target: "acme/app#999", for: "2h" } }),
       new RegExp(`the limit is ${PR_WATCH_MAX_ARMED}`),
     )
     assert.equal(h.storage.listPrWatches("t", { armedOnly: true }).length, PR_WATCH_MAX_ARMED)
@@ -151,7 +151,7 @@ test("drop withdraws the caller's own watcher, and says so when it matched nothi
   try {
     h.storage.upsertSession(row("mine"))
     h.storage.upsertSession(row("theirs"))
-    const mine = await h.router.addOwnPrWatch.handler({ input: { slug: "mine", target: "acme/app#391" } })
+    const mine = await h.router.addOwnPrWatch.handler({ input: { slug: "mine", target: "acme/app#391", for: "2h" } })
 
     const wrongThread = await h.router.dropOwnPrWatch.handler({ input: { slug: "theirs", id: mine.id } })
     assert.equal(wrongThread.dropped, false, "another thread's id is not droppable")
@@ -175,7 +175,7 @@ test("list answers with each PR's latest checks, from the same book the board re
   const h = harness()
   try {
     h.storage.upsertSession(row("t"))
-    await h.router.addOwnPrWatch.handler({ input: { slug: "t", target: "acme/app#391" } })
+    await h.router.addOwnPrWatch.handler({ input: { slug: "t", target: "acme/app#391", for: "2h" } })
     h.storage.setSetting("waker.github.status.v1", {
       "acme/app#391": {
         checks: "failing", running: 1, passed: 9, failed: 2, failing: ["lint"],
@@ -188,7 +188,7 @@ test("list answers with each PR's latest checks, from the same book the board re
 
     // An UNPOLLED PR carries no status at all rather than an invented one — "frizz has not looked yet"
     // and "this PR has no CI" are different facts, and only the second means the wait is nearly over.
-    await h.router.addOwnPrWatch.handler({ input: { slug: "t", target: "acme/app#392" } })
+    await h.router.addOwnPrWatch.handler({ input: { slug: "t", target: "acme/app#392", for: "2h" } })
     const both = await h.router.listOwnPrWatches.handler({ input: { slug: "t" } })
     assert.equal(both.watches.find((w) => w.target === "acme/app#392")?.github, undefined)
   } finally { h.close() }
@@ -200,7 +200,7 @@ test("forgetting a thread takes its watchers with it", async () => {
   const h = harness()
   try {
     h.storage.upsertSession(row("t"))
-    await h.router.addOwnPrWatch.handler({ input: { slug: "t", target: "acme/app#391" } })
+    await h.router.addOwnPrWatch.handler({ input: { slug: "t", target: "acme/app#391", for: "2h" } })
     h.storage.forgetSession("t")
     assert.deepEqual(h.storage.listPrWatches("t"), [])
     assert.deepEqual(h.storage.armedPrWatches(), [])

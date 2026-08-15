@@ -303,6 +303,14 @@ const WATCH_PR = {
           "cannot be parsed is REFUSED rather than stored — a watcher that can never fire is worse than " +
           "no watcher, because you would come to rest believing you were covered.",
       },
+      for: {
+        type: "string",
+        description:
+          "REQUIRED for `add`. How long to watch, as a DURATION — `30m`, `2h`, `3d` (max 24h). Never an " +
+          "instant, and there is no default. A PR nobody ever reviews would otherwise be polled forever " +
+          "and hold your thread with it; the watcher settles itself when this runs out and tells you, " +
+          "and you re-register if you still care.",
+      },
       id: {
         type: "string",
         description: "Required for `drop`. The watcher id returned by `add` (or listed by `list`).",
@@ -880,7 +888,7 @@ async function watchPr(args) {
 
   const target = typeof args.target === "string" ? args.target.trim() : ""
   if (!target) throw new Error("`target` is required — the pull request, as `owner/repo#123` or a PR URL")
-  const result = (await callRpc("addOwnPrWatch", { slug, target }))?.result
+  const result = (await callRpc("addOwnPrWatch", { slug, target, for: typeof args.for === "string" ? args.for.trim() : "" }))?.result
   const id = result?.id ?? "(unknown)"
   const ref = result?.target ?? target
   const head = result?.alreadyArmed

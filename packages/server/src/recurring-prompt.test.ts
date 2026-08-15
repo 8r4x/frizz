@@ -339,7 +339,7 @@ test("an awaiting fence on a PR the scheduler is watching holds the bump", async
   try {
     // REGISTERED, which is what makes a wake actually coming. Since 2026-08-14 the fence line alone arms
     // nothing — `mcp__frizz__watch_pr` does — so the hold reads the registry rather than the hint.
-    h.storage.armPrWatch({ id: "prw_1", slug: h.slug, owner: "colinhacks", repo: "zod", number: 6382, createdAtMs: 1 })
+    h.storage.armPrWatch({ id: "prw_1", slug: h.slug, owner: "colinhacks", repo: "zod", number: 6382, createdAtMs: 1, expiresAtMs: Date.parse("2099-01-01T00:00:00.000Z") })
     await h.s.tick()
     assert.deepEqual(h.delivered, [], "the waker already owns this thread's next wake")
   } finally { h.close() }

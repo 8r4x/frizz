@@ -2,7 +2,7 @@ import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
 import { compactionPromptMessage, formatGithubWakeSteer, type GithubWatchStatus, prWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, wakeDeliveryToken, type QuotaSnapshot } from "@frizz/shared"
-import { GITHUB_STATUS_SETTING, parkIsHonoured, readAwaitingPark, type LiveActivity } from "./awaiting.ts"
+import { GITHUB_STATUS_SETTING, parkExpiresAt, parkIsHonoured, readAwaitingPark, unaccountedItems, type LiveActivity } from "./awaiting.ts"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
 import type { FenceView, SessionTelemetry } from "./tailer.ts"
@@ -1996,6 +1996,90 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     deps.storage.countSignoffNudge(item.slug, item.fenceId)
   }
 
+  // ---- SOURCE 12: A PARK THAT RAN OUT, OR THAT NAMED SOMETHING DEAD -------------------------------
+  //
+  // The two ways an ```awaiting fence stops being true, and neither may pass silently — that is the whole
+  // lesson of the three stalls this grammar replaced (see the AwaitingHint doc block in @frizz/shared).
+  //
+  //  1. IT NAMED SOMETHING THAT IS NOT RUNNING. Checked the moment the fence lands. The bump says WHICH,
+  //     because "your fence is wrong" sends a worker to re-read its own transcript for an id it has
+  //     already lost, and that is exactly how it got the id wrong the first time.
+  //  2. IT RAN OUT. `for:` elapsed and nothing resolved. The worker is brought back to re-check
+  //     everything rather than the wait simply continuing, and re-parking on the same still-running
+  //     items is UNLIMITED (maintainer 2026-08-15) — a three-hour build under a one-hour estimate is a
+  //     bad estimate, not a failure, and each bump is a real checkpoint where it could decide otherwise.
+  function evalParkIntegrity(nowMs: number): void {
+    for (const row of deps.storage.allSessions()) {
+      if (row.state === "archived" || row.archived === 1) continue
+      const tele = deps.tailer.get(row.slug)
+      if (!tele || tele.turn !== "idle") continue
+      if (tele.lastFence?.kind !== "awaiting") continue
+      // The agent must have spoken last — same guard as the sign-off nudge, and for the same measured
+      // reason: frizz's own delivery lands as a USER record, so keying on activity would let this reset
+      // its own dedupe and bump in a loop.
+      const spokeAt = tele.lastAssistantAt
+      if (!spokeAt) continue
+      if (tele.lastUserAt && Date.parse(tele.lastUserAt) >= Date.parse(spokeAt)) continue
+      if (tele.authFault) continue
+
+      const park = readAwaitingPark(tele.lastFence.hints)
+      const live = liveActivityOf(
+        tele,
+        registeredPrWatchesOf(deps.storage, row.slug),
+        armedTimerIdsOf(deps.storage, row.slug),
+      )
+      const dead = unaccountedItems(park.items, live)
+      const expiresAt = parkExpiresAt(park, Date.parse(spokeAt))
+      const expired = expiresAt !== null && nowMs >= expiresAt
+      if (dead.length === 0 && !expired) continue
+      // A fence that is not structurally a park at all (names nothing, or carries no `for:`) is left to
+      // the sign-off nudge, which already teaches the whole grammar. Bumping it here too would say the
+      // same thing twice for one rest.
+      if (park.items.length === 0 || park.forMs === null) continue
+
+      const status = park.items.map((i) => {
+        const gone = dead.some((d) => d.kind === i.kind && d.value === i.value)
+        return `- \`${i.kind}: ${i.value}\` — ${gone ? "NOT RUNNING" : "still running"}`
+      })
+      const message = expired
+        ? [
+          "⏰ Your wait expired, nothing resolved. Check back in on everything.",
+          "",
+          ...status,
+          "",
+          "Re-park if they are genuinely still going — there is no limit on that, and a long job is not a",
+          "failure. If something is finished, read its result. If nothing is left, end in ```done or ask a",
+          "```question.",
+        ].join("\n")
+        : [
+          `⚠️ Your \`\`\`awaiting fence names ${dead.length === 1 ? "something that is" : "things that are"} not running, so it is not a park and your thread stayed in the queue.`,
+          "",
+          ...status,
+          "",
+          "Use `mcp__frizz__activity` to read back what you actually have out, with the exact id each line",
+          "needs, then re-fence naming only those — or end in ```done or a ```question if there is nothing",
+          "left to wait for.",
+        ].join("\n")
+
+      // Keyed on the REST plus which failure it is, so one fence gets one bump per cause: a park that is
+      // bumped for a dead id and later expires is two different pieces of news.
+      const fenceId = `park:${expired ? "expired" : "dead"}:${spokeAt}`
+      const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
+      if (outbox.get(deliveryId)) continue
+      const item = outbox.enqueue({
+        id: deliveryId,
+        slug: row.slug,
+        sessionId: row.session_id,
+        fenceId,
+        hintKey: fenceId,
+        message,
+        reason: expired ? "awaiting park expired" : `awaiting park named ${dead.length} dead item(s)`,
+      }, nowMs).delivery
+      log(`waker: queued ${row.slug} — ${item.reason}`)
+      checkpoint("after-enqueue", item)
+    }
+  }
+
   // ---- SOURCE 11: THE REGISTERED PR WATCHERS ------------------------------------------------------
   // A worker registers a pull request with `mcp__frizz__watch_pr` and frizz brings it back whenever
   // something happens on it (maintainer 2026-08-14: "The agent should have a tool to register a PR
@@ -2031,6 +2115,36 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   }
 
   async function evalPrWatches(nowMs: number): Promise<void> {
+    // EXPIRY FIRST, so an expired watcher is never polled again and never fires one last time on its way
+    // out. A PR nobody touches would otherwise be polled forever, and a thread parked on it would wait
+    // forever with it — the unbounded wait this whole grammar exists to end (maintainer 2026-08-15).
+    // The worker is TOLD, because a watcher that vanishes silently is the same stall in a new costume:
+    // it would rest believing it is covered.
+    for (const w of deps.storage.expiredPrWatches(nowMs)) {
+      const row = deps.storage.getSession(w.thread_slug)
+      deps.storage.settlePrWatch(w.id, nowMs)
+      const ref = `${w.owner}/${w.repo}#${w.number}`
+      log(`waker: settled ${w.thread_slug} — pr watcher ${w.id} expired (${ref})`)
+      if (!row || row.state === "archived" || row.archived === 1) continue
+      const fenceId = `prwatch-expired:${w.id}`
+      const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
+      if (outbox.get(deliveryId)) continue
+      const item = outbox.enqueue({
+        id: deliveryId,
+        slug: row.slug,
+        sessionId: row.session_id,
+        fenceId,
+        hintKey: `prwatch-expired:${w.id}`,
+        message:
+          `⏰ Your watcher on ${ref} has expired and is no longer armed — nothing on that PR will wake ` +
+          `you now.\n\nIf you still care about it, register it again with \`mcp__frizz__watch_pr\` and a ` +
+          `fresh \`for:\`. If you do not, and it was the only thing you were waiting on, end in a proper ` +
+          `terminal state instead of parking on it again.`,
+        reason: `pr watcher ${w.id} expired (${ref})`,
+      }, nowMs).delivery
+      log(`waker: queued ${row.slug} — ${item.reason}`)
+      checkpoint("after-enqueue", item)
+    }
     const armed = deps.storage.armedPrWatches()
     if (armed.length === 0) return
     // ONE FETCH PER PR, however many threads watch it. Two workers on the same PR is the ordinary shape
@@ -2715,6 +2829,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
     try {
       evalSignoffNudges(now())
+      // SOURCE 12, beside the nudge because they are the same job from two directions: the nudge catches
+      // a rest that declared NOTHING, this catches one whose declaration stopped being true.
+      evalParkIntegrity(now())
     } catch (err) {
       if (err instanceof InjectedSchedulerCrash) throw err
       log(`waker: sign-off nudge pass failed: ${err instanceof Error ? err.message : String(err)}`)

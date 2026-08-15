@@ -382,6 +382,9 @@ export interface PrWatchRow {
   owner: string
   repo: string
   number: number
+  /** Epoch ms after which this watcher settles itself. Null only on a row written before it was
+   *  required — the registration path rejects a missing one. */
+  expires_at: number | null
   state: "armed" | "dropped" | "settled"
   created_at: number
   settled_at: number | null
@@ -535,7 +538,9 @@ export interface Storage {
   // The same shape as the timers above and for the same reason: a thread may hold many, each with its own
   // identity, so the record of intent is a TABLE. `id` is minted by the caller so the row and the
   // scheduler's delivery ids agree without a read-back.
-  armPrWatch(watch: { id: string; slug: string; owner: string; repo: string; number: number; createdAtMs: number }): void
+  armPrWatch(watch: { id: string; slug: string; owner: string; repo: string; number: number; createdAtMs: number; expiresAtMs: number }): void
+  /** Every armed watcher whose expiry has passed — settled by the scheduler, not polled again. */
+  expiredPrWatches(nowMs: number): PrWatchRow[]
   // A thread's watchers, oldest first. `armedOnly` is what the worker's tool reads back and what the
   // board lists; the full set is for diagnostics.
   listPrWatches(slug: string, opts?: { armedOnly?: boolean }): PrWatchRow[]
@@ -822,7 +827,11 @@ export function createStorage(dbPath: string): Storage {
       state       TEXT NOT NULL CHECK (state IN ('armed', 'dropped', 'settled')),
       created_at  INTEGER NOT NULL,
       settled_at  INTEGER,
-      cursor      TEXT
+      cursor      TEXT,
+      -- When this watcher stops polling by itself. REQUIRED at registration (2026-08-15): a PR nobody
+      -- ever touches would otherwise be polled forever, and the thread parked on it would wait forever
+      -- with it. Nullable in the column only so an older row reads; the tool refuses to arm without one.
+      expires_at  INTEGER
     );
     CREATE INDEX IF NOT EXISTS pr_watch_armed
       ON pr_watch(state);
@@ -932,6 +941,15 @@ export function createStorage(dbPath: string): Storage {
     } catch {
       // column already exists
     }
+  }
+  // A PR WATCHER'S EXPIRY (2026-08-15), on the same additive terms as the session columns above: the
+  // table is created with IF NOT EXISTS, so an existing database never sees the new column otherwise.
+  // Left NULL on an already-armed row — the poller treats "no expiry" as the old unbounded behaviour
+  // rather than settling a live watcher out from under a thread that is parked on it.
+  try {
+    db.exec("ALTER TABLE pr_watch ADD COLUMN expires_at INTEGER")
+  } catch {
+    // column already exists
   }
   // THE REBRAND LEFT THESE ROWS BEHIND (2026-08-06). `tmux_name` is re-derived as
   // `frizz-<slug>` and checked on EVERY write by validateSessionIdentity, so a row still holding
@@ -1528,9 +1546,12 @@ export function createStorage(dbPath: string): Storage {
     WHERE slug = ? AND signoff_nudges > 0
   `)
   const armPrWatchStmt = db.prepare(`
-    INSERT INTO pr_watch (id, thread_slug, owner, repo, number, state, created_at, settled_at, cursor)
-    VALUES (@id, @slug, @owner, @repo, @number, 'armed', @createdAtMs, NULL, NULL)
+    INSERT INTO pr_watch (id, thread_slug, owner, repo, number, state, created_at, settled_at, cursor, expires_at)
+    VALUES (@id, @slug, @owner, @repo, @number, 'armed', @createdAtMs, NULL, NULL, @expiresAtMs)
   `)
+  const expiredPrWatchesStmt = db.prepare<[number], PrWatchRow>(
+    "SELECT * FROM pr_watch WHERE state = 'armed' AND expires_at IS NOT NULL AND expires_at <= ? ORDER BY expires_at, id",
+  )
   const prWatchesBySlugStmt = db.prepare<[string], PrWatchRow>(
     "SELECT * FROM pr_watch WHERE thread_slug = ? ORDER BY created_at, id",
   )
@@ -2190,6 +2211,7 @@ export function createStorage(dbPath: string): Storage {
       (opts?.armedOnly ? armedPrWatchesBySlugStmt : prWatchesBySlugStmt).all(slug),
     getPrWatch: (id) => prWatchByIdStmt.get(id),
     armedPrWatches: () => armedPrWatchesStmt.all(),
+    expiredPrWatches: (nowMs) => expiredPrWatchesStmt.all(nowMs),
     dropPrWatch: (slug, id, settledAtMs) => dropPrWatchStmt.run(settledAtMs, id, slug).changes === 1,
     settlePrWatch: (id, settledAtMs) => settlePrWatchStmt.run(settledAtMs, id).changes === 1,
     setPrWatchCursor: (id, cursor) => prWatchCursorStmt.run(cursor, id).changes === 1,

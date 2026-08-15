@@ -956,6 +956,13 @@ export const AddOwnPrWatchInput = z.object({
   /** `owner/repo#123` or a PR URL. Parsed server-side; an unparseable ref is refused rather than stored,
    *  because a watcher that can never fire is worse than none — the worker rests believing it is covered. */
   target: z.string().trim().min(1).max(200),
+  /** REQUIRED. How long to watch, as a DURATION (`30m`, `2h`, `3d` — parseAwaitingDuration).
+   *
+   *  A PR nobody ever reviews would otherwise be polled forever, and a thread parked on it would wait
+   *  forever with it — the same unbounded wait the awaiting fence's `for:` closes, one level down. A
+   *  duration rather than an instant for the same reason it is one there: it cannot be written in the
+   *  past (maintainer 2026-08-15, asking for it explicitly). */
+  for: z.string().trim().min(1).max(16),
 }).strict()
 export type AddOwnPrWatchInput = z.infer<typeof AddOwnPrWatchInput>
 

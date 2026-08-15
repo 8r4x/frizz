@@ -80,6 +80,7 @@ import {
   isDirectSubAgent,
   DirectoryPickResult,
   ThreadLocation,
+  parseAwaitingDuration,
   AddOwnPrWatchInput,
   AddOwnPrWatchResult,
   DropOwnPrWatchInput,
@@ -2183,8 +2184,15 @@ export function createRouter(ctx: AppContext) {
         if (armed.length >= PR_WATCH_MAX_ARMED) {
           throw new Error(`this thread already watches ${armed.length} pull requests (the limit is ${PR_WATCH_MAX_ARMED}) — drop one first`)
         }
+        // REFUSED, not defaulted. A watcher with no expiry is the unbounded poll this field exists to
+        // end, and silently picking one for the worker would hide that it never chose.
+        const forMs = parseAwaitingDuration(input.for)
+        if (forMs === null) {
+          throw new Error(`\`for: ${input.for}\` is not a duration — give one like \`30m\`, \`2h\` or \`3d\` (max 24h)`)
+        }
+        const now = Date.now()
         const id = `prw_${randomUUID().replace(/-/g, "").slice(0, 12)}`
-        ctx.storage.armPrWatch({ id, slug: input.slug, owner: ref.owner, repo: ref.repo, number: ref.number, createdAtMs: Date.now() })
+        ctx.storage.armPrWatch({ id, slug: input.slug, owner: ref.owner, repo: ref.repo, number: ref.number, createdAtMs: now, expiresAtMs: now + forMs })
         ctx.board.refresh()
         return { id, target, alreadyArmed: false, watches: armedPrWatchViews(input.slug) }
       },
