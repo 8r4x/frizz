@@ -437,9 +437,10 @@ test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting pa
   // acceptable outcome on 2026-08-12 (scheduler SOURCE 9 corrects it).
   assert.match(SESSION_SEED, /points at future work AT ALL[^;]*ask a ```question instead, and uncertain is not done/)
   assert.match(SESSION_SEED, /ALWAYS SIGN OFF WITH A FENCE/)
-  // The park a worker cannot discover on its own: nothing wakes a RESTED worker when its background
-  // shell finishes unless the fence names it, so the seed has to say the line out loud.
-  assert.match(SESSION_SEED, /`watch: <id>` line inside the fence/)
+  // The fact a worker cannot discover on its own, and the one it most often gets wrong: its shells are
+  // watched AUTOMATICALLY, and the fence line is how it comes to REST meanwhile — not a registration.
+  assert.match(SESSION_SEED, /watched AUTOMATICALLY/)
+  assert.match(SESSION_SEED, /`watch: <id>` line/)
   assert.match(SESSION_SEED, /because that artifact outlives the thread/)
   assert.match(SESSION_SEED, /code LANDED on the mainline — an open PR is NOT done, park it on ```awaiting until it MERGES/)
   assert.doesNotMatch(SESSION_SEED, /BARE REST[^\n]*quiet/i)

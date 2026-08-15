@@ -434,6 +434,9 @@ export interface RetiredShellView {
   taskId?: string // the runtime handle the worker was given
   label: string
   status: "completed" | "failed" | "killed"
+  /** When its terminal record landed. Absent on an older tail state, which reads as "cannot tell" and
+   *  therefore never fires a wake — the safe direction. */
+  finishedAt?: string
 }
 
 // A pending native AskUserQuestion (structured, capped). Mirrors @frizz/shared PendingAsk; `id` is
@@ -482,11 +485,14 @@ interface RetiredShell {
   command?: string
   outputFile?: string
   status: "completed" | "failed" | "killed"
-  // The two handles a WATCHER can be armed against (scheduler SOURCE 8 matches a target against id,
-  // taskId or label). Retained here because a watcher has to be able to fire on a shell it never saw
-  // ALIVE — see retiredShellViews for why absence alone cannot be the signal.
+  // The handles a fence may NAME this shell by, kept so the board can check a declaration against a
+  // shell that has already finished as well as one still running.
   taskId?: string
   label: string
+  // WHEN it finished, off its own terminal record. This is what tells the scheduler whether the AGENT
+  // was told: the runtime delivers a shell's completion only to a RUNNING turn, so a shell that
+  // finished after the agent's last word was never reported to anyone. See the shell-completion wake.
+  finishedAt?: string
 }
 // How many terminal sub-agents to retain per thread for drawer review (newest-wins ring).
 const RETAINED_SUBAGENTS_MAX = 20
@@ -1044,7 +1050,7 @@ function retireLive(state: TailState, entry: SubAgentEntry, finishedAt: string |
   state.subAgents.delete(entry.toolUseId)
   if (entry.kind === "shell") {
     state.retiredShells.delete(entry.toolUseId)
-    state.retiredShells.set(entry.toolUseId, { toolUseId: entry.toolUseId, command: entry.command, outputFile: entry.outputFile, status, taskId: entry.taskId, label: entry.label })
+    state.retiredShells.set(entry.toolUseId, { toolUseId: entry.toolUseId, command: entry.command, outputFile: entry.outputFile, status, taskId: entry.taskId, label: entry.label, finishedAt })
     while (state.retiredShells.size > RETAINED_SHELLS_MAX) {
       const oldest = state.retiredShells.keys().next().value
       if (oldest === undefined) break
@@ -2790,7 +2796,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   // shell matches no retirement either, so a typo still never fires.
   function retiredShellViews(state: TailState): RetiredShellView[] {
     const out: RetiredShellView[] = []
-    for (const r of state.retiredShells.values()) out.push({ id: r.toolUseId, taskId: r.taskId, label: r.label, status: r.status })
+    for (const r of state.retiredShells.values()) out.push({ id: r.toolUseId, taskId: r.taskId, label: r.label, status: r.status, finishedAt: r.finishedAt })
     return out
   }
 

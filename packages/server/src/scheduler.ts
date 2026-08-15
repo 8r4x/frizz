@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { compactionPromptMessage, formatGithubWakeSteer, type GithubWatchStatus, isValidAwaitingTimer, restPromptMessage, schedulePromptMessage, timerPromptMessage, watchWakeMessage, signoffNudgeMessage, wakeDeliveryToken, type QuotaSnapshot } from "@frizz/shared"
+import { compactionPromptMessage, formatGithubWakeSteer, type GithubWatchStatus, shellDoneMessage, isValidAwaitingTimer, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, wakeDeliveryToken, type QuotaSnapshot } from "@frizz/shared"
 import { GITHUB_STATUS_SETTING } from "./awaiting.ts"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
@@ -256,7 +256,6 @@ function isPrWatchHint(kind: FenceView["hints"][number]["kind"]): boolean {
 // definition and `session:` has no cross-session liveness signal, so neither is resolved here.
 function isActionable(hint: FenceView["hints"][number]): boolean {
   if (hint.kind === "timer") return isValidAwaitingTimer(hint.value)
-  if (hint.kind === "watch") return hint.value.trim().length > 0
   if (isPrWatchHint(hint.kind) || hint.kind === "pr" || hint.kind === "ci") return parsePrRef(hint.value) !== undefined
   return false
 }
@@ -751,6 +750,16 @@ const TIMER_HINT_PREFIX = "timer:"
 // same reason the timer's is: an awaiting fence id begins with its own fence instant, and no other
 // prefix here starts with these characters.
 // The built-in sign-off nudge's delivery namespace (scheduler SOURCE 9), and its consecutive cap.
+/** A finished background shell's delivery namespace. The shell's own launch tool_use id is the whole
+ *  key, so one shell can wake its thread exactly once, ever — no counter, no cursor, no way to loop. */
+const SHELL_FENCE_PREFIX = "shell"
+function shellFenceId(toolUseId: string): string {
+  return `${SHELL_FENCE_PREFIX}:${toolUseId}`
+}
+function isShellFenceId(fenceId: string): boolean {
+  return fenceId.startsWith(`${SHELL_FENCE_PREFIX}:`)
+}
+
 const SIGNOFF_FENCE_PREFIX = "signoff"
 const SIGNOFF_HINT_KEY = "signoff:rest"
 const SIGNOFF_NUDGE_MAX = 2
@@ -1190,6 +1199,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     // resume.wakeParkedThreadForFollowUp) therefore all read as supersession here: each one is the human
     // replacing the promise we were holding. Reprompting a thread means "now", which is precisely the
     // instruction a bump scheduled for later no longer describes.
+    // A SHELL-COMPLETION WAKE CANNOT BE SUPERSEDED BY ANYTHING THE THREAD SAYS. It is bound to a fact
+    // that has already happened — this shell finished, and its agent was resting when it did — and no
+    // later fence, rest or edit makes that untrue. So the only question is whether the thread is free to
+    // receive it. (Without this branch it fell through to the awaiting-fence logic below, which compares
+    // the delivery against the thread's CURRENT fence and superseded every wake for a bare rest: queued
+    // on every tick, delivered never.)
+    if (isShellFenceId(item.fenceId)) {
+      return tele.turn === "idle" ? "current-idle" : "current-busy"
+    }
     if (isSnoozeFenceId(item.fenceId)) {
       if (armedSnooze(row)?.fenceId !== item.fenceId) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
@@ -1463,55 +1481,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     reviewFailures.delete(key)
   }
 
-  // ---- THE FENCE'S OWN SHELL WAKE (`watch:`) -------------------------------------------------------
-  // A background shell DOES re-invoke its worker when it exits — but only while the worker's turn is
-  // RUNNING. Measured over this machine's whole session history (3972 shells, 2026-08-14): all 3011
-  // delivered notifications landed on an assistant record with stop_reason "tool_use", while 1601 shells
-  // outlived their worker's rest and 1191 of those were never delivered at all, though the session
-  // provably kept writing for minutes to days afterwards. THAT is the gap, and it is the only reason
-  // frizz touches shells at all.
-  //
-  // It is closed by the FENCE, not by a registration tool. The worker already has to say what it is
-  // waiting on for the park to count (`hasDeclaredBackgroundPark`), so the same line is the wake: one
-  // sentence, no id to remember across a compaction, and no registry row that can outlive the park it
-  // describes. Its lifetime is the fence's lifetime — the worker says anything else, the wait is gone,
-  // which is exactly when the scheduler should stop watching.
-  //
-  // TWO WAYS A SHELL CAN BE DONE, and the first is why absence alone was not enough:
-  //
-  //  1. IT RETIRED. The fold saw the shell's own terminal <task-notification>. Positive evidence, no
-  //     prior sighting needed, no race.
-  //  2. SEEN-THEN-GONE. Observed alive on an earlier tick and now absent — the fallback for a finish this
-  //     thread holds no retirement for (the ring keeps 20).
-  //
-  // (2) ALONE ATE SHORT SHELLS. This pass runs every 10s, so a shell finishing within one tick of the
-  // park is never observed alive and its absence never counts. Measured on the thread that found it: of
-  // three watched shells one lived 0.98s past the park, and could not have fired under (2) at any tick
-  // rate short of continuous polling.
-  //
-  // A TARGET THAT NAMES NOTHING NEVER FIRES. No live row and no retirement is INDETERMINATE, not "done"
-  // — so a typo cannot report a completion that never happened, and cannot wake the thread on a wait it
-  // never really had.
-  function watchVerdict(value: string, tele: SessionTelemetry | undefined, seenAlive: boolean): Verdict | undefined {
-    if (!tele) return undefined // telemetry we cannot read is indeterminate, never "gone"
-    const target = value.trim()
-    const namesShell = (sh: { id?: string; taskId?: string; label: string }) =>
-      sh.id === target || sh.taskId === target || sh.label === target
-    const unmet = { met: false, steer: "", reason: "" }
-    if (tele.bgShells.some((sh) => sh.state === "running" && namesShell(sh))) return unmet
-    // A SUB-AGENT NEEDS NO WAKE FROM HERE — its return re-invokes its parent by construction — but it may
-    // legitimately be named in the fence, so treat a running one as an unmet wait rather than as a target
-    // that does not exist. Otherwise the thread would fire the moment it parked.
-    if (tele.subAgents.some((a) => a.state === "running" && (a.id === target || a.label === target))) return unmet
-    const retired = (tele.retiredShells ?? []).some(namesShell)
-    if (!retired && !seenAlive) return undefined
-    return {
-      met: true,
-      steer: watchWakeMessage("shell", target, "The background work you were waiting on has finished"),
-      reason: `watch ${target} finished`,
-    }
-  }
-
   async function evalThread(slug: string, sessionId: string, fence: FenceView, nowMs: number, fenceAt?: string): Promise<void> {
     const actionable = fence.hints.filter(isActionable)
     if (actionable.length === 0) {
@@ -1602,9 +1571,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const reviewRef = isPrWatchHint(h.kind) ? parsePrRef(h.value) : undefined
       const reviewActivity = reviewRef ? st.reviewCache.get(refKey(reviewRef)) : undefined
       const pendingReview = registrations.get(persistKey)?.reviews[key]?.pending
-      const verdict = h.kind === "watch"
-        ? watchVerdict(h.value, deps.tailer.get(slug), st.armed.get(key) === true)
-        : isPrWatchHint(h.kind)
+      const verdict = isPrWatchHint(h.kind)
         ? reviewActivity || pendingReview
           ? reviewVerdict(slug, persistKey, h, reviewActivity ?? [], fenceAt)
           : undefined
@@ -1615,12 +1582,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         if (h.kind === "timer") armTimer(persistKey, key, h.value)
         continue
       }
-      // PR-watch hints are eligible once a persisted baseline detects an unseen human id, and a `watch:`
-      // once the shell's own RETIREMENT is on the ring — neither needs to have witnessed the wait unmet
-      // first, which is the whole point of both (a short shell is never seen alive; review may already be
-      // sitting on the PR at the park). Timer/legacy conditions still require arming; for timers that
-      // arming was restored from durable registration.
-      if (!isPrWatchHint(h.kind) && h.kind !== "watch" && !st.armed.get(key)) continue
+      // PR-watch hints are eligible once a persisted baseline detects an unseen human id. Timer/legacy
+      // conditions still require arming; for timers that arming was restored from durable registration.
+      if (!isPrWatchHint(h.kind) && !st.armed.get(key)) continue
       const item = outbox.enqueue({
         id: deliveryId,
         slug,
@@ -1953,6 +1917,62 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     // Anchored on the REST this nudge was for (the agent's own last word, which is the fence id), so a
     // retry of the same delivery cannot count twice while a genuinely new fenceless rest does.
     deps.storage.countSignoffNudge(item.slug, item.fenceId)
+  }
+
+  // ---- SOURCE 10: A BACKGROUND SHELL FINISHED WHILE ITS AGENT WAS RESTING -------------------------
+  // AUTOMATIC, for every thread, with nothing to register and nothing to declare. Maintainer 2026-08-14:
+  // "the agent just uses the built-in tool from the harness to start a background shell. It should be
+  // watched automatically: every time a background shell completes, the agent should be woken up. That's
+  // how it should always work."
+  //
+  // It is not redundant with the runtime's own notification, and the split is the entire reason this
+  // exists. Measured over this machine's whole session history (3972 shells): all 3011 delivered
+  // notifications landed on an assistant record with stop_reason "tool_use" — i.e. MID-TURN — while 1601
+  // shells outlived their worker's rest and 1191 of those were never delivered at all, though the session
+  // provably kept writing for minutes to days afterwards. The runtime covers the running turn; this
+  // covers the rest, and only the rest.
+  //
+  // WHICH IS EXACTLY WHAT `finishedAt` DECIDES. A shell that finished BEFORE the agent's last word was
+  // reported to it by the runtime and folded into that turn; waking again would tell it twice. A shell
+  // that finished AFTER it has nobody to tell. So the test is `finishedAt > lastAssistantAt`, and a
+  // retirement carrying no instant (an older tail state) never fires — the safe direction.
+  //
+  // THE AWAITING FENCE HAS NOTHING TO DO WITH THIS. It does not register the wait and never did; it is
+  // how an agent comes to REST and states what it is waiting on (see hasDeclaredBackgroundPark). A
+  // thread with no fence at all is woken here exactly the same way, which is the point.
+  function evalShellCompletions(nowMs: number): void {
+    for (const row of deps.storage.allSessions()) {
+      if (row.state === "archived" || row.archived === 1) continue
+      const tele = deps.tailer.get(row.slug)
+      if (!tele) continue
+      // AT REST ONLY. Mid-turn the runtime's own notification is the delivery, and frizz adding a second
+      // one would land while the agent is still working — the noise this pass exists to avoid.
+      if (tele.turn !== "idle") continue
+      // A signed-out provider answers in milliseconds and every reply is a "rest", which makes it a
+      // perfect loop generator for anything that re-prompts. Same guard as SOURCES 5 and 9.
+      if (tele.authFault) continue
+      const restedAt = Date.parse(tele.lastAssistantAt ?? "")
+      if (!Number.isFinite(restedAt)) continue
+      for (const shell of tele.retiredShells ?? []) {
+        const finishedAt = Date.parse(shell.finishedAt ?? "")
+        if (!Number.isFinite(finishedAt) || finishedAt <= restedAt) continue
+        const fenceId = shellFenceId(shell.id)
+        const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
+        if (outbox.get(deliveryId)) continue // this shell has already had its one wake
+        const item = outbox.enqueue({
+          id: deliveryId,
+          slug: row.slug,
+          sessionId: row.session_id,
+          fenceId,
+          hintKey: `${SHELL_FENCE_PREFIX}:${shell.id}`,
+          message: shellDoneMessage(shell),
+          reason: `background shell finished (${shell.taskId ?? shell.label})`,
+        }, nowMs).delivery
+        log(`waker: queued ${row.slug} — ${item.reason}`)
+        checkpoint("after-enqueue", item)
+        return // one durable wake per thread per pass; the next tick takes the next shell
+      }
+    }
   }
 
   function evalTimers(nowMs: number): void {
@@ -2426,6 +2446,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     } catch (err) {
       if (err instanceof InjectedSchedulerCrash) throw err
       log(`waker: sign-off nudge pass failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    try {
+      evalShellCompletions(now())
+    } catch (err) {
+      if (err instanceof InjectedSchedulerCrash) throw err
+      log(`waker: shell-completion pass failed: ${err instanceof Error ? err.message : String(err)}`)
     }
     try {
       evalTimers(now())

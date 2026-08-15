@@ -1,12 +1,17 @@
-// THE `watch:` FENCE END TO END — real tailer folding a real transcript file, real scheduler, real
-// SQLite, no fake telemetry anywhere.
+// THE BACKGROUND-SHELL WAKE END TO END — real tailer folding a real transcript file, real scheduler,
+// real SQLite, no fake telemetry anywhere.
 //
-// This is the seam a unit test cannot reach and the one that matters, because the whole mechanism is a
-// hand-off between three things that each look fine alone: the fold has to turn a background-shell
-// launch into a live `bgShells` row and its `<task-notification>` into a RETIREMENT, the fence parser
-// has to carry the `watch:` hint, and the scheduler has to match the name the WORKER wrote against
-// either of those. A mock at any one of those joints proves nothing about the other two — which is
-// exactly how the previous version of this shipped a watcher that could never fire (`bf14128`).
+// A SHELL IS WATCHED AUTOMATICALLY. Maintainer 2026-08-14: "the agent just uses the built-in tool from
+// the harness to start a background shell. It should be watched automatically: every time a background
+// shell completes, the agent should be woken up. That's how it should always work." So the wake owes
+// nothing to the awaiting fence, and the FIRST test here is the one with no fence at all.
+//
+// This is the seam a unit test cannot reach, because the mechanism is a hand-off between two things that
+// each look fine alone: the fold has to turn a background-shell launch into a live `bgShells` row and its
+// `<task-notification>` into a RETIREMENT carrying a finish INSTANT, and the scheduler has to compare
+// that instant against the agent's own last word. A mock at either joint proves nothing about the other
+// — which is how a version of this shipped a watcher that could never fire (`bf14128`), and how the
+// `watch:` hint shipped unparseable (`9b6322e`).
 //
 // The transcript records are shape-accurate against a real ~/.claude/projects session (2026-07-23):
 // the launch is a `tool_result` whose text carries "Command running in background with ID: <taskId>"
@@ -58,17 +63,20 @@ function launchRecords(at: string): string {
   )
 }
 
-/** The worker's final message: an awaiting fence naming the shell by the handle the RUNTIME gave it —
- *  which is the string a real worker reaches for, and the one this whole change exists to honour. */
-function parkRecord(at: string, target: string): string {
-  const text = [
-    "Kicked the suite off in the background; I'll fold the result in when it lands.",
-    "",
-    "```awaiting",
-    `watch: ${target}`,
-    "Waiting on the test run.",
-    "```",
-  ].join("\n")
+/** The worker's final message. `target` undefined = a BARE rest with no fence at all, which is the case
+ *  the wake must not depend on. With a target it is an awaiting fence naming the shell by the handle the
+ *  runtime gave it — a declaration the board reads, and no part of the wake. */
+function parkRecord(at: string, target?: string): string {
+  const text = target
+    ? [
+      "Kicked the suite off in the background; I'll fold the result in when it lands.",
+      "",
+      "```awaiting",
+      `watch: ${target}`,
+      "Waiting on the test run.",
+      "```",
+    ].join("\n")
+    : "Kicked the suite off in the background; I'll fold the result in when it lands."
   return line({
     type: "assistant", timestamp: at, sessionId: SESSION, uuid: "u3",
     message: { role: "assistant", content: [{ type: "text", text }] },
@@ -90,7 +98,7 @@ function retirementRecord(at: string): string {
   })
 }
 
-async function harness(target: string) {
+async function harness(target?: string) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-watch-e2e-"))
   const transcript = join(dir, `${SESSION}.jsonl`)
   const at = new Date(Date.now() - 60_000).toISOString()
@@ -110,23 +118,53 @@ async function harness(target: string) {
     onChange: () => {}, paneDead: () => false, capturePane: () => "",
   })
   const delivered: string[] = []
+  const logs: string[] = []
   const s = createScheduler({
     storage,
     tailer,
     resume: async (_slug, message) => { delivered.push(message) },
-    log: () => {},
+    log: (m) => { logs.push(m) },
   })
   const refold = () => { tailer.tick() }
   storage.setBackend(SLUG, "claude")
   storage.setClaudeRuntime(SLUG, "broker")
   refold()
   return {
-    storage, tailer, s, delivered, transcript, refold,
+    storage, tailer, s, delivered, logs, transcript, refold,
     tele: () => tailer.get(SLUG),
     finish: async () => { appendFileSync(transcript, retirementRecord(new Date().toISOString())); refold() },
+    // The shell finishes and THEN the agent speaks again — i.e. it finished mid-turn, the runtime
+    // delivered it, and the agent folded it into the turn it went on to end.
+    finishThenSpeak: async () => {
+      appendFileSync(transcript, retirementRecord(new Date().toISOString()))
+      appendFileSync(transcript, parkRecord(new Date(Date.now() + 1000).toISOString()))
+      refold()
+    },
     close: () => { void s.stop(); tailer.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) },
   }
 }
+
+// THE HEADLINE. No fence, no declaration, no registration — a worker that simply launched a shell and
+// stopped is still told when it finishes, because that is the one case its runtime cannot cover.
+test("a shell that finishes behind a RESTED agent wakes it, with no fence anywhere", async () => {
+  const h = await harness()
+  try {
+    assert.equal(h.tele()?.lastFence, undefined, "precondition: a bare rest, nothing declared")
+    await h.s.tick()
+    assert.deepEqual(h.delivered, [], "still running — nothing to say")
+
+    await h.finish()
+    await h.s.tick()
+    assert.equal(h.delivered.length, 1, "frizz tells it, because the runtime did not")
+    assert.match(h.delivered[0], new RegExp(TASK_ID))
+    assert.match(h.delivered[0], /after you came to rest/)
+
+    // ONE wake per SHELL, ever: the delivery id is keyed on the shell's own launch id, so there is no
+    // counter to reset and no way for this to repeat.
+    await h.s.tick()
+    assert.equal(h.delivered.length, 1)
+  } finally { h.close() }
+})
 
 test("a park on a LIVE shell stays parked, then wakes on the shell's own retirement", async () => {
   const h = await harness(TASK_ID)
@@ -156,28 +194,28 @@ test("a park on a LIVE shell stays parked, then wakes on the shell's own retirem
   } finally { h.close() }
 })
 
-// A name matching nothing live and nothing retired is INDETERMINATE, never "done". This is the property
-// that makes the fence safe to fail open: a typo cannot report a completion that never happened, and it
-// cannot park a thread on a wait that will never resolve either (the board queues it — declared-park.test).
-test("a typo'd target never fires, however long the thread sits there", async () => {
+// A TYPO'D DECLARATION CHANGES NOTHING ABOUT THE WAKE, which is the clearest statement that the two are
+// unrelated: the shell still finished, so the agent is still told. What the bad name costs is the PARK —
+// the board refuses to believe a wait it cannot verify, and the thread queues (declared-park.test.ts).
+test("a typo'd declaration does not suppress the wake — the fence is not the mechanism", async () => {
   const h = await harness("bzvtnt3ig-typo")
   try {
-    await h.s.tick()
     await h.finish()
     await h.s.tick()
-    await h.s.tick()
-    assert.deepEqual(h.delivered, [], "no live shell and no retirement by that name — nothing is claimed")
+    assert.equal(h.delivered.length, 1, "the shell finished, so the agent hears about it either way")
   } finally { h.close() }
 })
 
-// The worker may equally name the shell by its LABEL, which is what its own transcript shows it beside
-// the command. Refusing that would make the fence unusable for the case it exists for.
-test("the shell's label works as a target too", async () => {
-  const h = await harness("Running the suite")
+// A shell that finished BEFORE the agent's last word was reported to it by the runtime and folded into
+// that turn. Waking again would tell it twice about something it already acted on — and this is the only
+// thing separating the two cases, so it is the assertion that keeps the pass honest.
+test("a shell that finished MID-TURN is never re-reported — the runtime already told it", async () => {
+  const h = await harness()
   try {
-    await h.finish()
+    await h.finishThenSpeak()
     await h.s.tick()
-    assert.equal(h.delivered.length, 1, "matched by label")
+    await h.s.tick()
+    assert.deepEqual(h.delivered, [], "it finished before the agent's last word; the agent knew")
   } finally { h.close() }
 })
 

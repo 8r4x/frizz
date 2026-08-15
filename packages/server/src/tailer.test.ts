@@ -589,11 +589,12 @@ test("applyRecord: a shell leaves the live view on completion and retains bounde
   applyRecord(s, bashBg("toolu_sh", "Watch CI", "gh run watch"))
   applyRecord(s, taskNotification("toolu_sh", "completed"))
   assert.equal(s.subAgents.size, 0)
-  // `label` and `taskId` joined the record so a WATCHER can be matched against a shell it never saw
-  // alive (scheduler SOURCE 8 fires on the retirement, not on absence — see retiredShellViews). `taskId`
-  // is undefined here because this fixture retires the shell without a launch ack; the ack path is
-  // covered by the auto-background case below, which asserts the id is captured.
-  assert.deepEqual(s.retiredShells.get("toolu_sh"), { toolUseId: "toolu_sh", command: "gh run watch", outputFile: undefined, status: "completed", label: "Watch CI", taskId: undefined })
+  // `label` and `taskId` are here so a fence's DECLARATION can be checked against a shell that has
+  // already finished; `finishedAt` is here for the wake itself, which compares it against the agent's own
+  // last word to decide whether the runtime already reported this shell (mid-turn) or nobody did (at
+  // rest). `taskId` is undefined because this fixture retires the shell without a launch ack; the ack
+  // path is covered by the auto-background case below, which asserts the id is captured.
+  assert.deepEqual(s.retiredShells.get("toolu_sh"), { toolUseId: "toolu_sh", command: "gh run watch", outputFile: undefined, status: "completed", label: "Watch CI", taskId: undefined, finishedAt: "2026-07-01T00:00:09.000Z" })
 })
 
 // The pairing that matters for the watcher: a shell retired AFTER its launch ack keeps the runtime

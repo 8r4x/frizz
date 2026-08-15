@@ -694,18 +694,20 @@ export const TimerPromptText = z.string().trim().min(1).max(TIMER_PROMPT_MAX)
  *  parser exists because a recurring prompt repeats the same paragraph down the whole transcript and has
  *  to collapse to a divider; a one-off is said once, so the chat's generic first-party wake card — the
  *  one already written for "a CI/timer/limit wake" — shows it correctly with no new component. */
-/** What frizz delivers when a thread's `watch:` line resolves — the background work it parked on has
- *  finished.
+/** What frizz delivers when one of a thread's background shells finishes while the thread is RESTING.
  *
- * Unlike every other wake here there is no operator text to carry: a park holds no prompt, only a thing
- * it was waiting for. So the message IS the news, and it has exactly two jobs — say what resolved
- * precisely enough to act on, and say that the park is spent. A worker that thinks it is still parked
- * will rest expecting a second wake that is never coming. */
-export function watchWakeMessage(kind: "shell", target: string, detail: string): string {
-  const what = kind === "shell" ? `your background shell \`${target}\`` : `${target}`
+ *  There is no operator text to carry — nobody asked for this wake, a finished shell simply happened —
+ *  so the message IS the news, and it has two jobs: say WHICH shell precisely enough to act on, and say
+ *  why frizz is the one saying it. The second matters because the agent has a runtime notification for
+ *  exactly this event and will reasonably wonder why it did not arrive: it only ever reaches a RUNNING
+ *  turn, so a shell that finishes behind a rested worker is never reported by anyone else. */
+export function shellDoneMessage(shell: { taskId?: string; label: string; status: "completed" | "failed" | "killed" }): string {
+  const what = shell.taskId ? `\`${shell.taskId}\` — ${shell.label}` : shell.label
+  const verb = shell.status === "failed" ? "FAILED" : shell.status === "killed" ? "was STOPPED" : "finished"
   return (
-    `⏰ ${detail} (${what}).\n\n(You parked on this in an \`\`\`awaiting fence. That park is now spent —` +
-    " write a new fence if you need to keep waiting.)"
+    `\u23f0 Your background shell ${verb}: ${what}.\n\n` +
+    "(Frizz sends this because it finished after you came to rest, where your runtime's own completion" +
+    " notification does not reach you. Read its output if you still need it.)"
   )
 }
 
@@ -790,11 +792,11 @@ export const SIGNOFF_NUDGE_MESSAGE = [
   "- `` ```done `` — genuinely FINISHED. A DISMISSAL: the card is filed away and nobody looks again, so",
   "  if anything is still owed, it is not done. Body: 1-3 sentences, then bullets, each opening with a",
   "  **bolded verb phrase**.",
-  "- `` ```awaiting `` — you are waiting on background work. Name each thing on its own `watch: <id>`",
-  "  line inside the fence, using the id or label listed at the end of this message. That line is BOTH",
-  "  the park and the wake: frizz checks every name against what you actually have running, and brings",
-  "  you back when it finishes. Name only what you are ACTUALLY waiting for, never a dev server you left",
-  "  running — a name matching nothing live is not a park, and the thread queues as usual.",
+  "- `` ```awaiting `` — you are WAITING on background work. Your shells and sub-agents are watched",
+  "  automatically (frizz wakes you when one finishes, fence or no fence); this is how you come to REST",
+  "  meanwhile. Name each thing on its own `watch: <id>` line, using the id or label listed at the end of",
+  "  this message. Name only what you are ACTUALLY waiting for, never a dev server you left running — a",
+  "  name matching nothing live is not a wait, and the thread queues as usual.",
   "",
   "**DO NOT REPEAT YOURSELF.** If the message you just wrote already stands on its own, reply with the",
   "fence ALONE — the human reads both together, so restating it costs them the second read for nothing.",

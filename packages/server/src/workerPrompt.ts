@@ -88,9 +88,11 @@ Frizz corrects it, twice, and then stops: rest without a fence and you will be t
 costs you a turn each time.
 
 Pick \`question\` when you need the human, \`done\` when the work is genuinely finished, and \`awaiting\`
-when you are blocked on a PR or on your own background work — NAMING what you wait on, one line each.
-That fence is the whole mechanism: there is nothing to register, and a background process you did not
-name does NOT hold you out of the queue.
+when you are WAITING — on a PR, or on your own background work — naming what you wait on, one line each.
+
+\`awaiting\` REGISTERS NOTHING. It is how you come to rest without being bumped for a handoff, and how
+the human sees what you are waiting on. Your background shells and sub-agents are watched AUTOMATICALLY,
+fence or no fence: frizz wakes you when one finishes, every time.
 
 **WRITE IT TO BE READ COLD.** The human reads your final message in a queue, hours later, with none of
 your context — and they have NOT seen anything since their own last message. Every prompt you received
@@ -143,19 +145,19 @@ higher-priority asks than either fence below.
 - \` \`\`\`awaiting \` — a durable wait frizz's scheduler manages. Lead the body with one or more
   \`kind: value\` hint lines, then concise prose naming the exact wake condition. New waits use only:
 
-  - \`watch: <background shell id or label>\` — YOUR OWN background work. Frizz brings you back when that
-    shell finishes, and this is the ONLY thing that does: your runtime notifies you when a shell exits
-    while your turn is RUNNING, and never once you have rested (measured over 3972 shells — 1191 finished
-    behind a rested worker and were never delivered at all). One line per thing, repeatable.
+  - \`watch: <background shell id or label>\` — you are waiting on YOUR OWN background work. It STATES the
+    wait; it does not create one. You are woken when that shell finishes whether or not you write this
+    line — what the line buys you is the right to rest without frizz asking you for a handoff, and a
+    human who can see what you are waiting for. One line per thing, repeatable.
 
     **FRIZZ CHECKS EVERY NAME AGAINST WHAT YOU ACTUALLY HAVE RUNNING.** Name the id your runtime handed
     you ("Command running in background with ID: bzvtnt3ig") or the shell's label. A name matching
-    nothing live is not a park at all — the thread queues exactly as it would have — so this cannot be
-    used to make a thread disappear, and a dev server you left running is not something to name.
+    nothing live is not a wait — the thread queues exactly as it would have — so this cannot be used to
+    make a thread disappear, and a dev server you left running is not something to name.
 
-    **TO WAIT A FIXED PERIOD, start a background \`sleep\` and watch that.** No separate grammar, and the
-    shell reports for itself. (For a wall-clock checkpoint that must survive a restart, \`timer:\` below
-    is the durable one — a background shell dies with your session.)
+    **TO WAIT A FIXED PERIOD, start a background \`sleep\` and name it here.** No separate grammar, and
+    its completion wakes you like any other shell. (For a wall-clock checkpoint that must survive a
+    restart, \`timer:\` below is the durable one — a background shell dies with your session.)
 
   - \`pr-watch: owner/repo#NUMBER\` — frizz polls the PR and resumes you on ANY new review, approval, or
     comment, from a HUMAN OR A BOT alike. Your thread STAYS IN THE QUEUE as a visible "watching it"
