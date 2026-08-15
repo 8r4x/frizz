@@ -396,6 +396,7 @@ async function runSupervisor(
       host: bind.host,
       allowedHosts: bind.allowedHosts,
       ...(bind.publicOrigin ? { publicOrigin: bind.publicOrigin } : {}),
+      ...(bind.publicToken ? { publicToken: bind.publicToken } : {}),
       cwd: workspace.root,
       env: supervisorEnv,
       stateDir: workspace.stateDir,
@@ -713,7 +714,7 @@ async function openOrPrint(
     console.log(`source: ${sourceLabel()}`);
     console.log(url);
     for (const address of network) console.log(address);
-    if (publicOrigin) console.log(publicOrigin);
+    if (publicOrigin) console.log(`${publicOrigin}/${bind.publicToken ? `?frizz_token=${bind.publicToken}` : ""}`);
     for (const warning of warnings) console.log(warning);
     return;
   }
@@ -721,7 +722,7 @@ async function openOrPrint(
     [
       { label: "Local", value: boardAddress(url), accent: true },
       ...network.map((address) => ({ label: "Network", value: `${address}/`, accent: true })),
-      ...(publicOrigin ? [{ label: "Public", value: `${publicOrigin}/`, accent: true }] : []),
+      ...(publicOrigin ? [{ label: "Public", value: `${publicOrigin}/${bind.publicToken ? `?frizz_token=${bind.publicToken}` : ""}`, accent: true }] : []),
       { label: "Project", value: `${workspace.name} — ${tildePath(workspace.root, home)}` },
       { label: "Source", value: tildePath(sourceLabel(), home) },
       ...(logger.file ? [{ label: "Logs", value: tildePath(logger.file, home) }] : []),

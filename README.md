@@ -140,14 +140,16 @@ Environment:
   FRIZZ_HOST              same as --host
   FRIZZ_ALLOWED_HOSTS     same as --allowed-host, comma separated
   FRIZZ_PUBLIC_ORIGIN     same as --public-origin
+  FRIZZ_PUBLIC_TOKEN      pin the --public-origin access secret instead of generating one
 
 --host puts a board that can run shell commands as you on the network, and Frizz has no login: anyone
 who reaches the port controls it. Only do this on a network you trust. An IP address works as-is; to
 reach the board by DNS name you must list that name with --allowed-host ("*" allows any).
 
 --public-origin serves the board through a tunnel or reverse proxy without putting it on the LAN
-at all — Frizz stays on loopback and the tunnel dials it. Frizz still has no login, so require
-authentication at the proxy: with Cloudflare Access, that is the whole of your access control.
+at all — Frizz stays on loopback and the tunnel dials it. It always prints a one-time access link
+carrying a generated secret; that secret, not the tunnel, is what keeps strangers out. Anything
+stronger in front (Cloudflare Access, Tailscale) still helps, and is worth it for a shared board.
 ```
 
 <br/>

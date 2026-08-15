@@ -3,6 +3,7 @@
 // crash.  This intentionally contains no source-watch logic: stable and legacy launchers can share it.
 import { request as requestHttp, createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http"
 import { connect } from "node:net"
+import { timingSafeEqual } from "node:crypto"
 import {
   allowedLocalCorsOrigin,
   authoritySendsFetchMetadata,
@@ -11,6 +12,7 @@ import {
   isTrustedLocalHttpRequest,
   LOOPBACK_BIND_HOST,
   parseLocalHost,
+  rejectWebSocketUpgrade,
   type LocalAuthorityPolicy,
 } from "./local-origin.ts"
 import { resolveLocalImage } from "./local-image.ts"
@@ -40,6 +42,15 @@ export interface RestartSupervisorProxyOptions {
   allowedHosts?: readonly string[]
   /** Serialized origin of a reverse proxy fronting this port (`--public-origin`), if the operator named one. */
   publicOrigin?: string
+  /**
+   * Shared secret every request arriving AS `publicOrigin` must carry. Loopback is never gated.
+   *
+   * Frizz has no accounts, and a tunnelled board is a shell on the operator's machine reachable from
+   * the internet — so the launcher generates one of these whenever a public origin is declared and
+   * there is nothing else in front. It is a bearer secret, not a login: possession is the whole proof.
+   * That is a deliberate floor, not the destination — a real session layer is the next step.
+   */
+  publicToken?: string
   /** The current disposable child. Undefined means it is starting, stopped, or failed. */
   childPort: () => number | undefined
   /** Must coalesce work itself or return the same in-flight promise for repeat requests. */
@@ -103,6 +114,27 @@ function proxyHeaders(
   if (vouchSameOrigin) headers["sec-fetch-site"] = "same-origin"
   delete headers.connection
   return headers
+}
+
+export const PUBLIC_TOKEN_PARAM = "frizz_token"
+const PUBLIC_TOKEN_COOKIE = "frizz_public"
+/** Loopback spellings the token gate must never challenge — the operator's own tab on the box. */
+const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1"])
+
+function readCookie(header: string | undefined, name: string): string | undefined {
+  if (!header) return undefined
+  for (const pair of header.split(";")) {
+    const eq = pair.indexOf("=")
+    if (eq === -1) continue
+    if (pair.slice(0, eq).trim() === name) return pair.slice(eq + 1).trim()
+  }
+  return undefined
+}
+
+function unauthorizedPage(): string {
+  // Deliberately says nothing about what Frizz is or whose machine this is. An unauthenticated
+  // visitor should not learn that a shell-capable board lives here.
+  return `<!doctype html><meta charset="utf-8"><title>Unauthorized</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:3rem;font:16px system-ui;color:#e7e7e7;background:#171717}main{max-width:30rem;padding:1.5rem;border:1px solid #444;border-radius:.75rem;background:#222}</style><main><h1>Unauthorized</h1><p>This address needs the access link it was started with.</p></main>`
 }
 
 function isControlRequest(req: IncomingMessage): boolean {
@@ -340,11 +372,65 @@ export class RestartSupervisorProxy {
     res.end(req.method === "HEAD" ? undefined : result.body)
   }
 
+  /**
+   * Is this request arriving as the declared public origin rather than over loopback?
+   *
+   * The token gate keys on this and not on "is the port exposed", because the two are independent:
+   * a tunnelled board stays bound to 127.0.0.1 while being reachable from the internet by name.
+   */
+  private arrivedPublicly(req: IncomingMessage): boolean {
+    const declared = this.options.publicOrigin
+    if (!declared) return false
+    const host = parseLocalHost(req.headers.host, this.options.port, this.policy)
+    return !!host && !LOOPBACK_HOSTNAMES.has(host.hostname)
+  }
+
+  /**
+   * Bearer check for the public origin. Two ways in: the cookie the exchange below sets, or the
+   * one-time `?frizz_token=` in the URL the operator was handed at launch.
+   *
+   * Compared with `timingSafeEqual` on equal-length buffers — a plain `===` on a secret leaks its
+   * prefix to a patient attacker, and this secret is the only thing between the internet and a shell.
+   */
+  private tokenAccepted(req: IncomingMessage): boolean {
+    const expected = this.options.publicToken
+    if (!expected) return true
+    const url = new URL(req.url ?? "/", "http://frizz.invalid")
+    const supplied = url.searchParams.get(PUBLIC_TOKEN_PARAM) ?? readCookie(req.headers.cookie, PUBLIC_TOKEN_COOKIE)
+    if (!supplied) return false
+    const a = Buffer.from(supplied)
+    const b = Buffer.from(expected)
+    return a.length === b.length && timingSafeEqual(a, b)
+  }
+
+  /** Trade `?frizz_token=…` for an HttpOnly cookie, then bounce to the same URL without the secret. */
+  private exchangeToken(req: IncomingMessage, res: ServerResponse): boolean {
+    const url = new URL(req.url ?? "/", "http://frizz.invalid")
+    if (url.searchParams.get(PUBLIC_TOKEN_PARAM) === null) return false
+    url.searchParams.delete(PUBLIC_TOKEN_PARAM)
+    const target = `${url.pathname}${url.search}${url.hash}`
+    // Secure + SameSite=Lax: the origin is https through the tunnel, and Lax still allows the
+    // top-level navigation that lands here while refusing cross-site writes.
+    res.writeHead(302, {
+      location: target || "/",
+      "set-cookie": `${PUBLIC_TOKEN_COOKIE}=${this.options.publicToken}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=31536000`,
+      "cache-control": "no-store",
+    })
+    res.end()
+    return true
+  }
+
   private handle(req: IncomingMessage, res: ServerResponse): void {
     if (isControlRequest(req)) {
       void this.handleControl(req, res)
       return
     }
+    if (this.arrivedPublicly(req) && !this.tokenAccepted(req)) {
+      res.writeHead(401, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" })
+      res.end(unauthorizedPage())
+      return
+    }
+    if (this.arrivedPublicly(req) && this.exchangeToken(req, res)) return
     if (!this.authorityAccepted(req)) {
       res.writeHead(403, { "content-type": "text/plain; charset=UTF-8" })
       res.end("Forbidden")
@@ -381,6 +467,13 @@ export class RestartSupervisorProxy {
   }
 
   private handleUpgrade(req: IncomingMessage, socket: import("node:stream").Duplex, head: Buffer): void {
+    // The board socket and every terminal come through here, so the bearer gate has to cover the
+    // upgrade too — otherwise the shell is reachable without the secret the HTML path demands. No
+    // query-param exchange here: a browser sends the cookie it was given on the page that opened it.
+    if (this.arrivedPublicly(req) && !this.tokenAccepted(req)) {
+      rejectWebSocketUpgrade(socket, 401, "Unauthorized")
+      return
+    }
     // A browser always sends Origin on a WebSocket handshake and the child requires one, so this is
     // the strict form of the gate — the child will never get the chance to apply it itself.
     if (!this.authorityAccepted(req, false)) {

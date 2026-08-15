@@ -293,13 +293,13 @@ async function proxied(
   path: string,
   headers: Record<string, string>,
   method = "GET",
-): Promise<{ status: number; body: string }> {
+): Promise<{ status: number; body: string; headers?: IncomingHttpHeaders }> {
   return new Promise((resolve, reject) => {
     const req = request({ host: "127.0.0.1", port, path, method, headers }, (res) => {
       let body = ""
       res.setEncoding("utf8")
       res.on("data", (chunk) => { body += chunk })
-      res.on("end", () => resolve({ status: res.statusCode ?? 0, body }))
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, body, headers: res.headers }))
     })
     req.once("error", reject)
     req.end()
@@ -568,6 +568,93 @@ test("--public-origin: a tunnelled request is accepted and reaches the child wit
     )
     // The operator's own tab on the box keeps working while a tunnel is declared.
     assert.equal((await proxied(port, "/_frizz/rpc/x", { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}` }, "POST")).status, 200)
+  } finally {
+    await proxy.close().catch(() => undefined)
+    await current.close().catch(() => undefined)
+  }
+})
+
+/**
+ * The upgrade's real outcome: the HTTP status the proxy answered with, or "refused" if it hung up
+ * without one. `upgrade()` above only asks "did any bytes come back", which cannot tell a 101 from
+ * a 401 — and the bearer gate answers 401 rather than destroying the socket, so it needs this.
+ */
+async function upgradeStatus(port: number, headers: Record<string, string>): Promise<string> {
+  const socket = netConnect(port, "127.0.0.1")
+  await once(socket, "connect")
+  const lines = [
+    "GET /ws HTTP/1.1",
+    ...Object.entries(headers).map(([name, value]) => `${name}: ${value}`),
+    "upgrade: websocket",
+    "connection: Upgrade",
+    "sec-websocket-version: 13",
+    "sec-websocket-key: AQIDBAUGBwgJCgsMDQ4PEC==",
+  ]
+  socket.write(`${lines.join("\r\n")}\r\n\r\n`)
+  try {
+    let received = ""
+    socket.setEncoding("utf8")
+    return await new Promise<string>((resolve) => {
+      socket.on("data", (chunk: string) => {
+        received += chunk
+        const match = /^HTTP\/1\.1 (\d{3})/.exec(received)
+        if (match) resolve(match[1]!)
+      })
+      socket.on("close", () => resolve(/^HTTP\/1\.1 (\d{3})/.exec(received)?.[1] ?? "refused"))
+      socket.on("error", () => resolve("refused"))
+      setTimeout(() => resolve("timeout"), 2_000).unref()
+    })
+  } finally {
+    socket.destroy()
+  }
+}
+
+test("--public-origin without a secret is not a reachable state: the bearer gate covers page and socket", async () => {
+  // Frizz has no accounts, so on a tunnelled board possession of this secret IS the authorization.
+  // What must hold: loopback is never challenged, the public origin always is, and the board socket
+  // is gated too — a shell reachable over ws:// without the secret would make the page gate theatre.
+  const current = await child("only")
+  const port = await freePort()
+  const proxy = new RestartSupervisorProxy({
+    port,
+    publicOrigin: "https://colin.frizz.sh",
+    publicToken: "s3cret-token-value",
+    childPort: () => current.port,
+    restart: async () => ({ state: "ready" }),
+  })
+  try {
+    await proxy.listen()
+    const publicHeaders = { host: "colin.frizz.sh", origin: "https://colin.frizz.sh" }
+
+    // No secret at all: refused, and the page must not advertise what lives here.
+    const bare = await proxied(port, "/", publicHeaders)
+    assert.equal(bare.status, 401)
+    assert.ok(!/frizz|board|agent/i.test(bare.body), `401 page leaked product identity: ${bare.body.slice(0, 120)}`)
+
+    // The cookie the exchange sets is accepted.
+    const withCookie = await proxied(port, "/", { ...publicHeaders, cookie: "frizz_public=s3cret-token-value" })
+    assert.equal(withCookie.status, 200)
+
+    // The one-time link is traded for that cookie and bounced to a URL without the secret in it, so
+    // it never lands in history, a Referer, or a screenshot.
+    const exchange = await proxied(port, "/thread/abc?frizz_token=s3cret-token-value", publicHeaders)
+    assert.equal(exchange.status, 302)
+    assert.equal(exchange.headers?.location, "/thread/abc")
+    assert.match(String(exchange.headers?.["set-cookie"]), /frizz_public=s3cret-token-value/)
+    assert.match(String(exchange.headers?.["set-cookie"]), /HttpOnly/)
+
+    // A wrong secret of the SAME LENGTH is the case a sloppy compare would leak a prefix on.
+    assert.equal((await proxied(port, "/", { ...publicHeaders, cookie: "frizz_public=s3cret-token-valuX" })).status, 401)
+    assert.equal((await proxied(port, "/", { ...publicHeaders, cookie: "frizz_public=short" })).status, 401)
+
+    // The board socket and every terminal ride this gate too.
+    assert.equal(await upgradeStatus(port, publicHeaders), "401")
+    assert.equal(await upgrade(port, { ...publicHeaders, cookie: "frizz_public=s3cret-token-value" }), "forwarded")
+
+    // Loopback is NEVER challenged — the operator's own tab on the box keeps working untouched.
+    const loopback = { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}` }
+    assert.equal((await proxied(port, "/", loopback)).status, 200)
+    assert.equal(await upgrade(port, loopback), "forwarded")
   } finally {
     await proxy.close().catch(() => undefined)
     await current.close().catch(() => undefined)

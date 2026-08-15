@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
+import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir, networkInterfaces } from "node:os";
 import { basename, join, resolve } from "node:path";
@@ -308,6 +309,8 @@ export interface BindSelection {
   allowedHosts: string[];
   /** Serialized origin of a proxy/tunnel fronting the board, or undefined when none was declared. */
   publicOrigin?: string;
+  /** Bearer secret guarding that origin. Always present when publicOrigin is — see resolveBindSelection. */
+  publicToken?: string;
 }
 
 /**
@@ -331,7 +334,20 @@ export function resolveBindSelection(
   // the whole point of naming one is reaching the board from anywhere WITHOUT also putting it on the LAN.
   const publicOriginRaw = options.publicOrigin ?? env.FRIZZ_PUBLIC_ORIGIN?.trim();
   const publicOrigin = publicOriginRaw ? normalizePublicOrigin(publicOriginRaw) : undefined;
-  return { host, exposed: bindHostIsExposed(host), allowedHosts, ...(publicOrigin ? { publicOrigin } : {}) };
+  // A declared public origin ALWAYS gets a secret, and one is generated when the operator supplies
+  // none. Frizz has no accounts and a tunnelled board is a shell reachable from the internet, so
+  // "they forgot to set a password" must not be a reachable state. FRIZZ_PUBLIC_TOKEN lets a
+  // long-lived deployment pin it so the link survives a restart.
+  const publicToken = publicOrigin
+    ? (env.FRIZZ_PUBLIC_TOKEN?.trim() || randomBytes(24).toString("base64url"))
+    : undefined;
+  return {
+    host,
+    exposed: bindHostIsExposed(host),
+    allowedHosts,
+    ...(publicOrigin ? { publicOrigin } : {}),
+    ...(publicToken ? { publicToken } : {}),
+  };
 }
 
 /**
@@ -417,8 +433,9 @@ anyone who reaches the port controls it. Only do this on a network you trust. An
 as-is; to reach the board by DNS name you must list that name with --allowed-host ("*" allows any).
 
 --public-origin serves the board through a tunnel or reverse proxy without putting it on the LAN
-at all — Frizz stays on loopback and the tunnel dials it. Frizz still has no login, so require
-authentication at the proxy: with Cloudflare Access, that is the whole of your access control.
+at all — Frizz stays on loopback and the tunnel dials it. It always prints a one-time access link
+carrying a generated secret; that secret, not the tunnel, is what keeps strangers out. Anything
+stronger in front (Cloudflare Access, Tailscale) still helps, and is worth it for a shared board.
 
 An immutable artifact is the default. --dev is the only explicit unsafe source watcher/HMR mode.
 `;

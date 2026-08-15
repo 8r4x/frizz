@@ -121,14 +121,16 @@ Environment:
   FRIZZ_HOST              same as --host
   FRIZZ_ALLOWED_HOSTS     same as --allowed-host, comma separated
   FRIZZ_PUBLIC_ORIGIN     same as --public-origin
+  FRIZZ_PUBLIC_TOKEN      pin the --public-origin access secret instead of generating one
 
 --host puts a board that can run shell commands as you on the network, and Frizz has no login: anyone
 who reaches the port controls it. Only do this on a network you trust. An IP address works as-is; to
 reach the board by DNS name you must list that name with --allowed-host ("*" allows any).
 
 --public-origin serves the board through a tunnel or reverse proxy without putting it on the LAN
-at all — Frizz stays on loopback and the tunnel dials it. Frizz still has no login, so require
-authentication at the proxy: with Cloudflare Access, that is the whole of your access control.`,
+at all — Frizz stays on loopback and the tunnel dials it. It always prints a one-time access link
+carrying a generated secret; that secret, not the tunnel, is what keeps strangers out. Anything
+stronger in front (Cloudflare Access, Tailscale) still helps, and is worth it for a shared board.`,
   );
   process.exit(0);
 }
@@ -311,7 +313,7 @@ async function openOrPrint(port: number, reused: boolean, path = ""): Promise<vo
     console.log(`${reused ? "reusing" : "started"} Frizz ${PACKAGE_VERSION} for ${workspace.root}`);
     console.log(url);
     for (const address of network) console.log(address);
-    if (publicOrigin) console.log(publicOrigin);
+    if (publicOrigin) console.log(`${publicOrigin}/${bind.publicToken ? `?frizz_token=${bind.publicToken}` : ""}`);
     for (const warning of warnings) console.log(warning);
     return;
   }
@@ -320,7 +322,7 @@ async function openOrPrint(port: number, reused: boolean, path = ""): Promise<vo
     [
       { label: "Local", value: boardAddress(url), accent: true },
       ...network.map((address) => ({ label: "Network", value: `${address}/`, accent: true })),
-      ...(publicOrigin ? [{ label: "Public", value: `${publicOrigin}/`, accent: true }] : []),
+      ...(publicOrigin ? [{ label: "Public", value: `${publicOrigin}/${bind.publicToken ? `?frizz_token=${bind.publicToken}` : ""}`, accent: true }] : []),
       { label: "Project", value: `${workspace.name} — ${tildePath(workspace.root, home)}` },
       ...(logger.file ? [{ label: "Logs", value: tildePath(logger.file, home) }] : []),
     ],
@@ -389,6 +391,7 @@ async function runSupervisor(port: number, token: string): Promise<never> {
     host: bind.host,
     allowedHosts: bind.allowedHosts,
       ...(bind.publicOrigin ? { publicOrigin: bind.publicOrigin } : {}),
+      ...(bind.publicToken ? { publicToken: bind.publicToken } : {}),
     cwd: workspace.root,
     stateDir: workspace.stateDir,
     launchTarget: target,
