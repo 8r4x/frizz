@@ -45,6 +45,8 @@ import type {
   CancelOwnThreadTimerInput,
   CancelOwnThreadTimerResult,
   ListOwnThreadTimersInput,
+  ListOwnThreadActivityInput,
+  OwnThreadActivityResult,
   OwnThreadTimersResult,
   ThreadPluginReloadResult,
   SetThreadSnoozeInput,
@@ -184,6 +186,7 @@ export interface Api {
   setOwnThreadTimer(input: SetOwnThreadTimerInput): Promise<SetOwnThreadTimerResult>
   cancelOwnThreadTimer(input: CancelOwnThreadTimerInput): Promise<CancelOwnThreadTimerResult>
   listOwnThreadTimers(input: ListOwnThreadTimersInput): Promise<OwnThreadTimersResult>
+  listOwnThreadActivity(input: ListOwnThreadActivityInput): Promise<OwnThreadActivityResult>
   // In-place plugin reload for a broker-backed Claude thread — the alternative to a hard restart.
   reloadThreadPlugins(input: { slug: string; sessionId: string }): Promise<ThreadPluginReloadResult>
   // Event-snooze the awaiting-background card: hide it until the thread's own background work returns
@@ -325,6 +328,7 @@ export const PROCEDURES = {
   setOwnThreadTimer: "mutation",
   cancelOwnThreadTimer: "mutation",
   listOwnThreadTimers: "mutation",
+  listOwnThreadActivity: "mutation",
   reloadThreadPlugins: "mutation",
   snoozeAwaitingBackground: "mutation",
   confirmAwaiting: "mutation",

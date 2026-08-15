@@ -3522,7 +3522,7 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   const parkTitle = parkAction?.title ?? AWAITING_FALLBACK_TITLE
   // A watch is active observation, not elapsed time. Keep the hourglass for actual timer/human holds
   // and give pr-watch its own scanning mark; the scheduler-facing hint itself stays out of the prose.
-  const AwaitingIcon = hints.some((hint) => hint.kind === "pr-watch") ? Radar : Hourglass
+  const AwaitingIcon = hints.some((hint) => hint.kind === "pr") ? Radar : Hourglass
   // The PRs the watcher is actually on, as LINKS. The title states the wait and the body is the
   // worker's own prose, so without these the one thing the card is ABOUT — which PR? — was unreachable:
   // the hint is the only place the ref exists, and the prose usually names a bare "#15524" or nothing

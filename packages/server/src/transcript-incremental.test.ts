@@ -25,7 +25,7 @@ const toolResult = (id: string, content: unknown, ts = "2026-07-01T00:00:01.000Z
 const enqueue = (content: string, ts = "2026-07-01T00:00:02.000Z") =>
   JSON.stringify({ type: "queue-operation", operation: "enqueue", timestamp: ts, content })
 const deliver = (prompt: string, ts = "2026-07-01T00:00:03.000Z") =>
-  JSON.stringify({ type: "attachment", timestamp: ts, attachment: { type: "queued_command", prompt, commandMode: "prompt", origin: { kind: "human" } } })
+  JSON.stringify({ type: "attachment", timestamp: ts, attachment: { type: "queued_command", prompt, commandMode: "prompt", origin: { kind: "shell" } } })
 const agentLaunch = (id: string, description: string, ts = "2026-07-01T00:00:04.000Z") =>
   JSON.stringify({ type: "assistant", timestamp: ts, message: { id: "m-agent", content: [{ type: "tool_use", id, name: "Agent", input: { description, subagent_type: "claude", prompt: "do the sub-task" } }] } })
 const taskNotification = (id: string, status: string, ts = "2026-07-01T00:00:09.000Z") =>

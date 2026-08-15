@@ -32,8 +32,8 @@ test("an awaiting fence: current human/pr-watch/timer hint lines parse with the 
       fenceKind: "awaiting",
       body: "Waiting on a named maintainer at a scheduled checkpoint.",
       hints: [
-        { kind: "human", value: "Alice must approve fork CI" },
-        { kind: "pr-watch", value: "owner/repo#12" },
+        { kind: "shell", value: "Alice must approve fork CI" },
+        { kind: "pr", value: "owner/repo#12" },
         { kind: "timer", value: "2026-07-15T17:00:00Z" },
       ],
     },
@@ -43,10 +43,10 @@ test("an awaiting fence: current human/pr-watch/timer hint lines parse with the 
 test("awaiting hint kinds are case-insensitive; current and legacy kinds remain readable", () => {
   const { hints, body } = parseFenceBody("Human: Alice approves\nTimer: 2026-07-15T17:00:00Z\nPR: p\nCI: c\nSession: sub-123\nprose tail", "awaiting")
   assert.deepEqual(hints, [
-    { kind: "human", value: "Alice approves" },
+    { kind: "shell", value: "Alice approves" },
     { kind: "timer", value: "2026-07-15T17:00:00Z" },
     { kind: "pr", value: "p" },
-    { kind: "ci", value: "c" },
+    { kind: "shell", value: "c" },
     { kind: "session", value: "sub-123" },
   ])
   assert.equal(body, "prose tail")
@@ -93,7 +93,7 @@ test("unterminated fence degrades to plain prose (no fence segment)", () => {
 
 test("CRLF line endings are handled", () => {
   const segs = splitFenceBlocks("```awaiting\r\nhold on\r\nci: build 9\r\n```")
-  assert.deepEqual(segs, [{ kind: "fence", fenceKind: "awaiting", body: "hold on", hints: [{ kind: "ci", value: "build 9" }] }])
+  assert.deepEqual(segs, [{ kind: "fence", fenceKind: "awaiting", body: "hold on", hints: [{ kind: "shell", value: "build 9" }] }])
 })
 
 test("hasFence detects done and awaiting, ignores question/plain", () => {

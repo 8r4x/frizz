@@ -64,7 +64,7 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     rpc.send({ jsonrpc: "2.0", method: "notifications/initialized" })
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
     const list = await rpc.next(2)
-    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "recurring_prompt", "timer", "watch_pr"])
+    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "recurring_prompt", "timer", "watch_pr", "activity"])
     for (const required of ["prompt", "model", "effort"]) {
       assert.ok(list.result.tools[0].inputSchema.required.includes(required))
     }
@@ -91,7 +91,12 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     // there is nothing for a worker to register. `watch_pr` exists because the opposite is true of a
     // pull request — nothing watches one unless the worker says so. Same shape as its siblings: `action`
     // alone is required, and NO thread parameter a model could aim elsewhere.
-    assert.equal(list.result.tools.length, 4)
+    // `activity` READS the four kinds of background work with the ids an awaiting fence names them by.
+    // It takes NOTHING: there is no thread parameter and no filter, because the only correct answer is
+    // "everything you have running", and a worker that has lost its ids cannot be trusted to name them.
+    assert.equal(list.result.tools.length, 5)
+    assert.deepEqual(list.result.tools[4].inputSchema.required, [])
+    assert.deepEqual(Object.keys(list.result.tools[4].inputSchema.properties), [])
     assert.deepEqual(list.result.tools[3].inputSchema.required, ["action"])
     assert.deepEqual(list.result.tools[3].inputSchema.properties.action.enum, ["add", "list", "drop"])
     assert.deepEqual(
@@ -813,6 +818,79 @@ test("`watch_pr` registers, lists and drops against the CALLING thread", async (
     const badAction = await rpc.next(7)
     assert.equal(badAction.result.isError, true)
     assert.equal(seen.length, before, "not one of the three reached the server")
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
+
+// `activity` IS THE ANSWER TO "I HAVE LOST MY IDS", so what it must do is print every kind of running
+// work with the exact string an ```awaiting fence names it by — and say so plainly when there is none,
+// because a fence naming nothing is not a park and a worker needs to be told that rather than left to
+// invent one.
+test("`activity` reads all four kinds back with the ids a fence names them by", async () => {
+  const seen: Array<{ url: string; body: any }> = []
+  const http = createServer((req, res) => {
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      seen.push({ url: req.url ?? "", body: JSON.parse(body || "{}") })
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ result: { activity: [
+        { kind: "shell", id: "bzvtnt3ig", label: "Running the suite", since: "2026-08-15T09:00:00.000Z" },
+        { kind: "agent", id: "toolu_agent1", label: "Reviewing the diff", since: "2026-08-15T09:01:00.000Z" },
+        { kind: "timer", id: "tmr_a1b2c3", label: "check the deploy", since: "2026-08-15T09:02:00.000Z", until: "2026-08-15T10:00:00.000Z" },
+        { kind: "pr", id: "acme/app#391", label: "acme/app#391", since: "2026-08-15T09:03:00.000Z" },
+      ] } }))
+    })
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "busy-thread" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "activity", arguments: {} } })
+    const got = await rpc.next(2)
+    assert.equal(got.result.isError, undefined)
+    const text = got.result.content[0].text
+    // The SLUG comes from the server's env, never from the model — same rule as every sibling tool.
+    assert.deepEqual(seen, [{ url: "/_frizz/rpc/listOwnThreadActivity", body: { slug: "busy-thread" } }])
+    // Every id, spelled exactly as its fence line must carry it.
+    for (const id of ["bzvtnt3ig", "toolu_agent1", "tmr_a1b2c3", "acme/app#391"]) {
+      assert.match(text, new RegExp(id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `${id} must be readable back`)
+    }
+    assert.match(text, /4 things running/)
+    assert.match(text, /for:/, "…and it says what else the fence needs")
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
+
+// The empty case is the one that has to TEACH: a worker with nothing running cannot write an awaiting
+// fence at all, and must be told which terminal state it is actually in rather than parking on nothing.
+test("`activity` with nothing running says so, and names the terminal states that remain", async () => {
+  const http = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" })
+    res.end(JSON.stringify({ result: { activity: [] } }))
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "idle-thread" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "activity", arguments: {} } })
+    const got = await rpc.next(2)
+    assert.equal(got.result.isError, undefined)
+    assert.match(got.result.content[0].text, /Nothing is running on this thread/)
+    assert.match(got.result.content[0].text, /```done/)
+    assert.match(got.result.content[0].text, /```question/)
   } finally {
     rpc.kill()
     http.close()

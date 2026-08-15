@@ -530,13 +530,18 @@ test("deriveNeedsYou: a checked ```done fence at rest queues until archived, eve
   assert.equal(deriveNeedsYou(row({ seen_at: T0 }), done, "running"), false)
 })
 
-test("deriveNeedsYou: a parked human/timestamp awaiting fence stays out of the operator queue", () => {
-  const human = tele({ lastFence: { kind: "awaiting", body: "", hints: [{ kind: "human", value: "Alice must approve" }] }, lastActivityAt: LATER })
-  const timer = tele({ lastFence: { kind: "awaiting", body: "", hints: [{ kind: "timer", value: "2099-07-15T17:00:00Z" }] }, lastActivityAt: LATER })
-  assert.equal(deriveNeedsYou(row({ seen_at: T0 }), human, "turn-idle"), false)
-  assert.equal(deriveNeedsYou(row({ seen_at: T0 }), timer, "turn-idle"), false)
-  // ...but a pending QUESTION overrides a parked fence (a specific ask beats the park).
-  const both = tele({ pendingQuestion: true, lastFence: { kind: "awaiting", body: "", hints: [{ kind: "human", value: "Alice must approve" }] } })
+// THIS TEST USED TO PIN THE OPPOSITE, and the inversion is the point. A `human: Alice must approve`
+// line and a future `timer: <instant>` each took a thread OUT of the operator queue on the worker's
+// word alone. Nothing ever fired a human gate, and one timer was published 5h55m in the PAST — it
+// parsed, armed nothing, and parked its thread for 5.5 hours. Both kinds are deleted (2026-08-15).
+// A fence now has to NAME something frizz can find, and neither of these does.
+test("deriveNeedsYou: an unverifiable awaiting fence does NOT leave the operator queue", () => {
+  const noSuchShell = tele({ lastFence: { kind: "awaiting", body: "", hints: [{ kind: "shell", value: "Alice must approve" }] }, lastActivityAt: LATER })
+  const noSuchTimer = tele({ lastFence: { kind: "awaiting", body: "", hints: [{ kind: "timer", value: "tmr_nosuchtimer" }] }, lastActivityAt: LATER })
+  assert.equal(deriveNeedsYou(row({ seen_at: T0 }), noSuchShell, "turn-idle"), true, "a shell name matching nothing live is not a park")
+  assert.equal(deriveNeedsYou(row({ seen_at: T0 }), noSuchTimer, "turn-idle"), true, "a timer id matching no armed row is not a park")
+  // …and a pending QUESTION still outranks any fence, parked or not.
+  const both = tele({ pendingQuestion: true, lastFence: { kind: "awaiting", body: "", hints: [{ kind: "shell", value: "Alice must approve" }] } })
   assert.equal(deriveNeedsYou(row({ seen_at: LATER }), both, "turn-idle"), true)
 })
 
@@ -577,11 +582,12 @@ test("deriveNeedsYou: a live sub-agent excuses the rest only while the worker de
   assert.equal(deriveNeedsYou(row({ rested_at: T0 }), tele({ subAgents: child, lastFence: { kind: "done", body: "", hints: [] }, lastActivityAt: LATER }), "turn-idle"), true, "done fence still queues")
   // A non-parked ```awaiting — pr-watch above all — stays a VISIBLE queue handoff even with a child out
   // (maintainer 2026-07-24), so a PR watcher can never vanish because a sub-agent happens to be running.
-  const prWatch = { kind: "awaiting" as const, body: "", hints: [{ kind: "pr-watch" as const, value: "acme/app#1" }] }
+  const prWatch = { kind: "awaiting" as const, body: "", hints: [{ kind: "pr" as const, value: "acme/app#1" }] }
   assert.equal(deriveNeedsYou(row({ rested_at: T0 }), tele({ subAgents: child, lastFence: prWatch, lastActivityAt: LATER }), "turn-idle"), true, "pr-watch still queues")
-  // A PARKED human fence was already excused (Held) above this branch and stays that way.
-  const parked = { kind: "awaiting" as const, body: "", hints: [{ kind: "human" as const, value: "Alice must approve" }] }
-  assert.equal(deriveNeedsYou(row({ rested_at: T0 }), tele({ subAgents: child, lastFence: parked, lastActivityAt: LATER }), "turn-idle"), false)
+  // A fence naming a shell nothing matches is NOT a park either, so the live child does not rescue it:
+  // an unverifiable declaration queues however much work the thread has out (2026-08-15).
+  const unverifiable = { kind: "awaiting" as const, body: "", hints: [{ kind: "shell" as const, value: "Alice must approve" }] }
+  assert.equal(deriveNeedsYou(row({ rested_at: T0 }), tele({ subAgents: child, lastFence: unverifiable, lastActivityAt: LATER }), "turn-idle"), true)
 })
 
 // THE EVENT-SNOOZE, WHICH THE SHELL-ONLY REST PUT BACK IN REACH. It hides the awaiting-background QUEUE
@@ -603,7 +609,7 @@ test("deriveNeedsYou: the event-snooze parks a shell-only rest for exactly the c
 
   // The other branch bgSnoozeArmed governs: a non-done FENCE with live work of either kind. A fenced
   // thread is never excused, so it keeps its card — and an armed snooze still parks that card.
-  const prWatch = { kind: "awaiting" as const, body: "", hints: [{ kind: "pr-watch" as const, value: "acme/app#1" }] }
+  const prWatch = { kind: "awaiting" as const, body: "", hints: [{ kind: "pr" as const, value: "acme/app#1" }] }
   const fenced = tele({ bgShells: [{ label: "watch", startedAt: T0, state: "running" }], lastFence: prWatch, lastActivityAt: LATER })
   assert.equal(deriveNeedsYou(row({ rested_at: T0 }), fenced, "turn-idle"), true, "a pr-watch handoff stays visible")
   assert.equal(deriveNeedsYou(row({ rested_at: T0, bg_snooze_rested_at: T0 }), fenced, "turn-idle"), false, "…unless snoozed for this exact rest")
@@ -622,7 +628,7 @@ test("deriveAwaitingBackground: true only when own-work rest is the SOLE reason 
   const declaredShell = tele({
     bgShells: [{ label: "w", startedAt: T0, state: "running" }],
     lastAssistantAt: LATER,
-    lastFence: { kind: "awaiting", body: "Waiting on the suite.", hints: [{ kind: "watch", value: "w" }] },
+    lastFence: { kind: "awaiting", body: "Waiting on the suite.", hints: [{ kind: "shell", value: "w" }] },
   })
   assert.equal(
     deriveAwaitingBackground(row({ rested_at: T0 }), declaredShell, "turn-idle", false, Date.parse(LATER) + 1000),
@@ -635,19 +641,19 @@ test("deriveAwaitingBackground: true only when own-work rest is the SOLE reason 
   assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), tele({ ...child, lastFence: { kind: "done", body: "", hints: [] } }), "turn-idle"), false, "a done fence outranks it")
   // A NON-pr-watch awaiting fence still outranks the banner: it renders its own titled card with its own
   // park control, so showing both would be the double-card this rule exists to prevent.
-  const humanPark = tele({ ...child, lastFence: { kind: "awaiting", body: "", hints: [{ kind: "human", value: "Alice" }] } })
+  const humanPark = tele({ ...child, lastFence: { kind: "awaiting", body: "", hints: [{ kind: "shell", value: "Alice" }] } })
   assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), humanPark, "turn-idle"), false, "an awaiting fence outranks it → no double-card")
   // A pr-watch PARK IS THE EXCEPTION (2026-08-13). Its fence card no longer offers a park action at all
   // (lib/awaitingPresentation), so this banner is the only place the wait is stated in words AND the only
   // place its snooze lives. Suppressing it would leave a titleless fence card with no control anywhere.
-  const prWatch = tele({ ...child, lastFence: { kind: "awaiting", body: "PR up.", hints: [{ kind: "pr-watch", value: "acme/app#1" }] } })
+  const prWatch = tele({ ...child, lastFence: { kind: "awaiting", body: "PR up.", hints: [{ kind: "pr", value: "acme/app#1" }] } })
   assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), prWatch, "turn-idle"), true, "the pr-watch park cards here now")
   assert.equal(deriveNeedsYou(row({ rested_at: T0 }), prWatch, "turn-idle"), true, "…and the thread still queues")
   // …and it qualifies on the WATCHER ALONE, with no sub-agent or shell out — which is the common shape.
-  const watcherOnly = tele({ lastActivityAt: LATER, lastFence: { kind: "awaiting", body: "PR up.", hints: [{ kind: "pr-watch", value: "acme/app#1" }] } })
+  const watcherOnly = tele({ lastActivityAt: LATER, lastFence: { kind: "awaiting", body: "PR up.", hints: [{ kind: "pr", value: "acme/app#1" }] } })
   assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), watcherOnly, "turn-idle"), true, "a watcher is live own work")
   // An unparseable ref arms nothing, so it is not live work and must not conjure a card.
-  const bogus = tele({ lastActivityAt: LATER, lastFence: { kind: "awaiting", body: "", hints: [{ kind: "pr-watch", value: "the auth PR" }] } })
+  const bogus = tele({ lastActivityAt: LATER, lastFence: { kind: "awaiting", body: "", hints: [{ kind: "pr", value: "the auth PR" }] } })
   assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), bogus, "turn-idle"), false, "no parseable ref, no watcher")
   // An EXITED parent with a 'running' child is a crash, not this card.
   assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), child, "exited"), false)
@@ -670,7 +676,7 @@ test("deriveAwaitingBackground: the event-snooze hides the QUEUE card, never the
   const declared = tele({
     bgShells: [{ label: "Poll CI to terminal", startedAt: T0, state: "running" }],
     lastAssistantAt: LATER,
-    lastFence: { kind: "awaiting", body: "Waiting on CI.", hints: [{ kind: "watch", value: "Poll CI to terminal" }] },
+    lastFence: { kind: "awaiting", body: "Waiting on CI.", hints: [{ kind: "shell", value: "Poll CI to terminal" }] },
   })
   void shell
   for (const [what, t] of [["sub-agent", child], ["declared shell", declared]] as const) {
@@ -824,17 +830,34 @@ test("deriveNeedsYou: manual snooze suppresses every queue reason until its exac
   assert.equal(deriveNeedsYou(snoozed, tele(), "turn-idle", false, Date.parse("2026-07-14T12:00:00.001Z")), true, "due snooze requeues")
 })
 
-test("deriveNeedsYou: only truthful human/future-timer waits excuse rest; machine and elapsed waits queue", () => {
+// NOTHING A WORKER MERELY ASSERTS TAKES ITS THREAD OUT OF THE QUEUE ANY MORE (2026-08-15).
+//
+// This test used to pin the opposite: `human: Alice review` and a future `timer: <instant>` each
+// excused a rest, on the worker's word alone. Both were ways to stall silently. Nothing ever fired a
+// `human:` gate — it parked the thread in Held and waited for the operator to notice. And a `timer:`
+// was an absolute instant the worker computed: one was published 5h55m in the past, parsed fine, armed
+// nothing, and left its thread parked for 5.5 hours with no wake possible.
+//
+// Both kinds are deleted. A park is now a STRUCTURAL declaration naming things frizz can look up
+// (hasDeclaredBackgroundPark), so what this pins is that the assertions alone no longer buy anything.
+test("deriveNeedsYou: an awaiting fence alone never excuses a rest — only a checkable park does", () => {
   const now = Date.parse("2026-07-13T12:00:00.000Z")
-  const waiting = (kind: "pr-watch" | "human" | "timer" | "pr" | "ci" | "session", value: string) =>
+  const waiting = (kind: "shell" | "agent" | "timer" | "pr" | "for" | "reason", value: string) =>
     tele({ lastFence: { kind: "awaiting", body: "", hints: [{ kind, value }] } })
-  assert.equal(deriveNeedsYou(row(), waiting("human", "Alice review"), "turn-idle", false, now), false)
-  // pr-watch does NOT park: it's a visible queue handoff (a PR whose reviews may never arrive must not
-  // vanish). The scheduler still polls + bumps it; the human hides it via the "PR watcher armed" card. (2026-07-22)
-  assert.equal(deriveNeedsYou(row(), waiting("pr-watch", "owner/repo#1"), "turn-idle", false, now), true, "pr-watch queues, never Held")
-  assert.equal(deriveNeedsYou(row(), waiting("timer", "2026-07-14T12:00:00Z"), "turn-idle", false, now), false)
-  assert.equal(deriveNeedsYou(row(), waiting("timer", "2026-07-12T12:00:00Z"), "turn-idle", false, now), true)
-  assert.equal(deriveNeedsYou(row(), waiting("ci", "build"), "turn-idle", false, now), true)
+  // Each of these NAMES something, but nothing in this thread's telemetry or registries backs it, so
+  // none of them is a park and every one queues.
+  for (const [kind, value] of [
+    ["shell", "bnotrunning"],
+    ["agent", "agent-that-finished"],
+    ["timer", "tmr_nosuchtimer"],
+    ["pr", "wpr_nosuchwatcher"],
+  ] as [Parameters<typeof waiting>[0], string][]) {
+    assert.equal(deriveNeedsYou(row(), waiting(kind, value), "turn-idle", false, now), true, `${kind} naming nothing live must queue`)
+  }
+  // A duration and a reason describe the park; on their own they name nothing to wait for.
+  assert.equal(deriveNeedsYou(row(), waiting("for", "2h"), "turn-idle", false, now), true, "a bare for: is not a wait")
+  assert.equal(deriveNeedsYou(row(), waiting("reason", "waiting on the build"), "turn-idle", false, now), true, "prose is not a wait")
+  // An awaiting fence naming NOTHING is a worker claiming to wait with no way to be woken.
   assert.equal(deriveNeedsYou(row(), tele({ lastFence: { kind: "awaiting", body: "", hints: [] } }), "turn-idle", false, now), true)
 })
 
@@ -1457,7 +1480,7 @@ const parked = (...hints: { kind: string; value: string }[]) =>
   tele({ lastFence: { kind: "awaiting", body: "", hints } as SessionTelemetry["lastFence"], lastAssistantAt: FENCE_AT })
 
 test("every registered PR watcher gets a row, with the instant it was registered", () => {
-  const views = fenceWatchViews("t", parked({ kind: "pr-watch", value: "colinhacks/zod#6382" }), FENCE_AT, {}, registeredOf("colinhacks/zod#6382"))
+  const views = fenceWatchViews("t", parked({ kind: "pr", value: "colinhacks/zod#6382" }), FENCE_AT, {}, registeredOf("colinhacks/zod#6382"))
   assert.deepEqual(views, [{
     id: "github:t:colinhacks/zod#6382",
     kind: "github",
@@ -1481,8 +1504,8 @@ test("a registered watcher shows with no fence at all", () => {
 // registration makes frizz watch one, so an unregistered line would put a row on the strip that nothing
 // can ever fire.
 test("a pr-watch line with no registration behind it yields no row", () => {
-  assert.deepEqual(fenceWatchViews("t", parked({ kind: "pr-watch", value: "colinhacks/zod#6382" }), FENCE_AT, {}, []), [])
-  assert.deepEqual(fenceWatchViews("t", parked({ kind: "pr-watch", value: "the auth PR" }), FENCE_AT, {}, []), [])
+  assert.deepEqual(fenceWatchViews("t", parked({ kind: "pr", value: "colinhacks/zod#6382" }), FENCE_AT, {}, []), [])
+  assert.deepEqual(fenceWatchViews("t", parked({ kind: "pr", value: "the auth PR" }), FENCE_AT, {}, []), [])
 })
 
 test("several registered PRs each get a row, and a repeat of one does not", () => {
@@ -1492,7 +1515,7 @@ test("several registered PRs each get a row, and a repeat of one does not", () =
 
 test("hints that are neither pr-watch nor watch never produce a row", () => {
   assert.deepEqual(fenceWatchViews("t", parked(
-    { kind: "human", value: "Alice must approve" },
+    { kind: "shell", value: "Alice must approve" },
     { kind: "timer", value: "2099-07-15T17:00:00Z" },
     { kind: "session", value: "the reviewer's thread" },
   ), FENCE_AT, {}, []), [])

@@ -198,7 +198,7 @@ export interface SubAgentView {
 export interface FenceView {
   kind: "done" | "awaiting"
   body: string
-  hints: { kind: "watch" | "pr-watch" | "human" | "timer" | "pr" | "ci" | "session"; value: string }[]
+  hints: { kind: "shell" | "agent" | "timer" | "pr" | "for" | "reason"; value: string }[]
 }
 
 // Per-session derived telemetry surfaced to the board overlay. Structurally a NormalizedTail (the
@@ -806,7 +806,7 @@ const SIGNAL_FENCE_RE = /^```(done|awaiting)[ \t]*\n([\s\S]*?)\n```[ \t]*$/gm
 // NOT to this regex, which made every `watch:` line parse as prose and the whole fence-based park inert
 // in production while every unit test passed (they built `hints` by hand). Caught only by folding a real
 // transcript: awaiting-watch.e2e.test.ts.
-const AWAITING_HINT_RE = /^(pr-watch|watch|human|timer|pr|ci|session):\s*(\S.*)$/i
+const AWAITING_HINT_RE = /^(shell|agent|timer|pr|for|reason):\s*(\S.*)$/i
 const FENCE_BODY_MAX = 500 // defensive: never let a worker's fence body fatten the snapshot
 const HINT_MAX = 8 // defensive cap on parsed hint lines
 const HINT_VALUE_MAX = 200 // defensive cap on a single hint value
@@ -845,7 +845,7 @@ export function parseSignalFence(text: string | undefined): FenceView | undefine
     const k = hm?.[1].toLowerCase()
     // Only real hint kinds become hints; any other `word:` line is prose (a stray colon-line
     // like "note: …" must not mint a phantom hint that then glosses as leaked internals). 2026-07-10.
-    if (hm && (k === "watch" || k === "pr-watch" || k === "human" || k === "timer" || k === "pr" || k === "ci" || k === "session")) {
+    if (hm && (k === "shell" || k === "agent" || k === "timer" || k === "pr" || k === "for" || k === "reason")) {
       const value = hm[2].trim()
       hints.push({ kind: k, value: value.length > HINT_VALUE_MAX ? value.slice(0, HINT_VALUE_MAX) : value })
     } else {

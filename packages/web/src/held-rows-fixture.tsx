@@ -89,7 +89,7 @@ const watchThread = {
   id: "watch-the-resolver-pr",
   title: "Fix the cache collision in the resolver",
   snoozedUntil: snoozeAt,
-  lastFence: { kind: "awaiting", body: "PR is open and CI is green. Watching for review.", hints: [{ kind: "pr-watch", value: "acme/app#391" }] },
+  lastFence: { kind: "awaiting", body: "PR is open and CI is green. Watching for review.", hints: [{ kind: "pr", value: "acme/app#391" }] },
 } as unknown as ThreadView
 
 // Row D — snoozed WHILE ITS OWN TURN RUNS. isHeld excuses a running thread, so the park has not taken

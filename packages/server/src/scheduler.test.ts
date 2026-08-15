@@ -251,8 +251,8 @@ test("human/session hints are descriptive, not scheduler-actionable — no fire,
   const h = harness()
   h.storage.upsertSession(row("human"))
   h.storage.upsertSession(row("session"))
-  h.tele.set("human", tele(awaiting([{ kind: "human", value: "Alice must approve fork CI" }])))
-  h.tele.set("session", tele(awaiting([{ kind: "session", value: "other-thread" }])))
+  h.tele.set("human", tele(awaiting([{ kind: "shell", value: "Alice must approve fork CI" }])))
+  h.tele.set("session", tele(awaiting([{ kind: "shell", value: "a-shell-that-is-not-running" }])))
   const s = h.make()
   await s.tick()
   h.clock.ms += 10_000
@@ -336,7 +336,7 @@ test("pr-watch: a bot review AGENT's review (Pullfrog/Copilot) wakes the watcher
   h.watch("r", "nubjs/nub#544")
   const fenceAt = iso(h.clock.ms)
   h.storage.upsertSession(row("r"))
-  h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "nubjs/nub#544" }])), lastActivityAt: fenceAt })
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr", value: "nubjs/nub#544" }])), lastActivityAt: fenceAt })
   h.review.result = [] // no prior activity to baseline
   await h.make().tick()
   assert.equal(h.resumes.length, 0)
@@ -361,7 +361,7 @@ test("pr-watch: a bot COMMENT wakes the watcher, and the steer names it as a bot
   h.watch("r", "nubjs/nub#544")
   const fenceAt = iso(h.clock.ms)
   h.storage.upsertSession(row("r"))
-  h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "nubjs/nub#544" }])), lastActivityAt: fenceAt })
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr", value: "nubjs/nub#544" }])), lastActivityAt: fenceAt })
   h.review.result = []
   await h.make().tick()
   assert.equal(h.resumes.length, 0)
@@ -392,9 +392,9 @@ test("pr-watch fans out: every registered ref of a multi-PR thread is polled, an
   h.storage.upsertSession(row("multi"))
   h.tele.set("multi", {
     ...tele(awaiting([
-      { kind: "pr-watch", value: "acme/a#1" },
-      { kind: "pr-watch", value: "acme/b#2" },
-      { kind: "pr-watch", value: "acme/c#3" },
+      { kind: "pr", value: "acme/a#1" },
+      { kind: "pr", value: "acme/b#2" },
+      { kind: "pr", value: "acme/c#3" },
     ])),
     lastActivityAt: fenceAt,
   })
@@ -427,7 +427,7 @@ test("pr-watch: baselines, then bumps on a new human comment", async () => {
   h.watch("r", "acme/app#391")
   const fenceAt = iso(h.clock.ms)
   h.storage.upsertSession(row("r"))
-  h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "acme/app#391" }])), lastActivityAt: fenceAt })
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr", value: "acme/app#391" }])), lastActivityAt: fenceAt })
   // Already on the PR before the worker registered the watcher, so it is the worker's own news: the
   // first poll records it as seen and says nothing.
   h.review.result = [{ id: "comment:old", actor: "alice", actorType: "User", at: iso(h.clock.ms - 120_000), kind: "comment" }]
@@ -457,7 +457,7 @@ test("pr-watch: the bump steer carries the item's permalink and timestamp, not j
   h.watch("r", "nubjs/nub#587")
   const fenceAt = iso(h.clock.ms)
   h.storage.upsertSession(row("r"))
-  h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "nubjs/nub#587" }])), lastActivityAt: fenceAt })
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr", value: "nubjs/nub#587" }])), lastActivityAt: fenceAt })
   // The stale comment predates the registration, so the first poll only baselines it — and from here it
   // must never be named again.
   h.review.result = [{ id: "comment:stale", actor: "colinhacks", actorType: "User", at: iso(h.clock.ms - 120_000), kind: "comment", url: "https://github.com/nubjs/nub/pull/587#issuecomment-1" }]
@@ -488,7 +488,7 @@ test("pr-watch: a BURST between polls is enumerated in full, oldest first — no
   h.watch("r", "acme/app#391")
   const fenceAt = iso(h.clock.ms)
   h.storage.upsertSession(row("r"))
-  h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "acme/app#391" }])), lastActivityAt: fenceAt })
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr", value: "acme/app#391" }])), lastActivityAt: fenceAt })
   h.review.result = []
   await h.make().tick()
   assert.equal(h.resumes.length, 0)
@@ -530,7 +530,7 @@ test("pr-watch: a burst past the enumeration cap counts everything and says how 
   h.watch("r", "acme/app#391")
   const fenceAt = iso(h.clock.ms)
   h.storage.upsertSession(row("r"))
-  h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "acme/app#391" }])), lastActivityAt: fenceAt })
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr", value: "acme/app#391" }])), lastActivityAt: fenceAt })
   h.review.result = []
   await h.make().tick()
 
@@ -561,7 +561,7 @@ test("pr-watch: an APPROVAL is named specifically in the bump steer", async () =
   h.watch("r", "acme/app#391")
   const fenceAt = iso(h.clock.ms)
   h.storage.upsertSession(row("r"))
-  h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "acme/app#391" }])), lastActivityAt: fenceAt })
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr", value: "acme/app#391" }])), lastActivityAt: fenceAt })
   h.review.result = [] // no prior activity to baseline
   await h.make().tick()
   assert.equal(h.resumes.length, 0)
@@ -583,7 +583,7 @@ test("pr-watch: CHANGES_REQUESTED is named as a noun, so the steer stays a gramm
   h.watch("r", "acme/app#391")
   const fenceAt = iso(h.clock.ms)
   h.storage.upsertSession(row("r"))
-  h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "acme/app#391" }])), lastActivityAt: fenceAt })
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr", value: "acme/app#391" }])), lastActivityAt: fenceAt })
   h.review.result = []
   await h.make().tick()
 
@@ -609,7 +609,7 @@ test("pr-watch: the bump steer never reads as an instruction to mutate the PR", 
   h.watch("r", "nubjs/nub#551")
   const fenceAt = iso(h.clock.ms)
   h.storage.upsertSession(row("r"))
-  h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "nubjs/nub#551" }])), lastActivityAt: fenceAt })
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr", value: "nubjs/nub#551" }])), lastActivityAt: fenceAt })
   h.review.result = []
   await h.make().tick()
   assert.equal(h.resumes.length, 0)
@@ -634,7 +634,7 @@ test("pr-watch: 'Arm watcher' — a new-activity bump CLEARS the user snooze so 
   h.watch("r", "acme/app#391")
   const fenceAt = iso(h.clock.ms)
   h.storage.upsertSession(row("r"))
-  h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "acme/app#391" }])), lastActivityAt: fenceAt })
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr", value: "acme/app#391" }])), lastActivityAt: fenceAt })
   h.review.result = [] // baseline empty
   await h.make().tick()
 
@@ -662,7 +662,7 @@ test("pr-watch: one scheduler tick batches distinct refs and deduplicates duplic
   for (const [slug, pr] of [["first", 544], ["second", 549], ["duplicate", 544]] as const) {
     h.storage.upsertSession(row(slug))
     h.watch(slug, `nubjs/nub#${pr}`)
-    h.tele.set(slug, { ...tele(awaiting([{ kind: "pr-watch", value: `nubjs/nub#${pr}` }])), lastActivityAt: fenceAt })
+    h.tele.set(slug, { ...tele(awaiting([{ kind: "pr", value: `nubjs/nub#${pr}` }])), lastActivityAt: fenceAt })
   }
   let tokenCalls = 0
   const requests: any[] = []
@@ -696,7 +696,7 @@ test("pr-watch: precise failures are coalesced in logs and recovery is explicit"
   h.watch("r", "nubjs/nub#544")
   const fenceAt = iso(h.clock.ms)
   h.storage.upsertSession(row("r"))
-  h.tele.set("r", { ...tele(awaiting([{ kind: "pr-watch", value: "nubjs/nub#544" }])), lastActivityAt: fenceAt })
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr", value: "nubjs/nub#544" }])), lastActivityAt: fenceAt })
   const logs: string[] = []
   let recovered = false
   const scheduler = h.make({
@@ -744,7 +744,7 @@ test("pr: open→merged transition fires with the merged steer", async () => {
 test("ci: pending→(gh failure)→green; a transient gh failure is skipped, never fires early or crashes", async () => {
   const h = harness()
   h.storage.upsertSession(row("c"))
-  h.tele.set("c", tele(awaiting([{ kind: "ci", value: "acme/app#391" }])))
+  h.tele.set("c", tele(awaiting([{ kind: "shell", value: "acme/app#391" }])))
   const s = h.make()
   h.pr.result = { state: "OPEN", mergedAt: null, rollup: [{ status: "IN_PROGRESS" }], workflowRuns: [{ workflowName: "CI", event: "pull_request", status: "IN_PROGRESS" }] }
   await s.tick() // armed (pending)
@@ -762,7 +762,7 @@ test("ci: pending→(gh failure)→green; a transient gh failure is skipped, nev
 test("ci: a failing check still wakes the worker, and the steer NAMES the failed jobs", async () => {
   const h = harness()
   h.storage.upsertSession(row("c"))
-  h.tele.set("c", tele(awaiting([{ kind: "ci", value: "acme/app#391" }])))
+  h.tele.set("c", tele(awaiting([{ kind: "shell", value: "acme/app#391" }])))
   const s = h.make()
   h.pr.result = { state: "OPEN", mergedAt: null, rollup: [{ status: "IN_PROGRESS" }], workflowRuns: [{ workflowName: "CI", event: "pull_request", status: "IN_PROGRESS" }] }
   await s.tick()
@@ -786,7 +786,7 @@ test("ci: a failing check still wakes the worker, and the steer NAMES the failed
 test("ci: an unnamed failure degrades to the bare failed steer rather than an empty list", async () => {
   const h = harness()
   h.storage.upsertSession(row("c"))
-  h.tele.set("c", tele(awaiting([{ kind: "ci", value: "acme/app#391" }])))
+  h.tele.set("c", tele(awaiting([{ kind: "shell", value: "acme/app#391" }])))
   const s = h.make()
   h.pr.result = { state: "OPEN", mergedAt: null, rollup: [{ status: "IN_PROGRESS" }], workflowRuns: [{ event: "pull_request", status: "IN_PROGRESS" }] }
   await s.tick()
@@ -799,7 +799,7 @@ test("ci: an unnamed failure degrades to the bare failed steer rather than an em
 test("ci: a partial green rollup remains pending for an exact-head fork gate, then an approved rerun wakes once", async () => {
   const h = harness()
   h.storage.upsertSession(row("fork-gate"))
-  h.tele.set("fork-gate", tele(awaiting([{ kind: "ci", value: "acme/app#391" }])))
+  h.tele.set("fork-gate", tele(awaiting([{ kind: "shell", value: "acme/app#391" }])))
   const s = h.make()
   h.pr.result = {
     state: "OPEN", mergedAt: null,

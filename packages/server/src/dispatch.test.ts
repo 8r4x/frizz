@@ -342,9 +342,20 @@ test("loadWorkerPrompt: the backend-AGNOSTIC core is present in BOTH contracts",
     assert.match(raw, /## Git discipline/)
     assert.match(raw, /## Quality bar/)
     assert.match(raw, /## The stop criterion/)
-    assert.match(c, /human: <actor \+ exact review\/approval>/) // current awaiting grammar
-    assert.match(c, /timer: <ISO-8601 instant>/)
-    assert.match(c, /`pr:` \/ `ci:` \/ `session:` remain/) // legacy readability is explicit
+    // THE CURRENT AWAITING GRAMMAR (2026-08-15): structural lines only. `human:` used to be pinned here;
+    // it is deleted, because it parked a thread in Held and nothing ever fired it. Waiting on a person is
+    // a ```question now, and this asserts the contract says so rather than merely omitting the old kind.
+    assert.match(c, /shell: bzvtnt3ig/)
+    assert.match(c, /for: 2h/)
+    assert.match(c, /reason:/)
+    assert.doesNotMatch(c, /human:/, "the human gate must not come back")
+    // `timer:` NAMES A ROW NOW, never an instant. The instant grammar is deleted: one was written 5h55m
+    // in the past, parsed, armed nothing, and stalled its thread for 5.5 hours (2026-08-15).
+    assert.match(c, /timer: tmr_/)
+    assert.doesNotMatch(c, /timer: <ISO-8601 instant>/, "the instant grammar must not come back")
+    // The legacy compatibility note is gone with the kinds it described; the contract states the six
+    // structural lines and nothing else, so there is no "never emit these" footnote left to carry.
+    assert.doesNotMatch(c, /remain parser compatibility/)
     assert.match(raw, /## Agent completion invariant/)
     assert.match(c, /let it run to its terminal return/)
     assert.match(c, /partially applied edits, tests, and owned processes/)
@@ -364,13 +375,14 @@ test("awaiting re-entry: every worker-contract surface requires a fresh fence af
     const c = raw.replace(/\s+/g, " ") // pin content, not line-wrap
     assert.match(c, /back to awaiting/)
     assert.match(c, /already parked/)
-    assert.match(c, /re-emit/)
-    assert.match(c, /human:[^\n]*timer:/)
+    assert.match(c, /emit a FRESH fence/)
+    // The six structural lines, in order, and nothing between them a worker could mistake for prose.
+    assert.match(c, /shell:[^\n]*agent:[^\n]*timer:[^\n]*pr:[^\n]*for:[^\n]*reason:/)
     assert.match(c, /automatable[\s\S]{0,100}(?:arm|re-arm)/i)
   }
 })
 
-test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting parks human/timer only", () => {
+test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting parks on checked items", () => {
   // Whitespace-normalized throughout: these pin the RULES, not the line-wrap.
   for (const raw of [loadWorkerPrompt("claude"), loadWorkerPrompt("codex")]) {
     const c = raw.replace(/\s+/g, " ")

@@ -555,13 +555,13 @@ test("sessionIndicatorKind: a parent resting on a live sub-agent keeps its spinn
 
 // ---- isHeld: every rendered wait glyph belongs to the labeled dimmed Held band ----
 
-const awaitingHuman = { kind: "awaiting" as const, body: "", hints: [{ kind: "human" as const, value: "Cloudflare maintainer must approve fork CI" }] }
-const awaitingPrWatch = { kind: "awaiting" as const, body: "", hints: [{ kind: "pr-watch" as const, value: "owner/repo#12" }] }
+const awaitingHuman = { kind: "awaiting" as const, body: "", hints: [{ kind: "shell" as const, value: "Cloudflare maintainer must approve fork CI" }] }
+const awaitingPrWatch = { kind: "awaiting" as const, body: "", hints: [{ kind: "pr" as const, value: "owner/repo#12" }] }
 const awaitingTimer = { kind: "awaiting" as const, body: "", hints: [{ kind: "timer" as const, value: "2099-07-15T17:00:00Z" }] }
 const awaitingElapsedTimer = { kind: "awaiting" as const, body: "", hints: [{ kind: "timer" as const, value: "2020-07-15T17:00:00Z" }] }
 const awaitingBadTimer = { kind: "awaiting" as const, body: "", hints: [{ kind: "timer" as const, value: "tomorrow-ish" }] }
 const awaitingPr = { kind: "awaiting" as const, body: "", hints: [{ kind: "pr" as const, value: "owner/repo#12" }] }
-const awaitingCi = { kind: "awaiting" as const, body: "", hints: [{ kind: "ci" as const, value: "build #4821" }] }
+const awaitingCi = { kind: "awaiting" as const, body: "", hints: [{ kind: "shell" as const, value: "build #4821" }] }
 const liveSub = [{ label: "x", startedAt: "2026-07-10T00:00:00.000Z", state: "running" as const, id: "a1" }]
 const liveShell = [{ label: "Watch CI", startedAt: "2026-07-10T00:00:00.000Z", state: "running" as const }]
 

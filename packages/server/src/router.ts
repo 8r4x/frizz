@@ -26,13 +26,14 @@ import {
   CancelOwnThreadTimerInput,
   CancelOwnThreadTimerResult,
   ListOwnThreadTimersInput,
+  ListOwnThreadActivityInput,
+  OwnThreadActivityResult,
   OwnThreadTimersResult,
   TIMER_MAX_ARMED,
   type ThreadTimerView,
   ThreadPluginReloadResult,
   SetThreadSnoozeInput,
   ConfirmAwaitingInput,
-  canonicalSnoozeInstant,
   GithubStatus,
   GithubListInput,
   GithubRefPreviewInput,
@@ -2104,6 +2105,48 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => ({ timers: armedTimerViews(input.slug) }),
     }),
 
+    // EVERY kind of background work this thread has out, with the id its awaiting fence names it by.
+    //
+    // The fence is structural — it references live things by id — so a worker that no longer has those
+    // ids to hand cannot write a correct fence at all, and the failure is silent: it names something
+    // wrong, frizz refuses the park, and the thread queues. That is the exact stall the grammar exists
+    // to prevent, so the ids have to be RETRIEVABLE rather than remembered. Same list the sign-off nudge
+    // prints, from the same source, so the two can never tell a worker different things.
+    //
+    // A shell is keyed by its RUNTIME task id ("Command running in background with ID: bzvtnt3ig"),
+    // never its launch tool_use id: that is the string the worker was actually shown and the one it will
+    // reach for. Falls back to the launch id only when the ack has not landed yet.
+    listOwnThreadActivity: mutation({
+      input: ListOwnThreadActivityInput,
+      output: OwnThreadActivityResult,
+      handler: async ({ input }) => {
+        const tele = ctx.tailer.get(input.slug)
+        const activity: OwnThreadActivityResult["activity"] = []
+        for (const sh of tele?.bgShells ?? []) {
+          if (sh.state !== "running") continue
+          const id = sh.taskId ?? sh.id
+          if (id) activity.push({ kind: "shell", id, label: sh.label, since: sh.startedAt })
+        }
+        for (const a of tele?.subAgents ?? []) {
+          if (a.state !== "running") continue
+          if (a.id) activity.push({ kind: "agent", id: a.id, label: a.label, since: a.startedAt })
+        }
+        for (const t of ctx.storage.listThreadTimers(input.slug, { armedOnly: true })) {
+          activity.push({
+            kind: "timer", id: t.id, label: t.prompt.trim().replace(/\s+/g, " ").slice(0, 120),
+            since: new Date(t.created_at).toISOString(), until: new Date(t.fire_at).toISOString(),
+          })
+        }
+        for (const w of ctx.storage.listPrWatches(input.slug, { armedOnly: true })) {
+          activity.push({
+            kind: "pr", id: `${w.owner}/${w.repo}#${w.number}`, label: `${w.owner}/${w.repo}#${w.number}`,
+            since: new Date(w.created_at).toISOString(),
+          })
+        }
+        return { activity }
+      },
+    }),
+
     // THE WATCHER REGISTRY IS GONE (2026-08-14). `mcp__frizz__watch` and its four procedures are
     // deleted rather than shimmed: a wait is now a `watch:` line in the worker's own ```awaiting fence,
     // which is BOTH the park and the wake (scheduler `watchVerdict`), so there is nothing to register and
@@ -2244,10 +2287,10 @@ export function createRouter(ctx: AppContext) {
         if (!fenceAt || !Number.isFinite(Date.parse(fenceAt)) || fenceAt !== input.fenceAt) {
           throw new Error("This awaiting proposal changed before it could be confirmed")
         }
-        const snoozedUntil = hint.kind === "timer" ? canonicalSnoozeInstant(hint.value) : null
-        if (hint.kind === "timer" && !snoozedUntil) {
-          throw new Error("This awaiting proposal changed before it could be confirmed")
-        }
+        // NO HINT CONVERTS TO A SNOOZE ANY MORE. This turned a worker's `timer: <instant>` into a real
+        // durable park; that kind is deleted (see the AwaitingHint doc block in @frizz/shared) and
+        // isActionableAwaitingHint now refuses everything, so this handler is unreachable in practice.
+        const snoozedUntil: string | null = null
         if (snoozedUntil && Date.parse(snoozedUntil) <= Date.now()) {
           throw new Error("This scheduled time has already passed")
         }

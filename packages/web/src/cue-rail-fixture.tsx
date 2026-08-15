@@ -125,7 +125,7 @@ const threads: ThreadView[] = [
     runtime: "turn-idle",
     needsYou: false,
     sessionId: "aaaaaaaa-bbbb-cccc-dddd-000000000011",
-    lastFence: { kind: "awaiting", body: "", hints: [{ kind: "human", value: "@dana — schema review" }] },
+    lastFence: { kind: "awaiting", body: "", hints: [{ kind: "shell", value: "@dana — schema review" }] },
     lastAssistantAt: ago(40 * MIN),
     lastActivityAt: ago(40 * MIN),
     lastUserAt: ago(70 * MIN),

@@ -637,12 +637,14 @@ function StatusChip({ status }: { status: string }) {
 // leaked internals in the row subtitle (maintainer 2026-07-10: "what the fuck is that?! looks bad");
 // the CircleDashed indicator + its "Waiting on another session" tooltip already carry that state.
 // Null when there's no glossable hint.
+// The fence's own lines are STRUCTURAL now — ids and a duration — and a rail tooltip full of
+// `bzvtnt3ig` glosses nothing. The one line written for a human to read is `reason:`, so that is the
+// gloss; a fence without one has nothing to say here and returns null, as it always did.
 export function hintGloss(hints: readonly AwaitingHint[]): string | null {
-  const h = parkedAwaitingHint(hints) ?? hints.find((x) => x.kind === "pr" || x.kind === "ci")
-  if (!h) return null
-  if (h.kind === "timer") return formatSnoozedUntil(h.value) ?? "Timer schedule unavailable"
-  const label = h.kind === "pr" ? "PR" : h.kind === "ci" ? "CI" : h.kind === "human" ? "HUMAN" : h.kind === "pr-watch" ? "WATCH" : h.kind
-  return `${label} ${h.value}`
+  const reason = hints.find((h) => h.kind === "reason")?.value.trim()
+  if (reason) return reason
+  const pr = hints.find((h) => h.kind === "pr")
+  return pr ? `PR ${pr.value}` : null
 }
 
 // ── the indicator (one per row) ──────────────────────────────────────────────────────────────────
@@ -789,14 +791,13 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     // scheduled instant. Legacy/malformed waits stay readable but do not claim that a working wake is
     // armed — which is why the legacy `pr` row below wears the SAME GitHub glyph with the opposite
     // tooltip: both are PR-shaped waits, and the tooltip is what separates "watching" from "not armed".
-    const parked = parkedAwaitingHint(t.lastFence.hints)
-    if (parked?.kind === "human") return { node: heldMark, tip: withWatch("Waiting on a human review or approval") }
-    if (parked?.kind === "timer") return { node: heldMark, tip: withWatch(formatAutoSnoozedUntil(parked.value) ?? "Auto-snoozed until a scheduled check") }
-    const hk = t.lastFence.hints[0]?.kind
-    if (hk === "pr") return { node: github, tip: "Legacy PR wait — active monitoring is not armed" }
-    if (hk === "ci") return { node: <StatusBox><Clock size={9} className="text-muted/70" /></StatusBox>, tip: "Legacy CI wait — active monitoring is not armed" }
-    if (hk === "session") return { node: <StatusBox><CircleDashed size={10} className="text-muted/70" /></StatusBox>, tip: "Waiting on another session" }
-    return { node: <StatusBox><Clock size={9} className="text-muted/70" /></StatusBox>, tip: "Waiting on a machine" }
+    // NO HINT KIND PARKS ON ITS OWN. `human:` and `timer: <instant>` each drew the Held mark from the
+    // worker's assertion alone; both are deleted (2026-08-15) and the server now decides Held from a
+    // checked declaration. What is left to draw is the SHAPE of the wait.
+    const hk = t.lastFence.hints.find((h) => h.kind === "pr" || h.kind === "shell" || h.kind === "agent" || h.kind === "timer")?.kind
+    if (hk === "pr") return { node: github, tip: withWatch("Watching a pull request") }
+    if (hk === "shell" || hk === "agent") return { node: <StatusBox><CircleDashed size={10} className="text-muted/70" /></StatusBox>, tip: withWatch("Waiting on its own background work") }
+    return { node: <StatusBox><Clock size={9} className="text-muted/70" /></StatusBox>, tip: withWatch("Waiting on a timer") }
   }
   // At rest (no fence, nothing pending) with the process still ALIVE — a worker that came to rest
   // WITHOUT declaring done or a machine-wait, and with NOTHING it launched still running (that is the

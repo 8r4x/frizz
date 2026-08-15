@@ -36,26 +36,33 @@ function parked(names: string[], over: Partial<SessionTelemetry> = {}): SessionT
     lastFence: {
       kind: "awaiting",
       body: "Waiting on the test run.",
-      hints: names.map((value) => ({ kind: "watch" as const, value })),
+      hints: names.map((value) => ({ kind: "shell" as const, value })),
     },
     ...over,
   } as SessionTelemetry
 }
 
-test("the names come off the fence's `watch:` lines, and nothing else does", () => {
+// `declaredWaitIds` is the thread's OWN RUNNING WORK, by the handle the worker sees. `timer:` and
+// `pr:` are waits too, but they name rows in their own registries and are checked against those —
+// mixing them in here would compare a timer id against a set of shell handles and call a healthy wait
+// dead. `for:` and `reason:` describe the park itself and name nothing at all.
+test("the names come off the shell/agent lines, and nothing else does", () => {
   const tele = parked([], {
     lastFence: {
       kind: "awaiting",
-      body: "prose",
+      body: "",
       hints: [
-        { kind: "watch", value: "nub run test" },
-        { kind: "pr-watch", value: "acme/app#1" },
-        { kind: "human", value: "Colin" },
-        { kind: "watch", value: "bash_2" },
+        { kind: "shell", value: "nub run test" },
+        { kind: "pr", value: "acme/app#1" },
+        { kind: "agent", value: "agent_7" },
+        { kind: "timer", value: "tmr_abc123" },
+        { kind: "for", value: "2h" },
+        { kind: "reason", value: "waiting on the suite" },
+        { kind: "shell", value: "bash_2" },
       ],
     },
   } as Partial<SessionTelemetry>)
-  assert.deepEqual(declaredWaitIds(tele), ["nub run test", "bash_2"])
+  assert.deepEqual(declaredWaitIds(tele), ["nub run test", "agent_7", "bash_2"])
 })
 
 test("a done fence declares nothing, and neither does a thread with no fence", () => {
@@ -123,7 +130,7 @@ test("a pr-watch park cards but does NOT take the thread out of the queue", () =
     lastAssistantAt: AT,
     bgShells: [],
     subAgents: [],
-    lastFence: { kind: "awaiting", body: "PR up.", hints: [{ kind: "pr-watch", value: "acme/app#1" }] },
+    lastFence: { kind: "awaiting", body: "PR up.", hints: [{ kind: "pr", value: "acme/app#1" }] },
   } as unknown as SessionTelemetry
   assert.equal(hasDeclaredWait(prWatch, NOW), true, "it states a wait, so the card shows")
   assert.equal(hasDeclaredBackgroundPark(prWatch, NOW), false, "but it never excuses the queue")

@@ -65,9 +65,9 @@ const timerIso = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString()
 const cards: { slug: string; label: string; fence: "done" | "awaiting"; body: string; hints: AwaitingHint[] }[] = [
   { slug: "card-done", label: "done", fence: "done", body: "Shipped the change.", hints: [] },
   { slug: "card-timer", label: "timer snooze", fence: "awaiting", body: "Park until the checkpoint.", hints: [{ kind: "timer", value: timerIso }] },
-  { slug: "card-review", label: "PR watch", fence: "awaiting", body: "The implementation is ready for review.", hints: [{ kind: "pr-watch", value: "owner/repo#42" }] },
-  { slug: "card-human", label: "human approval", fence: "awaiting", body: "The API shape needs approval.", hints: [{ kind: "human", value: "Alice to approve the API shape" }] },
-  { slug: "card-legacy", label: "legacy CI (no button)", fence: "awaiting", body: "The legacy build is still running.", hints: [{ kind: "ci", value: "owner/repo#7" }] },
+  { slug: "card-review", label: "PR watch", fence: "awaiting", body: "The implementation is ready for review.", hints: [{ kind: "pr", value: "owner/repo#42" }] },
+  { slug: "card-human", label: "human approval", fence: "awaiting", body: "The API shape needs approval.", hints: [{ kind: "shell", value: "Alice to approve the API shape" }] },
+  { slug: "card-legacy", label: "legacy CI (no button)", fence: "awaiting", body: "The legacy build is still running.", hints: [{ kind: "shell", value: "owner/repo#7" }] },
 ]
 
 // The QUEUE path: the queue card renders the fence through <Message dense> inside a ThreadSlugContext,

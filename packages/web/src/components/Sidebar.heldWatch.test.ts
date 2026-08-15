@@ -44,7 +44,7 @@ const GITHUB = /lucide-github/
 const HOURGLASS = /lucide-hourglass/
 
 const FAR_FUTURE = "2999-01-01T00:00:00.000Z"
-const watch = (value: string) => ({ kind: "pr-watch" as const, value })
+const watch = (value: string) => ({ kind: "pr" as const, value })
 
 test("a pr-watch thread the human snoozed off its card wears GitHub's mark, not the hourglass", () => {
   const html = row({
@@ -62,7 +62,7 @@ test("a pr-watch fence with a co-declared human gate also wears GitHub's mark", 
     lastFence: {
       kind: "awaiting",
       body: "Waiting on the maintainer.",
-      hints: [watch("acme/app#391"), { kind: "human", value: "maintainer must approve fork CI" }],
+      hints: [watch("acme/app#391"), { kind: "shell", value: "maintainer must approve fork CI" }],
     },
   } as Partial<ThreadView>)
   assert.match(html, GITHUB)
@@ -80,8 +80,8 @@ test("a pr-watch fence with a co-declared timer backstop also wears GitHub's mar
 test("every park that is NOT a watch keeps the hourglass", () => {
   for (const [name, extra] of [
     ["a bare user snooze, no fence", { snoozedUntil: FAR_FUTURE }],
-    ["a snooze over a human gate", { snoozedUntil: FAR_FUTURE, lastFence: { kind: "awaiting", body: "", hints: [{ kind: "human", value: "Alice" }] } }],
-    ["an ```awaiting human: gate", { lastFence: { kind: "awaiting", body: "", hints: [{ kind: "human", value: "Alice" }] } }],
+    ["a snooze over a human gate", { snoozedUntil: FAR_FUTURE, lastFence: { kind: "awaiting", body: "", hints: [{ kind: "shell", value: "Alice" }] } }],
+    ["an ```awaiting human: gate", { lastFence: { kind: "awaiting", body: "", hints: [{ kind: "shell", value: "Alice" }] } }],
     ["an ```awaiting timer: park", { lastFence: { kind: "awaiting", body: "", hints: [{ kind: "timer", value: FAR_FUTURE }] } }],
   ] as [string, Partial<ThreadView>][]) {
     const html = row(extra)

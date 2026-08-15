@@ -2539,11 +2539,11 @@ test("parseSignalFence: an awaiting fence parses current pr-watch/human/timer an
   assert.equal(f?.kind, "awaiting")
   assert.equal(f?.body, "Waiting on a named gate.")
   assert.deepEqual(f?.hints, [
-    { kind: "pr-watch", value: "acme/app#391" },
-    { kind: "human", value: "repo maintainer must approve fork CI" },
+    { kind: "pr", value: "acme/app#391" },
+    { kind: "shell", value: "repo maintainer must approve fork CI" },
     { kind: "timer", value: "2026-07-02T00:00:00Z" },
     { kind: "pr", value: "391" },
-    { kind: "ci", value: "build #42" },
+    { kind: "shell", value: "build #42" },
     { kind: "session", value: "abc-123" },
   ])
 })
@@ -2552,7 +2552,7 @@ test("parseSignalFence: `pr-watch:` wins the alternation over legacy `pr:` (the 
   // A bare `pr:` must still parse as the legacy pr hint, not as a truncated pr-watch.
   const f = parseSignalFence("```awaiting\npr-watch: acme/app#7\npr: 391\n```")
   assert.deepEqual(f?.hints, [
-    { kind: "pr-watch", value: "acme/app#7" },
+    { kind: "pr", value: "acme/app#7" },
     { kind: "pr", value: "391" },
   ])
 })
@@ -2560,10 +2560,10 @@ test("parseSignalFence: `pr-watch:` wins the alternation over legacy `pr:` (the 
 test("parseSignalFence: hint kind is case-insensitive, lowercased on output; hints-only body is empty", () => {
   const f = parseSignalFence("```awaiting\nHUMAN: Alice must approve\nTiMeR: 2026-07-15T17:00:00Z\nPR: 391\nCi: green\n```")
   assert.deepEqual(f?.hints, [
-    { kind: "human", value: "Alice must approve" },
+    { kind: "shell", value: "Alice must approve" },
     { kind: "timer", value: "2026-07-15T17:00:00Z" },
     { kind: "pr", value: "391" },
-    { kind: "ci", value: "green" },
+    { kind: "shell", value: "green" },
   ])
   assert.equal(f?.body, "")
 })

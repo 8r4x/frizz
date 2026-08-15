@@ -72,7 +72,7 @@ function parkRecord(at: string, target?: string): string {
       "Kicked the suite off in the background; I'll fold the result in when it lands.",
       "",
       "```awaiting",
-      `watch: ${target}`,
+      `shell: ${target}`,
       "Waiting on the test run.",
       "```",
     ].join("\n")
@@ -173,7 +173,7 @@ test("a park on a LIVE shell stays parked, then wakes on the shell's own retirem
     const parked = h.tele()
     assert.equal(parked?.bgShells.some((sh) => sh.taskId === TASK_ID && sh.state === "running"), true, "the shell folded as live")
     assert.equal(parked?.lastFence?.kind, "awaiting", "the fence folded")
-    assert.deepEqual(parked?.lastFence?.hints, [{ kind: "watch", value: TASK_ID }], "…carrying the watch hint")
+    assert.deepEqual(parked?.lastFence?.hints, [{ kind: "shell", value: TASK_ID }], "…carrying the watch hint")
 
     await h.s.tick()
     assert.deepEqual(h.delivered, [], "the shell is still running — nothing to say")
@@ -230,7 +230,7 @@ test("a poll publishes a reading the BOARD can actually read, and the queue rule
   const transcript = join(dir, `${SESSION}.jsonl`)
   writeFileSync(transcript, line({
     type: "assistant", timestamp: at, sessionId: SESSION, uuid: "p1",
-    message: { role: "assistant", content: [{ type: "text", text: "PR is up.\n\n```awaiting\npr-watch: acme/app#391\nWatching for review.\n```" }] },
+    message: { role: "assistant", content: [{ type: "text", text: "PR is up.\n\n```awaiting\npr: acme/app#391\nfor: 2h\nreason: watching for review\n```" }] },
   }))
   const storage = createStorage(join(dir, "ui.db"))
   storage.setSetting("signoffNudge", "off")
@@ -271,7 +271,11 @@ test("a poll publishes a reading the BOARD can actually read, and the queue rule
   })
   try {
     const tele = tailer.get(SLUG)
-    assert.deepEqual(tele?.lastFence?.hints, [{ kind: "pr-watch", value: "acme/app#391" }], "the fence folded off the real file")
+    assert.deepEqual(tele?.lastFence?.hints, [
+      { kind: "pr", value: "acme/app#391" },
+      { kind: "for", value: "2h" },
+      { kind: "reason", value: "watching for review" },
+    ], "the fence folded off the real file")
 
     await s.tick()
     const book = readGithubStatusBook(storage.getSetting(GITHUB_STATUS_SETTING))

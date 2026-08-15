@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { compactionPromptMessage, formatGithubWakeSteer, type GithubWatchStatus, prWatchWakeMessage, shellDoneMessage, isValidAwaitingTimer, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, wakeDeliveryToken, type QuotaSnapshot } from "@frizz/shared"
-import { GITHUB_STATUS_SETTING } from "./awaiting.ts"
+import { compactionPromptMessage, formatGithubWakeSteer, type GithubWatchStatus, prWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, wakeDeliveryToken, type QuotaSnapshot } from "@frizz/shared"
+import { GITHUB_STATUS_SETTING, parkIsHonoured, readAwaitingPark, type LiveActivity } from "./awaiting.ts"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
 import type { FenceView, SessionTelemetry } from "./tailer.ts"
@@ -247,22 +247,19 @@ export function githubWatchStatus(pr: PrStatus, polledAt: string): GithubWatchSt
 // The PR-activity watcher hint. A one-line predicate (rather than inlining `=== "pr-watch"`) keeps
 // every scheduler branch reading uniformly and leaves an obvious seam if the watcher ever grows a
 // second spelling again. (`github-review`, the prior name, was removed 2026-07-22.)
-function isPrWatchHint(kind: FenceView["hints"][number]["kind"]): boolean {
-  return kind === "pr-watch"
+function isPrWatchHint(_kind: FenceView["hints"][number]["kind"]): boolean {
+  return false // the grammar has no pr-watch kind since 2026-08-15; a PR is a registered watcher (SOURCE 11)
 }
 
 // Is a hint one this scheduler can act on? A current STRICT ISO `timer:`, a machine-readable
 // `pr-watch:` PR ref, plus legacy `pr:`/`ci:` refs. `human:` is descriptive by
 // definition and `session:` has no cross-session liveness signal, so neither is resolved here.
-function isActionable(hint: FenceView["hints"][number]): boolean {
-  if (hint.kind === "timer") return isValidAwaitingTimer(hint.value)
-  // `pr-watch` IS NOT ACTIONABLE HERE ANY MORE (2026-08-14). It is a DECLARATION of a wait that
-  // `mcp__frizz__watch_pr` created, and the registry pass (SOURCE 11) is what fires it. Leaving it armed
-  // here too would wake a correctly-behaved worker TWICE for one review — register the PR, name it in
-  // the fence, get told everything twice — which is the shape of bug that reads as "the watcher is
-  // misfiring". A `pr-watch:` line with no registration behind it therefore wakes nobody, and the board
-  // queues that thread as usual rather than parking it (fenceWatchViews / heldByRunningChecks).
-  if (hint.kind === "pr" || hint.kind === "ci") return parsePrRef(hint.value) !== undefined
+function isActionable(_hint: FenceView["hints"][number]): boolean {
+  // NOTHING IN A FENCE IS ACTIONABLE ANY MORE (2026-08-15). Every kind this used to fire has become a
+  // REGISTRATION the worker makes through a tool, and the fence only NAMES what already exists: a timer
+  // is a `thread_timer` row, a PR is a `watch_pr` registration, a shell/agent is live telemetry. The
+  // arming/polling machinery below is therefore unreachable for the current grammar and survives only
+  // for the legacy `pr:`/`ci:` spellings, which no worker has emitted since long before this.
   return false
 }
 
@@ -557,13 +554,43 @@ function saidDone(tele: Pick<SessionTelemetry, "lastFence" | "lastAssistantAllDo
  *  `autonomous` reaches the QUESTION limb only, and the asymmetry is the point — see the header block.
  *  Both callers must pass the same value or a bump would be enqueued and then superseded before it was
  *  ever delivered, so it is read from the row by `autonomousModeOn` at each. */
+/** This thread's ARMED timer ids — the other registry a \`timer:\` line is checked against. */
+function armedTimerIdsOf(storage: Storage, slug: string): ReadonlySet<string> {
+  return new Set(storage.listThreadTimers(slug, { armedOnly: true }).map((t) => t.id))
+}
+
 function restMessageIsSignedOff(
-  tele: Pick<SessionTelemetry, "pendingQuestion" | "lastFence" | "lastAssistantAllDone">,
+  tele: Pick<SessionTelemetry, "pendingQuestion" | "lastFence" | "lastAssistantAllDone" | "bgShells" | "subAgents">,
   autonomous: boolean,
   registeredPrWatches: ReadonlySet<string> = new Set(),
+  armedTimerIds: ReadonlySet<string> = new Set(),
 ): boolean {
-  if (saidDone(tele) || parkedOnAWaitItCannotAdvance(tele, registeredPrWatches)) return true
+  if (saidDone(tele) || parkedOnAWaitItCannotAdvance(tele, registeredPrWatches, armedTimerIds)) return true
   return tele.pendingQuestion === true && !autonomous
+}
+
+/** What frizz can actually see running for this thread, in the shape `unaccountedItems` checks against.
+ *
+ *  A shell answers to THREE handles and a sub-agent to two, because the fence names whichever string the
+ *  worker was shown: the runtime task id it was handed ("Command running in background with ID:
+ *  bzvtnt3ig"), the launch id, or the label it reads back in its own transcript. Refusing a
+ *  correct-but-label-shaped name would make the fence unusable for the case it exists for. */
+function liveActivityOf(
+  tele: Pick<SessionTelemetry, "bgShells" | "subAgents">,
+  registeredPrWatches: ReadonlySet<string>,
+  armedTimerIds: ReadonlySet<string>,
+): LiveActivity {
+  const shells = new Set<string>()
+  for (const sh of tele.bgShells ?? []) {
+    if (sh.state !== "running") continue
+    for (const h of [sh.taskId, sh.id, sh.label]) if (h) shells.add(h)
+  }
+  const agents = new Set<string>()
+  for (const a of tele.subAgents ?? []) {
+    if (a.state !== "running") continue
+    for (const h of [a.id, a.label]) if (h) agents.add(h)
+  }
+  return { shells, agents, timers: armedTimerIds, prs: registeredPrWatches }
 }
 
 /** The rest parked on a wait THIS TRIGGER CANNOT ADVANCE: an `awaiting` fence naming either a durable
@@ -591,17 +618,18 @@ function restMessageIsSignedOff(
  *  park frizz cannot honour, so it gets the rescue like any other unfireable hint. Without the first
  *  half this reintroduces the measured loop above verbatim. */
 function parkedOnAWaitItCannotAdvance(
-  tele: Pick<SessionTelemetry, "lastFence">,
+  tele: Pick<SessionTelemetry, "lastFence" | "bgShells" | "subAgents">,
   registeredPrWatches: ReadonlySet<string>,
+  armedTimerIds: ReadonlySet<string>,
 ): boolean {
   const fence = tele.lastFence
   if (fence?.kind !== "awaiting") return false
-  return fence.hints.some((h) => {
-    if (isActionable(h) || h.kind === "human") return true
-    if (h.kind !== "pr-watch") return false
-    const ref = parsePrRef(h.value)
-    return ref !== undefined && registeredPrWatches.has(refKey(ref))
-  })
+  // A REAL PARK, checked, not merely asserted. Three things have to hold: it names at least one item, it
+  // carries a usable `for:`, and EVERY item it names is something frizz can currently see. Anything else
+  // is a wait that cannot resolve, and gets the rescue — which is the whole reason the grammar became
+  // structural. Before this, a worker could park indefinitely on `human: Alice` or on an instant already
+  // in the past, and frizz had no way to tell the difference from a healthy wait.
+  return parkIsHonoured(readAwaitingPark(fence.hints), liveActivityOf(tele, registeredPrWatches, armedTimerIds))
 }
 
 /** The PRs a thread has actually registered, by `owner/repo#N`. Read where the Goal decides whether to
@@ -834,12 +862,6 @@ interface Verdict {
   reason: string
 }
 function evalHint(hint: FenceView["hints"][number], nowMs: number, prCache: Map<string, PrStatus>, fenceBody: string): Verdict | undefined {
-  if (hint.kind === "timer") {
-    const target = Date.parse(hint.value)
-    if (!isValidAwaitingTimer(hint.value) || !Number.isFinite(target)) return undefined
-    const desc = fenceBody.trim().replace(/\s+/g, " ").slice(0, 200)
-    return { met: nowMs >= target, steer: `⏰ Your timer fired${desc ? `: ${desc}` : ""}. Continue.`, reason: `timer ${hint.value}` }
-  }
   if (isPrWatchHint(hint.kind)) return undefined // evaluated against its persisted activity cursor below
   const ref = parsePrRef(hint.value)
   if (!ref) return undefined
@@ -1276,7 +1298,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (isStopHookFenceId(item.fenceId)) {
       const armed = armedRest(row)
       if (!armed || item.fenceId !== stopHookFenceId(armed.armedAt, tele.lastAssistantAt ?? "")) return "superseded"
-      if (restMessageIsSignedOff(tele, autonomousModeOn(row), registeredPrWatchesOf(deps.storage, item.slug))) return "superseded"
+      if (restMessageIsSignedOff(tele, autonomousModeOn(row), registeredPrWatchesOf(deps.storage, item.slug), armedTimerIdsOf(deps.storage, item.slug))) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
     // A post-compaction delivery is bound to the generation AND to the exact compaction it was queued
@@ -1562,7 +1584,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     // LEGACY ONLY. `pr-watch` stopped being actionable on 2026-08-14 — the registry pass (SOURCE 11)
     // owns PR watching now — so nothing here can be a pr-watch hint any more, and both of these are
     // about the `pr:`/`ci:` spellings that pre-date it.
-    const needsPr = actionable.some((h) => h.kind === "pr" || h.kind === "ci")
+    const needsPr = false // legacy `pr:`/`ci:` conditions; no current grammar reaches here
     const needsReview = actionable.some((h) => isPrWatchHint(h.kind))
     if ((needsPr || needsReview) && (st.lastPollAt === 0 || nowMs - st.lastPollAt >= pollMs)) {
       st.lastPollAt = nowMs
@@ -1577,7 +1599,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       for (const h of actionable) {
         const ref = parsePrRef(h.value)
         if (!ref) continue
-        if (h.kind === "pr" || h.kind === "ci") { verdictRefs.add(refKey(ref)); refs.set(refKey(ref), ref) }
         if (isPrWatchHint(h.kind)) reviewRefs.set(refKey(ref), ref)
       }
       await Promise.all([
@@ -1951,6 +1972,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         message: signoffNudgeMessage({
           shells: (tele.bgShells ?? []).filter((sh) => sh.state === "running").map((sh) => ({ id: sh.taskId ?? sh.id, label: sh.label })),
           subAgents: (tele.subAgents ?? []).filter((a) => a.state === "running").map((a) => ({ id: a.id, label: a.label })),
+          // The other two registries, so the nudge lists EVERY kind an awaiting fence can name rather
+          // than the two the fold happens to know about — a worker told about half its work writes half
+          // a fence, and the half it left out is not what gets it bumped.
+          timers: deps.storage.listThreadTimers(row.slug, { armedOnly: true })
+            .map((t) => ({ id: t.id, label: t.prompt.trim().replace(/\s+/g, " ").slice(0, 80) })),
+          prs: deps.storage.listPrWatches(row.slug, { armedOnly: true })
+            .map((w) => ({ id: `${w.owner}/${w.repo}#${w.number}`, label: `${w.owner}/${w.repo}#${w.number}` })),
         }),
         reason: "rested without signing off",
       }, nowMs).delivery
@@ -2387,7 +2415,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // Per-rest, and that is what makes it free: every fact it reads rides the FINAL assistant message,
       // so the next word on the thread re-opens the trigger with nothing stored to clear.
       const autonomous = autonomousModeOn(row)
-      if (restMessageIsSignedOff(tele, autonomous, registeredPrWatchesOf(deps.storage, row.slug))) continue
+      if (restMessageIsSignedOff(tele, autonomous, registeredPrWatchesOf(deps.storage, row.slug), armedTimerIdsOf(deps.storage, row.slug))) continue
       // And the operator's own broader hold, when they armed it.
       if (heldByQuestion(row, tele)) continue
       const fenceId = stopHookFenceId(armed.armedAt, restedAt)

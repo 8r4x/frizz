@@ -18,11 +18,11 @@ test("awaiting hints become one compact plain-English action", () => {
     /^Snooze until /,
   )
   assert.equal(
-    awaitingHintSentence([{ kind: "pr-watch", value: "owner/repo#42" }], now),
+    awaitingHintSentence([{ kind: "pr", value: "owner/repo#42" }], now),
     null,
   )
   assert.equal(
-    awaitingHintSentence([{ kind: "human", value: "Alice to approve the API shape" }], now),
+    awaitingHintSentence([{ kind: "shell", value: "Alice to approve the API shape" }], now),
     "Wait for Alice to approve the API shape",
   )
 })
@@ -31,7 +31,7 @@ test("actionable hints win and elapsed timers remain stable instead of becoming 
   assert.equal(
     awaitingHintSentence([
       { kind: "timer", value: "not-a-time" },
-      { kind: "pr-watch", value: "owner/repo#42" },
+      { kind: "pr", value: "owner/repo#42" },
     ], now),
     null,
   )
@@ -49,8 +49,8 @@ test("actionable hints win and elapsed timers remain stable instead of becoming 
 // background tasks like shells or subagents, and now GitHub watchers can be included in the ranks of
 // those." So the fence card falls back to the plain heading and no button.
 test("pr-watch alone offers no park action — the resting card carries it now", () => {
-  assert.equal(awaitingHintSentence([{ kind: "pr-watch", value: "acme/app#391" }], now), null)
-  assert.equal(awaitingParkAction([{ kind: "pr-watch", value: "acme/app#391" }], now), null)
+  assert.equal(awaitingHintSentence([{ kind: "pr", value: "acme/app#391" }], now), null)
+  assert.equal(awaitingParkAction([{ kind: "pr", value: "acme/app#391" }], now), null)
 })
 
 // A timer co-declared as a watcher's safety backstop is scheduler input too, so neither parsed hint
@@ -58,7 +58,7 @@ test("pr-watch alone offers no park action — the resting card carries it now",
 // though: it is a real declared wait and nothing else offers it.
 test("a co-declared timer still parks, and now titles the card on its own terms", () => {
   const hints = [
-    { kind: "pr-watch", value: "acme/app#391" },
+    { kind: "pr", value: "acme/app#391" },
     { kind: "timer", value: "2026-07-21T21:00:00.000Z" },
   ] as const
   assert.equal(awaitingHintSentence([...hints], now), null)
@@ -79,16 +79,16 @@ test("every parkable kind carries a card title and an explainer naming what actu
   assert.equal(timer?.title, "Scheduled snooze")
   assert.match(timer?.explainer ?? "", /^This will dismiss the card from the queue until today at .+\.$/)
   assert.equal(
-    awaitingParkAction([{ kind: "human", value: "Alice to approve" }], now)?.explainer,
+    awaitingParkAction([{ kind: "shell", value: "Alice to approve" }], now)?.explainer,
     "This will dismiss the card from the queue until your default snooze elapses.",
   )
   // No parkable hint → no action at all, so the card falls back to the plain "Awaiting" heading.
-  assert.equal(awaitingParkAction([{ kind: "ci", value: "build 9" }], now), null)
+  assert.equal(awaitingParkAction([{ kind: "shell", value: "build 9" }], now), null)
 })
 
 test("legacy hints degrade to readable text and an empty hint set stays empty", () => {
   assert.equal(awaitingHintSentence([{ kind: "pr", value: "owner/repo#7" }], now), "Wait for PR owner/repo#7")
-  assert.equal(awaitingHintSentence([{ kind: "ci", value: "build 9" }], now), "Wait for CI build 9")
+  assert.equal(awaitingHintSentence([{ kind: "shell", value: "build 9" }], now), "Wait for CI build 9")
   assert.equal(awaitingHintSentence([{ kind: "session", value: "sub-123" }], now), "Wait for session sub-123")
   assert.equal(awaitingHintSentence([], now), null)
 })
@@ -114,8 +114,8 @@ test("a park target is always an instant setThreadSnooze accepts, whatever shape
 
 test("park kinds without a declared instant defer to the caller's preset, and unparkable hints offer nothing", () => {
   // `pr-watch` is no longer one of them — see the dedicated test above.
-  assert.equal(awaitingParkAction([{ kind: "pr-watch", value: "owner/repo#42" }], now), null)
-  assert.deepEqual(awaitingParkAction([{ kind: "human", value: "Alice to approve" }], now), {
+  assert.equal(awaitingParkAction([{ kind: "pr", value: "owner/repo#42" }], now), null)
+  assert.deepEqual(awaitingParkAction([{ kind: "shell", value: "Alice to approve" }], now), {
     title: "Awaiting human",
     explainer: "This will dismiss the card from the queue until your default snooze elapses.",
     toastVerb: "Snoozed",
@@ -135,33 +135,33 @@ test("park kinds without a declared instant defer to the caller's preset, and un
 // The hint is the ONLY place the watched PR exists — awaitingHintSentence keeps pr-watch out of the
 // prose on purpose — so the card's link has to come from here, in fence order and deduped.
 test("prWatchRefs surfaces every watched PR as a link target, in fence order", () => {
-  assert.deepEqual(prWatchRefs([{ kind: "pr-watch", value: "dependabot/dependabot-core#15524" }]), [
+  assert.deepEqual(prWatchRefs([{ kind: "pr", value: "dependabot/dependabot-core#15524" }]), [
     { ref: "dependabot/dependabot-core#15524", url: "https://github.com/dependabot/dependabot-core/pull/15524" },
   ])
   // Several watches across several repos keep the order the worker declared them in.
   assert.deepEqual(
     prWatchRefs([
-      { kind: "pr-watch", value: "withastro/astro#17487" },
+      { kind: "pr", value: "withastro/astro#17487" },
       { kind: "timer", value: "2026-07-21T21:00:00Z" },
-      { kind: "pr-watch", value: "vitejs/vite#23019" },
+      { kind: "pr", value: "vitejs/vite#23019" },
     ]).map((w) => w.ref),
     ["withastro/astro#17487", "vitejs/vite#23019"],
   )
   // A repeated line is one PR, not two chips pointing at the same place.
   assert.deepEqual(
     prWatchRefs([
-      { kind: "pr-watch", value: "acme/app#7" },
-      { kind: "pr-watch", value: " acme/app#7 " },
+      { kind: "pr", value: "acme/app#7" },
+      { kind: "pr", value: " acme/app#7 " },
     ]).length,
     1,
   )
   // A hand-written value that isn't `owner/repo#N` still NAMES what is watched, so it survives with a
   // null url and the card renders it as plain text rather than as a broken link.
-  assert.deepEqual(prWatchRefs([{ kind: "pr-watch", value: "the release PR" }]), [{ ref: "the release PR", url: null }])
+  assert.deepEqual(prWatchRefs([{ kind: "pr", value: "the release PR" }]), [{ ref: "the release PR", url: null }])
   // Nothing to link on any other fence — including the legacy `pr` kind, which is not a watcher.
   assert.deepEqual(prWatchRefs([]), [])
-  assert.deepEqual(prWatchRefs([{ kind: "pr", value: "owner/repo#7" }, { kind: "human", value: "Alice" }]), [])
-  assert.deepEqual(prWatchRefs([{ kind: "pr-watch", value: "   " }]), [])
+  assert.deepEqual(prWatchRefs([{ kind: "pr", value: "owner/repo#7" }, { kind: "shell", value: "Alice" }]), [])
+  assert.deepEqual(prWatchRefs([{ kind: "pr", value: "   " }]), [])
 })
 
 test("body and action join as clean prose without period-dash punctuation", () => {
@@ -178,7 +178,7 @@ test("body and action join as clean prose without period-dash punctuation", () =
     awaitingPresentationLine(
       "PR watcher armed — wakes on any review, approval, or comment on #15524 (plus merge/close).",
       awaitingHintSentence([
-        { kind: "pr-watch", value: "dependabot/dependabot-core#15524" },
+        { kind: "pr", value: "dependabot/dependabot-core#15524" },
         { kind: "timer", value: "2026-08-12T17:00:00Z" },
       ], now),
     ),

@@ -237,7 +237,11 @@ function scheduler(
 }
 
 const at = (iso: string) => () => Date.parse(iso)
-const awaiting = (...hints: FenceView["hints"]): FenceView => ({ kind: "awaiting", body: "parked", hints })
+// Every fence built here carries the REQUIRED `for:` unless a case overrides it — the 2026-08-15
+// grammar treats a fence with no duration as not-a-park, which is a different thing from the thing most
+// of these cases are about.
+const awaiting = (...hints: FenceView["hints"]): FenceView =>
+  ({ kind: "awaiting", body: "", hints: hints.length ? [...hints, { kind: "for" as const, value: "2h" }] : [] })
 const child = (state: "running" | "stale" | "rested") =>
   ({ label: "worker", startedAt: "2026-08-02T00:00:00.000Z", state, id: `t-${state}` })
 
@@ -331,7 +335,7 @@ test("ALLDONE holds the bump for that rest only, and nothing is stored to undo",
 // unmerged PR. These pin both halves: the Goal does not bump a wait somebody else owns, and it still
 // rescues a park nothing will ever fire.
 test("an awaiting fence on a PR the scheduler is watching holds the bump", async () => {
-  const h = scheduler({ lastFence: awaiting({ kind: "pr-watch", value: "colinhacks/zod#6382" }) }, { now: at("2026-08-02T00:00:05.000Z") })
+  const h = scheduler({ lastFence: awaiting({ kind: "pr", value: "colinhacks/zod#6382" }) }, { now: at("2026-08-02T00:00:05.000Z") })
   try {
     // REGISTERED, which is what makes a wake actually coming. Since 2026-08-14 the fence line alone arms
     // nothing — `mcp__frizz__watch_pr` does — so the hold reads the registry rather than the hint.
@@ -345,34 +349,15 @@ test("an awaiting fence on a PR the scheduler is watching holds the bump", async
 // a thread that waits forever, which is exactly the shape this trigger exists to rescue — the same
 // reading an unparseable ref has always had.
 test("an awaiting fence on a PR NOBODY registered is bumped, like any other unfireable park", async () => {
-  const h = scheduler({ lastFence: awaiting({ kind: "pr-watch", value: "colinhacks/zod#6382" }) }, { now: at("2026-08-02T00:00:05.000Z") })
+  const h = scheduler({ lastFence: awaiting({ kind: "pr", value: "colinhacks/zod#6382" }) }, { now: at("2026-08-02T00:00:05.000Z") })
   try {
     await h.s.tick()
     assert.equal(h.delivered.length, 1, "nothing will ever fire that, so the rescue stands")
   } finally { h.close() }
 })
+// (A test for a deleted awaiting-hint kind was removed here on 2026-08-15. See the AwaitingHint doc
+// block in @frizz/shared for why `human:`, `timer: <instant>` and `pr-watch:` no longer exist.)
 
-test("a `human:` gate holds it too — only the operator can open that one", async () => {
-  const h = scheduler({ lastFence: awaiting({ kind: "human", value: "Colin to merge — I am barred from merging" }) }, { now: at("2026-08-02T00:00:05.000Z") })
-  try {
-    await h.s.tick()
-    assert.deepEqual(h.delivered, [])
-  } finally { h.close() }
-})
-
-test("a future `timer:` holds it, and the same fence with a malformed instant does not", async () => {
-  const parked = scheduler({ lastFence: awaiting({ kind: "timer", value: "2026-08-02T06:00:00Z" }) }, { now: at("2026-08-02T00:00:05.000Z") })
-  try {
-    await parked.s.tick()
-    assert.deepEqual(parked.delivered, [])
-  } finally { parked.close() }
-
-  const malformed = scheduler({ lastFence: awaiting({ kind: "timer", value: "tomorrow morning" }) }, { now: at("2026-08-02T00:00:05.000Z") })
-  try {
-    await malformed.s.tick()
-    assert.equal(malformed.delivered.length, 1, "nothing will ever fire that, so the rescue stands")
-  } finally { malformed.close() }
-})
 
 // THE RESCUE, which is the whole reason this trigger fired over `awaiting` for months. A park frizz has
 // no way to honour is a thread that waits forever, and these are exactly the shapes it cannot honour:
@@ -380,8 +365,8 @@ test("a future `timer:` holds it, and the same fence with a malformed instant do
 test("an awaiting fence naming nothing frizz can fire is still bumped", async () => {
   const shapes: FenceView[] = [
     awaiting(),
-    awaiting({ kind: "pr-watch", value: "the auth PR" }),
-    awaiting({ kind: "session", value: "the reviewer's thread" }),
+    awaiting({ kind: "pr", value: "the auth PR" }),
+    awaiting({ kind: "shell", value: "a-shell-that-is-not-running" }),
   ]
   for (const lastFence of shapes) {
     const h = scheduler({ lastFence }, { now: at("2026-08-02T00:00:05.000Z") })
@@ -775,10 +760,17 @@ test("stop hook: autonomous mode does NOT reopen the done fence or a scheduler-o
     assert.deepEqual(done.delivered, [], "a finished thread is finished in either mode")
   } finally { done.close() }
 
-  const parked = scheduler({ lastFence: awaiting({ kind: "human", value: "Colin to merge" }), pendingQuestion: false }, { now: at("2026-08-02T00:00:05.000Z") })
+  // A REAL park: the fence names a shell this thread actually has running, so frizz can see the wait is
+  // honest. (It used to name a `human:` gate — that kind is deleted, and a name matching nothing live is
+  // no longer a park at all, so the case has to be built out of something checkable.)
+  const parked = scheduler({
+    lastFence: awaiting({ kind: "shell", value: "bzvtnt3ig" }),
+    bgShells: [{ label: "the suite", startedAt: "2026-08-02T00:00:00.000Z", state: "running", id: "toolu_x", taskId: "bzvtnt3ig" }],
+    pendingQuestion: false,
+  }, { now: at("2026-08-02T00:00:05.000Z") })
   try {
     await parked.s.tick()
-    assert.deepEqual(parked.delivered, [], "bumping a human gate is measured harm, whatever the mode")
+    assert.deepEqual(parked.delivered, [], "bumping a park frizz can verify is measured harm, whatever the mode")
   } finally { parked.close() }
 })
 

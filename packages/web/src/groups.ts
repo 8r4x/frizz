@@ -1,4 +1,4 @@
-import { isDirectSubAgent, isValidAwaitingTimer, type AwaitingHint, type ThreadView } from "@frizz/shared"
+import { isDirectSubAgent, type AwaitingHint, type ThreadView } from "@frizz/shared"
 import { canRetry } from "./lib/status.ts"
 
 // Shared listing logic: the queue definition (needsAction), the sidebar's status-keyed sections
@@ -358,11 +358,14 @@ function hasLiveOps(t: ThreadView): boolean {
 // which drops the card until the thread comes to a new rest (2026-08-13 — that card is where a parked
 // watcher is now stated and controlled; the awaiting card no longer offers a park action for pr-watch).
 // Adding pr-watch here would re-introduce exactly the auto-Held danger this split was built to remove.
-export function parkedAwaitingHint(hints: readonly AwaitingHint[], nowMs = Date.now()): AwaitingHint | undefined {
-  return (
-    hints.find((h) => h.kind === "human") ??
-    hints.find((h) => h.kind === "timer" && isValidAwaitingTimer(h.value) && Date.parse(h.value) > nowMs)
-  )
+// NOTHING HERE PARKS A THREAD ANY MORE (2026-08-15). This returned the two hint kinds that dimmed a
+// thread into Held on the worker's word alone: `human:`, which NOTHING EVER FIRED, and a future
+// `timer: <instant>`, one of which was published 5h55m in the PAST — it parsed, armed nothing, and left
+// its thread parked for 5.5 hours. Both kinds are deleted. A park is now a structural declaration the
+// SERVER checks against live telemetry and the registries (board.hasDeclaredBackgroundPark), which is
+// not something the client can or should re-derive from hints alone.
+export function parkedAwaitingHint(_hints: readonly AwaitingHint[], _nowMs = Date.now()): AwaitingHint | undefined {
+  return undefined
 }
 
 export function futureSnoozedUntil(
@@ -398,12 +401,8 @@ export function isHeld(t: ThreadView, nowMs = Date.now()): boolean {
   // work only the human will restart.
   if (t.limitPause?.autoResume) return true
   const declaredWait = t.lastFence?.kind === "awaiting" && parkedAwaitingHint(t.lastFence.hints, nowMs) !== undefined
-  const timedStatus =
-    t.status === "blocked" &&
-    t.mechanism === "timer" &&
-    typeof t.revalidate === "string" &&
-    isValidAwaitingTimer(t.revalidate) &&
-    Date.parse(t.revalidate) > nowMs
+  // `revalidate` was an absolute instant a worker wrote; that grammar is gone with `timer:`.
+  const timedStatus = false
   return userSnooze || declaredWait || timedStatus
 }
 

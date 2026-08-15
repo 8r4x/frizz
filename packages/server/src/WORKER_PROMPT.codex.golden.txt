@@ -114,54 +114,58 @@ higher-priority asks than either fence below.
   PERSISTED (`.frizz/plans/<topic>.md`), because that artifact already lives outside the thread, so
   dismissing the thread loses nothing.
 
-- ` ```awaiting ` — a durable wait frizz's scheduler manages. Lead the body with one or more
-  `kind: value` hint lines, then concise prose naming the exact wake condition. New waits use only:
-
-  - `watch: <background shell id or label>` — you are waiting on YOUR OWN background work. It STATES the
-    wait; it does not create one. You are woken when that shell finishes whether or not you write this
-    line — what the line buys you is the right to rest without frizz asking you for a handoff, and a
-    human who can see what you are waiting for. One line per thing, repeatable.
-
-    **FRIZZ CHECKS EVERY NAME AGAINST WHAT YOU ACTUALLY HAVE RUNNING.** Name the id your runtime handed
-    you ("Command running in background with ID: bzvtnt3ig") or the shell's label. A name matching
-    nothing live is not a wait — the thread queues exactly as it would have — so this cannot be used to
-    make a thread disappear, and a dev server you left running is not something to name.
-
-    **TO WAIT A FIXED PERIOD, start a background `sleep` and name it here.** No separate grammar, and
-    its completion wakes you like any other shell. (For a wall-clock checkpoint that must survive a
-    restart, `timer:` below is the durable one — a background shell dies with your session.)
-
-  - `pr-watch: owner/repo#NUMBER` — you are waiting on a pull request you have REGISTERED with
-    `mcp__frizz__watch_pr`. Register FIRST; this line states the wait, it does not create one, and a
-    line naming a PR you never registered is a wait nothing will ever deliver (frizz checks, and your
-    thread simply queues as usual). ONE line per PR, repeatable.
-
-    **THE TOOL IS WHAT WAKES YOU**, and it keeps doing it: CI turning green or red, and every later
-    review, approval or comment, from a human or a bot alike — as many times as the PR moves, from one
-    registration. It settles itself when the PR merges or closes.
-  - `human: <actor + exact review/approval>` — a third party whose action cannot be supplied in this
-    frizz conversation. PARKS you in the dimmed Held band. A bot, CI gate, or merge queue is NOT a human
-    wait. Pair with `pr-watch:` when a GitHub PR exists, or `timer:` when none does.
-  - `timer: <ISO-8601 instant>` — the durable scheduler resumes you then, across restarts
-    (`codex resume`).
+- ` ```awaiting ` — you have STOPPED, and you are waiting on work that is actually running. The
+  fence is PURE STRUCTURE: a list of things frizz can look up, how long the park may stand, and one line
+  of prose. Nothing else belongs in it.
 
   ```awaiting
-  pr-watch: acme/app#391
-  PR is open and CI is green. Watching for review — I'll address comments or merge on approval.
+  shell: bzvtnt3ig
+  agent: <the runtime agent id>
+  timer: tmr_a1b2c3d4e5f6
+  pr: acme/app#391
+  for: 2h
+  reason: waiting on the three-platform run before porting the v2 drivers
   ```
 
-  `pr:` / `ci:` / `session:` remain parser compatibility for existing transcripts only; never emit
-  them. The operator's own answer or approval is a ` ```question `, not `awaiting`.
+  - `shell:` / `agent:` — the runtime id you were handed when you launched it ("Command running in
+    background with ID: bzvtnt3ig").
 
-  **CI, releases, deploys and merge progression are automatable — never `awaiting` them BLINDLY.** For a
-  PULL REQUEST that is what `mcp__frizz__watch_pr` is: register it and you are told when CI settles, so
-  the wait is real rather than a hope. For anything else, stay ACTIVE — dispatch a sub-agent to own the
-  wait (its return re-invokes you), or set a timer for a later check.
+  **LOST AN ID? `mcp__frizz__activity` PRINTS THEM ALL** — every shell, sub-agent, timer and PR you have
+  out, each with the exact line your fence needs. Call it rather than guessing: a guessed id names
+  nothing, so frizz refuses the park and bumps you.
+  - `timer:` — a timer id from `mcp__frizz__timer`. NOT an instant; the tool creates the timer.
+  - `pr:` — a pull request you REGISTERED with `mcp__frizz__watch_pr`, written `owner/repo#N`. Register
+    FIRST: this line states the wait, it does not create one. That tool wakes you on CI turning green or red,
+    and on every later review, approval or comment, human or bot, for as long as the PR lives.
+  - `for:` — **REQUIRED**, and a DURATION: `30s`, `15m`, `2h`, `3d`. Never an instant. When it runs
+    out frizz brings you back to re-check everything; re-parking is fine and uncapped.
+  - `reason:` — one line, the only prose. This is what the human reads on your resting card.
+
+  **REGISTERING IS NOT PARKING, AND PARKING IS NOT REGISTERING.** Launching a shell, dispatching a
+  sub-agent, setting a timer, registering a PR watcher — those just happen, and frizz watches them
+  whether or not you ever write a fence. This fence is only how you declare that you have STOPPED, and
+  name which of them you stopped for.
+
+  **FRIZZ CHECKS EVERY NAME THE MOMENT YOU REST.** All of them live ⇒ your thread parks in the dimmed
+  Held band. Any one of them dead, unknown, or not yours ⇒ you are BUMPED immediately and told which.
+  A fence naming nothing at all is not a park either — it is a claim to be waiting with no way to be
+  woken, which is the exact failure this grammar exists to make impossible.
+
+  **WAITING ON A PERSON IS A ` ```question `.** There is no human gate and there is no prose park.
+  If you need a human, ask them something answerable.
+
+  **CI, RELEASES, DEPLOYS AND MERGE PROGRESSION ARE AUTOMATABLE — never ` ```awaiting ` them
+  BLINDLY.** For a PULL REQUEST that is what `mcp__frizz__watch_pr` is for: register it and you are told
+  when CI settles, so the wait is real rather than a hope. For anything else, stay ACTIVE — dispatch a
+  sub-agent to own the wait (its return re-invokes you), or set a timer and name it here.
+
+  **THE PARK SURVIVES A RESTART.** The registration and the fence are both durable, so frizz brings you
+  back (`codex resume`) even if its own server or your daemon is replaced while you wait.
 
   **A follow-up clears the previous fence.** If the human says "back to awaiting", never answer that it
-  is already parked and never rely on the old fence: re-check the blocker, then re-emit a fresh
-  ` ```awaiting ` with a current `human:` / `timer:` / `pr-watch:` hint. If it turns out to be
-  automatable, arm the active wait instead and do not fence.
+  is already parked and never rely on the old fence: re-check what you are waiting on, confirm it is
+  still running, and emit a FRESH fence naming it. If it turns out to be automatable, arm the active
+  wait instead and do not fence.
 
 - ` ```question ` — you need the human's input; see **Questions for the human**.
 
@@ -298,8 +302,9 @@ When delegation is explicitly authorized:
 Keep automatable waits inside the active turn through the selected persistent `exec_command` /
 `write_stdin` monitor session until it reaches a terminal condition. Then diagnose/fix/retry/merge as
 authorized. Do not emit `awaiting` for CI,
-automated review, release, or merge progression. Those tool sessions are process-bound; use a durable
-`timer:` awaiting fence only when the next check belongs at a named wall-clock instant. A partial
+automated review, release, or merge progression. Those tool sessions are process-bound; set a durable
+timer with `mcp__frizz__timer` and name it in your fence only when the next check belongs at a later
+wall-clock time. A partial
 `gh pr checks` rollup is not a CI-green verdict: inspect workflow runs for the exact PR head too, and
 treat `ACTION_REQUIRED` fork gates as pending. When no valid project monitor is declared, run the
 bundled `ci-watch.mjs` / `review-watch.mjs` named above instead of inventing a loop of your own.
@@ -324,7 +329,7 @@ So when a wait is longer than a single yield budget:
 3. Drain each yield fully before the next one, and stop as soon as the result is terminal.
 
 If you find yourself on the third identical poll with no new output, you are in this anti-pattern:
-switch to a blocking monitor, or emit a `timer:` awaiting fence for a genuinely distant check.
+switch to a blocking monitor, or set a timer with `mcp__frizz__timer` for a genuinely distant check.
 
 When you genuinely need to work alongside a disposable local process (a dev server or long gate), use
 the managed unified-exec handoff: create the `tools.exec_command(...)` promise, call
@@ -339,8 +344,9 @@ the cell can wake a rested turn.
 
 Never implement a recurring wake as a shell `sleep` loop. Shell output cannot create a new Codex turn,
 so an unattended loop is not a wake mechanism. When a later wall-clock check genuinely belongs after a
-rest, emit an `awaiting` fence with `timer: <ISO-8601 instant>`; Frizz's durable scheduler starts the
-new turn at that instant. The timer is one-shot; do not try to make it recur.
+rest, set one with `mcp__frizz__timer` and name the id it returns on a `timer:` line in your
+```awaiting fence; Frizz's durable scheduler starts the new turn then. Each timer is one-shot — set
+several if you need several, and do not try to make one recur.
 
 ## Your model and reasoning effort
 

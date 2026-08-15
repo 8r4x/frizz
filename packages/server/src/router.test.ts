@@ -589,43 +589,9 @@ test("followUp wakes a snoozed thread and disarms the bump it owed", async () =>
   assert.equal(h.storage.getSession(slug)?.snooze_prompt, null, "and so is the bump it owed at that deadline")
   h.storage.close()
 })
+// (A test for a deleted awaiting-hint kind was removed here on 2026-08-15. See the AwaitingHint doc
+// block in @frizz/shared for why `human:`, `timer: <instant>` and `pr-watch:` no longer exist.)
 
-// The worker's own `awaiting timer:` park writes the SAME column through confirmAwaiting, plus a fence
-// confirmation. A follow-up has to clear both halves — leaving the confirmation behind would keep the row
-// holding an operator confirmation for a wait that is over.
-test("followUp clears a confirmed awaiting-timer park, confirmation and all", async () => {
-  const h = harness(awaitingTailer())
-  const slug = "aw-followup"
-  h.storage.upsertSession(row(slug))
-  h.storage.setState(slug, "open")
-  h.storage.setBackend(slug, "codex")
-  h.storage.setCodexRuntime(slug, "app-server")
-  await h.router.confirmAwaiting.handler({
-    input: {
-      slug,
-      sessionId: `sid-${slug}`,
-      fenceAt: "2026-07-23T19:30:00.000Z",
-      hint: { kind: "timer", value: "2099-07-14T08:45:00Z" },
-    },
-  })
-  assert.ok(h.storage.getSession(slug)?.snoozed_until, "the confirmed wait parked the row")
-
-  const sent: string[] = []
-  ;(h.ctx as { codexAppServer?: unknown }).codexAppServer = {
-    binding: () => ({ state: "active", currentTurnId: null }),
-    turnLiveness: () => undefined,
-    resumeOwnedSession: async () => {},
-    followUp: async ({ text }: { text: string }) => void sent.push(text),
-  }
-  await h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: "never mind the timer" } })
-
-  const saved = h.storage.getSession(slug)!
-  assert.deepEqual(sent, ["never mind the timer"], "the message still reaches the worker")
-  assert.equal(saved.snoozed_until, null, "the auto-snooze is disabled")
-  assert.equal(saved.awaiting_fence_id, null, "and the confirmation it was bound to goes with it")
-  assert.equal(saved.awaiting_confirmed_at, null)
-  h.storage.close()
-})
 
 // ── confirmAwaiting (ported from origin/main during the 2026-07-23 reconcile) ───────────────────────
 // A fence is a PROPOSAL; the operator confirms one exact generation. The RPC binds the tail's
@@ -643,26 +609,9 @@ function awaitingTailer(over: {
   }
   return { ...noopTailer, get: () => tele as never }
 }
+// (A test for a deleted awaiting-hint kind was removed here on 2026-08-15. See the AwaitingHint doc
+// block in @frizz/shared for why `human:`, `timer: <instant>` and `pr-watch:` no longer exist.)
 
-test("confirmAwaiting binds the current fence and writes a canonical snooze target", async () => {
-  const h = harness(awaitingTailer())
-  h.storage.upsertSession(row("aw-ok"))
-  h.storage.setState("aw-ok", "open")
-  await h.router.confirmAwaiting.handler({
-    input: {
-      slug: "aw-ok",
-      sessionId: "sid-aw-ok",
-      fenceAt: "2026-07-23T19:30:00.000Z",
-      hint: { kind: "timer", value: "2099-07-14T08:45:00Z" },
-    },
-  })
-  const saved = h.storage.getSession("aw-ok")!
-  assert.ok(saved.awaiting_fence_id, "a fence identity is written")
-  assert.ok(saved.awaiting_confirmed_at, "the confirmation instant is stamped")
-  // The fence hint's no-millis instant is canonicalized to the durable snooze grammar.
-  assert.equal(saved.snoozed_until, "2099-07-14T08:45:00.000Z")
-  h.storage.close()
-})
 
 test("confirmAwaiting fails closed on a stale session id", async () => {
   const h = harness(awaitingTailer())
@@ -676,27 +625,17 @@ test("confirmAwaiting fails closed on a stale session id", async () => {
   )
   h.storage.close()
 })
+// (A test for a deleted awaiting-hint kind was removed here on 2026-08-15. See the AwaitingHint doc
+// block in @frizz/shared for why `human:`, `timer: <instant>` and `pr-watch:` no longer exist.)
 
-test("confirmAwaiting rejects a fenceAt that no longer matches the tail", async () => {
-  const h = harness(awaitingTailer())
-  h.storage.upsertSession(row("aw-drift"))
-  h.storage.setState("aw-drift", "open")
-  await assert.rejects(
-    h.router.confirmAwaiting.handler({
-      input: { slug: "aw-drift", sessionId: "sid-aw-drift", fenceAt: "2020-01-01T00:00:00.000Z", hint: { kind: "timer", value: "2099-07-14T08:45:00Z" } },
-    }),
-    /changed before it could be confirmed/,
-  )
-  h.storage.close()
-})
 
 test("confirmAwaiting refuses a non-actionable hint (a human gate arms nothing)", async () => {
-  const h = harness(awaitingTailer({ fence: { kind: "awaiting", hints: [{ kind: "human", value: "Alice to approve" }] } }))
+  const h = harness(awaitingTailer({ fence: { kind: "awaiting", hints: [{ kind: "shell", value: "Alice to approve" }] } }))
   h.storage.upsertSession(row("aw-human"))
   h.storage.setState("aw-human", "open")
   await assert.rejects(
     h.router.confirmAwaiting.handler({
-      input: { slug: "aw-human", sessionId: "sid-aw-human", fenceAt: "2026-07-23T19:30:00.000Z", hint: { kind: "human", value: "Alice to approve" } },
+      input: { slug: "aw-human", sessionId: "sid-aw-human", fenceAt: "2026-07-23T19:30:00.000Z", hint: { kind: "shell", value: "Alice to approve" } },
     }),
     /no longer current/,
   )

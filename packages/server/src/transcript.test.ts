@@ -121,7 +121,7 @@ test("a wake token riding a QUEUED follow-up is hidden too, and the pending bubb
     JSON.stringify({ type: "queue-operation", timestamp: "2026-07-01T00:00:05.000Z", operation: "enqueue", content: delivered }),
     JSON.stringify({
       type: "attachment", timestamp: "2026-07-01T00:00:09.000Z",
-      attachment: { type: "queued_command", prompt: delivered, origin: { kind: "human" }, commandMode: "prompt" },
+      attachment: { type: "queued_command", prompt: delivered, origin: { kind: "shell" }, commandMode: "prompt" },
     }),
   ].join("\n")
   const msgs = parseTranscript(raw)
@@ -1764,7 +1764,7 @@ const removeLine = (content: string, ts = "2026-07-01T00:00:09.000Z") =>
 const deliverLine = (prompt: unknown, ts = "2026-07-01T00:00:10.000Z") =>
   JSON.stringify({
     type: "attachment", timestamp: ts,
-    attachment: { type: "queued_command", commandMode: "prompt", origin: { kind: "human" }, prompt },
+    attachment: { type: "queued_command", commandMode: "prompt", origin: { kind: "shell" }, prompt },
   })
 const assistantLine = (text: string, ts = "2026-07-01T00:00:09.500Z") =>
   JSON.stringify({ type: "assistant", timestamp: ts, message: { id: "a1", content: [{ type: "text", text }] } })

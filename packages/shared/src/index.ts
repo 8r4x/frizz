@@ -295,69 +295,73 @@ export const NativeInputRequired = z.object({
   title: z.string().max(120),
 })
 export type NativeInputRequired = z.infer<typeof NativeInputRequired>
-
-// ---- Session-first signal model (2026-07-09) ----
-// Threads ARE sessions now (the user-facing word stays THREAD — maintainer-settled): the primary
-// listing entity is a claude session discovered from the project's JSONL dir, registered (frizz-
-// spawned, tmux-attached) or FOREIGN (a maintainer terminal — no registry row, read-only, no tmux
-// verbs). Legacy .frizz/<slug>.md rows survive read-only in a collapsed Legacy shelf. The queue
-// inversion: a thread at rest is awaiting the human UNLESS it excused itself with a signal fence.
-
-// A parked-wait hint parsed from `<kind>: <value>` lines in an ```awaiting fence body. `pr-watch`,
-// `pr-watch`, `human`, and `timer` are current; pr/ci/session remain readable for older transcripts
-// and wakers. (`github-review`, the prior review-watcher name, was removed 2026-07-22 — fully
-// displaced by `pr-watch`; an in-flight `github-review:` line now degrades to prose → an ordinary
-// bare-rest queue handoff, which is harmless.)
+// ---- THE AWAITING FENCE ---------------------------------------------------------------------------
+// A worker ends every turn in exactly ONE of three terminal states: a ```question (it needs the human), a
+// ```awaiting park (it is waiting on work that is actually running), or ```done. This is that middle one,
+// and it is PURE STRUCTURE — a list of things frizz can look up, a duration, and one line of prose.
 //
-// `pr-watch: owner/repo#N` is the general PR watcher: the durable scheduler polls the PR and bumps the
-// worker on ANY new activity — a review, an approval, or a comment, from a human or a bot alike (most
-// review today is filed by an app, so there is no actor filter). It does NOT park the thread
-// in Held: a pr-watch thread stays a visible QUEUE handoff (the worker opened a PR and is watching it),
-// and new activity re-surfaces it. The human can park it via the "PR watcher armed" card's Snooze button
-// (a hold the next activity clears). Pair `pr-watch:` with `human:` only when the worker is genuinely
-// blocked on a NAMED reviewer — then `human:` supplies the Held/park while pr-watch supplies the cursor.
-// `watch: <background shell id or label>` — the thread is parked on its OWN background work, named.
+//   shell:  <runtime task id>   a background shell it launched      → checked against live telemetry
+//   agent:  <runtime agent id>  a sub-agent it dispatched           → checked against live telemetry
+//   timer:  tmr_…               a timer it set                      → checked against thread_timer
+//   pr:     wpr_…               a PR watcher it registered          → checked against its PR registry
+//   for:    2h                  REQUIRED. How long the park may stand (parseAwaitingDuration).
+//   reason: <one line>          The one free-text field — what the human reads on the resting card.
 //
-// IT IS BOTH THE PARK AND THE WAKE, and it needs no registration behind it (2026-08-14). The scheduler
-// matches the name against the thread's live shells and its retired-shell ring, so the same line that
-// keeps the thread out of the queue is what brings it back when the shell finishes. The `thread_watch`
-// registry that used to own that wake is retired: it existed because a fence had no identity to DROP,
-// and a park nobody has to drop needs none — the fence's own lifetime ends it.
+// REGISTRATION IS ORTHOGONAL TO THIS FENCE (maintainer 2026-08-15). Dispatching a shell or a sub-agent,
+// setting a timer, registering a PR watcher — none of that is a fence, and none of it parks anything.
+// Those things simply exist and frizz watches them. The fence is only how a worker declares that it has
+// STOPPED, and names which of them it stopped for.
 //
-// WHY FRIZZ HAS TO DO THIS AT ALL. A background shell re-invokes its worker when it exits, but only
-// while the worker's turn is RUNNING. Measured over this machine's whole session history (3972 shells):
-// all 3011 delivered notifications landed on an assistant record with stop_reason "tool_use", while 1601
-// shells outlived their worker's rest and 1191 of those were never delivered at all. Rest is the gap.
+// EVERY NAME IS CHECKED, THE MOMENT THE FENCE LANDS. All valid ⇒ the thread goes to Held. Any name that
+// is dead, unknown, or another thread’s ⇒ the worker is BUMPED immediately. It does not fail open and it
+// does not park: a wait that cannot resolve must never be able to look like one that can.
 //
-// THE NAME IS CHECKED (maintainer 2026-08-14: "Make sure that the items therein correspond to actual
-// background shells or agents or watchers"). A park counts only while every name it carries matches
-// something the thread actually has running — the runtime handle it was shown, the launch id, or the
-// label. An unknown name is not a park at all, and the thread queues as usual. It fails OPEN on purpose:
-// a typo must not be a way to vanish from the board.
+// WHAT WAS DELETED, AND WHY, BECAUSE EACH ONE WAS A WAY TO STALL SILENTLY:
+//   `human: <person>`  parked a thread in Held and NOTHING EVER FIRED IT. Waiting on a person is a
+//                      ```question — that is what a question is for.
+//   `timer: <instant>` an absolute instant the worker computed. One was written 5h55m in the past; it
+//                      parsed, armed nothing, and stalled its thread for 5.5 hours. `for:` is a duration
+//                      precisely so this cannot be expressed (see parseAwaitingDuration).
+//   `pr-watch: ref`    free text the poller armed from. A PR is now a registered watcher with an id.
+//   `watch: id`        superseded: a shell is named directly by its runtime handle.
+//   `pr:`/`ci:`/`session:` legacy conditions nothing has fired for a long time.
+//   prose bodies       replaced by the single `reason:` line, so the fence is machine-checkable.
 export const AwaitingHint = z.object({
-  kind: z.enum(["watch", "pr-watch", "human", "timer", "pr", "ci", "session"]),
+  kind: z.enum(["shell", "agent", "timer", "pr", "for", "reason"]),
   value: z.string(),
 })
 export type AwaitingHint = z.infer<typeof AwaitingHint>
 
-// One timer grammar shared by the scheduler and the web presentation. Date.parse alone admits locale
-// dates (and the web previously hourglassed even completely invalid strings), while the worker contract
-// promises an ISO-8601 INSTANT. Accept seconds with optional fractional precision and either Z or an
-// explicit numeric offset, then let Date.parse reject impossible dates/offsets.
-const AWAITING_TIMER_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})$/
-export function isValidAwaitingTimer(value: string): boolean {
-  const s = value.trim()
-  return AWAITING_TIMER_RE.test(s) && Number.isFinite(Date.parse(s))
+/** The four kinds that NAME A LIVE THING. Every one is checked against something frizz can look up — a
+ *  runtime handle in this thread's telemetry, or a row in one of its registries — which is the whole
+ *  point of the grammar. `for`/`reason` describe the park itself and name nothing. */
+export const AWAITING_ITEM_KINDS = ["shell", "agent", "timer", "pr"] as const
+export type AwaitingItemKind = (typeof AWAITING_ITEM_KINDS)[number]
+export function isAwaitingItemKind(kind: string): kind is AwaitingItemKind {
+  return (AWAITING_ITEM_KINDS as readonly string[]).includes(kind)
 }
 
-/** The canonical UTC serialization of a worker `timer:` instant, or null when it is not a valid timer.
- *  The fence grammar above deliberately admits shapes the durable `SnoozeUntil` grammar rejects — no
- *  seconds, no milliseconds, an explicit numeric offset — so every timer→snooze handoff normalizes
- *  HERE. Sending a raw hint at the RPC boundary is what made "Confirm snooze" fail on the contract's
- *  own documented `2026-07-24T17:00:00Z` form. */
-export function canonicalSnoozeInstant(value: string): string | null {
-  if (!isValidAwaitingTimer(value)) return null
-  return new Date(Date.parse(value.trim())).toISOString()
+/** `for: 2h` — how long this park may stand before frizz bumps the worker to re-check everything.
+ *
+ *  A DURATION, NEVER AN INSTANT, and that is the entire point. The grammar this replaced took an absolute
+ *  ISO instant, which a worker has to compute — and on 2026-08-15 one wrote `timer: 2026-08-14T19:45:00Z`
+ *  into a fence it published at `01:39:59Z`, an instant already 5h55m gone. It parsed (the old validator
+ *  checked shape only), armed nothing (an already-past timer is never registered — the boot no-mass-fire
+ *  guard), and the thread sat 5.5 hours looking parked with nothing able to wake it. A duration cannot be
+ *  written in the past, needs no clock arithmetic and carries no timezone, so that failure is not merely
+ *  caught here — it is unrepresentable. */
+const AWAITING_DURATION_RE = /^(\d{1,5})(s|m|h|d)$/
+const DURATION_UNIT_MS: Record<string, number> = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 }
+/** The park's ceiling. A worker may ask for less; anything longer is capped rather than refused, so a
+ *  fat-fingered `for: 9999d` still parks — it just cannot disappear a thread for a decade. */
+export const AWAITING_FOR_MAX_MS = 24 * 60 * 60 * 1000
+/** Milliseconds, or null when the value is not a duration. */
+export function parseAwaitingDuration(value: string): number | null {
+  const m = AWAITING_DURATION_RE.exec(value.trim())
+  if (!m) return null
+  const ms = Number(m[1]) * DURATION_UNIT_MS[m[2]]
+  if (!Number.isFinite(ms) || ms <= 0) return null
+  return Math.min(ms, AWAITING_FOR_MAX_MS)
 }
 
 // A user-chosen snooze is UI lifecycle state, not agent-authored transcript state. The browser
@@ -795,22 +799,37 @@ export const SIGNOFF_NUDGE_MARKER = "**This message is from frizz, not from the 
 export interface SignoffLiveOps {
   /** Running background shells, named by the handle the RUNTIME gave the worker — the string it was
    *  actually shown ("Command running in background with ID: bzvtnt3ig"), not the launch tool_use id.
-   *  These are what a `watch:` line names. */
+   *  These are what a `shell:` line names. */
   shells: { id?: string; label: string }[]
-  /** Running sub-agents. Listed so the agent knows what it has out, and named the same way — a fence may
-   *  park on one, though it does not need to: a finished sub-agent re-invokes its parent by itself. */
+  /** Running sub-agents, named the same way. A fence may park on one, though it does not need to: a
+   *  finished sub-agent re-invokes its parent by itself. */
   subAgents: { id?: string; label: string }[]
+  /** Armed one-off timers, by row id (`tmr_…`) — what a `timer:` line names. */
+  timers?: { id?: string; label: string }[]
+  /** Registered pull requests, by ref (`owner/repo#N`) — what a `pr:` line names. */
+  prs?: { id?: string; label: string }[]
 }
 
+// THE NUDGE PRINTS THE IDS, and that is not a convenience — it is what makes the fence writable at all.
+// The awaiting grammar references live things BY ID, so a worker that has lost them (a compaction, a long
+// turn) cannot write a correct fence and will be bumped for naming something wrong. Giving it the exact
+// lines here closes that loop at the one moment it is provably needed: it just rested without a fence.
+// `mcp__frizz__activity` returns the same list on demand, from the same source.
 export function signoffNudgeMessage(ops?: SignoffLiveOps): string {
   const lines: string[] = []
-  if (ops?.shells.length) {
-    lines.push("", "Background shells still running — name one on a `watch:` line to park on it:")
-    for (const sh of ops.shells) lines.push(`- ${sh.label}${sh.id ? ` — \`${sh.id}\`` : ""}`)
+  const section = (heading: string, kind: string, items: { id?: string; label: string }[]) => {
+    if (!items.length) return
+    lines.push("", heading)
+    for (const i of items) lines.push(`- \`${kind}: ${i.id ?? "?"}\`  — ${i.label}`)
   }
-  if (ops?.subAgents.length) {
-    lines.push("", "Sub-agents still running (they re-invoke you on their own, so parking on one is optional):")
-    for (const a of ops.subAgents) lines.push(`- ${a.label}${a.id ? ` — \`${a.id}\`` : ""}`)
+  section("Background shells still running:", "shell", ops?.shells ?? [])
+  section("Sub-agents still running (they re-invoke you on their own, so parking on one is optional):", "agent", ops?.subAgents ?? [])
+  section("Timers you have armed:", "timer", ops?.timers ?? [])
+  section("Pull requests you registered:", "pr", ops?.prs ?? [])
+  if (lines.length) {
+    lines.push("", "An ```awaiting fence takes one such line per thing you are ACTUALLY waiting on, plus a")
+    lines.push("required `for:` duration (`30s`/`15m`/`2h`/`3d`) and a one-line `reason:`. Frizz checks every")
+    lines.push("id: name something that is not running and you are bumped rather than parked.")
   }
   return lines.length === 0 ? SIGNOFF_NUDGE_MESSAGE : `${SIGNOFF_NUDGE_MESSAGE}\n${lines.join("\n")}`
 }
@@ -1738,6 +1757,34 @@ export const OwnThreadTimersResult = z.object({
   timers: z.array(ThreadTimerView),
 }).strict()
 export type OwnThreadTimersResult = z.infer<typeof OwnThreadTimersResult>
+
+// ---- THE ACTIVITY READOUT -------------------------------------------------------------------------
+// EVERY kind of background work a thread has out, with the id the awaiting fence names it by, in ONE
+// call. The fence is structural — it references things by id — so a worker that has lost its ids (a
+// compaction, a long turn, a wake it did not expect) cannot write a correct fence at all. This is how it
+// gets them back, and it is the same list the sign-off nudge prints, so the two can never disagree.
+export const ThreadActivityItem = z.object({
+  kind: z.enum(["shell", "agent", "timer", "pr"]),
+  /** The string a `<kind>:` fence line must carry. For a shell that is the runtime task id the worker
+   *  was shown; for a PR, `owner/repo#N`; for a timer, its `tmr_…` row id. */
+  id: z.string(),
+  label: z.string(),
+  /** ISO8601 of when it started or was armed — absent when frizz has no instant for it. */
+  since: z.string().optional(),
+  /** A timer's fire instant, or a PR's expiry. Absent for shells and sub-agents. */
+  until: z.string().optional(),
+}).strict()
+export type ThreadActivityItem = z.infer<typeof ThreadActivityItem>
+
+export const ListOwnThreadActivityInput = z.object({
+  slug: ThreadSlug,
+}).strict()
+export type ListOwnThreadActivityInput = z.infer<typeof ListOwnThreadActivityInput>
+
+export const OwnThreadActivityResult = z.object({
+  activity: z.array(ThreadActivityItem),
+}).strict()
+export type OwnThreadActivityResult = z.infer<typeof OwnThreadActivityResult>
 
 export const SetOwnThreadTimerResult = z.object({
   id: z.string(),

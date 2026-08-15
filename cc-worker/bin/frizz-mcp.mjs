@@ -319,7 +319,20 @@ const WATCH_PR = {
 const MIN_INTERVAL_SECONDS = 60
 const MAX_INTERVAL_SECONDS = 24 * 60 * 60
 
-const TOOLS = [SPAWN_THREAD, RECURRING_PROMPT, TIMER, WATCH_PR]
+const ACTIVITY = {
+  name: "activity",
+  description:
+    "EVERYTHING YOU CURRENTLY HAVE RUNNING, with the id each one is named by — your background shells, " +
+    "your sub-agents, your armed timers, and the pull requests you registered.\n\n" +
+    "WHY YOU NEED IT: an ```awaiting fence names what you are waiting on BY ID, and frizz checks every " +
+    "one against what is actually live. A name that matches nothing is not a park — you are bumped and " +
+    "your thread queues. So if you have lost an id (a compaction, a long turn, a wake you did not " +
+    "expect), call this rather than guessing. Guessing is the failure this tool exists to remove.\n\n" +
+    "It takes nothing and changes nothing. You can only ever read your OWN thread.",
+  inputSchema: { type: "object", properties: {}, required: [] },
+}
+
+const TOOLS = [SPAWN_THREAD, RECURRING_PROMPT, TIMER, WATCH_PR, ACTIVITY]
 
 /** @type {Record<string, (args: Record<string, unknown>) => Promise<string>>} */
 const HANDLERS = {
@@ -327,6 +340,32 @@ const HANDLERS = {
   [RECURRING_PROMPT.name]: recurringPrompt,
   [TIMER.name]: timer,
   [WATCH_PR.name]: watchPr,
+  [ACTIVITY.name]: activity,
+}
+
+/** Read out every background thing this thread has running, in the shape an awaiting fence names them.
+ * @returns {Promise<string>} */
+async function activity() {
+  const result = (await callRpc("listOwnThreadActivity", { slug: threadSlug() }))?.result
+  const items = Array.isArray(result?.activity) ? result.activity : []
+  if (!items.length) {
+    return (
+      "Nothing is running on this thread — no background shells, no sub-agents, no armed timers, no " +
+      "registered PRs.\n\nSo there is nothing to wait on: an ```awaiting fence would have nothing to " +
+      "name, and a fence naming nothing is not a park. End with ```done, or with a ```question if you " +
+      "need the human."
+    )
+  }
+  const lines = items.map((i) => {
+    const when = i.until ? `  (fires ${i.until})` : i.since ? `  (since ${i.since})` : ""
+    return `  ${i.kind}: ${i.id}${when}\n    ${i.label}`
+  })
+  return (
+    `${items.length} thing${items.length === 1 ? "" : "s"} running on this thread:\n\n${lines.join("\n")}\n\n` +
+    "Name the ones you are ACTUALLY waiting on in your ```awaiting fence, one `<kind>: <id>` line each, " +
+    "plus a required `for:` duration and a one-line `reason:`. Do not name something you are not waiting " +
+    "on — a dev server you left running is not a wait."
+  )
 }
 
 /** @param {unknown} obj */

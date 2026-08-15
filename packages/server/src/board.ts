@@ -7,7 +7,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import watcher from "@parcel/watcher"
 import type { BoardSnapshot, ThreadView, RuntimeState, PlanView, ThreadRecurringPrompt } from "@frizz/shared"
-import { BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isDirectSubAgent, isValidAwaitingTimer, type PermissionMode as PermissionModeValue } from "@frizz/shared"
+import { BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isDirectSubAgent, type PermissionMode as PermissionModeValue } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import type { Project } from "./project.ts"
 import { isHeadlessRow, isBrokerClaudeRow, sessionTitleLocked } from "./storage.ts"
@@ -16,7 +16,7 @@ import { normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
 import type { Tailer, SessionTelemetry } from "./tailer.ts"
 import type { InteractionChange } from "./interaction-store.ts"
 import { frizzDirExists } from "./frizz.ts"
-import { githubStatusKey, parsePrRef, readGithubStatusBook, GITHUB_STATUS_SETTING, type GithubStatusBook } from "./awaiting.ts"
+import { githubStatusKey, parsePrRef, readAwaitingPark, readGithubStatusBook, GITHUB_STATUS_SETTING, type GithubStatusBook } from "./awaiting.ts"
 import { findByPath } from "./project-registry.ts"
 import { parseDeliveryLedger } from "./delivery-ledger.ts"
 import { effectivePermissionMode, resolveLegacyThreadFile } from "./dispatch.ts"
@@ -281,9 +281,18 @@ function stampStoppableShells(shells: ThreadView["bgShells"], row: SessionRow): 
 // background `sleep` and awaits that shell, which is the same mechanism with no new grammar.
 const DECLARED_PARK_MAX_MS = 24 * 60 * 60 * 1000
 
+/** The names this fence gives to the thread's OWN RUNNING WORK — its shells and its sub-agents.
+ *
+ *  Deliberately NOT every item kind. `timer:` and `pr:` name rows in their own registries and are
+ *  checked against those; these two name runtime handles and are checked against live telemetry
+ *  (liveWaitHandles). Mixing them here would compare a `tmr_…` id against a set of shell handles and
+ *  find it missing every time, which reads as "the worker named something dead" for a wait that is
+ *  perfectly healthy. */
 export function declaredWaitIds(tele: SessionTelemetry | undefined): string[] {
   if (tele?.lastFence?.kind !== "awaiting") return []
-  return tele.lastFence.hints.filter((h) => h.kind === "watch").map((h) => h.value.trim()).filter(Boolean)
+  return readAwaitingPark(tele.lastFence.hints).items
+    .filter((i) => i.kind === "shell" || i.kind === "agent")
+    .map((i) => i.value)
 }
 
 /** Everything this thread could legitimately claim to be waiting on, by the handle the worker sees: a
@@ -378,10 +387,12 @@ function heldByRunningChecks(
   if (tele?.lastFence?.kind !== "awaiting") return false
   const refs: string[] = []
   for (const hint of tele.lastFence.hints) {
-    if (hint.kind !== "pr-watch") continue
+    if (hint.kind !== "pr") continue
     const ref = parsePrRef(hint.value)
     // DECLARED AND REGISTERED, both. The declaration is what says the thread is waiting; the
     // registration is what will actually wake it. A line with no watcher behind it is neither.
+    // A PR watcher is keyed by its REF (`owner/repo#N`), not by a minted id — so the ref IS the
+    // reference, and it is checkable precisely because the registration is what it is checked against.
     if (ref && registered.has(githubStatusKey(ref))) refs.push(githubStatusKey(ref))
   }
   if (refs.length === 0) return false
@@ -409,7 +420,7 @@ function hasLiveOwnWork(tele: SessionTelemetry | undefined): boolean {
  *  renders and the waker's own poller arms from, so "there is a watcher" means one thing everywhere. */
 function hasParkedPrWatch(tele: SessionTelemetry | undefined): boolean {
   if (tele?.lastFence?.kind !== "awaiting") return false
-  return tele.lastFence.hints.some((hint) => hint.kind === "pr-watch" && parsePrRef(hint.value) !== undefined)
+  return tele.lastFence.hints.some((hint) => hint.kind === "pr" && parsePrRef(hint.value) !== undefined)
 }
 
 // The awaiting-background event-snooze is armed for the CURRENT rest iff the captured rested_at still
@@ -435,12 +446,14 @@ function bgSnoozeArmed(row: Pick<SessionRow, "bg_snooze_rested_at" | "rested_at"
 // hint, not on this excusal); the human hides it on demand via the "PR watcher armed" card's Snooze
 // button (a user snooze, cleared by the next activity). Mirrors groups.parkedAwaitingHint — keep the
 // two in lockstep.
-function hasParkedExternalWait(tele: SessionTelemetry | undefined, nowMs: number): boolean {
-  if (tele?.lastFence?.kind !== "awaiting") return false
-  return tele.lastFence.hints.some((hint) =>
-    hint.kind === "human" ||
-    (hint.kind === "timer" && isValidAwaitingTimer(hint.value) && Date.parse(hint.value) > nowMs),
-  )
+function hasParkedExternalWait(tele: SessionTelemetry | undefined, _nowMs: number): boolean {
+  // NOTHING EXTERNAL PARKS A THREAD ANY MORE. This carried the two hint kinds that took a thread out of
+  // the queue on the worker's word alone: `human:`, which parked it in Held and which NOTHING EVER
+  // FIRED, and `timer: <instant>`, one of which was written 5h55m in the past and stalled its thread for
+  // 5.5 hours. Both are deleted (see the AwaitingHint doc block in @frizz/shared): waiting on a person is
+  // a ```question, and a timer is a registered row named by id like every other item. Parking is decided
+  // by the structural park alone now — hasDeclaredBackgroundPark — which frizz can actually check.
+  return false
 }
 
 // Every wait the thread has out, synthesized as watch rows so the ops strip under the prompt box can
@@ -492,7 +505,7 @@ export function fenceWatchViews(
     // A `pr-watch:` line adds NO row of its own: the registry above already listed every PR this thread
     // watches, and a line naming an unregistered PR describes a wait nothing will deliver. Listing it
     // would put a row on the strip that nothing behind it can ever fire.
-    if (hint.kind !== "watch") continue
+    if (hint.kind !== "shell" && hint.kind !== "agent") continue
     const target = hint.value.trim()
     // A name matching nothing live is not a wait — the same rule, applied to the shells the thread owns.
     if (!target || seen.has(`shell:${target}`) || !liveWaitHandles(tele).has(target)) continue

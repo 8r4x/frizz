@@ -117,7 +117,7 @@ function watching(): SessionTelemetry {
   return {
     turn: "idle", permPrompt: false, subAgents: [], bgShells: [], pendingQuestion: false,
     lastActivityAt: LATER, lastAssistantAt: LATER,
-    lastFence: { kind: "awaiting", body: "PR up.", hints: [{ kind: "pr-watch", value: REF }] },
+    lastFence: { kind: "awaiting", body: "PR up.", hints: [{ kind: "pr", value: REF }] },
   } as unknown as SessionTelemetry
 }
 const book = (over: Partial<ReturnType<typeof githubWatchStatus>>) =>
@@ -166,7 +166,7 @@ test("one finished PR among several requeues the thread", () => {
     lastFence: {
       kind: "awaiting",
       body: "two PRs up.",
-      hints: [{ kind: "pr-watch", value: REF }, { kind: "pr-watch", value: "acme/app#392" }],
+      hints: [{ kind: "pr", value: REF }, { kind: "pr", value: "acme/app#392" }],
     },
   } as unknown as SessionTelemetry
   const running = { ...githubWatchStatus(pr(), AT), checks: "running" as const, running: 1 }

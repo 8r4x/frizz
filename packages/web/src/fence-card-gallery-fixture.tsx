@@ -64,7 +64,7 @@ const fences: { slug: string; label: string; kind: "done" | "awaiting"; body: st
     hints: [],
   },
   { slug: "g-timer", label: "```awaiting · timer", kind: "awaiting", body: "Park until the checkpoint.", hints: [{ kind: "timer", value: timerIso }] },
-  { slug: "g-pr", label: "```awaiting · pr-watch", kind: "awaiting", body: "PR is open and CI is green. Watching for review.", hints: [{ kind: "pr-watch", value: "acme/app#391" }] },
+  { slug: "g-pr", label: "```awaiting · pr-watch", kind: "awaiting", body: "PR is open and CI is green. Watching for review.", hints: [{ kind: "pr", value: "acme/app#391" }] },
   // Several watches is a different SHAPE, not the same card with more data: one ref rides the title row
   // in the `aside` slot, so a fence carrying three gets a wrapped row of its own under the prose.
   {
@@ -73,13 +73,13 @@ const fences: { slug: string; label: string; kind: "done" | "awaiting"; body: st
     kind: "awaiting",
     body: "All three adoption PRs are open and green, in their maintainers' hands.",
     hints: [
-      { kind: "pr-watch", value: "withastro/astro#17487" },
-      { kind: "pr-watch", value: "vitejs/vite#23019" },
-      { kind: "pr-watch", value: "strapi/strapi#26864" },
+      { kind: "pr", value: "withastro/astro#17487" },
+      { kind: "pr", value: "vitejs/vite#23019" },
+      { kind: "pr", value: "strapi/strapi#26864" },
     ],
   },
-  { slug: "g-human", label: "```awaiting · human", kind: "awaiting", body: "The API shape needs approval.", hints: [{ kind: "human", value: "Alice to approve the API shape" }] },
-  { slug: "g-legacy", label: "```awaiting · legacy ci (no action)", kind: "awaiting", body: "The legacy build is still running.", hints: [{ kind: "ci", value: "acme/app#7" }] },
+  { slug: "g-human", label: "```awaiting · human", kind: "awaiting", body: "The API shape needs approval.", hints: [{ kind: "shell", value: "Alice to approve the API shape" }] },
+  { slug: "g-legacy", label: "```awaiting · legacy ci (no action)", kind: "awaiting", body: "The legacy build is still running.", hints: [{ kind: "shell", value: "acme/app#7" }] },
 ]
 
 // The `approval` kind is RETIRED (2026-07-26) — a go/no-go is just a two-option question, and the last

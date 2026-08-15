@@ -112,7 +112,9 @@ export function formatSnoozeWake(until: string, nowMs = Date.now()): string {
 /** The lowercased wake phrase ("today at 11:09 PM") that folds into a full held-status sentence. Null
  *  when the instant is not a valid scheduler timer, so a malformed park has no display value. */
 function wakePhrase(until: string, nowMs: number): string | null {
-  if (!isValidAwaitingTimer(until)) return null
+  // The fence-timer grammar is gone; a durable snooze instant is validated by Date.parse alone, which
+  // is what every other reader of this value already relies on.
+  if (!Number.isFinite(Date.parse(until))) return null
   const wake = formatSnoozeWake(until, nowMs)
   if (!wake) return null
   return wake.replace(/^(Today|Tomorrow)/, (day) => day.toLowerCase())
@@ -154,4 +156,4 @@ export function formatAutoSnoozedUntil(until: string, nowMs = Date.now()): strin
   const wake = wakePhrase(until, nowMs)
   return wake ? `Auto-snoozed until ${wake}` : null
 }
-import { isValidAwaitingTimer } from "@frizz/shared"
+
