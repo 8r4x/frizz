@@ -132,3 +132,39 @@ test("closing the drawer flushes a pending keystroke instead of dropping it", { 
     await browser.close()
   }
 })
+
+// The GitHub picker's issue and PR prompts merged into ONE field on 2026-08-15. Two things are worth
+// pinning here rather than in a unit test, because both are properties of the RENDERED drawer: that
+// there is exactly one editor (a stray second one would mean a per-kind field survived the merge), and
+// that "Reset to default" clears the override to undefined — the wire value that means "use the server
+// default", as opposed to a copy of the default text frozen into the user's settings.
+test("one prompt editor, and Reset clears the override rather than freezing the default text", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  const { browser, page, errors } = await launch()
+  try {
+    assert.equal(await page.evaluate(() => document.querySelectorAll("textarea").length), 1, "one editor, not one per kind")
+
+    const labels = () => page.evaluate(() => [...document.querySelectorAll("button")].map((b) => (b.textContent ?? "").trim()))
+    assert.ok(!(await labels()).includes("Reset to default"), "no Reset while the box shows the shipped default")
+
+    await page.focus("textarea")
+    await page.evaluate(() => {
+      const box = document.querySelector("textarea")!
+      box.setSelectionRange(0, box.value.length)
+    })
+    await page.keyboard.type("mine", { delay: 30 })
+    await page.waitForFunction(() => (window as unknown as { __settingsWrites: Write[] }).__settingsWrites.length === 1, { timeout: 5000 })
+    assert.equal((await readWrites(page))[0]!.body.githubPrompt, "mine")
+
+    await page.evaluate(() => {
+      [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Reset to default")!.click()
+    })
+    await page.waitForFunction(() => (window as unknown as { __settingsWrites: Write[] }).__settingsWrites.length === 2, { timeout: 5000 })
+    const writes = await readWrites(page)
+    assert.equal(writes[1]!.body.githubPrompt, undefined, "cleared to unset, which is what the server reads as 'default'")
+    assert.ok(!("githubIssuePrompt" in writes[1]!.body), "the merged-away key never reappears on the wire")
+    assert.ok(!("githubPrPrompt" in writes[1]!.body))
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})

@@ -348,23 +348,20 @@ function PromptsSection({
     <div className="flex flex-col gap-6">
       <DividerLabel label="Prompts" />
 
-      {/* The GitHub-picker triage template. The field carries its own label, so no group label is
-          needed; the "?" popover lives once, right-aligned above it. */}
+      {/* The GitHub-picker triage template. The token "?" rides the field's OWN label row (see
+          GithubPromptField): it used to sit on a right-aligned row of its own, which read as a shared
+          header while there were two fields under it and as an orphan floating in dead space the moment
+          there was one. */}
       {!defaults.data ? (
         <div className="text-[12px] text-muted">Loading defaults…</div>
       ) : (
-        <div className="flex flex-col gap-5">
-          <div className="flex justify-end">
-            <TokenHelpPopover />
-          </div>
-          <GithubPromptField
-            label="Issue and PR triage prompt"
-            help="The prompt for every item dispatched from the GitHub picker, issues and PRs alike. The default has the worker read the whole thread, classify it, and branch — reproduce + fix-plan for a bug, a plan for a feature, an adversarial review for a PR."
-            value={draft.githubPrompt}
-            fallback={defaults.data.prompt}
-            onChange={(v, opts) => setDraft({ ...draft, githubPrompt: v }, opts)}
-          />
-        </div>
+        <GithubPromptField
+          label="Issue and PR triage prompt"
+          help="The prompt for every item dispatched from the GitHub picker, issues and PRs alike. The default has the worker read the whole thread, classify it, and branch — reproduce + fix-plan for a bug, a plan for a feature, an adversarial review for a PR."
+          value={draft.githubPrompt}
+          fallback={defaults.data.prompt}
+          onChange={(v, opts) => setDraft({ ...draft, githubPrompt: v }, opts)}
+        />
       )}
     </div>
   )
@@ -387,8 +384,14 @@ function DividerLabel({ label }: { label: string }) {
 // Radix Popover: opaque from the first frame, portaled above the drawer, and it flips/shifts to stay
 // on-screen. Opens on click; dismisses on outside-click or Esc (Radix handles both, and — being a
 // non-modal Popover portaled to <body> — its Esc does not bubble to App's window-level Esc, so it
-// closes only the panel, never the whole Settings drawer). Prefers opening UPWARD: the "?" lives low
-// in the scroll body, so there is room above it and rarely any below.
+// closes only the panel, never the whole Settings drawer). Prefers opening UPWARD: it sits on the
+// prompt field's label row, low in the scroll body, with the roomy textarea below it and space above.
+//
+// The trigger is a WORD, not a "?" circle. It was a HelpCircle while it lived on a row of its own; on
+// the field's label row it would be the second identical question-mark glyph in ~800px — LabelWithHelp
+// already puts one right after the label, and the two do different things (that one hovers prose, this
+// one clicks open a list). "Tokens" also says what the panel holds, which the circle never did, and it
+// matches the "Reset to default" text button it now sits beside.
 function TokenHelpPopover() {
   const [open, setOpen] = useState(false)
   return (
@@ -396,10 +399,9 @@ function TokenHelpPopover() {
       <PopoverTrigger asChild>
         <button
           type="button"
-          aria-label="Available tokens"
-          className={`shrink-0 transition-colors ${open ? "text-accent" : "text-muted/60 hover:text-fg"}`}
+          className={`shrink-0 text-[11px] transition-colors ${open ? "text-accent" : "text-muted hover:text-accent"}`}
         >
-          <HelpCircle size={14} />
+          Tokens
         </button>
       </PopoverTrigger>
       <PopoverContent side="top" align="end" className="w-56 p-3">
@@ -440,17 +442,35 @@ function GithubPromptField({
   const customized = value != null
   return (
     <div className="flex flex-col gap-2">
+      {/* Label left; "Reset to default" and "Tokens" right, in that order — "Tokens" holds the far
+          corner whether or not Reset is showing, so it never shifts when the field becomes customized.
+          The MIDDOT is doing real work, not decoration. Both actions are 11px text runs whose boxes sit
+          tight to their ink (0.5-0.8px dead a side), so a flex gap here IS the ink gap — but the number
+          that decides whether they read as two controls or one phrase is the gap measured in WORD
+          SPACES, and this app ships two fonts with very different ones. At gap-3 (12px): sans spaces
+          3.15px ⇒ 3.81×, mono spaces 6.03px ⇒ 1.99×. Two word-spaces is the ambiguity zone, so the same
+          CSS that read as two controls in sans read as a phrase in mono, and no single gap fixes both.
+          A delimiter does, in any font, for one glyph of ink. It renders only when both are present.
+          Measured after: gap-2 sits the dot symmetrically — 10.60/10.56px of ink either side in mono,
+          9.44/9.68px in sans — at 124/118 mean contrast against the actions' ~307, so it separates
+          them without joining the conversation. */}
       <div className="flex items-center justify-between gap-2">
         <LabelWithHelp label={label} help={help} />
-        {customized && (
-          <button
-            type="button"
-            className="text-[11px] text-muted hover:text-accent transition-colors"
-            onClick={() => onChange(undefined)}
-          >
-            Reset to default
-          </button>
-        )}
+        <div className="flex shrink-0 items-center gap-2">
+          {customized && (
+            <>
+              <button
+                type="button"
+                className="text-[11px] text-muted hover:text-accent transition-colors"
+                onClick={() => onChange(undefined)}
+              >
+                Reset to default
+              </button>
+              <span aria-hidden className="text-[11px] text-muted/40">·</span>
+            </>
+          )}
+          <TokenHelpPopover />
+        </div>
       </div>
       <textarea
         value={value ?? fallback}
