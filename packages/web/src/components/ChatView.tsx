@@ -35,7 +35,7 @@ import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { lastAskIndex, messagePresentationText } from "../lib/messagePresentation.ts"
 import { snoozePresetInstant, formatSnoozeWake } from "../lib/snooze.ts"
-import { AWAITING_FALLBACK_TITLE, AWAITING_PARK_BUTTON, awaitingHintSentence, awaitingParkAction, awaitingPresentationLine, prWatchRefs } from "../lib/awaitingPresentation.ts"
+import { AWAITING_FALLBACK_TITLE, AWAITING_PARK_BUTTON, awaitingForLabel, awaitingHintSentence, awaitingItemLabels, awaitingParkAction, awaitingPresentationLine, prWatchRefs } from "../lib/awaitingPresentation.ts"
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { prefs } from "../lib/prefs.ts"
 import { canAdoptThread } from "../lib/adoption.ts"
@@ -3463,6 +3463,11 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   const awaitingHint = awaitingHintSentence(hints)
   const awaitingLine = awaitingPresentationLine(body, awaitingHint)
   const awaitingInner = useInnerHtml(useInlineMarkdownHtml(awaitingLine))
+  // WHAT IT IS WAITING ON, as structure rather than as the raw `kind: value` lines the fence is made of.
+  // The reason above is the sentence; this is the SET, and it is the part a human scans to answer "will
+  // anything actually wake this?" — the question the card exists for.
+  const itemLabels = awaitingItemLabels(hints)
+  const forLabel = awaitingForLabel(hints)
   // The owning thread's slug — set by the thread view AND the queue card — so the confirm button
   // resolves its thread and renders on both surfaces (null in a sub-agent's own transcript → no button).
   const slug = useContext(ThreadSlugContext)
@@ -3554,6 +3559,14 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
     return (
       <div data-awaiting-fence className="flex flex-col">
         <div className={`md-inline ${wrap ? QUEUE_WRAP : ""}`} dangerouslySetInnerHTML={awaitingInner} />
+        {(itemLabels.length > 0 || forLabel) && (
+        // Muted and small: it is the machinery, under the prose that explains it. `gap-x-3` matches the
+        // PR-ref row below so the two read as one band rather than two competing lists.
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[12px] text-muted">
+          {itemLabels.map((label) => <span key={label}>{label}</span>)}
+          {forLabel && <span className="text-muted/70">{forLabel}</span>}
+        </div>
+      )}
         {watched.length > 0 && !listedBelow && (
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5">
             {watched.map((watch) => <WatchedRef key={watch.ref} watch={watch} />)}
@@ -3568,6 +3581,14 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
         className={`md-inline ${CARD_BODY}${wrap ? ` ${QUEUE_WRAP}` : ""}`}
         dangerouslySetInnerHTML={awaitingInner}
       />
+      {(itemLabels.length > 0 || forLabel) && (
+        // Muted and small: it is the machinery, under the prose that explains it. `gap-x-3` matches the
+        // PR-ref row below so the two read as one band rather than two competing lists.
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[12px] text-muted">
+          {itemLabels.map((label) => <span key={label}>{label}</span>)}
+          {forLabel && <span className="text-muted/70">{forLabel}</span>}
+        </div>
+      )}
       {watched.length > 1 && (
         // `gap-x-3` rather than a punctuation separator: the refs are a set of targets, not a sentence,
         // and a wrapped "·" stranded at a line end reads as a typo. They wrap onto as many lines as the

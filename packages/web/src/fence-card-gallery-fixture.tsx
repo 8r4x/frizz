@@ -63,7 +63,30 @@ const fences: { slug: string; label: string; kind: "done" | "awaiting"; body: st
     body: "- Fixed the cache collision in `src/resolver.ts` — the lookup now keys on the normalized id.\n- Added a regression test; `npm test` green.",
     hints: [],
   },
-  { slug: "g-timer", label: "```awaiting · timer", kind: "awaiting", body: "Park until the checkpoint.", hints: [{ kind: "timer", value: timerIso }] },
+  // THE STRUCTURAL FENCE, which is what a worker writes now: a reason for the human, the things it
+  // waits on, and a duration. The card renders the sentence as prose and the rest as a muted band — the
+  // raw `kind: value` lines must never reach the reader (maintainer 2026-08-16).
+  {
+    slug: "g-structural",
+    label: "```awaiting · the structural fence",
+    kind: "awaiting",
+    body: "",
+    hints: [
+      { kind: "shell", value: "bvg44v4ij" },
+      { kind: "for", value: "40m" },
+      { kind: "reason", value: "CI on acme/app#1227 is running the upgraded fs-exfil fixture, the last open scenario before cutting the patch." },
+    ],
+  },
+  // A worker still on the OLD contract writes a deleted kind, which the parser drops into the BODY. It
+  // must not be printed as prose — that is the exact "why does it look like this" screenshot.
+  {
+    slug: "g-stale-kind",
+    label: "```awaiting · a stale `watch:` line",
+    kind: "awaiting",
+    body: "watch: bvg44v4ij",
+    hints: [{ kind: "for", value: "40m" }, { kind: "reason", value: "CI on acme/app#1227 is running." }],
+  },
+  { slug: "g-timer", label: "```awaiting · timer", kind: "awaiting", body: "", hints: [{ kind: "timer", value: "tmr_a1b2c3" }, { kind: "for", value: "2h" }, { kind: "reason", value: "Re-checking the rollout at the checkpoint." }] },
   { slug: "g-pr", label: "```awaiting · pr-watch", kind: "awaiting", body: "PR is open and CI is green. Watching for review.", hints: [{ kind: "pr", value: "acme/app#391" }] },
   // Several watches is a different SHAPE, not the same card with more data: one ref rides the title row
   // in the `aside` slot, so a fence carrying three gets a wrapped row of its own under the prose.

@@ -60,10 +60,41 @@ export function awaitingHintSentence(hints: readonly AwaitingHint[], _nowMs = Da
   return reason ? reason : null
 }
 
+// THE CARD'S PROSE, and under the structural grammar the BODY IS NOT PART OF IT.
+//
+// A fence is now six known line kinds and nothing else, so anything left in `body` is a line the parser
+// did NOT recognise — a worker still writing the deleted `watch:`, or a typo. Joining that into the
+// card's sentence printed raw fence syntax at the human: "watch: bvg44v4ij — CI on #1227 is running…"
+// (maintainer 2026-08-16: "why the fuck is the awaiting block looking like this?"). It is not prose, it
+// is a malformed declaration — the worker gets BUMPED for it (scheduler SOURCE 12), which is where that
+// belongs, and the card says what it can rather than showing the machinery.
+//
+// `body` is still taken when there is no `reason:` at all: an OLD fence, written before the grammar had
+// one, put its whole handoff there, and those threads must not card as blank.
 export function awaitingPresentationLine(body: string, hint: string | null): string {
+  if (hint) return hint
   const prose = body.trim()
-  if (!prose) return hint ?? "Waiting for an external update."
-  if (!hint) return prose
-  const separator = /[.!?…][*_~`"')\]]*$/.test(prose) ? " " : " — "
-  return `${prose}${separator}${hint}`
+  return prose ? prose : "Waiting for an external update."
+}
+
+/** What the fence says it is waiting ON, as short readable labels — the structure the card renders
+ *  instead of the raw `kind: value` lines. PRs are excluded: they get real LINKS of their own
+ *  (`prWatchRefs`), and listing them twice is the duplication this card has been trimmed for twice. */
+export function awaitingItemLabels(hints: readonly AwaitingHint[]): string[] {
+  const out: string[] = []
+  for (const h of hints) {
+    const value = h.value.trim()
+    if (!value) continue
+    if (h.kind === "shell") out.push(`shell ${value}`)
+    else if (h.kind === "agent") out.push(`sub-agent ${value}`)
+    else if (h.kind === "timer") out.push("a timer")
+  }
+  return out
+}
+
+/** The `for:` duration as the card shows it — "for 40m". Null when the fence carries none, which is a
+ *  malformed park rather than an unbounded one: frizz refuses it, so the card does not imply otherwise. */
+export function awaitingForLabel(hints: readonly AwaitingHint[]): string | null {
+  const value = hints.find((h) => h.kind === "for")?.value.trim()
+  return value ? `for ${value}` : null
 }
