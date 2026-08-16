@@ -239,3 +239,60 @@ rewrite. That is a day of design discipline now against a fortnight of migration
 - **Shipping a Cloudflare token in the client** — impossible to scope safely; see verified premises.
 - **Vercel as the front** — no tunnel product, and `vercel.json` rewrites do not proxy WebSocket
   upgrades to an external destination. Frizz's board and terminals are all WebSockets.
+
+## Stage 1, concretely: single-use codes instead of one standing secret
+
+What shipped in `ec6ecb1` is a **floor**: one long-lived bearer secret, printed at launch, traded for a
+year-long cookie. It works, and its weaknesses are structural rather than fixable by tuning:
+
+- The secret lands in terminal scrollback, shell history, and (as of 2026-08-16) an email. Every copy is
+  permanently valid.
+- It only rotates when the board restarts, which is exactly when it is most disruptive to rotate.
+- There is one secret for the whole machine, so "let someone see this board" is indistinguishable from
+  "hand over every project on my laptop".
+
+### The mechanism
+
+Separate **codes** from **sessions** — the single most important move, and the reason this generalises.
+
+- A **code** is single-use and short-lived (~5 minutes). It authorizes exactly one exchange.
+- A **session** is what the code mints: a long-lived signed cookie, independently revocable.
+- `GET /?frizz_code=<code>` → atomic compare-and-set on the code (used exactly once, no TOCTOU) → mint
+  session → redirect to a clean URL, as the current exchange already does.
+
+Once that split exists, everything else is a policy on top: expiry, per-device naming, "sign out all
+devices", and eventually a real IdP minting the session instead of a code. The hosted product's JWT is
+the same shape with GitHub in front, which is why this is not throwaway work.
+
+### QR is the right affordance, not a gimmick
+
+The actual problem is moving a credential from a terminal to a phone, and a 32-character token is
+miserable to type. Render the code as a QR in the terminal (half-block glyphs; a minimal encoder is
+small enough not to warrant a dependency). Repainting it the moment it is consumed — the server already
+knows, because consumption goes through one endpoint — makes the staleness visible instead of implicit.
+
+### Show it in an EPHEMERAL pane, not the standing readout
+
+Tempting to print the QR in the launch readout. Don't:
+
+- The readout is scrollback. A QR sitting in scrollback is the same leak as the token today, just harder
+  to grep for.
+- Frizz deliberately degrades to plain parseable records when stdout is not a TTY (`if (!readout)`), and
+  a permanent live region fights `--debug`, piping, and CI.
+
+So: keep the standing readout exactly as it is, and add a keypress (TTY only) that opens a temporary
+full-screen pane showing a freshly minted code as a QR, which restores the normal readout on dismiss or
+expiry. That is the maintainer's second sketch and it is the safer of the two.
+
+### Keep the standing secret for headless
+
+`FRIZZ_PUBLIC_TOKEN` stays, for boxes with no TTY where nobody can press a key — a server, a container, a
+CI runner. Interactive launches default to single-use codes; headless ones keep the pinned secret. Say so
+in the readout, because the two postures have genuinely different risk.
+
+### Cautions worth encoding in the tests
+
+- Single-use must be **atomic**. Two browsers racing one code is the bug that makes "single-use" a lie.
+- Short expiry: a QR photographed over a shoulder, or caught in a screen recording, is a real vector.
+- Rate-limit redemption, and never write a code to a log file or the terminal title.
+- Sessions need revocation, or "I shared my board once" becomes permanent.
