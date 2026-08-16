@@ -68,8 +68,10 @@ test("a snoozed row never glosses its park inline, in any band", () => {
 })
 
 test("a NON-snoozed awaiting row keeps its inline hint gloss", () => {
-  // The subtitle still exists — dropping the park label must not take the pr/ci hint with it, which is
-  // the one thing a row genuinely cannot say any other way.
-  const html = row({ lastFence: { kind: "awaiting", body: "", hints: [{ kind: "pr", value: "acme/app#391" }] } } as Partial<ThreadView>)
-  assert.match(html, /acme\/app#391/, "a legacy pr wait still glosses its ref inline")
+  // The subtitle still exists — dropping the park label must not take the PR ref with it, which is the
+  // one thing a row genuinely cannot say any other way. `needsYou` because a HELD row collapses to a
+  // single line by design, and an honoured park is Held now: the gloss belongs to the awaiting row the
+  // server left in the QUEUE, which is the row that still has a subtitle to put it in.
+  const html = row({ needsYou: true, lastFence: { kind: "awaiting", body: "", hints: [{ kind: "pr", value: "acme/app#391" }] } } as Partial<ThreadView>)
+  assert.match(html, /acme\/app#391/, "a queued PR wait still glosses its ref inline")
 })

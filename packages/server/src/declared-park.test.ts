@@ -234,18 +234,48 @@ test("a park whose `for:` runs out bumps with the status of every item, and re-p
     assert.equal(h.queued().length, 1, "one rest, one expiry bump")
   } finally { h.close() }
 })
+// A fence with ITEMS but no `for:` is MALFORMED rather than wrong, and the sign-off nudge teaches the
+// whole grammar in one message — a better teacher than a correction aimed at one missing line. (A fence
+// with no items AT ALL is the opposite case and is bumped here; see the nameless tests below.)
+test("a fence with items but no `for:` is left to the sign-off nudge", async () => {
+  const h = parkHarness([{ kind: "shell", value: "bzvtnt3ig" }], { shells: [LIVE_SHELL] })
+  try {
+    await h.s.tick()
+    assert.deepEqual(h.queued(), [], "not SOURCE 12's to report")
+  } finally { h.close() }
+})
 
-// A fence that is not structurally a park at all belongs to the sign-off nudge, which teaches the whole
-// grammar in one message. Bumping here too would say the same thing twice for one rest.
-test("a fence with no items and a fence with no `for:` are left to the sign-off nudge", async () => {
-  for (const hints of [
-    [{ kind: "for" as const, value: "2h" }],
-    [{ kind: "shell" as const, value: "bGONE" }],
-  ]) {
-    const h = parkHarness(hints)
-    try {
-      await h.s.tick()
-      assert.deepEqual(h.queued(), [], `${JSON.stringify(hints)} is not SOURCE 12's to report`)
-    } finally { h.close() }
-  }
+// THE FENCE THAT NAMES NOTHING — the shape the maintainer caught in the wild (2026-08-16): `for: 24h`
+// plus "TypeScript legs still running … waiting on the checks and your merge", and no item at all. The
+// worker could have registered a PR watcher and been woken the moment CI settled; instead it waited on
+// nothing, and frizz — which correctly refused the park — said nothing about why for a whole day.
+//
+// It is now the most explicit of the three bumps, because it is the one where the worker has the most to
+// gain from being told: it does not need to fix an id, it needs to register something at all.
+test("an awaiting fence naming NOTHING is bumped, with how to register a real wait", async () => {
+  const h = parkHarness([{ kind: "for", value: "24h" }, { kind: "reason", value: "TypeScript legs still running; waiting on the checks and your merge" }])
+  try {
+    await h.s.tick()
+    const rows = h.queued()
+    assert.equal(rows.length, 1, "a wait with nothing to wake it is never silent")
+    assert.match(rows[0].fence_id, /^park:nameless:/)
+    assert.match(rows[0].message, /names nothing to wait on/)
+    // It has to say HOW, naming the tool for each kind — a worker told only "that is wrong" writes the
+    // same fence again.
+    assert.match(rows[0].message, /mcp__frizz__watch_pr/, "the PR case, which is the one it had")
+    assert.match(rows[0].message, /mcp__frizz__timer/)
+    assert.match(rows[0].message, /mcp__frizz__activity/, "…and where to get the ids")
+    // …and the other honest exit: if it is not waiting, it is done.
+    assert.match(rows[0].message, /you are not awaiting — you are done/)
+  } finally { h.close() }
+})
+
+// One bump per rest per CAUSE. A fence that names nothing is a different piece of news from one whose
+// item died, so the ids must not collide — but neither may fire twice for the same rest.
+test("the nameless bump fires once per rest, and does not collide with the other two causes", async () => {
+  const h = parkHarness([{ kind: "for", value: "2h" }, { kind: "reason", value: "waiting" }])
+  try {
+    for (let i = 0; i < 4; i++) await h.s.tick()
+    assert.equal(h.queued().length, 1, "one rest, one nameless bump")
+  } finally { h.close() }
 })

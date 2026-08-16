@@ -2031,17 +2031,44 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const dead = unaccountedItems(park.items, live)
       const expiresAt = parkExpiresAt(park, Date.parse(spokeAt))
       const expired = expiresAt !== null && nowMs >= expiresAt
-      if (dead.length === 0 && !expired) continue
-      // A fence that is not structurally a park at all (names nothing, or carries no `for:`) is left to
-      // the sign-off nudge, which already teaches the whole grammar. Bumping it here too would say the
-      // same thing twice for one rest.
-      if (park.items.length === 0 || park.forMs === null) continue
+      // NAMES NOTHING — the loudest case, and it was the silent one. A fence carrying only `for:` and
+      // `reason:` is a worker declaring a wait with NOTHING that can wake it: frizz refuses the park, the
+      // thread queues, and until 2026-08-16 nobody told the worker why. It was routed to the sign-off
+      // nudge, which only fires on a rest carrying NO fence — so this exact shape got nothing at all.
+      //
+      // Observed in the wild, which is why it is now the most explicit bump of the three: `for: 24h` plus
+      // "TypeScript legs still running on 1a5d0804 … waiting on the checks and your merge" — a worker
+      // that could have registered a PR watcher and been told the moment CI settled, waiting on nothing
+      // for a day instead.
+      const nameless = park.items.length === 0
+      if (dead.length === 0 && !expired && !nameless) continue
+      // No `for:` at all is a MALFORMED fence rather than a wrong one, and the sign-off nudge teaches the
+      // whole grammar in one message — a better teacher than a correction aimed at one line.
+      if (park.forMs === null && !nameless) continue
 
       const status = park.items.map((i) => {
         const gone = dead.some((d) => d.kind === i.kind && d.value === i.value)
         return `- \`${i.kind}: ${i.value}\` — ${gone ? "NOT RUNNING" : "still running"}`
       })
-      const message = expired
+      const message = nameless
+        ? [
+          "⚠️ Your ```awaiting fence names nothing to wait on, so it is not a park — your thread is still",
+          "in the queue, and nothing will wake you.",
+          "",
+          "A wait has to be something frizz can SEE. Register one, then name it:",
+          "",
+          "- a pull request → `mcp__frizz__watch_pr` (it wakes you on CI going green or red, and on every",
+          "  later review and comment) → `pr: owner/repo#123`",
+          "- a wall-clock check → `mcp__frizz__timer` → `timer: tmr_…`",
+          "- work you already launched → `shell: <the id your runtime gave you>` or `agent: <id>`",
+          "",
+          "Use `mcp__frizz__activity` to read back everything you have running, with the exact id each",
+          "line needs.",
+          "",
+          "AND IF YOU ARE NOT WAITING ON ANYTHING, you are not awaiting — you are done. End with ```done,",
+          "or ask a ```question if you need the human.",
+        ].join("\n")
+        : expired
         ? [
           "⏰ Your wait expired, nothing resolved. Check back in on everything.",
           "",
@@ -2063,7 +2090,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
       // Keyed on the REST plus which failure it is, so one fence gets one bump per cause: a park that is
       // bumped for a dead id and later expires is two different pieces of news.
-      const fenceId = `park:${expired ? "expired" : "dead"}:${spokeAt}`
+      const fenceId = `park:${nameless ? "nameless" : expired ? "expired" : "dead"}:${spokeAt}`
       const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
       if (outbox.get(deliveryId)) continue
       const item = outbox.enqueue({
@@ -2073,7 +2100,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         fenceId,
         hintKey: fenceId,
         message,
-        reason: expired ? "awaiting park expired" : `awaiting park named ${dead.length} dead item(s)`,
+        reason: nameless ? "awaiting park names nothing" : expired ? "awaiting park expired" : `awaiting park named ${dead.length} dead item(s)`,
       }, nowMs).delivery
       log(`waker: queued ${row.slug} — ${item.reason}`)
       checkpoint("after-enqueue", item)

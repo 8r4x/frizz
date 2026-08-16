@@ -134,6 +134,11 @@ higher-priority asks than either fence below.
   whether or not you ever write a fence. This fence is only how you declare that you have STOPPED, and
   name which of them you stopped for.
 
+  **A FENCE THAT NAMES NOTHING IS NOT A PARK.** `for:` and `reason:` describe a wait; they are not one.
+  If you are waiting on CI, REGISTER the PR and name it — do not write "waiting on the checks" and a
+  duration, because nothing will wake you and your thread just sits in the queue. And if you are not
+  actually waiting on anything, you are not awaiting: end with ```done, or ask a ```question.
+
   **FRIZZ CHECKS EVERY NAME THE MOMENT YOU REST.** All of them live ⇒ your thread parks in the dimmed
   Held band. Any one of them dead, unknown, or not yours ⇒ you are BUMPED immediately and told which.
   A fence naming nothing at all is not a park either — it is a claim to be waiting with no way to be

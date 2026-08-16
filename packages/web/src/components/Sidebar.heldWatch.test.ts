@@ -77,16 +77,23 @@ test("a pr-watch fence with a co-declared timer backstop also wears GitHub's mar
   assert.doesNotMatch(html, HOURGLASS)
 })
 
-test("every park that is NOT a watch keeps the hourglass", () => {
-  for (const [name, extra] of [
-    ["a bare user snooze, no fence", { snoozedUntil: FAR_FUTURE }],
-    ["a snooze over a human gate", { snoozedUntil: FAR_FUTURE, lastFence: { kind: "awaiting", body: "", hints: [{ kind: "shell", value: "Alice" }] } }],
-    ["an ```awaiting human: gate", { lastFence: { kind: "awaiting", body: "", hints: [{ kind: "shell", value: "Alice" }] } }],
-    ["an ```awaiting timer: park", { lastFence: { kind: "awaiting", body: "", hints: [{ kind: "timer", value: FAR_FUTURE }] } }],
-  ] as [string, Partial<ThreadView>][]) {
+// THE HOURGLASS IS NO LONGER THE GENERIC PARK MARK. It stood for every park that was not a watch, back
+// when the fence's kinds were all "somebody will get to it eventually". The 2026-08-15 grammar names
+// LIVE THINGS, so the glyph says which SHAPE is being waited on — a clock for a timer, a dashed circle
+// for the thread's own work — and the hourglass is left to the one park that really is just elapsed
+// time: a user snooze. What they all still share is that none may borrow GitHub's mark, which is the
+// confusion this file exists to prevent.
+test("each park wears its own shape, and none of them borrows GitHub's mark", () => {
+  const cases = [
+    ["a bare user snooze, no fence", { snoozedUntil: FAR_FUTURE }, HOURGLASS],
+    ["a snooze over a declared park", { snoozedUntil: FAR_FUTURE, lastFence: { kind: "awaiting", body: "", hints: [{ kind: "shell", value: "bzvtnt3ig" }] } }, HOURGLASS],
+    ["a park on its own background work", { lastFence: { kind: "awaiting", body: "", hints: [{ kind: "shell", value: "bzvtnt3ig" }] } }, /lucide-circle-dashed/],
+    ["a park on a timer", { lastFence: { kind: "awaiting", body: "", hints: [{ kind: "timer", value: "tmr_a1b2c3" }] } }, /lucide-clock/],
+  ] as [string, Partial<ThreadView>, RegExp][]
+  for (const [name, extra, mark] of cases) {
     const html = row(extra)
-    assert.match(html, HOURGLASS, `${name} is still parked on the clock`)
-    assert.doesNotMatch(html, GITHUB, `…so ${name} must not claim a PR watch`)
+    assert.match(html, mark, `${name} wears its own mark`)
+    assert.doesNotMatch(html, GITHUB, `…and ${name} must not claim a PR watch`)
   }
 })
 

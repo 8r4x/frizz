@@ -23,11 +23,15 @@ export type FenceSegment =
 // can't match the (done|awaiting) alternation, so question blocks are left entirely to questionBlocks.ts.
 const FENCE_BLOCK = /^```(done|awaiting)[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*$/gm
 
-// A parked-wait hint line inside an ```awaiting body. `pr-watch`/`human`/`timer` are current;
-// pr/ci/session remain parseable for older transcripts. Case-insensitive; everything else is prose.
-// `pr-watch` precedes `pr` so it wins the alternation on a `pr-watch:` line (a bare `pr:` still falls
-// through to the legacy `pr`). (`github-review` was removed 2026-07-22 — displaced by `pr-watch`.)
-const HINT_RE = /^(pr-watch|human|timer|pr|ci|session):\s*(\S.*)$/i
+// A structural line inside an ```awaiting body. The six kinds are the whole grammar (2026-08-15): four
+// that NAME a live thing frizz can look up, plus the duration the park may stand for and the one line of
+// prose written for a human.
+//
+// THIS LIST MUST MATCH THE TAILER'S. The server folds the same fence out of the transcript, and a kind
+// only one of them knows is a line that renders one way and parks another — which is how a worker ends
+// up looking parked on something frizz never armed. `AWAITING_HINT_RE` in server/src/tailer.ts is the
+// twin; keep them in step.
+const HINT_RE = /^(shell|agent|timer|pr|for|reason):\s*(\S.*)$/i
 
 // Split the body of a fence into its prose (hint lines removed) and its parsed hints. `done` fences
 // carry no hints — the whole body is prose.
