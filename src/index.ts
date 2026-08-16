@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { bindHostIsExposed } from "@frizz/server/local-origin";
 import { renderQrLines } from "@frizz/server/qr";
+import { installAccessPane, type AccessPane } from "./access-pane.ts";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -229,6 +230,8 @@ const launchTarget = workspaceLaunchTarget(workspace);
  * in another function entirely, and threading one nullable string through that call chain buys nothing.
  */
 let activeAccessLink: { code: string; url: string; expiresAt: number } | null = null;
+/** The keypress listener, held so shutdown can put the terminal back the way it found it. */
+let accessPane: AccessPane | null = null;
 
 const bind = (() => {
   try {
@@ -424,6 +427,11 @@ async function runSupervisor(
     });
     // The supervisor is listening now, so a code minted here is immediately redeemable.
     activeAccessLink = bind.publicOrigin ? supervisor.issueAccessLink() : null;
+    // "Press L for a fresh link" — the only way to reissue without restarting the board. Returns null
+    // when stdout is not a terminal, which leaves the plain records path completely untouched.
+    if (bind.publicOrigin) {
+      accessPane = installAccessPane({ issue: () => supervisor.issueAccessLink() });
+    }
   } catch (error) {
     launchOwner.release();
     throw error;
@@ -438,6 +446,8 @@ async function runSupervisor(
       // Ctrl-C printed nothing at all before this. Say the board stopped, and where the complete
       // record of the run it just ended can be read.
       logger.info("launcher", `stopped with code ${code}`);
+      // Before the farewell, or the operator's shell is left in raw mode echoing nothing.
+      accessPane?.dispose();
       printFarewell(code);
       process.exit(code);
     },
@@ -752,7 +762,9 @@ async function openOrPrint(
         `reopened the server already running for this project · run ${sourceCommand} --stop to stop it`
       : options.debug
         ? undefined
-        : `press ctrl-c to stop · run with --debug for the full event feed`,
+        : accessPane
+          ? `press L for a fresh access link · ctrl-c to stop · --debug for the full event feed`
+          : `press ctrl-c to stop · run with --debug for the full event feed`,
     {
       ...(reused ? { status: `already running on port ${port}` } : {}),
       ...(warnings.length > 0 ? { warning: warnings.join(" ") } : {}),
