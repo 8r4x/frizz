@@ -983,7 +983,12 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
             effort: effort ?? null,
             permission_mode: permissionMode,
           })
-          armDefaultGoal(deps.storage, slug)
+          // NO GOAL ON A BRAND-NEW THREAD (2026-08-16). Every thread used to be born with the stop-hook Goal
+          // armed, because a worker that rested without signing off had nothing to bring it back. The built-in
+          // handoff bump does that now — it fires on exactly the rests that need it, carries the three terminal
+          // states and lists the thread's live work with the ids a fence needs — so arming a Goal as well is the
+          // same nudge twice, and the maintainer called it redundant. `armDefaultGoal` stays for the FOOTER
+          // PANEL, where an operator arming a Goal by hand still wants the stop hook on.
           deps.storage.setBackend(slug, "codex")
           // The codex SESSION id (not the thread id) matches the rollout filename the tailer scans for.
           deps.storage.setAgentSession(slug, spawned.binding.codexSessionId)
@@ -1056,7 +1061,12 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
             effort: effort ?? null,
             permission_mode: permissionMode,
           })
-          armDefaultGoal(deps.storage, slug)
+          // NO GOAL ON A BRAND-NEW THREAD (2026-08-16). Every thread used to be born with the stop-hook Goal
+          // armed, because a worker that rested without signing off had nothing to bring it back. The built-in
+          // handoff bump does that now — it fires on exactly the rests that need it, carries the three terminal
+          // states and lists the thread's live work with the ids a fence needs — so arming a Goal as well is the
+          // same nudge twice, and the maintainer called it redundant. `armDefaultGoal` stays for the FOOTER
+          // PANEL, where an operator arming a Goal by hand still wants the stop hook on.
           deps.storage.setBackend(slug, "claude")
           deps.storage.setClaudeRuntime(slug, "broker")
           void deps.board.rebuild().catch(() => {})

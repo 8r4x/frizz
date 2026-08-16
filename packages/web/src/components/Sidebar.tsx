@@ -637,14 +637,33 @@ function StatusChip({ status }: { status: string }) {
 // leaked internals in the row subtitle (maintainer 2026-07-10: "what the fuck is that?! looks bad");
 // the CircleDashed indicator + its "Waiting on another session" tooltip already carry that state.
 // Null when there's no glossable hint.
-// The fence's own lines are STRUCTURAL now — ids and a duration — and a rail tooltip full of
-// `bzvtnt3ig` glosses nothing. The one line written for a human to read is `reason:`, so that is the
-// gloss; a fence without one has nothing to say here and returns null, as it always did.
+// THE INLINE SUBTITLE, and `reason:` DELIBERATELY DOES NOT BELONG IN IT (maintainer 2026-08-16: "you
+// should not be showing that reason in a sidebar label"). The reason is a sentence the worker wrote for
+// a human, and the rail's subtitle is its scarcest line — a sentence there competes with the row's own
+// status instead of supplementing it, which is the same complaint that hid the SNOOZED label. It goes in
+// the HOVER POPOVER instead, where there is room for it and where you go when you want the detail
+// (see `awaitingReason`, used by the row indicator below).
+//
+// What is left to gloss inline is a PR ref: the one fence line that names a THING rather than describing
+// the wait, and that exists nowhere else on the row.
 export function hintGloss(hints: readonly AwaitingHint[]): string | null {
-  const reason = hints.find((h) => h.kind === "reason")?.value.trim()
-  if (reason) return reason
   const pr = hints.find((h) => h.kind === "pr")
   return pr ? `PR ${pr.value}` : null
+}
+
+/** `what`, plus the worker's own reason when it wrote one — the composition every awaiting popover
+ *  shares, so the shape of the wait always leads and the sentence always follows. */
+function reasonSuffix(t: Pick<ThreadView, "lastFence">, what: string): string {
+  const reason = awaitingReason(t)
+  return reason ? `${what} — ${reason}` : what
+}
+
+/** The worker's own one-line `reason:`, for a POPOVER. Null when the fence carries none — a tooltip that
+ *  invents a sentence is worse than one that just names the state. */
+export function awaitingReason(t: Pick<ThreadView, "lastFence">): string | null {
+  if (t.lastFence?.kind !== "awaiting") return null
+  const reason = t.lastFence.hints.find((h) => h.kind === "reason")?.value.trim()
+  return reason ? reason : null
 }
 
 // ── the indicator (one per row) ──────────────────────────────────────────────────────────────────
@@ -700,7 +719,10 @@ export function ThreadIndicator({ t, legacy }: { t: ThreadView; legacy?: boolean
 //   […] at rest     — an ordinary rest with no concrete ask, INCLUDING a queued thread whose own
 //                     dispatched sub-agents are still running (they spin on their own child rows)
 // Attention (needs-input / stalled) wears the accent; everything else is muted.
-function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: string | null } {
+/** Exported for TESTS ONLY. The tip is a Radix tooltip, so it renders nothing until it opens — static
+ *  markup cannot see it, and asserting on the icon alone would pass a popover that said the wrong thing.
+ *  This is the seam that lets the popover's TEXT be pinned directly. */
+export function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: string | null } {
   const base = sessionStateIndicatorFor(t)
   // The tooltip is now the ONLY place a snooze is legible on the rail (the subtitle no longer names it),
   // so it has to say so on every parked row — not just the ones the park actually quiets. The hourglass
@@ -795,9 +817,15 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     // worker's assertion alone; both are deleted (2026-08-15) and the server now decides Held from a
     // checked declaration. What is left to draw is the SHAPE of the wait.
     const hk = t.lastFence.hints.find((h) => h.kind === "pr" || h.kind === "shell" || h.kind === "agent" || h.kind === "timer")?.kind
-    if (hk === "pr") return { node: github, tip: withWatch("Watching a pull request") }
-    if (hk === "shell" || hk === "agent") return { node: <StatusBox><CircleDashed size={10} className="text-muted/70" /></StatusBox>, tip: withWatch("Waiting on its own background work") }
-    return { node: <StatusBox><Clock size={9} className="text-muted/70" /></StatusBox>, tip: withWatch("Waiting on a timer") }
+    // The worker's `reason:` rides every one of these too. A HELD row is rested and awaiting just as
+    // much as the at-rest one below, and splitting the behaviour — the reason on one popover and a
+    // generic sentence on the other — would make the tooltip mean something different depending on
+    // whether frizz happened to honour the park. The SHAPE of the wait leads, because that is what the
+    // glyph beside it is claiming; the reason follows, because that is what the human wrote.
+    const shape = (what: string) => withWatch(reasonSuffix(t, what))
+    if (hk === "pr") return { node: github, tip: shape("Watching a pull request") }
+    if (hk === "shell" || hk === "agent") return { node: <StatusBox><CircleDashed size={10} className="text-muted/70" /></StatusBox>, tip: shape("Waiting on its own background work") }
+    return { node: <StatusBox><Clock size={9} className="text-muted/70" /></StatusBox>, tip: shape("Waiting on a timer") }
   }
   // At rest (no fence, nothing pending) with the process still ALIVE — a worker that came to rest
   // WITHOUT declaring done or a machine-wait, and with NOTHING it launched still running (that is the
@@ -807,7 +835,16 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
   // empty box and never a false check). We don't know the reason — the worker didn't fence — so: no
   // hint gloss (vs an ```awaiting fence, which carries pr/ci hints AND dims + sinks the row). The
   // honest fix is the worker emitting ` ```awaiting ` when it's blocked on a machine.
-  return { node: <StatusBox><Ellipsis size={11} className="text-muted/70" /></StatusBox>, tip: "At rest" }
+  // RESTED AND AWAITING lands here whenever the park is not Held — the fence declared a wait but frizz
+  // could not honour it (an item that is not running, no `for:`), so the row stays in the queue wearing
+  // the ordinary at-rest mark. That row is exactly where the worker's `reason:` earns its place: the
+  // glyph says "at rest" and the popover says what it thinks it is waiting for, which is the one thing
+  // the rail cannot show and the operator most wants on hover (maintainer 2026-08-16).
+  const reason = awaitingReason(t)
+  return {
+    node: <StatusBox><Ellipsis size={11} className="text-muted/70" /></StatusBox>,
+    tip: reason ? `At rest — ${reason}` : "At rest",
+  }
 }
 
 // THE shared rounded-rect checkbox — the ONE outer shape every status glyph sits in. Its size and the

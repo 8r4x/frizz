@@ -400,10 +400,16 @@ export function isHeld(t: ThreadView, nowMs = Date.now()): boolean {
   // auto-resume promise there is no armed wake, so it is NOT held: it falls through to the queue as
   // work only the human will restart.
   if (t.limitPause?.autoResume) return true
-  const declaredWait = t.lastFence?.kind === "awaiting" && parkedAwaitingHint(t.lastFence.hints, nowMs) !== undefined
-  // `revalidate` was an absolute instant a worker wrote; that grammar is gone with `timer:`.
-  const timedStatus = false
-  return userSnooze || declaredWait || timedStatus
+  // THE SERVER ALREADY DECIDED THIS, and the client must not re-derive it. A park is honoured only when
+  // every item the fence names is still live — checked against telemetry and the registries, which the
+  // browser cannot see (board.hasDeclaredBackgroundPark). What reaches here is that verdict: the server
+  // excuses an honoured park from the queue, so by this line `!t.needsYou` and `atRest(t)` already hold,
+  // and an `awaiting` fence on top of them means the park was checked and stood.
+  //
+  // Reading the HINTS instead is what the deleted grammar did, and it is exactly why a worker could park
+  // itself on `human: Alice` or an instant already in the past: the client believed the assertion.
+  const declaredWait = t.lastFence?.kind === "awaiting"
+  return userSnooze || declaredWait
 }
 
 // ACTIVELY RUNNING: a live session with work in flight — running/spawning, or turn-idle while a
