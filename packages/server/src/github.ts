@@ -518,18 +518,19 @@ function labelsLine(labels: string[]): string {
 // a hard newline INSIDE one is the regression the golden test guards. The metadata block wraps
 // naturally, one field per line, so its newlines are structural too.
 //
-// The prose below is the maintainer's own, reproduced verbatim (2026-08-15) — including "thoroug",
-// "theads" and the fixed "Issue #{n}" heading that a PR also renders under. Do not quietly tidy them;
-// this string is the shipped copy they wrote, and the compact lead above it already names the kind.
-export const DEFAULT_GITHUB_PROMPT = `Triage this GitHub issue/PR and make recommendations. Be thoughtful, thoroug, and dubious. Think through whether this is truly a good idea or not. Many ideas are bad.
+// The prose below is the maintainer's own (2026-08-15), copy-corrected on their say-so the next day:
+// "thoroug" → "thorough", "theads" → "threads", "the impact the of changes" → "the impact of the
+// changes", one stray double space, and the heading "Issue #{n}" → "Issue/PR #{n}" so a dispatched PR
+// is not labelled an issue. Wording is otherwise theirs — change the MEANING only when they ask.
+export const DEFAULT_GITHUB_PROMPT = `Triage this GitHub issue/PR and make recommendations. Be thoughtful, thorough, and dubious. Think through whether this is truly a good idea or not. Many ideas are bad.
 
 Read the full thread first — body, labels, and the whole discussion — then classify the report as a BUG or a FEATURE request and say which it is and why.
 
-If it is a BUG REPORT: establish whether the reported behavior actually happens on the current tree (capture the exact steps, command and output if it reproduces; say what you saw instead if it does not), trace the cause to concrete code, and state the smallest correct fix — or the top 2 options with the tradeoff of each — plus the files it touches and the risk.  Be sure you have high confidence that the bug is real. There should be a clean and elegant solution. If there isn't an elegant way to do something, then it often means that it's not a good idea or that we are in need of a larger codebase refactor. The issue: you should stay in the codebase for similar categories of bugs. We are constantly seeking to proactively self-improve the codebase.
+If it is a BUG REPORT: establish whether the reported behavior actually happens on the current tree (capture the exact steps, command and output if it reproduces; say what you saw instead if it does not), trace the cause to concrete code, and state the smallest correct fix — or the top 2 options with the tradeoff of each — plus the files it touches and the risk. Be sure you have high confidence that the bug is real. There should be a clean and elegant solution. If there isn't an elegant way to do something, then it often means that it's not a good idea or that we are in need of a larger codebase refactor. The issue: you should stay in the codebase for similar categories of bugs. We are constantly seeking to proactively self-improve the codebase.
 
 If it is a FEATURE REQUEST: restate the request precisely (the use-case behind it and any ambiguity a maintainer must resolve), map where it lands in the code and what public API / UX surface it changes, and sketch a concrete plan for the smallest viable version with its risks, open design questions and a rough size estimate.
 
-If it is a PR: review it. Read the PR description, comments, and changes. You should be dubious. Do not assume that the PR is high quality, many are not. For each substantive change ask: is there a better approach? Is it correct? Does it handle edges? Is it elegant? Does it break existing behavior or the public API? Are there tests, and do they actually cover the change? Trace the impact the of changes thoughtfully. Check CI too. Recommend either closing, making changes (explain them), or merging. Test the changes yourself if necessary/possible.
+If it is a PR: review it. Read the PR description, comments, and changes. You should be dubious. Do not assume that the PR is high quality, many are not. For each substantive change ask: is there a better approach? Is it correct? Does it handle edges? Is it elegant? Does it break existing behavior or the public API? Are there tests, and do they actually cover the change? Trace the impact of the changes thoughtfully. Check CI too. Recommend either closing, making changes (explain them), or merging. Test the changes yourself if necessary/possible.
 
 If it is a DOCS CHANGE: make sure that it is well written, minimal, no walls of text, well structured, consistent tonally with others docs/prose, and not AI slop.
 
@@ -537,12 +538,12 @@ Bias always towards proactivity and taking immediate action. If you encounter is
 
 ---
 
-Issue #{n}: {title}
+Issue/PR #{n}: {title}
 Repository: {repo}
 URL: {url}
 Labels: {labels}
 Body + thread (issues): \`gh issue view {n} -R {repo} --comments\`
-Body + theads (PRs): \`gh pr view {n} -R {repo} --comments\`
+Body + thread (PRs): \`gh pr view {n} -R {repo} --comments\`
 Diff (PRs): \`gh pr diff {n} -R {repo}\`
 CI (PRs): \`gh pr checks {n} -R {repo}\``
 

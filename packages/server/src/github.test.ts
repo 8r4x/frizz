@@ -283,6 +283,19 @@ test("DEFAULT_GITHUB_PROMPT: classifies, then branches on bug / feature / PR / d
   assert.ok(!DEFAULT_GITHUB_PROMPT.includes("THREAD:"))
 })
 
+// This copy shipped with four defects the maintainer asked to correct on 2026-08-16 (they had been kept
+// verbatim the day before, under the paste-exactly rule). It is user-visible in the Settings box and in
+// every dispatched worker's first message, so the corrections get a guard rather than trust.
+test("DEFAULT_GITHUB_PROMPT: the shipped copy stays clean", () => {
+  assert.ok(DEFAULT_GITHUB_PROMPT.includes("Be thoughtful, thorough, and dubious"))
+  assert.ok(DEFAULT_GITHUB_PROMPT.includes("Trace the impact of the changes"))
+  assert.ok(DEFAULT_GITHUB_PROMPT.includes("Body + thread (PRs):"))
+  assert.ok(!/\btheads\b/.test(DEFAULT_GITHUB_PROMPT))
+  assert.ok(!/\bthoroug\b/.test(DEFAULT_GITHUB_PROMPT))
+  // No doubled space anywhere: the textarea soft-wraps, so a stray one shows up as a gap mid-sentence.
+  assert.equal(DEFAULT_GITHUB_PROMPT.match(/\S {2,}\S/g), null)
+})
+
 // The shipped default is shaped so a user can rewrite the INSTRUCTIONS without touching the template
 // tags: prose paragraphs carrying no tokens at all, then a trailing metadata block that carries every
 // one of them. This test is the guard on that split — a {token} creeping up into the prose is exactly
@@ -329,8 +342,11 @@ const pr: HydratedPr = {
 test("DEFAULT_GITHUB_PROMPT renders into a real PR prompt (diff/checks by number)", () => {
   const p = renderGithubPrompt(DEFAULT_GITHUB_PROMPT, "cli/cli", pr, "review-cli-cli-13844", "pr")
   assert.ok(p.startsWith("THREAD: review-cli-cli-13844\n\n"))
-  // The generated lead is what names the kind — the merged template's own heading line says "Issue".
-  assert.ok(p.includes("PR #13844: perf(status): O(1) map lookup"))
+  assert.ok(p.includes("PR #13844: perf(status): O(1) map lookup")) // the generated lead names the kind
+  // …and the merged template's own heading does not CONTRADICT it. One template serves both kinds, so
+  // its heading reads "Issue/PR"; a bare "Issue #N" above a pull request is what this pins against.
+  assert.ok(p.includes("Issue/PR #13844: perf(status): O(1) map lookup"))
+  assert.ok(!/^Issue #13844/m.test(p))
   assert.ok(p.includes("gh pr view 13844 -R cli/cli --comments"))
   assert.ok(p.includes("gh pr diff 13844 -R cli/cli"))
   assert.ok(p.includes("gh pr checks 13844 -R cli/cli"))
