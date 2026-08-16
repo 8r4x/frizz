@@ -443,9 +443,9 @@ anyone who reaches the port controls it. Only do this on a network you trust. An
 as-is; to reach the board by DNS name you must list that name with --allowed-host ("*" allows any).
 
 --public-origin serves the board through a tunnel or reverse proxy without putting it on the LAN
-at all — Frizz stays on loopback and the tunnel dials it. It always prints a one-time access link
-carrying a generated secret; that secret, not the tunnel, is what keeps strangers out. Anything
-stronger in front (Cloudflare Access, Tailscale) still helps, and is worth it for a shared board.
+at all — Frizz stays on loopback and the tunnel dials it. It prints a SINGLE-USE access link, and
+shows it as a QR so you can scan it from a phone; press L for a fresh one at any time. Scanning it
+trades the code for a session cookie, so the link itself stops working the moment it is used.
 
 An immutable artifact is the default. --dev is the only explicit unsafe source watcher/HMR mode.
 `;

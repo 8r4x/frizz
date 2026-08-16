@@ -140,16 +140,16 @@ Environment:
   FRIZZ_HOST              same as --host
   FRIZZ_ALLOWED_HOSTS     same as --allowed-host, comma separated
   FRIZZ_PUBLIC_ORIGIN     same as --public-origin
-  FRIZZ_PUBLIC_TOKEN      pin the --public-origin access secret instead of generating one
+  FRIZZ_PUBLIC_TOKEN      standing secret for HEADLESS boxes that cannot show a QR
 
 --host puts a board that can run shell commands as you on the network, and Frizz has no login: anyone
 who reaches the port controls it. Only do this on a network you trust. An IP address works as-is; to
 reach the board by DNS name you must list that name with --allowed-host ("*" allows any).
 
 --public-origin serves the board through a tunnel or reverse proxy without putting it on the LAN
-at all — Frizz stays on loopback and the tunnel dials it. It always prints a one-time access link
-carrying a generated secret; that secret, not the tunnel, is what keeps strangers out. Anything
-stronger in front (Cloudflare Access, Tailscale) still helps, and is worth it for a shared board.
+at all — Frizz stays on loopback and the tunnel dials it. It prints a SINGLE-USE access link, and
+shows it as a QR so you can scan it from a phone; press L for a fresh one at any time. Scanning it
+trades the code for a session cookie, so the link itself stops working the moment it is used.
 ```
 
 <br/>
@@ -228,7 +228,9 @@ stronger in front (Cloudflare Access, Tailscale) still helps, and is worth it fo
 >
 > The address you pass must be the exact origin your browser shows — scheme and host, no path. Frizz accepts that one origin, and accepts `X-Forwarded-*` only on requests that actually arrived as it.
 >
-> **This is the part that matters: Frizz has no login, so whatever you put in front of the tunnel *is* your access control.** A bare tunnel publishes a shell-capable board to the open internet for anyone who has the URL. Require authentication at the proxy — with Cloudflare, that means a [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) application over the hostname, with a policy allowing only your own email, created *before* the hostname resolves. Tailscale Serve is the same idea with device identity instead of SSO. Frizz prints this warning on every launch that names a public origin, and it is not boilerplate.
+> Frizz prints a **single-use** access link and renders it as a QR in your terminal, so you can scan it from a phone without typing forty characters. Scanning trades the code for a session cookie and the link immediately stops working; press **L** any time for a fresh one. A code expires in five minutes, and a spent one says so rather than failing silently.
+
+**Even so: Frizz has no accounts, so that link — and anything you put in front of the tunnel — *is* your access control.** A bare tunnel publishes a shell-capable board to the open internet for anyone who has the URL. Require authentication at the proxy — with Cloudflare, that means a [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) application over the hostname, with a policy allowing only your own email, created *before* the hostname resolves. Tailscale Serve is the same idea with device identity instead of SSO. Frizz prints this warning on every launch that names a public origin, and it is not boilerplate.
 
 </details>
 
