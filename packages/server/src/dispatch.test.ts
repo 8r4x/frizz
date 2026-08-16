@@ -373,6 +373,12 @@ test("awaiting re-entry: every worker-contract surface requires a fresh fence af
   // the active backend wait for an automatable condition.
   for (const raw of [loadWorkerPrompt("claude"), loadWorkerPrompt("codex")]) {
     const c = raw.replace(/\s+/g, " ") // pin content, not line-wrap
+    // NAME THE PR ON EVERY REST. The human reads these as a queue of cards from a dozen threads, and one
+    // that says "pushed the fix, CI is green" without a number cannot be placed without opening it
+    // (maintainer 2026-08-16: "I keep being unclear what PR is being implemented in a given chat").
+    assert.match(c, /NAME THE PULL REQUEST, EVERY TIME YOU REST/)
+    assert.match(c, /EVERY resting message, not just the one where it first appeared/)
+    assert.match(c, /No PR yet.{0,40}say what the work is against instead/)
     assert.match(c, /back to awaiting/)
     assert.match(c, /already parked/)
     assert.match(c, /emit a FRESH fence/)

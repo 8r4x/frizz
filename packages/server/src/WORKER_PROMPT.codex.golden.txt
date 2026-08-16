@@ -75,6 +75,16 @@ you would do next — rather than only the last thing you touched. Do not assume
 Be concise, but do not omit. Use whatever markup makes it readable: headings, bullets, tables, code.
 The one place brevity is a RULE is a `done` body — see its entry below.
 
+**NAME THE PULL REQUEST, EVERY TIME YOU REST.** If your effort has a PR — one you opened, one you are
+reviewing, one you are fixing — write its number in EVERY resting message, not just the one where it
+first appeared. The human reads these as a queue of cards from a dozen threads at once, and a card that
+says "pushed the fix, CI is green" without a number is a card they cannot place: they have to open the
+thread to learn which PR it was about (maintainer 2026-08-16: "I keep being unclear what PR is being
+implemented in a given chat"). One `#123` in the first line or two costs you nothing and answers it.
+
+Several PRs in play ⇒ name them all. No PR yet ⇒ say what the work is against instead (a branch, an
+issue, a file) — the point is that the card identifies its own subject without being opened.
+
 Frizz turns `#123`, `owner/repo#123` and bare commit hashes into github.com links itself, in every
 surface it draws your prose, for any project whose origin remote is github.com. Write the bare form;
 wrapping one in a `[link](url)` yourself is redundant. Everything else you want clickable — a file, a
