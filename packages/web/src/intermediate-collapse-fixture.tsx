@@ -10,7 +10,9 @@ import "./styles.css"
 // Browser QA for the higher-level "intermediate logs collapse" in the queue card (QCard).
 //
 // ONE FOLD PER RUN. A run is [what re-invoked the agent → the prose it rested on]; the human's ask opens
-// the first one and every scheduler WAKE cuts a new one. Within a run the card shows the TEXT ONLY of its
+// the first one, and every REST and every scheduler WAKE cuts a new one — so every message the agent
+// rested on survives the fold, whether or not anything narrates what resumed it. Within a run the card
+// shows the TEXT ONLY of its
 // opening and closing messages, and everything else — the fully-hidden middles, the tool bands batched
 // into those two, and any calls made after the closing prose — collapses behind that run's own HAIRLINE
 // DIVIDER (the transcript's WakeDivider chrome: the stacked-chevron ChevronsUpDown glyph, the tool-call
@@ -60,8 +62,39 @@ import "./styles.css"
 //   ?variant=priorrest TWO turns — an ask, a rest, a background wake, then a second turn ending in a
 //                      question and another rest. The window reaches back to the HUMAN's ask, so both
 //                      turns render; neither "Agent rested" rule may be drawn at either end.
+//   ?variant=goalwakes THE REGRESSION SHAPE (2026-08-16): a pointed question, the ANSWER, a rest, and two
+//                      more turns driven by the GOAL's own bump. Every rested message must render in full
+//                      — the answer above all — each run must get its own fold, and each bump must draw
+//                      its "Goal · at rest" hairline directly under the message it resumed.
+//
+// AND `?src=<url>` REPLAYS A REAL THREAD through the card, overriding the variant. Point it at a dump of
+// the server's own `threadTranscript` reply and the card renders the actual bytes that produced a report,
+// rather than a hand-built approximation of them:
+//
+//   curl -H 'Origin: http://127.0.0.1:9494' \
+//     'http://127.0.0.1:9494/_frizz/<project>/rpc/threadTranscript?input={"slug":"<slug>"}' > /tmp/t.json
+//   # serve /tmp/t.json from anywhere the fixture's origin can reach, then:
+//   open '…/intermediate-collapse-fixture.html?src=http://127.0.0.1:8181/t.json'
+//
+// It accepts the RPC envelope (`{result:{messages}}`) or a bare `{messages}` / array, and runs before the
+// fetch mock below so it uses the real `fetch`. This is how the 2026-08-16 collapse regression was
+// confirmed fixed on the thread that reported it — a synthesized fixture cannot prove the server's own
+// `boundary`/`wake` markers are the ones the walk keys on.
 const params = new URLSearchParams(location.search)
 const variant = params.get("variant") ?? "heavy"
+const src = params.get("src")
+const replay: { messages: TranscriptMessage[]; hasEarlier: boolean } | undefined = src
+  ? await (async () => {
+      const body = await (await fetch(src)).json()
+      const page = body?.result ?? body
+      return {
+        messages: (page?.messages ?? page) as TranscriptMessage[],
+        // A real dump is a WINDOW, and the card's "Load earlier messages" control is part of what the
+        // replay is meant to reproduce.
+        hasEarlier: page?.hasEarlier === true,
+      }
+    })()
+  : undefined
 
 const SLUG = "intermediate-collapse-demo"
 
@@ -424,8 +457,66 @@ const prwakes: TranscriptMessage[] = [
   withId(boundaryEvent("rest", "Agent rested")),
 ]
 
+// THE SHAPE THAT BROKE IT (maintainer 2026-08-16, zod thread
+// `dedupe-zod-6236-exactoptional-with-coercion-2-prs`): the human asks a pointed question, the agent
+// ANSWERS it and rests, and the GOAL — not a watcher — wakes it twice more. Every wake here is the Goal's
+// own bump, which the card used to drop outright and which therefore cut nothing: the three turns merged
+// into one run, and the fold that stood for it hid the answer he had just asked for ("the entire answer
+// to that question was collapsed by default").
+//
+// The bump text is the REAL delivery, token and all — the same string frizz wrote into that thread. The
+// `<!-- frizz-wake:… -->` token is what the server strips into `displayText`, and RecurringPromptLine
+// parses the `$`-anchored trailer off the presentation text, so a hand-trimmed copy would render as a
+// plain wake card instead of the "Goal · at rest" hairline this variant exists to pin.
+const GOAL_BODY =
+  "If further work towards the original task/goal remains, keep going. If there are open questions that require human input, ask them with question fences.\n\n" +
+  "(Goal — sent each time you come to rest. To stop these, sign off with a ```done fence — but ONLY when the work is genuinely finished: it files this thread away, and nothing but new work from the human reopens it.)"
+
+const goalBump = (n: number): TranscriptMessage =>
+  withId({
+    role: "user",
+    wake: true,
+    text: `${GOAL_BODY}\n\n<!-- frizz-wake:${String(n).repeat(8)} -->`,
+    displayText: GOAL_BODY,
+    tools: [],
+    parts: [],
+  } as unknown as TranscriptMessage)
+
+const goalwakes: TranscriptMessage[] = [
+  { sourceId: "u-cur", role: "user", text: "why do you remove the input field from that object, the object where you now add `is_present`? I'm a little suspicious of that.", tools: [], parts: [] },
+  withId(asst("Fair challenge. Let me answer the first precisely and then actually test the second.", [
+    tool("Bash", { detail: "rg -n 'key in input' packages/zod/src/v4/core", desc: "Finding every use of the field" }),
+  ])),
+  withId(asst("Confirmed on `input`: it was used for exactly one thing. Prototyping the alternative.", [
+    tool("Edit", { detail: "packages/zod/src/v4/core/schemas.ts" }),
+    tool("Bash", { detail: "nub --test packages/zod/src/v4", desc: "Running the suite on the prototype" }),
+    tool("Read", { detail: "packages/zod/src/v4/core/parse.ts", read: "…412 lines…" }),
+  ])),
+  // THE ANSWER. It is the message the agent RESTED on, so it must render in full — this is the row the
+  // old single-run fold swallowed.
+  withId(asst("You were right on both counts. I rewrote it — `c6fdada5` replaces the whole approach.\n\n## On removing `input`\n\nIt was load-bearing for exactly one check, and the rewrite makes that check unnecessary rather than moving it.")),
+  withId(boundaryEvent("rest", "Agent rested")),
+  goalBump(1),
+  withId(asst("CI check first, then I need to fix the write-up — it still describes the approach I just abandoned.", [
+    tool("Bash", { detail: "gh pr checks 6385", desc: "Reading the check runs" }),
+    tool("Edit", { detail: ".triage/issues/6236/results.md" }),
+    tool("Bash", { detail: "git commit -am 'fix: rewrite the write-up'", desc: "Committing the write-up" }),
+  ])),
+  withId(asst("All six real CI checks are green on the rewritten `c6fdada5`, `MERGEABLE`. The durable write-up matches the code again.")),
+  withId(boundaryEvent("rest", "Agent rested")),
+  goalBump(2),
+  withId(asst("Review count went from 9 to 10 — checking whether pullfrog re-reviewed the rewrite.", [
+    tool("Bash", { detail: "gh api repos/colinhacks/zod/pulls/6385/reviews", desc: "Listing the reviews" }),
+    tool("Bash", { detail: "gh api repos/colinhacks/zod/pulls/6385/reviews/492266/comments", desc: "Reading the newest review" }),
+  ])),
+  withId(asst("That review predates my rewrite — it is against `1a5d0804`, the design that no longer exists. Nothing to act on.")),
+  withId(boundaryEvent("rest", "Agent rested")),
+]
+
 const messages =
-  variant === "prwakes" ? prwakes
+  replay?.messages ??
+  (variant === "goalwakes" ? goalwakes
+  : variant === "prwakes" ? prwakes
   : variant === "single" ? single
   : variant === "bgshells" ? bgshells
   : variant === "dispatches" ? dispatches
@@ -438,7 +529,7 @@ const messages =
   : variant === "twoasks" ? twoasks
   : variant === "humanpast" ? humanpast
   : variant === "priorrest" ? priorrest
-  : heavy
+  : heavy)
 
 const thread: ThreadViewModel = {
   id: SLUG,
@@ -483,7 +574,7 @@ const thread: ThreadViewModel = {
 
 store.board = { projectDir: "/fixture/frizz", threads: [thread] } as BoardSnapshot
 
-const transcriptPage = { messages, transcriptKey: "fixture-key", hasEarlier: false, historyLoaded: false }
+const transcriptPage = { messages, transcriptKey: "fixture-key", hasEarlier: replay?.hasEarlier === true, historyLoaded: false }
 
 const originalFetch = window.fetch
 window.fetch = async (input, init) => {

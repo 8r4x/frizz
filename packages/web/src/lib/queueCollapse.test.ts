@@ -1,11 +1,9 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { isGoalBump, queueCollapseSegments, segmentFolds, supersededAskIndices, survivesQueueCollapse } from "./queueCollapse.ts"
+import { opensQueueSegment, queueCollapseSegments, segmentFolds, supersededAskIndices, survivesQueueCollapse } from "./queueCollapse.ts"
 
 // The REAL Goal delivery frizz wrote into the maintainer's zod thread on 2026-08-12, verbatim — trailer,
-// the `<!-- frizz-wake:… -->` token and all. The token is the whole reason `text` cannot be matched
-// directly (the trailer regex is `$`-anchored), so a synthesized fixture without it would pass while the
-// app kept rendering the hairline.
+// the `<!-- frizz-wake:… -->` token and all.
 const GOAL_TEXT =
   "If further work towards the original task/goal remains, keep going. If there are open questions that require human input, ask them with question fences.\n\n" +
   "(Goal — sent each time you come to rest. To stop these, sign off with a ```done fence — but ONLY when the work is genuinely finished: it files this thread away, and nothing but new work from the human reopens it. Sign off either way — ```question if you need the human, ```done if it is truly finished: 1-3 sentences, then **bolded verb phrase** bullets.)\n\n" +
@@ -13,21 +11,6 @@ const GOAL_TEXT =
 const GOAL_DISPLAY = GOAL_TEXT.replace(/\n*<!-- frizz-wake:[a-f0-9]+ -->$/, "")
 
 const ask = (body: string) => "Here is where things stand.\n\n```question\n" + body + "\n```\n"
-
-// ---- isGoalBump ----
-
-test("the Goal bump is matched on the PRESENTATION text, not the raw text", () => {
-  assert.equal(isGoalBump({ text: GOAL_TEXT, displayText: GOAL_DISPLAY, wake: true }), true)
-  // No displayText → the raw text still carries the delivery token after the `$`-anchored trailer, so
-  // the parse cannot fire. This is the shape the pre-ef1afce code was matching, and it is why the
-  // hairline rendered anyway.
-  assert.equal(isGoalBump({ text: GOAL_TEXT, wake: true }), false)
-})
-
-test("a wake that is not the Goal, and an ordinary message, are not bumps", () => {
-  assert.equal(isGoalBump({ text: "👤 Review from @colinhacks on acme/app#391", wake: true }), false)
-  assert.equal(isGoalBump({ text: GOAL_TEXT, displayText: GOAL_DISPLAY }), false, "no wake flag → not a delivery")
-})
 
 // ---- supersededAskIndices ----
 
@@ -78,17 +61,27 @@ test("a SCHEDULER wake survives — nothing else on the card represents it", () 
   assert.equal(survivesQueueCollapse({ text: "👤 Review from @colinhacks on acme/app#391", wake: true }, 3, none), true)
 })
 
-test("a background-task/sub-agent COMPLETION does not survive — its launch card already stands for it", () => {
+// Its POSITION decides it instead — see the waker tests below. This predicate answers only "is it a wake
+// DELIVERY", and a completion marker is not one.
+test("a background-task/sub-agent COMPLETION is not a wake delivery", () => {
   const none = new Set<number>()
-  // Keeping it renders one event twice, and inverted: the completion flows in transcript order while the
-  // launch is one synthesized row at the foot of the span.
   assert.equal(survivesQueueCollapse({ text: "Sub-agent « Watching CI » finished", boundary: "wake" }, 4, none), false)
   assert.equal(survivesQueueCollapse({ text: "Background task «Running the full suite» finished", boundary: "wake" }, 5, none), false)
 })
 
-test("the GOAL's own bump does not survive — the card refuses to narrate it", () => {
+// It used to be the ONE wake the card refused to narrate, and that suppression is what left the
+// maintainer's own thread showing resumed work with nothing above it to explain the resumption
+// (2026-08-16). It is a wake like any other now: it opens a run and draws its own hairline.
+test("the GOAL's own bump survives and cuts, exactly like every other wake", () => {
   const none = new Set<number>()
-  assert.equal(survivesQueueCollapse({ text: GOAL_TEXT, displayText: GOAL_DISPLAY, wake: true }, 5, none), false)
+  const bump = { text: GOAL_TEXT, displayText: GOAL_DISPLAY, wake: true }
+  assert.equal(survivesQueueCollapse(bump, 5, none), true)
+  assert.equal(opensQueueSegment(bump), true)
+})
+
+test("a message with no wake flag opens nothing, whatever its text says", () => {
+  assert.equal(opensQueueSegment({ text: GOAL_TEXT, displayText: GOAL_DISPLAY }), false)
+  assert.equal(opensQueueSegment({ text: "", boundary: "wake" }), false, "a background-task completion is not a wake DELIVERY")
 })
 
 test("ordinary chatter collapses", () => {
@@ -99,21 +92,24 @@ test("ordinary chatter collapses", () => {
 
 // ---- queueCollapseSegments ----
 //
-// ONE FOLD PER WAKE. These are the shapes the maintainer described on 2026-08-12 — a thread driven
-// across several watcher wakes, and the run whose calls landed after its closing prose.
+// ONE FOLD PER REST. These are the shapes the maintainer described on 2026-08-12 (a thread driven across
+// several watcher wakes, and the run whose calls landed after its closing prose) and on 2026-08-16 ("you
+// should show all of the resting messages, but then all of the stuff between them can be collapsed").
 
-// Shorthand: `p` prose, `t` a tools-only step, `w` a wake, `x` a message the card drops outright.
+// Shorthand: `p` prose, `t` a tools-only step, `w` a wake, `r` the rest divider, `x` a message the card
+// drops outright.
 const p = (tools = 0) => ({ text: true, tools, countable: true })
 const t = (tools = 1) => ({ tools, countable: true })
 const w = () => ({ opens: true, survives: true, countable: true })
+const r = () => ({ skip: true, closes: true })
 const x = () => ({ skip: true })
 
-test("with no wake the whole run is one segment, anchored on the first and last prose", () => {
+test("with no rest or wake the whole run is one segment, anchored on the first and last prose", () => {
   const segs = queueCollapseSegments([x(), p(), t(3), t(2), p()], 1)
   assert.equal(segs.length, 1)
   assert.deepEqual(
-    { start: segs[0].start, end: segs[0].end, open: segs[0].open, close: segs[0].close, woken: segs[0].woken },
-    { start: 1, end: 4, open: 1, close: 4, woken: false },
+    { start: segs[0].start, end: segs[0].end, open: segs[0].open, close: segs[0].close, resumed: segs[0].resumed },
+    { start: 1, end: 4, open: 1, close: 4, resumed: false },
   )
   assert.equal(segs[0].tools, 5)
   assert.equal(segs[0].steps, 2, "the two tools-only middles are hidden whole")
@@ -123,10 +119,72 @@ test("a wake CUTS: each run gets its own fold, and the wake itself belongs to ne
   //  0 ask · 1 prose · 2 tools · 3 prose · 4 WAKE · 5 tools · 6 tools · 7 prose
   const segs = queueCollapseSegments([x(), p(), t(4), p(), w(), t(3), t(2), p()], 1)
   assert.equal(segs.length, 2)
-  assert.deepEqual([segs[0].start, segs[0].end, segs[0].woken], [1, 3, false])
-  assert.deepEqual([segs[1].start, segs[1].end, segs[1].woken], [5, 7, true])
+  assert.deepEqual([segs[0].start, segs[0].end, segs[0].resumed], [1, 3, false])
+  assert.deepEqual([segs[1].start, segs[1].end, segs[1].resumed], [5, 7, true])
   assert.equal(segs[0].tools, 4)
   assert.equal(segs[1].tools, 5, "the second run's calls are ITS run's, not the first's")
+})
+
+// THE REGRESSION. The maintainer's zod thread: he asked a question, the agent answered it and RESTED,
+// and the Goal woke it twice more. The wake CUT but the card never drew it, so before `closes` existed
+// only `w()` cut anything — and with the Goal suppressed entirely (an `x()` here) the three turns merged
+// into one run whose fold hid everything but its first and last prose. That fold swallowed the answer.
+test("a REST cuts even when nothing narrates the wake that follows it", () => {
+  //  0 ask · 1 prose · 2 tools · 3 THE ANSWER · 4 rest · 5 ⟨unnarrated bump⟩ · 6 tools · 7 prose · 8 rest
+  const segs = queueCollapseSegments([x(), p(), t(6), p(), r(), x(), t(4), p(), r()], 1)
+  assert.equal(segs.length, 2)
+  assert.deepEqual([segs[0].open, segs[0].close], [1, 3], "the answer the agent rested on closes its own run")
+  assert.deepEqual([segs[1].open, segs[1].close], [7, 7])
+  assert.equal(segs[1].resumed, true, "a run past a rest has the rested message above it as its anchor")
+})
+
+test("rest then wake is ONE cut, not two empty runs", () => {
+  //  0 ask · 1 prose · 2 rest · 3 WAKE · 4 tools · 5 prose · 6 rest
+  const segs = queueCollapseSegments([x(), p(), r(), w(), t(3), p(), r()], 1)
+  assert.equal(segs.length, 2)
+  assert.deepEqual([segs[0].start, segs[0].end], [1, 1])
+  assert.deepEqual([segs[1].start, segs[1].end], [4, 5], "the run starts after the wake, not after the rest")
+})
+
+test("the TRAILING rest closes the last run and leaves no empty one behind it", () => {
+  const segs = queueCollapseSegments([x(), p(), t(2), p(), r()], 1)
+  assert.equal(segs.length, 1)
+  assert.equal(segs[0].end, 3)
+})
+
+// ---- the run's WAKER --------------------------------------------------------------------------------
+//
+// A completion marker's POSITION decides whether it is news. At the head of a resumed run it is what
+// re-invoked the agent and nothing else on the card says so; anywhere else the agent was already working
+// and it is chatter the fold carries.
+const c = () => ({ completion: true, countable: true })
+
+test("a completion at the head of a resumed run is that run's WAKER, and is not counted as hidden", () => {
+  //  0 ask · 1 prose · 2 rest · 3 COMPLETION · 4 prose · 5 tools · 6 prose
+  const segs = queueCollapseSegments([x(), p(), r(), c(), p(), t(3), p()], 1)
+  assert.equal(segs.length, 2)
+  assert.equal(segs[1].waker, 3)
+  assert.equal(segs[1].open, 4, "the waker renders above the run's opening prose, it does not become it")
+  assert.equal(segs[1].steps, 1, "only the tools-only middle is hidden — the waker is on screen, not in the fold")
+})
+
+test("a completion MID-run is chatter — it folds and it counts", () => {
+  const segs = queueCollapseSegments([x(), p(), r(), p(), c(), p()], 1)
+  assert.equal(segs[1].waker, -1)
+  assert.equal(segs[1].steps, 1, "it is a hidden step like any other row the fold swallows")
+})
+
+test("a completion in the human's OWN first run is never a waker — nothing was resting", () => {
+  // The agent launched a task and it finished while the agent kept working. Calling that a wake would
+  // claim the human's turn had ended.
+  const segs = queueCollapseSegments([x(), c(), p(), t(2), p()], 1)
+  assert.equal(segs[0].waker, -1)
+})
+
+test("a run opened by a scheduler WAKE does not also claim a completion as its waker", () => {
+  // The wake already draws its own hairline; a completion right behind it is the run's first step.
+  const segs = queueCollapseSegments([x(), p(), r(), w(), c(), p(), t(2), p()], 1)
+  assert.equal(segs[1].waker, -1, "the wake hairline is what named the resumption")
 })
 
 // The screenshot that started this: "a bunch of bash calls show up right at the end". They are the same
@@ -158,6 +216,13 @@ test("a WOKEN run folds even when one message both opens and closes it", () => {
   const [seg] = queueCollapseSegments([w(), t(9), p()], 0)
   assert.equal(seg.open, seg.close, "one prose message doing both jobs")
   assert.equal(segmentFolds(seg), true, "its wake hairline is the anchor above the fold")
+})
+
+test("a run RESUMED by a bare rest folds on the same strength — the rested message is its anchor", () => {
+  const segs = queueCollapseSegments([x(), p(), r(), t(9), p()], 1)
+  const seg = segs[1]
+  assert.equal(seg.open, seg.close)
+  assert.equal(segmentFolds(seg), true)
 })
 
 // Today's rule, kept deliberately: a lone agent turn has nothing intermediate, and a divider standing

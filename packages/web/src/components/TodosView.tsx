@@ -10,7 +10,7 @@ import { useBoard, asThreads, useTranscript } from "../hooks.ts"
 import { orderQueue, queued, displayTitle, lastActiveLabelAt } from "../groups.ts"
 import { useLiveAnswering } from "../lib/answering.ts"
 import { hasQuestionBlock } from "../lib/questionBlocks.ts"
-import { isGoalBump, opensQueueSegment, queueCollapseSegments, segmentFolds, supersededAskIndices, survivesQueueCollapse } from "../lib/queueCollapse.ts"
+import { opensQueueSegment, queueCollapseSegments, segmentFolds, supersededAskIndices, survivesQueueCollapse } from "../lib/queueCollapse.ts"
 import { pairAllAnswers } from "../lib/answersMessage.ts"
 import { Message, NativeInputRequiredCard, PermPolicyDenialCard, PermPromptBanner, PendingAskCard, StickyUserBand, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText } from "./ChatView.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_TOP, CARD_ACTION_EXPLAINER, CARD_PRIMARY_ACTION } from "./TranscriptCard.tsx"
@@ -828,11 +828,11 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   // and this card's own render predicates. The walk itself is pure — see lib/queueCollapse.
   const collapseSteps = useMemo(() => messages.map((m, g) => {
     if (!m || m.queued || messageRendersNothing(m)) return { skip: true }
-    // DROPPED BY THE RENDER LOOP OUTRIGHT, expanded or not (see below): the rest divider, which is the
-    // card's own premise, and the Goal firing, which is machinery. Neither may anchor a run's opening or
-    // closing prose — a divider emitted before a row that never renders would never appear at all — and
-    // neither may count as a hidden step, since expanding reveals nothing where they stood.
-    if (m.boundary === "rest" || isGoalBump(m)) return { skip: true }
+    // THE REST DIVIDER: dropped by the render loop outright, expanded or not (see below) — the card's own
+    // premise, so it may not anchor a run's opening or closing prose and may not count as a hidden step,
+    // since expanding reveals nothing where it stood. It is still the CUT: `closes` ends the run whose
+    // last prose the agent rested on, which is the message the maintainer asked to always see.
+    if (m.boundary === "rest") return { skip: true, closes: true }
     // A sub-agent completion marker carries a tool call but renders as a wake DIVIDER, not a card
     // (see ChatView.agentCompletionCall) — counting it would promise a tool the expansion never shows.
     // It still counts as a step, exactly like the background-shell wake divider beside it.
@@ -846,11 +846,15 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
       // as a hidden step would promise the expansion a message it already shows.
       survives: survivesQueueCollapse(m, g, supersededAsks),
       opens: opensQueueSegment(m),
+      // BOTH spellings of "a child finished": the transcript's own `boundary:"wake"` divider (a background
+      // shell, a Monitor) and a sub-agent completion carried as a tool call. They render identically — a
+      // wake hairline — so the segment walk treats them as one thing when deciding a run's waker.
+      completion: m.boundary === "wake" || completion !== undefined,
     }
   }), [messages, supersededAsks])
-  // ONE FOLD PER WAKE. Every run between the human's ask and the agent's rest, and between each
+  // ONE FOLD PER REST. Every run between the human's ask and the agent's rest, and between each
   // subsequent wake and the rest it produced, is its own segment with its own divider. See
-  // lib/queueCollapse for why a wake CUTS rather than merely surviving the fold.
+  // lib/queueCollapse for why a rest CUTS, and why cutting on the wake alone was not enough.
   const segments = useMemo(
     () => queueCollapseSegments(collapseSteps, lastUserIdx + 1).filter(segmentFolds),
     [collapseSteps, lastUserIdx],
@@ -1234,18 +1238,15 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                 // reply to a finished agent apart from a steer typed mid-turn (lib/restDividers.ts).
                 // Everywhere else the drawer now drops it for the same reason this card drops all of it.
                 if (m.boundary === "rest") return
-                // …and neither is the GOAL firing. On a thread being driven by one, a legitimate rest
-                // followed by a bump is the normal cycle, and the card's job is to show where the thread
-                // stands now — not to narrate the machinery that got it there. The hairline sat directly
-                // above the final message and read as part of the handoff (maintainer 2026-08-12: "do not
-                // include 'Agent rested' above it or the stop hook firing").
-                //
-                // FRIZZ'S SIGN-OFF REMINDER IS DELIBERATELY EXEMPT. That one is not machinery the reader
-                // can ignore: it explains why a fence appeared in a message that had already been written,
-                // so removing it would make the agent look like it had answered a question nobody asked.
-                // The drawer keeps both — it is a live transcript, where knowing what re-invoked the agent
-                // is exactly the point.
-                if (isGoalBump(m)) return
+                // THE GOAL'S BUMP, HOWEVER, NOW DRAWS ITS HAIRLINE — it used to be dropped here beside the
+                // rest divider as "machinery", and that was a mistake this card could not survive: the
+                // Goal is how most frizz-driven threads are resumed, so suppressing it left the card
+                // showing work resuming for no stated reason at all. The maintainer read his own thread's
+                // three Goal wakes as a PR watcher firing and asked why nothing marked them (2026-08-16:
+                // "there's not a hairline notification rendered for that, which is also weird to me").
+                // It renders through the ordinary path below as the transcript's own RecurringPromptLine
+                // ("Goal · at rest"), one rule under the message the agent rested on — the position the
+                // 2026-08-12 call was really objecting to it NOT being in.
                 const segIdx = collapseIntermediate ? segmentAt.get(globalIdx) : undefined
                 const seg = segIdx === undefined ? undefined : segments[segIdx]
                 const inSpan = seg !== undefined
@@ -1257,6 +1258,24 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                 // messageHasRenderableText reports all of those as no prose at all, so the textOnly path
                 // would drop it on the floor rather than show it.
                 const liftedWake = inSpan && !isFirst && !isLast && !hasQuestionBlock(m.text) && survivesQueueCollapse(m, globalIdx, supersededAsks)
+                // THIS RUN'S WAKER — the background task or sub-agent whose completion re-invoked the
+                // agent while it was at rest. It takes the ordinary path too, and it must be handled
+                // BEFORE the summary bar below: the bar is emitted at the first row after the opening
+                // prose, and a waker that fell through to it would print the fold ABOVE the narration it
+                // summarizes — the same inversion the `isLast` anchor once produced.
+                if (seg !== undefined && globalIdx === seg.waker) {
+                  // The SAME pitch the ordinary path charges, spelled the same way: a waker is a wake
+                  // hairline like any other, and a second spelling here is how the rhythm drifts.
+                  if (prevTailIsMeta !== null) out.push(<VSpace key={`s${i}`} h={prevTailIsMeta && messageHeadIsMeta(m) ? 6 : STEP} />)
+                  const wakerKey = m.sourceId ?? `legacy-${globalIdx}`
+                  out.push(
+                    <div key={wakerKey} data-transcript-source-id={wakerKey} className="flex flex-col">
+                      <Message m={m} dense />
+                    </div>,
+                  )
+                  prevTailIsMeta = messageTailIsMeta(m)
+                  return
+                }
                 if (inSpan && !liftedWake) {
                   // Fully-hidden middle message — UNLESS survivesQueueCollapse lifts it out. Same rule as
                   // the background tasks and sub-agent dispatches below: lifecycle content (an open ask,

@@ -1,42 +1,29 @@
 // What the QUEUE CARD's intermediate collapse is allowed to swallow.
 //
-// The card hides the run between the agent's opening narration and its final message behind one summary
-// divider, so a triage card reads "what I asked" → "where it landed" without the wall of tool calls in
-// between. Two things must survive that elision, for the same reason the background-task and sub-agent
-// dispatch CALLS are lifted out of it (maintainer 2026-08-01: "It's important that those show up in the
-// chat") — they are LIFECYCLE, not disposable chatter.
+// The card hides each RUN — the agent's opening narration through the prose it rested on — behind one
+// summary divider, so a triage card reads "what I asked" → "where it landed" without the wall of tool
+// calls in between. Two things must survive that elision, for the same reason the background-task and
+// sub-agent dispatch CALLS are lifted out of it (maintainer 2026-08-01: "It's important that those show
+// up in the chat") — they are LIFECYCLE, not disposable chatter.
 //
 // Pure string/shape logic, no DOM and no schema import: the predicates take the structural minimum so
 // they stay unit-testable, mirroring answering.ts's AskMsgLike.
 
-import { parseRecurringPrompt } from "@frizz/shared"
-import { messagePresentationText } from "./messagePresentation.ts"
 import { hasQuestionBlock, splitQuestionBlocks } from "./questionBlocks.ts"
 
-// The minimal message shape these walks need. `displayText` is what the reader actually sees — the
-// server strips its own wake-delivery token out of `text` into that field — and it is what the Goal
-// trailer must be matched against (see isGoalBump).
+// The minimal message shape these walks need.
+//
+// `displayText` no longer changes any answer here and is kept because callers pass whole transcript
+// messages: this module used to classify the GOAL's own bump apart from every other wake (to suppress
+// it), which meant parsing frizz's `$`-anchored trailer off the presentation text rather than the raw
+// `text` the server's delivery token still trails. Every wake is treated alike now — see
+// survivesQueueCollapse — so that distinction, and the parse it needed, are gone.
 export interface CollapseMsgLike {
   text: string
   displayText?: string
   wake?: boolean
   boundary?: "wake" | "compaction" | "rest"
   sourceId?: string
-}
-
-// The GOAL firing, which the queue card deliberately does not narrate: on a thread being driven by one,
-// rest → bump is the normal cycle, not news (maintainer 2026-08-12: "do not include 'Agent rested' above
-// it or the stop hook firing"). Frizz's SIGN-OFF reminder is exempt — that one explains why a fence
-// appeared in a message that had already been written, so removing it makes the agent look like it
-// answered a question nobody asked.
-//
-// Matched on the PRESENTATION text, never the raw `text`: the trailer this parses is `$`-anchored, and
-// the raw field still carries the server's delivery token after it, so matching `text` silently never
-// fires.
-export function isGoalBump(m: CollapseMsgLike): boolean {
-  if (!m.wake) return false
-  const bump = parseRecurringPrompt(messagePresentationText(m))
-  return bump !== undefined && bump.kind !== "signoff"
 }
 
 // A message's ```question fences, normalized — its identity as an ASK. The surrounding prose is
@@ -78,38 +65,68 @@ export function supersededAskIndices(messages: readonly CollapseMsgLike[]): Set<
 //   - A ```question. An ask the agent kept working past is a decision the human still owes; collapsing it
 //     left the card offering "Send answers" with no question in sight, and the same ask answerable one
 //     click away in the drawer. A SUPERSEDED copy is the exception — the newer one carries the decision.
-//   - A SCHEDULER WAKE (`wake: true` — a pr-watch delivery, a timer, a watcher). It names WHAT
-//     RE-INVOKED THE AGENT, and NOTHING ELSE on the card represents it. Hiding it left a card that
-//     showed a park on a PR watcher and then, with nothing in between, more work — reading as a watcher
-//     wake that had never happened (maintainer 2026-08-12: "there's no indication of the PR Watcher
-//     triggering and actually causing the additional follow-ups"). The Goal's own bump stays out, per
-//     isGoalBump.
+//   - A SCHEDULER WAKE (`wake: true` — a pr-watch delivery, a timer, a watcher, AND the Goal's own bump).
+//     It names WHAT RE-INVOKED THE AGENT, and NOTHING ELSE on the card represents it. Hiding it left a
+//     card that showed a park on a PR watcher and then, with nothing in between, more work — reading as
+//     a watcher wake that had never happened (maintainer 2026-08-12: "there's no indication of the PR
+//     Watcher triggering and actually causing the additional follow-ups").
 //
-// A `boundary:"wake"` divider does NOT survive, and the asymmetry is the point. That one is a background
-// task or sub-agent COMPLETION, and its LAUNCH card is already lifted out of this same span carrying the
-// terminal state and the duration — so keeping it renders one event twice, and in the wrong order, since
-// the completions flow in transcript order while the launches are one synthesized row emitted at the
-// foot of the span (maintainer 2026-08-12, on exactly that card: "The ordering here just seems totally
-// fucked … four background task completion notifications … then a bunch of bash calls show up right at
-// the end"). The launch card is the better of the two: it says both what started and how it ended.
+//     THE GOAL'S OWN BUMP IS NO LONGER THE EXCEPTION, which reverses a call made on 2026-08-12 ("do not
+//     include 'Agent rested' above it or the stop hook firing"). That exemption was written when a rest
+//     did not CUT: the bump's hairline had no rested message above it to belong to, so it landed jammed
+//     against the final handoff and read as part of it. Now that each rest closes a run, the bump sits
+//     exactly where the maintainer asked for it — under the message the agent rested on, naming why
+//     there is more below (2026-08-16: "Anytime the agent does additional work after an awaiting block
+//     or a done block or what have you, there should be a hairline beneath it telling it what woke up
+//     the chat"). Measured on the thread that produced that ask (zod
+//     `dedupe-zod-6236-exactoptional-with-coercion-2-prs`): all three wakes were Goal bumps, the card
+//     drew none of them, and the maintainer read the resumed work as an unexplained PR-watcher firing.
+//     The `rest` divider itself stays dropped — the rested message above the hairline says it better.
+//
+// A `boundary:"wake"` COMPLETION divider — a background task or sub-agent finishing — does not survive
+// HERE, and its position decides it instead: see `CollapseSegment.waker` below. Mid-run it is chatter,
+// because the agent was already working and the completion changed nothing about why; the run's own fold
+// carries it. At the HEAD of a run it is the waker, and it draws its hairline like any other.
+//
+// That split replaces a flat "never survives" rule whose stated reason had quietly expired. It was
+// dropped because "its LAUNCH card is already lifted out of this same span" (2026-08-12), so keeping the
+// completion rendered one event twice and inverted — the completions flow in transcript order while the
+// launches were one synthesized row at the foot of the span. Later the same day the launches were folded
+// IN (a queue card gives no background task a card of its own), so nothing on the card stood for the
+// event any more, and a run could begin with no statement of what began it — the exact gap the 2026-08-16
+// ask names.
 //
 // The counting walk and the render loop BOTH go through this, so the divider can never promise the
 // expansion a message it is already showing.
 export function survivesQueueCollapse(m: CollapseMsgLike, index: number, superseded: ReadonlySet<number>): boolean {
   if (hasQuestionBlock(m.text)) return !superseded.has(index)
-  return m.wake === true && !isGoalBump(m)
+  return m.wake === true
 }
 
 /** Does this message OPEN a new collapse segment — i.e. is it the scheduler wake that re-invoked a
  *  rested agent? An open ask survives the fold too (above) but does not start a segment: the agent asked
  *  and kept working, which is one continuous run of work, not a new one. */
 export function opensQueueSegment(m: CollapseMsgLike): boolean {
-  return m.wake === true && !isGoalBump(m)
+  return m.wake === true
 }
 
 // ---- SEGMENTS -------------------------------------------------------------------------------------
 //
-// ONE FOLD PER WAKE, not one fold per card.
+// ONE FOLD PER REST, not one fold per card.
+//
+// THE REST IS THE CUT, and the wake is only the label on it. Cutting on the WAKE alone was the bug: a
+// wake the card chose not to narrate — the Goal's bump, which is how nearly every frizz-driven thread is
+// resumed — cut nothing, so every turn it drove merged into ONE run whose fold hid all but the first and
+// last prose in it. On the maintainer's zod thread that swallowed the whole answer to the question he had
+// just asked: he asked about a field, the agent answered it and rested, the Goal woke it twice more, and
+// the card showed the stale message above his ask, one fold, and the last turn's summary — the answer
+// itself inside the fold (2026-08-16: "the entire answer to that question was collapsed by default").
+//
+// So the rule is now the one he stated: "you should show all of the resting messages, but then all of the
+// stuff between them can be collapsed." Every message the agent RESTED on is a run's closing prose and is
+// therefore shown; the run behind it folds; the wake that started the next run draws its own hairline
+// between the two. A wake still cuts as well, because a wake can arrive mid-turn (a watcher firing while
+// the agent works) with no rest to cut on.
 //
 // The card used to compute a single span — the agent's first prose after the human's ask through its
 // last prose anywhere — and hang one divider off it. Wakes were lifted OUT of that span but did not
@@ -117,8 +134,8 @@ export function opensQueueSegment(m: CollapseMsgLike): boolean {
 // a row, one fold, closing prose. Every hairline was detached from the work it explained, and the fold
 // claimed a single run for five separate ones.
 //
-// A wake now CUTS. Each segment is [what re-invoked the agent → the prose it rested on], folds its own
-// calls, and shows its own closing message, so the card reads down the page as the thread actually ran
+// A rest — and a wake — now CUTS. Each segment is [what re-invoked the agent → the prose it rested on],
+// folds its own calls, and shows its own closing message, so the card reads down the page as it ran
 // (maintainer 2026-08-12: "collapse everything starting at the point where the watcher was triggered up
 // until it comes to rest… multiple messages in their complete form, with various collapsed tool call
 // blocks between them, plus some hairline indicators showing why they were reawoken").
@@ -128,7 +145,7 @@ export function opensQueueSegment(m: CollapseMsgLike): boolean {
 // the maintainer reported ("a bunch of bash calls show up right at the end"). They are the same run's
 // work and they fold with it.
 
-/** One message's shape, reduced to the six facts the segment walk needs. The caller evaluates them
+/** One message's shape, reduced to the seven facts the segment walk needs. The caller evaluates them
  *  (they need the transcript schema and the card's own render predicates); this stays pure so the walk
  *  itself is unit-testable. */
 export interface CollapseStep {
@@ -145,12 +162,19 @@ export interface CollapseStep {
   survives?: boolean
   /** Starts a new segment (`opensQueueSegment`). The wake itself belongs to no segment. */
   opens?: boolean
+  /** ENDS the run: the `rest` divider the agent's own stop emits. It renders nothing itself — the card
+   *  drops it — but the prose before it is what the agent RESTED on, and that message is the reason the
+   *  cut exists. Carried alongside `skip`, since the walk must see it before it skips it. */
+  closes?: boolean
+  /** A background-task / sub-agent COMPLETION marker, which renders as a hairline rather than a card.
+   *  Only its POSITION decides whether it survives — see `CollapseSegment.waker`. */
+  completion?: boolean
 }
 
 export interface CollapseSegment {
-  /** First index in the run — the message after the wake, or the first after the human's ask. */
+  /** First index in the run — the message after the wake or rest, or the first after the human's ask. */
   start: number
-  /** Last index in the run — the message before the next wake, or the last message. */
+  /** Last index in the run — the message before the next wake or rest, or the last message. */
   end: number
   /** First index contributing prose, rendered text-only above the fold; -1 when the run has none. */
   open: number
@@ -160,28 +184,52 @@ export interface CollapseSegment {
   steps: number
   /** Tool calls the fold carries. */
   tools: number
-  /** This run opened on a WAKE rather than on the human's ask. */
-  woken: boolean
+  /** This run did NOT open on the human's ask — a WAKE or a previous REST stands above it. That is the
+   *  only thing `segmentFolds` needs to know: a resumed run has a visible anchor above its divider, so it
+   *  may fold on the strength of anything hidden at all, while the first run may not. */
+  resumed: boolean
+  /** Index of the COMPLETION marker that opened this run — a background task or sub-agent finishing while
+   *  the agent was at rest, which is what re-invoked it. It renders as its own hairline ABOVE the run's
+   *  opening prose (and so above the fold), and is not counted as a hidden step. -1 when the run began
+   *  some other way: on the human's ask, on a scheduler wake that draws its own hairline already, or on
+   *  the agent simply carrying on. A completion sitting anywhere ELSE in the run is chatter and folds. */
+  waker: number
 }
 
-/** Split `[from .. end]` into one segment per wake. The wake messages themselves are excluded — they
- *  render as their own hairline at each boundary. */
+/** Split `[from .. end]` into one segment per run. The wake and rest messages themselves are excluded —
+ *  the wake renders as its own hairline at the boundary, and the card drops the rest divider outright. */
 export function queueCollapseSegments(steps: readonly CollapseStep[], from: number): CollapseSegment[] {
   const segments: CollapseSegment[] = []
   let current: CollapseSegment | undefined
+  // Latched, never cleared: once a rest or a wake has gone by, NOTHING after it is the run the human's
+  // ask opened, so every later run is anchored by something visible above it.
+  let resumed = false
   const close = () => {
     if (current && current.start <= current.end) segments.push(current)
     current = undefined
   }
   for (let i = Math.max(0, from); i < steps.length; i++) {
     const s = steps[i]
+    // BEFORE the skip: a rest renders nothing, so the card skips it — but it is the cut, so the walk
+    // has to see it first.
+    if (s.closes === true) {
+      close()
+      resumed = true
+      continue
+    }
     if (s.skip === true) continue
     if (s.opens === true) {
       close()
-      current = { start: i + 1, end: i, open: -1, close: -1, steps: 0, tools: 0, woken: true }
+      resumed = true
+      current = { start: i + 1, end: i, open: -1, close: -1, steps: 0, tools: 0, resumed: true, waker: -1 }
       continue
     }
-    if (!current) current = { start: i, end: i, open: -1, close: -1, steps: 0, tools: 0, woken: false }
+    const opening = current === undefined
+    if (!current) current = { start: i, end: i, open: -1, close: -1, steps: 0, tools: 0, resumed, waker: -1 }
+    // A COMPLETION that opens a RESUMED run is what re-invoked the agent, and is the run's waker. The
+    // `resumed` guard is what keeps a completion arriving during the human's own first turn — the agent
+    // launched a task and it finished while the agent kept working — from being read as a wake.
+    if (opening && s.completion === true && current.resumed) current.waker = i
     current.end = i
     current.tools += s.tools ?? 0
     if (s.text === true) {
@@ -196,7 +244,7 @@ export function queueCollapseSegments(steps: readonly CollapseStep[], from: numb
     for (let i = seg.start; i <= seg.end; i++) {
       const s = steps[i]
       if (s.skip === true || s.survives === true) continue
-      if (i === seg.open || i === seg.close) continue
+      if (i === seg.open || i === seg.close || i === seg.waker) continue
       if (s.countable === true) seg.steps++
     }
   }
@@ -205,9 +253,10 @@ export function queueCollapseSegments(steps: readonly CollapseStep[], from: numb
 
 /** Is this run worth folding?
  *
- *  A WOKEN run folds on the strength of anything hidden at all: its wake hairline is the anchor above it,
- *  and "the watcher fired and then twelve calls happened" is precisely the run the maintainer asked to
- *  see collapsed — even when the agent narrated it in a single message.
+ *  A RESUMED run folds on the strength of anything hidden at all: the message the agent rested on, or the
+ *  wake hairline under it, is the anchor above it — and "the watcher fired and then twelve calls happened"
+ *  is precisely the run the maintainer asked to see collapsed, even when the agent narrated it in a
+ *  single message.
  *
  *  THE FIRST run, which opens on the human's ask, additionally needs DISTINCT opening and closing prose.
  *  That is today's rule kept deliberately: a lone agent turn has nothing intermediate, and hiding its own
@@ -216,5 +265,5 @@ export function queueCollapseSegments(steps: readonly CollapseStep[], from: numb
 export function segmentFolds(seg: CollapseSegment): boolean {
   if (seg.open < 0) return false
   if (seg.tools < 1 && seg.steps < 1) return false
-  return seg.woken || seg.open !== seg.close
+  return seg.resumed || seg.open !== seg.close
 }

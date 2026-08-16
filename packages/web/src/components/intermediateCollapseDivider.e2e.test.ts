@@ -179,13 +179,14 @@ test("the collapsed intermediate run is a hairline divider that names its tool c
       "the ten polls are counted by the divider rather than drawn",
     )
 
-    // ---- 8. no rest rule is drawn, and the window reaches back to the human's own ask ----
-    // The queue card is a triage surface for the standing signal, and the rest hairline is its own
-    // premise (maintainer 2026-08-11: "you shoudl NOT render the hairline for the rest/stop hook"). The
-    // WINDOW, though, reaches back to the human's last message rather than to the previous rest — with
-    // frizz driving threads across many rests, "the current turn" is a stretch the reader never saw the
-    // start of, and the card was opening mid-conversation. So the earlier turn renders too; only its
-    // rest rules do not.
+    // ---- 8. the REST is the cut: no rest RULE is drawn, but every rested message survives ----
+    // "Agent rested" itself is never drawn — the card is a triage surface for the standing signal and
+    // that hairline is its own premise (maintainer 2026-08-11: "you shoudl NOT render the hairline for
+    // the rest/stop hook"). The rest still CUTS, which is a different claim and the one that matters:
+    // each run gets its own fold, and the message the agent rested on is that run's closing prose, so it
+    // renders in full (2026-08-16: "you should show all of the resting messages, but then all of the
+    // stuff between them can be collapsed"). The WINDOW, meanwhile, reaches back to the human's last
+    // message rather than to the previous rest, so the earlier turn renders too.
     await page.goto(variant("priorrest"), { waitUntil: "networkidle0" })
     await page.waitForSelector(SEL, { timeout: 10_000 })
     const card = await page.evaluate(() => document.body.innerText)
@@ -196,13 +197,24 @@ test("the collapsed intermediate run is a hairline divider that names its tool c
     )
     assert.doesNotMatch(card, /Agent rested/, "…and its label must not survive as any other row either")
     assert.match(card, /Kick off the release workflow/, "the human's own ask anchors the window")
-    // THE COMPLETION MARKER IS NOT A WAKE DELIVERY, and only the delivery cuts a run. This fixture holds
-    // `boundary: "wake"` — the transcript's own "that task finished" hairline, whose LAUNCH already folds
-    // into the count, so keeping it would render one event twice and inverted (see
-    // queueCollapse.survivesQueueCollapse). What actually re-invokes a rested agent is the scheduler's
-    // wake, a real user record carrying frizz's delivery token (`wake: true`), and that is section 9.
-    assert.doesNotMatch(card, /Watching the release run/, "a completion marker folds like the launch it echoes")
-    assert.doesNotMatch(card, /The watcher came back green/, "…so the run around it is one fold, not two")
+    // TWO folds, because the rest between them cut — and the message the agent rested on stands between
+    // them in full. Before the rest cut, this was one run whose fold swallowed that message whole.
+    assert.equal(await page.$$eval(SEL, (ns) => ns.length), 2, "the rest cuts the two turns into their own folds")
+    assert.match(card, /Fixed — the workflow is running/, "the message the agent RESTED on always renders")
+    assert.match(card, /The watcher came back green/, "…and the resumed run opens on its own narration")
+    // …WITH THE COMPLETION MARKER BETWEEN THEM, because here it is the WAKER: the agent was at rest and
+    // this is what re-invoked it. It used to be dropped on the grounds that its LAUNCH card stood for it,
+    // and that stopped being true when launches were folded into the count — so a run began with nothing
+    // saying what began it. A completion MID-run still folds; only position distinguishes them.
+    // Read in order: the marker must sit under the rested message and ABOVE its run's fold, never after.
+    const restedLadder = await page.$$eval("[data-wake-divider]", (ns) =>
+      ns.map((n) => (n as HTMLElement).innerText.replace(/\s+/g, " ").trim()),
+    )
+    assert.deepEqual(
+      restedLadder,
+      ["1 tool call · Click to expand", "Background task «Watching the release run» exited 0", "4 tool calls · Click to expand"],
+      `the waker names the resumption between the two runs, got ${restedLadder.join(" | ")}`,
+    )
 
     // ---- 9. ONE FOLD PER WAKE ----
     // The shape this collapse exists for (maintainer 2026-08-12): an agent parks on a PR watcher, the
@@ -256,7 +268,44 @@ test("the collapsed intermediate run is a hairline divider that names its tool c
       "…and the wake hairlines survive the expansion, still one per run",
     )
 
-    // ---- 9. control: nothing intermediate, so no divider at all ----
+    // ---- 10. THE GOAL DRIVES MOST THREADS, and it must cut and be named like any other wake ----
+    // The regression, from the maintainer's own zod thread on 2026-08-16: he asked a pointed question,
+    // the agent answered it and rested, and the GOAL woke it twice more. The card exempted the Goal from
+    // both halves of this — it cut nothing and it drew nothing — so the three turns merged into a single
+    // run whose one fold hid everything but its first and last prose. The answer he had just asked for
+    // was inside that fold ("the entire answer to that question was collapsed by default"), and the
+    // resumed work appeared with nothing above it to explain the resumption ("there's not a hairline
+    // notification rendered for that, which is also weird to me" — he read it as a PR watcher).
+    //
+    // Read the ladder IN DOCUMENT ORDER: the interleaving is the whole claim. Three folds and two Goal
+    // hairlines in the right count but the wrong places would pass a per-selector check.
+    await page.goto(variant("goalwakes"), { waitUntil: "networkidle0" })
+    await page.waitForSelector(SEL, { timeout: 10_000 })
+    const goalLadder = await page.$$eval("[data-wake-divider]", (ns) =>
+      ns.map((n) => `${n.getAttribute("data-wake-divider")}: ${(n as HTMLElement).innerText.replace(/\s+/g, " ").trim()}`),
+    )
+    assert.deepEqual(
+      goalLadder,
+      [
+        "intermediate-summary: 4 tool calls · Click to expand",
+        "rest: Goal · at rest",
+        "intermediate-summary: 3 tool calls · Click to expand",
+        "rest: Goal · at rest",
+        "intermediate-summary: 2 tool calls · Click to expand",
+      ],
+      `each Goal-driven run folds on its own, under the hairline naming what resumed it, got ${goalLadder.join(" | ")}`,
+    )
+    const goalCard = await page.evaluate(() => document.body.innerText)
+    // THE ROW THIS WHOLE CHANGE EXISTS FOR: the answer to the question, which the single-run fold ate.
+    assert.match(goalCard, /You were right on both counts/, "the answer the agent rested on renders in full")
+    assert.match(goalCard, /All six real CI checks are green/, "…and so does every later rested message")
+    assert.match(goalCard, /That review predates my rewrite/)
+    // The bump's own PARAGRAPH never renders — the hairline is the whole notification. Rendering it in
+    // full is what the 2026-08-12 call was actually against, and it must not come back with the rule.
+    assert.doesNotMatch(goalCard, /If further work towards the original task/, "the Goal's body stays out; only its hairline shows")
+    assert.doesNotMatch(goalCard, /Agent rested/, "the rest divider is still never drawn")
+
+    // ---- 11. control: nothing intermediate, so no divider at all ----
     await page.goto(variant("single"), { waitUntil: "networkidle0" })
     await page.waitForFunction(() => document.querySelectorAll("[data-frizz-msg]").length > 0, { timeout: 10_000 })
     assert.equal(
