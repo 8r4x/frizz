@@ -51,7 +51,20 @@ test("a rest with no fence is told how to sign off, and the text names all three
     assert.match(h.delivered[0], /```question/)
     assert.match(h.delivered[0], /```done/)
     assert.match(h.delivered[0], /```awaiting/)
-    assert.match(h.delivered[0], /`watch: <id>`/)
+    // THE CURRENT FENCE GRAMMAR, not the deleted `watch:` one — this reminder is the last thing many
+    // workers read before writing a fence, so a stale example here teaches the wrong syntax to exactly
+    // the audience that most needs the right one.
+    assert.match(h.delivered[0], /shell: <the id your runtime gave you>/)
+    assert.match(h.delivered[0], /for: 2h/)
+    assert.match(h.delivered[0], /reason:/)
+    assert.doesNotMatch(h.delivered[0], /`watch: <id>`/, "the deleted grammar must not come back")
+    // THE GOAL'S VERBIAGE LIVES HERE NOW. A new thread no longer arms the default Goal (2026-08-16) —
+    // the bump is the same nudge — so the bump has to carry what the Goal used to say about finishing
+    // the work and about deciding rather than asking, or dropping it quietly removed both.
+    assert.match(h.delivered[0], /unfinished, unverified, or deferred/)
+    assert.match(h.delivered[0], /written-up plan/, "a plan is not an ending either")
+    assert.match(h.delivered[0], /DECIDE RATHER THAN ASK/)
+    assert.match(h.delivered[0], /which way you went and what would reverse/)
     // `done` must arrive with its COST attached, or it becomes the cheapest way to stop being nudged —
     // the exact failure the retired ALLDONE warning existed for.
     assert.match(h.delivered[0], /DISMISSAL/)
@@ -73,7 +86,7 @@ test("a rest with no fence is told how to sign off, and the text names all three
       h.delivered[0].indexOf("THE WORK IS") < h.delivered[0].indexOf("```question"),
       "resuming the work is offered BEFORE the fence menu, not as a footnote under it",
     )
-    assert.match(h.delivered[0], /are not endings/, "and the endings a worker mistakes for one are named")
+    assert.match(h.delivered[0], /none of\s+them endings/, "and the endings a worker mistakes for one are named")
     assert.match(h.delivered[0], /DO NOT REPEAT YOURSELF/)
     assert.match(h.delivered[0], /reply with the\s+fence ALONE/)
     // The 1-3-sentences shape belongs to a `done` BODY and nowhere else — read as general guidance it
