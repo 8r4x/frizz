@@ -275,7 +275,7 @@ export class Readout {
   ready(
     entries: Array<{ label: string; value: string; accent?: boolean }>,
     hint?: string,
-    options: { status?: string; warning?: string } = {},
+    options: { status?: string; warning?: string; qr?: string[] } = {},
   ): void {
     for (const step of this.steps) if (step.state === "active") this.settle(step.key, "done")
     const elapsed = formatDuration(this.now() - this.startedAt)
@@ -309,6 +309,7 @@ export class Readout {
       }),
       // Yellow, above the dim hint: exposing the board off loopback is the one launch outcome the
       // operator must not skim past, so it may not share the hint's low-contrast styling.
+      ...(options.qr?.length ? ["", ...options.qr.map((row) => `  ${row}`)] : []),
       ...(options.warning ? ["", `  ${this.c(ANSI.yellow, options.warning)}`] : []),
       ...(hint ? ["", `  ${this.c(ANSI.dim, hint)}`] : []),
       "",

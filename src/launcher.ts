@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
-import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir, networkInterfaces } from "node:os";
 import { basename, join, resolve } from "node:path";
@@ -347,13 +346,11 @@ export function resolveBindSelection(
   // the whole point of naming one is reaching the board from anywhere WITHOUT also putting it on the LAN.
   const publicOriginRaw = options.publicOrigin ?? env.FRIZZ_PUBLIC_ORIGIN?.trim();
   const publicOrigin = publicOriginRaw ? normalizePublicOrigin(publicOriginRaw) : undefined;
-  // A declared public origin ALWAYS gets a secret, and one is generated when the operator supplies
-  // none. Frizz has no accounts and a tunnelled board is a shell reachable from the internet, so
-  // "they forgot to set a password" must not be a reachable state. FRIZZ_PUBLIC_TOKEN lets a
-  // long-lived deployment pin it so the link survives a restart.
-  const publicToken = publicOrigin
-    ? (env.FRIZZ_PUBLIC_TOKEN?.trim() || randomBytes(24).toString("base64url"))
-    : undefined;
+  // A public origin is NEVER ungated, but the gate is now single-use access codes minted on demand
+  // rather than one standing secret — see packages/server/src/access-codes.ts for why that split
+  // matters. FRIZZ_PUBLIC_TOKEN remains ONLY for headless boxes where nobody can press a key to mint
+  // a code; when it is absent the board is still gated, just by codes instead.
+  const publicToken = publicOrigin ? env.FRIZZ_PUBLIC_TOKEN?.trim() || undefined : undefined;
   return {
     host,
     exposed: bindHostIsExposed(host),

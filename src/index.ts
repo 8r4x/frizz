@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { bindHostIsExposed } from "@frizz/server/local-origin";
+import { renderQrLines } from "@frizz/server/qr";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -221,6 +222,14 @@ if (!internalLaunch) {
 readout?.settle("workspace", "done", workspace.name);
 const expectedHealth = { projectId: workspace.id, projectDir: workspace.root };
 const launchTarget = workspaceLaunchTarget(workspace);
+/**
+ * The first single-use access link, minted once the supervisor is listening.
+ *
+ * Module-scoped because the supervisor is built inside the launch path while the readout is assembled
+ * in another function entirely, and threading one nullable string through that call chain buys nothing.
+ */
+let activeAccessLink: { code: string; url: string; expiresAt: number } | null = null;
+
 const bind = (() => {
   try {
     return resolveBindSelection(options, process.env);
@@ -413,6 +422,8 @@ async function runSupervisor(
       // option can quietly take it away.
       dev: true,
     });
+    // The supervisor is listening now, so a code minted here is immediately redeemable.
+    activeAccessLink = bind.publicOrigin ? supervisor.issueAccessLink() : null;
   } catch (error) {
     launchOwner.release();
     throw error;
@@ -708,6 +719,9 @@ async function openOrPrint(
   const publicOrigin = reused ? undefined : bind.publicOrigin;
   // A reused server was started by someone else's invocation, so these flags did nothing. Say so.
   const networkFlagsIgnored = reused && (bind.publicOrigin !== undefined || bindHostIsExposed(bind.host));
+  // Mint the first single-use link now, so the readout can show something scannable. Codes expire in
+  // minutes by design; the QR pane (below) is how you get a fresh one without restarting the board.
+  const accessLink = publicOrigin && !reused ? activeAccessLink : null;
   const warnings = [
     ...(network.length > 0 ? [EXPOSED_WARNING] : []),
     ...(publicOrigin ? [PUBLIC_ORIGIN_WARNING] : []),
@@ -719,7 +733,7 @@ async function openOrPrint(
     console.log(`source: ${sourceLabel()}`);
     console.log(url);
     for (const address of network) console.log(address);
-    if (publicOrigin) console.log(`${publicOrigin}/${bind.publicToken ? `?frizz_token=${bind.publicToken}` : ""}`);
+    if (publicOrigin) console.log(accessLink?.url ?? `${publicOrigin}/`);
     for (const warning of warnings) console.log(warning);
     return;
   }
@@ -727,7 +741,7 @@ async function openOrPrint(
     [
       { label: "Local", value: boardAddress(url), accent: true },
       ...network.map((address) => ({ label: "Network", value: `${address}/`, accent: true })),
-      ...(publicOrigin ? [{ label: "Public", value: `${publicOrigin}/${bind.publicToken ? `?frizz_token=${bind.publicToken}` : ""}`, accent: true }] : []),
+      ...(publicOrigin ? [{ label: "Public", value: accessLink?.url ?? `${publicOrigin}/`, accent: true }] : []),
       { label: "Project", value: `${workspace.name} — ${tildePath(workspace.root, home)}` },
       { label: "Source", value: tildePath(sourceLabel(), home) },
       ...(logger.file ? [{ label: "Logs", value: tildePath(logger.file, home) }] : []),
@@ -742,6 +756,9 @@ async function openOrPrint(
     {
       ...(reused ? { status: `already running on port ${port}` } : {}),
       ...(warnings.length > 0 ? { warning: warnings.join(" ") } : {}),
+      // Scannable, because the point of the link is to reach a phone and nobody types 40 characters
+      // off a terminal. Only when there IS a link — a loopback board has nothing to scan.
+      ...(accessLink ? { qr: renderQrLines(accessLink.url) } : {}),
     }
   );
 }

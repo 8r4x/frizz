@@ -532,6 +532,9 @@ test("--public-origin: a tunnelled request is accepted and reaches the child wit
   const proxy = new RestartSupervisorProxy({
     port,
     publicOrigin: "https://frizz.example.com",
+    // This test is about HEADER STRIPPING, not auth, so it carries the headless standing token to get
+    // past the gate. A public origin with no credential is 401 — see the bearer-gate test below.
+    publicToken: "headless-standing-token",
     childPort: () => current.port,
     restart: async () => ({ state: "ready" }),
   })
@@ -547,6 +550,7 @@ test("--public-origin: a tunnelled request is accepted and reaches the child wit
       "x-forwarded-proto": "https",
       "x-forwarded-host": "frizz.example.com",
       "sec-fetch-site": "same-origin",
+      cookie: "frizz_public=headless-standing-token",
     }
     assert.equal((await proxied(port, "/_frizz/rpc/x", tunnelled, "POST")).status, 200)
     const forwarded = seen.at(-1)!
@@ -655,6 +659,64 @@ test("--public-origin without a secret is not a reachable state: the bearer gate
     const loopback = { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}` }
     assert.equal((await proxied(port, "/", loopback)).status, 200)
     assert.equal(await upgrade(port, loopback), "forwarded")
+  } finally {
+    await proxy.close().catch(() => undefined)
+    await current.close().catch(() => undefined)
+  }
+})
+
+test("an access code is spent once over HTTP: it mints a session, then stops working", async () => {
+  // The end-to-end shape of the whole feature. The unit tests prove the store is single-use; this
+  // proves the PROXY actually funnels through it, mints a session cookie, and does not keep honouring
+  // the spent code just because it is still sitting in someone's URL bar.
+  const current = await child("only")
+  const port = await freePort()
+  let consumed = 0
+  const proxy = new RestartSupervisorProxy({
+    port,
+    publicOrigin: "https://colin.frizz.sh",
+    onCodeConsumed: () => { consumed++ },
+    childPort: () => current.port,
+    restart: async () => ({ state: "ready" }),
+  })
+  try {
+    await proxy.listen()
+    const publicHeaders = { host: "colin.frizz.sh", origin: "https://colin.frizz.sh" }
+    const code = proxy.issueAccessCode()
+    assert.ok(code, "a declared public origin can mint codes")
+    assert.equal(proxy.accessUrl(code.code), `https://colin.frizz.sh/?frizz_code=${code.code}`)
+
+    // No credential at all.
+    assert.equal((await proxied(port, "/", publicHeaders)).status, 401)
+
+    // Spending the code redirects, strips the secret from the URL, and hands back a session.
+    const spent = await proxied(port, `/thread/x?frizz_code=${code.code}`, publicHeaders)
+    assert.equal(spent.status, 302)
+    assert.equal(spent.headers?.location, "/thread/x", "the code is stripped from the redirect target")
+    const setCookie = String(spent.headers?.["set-cookie"])
+    assert.match(setCookie, /frizz_session=/)
+    assert.match(setCookie, /HttpOnly/)
+    assert.match(setCookie, /SameSite=Lax/)
+    assert.equal(consumed, 1, "consumption fires once, so a launcher can repaint the QR")
+
+    // That session works.
+    const session = /frizz_session=([^;]+)/.exec(setCookie)![1]!
+    assert.equal((await proxied(port, "/", { ...publicHeaders, cookie: `frizz_session=${session}` })).status, 200)
+    assert.equal(await upgrade(port, { ...publicHeaders, cookie: `frizz_session=${session}` }), "forwarded")
+
+    // The code does NOT. This is the property the standing secret never had.
+    const replay = await proxied(port, `/?frizz_code=${code.code}`, publicHeaders)
+    assert.equal(replay.status, 401)
+    assert.match(replay.body, /already been used/, "says WHICH failure, so the operator knows to reissue")
+    assert.equal(consumed, 1, "a refused replay does not fire consumption again")
+
+    // A code that was never issued is refused without disclosing anything.
+    const bogus = await proxied(port, "/?frizz_code=neverissued", publicHeaders)
+    assert.equal(bogus.status, 401)
+    assert.doesNotMatch(bogus.body, /frizz|board|agent/i, "the 401 page still names nothing")
+
+    // Loopback remains completely ungated.
+    assert.equal((await proxied(port, "/", { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}` })).status, 200)
   } finally {
     await proxy.close().catch(() => undefined)
     await current.close().catch(() => undefined)

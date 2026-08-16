@@ -3,7 +3,7 @@
 // crash.  This intentionally contains no source-watch logic: stable and legacy launchers can share it.
 import { request as requestHttp, createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http"
 import { connect } from "node:net"
-import { timingSafeEqual } from "node:crypto"
+import { AccessStore, secretsMatch, type AccessCode } from "./access-codes.ts"
 import {
   allowedLocalCorsOrigin,
   authoritySendsFetchMetadata,
@@ -51,6 +51,8 @@ export interface RestartSupervisorProxyOptions {
    * That is a deliberate floor, not the destination — a real session layer is the next step.
    */
   publicToken?: string
+  /** Fired when an access code is redeemed, so a launcher can repaint a now-spent QR. */
+  onCodeConsumed?: () => void
   /** The current disposable child. Undefined means it is starting, stopped, or failed. */
   childPort: () => number | undefined
   /** Must coalesce work itself or return the same in-flight promise for repeat requests. */
@@ -117,7 +119,9 @@ function proxyHeaders(
 }
 
 export const PUBLIC_TOKEN_PARAM = "frizz_token"
+export const ACCESS_CODE_PARAM = "frizz_code"
 const PUBLIC_TOKEN_COOKIE = "frizz_public"
+const SESSION_COOKIE = "frizz_session"
 /** Loopback spellings the token gate must never challenge — the operator's own tab on the box. */
 const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1"])
 
@@ -131,10 +135,17 @@ function readCookie(header: string | undefined, name: string): string | undefine
   return undefined
 }
 
-function unauthorizedPage(): string {
+function unauthorizedPage(reason?: "unknown" | "expired" | "already-used"): string {
   // Deliberately says nothing about what Frizz is or whose machine this is. An unauthenticated
-  // visitor should not learn that a shell-capable board lives here.
-  return `<!doctype html><meta charset="utf-8"><title>Unauthorized</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:3rem;font:16px system-ui;color:#e7e7e7;background:#171717}main{max-width:30rem;padding:1.5rem;border:1px solid #444;border-radius:.75rem;background:#222}</style><main><h1>Unauthorized</h1><p>This address needs the access link it was started with.</p></main>`
+  // visitor should not learn that a shell-capable board lives here. The reason is the one exception:
+  // "already used" and "expired" send the operator to very different next actions, and neither
+  // discloses anything to somebody who did not already hold a link.
+  const detail = reason === "already-used"
+    ? "That link has already been used. Generate a fresh one."
+    : reason === "expired"
+      ? "That link expired. Generate a fresh one."
+      : "This address needs a current access link.";
+  return `<!doctype html><meta charset="utf-8"><title>Unauthorized</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:3rem;font:16px system-ui;color:#e7e7e7;background:#171717}main{max-width:30rem;padding:1.5rem;border:1px solid #444;border-radius:.75rem;background:#222}</style><main><h1>Unauthorized</h1>${detail ? `<p>${detail}</p>` : ""}</main>`
 }
 
 function isControlRequest(req: IncomingMessage): boolean {
@@ -169,17 +180,41 @@ export class RestartSupervisorProxy {
    * judged here first.
    */
   private readonly policy: LocalAuthorityPolicy
+  /**
+   * Codes and sessions for the public origin, or null when no public origin is declared (loopback-only
+   * boards are never gated, so there is nothing to store).
+   */
+  private readonly access: AccessStore | null
   /** Both halves of every live upgraded pair, so close() can actually finish. See close(). */
   private readonly upgradedSockets = new Set<import("node:stream").Duplex>()
 
   constructor(options: RestartSupervisorProxyOptions) {
     this.options = options
     this.host = options.host ?? LOOPBACK_BIND_HOST
+    this.access = options.publicOrigin
+      ? new AccessStore({ onConsumed: () => options.onCodeConsumed?.() })
+      : null
     this.policy = {
       exposed: bindHostIsExposed(this.host),
       allowedHosts: options.allowedHosts ?? [],
       ...(options.publicOrigin ? { publicOrigin: options.publicOrigin } : {}),
     }
+  }
+
+  /**
+   * Mint a single-use code for this board, or null when no public origin is declared.
+   *
+   * Issuing does NOT invalidate codes already outstanding — pressing the key twice, or two people
+   * asking at once, must not silently break the first QR somebody is still walking towards.
+   */
+  issueAccessCode(): AccessCode | null {
+    return this.access?.issue() ?? null
+  }
+
+  /** The full URL to show as a link or a QR. */
+  accessUrl(code: string): string | null {
+    const origin = this.options.publicOrigin
+    return origin ? `${origin}/?${ACCESS_CODE_PARAM}=${encodeURIComponent(code)}` : null
   }
 
   async listen(): Promise<void> {
@@ -392,28 +427,66 @@ export class RestartSupervisorProxy {
    * Compared with `timingSafeEqual` on equal-length buffers — a plain `===` on a secret leaks its
    * prefix to a patient attacker, and this secret is the only thing between the internet and a shell.
    */
-  private tokenAccepted(req: IncomingMessage): boolean {
-    const expected = this.options.publicToken
-    if (!expected) return true
-    const url = new URL(req.url ?? "/", "http://frizz.invalid")
-    const supplied = url.searchParams.get(PUBLIC_TOKEN_PARAM) ?? readCookie(req.headers.cookie, PUBLIC_TOKEN_COOKIE)
-    if (!supplied) return false
-    const a = Buffer.from(supplied)
-    const b = Buffer.from(expected)
-    return a.length === b.length && timingSafeEqual(a, b)
+  /**
+   * Is this request carrying a session this process minted?
+   *
+   * Sessions only. A raw `?frizz_code=` is NOT accepted here — it is redeemed once by exchangeCode()
+   * below and traded for a session, so a code that has already been spent cannot keep working just by
+   * staying in somebody's URL bar.
+   */
+  private sessionAccepted(req: IncomingMessage): boolean {
+    if (!this.access) return true
+    if (this.options.publicToken && this.legacyTokenAccepted(req)) return true
+    return this.access.verifySession(readCookie(req.headers.cookie, SESSION_COOKIE))
   }
 
-  /** Trade `?frizz_token=…` for an HttpOnly cookie, then bounce to the same URL without the secret. */
-  private exchangeToken(req: IncomingMessage, res: ServerResponse): boolean {
+  /**
+   * The standing `FRIZZ_PUBLIC_TOKEN`, for headless boxes where nobody can press a key to mint a code.
+   * Deliberately kept as a separate, opt-in path rather than folded into sessions: it has the weaker
+   * properties (never rotates, every copy stays valid) and the readout says so.
+   */
+  private legacyTokenAccepted(req: IncomingMessage): boolean {
+    const expected = this.options.publicToken
+    if (!expected) return false
     const url = new URL(req.url ?? "/", "http://frizz.invalid")
-    if (url.searchParams.get(PUBLIC_TOKEN_PARAM) === null) return false
+    const supplied = url.searchParams.get(PUBLIC_TOKEN_PARAM) ?? readCookie(req.headers.cookie, PUBLIC_TOKEN_COOKIE)
+    return !!supplied && secretsMatch(supplied, expected)
+  }
+
+  /**
+   * Trade `?frizz_code=…` (or the legacy `?frizz_token=…`) for a cookie, then bounce to the same URL
+   * without the secret, so it never lands in history, a Referer header, or a screenshot.
+   */
+  private exchangeCode(req: IncomingMessage, res: ServerResponse): boolean {
+    const url = new URL(req.url ?? "/", "http://frizz.invalid")
+    const code = url.searchParams.get(ACCESS_CODE_PARAM)
+    const legacy = url.searchParams.get(PUBLIC_TOKEN_PARAM)
+    if (code === null && legacy === null) return false
+
+    let cookie: string
+    if (code !== null) {
+      const redeemed = this.access?.redeem(code)
+      if (!redeemed?.ok) {
+        // Say WHICH failure. "This link was already used" and "no such link" send a person to very
+        // different next actions, and the store keeps consumed codes precisely so we can tell them apart.
+        res.writeHead(401, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" })
+        res.end(unauthorizedPage(redeemed?.reason))
+        return true
+      }
+      cookie = `${SESSION_COOKIE}=${redeemed.session}`
+    } else {
+      if (!this.legacyTokenAccepted(req)) return false
+      cookie = `${PUBLIC_TOKEN_COOKIE}=${this.options.publicToken}`
+    }
+
+    url.searchParams.delete(ACCESS_CODE_PARAM)
     url.searchParams.delete(PUBLIC_TOKEN_PARAM)
-    const target = `${url.pathname}${url.search}${url.hash}`
-    // Secure + SameSite=Lax: the origin is https through the tunnel, and Lax still allows the
+    const target = `${url.pathname}${url.search}${url.hash}` || "/"
+    // Secure + SameSite=Lax: the origin is https through the tunnel, and Lax still permits the
     // top-level navigation that lands here while refusing cross-site writes.
     res.writeHead(302, {
-      location: target || "/",
-      "set-cookie": `${PUBLIC_TOKEN_COOKIE}=${this.options.publicToken}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=31536000`,
+      location: target,
+      "set-cookie": `${cookie}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=31536000`,
       "cache-control": "no-store",
     })
     res.end()
@@ -425,12 +498,14 @@ export class RestartSupervisorProxy {
       void this.handleControl(req, res)
       return
     }
-    if (this.arrivedPublicly(req) && !this.tokenAccepted(req)) {
+    // Exchange FIRST: the arriving link carries the credential, so judging before redeeming would
+    // reject the very request that is meant to establish the session.
+    if (this.arrivedPublicly(req) && this.exchangeCode(req, res)) return
+    if (this.arrivedPublicly(req) && !this.sessionAccepted(req)) {
       res.writeHead(401, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" })
       res.end(unauthorizedPage())
       return
     }
-    if (this.arrivedPublicly(req) && this.exchangeToken(req, res)) return
     if (!this.authorityAccepted(req)) {
       res.writeHead(403, { "content-type": "text/plain; charset=UTF-8" })
       res.end("Forbidden")
@@ -470,7 +545,7 @@ export class RestartSupervisorProxy {
     // The board socket and every terminal come through here, so the bearer gate has to cover the
     // upgrade too — otherwise the shell is reachable without the secret the HTML path demands. No
     // query-param exchange here: a browser sends the cookie it was given on the page that opened it.
-    if (this.arrivedPublicly(req) && !this.tokenAccepted(req)) {
+    if (this.arrivedPublicly(req) && !this.sessionAccepted(req)) {
       rejectWebSocketUpgrade(socket, 401, "Unauthorized")
       return
     }
