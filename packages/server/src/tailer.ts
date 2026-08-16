@@ -154,6 +154,20 @@ const PRIME_PROGRESS_EVERY = 20
 // While a thread's transcript is still unresolved (missing past the grace window), re-run discovery at
 // most this often — the file may yet appear (a very late boot) or a drifted transcript may materialize.
 const DISCOVER_RETRY_MS = 15_000
+// …but BACK OFF once a row has missed repeatedly, doubling to this ceiling. A miss costs a full sweep
+// of every sibling bucket under ~/.claude/projects plus a head-scan of this project's log dir, and it
+// runs SYNCHRONOUSLY on the event loop. That is the right price for a thread that might still be
+// booting; it is pure waste for one that never will, and the never-will rows accumulate forever.
+// Measured on the maintainer's board 2026-08-16 (464 rows; 39 of them will never bind again — every
+// one `exited` AND archived, aged 12–46 days — of which the claude rows reach this path at all, since
+// a codex row skips resolveTranscript entirely): a simulated hour of ticks spent 2090ms of blocked
+// event loop re-asking a question whose answer had not changed in six weeks, against ~900ms with the
+// backoff. Small per tick, but it is pure waste and it grows with every thread ever dispatched.
+// The retry never stops, it just becomes rare: a transcript that appears on day 40 is still picked up
+// within the ceiling, and any bind resets the row to the base interval. Note this throttles the
+// SWEEPS only — a row whose own pinned `<session_id>.jsonl` gets bytes binds on the next tick
+// regardless of how deep its miss streak is, which is what makes backing off safe for a live boot.
+const DISCOVER_RETRY_MAX_MS = 15 * 60_000
 // Per-session sink for a captured boot-failure pane, so a stall's root cause (claude's own error text,
 // frozen in the remain-on-exit pane) survives past the pane being killed. Best-effort; inert litter.
 // NOTE: per-PROJECT, resolved inside createTailer — the filename is a bare thread slug, so two
@@ -635,6 +649,9 @@ export interface TailState extends FoldState {
   noTranscript: boolean
   // Throttle: next epoch-ms at which discovery may re-run for an unresolved (missing-transcript) row.
   nextDiscoverMs: number
+  // Consecutive discovery misses for this row, which set the interval above (see DISCOVER_RETRY_MAX_MS).
+  // Reset to 0 the moment anything binds, so a row that heals returns to the responsive base interval.
+  discoverMisses: number
   // One-shot guard so a stall's pane is captured/logged once, not every tick.
   stallLogged: boolean
   customTitle?: string
@@ -721,6 +738,7 @@ export function newTailState(
     paneDead: false,
     noTranscript: false,
     nextDiscoverMs: 0,
+    discoverMisses: 0,
     stallLogged: false,
     customTitleRevision: 0,
   }
@@ -2335,7 +2353,7 @@ export const UNRESTORED_TAIL_FIELDS: ReadonlySet<string> = new Set([
   // shares. A state cached by the build that still retained auto-approvals would otherwise be handed
   // straight back to the build that removed them, resurrecting the note permanently.
   "permPolicy", "permDenies",
-  "noTranscript", "nextDiscoverMs", "stallLogged",
+  "noTranscript", "nextDiscoverMs", "discoverMisses", "stallLogged",
   "deliveryLedgerSeen",
   // The chase bookkeeping is compared against an IN-MEMORY, per-process counter — the ingest's `live`
   // map is rebuilt empty on every boot (backend/claude-runtime-ingest.ts). A hydrated high-water mark
@@ -2352,6 +2370,21 @@ export const UNRESTORED_TAIL_FIELDS: ReadonlySet<string> = new Set([
   // restart test, after the fix looked correct and the row came back anyway.
   "dismissedOps",
 ])
+
+/**
+ * Is this row filed away in the board's Done section?
+ *
+ * The tailer's read of board.ts's `effectiveSessionState`, minus its third clause — the legacy paired
+ * terminal FILE, which is a disk read this loop must not do per row and which only ever classifies
+ * pre-session-first rows. The first two clauses are the whole story for anything dispatch created:
+ * an explicit `state` write wins, and the legacy `archived` bit answers only for rows that never got
+ * one. Keying on `archived` ALONE would be wrong — storage.ts is explicit that it is a legacy column
+ * kept only in sync, and an explicit `state: "open"` must beat a stale bit, not lose to it.
+ */
+function rowIsArchived(row: SessionRow): boolean {
+  if (row.state === "open" || row.state === "archived") return row.state === "archived"
+  return row.archived === 1
+}
 
 export function createTailer(deps: TailerDeps): Tailer {
   const now = deps.now ?? Date.now
@@ -3833,6 +3866,18 @@ export function createTailer(deps: TailerDeps): Tailer {
   // point is root-causing the missing transcript, but a capture failure must never break the tick.
   function captureStall(state: TailState, row: SessionRow): void {
     if (state.stallLogged) return
+    // "No transcript 60s after dispatch" is a BOOT-FAILURE alarm: it means a worker the operator just
+    // started never came up, and it is worth an ERROR. An `exited` AND archived row is neither starting
+    // nor watched — it is a thread the operator finished with and filed away, and its missing transcript
+    // is settled history. Re-announcing it is pure noise, and because `stallLogged` is deliberately not
+    // restored from the tail cache (see UNRESTORED_TAIL_FIELDS) it was re-announced on EVERY boot: 80
+    // ERROR lines for 10 threads dead 12–46 days, in the same startup window an operator reads to find
+    // out why the server just restarted. The row still flags `noTranscript` in resolveTranscript, so the
+    // board's degraded state is unchanged — only the alarm is suppressed.
+    //
+    // Deliberately BEFORE the one-shot latch, not after: an archived row consumes no alarm. If it is
+    // ever reopened and still cannot bind, that is a live problem again and gets its one ERROR then.
+    if (row.exited && rowIsArchived(row)) return
     state.stallLogged = true
     let pane = ""
     try {
@@ -3855,13 +3900,18 @@ export function createTailer(deps: TailerDeps): Tailer {
       ? `no tmux pane (broker runtime). Daemon diagnostics: ${claudeBrokerDiagnosticLogPath(deps.project.stateDir, row.session_id)}`
       : isHeadlessRow(row)
       ? `no tmux pane (headless ${row.backend === "codex" ? "codex app-server" : "claude broker"} runtime)`
-      : ""
+      // Neither runtime above, i.e. a row from the tmux era. Nothing in this build captures a pane —
+      // `deps.capturePane` is wired by fixtures only, and there is no tmux left to capture from — so the
+      // old "(pane empty / unavailable)" described a pane that SHOULD have had content and sent the
+      // reader hunting for one that cannot exist. Say why there is nothing instead.
+      : "no pane captured (this build runs no tmux)"
     const detail = authFailure
       ? "(claude authentication failure — pane content redacted; sign in and retry)"
-      : pane.trim() || evidence || "(pane empty / unavailable)"
+      : pane.trim() || evidence
+    // Frame the detail as pane output only when it actually IS pane output.
     frizzLog.error(
       "tailer",
-      `thread ${row.slug} (session ${row.session_id}): no transcript ${DISCOVERY_GRACE_MS / 1000}s after dispatch — likely a boot failure. ${isHeadlessRow(row) && !pane.trim() && !authFailure ? "" : "Pane:\n"}${detail.slice(0, 4000)}`,
+      `thread ${row.slug} (session ${row.session_id}): no transcript ${DISCOVERY_GRACE_MS / 1000}s after dispatch — likely a boot failure. ${pane.trim() && !authFailure ? "Pane:\n" : ""}${detail.slice(0, 4000)}`,
     )
     try {
       mkdirSync(stallLogDir, { recursive: true })
@@ -3892,6 +3942,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       // Real content present (or just appeared) — clear any prior degraded state and let consume bind it.
       state.noTranscript = false
       state.stallLogged = false
+      state.discoverMisses = 0
       return true
     }
     // Empty/missing but still within the grace window → an ordinary just-spawned session (spinner). Wait.
@@ -3914,6 +3965,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       state.primed = false
       state.noTranscript = false
       state.stallLogged = false
+      state.discoverMisses = 0
       return true
     }
     const found = discoverTranscriptId(logDir, row.session_id, { nowMs, exclude: claimedIds(row.slug) })
@@ -3940,9 +3992,17 @@ export function createTailer(deps: TailerDeps): Tailer {
       state.primed = false
       state.noTranscript = false
       state.stallLogged = false
+      state.discoverMisses = 0
       return true
     }
     // Nothing to bind: the worker never wrote a transcript → degraded/stalled, captured once for triage.
+    // Both sweeps above just came up empty, so push the next attempt out exponentially — see
+    // DISCOVER_RETRY_MAX_MS for why a board accumulates rows that can never answer this question.
+    state.discoverMisses++
+    state.nextDiscoverMs = nowMs + Math.min(
+      DISCOVER_RETRY_MS * 2 ** (state.discoverMisses - 1),
+      DISCOVER_RETRY_MAX_MS,
+    )
     state.noTranscript = true
     captureStall(state, row)
     return true
@@ -3964,6 +4024,25 @@ export function createTailer(deps: TailerDeps): Tailer {
     // a fresh batched capture is kicked off the loop at the tick's end (see refreshPaneTextAsync).
     adoptionBindings = new Map()
     const rows = deps.storage.allSessions()
+    // ARCHIVED ROWS PRIME LAST. Priming is bounded per tick, so on a cold board the registry's order
+    // decides who converges first — and a long-lived board is overwhelmingly archive. The maintainer's
+    // board on 2026-08-16: 464 rows, 459 of them archived, 5 on the live board. Priming in row order
+    // spent ~21 consecutive budget-capped ticks (~5.7s of ~99% event-loop occupancy, measured with a
+    // real board wired) folding threads filed away in the collapsed Done section, while the five rows
+    // actually on screen waited their turn in the same queue. That is the "sidebar won't update for a
+    // number of seconds" report from the other end: not a slow tick, a mis-ordered one.
+    //
+    // Same total work, different order: while ANY visible row is still cold, archived rows yield their
+    // slots. The board the operator is looking at converges on the first tick or two; the archive
+    // catches up behind it at the same bounded rate. Deferring is safe because a prime is deliberately
+    // notify-free (it adopts history as a baseline), so a late one cannot miss an event — it only
+    // delays derived telemetry for rows that are collapsed out of sight.
+    let coldVisibleRow = false
+    for (const row of rows) {
+      if (rowIsArchived(row)) continue
+      const known = states.get(row.slug)
+      if (!known || !known.primed) { coldVisibleRow = true; break }
+    }
     let primed = 0
     // Newly-primed rows this tick, and whether the bound cut the pass short (see MAX_PRIME_ROWS_PER_TICK).
     let primedRows = 0
@@ -4035,6 +4114,11 @@ export function createTailer(deps: TailerDeps): Tailer {
         // `primedRows > 0` guarantees forward progress: the very first cold row of a tick always
         // primes, however expensive, so a board can never stall by being over budget on entry.
         if (
+          // Yield the slot to a still-cold visible row — but never at the cost of the forward-progress
+          // guarantee below. `primedRows > 0` keeps the archive advancing by at least one row per tick
+          // even if a visible row were somehow to stay cold indefinitely, so deferral can never become
+          // starvation. The visible row still primes on this same tick; it just is not necessarily first.
+          (coldVisibleRow && primedRows > 0 && rowIsArchived(row)) ||
           primedRows >= MAX_PRIME_ROWS_PER_TICK ||
           (primedRows > 0 && performance.now() - tickStartedMs > PRIME_BUDGET_MS)
         ) {

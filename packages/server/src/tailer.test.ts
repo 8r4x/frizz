@@ -3367,3 +3367,136 @@ test("tailer: dismissing scopes to the SESSION — a re-dispatched slug starts c
   assert.deepEqual(h.storage.retiredOps("t", "sid"), new Set(["toolu_sh"]))
   assert.deepEqual(h.storage.retiredOps("t", "a-different-session"), new Set(), "another session inherits nothing")
 })
+
+// ---- discovery BACKOFF + boot-failure alarm scope (the 2026-08-16 tick-cost investigation) ----
+//
+// A miss costs a full sweep of every sibling bucket under ~/.claude/projects plus a head-scan of this
+// project's log dir, synchronously on the event loop. Rows that can never bind accumulate forever (the
+// maintainer's board: 39 of them, every one `exited` AND `archived`, aged 12-46 days), so a flat retry
+// spends that cost again every 15s for the life of the server.
+
+test("tailer: repeated discovery misses back OFF, and a late drifted transcript is still found", () => {
+  const h = harness()
+  h.storage.upsertSession(row())
+  const t = makeTailer(h)
+
+  h.clock.ms = Date.parse(SPAWN)
+  t.tick() // within grace — no discovery yet
+
+  // Four misses past grace, each at the interval the PREVIOUS miss asked for: 15s, 30s, 60s, 120s.
+  h.clock.ms = PAST_GRACE
+  t.tick()
+  assert.equal(t.get("t")?.noTranscript, true, "past grace with nothing to bind → degraded")
+  for (const step of [15_000, 30_000, 60_000]) {
+    h.clock.ms += step
+    t.tick()
+  }
+
+  // The transcript finally appears — drifted, so ONLY a discovery sweep can find it.
+  driftedFixture(h.logDir, "late-id", "sid", [DONE])
+
+  // The base interval is no longer enough: four misses have pushed the next attempt out to 120s.
+  h.clock.ms += 15_000
+  t.tick()
+  assert.equal(h.storage.getSession("t")?.transcript_id ?? null, null, "backoff holds: no sweep at the base interval")
+  assert.equal(t.get("t")?.noTranscript, true, "still degraded while the backoff is in effect")
+
+  // But the retry never STOPS — it only becomes rare. Past the backed-off deadline it binds.
+  h.clock.ms += 120_000
+  t.tick()
+  assert.equal(h.storage.getSession("t")?.transcript_id, "late-id", "the backed-off retry still discovers it")
+  assert.equal(t.get("t")?.noTranscript ?? false, false, "re-linked → no longer degraded")
+  assert.equal(t.get("t")?.turn, "idle", "and its derivation drives telemetry as usual")
+})
+
+test("tailer: the BACKOFF never delays a transcript that appears at the pinned path", () => {
+  // The throttle gates the discovery SWEEPS only. A row whose own `<session_id>.jsonl` finally gets
+  // bytes must bind on the very next tick however long its miss streak — that check runs before the
+  // throttle. This is the guarantee that makes backing off safe for a row that is genuinely booting.
+  const h = harness()
+  h.storage.upsertSession(row())
+  const t = makeTailer(h)
+
+  h.clock.ms = PAST_GRACE
+  t.tick()
+  for (const step of [15_000, 30_000, 60_000, 120_000]) {
+    h.clock.ms += step
+    t.tick()
+  }
+  assert.equal(t.get("t")?.noTranscript, true, "five misses deep — well past the base interval")
+
+  fixture(h.logDir, "sid", [IN_FLIGHT, TOOL, DONE])
+  h.clock.ms += 1_000 // one second later, far inside the backed-off window
+  t.tick()
+  assert.equal(t.get("t")?.noTranscript ?? false, false, "the pinned path binds immediately, backoff or not")
+  assert.equal(t.get("t")?.lastAssistant, "all done", "and it folds on that same tick")
+})
+
+test("tailer: an exited+archived row flags noTranscript but raises NO boot-failure alarm", () => {
+  const h = harness()
+  const slug = "filed-away"
+  const stallLog = join(frizzTempDir("frizz-worker-logs"), `${slug}.stall.log`)
+  try { rmSync(stallLog) } catch { /* not there */ }
+  // A thread the operator finished with and archived. Its transcript never existed and never will.
+  // `archived` is a legacy column upsertSession does not even write — setState is the only way to
+  // archive, and it is what the board reads. Archive it the way the Archive button does.
+  h.storage.upsertSession(row({ slug, tmux_name: `frizz-${slug}`, exited: 1 }))
+  h.storage.setState(slug, "archived")
+  h.pane.text = "Error: Session ID sid is already in use."
+  const t = makeTailer(h)
+
+  h.clock.ms = PAST_GRACE
+  t.tick()
+  // The BOARD still learns the row is degraded — only the ERROR-level alarm and its capture are skipped.
+  assert.equal(t.get(slug)?.noTranscript, true, "the degraded flag is unchanged: the board still knows")
+  assert.throws(() => readFileSync(stallLog, "utf8"), "no stall sink written for an archived, exited row")
+})
+
+test("tailer: a LIVE row still raises the boot-failure alarm (the archived skip is not a blanket mute)", () => {
+  const h = harness()
+  const slug = "really-stalled"
+  const stallLog = join(frizzTempDir("frizz-worker-logs"), `${slug}.stall.log`)
+  try { rmSync(stallLog) } catch { /* not there */ }
+  h.storage.upsertSession(row({ slug, tmux_name: `frizz-${slug}`, exited: 0, archived: 0 }))
+  h.pane.text = "Error: Session ID sid is already in use."
+  const t = makeTailer(h)
+
+  h.clock.ms = PAST_GRACE
+  t.tick()
+  assert.equal(t.get(slug)?.noTranscript, true)
+  assert.match(readFileSync(stallLog, "utf8"), /already in use/, "a worker that failed to boot is still captured")
+  try { rmSync(stallLog) } catch { /* cleanup */ }
+})
+
+// Priming is bounded per tick, so on a cold board the ORDER decides who converges first. A long-lived
+// board is overwhelmingly archive (464 rows, 459 archived, on the maintainer's machine), and priming in
+// registry order made the five rows actually on screen wait ~20 ticks behind the collapsed Done section.
+test("tailer: cold ARCHIVED rows yield their prime slots until every visible row has folded", () => {
+  const h = harness()
+  // Enough archived rows to exhaust the per-tick prime bound several times over, registered FIRST so
+  // registry order alone would starve the visible row.
+  for (let i = 0; i < 60; i++) {
+    const slug = `archived-${i}`
+    h.storage.upsertSession(row({ slug, tmux_name: `frizz-${slug}`, session_id: `arch-sid-${i}`, exited: 1 }))
+    h.storage.setState(slug, "archived")
+    fixture(h.logDir, `arch-sid-${i}`, [IN_FLIGHT, DONE])
+  }
+  const slug = "on-screen"
+  h.storage.upsertSession(row({ slug, tmux_name: `frizz-${slug}`, session_id: "visible-sid" }))
+  h.storage.setState(slug, "open")
+  fixture(h.logDir, "visible-sid", [IN_FLIGHT, TOOL, DONE, TITLE])
+
+  const t = makeTailer(h)
+  h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z") // clear of the fold's unknown-stop_reason guess
+  t.tick() // ONE tick
+
+  assert.equal(t.get(slug)?.turn, "idle", "the visible row folded on the first tick, not the twentieth")
+  assert.equal(t.get(slug)?.lastAssistant, "all done")
+  assert.equal(t.get(slug)?.aiTitle, "x")
+  // …and the archive is still deferred, which is exactly what bought that slot.
+  assert.equal(t.get("archived-59")?.lastAssistant ?? null, null, "archived rows wait their turn")
+
+  // They are deferred, never dropped: once nothing visible is cold they prime at the ordinary bound.
+  for (let i = 0; i < 5; i++) t.tick()
+  assert.equal(t.get("archived-0")?.lastAssistant, "all done", "the archive converges behind the visible board")
+})
