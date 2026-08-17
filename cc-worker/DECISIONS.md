@@ -125,6 +125,23 @@ decision, not an artifact-portability implementation detail. A future isolation 
 which settings/auth surfaces are preserved before adding `--settings`, a config-home override, or a
 global-plugin disable mechanism.
 
+**2026-08-16 — the SDK broker had drifted off this policy, and is back on it.** The tmux transport
+spawned a plain `claude`, which reads all three settings scopes, so the policy above held by default.
+The Agent-SDK broker takes an explicit `settingSources` and the SDK's own default is `[]` — nothing at
+all — so when the broker became the default Claude transport it read no config whatsoever. The
+2026-07-26 fix restored `project` + `local` (the repo's `CLAUDE.md` / `AGENTS.md` / `.claude/skills`)
+and left `user` out, on a rationale written into the code — "the operator's personal `~/.claude` config
+is theirs, not something a dispatched worker should silently inherit" — that this record had already
+rejected. The gap was invisible because everything it withheld fails QUIETLY: the operator's `env`
+block (which is where an API-proxy front-end writes its base-URL/token pair, so a broker session
+authenticates differently from the CLI in the same shell), `autoCompactWindow` (so sessions compacted
+at the default threshold, not the configured one), `permissions`, `hooks` and `enabledPlugins`.
+Measured against the maintainer's real config, one variable, observed through a project-scope hook:
+`--setting-sources=project,local` reported their `env` block UNSET, `user,project,local` reported it
+applied, both sessions exiting 0 with empty stderr. The default is now all three scopes — the same
+thing a plain `claude` in the same cwd reads. A frizz thread is the operator's own session on their own
+machine, so the surprising behavior was the divergence, not the inheritance.
+
 ## 2026-07-02: Stop hook removed
 stop-flush.mjs is no longer wired (script kept for reference). User call: under frizz the
 tailer/board already surface worker state live, and the block-until-file-edited nag forced even

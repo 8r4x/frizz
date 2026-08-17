@@ -113,13 +113,17 @@ export interface ClaudeQueryStartOptions {
   // Which of Claude Code's own settings layers the session loads — and, critically, whether it reads
   // the PROJECT's `CLAUDE.md` / `AGENTS.md` and `.claude/skills` at all.
   //
-  // Default `["project", "local"]`: the repo frizz is dispatched INTO gets its own conventions in front
-  // of the worker, which is what every one of those files assumes ("This binds EVERY agent that
-  // touches this repo"). Deliberately NOT `"user"` — the operator's personal `~/.claude` config is
-  // theirs, not something a dispatched worker should silently inherit.
+  // Default `["user", "project", "local"]` — every scope, which is what a plain `claude` in the same
+  // cwd reads. A frizz thread is the operator's OWN session on their OWN machine, so anything they
+  // configured for `claude` has to reach it: `env` (an API-proxy front-end writes its base-URL/token
+  // pair there, so dropping the scope authenticates a worker differently from the CLI beside it),
+  // `autoCompactWindow`, permissions, hooks and enabled plugins. `cc-worker/DECISIONS.md` already
+  // states the policy this restores: frizz deliberately does not isolate `HOME`, `CLAUDE_CONFIG_DIR`
+  // or Claude's settings sources, because doing so silently changes auth, user-approved permissions,
+  // MCP config and plugin behavior.
   //
-  // Pass `[]` for a hermetic session that sees no project config at all (what the standalone SDK
-  // foundation used before the broker became a real worker transport).
+  // Pass `[]` for a hermetic session that sees no config at all (what the standalone SDK foundation
+  // used before the broker became a real worker transport).
   settingSources?: Array<"user" | "project" | "local">
 }
 
@@ -858,13 +862,18 @@ function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptio
       ...(options.session.kind === "new" ? { sessionId } : { resume: sessionId }),
       canUseTool,
       onElicitation,
-      // PROJECT + LOCAL by default — see ClaudeQueryStartOptions.settingSources. `[]` was correct while
-      // this was a standalone foundation nothing dispatched through; once the broker became the DEFAULT
+      // EVERY scope by default — see ClaudeQueryStartOptions.settingSources. `[]` was correct while this
+      // was a standalone foundation nothing dispatched through; once the broker became the DEFAULT
       // Claude transport it silently stopped every worker from seeing the repo's own `CLAUDE.md` /
       // `AGENTS.md` and its `.claude/skills`. Measured differential in the frizz repo, one variable:
       // this factory answered `NO-CLAUDE-MD` where a plain `claude -p` in the same cwd answered
-      // "# No pull requests — land on local `main`". `"user"` stays OUT on purpose (see the field docs).
-      settingSources: options.settingSources ?? ["project", "local"],
+      // "# No pull requests — land on local `main`". That fix restored PROJECT + LOCAL and left USER
+      // out, which kept a second, quieter half of the same regression: the tmux transport ran plain
+      // `claude` and got all three scopes, so a broker session was the only place the operator's
+      // `~/.claude/settings.json` stopped applying. Measured 2026-08-16 against the maintainer's real
+      // config, one variable: `--setting-sources=project,local` reported their `env` block UNSET where
+      // `user,project,local` reported it applied.
+      settingSources: options.settingSources ?? ["user", "project", "local"],
       // The frizz worker environment (see ClaudeQueryStartOptions): load the local cc-worker plugin so a
       // broker session gets the frizz sub-agent profiles + hooks, mount the MCP servers (frizz +
       // chrome-devtools), and pre-approve them.

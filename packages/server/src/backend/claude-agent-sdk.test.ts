@@ -119,12 +119,13 @@ test("real SDK + fake executable: init owns the requested session, input streams
     const argv = startup.argv as string[]
     assert.deepEqual(argv.slice(0, 5), ["--output-format", "stream-json", "--verbose", "--input-format", "stream-json"])
     assert.ok(argv.includes("--no-session-persistence"))
-    // PROJECT + LOCAL, never USER: a dispatched worker reads the repo's own CLAUDE.md / AGENTS.md and
-    // .claude/skills, and never the operator's personal ~/.claude config. This pinned the empty (fully
-    // hermetic) form until 2026-07-26, when a measured differential showed the broker — by then the
-    // DEFAULT Claude transport — was answering `NO-CLAUDE-MD` where a plain `claude -p` in the same
-    // cwd read the project's first heading.
-    assert.ok(argv.includes("--setting-sources=project,local"), `argv had: ${argv.filter((a) => a.startsWith("--setting-sources")).join(",") || "no --setting-sources flag"}`)
+    // EVERY scope, which is what a plain `claude` in the same cwd reads: the repo's own CLAUDE.md /
+    // AGENTS.md and .claude/skills, and the operator's own `~/.claude` settings. This pinned the empty
+    // (fully hermetic) form until 2026-07-26, when a measured differential showed the broker — by then
+    // the DEFAULT Claude transport — was answering `NO-CLAUDE-MD` where a plain `claude -p` in the same
+    // cwd read the project's first heading. That fix restored project+local only, so the operator's own
+    // scope stayed dark in broker sessions until 2026-08-16; see the factory for that differential.
+    assert.ok(argv.includes("--setting-sources=user,project,local"), `argv had: ${argv.filter((a) => a.startsWith("--setting-sources")).join(",") || "no --setting-sources flag"}`)
     assert.equal(argv[argv.indexOf("--session-id") + 1], SESSION_ID)
     assert.deepEqual(startup.environment, {
       frizzFakeInheritedPresent: false,
