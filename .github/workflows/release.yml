@@ -81,22 +81,36 @@ jobs:
         if: steps.decide.outputs.publish == 'true'
         run: npm publish
 
+      # The two steps below are deliberately NOT gated on `publish`, and each checks for its own
+      # artifact instead. Publishing is only the first of three things a release does, and the moment
+      # npm accepts the tarball `publish` is false forever after — so gating these on it meant the
+      # workflow_dispatch retry promised above could never repair a release that died AFTER the
+      # publish. That is not hypothetical: v0.4.0 reached npm and was tagged, then `gh release create`
+      # got a 503 from the API, and re-running the workflow would have skipped straight past the one
+      # step that had failed. Checking for the tag and the release makes a retry finish the job and
+      # makes a re-run on an already-complete release a no-op.
       - name: Tag the released commit
-        if: steps.decide.outputs.publish == 'true'
         env:
           VERSION: ${{ steps.decide.outputs.version }}
         run: |
+          if git ls-remote --exit-code --tags origin "v$VERSION" > /dev/null 2>&1; then
+            echo "v$VERSION is already tagged; nothing to do"
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "v$VERSION" -m "frizz v$VERSION"
           git push origin "v$VERSION"
 
       - name: Create the GitHub release
-        if: steps.decide.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.decide.outputs.version }}
         run: |
+          if gh release view "v$VERSION" > /dev/null 2>&1; then
+            echo "the v$VERSION release already exists; nothing to do"
+            exit 0
+          fi
           gh release create "v$VERSION" \
             --title "frizz v$VERSION" \
             --notes "Published to npm: https://www.npmjs.com/package/frizz/v/$VERSION" \
