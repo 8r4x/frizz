@@ -54,6 +54,11 @@ export interface RestartSupervisorProxyOptions {
   publicToken?: string
   /** Fired when an access code is redeemed, so a launcher can repaint a now-spent QR. */
   onCodeConsumed?: () => void
+  /**
+   * Persisted HMAC key for sessions. Without one, every restart signs out every device — which made a
+   * nominally year-long cookie last only until the next artifact update.
+   */
+  sessionKey?: Buffer
   /** The current disposable child. Undefined means it is starting, stopped, or failed. */
   childPort: () => number | undefined
   /** Must coalesce work itself or return the same in-flight promise for repeat requests. */
@@ -196,7 +201,10 @@ export class RestartSupervisorProxy {
     this.options = options
     this.host = options.host ?? LOOPBACK_BIND_HOST
     this.access = options.publicOrigin
-      ? new AccessStore({ onConsumed: () => options.onCodeConsumed?.() })
+      ? new AccessStore({
+          onConsumed: () => options.onCodeConsumed?.(),
+          ...(options.sessionKey ? { signingKey: options.sessionKey } : {}),
+        })
       : null
     this.policy = {
       exposed: bindHostIsExposed(this.host),

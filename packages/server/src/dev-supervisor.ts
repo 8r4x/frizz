@@ -89,6 +89,8 @@ export interface DevSupervisorOptions {
   publicToken?: string
   /** Fired when an access code is redeemed, so the launcher can repaint a spent QR. */
   onCodeConsumed?: () => void
+  /** Persisted session-signing key, so devices stay signed in across restarts. */
+  sessionKey?: Buffer
   launchTarget: ProjectLaunchTarget
   launchOwnerToken: string
   cwd?: string
@@ -486,6 +488,7 @@ class Supervisor implements DevSupervisor {
       publicOrigin: opts.publicOrigin,
       publicToken: opts.publicToken,
       onCodeConsumed: opts.onCodeConsumed,
+      sessionKey: opts.sessionKey,
       childPort: () => this.childPort,
       restart: () => this.restartFromBrowser(),
       updateRestart: this.updateRestart ? () => this.updateFromBrowser() : undefined,

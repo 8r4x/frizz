@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { bindHostIsExposed } from "@frizz/server/local-origin";
+import { loadOrCreateSessionKey } from "@frizz/server/access-codes";
 import { renderQrLines } from "@frizz/server/qr";
 import { SUPERVISOR_ACCESS_CODE_PATH } from "@frizz/server/restart-supervisor";
 import { installAccessPane, type AccessPane } from "./access-pane.ts";
@@ -412,6 +413,8 @@ async function runSupervisor(
       allowedHosts: bind.allowedHosts,
       ...(bind.publicOrigin ? { publicOrigin: bind.publicOrigin } : {}),
       ...(bind.publicToken ? { publicToken: bind.publicToken } : {}),
+      // Persisted beside the project's other state so a restart does not sign every device out.
+      ...(bind.publicOrigin ? { sessionKey: loadOrCreateSessionKey(workspace.stateDir) } : {}),
       cwd: workspace.root,
       env: supervisorEnv,
       stateDir: workspace.stateDir,

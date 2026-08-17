@@ -1,4 +1,6 @@
 import { randomBytes, timingSafeEqual, createHmac } from "node:crypto"
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { dirname, join } from "node:path"
 
 /**
  * Single-use access codes, and the long-lived sessions they mint.
@@ -39,6 +41,14 @@ export interface AccessStoreOptions {
   now?: () => number
   /** Injectable so tests get deterministic values; production uses randomBytes. */
   randomToken?: (bytes: number) => string
+  /**
+   * HMAC key for sessions. Supply a PERSISTED one so sessions outlive a restart.
+   *
+   * Defaulting to a fresh random key means every restart silently signs out every device — and a
+   * board restarts often (artifact updates, crashes, an ordinary ctrl-C), so in practice a "one year"
+   * cookie lasted until the next one. Rotating this key is what revocation looks like.
+   */
+  signingKey?: Buffer
   /** Called when a code is successfully consumed, so a launcher can repaint its QR. */
   onConsumed?: (code: string) => void
 }
@@ -60,11 +70,12 @@ export function secretsMatch(a: string, b: string): boolean {
 
 export class AccessStore {
   private readonly codes = new Map<string, StoredCode>()
-  private readonly options: Required<Omit<AccessStoreOptions, "onConsumed">> & Pick<AccessStoreOptions, "onConsumed">
-  /** Signing key for sessions. Regenerated per process, so a restart invalidates every session. */
-  private readonly signingKey = randomBytes(32)
+  private readonly options: Required<Omit<AccessStoreOptions, "onConsumed" | "signingKey">> & Pick<AccessStoreOptions, "onConsumed">
+  /** Signing key for sessions. Persisted by the caller; a fresh one signs every device out. */
+  private readonly signingKey: Buffer
 
   constructor(options: AccessStoreOptions = {}) {
+    this.signingKey = options.signingKey ?? randomBytes(32)
     this.options = {
       codeTtlMs: options.codeTtlMs ?? DEFAULT_CODE_TTL_MS,
       sessionTtlMs: options.sessionTtlMs ?? DEFAULT_SESSION_TTL_MS,
@@ -116,9 +127,9 @@ export class AccessStore {
   }
 
   /**
-   * A session is `<expiry>.<hmac>` — stateless, so it survives without a server-side table, but signed
-   * with a per-process key so a restart invalidates every outstanding one. Self-describing expiry means
-   * a stale cookie is rejected without a lookup.
+   * A session is `<expiry>.<hmac>` — stateless, so it needs no server-side table, and signed with a key
+   * the caller persists so it survives a restart. Self-describing expiry means a stale cookie is
+   * rejected without a lookup, and rotating the key revokes every outstanding session at once.
    */
   private mintSession(now: number): string {
     const expiresAt = now + this.options.sessionTtlMs
@@ -131,7 +142,7 @@ export class AccessStore {
     return createHmac("sha256", this.signingKey).update(payload).digest("base64url")
   }
 
-  /** Is this cookie a session this process issued, and still in date? */
+  /** Is this cookie a session signed by this board's key, and still in date? */
   verifySession(session: string | undefined): boolean {
     if (!session) return false
     const cut = session.lastIndexOf(".")
@@ -165,4 +176,34 @@ export class AccessStore {
       .filter((stored) => stored.consumedAt === undefined)
       .map(({ code, createdAt, expiresAt }) => ({ code, createdAt, expiresAt }))
   }
+}
+
+
+/**
+ * Load this board's session-signing key, creating it on first use.
+ *
+ * On disk at 0600 beside the project's other state, because the alternative — a key held only in
+ * memory — makes every restart a silent sign-out of every device. Deleting this file is the
+ * revocation story: it invalidates every outstanding session at once and the next start writes a
+ * fresh one.
+ */
+export function loadOrCreateSessionKey(stateDir: string): Buffer {
+  const path = join(stateDir, "session-key")
+  try {
+    const existing = readFileSync(path)
+    // A truncated or empty file would silently produce a weak key; treat it as absent and rewrite.
+    if (existing.byteLength >= 32) return existing
+  } catch {
+    // Missing on first run, which is the ordinary path.
+  }
+  const key = randomBytes(32)
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, key, { mode: 0o600 })
+  try {
+    // writeFileSync's mode is ignored when the file already exists, so state it again.
+    chmodSync(path, 0o600)
+  } catch {
+    // Best effort: a key readable only by this user is the goal, not a hard gate.
+  }
+  return key
 }

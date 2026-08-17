@@ -1,6 +1,10 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { AccessStore, DEFAULT_CODE_TTL_MS, secretsMatch } from "./access-codes.ts"
+import { randomBytes } from "node:crypto"
+import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { AccessStore, DEFAULT_CODE_TTL_MS, loadOrCreateSessionKey, secretsMatch } from "./access-codes.ts"
 
 /** A clock the test drives, so expiry is exercised without sleeping through it. */
 function clock(start = 1_000_000) {
@@ -64,7 +68,7 @@ test("issuing a code does not invalidate one already outstanding", () => {
   assert.equal(store.redeem(second.code).ok, true)
 })
 
-test("a session verifies, expires on its own terms, and does not survive a restart", () => {
+test("a session verifies, expires on its own terms, and dies when the key rotates", () => {
   const time = clock()
   const store = new AccessStore({ now: time.now, randomToken: counter(), sessionTtlMs: 10_000 })
   const redeemed = store.redeem(store.issue().code)
@@ -75,9 +79,42 @@ test("a session verifies, expires on its own terms, and does not survive a resta
   time.advance(10_001)
   assert.equal(store.verifySession(session), false, "a session past its own expiry is refused")
 
-  // A fresh process means a fresh signing key, so yesterday's cookie is not a way back in.
-  const restarted = new AccessStore({ now: time.now, randomToken: counter() })
-  assert.equal(restarted.verifySession(session), false)
+  // A board with a DIFFERENT key rejects it — that is what rotating the key means, and it is the
+  // revocation story.
+  const rotated = new AccessStore({ now: time.now, randomToken: counter(), signingKey: Buffer.alloc(32, 9) })
+  assert.equal(rotated.verifySession(session), false)
+})
+
+test("a session SURVIVES a restart when the signing key is persisted", () => {
+  // The bug this pins cost a real sign-out: the key defaulted to a fresh random per process, so every
+  // artifact update, crash or ctrl-C silently signed out every device — making a nominally year-long
+  // cookie last only until the next restart. The board must load the same key back.
+  const key = randomBytes(32)
+  const first = new AccessStore({ signingKey: key, randomToken: counter() })
+  const redeemed = first.redeem(first.issue().code)
+  assert.ok(redeemed.ok)
+
+  const afterRestart = new AccessStore({ signingKey: key, randomToken: counter() })
+  assert.equal(afterRestart.verifySession(redeemed.session), true, "the phone stays signed in")
+})
+
+test("the session key is persisted at 0600 and reloaded, not regenerated", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-session-key-"))
+  const first = loadOrCreateSessionKey(dir)
+  const second = loadOrCreateSessionKey(dir)
+  assert.deepEqual(second, first, "a second start must reuse the key, or every restart signs out")
+  assert.equal(first.byteLength, 32)
+  assert.equal(statSync(join(dir, "session-key")).mode & 0o777, 0o600, "a world-readable key is a forgeable session")
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test("a truncated key file is replaced rather than used", () => {
+  // A short read would silently weaken every signature; treat it as absent.
+  const dir = mkdtempSync(join(tmpdir(), "frizz-session-key-"))
+  writeFileSync(join(dir, "session-key"), Buffer.alloc(4))
+  const key = loadOrCreateSessionKey(dir)
+  assert.equal(key.byteLength, 32)
+  rmSync(dir, { recursive: true, force: true })
 })
 
 test("a forged or tampered session is refused", () => {
