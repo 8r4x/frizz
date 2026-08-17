@@ -3559,14 +3559,6 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
     return (
       <div data-awaiting-fence className="flex flex-col">
         <div className={`md-inline ${wrap ? QUEUE_WRAP : ""}`} dangerouslySetInnerHTML={awaitingInner} />
-        {(itemLabels.length > 0 || forLabel) && (
-        // Muted and small: it is the machinery, under the prose that explains it. `gap-x-3` matches the
-        // PR-ref row below so the two read as one band rather than two competing lists.
-        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[12px] text-muted">
-          {itemLabels.map((label) => <span key={label}>{label}</span>)}
-          {forLabel && <span className="text-muted/70">{forLabel}</span>}
-        </div>
-      )}
         {watched.length > 0 && !listedBelow && (
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5">
             {watched.map((watch) => <WatchedRef key={watch.ref} watch={watch} />)}
@@ -3582,6 +3574,12 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
         dangerouslySetInnerHTML={awaitingInner}
       />
       {(itemLabels.length > 0 || forLabel) && (
+        // ONLY ON THIS BRANCH. When the resting card is showing it owns this entirely — a table grouped
+        // by kind, a row per thing, with live state and a drill-in (AwaitingBackgroundCard) — and the
+        // branch above drops its chrome precisely so the two do not both state the wait. This is the
+        // FALLBACK: no resting card, so the fence is the only place the set is named at all, and without
+        // it `shell:`/`agent:`/`timer:` lines reach the card and fall straight through it.
+        //
         // Muted and small: it is the machinery, under the prose that explains it. `gap-x-3` matches the
         // PR-ref row below so the two read as one band rather than two competing lists.
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[12px] text-muted">
