@@ -409,6 +409,7 @@ test("CLI options default to immutable mode and make source/HMR explicit", () =>
   assert.deepEqual(parseCliArgs([]), {
     noApp: false,
     appMode: false,
+    cloud: false,
     foreground: true,
     stop: false,
     status: false,
@@ -424,6 +425,7 @@ test("CLI options default to immutable mode and make source/HMR explicit", () =>
   assert.deepEqual(parseCliArgs(["--no-app", "--foreground", "--port=5123"]), {
     noApp: true,
     appMode: false,
+    cloud: false,
     foreground: true,
     stop: false,
     status: false,

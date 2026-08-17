@@ -80,6 +80,8 @@ export interface CliOptions {
   publicOrigin?: string;
   /** `--link`: ask the ALREADY-RUNNING board for a fresh single-use access link, then exit. */
   link: boolean;
+  /** `--cloud`: serve at the saved public hostname and run the tunnel as a supervised child. */
+  cloud: boolean;
   /** Optional Git repository to serve. Defaults to the caller's current directory. */
   repoPath?: string;
 }
@@ -240,6 +242,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     "--stop",
     "--status",
     "--link",
+    "--cloud",
     "--help",
     "-h",
     "--dev",
@@ -272,6 +275,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     foreground: true,
     stop: args.has("--stop"),
     link: args.has("--link"),
+    cloud: args.has("--cloud"),
     status: args.has("--status"),
     help: args.has("--help") || args.has("-h"),
     dev: args.has("--dev"),
@@ -427,6 +431,7 @@ Options:
   --host [address]       serve on a network address instead of loopback (bare --host means 0.0.0.0)
   --allowed-host <name>  with --host, also accept this DNS name as the board's address (repeatable)
   --public-origin <url>  serve behind a proxy/tunnel reachable at this exact origin
+  --cloud                serve at your public hostname, running the tunnel too (asked once)
   --link                 print a fresh single-use access link for the already-running board
   --debug                stream the full event feed to the terminal instead of the compact readout
   --status               report this workspace's stable server and artifact

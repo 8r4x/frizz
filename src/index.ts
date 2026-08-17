@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { bindHostIsExposed } from "@frizz/server/local-origin";
 import { loadOrCreateSessionKey } from "@frizz/server/access-codes";
+import { promptForCloudConfig, readCloudConfig, startTunnel, writeCloudConfig, type TunnelHandle } from "./cloud.ts";
 import { renderQrLines } from "@frizz/server/qr";
 import { SUPERVISOR_ACCESS_CODE_PATH } from "@frizz/server/restart-supervisor";
 import { installAccessPane, type AccessPane } from "./access-pane.ts";
@@ -239,6 +240,17 @@ let activeAccessLink: { code: string; url: string; expiresAt: number } | null = 
 /** The keypress listener, held so shutdown can put the terminal back the way it found it. */
 let accessPane: AccessPane | null = null;
 
+/** The tunnel this launch supervises, so shutdown can take it down with the board. */
+let tunnel: TunnelHandle | null = null;
+
+/**
+ * `--cloud` resolves to a saved hostname, asking once if there is none. It sets publicOrigin exactly
+ * as `--public-origin` would, so everything downstream — the gate, the codes, the QR — is unchanged;
+ * the only difference is that the operator did not have to know any of it.
+ */
+let cloudConfig = options.cloud ? readCloudConfig() : null;
+if (cloudConfig) options.publicOrigin = `https://${cloudConfig.hostname}`;
+
 const bind = (() => {
   try {
     return resolveBindSelection(options, process.env);
@@ -411,6 +423,12 @@ async function runSupervisor(
         watch: true,
       };
   try {
+    if (options.cloud && !cloudConfig) {
+      // First run only. Asking here rather than at import keeps the question off every other launch.
+      cloudConfig = await promptForCloudConfig();
+      writeCloudConfig(cloudConfig);
+      bind.publicOrigin = `https://${cloudConfig.hostname}`;
+    }
     supervisor = await startDevSupervisor({
       port,
       host: bind.host,
@@ -435,6 +453,16 @@ async function runSupervisor(
     });
     // The supervisor is listening now, so a code minted here is immediately redeemable.
     activeAccessLink = bind.publicOrigin ? supervisor.issueAccessLink() : null;
+    if (cloudConfig) {
+      // The tunnel is a CHILD of this launcher, so the two halves share a lifetime and cannot drift
+      // apart. A tunnel that dies while the board lives is the "Cloudflare error" state; a board that
+      // dies while the tunnel lives is the 530. Both were reachable when these were separate commands.
+      tunnel = startTunnel(cloudConfig, (code) => {
+        if (code === 0 || code === null) return;
+        logger.error("tunnel", `cloudflared exited with code ${code}; the public hostname is now unreachable`);
+      });
+      logger.info("tunnel", `running cloudflared tunnel ${cloudConfig.tunnel} for ${cloudConfig.hostname}`);
+    }
     // "Press L for a fresh link" — the only way to reissue without restarting the board. Returns null
     // when stdout is not a terminal, which leaves the plain records path completely untouched.
     if (bind.publicOrigin) {
@@ -456,6 +484,8 @@ async function runSupervisor(
       logger.info("launcher", `stopped with code ${code}`);
       // Before the farewell, or the operator's shell is left in raw mode echoing nothing.
       accessPane?.dispose();
+      // Down with the board: leaving cloudflared running would keep the hostname resolving to a 530.
+      tunnel?.stop();
       printFarewell(code);
       process.exit(code);
     },
