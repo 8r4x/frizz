@@ -296,3 +296,59 @@ in the readout, because the two postures have genuinely different risk.
 - Short expiry: a QR photographed over a shoulder, or caught in a screen recording, is a real vector.
 - Rate-limit redemption, and never write a code to a log file or the terminal title.
 - Sessions need revocation, or "I shared my board once" becomes permanent.
+
+## Stage 2, concretely: who actually creates a new user's subdomain
+
+The question this answers, because it is the one that keeps coming back: **does the user running
+`cloudflared tunnel run` create their subdomain?** No. That command only CONNECTS a tunnel that already
+exists. Both the tunnel and the DNS record are created by API calls against the zone, and the token that
+authorises them can never be on a user's machine — Cloudflare scopes tokens to a zone, never to a
+record, so anything strong enough to create `alice.frizz.sh` is also strong enough to delete
+`bob.frizz.sh` and repoint the apex.
+
+So a broker is required. One correction to how it is usually imagined: **it does not need to be
+persistent.** Registration is request/response, so a Worker is exactly right and nothing stays running.
+
+### The sequence
+
+| Who | Does what |
+| --- | --- |
+| CLI | `POST /register` to the Worker with the desired name and the local port |
+| Worker | Authenticates the user (Stage 3 concern; v1 can be first-come-first-served) |
+| Worker → CF | `POST /accounts/{id}/cfd_tunnel` `{name, config_src:"cloudflare"}` → tunnel id **and its run token** |
+| Worker → CF | `PUT /accounts/{id}/cfd_tunnel/{id}/configurations` → ingress to `http://localhost:<port>` |
+| Worker → CF | `POST /zones/{id}/dns_records` → CNAME `<name>.frizz.sh` → `<tunnelid>.cfargotunnel.com`, proxied |
+| Worker | Returns **only the per-tunnel run token** |
+| CLI | Stores it under `~/.frizz/`, runs `cloudflared tunnel run --token …` as a supervised child |
+
+### Why this split is the safe one
+
+**The Worker creates; the user's machine only connects.** A per-tunnel run token runs exactly one tunnel
+and nothing else — it cannot enumerate the zone, cannot create records, cannot reach another user's
+tunnel. That asymmetry is the entire security argument, and it is why the zone token never leaves the
+Worker and the run token is safe to hand out.
+
+### Three consequences worth knowing before writing any of it
+
+- **No database in v1.** Cloudflare's own tunnel list is the registry: `GET /cfd_tunnel?name=<x>` answers
+  "is this taken". D1 earns its place at Stage 3 for revocation, subscription state and audit — not for
+  uniqueness.
+- **The Worker is off the data plane.** It runs during signup and never again. If it is down, every
+  existing board keeps working and only new registrations fail. Protecting that property is worth more
+  than any other choice in this document.
+- **Users need the `cloudflared` binary.** Bundle per platform (~30 MB each, ugly in an npm package) or
+  download on first `--cloud` use against a pinned checksum. Prefer the download: the package stays
+  small and self-hosters never pay for it.
+
+### The port detail that decides the shape
+
+Remotely-managed ingress lives in Cloudflare, so the Worker must know which local port to point at. Have
+the CLI send its port at registration and the Worker set ingress accordingly — one extra API call, and it
+handles people not on the default port. The alternative (fixing the port by convention) is simpler and
+breaks the first time someone runs two boards or has 9494 occupied.
+
+### Do not start this before the terms question
+
+Stage 2 is where you begin creating tunnels *on behalf of other people*, which is precisely the activity
+§2.2.1(j) describes. Building it first and asking afterwards risks discovering the data plane has to move
+after the code assumes it never will. Ask, then build.
