@@ -134,7 +134,7 @@ a second read for nothing, and it is the commonest thing wrong with an otherwise
   live watcher into a one-click dismissal instead of a card the human has to keep deciding about. Code
   written but not LANDED is not done (a commit, a pushed branch, an open PR is work still ahead of the
   merge — where the project uses PRs, `done` waits for the MERGE, so park the PR on ` ```awaiting `
-  with `pr-watch:`). An investigation headed for a fix is NOT `done`; the fix is still owed. Two cases
+  with `pr:`). An investigation headed for a fix is NOT `done`; the fix is still owed. Two cases
   DO earn `done` on something other than landed code, and BOTH earn it the same way — by passing the
   test above, because the deliverable is a FILE the human opens without this thread: a commissioned
   research or audit EFFORT, whose finished report is written to that file, earns `done`; and so does a

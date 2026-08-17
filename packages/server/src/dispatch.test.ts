@@ -411,7 +411,9 @@ test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting pa
     assert.match(c, /Code written but not LANDED is not done/)
     assert.match(c, /open PR is work still ahead of the merge/)
     assert.match(c, /`done` waits for the MERGE/)
-    assert.match(c, /park the PR on[\s\S]{0,40}`pr-watch:`/)
+    // `pr:`, NOT the retired `pr-watch:` — the 2026-08-15 grammar dropped that spelling, so a fence
+    // written the old way parses as prose and the park names nothing (AWAITING_HINT_RE in tailer.ts).
+    assert.match(c, /park the PR on[\s\S]{0,40}`pr:`/)
     // The git-discipline + implementation-thread surfaces must not contradict it by fencing on a PR.
     assert.match(c, /Opening the PR does NOT finish the thread — the MERGE does/)
     assert.doesNotMatch(c, /done ` fence naming the PR\/paths/)
