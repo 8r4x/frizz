@@ -1,4 +1,4 @@
-// FRIZZ ON A PHONE — the whole product, mocked up as a native-feeling iOS app.
+// FRIZZ ON A PHONE — the whole product, mocked up for a 390pt viewport.
 //
 // Not a test and not shipped UI: a DESIGN SURFACE, in the shape `awaiting-mockups-fixture.tsx`
 // established. Every screen renders in the app's REAL stylesheet on the app's REAL tokens, so a choice
@@ -8,45 +8,52 @@
 //   http://localhost:5477/mobile-mockup-fixture.html                — the gallery, every screen
 //                                              ?screen=board        — one screen, alone, at 1:1
 //                                              ?font=mono           — the other font setting
+//                                              ?still=1             — freeze the spinners for a still
 //
 // ── What is being designed ────────────────────────────────────────────────────────────────────────
 // The desktop app is three standing surfaces at once: a project rail, a thread rail, and a workpane,
-// with threads opening as right-hand drawers that stack. None of that survives a 390pt viewport. The
-// phone gets the same INFORMATION MODEL — Rested / Active / Held / Done, the accent meaning "awaiting
-// you", the checkbox status family — expressed as a two-level drill-down where every drawer becomes a
-// sheet at a detent and every rail row becomes a card.
+// with threads opening as right-hand drawers that stack. None of that survives 390pt. The phone gets
+// the same INFORMATION MODEL — Rested / Active / Held / Done, the accent meaning "awaiting you", the
+// checkbox status family — expressed as a two-level drill-down where every drawer becomes a sheet at a
+// detent, every rail row becomes a full-width list row, and the four bands become four tabs.
 //
-// Six rulings this mockup makes. All reversible, all worth arguing with:
+// THIS IS A WEBSITE, not an app-store submission (maintainer 2026-08-17: "This is a freaking website
+// that people go to, not a mobile app at this point"). So there is no push notification, no lock
+// screen and no install flow here: everything drawn is something a browser tab can do today.
 //
-//   1. NO TAB BAR. Frizz is projects → board → thread. A tab bar spends 49pt on navigation that the
-//      hierarchy does not have, and the bottom edge is worth more as the prompt box.
-//   2. THE PROMPT BOX DOCKS TO THE BOTTOM. It is the top of the sidebar on desktop; on a phone the
-//      bottom edge is the only place a thumb reaches without a grip change.
-//   3. A ROW BECOMES A CARD. The rail's job is scanning forty threads; a phone shows five. The density
-//      buys detail instead: the gloss, the live tool line, the child ops, and — for the one state that
-//      matters — the whole question, answerable without opening the thread.
-//   4. EVERY DRAWER IS A SHEET AT A DETENT, with the parent scaled back behind it. The desktop's stack
-//      of overlapping right-hand drawers becomes a stack of sheets, dismissed by flicking down.
-//   5. THE ACCENT IS STILL THE ASK. iOS tints every nav action with the app colour; here that would put
-//      four yellow controls on a screen whose yellow is supposed to mean "a worker is waiting for you".
-//      So nav actions are neutral, and the accent is spent on exactly two things: the awaiting-you marks
-//      and counts, and the ONE primary verb of a screen (Send answer, Dispatch).
-//   6. THE TYPE SCALE IS iOS'S, NOT THE DESKTOP'S. 17/15/13/11.5 against 13px-everything. See the note
-//      at the top of `mobile-mockup-kit.tsx`.
+// ── The rulings, and who made them ────────────────────────────────────────────────────────────────
+// Round 2 rewrote most of round 1 against the maintainer's review. Each of these is theirs:
 //
-// Screens, in `?screen=` order: home · board · board-ask · thread · answer · actions · dispatch ·
-// snooze · settings · subagent · switcher · search · empty · notification · plan · kit
+//   1. NO PROMPT BOX ON THE BOARD. A docked composer for a NEW thread is not the same kind of thing as
+//      a reply box, and the liveness indicator round 1 parked above it belonged to a running thread,
+//      not over a control that starts one. Creating a thread is the floating + in the bottom right;
+//      live work is drawn on the running thread's own row.
+//   2. NO PROJECT SWITCHER. The board already has a way back to Projects; a switcher in the title as
+//      well is two doors to one room.
+//   3. NO YELLOW CARD FOR A QUESTION. The rail marks an ask with the accent "?" and nothing else —
+//      "it's clean and it's consistent and it's subtle" — so that mark is all an asking row gets here.
+//   4. FULL WIDTH, NOT CARDS. A card spends side margins AND its own padding on every row.
+//   5. THE BANDS ARE TABS along the bottom, in a tab bar whose icons are the status family itself.
+//   6. NO ANSWERING FROM THE LIST. You open the thread, read the context that produced the question,
+//      and answer it there.
+//
+// Kept from round 1: every drawer is a sheet at a detent with the parent scaled back behind it; the
+// accent is spent only on the ask and on one primary verb per screen (so nav actions are neutral); and
+// iOS's 17/15/13/11.5 type scale with a 44pt touch floor rather than the desktop's 13px-everything.
+//
+// Screens, in `?screen=` order: home · board · board-active · board-held · thread · answer · actions ·
+// dispatch · snooze · settings · subagent · search · empty · plan · kit
 import { createRoot } from "react-dom/client"
 import type { ReactNode } from "react"
 import {
-  Archive, ArrowUpRight, Bell, Check, ChevronDown, ChevronRight, Clock, Copy, Ellipsis, FileText,
-  Github, Hourglass, Image as ImageIcon, Info, Paperclip, Pencil, Plus, RotateCcw, Search,
-  Settings as SettingsIcon, Sparkles, SquareTerminal, Timer, Type as TypeIcon, Wrench, X, Zap,
+  Archive, ArrowUpRight, Bell, Check, ChevronRight, Clock, Copy, Ellipsis, FileText, Github, Hourglass,
+  Image as ImageIcon, Info, Paperclip, Pencil, Plus, RotateCcw, Search, Settings as SettingsIcon,
+  Sparkles, SquareTerminal, Timer, Type as TypeIcon, Wrench, X, Zap,
 } from "lucide-react"
 import {
-  AskBox, BoxSpinnerM, Button, Canvas, Chip, ComposerDock, DoneBox, Group, GroupHeader, Keyboard,
-  LargeTitle, LiveDot, NavAction, NavBar, ON_CAP, Phone, Row, RowRule, Segmented, SheetHeader,
-  SheetOver, StatusBox, Toggle, INK,
+  AskBox, BoxSpinnerM, Button, Canvas, Chip, ComposerDock, DoneBox, Fab, Group, GroupHeader, INK,
+  Keyboard, LargeTitle, LiveDot, NavAction, NavBar, ON_CAP, Phone, Row, RowRule, Segmented,
+  SheetHeader, SheetOver, StatusBox, TabBar, Toggle,
 } from "./mobile-mockup-kit.tsx"
 import "./styles.css"
 
@@ -96,8 +103,8 @@ function ProviderMark({ kind }: { kind: "claude" | "codex" }) {
  *
  * The mark is an ATOMIC inline box and the line breaker is free to break right before it even though no
  * whitespace separates the two — which strands the mark alone on a second line under a wrapping title.
- * The desktop rail solved this exact bug the same way (Sidebar's TitleWithTrailers); a phone's 250pt
- * title column hits it far more often.
+ * The desktop rail solved this exact bug the same way (Sidebar's TitleWithTrailers); a phone's title
+ * column hits it far more often.
  */
 function TitleWithMark({ title, provider }: { title: string; provider?: "claude" | "codex" }) {
   if (!provider) return <>{title}</>
@@ -115,41 +122,28 @@ function TitleWithMark({ title, provider }: { title: string; provider?: "claude"
   )
 }
 
-/** The band header on the board: the app's own nomenclature, plus its count. */
-function Band({ label, count, collapsed }: { label: string; count: number; collapsed?: boolean }) {
-  return (
-    <div className="flex items-center gap-1.5 px-5 pb-2 pt-3.5">
-      {collapsed !== undefined ? (
-        <ChevronRight data-ink="band-chevron" size={12} className={`shrink-0 ${INK.chevron12} text-muted/60 transition-transform ${collapsed ? "" : "rotate-90"}`} />
-      ) : null}
-      <span data-ink="band-label" className="text-[12px] font-semibold uppercase tracking-[0.07em] text-muted/80">{label}</span>
-      {/* -1.5px: two TEXT runs on one gap read looser than a glyph and a label, because each carries its
-          own side bearing (measured: chevron→label 7.00px of ink, label→count 8.38px, both on gap-1.5).
-          The count is a mark here rather than prose, so it takes the trim and the row reads as one gap. */}
-      <span data-ink="band-count" className="-ml-[1.5px] text-[12px] tabular-nums text-muted/50">{count}</span>
-    </div>
-  )
-}
-
 /**
- * A thread card — the phone's unit of board information, and the thing "a rail row" becomes.
+ * A THREAD ROW — the phone's unit of board information, and what a rail row becomes.
  *
- * The anatomy is the rail's, re-laid for a 358pt measure: the status glyph keeps its own column so the
- * marks form a readable stripe down the board, the title wraps rather than truncating (the rail's own
- * rule), the rest time is a right-justified column because a title's length must not decide where its
- * timestamp sits, and everything under the title is the row's subtitle stack.
+ * Full width, hairline-separated, no card. The anatomy is the rail's: the status glyph keeps its own
+ * column so the marks read as a stripe down the list, the title wraps rather than truncating (the
+ * rail's own rule), and the rest time is a right-justified column, because a title's length must not
+ * decide where its timestamp sits. An asking thread is marked by the accent "?" in that glyph column
+ * and by NOTHING else — no border, no tint, no rail.
+ *
+ * The separator is drawn by the row so it can be INSET to the text column (16 + 18 + 12 = 46), which is
+ * what tells the eye the glyph column is a gutter rather than the first cell of a table.
  */
-function ThreadCard({
+function ThreadRow({
   glyph,
   title,
   provider,
   age,
   gloss,
   activity,
-  meta,
   children,
   dim,
-  ask,
+  last,
 }: {
   glyph: ReactNode
   title: string
@@ -157,44 +151,40 @@ function ThreadCard({
   age?: string
   gloss?: ReactNode
   activity?: ReactNode
-  meta?: ReactNode
   children?: ReactNode
   dim?: boolean
-  /** Awaiting-you: the accent rail down the leading edge. The one card on the board that shouts. */
-  ask?: boolean
+  last?: boolean
 }) {
   return (
-    <div
-      className={`relative overflow-hidden rounded-[14px] border bg-panel ${
-        ask ? "border-accent/35" : "border-border/70"
-      } ${dim ? "opacity-60" : ""}`}
-    >
-      {ask ? <span aria-hidden className="absolute inset-y-0 left-0 w-[3px] bg-accent" /> : null}
+    <div className={dim ? "opacity-60" : ""}>
       <div className="flex items-start gap-3 px-4 pb-2.5 pt-2.5">
-        <span data-ink="card-glyph" className="flex h-[21px] shrink-0 items-center justify-center">{glyph}</span>
+        <span data-ink="row-glyph" className="flex h-[21px] shrink-0 items-center justify-center">{glyph}</span>
         <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
           <div className="flex min-w-0 items-baseline gap-3">
-            <span data-ink="card-title" className="min-w-0 flex-1 text-[15px] font-medium leading-[21px] tracking-[-0.01em] text-fg">
+            <span data-ink="row-title" className="min-w-0 flex-1 text-[15px] font-medium leading-[21px] tracking-[-0.01em] text-fg">
               <TitleWithMark title={title} provider={provider} />
             </span>
             {age ? <span className="shrink-0 text-[11.5px] leading-[21px] tabular-nums text-muted/60">{age}</span> : null}
           </div>
-          {gloss ? (
-            <span className={`min-w-0 text-[13px] leading-[18px] text-muted ${ask ? "line-clamp-2" : "truncate"}`}>{gloss}</span>
-          ) : null}
+          {gloss ? <span className="min-w-0 truncate text-[13px] leading-[18px] text-muted">{gloss}</span> : null}
           {activity ? <span className="min-w-0 truncate text-[13px] leading-[18px] text-muted/85">{activity}</span> : null}
-          {meta ? <div className="mt-1 flex flex-wrap items-center gap-1.5">{meta}</div> : null}
         </div>
       </div>
       {children}
+      {last ? null : <div className="ml-[46px] h-px bg-border/70" />}
     </div>
   )
 }
 
-/** An indented child-op row — the rail's ⤷ line, at card density. */
+/**
+ * An indented child-op row — the rail's ⤷ line.
+ *
+ * THIS is where a liveness dot belongs: under the thread that owns the work, never over a control that
+ * starts a new one.
+ */
 function ChildOp({ kind, label, elapsed }: { kind: "agent" | "shell"; label: string; elapsed: string }) {
   return (
-    <div className="flex items-baseline gap-2 pl-[49px] pr-4">
+    <div className="flex items-baseline gap-2 pb-1.5 pl-[46px] pr-4">
       <span data-ink="op-dot" className="flex shrink-0"><LiveDot kind={kind} /></span>
       <span data-ink="op-label" className="min-w-0 flex-1 truncate text-[12.5px] leading-[19px] text-muted">{label}</span>
       <span className="shrink-0 text-[11.5px] leading-[19px] tabular-nums text-muted/55">{elapsed}</span>
@@ -205,9 +195,9 @@ function ChildOp({ kind, label, elapsed }: { kind: "agent" | "shell"; label: str
 // ══ 1 · home ════════════════════════════════════════════════════════════════════════════════════
 // EVERY PROJECT ON THE MACHINE, and what each of them wants from you. The desktop grid shows a name, a
 // path and a last-opened date, because opening forty databases to draw forty cards is exactly what lazy
-// activation exists to avoid. A phone is the surface you check from a sofa, so the one thing worth
-// paying for is the answer to "does anything need me": a per-board state summary, and the accent count
-// that says how many asks are waiting. Sorted by that count, so the answer is the top of the screen.
+// activation exists to avoid. A phone is the surface you check away from your desk, so the one thing
+// worth paying for is the answer to "does anything need me": a per-board state summary, and the accent
+// count of asks. Sorted by that count, so the answer is the top of the screen.
 const PROJECTS = [
   { slug: "nub", label: "nubjs/nub", tint: "bg-[#e8b923] text-bg", initial: "N", path: "~/code/nub", asks: 2, active: 2, held: 1, when: "now" },
   { slug: "zod", label: "colinhacks/zod", tint: "bg-[#4a9eff] text-bg", initial: "Z", path: "~/code/zod", asks: 1, active: 0, held: 2, when: "2h" },
@@ -217,39 +207,42 @@ const PROJECTS = [
   { slug: "sonner", label: "emilkowal/sonner", tint: "bg-[#33363c] text-fg", initial: "S", path: "~/code/sonner", asks: 0, active: 0, held: 0, when: "1w" },
 ]
 
-function ProjectRowCard({ p }: { p: (typeof PROJECTS)[number] }) {
+function ProjectRow({ p, last }: { p: (typeof PROJECTS)[number]; last?: boolean }) {
   const quiet = p.asks === 0 && p.active === 0 && p.held === 0
   return (
-    <div className="flex items-center gap-3 py-2.5 pl-4 pr-3">
-      <ProjectSquare label={p.initial} tint={p.tint} />
-      <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
-        <span className="truncate text-[16px] font-medium leading-[21px] tracking-[-0.01em] text-fg">{p.label}</span>
-        {quiet ? (
-          <span className="truncate font-mono-keep text-[12.5px] leading-[16px] text-muted/70">{p.path}</span>
-        ) : (
-          <span className="flex min-w-0 items-baseline gap-2.5 text-[12.5px] leading-[16px] text-muted">
-            {p.active > 0 && (
-              <span className="flex shrink-0 items-baseline gap-1.5">
-                <span data-ink="meta-dot" className="flex shrink-0"><LiveDot kind="agent" /></span>
-                <span data-ink="meta-active">{p.active} active</span>
-              </span>
-            )}
-            {p.held > 0 && (
-              <span className="flex shrink-0 items-baseline gap-1.5">
-                <Hourglass data-ink="meta-glass" size={11} className={`${ON_CAP} ${INK.hourglass} text-muted/70`} />
-                <span data-ink="meta-held">{p.held} held</span>
-              </span>
-            )}
-            <span className="min-w-0 truncate text-muted/55">{p.when}</span>
+    <div>
+      <div className="flex items-center gap-3 py-2.5 pl-4 pr-3">
+        <ProjectSquare label={p.initial} tint={p.tint} />
+        <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
+          <span className="truncate text-[16px] font-medium leading-[21px] tracking-[-0.01em] text-fg">{p.label}</span>
+          {quiet ? (
+            <span className="truncate font-mono-keep text-[12.5px] leading-[16px] text-muted/70">{p.path}</span>
+          ) : (
+            <span className="flex min-w-0 items-baseline gap-2.5 text-[12.5px] leading-[16px] text-muted">
+              {p.active > 0 && (
+                <span className="flex shrink-0 items-baseline gap-1.5">
+                  <span data-ink="meta-dot" className="flex shrink-0"><LiveDot kind="agent" /></span>
+                  <span data-ink="meta-active">{p.active} active</span>
+                </span>
+              )}
+              {p.held > 0 && (
+                <span className="flex shrink-0 items-baseline gap-1.5">
+                  <Hourglass data-ink="meta-glass" size={11} className={`${ON_CAP} ${INK.hourglass} text-muted/70`} />
+                  <span data-ink="meta-held">{p.held} held</span>
+                </span>
+              )}
+              <span className="min-w-0 truncate text-muted/55">{p.when}</span>
+            </span>
+          )}
+        </div>
+        {p.asks > 0 ? (
+          <span className="flex h-[22px] min-w-[22px] shrink-0 items-center justify-center rounded-full bg-accent px-1.5 text-[12.5px] font-semibold text-bg">
+            {p.asks}
           </span>
-        )}
+        ) : null}
+        <ChevronRight size={17} className="shrink-0 text-muted/45" />
       </div>
-      {p.asks > 0 ? (
-        <span className="flex h-[22px] min-w-[22px] shrink-0 items-center justify-center rounded-full bg-accent px-1.5 text-[12.5px] font-semibold text-bg">
-          {p.asks}
-        </span>
-      ) : null}
-      <ChevronRight size={17} className="shrink-0 text-muted/45" />
+      {last ? null : <div className="ml-[72px] h-px bg-border/70" />}
     </div>
   )
 }
@@ -279,25 +272,20 @@ function HomeScreen() {
 
         <GroupHeader trailing="3 asks">Needs you</GroupHeader>
         <Group>
-          <ProjectRowCard p={PROJECTS[0]} />
-          <RowRule inset={72} />
-          <ProjectRowCard p={PROJECTS[1]} />
+          <ProjectRow p={PROJECTS[0]} />
+          <ProjectRow p={PROJECTS[1]} last />
         </Group>
 
         <GroupHeader>All projects</GroupHeader>
         <Group>
-          {PROJECTS.slice(2).map((p, i) => (
-            <div key={p.slug}>
-              {i > 0 ? <RowRule inset={72} /> : null}
-              <ProjectRowCard p={p} />
-            </div>
+          {PROJECTS.slice(2).map((p, i, all) => (
+            <ProjectRow key={p.slug} p={p} last={i === all.length - 1} />
           ))}
         </Group>
 
-        <div className="px-4 pt-3">
-          {/* Dashed and never filled: an affordance, not a project — the desktop grid's own ruling,
-              which a phone has more reason to keep, since here it is the last thing in a scroll. */}
-          <button className="flex h-[52px] w-full items-center justify-center gap-2 rounded-[14px] border border-dashed border-border-strong text-[15px] text-muted active:border-accent active:text-fg">
+        <div className="px-4 pt-4">
+          {/* Dashed and never filled: an affordance, not a project — the desktop grid's own ruling. */}
+          <button className="flex h-[48px] w-full items-center justify-center gap-2 rounded-[12px] border border-dashed border-border-strong text-[15px] text-muted active:border-accent active:text-fg">
             <Plus size={17} className={ON_CAP} />
             Add a project
           </button>
@@ -307,22 +295,38 @@ function HomeScreen() {
   )
 }
 
-// ══ 2 · board ═══════════════════════════════════════════════════════════════════════════════════
-// THE PROJECT PAGE. The bands are the app's own, in the app's own order and the app's own words —
-// Rested (the cue) first, under the prompt box's reach; Active below it; Held dimmed and labelled; Done
-// collapsed. "Active" means SPINNING and nothing else, so a rested row never lands in it and never
-// carries a spinner. Only the cue's cards date their rest: a row that is still running has not made a
-// handoff, so it has nothing to date.
+// ══ 2–4 · the board ═════════════════════════════════════════════════════════════════════════════
+// THE PROJECT PAGE, as a tab view. The bands are the app's own, in the app's own words: Rested (the
+// cue) → Active (spinning, and nothing else) → Held → Done. On a phone they are four tabs rather than
+// four stacked sections, so the band you are reading gets the whole screen instead of a quarter of it.
+//
+// The tab bar's icons ARE the status family, which makes it the legend for the list above it. The +
+// starts a thread. Nothing on this screen is a composer.
+
+const TAB_ICON = 21
+
+function boardTabs(active: string) {
+  return [
+    // Rested is the band that can be waiting on you, so its tab is the only one that ever wears the
+    // accent — as the "?" when you are standing in it, and as the badge either way.
+    { id: "rested", label: "Rested", icon: active === "rested" ? <AskBox size={TAB_ICON} /> : <StatusBox size={TAB_ICON} />, count: 3, asks: true },
+    { id: "active", label: "Active", icon: <BoxSpinnerM size={TAB_ICON} frozen={still} />, count: 2 },
+    { id: "held", label: "Held", icon: <StatusBox size={TAB_ICON}><Hourglass size={13} className="text-muted/75" /></StatusBox>, count: 2 },
+    { id: "done", label: "Done", icon: <DoneBox size={TAB_ICON} />, count: 6 },
+  ]
+}
 
 function BoardTopBar() {
   return (
     <NavBar
       back="Projects"
+      // No switcher. The way to another project is the way you came (maintainer 2026-08-17: "Kind of
+      // weird to have that and the projects, like the ability to go back to a project… I think we
+      // should probably just drop the switcher").
       title={
         <span className="flex items-center gap-1.5">
           <ProjectSquare label="N" tint="bg-[#e8b923] text-bg" size={17} />
           <span className="font-mono-keep text-[15px]">nubjs/nub</span>
-          <ChevronDown size={13} className="text-muted/70" />
         </span>
       }
       trailing={<NavAction label="Board actions"><Ellipsis size={20} /></NavAction>}
@@ -330,35 +334,16 @@ function BoardTopBar() {
   )
 }
 
-/** The board's asking card, collapsed: the question in one line and the verb that opens it. */
-function AskCardCollapsed() {
-  return (
-    <ThreadCard
-      ask
-      glyph={<AskBox />}
-      title="Fix the cache collision in the resolver"
-      provider="claude"
-      age="4m"
-      gloss="Should the settings store use SQLite or a JSON file?"
-    >
-      <div className="flex items-center gap-2 px-4 pb-3 pl-[49px]">
-        <Button kind="accent" size="sm">Answer</Button>
-        <Button kind="tinted" size="sm">Open</Button>
-      </div>
-    </ThreadCard>
-  )
-}
-
 /**
- * A card mid-swipe.
+ * A row mid-swipe.
  *
- * The card slides and its LEADING content is clipped by the group's own rounded mask, which is exactly
- * what an inset-grouped row does in Mail. It is the one place a static mockup looks wrong while being
- * right — a swipe caught mid-gesture always cuts a word in half.
+ * Full-width rows are what make this read right: the row slides under the SCREEN edge, exactly as a
+ * Mail cell does, instead of sliding out of a floating card and looking broken. A swipe caught in a
+ * still always cuts a word in half — that is the gesture, not a rendering fault.
  */
-function SwipedCard() {
+function SwipedRow() {
   return (
-    <div className="relative overflow-hidden rounded-[14px]">
+    <div className="relative overflow-hidden">
       <div className="absolute inset-y-0 right-0 flex">
         <div className="flex w-[76px] flex-col items-center justify-center gap-1 bg-elevated text-muted">
           <Clock size={19} />
@@ -370,7 +355,7 @@ function SwipedCard() {
         </div>
       </div>
       <div className="relative -translate-x-[152px]">
-        <ThreadCard
+        <ThreadRow
           glyph={<StatusBox />}
           title="Rewrite the release notes for 0.4"
           provider="codex"
@@ -382,46 +367,102 @@ function SwipedCard() {
   )
 }
 
-function BoardBands({ ask }: { ask: ReactNode }) {
+function BoardShell({ tab, children }: { tab: string; children: ReactNode }) {
   return (
-    <>
-      <Band label="Rested" count={3} />
-      <div className="flex flex-col gap-2 px-4">
-        {ask}
-        <ThreadCard
+    <Canvas>
+      <BoardTopBar />
+      {/* 83pt of tab bar + safe area, and the + floats clear of both. */}
+      <div className="min-h-0 flex-1 overflow-hidden pb-[83px]">{children}</div>
+      <Fab />
+      <TabBar tabs={boardTabs(tab)} active={tab} />
+    </Canvas>
+  )
+}
+
+/** Rested — the cue. Every row here is at rest; the accent "?" is the only thing marking an ask. */
+function BoardRestedScreen() {
+  return (
+    <BoardShell tab="rested">
+      <Group className="border-t-0">
+        <ThreadRow
+          glyph={<AskBox />}
+          title="Fix the cache collision in the resolver"
+          provider="claude"
+          age="4m"
+          gloss="Should the settings store use SQLite or a JSON file?"
+        />
+        <ThreadRow
           glyph={<StatusBox />}
           title="Audit the parser for edge cases"
           provider="claude"
           age="1h"
           gloss="Waiting on your call about the tokenizer"
         />
-        <SwipedCard />
-      </div>
+        <SwipedRow />
+        <ThreadRow
+          glyph={<AskBox />}
+          title="Pick the retry policy for the socket reconnect"
+          provider="codex"
+          age="5h"
+          gloss="Two options, both reversible"
+        />
+        <ThreadRow
+          glyph={<StatusBox />}
+          title="Port the v2 drivers to the new host API"
+          provider="claude"
+          age="2d"
+          gloss="Rested — nothing running"
+          last
+        />
+      </Group>
+    </BoardShell>
+  )
+}
 
-      <Band label="Active" count={2} />
-      <div className="flex flex-col gap-2 px-4">
-        <ThreadCard
+/**
+ * Active — SPINNING, and nothing else.
+ *
+ * The only band whose rows carry live work, so the only one whose rows carry a liveness dot: the blue
+ * one under a row is that thread's background shell, the yellow one its sub-agent. No rest times here —
+ * a row that is still running has not made a handoff, so it has nothing to date.
+ */
+function BoardActiveScreen() {
+  return (
+    <BoardShell tab="active">
+      <Group className="border-t-0">
+        <ThreadRow
           glyph={<BoxSpinnerM frozen={still} />}
           title="Migrate the board store to valtio 2"
           provider="claude"
           activity={<span className="shimmer-text">Running the focused tests</span>}
         >
-          <div className="flex flex-col gap-0.5 pb-3">
+          <div className="flex flex-col">
             <ChildOp kind="agent" label="Audit the parser for edge cases" elapsed="2m" />
             <ChildOp kind="shell" label="gh run watch 1842" elapsed="4m" />
           </div>
-        </ThreadCard>
-        <ThreadCard
+        </ThreadRow>
+        <ThreadRow
           glyph={<BoxSpinnerM frozen={still} />}
           title="Draft the changelog for 0.4"
           provider="codex"
           activity={<span className="shimmer-text">Reading packages/server/src/router.ts</span>}
-        />
-      </div>
+          last
+        >
+          <div className="flex flex-col">
+            <ChildOp kind="shell" label="vite dev --host" elapsed="18m" />
+          </div>
+        </ThreadRow>
+      </Group>
+    </BoardShell>
+  )
+}
 
-      <Band label="Held" count={2} collapsed={false} />
-      <div className="flex flex-col gap-2 px-4">
-        <ThreadCard
+/** Held — dimmed, and every row says what it is waiting for. */
+function BoardHeldScreen() {
+  return (
+    <BoardShell tab="held">
+      <Group className="border-t-0">
+        <ThreadRow
           dim
           glyph={<StatusBox><Hourglass size={11} className="text-muted/75" /></StatusBox>}
           title="Land the tenant routing fix"
@@ -434,103 +475,24 @@ function BoardBands({ ask }: { ask: ReactNode }) {
             </span>
           }
         />
-        <ThreadCard
+        <ThreadRow
           dim
           glyph={<StatusBox><Timer size={11} className="text-muted/75" /></StatusBox>}
           title="Retry the flaky socket test"
           provider="claude"
           age="20m"
           gloss="Wakes at 5:00 PM"
+          last
         />
-      </div>
-
-      <Band label="Done" count={6} collapsed />
-    </>
+      </Group>
+    </BoardShell>
   )
 }
 
-function BoardScreen({ dockOps = true, ask }: { dockOps?: boolean; ask?: ReactNode }) {
-  return (
-    <Canvas>
-      <BoardTopBar />
-      <div className="min-h-0 flex-1 overflow-hidden pb-[110px]">
-        <BoardBands ask={ask ?? <AskCardCollapsed />} />
-      </div>
-      <ComposerDock
-        ops={
-          dockOps ? (
-            <div className="flex items-baseline gap-2 text-[12px] leading-[17px] text-muted">
-              <LiveDot kind="shell" />
-              <span className="min-w-0 flex-1 truncate">vite dev --host</span>
-              <span className="shrink-0 tabular-nums text-muted/55">18m</span>
-            </div>
-          ) : null
-        }
-      />
-    </Canvas>
-  )
-}
-
-// ══ 3 · board-ask ═══════════════════════════════════════════════════════════════════════════════
-// THE SAME BOARD, with the asking card expanded in place. This is the whole argument for cards over
-// rows: the reason to pick the phone up is a worker that stopped, and answering it should not cost a
-// navigation. Tapping "Answer" expands the question here; only a question too long to read in a card
-// (or one of several) pushes the full-screen `answer` surface.
-
-function AskCardExpanded() {
-  return (
-    <ThreadCard
-      ask
-      glyph={<AskBox />}
-      title="Fix the cache collision in the resolver"
-      provider="claude"
-      age="4m"
-      gloss="Awaiting your answer"
-    >
-      <div className="mx-4 mb-3.5 rounded-[10px] border border-border/70 bg-bg/60 p-3">
-        <p className="m-0 text-[14px] leading-[19px] text-fg/90">
-          Should the settings store use SQLite or a JSON file?
-        </p>
-        <div className="mt-2.5 flex flex-col gap-1.5">
-          {[
-            { key: "A", label: "SQLite", why: "Transactional, and it matches how sessions are already stored", rec: true },
-            { key: "B", label: "JSON file", why: "Zero deps and human-editable, but racy under concurrent writes" },
-          ].map((option) => (
-            <button
-              key={option.key}
-              className={`flex min-h-[44px] items-start gap-2.5 rounded-[10px] border px-3 py-2.5 text-left ${
-                option.rec ? "border-accent/45 bg-accent/[0.07]" : "border-border bg-panel-2"
-              }`}
-            >
-              <span
-                className={`mt-[1px] flex size-[18px] shrink-0 items-center justify-center rounded-full border text-[10.5px] font-semibold ${
-                  option.rec ? "border-accent bg-accent text-bg" : "border-border-strong text-muted"
-                }`}
-              >
-                {option.key}
-              </span>
-              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span className="text-[14px] font-medium leading-[18px] text-fg">
-                  {option.label}
-                  {option.rec ? <span className="ml-1.5 text-[11.5px] font-normal text-accent">recommended</span> : null}
-                </span>
-                <span className="text-[12.5px] leading-[16px] text-muted">{option.why}</span>
-              </span>
-            </button>
-          ))}
-        </div>
-        <div className="mt-2.5 flex items-center gap-2">
-          <Button kind="accent" size="sm" className="flex-1">Send answer</Button>
-          <Button kind="tinted" size="sm">Open thread</Button>
-        </div>
-      </div>
-    </ThreadCard>
-  )
-}
-
-// ══ 4 · thread ══════════════════════════════════════════════════════════════════════════════════
-// THE TRANSCRIPT, full screen. Everything the desktop draws in a stacked right-hand drawer, in the one
-// place a phone has, with the same composer docked under it.
+// ══ 5 · thread ══════════════════════════════════════════════════════════════════════════════════
+// THE TRANSCRIPT, full screen — and the only place a composer belongs, because here there is a
+// conversation to add to. Everything the desktop draws in a stacked right-hand drawer, in the one place
+// a phone has.
 
 /** A tool call, at reading density: the glyph, the target, the elapsed, and a chevron that expands it. */
 function ToolCard({ icon, label, detail, elapsed }: { icon: ReactNode; label: string; detail?: string; elapsed?: string }) {
@@ -575,46 +537,34 @@ function ThreadScreen() {
             <ToolCard icon={<SquareTerminal size={14} />} label="nub --test packages/server" elapsed="8.1s" />
           </div>
 
-          {/* A ```done fence, as the app's own signal card: the gutter glyph, the eyebrow, the ledger. */}
-          <div className="rounded-[12px] border border-live/25 bg-live/[0.06] p-3.5">
+          {/* THE ASK, in the one place it is answerable: inside the thread, under the context that
+              produced it (maintainer 2026-08-17: "you should just be clicking into the thread in order
+              to review the rest of the message and the full context, and then answer the questions that
+              way"). The card wears the app's ordinary chrome — the "?" carries the state, not a colour. */}
+          <div className="rounded-[12px] border border-border-strong bg-panel p-3.5">
             <div className="flex items-baseline gap-2">
-              <Check size={13} strokeWidth={2.8} className={`${ON_CAP} text-live`} />
-              <span className="text-[11.5px] font-semibold uppercase tracking-[0.06em] text-live/90">Done</span>
+              <span className={ON_CAP}><AskBox size={15} /></span>
+              <span className="text-[11.5px] font-semibold uppercase tracking-[0.06em] text-muted">Question</span>
             </div>
-            <ul className="m-0 mt-2 flex list-disc flex-col gap-1.5 pl-4 text-[14px] leading-[20px] text-fg/85 marker:text-muted/60">
-              <li>
-                <span className="font-semibold">Fixed the cache collision</span> in{" "}
-                <code className="rounded bg-panel-2 px-1 py-[1px] font-mono-keep text-[12.5px]">src/resolver.ts</code> — the
-                lookup now keys on the normalized id.
-              </li>
-              <li>
-                <span className="font-semibold">Added a regression test</span>; the focused suite is green.
-              </li>
-            </ul>
+            <p className="m-0 mt-2 text-[15px] leading-[21px] text-fg">
+              Should the settings store use SQLite or a JSON file?
+            </p>
             <div className="mt-3 flex items-center gap-2">
-              <Button kind="filled" size="sm">Mark as done</Button>
-              <Button kind="tinted" size="sm">Reopen</Button>
+              <Button kind="accent" size="sm" className="flex-1">Answer</Button>
+              <Button kind="tinted" size="sm">Ask something back</Button>
             </div>
-          </div>
-
-          {/* The rest divider — the app's own "this is where the worker stopped" rule, which is also
-              what keeps the tail of a finished transcript from reading as an unfinished one. */}
-          <div className="flex items-center gap-3 py-1">
-            <span className="h-px flex-1 bg-border/60" />
-            <span className="shrink-0 text-[11.5px] text-muted/60">rested 4m</span>
-            <span className="h-px flex-1 bg-border/60" />
           </div>
         </div>
       </div>
-      <ComposerDock placeholder="Reply or steer…" />
+      <ComposerDock />
     </Canvas>
   )
 }
 
-// ══ 5 · answer ══════════════════════════════════════════════════════════════════════════════════
-// THE ASK, given the whole screen — the surface a card cannot hold: several questions at once. Each
-// option is a 56pt row, and the send action is docked rather than appended to the last card, because it
-// answers BOTH questions and must be reachable without scrolling to the bottom of the ask.
+// ══ 6 · answer ══════════════════════════════════════════════════════════════════════════════════
+// ANSWERING, pushed from the thread. Each option is a 56pt row, and the send action is docked rather
+// than appended to the last question, because it answers BOTH and must be reachable without scrolling
+// to the bottom of the ask.
 
 function OptionRow({
   letter,
@@ -630,11 +580,7 @@ function OptionRow({
   rec?: boolean
 }) {
   return (
-    <button
-      className={`flex min-h-[56px] w-full items-start gap-3 border-b border-border/60 px-3.5 py-3 text-left last:border-b-0 ${
-        chosen ? "bg-accent/[0.09]" : ""
-      }`}
-    >
+    <button className={`flex min-h-[56px] w-full items-start gap-3 px-4 py-3 text-left ${chosen ? "bg-accent/[0.09]" : ""}`}>
       <span
         className={`mt-[1px] flex size-[20px] shrink-0 items-center justify-center rounded-full border text-[11px] font-semibold ${
           chosen ? "border-accent bg-accent text-bg" : "border-border-strong text-muted"
@@ -653,12 +599,34 @@ function OptionRow({
   )
 }
 
+function QuestionBlock({
+  prompt,
+  options,
+}: {
+  prompt: string
+  options: { letter: string; label: string; why: string; chosen?: boolean; rec?: boolean }[]
+}) {
+  return (
+    <Group>
+      <div className="px-4 pb-2.5 pt-3">
+        <p className="m-0 text-[15px] font-medium leading-[21px] text-fg">{prompt}</p>
+      </div>
+      {options.map((option) => (
+        <div key={option.letter}>
+          <div className="h-px bg-border/70" />
+          <OptionRow {...option} />
+        </div>
+      ))}
+    </Group>
+  )
+}
+
 function AnswerScreen() {
   return (
     <Canvas>
       <NavBar back="Thread" title="2 questions" subtitle="Fix the cache collision" />
       <div className="min-h-0 flex-1 overflow-hidden pb-[100px]">
-        <div className="px-5 pt-4">
+        <div className="px-4 pt-4">
           <p className="m-0 text-[13.5px] leading-[19px] text-muted">
             The resolver fix is written and its test is green. Both of these change what ships, so they
             are yours to call.
@@ -666,29 +634,23 @@ function AnswerScreen() {
         </div>
 
         <GroupHeader>Question 1 of 2</GroupHeader>
-        <Group>
-          <div className="px-3.5 pb-2.5 pt-3">
-            <p className="m-0 text-[15px] font-medium leading-[21px] text-fg">
-              Should the settings store use SQLite or a JSON file?
-            </p>
-          </div>
-          <div className="h-px bg-border/70" />
-          <OptionRow letter="A" label="SQLite" why="Transactional, and it matches how sessions are already stored" chosen rec />
-          <OptionRow letter="B" label="JSON file" why="Zero deps and human-editable, but racy under concurrent writes" />
-          <OptionRow letter="C" label="Something else" why="Type your own answer" />
-        </Group>
+        <QuestionBlock
+          prompt="Should the settings store use SQLite or a JSON file?"
+          options={[
+            { letter: "A", label: "SQLite", why: "Transactional, and it matches how sessions are already stored", chosen: true, rec: true },
+            { letter: "B", label: "JSON file", why: "Zero deps and human-editable, but racy under concurrent writes" },
+            { letter: "C", label: "Something else", why: "Type your own answer" },
+          ]}
+        />
 
         <GroupHeader>Question 2 of 2</GroupHeader>
-        <Group>
-          <div className="px-3.5 pb-2.5 pt-3">
-            <p className="m-0 text-[15px] font-medium leading-[21px] text-fg">
-              Should the normalized key be written into the on-disk cache too?
-            </p>
-          </div>
-          <div className="h-px bg-border/70" />
-          <OptionRow letter="A" label="Migrate on next read" why="No downtime; a stale entry is corrected the first time it is hit" rec />
-          <OptionRow letter="B" label="Rebuild the cache once" why="Clean, but the first boot after the update is slow" />
-        </Group>
+        <QuestionBlock
+          prompt="Should the normalized key be written into the on-disk cache too?"
+          options={[
+            { letter: "A", label: "Migrate on next read", why: "No downtime; a stale entry is corrected the first time it is hit", rec: true },
+            { letter: "B", label: "Rebuild the cache once", why: "Clean, but the first boot after the update is slow" },
+          ]}
+        />
       </div>
       <div className="absolute inset-x-0 bottom-0 z-30 border-t border-border/70 bg-bg/85 px-4 pb-[30px] pt-2.5 backdrop-blur-xl">
         <Button kind="accent" size="lg" full>Send 1 of 2 answers</Button>
@@ -697,14 +659,14 @@ function AnswerScreen() {
   )
 }
 
-// ══ 6 · actions ═════════════════════════════════════════════════════════════════════════════════
+// ══ 7 · actions ═════════════════════════════════════════════════════════════════════════════════
 // THE THREAD-ACTIONS SHEET, over a receded board. Everything the desktop scatters across a row hover, a
-// header cluster and a footer, in one grouped list at the bottom of the screen where the thumb is.
+// header cluster and a footer, in one list at the bottom of the screen where the thumb is.
 
 function ActionsScreen() {
   return (
     <Canvas>
-      <SheetOver detent={0.68} behind={<BoardScreen dockOps={false} />}>
+      <SheetOver detent={0.68} behind={<BoardRestedScreen />}>
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden pt-2">
           <div className="flex items-start gap-3 px-4 pb-3 pt-1">
             <span className="pt-[2px]"><AskBox /></span>
@@ -716,7 +678,7 @@ function ActionsScreen() {
             </div>
           </div>
 
-          <div className="flex flex-col gap-3 overflow-hidden pb-[34px]">
+          <div className="flex flex-col gap-4 overflow-hidden pb-[34px]">
             <Group>
               <Row icon={<Check size={16} className="text-live" />} label="Mark as done" />
               <RowRule inset={53} />
@@ -745,12 +707,14 @@ function ActionsScreen() {
   )
 }
 
-// ══ 7 · dispatch ════════════════════════════════════════════════════════════════════════════════
-// THE FULL-SCREEN COMPOSER, WITH THE KEYBOARD UP — which is the only honest way to draw it. Tapping the
-// dock's prompt box promotes it to this: a real writing surface with the dispatch controls under it, in
-// the 553 points that survive once the keyboard is showing. Everything below that line has to be
-// reachable by scrolling the form, so nothing lives there that you need WHILE typing; what you do need
-// mid-sentence (an attachment, the profile you are dispatching under) rides the accessory bar.
+// ══ 8 · dispatch ════════════════════════════════════════════════════════════════════════════════
+// NEW THREAD, WITH THE KEYBOARD UP — the only honest way to draw a composer. The + opens this: a real
+// writing surface with the dispatch controls under it, in the 553 points that survive once the keyboard
+// is showing. Everything below that line has to be reached by scrolling the form, so nothing lives
+// there that you need WHILE typing; what you do need mid-sentence rides the accessory bar.
+//
+// The verb is SUBMIT (maintainer 2026-08-17). "Dispatch" is what the system does with the thread;
+// "Submit" is what the person at the keyboard is doing.
 
 function DispatchScreen() {
   return (
@@ -759,10 +723,10 @@ function DispatchScreen() {
         title="New thread"
         subtitle="nubjs/nub"
         leading={<button className="px-2 text-[17px] text-fg/85">Cancel</button>}
-        trailing={<button className="px-2 text-[17px] font-semibold text-accent">Dispatch</button>}
+        trailing={<button className="px-2 text-[17px] font-semibold text-accent">Submit</button>}
       />
       <div className="min-h-0 flex-1 overflow-hidden pb-[347px]">
-        <div className="px-5 pb-1 pt-4">
+        <div className="px-4 pb-1 pt-4">
           <p className="m-0 text-[17px] leading-[23px] text-fg">
             Port the v2 drivers to the new host API, then land it on main.
             <span className="ml-[1px] inline-block h-[19px] w-[2px] translate-y-[3px] bg-accent" />
@@ -782,8 +746,8 @@ function DispatchScreen() {
           <Row icon={<Sparkles size={15} className="text-fg" />} iconTint="bg-[#b47feb]/20" label="Model" value="Opus 5" chevron />
           <RowRule inset={57} />
           {/* EFFORT IS FIVE CELLS, so it takes its own full-width row rather than sharing one with its
-              label — squeezed beside "Effort" the segmented control had 37pt per cell and "xhigh" had
-              to be dropped, which quietly misrepresents what the product offers. */}
+              label — squeezed beside "Effort" the segmented control had 37pt per cell and "xhigh" had to
+              be dropped, which quietly misrepresents what the product offers. */}
           <div className="flex flex-col gap-2 px-4 py-2.5">
             <div className="flex items-center gap-3">
               <span className="flex size-[29px] shrink-0 items-center justify-center rounded-[7px] bg-[#e8b923]/18">
@@ -829,19 +793,19 @@ function DispatchScreen() {
   )
 }
 
-// ══ 8 · snooze ══════════════════════════════════════════════════════════════════════════════════
-// A SMALL-DETENT SHEET, and the argument for detents at all: this is a five-second decision, so it
-// takes half the screen and leaves the board visible behind it. Every option resolves its own wall
-// clock on the right — "this evening" is not an instruction the reader should have to convert.
+// ══ 9 · snooze ══════════════════════════════════════════════════════════════════════════════════
+// A SMALL-DETENT SHEET, and the argument for detents at all: this is a five-second decision, so it takes
+// half the screen and leaves the board visible behind it. Every option resolves its own wall clock on
+// the right — "this evening" is not an instruction the reader should have to convert.
 
 function SnoozeScreen() {
   return (
     <Canvas>
-      <SheetOver detent={0.5} behind={<BoardScreen dockOps={false} />}>
+      <SheetOver detent={0.5} behind={<BoardRestedScreen />}>
         {/* NO confirm button. Every row here IS the choice, so a Done would be a second tap that can
             only ever mean "yes, the thing I just tapped" — and a permanently-dim one, until then. */}
         <SheetHeader title="Snooze" leading={<button className="px-2 text-[16px] text-fg/85">Cancel</button>} />
-        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden pt-3">
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden pt-3">
           <Group>
             <Row icon={<Clock size={16} className="text-muted" />} label="In 30 minutes" value="10:11 AM" />
             <RowRule inset={53} />
@@ -854,7 +818,7 @@ function SnoozeScreen() {
           <Group>
             <Row icon={<Timer size={16} className="text-muted" />} label="Pick a date and time…" chevron />
           </Group>
-          <p className="m-0 px-6 text-[12.5px] leading-[17px] text-muted/70">
+          <p className="m-0 px-4 text-[12.5px] leading-[17px] text-muted/70">
             A snoozed thread moves to Held and wakes itself at the time you pick. Nothing stops running.
           </p>
         </div>
@@ -863,9 +827,9 @@ function SnoozeScreen() {
   )
 }
 
-// ══ 9 · settings ════════════════════════════════════════════════════════════════════════════════
-// THE SETTINGS DRAWER, as grouped rows. The desktop drawer is a scrolling form; the phone version is the
-// same content in the shape an iOS reader already knows how to skim.
+// ══ 10 · settings ═══════════════════════════════════════════════════════════════════════════════
+// THE SETTINGS DRAWER, as full-width rows. The desktop drawer is a scrolling form; this is the same
+// content in the shape a phone reader already knows how to skim.
 
 function SettingsScreen() {
   return (
@@ -886,16 +850,7 @@ function SettingsScreen() {
             <Segmented className="ml-auto w-[150px]" options={["Sans", "Mono"]} value="Sans" />
           </div>
           <RowRule inset={57} />
-          <Row icon={<Sparkles size={15} className="text-fg" />} iconTint="bg-elevated" label="Compact cards" detail="One line per thread on the board" trailing={<Toggle />} />
-        </Group>
-
-        <GroupHeader>Notifications</GroupHeader>
-        <Group>
-          <Row icon={<Bell size={15} className="text-fg" />} iconTint="bg-[#e8b923]/18" label="When a thread needs you" trailing={<Toggle on />} />
-          <RowRule inset={57} />
-          <Row icon={<Check size={15} className="text-fg" />} iconTint="bg-[#4ac97e]/18" label="When a thread finishes" trailing={<Toggle on />} />
-          <RowRule inset={57} />
-          <Row icon={<Github size={15} className="text-fg" />} iconTint="bg-[#b47feb]/18" label="When a watched PR settles" trailing={<Toggle />} />
+          <Row icon={<Sparkles size={15} className="text-fg" />} iconTint="bg-elevated" label="Compact rows" detail="One line per thread on the board" trailing={<Toggle />} />
         </Group>
 
         <GroupHeader>Dispatch defaults</GroupHeader>
@@ -905,6 +860,21 @@ function SettingsScreen() {
           <Row icon={<Zap size={15} className="text-fg" />} iconTint="bg-elevated" label="Effort" value="High" chevron />
           <RowRule inset={57} />
           <Row icon={<Wrench size={15} className="text-fg" />} iconTint="bg-elevated" label="Permissions" value="Ask" chevron />
+        </Group>
+
+        <GroupHeader>Alerts</GroupHeader>
+        <Group>
+          {/* BROWSER notifications, not push. This is a website, so what it can offer is the tab's own
+              Notification permission and a title badge — there is no APNs and no lock screen here. */}
+          <Row
+            icon={<Bell size={15} className="text-fg" />}
+            iconTint="bg-[#e8b923]/18"
+            label="Alert me when a thread needs me"
+            detail="Uses this browser's notifications"
+            trailing={<Toggle on />}
+          />
+          <RowRule inset={57} />
+          <Row icon={<Check size={15} className="text-fg" />} iconTint="bg-[#4ac97e]/18" label="Alert me when a thread finishes" trailing={<Toggle />} />
         </Group>
 
         <GroupHeader>Frizz</GroupHeader>
@@ -918,9 +888,9 @@ function SettingsScreen() {
   )
 }
 
-// ══ 10 · subagent ═══════════════════════════════════════════════════════════════════════════════
+// ══ 11 · subagent ═══════════════════════════════════════════════════════════════════════════════
 // THE DRILL-IN SHEET, at the large detent, over its parent thread. This is the phone's answer to the
-// desktop's STACKED drawers: a sub-agent opened from a thread opens over it, at 93%, so the parent stays
+// desktop's STACKED drawers: a sub-agent opened from a thread opens over it, so the parent stays
 // visible above it and a flick down returns to exactly where you were.
 
 function SubAgentScreen() {
@@ -986,57 +956,6 @@ function SubAgentScreen() {
   )
 }
 
-// ══ 11 · switcher ═══════════════════════════════════════════════════════════════════════════════
-// THE PROJECT RAIL, as a sheet. The desktop keeps an optional permanent 57px column of every project; a
-// phone cannot spend that, and should not — a standing invitation to leave the thread you are in is
-// worse on the surface where you can only see one thing at a time. So it lives behind the board title,
-// which carries a chevron saying so.
-
-function SwitcherScreen() {
-  return (
-    <Canvas>
-      <SheetOver detent={0.66} behind={<BoardScreen dockOps={false} />}>
-        <SheetHeader title="Switch project" trailing={<button className="px-2 text-[16px] text-fg/85">Done</button>} />
-        <div className="min-h-0 flex-1 overflow-hidden pt-3">
-          <div className="px-4 pb-3">
-            <div className="flex h-[36px] items-center gap-2 rounded-[10px] bg-panel-2 px-2.5">
-              <Search size={15} className="shrink-0 text-muted/70" />
-              <span className="text-[16px] text-muted/60">Filter</span>
-            </div>
-          </div>
-          <Group>
-            {PROJECTS.slice(0, 5).map((p, i) => (
-              <div key={p.slug}>
-                {i > 0 ? <RowRule inset={65} /> : null}
-                <div className={`flex min-h-[52px] items-center gap-3 pl-4 pr-3.5 ${i === 0 ? "bg-white/[0.04]" : ""}`}>
-                  <ProjectSquare label={p.initial} tint={p.tint} size={34} />
-                  <div className="flex min-w-0 flex-1 flex-col">
-                    <span className="truncate text-[16px] leading-[21px] tracking-[-0.01em] text-fg">{p.label}</span>
-                    <span className="truncate font-mono-keep text-[12px] leading-[16px] text-muted/70">{p.path}</span>
-                  </div>
-                  {p.asks > 0 ? (
-                    <span className="flex size-[20px] shrink-0 items-center justify-center rounded-full bg-accent text-[11.5px] font-semibold text-bg">
-                      {p.asks}
-                    </span>
-                  ) : null}
-                  {i === 0 ? <Check size={17} className="shrink-0 text-fg" strokeWidth={2.6} /> : null}
-                </div>
-              </div>
-            ))}
-          </Group>
-          {/* `pt-3` only — a `px-4` wrapper around a Group would inset it TWICE, and the second inset
-              is visible the moment it sits under a full-width list. */}
-          <div className="pt-3">
-            <Group>
-              <Row icon={<Plus size={16} className="text-muted" />} label="Add a project" />
-            </Group>
-          </div>
-        </div>
-      </SheetOver>
-    </Canvas>
-  )
-}
-
 // ══ 12 · search ═════════════════════════════════════════════════════════════════════════════════
 // THE COMMAND PALETTE, which on a phone is simply SEARCH. ⌘K has no thumb, so the palette stops being a
 // chord and becomes the magnifier in the nav bar — and its verbs stay in the results, under their own
@@ -1062,10 +981,13 @@ function SearchScreen() {
         <Group>
           <Row icon={<AskBox />} label="Fix the cache collision in the resolver" detail="nubjs/nub · rested 4m" />
           <RowRule inset={53} />
-          <RowRule inset={53} />
           <Row icon={<DoneBox />} label="Make the resolver cache keys stable" detail="nubjs/nub · done yesterday" />
           <RowRule inset={53} />
-          <Row icon={<StatusBox><Hourglass size={11} className="text-muted/75" /></StatusBox>} label="Resolver cache: migrate on read" detail="colinhacks/zod · held, wakes 5:00 PM" />
+          <Row
+            icon={<StatusBox><Hourglass size={11} className="text-muted/75" /></StatusBox>}
+            label="Resolver cache: migrate on read"
+            detail="colinhacks/zod · held, wakes 5:00 PM"
+          />
         </Group>
         <GroupHeader>Plans</GroupHeader>
         <Group>
@@ -1079,7 +1001,7 @@ function SearchScreen() {
           <RowRule inset={53} />
           <Row icon={<SettingsIcon size={16} className="text-muted" />} label="Open settings" />
         </Group>
-        <p className="m-0 px-6 pt-4 text-[12.5px] leading-[17px] text-muted/70">
+        <p className="m-0 px-4 pt-4 text-[12.5px] leading-[17px] text-muted/70">
           Search covers every project on this machine, not just the one you are in.
         </p>
       </div>
@@ -1089,9 +1011,8 @@ function SearchScreen() {
 
 // ══ 13 · empty ══════════════════════════════════════════════════════════════════════════════════
 // A PROJECT WITH NOTHING IN IT. The desktop's first-run state centres the prompt box as the whole
-// screen; the phone cannot centre a control it also needs docked, so the prompt box stays where it
-// always is and the empty space above it carries the invitation instead. Three starters, because the
-// hardest part of a fresh board is not the composer — it is knowing what to type into it.
+// screen. Here the + is the way in, so the empty space carries the invitation instead — three starters,
+// because the hard part of a fresh board is not the composer, it is knowing what to type into it.
 
 function EmptyScreen() {
   return (
@@ -1102,18 +1023,15 @@ function EmptyScreen() {
           <span className="flex items-center gap-1.5">
             <ProjectSquare label="P" tint="bg-[#6b7280] text-bg" size={17} />
             <span className="font-mono-keep text-[15px]">pullfrog/web</span>
-            <ChevronDown size={13} className="text-muted/70" />
           </span>
         }
         trailing={<NavAction label="Board actions"><Ellipsis size={20} /></NavAction>}
       />
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-8 pb-[110px]">
-        {/* THE RASTER ICON, not `/favicon.svg`. That file is one 58KB path — the mark's loose fibers as
-            a single mega-geometry — and Chrome re-tessellates it on every raster: the three screens that
-            drew it could not complete a 390×844 headless screenshot in TEN MINUTES, while every screen
-            without it shot in sixteen seconds. An app icon is raster on iOS anyway — and it is the TOUCH
-            icon rather than `icon-192.png`, which is transparent-backed and reads as a loose yellow
-            squiggle once it is drawn at notification size. */}
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 pb-[83px]">
+        {/* THE RASTER ICON, not `/favicon.svg`. That file is one 58KB path — the mark's loose fibers as a
+            single mega-geometry — and Chrome re-tessellates it on every raster: the screens that drew it
+            could not complete a 390×844 headless screenshot in TEN MINUTES, while every screen without
+            it shot in sixteen seconds. */}
         <img src="/apple-touch-icon.png" width={64} height={64} alt="" className="rounded-[15px] opacity-90" />
         <h2 className="m-0 mt-4 text-[19px] font-semibold tracking-[-0.015em] text-fg">No threads yet</h2>
         <p className="m-0 mt-1.5 text-center text-[14px] leading-[20px] text-muted">
@@ -1134,131 +1052,21 @@ function EmptyScreen() {
           )}
         </div>
       </div>
-      <ComposerDock />
-    </Canvas>
-  )
-}
-
-// ══ 14 · notification ═══════════════════════════════════════════════════════════════════════════
-// THE LOCK SCREEN, and the reason a phone client is worth building at all. Frizz already knows the
-// moment a worker stops and asks — on a desktop that is a notification you walk back to your machine
-// for. Here the ask arrives with its OPTIONS attached, so the round trip that unblocks a worker is one
-// tap from a locked phone, and the thread is running again before you have unlocked it.
-//
-// Two rules this obeys. The notification carries the QUESTION, never the worker's reasoning — a
-// notification is a decision surface, not a transcript. And the recommended option leads, marked, so
-// the fast path is also the considered one.
-
-/**
- * The app icon at notification size — and a finding rather than a detail.
- *
- * The Frizz mark is five fibers pulling loose from a wrapped bundle, and `ProjectGrid.tsx` already
- * records that below ~70px the strands collapse into a silhouette. A notification icon is 20–24pt, so
- * the shipped mark cannot survive there: drawn bare it reads as a yellow scribble. On its own tile it at
- * least reads as AN APP, which is what this slot is really for — but a phone client would want a
- * simplified mark cut for the small sizes, and that is a design decision for the maintainer, not one to
- * make inside a mockup.
- */
-function AppMark({ quiet }: { quiet?: boolean }) {
-  return (
-    <span
-      className={`mt-[1px] flex size-[22px] shrink-0 items-center justify-center overflow-hidden rounded-[6px] border border-white/[0.08] bg-[#191a20] ${
-        quiet ? "opacity-80" : ""
-      }`}
-    >
-      <img src="/apple-touch-icon.png" width={18} height={18} alt="" />
-    </span>
-  )
-}
-
-function NotificationScreen() {
-  return (
-    <Canvas className="bg-black">
-      {/* The wallpaper: a quiet radial wash rather than a photo, so the notification is what the eye
-          lands on and the mockup is judging the notification instead of the picture behind it. */}
-      <div
-        className="absolute inset-0"
-        style={{ background: "radial-gradient(120% 90% at 50% 0%, #1b1d22 0%, #0d0e10 55%, #08090b 100%)" }}
+      <Fab />
+      <TabBar
+        tabs={[
+          { id: "rested", label: "Rested", icon: <StatusBox size={TAB_ICON} />, count: 0 },
+          { id: "active", label: "Active", icon: <BoxSpinnerM size={TAB_ICON} frozen={still} />, count: 0 },
+          { id: "held", label: "Held", icon: <StatusBox size={TAB_ICON}><Hourglass size={13} className="text-muted/75" /></StatusBox>, count: 0 },
+          { id: "done", label: "Done", icon: <DoneBox size={TAB_ICON} />, count: 0 },
+        ]}
+        active="rested"
       />
-      <div className="relative flex min-h-0 flex-1 flex-col pb-[26px] pt-[76px]">
-        <div className="flex flex-col items-center gap-1">
-          <span className="text-[22px] font-medium tracking-[-0.01em] text-fg/85">Saturday, 16 August</span>
-          <span className="text-[86px] font-semibold leading-[96px] tracking-[-0.03em] text-fg tabular-nums">9:41</span>
-        </div>
-
-        {/* Notifications stack at the BOTTOM of the lock screen, above the two utility buttons — iOS
-            moved them there in 16 and it is the half of the screen a thumb can reach. */}
-        <div className="mt-auto flex flex-col gap-2 px-3">
-          {/* The expanded (long-pressed) notification, with the ask's own options as actions. */}
-          <div className="overflow-hidden rounded-[20px] border border-white/[0.07] bg-white/[0.09] backdrop-blur-2xl">
-            <div className="flex items-start gap-2.5 px-3.5 pb-2.5 pt-3">
-              <AppMark />
-              <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
-                <div className="flex items-baseline gap-2">
-                  <span className="min-w-0 flex-1 truncate text-[13px] font-medium tracking-[0.01em] text-fg/70">
-                    FRIZZ · nubjs/nub
-                  </span>
-                  <span className="shrink-0 text-[12.5px] text-fg/50">now</span>
-                </div>
-                <span className="text-[15px] font-semibold leading-[20px] text-fg">
-                  Fix the cache collision in the resolver
-                </span>
-                <span className="text-[15px] leading-[20px] text-fg/80">
-                  Should the settings store use SQLite or a JSON file?
-                </span>
-              </div>
-            </div>
-            {/* The two answers, as notification actions. Answering here never opens the app. */}
-            <div className="flex border-t border-white/[0.09]">
-              <button className="flex h-[46px] flex-1 items-center justify-center gap-1.5 border-r border-white/[0.09] text-[15px] font-medium text-accent">
-                SQLite
-                <span className="text-[11.5px] font-normal text-accent/70">recommended</span>
-              </button>
-              <button className="flex h-[46px] flex-1 items-center justify-center text-[15px] text-fg/85">
-                JSON file
-              </button>
-            </div>
-          </div>
-
-          {/* A second, quieter notification — the finished-work kind, which needs no action. */}
-          <div className="flex items-start gap-2.5 rounded-[20px] border border-white/[0.05] bg-white/[0.06] px-3.5 py-3 backdrop-blur-2xl">
-            <AppMark quiet />
-            <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
-              <div className="flex items-baseline gap-2">
-                <span className="min-w-0 flex-1 truncate text-[13px] font-medium tracking-[0.01em] text-fg/60">
-                  FRIZZ · colinhacks/zod
-                </span>
-                <span className="shrink-0 text-[12.5px] text-fg/45">14m ago</span>
-              </div>
-              <span className="truncate text-[15px] leading-[20px] text-fg/80">
-                Port the v2 drivers — done, landed on main
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {/* The two lock-screen utilities, for scale and for honesty about what else lives down here. */}
-        <div className="mt-5 flex items-center justify-between px-9">
-          {[
-            <path key="t" d="M9 2h6v3a3 3 0 0 1-1 2.2V22h-4V7.2A3 3 0 0 1 9 5Z" />,
-            <>
-              <path key="c1" d="M4 8h3l1.5-2h7L17 8h3v11H4Z" />
-              <circle key="c2" cx="12" cy="13.5" r="3.5" />
-            </>,
-          ].map((glyph, i) => (
-            <span key={i} className="flex size-[50px] items-center justify-center rounded-full bg-white/[0.12] backdrop-blur-2xl">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" className="text-fg/90" aria-hidden>
-                {glyph}
-              </svg>
-            </span>
-          ))}
-        </div>
-      </div>
     </Canvas>
   )
 }
 
-// ══ 15 · plan ═══════════════════════════════════════════════════════════════════════════════════
+// ══ 14 · plan ═══════════════════════════════════════════════════════════════════════════════════
 // A PLAN, READ ON A PHONE. Plans are the one artifact in Frizz that is genuinely long-form prose, and
 // the one thing a phone is unambiguously good at. So the plan drawer becomes a reading surface — the
 // app's own `.md-body` rhythm at the phone's measure — with the single verb it exists for docked at the
@@ -1273,7 +1081,7 @@ function PlanScreen() {
         subtitle="3 threads from this plan"
         trailing={<NavAction label="Plan actions"><Ellipsis size={20} /></NavAction>}
       />
-      <div className="min-h-0 flex-1 overflow-hidden px-5 pb-[96px] pt-4">
+      <div className="min-h-0 flex-1 overflow-hidden px-4 pb-[96px] pt-4">
         {/* The app's own markdown class, so the phone reads plans in exactly the rhythm the desktop
             does — one prose scale for the product, not a second one invented here. */}
         <div className="md-body" style={{ fontSize: 15 }}>
@@ -1317,7 +1125,7 @@ cache.set(key, resolved)`}</code></pre>
   )
 }
 
-// ══ 16 · kit ════════════════════════════════════════════════════════════════════════════════════
+// ══ 15 · kit ════════════════════════════════════════════════════════════════════════════════════
 // THE CONTROL VOCABULARY on one screen, so the pieces can be judged against each other rather than one
 // at a time inside a layout.
 
@@ -1349,7 +1157,7 @@ function KitScreen() {
               <div className="flex items-center gap-2">
                 <Button kind="plain" size="sm">Load earlier</Button>
                 <Button kind="tinted" size="sm">Retry</Button>
-                <Button kind="filled" size="sm">Dispatch</Button>
+                <Button kind="filled" size="sm">Submit</Button>
               </div>
             </div>
           </KitSection>
@@ -1394,14 +1202,10 @@ function KitScreen() {
             </div>
           </KitSection>
 
-          <KitSection title="Prompt box">
+          <KitSection title="Reply box">
             <div className="flex items-end gap-2">
-              <div className="flex min-h-[44px] min-w-0 flex-1 flex-col gap-2 rounded-[22px] border border-border-strong bg-panel px-3.5 py-[11px]">
-                <span className="text-[16px] leading-[21px] text-fg">Port the v2 drivers</span>
-                <div className="flex items-center gap-1.5">
-                  <Chip>opus · high</Chip>
-                  <Chip>ask</Chip>
-                </div>
+              <div className="flex min-h-[44px] min-w-0 flex-1 items-center rounded-[22px] border border-border-strong bg-panel px-3.5 py-[11px]">
+                <span className="text-[16px] leading-[21px] text-fg">Use SQLite</span>
               </div>
               <button aria-label="Send" className="flex size-[44px] shrink-0 items-center justify-center rounded-full bg-accent text-bg">
                 <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -1421,21 +1225,20 @@ function KitScreen() {
 
 const SCREENS: { id: string; title: string; note: string; render: () => ReactNode }[] = [
   { id: "home", title: "1 · Home", note: "Every project on the machine, sorted by what wants you. The accent count is the ask.", render: () => <HomeScreen /> },
-  { id: "board", title: "2 · Project board", note: "Rested → Active → Held → Done, as cards. One card mid-swipe.", render: () => <BoardScreen /> },
-  { id: "board-ask", title: "3 · Answering in place", note: "The asking card expanded on the board — the whole argument for cards over rows.", render: () => <BoardScreen ask={<AskCardExpanded />} /> },
-  { id: "thread", title: "4 · Thread", note: "The transcript full screen, composer docked under the thumb.", render: () => <ThreadScreen /> },
-  { id: "answer", title: "5 · Answering, full screen", note: "Several questions at once: one 56pt row per option, send docked.", render: () => <AnswerScreen /> },
-  { id: "actions", title: "6 · Thread actions", note: "A medium-detent sheet over a receded board.", render: () => <ActionsScreen /> },
-  { id: "dispatch", title: "7 · New thread", note: "The prompt box promoted, drawn with the keyboard up because that is the real height.", render: () => <DispatchScreen /> },
-  { id: "snooze", title: "8 · Snooze", note: "A five-second decision at a small detent, every option resolving its own clock.", render: () => <SnoozeScreen /> },
-  { id: "settings", title: "9 · Settings", note: "The settings drawer as grouped rows.", render: () => <SettingsScreen /> },
-  { id: "subagent", title: "10 · Sub-agent", note: "The drill-in, at the large detent over its parent — the desktop's stacked drawers.", render: () => <SubAgentScreen /> },
-  { id: "switcher", title: "11 · Project switcher", note: "The rail, behind the title chevron rather than a permanent column.", render: () => <SwitcherScreen /> },
+  { id: "board", title: "2 · Board — Rested", note: "The cue, full width. An ask is marked by the accent ? and nothing else. One row mid-swipe.", render: () => <BoardRestedScreen /> },
+  { id: "board-active", title: "3 · Board — Active", note: "Spinning threads with their live children under them — the only band that carries a liveness dot.", render: () => <BoardActiveScreen /> },
+  { id: "board-held", title: "4 · Board — Held", note: "Dimmed, and every row says what it is waiting for.", render: () => <BoardHeldScreen /> },
+  { id: "thread", title: "5 · Thread", note: "The transcript, and the only surface with a composer. The ask is answered here, in context.", render: () => <ThreadScreen /> },
+  { id: "answer", title: "6 · Answering", note: "Pushed from the thread: one 56pt row per option, send docked.", render: () => <AnswerScreen /> },
+  { id: "actions", title: "7 · Thread actions", note: "A medium-detent sheet over a receded board.", render: () => <ActionsScreen /> },
+  { id: "dispatch", title: "8 · New thread", note: "What the + opens, drawn with the keyboard up because that is the real height.", render: () => <DispatchScreen /> },
+  { id: "snooze", title: "9 · Snooze", note: "A five-second decision at a small detent, every option resolving its own clock.", render: () => <SnoozeScreen /> },
+  { id: "settings", title: "10 · Settings", note: "Browser notifications, not push — this is a website.", render: () => <SettingsScreen /> },
+  { id: "subagent", title: "11 · Sub-agent", note: "The drill-in, at the large detent over its parent — the desktop's stacked drawers.", render: () => <SubAgentScreen /> },
   { id: "search", title: "12 · Search", note: "The command palette, without a chord to open it.", render: () => <SearchScreen /> },
   { id: "empty", title: "13 · Empty board", note: "A project with nothing in it yet, and three ways to start.", render: () => <EmptyScreen /> },
-  { id: "notification", title: "14 · Lock screen", note: "The ask arrives with its options attached — the round trip that unblocks a worker, from a locked phone.", render: () => <NotificationScreen /> },
-  { id: "plan", title: "15 · Plan", note: "The one genuinely long-form artifact in Frizz, read at the phone's measure.", render: () => <PlanScreen /> },
-  { id: "kit", title: "16 · Controls", note: "The whole vocabulary on one screen.", render: () => <KitScreen /> },
+  { id: "plan", title: "14 · Plan", note: "The one genuinely long-form artifact in Frizz, read at the phone's measure.", render: () => <PlanScreen /> },
+  { id: "kit", title: "15 · Controls", note: "The whole vocabulary on one screen.", render: () => <KitScreen /> },
 ]
 
 function Gallery() {
@@ -1453,7 +1256,7 @@ function Gallery() {
       <header className="mb-10 flex max-w-[720px] flex-col gap-2.5">
         <h1 className="m-0 text-[24px] font-semibold tracking-[-0.02em] text-fg">Frizz on a phone</h1>
         <p className="m-0 text-[14px] leading-[21px] text-muted">
-          Sixteen screens, drawn at 390×844 in the app's own stylesheet and tokens. Append{" "}
+          Fifteen screens, drawn at 390×844 in the app's own stylesheet and tokens. Append{" "}
           <code className="rounded bg-panel-2 px-1 py-0.5 font-mono-keep text-[12.5px]">?screen=board</code> for one on
           its own at 1:1, or <code className="rounded bg-panel-2 px-1 py-0.5 font-mono-keep text-[12.5px]">?font=mono</code>{" "}
           for the other font setting.

@@ -3500,3 +3500,45 @@ test("tailer: cold ARCHIVED rows yield their prime slots until every visible row
   for (let i = 0; i < 5; i++) t.tick()
   assert.equal(t.get("archived-0")?.lastAssistant, "all done", "the archive converges behind the visible board")
 })
+
+// FRONTMATTER, THEN MARKDOWN (2026-08-17). `reason:` was one LINE, and workers were visibly straining
+// against it — the fence that prompted this crammed a known-answer-control rationale, two conditions and a
+// commitment into a single sentence. A handoff is prose; forcing it through a key/value slot made it worse
+// prose. A `---` line now ends the structure and everything after it is ordinary Markdown.
+test("parseSignalFence: a `---` line ends the frontmatter and everything after it is prose", () => {
+  const fence = ["```awaiting", "shell: bb4sns0ye", "for: 20m", "---", "Known-answer control on the detector.", "", "- angular must report clean", "- puppeteer must be flagged", "```"].join("\n")
+  const parsed = parseSignalFence(fence)
+  assert.deepEqual(parsed?.hints, [{ kind: "shell", value: "bb4sns0ye" }, { kind: "for", value: "20m" }])
+  // The prose survives INTACT — blank line and list markers included. Flattening it is what the old
+  // one-line `reason:` did.
+  assert.equal(parsed?.body, "Known-answer control on the detector.\n\n- angular must report clean\n- puppeteer must be flagged")
+})
+
+// Every fence written before the delimiter existed must keep parsing exactly as it did.
+test("parseSignalFence: with no `---`, the whole fence is frontmatter and `reason:` is still a hint", () => {
+  const parsed = parseSignalFence("```awaiting\nshell: bb4sns0ye\nfor: 20m\nreason: one line as before\n```")
+  assert.deepEqual(parsed?.hints, [
+    { kind: "shell", value: "bb4sns0ye" },
+    { kind: "for", value: "20m" },
+    { kind: "reason", value: "one line as before" },
+  ])
+  assert.equal(parsed?.body, "")
+})
+
+// THE DELIMITER IS WHAT MAKES A BAD LINE REFUSABLE. Before it, a `word:` line is a CLAIM to be structural,
+// so a retired kind there is an error the worker gets told about; after it, the same characters are prose.
+// Previously the two were indistinguishable and a `pr-watch:` line quietly became body text.
+test("parseSignalFence: a retired kind in frontmatter falls to the body, where the scheduler can name it", () => {
+  const parsed = parseSignalFence("```awaiting\npr-watch: acme/app#1\nfor: 2h\n---\nthe handoff\n```")
+  assert.deepEqual(parsed?.hints, [{ kind: "for", value: "2h" }])
+  assert.match(parsed?.body ?? "", /pr-watch: acme\/app#1/, "the offending line is still visible to SOURCE 12")
+  assert.match(parsed?.body ?? "", /the handoff/)
+})
+
+// A structural line AFTER the delimiter is prose, not a hint — otherwise a worker quoting the grammar in
+// its own handoff would arm a wait by accident.
+test("parseSignalFence: a `shell:` line after the delimiter is prose, not a wait", () => {
+  const parsed = parseSignalFence("```awaiting\nfor: 2h\n---\nI considered `shell: bnope` but it had already finished.\n```")
+  assert.deepEqual(parsed?.hints, [{ kind: "for", value: "2h" }])
+  assert.match(parsed?.body ?? "", /shell: bnope/)
+})

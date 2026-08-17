@@ -127,3 +127,29 @@ test("an empty done body is allowed (body may be '')", () => {
   const segs = splitFenceBlocks("```done\n\n```")
   assert.deepEqual(segs, [{ kind: "fence", fenceKind: "done", body: "", hints: [] }])
 })
+
+// THE CLIENT'S SPLIT MUST MATCH THE TAILER'S (parseSignalFence). The server decides whether a fence parks
+// and the client decides how it reads; a disagreement about where the structure ends is a fence that
+// renders one way and behaves another — the exact class of bug that had `pr-watch:` printing at the human
+// while frizz treated the fence as naming nothing.
+test("a `---` line ends the frontmatter here too, and the prose survives intact", () => {
+  const { hints, body } = parseFenceBody("shell: bb4sns0ye\nfor: 20m\n---\nKnown-answer control.\n\n- angular clean\n- puppeteer flagged", "awaiting")
+  assert.deepEqual(hints, [{ kind: "shell", value: "bb4sns0ye" }, { kind: "for", value: "20m" }])
+  assert.equal(body, "Known-answer control.\n\n- angular clean\n- puppeteer flagged")
+})
+
+test("no `---` parses exactly as it did before the delimiter existed", () => {
+  const { hints, body } = parseFenceBody("shell: bb4sns0ye\nfor: 20m\nreason: one line", "awaiting")
+  assert.deepEqual(hints, [
+    { kind: "shell", value: "bb4sns0ye" },
+    { kind: "for", value: "20m" },
+    { kind: "reason", value: "one line" },
+  ])
+  assert.equal(body, "")
+})
+
+test("a structural line AFTER the delimiter is prose, so quoting the grammar cannot arm a wait", () => {
+  const { hints, body } = parseFenceBody("for: 2h\n---\nI considered `shell: bnope` but it had finished.", "awaiting")
+  assert.deepEqual(hints, [{ kind: "for", value: "2h" }])
+  assert.match(body, /shell: bnope/)
+})

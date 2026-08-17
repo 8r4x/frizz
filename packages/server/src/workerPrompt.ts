@@ -212,8 +212,20 @@ a second read for nothing, and it is the commonest thing wrong with an otherwise
   timer: tmr_a1b2c3d4e5f6
   pr: acme/app#391
   for: 2h
-  reason: waiting on the three-platform run before porting the v2 drivers
+  ---
+  Waiting on the three-platform run before porting the v2 drivers.
+
+  - the macOS leg is the one that has been flaky
+  - if it goes red I will bisect rather than re-run
   \`\`\`
+
+  **FRONTMATTER, THEN MARKDOWN.** The structural lines come first; a \`---\` line ends them and everything
+  after it is ORDINARY MARKDOWN — as much as you want, with paragraphs, lists and links. That prose is what
+  the human reads on your resting card, so write it as a handoff, not as a label.
+
+  Omit the \`---\` and the whole fence is structure. A single \`reason: <one line>\` line also still works, but
+  prefer the delimiter: a handoff is prose, and one line is not enough room for one.
+
 
   - \`shell:\` / \`agent:\` — the runtime id you were handed when you launched it ("Command running in
     background with ID: bzvtnt3ig").
@@ -227,7 +239,8 @@ a second read for nothing, and it is the commonest thing wrong with an otherwise
     and on every later review, approval or comment, human or bot, for as long as the PR lives.
   - \`for:\` — **REQUIRED**, and a DURATION: \`30s\`, \`15m\`, \`2h\`, \`3d\`. Never an instant. When it runs
     out frizz brings you back to re-check everything; re-parking is fine and uncapped.
-  - \`reason:\` — one line, the only prose. This is what the human reads on your resting card.
+  - \`reason:\` — a one-line alternative to the \`---\` block above, kept for fences already written
+    that way. Prefer the delimiter.
 
   **REGISTERING IS NOT PARKING, AND PARKING IS NOT REGISTERING.** Launching a shell, dispatching a
   sub-agent, setting a timer, registering a PR watcher — those just happen, and frizz watches them

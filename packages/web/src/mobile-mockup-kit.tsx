@@ -235,11 +235,20 @@ export function LargeTitle({ children, trailing }: { children: ReactNode; traili
   )
 }
 
-// ── grouped lists (the iOS inset-grouped table) ─────────────────────────────────────────────────
-/** A section header above an inset group: 13px, sentence case, in the muted tone. */
+// ── lists ───────────────────────────────────────────────────────────────────────────────────────
+// FULL-WIDTH, NOT INSET-GROUPED (maintainer 2026-08-17: "Why do you even use cards here? Why not have
+// it go full width to save us more real estate? The cards just kind of make it so that we have to have
+// two sets of padding or padding and margin, and it's not necessary").
+//
+// This is iOS's PLAIN grouped table rather than its inset one, and on a 390pt viewport the difference
+// is real: an inset card spends 32pt on side margins and then 32pt again on its own padding, so a
+// thread title gets 326pt of measure instead of the 358pt it could have. The section header and the
+// hairline carry the grouping; the card was only ever drawing a box around it.
+
+/** A section header above a list: 13px, sentence case, in the muted tone. */
 export function GroupHeader({ children, trailing }: { children: ReactNode; trailing?: ReactNode }) {
   return (
-    <div className="flex items-baseline justify-between gap-3 px-5 pb-1.5 pt-4">
+    <div className="flex items-baseline justify-between gap-3 px-4 pb-1.5 pt-4">
       <span className="text-[13px] font-medium text-muted">{children}</span>
       {trailing ? <span className="text-[13px] text-muted/70">{trailing}</span> : null}
     </div>
@@ -247,17 +256,14 @@ export function GroupHeader({ children, trailing }: { children: ReactNode; trail
 }
 
 /**
- * The inset group itself. iOS separates rows with a hairline INSET to the text column, not to the card
- * edge — the icon column is what the inset clears, and getting that wrong is the tell of a web port.
+ * A list section: edge to edge, hairline top and bottom, no radius and no margin.
+ *
+ * The separators BETWEEN its rows are inset to the text column (see RowRule) while the section's own
+ * top and bottom rules run the full width — that contrast is what says "these rows are one group"
+ * without a border drawn around them.
  */
-export function Group({ children, className = "", inset = true }: { children: ReactNode; className?: string; inset?: boolean }) {
-  // `inset` is a PROP rather than an `mx-0` the caller passes: two margin utilities on one element are
-  // decided by stylesheet order, not class order, so overriding `mx-4` from the outside is a coin flip.
-  return (
-    <div className={`${inset ? "mx-4" : ""} overflow-hidden rounded-[14px] border border-border/70 bg-panel ${className}`}>
-      {children}
-    </div>
-  )
+export function Group({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <div className={`border-y border-border/70 bg-panel/60 ${className}`}>{children}</div>
 }
 
 export function Row({
@@ -400,11 +406,13 @@ export function Chip({ children, tone = "text-muted", className = "" }: { childr
 // 18px box) instead of to the 44px touch floor, which belongs to the row that contains it.
 export const MOBILE_BOX = 18
 
-export function StatusBox({ children, tone = "border-muted/45" }: { children?: ReactNode; tone?: string }) {
+export function StatusBox({ children, tone = "border-muted/45", size = MOBILE_BOX }: { children?: ReactNode; tone?: string; size?: number }) {
   return (
     <span
-      className={`inline-flex shrink-0 items-center justify-center rounded-[5px] border ${tone}`}
-      style={{ width: MOBILE_BOX, height: MOBILE_BOX }}
+      className={`inline-flex shrink-0 items-center justify-center border ${tone}`}
+      // The radius is the rail's 4-in-15, kept as a ratio so the mark stays the same SHAPE at the tab
+      // bar's larger size instead of reading as a rounder box.
+      style={{ width: size, height: size, borderRadius: (size * 4) / 15 }}
     >
       {children}
     </span>
@@ -432,19 +440,19 @@ export function BoxSpinnerM({ size = MOBILE_BOX, tone = "text-muted/85", frozen 
 }
 
 /** [?] awaiting you — the one mark that spends the accent, because the accent IS the ask. */
-export function AskBox() {
+export function AskBox({ size = MOBILE_BOX }: { size?: number }) {
   return (
-    <StatusBox tone="border-accent/90">
-      <span className="font-sans text-[12px] font-bold leading-none text-accent">?</span>
+    <StatusBox size={size} tone="border-accent/90">
+      <span className="font-sans font-bold leading-none text-accent" style={{ fontSize: (size * 10) / 15 }}>?</span>
     </StatusBox>
   )
 }
 
 /** [x] done. */
-export function DoneBox() {
+export function DoneBox({ size = MOBILE_BOX }: { size?: number }) {
   return (
-    <StatusBox tone="border-muted/40">
-      <Check size={12} strokeWidth={3} className="text-muted/85" />
+    <StatusBox size={size} tone="border-muted/40">
+      <Check size={Math.round((size * 10) / 15)} strokeWidth={3} className="text-muted/85" />
     </StatusBox>
   )
 }
@@ -513,6 +521,86 @@ export function SheetHeader({ title, leading, trailing }: { title: ReactNode; le
   )
 }
 
+// ── the tab bar ─────────────────────────────────────────────────────────────────────────────────
+/**
+ * THE BOARD'S BANDS, AS TABS (maintainer 2026-08-17: "having this rested versus active versus held
+ * stuff kind of feels like that should just be some kind of tab switcher, essentially like a view
+ * controller tab view controller along the bottom").
+ *
+ * It buys the thing a phone is shortest of. Four stacked bands with headers spend ~150pt of a 844pt
+ * screen on labels and rules for sections that are mostly not the one you are reading; four tabs spend
+ * 49pt once, and the band you ARE reading gets the whole screen.
+ *
+ * THE ICONS ARE THE STATUS FAMILY ITSELF — the same rounded-rect checkbox the rail draws beside every
+ * thread, with the same glyph inside it. The tab for Held is the mark a held row wears. So the tab bar
+ * doubles as the legend for the list above it, and there is no second visual language to learn.
+ *
+ * The count rides in the badge position: MUTED, because a count is information — except where a band
+ * is waiting on the reader, and then it is the accent, which is the one thing the accent ever means.
+ */
+export function TabBar({
+  tabs,
+  active,
+}: {
+  tabs: { id: string; label: string; icon: ReactNode; count: number; asks?: boolean }[]
+  active: string
+}) {
+  return (
+    <div className="absolute inset-x-0 bottom-0 z-30 border-t border-border/70 bg-bg/85 pb-[34px] backdrop-blur-xl backdrop-saturate-150">
+      <div className="flex h-[49px] items-stretch">
+        {tabs.map((tab) => {
+          const on = tab.id === active
+          return (
+            <button key={tab.id} className="flex flex-1 flex-col items-center justify-center gap-[3px] pt-[3px]">
+              <span className={`relative ${on ? "opacity-100" : "opacity-55"}`}>
+                {tab.icon}
+                {tab.count > 0 ? (
+                  <span
+                    className={`absolute -right-[9px] -top-[5px] flex h-[15px] min-w-[15px] items-center justify-center rounded-full px-[3.5px] text-[10px] font-semibold tabular-nums ${
+                      tab.asks ? "bg-accent text-bg" : "bg-elevated text-muted"
+                    }`}
+                  >
+                    {tab.count}
+                  </span>
+                ) : null}
+              </span>
+              <span className={`text-[10px] leading-[12px] tracking-[-0.005em] ${on ? "text-fg" : "text-muted/70"}`}>
+                {tab.label}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The floating compose button (maintainer 2026-08-17: "For creating a new thread, there can just be a
+ * floating arrow or feather icon in the bottom right… maybe a plus sign, actually, which is kind of the
+ * classic mobile idiom for that").
+ *
+ * NOT ACCENT, deliberately. A FAB is the loudest mark on the screen it sits on, and yellow here means "a
+ * worker is waiting for you" — an always-present yellow circle would out-shout every ask in the list
+ * below it. It takes the app's own primary-button fill instead (`bg-fg text-bg`, the same one
+ * TranscriptCard's CARD_PRIMARY_BUTTON uses), which reads as the primary action without spending the
+ * one colour that carries meaning.
+ */
+export function Fab({ bottom = 99 }: { bottom?: number }) {
+  return (
+    <button
+      aria-label="New thread"
+      className="absolute right-4 z-30 flex size-[56px] items-center justify-center rounded-full bg-fg text-bg shadow-lg shadow-black/50 active:opacity-85"
+      style={{ bottom }}
+    >
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden>
+        <path d="M12 5v14" />
+        <path d="M5 12h14" />
+      </svg>
+    </button>
+  )
+}
+
 // ── the keyboard ────────────────────────────────────────────────────────────────────────────────
 /**
  * The system keyboard, drawn because a composer screen is a LIE without it.
@@ -571,31 +659,31 @@ function KeyWide({ glyph }: { glyph: string }) {
 
 // ── the docked composer ─────────────────────────────────────────────────────────────────────────
 /**
- * THE PROMPT BOX, docked.
+ * THE REPLY BOX, docked — and it belongs to ONE THREAD, never to the board.
  *
- * On the desktop this sits at the top of the sidebar. On a phone the bottom edge is the only place a
- * thumb reaches without a grip change, and it is where every messaging app puts the same control — so
- * it docks, over a blur, above the home indicator. It is the app's centre of gravity, which is also
- * the reason this mockup has no tab bar: Frizz is a two-level drill-down (projects → board → thread),
- * and a tab bar would spend the same 49pt on navigation that never needed it.
+ * It used to dock on the board as a new-thread prompt, with the desktop composer's ⤷ running-ops column
+ * above it. That was wrong twice over (maintainer 2026-08-17): a liveness indicator "is the kind of
+ * thing that we would show attached to a currently running thread. It doesn't make sense to have an
+ * indicator like that above just the equivalent of the sidebar prompt box, which is used to trigger a
+ * totally new action." Starting a thread is now the floating + button; live work is drawn where it
+ * lives, on the running thread's own row (the ⤷ child-op lines under an Active row).
+ *
+ * So this control only ever appears where there IS a conversation to add to, and it carries no ops
+ * column at all.
  */
 export function ComposerDock({
-  placeholder = "Dispatch a thread…",
+  placeholder = "Reply or steer…",
   value,
   profile = "opus · high",
-  ops,
   armed,
 }: {
   placeholder?: string
   value?: string
   profile?: string
-  /** The ⤷ running-ops column the desktop composer carries above its input. */
-  ops?: ReactNode
   armed?: boolean
 }) {
   return (
     <div className="absolute inset-x-0 bottom-0 z-30 border-t border-border/70 bg-bg/85 px-3 pb-[30px] pt-2.5 backdrop-blur-xl backdrop-saturate-150">
-      {ops ? <div className="mb-2 flex flex-col gap-1 px-1">{ops}</div> : null}
       <div className="flex items-end gap-2">
         <div className="flex min-h-[44px] min-w-0 flex-1 flex-col gap-2 rounded-[22px] border border-border-strong bg-panel px-3.5 py-[11px]">
           <span className={`min-w-0 text-[16px] leading-[21px] ${value ? "text-fg" : "text-muted/70"}`}>{value ?? placeholder}</span>

@@ -3462,7 +3462,10 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   const doneInner = useInnerHtml(html)
   const awaitingHint = awaitingHintSentence(hints)
   const awaitingLine = awaitingPresentationLine(body, awaitingHint)
-  const awaitingInner = useInnerHtml(useInlineMarkdownHtml(awaitingLine))
+  // BLOCK markdown, not inline. The fence's prose is arbitrary Markdown since frontmatter landed
+  // (2026-08-17), and inline rendering flattened a worker's paragraphs and lists into one run — the shape
+  // a handoff most often takes. `done` has rendered as blocks all along; this is the same treatment.
+  const awaitingInner = useInnerHtml(useMarkdownHtml(awaitingLine))
   // WHAT IT IS WAITING ON, as structure rather than as the raw `kind: value` lines the fence is made of.
   // The reason above is the sentence; this is the SET, and it is the part a human scans to answer "will
   // anything actually wake this?" — the question the card exists for.

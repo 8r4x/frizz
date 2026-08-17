@@ -856,13 +856,32 @@ export function parseSignalFence(text: string | undefined): FenceView | undefine
   if (norm.slice(end).trim() !== "") return undefined
   if (kind === "done") return { kind, body: capFenceBody(raw.trim()), hints: [] }
   // awaiting: peel `<kind>: <value>` hint lines out; the remaining lines are the prose body.
+  // FRONTMATTER, THEN MARKDOWN (2026-08-17). Structural lines come first; a `---` line ends them and
+  // everything after it is arbitrary prose, as much as the worker wants.
+  //
+  // `reason:` was one LINE, and workers were visibly straining against it — the fence that prompted this
+  // crammed a whole known-answer-control rationale, two conditions and a commitment into a single
+  // sentence. A handoff is prose; forcing it through a key/value slot made it worse prose. Frontmatter is
+  // the shape everyone already knows from Markdown, and `reason:` stays valid so the fences written in
+  // the last two days keep parsing.
+  //
+  // It also makes the STRUCTURE POSITION unambiguous, which is what lets a bad line be refused instead of
+  // silently swallowed: before the delimiter, a `word:` line is a CLAIM to be structural, so a retired or
+  // unknown kind there is an error the worker is told about (scheduler SOURCE 12). After it, the same
+  // characters are just prose. Previously the two were indistinguishable and a `pr-watch:` line quietly
+  // became body text.
+  const lines = raw.split("\n")
+  const delimiter = lines.findIndex((l) => /^\s*---+\s*$/.test(l))
+  // No delimiter ⇒ the whole fence is frontmatter, exactly as it parsed before this existed.
+  const frontmatter = delimiter === -1 ? lines : lines.slice(0, delimiter)
+  const prose = delimiter === -1 ? [] : lines.slice(delimiter + 1)
   const hints: FenceView["hints"] = []
   const rest: string[] = []
-  for (const line of raw.split("\n")) {
+  for (const line of frontmatter) {
     const hm = line.match(AWAITING_HINT_RE)
     const k = hm?.[1].toLowerCase()
-    // Only real hint kinds become hints; any other `word:` line is prose (a stray colon-line
-    // like "note: …" must not mint a phantom hint that then glosses as leaked internals). 2026-07-10.
+    // Only real hint kinds become hints; any other `word:` line falls to the body, where the scheduler
+    // can recognise a RETIRED kind and refuse it by name rather than letting it pass as prose.
     if (hm && (k === "shell" || k === "agent" || k === "timer" || k === "pr" || k === "for" || k === "reason")) {
       const value = hm[2].trim()
       hints.push({ kind: k, value: value.length > HINT_VALUE_MAX ? value.slice(0, HINT_VALUE_MAX) : value })
@@ -870,6 +889,7 @@ export function parseSignalFence(text: string | undefined): FenceView | undefine
       rest.push(line)
     }
   }
+  rest.push(...prose)
   return { kind, body: capFenceBody(rest.join("\n").trim()), hints: hints.slice(0, HINT_MAX) }
 }
 

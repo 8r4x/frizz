@@ -41,16 +41,26 @@ const HINT_RE = /^(shell|agent|timer|pr|for|reason):\s*(\S.*)$/i
 const HINT_MAX = 8
 const HINT_VALUE_MAX = 200
 
+// FRONTMATTER, THEN MARKDOWN — and this must match the TAILER's split exactly (parseSignalFence in
+// server/src/tailer.ts). The server decides whether a fence parks and the client decides how it reads; a
+// disagreement about where the structure ends is a fence that renders one way and behaves another.
+//
+// Structural lines first, a `---` line ends them, everything after is arbitrary prose. No delimiter ⇒ the
+// whole fence is frontmatter, which is how every fence written before 2026-08-17 parses.
 export function parseFenceBody(raw: string, kind: FenceKind): { body: string; hints: AwaitingHint[] } {
   if (kind === "done") return { body: raw.trim(), hints: [] }
+  const lines = raw.split("\n").map((l) => l.replace(/\r$/, ""))
+  const delimiter = lines.findIndex((l) => /^\s*---+\s*$/.test(l))
+  const frontmatter = delimiter === -1 ? lines : lines.slice(0, delimiter)
+  const after = delimiter === -1 ? [] : lines.slice(delimiter + 1)
   const hints: AwaitingHint[] = []
   const prose: string[] = []
-  for (const line of raw.split("\n")) {
-    const l = line.replace(/\r$/, "")
+  for (const l of frontmatter) {
     const m = l.match(HINT_RE)
     if (m) hints.push({ kind: m[1].toLowerCase() as AwaitingHint["kind"], value: m[2].trim().slice(0, HINT_VALUE_MAX) })
     else prose.push(l)
   }
+  prose.push(...after)
   return { body: prose.join("\n").trim(), hints: hints.slice(0, HINT_MAX) }
 }
 

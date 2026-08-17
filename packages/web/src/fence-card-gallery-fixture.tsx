@@ -63,6 +63,19 @@ const fences: { slug: string; label: string; kind: "done" | "awaiting"; body: st
     body: "- Fixed the cache collision in `src/resolver.ts` — the lookup now keys on the normalized id.\n- Added a regression test; `npm test` green.",
     hints: [],
   },
+  // FRONTMATTER + MARKDOWN — the shape a worker writes since 2026-08-17. The prose is arbitrary and
+  // renders as BLOCKS, so a handoff with a list stays a list instead of being flattened into one run.
+  {
+    slug: "g-frontmatter",
+    label: "```awaiting · frontmatter + markdown",
+    kind: "awaiting",
+    body: "Known-answer control on the new escape detector, before I commit the check.\n\n- angular (zero install-script deps) must report **clean**\n- puppeteer must be **flagged**\n\nIf either fails I will bisect rather than re-run.",
+    hints: [
+      { kind: "shell", value: "bb4sns0ye" },
+      { kind: "pr", value: "acme/app#391" },
+      { kind: "for", value: "20m" },
+    ],
+  },
   // THE STRUCTURAL FENCE, which is what a worker writes now: a reason for the human, the things it
   // waits on, and a duration. The card renders the sentence as prose and the rest as a muted band — the
   // raw `kind: value` lines must never reach the reader (maintainer 2026-08-16).
