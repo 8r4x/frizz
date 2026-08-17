@@ -38,7 +38,7 @@
     "frizz-dev:uninstall": "nub scripts/install-global-cli.mjs --uninstall",
     "install:global": "nub scripts/install-global-cli.mjs",
     "typecheck": "tsc -b packages/shared packages/rpc packages/server . && pnpm --filter @frizz/web typecheck",
-    "test": "nub --test --test-force-exit 'board/*.test.mjs' 'scripts/**/*.test.mjs' 'src/**/*.test.ts' 'packages/shared/src/**/*.test.ts' 'packages/server/src/**/*.test.ts' 'packages/web/src/**/*.test.ts'",
+    "test": "nub scripts/run-tests.mjs",
     "prepack": "node ./scripts/prepare-package.mjs && node ./scripts/build-package.mjs && node ./scripts/publish-manifest.mjs --strip",
     "postpack": "node ./scripts/publish-manifest.mjs --restore && node ./scripts/prepare-package.mjs --clean"
   },

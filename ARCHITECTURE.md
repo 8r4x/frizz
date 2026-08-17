@@ -58,6 +58,16 @@ command line. Ctrl-C and a failed boot both print the log path.
 Gates: `pnpm run typecheck` and `pnpm test`. CI (`.github/workflows/ci.yml`) runs only the checks that
 need no install or provider CLI; the full suite is local-only by design.
 
+The suite runs through `scripts/run-tests.mjs` rather than calling node's runner directly, because a
+green run has to prove the whole run happened. `--test-force-exit` is load-bearing here — without it
+`claude-agent-broker.test.ts` leaks a handle and hangs forever — but it also makes each per-file child
+`process.exit()` while verdicts are still queued on the pipe carrying them to the parent, which drops
+them with no failure and no non-zero exit ([nodejs/node#64833](https://github.com/nodejs/node/issues/64833),
+still open; measured here 2026-08-16 as a run that silently lost 31 of one file's 70 tests). So the
+runner is wrapped: every child puts its report pipe in blocking mode and tallies the verdicts it
+emits, and the wrapper refuses to report success unless that tally matches what reached the parent.
+Invoking `nub --test` by hand is fine for one file, but it bypasses that check.
+
 ## Invariants
 
 - **THERE IS NO TMUX. Agents run as detached broker daemons.** Say it here because the codebase is
