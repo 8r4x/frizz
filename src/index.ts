@@ -462,8 +462,14 @@ async function runSupervisor(
     error: (line) =>
       logger.error("supervisor", line.startsWith("[frizz] ") ? line.slice(10) : line),
   });
+  // SIGHUP is what closing a terminal sends, and Node's default action for it is to die on the spot —
+  // so without this the launcher was killed WITHOUT running `stop`, and the control-plane child (which
+  // sits in its own process group, so the tty never signals it directly) was orphaned still holding the
+  // port. That is the whole reason an "always foreground" board could outlive its terminal and need
+  // `--stop` to reach. Verified on a live board: launcher pgid 31700, child pgid 31704, same tty.
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
+  process.on("SIGHUP", stop);
   void supervisor.stopRequested.then(stop);
   await supervisor.firstBoot;
   persistLauncher(workspace, port, sourceWorkspaceDir());
