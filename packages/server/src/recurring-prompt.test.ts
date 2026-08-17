@@ -345,38 +345,6 @@ test("an awaiting fence on a PR the scheduler is watching holds the bump", async
   } finally { h.close() }
 })
 
-// …AND THE SAME LINE WITH NOTHING REGISTERED GETS THE RESCUE. A `pr-watch:` line frizz will never fire is
-// a thread that waits forever, which is exactly the shape this trigger exists to rescue — the same
-// reading an unparseable ref has always had.
-test("an awaiting fence on a PR NOBODY registered is bumped, like any other unfireable park", async () => {
-  const h = scheduler({ lastFence: awaiting({ kind: "pr", value: "colinhacks/zod#6382" }) }, { now: at("2026-08-02T00:00:05.000Z") })
-  try {
-    await h.s.tick()
-    assert.equal(h.delivered.length, 1, "nothing will ever fire that, so the rescue stands")
-  } finally { h.close() }
-})
-// (A test for a deleted awaiting-hint kind was removed here on 2026-08-15. See the AwaitingHint doc
-// block in @frizz/shared for why `human:`, `timer: <instant>` and `pr-watch:` no longer exist.)
-
-
-// THE RESCUE, which is the whole reason this trigger fired over `awaiting` for months. A park frizz has
-// no way to honour is a thread that waits forever, and these are exactly the shapes it cannot honour:
-// no hint at all, a PR ref that does not parse, and the presentation-only `session:` kind.
-test("an awaiting fence naming nothing frizz can fire is still bumped", async () => {
-  const shapes: FenceView[] = [
-    awaiting(),
-    awaiting({ kind: "pr", value: "the auth PR" }),
-    awaiting({ kind: "shell", value: "a-shell-that-is-not-running" }),
-  ]
-  for (const lastFence of shapes) {
-    const h = scheduler({ lastFence }, { now: at("2026-08-02T00:00:05.000Z") })
-    try {
-      await h.s.tick()
-      assert.equal(h.delivered.length, 1, `${JSON.stringify(lastFence.hints)} is a park nothing will ever settle`)
-    } finally { h.close() }
-  }
-})
-
 // ---- The HEARTBEAT (scheduler SOURCE 4) ----------------------------------------------------------
 // The dumb sibling. Everything the stop hook consults, this ignores — that is its entire contract, and
 // these are the tests that would catch it quietly growing a condition.
@@ -802,5 +770,45 @@ test("an auth-faulted thread is never re-prompted — the Goal cannot fix a sign
   try {
     await h.s.tick()
     assert.deepEqual(h.delivered, [])
+  } finally { h.close() }
+})
+// THE GOAL NO LONGER BUMPS AN UNFIREABLE AWAITING FENCE, and two tests that pinned the opposite were
+// removed here (2026-08-17). It was not a rescue, it was a LOOP: the Goal's text is a generic "keep
+// going" that says nothing about fence grammar, so a worker whose fence could not be honoured re-wrote
+// the same dead fence every ~6 seconds. That correction belongs to scheduler SOURCE 12, whose message
+// names what is wrong and which tool fixes it — covered in declared-park.test.ts, which asserts the
+// nameless and dead-item bumps directly.
+
+// AN UNHONOURABLE AWAITING FENCE STILL HOLDS THE GOAL — and this is the fix for a measured LOOP, not a
+// tidiness rule (2026-08-17, thread `we-need-to-unify-some-development`).
+//
+// A worker on the OLD contract wrote `pr-watch: pullfrog/app#1221`, a kind the grammar cut deleted. Zero
+// hints parse, so the park could never be honoured, so the Goal's stop hook fired ~6 seconds after every
+// rest — three identical fences in 40 seconds, each re-writing the same dead line, because the Goal's
+// text is a generic "keep going" that says nothing about fence grammar.
+//
+// The scheduler owns an awaiting rest in BOTH directions: honoured needs nothing, unhonourable gets
+// SOURCE 12, whose message names exactly what is wrong and which tool fixes it. So the Goal holds either
+// way, and the worker hears the one voice that can get it out.
+test("an awaiting fence the scheduler cannot honour STILL holds the Goal — SOURCE 12 owns that rest", async () => {
+  // The exact shape: a deleted kind, so the tailer parses NO hints and the body carries the prose.
+  const deadKind = { kind: "awaiting" as const, body: "Drift check re-run: CI green. #1221 needs your merge click.", hints: [] }
+  const h = scheduler({ lastFence: deadKind, pendingQuestion: false }, { now: at("2026-08-02T00:00:05.000Z") })
+  try {
+    await h.s.tick()
+    assert.deepEqual(h.delivered, [], "the Goal must not bump a rest the scheduler is already correcting")
+  } finally { h.close() }
+})
+
+// …and the honoured park keeps holding it, which is the case that always worked.
+test("an honoured park holds the Goal too", async () => {
+  const h = scheduler({
+    lastFence: awaiting({ kind: "shell", value: "bzvtnt3ig" }),
+    bgShells: [{ label: "the suite", startedAt: "2026-08-02T00:00:00.000Z", state: "running", id: "toolu_x", taskId: "bzvtnt3ig" }],
+    pendingQuestion: false,
+  }, { now: at("2026-08-02T00:00:05.000Z") })
+  try {
+    await h.s.tick()
+    assert.deepEqual(h.delivered, [], "an honest park is not interrupted")
   } finally { h.close() }
 })

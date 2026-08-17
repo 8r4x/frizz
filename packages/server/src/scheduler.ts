@@ -522,10 +522,28 @@ function armedTimerIdsOf(storage: Storage, slug: string): ReadonlySet<string> {
  *  switchable off by the panel's "Autonomous mode", and the switch and the limb went together. */
 function restMessageIsSignedOff(
   tele: Pick<SessionTelemetry, "lastFence" | "lastAssistantAllDone" | "bgShells" | "subAgents">,
-  registeredPrWatches: ReadonlySet<string> = new Set(),
-  armedTimerIds: ReadonlySet<string> = new Set(),
+  _registeredPrWatches: ReadonlySet<string> = new Set(),
+  _armedTimerIds: ReadonlySet<string> = new Set(),
 ): boolean {
-  return saidDone(tele) || parkedOnAWaitItCannotAdvance(tele, registeredPrWatches, armedTimerIds)
+  // AN `awaiting` FENCE ENDS THE GOAL'S BUSINESS WITH THIS REST, honoured or not — and the "or not" is
+  // the whole point of widening this from `parkIsHonoured` to the fence's mere presence.
+  //
+  // The scheduler already owns an awaiting rest in BOTH directions: a park it can honour needs nothing,
+  // and one it cannot gets SOURCE 12, which names exactly what is wrong and how to fix it. The Goal
+  // firing on top of that is a second bump for one rest, and its text is a generic "keep going" that says
+  // nothing about fence grammar — so a worker whose fence is unhonourable cannot learn anything from it.
+  //
+  // MEASURED, and it is a tight loop rather than a nuisance (2026-08-17, thread
+  // `we-need-to-unify-some-development`): a worker on the OLD contract wrote `pr-watch: pullfrog/app#1221`,
+  // a kind the grammar cut deleted. Zero hints parse, so the park was never honourable, so the Goal fired
+  // ~6s after every rest — three identical fences in 40 seconds, each one re-writing the same dead line
+  // because nothing it received mentioned the grammar. Holding the Goal here leaves SOURCE 12 as the one
+  // voice on that rest, which is the voice that can actually get the worker out.
+  //
+  // A worker that writes a garbage fence is therefore NOT left alone: it is bumped once per rest, by the
+  // source whose message is about fences.
+  if (tele.lastFence?.kind === "awaiting") return true
+  return saidDone(tele)
 }
 
 /** What frizz can actually see running for this thread, in the shape `unaccountedItems` checks against.
