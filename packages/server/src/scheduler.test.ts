@@ -1395,20 +1395,29 @@ test("limit: the early resume is spent ONCE per wall — bouncing off it does no
   h.storage.close()
 })
 
-test("limit: a limit wake and a fence wake for the same session get distinct deliveries", async () => {
+test("limit: a limit wake and a timer wake for the same session get distinct deliveries", async () => {
   // Both sources share one outbox. If their identities could collide, arming one would silently
   // swallow the other's wake for that session.
+  //
+  // BOTH SOURCES MUST ACTUALLY FIRE or the uniqueness check below is vacuous — a set of one id is
+  // always "distinct". This armed off an `awaiting timer:` fence hint until 2026-08-16, which had been
+  // inert since the 2026-08-15 grammar made isActionable return false, AND whose target sat 5min past a
+  // clock that only ever reached +61s. So it asserted uniqueness over the limit wake alone, under a name
+  // promising a collision it could not exercise. A real timer row, due INSIDE the window the clock
+  // crosses, is what makes the two sources collide — the same vehicle its snooze sibling uses.
   const h = limitHarness()
   h.storage.upsertSession(row("a"))
-  const target = SESSION_RESET_MS + 5 * 60_000
-  h.tele.set("a", { ...limitTele(sessionFault()), lastFence: awaiting([{ kind: "timer", value: iso(target) }], "re-check") })
+  const target = SESSION_RESET_MS + 30_000
+  armTimer(h, "a", target, "re-check")
+  h.tele.set("a", limitTele(sessionFault()))
   const s = h.make()
-  await s.tick() // arms the timer (witnessed unmet) and sees the limit still closed
+  await s.tick() // neither is due: the limit is still closed and the timer has not been crossed
   h.clock.ms = SESSION_RESET_MS + 61_000
-  await s.tick() // the limit resets first
-  assert.deepEqual(h.resumes.map((r) => r.slug), ["a"])
+  await s.tick() // the limit resets and the timer comes due in the same pass
+  assert.deepEqual(h.resumes.map((r) => r.slug), ["a", "a"], "one thread, both sources")
   assert.match(h.resumes[0].message, /usage limit/)
   const ids = createWakeDeliveryStore(h.storage.db).list().map((d) => d.id)
+  assert.equal(ids.length, 2, "both sources armed their own wake for this session")
   assert.equal(new Set(ids).size, ids.length, "no delivery-id collision between the two wake sources")
   h.storage.close()
 })
