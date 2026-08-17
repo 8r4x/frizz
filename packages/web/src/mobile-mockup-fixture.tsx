@@ -8,7 +8,6 @@
 //   http://localhost:5477/mobile-mockup-fixture.html                — the gallery, every screen
 //                                              ?screen=board        — one screen, alone, at 1:1
 //                                              ?font=mono           — the other font setting
-//                                              ?still=1             — freeze the spinners for a still
 //
 // ── What is being designed ────────────────────────────────────────────────────────────────────────
 // The desktop app is three standing surfaces at once: a project rail, a thread rail, and a workpane,
@@ -37,23 +36,38 @@
 //   6. NO ANSWERING FROM THE LIST. You open the thread, read the context that produced the question,
 //      and answer it there.
 //
+// Round 3, same reviewer, same day:
+//
+//   7. THE DOTS WERE ALL RIDING LOW — measured at 3.32px below the cap band, because a measurement
+//      wrapper had turned each one into a flex item and killed its `self-baseline`. See CAP_ALIGN.
+//   8. RESTED + ACTIVE ARE ONE TAB, called QUEUE: "something is active until it's marked done".
+//   9. NOTHING HERE ANIMATES FOREVER, and that ended up going further than the tab bar. A RUNNING ROW
+//      wears the static play mark too, not the rail's travelling spinner: now that Queue holds running
+//      and rested rows as neighbours, the difference between them has to survive a glance at arm's
+//      length, and a 1px arc crawling round a 18px box does not. Liveness is still moving on that row —
+//      the activity line shimmers and the child-op dots pulse — it is just not carried by the mark.
+//  10. ONE QUESTION AT A TIME, in a sheet that slides up from the bottom rather than a pushed page,
+//      and the verb is "Continue" rather than "Send".
+//  11. NO SEARCH. The web UI has none.
+//  12. NO INVENTED STARTER PROMPTS on an empty board.
+//
 // Kept from round 1: every drawer is a sheet at a detent with the parent scaled back behind it; the
 // accent is spent only on the ask and on one primary verb per screen (so nav actions are neutral); and
 // iOS's 17/15/13/11.5 type scale with a 44pt touch floor rather than the desktop's 13px-everything.
 //
-// Screens, in `?screen=` order: home · board · board-active · board-held · thread · answer · actions ·
-// dispatch · snooze · settings · subagent · search · empty · plan · kit
+// Screens, in `?screen=` order: home · board · board-held · thread · answer · actions · dispatch ·
+// snooze · settings · subagent · empty · plan · kit
 import { createRoot } from "react-dom/client"
 import type { ReactNode } from "react"
 import {
   Archive, ArrowUpRight, Bell, Check, ChevronRight, Clock, Copy, Ellipsis, FileText, Github, Hourglass,
-  Image as ImageIcon, Info, Paperclip, Pencil, Plus, RotateCcw, Search, Settings as SettingsIcon,
-  Sparkles, SquareTerminal, Timer, Type as TypeIcon, Wrench, X, Zap,
+  Image as ImageIcon, Info, Paperclip, Pencil, Plus, RotateCcw, Settings as SettingsIcon, Sparkles,
+  SquareTerminal, Timer, Type as TypeIcon, Wrench, X, Zap,
 } from "lucide-react"
 import {
-  AskBox, BoxSpinnerM, Button, Canvas, Chip, ComposerDock, DoneBox, Fab, Group, GroupHeader, INK,
-  Keyboard, LargeTitle, LiveDot, NavAction, NavBar, ON_CAP, Phone, Row, RowRule, Segmented,
-  SheetHeader, SheetOver, StatusBox, TabBar, Toggle,
+  AskBox, Button, CAP_ALIGN, Canvas, Chip, ComposerDock, DoneBox, Fab, Group, GroupHeader,
+  INK, Keyboard, LargeTitle, LiveDot, NavAction, NavBar, ON_CAP, Phone, PlayBox, Row, RowRule,
+  Segmented, SheetHeader, SheetOver, StatusBox, TabBar, Toggle, capAlign,
 } from "./mobile-mockup-kit.tsx"
 import "./styles.css"
 
@@ -63,10 +77,6 @@ const params = new URLSearchParams(location.search)
 // window. Sans is the shipped default, so it is this fixture's default too.
 document.documentElement.dataset.font = params.get("font") === "mono" ? "mono" : "sans"
 const only = params.get("screen")?.toLowerCase() ?? null
-// `?still=1` freezes the box spinners at a legible phase. A screenshot of a live spinner is a coin flip
-// between "obviously running" and "identical to the empty at-rest box", and the still IS the deliverable
-// here — so the shot script asks for the frozen phase rather than hoping for it.
-const still = params.has("still")
 
 // ══ shared pieces ═══════════════════════════════════════════════════════════════════════════════
 
@@ -185,7 +195,7 @@ function ThreadRow({
 function ChildOp({ kind, label, elapsed }: { kind: "agent" | "shell"; label: string; elapsed: string }) {
   return (
     <div className="flex items-baseline gap-2 pb-1.5 pl-[46px] pr-4">
-      <span data-ink="op-dot" className="flex shrink-0"><LiveDot kind={kind} /></span>
+      <LiveDot kind={kind} ink="op-dot" />
       <span data-ink="op-label" className="min-w-0 flex-1 truncate text-[12.5px] leading-[19px] text-muted">{label}</span>
       <span className="shrink-0 text-[11.5px] leading-[19px] tabular-nums text-muted/55">{elapsed}</span>
     </div>
@@ -221,13 +231,13 @@ function ProjectRow({ p, last }: { p: (typeof PROJECTS)[number]; last?: boolean 
             <span className="flex min-w-0 items-baseline gap-2.5 text-[12.5px] leading-[16px] text-muted">
               {p.active > 0 && (
                 <span className="flex shrink-0 items-baseline gap-1.5">
-                  <span data-ink="meta-dot" className="flex shrink-0"><LiveDot kind="agent" /></span>
+                  <LiveDot kind="agent" ink="meta-dot" />
                   <span data-ink="meta-active">{p.active} active</span>
                 </span>
               )}
               {p.held > 0 && (
                 <span className="flex shrink-0 items-baseline gap-1.5">
-                  <Hourglass data-ink="meta-glass" size={11} className={`${ON_CAP} ${INK.hourglass} text-muted/70`} />
+                  <Hourglass data-ink="meta-glass" size={11} style={capAlign(11)} className={`${CAP_ALIGN} ${INK.hourglass} text-muted/70`} />
                   <span data-ink="meta-held">{p.held} held</span>
                 </span>
               )}
@@ -252,23 +262,11 @@ function HomeScreen() {
     <Canvas>
       {/* At the top of the scroll the nav bar carries no inline title — the large title below IS the
           title. Scrolled, the two swap. */}
-      <NavBar
-        border={false}
-        trailing={
-          <>
-            <NavAction label="Search"><Search size={20} /></NavAction>
-            <NavAction label="Settings"><SettingsIcon size={20} /></NavAction>
-          </>
-        }
-      />
+      {/* NO SEARCH. The web UI has none, and a mockup that invents one is designing a feature rather
+          than a phone layout for the product that exists. */}
+      <NavBar border={false} trailing={<NavAction label="Settings"><SettingsIcon size={20} /></NavAction>} />
       <div className="min-h-0 flex-1 overflow-hidden pb-[34px]">
         <LargeTitle>Projects</LargeTitle>
-        <div className="px-4 pb-1 pt-1.5">
-          <div className="flex h-[36px] items-center gap-2 rounded-[10px] bg-panel-2 px-2.5">
-            <Search size={15} className="shrink-0 text-muted/70" />
-            <span className="text-[16px] text-muted/60">Search projects and threads</span>
-          </div>
-        </div>
 
         <GroupHeader trailing="3 asks">Needs you</GroupHeader>
         <Group>
@@ -286,7 +284,7 @@ function HomeScreen() {
         <div className="px-4 pt-4">
           {/* Dashed and never filled: an affordance, not a project — the desktop grid's own ruling. */}
           <button className="flex h-[48px] w-full items-center justify-center gap-2 rounded-[12px] border border-dashed border-border-strong text-[15px] text-muted active:border-accent active:text-fg">
-            <Plus size={17} className={ON_CAP} />
+            <Plus size={17} style={capAlign(17)} className={CAP_ALIGN} />
             Add a project
           </button>
         </div>
@@ -305,13 +303,26 @@ function HomeScreen() {
 
 const TAB_ICON = 21
 
-function boardTabs(active: string) {
+/**
+ * THREE TABS, NOT FOUR — Rested and Active are one band called QUEUE (maintainer 2026-08-17: "perhaps
+ * we should just unify rested and active into one tab… something is active until it's marked done. I
+ * know that's a bit of a redefinition of the word active, but still, I think it makes sense").
+ *
+ * It is a redefinition, and it is the right one for this surface. On the desktop the Rested/Active
+ * split answers "which of these is spinning right now", which matters when forty rows are in front of
+ * you and you are choosing where to look. On a phone you are looking at one screen with a handful of
+ * rows, and the split costs you a tab switch to see work you already own. What survives the merge is
+ * the ROW's own state — its mark, its activity line and its live children — so nothing is lost except
+ * the partition itself.
+ *
+ * The Queue's tab icon is a STATIC PLAY, never the running spinner: a tab bar is permanent chrome, and
+ * permanent motion in the corner of the eye is noise.
+ */
+function boardTabs() {
   return [
-    // The icon is the BAND's mark — an at-rest row's empty box — not an ask mark: Rested is where asks
-    // land, but a rested thread is not itself a question. The accent BADGE is what says one of these
-    // three is waiting on you, and it is the only accent in the bar.
-    { id: "rested", label: "Rested", icon: <StatusBox size={TAB_ICON} />, count: 3, asks: true },
-    { id: "active", label: "Active", icon: <BoxSpinnerM size={TAB_ICON} frozen={still} />, count: 3 },
+    // The badge is the ASK count in accent when there is one, and the band count in muted otherwise —
+    // see the note on TabBar. Yellow here always means "this many want you".
+    { id: "queue", label: "Queue", icon: <PlayBox size={TAB_ICON} />, count: 3, asks: true },
     { id: "held", label: "Held", icon: <StatusBox size={TAB_ICON}><Hourglass size={13} className="text-muted/75" /></StatusBox>, count: 2 },
     { id: "done", label: "Done", icon: <DoneBox size={TAB_ICON} />, count: 6 },
   ]
@@ -375,15 +386,25 @@ function BoardShell({ tab, children }: { tab: string; children: ReactNode }) {
       {/* 83pt of tab bar + safe area, and the + floats clear of both. */}
       <div className="min-h-0 flex-1 overflow-hidden pb-[83px]">{children}</div>
       <Fab />
-      <TabBar tabs={boardTabs(tab)} active={tab} />
+      <TabBar tabs={boardTabs()} active={tab} />
     </Canvas>
   )
 }
 
-/** Rested — the cue. Every row here is at rest; the accent "?" is the only thing marking an ask. */
-function BoardRestedScreen() {
+/**
+ * THE QUEUE — everything that is neither held nor done, in one list.
+ *
+ * ORDERED BY WHAT IT WANTS FROM YOU: the threads asking a question first, then the ones running, then
+ * the ones at rest. The desktop rail orders the cue by rest time, which is right for a column you scan
+ * with a mouse beside a workpane; on the one screen a phone has, "what needs me" earns the top.
+ *
+ * Three marks, one family, and the row is the only place any of them animates: accent "?" asks,
+ * spinner runs, empty box rests. A running row shows what it is doing and its live children instead of
+ * a rest time — a thread that is still going has not made a handoff, so it has nothing to date.
+ */
+function BoardQueueScreen() {
   return (
-    <BoardShell tab="rested">
+    <BoardShell tab="queue">
       <Group className="border-t-0">
         <ThreadRow
           glyph={<AskBox />}
@@ -393,19 +414,53 @@ function BoardRestedScreen() {
           gloss="Should the settings store use SQLite or a JSON file?"
         />
         <ThreadRow
-          glyph={<StatusBox />}
-          title="Audit the parser for edge cases"
-          provider="claude"
-          age="1h"
-          gloss="Waiting on your call about the tokenizer"
-        />
-        <SwipedRow />
-        <ThreadRow
           glyph={<AskBox />}
           title="Pick the retry policy for the socket reconnect"
           provider="codex"
           age="5h"
           gloss="Two options, both reversible"
+        />
+        <ThreadRow
+          glyph={<AskBox />}
+          title="Decide what a restart does to a live turn"
+          provider="claude"
+          age="3d"
+          gloss="Needs a call before the next release"
+        />
+        <ThreadRow
+          glyph={<PlayBox />}
+          title="Migrate the board store to valtio 2"
+          provider="claude"
+          activity={<span className="shimmer-text">Running the focused tests</span>}
+        >
+          <div className="flex flex-col">
+            <ChildOp kind="agent" label="Audit the parser for edge cases" elapsed="2m" />
+            <ChildOp kind="shell" label="gh run watch 1842" elapsed="4m" />
+          </div>
+        </ThreadRow>
+        <ThreadRow
+          glyph={<PlayBox />}
+          title="Draft the changelog for 0.4"
+          provider="codex"
+          activity={<span className="shimmer-text">Reading packages/server/src/router.ts</span>}
+        >
+          <div className="flex flex-col">
+            <ChildOp kind="shell" label="vite dev --host" elapsed="18m" />
+          </div>
+        </ThreadRow>
+        <ThreadRow
+          glyph={<PlayBox />}
+          title="Chase the socket reconnect flake"
+          provider="claude"
+          activity={<span className="shimmer-text">Inspecting the broker handshake</span>}
+        />
+        <SwipedRow />
+        <ThreadRow
+          glyph={<StatusBox />}
+          title="Audit the parser for edge cases"
+          provider="claude"
+          age="1h"
+          gloss="Waiting on your call about the tokenizer"
         />
         <ThreadRow
           glyph={<StatusBox />}
@@ -422,69 +477,11 @@ function BoardRestedScreen() {
           gloss="780KB → 137KB, landed on main"
         />
         <ThreadRow
-          glyph={<AskBox />}
-          title="Decide what a restart does to a live turn"
-          provider="claude"
-          age="3d"
-          gloss="Needs a call before the next release"
-        />
-        <ThreadRow
           glyph={<StatusBox />}
           title="Pin the batch-local result memo"
           provider="codex"
           age="4d"
           gloss="Rested — nothing running"
-        />
-        <ThreadRow
-          glyph={<StatusBox />}
-          title="Teach the tailer about the 20k backlog"
-          provider="claude"
-          age="6d"
-          gloss="Rested — nothing running"
-          last
-        />
-      </Group>
-    </BoardShell>
-  )
-}
-
-/**
- * Active — SPINNING, and nothing else.
- *
- * The only band whose rows carry live work, so the only one whose rows carry a liveness dot: the blue
- * one under a row is that thread's background shell, the yellow one its sub-agent. No rest times here —
- * a row that is still running has not made a handoff, so it has nothing to date.
- */
-function BoardActiveScreen() {
-  return (
-    <BoardShell tab="active">
-      <Group className="border-t-0">
-        <ThreadRow
-          glyph={<BoxSpinnerM frozen={still} />}
-          title="Migrate the board store to valtio 2"
-          provider="claude"
-          activity={<span className="shimmer-text">Running the focused tests</span>}
-        >
-          <div className="flex flex-col">
-            <ChildOp kind="agent" label="Audit the parser for edge cases" elapsed="2m" />
-            <ChildOp kind="shell" label="gh run watch 1842" elapsed="4m" />
-          </div>
-        </ThreadRow>
-        <ThreadRow
-          glyph={<BoxSpinnerM frozen={still} />}
-          title="Draft the changelog for 0.4"
-          provider="codex"
-          activity={<span className="shimmer-text">Reading packages/server/src/router.ts</span>}
-        >
-          <div className="flex flex-col">
-            <ChildOp kind="shell" label="vite dev --host" elapsed="18m" />
-          </div>
-        </ThreadRow>
-        <ThreadRow
-          glyph={<BoxSpinnerM frozen={still} />}
-          title="Chase the socket reconnect flake"
-          provider="claude"
-          activity={<span className="shimmer-text">Inspecting the broker handshake</span>}
           last
         />
       </Group>
@@ -578,12 +575,13 @@ function ThreadScreen() {
               way"). The card wears the app's ordinary chrome — the "?" carries the state, not a colour. */}
           <div className="rounded-[12px] border border-border-strong bg-panel p-3.5">
             <div className="flex items-baseline gap-2">
-              <span className={ON_CAP}><AskBox size={15} /></span>
+              <span className={CAP_ALIGN} style={capAlign(15)}><AskBox size={15} /></span>
               <span className="text-[11.5px] font-semibold uppercase tracking-[0.06em] text-muted">Question</span>
             </div>
             <p className="m-0 mt-2 text-[15px] leading-[21px] text-fg">
               Should the settings store use SQLite or a JSON file?
             </p>
+            <p className="m-0 mt-1 text-[13px] leading-[18px] text-muted">And one more after this one.</p>
             <div className="mt-3 flex items-center gap-2">
               <Button kind="accent" size="sm">Answer</Button>
               <Button kind="tinted" size="sm">Ask something back</Button>
@@ -603,9 +601,21 @@ function ThreadScreen() {
 }
 
 // ══ 6 · answer ══════════════════════════════════════════════════════════════════════════════════
-// ANSWERING, pushed from the thread. Each option is a 56pt row, and the send action is docked rather
-// than appended to the last question, because it answers BOTH and must be reachable without scrolling
-// to the bottom of the ask.
+// ANSWERING — ONE QUESTION AT A TIME, IN A SHEET THAT SLIDES UP FROM THE BOTTOM.
+//
+// Round 2 got this wrong in a way that was worth being called out for (maintainer 2026-08-17): the
+// thread showed a single question card with its own Answer button, and tapping it pushed a PAGE
+// rendering every question at once with one "Send" at the bottom. Two contradictory promises — a
+// per-question button that submits nothing, and a batch page you never asked for.
+//
+// So: one question per view, and the view is a MODAL rather than a page, because that is what it is —
+// a thing you deal with and dismiss, not a place you navigate to. It slides up, the thread stays
+// visible and receded behind it, and a flick down abandons it.
+//
+// THE VERB IS "CONTINUE", NOT "SEND". With one question in front of you, "Send" would claim the whole
+// ask went back when only this answer did; Continue says what actually happens — this answer is kept
+// and the next question comes up. The LAST question is the only one that submits, and only that one
+// says so.
 
 function OptionRow({
   letter,
@@ -640,62 +650,45 @@ function OptionRow({
   )
 }
 
-function QuestionBlock({
-  prompt,
-  options,
-}: {
-  prompt: string
-  options: { letter: string; label: string; why: string; chosen?: boolean; rec?: boolean }[]
-}) {
-  return (
-    <Group>
-      <div className="px-4 pb-2.5 pt-3">
-        <p className="m-0 text-[15px] font-medium leading-[21px] text-fg">{prompt}</p>
-      </div>
-      {options.map((option) => (
-        <div key={option.letter}>
-          <div className="h-px bg-border/70" />
-          <OptionRow {...option} />
-        </div>
-      ))}
-    </Group>
-  )
-}
-
 function AnswerScreen() {
   return (
     <Canvas>
-      <NavBar back="Thread" title="2 questions" subtitle="Fix the cache collision" />
-      <div className="min-h-0 flex-1 overflow-hidden pb-[100px]">
-        <div className="px-4 pt-4">
-          <p className="m-0 text-[13.5px] leading-[19px] text-muted">
-            The resolver fix is written and its test is green. Both of these change what ships, so they
-            are yours to call.
-          </p>
+      <SheetOver detent={0.6} behind={<ThreadScreen />}>
+        <SheetHeader
+          title="Question 1 of 2"
+          leading={<button className="px-2 text-[16px] text-fg/85">Cancel</button>}
+        />
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <div className="px-4 pb-3 pt-3.5">
+            <p className="m-0 text-[17px] leading-[23px] text-fg">
+              Should the settings store use SQLite or a JSON file?
+            </p>
+          </div>
+          <Group>
+            <OptionRow
+              letter="A"
+              label="SQLite"
+              why="Transactional, and it matches how sessions are already stored"
+              chosen
+              rec
+            />
+            <div className="ml-4 h-px bg-border/70" />
+            <OptionRow letter="B" label="JSON file" why="Zero deps and human-editable, but racy under concurrent writes" />
+            <div className="ml-4 h-px bg-border/70" />
+            <OptionRow letter="C" label="Something else" why="Type your own answer" />
+          </Group>
+
+          {/* The progress the header states, drawn — two questions, the first one live. It rides with
+              the button rather than under the options, so the pair reads as one footer. */}
+          <div className="mt-auto flex flex-col items-center gap-3 border-t border-border/70 px-4 pb-[30px] pt-3">
+            <div className="flex items-center gap-1.5">
+              <span className="size-[6px] rounded-full bg-accent" />
+              <span className="size-[6px] rounded-full bg-muted/35" />
+            </div>
+            <Button kind="accent" size="lg" full>Continue</Button>
+          </div>
         </div>
-
-        <GroupHeader>Question 1 of 2</GroupHeader>
-        <QuestionBlock
-          prompt="Should the settings store use SQLite or a JSON file?"
-          options={[
-            { letter: "A", label: "SQLite", why: "Transactional, and it matches how sessions are already stored", chosen: true, rec: true },
-            { letter: "B", label: "JSON file", why: "Zero deps and human-editable, but racy under concurrent writes" },
-            { letter: "C", label: "Something else", why: "Type your own answer" },
-          ]}
-        />
-
-        <GroupHeader>Question 2 of 2</GroupHeader>
-        <QuestionBlock
-          prompt="Should the normalized key be written into the on-disk cache too?"
-          options={[
-            { letter: "A", label: "Migrate on next read", why: "No downtime; a stale entry is corrected the first time it is hit", rec: true },
-            { letter: "B", label: "Rebuild the cache once", why: "Clean, but the first boot after the update is slow" },
-          ]}
-        />
-      </div>
-      <div className="absolute inset-x-0 bottom-0 z-30 border-t border-border/70 bg-bg/85 px-4 pb-[30px] pt-2.5 backdrop-blur-xl">
-        <Button kind="accent" size="lg" full>Send 1 of 2 answers</Button>
-      </div>
+      </SheetOver>
     </Canvas>
   )
 }
@@ -707,7 +700,7 @@ function AnswerScreen() {
 function ActionsScreen() {
   return (
     <Canvas>
-      <SheetOver detent={0.68} behind={<BoardRestedScreen />}>
+      <SheetOver detent={0.68} behind={<BoardQueueScreen />}>
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden pt-2">
           <div className="flex items-start gap-3 px-4 pb-3 pt-1">
             <span className="pt-[2px]"><AskBox /></span>
@@ -842,7 +835,7 @@ function DispatchScreen() {
 function SnoozeScreen() {
   return (
     <Canvas>
-      <SheetOver detent={0.5} behind={<BoardRestedScreen />}>
+      <SheetOver detent={0.5} behind={<BoardQueueScreen />}>
         {/* NO confirm button. Every row here IS the choice, so a Done would be a second tap that can
             only ever mean "yes, the thing I just tapped" — and a permanently-dim one, until then. */}
         <SheetHeader title="Snooze" leading={<button className="px-2 text-[16px] text-fg/85">Cancel</button>} />
@@ -997,59 +990,6 @@ function SubAgentScreen() {
   )
 }
 
-// ══ 12 · search ═════════════════════════════════════════════════════════════════════════════════
-// THE COMMAND PALETTE, which on a phone is simply SEARCH. ⌘K has no thumb, so the palette stops being a
-// chord and becomes the magnifier in the nav bar — and its verbs stay in the results, under their own
-// heading, exactly where a palette user expects to find them.
-
-function SearchScreen() {
-  return (
-    <Canvas>
-      <div className="shrink-0 bg-bg pt-[59px]">
-        <div className="flex h-[52px] items-center gap-2 px-4">
-          <div className="flex h-[36px] min-w-0 flex-1 items-center gap-2 rounded-[10px] bg-panel-2 px-2.5">
-            <Search size={15} className="shrink-0 text-muted/70" />
-            <span className="min-w-0 flex-1 truncate text-[16px] text-fg">resolver</span>
-            <span className="flex size-[17px] shrink-0 items-center justify-center rounded-full bg-muted/25 text-bg">
-              <X size={11} strokeWidth={3} />
-            </span>
-          </div>
-          <button className="shrink-0 text-[17px] text-fg/85">Cancel</button>
-        </div>
-      </div>
-      <div className="min-h-0 flex-1 overflow-hidden">
-        <GroupHeader>Threads</GroupHeader>
-        <Group>
-          <Row icon={<AskBox />} label="Fix the cache collision in the resolver" detail="nubjs/nub · rested 4m" />
-          <RowRule inset={53} />
-          <Row icon={<DoneBox />} label="Make the resolver cache keys stable" detail="nubjs/nub · done yesterday" />
-          <RowRule inset={53} />
-          <Row
-            icon={<StatusBox><Hourglass size={11} className="text-muted/75" /></StatusBox>}
-            label="Resolver cache: migrate on read"
-            detail="colinhacks/zod · held, wakes 5:00 PM"
-          />
-        </Group>
-        <GroupHeader>Plans</GroupHeader>
-        <Group>
-          <Row icon={<FileText size={16} className="text-muted" />} label="Resolver rewrite, stage 2" detail="3 threads from this plan" chevron />
-        </Group>
-        <GroupHeader>Actions</GroupHeader>
-        <Group>
-          <Row icon={<Plus size={16} className="text-muted" />} label="New thread" />
-          <RowRule inset={53} />
-          <Row icon={<Github size={16} className="text-muted" />} label="Dispatch from an issue or PR" />
-          <RowRule inset={53} />
-          <Row icon={<SettingsIcon size={16} className="text-muted" />} label="Open settings" />
-        </Group>
-        <p className="m-0 px-4 pt-4 text-[12.5px] leading-[17px] text-muted/70">
-          Search covers every project on this machine, not just the one you are in.
-        </p>
-      </div>
-    </Canvas>
-  )
-}
-
 // ══ 13 · empty ══════════════════════════════════════════════════════════════════════════════════
 // A PROJECT WITH NOTHING IN IT. The desktop's first-run state centres the prompt box as the whole
 // screen. Here the + is the way in, so the empty space carries the invitation instead — three starters,
@@ -1068,40 +1008,28 @@ function EmptyScreen() {
         }
         trailing={<NavAction label="Board actions"><Ellipsis size={20} /></NavAction>}
       />
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 pb-[83px]">
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-10 pb-[83px]">
         {/* THE RASTER ICON, not `/favicon.svg`. That file is one 58KB path — the mark's loose fibers as a
             single mega-geometry — and Chrome re-tessellates it on every raster: the screens that drew it
             could not complete a 390×844 headless screenshot in TEN MINUTES, while every screen without
             it shot in sixteen seconds. */}
         <img src="/apple-touch-icon.png" width={64} height={64} alt="" className="rounded-[15px] opacity-90" />
         <h2 className="m-0 mt-4 text-[19px] font-semibold tracking-[-0.015em] text-fg">No threads yet</h2>
+        {/* One line, and no invented starter prompts. The + is the way in and it is already on screen;
+            a list of tasks Frizz made up for you is not an empty state, it is a suggestion nobody
+            asked for. */}
         <p className="m-0 mt-1.5 text-center text-[14px] leading-[20px] text-muted">
           Describe a task and Frizz dispatches a worker for it. Everything it does lands back here.
         </p>
-        <div className="mt-5 flex w-full flex-col gap-2">
-          {["Find and fix the flaky test in the socket suite", "Review the diff on this branch", "Write the release notes for 0.4"].map(
-            (starter) => (
-              <button
-                key={starter}
-                className="flex min-h-[44px] items-center gap-2.5 rounded-[12px] border border-border/70 bg-panel px-3.5 py-2.5 text-left text-[14px] leading-[19px] text-fg/85"
-              >
-                <Sparkles size={15} className="shrink-0 text-muted/70" />
-                <span className="min-w-0 flex-1">{starter}</span>
-                <ArrowUpRight size={15} className="shrink-0 text-muted/45" />
-              </button>
-            ),
-          )}
-        </div>
       </div>
       <Fab />
       <TabBar
         tabs={[
-          { id: "rested", label: "Rested", icon: <StatusBox size={TAB_ICON} />, count: 0 },
-          { id: "active", label: "Active", icon: <BoxSpinnerM size={TAB_ICON} frozen={still} />, count: 0 },
+          { id: "queue", label: "Queue", icon: <PlayBox size={TAB_ICON} />, count: 0 },
           { id: "held", label: "Held", icon: <StatusBox size={TAB_ICON}><Hourglass size={13} className="text-muted/75" /></StatusBox>, count: 0 },
           { id: "done", label: "Done", icon: <DoneBox size={TAB_ICON} />, count: 0 },
         ]}
-        active="rested"
+        active="queue"
       />
     </Canvas>
   )
@@ -1216,7 +1144,7 @@ function KitScreen() {
             <div className="flex items-center gap-4 rounded-[12px] border border-border/70 bg-panel px-4 py-3">
               {[
                 { mark: <AskBox />, label: "asks" },
-                { mark: <BoxSpinnerM frozen />, label: "runs" },
+                { mark: <PlayBox />, label: "runs" },
                 { mark: <StatusBox />, label: "rests" },
                 { mark: <StatusBox><Hourglass size={11} className="text-muted/75" /></StatusBox>, label: "held" },
                 { mark: <DoneBox />, label: "done" },
@@ -1266,20 +1194,18 @@ function KitScreen() {
 
 const SCREENS: { id: string; title: string; note: string; render: () => ReactNode }[] = [
   { id: "home", title: "1 · Home", note: "Every project on the machine, sorted by what wants you. The accent count is the ask.", render: () => <HomeScreen /> },
-  { id: "board", title: "2 · Board — Rested", note: "The cue, full width. An ask is marked by the accent ? and nothing else. One row mid-swipe.", render: () => <BoardRestedScreen /> },
-  { id: "board-active", title: "3 · Board — Active", note: "Spinning threads with their live children under them — the only band that carries a liveness dot.", render: () => <BoardActiveScreen /> },
-  { id: "board-held", title: "4 · Board — Held", note: "Dimmed, and every row says what it is waiting for.", render: () => <BoardHeldScreen /> },
-  { id: "thread", title: "5 · Thread", note: "The transcript, and the only surface with a composer. The ask is answered here, in context.", render: () => <ThreadScreen /> },
-  { id: "answer", title: "6 · Answering", note: "Pushed from the thread: one 56pt row per option, send docked.", render: () => <AnswerScreen /> },
-  { id: "actions", title: "7 · Thread actions", note: "A medium-detent sheet over a receded board.", render: () => <ActionsScreen /> },
-  { id: "dispatch", title: "8 · New thread", note: "What the + opens, drawn with the keyboard up because that is the real height.", render: () => <DispatchScreen /> },
-  { id: "snooze", title: "9 · Snooze", note: "A five-second decision at a small detent, every option resolving its own clock.", render: () => <SnoozeScreen /> },
-  { id: "settings", title: "10 · Settings", note: "Browser notifications, not push — this is a website.", render: () => <SettingsScreen /> },
-  { id: "subagent", title: "11 · Sub-agent", note: "The drill-in, at the large detent over its parent — the desktop's stacked drawers.", render: () => <SubAgentScreen /> },
-  { id: "search", title: "12 · Search", note: "The command palette, without a chord to open it.", render: () => <SearchScreen /> },
-  { id: "empty", title: "13 · Empty board", note: "A project with nothing in it yet, and three ways to start.", render: () => <EmptyScreen /> },
-  { id: "plan", title: "14 · Plan", note: "The one genuinely long-form artifact in Frizz, read at the phone's measure.", render: () => <PlanScreen /> },
-  { id: "kit", title: "15 · Controls", note: "The whole vocabulary on one screen.", render: () => <KitScreen /> },
+  { id: "board", title: "2 · Board — Queue", note: "Everything not held or done, in one list, asks first. Full width; the accent ? is the only ask marking.", render: () => <BoardQueueScreen /> },
+  { id: "board-held", title: "3 · Board — Held", note: "Dimmed, and every row says what it is waiting for.", render: () => <BoardHeldScreen /> },
+  { id: "thread", title: "4 · Thread", note: "The transcript, and the only surface with a composer. The ask is answered here, in context.", render: () => <ThreadScreen /> },
+  { id: "answer", title: "5 · Answering", note: "One question at a time, in a sheet that slides up over the thread. The verb is Continue, not Send.", render: () => <AnswerScreen /> },
+  { id: "actions", title: "6 · Thread actions", note: "A medium-detent sheet over a receded board.", render: () => <ActionsScreen /> },
+  { id: "dispatch", title: "7 · New thread", note: "What the + opens, drawn with the keyboard up because that is the real height.", render: () => <DispatchScreen /> },
+  { id: "snooze", title: "8 · Snooze", note: "A five-second decision at a small detent, every option resolving its own clock.", render: () => <SnoozeScreen /> },
+  { id: "settings", title: "9 · Settings", note: "Browser notifications, not push — this is a website.", render: () => <SettingsScreen /> },
+  { id: "subagent", title: "10 · Sub-agent", note: "The drill-in, at the large detent over its parent — the desktop's stacked drawers.", render: () => <SubAgentScreen /> },
+  { id: "empty", title: "11 · Empty board", note: "A project with nothing in it yet, and three ways to start.", render: () => <EmptyScreen /> },
+  { id: "plan", title: "12 · Plan", note: "The one genuinely long-form artifact in Frizz, read at the phone's measure.", render: () => <PlanScreen /> },
+  { id: "kit", title: "13 · Controls", note: "The whole vocabulary on one screen.", render: () => <KitScreen /> },
 ]
 
 function Gallery() {
@@ -1297,7 +1223,7 @@ function Gallery() {
       <header className="mb-10 flex max-w-[720px] flex-col gap-2.5">
         <h1 className="m-0 text-[24px] font-semibold tracking-[-0.02em] text-fg">Frizz on a phone</h1>
         <p className="m-0 text-[14px] leading-[21px] text-muted">
-          Fifteen screens, drawn at 390×844 in the app's own stylesheet and tokens. Append{" "}
+          Thirteen screens, drawn at 390×844 in the app's own stylesheet and tokens. Append{" "}
           <code className="rounded bg-panel-2 px-1 py-0.5 font-mono-keep text-[12.5px]">?screen=board</code> for one on
           its own at 1:1, or <code className="rounded bg-panel-2 px-1 py-0.5 font-mono-keep text-[12.5px]">?font=mono</code>{" "}
           for the other font setting.

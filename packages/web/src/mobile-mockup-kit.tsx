@@ -51,10 +51,36 @@ export const INK = {
   chevron12: "-mx-[2.5px]",
 }
 
-// ── ink alignment ───────────────────────────────────────────────────────────────────────────────
-// `1cap` is the resolved font's cap height, so a symmetric 1em glyph's ink lands on the cap band in
-// EITHER font at any size, with nothing to re-measure when the font setting flips. It needs a shared
-// baseline to align against, so every row that uses it is `items-baseline`.
+// ── vertical ink alignment ──────────────────────────────────────────────────────────────────────
+//
+// A mark beside text is aligned to the CAP BAND — baseline to cap height — because that is the band
+// the eye reads as "the line of text". `1cap` is the resolved font's own cap height, so a correction
+// written against it is right in BOTH of this app's fonts with nothing to re-measure when the setting
+// flips.
+//
+// THE ARITHMETIC, once, because the obvious constant is wrong for most marks. `self-baseline` puts a
+// non-text mark's BOTTOM MARGIN EDGE on the text baseline, so a mark whose box is S tall has its ink
+// centre at `baseline − S/2` (a symmetric halo cancels). The cap band's centre is `baseline − cap/2`.
+// So the lift is:
+//
+//     translateY( S/2 − 0.5cap )
+//
+// `0.5em − 0.5cap` — which is what this file used to hard-code for everything — is that formula with
+// S pinned to 1em, and it is therefore only correct for a mark that is exactly 1em tall. Applied to a
+// fixed 6px dot beside 12.5px text it is not a small error: MEASURED at +1.85px in the wrong
+// direction, which is most of the "the dot indicators are all way too low" the maintainer read off the
+// board (2026-08-17). It is a per-mark size, so it cannot be a shared class.
+//
+// One more trap, and it is what actually broke these dots: WRAPPING the mark in a `flex` span makes it
+// a flex item of the WRAPPER, so `self-baseline` aligns it inside that box instead of against the
+// row's shared baseline — and the row then takes its baseline from the wrapper's bottom edge. Measured
+// −3.32px on the child-op rows. Never wrap an aligned mark; put the hook on the mark itself.
+export const CAP_ALIGN = "shrink-0 self-baseline"
+/** The lift for a mark whose box is `size` px tall, sitting on the baseline of a row's text. */
+export function capAlign(size: number): { translate: string } {
+  return { translate: `0 calc(${size / 2}px - 0.5cap)` }
+}
+/** The 1em case, kept as a class for marks that really are 1em (a text glyph in the prose flow). */
 export const ON_CAP = "shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)]"
 
 // ── device ──────────────────────────────────────────────────────────────────────────────────────
@@ -439,6 +465,28 @@ export function BoxSpinnerM({ size = MOBILE_BOX, tone = "text-muted/85", frozen 
   )
 }
 
+/**
+ * [▶] the QUEUE's mark — a static play triangle in the family's box.
+ *
+ * The tab bar used to draw the running spinner here and it was the wrong instrument for the job
+ * (maintainer 2026-08-17: "We cannot have the tab icon for the active tab be continuously spinning.
+ * That's awful… better yet, a play button. A play button makes the most sense"). A row's spinner
+ * animates because THAT thread is moving right now; a tab is permanent chrome, and permanent motion in
+ * the corner of the eye is noise. Play says "this is the band where work is in flight" without moving.
+ */
+export function PlayBox({ size = MOBILE_BOX }: { size?: number }) {
+  return (
+    <StatusBox size={size} tone="border-muted/45">
+      {/* Optically centred, not geometrically: a triangle's visual centre sits behind its centroid, so
+          a play glyph centred on its bounding box always reads as leaning left. The 8% nudge is the
+          convention every media player uses. */}
+      <svg width={Math.round(size * 0.52)} height={Math.round(size * 0.52)} viewBox="0 0 10 10" aria-hidden className="translate-x-[8%] text-muted/85">
+        <path d="M2.5 1.4 8.2 5 2.5 8.6Z" fill="currentColor" />
+      </svg>
+    </StatusBox>
+  )
+}
+
 /** [?] awaiting you — the one mark that spends the accent, because the accent IS the ask. */
 export function AskBox({ size = MOBILE_BOX }: { size?: number }) {
   return (
@@ -458,12 +506,15 @@ export function DoneBox({ size = MOBILE_BOX }: { size?: number }) {
 }
 
 /** The liveness dot, in the app's three runtime hues: agent (accent), shell (blue), PR watch (violet). */
-export function LiveDot({ kind = "agent", quiet }: { kind?: "agent" | "shell" | "github"; quiet?: boolean }) {
+export function LiveDot({ kind = "agent", quiet, ink }: { kind?: "agent" | "shell" | "github"; quiet?: boolean; ink?: string }) {
   // The quiet variant carries its OWN hue modifier (`.frizz-live-dot-quiet--shell`), not the bright
   // dot's — composing `frizz-live-dot-quiet` with `frizz-live-dot--shell` silently leaves the quiet dot
   // on its accent default, which is how a background shell came out yellow.
+  //
+  // The dot aligns ITSELF and carries its own `data-ink` hook, so no caller ever needs to wrap it — see
+  // the flex-item trap in the CAP_ALIGN note above, which is exactly what a measurement wrapper caused.
   const base = quiet ? "frizz-live-dot-quiet" : "frizz-live-dot"
-  return <span className={`${base} ${base}--${kind} ${ON_CAP} ${INK.dot}`} />
+  return <span data-ink={ink} className={`${base} ${base}--${kind} ${CAP_ALIGN} ${INK.dot}`} style={capAlign(6)} />
 }
 
 // ── sheets ──────────────────────────────────────────────────────────────────────────────────────
