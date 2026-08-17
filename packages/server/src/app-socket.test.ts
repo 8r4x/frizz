@@ -626,6 +626,47 @@ test("resource control: concurrent tabs coalesce one slow transcript read and on
   }
 })
 
+// The batch has TWO independent reasons to read once: the snapshot cache, and the batch-local memo of
+// each slug's result. The cache normally answers first and hides the memo entirely — deleting the memo
+// leaves the check above green — so pin the memo where the cache cannot help: with caching switched off,
+// only the memo can still collapse 8 tabs onto one read. That is the configuration a too-large frame or
+// an exhausted entry budget produces in production, i.e. exactly when a per-subscriber read hurts most.
+test("resource control: one batch reads once even when the snapshot cache is disabled", async () => {
+  let reads = 0
+  const armedBatches: (() => void)[] = []
+  const h = await startHarness({
+    maxConnections: 16,
+    maxTranscriptCacheEntries: 0,
+    scheduleSubscriptionFlush: (flush) => {
+      armedBatches.push(flush)
+    },
+    readTranscript: () => {
+      reads++
+      return [msg("uncached")]
+    },
+  })
+  try {
+    const clients = await Promise.all(Array.from({ length: 8 }, () => connectClient(h.port)))
+    await Promise.all(clients.map((client) => client.next()))
+    for (const client of clients) {
+      client.ws.send(JSON.stringify({ t: "sub", topic: "transcript", slug: "shared" }))
+    }
+    await waitFor(
+      () => h.appSocket.registry.subscribers("shared").length === 8,
+      "all 8 tabs registered as subscribers",
+    )
+    assert.equal(armedBatches.length, 1)
+    armedBatches[0]!()
+    const pushes = await Promise.all(clients.map((client) => client.next()))
+    for (const push of pushes) assert.equal(push.t, "transcript")
+    assert.equal(reads, 1, "the batch-local result memo carries the batch when nothing is cached")
+    assert.equal(h.appSocket.transcriptCacheEntries, 0, "nothing was retained — the cache is off")
+    for (const client of clients) client.ws.close()
+  } finally {
+    await h.close()
+  }
+})
+
 test("resource control: rapid alternating sub/unsub churn collapses to one surviving read", async () => {
   let reads = 0
   const h = await startHarness({
