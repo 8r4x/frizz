@@ -135,6 +135,10 @@ const interactiveLaunch =
   !internalLaunch &&
   !options.stop &&
   !options.status &&
+  // --link is a QUERY against a running board, not a launch. Counting it as interactive built a
+  // progress readout around it, so `frizz-dev --link` printed boot chatter above the URL you asked
+  // for — and it would have made the takeover below fire on a command that must never restart anything.
+  !options.link &&
   command !== "restart" &&
   command !== "promote";
 
@@ -884,6 +888,34 @@ try {
   }
 
   let before = await existingHealth();
+
+  // A JOINING LAUNCH MUST NOT SILENTLY DISCARD NETWORK FLAGS.
+  //
+  // Frizz is a singleton, so a second launch joins the running board rather than starting one. That is
+  // right for the common case — running `frizz-dev` again to reopen the tab should not restart anything.
+  // But it silently dropped --host/--public-origin, so a launch that looked successful left the board
+  // reachable on entirely different terms than the flags asked for. That produced a real "Forbidden"
+  // more than once, and the warning printed after the fact was too late to be useful.
+  //
+  // So: refuse, loudly, and ONLY when flags would actually be lost. Taking over automatically was the
+  // other candidate and is deliberately rejected — "stop whatever is running" is a destructive default
+  // on a machine where several terminals and agents share one board, and it cost a live board once
+  // already while being tested.
+  if (before.port && interactiveLaunch && !command) {
+    const ignored = [
+      ...(bind.publicOrigin ? ["--public-origin"] : []),
+      ...(bindHostIsExposed(bind.host) ? ["--host"] : []),
+    ];
+    if (ignored.length > 0) {
+      console.error(
+        `frizz: a board is already running on port ${before.port}, so ${ignored.join(" and ")} would be ignored.\n` +
+          `       Stop it first, then relaunch:\n\n` +
+          `         frizz-dev --stop\n`
+      );
+      process.exit(1);
+    }
+  }
+
   if (command === "restart") {
     if (!before.port) throw new Error("Frizz is not running for this workspace");
     const response = await fetch(
