@@ -303,9 +303,22 @@ export type NativeInputRequired = z.infer<typeof NativeInputRequired>
 //   shell:  <runtime task id>   a background shell it launched      → checked against live telemetry
 //   agent:  <runtime agent id>  a sub-agent it dispatched           → checked against live telemetry
 //   timer:  tmr_…               a timer it set                      → checked against thread_timer
-//   pr:     wpr_…               a PR watcher it registered          → checked against its PR registry
+//   pr:     owner/repo#123      a PR watcher it registered          → checked against its PR registry
 //   for:    2h                  REQUIRED. How long the park may stand (parseAwaitingDuration).
-//   reason: <one line>          The one free-text field — what the human reads on the resting card.
+//   reason: <one line>          What the human reads on the resting card.
+//
+// …then, after a `---` line, as much arbitrary Markdown as the worker wants (2026-08-17). The structural
+// lines are FRONTMATTER; the delimiter is what makes "is this line structural?" answerable, which is what
+// lets a retired or unknown kind be refused by name instead of silently swallowed as prose.
+//
+// IT IS NOT YAML, AND MUST NOT BECOME YAML — repeated keys are the normal case here (three `shell:` lines
+// are three shells), the way git trailers and HTTP headers repeat. Measured against the real `yaml`
+// package 2026-08-17, on real fences: `reason: waiting on your merge: the propKeys revert` is a PARSE
+// ERROR (nested mappings), `reason: see #6422` silently becomes `{"reason":"see"}` because ` #` opens a
+// comment, and two `shell:` lines are a hard "map keys must be unique". A worker's handoff prose contains
+// colons and `#`-refs constantly, and `reason:` takes the REST OF THE LINE verbatim — which no YAML
+// parser will do. Arrays would fix the duplicate-key objection and buy nothing else, at the cost of
+// nested indentation being the thing most likely to go wrong.
 //
 // REGISTRATION IS ORTHOGONAL TO THIS FENCE (maintainer 2026-08-15). Dispatching a shell or a sub-agent,
 // setting a timer, registering a PR watcher — none of that is a fence, and none of it parks anything.
@@ -325,7 +338,8 @@ export type NativeInputRequired = z.infer<typeof NativeInputRequired>
 //   `pr-watch: ref`    free text the poller armed from. A PR is now a registered watcher with an id.
 //   `watch: id`        superseded: a shell is named directly by its runtime handle.
 //   `pr:`/`ci:`/`session:` legacy conditions nothing has fired for a long time.
-//   prose bodies       replaced by the single `reason:` line, so the fence is machine-checkable.
+//   prose bodies       narrowed to `reason:` so the fence is machine-checkable — then given back in full
+//                      below the `---` delimiter, where prose cannot be mistaken for structure.
 export const AwaitingHint = z.object({
   kind: z.enum(["shell", "agent", "timer", "pr", "for", "reason"]),
   value: z.string(),
@@ -842,7 +856,13 @@ export interface SignoffLiveOps {
 // turn) cannot write a correct fence and will be bumped for naming something wrong. Giving it the exact
 // lines here closes that loop at the one moment it is provably needed: it just rested without a fence.
 // `mcp__frizz__activity` returns the same list on demand, from the same source.
-export function signoffNudgeMessage(ops?: SignoffLiveOps): string {
+/** The four registries as `kind: id` lines a fence can copy verbatim, or `[]` when nothing is running.
+ *
+ *  Shared with SOURCE 12's corrections, and that sharing is the point rather than tidiness: a worker
+ *  dispatched before `mcp__frizz__activity` existed CANNOT call it — its MCP server is frozen at dispatch
+ *  — so a correction whose only remedy is that tool teaches the oldest threads nothing, which is exactly
+ *  the population most likely to be writing a bad fence. Printing the ids needs no tool at all. */
+export function liveOpsLines(ops?: SignoffLiveOps): string[] {
   const lines: string[] = []
   const section = (heading: string, kind: string, items: { id?: string; label: string }[]) => {
     if (!items.length) return
@@ -853,6 +873,11 @@ export function signoffNudgeMessage(ops?: SignoffLiveOps): string {
   section("Sub-agents still running (they re-invoke you on their own, so parking on one is optional):", "agent", ops?.subAgents ?? [])
   section("Timers you have armed:", "timer", ops?.timers ?? [])
   section("Pull requests you registered:", "pr", ops?.prs ?? [])
+  return lines
+}
+
+export function signoffNudgeMessage(ops?: SignoffLiveOps): string {
+  const lines = liveOpsLines(ops)
   if (lines.length) {
     lines.push("", "An ```awaiting fence takes one such line per thing you are ACTUALLY waiting on, plus a")
     lines.push("required `for:` duration (`30s`/`15m`/`2h`/`3d`) and a one-line `reason:`. Frizz checks every")

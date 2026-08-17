@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, formatGithubWakeSteer, type GithubWatchStatus, prWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, wakeDeliveryToken, type QuotaSnapshot } from "@frizz/shared"
+import { RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, formatGithubWakeSteer, type GithubWatchStatus, prWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, type QuotaSnapshot } from "@frizz/shared"
 import { GITHUB_STATUS_SETTING, parkExpiresAt, parkIsHonoured, readAwaitingPark, unaccountedItems, type LiveActivity } from "./awaiting.ts"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
@@ -2012,7 +2012,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         return `- \`${i.kind}: ${i.value}\` — ${gone ? "NOT RUNNING" : "still running"}`
       })
       const retired = retiredAwaitingKindsIn(tele.lastFence.body ?? "")
-      const message = retired.length > 0
+      const head = retired.length > 0
         ? [
           `⛔ Your \`\`\`awaiting fence uses ${retired.length === 1 ? "a line kind" : "line kinds"} that no longer exist, so frizz ignored ${retired.length === 1 ? "it" : "them"} — the`,
           "fence named nothing and your thread stayed in the queue.",
@@ -2070,6 +2070,27 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         ].join("\n")
 
       const cause = retired.length > 0 ? "retired" : nameless ? "nameless" : expired ? "expired" : "dead"
+      // THE IDS, INLINE — not a tool name. Every correction here used to end at "use
+      // `mcp__frizz__activity`", which a worker dispatched before that tool existed cannot call: its MCP
+      // server is frozen at dispatch. Those are precisely the threads still writing fences this check
+      // refuses, so the one remedy on offer was unreachable by the population that needed it. The lines
+      // below can be copied straight into a fence, and the tool remains the on-demand form of the same
+      // list. `expired` is excluded: its status list already names every item, by definition still live.
+      const ops = cause === "expired" ? [] : liveOpsLines({
+        shells: (tele.bgShells ?? []).filter((sh) => sh.state === "running").map((sh) => ({ id: sh.taskId ?? sh.id, label: sh.label })),
+        subAgents: (tele.subAgents ?? []).filter((a) => a.state === "running").map((a) => ({ id: a.id, label: a.label })),
+        timers: deps.storage.listThreadTimers(row.slug, { armedOnly: true })
+          .map((t) => ({ id: t.id, label: t.prompt.trim().replace(/\s+/g, " ").slice(0, 80) })),
+        prs: deps.storage.listPrWatches(row.slug, { armedOnly: true })
+          .map((w) => ({ id: `${w.owner}/${w.repo}#${w.number}`, label: `${w.owner}/${w.repo}#${w.number}` })),
+      })
+      // NOTHING RUNNING is itself the answer, and the most common one for a nameless fence: a worker
+      // waiting on nothing is not awaiting, it is done. Said plainly rather than left as an empty list.
+      const message = ops.length > 0
+        ? `${head}\n${ops.join("\n")}`
+        : cause === "expired"
+        ? head
+        : `${head}\n\nYou have NOTHING running right now — no shell, no sub-agent, no timer, no registered\npull request. There is nothing that could wake you, so this thread is not awaiting: finish in\n\`\`\`done, or ask a \`\`\`question.`
       // THE CONSECUTIVE CAP, and the reason SOURCE 12 needed one. A correction is only worth sending to a
       // worker that can act on it, and a worker whose contract froze before this grammar existed cannot:
       // no fence it knows how to write will pass the check. Uncapped, that is a closed loop — bump, wake,

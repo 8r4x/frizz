@@ -308,6 +308,33 @@ test("a fence using a RETIRED kind is bumped by name, with what replaced it", as
   } finally { h.close() }
 })
 
+// A CORRECTION CARRIES THE IDS, not a tool name. A worker dispatched before `mcp__frizz__activity`
+// existed cannot call it — its MCP server is frozen at dispatch — and those are exactly the threads still
+// writing fences this check refuses. Telling them to call it was pointing the whole affected population
+// at a remedy they do not have.
+test("a correction prints the live ids inline, ready to copy into a fence", async () => {
+  const h = parkHarness([{ kind: "shell", value: "bGONE" }, { kind: "for", value: "2h" }], { shells: [LIVE_SHELL] })
+  try {
+    await h.s.tick()
+    const msg = h.queued()[0].message
+    assert.match(msg, /Background shells still running:/)
+    // The COPYABLE form — the exact line the worker should have written, by the id the runtime showed it.
+    assert.match(msg, /`shell: bzvtnt3ig`/, "the id, in the shape a fence line takes")
+  } finally { h.close() }
+})
+
+// …and when there is genuinely nothing out, that is the answer rather than an empty list. This is the
+// commonest nameless fence: a worker "waiting" on nothing at all.
+test("a nameless fence with nothing running is told it is not awaiting at all", async () => {
+  const h = parkHarness([{ kind: "for", value: "24h" }, { kind: "reason", value: "waiting on the merge" }])
+  try {
+    await h.s.tick()
+    const msg = h.queued()[0].message
+    assert.match(msg, /You have NOTHING running right now/)
+    assert.match(msg, /finish in\s*```done, or ask a ```question/s)
+  } finally { h.close() }
+})
+
 // THE CORRECTION IS CAPPED, because a correction only helps a worker that can act on it.
 //
 // Every test above ticks against ONE rest, where the delivery id alone bounds the bump. The loop lives in
