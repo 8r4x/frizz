@@ -994,6 +994,10 @@ export const GithubWatchStatus = z.object({
    *  "red again on a new commit" is news that the bare word `failing` cannot express. Optional because a
    *  reading taken before 2026-08-17 carries none. */
   head: z.string().optional(),
+  /** A digest of WHICH jobs are failing right now. The head commit alone cannot express a re-run of the
+   *  same job, or a slower job going red after the first — both of which are a second failure the worker
+   *  must hear about. Empty when nothing is failing. */
+  failureSig: z.string().optional(),
 }).strict()
 export type GithubWatchStatus = z.infer<typeof GithubWatchStatus>
 

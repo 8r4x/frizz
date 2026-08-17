@@ -92,6 +92,35 @@ interface RollupEntry {
   name?: string // CheckRun's job name
   context?: string // StatusContext's context label
   workflowName?: string // CheckRun's parent workflow, when GitHub reports one
+  // The two fields that make one FAILURE EVENT distinguishable from the next. `detailsUrl` carries the
+  // run and job ids (`/actions/runs/<run>/job/<job>`), so a re-run of the same job on the same commit is
+  // a different URL — which is exactly what "this failed AGAIN" has to be keyed on.
+  detailsUrl?: string // CheckRun's job URL
+  targetUrl?: string // StatusContext's equivalent
+  completedAt?: string
+}
+
+// THE IDENTITY OF THE CURRENT FAILURES, so "CI is red" can be told apart from "CI is red AGAIN".
+//
+// A verdict word cannot express a second failure, and neither can the head commit alone: CI fails, the
+// job is re-run on the SAME commit and fails again, or a slower job goes red minutes after the first —
+// all real, all news, and all invisible to `failing === failing`. This digests what is failing RIGHT NOW
+// into one short string, so any change in the failing set is a change in the stamp.
+//
+// Keyed on the job URL first because it carries the run and job ids and therefore changes on a re-run;
+// `completedAt` is the fallback for a StatusContext that has no such URL, and the name alone is the last
+// resort. Hashed because a rollup can carry 60+ entries and this string lives in a cursor column.
+export function failureSignature(rollup: RollupEntry[]): string {
+  const ids: string[] = []
+  for (const c of Array.isArray(rollup) ? rollup : []) {
+    if (!c || typeof c !== "object") continue
+    if (!rollupEntryFailed(typeof c.conclusion === "string" ? c.conclusion : undefined, typeof c.state === "string" ? c.state : undefined)) continue
+    const label = c.name ?? c.context ?? c.workflowName ?? "?"
+    ids.push(`${label}@${c.detailsUrl ?? c.targetUrl ?? c.completedAt ?? ""}`)
+  }
+  if (ids.length === 0) return ""
+  // SORTED, because GitHub's rollup order is not stable and an order flip is not a new failure.
+  return createHash("sha1").update(ids.sort().join("\n")).digest("hex").slice(0, 12)
 }
 
 // Parse a PR reference out of a hint value: `owner/repo#123` or a GitHub PR URL. Undefined when neither
@@ -245,6 +274,7 @@ export function githubWatchStatus(pr: PrStatus, polledAt: string): GithubWatchSt
     state,
     polledAt,
     head: pr.head,
+    failureSig: failureSignature(entries),
   }
 }
 
@@ -2269,7 +2299,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // the exact class of dead wait this whole grammar exists to make impossible. Red again on a NEW
       // commit is the most actionable news a watcher has, and it was the one thing it could not say.
       const terminal = st && (st.checks === "passing" || st.checks === "failing") ? st.checks : undefined
-      // `<head>:<verdict>`, so a re-run on the same commit stays quiet while a new commit always speaks.
+      // `<head>:<verdict>:<failing jobs>`, so EVERY distinct failure speaks and only an unchanged reading
+      // is quiet. The commit alone was not enough: a job re-run on the same head, or a slower job going
+      // red after the first, is a second failure the worker has to hear about and neither moves the SHA.
       //
       // A LEGACY CURSOR (the bare word, written before this) can never equal a stamp, so every armed
       // watcher re-announces its current verdict ONCE on the first poll after the upgrade and is
@@ -2278,7 +2310,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // prompted the report. Special-casing the legacy shape to suppress those 7 messages would have left
       // the reported bug live on exactly the thread that reported it, until its CI happened to flip
       // colour — buying silence at the cost of the fix.
-      const stamp = terminal !== undefined ? `${st?.head ?? "?"}:${terminal}` : undefined
+      const stamp = terminal !== undefined ? `${st?.head ?? "?"}:${terminal}:${st?.failureSig ?? ""}` : undefined
       const checksChanged = stamp !== undefined && cursor.checks !== stamp
       // NEW review activity, against everything already reported. On the FIRST poll there is nothing
       // reported yet, so the baseline is the REGISTRATION INSTANT: a worker registers when it opens or

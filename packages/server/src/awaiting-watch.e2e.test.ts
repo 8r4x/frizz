@@ -374,6 +374,46 @@ async function prHarness() {
 // transition — said nothing. The worker then waited on a watcher that could no longer speak, which is
 // precisely the dead wait this grammar exists to make impossible. Reported by the maintainer 2026-08-17
 // against `investigate-nubjs-nub-728`, whose cursor read `{"checks":"failing","report":4}`.
+// MULTIPLE SEQUENTIAL FAILURES, which is the whole requirement and not only the new-commit slice of it.
+// A worker iterating on a red build produces failures that do NOT move the head: it re-runs the failed
+// job, or a slower job goes red minutes after the first. Keyed on the verdict word (or even on the
+// commit), every one of those after the first is silent — the worker is told once and then left waiting
+// on a watcher that has nothing more it can say.
+test("every distinct failure speaks: a re-run on the same commit, and a second job going red later", async () => {
+  const h = await prHarness()
+  try {
+    // FAILURE 1 — one job red.
+    h.setChecks([{ status: "COMPLETED", conclusion: "FAILURE", name: "lint", detailsUrl: "https://gh/runs/1/job/1" }])
+    await h.tick()
+    assert.equal(h.delivered.length, 1, "the first failure")
+    h.delivered.length = 0
+
+    // FAILURE 2 — the SAME job re-run on the SAME commit. A re-run is a new job id, so the URL moves even
+    // though the head and the verdict word do not.
+    h.setChecks([{ status: "COMPLETED", conclusion: "FAILURE", name: "lint", detailsUrl: "https://gh/runs/2/job/2" }])
+    await h.tick()
+    assert.equal(h.delivered.length, 1, "a re-run that fails again is a second failure, not the same one")
+    assert.match(h.delivered[0], /CI FAILED/)
+    h.delivered.length = 0
+
+    // FAILURE 3 — a SLOWER job goes red on the same commit, alongside the first. The failing SET grew.
+    h.setChecks([
+      { status: "COMPLETED", conclusion: "FAILURE", name: "lint", detailsUrl: "https://gh/runs/2/job/2" },
+      { status: "COMPLETED", conclusion: "FAILURE", name: "e2e", detailsUrl: "https://gh/runs/2/job/3" },
+    ])
+    await h.tick()
+    assert.equal(h.delivered.length, 1, "a second job going red is news the worker has not heard")
+    assert.match(h.delivered[0], /e2e/, "…and it names the job that just went red")
+    h.delivered.length = 0
+
+    // NOTHING CHANGED — still the same two jobs, same runs. The nag-loop guard must hold through all of
+    // the above, or this fix trades a silent watcher for one that talks on every tick.
+    await h.tick()
+    await h.tick()
+    assert.deepEqual(h.delivered, [], "an unchanged reading stays quiet, however many times it is polled")
+  } finally { h.close() }
+})
+
 test("a SECOND CI failure on a new commit is reported, and a re-poll of the same commit is not", async () => {
   const h = await prHarness()
   try {
