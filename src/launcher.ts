@@ -427,6 +427,7 @@ Options:
   --host [address]       serve on a network address instead of loopback (bare --host means 0.0.0.0)
   --allowed-host <name>  with --host, also accept this DNS name as the board's address (repeatable)
   --public-origin <url>  serve behind a proxy/tunnel reachable at this exact origin
+  --link                 print a fresh single-use access link for the already-running board
   --debug                stream the full event feed to the terminal instead of the compact readout
   --status               report this workspace's stable server and artifact
   --stop                 stop this workspace's UI supervisor (agents keep running)
