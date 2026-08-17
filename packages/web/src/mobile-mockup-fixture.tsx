@@ -307,10 +307,11 @@ const TAB_ICON = 21
 
 function boardTabs(active: string) {
   return [
-    // Rested is the band that can be waiting on you, so its tab is the only one that ever wears the
-    // accent — as the "?" when you are standing in it, and as the badge either way.
-    { id: "rested", label: "Rested", icon: active === "rested" ? <AskBox size={TAB_ICON} /> : <StatusBox size={TAB_ICON} />, count: 3, asks: true },
-    { id: "active", label: "Active", icon: <BoxSpinnerM size={TAB_ICON} frozen={still} />, count: 2 },
+    // The icon is the BAND's mark — an at-rest row's empty box — not an ask mark: Rested is where asks
+    // land, but a rested thread is not itself a question. The accent BADGE is what says one of these
+    // three is waiting on you, and it is the only accent in the bar.
+    { id: "rested", label: "Rested", icon: <StatusBox size={TAB_ICON} />, count: 3, asks: true },
+    { id: "active", label: "Active", icon: <BoxSpinnerM size={TAB_ICON} frozen={still} />, count: 3 },
     { id: "held", label: "Held", icon: <StatusBox size={TAB_ICON}><Hourglass size={13} className="text-muted/75" /></StatusBox>, count: 2 },
     { id: "done", label: "Done", icon: <DoneBox size={TAB_ICON} />, count: 6 },
   ]
@@ -412,6 +413,34 @@ function BoardRestedScreen() {
           provider="claude"
           age="2d"
           gloss="Rested — nothing running"
+        />
+        <ThreadRow
+          glyph={<StatusBox />}
+          title="Compress the board payload on the wire"
+          provider="claude"
+          age="2d"
+          gloss="780KB → 137KB, landed on main"
+        />
+        <ThreadRow
+          glyph={<AskBox />}
+          title="Decide what a restart does to a live turn"
+          provider="claude"
+          age="3d"
+          gloss="Needs a call before the next release"
+        />
+        <ThreadRow
+          glyph={<StatusBox />}
+          title="Pin the batch-local result memo"
+          provider="codex"
+          age="4d"
+          gloss="Rested — nothing running"
+        />
+        <ThreadRow
+          glyph={<StatusBox />}
+          title="Teach the tailer about the 20k backlog"
+          provider="claude"
+          age="6d"
+          gloss="Rested — nothing running"
           last
         />
       </Group>
@@ -446,12 +475,18 @@ function BoardActiveScreen() {
           title="Draft the changelog for 0.4"
           provider="codex"
           activity={<span className="shimmer-text">Reading packages/server/src/router.ts</span>}
-          last
         >
           <div className="flex flex-col">
             <ChildOp kind="shell" label="vite dev --host" elapsed="18m" />
           </div>
         </ThreadRow>
+        <ThreadRow
+          glyph={<BoxSpinnerM frozen={still} />}
+          title="Chase the socket reconnect flake"
+          provider="claude"
+          activity={<span className="shimmer-text">Inspecting the broker handshake</span>}
+          last
+        />
       </Group>
     </BoardShell>
   )
@@ -550,9 +585,15 @@ function ThreadScreen() {
               Should the settings store use SQLite or a JSON file?
             </p>
             <div className="mt-3 flex items-center gap-2">
-              <Button kind="accent" size="sm" className="flex-1">Answer</Button>
+              <Button kind="accent" size="sm">Answer</Button>
               <Button kind="tinted" size="sm">Ask something back</Button>
             </div>
+          </div>
+
+          <div className="flex items-center gap-3 py-1">
+            <span className="h-px flex-1 bg-border/60" />
+            <span className="shrink-0 text-[11.5px] text-muted/60">rested 4m</span>
+            <span className="h-px flex-1 bg-border/60" />
           </div>
         </div>
       </div>

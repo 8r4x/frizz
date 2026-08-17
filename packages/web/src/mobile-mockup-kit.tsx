@@ -535,8 +535,11 @@ export function SheetHeader({ title, leading, trailing }: { title: ReactNode; le
  * thread, with the same glyph inside it. The tab for Held is the mark a held row wears. So the tab bar
  * doubles as the legend for the list above it, and there is no second visual language to learn.
  *
- * The count rides in the badge position: MUTED, because a count is information — except where a band
- * is waiting on the reader, and then it is the accent, which is the one thing the accent ever means.
+ * THE BADGE IS TWO DIFFERENT NUMBERS, and the colour is what says which. Muted = how many threads are
+ * in that band, which is information. Accent = how many of them are WAITING ON YOU, which is the only
+ * thing the accent ever means anywhere in this product. So a grey 6 on Done reads "six finished" and a
+ * yellow 3 on Rested reads "three want you", with the band's own length left to the list itself. One
+ * number in two roles is a compromise, but a second numeral per tab in a 97pt cell is not a design.
  */
 export function TabBar({
   tabs,
@@ -556,7 +559,7 @@ export function TabBar({
                 {tab.icon}
                 {tab.count > 0 ? (
                   <span
-                    className={`absolute -right-[9px] -top-[5px] flex h-[15px] min-w-[15px] items-center justify-center rounded-full px-[3.5px] text-[10px] font-semibold tabular-nums ${
+                    className={`absolute -right-[11px] -top-[7px] flex h-[16px] min-w-[16px] items-center justify-center rounded-full border-[1.5px] border-bg px-[3.5px] text-[10px] font-semibold tabular-nums ${
                       tab.asks ? "bg-accent text-bg" : "bg-elevated text-muted"
                     }`}
                   >
