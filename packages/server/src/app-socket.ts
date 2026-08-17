@@ -130,6 +130,14 @@ export interface AppSocketDeps {
   bufferedAmount?: (ws: WebSocket) => number
   now?: () => number
   serializeMessage?: (msg: SocketServerMsg) => string
+  /**
+   * Arms the deferred subscription batch, and optionally returns a cancel for shutdown. Production uses
+   * setImmediate — the check phase right after the poll phase that delivered the sub frames — so every
+   * subscription read off one poll iteration shares a single read. A test injects a manual trigger to
+   * make the batch BOUNDARY explicit: which frames land in one poll iteration is a property of the
+   * kernel and the machine's load, never something a socket client can guarantee.
+   */
+  scheduleSubscriptionFlush?: (flush: () => void) => (() => void) | void
 }
 
 // Build the transcript reader index.ts injects — resolves a thread slug to its rendered transcript the
@@ -232,6 +240,12 @@ export function createAppSocketServer(deps: AppSocketDeps): AppSocketServer {
   const bufferedAmount = deps.bufferedAmount ?? ((ws: WebSocket) => ws.bufferedAmount)
   const now = deps.now ?? Date.now
   const serializeMessage = deps.serializeMessage ?? JSON.stringify
+  const scheduleSubscriptionFlush = deps.scheduleSubscriptionFlush
+    ?? ((flush: () => void) => {
+      const immediate = setImmediate(flush)
+      immediate.unref?.()
+      return () => clearImmediate(immediate)
+    })
   const terminationTimers = new WeakMap<WebSocket, NodeJS.Timeout>()
   const keyframes = new Set<Promise<void>>()
   let closing = false
@@ -589,7 +603,36 @@ export function createAppSocketServer(deps: AppSocketDeps): AppSocketServer {
   // preserves the historical guarantee that a late subscriber sees disk truth even in the small gap
   // before the tailer emits its change edge. Map+Set dedupes sub/unsub/sub churn within the same batch.
   const pendingSubscriptionPushes = new Map<WebSocket, Set<string>>()
-  let subscriptionFlushImmediate: NodeJS.Immediate | null = null
+  let subscriptionFlushArmed = false
+  let cancelSubscriptionFlush: (() => void) | null = null
+
+  function flushSubscriptionPushes(): void {
+    subscriptionFlushArmed = false
+    cancelSubscriptionFlush = null
+    if (closing) {
+      pendingSubscriptionPushes.clear()
+      return
+    }
+    const batch = [...pendingSubscriptionPushes]
+    pendingSubscriptionPushes.clear()
+    const batchResults = new Map<string, SnapshotResult>()
+    for (const [candidate, candidateSlugs] of batch) {
+      if (candidate.readyState !== candidate.OPEN) continue
+      for (const candidateSlug of candidateSlugs) {
+        if (!registry.isSubscribed(candidate, candidateSlug)) continue
+        let result = batchResults.get(candidateSlug)
+        if (!result || (result.kind === "limited" && result.scope === "origin")) {
+          result = snapshotFor(candidateSlug, socketOrigins.get(candidate))
+          // An origin denial is local to that origin; let the next origin attempt its own fair share.
+          // Every other outcome describes the one process-wide read/result and is safe to share.
+          if (!(result.kind === "limited" && result.scope === "origin")) {
+            batchResults.set(candidateSlug, result)
+          }
+        }
+        pushSnapshotResult(candidate, candidateSlug, result)
+      }
+    }
+  }
 
   function enqueueSubscriptionPush(ws: WebSocket, slug: string): void {
     deleteTranscriptSnapshot(slug)
@@ -599,34 +642,11 @@ export function createAppSocketServer(deps: AppSocketDeps): AppSocketServer {
       pendingSubscriptionPushes.set(ws, slugs)
     }
     slugs.add(slug)
-    if (subscriptionFlushImmediate) return
-    subscriptionFlushImmediate = setImmediate(() => {
-      subscriptionFlushImmediate = null
-      if (closing) {
-        pendingSubscriptionPushes.clear()
-        return
-      }
-      const batch = [...pendingSubscriptionPushes]
-      pendingSubscriptionPushes.clear()
-      const batchResults = new Map<string, SnapshotResult>()
-      for (const [candidate, candidateSlugs] of batch) {
-        if (candidate.readyState !== candidate.OPEN) continue
-        for (const candidateSlug of candidateSlugs) {
-          if (!registry.isSubscribed(candidate, candidateSlug)) continue
-          let result = batchResults.get(candidateSlug)
-          if (!result || (result.kind === "limited" && result.scope === "origin")) {
-            result = snapshotFor(candidateSlug, socketOrigins.get(candidate))
-            // An origin denial is local to that origin; let the next origin attempt its own fair share.
-            // Every other outcome describes the one process-wide read/result and is safe to share.
-            if (!(result.kind === "limited" && result.scope === "origin")) {
-              batchResults.set(candidateSlug, result)
-            }
-          }
-          pushSnapshotResult(candidate, candidateSlug, result)
-        }
-      }
-    })
-    subscriptionFlushImmediate.unref?.()
+    if (subscriptionFlushArmed) return
+    subscriptionFlushArmed = true
+    const cancel = scheduleSubscriptionFlush(flushSubscriptionPushes)
+    // A scheduler that ran the flush synchronously has already disarmed; don't retain its dead cancel.
+    if (subscriptionFlushArmed) cancelSubscriptionFlush = cancel ?? null
   }
 
   function cancelPendingSubscriptionPush(ws: WebSocket, slug?: string): void {
@@ -962,8 +982,13 @@ export function createAppSocketServer(deps: AppSocketDeps): AppSocketServer {
       } catch {
         // Continue reclaiming sockets even if a custom producer cleanup fails.
       }
-      if (subscriptionFlushImmediate) clearImmediate(subscriptionFlushImmediate)
-      subscriptionFlushImmediate = null
+      try {
+        cancelSubscriptionFlush?.()
+      } catch {
+        // The flush is a no-op once `closing` is set, so a failed cancel cannot start a read.
+      }
+      cancelSubscriptionFlush = null
+      subscriptionFlushArmed = false
       pendingSubscriptionPushes.clear()
       if (transcriptRefreshTimer) clearTimeout(transcriptRefreshTimer)
       transcriptRefreshTimer = null

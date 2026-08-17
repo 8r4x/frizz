@@ -64,6 +64,16 @@ const board: BoardSnapshot = {
 const msg = (text: string): TranscriptMessage => ({ role: "assistant", text, tools: [], parts: [] })
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+// Poll an OBSERVABLE server-side condition instead of guessing how long a socket frame takes to land.
+// Slow under load is fine; the assertion that follows is the deterministic part.
+async function waitFor(predicate: () => boolean, what: string, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!predicate()) {
+    if (Date.now() >= deadline) assert.fail(`timed out waiting for ${what}`)
+    await delay(2)
+  }
+}
+
 interface Harness {
   server: Server
   port: number
@@ -550,12 +560,23 @@ test("protocol: sub pushes the current transcript immediately", async () => {
   }
 })
 
+// The BOUNDARY of a subscription batch is the check phase after the poll iteration that delivered the
+// frames — so which of 8 tabs' sub frames share a batch is a property of the kernel and the machine's
+// load, and no socket client can guarantee it. Under full-suite load these 8 frames really do straddle
+// two poll iterations, and the server then reads twice BY DESIGN (a later batch invalidates retained
+// cache first, so a late subscriber still sees disk truth). Asserting "one read" therefore has to fix
+// the batch boundary rather than hope for it: the flush is driven manually here, closed only once all 8
+// subscriptions are registered, which is exactly the arrangement the assertion is about.
 test("resource control: concurrent tabs coalesce one slow transcript read and one serialization", async () => {
   let reads = 0
   let serializations = 0
   const messages = [msg("shared snapshot")]
+  const armedBatches: (() => void)[] = []
   const h = await startHarness({
     maxConnections: 16,
+    scheduleSubscriptionFlush: (flush) => {
+      armedBatches.push(flush)
+    },
     readTranscript: () => {
       reads++
       const until = Date.now() + 20
@@ -575,6 +596,13 @@ test("resource control: concurrent tabs coalesce one slow transcript read and on
     for (const client of clients) {
       client.ws.send(JSON.stringify({ t: "sub", topic: "transcript", slug: "shared" }))
     }
+    await waitFor(
+      () => h.appSocket.registry.subscribers("shared").length === 8,
+      "all 8 tabs registered as subscribers",
+    )
+    assert.equal(reads, 0, "the batch defers the read — nothing is read while subscriptions accumulate")
+    assert.equal(armedBatches.length, 1, "8 subscriptions arm ONE batch, not one batch each")
+    armedBatches[0]!() // the batch boundary, made explicit
     const pushes = await Promise.all(clients.map((client) => client.next()))
     for (const push of pushes) {
       assert.equal(push.t, "transcript")
@@ -591,6 +619,7 @@ test("resource control: concurrent tabs coalesce one slow transcript read and on
     await Promise.all(clients.map((client) => client.expectNone(50)))
     assert.equal(reads, 1, "duplicate subscriptions remain true no-ops")
     assert.equal(serializations, 1)
+    assert.equal(armedBatches.length, 1, "a duplicate subscription arms no second batch either")
     for (const client of clients) client.ws.close()
   } finally {
     await h.close()
