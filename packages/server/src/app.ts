@@ -9,6 +9,7 @@ import { DEFAULT_PORT, ATTACHMENT_MAX_BASE64_CHARS, attachmentExtension, isAllow
 import { createRouter } from "./router.ts"
 import type { AppContext } from "./context.ts"
 import { allowedLocalCorsOrigin, isTrustedLocalHttpRequest } from "./local-origin.ts"
+import { compress, negotiateEncoding, shouldCompress } from "./compression.ts"
 import { resolveLocalImage } from "./local-image.ts"
 import { resolveProjectIconResponse } from "./project-icon.ts"
 import { resolveLocalVisualization } from "./local-visualization.ts"
@@ -77,6 +78,29 @@ export function createApp(ctx: AppContext, options: AppOptions = {}) {
   app.use(`${frizzRoute("/rpc")}/*`, async (c, next) => {
     c.header("x-frizz-boot", ctx.bootId)
     await next()
+  })
+
+  // Compress RPC responses. The board payload for a busy project is ~780 KB of JSON and every page
+  // load fetches it; the server produces it in ~11 ms and then spends far longer pushing it up a home
+  // connection through a tunnel, which is what made a remote board feel slow. Brotli q4 takes it to
+  // ~150 KB for ~6 ms of CPU. Scoped to /rpc/* on purpose: the SSE stream must never be buffered by a
+  // compressor. See compression.ts for the measurements behind the level choice.
+  app.use(`${frizzRoute("/rpc")}/*`, async (c, next) => {
+    await next()
+    const encoding = negotiateEncoding(c.req.header("accept-encoding"))
+    if (!encoding || !c.res.body) return
+    const body = new Uint8Array(await c.res.arrayBuffer())
+    if (!shouldCompress(c.res.headers, body.byteLength)) {
+      // arrayBuffer() consumed the stream, so the response has to be rebuilt either way.
+      c.res = new Response(body, { status: c.res.status, headers: c.res.headers })
+      return
+    }
+    const headers = new Headers(c.res.headers)
+    headers.set("content-encoding", encoding)
+    headers.set("vary", "Accept-Encoding")
+    // The old length describes the uncompressed body and would truncate the response.
+    headers.delete("content-length")
+    c.res = new Response(compress(body, encoding), { status: c.res.status, headers })
   })
 
   // Launcher identity probe: a bare `{ok:true}` cannot distinguish two workspace servers that race
