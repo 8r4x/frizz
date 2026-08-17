@@ -10,6 +10,8 @@ import { startRouter } from "./lib/router.ts"
 import { nextSidebarPresence, type SidebarPresence } from "./lib/sidebarPresence.ts"
 import { rpc } from "./api/rpc.ts"
 import { Sidebar, projectIdentity } from "./components/Sidebar.tsx"
+import { MobileBoard } from "./components/MobileBoard.tsx"
+import { useIsMobile } from "./lib/mobile.ts"
 import { StatusBar } from "./components/StatusBar.tsx"
 import { DrawerStack } from "./components/DrawerStack.tsx"
 import { TodosView } from "./components/TodosView.tsx"
@@ -208,6 +210,9 @@ export function App() {
   }, [])
 
   const board = useBoard()
+  // The phone gets its own shell. Everything BELOW the layout — the drawer stack, the modals, the
+  // restart overlay — is shared, so only the standing surfaces branch (see the return below).
+  const isMobile = useIsMobile()
 
   // Settle a parked `/thread/<slug>` URL. It waits for the board because the destination depends on
   // whether the thread is QUEUED — a needsYou thread's whole panel is already in the main column, so
@@ -253,11 +258,20 @@ export function App() {
           now — the settings/reload pair used to live there, a screen's width away from the identity
           they describe. Everything else flows; the PAGE is the one and only scroll container — a tall
           card simply runs off both edges. */}
-      <StatusBar identity={identity} connection={snap.connection} boardFallback={snap.socketBoardFallback} />
+      {/* The status bar is DESKTOP CHROME. On a phone its six readings (identity, connection, settings,
+          reload, two quota chips) do not fit a 390pt strip, and the two that matter most — the project
+          and the way to settings — are already in the mobile nav bar. */}
+      {isMobile ? null : (
+        <StatusBar identity={identity} connection={snap.connection} boardFallback={snap.socketBoardFallback} />
+      )}
       {/* (The old fixed "New thread" pill moved INTO the sidebar's top — one entry point, same modal
           flow; the ⌘K palette's "New thread" item and the always-visible dispatch box are the
           other doors — deliberately NOT ⌘N, which belongs to the browser.) */}
 
+      {isMobile ? (
+        <MobileBoard />
+      ) : (
+        <>
       {/* CENTERED PAIR with a SCALING GUTTER: the floating sidebar column and the workpane sit side by
           side ("space-around looked weird" — a deliberate gutter reads calmer), and the PAIR as a unit
           centers horizontally — leftover space distributes on the far sides. The sidebar is VERTICALLY
@@ -313,6 +327,8 @@ export function App() {
           )}
         </main>
       </div>
+        </>
+      )}
 
       {/* The side-drawer STACK — and the Escape chain that unwinds it — lives in <DrawerStack> so the
           standalone `/thread/<slug>/full` page can mount the identical thing. See DrawerStack.tsx. */}

@@ -37,6 +37,10 @@ function shortPath(path: string, home: string | undefined): string {
 const CARD_BASE =
   "flex flex-col gap-1 rounded-lg border px-4 py-3 outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60"
 
+// On a phone the same rows go FULL WIDTH: no card border, no radius, no grid gutter — a hairline
+// between rows instead, and the whole row is the target. The grid above the breakpoint is untouched.
+const MOBILE_ROW = "max-[700px]:rounded-none max-[700px]:border-x-0 max-[700px]:border-t-0 max-[700px]:border-b-border/70 max-[700px]:bg-transparent max-[700px]:py-3.5"
+
 /** The card's icon is the rail's square at card size, and the one place to change it. */
 const CARD_ICON = 38
 
@@ -49,7 +53,7 @@ function Card({ project, home }: { project: ProjectCard; home: string | undefine
     <div className="group/card relative">
       <Link
         to={projectHref(project.slug)}
-        className={`${CARD_BASE} flex-row items-center gap-3 border-border bg-panel hover:border-border-strong hover:bg-panel-2 ${
+        className={`${CARD_BASE} ${MOBILE_ROW} flex-row items-center gap-3 border-border bg-panel hover:border-border-strong hover:bg-panel-2 ${
           project.stale ? "opacity-60" : ""
         }`}
       >
@@ -115,7 +119,7 @@ function PhantomCard({
       type="button"
       onClick={onClick}
       disabled={pending}
-      className={`${CARD_BASE} items-center justify-center gap-1.5 border-dashed border-border-strong bg-transparent text-muted hover:border-accent hover:text-fg ${
+      className={`${CARD_BASE} items-center justify-center gap-1.5 border-dashed border-border-strong bg-transparent text-muted hover:border-accent hover:text-fg max-[700px]:mx-4 max-[700px]:mt-4 ${
         hero ? "min-h-[118px]" : "min-h-[74px]"
       }`}
     >
@@ -263,7 +267,7 @@ export function ProjectGrid() {
     // m-auto rather than justify-center: a centred flex column CLIPS its overflow at the top once
     // the content is taller than the viewport, and forty projects will be. Auto margins centre while
     // still letting the page scroll from its real top.
-    <div className="flex min-h-dvh w-full flex-col px-6 py-14">
+    <div className="flex min-h-dvh w-full flex-col px-6 py-14 max-[700px]:px-0 max-[700px]:py-10">
       <div className="m-auto flex w-full flex-col items-center">
       <div className="mb-8 flex flex-col items-center gap-2.5 text-center">
         <img src="/favicon.svg" width={MARK_PX} height={MARK_PX} alt="" className="rounded-[17px]" />
@@ -285,7 +289,7 @@ export function ProjectGrid() {
       ) : (
         <>
           <div
-            className={`grid w-full gap-2.5 ${
+            className={`grid w-full gap-2.5 max-[700px]:gap-0 ${
               empty ? "max-w-[360px] grid-cols-1" : "max-w-[720px] grid-cols-1 sm:grid-cols-2"
             }`}
           >

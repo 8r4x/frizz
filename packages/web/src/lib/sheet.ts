@@ -18,7 +18,7 @@ export const SHEET_SCRIM_CLASS =
 // The sliding panel: right-anchored, full-height, bordered, elevated; slides along the X axis. The
 // consumer appends the translate toggle (translate-x-0 / translate-x-full) and its own width.
 export const SHEET_PANEL_CLASS =
-  "flex h-full flex-col border-l border-border bg-panel shadow-2xl shadow-black/50 transition-transform duration-200 ease-out motion-reduce:transition-none"
+  "frizz-sheet-panel flex h-full flex-col border-l border-border bg-panel shadow-2xl shadow-black/50 transition-transform duration-200 ease-out motion-reduce:transition-none"
 
 // The stack width curve: each STAYING layer below steps the panel 28px / 4vw narrower so the stack
 // reads as a stack. `offset` pulls the effective depth back — ThreadDrawer passes 1 because the frizz-doc

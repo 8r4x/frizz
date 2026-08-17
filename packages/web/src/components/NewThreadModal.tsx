@@ -263,7 +263,10 @@ export function NewThreadDialog({ onClose }: { onClose: () => void }) {
             event.preventDefault()
             contentRef.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus({ preventScroll: true })
           }}
-          className="fixed left-1/2 top-1/2 z-50 w-[640px] max-w-[86vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-black/50 outline-none"
+          // TOP-ANCHORED ON A PHONE. Vertically centred, this dialog sits at ~420pt on a 844pt screen —
+          // which is under the keyboard the moment its textarea takes focus, and the composer is the
+          // entire point of the dialog. Above the phone breakpoint nothing changes.
+          className="fixed left-1/2 top-1/2 z-50 w-[640px] max-w-[86vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-black/50 outline-none max-[700px]:top-[calc(env(safe-area-inset-top)+56px)] max-[700px]:w-[calc(100vw-24px)] max-[700px]:max-w-none max-[700px]:translate-y-0"
         >
           <RadixDialog.Title className="mb-1 text-[14px] font-medium">New thread</RadixDialog.Title>
           {planName && <p className="mb-3 text-[11.5px] text-muted/80">From plan <span className="font-mono-keep text-muted">{planName}</span></p>}
