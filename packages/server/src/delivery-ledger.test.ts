@@ -52,7 +52,7 @@ test("an enqueue record matching a pending item moves it to enqueued", () => {
 test("a queued_command attachment delivers (drops) the item", () => {
   const out = correlateDeliveryRecord(
     [item({ state: "enqueued" })],
-    { type: "attachment", attachment: { type: "queued_command", commandMode: "prompt", origin: { kind: "shell" }, prompt: "fix the bug" }, timestamp: iso(T0 + 9000) },
+    { type: "attachment", attachment: { type: "queued_command", commandMode: "prompt", origin: { kind: "human" }, prompt: "fix the bug" }, timestamp: iso(T0 + 9000) },
     iso(T0 + 9000),
   )
   assert.deepEqual(out, [])

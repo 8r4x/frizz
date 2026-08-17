@@ -2534,36 +2534,36 @@ test("parseSignalFence: END-ANCHORED — a fence with prose after it is quoted/e
   assert.deepEqual(parseSignalFence("all done\n\n```done\nShipped.\n```\n  \n"), { kind: "done", body: "Shipped.", hints: [] })
 })
 
-test("parseSignalFence: an awaiting fence parses current pr-watch/human/timer and legacy pr/ci/session hints", () => {
-  const f = parseSignalFence("```awaiting\npr-watch: acme/app#391\nhuman: repo maintainer must approve fork CI\ntimer: 2026-07-02T00:00:00Z\npr: 391\nci: build #42\nsession: abc-123\nWaiting on a named gate.\n```")
+test("parseSignalFence: an awaiting fence parses every hint kind in file order; the remaining lines are the body", () => {
+  const f = parseSignalFence("```awaiting\nshell: bzvtnt3ig\nagent: a247b4470c\ntimer: tmr_a1b2c3d4e5f6\npr: acme/app#391\nfor: 2h\nreason: waiting on the three-platform run\nWaiting on a named gate.\n```")
   assert.equal(f?.kind, "awaiting")
   assert.equal(f?.body, "Waiting on a named gate.")
   assert.deepEqual(f?.hints, [
+    { kind: "shell", value: "bzvtnt3ig" },
+    { kind: "agent", value: "a247b4470c" },
+    { kind: "timer", value: "tmr_a1b2c3d4e5f6" },
     { kind: "pr", value: "acme/app#391" },
-    { kind: "shell", value: "repo maintainer must approve fork CI" },
-    { kind: "timer", value: "2026-07-02T00:00:00Z" },
-    { kind: "pr", value: "391" },
-    { kind: "shell", value: "build #42" },
-    { kind: "session", value: "abc-123" },
+    { kind: "for", value: "2h" },
+    { kind: "reason", value: "waiting on the three-platform run" },
   ])
 })
 
-test("parseSignalFence: `pr-watch:` wins the alternation over legacy `pr:` (the shared -watch suffix)", () => {
-  // A bare `pr:` must still parse as the legacy pr hint, not as a truncated pr-watch.
-  const f = parseSignalFence("```awaiting\npr-watch: acme/app#7\npr: 391\n```")
-  assert.deepEqual(f?.hints, [
-    { kind: "pr", value: "acme/app#7" },
-    { kind: "pr", value: "391" },
-  ])
+test("parseSignalFence: a `word:` line outside the hint vocabulary is PROSE, and so is a valueless one", () => {
+  // A stray colon-line must not mint a phantom hint that then glosses as leaked internals — which
+  // includes the words the 2026-08-15 grammar RETIRED (`pr-watch:`, `human:`, `ci:`, `session:`):
+  // they are ordinary prose now, exactly like `note:`.
+  const f = parseSignalFence("```awaiting\nnote: not a hint\npr-watch: acme/app#7\nhuman: Alice must approve\npr:\npr: 391\n```")
+  assert.deepEqual(f?.hints, [{ kind: "pr", value: "391" }])
+  assert.equal(f?.body, "note: not a hint\npr-watch: acme/app#7\nhuman: Alice must approve\npr:")
 })
 
 test("parseSignalFence: hint kind is case-insensitive, lowercased on output; hints-only body is empty", () => {
-  const f = parseSignalFence("```awaiting\nHUMAN: Alice must approve\nTiMeR: 2026-07-15T17:00:00Z\nPR: 391\nCi: green\n```")
+  const f = parseSignalFence("```awaiting\nSHELL: bzvtnt3ig\nTiMeR: tmr_a1b2c3d4e5f6\nPR: acme/app#391\nFor: 2h\n```")
   assert.deepEqual(f?.hints, [
-    { kind: "shell", value: "Alice must approve" },
-    { kind: "timer", value: "2026-07-15T17:00:00Z" },
-    { kind: "pr", value: "391" },
-    { kind: "shell", value: "green" },
+    { kind: "shell", value: "bzvtnt3ig" },
+    { kind: "timer", value: "tmr_a1b2c3d4e5f6" },
+    { kind: "pr", value: "acme/app#391" },
+    { kind: "for", value: "2h" },
   ])
   assert.equal(f?.body, "")
 })

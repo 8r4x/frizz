@@ -818,12 +818,12 @@ export function hasQuestionBlock(text: string | undefined): boolean {
 const SIGNAL_FENCE_RE = /^```(done|awaiting)[ \t]*\n([\s\S]*?)\n```[ \t]*$/gm
 // An awaiting-body hint line: `<kind>: <value>`. Kind is case-insensitive (lowercased on output); the
 // value must start with a non-space char (a bare `pr:` with nothing after is prose, not a hint).
-// `pr-watch` LEADS `watch` in the alternation, and it must keep leading it: both are anchored at `^`,
-// so a `pr-watch:` line can only ever match the longer name — but stating the order here is cheaper
-// than rediscovering it. `watch` was added to the type union and to the guard below on 2026-08-14 and
-// NOT to this regex, which made every `watch:` line parse as prose and the whole fence-based park inert
-// in production while every unit test passed (they built `hints` by hand). Caught only by folding a real
-// transcript: awaiting-watch.e2e.test.ts.
+// THREE PLACES SPELL THE VOCABULARY and they must move together: this regex, FenceView["hints"]'s
+// `kind` union, and the guard below. A kind added to the union and the guard but NOT here parses as
+// prose — which is exactly what happened to the retired `watch:` on 2026-08-14, leaving the whole
+// fence-based park inert in production while every unit test passed (they built `hints` by hand).
+// Caught only by folding a real transcript: awaiting-watch.e2e.test.ts. Keep an e2e fold in that file
+// for any kind you add. If two kinds ever share a prefix, the longer must LEAD the alternation.
 const AWAITING_HINT_RE = /^(shell|agent|timer|pr|for|reason):\s*(\S.*)$/i
 const FENCE_BODY_MAX = 500 // defensive: never let a worker's fence body fatten the snapshot
 const HINT_MAX = 8 // defensive cap on parsed hint lines

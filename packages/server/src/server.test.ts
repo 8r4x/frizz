@@ -362,7 +362,7 @@ test("buildClaudeResumeCommand: -r <sessionId> with the follow-up + worker syste
   const flat = system.replace(/\s+/g, " ")
   assert.match(flat, /back to awaiting/)
   assert.match(flat, /never answer that it is already parked/)
-  assert.match(flat, /re-emit a fresh/)
+  assert.match(flat, /emit a FRESH fence/)
 })
 
 test("build*Command: extraSystemPrompt is appended AFTER the worker norms in the system prompt", () => {
