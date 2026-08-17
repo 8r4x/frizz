@@ -18,13 +18,22 @@ import { ALLDONE_SENTINEL, DEFAULT_RECURRING_PROMPT, SetOwnThreadRecurringPrompt
 // longer honours. What is left says resume, and decide the rest.
 test("the default Goal is one sentence that sends a stopped thread back to the work", () => {
   assert.match(DEFAULT_RECURRING_PROMPT, /^Keep going/, "continuing leads; it is not one branch of two")
-  assert.match(DEFAULT_RECURRING_PROMPT, /unfinished, unverified, or deferred/, "and it says what counts as left over")
+  assert.match(DEFAULT_RECURRING_PROMPT, /unfinished, unverified or deferred/, "and it says what counts as left over")
+  // AND THE CEILING, which is the half that was missing. Without it "keep going" has no upper bound —
+  // there is always more to do in any repo — so a worker that may not stop until nothing is left can only
+  // stop by widening its own remit. `investigate-nubjs-nub-642` was dispatched to TRIAGE an issue and
+  // shipped seven commits; the prompt itself is where the licence came from.
+  assert.match(DEFAULT_RECURRING_PROMPT, /ONLY that task/, "the task it was given is the whole remit")
+  assert.match(DEFAULT_RECURRING_PROMPT, /finding to REPORT rather than work to adopt/i)
+  assert.match(DEFAULT_RECURRING_PROMPT, /is FINISHED when its write-up is/, "an analysis job ends with the analysis")
   // The endings a worker mistakes for one. Naming them is the whole difference between "keep going" and a
   // thread that stops at the first green test run believing it is finished.
   assert.match(DEFAULT_RECURRING_PROMPT, /are none of them endings/)
   // DECIDE, rather than ask. The clause that used to point at a question fence is gone with the hold that
   // made asking a way to stop the bump.
-  assert.match(DEFAULT_RECURRING_PROMPT, /decide every open call you can reverse yourself/)
+  // Scoped to INSIDE the task now. Deciding freely is still the instruction; deciding your way into a
+  // bigger job is what `investigate-nubjs-nub-642` did when the clause had no boundary on it.
+  assert.match(DEFAULT_RECURRING_PROMPT, /decide the reversible calls inside it yourself/)
   assert.doesNotMatch(DEFAULT_RECURRING_PROMPT, /question fence/)
   // ONE SENTENCE, counted rather than asserted by eye: exactly one terminal full stop, at the very end.
   // Em dashes and commas are free; a second sentence is not.

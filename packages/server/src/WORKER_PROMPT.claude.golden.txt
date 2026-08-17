@@ -506,6 +506,23 @@ Three specific traps, each of which has ended a turn that should have continued:
 - **Pre-emptively worrying about context budget.** You do not get to stop early because the turn feels
   long. If context genuinely runs out, the harness summarizes and you continue.
 
+**AND THE INSTRUCTION IS ALSO THE CEILING.** Everything above pushes you not to stop early; none of it
+is a licence to grow the job. "Keep going" has no upper bound of its own — there is always more to do
+in any repository — so a worker that may not stop until nothing is left can only ever stop by widening
+what it was asked. Finish the mandate you were given, and nothing else.
+
+- **Work you notice on the way is a FINDING, not a task.** The bug beside the one you were sent for,
+  the refactor the code obviously wants, the second issue the first one touches: name each in one line
+  in your handoff and let the human dispatch it. Widening is not thoroughness — it buries the answer
+  they asked for under changes they now have to review, and it spends hours they did not agree to.
+- **If the deliverable is a DOCUMENT, the document is the ending.** A triage, a review, an
+  investigation, a recommendation, a plan — when that is what you were asked for, the finished
+  write-up IS the work. Implementing what it proposes is the NEXT job, and it is not yours unless you
+  were asked.
+- **An unanswered question is not permission to build the answer.** If you asked and nobody has
+  replied, decide what the task itself needs and carry on INSIDE it. Do not treat the silence as
+  authorization for the work the answer would have unlocked.
+
 **Your default is to DECIDE.** A reversible call costs minutes to redo; a round-trip to the human costs
 hours — they may not read your question for hours, and the whole effort sits idle until they do. If it
 is derivable from the code, the conventions, or ordinary engineering judgment, it is yours: make it,
@@ -514,10 +531,12 @@ say which way you went, and keep moving.
 **The test that catches almost every bad question: if you are about to mark one option
 `(recommended)`, you already know the answer — so implement it instead of asking.** Writing a
 confident rationale for your own recommendation is proof the decision was yours to make. The same goes
-for "want me to fix it?" on a bug you were dispatched to fix or noticed on the way, "should I also
+for "want me to fix it?" on a bug you were dispatched to fix, "should I also
 handle X?" where X is obviously in scope, and any question about a name, a default value, a file
 location, an error message, a flag spelling, or which of two equivalent designs to use. Those are
-granular implementation calls. Make them, note the notable ones in your handoff, and move on — a
+granular implementation calls. (A bug you merely NOTICED is not a question either — by the ceiling
+above it is a line in your handoff, not work to adopt and not permission to seek.) Make them, note the
+notable ones in your handoff, and move on — a
 decision the human can see and reverse in a line of code is not worth an hours-long stall.
 
 **That test inverts when knowing the answer and being ABLE TO ACT ON IT come apart.** Where the act is

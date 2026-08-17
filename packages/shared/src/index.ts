@@ -500,8 +500,23 @@ export const RecurringPromptText = z.string().trim().min(1).max(RECURRING_PROMPT
 //
 // Nothing here teaches the ```done exit, because the trailer already does (`OPT_OUT_NOTE`), on every
 // delivery, whatever the operator has typed over this text.
+// THE TASK IS ALSO THE CEILING, and leaving that out was a real failure rather than a wording nicety.
+// Traced 2026-08-17 on `investigate-nubjs-nub-642`, dispatched to TRIAGE issue #642 — "recommend what to
+// do about it… state the smallest correct fix, the files it touches and the risk". An analysis job. It
+// produced the analysis, asked the maintainer one design question, and rested. The maintainer did not
+// answer for 36 hours. This prompt then fired at every rest, and the worker — told that a written-up plan
+// is not an ending and that unanswered calls are its own to make — decided the question itself and built
+// the thing: seven commits, a moved global bin dir, shell-profile writing, a docs change, 34 background
+// verification runs. Nothing woke it but its own completions; frizz sent it no wake at all.
+//
+// So the prompt now carries the two clauses whose absence made that reading correct: work found OUTSIDE
+// the task is a finding to report rather than work to adopt, and a triage/review/plan is FINISHED when
+// its write-up is. Without them "keep going" has no upper bound — every codebase always has more to do,
+// so a worker that may not stop until nothing is left can only ever stop by widening what it was asked.
+//
+// STILL ONE SENTENCE (maintainer 2026-08-16: "the default stop hook prompt should be one sentence long").
 export const DEFAULT_RECURRING_PROMPT =
-  "Keep going: if ANY part of the task is unfinished, unverified, or deferred, resume it NOW rather than writing up — a milestone, a green test run and a long turn are none of them endings — and decide every open call you can reverse yourself instead of stopping to ask."
+  "Keep going on the task you were given and ONLY that task: resume any part of it that is unfinished, unverified or deferred rather than writing up — a milestone, a green test run and a long turn are none of them endings — decide the reversible calls inside it yourself instead of stopping to ask, treat anything you discover outside it as a finding to REPORT rather than work to adopt, and remember that a triage, a review or a plan you were asked for is FINISHED when its write-up is."
 export const RecurringIntervalSeconds = z
   .number()
   .int()
@@ -893,13 +908,26 @@ export const SIGNOFF_NUDGE_MESSAGE = [
   "",
   "**IF THE TASK STILL HAS PARTS LEFT, THE FENCE IS NOT WHAT YOU OWE — THE WORK IS.** If ANY part of the",
   "original task is unfinished, unverified, or deferred, resume it NOW, in THIS turn, and sign off once it",
-  "is genuinely finished. A milestone, a green test run, a written-up plan and a long turn are none of",
-  "them endings, and neither is naming the next step or writing it into a scratch file.",
+  "is genuinely finished. A milestone, a green test run and a long turn are none of them endings, and",
+  "neither is naming the next step or writing it into a scratch file.",
+  "",
+  "**AND THAT TASK IS ALSO THE CEILING — finish it, and nothing else.** Work you notice on the way is a",
+  "FINDING TO REPORT in your sign-off, never work to take on: the bug beside the one you were sent for,",
+  "the refactor the code obviously wants, the second issue the first one touches. Widening the job is not",
+  "thoroughness — it is a different job nobody asked for, and it buries the answer they did ask for under",
+  "changes they now have to review. If it should be done, name it in one line and let the human dispatch",
+  "it.",
+  "",
+  "**IF WHAT YOU WERE ASKED FOR IS A DOCUMENT, THE DOCUMENT IS THE ENDING.** A triage, a review, an",
+  "investigation, a recommendation, a plan — when that is the deliverable, the finished write-up IS the",
+  "work. Implementing what it proposes is the NEXT job, and not yours unless you were asked. Sign off with",
+  "the write-up.",
   "",
   "**DECIDE RATHER THAN ASK.** Stop only for a decision that is genuinely the human's AND that blocks you",
-  "right now: ask that one in a question fence. Every other open choice — a name, a default, a reversible",
-  "design call — is yours to make: decide it, say in one line which way you went and what would reverse",
-  "it, and carry on.",
+  "right now: ask that one in a question fence. Every other open choice INSIDE the task — a name, a",
+  "default, a reversible design call — is yours to make: decide it, say in one line which way you went and",
+  "what would reverse it, and carry on. A choice that would ENLARGE the task is not one of those: an",
+  "unanswered question is not permission to go build the answer.",
   "",
   "Otherwise, add a fence at the END of your next message:",
   "",

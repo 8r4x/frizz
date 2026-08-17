@@ -62,9 +62,20 @@ test("a rest with no fence is told how to sign off, and the text names all three
     // the bump is the same nudge — so the bump has to carry what the Goal used to say about finishing
     // the work and about deciding rather than asking, or dropping it quietly removed both.
     assert.match(h.delivered[0], /unfinished, unverified, or deferred/)
-    assert.match(h.delivered[0], /written-up plan/, "a plan is not an ending either")
     assert.match(h.delivered[0], /DECIDE RATHER THAN ASK/)
-    assert.match(h.delivered[0], /which way you went and what would reverse/)
+    // THE TASK IS ALSO THE CEILING. "Keep going" with no upper bound is unbounded by construction —
+    // every codebase always has more to do — so a worker forbidden to stop can only stop by widening
+    // what it was asked. Traced 2026-08-17 on `investigate-nubjs-nub-642`: dispatched to TRIAGE an
+    // issue, it shipped seven commits instead. See DEFAULT_RECURRING_PROMPT for the full account.
+    assert.match(h.delivered[0], /FINDING TO REPORT/, "discovered work is reported, not adopted")
+    assert.match(h.delivered[0], /THE DOCUMENT IS THE ENDING/, "a triage/review/plan ends with its write-up")
+    assert.match(h.delivered[0], /not permission to go build the answer/, "an unanswered question is not a mandate")
+    // …and the old copy that made the wrong reading correct must not come back: it listed a written-up
+    // plan among the things that are NOT an ending, which for an analysis task denies the deliverable.
+    assert.doesNotMatch(h.delivered[0], /a written-up plan and a long turn are none of them endings/)
+    // `\s` rather than a literal space: the message is a wrapped array of lines, so this phrase spans a
+    // newline and a regex written for one line silently stops pinning anything.
+    assert.match(h.delivered[0], /which way you went and\s+what would reverse/)
     // `done` must arrive with its COST attached, or it becomes the cheapest way to stop being nudged —
     // the exact failure the retired ALLDONE warning existed for.
     assert.match(h.delivered[0], /DISMISSAL/)
