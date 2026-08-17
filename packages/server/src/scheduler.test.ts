@@ -1055,10 +1055,12 @@ test("two scheduler instances on separate SQLite connections atomically claim on
   const clock = { ms: Date.parse("2026-07-09T12:00:00.000Z") }
   const target = clock.ms + 1_000
   firstStorage.upsertSession(row("concurrent"))
-  telemetry.set("concurrent", {
-    ...tele(awaiting([{ kind: "timer", value: iso(target) }])),
-    lastActivityAt: iso(clock.ms),
+  // A real timer ROW, for the reason recorded above `dueTimer` — this case arms its own storage rather
+  // than the harness's, since the whole point is two connections onto one db file.
+  firstStorage.armThreadTimer({
+    id: "tmr_concurrent", slug: "concurrent", prompt: "Wake concurrent.", fireAtMs: target, createdAtMs: clock.ms,
   })
+  telemetry.set("concurrent", { ...tele(), lastActivityAt: iso(clock.ms) })
 
   const deliveries: string[] = []
   let release!: () => void
@@ -1082,7 +1084,7 @@ test("two scheduler instances on separate SQLite connections atomically claim on
   })
   const first = make(firstStorage)
   const second = make(secondStorage)
-  await Promise.all([first.tick(), second.tick()]) // both register the future timer
+  await Promise.all([first.tick(), second.tick()]) // the timer is not due yet: neither enqueues
   clock.ms = target + 1
 
   const firstTick = first.tick()
@@ -1535,17 +1537,18 @@ test("snooze: an archived thread never bumps", async () => {
   h.storage.close()
 })
 
-test("snooze: a snooze wake and a fence wake for the same session get distinct deliveries", async () => {
+test("snooze: a snooze wake and a timer wake for the same session get distinct deliveries", async () => {
   const h = harness()
   const target = h.clock.ms + 30_000
   h.storage.upsertSession(snoozeRow("s", iso(target), "snooze prompt"))
-  h.tele.set("s", tele(awaiting([{ kind: "timer", value: iso(target) }], "re-check")))
+  armTimer(h, "s", target, "re-check")
+  h.tele.set("s", tele())
   const s = h.make()
-  await s.tick() // arms the fence timer (witnessed unmet); the snooze is not yet due
+  await s.tick() // neither source is due yet
   h.clock.ms = target + 1000
   await s.tick()
   const ids = createWakeDeliveryStore(h.storage.db).list().map((d) => d.id)
-  assert.equal(new Set(ids).size, ids.length, "no delivery-id collision between the snooze and fence sources")
+  assert.equal(new Set(ids).size, ids.length, "no delivery-id collision between the snooze and timer sources")
   assert.equal(ids.length, 2, "both sources armed their own wake for this session")
   h.storage.close()
 })
@@ -1557,20 +1560,15 @@ test("snooze: a snooze wake and a fence wake for the same session get distinct d
 // and return undefined immediately. The scheduler awaits `resume`, so it saw an instant success and
 // ACKED the delivery; the real bridge failure landed seconds later into a bare `.catch` and vanished —
 // no log, no retry, the wake lost forever. Claude's synchronous `resumeThread` throws straight into the
-// scheduler's catch and retries, so the bug was CODEX-ONLY and silent: an `awaiting timer:` or
-// limit-auto-resume codex thread could simply never wake.
+// scheduler's catch and retries, so the bug was CODEX-ONLY and silent: a timer or limit-auto-resume
+// codex thread could simply never wake.
 //
 // Returning the promise is the whole fix, and this test is what keeps it returned: revert to
 // fire-and-forget and the rejection never reaches the scheduler, so no retry happens and this fails.
 test("a resume that REJECTS asynchronously is retried, exactly like a synchronous throw", async () => {
   const h = harness()
-  h.storage.upsertSession(row("async-wake"))
-  h.tele.set("async-wake", tele(awaiting([{ kind: "timer", value: iso(h.clock.ms + 1_000) }])))
-
-  // The fence must be WITNESSED pending before it can fire (the boot-safety guard), so take a durable
-  // baseline while it is still in the future, then cross it.
-  await h.make().tick()
-  h.clock.ms += 2_000
+  const { target } = dueTimer(h, "async-wake")
+  h.clock.ms = target + 1_000
 
   let attempts = 0
   const failing = h.make({
