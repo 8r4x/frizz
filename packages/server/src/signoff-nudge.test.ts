@@ -68,6 +68,11 @@ test("a rest with no fence is told how to sign off, and the text names all three
     // `done` must arrive with its COST attached, or it becomes the cheapest way to stop being nudged —
     // the exact failure the retired ALLDONE warning existed for.
     assert.match(h.delivered[0], /DISMISSAL/)
+    // ...and "still owed" has to spell out the cases that read as finished: a RECOMMENDATION whose act
+    // the human must perform, an unsent draft, and discovered follow-up that is someone else's to do.
+    // Two zod threads fenced `done` on exactly those on 2026-08-16 — see workerPrompt.ts above SIGNALS.
+    assert.match(h.delivered[0], /STILL OWED counts things you are not going to do yourself/)
+    assert.match(h.delivered[0], /`mcp__frizz__spawn_thread`/)
     // SELF-CONTAINEDNESS is the point the first version missed: the human has seen nothing since their
     // own last message, and everything in between came from frizz. An agent that does not know that
     // writes a handoff about the last thing it touched.

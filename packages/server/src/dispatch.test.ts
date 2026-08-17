@@ -422,7 +422,7 @@ test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting pa
     assert.match(c, /(?:CI|automatable)[\s\S]{0,180}(?:stay ACTIVE|stay active|active wait|live operation)/i)
     // `done` is taught as a DISMISSAL, not a summary: its card is the one-click path into Inactive
     // (groups.ts), so anything living only in the conversation dies with the thread. The rule is the
-    // intent-level heuristic — "points at future work AT ALL" → bare rest — not a scenario list, and
+    // intent-level heuristic — "points at future work AT ALL" → not done — not a scenario list, and
     // the planning carve-out is DERIVED from it (the artifact outlives the thread), never asserted
     // as an arbitrary exception (done-is-a-dismissal).
     //
@@ -439,6 +439,39 @@ test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting pa
     assert.match(c, /PLANNING session whose plan file is FULLY written and PERSISTED/)
     assert.match(c, /FULLY written and PERSISTED \(`\.frizz\/plans\/<topic>\.md`\)/)
     assert.match(c, /artifact already lives outside the thread, so dismissing the thread loses nothing/)
+    // 2026-08-16, TWO threads in one sitting fenced `done` on work that was still owed, and both read
+    // the contract correctly to get there — so these are the wording defects, not model defects:
+    //
+    //   zod #6022  reached `decline`, DRAFTED the close comment, wrote "not posted", fenced `done`.
+    //              The audit carve-out said a finished report earns `done` and gave no exit condition,
+    //              so a verdict that ENDS IN AN ACT the human must perform read as a finished report.
+    //   zod #6065  finished its mandate, discovered an unlanded fix, reasoned "the fix is not mine, so
+    //              I do not OWE it" — widening "not a process that happens to still be RUNNING" from a
+    //              background-process carve-out into a general test — and fenced `done`.
+    //
+    // Its self-diagnosis also named a real deadlock the contract created: `done` barred by future work,
+    // `awaiting` barred with nothing running, `question` seemingly barred with nothing pending, and
+    // "bare-rest instead" contradicted by ALWAYS SIGN OFF WITH A FENCE. The resolution is a named
+    // section with three ordered exits, and it is what connects spawn_thread to the `done` test.
+    assert.match(c, /RECOMMENDATION IS NOT A CONCLUSION, AND AN UNSENT DRAFT IS NOT A DELIVERABLE/)
+    assert.match(c, /WROTE but did not SEND/)
+    assert.match(c, /BACKGROUND PROCESS that happens to still be running/)
+    assert.match(c, /Read that carve-out\s+narrowly: its subject is a running process, and nothing else/)
+    assert.match(c, /Follow-up work you DISCOVERED blocks[\s\S]{0,120}even when it is someone else's to do/)
+    assert.match(c, /"not mine" is not "not owed"/)
+    assert.match(c, /Neither\s+exception stretches to a report that ENDS IN A DECISION the human has yet to make/)
+    // The deadlock's exit, in order: do it, hand it to its own card, ask. Never stretch `done`.
+    assert.match(c, /### When the work is finished but the thread found more/)
+    assert.match(c, /HAND IT OFF TO ITS OWN CARD[\s\S]{0,120}`mcp__frizz__spawn_thread`/)
+    assert.match(c, /stretching `done` is not how you break it/)
+    assert.match(c, /A bare rest is the residual, not a plan/)
+    // ...and spawn_thread's own section points BACK, so a worker reading either one finds the link.
+    assert.match(c, /Its most valuable use is the one that unblocks/)
+    // The stop criterion's "you marked it (recommended), so you already knew — implement it instead"
+    // is the counter-pull that pushed zod #6022 away from a question. It only holds where the worker
+    // CAN act; under a read-only boundary the recommendation IS the question, never a silent `done`.
+    assert.match(c, /knowing the answer and being ABLE TO ACT ON IT come apart/)
+    assert.match(c, /It becomes the QUESTION, with the recommendation as option A/)
     // The planning thread type derives the same carve-out where a worker reads its deliverable —
     // codex-only now, since claude's lean contract drops ## Thread types. Claude still carries the
     // rule itself in End-of-turn signals (FULLY written and PERSISTED, asserted above).
@@ -460,6 +493,11 @@ test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting pa
   assert.match(SESSION_SEED, /watched AUTOMATICALLY/)
   assert.match(SESSION_SEED, /`watch: <id>` line/)
   assert.match(SESSION_SEED, /because that artifact outlives the thread/)
+  // The seed carries the two 2026-08-16 wrong-`done` cases in one clause each — a worker that never
+  // scrolls the system prompt still gets the recommendation rule and the discovered-follow-up rule.
+  assert.match(SESSION_SEED, /follow-up work you DISCOVERED even when someone else will do it/)
+  assert.match(SESSION_SEED, /never a done card, because a draft you wrote but did not send is filed away with the thread/)
+  assert.match(SESSION_SEED, /mcp__frizz__spawn_thread gives it its own card and only THEN is done honest/)
   assert.match(SESSION_SEED, /code LANDED on the mainline — an open PR is NOT done, park it on ```awaiting until it MERGES/)
   assert.doesNotMatch(SESSION_SEED, /BARE REST[^\n]*quiet/i)
   assert.doesNotMatch(SESSION_SEED, /```done \/ ```awaiting excuse/)

@@ -52,6 +52,8 @@ when the human asked for X is not progress on X. Two rows above describe INCOMPL
 The token and the fence must agree; the fence is the glance-level signal and the token is its
 one-line caption. `**Fixed** — the divider now shows the child's description, `749a37b` on `main`.`
 
+**`**Fixed**` is for work that LANDED, not for work you concluded.** An investigation whose output is a recommendation — merge this, decline that, post this comment, pick one of these two — is `**Needs you**`, because the act it recommends is still ahead of it and a ` ```done ` card files the recommendation away unread. Same for a draft you wrote but did not send, and for follow-up work you discovered and are not going to do: if it deserves an effort, `mcp__frizz__spawn_thread` gives it its own card and only then does this thread owe nothing.
+
 Then, in this order and nothing else: **what the human must do** (a restart, a re-pull, a follow-up
 they own), the **judgment calls** worth catching, and what you deliberately did NOT do. Root cause,
 measurements and evidence tables earn their place only when they change what the human does next —
