@@ -33,7 +33,7 @@ Then run it in any directory — a repo, a jj checkout, or a folder of scripts. 
 $ cd path/to/acme
 $ npx frizz
 
-  FRIZZ v0.3.0  ready in 4.0s
+  FRIZZ v0.4.0  ready in 4.0s
 
   ➜  Local:    http://127.0.0.1:9393/project/acme/
   ➜  Project:  acme — path/to/acme
@@ -133,6 +133,7 @@ Options:
   --host [address]       serve on a network address instead of loopback (bare --host means 0.0.0.0)
   --allowed-host <name>  with --host, also accept this DNS name as the board's address (repeatable)
   --public-origin <url>  serve behind a proxy/tunnel reachable at this exact origin
+  --link                 print a fresh single-use access link for the running board
   --debug                stream the full event feed to the terminal instead of the compact readout
   -h, --help             show this help
 
