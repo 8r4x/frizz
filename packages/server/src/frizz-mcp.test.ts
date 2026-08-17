@@ -899,3 +899,34 @@ test("`activity` with nothing running says so, and names the terminal states tha
     http.close()
   }
 })
+
+// A RESTART WINDOW MUST NOT SILENTLY EAT A WORKER'S INTENT.
+//
+// This process outlives every frizz restart, so a call landing while no server is up is ordinary rather
+// than exceptional. What is NOT ordinary is what used to happen next: the error said "Is frizz running?"
+// — a fact about the world — and the worker read it as diagnosis rather than as "your call did nothing",
+// carried on, and rested. Measured 2026-08-17 on a real thread: a `recurring_prompt start` hit exactly
+// this window, and the Goal that was keeping a long autonomous effort alive simply never existed.
+test("with no server up, a tool call says NOTHING WAS SAVED and to retry — not just 'is frizz running?'", async () => {
+  // A state dir whose lock names a pid that cannot be alive: the shim's own liveness probe rejects it,
+  // then falls through every project lock, then gives up — the exact path the real failure took.
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-nolock-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ pid: 2147483646, port: 1 }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "orphaned-thread" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+    rpc.send({
+      jsonrpc: "2.0", id: 2, method: "tools/call",
+      params: { name: "recurring_prompt", arguments: { action: "start", stop_hook: true, prompt: "KEEP GOING." } },
+    })
+    const failed = await rpc.next(2)
+    assert.equal(failed.result.isError, true)
+    const text = failed.result.content[0].text
+    assert.match(text, /NOTHING WAS SAVED/, "the worker must learn its OWN call had no effect")
+    assert.match(text, /RETRY this exact call/, "…and what to do about it")
+    assert.match(text, /do not come to rest assuming it took/, "…and the failure mode to avoid")
+  } finally {
+    rpc.kill()
+  }
+})

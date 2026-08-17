@@ -454,10 +454,17 @@ function serverLockPort() {
     }
   }
   if (candidates.length === 0) throw new Error("FRIZZ_STATE_DIR / FRIZZ_SERVER_LOCK not set — cannot locate the frizz server")
+  // SAY THAT NOTHING WAS SAVED, and say to retry. A worker reads "is frizz running?" as a fact about the
+  // world rather than as a fact about ITS OWN call, and moves on — so whatever it was arming is silently
+  // gone. Measured 2026-08-17: a worker's `recurring_prompt start` hit a restart window, got this error,
+  // carried on, and its Goal — the thing keeping a long autonomous effort alive — never existed. The
+  // window is ordinary (frizz restarts, and this process outlives every one of them), so the recovery has
+  // to be ordinary too: try again.
   throw new Error(
     `no running frizz server found (looked at ${candidates.join(", ")} and every project lock under ` +
     `${root ? join(root, "projects") : "the frizz root"}; each was missing, malformed, or written by a process that is gone). ` +
-    `Is frizz running?`,
+    `NOTHING WAS SAVED — this call had no effect. frizz is probably mid-restart, which is ordinary and ` +
+    `brief; RETRY this exact call before you do anything else, and do not come to rest assuming it took.`,
   )
 }
 
