@@ -28,7 +28,15 @@ if (!url) {
   process.exit(1)
 }
 
-const browser = await puppeteer.launch({ headless: "new", args: ["--no-sandbox", "--force-color-profile=srgb"] })
+// protocolTimeout: puppeteer's default is 180s, and `Page.captureScreenshot` blows straight through it
+// on a busy machine — this repo regularly has a dozen agents compiling at once (measured at load
+// average 159, where a single 390×844 dsf-2 shot of a page with backdrop-blur could not rasterize in
+// three minutes). The failure arrives as a bare ProtocolError that reads like a bug in the page.
+const browser = await puppeteer.launch({
+  headless: "new",
+  args: ["--no-sandbox", "--force-color-profile=srgb"],
+  protocolTimeout: 600_000,
+})
 try {
   const page = await browser.newPage()
   await page.setViewport({ width: W, height: H, deviceScaleFactor: Number(flags.dsf) || 2 })
