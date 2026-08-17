@@ -67,6 +67,9 @@ export interface PrStatus {
   // actually land", which the card renders and the queue rule reads.
   mergeable?: string
   reviewDecision?: string
+  /** The head commit the rollup describes. Fetched all along to query workflow runs, and now KEPT: a
+   *  verdict is only news against the commit it was reached on (see the pr-watch cursor). */
+  head?: string
   // Workflow runs queried by the PR's exact head SHA. statusCheckRollup can omit a fork-gated
   // ACTION_REQUIRED run, so it is never sufficient evidence that a legacy `ci:` fence passed.
   workflowRuns?: WorkflowRun[]
@@ -241,6 +244,7 @@ export function githubWatchStatus(pr: PrStatus, polledAt: string): GithubWatchSt
     merge,
     state,
     polledAt,
+    head: pr.head,
   }
 }
 
@@ -890,6 +894,7 @@ async function defaultFetchPr(ref: PrRef): Promise<PrStatus | undefined> {
       state: j.state,
       mergedAt: typeof j.mergedAt === "string" ? j.mergedAt : null,
       rollup: Array.isArray(j.statusCheckRollup) ? (j.statusCheckRollup as RollupEntry[]) : [],
+      head: j.headRefOid,
       mergeable: typeof j.mergeable === "string" ? j.mergeable : undefined,
       reviewDecision: typeof j.reviewDecision === "string" ? j.reviewDecision : undefined,
       workflowRuns: workflowRuns as WorkflowRun[],
@@ -2255,8 +2260,26 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
       // CI reaching a TERMINAL verdict, and only on the transition to it. `running` and `none` are not
       // news; going from either to green or red is the whole reason CI is watched.
+      //
+      // KEYED ON THE HEAD COMMIT, not on the verdict word alone — that was a silent miss, reported
+      // 2026-08-17 against `investigate-nubjs-nub-728` watching nubjs/nub#761. The cursor held the bare
+      // string "failing", so the SECOND failure never fired: CI goes red (reported, cursor = "failing"),
+      // the worker pushes a fix, CI runs and goes red AGAIN — same word, `checksChanged` false, nothing
+      // said. The worker sat waiting on a watcher that had already spent its only transition, which is
+      // the exact class of dead wait this whole grammar exists to make impossible. Red again on a NEW
+      // commit is the most actionable news a watcher has, and it was the one thing it could not say.
       const terminal = st && (st.checks === "passing" || st.checks === "failing") ? st.checks : undefined
-      const checksChanged = terminal !== undefined && cursor.checks !== terminal
+      // `<head>:<verdict>`, so a re-run on the same commit stays quiet while a new commit always speaks.
+      //
+      // A LEGACY CURSOR (the bare word, written before this) can never equal a stamp, so every armed
+      // watcher re-announces its current verdict ONCE on the first poll after the upgrade and is
+      // correctly keyed forever after. That is the whole migration, and it is deliberate rather than
+      // tolerated: there were 7 armed watchers in total when this landed, one of them the failing PR that
+      // prompted the report. Special-casing the legacy shape to suppress those 7 messages would have left
+      // the reported bug live on exactly the thread that reported it, until its CI happened to flip
+      // colour — buying silence at the cost of the fix.
+      const stamp = terminal !== undefined ? `${st?.head ?? "?"}:${terminal}` : undefined
+      const checksChanged = stamp !== undefined && cursor.checks !== stamp
       // NEW review activity, against everything already reported. On the FIRST poll there is nothing
       // reported yet, so the baseline is the REGISTRATION INSTANT: a worker registers when it opens or
       // pushes a PR, so anything already there is its own news and telling it would spend a turn — while
@@ -2297,7 +2320,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
       const nextCursor: PrWatchCursor = {
         seen: acts ? [...new Set([...cursor.seen, ...acts.map((a) => a.id)])].slice(-REVIEW_SEEN_CAP) : cursor.seen,
-        checks: terminal ?? cursor.checks,
+        // The STAMP, so the next poll compares against the commit as well as the colour.
+        checks: stamp ?? cursor.checks,
         report: cursor.report ?? 0,
       }
       if (!checksChanged && !reviewSteer) {

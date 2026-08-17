@@ -341,6 +341,8 @@ async function prHarness() {
   // is stepped past with an explicit clock so the test never sleeps.
   let rollup: Record<string, unknown>[] = [{ status: "IN_PROGRESS", name: "test" }]
   let prState = "OPEN"
+  // The head commit the rollup describes. A push moves it, which is what makes a repeat verdict news.
+  let head = "sha-aaa"
   let activity: { id: string; actor: string; kind: "review" | "comment"; at: string }[] = []
   let clock = Date.now()
   const delivered: string[] = []
@@ -350,19 +352,75 @@ async function prHarness() {
     resume: async (_slug, message) => { delivered.push(message) },
     log: () => {},
     now: () => clock,
-    fetchPr: async () => ({ state: prState, mergedAt: null, mergeable: "MERGEABLE", rollup, workflowRuns: [] } as never),
+    fetchPr: async () => ({ state: prState, mergedAt: null, mergeable: "MERGEABLE", rollup, head, workflowRuns: [] } as never),
     fetchGithubReview: async () => activity as never,
   })
   return {
     delivered, storage,
     setChecks: (next: Record<string, unknown>[]) => { rollup = next },
     setPrState: (next: string) => { prState = next },
+    push: (sha: string) => { head = sha },
     setActivity: (next: typeof activity) => { activity = next },
     // Each tick steps past the per-PR poll floor, so every call really re-reads GitHub.
     tick: async () => { clock += 90_000; await s.tick() },
     close: () => { void s.stop(); tailer.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) },
   }
 }
+
+// RED AGAIN ON A NEW COMMIT IS NEWS, and for a while it was the one thing a watcher could not say.
+//
+// The cursor held the bare verdict word, so the transition red→red did not exist: CI fails (reported),
+// the worker pushes a fix, CI runs and fails AGAIN, and the watcher — which had already spent its only
+// transition — said nothing. The worker then waited on a watcher that could no longer speak, which is
+// precisely the dead wait this grammar exists to make impossible. Reported by the maintainer 2026-08-17
+// against `investigate-nubjs-nub-728`, whose cursor read `{"checks":"failing","report":4}`.
+test("a SECOND CI failure on a new commit is reported, and a re-poll of the same commit is not", async () => {
+  const h = await prHarness()
+  try {
+    h.setChecks([{ status: "COMPLETED", conclusion: "FAILURE", name: "lint" }])
+    await h.tick()
+    assert.equal(h.delivered.length, 1, "the first failure is reported")
+    assert.match(h.delivered[0], /CI FAILED/)
+    h.delivered.length = 0
+
+    // Same commit, same red: still not news. The nag-loop guard must survive this fix.
+    await h.tick()
+    assert.deepEqual(h.delivered, [], "the same verdict on the same commit stays quiet")
+
+    // THE WORKER PUSHES A FIX and CI goes red again — a different commit, the same colour.
+    h.push("sha-bbb")
+    h.setChecks([{ status: "COMPLETED", conclusion: "FAILURE", name: "lint" }])
+    await h.tick()
+    assert.equal(h.delivered.length, 1, "red again on a NEW commit is the most actionable news there is")
+    assert.match(h.delivered[0], /CI FAILED/)
+    h.delivered.length = 0
+
+    // …and the new commit's verdict is now the baseline, so it does not repeat either.
+    await h.tick()
+    assert.deepEqual(h.delivered, [], "the new commit's verdict settles as the baseline")
+  } finally { h.close() }
+})
+
+// THE MIGRATION, which every live watcher goes through exactly once. A cursor written before the commit
+// stamp holds the bare word, which can never equal a stamp — so the first poll after the upgrade
+// re-announces the current verdict and is correctly keyed from then on. This is the path the maintainer's
+// own failing watcher takes, so it is pinned rather than assumed.
+test("a watcher carrying a pre-stamp cursor re-announces once, then settles", async () => {
+  const h = await prHarness()
+  try {
+    // Exactly the shape observed in the wild: `{"checks":"failing","report":4}`, no commit.
+    h.storage.setPrWatchCursor("prw_1", JSON.stringify({ seen: [], checks: "failing", report: 4 }))
+    h.setChecks([{ status: "COMPLETED", conclusion: "FAILURE", name: "lint" }])
+    await h.tick()
+    assert.equal(h.delivered.length, 1, "the legacy cursor cannot match a stamp, so the verdict is said once")
+    assert.match(h.delivered[0], /CI FAILED/)
+    h.delivered.length = 0
+
+    // …and it is now stamped, so it does not repeat.
+    await h.tick()
+    assert.deepEqual(h.delivered, [], "the re-announcement happens once, not on every tick")
+  } finally { h.close() }
+})
 
 test("a registered watcher reports CI, then review, then says nothing while nothing changes", async () => {
   const h = await prHarness()

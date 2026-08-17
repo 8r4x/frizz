@@ -990,6 +990,10 @@ export const GithubWatchStatus = z.object({
   /** When frizz last heard from GitHub. A poll can fail or be rate-limited, and a stale reading stated
    *  as current is worse than no reading. */
   polledAt: z.string(),
+  /** The head commit this verdict was reached on. A PR watcher reports a CI verdict when it is NEWS, and
+   *  "red again on a new commit" is news that the bare word `failing` cannot express. Optional because a
+   *  reading taken before 2026-08-17 carries none. */
+  head: z.string().optional(),
 }).strict()
 export type GithubWatchStatus = z.infer<typeof GithubWatchStatus>
 
