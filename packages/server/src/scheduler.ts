@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { compactionPromptMessage, formatGithubWakeSteer, type GithubWatchStatus, prWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, wakeDeliveryToken, type QuotaSnapshot } from "@frizz/shared"
+import { RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, formatGithubWakeSteer, type GithubWatchStatus, prWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, wakeDeliveryToken, type QuotaSnapshot } from "@frizz/shared"
 import { GITHUB_STATUS_SETTING, parkExpiresAt, parkIsHonoured, readAwaitingPark, unaccountedItems, type LiveActivity } from "./awaiting.ts"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
@@ -2000,7 +2000,27 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         const gone = dead.some((d) => d.kind === i.kind && d.value === i.value)
         return `- \`${i.kind}: ${i.value}\` — ${gone ? "NOT RUNNING" : "still running"}`
       })
-      const message = nameless
+      const retired = retiredAwaitingKindsIn(tele.lastFence.body ?? "")
+      const message = retired.length > 0
+        ? [
+          `⛔ Your \`\`\`awaiting fence uses ${retired.length === 1 ? "a line kind" : "line kinds"} that no longer exist, so frizz ignored ${retired.length === 1 ? "it" : "them"} — the`,
+          "fence named nothing and your thread stayed in the queue.",
+          "",
+          ...retired.map((k) => `- \`${k}:\` is GONE → ${RETIRED_AWAITING_REPLACEMENT[k]}`),
+          "",
+          "THE ONLY LINE KINDS NOW SUPPORTED, and every one is checked against something frizz can see:",
+          "",
+          "  shell: <runtime task id>    a background shell you launched",
+          "  agent: <runtime agent id>   a sub-agent you dispatched",
+          "  timer: tmr_…                a timer from `mcp__frizz__timer`",
+          "  pr:    owner/repo#123       a PR registered with `mcp__frizz__watch_pr`",
+          "  for:   2h                   REQUIRED — a DURATION, never an instant",
+          "  reason: one line            the only prose",
+          "",
+          "`mcp__frizz__activity` lists everything you have running with the exact id each line needs.",
+          "If you are not waiting on anything, you are not awaiting — end with ```done, or ask a ```question.",
+        ].join("\n")
+        : nameless
         ? [
           "⚠️ Your ```awaiting fence names nothing to wait on, so it is not a park — your thread is still",
           "in the queue, and nothing will wake you.",
@@ -2040,7 +2060,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
       // Keyed on the REST plus which failure it is, so one fence gets one bump per cause: a park that is
       // bumped for a dead id and later expires is two different pieces of news.
-      const fenceId = `park:${nameless ? "nameless" : expired ? "expired" : "dead"}:${spokeAt}`
+      const fenceId = `park:${retired.length > 0 ? "retired" : nameless ? "nameless" : expired ? "expired" : "dead"}:${spokeAt}`
       const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
       if (outbox.get(deliveryId)) continue
       const item = outbox.enqueue({
@@ -2050,7 +2070,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         fenceId,
         hintKey: fenceId,
         message,
-        reason: nameless ? "awaiting park names nothing" : expired ? "awaiting park expired" : `awaiting park named ${dead.length} dead item(s)`,
+        reason: retired.length > 0 ? `awaiting fence uses retired kind(s): ${retired.join(", ")}` : nameless ? "awaiting park names nothing" : expired ? "awaiting park expired" : `awaiting park named ${dead.length} dead item(s)`,
       }, nowMs).delivery
       log(`waker: queued ${row.slug} — ${item.reason}`)
       checkpoint("after-enqueue", item)

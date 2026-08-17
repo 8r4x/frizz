@@ -332,6 +332,47 @@ export const AwaitingHint = z.object({
 })
 export type AwaitingHint = z.infer<typeof AwaitingHint>
 
+/** The hint kinds that USED to exist, so a worker still writing one can be told rather than ignored.
+ *
+ *  A worker's contract is frozen into its system prompt at dispatch, so every session started before the
+ *  2026-08-15 cut keeps writing these — and a deleted kind does not parse, so it falls into the fence BODY
+ *  as prose and the fence silently becomes a park that names nothing. Measured three times in two days,
+ *  each as a separate bug report: a `for:`-only fence, a card printing `watch: bvg44v4ij`, and a Goal
+ *  loop re-writing `pr-watch:` every six seconds.
+ *
+ *  Falling through quietly is the whole problem: the worker cannot see which line frizz ignored, so it
+ *  writes the same one again. Recognising them by name is what lets the bump say "you wrote `pr-watch:`,
+ *  that kind is gone, here is what replaced it" (maintainer 2026-08-17: "BLOCK THEM with an error
+ *  message… tell them what is now supported"). */
+export const RETIRED_AWAITING_KINDS = ["watch", "pr-watch", "human", "ci", "session"] as const
+export type RetiredAwaitingKind = (typeof RETIRED_AWAITING_KINDS)[number]
+
+const RETIRED_LINE_RE = new RegExp(`^\\s*(${RETIRED_AWAITING_KINDS.join("|")}):\\s*\\S`, "im")
+
+/** Every retired kind a fence body still carries, in the order the grammar lists them — deduped, because
+ *  a worker repeating `pr-watch:` for three PRs has ONE thing to learn, not three. */
+export function retiredAwaitingKindsIn(body: string): RetiredAwaitingKind[] {
+  if (!body || !RETIRED_LINE_RE.test(body)) return []
+  const found: RetiredAwaitingKind[] = []
+  for (const line of body.split("\n")) {
+    const m = /^\s*([a-z-]+):\s*\S/i.exec(line)
+    const kind = m?.[1].toLowerCase()
+    if (!kind) continue
+    const hit = RETIRED_AWAITING_KINDS.find((k) => k === kind)
+    if (hit && !found.includes(hit)) found.push(hit)
+  }
+  return found
+}
+
+/** What each retired kind became, so the bump can say it in one line rather than restating the grammar. */
+export const RETIRED_AWAITING_REPLACEMENT: Record<RetiredAwaitingKind, string> = {
+  "watch": "`shell: <the id your runtime gave you>` (or `agent: <id>`) — the same id, on the current line kind",
+  "pr-watch": "register the PR with `mcp__frizz__watch_pr`, then name it `pr: owner/repo#123`",
+  "human": "there is no human gate any more — if you need a person, ask a ```question instead of parking",
+  "ci": "CI is not a wait of its own: register the PR with `mcp__frizz__watch_pr` and you are woken when its checks settle",
+  "session": "there is no cross-session wait — name the sub-agent you dispatched with `agent: <id>`",
+}
+
 /** The four kinds that NAME A LIVE THING. Every one is checked against something frizz can look up — a
  *  runtime handle in this thread's telemetry, or a row in one of its registries — which is the whole
  *  point of the grammar. `for`/`reason` describe the park itself and name nothing. */

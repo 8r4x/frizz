@@ -153,7 +153,7 @@ test("own background work does both — it cards AND it leaves the queue", () =>
 // blocking call that starved its own notification, a timer written in the past. Each one left a thread
 // looking parked forever, and frizz said nothing.
 
-function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; restedAt?: string } = {}) {
+function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; restedAt?: string; body?: string } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-park-"))
   const storage = createStorage(join(dir, "ui.db"))
   storage.setSetting("signoffNudge", "off") // isolate SOURCE 12 from the nudge
@@ -175,7 +175,7 @@ function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; restedAt
         bgShells: opts.shells ?? [],
         pendingQuestion: false,
         permPrompt: false,
-        lastFence: { kind: "awaiting", body: "", hints },
+        lastFence: { kind: "awaiting", body: opts.body ?? "", hints },
       }),
     } as never,
     resume: async () => {},
@@ -277,5 +277,46 @@ test("the nameless bump fires once per rest, and does not collide with the other
   try {
     for (let i = 0; i < 4; i++) await h.s.tick()
     assert.equal(h.queued().length, 1, "one rest, one nameless bump")
+  } finally { h.close() }
+})
+
+// A RETIRED LINE KIND IS BLOCKED BY NAME, not silently ignored (maintainer 2026-08-17: "BLOCK THEM with
+// an error message… tell them what is now supported").
+//
+// A worker's contract is frozen at dispatch, so every session started before the 2026-08-15 cut keeps
+// writing the old kinds. A deleted kind does not parse, so it falls into the fence BODY as prose and the
+// fence silently becomes a park naming nothing — and the worker cannot see WHICH line frizz ignored, so
+// it writes the same one again. That produced three separate bug reports in two days, one of them a Goal
+// loop re-writing `pr-watch:` every six seconds.
+test("a fence using a RETIRED kind is bumped by name, with what replaced it", async () => {
+  // The exact shape from the looping thread: the deleted kind lands in the body, hints are empty.
+  const h = parkHarness([], { body: "pr-watch: pullfrog/app#1221\nDrift check re-run: CI green." })
+  try {
+    await h.s.tick()
+    const rows = h.queued()
+    assert.equal(rows.length, 1)
+    assert.match(rows[0].fence_id, /^park:retired:/, "its own cause, so it cannot collide with the others")
+    // NAMES THE OFFENDING LINE. "Your fence names nothing" was true but not actionable — the worker
+    // could not tell which of its lines frizz had dropped.
+    assert.match(rows[0].message, /`pr-watch:` is GONE/)
+    assert.match(rows[0].message, /mcp__frizz__watch_pr/, "…and what to do instead")
+    // AND THE WHOLE SUPPORTED SET, so the answer does not depend on the worker's frozen contract.
+    for (const kind of ["shell:", "agent:", "timer:", "pr:", "for:", "reason:"]) {
+      assert.ok(rows[0].message.includes(kind), `the supported set must name ${kind}`)
+    }
+    assert.match(rows[0].message, /REQUIRED — a DURATION, never an instant/)
+  } finally { h.close() }
+})
+
+test("every retired kind is recognized, and a repeat teaches once", async () => {
+  const h = parkHarness([], { body: "watch: b1\nhuman: Alice\nci: build 9\nsession: s1\npr-watch: a/b#1\npr-watch: a/b#2" })
+  try {
+    await h.s.tick()
+    const msg = h.queued()[0].message
+    for (const k of ["watch:", "human:", "ci:", "session:", "pr-watch:"]) {
+      assert.ok(msg.includes(`\`${k}\` is GONE`), `${k} must be named`)
+    }
+    // Two `pr-watch:` lines are ONE thing to learn.
+    assert.equal(msg.match(/`pr-watch:` is GONE/g)?.length, 1, "deduped by kind, not by line")
   } finally { h.close() }
 })
