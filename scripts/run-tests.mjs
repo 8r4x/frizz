@@ -37,7 +37,20 @@ const GLOBS = [
 ];
 
 const forwarded = process.argv.slice(2);
-const targets = forwarded.some((arg) => !arg.startsWith("-")) ? forwarded : [...forwarded, ...GLOBS];
+const usingDefaults = !forwarded.some((arg) => !arg.startsWith("-"));
+const targets = usingDefaults ? [...forwarded, ...GLOBS] : forwarded;
+
+// node's runner ignores a glob that matches nothing and still exits 0, so a renamed directory would
+// quietly drop a whole tree from a green run — the same "green does not prove it ran" defect this
+// script exists for, arriving by a different route. Every configured glob must match something.
+if (usingDefaults) {
+  const empty = GLOBS.filter((glob) => fs.globSync(glob, { cwd: root }).length === 0);
+  if (empty.length > 0) {
+    console.error("✖ these test globs in scripts/run-tests.mjs match no files, so a whole tree would go unrun:");
+    for (const glob of empty) console.error(`  ${glob}`);
+    process.exit(1);
+  }
+}
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "frizz-test-guard-"));
 const ledgerPath = path.join(scratch, "emitted.jsonl");
