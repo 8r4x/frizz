@@ -401,6 +401,11 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
   // Background Bash launch ids are provider-native lifecycle keys. Their immediate tool_result is
   // only a launch acknowledgement; task-notification is the terminal observation.
   const backgroundShells = new Map<string, { at?: string; call: TranscriptToolCall }>()
+  // SHELLS ALREADY DRAWN, and the rest-epoch each was drawn in. A completion is routinely delivered
+  // twice — once mid-turn as the runtime folds it in, and again afterwards as the thing that re-invokes
+  // the agent — and de-duping the second one is right only while the agent never stopped in between. See
+  // `completionEvents` for the wake this recovers.
+  const consumedShells = new Map<string, { epoch: number; call: TranscriptToolCall }>()
   // RUNTIME task id → tool_use id, captured from background launch acks (mirrors the tailer's
   // launchTaskId). Needed because two terminal signals carry NO <tool-use-id>: the Monitor-timeout
   // notification (task-id only) and a manual TaskStop result (task_id only).
@@ -456,9 +461,13 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
   // underneath it. Holding it until a record arrives that is not a continuation of `msgId` keeps one
   // divider, in the right place, under one bubble.
   let pendingRest: { sourceId: string; at?: string; msgId: string | null } | null = null
+  // How many times the agent has come to REST so far. It is what tells a re-notify that merely repeats a
+  // completion already drawn from the one that RE-INVOKED the agent across a rest — see `consumedShells`.
+  const restEpoch = { n: 0 }
   function flushRest(): void {
     if (!pendingRest) return
     out.push(restMessage(pendingRest.sourceId, pendingRest.at))
+    restEpoch.n++
     pendingRest = null
     lastAssistantId = null // the divider breaks the assistant-record merge chain, like every other event
   }
@@ -539,7 +548,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
     // notificationCarrierText) re-render each finished dispatch's AgentBlock card inline at this
     // position (clickable into the run-log drawer), back-fill the original launch cards' terminal
     // state, and emit a boundary line per woken shell.
-    const evs = completionEvents(rec, agentDispatches, backgroundShells, backgroundTaskIds, relayedWakesDrawn)
+    const evs = completionEvents(rec, agentDispatches, backgroundShells, backgroundTaskIds, relayedWakesDrawn, consumedShells, restEpoch)
     // Did this record already spend its bare sourceId on a divider? Only a coalesced record reaches the
     // user branch below after drawing one, and then the delivery must not reuse it (see pushUserRecord).
     let drewEvents = false
@@ -1822,6 +1831,8 @@ function completionEvents(
   backgroundShells: Map<string, { at?: string; call: TranscriptToolCall }>,
   backgroundTaskIds: Map<string, string>,
   relayedWakesDrawn: Set<string>,
+  consumedShells: Map<string, { epoch: number; call: TranscriptToolCall }> = new Map(),
+  restEpoch: { n: number } = { n: 0 },
 ): TranscriptMessage[] {
   const carrier = notificationCarrierText(rec)
   // A completion frizz REPAIRED arrives as prose, not as a notification (see relayNotificationBlock).
@@ -1887,10 +1898,28 @@ function completionEvents(
       if (!d) {
         const shell = backgroundShells.get(id)
         if (!shell) {
+          // ALREADY DRAWN — but a completion is delivered TWICE in the ordinary case: once while the
+          // agent is still mid-turn (folded in at that position), and again afterwards as the thing that
+          // actually RE-INVOKES it. De-duping the second is right only while the agent never stopped in
+          // between; across a REST it deletes the one divider that explains why the thread started again.
+          //
+          // Measured on `investigate-nubjs-nub-642` (maintainer 2026-08-17: "the agent came to rest, but
+          // then it starts up again, and I have no idea why. What restarted it? Kind of mysterious"):
+          // shell `bfpp19dew` finished at 07:10:15 and drew its divider mid-turn; the agent rested at
+          // 07:10:24.613; the SAME completion arrived again 46ms later and re-invoked it, and fell in
+          // here — so the transcript read [rest] → [work] with nothing in between. The neighbouring rest
+          // at 07:10:50 shows the correct shape, which is what made the gap look arbitrary.
+          const drawn = consumedShells.get(id)
+          if (drawn && restEpoch.n > drawn.epoch) {
+            consumedShells.set(id, { epoch: restEpoch.n, call: drawn.call })
+            out.push({ role: "assistant", kind: "event", boundary: "wake", text: backgroundWakeLabel(drawn.call, status, block), tools: [], parts: [], at })
+            continue
+          }
           relayedFallback()
-          continue // an unrelated process, or an already-consumed child
+          continue // an unrelated process, or a re-notify inside the same turn
         }
         backgroundShells.delete(id)
+        consumedShells.set(id, { epoch: restEpoch.n, call: shell.call })
         const elapsedMs = elapsedBetween(shell.at, rec.timestamp)
         shell.call.status = status === "completed" ? "completed" : status === "killed" ? "cancelled" : "failed"
         if (elapsedMs !== undefined) shell.call.durationMs = elapsedMs

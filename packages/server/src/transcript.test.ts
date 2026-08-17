@@ -2363,3 +2363,63 @@ test("the retirement projection is a no-op when nothing was retired, and never t
   assert.equal(projectRetiredBackgroundOps(messages, new Set())[0]!.tools[0]!.status, "completed")
   assert.equal(projectRetiredBackgroundOps(messages, new Set(["toolu_sh"]))[0]!.tools[0]!.status, "completed")
 })
+
+// THE SAME COMPLETION, DELIVERED TWICE, WITH A REST IN BETWEEN.
+//
+// The runtime routinely delivers a background shell's completion twice: once while the agent is still
+// mid-turn, and again afterwards as the thing that RE-INVOKES it. De-duping the second is right while
+// the agent never stopped in between — and deletes the only explanation the reader has when it did.
+//
+// Measured on `investigate-nubjs-nub-642` (maintainer 2026-08-17: "the agent came to rest, but then it
+// starts up again, and I have no idea why. What restarted it? Kind of mysterious"): shell `bfpp19dew`
+// drew its divider at 07:10:15 mid-turn, the agent rested at 07:10:24.613 on an ```awaiting fence naming
+// that shell, and the SAME completion arrived 46ms later and restarted it — landing in the
+// already-consumed branch and rendering nothing. The transcript read [rest] → [work], with no cause.
+test("a completion re-delivered ACROSS a rest draws the wake that explains the restart", () => {
+  const launch = JSON.stringify({
+    type: "assistant",
+    timestamp: "2026-07-01T00:00:00.000Z",
+    message: { id: "m1", content: [{ type: "tool_use", id: "bash-1", name: "Bash", input: { command: "nub test", description: "Running the site gate", run_in_background: true } }] },
+  })
+  // FIRST delivery — the agent is still working, so this one folds in where it lands.
+  const midTurn = taskNotification("bash-1", "completed", "2026-07-01T00:00:05.000Z")
+  // The agent's turn ENDS (stop_reason is what the projection reads as a rest).
+  const rested = JSON.stringify({
+    type: "assistant",
+    timestamp: "2026-07-01T00:00:09.000Z",
+    message: { id: "m2", content: [{ type: "text", text: "Parked on the gate." }], stop_reason: "end_turn" },
+  })
+  // SECOND delivery of the SAME completion — this is what re-invoked the agent.
+  const reDelivered = taskNotification("bash-1", "completed", "2026-07-01T00:00:09.050Z")
+  const resumed = JSON.stringify({
+    type: "assistant",
+    timestamp: "2026-07-01T00:00:12.000Z",
+    message: { id: "m3", content: [{ type: "text", text: "Gate is green." }] },
+  })
+
+  const msgs = parseTranscript([launch, midTurn, rested, reDelivered, resumed].join("\n"))
+  const kinds = msgs.map((m) => m.boundary ?? (m.text ? "text" : "-"))
+  assert.deepEqual(
+    kinds,
+    ["-", "wake", "text", "rest", "wake", "text"],
+    "the second delivery draws its own wake, BETWEEN the rest and the work it restarted",
+  )
+  // The resumed work is not left unexplained: the divider directly above it names what came back.
+  const restIdx = kinds.indexOf("rest")
+  assert.equal(msgs[restIdx + 1].text, "Background task «Running the site gate» finished")
+  assert.equal(msgs[restIdx + 2].text, "Gate is green.")
+})
+
+// …and the de-dup it replaces still holds WITHIN one turn, or every coalesced double-carrier delivery
+// would draw two identical hairlines in a row.
+test("a completion re-delivered inside the SAME turn still draws only one wake", () => {
+  const launch = JSON.stringify({
+    type: "assistant",
+    timestamp: "2026-07-01T00:00:00.000Z",
+    message: { id: "m1", content: [{ type: "tool_use", id: "bash-2", name: "Bash", input: { command: "nub test", description: "Running the site gate", run_in_background: true } }] },
+  })
+  const first = taskNotification("bash-2", "completed", "2026-07-01T00:00:05.000Z")
+  const second = taskNotification("bash-2", "completed", "2026-07-01T00:00:05.500Z")
+  const msgs = parseTranscript([launch, first, second].join("\n"))
+  assert.equal(msgs.filter((m) => m.boundary === "wake").length, 1, "one event, one divider")
+})
