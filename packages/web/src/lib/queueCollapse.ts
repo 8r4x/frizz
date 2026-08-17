@@ -267,3 +267,55 @@ export function segmentFolds(seg: CollapseSegment): boolean {
   if (seg.tools < 1 && seg.steps < 1) return false
   return seg.resumed || seg.open !== seg.close
 }
+
+/** The MIDDLE runs, collapsed whole — prose, wakes and all.
+ *
+ *  One fold per rest is right for a thread with two or three of them and unreadable for a thread with
+ *  thirty. `investigate-nubjs-nub-642` rested 30+ times against a single ask, and because a rested
+ *  message always survives its own run's fold, the card painted thirty near-identical restatements in
+ *  full (maintainer 2026-08-17: "it's just so much unnecessary rendering… we need to just hide all of
+ *  the intermediate work").
+ *
+ *  A straight revert would bring back the bug that made a rest cut in the first place — the answer to the
+ *  question the human had just asked was swallowed into a fold. That answer is the FIRST rested message,
+ *  so keeping the first run and the last one whole preserves it exactly, and everything between them —
+ *  every intermediate rest, every wake hairline, every tool call — becomes one divider (maintainer:
+ *  "show the first one and then collapse everything in the middle and then show the last one… it can
+ *  collapse all of the awakenings that happened in the middle").
+ *
+ *  Computed over ALL runs, not just the folding ones: a middle run with nothing worth folding on its own
+ *  is still intermediate work, and leaving it visible would put a stray restatement inside the very span
+ *  this is hiding. */
+export interface MiddleCollapse {
+  /** Inclusive index range this swallows — every message in it renders nothing but the one divider. */
+  start: number
+  end: number
+  /** How many RUNS are hidden. This is the number the reader cares about: "the agent went round 28 more
+   *  times", not how many records that took. */
+  runs: number
+  /** Tool calls across those runs, summed, for the divider's own count. */
+  tools: number
+}
+
+/** Split the runs into [first, …middle…, last]. `middle` is undefined when there is nothing in between —
+ *  fewer than three runs — and the card then behaves exactly as it did before. */
+export function collapseMiddleRuns(
+  segments: readonly CollapseSegment[],
+): { kept: CollapseSegment[]; middle?: MiddleCollapse } {
+  if (segments.length < 3) return { kept: [...segments] }
+  const first = segments[0]
+  const last = segments[segments.length - 1]
+  const inner = segments.slice(1, -1)
+  return {
+    kept: [first, last],
+    middle: {
+      start: inner[0].start,
+      // Up to the last hidden run's END, so the wake or rest that opens the FINAL run still renders: it
+      // is what says why the last message exists, and the maintainer has already reported once that
+      // resumed work with nothing above it reads as unexplained.
+      end: inner[inner.length - 1].end,
+      runs: inner.length,
+      tools: inner.reduce((n, s) => n + s.tools, 0),
+    },
+  }
+}

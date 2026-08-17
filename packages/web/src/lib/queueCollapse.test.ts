@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { opensQueueSegment, queueCollapseSegments, segmentFolds, supersededAskIndices, survivesQueueCollapse } from "./queueCollapse.ts"
+import { collapseMiddleRuns, opensQueueSegment, queueCollapseSegments, segmentFolds, supersededAskIndices, survivesQueueCollapse } from "./queueCollapse.ts"
 
 // The REAL Goal delivery frizz wrote into the maintainer's zod thread on 2026-08-12, verbatim — trailer,
 // the `<!-- frizz-wake:… -->` token and all.
@@ -243,4 +243,60 @@ test("a run with no prose at all never folds — it has no anchor to render", ()
   const [seg] = queueCollapseSegments([w(), t(4)], 0)
   assert.equal(seg.open, -1)
   assert.equal(segmentFolds(seg), false)
+})
+
+// ---- THE MIDDLE ROUNDS ---------------------------------------------------------------------------
+//
+// One fold per rest is right for two or three rests and unreadable at thirty. `investigate-nubjs-nub-642`
+// rested 30+ times against ONE ask, and because a rested message always survives its own run's fold, the
+// card painted thirty near-identical restatements in full (maintainer 2026-08-17: "it's just so much
+// unnecessary rendering"). The first rested message is the answer to whatever was last asked, and the
+// last one is where the thread stands now; everything between them is the part nobody reads.
+test("three or more runs keep the first and last, and collapse the middle whole", () => {
+  // Four runs: ask → rest → wake → rest → wake → rest → wake → prose.
+  const segs = queueCollapseSegments(
+    [x(), p(), t(3), r(), w(), p(), t(2), r(), w(), p(), t(4), r(), w(), p(), t(5)],
+    1,
+  )
+  assert.equal(segs.length, 4, "four runs to start with")
+  const { kept, middle } = collapseMiddleRuns(segs)
+  assert.equal(kept.length, 2, "the first run and the last one survive")
+  assert.equal(kept[0], segs[0])
+  assert.equal(kept[1], segs[3])
+  assert.ok(middle, "and the two between them collapse")
+  assert.equal(middle.runs, 2, "counted in ROUNDS — what the reader wants is how many times it went round")
+  assert.equal(middle.tools, segs[1].tools + segs[2].tools, "with every call inside them")
+  // The span covers the hidden runs and NOTHING else: the last run's own waker sits after it, so the
+  // final message still has the hairline above it that says what resumed the agent.
+  assert.equal(middle.start, segs[1].start)
+  assert.equal(middle.end, segs[2].end)
+  assert.ok(middle.end < segs[3].start, "the last run is untouched, waker and all")
+})
+
+test("two runs are left alone — there is no middle to hide", () => {
+  const segs = queueCollapseSegments([x(), p(), t(3), r(), w(), p(), t(2)], 1)
+  assert.equal(segs.length, 2)
+  const { kept, middle } = collapseMiddleRuns(segs)
+  assert.equal(middle, undefined, "nothing between the first and the last")
+  assert.deepEqual(kept, segs, "so the card behaves exactly as it did before")
+})
+
+test("one run, and no run at all, are both left alone", () => {
+  for (const steps of [[x(), p(), t(3)], [x()]]) {
+    const { kept, middle } = collapseMiddleRuns(queueCollapseSegments(steps, 1))
+    assert.equal(middle, undefined)
+    assert.ok(kept.length <= 1)
+  }
+})
+
+// The 642 shape at scale: the count has to be the number of ROUNDS, not of records, or the divider says
+// "412 steps" where the honest summary is "the agent went round 28 more times".
+test("thirty runs collapse to two visible runs and one line", () => {
+  const steps = [x(), p(), t(2)]
+  for (let i = 0; i < 29; i++) steps.push(r(), w(), p(), t(2))
+  const segs = queueCollapseSegments(steps, 1)
+  assert.equal(segs.length, 30)
+  const { kept, middle } = collapseMiddleRuns(segs)
+  assert.equal(kept.length, 2)
+  assert.equal(middle?.runs, 28)
 })

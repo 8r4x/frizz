@@ -10,7 +10,7 @@ import { useBoard, asThreads, useTranscript } from "../hooks.ts"
 import { orderQueue, queued, displayTitle, lastActiveLabelAt } from "../groups.ts"
 import { useLiveAnswering } from "../lib/answering.ts"
 import { hasQuestionBlock } from "../lib/questionBlocks.ts"
-import { opensQueueSegment, queueCollapseSegments, segmentFolds, supersededAskIndices, survivesQueueCollapse } from "../lib/queueCollapse.ts"
+import { collapseMiddleRuns, opensQueueSegment, queueCollapseSegments, segmentFolds, supersededAskIndices, survivesQueueCollapse } from "../lib/queueCollapse.ts"
 import { pairAllAnswers } from "../lib/answersMessage.ts"
 import { Message, NativeInputRequiredCard, PermPolicyDenialCard, PermPromptBanner, PendingAskCard, StickyUserBand, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText } from "./ChatView.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_TOP, CARD_ACTION_EXPLAINER, CARD_PRIMARY_ACTION } from "./TranscriptCard.tsx"
@@ -659,6 +659,32 @@ function CardSlot({ leaving, slug, children }: { leaving: boolean; slug: string;
 //
 // Clicking is ONE-WAY: it reveals the full log and the divider unmounts; there is no re-collapse
 // (the maintainer's ask).
+/** The MIDDLE runs, as one line. Distinct from `IntermediateSummary` because it stands for whole ROUNDS
+ *  — rest, wake, work, rest again — rather than the calls inside one of them, and the count a reader
+ *  wants is how many times the agent went round, not how many records that took. */
+function MiddleRunsSummary({ runs, toolCount, onExpand }: { runs: number; toolCount: number; onExpand: () => void }) {
+  const tools = toolCount > 0 ? `${toolCount} tool call${toolCount === 1 ? "" : "s"}` : ""
+  const label = `${runs} more round${runs === 1 ? "" : "s"}`
+  return (
+    <WakeDivider
+      icon={ChevronsUpDown}
+      marker="middle-runs-summary"
+      onClick={onExpand}
+      ariaLabel={`Expand ${label}${tools ? ` and ${tools}` : ""} of intermediate agent activity`}
+    >
+      <span className="shrink-0 tabular-nums">{label}</span>
+      {tools && (
+        <>
+          <span aria-hidden="true" className="shrink-0 opacity-50">·</span>
+          <span className="shrink-0 tabular-nums">{tools}</span>
+        </>
+      )}
+      <span aria-hidden="true" className="shrink-0 opacity-50">·</span>
+      <span className="shrink-0">Click to expand</span>
+    </WakeDivider>
+  )
+}
+
 function IntermediateSummary({ toolCount, onExpand }: { toolCount: number; onExpand: () => void }) {
   const tools = toolCount > 0 ? `${toolCount} tool call${toolCount === 1 ? "" : "s"}` : ""
   return (
@@ -855,10 +881,19 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   // ONE FOLD PER REST. Every run between the human's ask and the agent's rest, and between each
   // subsequent wake and the rest it produced, is its own segment with its own divider. See
   // lib/queueCollapse for why a rest CUTS, and why cutting on the wake alone was not enough.
-  const segments = useMemo(
-    () => queueCollapseSegments(collapseSteps, lastUserIdx + 1).filter(segmentFolds),
+  // FIRST RUN, THEN ONE LINE, THEN THE LAST RUN. One fold per rest reads well for two or three rests and
+  // is unreadable at thirty: `investigate-nubjs-nub-642` rested 30+ times against a single ask, and since
+  // a rested message always survives its own run's fold, the card painted thirty near-identical
+  // restatements in full. The middle runs collapse whole — prose, wakes and all — while the first rested
+  // message (which is the answer to whatever the human last asked) and the last one stay intact.
+  // Computed over ALL runs, not the folding ones, so a middle run with nothing of its own to fold cannot
+  // leave a stray restatement inside the span this is hiding.
+  const allSegments = useMemo(
+    () => queueCollapseSegments(collapseSteps, lastUserIdx + 1),
     [collapseSteps, lastUserIdx],
   )
+  const { kept, middle } = useMemo(() => collapseMiddleRuns(allSegments), [allSegments])
+  const segments = useMemo(() => kept.filter(segmentFolds), [kept])
   // Index → the segment folding it, for the render loop. Only folding segments are indexed: a run with
   // nothing worth hiding renders exactly as it did before.
   const segmentAt = useMemo(() => {
@@ -1247,6 +1282,26 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                 // It renders through the ordinary path below as the transcript's own RecurringPromptLine
                 // ("Goal · at rest"), one rule under the message the agent rested on — the position the
                 // 2026-08-12 call was really objecting to it NOT being in.
+                // THE MIDDLE ROUNDS, swallowed whole. This runs BEFORE every other branch — including the
+                // lifted-wake and waker paths — because those are exactly what it is hiding: the
+                // maintainer asked for "all of the awakenings that happened in the middle" to go with the
+                // work, leaving the first rested message and the last one facing each other across one
+                // line. Emitted once, at the span's first index.
+                if (collapseIntermediate && middle && globalIdx >= middle.start && globalIdx <= middle.end) {
+                  if (globalIdx === middle.start) {
+                    if (prevTailIsMeta !== null) out.push(<VSpace key="middle-runs-space" h={STEP} />)
+                    out.push(
+                      <MiddleRunsSummary
+                        key="middle-runs-summary"
+                        runs={middle.runs}
+                        toolCount={middle.tools}
+                        onExpand={() => setIntermediateExpanded(true)}
+                      />,
+                    )
+                    prevTailIsMeta = false
+                  }
+                  return
+                }
                 const segIdx = collapseIntermediate ? segmentAt.get(globalIdx) : undefined
                 const seg = segIdx === undefined ? undefined : segments[segIdx]
                 const inSpan = seg !== undefined

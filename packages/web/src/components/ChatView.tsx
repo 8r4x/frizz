@@ -686,6 +686,13 @@ function VirtualizedThreadTranscript({
     }))
   }, [activityMessages])
   const lastUserIdx = useMemo(() => lastAskIndex(messages), [messages])
+  // THE LAST THING THE AGENT SAID. Any ```awaiting fence above it describes a wait that has already
+  // resolved — the agent spoke again, so whatever it was stopped on came back — and renders as prose
+  // rather than as a live card. See FenceCard's `stale` branch.
+  const lastAgentIdx = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) if (messages[i].role === "assistant") return i
+    return -1
+  }, [messages])
   const hasRuntimeStatus = Boolean(
     (thread?.providerFault && !thread.foreign)
       || (thread?.limitPause && !thread.foreign)
@@ -1242,6 +1249,7 @@ function VirtualizedThreadTranscript({
                   answering={answeringForMessage(row.message)}
                   showSendButton
                   paired={paired[row.messageIndex]}
+                  staleAwaiting={lastAgentIdx >= 0 && row.messageIndex < lastAgentIdx}
                 />
               </div>
             ) : row.kind === "runtime-status" ? (
@@ -3073,7 +3081,7 @@ function UserBubble({ text, rawText, queued, sticky, deliveryUnconfirmed, delive
 // undefined (a consumer that doesn't precompute, e.g. the sub-agent sheet) → internal unpaired fallback.
 // Lifecycle controls never belong to a transcript message: every Done card stays presentation-only,
 // while the owning thread surface renders one stable footer.
-export const Message = memo(function Message({ m, answering, dense, paired, sticky, textOnly, showSendButton }: { m: ChatMessage; answering?: MessageAnswering; dense?: boolean; paired?: PairedAnswer[] | null; sticky?: boolean; textOnly?: boolean; showSendButton?: boolean }) {
+export const Message = memo(function Message({ m, answering, dense, paired, sticky, textOnly, showSendButton, staleAwaiting }: { m: ChatMessage; answering?: MessageAnswering; dense?: boolean; paired?: PairedAnswer[] | null; sticky?: boolean; textOnly?: boolean; showSendButton?: boolean; staleAwaiting?: boolean }) {
   // An event line (a sub-agent completion) is transcript PUNCTUATION — a quiet full-width line, not a
   // bubble or a tool band. Rendered before the role branches (its role field is nominal).
   if (m.kind === "event") return <EventLine text={m.text} boundary={m.boundary} sourceId={m.sourceId} />
@@ -3158,6 +3166,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
             body={fseg.body}
             hints={fseg.hints}
             wrap={dense}
+            stale={staleAwaiting}
           />,
         )
         continue
@@ -3457,7 +3466,7 @@ export function InlineVisualization({ file }: { file: string }) {
 // its thread's Archive lives in the stable lifecycle footer. `awaiting` → the SAME card shape: a
 // heading naming the wait ("PR watcher armed"), the body prose plus a plain-English action summary
 // for non-watcher waits (with legacy pr/ci/session support), then the park button + its explainer.
-export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKind; body: string; hints: AwaitingHint[]; wrap?: boolean }) {
+export function FenceCard({ fenceKind, body, hints, wrap, stale }: { fenceKind: FenceKind; body: string; hints: AwaitingHint[]; wrap?: boolean; stale?: boolean }) {
   const html = useMarkdownHtml(body)
   const doneInner = useInnerHtml(html)
   const awaitingHint = awaitingHintSentence(hints)
@@ -3526,6 +3535,21 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   // read as the button's verb when it was really the card's identity (maintainer 2026-07-24) — and why
   // the heading is now a STATE rather than the imperative "Arm watcher" that replaced it (2026-07-29).
   // With no parkable hint there's no action to name, so it falls back to a plain "Awaiting".
+  // A WAIT THAT IS OVER IS NOT A CARD. An ```awaiting fence states a LIVE condition — "I am stopped on
+  // this shell, for 30m" — and once the agent has spoken again the condition is settled by construction:
+  // whatever it named either finished or was given up on. Left as a card it reads as still pending, so a
+  // thread that rested thirty times showed thirty live-looking waits, only the last of which was real
+  // (maintainer 2026-08-17: "we should only render an awaiting card that is still being waited on at the
+  // bottom of a chat").
+  //
+  // The BODY still renders — it is the worker's handoff prose, and dropping the whole block would delete
+  // what it said, not just the chrome. What goes is the card frame, the hourglass, the item table and the
+  // park button: everything that asserts the wait is still open or offers to act on it.
+  //
+  // `done` is never stale: a finished thread stays finished, and its card is the thread's own outcome.
+  if (stale === true && fenceKind === "awaiting") {
+    return <div className="text-[13px] leading-[1.55] text-muted" dangerouslySetInnerHTML={awaitingInner} />
+  }
   const parkAction = awaitingParkAction(hints)
   const parkTitle = parkAction?.title ?? AWAITING_FALLBACK_TITLE
   // A watch is active observation, not elapsed time. Keep the hourglass for actual timer/human holds
