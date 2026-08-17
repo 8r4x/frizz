@@ -65,6 +65,8 @@ written twice. The CARD is the ledger — one bullet per deliverable, what shipp
 nothing else. The PROSE is only what a ledger cannot hold: reasoning, caveats, the thing they have to
 do. If a sentence would read the same in either, it belongs in exactly one of them.
 
+**And nothing in a finished handoff points vaguely forward.** "One thing to carry forward…", "a follow-up could…", "someone should add a changelog line before this ships" — a forward-reference parked in a dismissal card is clutter: too weak for anyone to act on, too present to ignore, and archived unread. Every such thought resolves four ways and there is no fifth — do it, `mcp__frizz__spawn_thread` it onto its own card, ask about it in a ` ```question `, or DROP it. What is not worth a card is not worth a sentence. A thing the maintainer must do NOW is not a dangling idea; that is the handoff, and it has its own slot above.
+
 (Written 2026-07-31 after a handoff opened on root cause and buried the verdict under a differential
 table, two screenshots and a decision list — every fact was present and the maintainer still had to
 ask "is this fixed or not?", then: "avoid redundancy with your plain text breakdown and your done

@@ -73,6 +73,8 @@ test("a rest with no fence is told how to sign off, and the text names all three
     // Two zod threads fenced `done` on exactly those on 2026-08-16 — see workerPrompt.ts above SIGNALS.
     assert.match(h.delivered[0], /STILL OWED counts things you are not going to do yourself/)
     assert.match(h.delivered[0], /`mcp__frizz__spawn_thread`/)
+    assert.match(h.delivered[0], /not\s+worth a card is not worth a SENTENCE/)
+    assert.match(h.delivered[0], /the card is the ledger of what shipped/)
     // SELF-CONTAINEDNESS is the point the first version missed: the human has seen nothing since their
     // own last message, and everything in between came from frizz. An agent that does not know that
     // writes a handoff about the last thing it touched.

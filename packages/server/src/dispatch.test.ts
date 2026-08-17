@@ -465,6 +465,17 @@ test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting pa
     assert.match(c, /HAND IT OFF TO ITS OWN CARD[\s\S]{0,120}`mcp__frizz__spawn_thread`/)
     assert.match(c, /stretching `done` is not how you break it/)
     assert.match(c, /A bare rest is the residual, not a plan/)
+    // The fourth exit is DROP, and it is the one the maintainer asked for by name (2026-08-16): a
+    // finished handoff that still trails "one thing to carry forward…" is clutter — too weak to act on,
+    // too present to ignore, archived unread. What is not worth a card is not worth a sentence.
+    assert.match(c, /DELETE EVERY DANGLING "WORTH DOING LATER"/)
+    assert.match(c, /one thing to\s+carry forward…/i)
+    assert.match(c, /DO it, SPAWN it onto\s+its own card, ASK about it, or DROP it/)
+    assert.match(c, /does not deserve a trailing\s+sentence either. DROP it/)
+    // ...and the card must not restate the prose. Same maintainer note; the rule already existed in
+    // this repo's FRIZZ.md but never in the contract every worker gets.
+    assert.match(c, /TWO SURFACES, NOT ONE MESSAGE WRITTEN TWICE/)
+    assert.match(c, /would read the same in either,\s+it belongs in exactly ONE of them/)
     // ...and spawn_thread's own section points BACK, so a worker reading either one finds the link.
     assert.match(c, /Its most valuable use is the one that unblocks/)
     // The stop criterion's "you marked it (recommended), so you already knew — implement it instead"
@@ -498,6 +509,8 @@ test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting pa
   assert.match(SESSION_SEED, /follow-up work you DISCOVERED even when someone else will do it/)
   assert.match(SESSION_SEED, /never a done card, because a draft you wrote but did not send is filed away with the thread/)
   assert.match(SESSION_SEED, /mcp__frizz__spawn_thread gives it its own card and only THEN is done honest/)
+  assert.match(SESSION_SEED, /TWO SURFACES, not one message written twice/)
+  assert.match(SESSION_SEED, /if it is not worth a card it is not worth a sentence/)
   assert.match(SESSION_SEED, /code LANDED on the mainline — an open PR is NOT done, park it on ```awaiting until it MERGES/)
   assert.doesNotMatch(SESSION_SEED, /BARE REST[^\n]*quiet/i)
   assert.doesNotMatch(SESSION_SEED, /```done \/ ```awaiting excuse/)
