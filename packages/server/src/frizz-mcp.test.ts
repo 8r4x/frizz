@@ -930,3 +930,41 @@ test("with no server up, a tool call says NOTHING WAS SAVED and to retry — not
     rpc.kill()
   }
 })
+
+// A SERVER THAT COMES UP DURING THE CALL IS CAUGHT, not failed into.
+//
+// This is the fix for the measured stall, and it is stronger than the message above it: the retry
+// GUIDANCE only works if the model complies, while this works regardless. frizz replaces its own server
+// routinely and this process outlives every one of those, so a call landing in the gap is ordinary —
+// failing it reports frizz's own housekeeping as the worker's problem.
+test("a call landing in a restart window waits for the server instead of failing", async () => {
+  const seen: string[] = []
+  const http = createServer((req, res) => {
+    seen.push(req.url ?? "")
+    res.writeHead(200, { "content-type": "application/json" })
+    res.end(JSON.stringify({ result: { timers: [] } }))
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+
+  // The lock starts DEAD — a pid that cannot be alive — exactly as it reads mid-restart.
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-window-"))
+  const lock = join(stateDir, "server.lock")
+  writeFileSync(lock, JSON.stringify({ pid: 2147483646, port: 1 }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "restarting-thread" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+    // Fire the call while nothing is up…
+    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "timer", arguments: { action: "list" } } })
+    // …then bring the server up mid-flight, the way a restart finishes.
+    await new Promise((r) => setTimeout(r, 800))
+    writeFileSync(lock, JSON.stringify({ pid: process.pid, port }))
+    const call = await rpc.next(2)
+    assert.equal(call.result.isError, undefined, "the window must be invisible to the worker")
+    assert.deepEqual(seen, ["/_frizz/rpc/listOwnThreadTimers"], "and the call actually lands, once")
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})

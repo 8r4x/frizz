@@ -565,8 +565,35 @@ async function spawnThread(args) {
 /** POST a frizz RPC procedure and return its parsed payload. Shares spawn_thread's transport rules:
  * the port comes from server.lock and `sec-fetch-site: same-origin` satisfies the loopback gate.
  * @param {string} procedure @param {Record<string, unknown>} body @returns {Promise<any>} */
+// HOW LONG A RESTART WINDOW IS ALLOWED TO BE INVISIBLE. frizz replaces its own server routinely
+// ("Update & Restart", a dev rebuild), and this process is deliberately still here across every one of
+// them — so a call landing in that gap is ORDINARY, and failing it is the shim reporting frizz's
+// housekeeping as the worker's problem. Measured 2026-08-17: a `recurring_prompt start` landed in one,
+// failed, and the Goal that was keeping a long autonomous effort alive silently never existed.
+//
+// Telling the model to retry (which the error also does) is strictly weaker than retrying, because it
+// only works if the model complies. Bounded and short: a genuinely-down frizz still fails, promptly,
+// with the same message — this only covers the seconds where a new server is coming up.
+const LOCK_RETRY_MS = 6_000
+const LOCK_RETRY_INTERVAL_MS = 400
+
+/** The port, waiting out a brief restart window rather than failing into one. Rethrows the real
+ *  "no running frizz server" error once the budget is spent, so a frizz that is actually down still
+ *  says so — and says it with the retry guidance attached. */
+async function serverLockPortWaiting() {
+  const deadline = Date.now() + LOCK_RETRY_MS
+  for (;;) {
+    try {
+      return serverLockPort()
+    } catch (err) {
+      if (Date.now() >= deadline) throw err
+      await new Promise((r) => setTimeout(r, LOCK_RETRY_INTERVAL_MS))
+    }
+  }
+}
+
 async function callRpc(procedure, body) {
-  const port = serverLockPort()
+  const port = await serverLockPortWaiting()
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), DISPATCH_TIMEOUT_MS)
   let res
