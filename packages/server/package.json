@@ -14,6 +14,7 @@
     "./project-launch": "./src/project-launch.ts",
     "./local-origin": "./src/local-origin.ts",
     "./qr": "./src/qr.ts",
+    "./restart-supervisor": "./src/restart-supervisor.ts",
     "./dev-supervisor": "./src/dev-supervisor.ts",
     "./dev-child": "./src/dev-child.ts",
     "./boot-progress": "./src/boot-progress.ts",

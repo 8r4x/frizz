@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { bindHostIsExposed } from "@frizz/server/local-origin";
 import { renderQrLines } from "@frizz/server/qr";
+import { SUPERVISOR_ACCESS_CODE_PATH } from "@frizz/server/restart-supervisor";
 import { installAccessPane, type AccessPane } from "./access-pane.ts";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -851,6 +852,31 @@ async function stopWorkspace(): Promise<void> {
 try {
   if (options.stop) {
     await stopWorkspace();
+    process.exit(0);
+  }
+
+  if (options.link) {
+    // Mint from the RUNNING board rather than starting one. This is the answer for a board running
+    // detached or in someone else's terminal, where the interactive QR pane cannot install — without
+    // it, "I need another code" means restarting the server, which is absurd.
+    const running = liveWorkspaceOwner(workspace.stateDir, launchTarget);
+    if (!running?.port) {
+      console.error("frizz: no board is running for this workspace");
+      process.exit(1);
+    }
+    const response = await fetch(`http://127.0.0.1:${running.port}${SUPERVISOR_ACCESS_CODE_PATH}`, {
+      method: "POST",
+      headers: { origin: `http://127.0.0.1:${running.port}` },
+    }).catch(() => undefined);
+    if (!response?.ok) {
+      const detail = response ? (await response.json().catch(() => undefined))?.error : undefined;
+      console.error(`frizz: ${detail ?? "could not mint an access link"}`);
+      process.exit(1);
+    }
+    const { url } = (await response.json()) as { url: string };
+    // The QR first: the whole point of a link is to reach a phone, and nobody types forty characters.
+    if (process.stdout.isTTY) for (const row of renderQrLines(url)) console.log(`  ${row}`);
+    console.log(process.stdout.isTTY ? `\n  ${url}` : url);
     process.exit(0);
   }
 

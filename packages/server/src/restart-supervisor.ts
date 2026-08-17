@@ -22,6 +22,7 @@ export const SUPERVISOR_CONTROL_PREFIX = "/_frizz/control"
 export const SUPERVISOR_RESTART_PATH = `${SUPERVISOR_CONTROL_PREFIX}/restart`
 export const SUPERVISOR_UPDATE_RESTART_PATH = `${SUPERVISOR_CONTROL_PREFIX}/update-restart`
 export const SUPERVISOR_STATUS_PATH = `${SUPERVISOR_CONTROL_PREFIX}/status`
+export const SUPERVISOR_ACCESS_CODE_PATH = `${SUPERVISOR_CONTROL_PREFIX}/access-code`
 export const SUPERVISOR_CONTROL_PROTOCOL = 1
 
 export type RestartControlState = "ready" | "restarting" | "failed"
@@ -150,7 +151,10 @@ function unauthorizedPage(reason?: "unknown" | "expired" | "already-used"): stri
 
 function isControlRequest(req: IncomingMessage): boolean {
   const url = new URL(req.url ?? "/", "http://frizz.invalid")
-  return url.pathname === SUPERVISOR_RESTART_PATH || url.pathname === SUPERVISOR_UPDATE_RESTART_PATH || url.pathname === SUPERVISOR_STATUS_PATH
+  return url.pathname === SUPERVISOR_RESTART_PATH
+    || url.pathname === SUPERVISOR_UPDATE_RESTART_PATH
+    || url.pathname === SUPERVISOR_STATUS_PATH
+    || url.pathname === SUPERVISOR_ACCESS_CODE_PATH
 }
 
 // `/_frizz/local-image` AND `/_frizz/<project>/local-image` — the client builds it from `apiBase()`,
@@ -347,6 +351,29 @@ export class RestartSupervisorProxy {
     if (!this.authorityAccepted(req, allowMissingOrigin)) {
       res.writeHead(403)
       res.end("Forbidden")
+      return
+    }
+    if (pathname === SUPERVISOR_ACCESS_CODE_PATH) {
+      // LOOPBACK ONLY, deliberately. Minting is how you let a NEW device in, so it must require
+      // presence on the machine — not merely a session, which anyone already through the tunnel has.
+      // Otherwise one shared link silently becomes the power to hand out unlimited further links.
+      if (this.arrivedPublicly(req)) {
+        res.writeHead(403)
+        res.end("Forbidden")
+        return
+      }
+      if (req.method !== "POST") {
+        res.writeHead(405, { allow: "POST" })
+        res.end()
+        return
+      }
+      const link = this.issueAccessCode()
+      const url = link && this.accessUrl(link.code)
+      if (!link || !url) {
+        responseJson(res, 409, { error: "this board has no public origin, so there is nothing to link to" })
+        return
+      }
+      responseJson(res, 200, { url, expiresAt: link.expiresAt })
       return
     }
     if (pathname === SUPERVISOR_STATUS_PATH && req.method === "GET") {

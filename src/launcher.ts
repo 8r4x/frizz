@@ -78,6 +78,8 @@ export interface CliOptions {
   allowedHosts: string[];
   /** `--public-origin`: the serialized origin of a reverse proxy or tunnel fronting this board. */
   publicOrigin?: string;
+  /** `--link`: ask the ALREADY-RUNNING board for a fresh single-use access link, then exit. */
+  link: boolean;
   /** Optional Git repository to serve. Defaults to the caller's current directory. */
   repoPath?: string;
 }
@@ -237,6 +239,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     "--detach",
     "--stop",
     "--status",
+    "--link",
     "--help",
     "-h",
     "--dev",
@@ -268,6 +271,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     // Retain the option in the parsed shape for callers, but normal frizz-dev is always attached.
     foreground: true,
     stop: args.has("--stop"),
+    link: args.has("--link"),
     status: args.has("--status"),
     help: args.has("--help") || args.has("-h"),
     dev: args.has("--dev"),

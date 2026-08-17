@@ -11,6 +11,7 @@ import {
   SUPERVISOR_RESTART_PATH,
   SUPERVISOR_UPDATE_RESTART_PATH,
   SUPERVISOR_STATUS_PATH,
+  SUPERVISOR_ACCESS_CODE_PATH,
   type RestartResult,
 } from "./restart-supervisor.ts"
 
@@ -717,6 +718,65 @@ test("an access code is spent once over HTTP: it mints a session, then stops wor
 
     // Loopback remains completely ungated.
     assert.equal((await proxied(port, "/", { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}` })).status, 200)
+  } finally {
+    await proxy.close().catch(() => undefined)
+    await current.close().catch(() => undefined)
+  }
+})
+
+test("--link mints from loopback only: a tunnelled session cannot hand out further links", async () => {
+  // The escalation this prevents: minting is how a NEW device gets in, so anyone who could mint from
+  // the tunnel could turn one shared link into unlimited further links for people who were never let
+  // in. Presence on the machine is the requirement, and a session is not presence.
+  const current = await child("only")
+  const port = await freePort()
+  const proxy = new RestartSupervisorProxy({
+    port,
+    publicOrigin: "https://colin.frizz.sh",
+    childPort: () => current.port,
+    restart: async () => ({ state: "ready" }),
+  })
+  try {
+    await proxy.listen()
+    const loopback = { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}` }
+
+    const minted = await proxied(port, SUPERVISOR_ACCESS_CODE_PATH, loopback, "POST")
+    assert.equal(minted.status, 200)
+    const { url } = JSON.parse(minted.body) as { url: string }
+    assert.match(url, /^https:\/\/colin\.frizz\.sh\/\?frizz_code=/)
+
+    // And the link it hands back actually works, which is the only thing that makes --link useful.
+    const code = new URL(url).searchParams.get("frizz_code")!
+    const redeemed = await proxied(port, `/?frizz_code=${code}`, { host: "colin.frizz.sh", origin: "https://colin.frizz.sh" })
+    assert.equal(redeemed.status, 302)
+
+    // From the tunnel: refused outright, session or no session.
+    const publicHeaders = { host: "colin.frizz.sh", origin: "https://colin.frizz.sh" }
+    const session = /frizz_session=([^;]+)/.exec(String(redeemed.headers?.["set-cookie"]))![1]!
+    assert.equal((await proxied(port, SUPERVISOR_ACCESS_CODE_PATH, publicHeaders, "POST")).status, 403)
+    assert.equal(
+      (await proxied(port, SUPERVISOR_ACCESS_CODE_PATH, { ...publicHeaders, cookie: `frizz_session=${session}` }, "POST")).status,
+      403,
+      "even a VALID session may not mint",
+    )
+
+    // GET is not a minting verb; minting has a side effect.
+    assert.equal((await proxied(port, SUPERVISOR_ACCESS_CODE_PATH, loopback)).status, 405)
+  } finally {
+    await proxy.close().catch(() => undefined)
+    await current.close().catch(() => undefined)
+  }
+})
+
+test("--link on a board with no public origin says so instead of minting a useless code", async () => {
+  const current = await child("only")
+  const port = await freePort()
+  const proxy = new RestartSupervisorProxy({ port, childPort: () => current.port, restart: async () => ({ state: "ready" }) })
+  try {
+    await proxy.listen()
+    const res = await proxied(port, SUPERVISOR_ACCESS_CODE_PATH, { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}` }, "POST")
+    assert.equal(res.status, 409)
+    assert.match(res.body, /no public origin/)
   } finally {
     await proxy.close().catch(() => undefined)
     await current.close().catch(() => undefined)

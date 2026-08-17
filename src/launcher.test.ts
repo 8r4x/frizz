@@ -417,6 +417,7 @@ test("CLI options default to immutable mode and make source/HMR explicit", () =>
     debug: false,
     port: undefined,
     host: undefined,
+    link: false,
     allowedHosts: [],
     repoPath: undefined,
   });
@@ -431,6 +432,7 @@ test("CLI options default to immutable mode and make source/HMR explicit", () =>
     debug: false,
     port: 5123,
     host: undefined,
+    link: false,
     allowedHosts: [],
     repoPath: undefined,
   });
