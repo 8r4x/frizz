@@ -781,6 +781,10 @@ const PR_WATCH_POLL_MS = 60_000
 const SIGNOFF_FENCE_PREFIX = "signoff"
 const SIGNOFF_HINT_KEY = "signoff:rest"
 const SIGNOFF_NUDGE_MAX = 2
+/** SOURCE 12's cap on CORRECTIVE bumps (nameless / retired / dead). Three, not two: there are three
+ *  distinct corrections and a worker may legitimately need to be told about more than one. `expired` is
+ *  uncounted — re-parking on still-running work is unlimited by explicit decision (2026-08-15). */
+const PARK_BUMP_MAX = 3
 /** The kill switch. Not in the UI — this lands on every live thread at once, so there has to be a way
  *  to stop it that is not a code change. Absent (the default) means ON. */
 const SIGNOFF_NUDGE_SETTING = "signoffNudge"
@@ -1946,6 +1950,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     deps.storage.countSignoffNudge(item.slug, item.fenceId)
   }
 
+
   // ---- SOURCE 12: A PARK THAT RAN OUT, OR THAT NAMED SOMETHING DEAD -------------------------------
   //
   // The two ways an ```awaiting fence stops being true, and neither may pass silently — that is the whole
@@ -1991,6 +1996,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // that could have registered a PR watcher and been told the moment CI settled, waiting on nothing
       // for a day instead.
       const nameless = park.items.length === 0
+      // HONOURED ⇒ the corrective allowance comes back. A park frizz can actually honour is the one
+      // event that proves a correction landed, and — unlike any activity signal — not one frizz can
+      // cause by correcting. Guarded on a non-zero count so this is a transition, not a write on every
+      // tick, exactly as the sign-off nudge's reset is. It deliberately does NOT `continue`: an honoured
+      // park can still have run out, and that bump is owed.
+      if (parkIsHonoured(park, live) && (row.park_bumps ?? 0) > 0) deps.storage.resetParkBumps(row.slug)
       if (dead.length === 0 && !expired && !nameless) continue
       // No `for:` at all is a MALFORMED fence rather than a wrong one, and the sign-off nudge teaches the
       // whole grammar in one message — a better teacher than a correction aimed at one line.
@@ -2058,9 +2069,20 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           "left to wait for.",
         ].join("\n")
 
+      const cause = retired.length > 0 ? "retired" : nameless ? "nameless" : expired ? "expired" : "dead"
+      // THE CONSECUTIVE CAP, and the reason SOURCE 12 needed one. A correction is only worth sending to a
+      // worker that can act on it, and a worker whose contract froze before this grammar existed cannot:
+      // no fence it knows how to write will pass the check. Uncapped, that is a closed loop — bump, wake,
+      // rest on the same bad fence under a new instant, bump — and it ran on the live board for 4h45m at
+      // 617 bumps to a single thread, one every ~28 seconds, before anyone counted them (2026-08-17).
+      //
+      // `expired` is exempt because it is not a correction: the fence was right, the clock ran out, and
+      // re-parking on still-running work is unlimited by explicit decision (maintainer 2026-08-15, "a
+      // three-hour build under a one-hour estimate is a bad estimate, not a failure").
+      if (cause !== "expired" && (row.park_bumps ?? 0) >= PARK_BUMP_MAX) continue
       // Keyed on the REST plus which failure it is, so one fence gets one bump per cause: a park that is
       // bumped for a dead id and later expires is two different pieces of news.
-      const fenceId = `park:${retired.length > 0 ? "retired" : nameless ? "nameless" : expired ? "expired" : "dead"}:${spokeAt}`
+      const fenceId = `park:${cause}:${spokeAt}`
       const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
       if (outbox.get(deliveryId)) continue
       const item = outbox.enqueue({
@@ -2072,6 +2094,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         message,
         reason: retired.length > 0 ? `awaiting fence uses retired kind(s): ${retired.join(", ")}` : nameless ? "awaiting park names nothing" : expired ? "awaiting park expired" : `awaiting park named ${dead.length} dead item(s)`,
       }, nowMs).delivery
+      // COUNTED AT ENQUEUE, not at delivery — the one place the sign-off nudge's idiom does not transfer.
+      // A nudge counts when it lands because it fires on a rest the thread is dispatchable for; a
+      // correction is enqueued whenever a bad fence is seen, and that can outrun the delivery loop. Pinned
+      // by the loop test: settling on delivery left the cap unreached and 12 unlearning rests drew 12
+      // bumps, which is the runaway this exists to stop.
+      if (cause !== "expired") deps.storage.countParkBump(row.slug, fenceId)
       log(`waker: queued ${row.slug} — ${item.reason}`)
       checkpoint("after-enqueue", item)
     }

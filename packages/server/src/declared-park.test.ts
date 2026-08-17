@@ -308,6 +308,77 @@ test("a fence using a RETIRED kind is bumped by name, with what replaced it", as
   } finally { h.close() }
 })
 
+// THE CORRECTION IS CAPPED, because a correction only helps a worker that can act on it.
+//
+// Every test above ticks against ONE rest, where the delivery id alone bounds the bump. The loop lives in
+// the shape they cannot express: the worker WAKES, cannot write a fence this grammar accepts — its
+// contract froze before the grammar existed — and rests again under a NEW instant, which is a new
+// delivery id and so a new bump. Closed loop, no dedupe reached.
+//
+// Measured on the live board 2026-08-17: `investigate-nubjs-nub-656` had taken 617 corrective bumps in
+// 4h45m, one every ~28 seconds, and two more threads were doing the same. Every other parked thread on
+// that board had taken exactly one.
+function loopHarness(body: string) {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-parkloop-"))
+  const storage = createStorage(join(dir, "ui.db"))
+  storage.setSetting("signoffNudge", "off")
+  const slug = "looping"
+  storage.upsertSession({
+    slug, session_id: "sid", tmux_name: `frizz-${slug}`, spawned_at: "2026-08-17T11:00:00.000Z",
+    last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: new Date().toISOString(),
+    title_auto: 0, title: null, state: "open", meta: null, seen_at: null, plan_path: null,
+    transcript_id: null,
+  } as SessionRow)
+  // The worker's own last word, advanced by `restAgain()` to model a wake that changes nothing.
+  let restedAt = new Date(Date.now() - 60_000).toISOString()
+  const s = createScheduler({
+    storage,
+    tailer: {
+      get: () => ({
+        turn: "idle", lastAssistantAt: restedAt, lastActivityAt: restedAt,
+        subAgents: [], bgShells: [], pendingQuestion: false, permPrompt: false,
+        lastFence: { kind: "awaiting", body, hints: [] },
+      }),
+    } as never,
+    resume: async () => {},
+    log: () => {},
+  })
+  return {
+    s, storage,
+    restAgain: () => { restedAt = new Date(Date.parse(restedAt) + 30_000).toISOString() },
+    bumps: () => (storage.db.prepare("SELECT COUNT(*) n FROM wake_delivery WHERE thread_slug = ?").get(slug) as { n: number }).n,
+    close: () => { void s.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) },
+  }
+}
+
+test("a worker that cannot act on the correction is corrected a few times, then left alone", async () => {
+  const h = loopHarness("pr-watch: a/b#1")
+  try {
+    // Twelve rests it never learns from. Uncapped this is twelve bumps — and in production it was 617.
+    for (let i = 0; i < 12; i++) {
+      await h.s.tick()
+      h.restAgain()
+    }
+    const n = h.bumps()
+    assert.ok(n > 0, "it is still told — a silent refusal is the bug this source exists to fix")
+    assert.ok(n <= 3, `the correction is bounded, got ${n} bumps from 12 unlearning rests`)
+  } finally { h.close() }
+})
+
+// …and the allowance comes BACK, so the cap cannot silently retire the check on a long-lived thread that
+// makes one mistake early and another one hours later.
+test("an honoured park gives the corrective allowance back", async () => {
+  const h = loopHarness("pr-watch: a/b#1")
+  try {
+    for (let i = 0; i < 6; i++) { await h.s.tick(); h.restAgain() }
+    const spent = h.bumps()
+    assert.ok(spent > 0 && spent <= 3, "capped first")
+    h.storage.resetParkBumps("looping") // what an honoured park does, exercised directly
+    for (let i = 0; i < 6; i++) { await h.s.tick(); h.restAgain() }
+    assert.ok(h.bumps() > spent, "a thread that came right is corrected again when it errs again")
+  } finally { h.close() }
+})
+
 test("every retired kind is recognized, and a repeat teaches once", async () => {
   const h = parkHarness([], { body: "watch: b1\nhuman: Alice\nci: build 9\nsession: s1\npr-watch: a/b#1\npr-watch: a/b#2" })
   try {

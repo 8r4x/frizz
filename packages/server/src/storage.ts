@@ -101,6 +101,14 @@ export interface SessionRow {
   // only). See the ALTER list for what clears the count.
   signoff_nudges?: number
   signoff_nudge_anchor?: string | null
+  // SOURCE 12's CORRECTIVE bumps (a fence naming nothing, a retired kind, a dead id), capped the same
+  // way and for the same reason: a correction a worker cannot act on repeats forever. Measured
+  // 2026-08-17 on the live board — one thread had taken 617 of them in 4h45m, one every ~28s, because
+  // its contract was frozen before this grammar existed and no fence it could write would satisfy the
+  // check. The `expired` cause is NOT counted here; re-parking on still-running work is unlimited by
+  // explicit decision (maintainer 2026-08-15).
+  park_bumps?: number
+  park_bump_anchor?: string | null
   // The ON SCHEDULE trigger's cadence. Kept even while that trigger is off, so switching it back on
   // does not lose the interval the operator chose.
   recurring_interval_ms?: number | null
@@ -559,6 +567,10 @@ export interface Storage {
   // Give the allowance back. Called when the thread SIGNS OFF — the only event that proves the nudge
   // worked, and the only one frizz cannot cause by nudging.
   resetSignoffNudges(slug: string): void
+  // The same pair for SOURCE 12's corrective bumps. Counted on delivery; the allowance comes back only
+  // when the thread rests on a park frizz can actually honour.
+  countParkBump(slug: string, anchor: string | null): void
+  resetParkBumps(slug: string): void
   // Stamp a delivered ON REST prompt, guarded on the generation so one settling after an edit cannot
   // write onto words it no longer describes.
   stampRecurringRestFired(slug: string, armedAt: string, firedAt: string): boolean
@@ -926,6 +938,10 @@ export function createStorage(dbPath: string): Storage {
     // last-nudged delivery id, for diagnosis.
     "signoff_nudges INTEGER NOT NULL DEFAULT 0",
     "signoff_nudge_anchor TEXT",
+    // Cleared by `resetParkBumps` when a park is actually HONOURED — the one event that proves the
+    // correction landed, and the one frizz cannot cause by correcting.
+    "park_bumps INTEGER NOT NULL DEFAULT 0",
+    "park_bump_anchor TEXT",
     // Title provenance for the CURRENT text (2026-08-07): 1 = the worker's own title signal wrote it,
     // 0 = the dispatch seeded it. DEFAULT 0 is the conservative direction — an existing row is assumed
     // to hold its dispatch chop until the repair below (or the next title signal) says otherwise.
@@ -1534,6 +1550,14 @@ export function createStorage(dbPath: string): Storage {
   const resetNudgesStmt = db.prepare(`
     UPDATE session SET signoff_nudges = 0, signoff_nudge_anchor = NULL
     WHERE slug = ? AND signoff_nudges > 0
+  `)
+  const countParkBumpStmt = db.prepare(`
+    UPDATE session SET park_bumps = park_bumps + 1, park_bump_anchor = ?
+    WHERE slug = ?
+  `)
+  const resetParkBumpsStmt = db.prepare(`
+    UPDATE session SET park_bumps = 0, park_bump_anchor = NULL
+    WHERE slug = ? AND park_bumps > 0
   `)
   const armPrWatchStmt = db.prepare(`
     INSERT INTO pr_watch (id, thread_slug, owner, repo, number, state, created_at, settled_at, cursor, expires_at)
@@ -2196,6 +2220,8 @@ export function createStorage(dbPath: string): Storage {
       recurringBySlugStmt.run(...recurringArgs(write), slug).changes === 1,
     countSignoffNudge: (slug, anchor) => void countNudgeStmt.run(anchor, slug),
     resetSignoffNudges: (slug) => void resetNudgesStmt.run(slug),
+    countParkBump: (slug, anchor) => void countParkBumpStmt.run(anchor, slug),
+    resetParkBumps: (slug) => void resetParkBumpsStmt.run(slug),
     armPrWatch: (watch) => void armPrWatchStmt.run(watch),
     listPrWatches: (slug, opts) =>
       (opts?.armedOnly ? armedPrWatchesBySlugStmt : prWatchesBySlugStmt).all(slug),
