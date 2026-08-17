@@ -179,20 +179,6 @@ const RECURRING_PROMPT = {
           "summarized, and make the prompt LINK the doc you are keeping in your scratch directory — that " +
           "link arriving in the emptied window is what lets you pick the work back up.",
       },
-      pause_on_questions: {
-        type: "boolean",
-        description:
-          "Send NOTHING — on any trigger — for as long as you are waiting on the human: an unanswered " +
-          "```question fence, a native ask, or a permission prompt. DEFAULTS TO TRUE, matching the " +
-          "thread footer, because being told \"keep going\" while you are holding a question up is the " +
-          "one delivery that can only make things worse. Pass false only if you genuinely want a beat " +
-          "to reach you mid-question. Passing false is what the thread footer calls AUTONOMOUS MODE, and " +
-          "it does one more thing: the at-rest trigger fires OVER your own unanswered ```question — the " +
-          "delivery says so, and you are expected to decide the question yourself rather than re-ask it. " +
-          "It does NOT touch frizz's built-in sign-off reminder, which reaches every thread in either " +
-          "mode. (A ```done fence and an ```awaiting on a wait frizz itself will deliver still stop the " +
-          "at-rest trigger in either mode.)",
-      },
     },
     required: ["action"],
   },
@@ -626,7 +612,7 @@ function cadenceLabel(seconds) {
  * each last fired, and the text VERBATIM (never truncated — reading back a summary of your own
  * instruction is exactly as blind as not reading it).
  * @param {{ prompt: string, stopHook: boolean, heartbeat: boolean, postCompaction: boolean,
- *           pauseOnQuestions?: boolean, intervalSeconds?: number, armedAt: string, lastRestFiredAt?: string,
+ *           intervalSeconds?: number, armedAt: string, lastRestFiredAt?: string,
  *           lastScheduleFiredAt?: string, lastCompactFiredAt?: string }} rp */
 function recurringPromptReport(rp) {
   const fired = (/** @type {string|undefined} */ at) => (at ? `last fired ${at}` : "never fired yet")
@@ -644,13 +630,7 @@ function recurringPromptReport(rp) {
   const head = triggers.length
     ? `Armed since ${rp.armedAt}, on:\n${triggers.join("\n")}`
     : `Text is parked (armed ${rp.armedAt}) but EVERY TRIGGER IS OFF — nothing will fire until one is switched back on.`
-  // Reported only when ON, and after the triggers: it is a HOLD over the list above rather than an item
-  // in it, so a worker reading this must already know what would fire before it is told what suspends it.
-  const hold = rp.pauseOnQuestions
-    ? "\n\nHELD while you are waiting on the human — nothing is sent for as long as a question fence, a " +
-      "native ask or a permission prompt is unanswered."
-    : ""
-  return `${head}${hold}\n\nThe text, verbatim:\n\n${rp.prompt}`
+  return `${head}\n\nThe text, verbatim:\n\n${rp.prompt}`
 }
 
 /** The `recurring_prompt` handler: arm, disarm, or READ BACK this thread's re-prompt.
@@ -685,7 +665,7 @@ async function recurringPrompt(args) {
   }
 
   if (action === "stop") {
-    await callRpc("setOwnThreadRecurringPrompt", { slug, prompt: null, stopHook: false, heartbeat: false, postCompaction: false, pauseOnQuestions: false })
+    await callRpc("setOwnThreadRecurringPrompt", { slug, prompt: null, stopHook: false, heartbeat: false, postCompaction: false })
     return "Recurring prompt disarmed and cleared. No trigger will fire — not the stop hook, not the heartbeat, not the post-compaction one — and the text is gone from the thread footer."
   }
 
@@ -704,9 +684,6 @@ async function recurringPrompt(args) {
     }
   }
   const postCompaction = args.post_compaction === true
-  // ON unless the caller says otherwise — the same default the footer panel seeds, so a worker-armed row
-  // and a human-armed one read identically in the panel. An older frizz server ignores the field.
-  const pauseOnQuestions = typeof args.pause_on_questions === "boolean" ? args.pause_on_questions : true
   // DEFAULTED, not required: a `start` that names no trigger at all is a model asking to be re-prompted
   // and leaving the mechanism to us, and the rest trigger is the safe reading of that — it cannot talk
   // over a running turn, and it cannot fire on a thread that has stopped needing it.
@@ -722,7 +699,6 @@ async function recurringPrompt(args) {
     stopHook,
     heartbeat,
     postCompaction,
-    pauseOnQuestions,
     ...(heartbeat ? { intervalSeconds: interval } : {}),
   })
   // `replaced` is absent against a server that predates it, which is indistinguishable from "there was
@@ -747,12 +723,12 @@ async function recurringPrompt(args) {
     ? `\n\nIT REPLACED an existing recurring prompt — check that discarding it was intended, and restore ` +
       `it with another \`start\` if it was not:\n\n${recurringPromptReport(replaced)}\n`
     : ""
-  const held = pauseOnQuestions
-    ? " Nothing is sent while you are waiting on the human — a question fence, a native ask or a " +
-      "permission prompt holds every trigger."
-    : ""
+  // NO QUESTION HOLD ANY MORE (2026-08-16). Every trigger fires while you are waiting on the human, and
+  // the at-rest one fires over your own unanswered ```question fence — the delivery says so, and expects
+  // you to decide the question yourself rather than re-ask it. A ```done fence, and an ```awaiting on a
+  // wait frizz itself will deliver, still stop the at-rest trigger.
   return (
-    `Recurring prompt armed — frizz will send you this ${when}.${held}${superseded}\n\n` +
+    `Recurring prompt armed — frizz will send you this ${when}.${superseded}\n\n` +
     "Call this tool again with `action: \"stop\"` once the work it drives is finished — one left armed on " +
     "a finished thread wakes it forever. The human can also edit or switch it off in the thread footer. " +
     "Signing off with a ```done fence stops it too, but only when there is genuinely nothing left: it " +

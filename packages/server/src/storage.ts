@@ -97,11 +97,6 @@ export interface SessionRow {
   // window is summarized away. It replaced a hook that spliced a canonical scratchpad's head into the
   // context — the durable row is visible and editable in the thread footer, where a hook was neither.
   recurring_on_compact?: number
-  // THE QUESTION HOLD (2026-08-11) — not a fourth trigger, a hold over all three. 1 = send nothing while
-  // the thread is blocked on the human (an unanswered ```question fence, a native ask, a permission
-  // prompt). It is stored beside the triggers rather than derived because it is an operator PREFERENCE
-  // about this thread, and the scheduler must be able to read it without the panel being open.
-  recurring_pause_on_questions?: number
   // The built-in sign-off nudge's consecutive counter, and the last delivery id it counted (diagnosis
   // only). See the ALTER list for what clears the count.
   signoff_nudges?: number
@@ -243,7 +238,6 @@ export interface RecurringWrite {
   stopHook: boolean // scheduler SOURCE 5 — on every rest
   heartbeat: boolean // scheduler SOURCE 4 — every intervalMs on a clock
   postCompaction: boolean // scheduler SOURCE 7 — on every context compaction
-  pauseOnQuestions: boolean // a HOLD over all three while the thread is blocked on the human
   intervalMs: number | null
   armedAt: string
 }
@@ -921,10 +915,11 @@ export function createStorage(dbPath: string): Storage {
     // which is the correct default: an existing prompt described the triggers its operator chose.
     "recurring_on_compact INTEGER NOT NULL DEFAULT 0",
     "recurring_compact_fired_at TEXT",
-    // The question hold (2026-08-11). Its own ALTER for the same reason as the trigger above: an existing
-    // armed row picks it up OFF on the next boot, which is the honest reading of a row whose operator has
-    // never been shown the option.
-    "recurring_pause_on_questions INTEGER NOT NULL DEFAULT 0",
+    // NO `recurring_pause_on_questions` HERE ANY MORE. It held every trigger while the thread was waiting
+    // on the human and the footer showed it inverted as "Autonomous mode"; both were deleted 2026-08-16
+    // (see scheduler.ts, "WHAT A PENDING QUESTION DOES TO THE THREE TRIGGERS"). A database created before
+    // that release still carries the column — it is `NOT NULL DEFAULT 0`, so nothing needs to write it,
+    // and dropping it would cost a table rebuild to reclaim one inert integer per row.
     // THE BUILT-IN SIGN-OFF NUDGE (scheduler SOURCE 9, 2026-08-12). How many times in a row frizz has
     // told this thread how to sign off without a fence appearing. Cleared ONLY when the thread signs
     // off — never by a user record, because frizz's own delivery is one. The second column holds the
@@ -1456,10 +1451,6 @@ export function createStorage(dbPath: string): Storage {
       recurring_on_rest = ?,
       recurring_on_schedule = ?,
       recurring_on_compact = ?,
-      -- The hold is deliberately absent from every CASE below it: it changes neither the WORDS nor the
-      -- cadence, so a delivery already queued still describes this row exactly. Flipping it must not
-      -- mint a generation or drop a "last sent" stamp.
-      recurring_pause_on_questions = ?,
       recurring_armed_at = CASE
         WHEN ? IS NULL THEN NULL
         WHEN recurring_armed_at IS NOT NULL AND recurring_prompt IS ? AND recurring_interval_ms IS ? THEN recurring_armed_at
@@ -1476,9 +1467,9 @@ export function createStorage(dbPath: string): Storage {
         WHEN ? IS NULL THEN NULL
         WHEN recurring_armed_at IS NOT NULL AND recurring_prompt IS ? THEN recurring_compact_fired_at
         ELSE NULL END`
-  // The 18 bound values RECURRING_SET consumes, in order. Factored out for the same reason the SET list
+  // The 17 bound values RECURRING_SET consumes, in order. Factored out for the same reason the SET list
   // is: writing this argument list twice is how the two paths silently diverge.
-  const recurringArgs = ({ prompt, stopHook, heartbeat, postCompaction, pauseOnQuestions, intervalMs, armedAt }: RecurringWrite) => {
+  const recurringArgs = ({ prompt, stopHook, heartbeat, postCompaction, intervalMs, armedAt }: RecurringWrite) => {
     // A cleared row keeps nothing: no cadence, and every trigger off. No trigger can be left on over a
     // null prompt, or the scheduler would hold an armed row with nothing to say.
     const ms = prompt === null ? null : intervalMs
@@ -1489,7 +1480,6 @@ export function createStorage(dbPath: string): Storage {
       flag(stopHook),
       flag(heartbeat),
       flag(postCompaction),
-      flag(pauseOnQuestions),
       prompt, prompt, ms, armedAt,
       prompt, prompt,
       prompt, prompt, ms,

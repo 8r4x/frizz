@@ -37,11 +37,14 @@ test("a cadence the field can only round is left exactly as stored", () => {
 })
 
 // ---- The pre-filled default -----------------------------------------------------------------------
-// The panel opens on the standard sentence with the stop hook on, and — there being no Save button —
-// the dismissal that follows WRITES it. That is the whole point: accepting the default costs one click
-// out. It also means the seed has to be withheld wherever the write would be refused, or looking at a
-// panel becomes an error toast. All three branches are driven in a real browser too; these pin them
-// where a boot is not worth the cycle.
+// The panel opens on the standard sentence with EVERY TRIGGER OFF, so accepting it costs one switch and
+// merely reading it costs nothing: an untouched open matches what `sent` was seeded with and the
+// dismissal writes nothing at all (maintainer 2026-08-16 — "it should not automatically arm anything").
+// It used to seed the stop hook on as well, which made simply opening the panel arm the thread.
+//
+// The seed is still withheld on an ARCHIVED thread, and that branch outlived the change: the operator can
+// still EDIT the text there, and the write that edit triggers is the one the server refuses. All three
+// branches are driven in a real browser too; these pin them where a boot is not worth the cycle.
 const view = (over: Partial<ThreadView>) => ({ archived: false, ...over }) as ThreadView
 
 test("an unarmed, open thread opens pre-filled", () => {
@@ -55,6 +58,6 @@ test("an ARMED thread shows its own words, never the default", () => {
   assert.equal(seedsDefaults(view({}), { ...armed, stopHook: false } as ThreadView["recurringPrompt"]), false)
 })
 
-test("an ARCHIVED thread opens empty — the server would refuse the write the dismissal makes", () => {
+test("an ARCHIVED thread opens empty — the server would refuse the write an edit makes", () => {
   assert.equal(seedsDefaults(view({ archived: true }), undefined), false)
 })

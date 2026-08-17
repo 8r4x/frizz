@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import {
   RECURRING_PROMPT_MAX,
-  DEFAULT_GOAL_TRIGGERS,
   DEFAULT_RECURRING_PROMPT,
   type ThreadView,
 } from "@frizz/shared"
@@ -271,9 +270,6 @@ interface Draft {
   stopHook: boolean
   heartbeat: boolean
   postCompaction: boolean
-  /** The HOLD, not a fourth trigger: while it is on, none of the three is sent for as long as the thread
-   *  is waiting on the human. */
-  pauseOnQuestions: boolean
   seconds: number
 }
 
@@ -314,17 +310,24 @@ function draftAsSent(d: Draft) {
     stopHook: d.stopHook,
     heartbeat: d.heartbeat,
     postCompaction: d.postCompaction,
-    pauseOnQuestions: d.pauseOnQuestions,
     seconds: d.seconds,
   }
 }
 
-/** Does this panel open PRE-FILLED — the standard sentence, stop hook on — rather than empty?
+/** Does this panel open PRE-FILLED with the standard sentence rather than empty?
  *
  *  Only for a thread that has nothing armed, because an armed row's own words are the thing to show.
  *  And never for an ARCHIVED one: the server refuses to arm a shelved thread (router
- *  `assertRecurringPromptArmable`), and since there is no Save button the seeded draft would be written
- *  by the dismissal — so merely LOOKING at a shelved thread's panel would end in an error toast.
+ *  `assertRecurringPromptArmable`), so a dismissal that wrote the seed would end in an error toast on a
+ *  panel the operator only LOOKED at.
+ *
+ *  IT SEEDS THE TEXT AND NOTHING ELSE (2026-08-16). It used to switch the stop hook on with it, so the
+ *  dismissal that followed armed the thread — merely opening the panel to read it was enough. Maintainer:
+ *  "When you first click the archery target icon, it should not automatically arm anything. It could show
+ *  you the default stop hook prompt". So the sentence is a PREFILL now: it is there to be accepted with
+ *  one switch instead of typed, it renders muted until a trigger is on (nothing is being sent yet), and
+ *  an untouched open writes nothing at all — see `sent` in PromptPanel, which is seeded from this same
+ *  text so "nothing changed" is true of a panel nobody touched.
  *
  *  Extracted and exported so the test beside this file can pin all three branches cheaply. Both are
  *  ALSO driven in a real browser — an archived thread's panel opens empty and its dismissal writes
@@ -364,29 +367,29 @@ function PromptPanel({ thread, armed }: {
   // the panel reads from it — and writes are serialised through `queue` below, so a second click while
   // one is in flight simply queues behind it and the last draft wins. The only thing the flag added was
   // the flash.
-  // WHAT AN UNARMED PANEL OPENS WITH, and it is a real default rather than an empty form: the standard
-  // text, with the stop hook on. The reason an operator opens this control is almost always the same
-  // one, and there is no Save button to press — so accepting the default costs exactly one dismissal, and
-  // typing over it costs what typing always cost (maintainer 2026-08-11: "default recurring prompt should
-  // be …", "make Stop Hook checked by default").
+  // WHAT AN UNARMED PANEL OPENS WITH: the standard text, and EVERY TRIGGER OFF. The reason an operator
+  // opens this control is almost always the same one, so the panel writes that sentence for them — but
+  // writing it is all it does. Switching a trigger on is the operator's, and until they do the panel has
+  // armed nothing and written nothing (maintainer 2026-08-16 — see `seedsDefaults`).
   //
   // NOT on an archived thread — see `seedsDefaults`, which carries the reason and the test.
   const seedDefaults = seedsDefaults(thread, armed)
+  const seededText = seedDefaults ? DEFAULT_RECURRING_PROMPT : ""
   // The panel's own draft. Seeded when this MOUNTS (the popover unmounts its content on close, so that is
   // once per open) rather than tracked live, so a board refresh mid-sentence cannot rewrite what the
   // operator is typing or dictating. From the server row — unless the last dismissal of THIS thread's
   // panel failed to save, in which case that draft is what they were last looking at and the row is not.
   const carried = rescued?.slug === thread.id ? rescued.draft : null
-  const [text, setText] = useState(carried?.text ?? armed?.prompt ?? (seedDefaults ? DEFAULT_RECURRING_PROMPT : ""))
-  const [stopHook, setStopHook] = useState(carried?.stopHook ?? armed?.stopHook ?? (seedDefaults && DEFAULT_GOAL_TRIGGERS.stopHook))
+  const [text, setText] = useState(carried?.text ?? armed?.prompt ?? seededText)
+  const [stopHook, setStopHook] = useState(carried?.stopHook ?? armed?.stopHook ?? false)
   const [heartbeat, setHeartbeat] = useState(carried?.heartbeat ?? armed?.heartbeat ?? false)
   const [postCompaction, setPostCompaction] = useState(carried?.postCompaction ?? armed?.postCompaction ?? false)
-  // ON with the stop hook, and for the stop hook's sake: a thread told "keep going" that has stopped to
-  // ASK you something must not be told it again while it waits (maintainer 2026-08-11, of this switch:
-  // "shoujld be ON BY DEFAULT"). Seeded like every other default here — only for an unarmed, unshelved
-  // thread — so an existing row keeps whatever its operator chose.
-  const [pauseOnQuestions, setPauseOnQuestions] = useState(carried?.pauseOnQuestions ?? armed?.pauseOnQuestions ?? (seedDefaults && DEFAULT_GOAL_TRIGGERS.pauseOnQuestions))
   const [seconds, setSeconds] = useState(carried?.seconds ?? armed?.intervalSeconds ?? DEFAULT_INTERVAL_SECONDS)
+  // NOTHING IS BEING SENT while every trigger is off, so the words say so themselves rather than sitting
+  // there in full-strength text as if they were live. It is the same reading the glyph gives from outside
+  // the panel — grey until something is armed — carried onto the surface that holds the words
+  // (maintainer 2026-08-16: "It should also appear grayed out if none of the toggles are toggled on").
+  const anyTrigger = stopHook || heartbeat || postCompaction
   // The minutes field is a STRING while it is being typed, so a half-typed value ("", "1" on the way to
   // "120") is not immediately clamped out from under the caret. It becomes a number on commit.
   const [minutes, setMinutes] = useState(String(Math.round((carried?.seconds ?? armed?.intervalSeconds ?? DEFAULT_INTERVAL_SECONDS) / 60)))
@@ -394,15 +397,17 @@ function PromptPanel({ thread, armed }: {
   // What was last SENT, so a blur or a close can skip a round-trip when nothing actually changed —
   // otherwise every stray click through the panel re-arms the row and mints a new generation.
   //
-  // SEEDED FROM THE SERVER ROW, never from the defaults above — which is exactly what makes the default a
-  // default: the panel opens already differing from what is stored, so the dismissal that follows writes
-  // it. An untouched open of an ALREADY-ARMED thread still matches and still writes nothing.
+  // SEEDED FROM THE PREFILL, not from the server row, and that inversion IS how "opening the panel arms
+  // nothing" is implemented. Until 2026-08-16 this held the row's empty prompt while the draft above held
+  // the default sentence, so the panel opened already differing from storage and the dismissal wrote it —
+  // which is precisely the auto-arming the maintainer asked to stop. Seeding both from one expression
+  // makes an untouched open compute `unchanged` and send nothing. Editing the text, or flipping any
+  // switch, still differs and is still written by the dismissal.
   const sent = useRef({
-    prompt: armed?.prompt ?? "",
+    prompt: armed?.prompt ?? seededText,
     stopHook: armed?.stopHook ?? false,
     heartbeat: armed?.heartbeat ?? false,
     postCompaction: armed?.postCompaction ?? false,
-    pauseOnQuestions: armed?.pauseOnQuestions ?? false,
     seconds: armed?.intervalSeconds ?? DEFAULT_INTERVAL_SECONDS,
   })
 
@@ -414,7 +419,6 @@ function PromptPanel({ thread, armed }: {
     stopHook,
     heartbeat,
     postCompaction,
-    pauseOnQuestions,
     seconds: draftIntervalSeconds(minutes, seconds),
     ...over,
   })
@@ -459,7 +463,6 @@ function PromptPanel({ thread, armed }: {
       && next.stopHook === sent.current.stopHook
       && next.heartbeat === sent.current.heartbeat
       && next.postCompaction === sent.current.postCompaction
-      && next.pauseOnQuestions === sent.current.pauseOnQuestions
       && next.seconds === sent.current.seconds
     if (unchanged) return true
     // Nothing armed and nothing typed — flipping a trigger before writing anything has nothing to
@@ -476,7 +479,6 @@ function PromptPanel({ thread, armed }: {
         stopHook: next.stopHook,
         heartbeat: next.heartbeat,
         postCompaction: next.postCompaction,
-        pauseOnQuestions: next.pauseOnQuestions,
         // ALWAYS sent alongside a prompt, even while the schedule trigger is OFF. Gating this on
         // `heartbeat` looked right and silently destroyed data: switching the schedule off sent no
         // cadence, storage cleared the column, and reopening the panel showed the 10-minute default —
@@ -558,7 +560,11 @@ function PromptPanel({ thread, armed }: {
         // style, you shouldn't need to write JavaScript auto-grow logic"). The measure-and-set version
         // is also the one that broke: driven from an effect it ran with a null ref, because the panel
         // mounts behind a Radix portal a render later, and never ran again. Chromium ≥123.
-        className="field-sizing-content max-h-[28vh] min-h-[4rem] w-full resize-none overflow-y-auto rounded-md border border-border bg-bg px-2 py-1.5 text-[12px] leading-snug text-fg outline-none placeholder:text-muted/50 focus:border-border-strong"
+        // GREY WHILE NOTHING IS ARMED (see `anyTrigger`). Not `disabled` and not `readOnly` — the words
+        // stay fully editable, because writing them is what you do BEFORE picking a trigger. The tone is
+        // the only thing that changes, and it says the same thing the glyph says from outside: these words
+        // are parked, not live.
+        className={`field-sizing-content max-h-[28vh] min-h-[4rem] w-full resize-none overflow-y-auto rounded-md border border-border bg-bg px-2 py-1.5 text-[12px] leading-snug outline-none placeholder:text-muted/50 focus:border-border-strong ${anyTrigger ? "text-fg" : "text-muted"}`}
       />
       {/* THE THREE MECHANISMS, one per line under the text they all send. They are NAMED — Stop hook,
           Heartbeat, Compaction — rather than described, because those are the names everything else in
@@ -594,13 +600,17 @@ function PromptPanel({ thread, armed }: {
           }}
         />
         <span className={`font-medium ${stopHook ? "text-fg" : "text-muted"}`}>Stop hook</span>
-        {/* "NOT ALREADY WAITING ON SOMETHING" is not decoration — it is the trigger's actual contract. A
-            rest whose final message carries a ```question fence is never bumped, and neither is one
-            parked on an ```awaiting fence naming a wait the scheduler itself owns — a `pr-watch:` PR, a
-            `timer:`, a named `human:` (scheduler.ts `restMessageIsSignedOff`). Both fences ARE the answer
-            to the question the stop hook asks. A gloss that still promised "every time" would be the one
-            surface claiming a delivery the scheduler declines to make. */}
-        <span className="text-muted">every rest — unless it signed off, or is waiting on you</span>
+        {/* THE EXCEPTION CLAUSE IS THE TRIGGER'S ACTUAL CONTRACT, not decoration — and it is exactly two
+            fences wide now. A rest that signed off with ```done is never bumped, and neither is one parked
+            on an ```awaiting naming a wait the scheduler itself owns — a `pr-watch:` PR, a `timer:`, a
+            named `human:` (scheduler.ts `restMessageIsSignedOff`). Both ARE the answer to the question the
+            stop hook asks.
+
+            A ```question fence USED to be a third exception and no longer is (2026-08-16): the bump fires
+            over an unanswered question, and the delivery tells the worker to decide it. So the clause no
+            longer says "or is waiting on you" — that promised a hold this trigger stopped honouring, and
+            this panel must not be the one surface describing a delivery the scheduler does not make. */}
+        <span className="text-muted">every rest — unless it signed off or parked on a wait</span>
 
         <Switch
           testId="heartbeat"
@@ -670,44 +680,15 @@ function PromptPanel({ thread, armed }: {
         <span className={`font-medium ${postCompaction ? "text-fg" : "text-muted"}`}>Compaction</span>
         <span className="text-muted">when the context is summarized away — link the doc to re-read</span>
 
-        {/* AUTONOMOUS MODE, below a rule because it is not a fourth trigger: the three above add reasons to
-            send, this one changes what happens when the thread is WAITING ON YOU.
-            
-            IT READS INVERTED AGAINST THE STORED FLAG, deliberately. The column is `pause_on_questions`
-            — the mechanism — and by default it is ON, so frizz holds the goal while a question fence, a
-            native ask or a permission prompt is unanswered. That default is right, but "Disable when
-            questions are pending" named the mechanism rather than the behaviour, and the gloss under it
-            listed what COUNTS as a question instead of saying what changes (maintainer 2026-08-12: "This
-            doesn't make any sense. It needs to say how it actually behaves differently when it's
-            checked"). Turning the switch ON now means what its name says: keep driving even while an
-            answer is outstanding, so the agent decides for itself instead of waiting for you. Same
-            default behaviour, a name that is finally true, and no migration — the inversion lives here.
-            
-            IT DOES NOT AFFECT `done`. A finished thread is finished in either mode; see the scheduler's
-            note on why that carve-out is the loop's off switch rather than an exception to it.
-
-            IT DOES NOT REACH FRIZZ'S OWN SIGN-OFF REMINDER EITHER, and that was tried: this switch also
-            silenced it for the thread between 2026-08-13 and 2026-08-14, on the argument that the two
-            deliveries landed on one rest pulling opposite ways. Both legs of that argument are gone. The
-            reminder now LEADS with "if the task still has parts left, the fence is not what you owe — the
-            work is", which is the Goal's own instruction, so there is nothing left pulling; and
-            suppressing it took the `` ```awaiting `` park with it, which the Goal's
-            trailer does not name — measured over five bare rests, an autonomous thread got five bumps and
-            was never told how to park. This switch is about QUESTIONS. Keep it about questions. */}
-        <div className="col-span-3 mt-0.5 h-px bg-border/70" />
-        <Switch
-          testId="autonomous-mode"
-          label="Autonomous mode"
-          checked={!pauseOnQuestions}
-          onChange={(next) => {
-            setPauseOnQuestions(!next)
-            void persistNow(draft({ pauseOnQuestions: !next }))
-          }}
-        />
-        <span className={`col-span-2 ${!pauseOnQuestions ? "text-fg" : "text-muted"}`}>
-          <span className="font-medium">Autonomous mode</span>
-          <span className="text-muted"> — sends goal prompt when the agent asks questions instead of waiting for an answer</span>
-        </span>
+        {/* THERE IS NO FOURTH ROW. An "Autonomous mode" switch sat here under a rule — the inverted face of
+            a `pause_on_questions` column that held every trigger while the thread was waiting on the human
+            — and it is deleted rather than re-defaulted. Arming a Goal is now the whole of that consent
+            (maintainer 2026-08-16: "the stop hook should just fire even when there are open questions,
+            unconditionally, and we could just drop the AutonomousMode toggle… If somebody enables the stop
+            hook goal, then that kind of implies to me that they don't really want to answer any more
+            questions"). A bump that crosses an unanswered question is worded for it — see the shared
+            `restPromptMessage` — and the ```done and ```awaiting carve-outs are untouched, because those
+            are about the fence answering the trigger rather than about who is waiting on whom. */}
       </div>
       {/* NO SAVE BUTTON, AND NO EXPLAINER. Every edit writes itself — a switch on its own click, the text
           and the cadence on blur, and whatever is still uncommitted on the dismissal that unmounts this

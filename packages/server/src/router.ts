@@ -654,7 +654,6 @@ export function createRouter(ctx: AppContext) {
     stopHook: boolean
     heartbeat: boolean
     postCompaction: boolean
-    pauseOnQuestions: boolean
     intervalSeconds?: number
   }
   function assertRecurringPromptArmable(
@@ -725,9 +724,6 @@ export function createRouter(ctx: AppContext) {
     // workers running the PRE-MERGE two-feature tools, which predate SOURCE 7 entirely — such a call
     // cannot have an opinion about a trigger it has never heard of, so it must not switch one off.
     const compactOn = row.recurring_on_compact === 1
-    // Preserved verbatim for the same reason, and it is a preference rather than a trigger: a legacy
-    // call has no opinion about a hold it has never heard of, so it must not release one.
-    const holdOn = row.recurring_pause_on_questions === 1
     // The cadence the row already carries, in the seconds the shared validator speaks. Read back even
     // while the HEARTBEAT is off, because arming the stop hook must not drop the interval the panel
     // needs to switch the heartbeat back on.
@@ -739,13 +735,12 @@ export function createRouter(ctx: AppContext) {
     const prompt = on ? write.prompt : otherOn || compactOn ? row.recurring_prompt ?? null : null
     const next: RecurringPromptWrite = prompt === null
       // No text, no mechanisms — one armed over an empty prompt is a row the scheduler cannot fire.
-      ? { prompt: null, stopHook: false, heartbeat: false, postCompaction: false, pauseOnQuestions: false }
+      ? { prompt: null, stopHook: false, heartbeat: false, postCompaction: false }
       : {
         prompt,
         stopHook: trigger === "rest" ? on : otherOn,
         heartbeat: trigger === "schedule" ? on : otherOn,
         postCompaction: compactOn,
-        pauseOnQuestions: holdOn,
         intervalSeconds: trigger === "schedule" && on ? write.intervalSeconds : storedSeconds,
       }
 
@@ -755,7 +750,6 @@ export function createRouter(ctx: AppContext) {
       stopHook: next.stopHook,
       heartbeat: next.heartbeat,
       postCompaction: next.postCompaction,
-      pauseOnQuestions: next.pauseOnQuestions,
       intervalMs: recurringIntervalMs(next),
       armedAt: new Date().toISOString(),
     })) {
@@ -1988,7 +1982,6 @@ export function createRouter(ctx: AppContext) {
           stopHook: input.stopHook,
           heartbeat: input.heartbeat,
           postCompaction: input.postCompaction,
-          pauseOnQuestions: input.pauseOnQuestions,
           intervalMs: recurringIntervalMs(input),
           armedAt: new Date().toISOString(),
         })) {
@@ -2021,7 +2014,6 @@ export function createRouter(ctx: AppContext) {
           stopHook: input.stopHook,
           heartbeat: input.heartbeat,
           postCompaction: input.postCompaction,
-          pauseOnQuestions: input.pauseOnQuestions,
           intervalMs: recurringIntervalMs(input),
           armedAt: new Date().toISOString(),
         })) {

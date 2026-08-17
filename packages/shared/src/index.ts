@@ -419,47 +419,34 @@ export const RECURRING_MIN_INTERVAL_SECONDS = 60
 export const RECURRING_MAX_INTERVAL_SECONDS = 24 * 60 * 60
 export const RecurringPromptText = z.string().trim().min(1).max(RECURRING_PROMPT_MAX)
 
-// WHAT THE PANEL OPENS WITH on a thread that has never armed one, and what every new thread is born
-// carrying. The overwhelmingly common reason an operator reaches for this control is the same one every
-// time — the thread stopped with work left in it — so the panel writes that sentence for them rather
-// than making them phrase it again. It is a starting point, not a fixed string: it is seeded into an
-// editable textarea and anything typed over it wins.
+// WHAT THE PANEL PREFILLS on a thread that has never armed one. The overwhelmingly common reason an
+// operator reaches for this control is the same one every time — the thread stopped with work left in it
+// — so the panel writes that sentence for them rather than making them phrase it again. It is a starting
+// point, not a fixed string: it is seeded into an editable textarea and anything typed over it wins, and
+// it arms NOTHING until the operator switches a trigger on (see RecurringPromptControl).
 //
 // IT IS DELIBERATELY LOPSIDED (maintainer 2026-08-14: "should bias the agent strongly towards continuing
 // with its work if there is incomplete work, unless there is a pressing or imminent decision that is
-// needed from the human"). The two clauses used to read as equal branches — keep going, or ask — and an
-// even split is not what this delivery is for: it lands on a thread that has already stopped, so the
-// only outcome worth buying is the one where it starts again. Hence the first sentence sends the worker
-// straight back to the work and NAMES the endings a worker mistakes for one, because the ordinary
-// failure is not a worker that refuses to continue, it is one that mistook a milestone for the finish.
+// needed from the human"). It lands on a thread that has already stopped, so the only outcome worth
+// buying is the one where it starts again — hence it sends the worker straight back to the work and
+// NAMES the endings a worker mistakes for one, because the ordinary failure is not a worker that refuses
+// to continue, it is one that mistook a milestone for the finish.
 //
-// The stop clause is what keeps that from being a nag, and it is narrowed rather than dropped. A thread
-// told only to "keep going" answers a question it cannot resolve by guessing; told this, it hands back
-// the one class of question worth stopping for — the human's own, and blocking NOW — through the fence
-// the board already renders as an answerable card, and decides the rest itself.
+// ONE SENTENCE (maintainer 2026-08-16: "the default stop hook prompt should be one sentence long"). It
+// was four, and the three that went carried an ask-the-human clause, an enumeration of the endings, and a
+// decide-it-yourself clause. The ask clause is the one whose premise the same change deleted: the stop
+// hook now fires over an unanswered question fence unconditionally, so a default prompt that invited the
+// worker to stop and ask would be teaching it the one exit this trigger no longer honours. What is left
+// is the whole instruction — resume, and decide the rest — and everything the longer text spelled out is
+// already in the worker contract at length.
+//
+// NO BACKTICKED FENCE NAMES IN HERE. This text is rendered as markdown wherever the operator sees it,
+// and a lone ``` opens a code block that swallows the rest of the card.
 //
 // Nothing here teaches the ```done exit, because the trailer already does (`OPT_OUT_NOTE`), on every
 // delivery, whatever the operator has typed over this text.
-/** The triggers a Goal carries when nobody has chosen otherwise — the stop hook on, and the question
- *  hold with it. ONE definition, read by BOTH the dispatch that arms a brand-new thread and the footer
- *  panel that seeds an unarmed one, because a default that lives in two places is a default that
- *  eventually disagrees with itself.
- *
- *  `heartbeat` off: a cadence nobody chose is exactly the ambiguity the minutes field exists to remove.
- *  `postCompaction` off: it is useless without a prompt that LINKS the doc to re-read, which only the
- *  worker can write. */
-export const DEFAULT_GOAL_TRIGGERS = {
-  stopHook: true,
-  heartbeat: false,
-  postCompaction: false,
-  pauseOnQuestions: true,
-} as const
-
-// NO BACKTICKED FENCE NAMES IN HERE. This text is rendered as markdown wherever the operator sees it,
-// and a lone ``` opens a code block that swallows the rest of the card. The trailer can afford them; the
-// prompt says "question fence" in words instead.
 export const DEFAULT_RECURRING_PROMPT =
-  "Keep going. If ANY part of the original task is unfinished, unverified, or deferred, resume it NOW — a milestone, a green test run, a written-up plan and a long turn are none of them endings. Stop only for a decision that is genuinely the human's AND that blocks you right now: ask that one in a question fence. Every other open choice — a name, a default, a reversible design call — is yours to make: decide it, say in one line which way you went, and carry on."
+  "Keep going: if ANY part of the task is unfinished, unverified, or deferred, resume it NOW rather than writing up — a milestone, a green test run and a long turn are none of them endings — and decide every open call you can reverse yourself instead of stopping to ask."
 export const RecurringIntervalSeconds = z
   .number()
   .int()
@@ -478,12 +465,6 @@ export const ThreadRecurringPrompt = z.object({
   stopHook: z.boolean(),
   heartbeat: z.boolean(),
   postCompaction: z.boolean(),
-  /** NOT a fourth trigger — a HOLD over all three. While it is on, nothing is sent for as long as the
-   *  thread is blocked on the human: an unanswered ```question fence, a native ask, or a permission
-   *  prompt. The footer panel seeds it ON for a fresh arming, with the stop hook, because they are one
-   *  intent — see scheduler.ts, "WHAT A PENDING QUESTION DOES TO ALL THREE TRIGGERS". The stored column
-   *  still defaults OFF, so an existing row and an older caller both keep the behaviour they had. */
-  pauseOnQuestions: z.boolean(),
   intervalSeconds: z.number().int().positive().optional(),
   armedAt: z.string(),
   /** Last delivery per trigger; stamped separately so each reads its own clock. */
@@ -561,25 +542,30 @@ const OPT_OUT_NOTE =
  * teaches the park at length. A worker that parks stops being bumped, so it never reads this line
  * again; the one that does read it is mid-work, where ```done is the only exit worth naming.
  *
- * `overQuestion` IS THE ONE CASE THAT NEEDS MORE THAN A FOOTNOTE. In Autonomous mode the rest trigger
- * fires over an unanswered ```question fence (scheduler `restMessageIsSignedOff`), so this delivery can
- * land on a worker whose own last word was a question to the human. Handed the bare goal there, the
- * honest thing for it to do is ask again — its question really is unanswered — and the operator gets the
- * same card twice, which is precisely the loop the unconditional hold used to prevent. So the delivery
- * that crosses a pending question SAYS SO: no answer is coming, make the call yourself. The clause
- * carries no parenthesis, because `RECURRING_TRAILER` matches the trailer up to the first one. */
+ * `overQuestion` IS THE ONE CASE THAT NEEDS MORE THAN A FOOTNOTE. The rest trigger fires over an
+ * unanswered ```question fence (scheduler `restMessageIsSignedOff`), so this delivery can land on a
+ * worker whose own last word was a question to the human. Handed the bare goal there, the honest thing
+ * for it to do is ask again — its question really is unanswered — and the operator gets the same card
+ * twice, which is precisely the loop the old question hold existed to prevent. So the delivery that
+ * crosses a pending question SAYS SO: no answer is coming, make the call yourself. The clause carries no
+ * parenthesis, because `RECURRING_TRAILER` matches the trailer up to the first one. */
 export function restPromptMessage(prompt: string, opts: { overQuestion?: boolean } = {}): string {
-  const note = opts.overQuestion ? `${AUTONOMOUS_OVER_QUESTION_NOTE} ${OPT_OUT_NOTE}` : OPT_OUT_NOTE
+  const note = opts.overQuestion ? `${OVER_QUESTION_NOTE} ${OPT_OUT_NOTE}` : OPT_OUT_NOTE
   return `${prompt.trim()}\n\n(Goal — sent each time you come to rest. ${note})`
 }
 
 // What the trailer adds when the bump crosses the worker's own unanswered question. It has to do two
 // things the plain note does not: overrule the worker's correct instinct to re-ask, and tell it what to
 // do with the decision instead — because a call the operator cannot see is worse than the question.
-const AUTONOMOUS_OVER_QUESTION_NOTE =
-  "Your ```question is still unanswered and the operator has AUTONOMOUS MODE on for this thread," +
-  " which means they are not coming to answer it: decide it yourself, say in one line which way you" +
-  " went and what would reverse it, and carry on. Do NOT re-ask it."
+//
+// It named an operator SETTING until 2026-08-16 ("the operator has AUTONOMOUS MODE on"), which stopped
+// being true when the question hold was deleted: arming a Goal at all is now the whole of that consent.
+// Maintainer, on dropping the switch: "If somebody enables the stop hook goal, then that kind of implies
+// to me that they don't really want to answer any more questions."
+const OVER_QUESTION_NOTE =
+  "Your ```question is still unanswered, and a Goal armed at rest means the operator is not waiting" +
+  " to answer it: decide it yourself, say in one line which way you went and what would reverse it," +
+  " and carry on. Do NOT re-ask it."
 
 /** What frizz delivers when the POST-COMPACTION trigger fires (scheduler SOURCE 7).
  *
@@ -763,14 +749,14 @@ export function shellDoneMessage(shell: { taskId?: string; label: string; status
 // untriageable queue item. That is the invariant it exists to buy: every item in the queue is a
 // question you can answer or a checkmark you can archive.
 //
-// IT REACHES EVERY THREAD, including one the operator has put in AUTONOMOUS MODE. That case was carved
-// out for a day (2026-08-13 → 2026-08-14) on the reading that the invariant is about a queue a HUMAN
-// triages, so a thread nobody is waiting on does not need it. Two things sank that: this text now opens
-// by sending a half-finished thread back to the WORK rather than offering a menu of ways to stop, so it
-// no longer pulls against the Goal arriving beside it; and it is the only delivery that names the
-// ```awaiting park at all (the Goal's own trailer deliberately does not — see restPromptMessage), so
-// silencing it left the longest-running threads — the autonomous ones, the ones most likely to hold
-// background work — with no way to learn how to park on it.
+// IT REACHES EVERY THREAD, including one driving itself on an armed Goal. That case was carved out for a
+// day (2026-08-13 → 2026-08-14, when the Goal still carried a question-hold switch) on the reading that
+// the invariant is about a queue a HUMAN triages, so a thread nobody is waiting on does not need it. Two
+// things sank that: this text now opens by sending a half-finished thread back to the WORK rather than
+// offering a menu of ways to stop, so it no longer pulls against the Goal arriving beside it; and it is
+// the only delivery that names the ```awaiting park at all (the Goal's own trailer deliberately does not
+// — see restPromptMessage), so silencing it left the longest-running threads — the self-driving ones, the
+// ones most likely to hold background work — with no way to learn how to park on it.
 //
 // SHORT, because it competes with the agent's own conclusion for attention, and because a long one
 // invites the agent to treat "how do I sign off?" as the task. Three facts and a shape.
@@ -1710,9 +1696,6 @@ export const SetThreadRecurringPromptInput = z.object({
   // so a client that predates it — an older tab, an older MCP server — keeps writing the row correctly
   // with the trigger off, which is the honest reading of a caller that has never heard of it.
   postCompaction: z.boolean().default(false),
-  // The QUESTION HOLD (2026-08-11). Defaulted for the same reason as the trigger above: a caller that
-  // has never heard of it means "don't hold", which is also this option's own default.
-  pauseOnQuestions: z.boolean().default(false),
   intervalSeconds: RecurringIntervalSeconds.optional(),
 }).strict()
 // z.input, not z.infer: `postCompaction` is `.default(false)`, so the parsed OUTPUT has it
@@ -1744,8 +1727,14 @@ export const SetOwnThreadRecurringPromptInput = z.object({
   // so a client that predates it — an older tab, an older MCP server — keeps writing the row correctly
   // with the trigger off, which is the honest reading of a caller that has never heard of it.
   postCompaction: z.boolean().default(false),
-  // The QUESTION HOLD (2026-08-11), defaulted exactly as the trigger above and for the same reason.
-  pauseOnQuestions: z.boolean().default(false),
+  /** ACCEPTED AND IGNORED. The question hold was deleted 2026-08-16 (see scheduler.ts) and no caller in
+   *  this repo sends it any more — but this object is `.strict()`, and the caller on the other end is a
+   *  DETACHED worker daemon holding the `frizz-mcp.mjs` it was spawned with. Those outlive a server
+   *  restart by design, so for as long as any pre-2026-08-16 worker is alive a `start` would otherwise
+   *  come back as a validation error on a field the model cannot see it is sending. Tolerated here rather
+   *  than in the router so the shape stays one declaration; delete it once no such worker can be running.
+   *  The BROWSER input above needs no such clause — a stale tab is one reload away. */
+  pauseOnQuestions: z.boolean().optional(),
   intervalSeconds: RecurringIntervalSeconds.optional(),
 }).strict()
 // z.input, not z.infer: `postCompaction` is `.default(false)`, so the parsed OUTPUT has it

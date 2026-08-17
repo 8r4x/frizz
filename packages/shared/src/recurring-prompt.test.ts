@@ -3,25 +3,33 @@
 // wording delivered and the wording recognized have to agree, and nothing else in the system checks it.
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { ALLDONE_SENTINEL, DEFAULT_RECURRING_PROMPT, saysAllDone, restPromptMessage, schedulePromptMessage, formatIntervalLabel, parseRecurringPrompt } from "./index.ts"
+import { ALLDONE_SENTINEL, DEFAULT_RECURRING_PROMPT, SetOwnThreadRecurringPromptInput, SetThreadRecurringPromptInput, saysAllDone, restPromptMessage, schedulePromptMessage, formatIntervalLabel, parseRecurringPrompt } from "./index.ts"
 
-// THE DEFAULT TEXT IS THE ONE GOAL MOST THREADS EVER RUN: every new thread is born carrying it (dispatch
-// `armDefaultGoal`) and the footer panel seeds an unarmed one from it, so almost nobody types their own.
-// Its BIAS is therefore a product decision rather than a wording choice, and it is deliberately lopsided
-// (maintainer 2026-08-14: bias "strongly towards continuing with its work if there is incomplete work,
-// unless there is a pressing or imminent decision that is needed from the human"). It used to read as two
-// equal branches — keep going, or ask — which is not what a delivery that lands on an ALREADY-STOPPED
-// thread is for.
-test("the default Goal sends a stopped thread back to the work, and narrows what earns a stop", () => {
-  assert.match(DEFAULT_RECURRING_PROMPT, /^Keep going\./, "continuing leads; it is not one branch of two")
+// THE DEFAULT TEXT IS THE ONE GOAL MOST THREADS EVER RUN: the footer panel prefills an unarmed thread's
+// with it, so almost nobody types their own. Its BIAS is therefore a product decision rather than a
+// wording choice, and it is deliberately lopsided (maintainer 2026-08-14: bias "strongly towards
+// continuing with its work if there is incomplete work, unless there is a pressing or imminent decision
+// that is needed from the human"). It used to read as two equal branches — keep going, or ask — which is
+// not what a delivery that lands on an ALREADY-STOPPED thread is for.
+//
+// ONE SENTENCE (maintainer 2026-08-16). It ran to four, and the ask-the-human clause is the one whose
+// premise the same change deleted: the stop hook now fires over an unanswered question fence
+// unconditionally, so inviting the worker to stop and ask would teach it the one exit this trigger no
+// longer honours. What is left says resume, and decide the rest.
+test("the default Goal is one sentence that sends a stopped thread back to the work", () => {
+  assert.match(DEFAULT_RECURRING_PROMPT, /^Keep going/, "continuing leads; it is not one branch of two")
   assert.match(DEFAULT_RECURRING_PROMPT, /unfinished, unverified, or deferred/, "and it says what counts as left over")
   // The endings a worker mistakes for one. Naming them is the whole difference between "keep going" and a
   // thread that stops at the first green test run believing it is finished.
   assert.match(DEFAULT_RECURRING_PROMPT, /are none of them endings/)
-  // The stop is NARROWED, not dropped: it still exists, still lands as a card the board can render, and
-  // still costs the human nothing to answer — but only for a decision that is theirs AND blocking now.
-  assert.match(DEFAULT_RECURRING_PROMPT, /genuinely the human's AND that blocks you right now/)
-  assert.match(DEFAULT_RECURRING_PROMPT, /question fence/)
+  // DECIDE, rather than ask. The clause that used to point at a question fence is gone with the hold that
+  // made asking a way to stop the bump.
+  assert.match(DEFAULT_RECURRING_PROMPT, /decide every open call you can reverse yourself/)
+  assert.doesNotMatch(DEFAULT_RECURRING_PROMPT, /question fence/)
+  // ONE SENTENCE, counted rather than asserted by eye: exactly one terminal full stop, at the very end.
+  // Em dashes and commas are free; a second sentence is not.
+  assert.equal(DEFAULT_RECURRING_PROMPT.match(/\.(\s|$)/g)?.length, 1, "one sentence, one terminator")
+  assert.ok(DEFAULT_RECURRING_PROMPT.trimEnd().endsWith("."))
   // NO BACKTICKED FENCE NAMES. This text renders as markdown in the panel and in the transcript, where a
   // lone ``` opens a code block that swallows everything after it. The trailer can afford them; this
   // cannot, because the operator edits it.
@@ -86,21 +94,21 @@ for (const [label, message] of [
   })
 }
 
-// THE ONE DELIVERY ALLOWED TO EXCEED THE FOOTNOTE. In Autonomous mode the at-rest trigger fires over an
-// unanswered ```question fence, so this bump can land on a worker whose own last word was a question to
-// the human — and there, silence is the expensive option: it re-asks, and the operator gets the same
-// card twice. The clause therefore has to overrule that instinct AND say what to do with the decision
-// instead, which is more than the shared note's budget. Every other trailer stays capped above.
-test("restPromptMessage names the autonomous override when the bump crosses a pending question", () => {
+// THE ONE DELIVERY ALLOWED TO EXCEED THE FOOTNOTE. The at-rest trigger fires over an unanswered
+// ```question fence, so this bump can land on a worker whose own last word was a question to the human —
+// and there, silence is the expensive option: it re-asks, and the operator gets the same card twice. The
+// clause therefore has to overrule that instinct AND say what to do with the decision instead, which is
+// more than the shared note's budget. Every other trailer stays capped above.
+test("restPromptMessage says why the bump crosses a pending question", () => {
   const crossing = restPromptMessage("keep going", { overQuestion: true })
-  assert.match(crossing, /AUTONOMOUS MODE/, "the worker is told why its question is being talked over")
+  assert.match(crossing, /not waiting\s+to answer it/, "the worker is told why its question is being talked over")
   assert.match(crossing, /Do NOT re-ask it/, "…and the instinct it must overrule is named outright")
   assert.match(crossing, /which way you went/, "a decision the operator cannot see is worse than the question")
   assert.ok(crossing.includes("```done"), "the opt-out survives the longer note")
 
   // OPT-IN, and the plain trailer is unchanged: a worker bumped mid-work has no question outstanding,
   // and telling it not to re-ask one would be frizz inventing a state the thread is not in.
-  assert.doesNotMatch(restPromptMessage("keep going"), /AUTONOMOUS MODE|re-ask/)
+  assert.doesNotMatch(restPromptMessage("keep going"), /not waiting|re-ask/)
   assert.equal(restPromptMessage("keep going", {}), restPromptMessage("keep going"))
 
   // The longer trailer is still a TRAILER: the parser reads the delivery back as an ordinary rest bump,
@@ -159,4 +167,25 @@ test("parseRecurringPrompt still reads the PRE-MERGE trailers", () => {
 
   const legacyBeat = "Check the deploy.\n\n(Heartbeat — sent every 10 min. If there is genuinely no further work, reply ALLDONE on its own line to stop these prompts — but be sure, because it permanently stalls this run.)"
   assert.deepEqual(parseRecurringPrompt(legacyBeat), { kind: "schedule", every: "10 min", prompt: "Check the deploy." })
+})
+
+// ---- The one field kept alive purely for a stale caller ---------------------------------------------
+// `pauseOnQuestions` was the question hold, deleted 2026-08-16 with the panel switch that inverted it.
+// The WORKER input still ACCEPTS it, because the caller on that end is a detached daemon holding the
+// `frizz-mcp.mjs` it was spawned with — those outlive a server restart by design, so a strict refusal
+// would fail a pre-change worker's `start` on a field its model cannot see it is sending. This is what
+// stops the tolerance being deleted as dead code, and what says when it may go.
+test("a pre-2026-08-16 worker's `start` still parses, and the hold is dropped rather than stored", () => {
+  const parsed = SetOwnThreadRecurringPromptInput.parse({
+    slug: "keep-going", prompt: "keep going", stopHook: true, heartbeat: false, pauseOnQuestions: true,
+  })
+  assert.equal(parsed.stopHook, true)
+  assert.equal("pauseOnQuestions" in parsed ? parsed.pauseOnQuestions : undefined, true, "parsed, so the call succeeds")
+  // …and nothing downstream reads it: the storage write shape has no such field, so it cannot be stored.
+
+  // The BROWSER input is deliberately NOT tolerant — a stale tab is one reload away, and a schema that
+  // accepts a field nobody sends is a field the next reader has to look up.
+  assert.throws(() => SetThreadRecurringPromptInput.parse({
+    slug: "keep-going", sessionId: "sid", prompt: "keep going", stopHook: true, heartbeat: false, pauseOnQuestions: true,
+  }))
 })

@@ -75,15 +75,15 @@ function fixture() {
 test("storage: toggling off and on KEEPS the generation and the last-fired stamp", () => {
   const f = fixture()
   try {
-    assert.equal(f.storage.setRecurringPromptIfCurrent(f.slug, "sid", 0, { prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false, pauseOnQuestions: false, intervalMs: null, armedAt: "2026-08-02T00:00:00.000Z" }), true)
+    assert.equal(f.storage.setRecurringPromptIfCurrent(f.slug, "sid", 0, { prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false, intervalMs: null, armedAt: "2026-08-02T00:00:00.000Z" }), true)
     const armedAt = f.row().recurring_armed_at
     assert.equal(armedAt, "2026-08-02T00:00:00.000Z")
     f.storage.stampRecurringRestFired(f.slug, armedAt!, "2026-08-02T00:05:00.000Z")
 
-    f.storage.setRecurringPromptIfCurrent(f.slug, "sid", 0, { prompt: "keep going", stopHook: false, heartbeat: false, postCompaction: false, pauseOnQuestions: false, intervalMs: null, armedAt: "2026-08-02T00:10:00.000Z" })
+    f.storage.setRecurringPromptIfCurrent(f.slug, "sid", 0, { prompt: "keep going", stopHook: false, heartbeat: false, postCompaction: false, intervalMs: null, armedAt: "2026-08-02T00:10:00.000Z" })
     assert.equal(f.row().recurring_on_rest, 0)
     assert.equal(f.row().recurring_armed_at, armedAt, "an off/on flip is not a re-arming")
-    f.storage.setRecurringPromptIfCurrent(f.slug, "sid", 0, { prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false, pauseOnQuestions: false, intervalMs: null, armedAt: "2026-08-02T00:11:00.000Z" })
+    f.storage.setRecurringPromptIfCurrent(f.slug, "sid", 0, { prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false, intervalMs: null, armedAt: "2026-08-02T00:11:00.000Z" })
     assert.equal(f.row().recurring_on_rest, 1)
     assert.equal(f.row().recurring_armed_at, armedAt)
     // The rate floor survives the flip too — otherwise toggling would be a way to bypass it.
@@ -96,9 +96,9 @@ test("storage: toggling off and on KEEPS the generation and the last-fired stamp
 test("storage: EDITING the text mints a new generation and drops the last-fired stamp", () => {
   const f = fixture()
   try {
-    f.storage.setRecurringPromptIfCurrent(f.slug, "sid", 0, { prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false, pauseOnQuestions: false, intervalMs: null, armedAt: "2026-08-02T00:00:00.000Z" })
+    f.storage.setRecurringPromptIfCurrent(f.slug, "sid", 0, { prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false, intervalMs: null, armedAt: "2026-08-02T00:00:00.000Z" })
     f.storage.stampRecurringRestFired(f.slug, f.row().recurring_armed_at!, "2026-08-02T00:05:00.000Z")
-    f.storage.setRecurringPromptIfCurrent(f.slug, "sid", 0, { prompt: "do something else", stopHook: true, heartbeat: false, postCompaction: false, pauseOnQuestions: false, intervalMs: null, armedAt: "2026-08-02T00:10:00.000Z" })
+    f.storage.setRecurringPromptIfCurrent(f.slug, "sid", 0, { prompt: "do something else", stopHook: true, heartbeat: false, postCompaction: false, intervalMs: null, armedAt: "2026-08-02T00:10:00.000Z" })
     assert.equal(f.row().recurring_armed_at, "2026-08-02T00:10:00.000Z", "new words are a new generation")
     assert.equal(f.row().recurring_rest_fired_at, null, "and the new words have never fired")
   } finally {
@@ -109,14 +109,14 @@ test("storage: EDITING the text mints a new generation and drops the last-fired 
 test("storage: a null prompt clears the whole row, and a stale session/generation writes nothing", () => {
   const f = fixture()
   try {
-    f.storage.setRecurringPromptIfCurrent(f.slug, "sid", 0, { prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false, pauseOnQuestions: false, intervalMs: null, armedAt: "2026-08-02T00:00:00.000Z" })
+    f.storage.setRecurringPromptIfCurrent(f.slug, "sid", 0, { prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false, intervalMs: null, armedAt: "2026-08-02T00:00:00.000Z" })
     assert.equal(
-      f.storage.setRecurringPromptIfCurrent(f.slug, "other-sid", 0, { prompt: "hijack", stopHook: true, heartbeat: false, postCompaction: false, pauseOnQuestions: false, intervalMs: null, armedAt: "2026-08-02T00:01:00.000Z" }),
+      f.storage.setRecurringPromptIfCurrent(f.slug, "other-sid", 0, { prompt: "hijack", stopHook: true, heartbeat: false, postCompaction: false, intervalMs: null, armedAt: "2026-08-02T00:01:00.000Z" }),
       false,
       "a tab looking at a superseded session fails closed",
     )
     assert.equal(f.row().recurring_prompt, "keep going")
-    f.storage.setRecurringPromptIfCurrent(f.slug, "sid", 0, { prompt: null, stopHook: true, heartbeat: false, postCompaction: false, pauseOnQuestions: false, intervalMs: null, armedAt: "2026-08-02T00:02:00.000Z" })
+    f.storage.setRecurringPromptIfCurrent(f.slug, "sid", 0, { prompt: null, stopHook: true, heartbeat: false, postCompaction: false, intervalMs: null, armedAt: "2026-08-02T00:02:00.000Z" })
     assert.equal(f.row().recurring_prompt, null)
     assert.equal(f.row().recurring_armed_at, null)
     assert.equal(f.row().recurring_on_rest, 0, "a cleared row can never read as enabled")
@@ -142,13 +142,13 @@ test("storage: the worker path writes by slug alone, across a session change the
 
     // The operator path, holding the OLD session id, correctly fails closed.
     assert.equal(
-      f.storage.setRecurringPromptIfCurrent(f.slug, "sid", 0, { prompt: "stale tab", stopHook: true, heartbeat: false, postCompaction: false, pauseOnQuestions: false, intervalMs: null, armedAt: "2026-08-02T00:00:00.000Z" }),
+      f.storage.setRecurringPromptIfCurrent(f.slug, "sid", 0, { prompt: "stale tab", stopHook: true, heartbeat: false, postCompaction: false, intervalMs: null, armedAt: "2026-08-02T00:00:00.000Z" }),
       false,
       "a browser tab that has fallen behind must not write",
     )
     // The worker path, which only ever knew the slug, still reaches its own row.
     assert.equal(
-      f.storage.setRecurringPromptBySlug(f.slug, { prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false, pauseOnQuestions: false, intervalMs: null, armedAt: "2026-08-02T00:01:00.000Z" }),
+      f.storage.setRecurringPromptBySlug(f.slug, { prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false, intervalMs: null, armedAt: "2026-08-02T00:01:00.000Z" }),
       true,
       "the tool must survive the resume it was armed before",
     )
@@ -162,22 +162,22 @@ test("storage: the worker path writes by slug alone, across a session change the
 test("storage: the worker path keeps the generation on a re-arm with the SAME text, and clears on null", () => {
   const f = fixture()
   try {
-    f.storage.setRecurringPromptBySlug(f.slug, { prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false, pauseOnQuestions: false, intervalMs: null, armedAt: "2026-08-02T00:00:00.000Z" })
+    f.storage.setRecurringPromptBySlug(f.slug, { prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false, intervalMs: null, armedAt: "2026-08-02T00:00:00.000Z" })
     const armedAt = f.row().recurring_armed_at
     f.storage.stampRecurringRestFired(f.slug, armedAt!, "2026-08-02T00:05:00.000Z")
 
     // A worker that re-registers on resume must not supersede a bump already queued for those words.
-    f.storage.setRecurringPromptBySlug(f.slug, { prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false, pauseOnQuestions: false, intervalMs: null, armedAt: "2026-08-02T00:10:00.000Z" })
+    f.storage.setRecurringPromptBySlug(f.slug, { prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false, intervalMs: null, armedAt: "2026-08-02T00:10:00.000Z" })
     assert.equal(f.row().recurring_armed_at, armedAt, "same text ⇒ same generation")
     assert.equal(f.row().recurring_rest_fired_at, "2026-08-02T00:05:00.000Z", "and the rate floor survives")
 
     // New words ARE a new generation, same as the operator path.
-    f.storage.setRecurringPromptBySlug(f.slug, { prompt: "do something else", stopHook: true, heartbeat: false, postCompaction: false, pauseOnQuestions: false, intervalMs: null, armedAt: "2026-08-02T00:11:00.000Z" })
+    f.storage.setRecurringPromptBySlug(f.slug, { prompt: "do something else", stopHook: true, heartbeat: false, postCompaction: false, intervalMs: null, armedAt: "2026-08-02T00:11:00.000Z" })
     assert.equal(f.row().recurring_armed_at, "2026-08-02T00:11:00.000Z")
     assert.equal(f.row().recurring_rest_fired_at, null)
 
     // `action: "stop"` — the worker ending its own loop deliberately.
-    f.storage.setRecurringPromptBySlug(f.slug, { prompt: null, stopHook: false, heartbeat: false, postCompaction: false, pauseOnQuestions: false, intervalMs: null, armedAt: "2026-08-02T00:12:00.000Z" })
+    f.storage.setRecurringPromptBySlug(f.slug, { prompt: null, stopHook: false, heartbeat: false, postCompaction: false, intervalMs: null, armedAt: "2026-08-02T00:12:00.000Z" })
     assert.equal(f.row().recurring_prompt, null)
     assert.equal(f.row().recurring_armed_at, null)
     assert.equal(f.row().recurring_on_rest, 0)
@@ -194,7 +194,7 @@ const HEARTBEAT_MS = 10 * 60_000
 
 function scheduler(
   tele: Partial<SessionTelemetry>,
-  opts: { lastFiredAt?: string; now?: () => number; pauseOnQuestions?: boolean } = {},
+  opts: { lastFiredAt?: string; now?: () => number } = {},
 ) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-hb-"))
   const storage = createStorage(join(dir, "ui.db"))
@@ -208,7 +208,7 @@ function scheduler(
   // the Goal — so it would add a second delivery to every count in this file. Silenced so these stay
   // about the Goal; the reminder has signoff-nudge.test.ts.
   storage.setSetting("signoffNudge", "off")
-  storage.setRecurringPromptBySlug(slug, { prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false, pauseOnQuestions: opts.pauseOnQuestions === true, intervalMs: null, armedAt: "2026-08-02T00:00:00.000Z" })
+  storage.setRecurringPromptBySlug(slug, { prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false, intervalMs: null, armedAt: "2026-08-02T00:00:00.000Z" })
   if (opts.lastFiredAt) storage.stampRecurringRestFired(slug, storage.getSession(slug)!.recurring_armed_at!, opts.lastFiredAt)
   const delivered: string[] = []
   const s = createScheduler({
@@ -393,7 +393,7 @@ function heartbeatScheduler(
     title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   } as SessionRow)
   storage.setSetting("signoffNudge", "off")
-  storage.setRecurringPromptBySlug(slug, { prompt: "check the deploy", stopHook: false, heartbeat: true, postCompaction: false, pauseOnQuestions: false, intervalMs: opts.intervalMs ?? 3_600_000, armedAt: opts.armedAt ?? "2026-08-02T00:00:00.000Z" })
+  storage.setRecurringPromptBySlug(slug, { prompt: "check the deploy", stopHook: false, heartbeat: true, postCompaction: false, intervalMs: opts.intervalMs ?? 3_600_000, armedAt: opts.armedAt ?? "2026-08-02T00:00:00.000Z" })
   if (opts.lastFiredAt) storage.stampRecurringScheduleFired(slug, storage.getSession(slug)!.recurring_armed_at!, opts.lastFiredAt)
   const delivered: string[] = []
   const s = createScheduler({
@@ -490,7 +490,7 @@ test("heartbeat: a mid-turn beat advances the clock, so the schedule keeps runni
 test("the mid-turn exception is the HEARTBEAT's alone — a due snooze is still held while busy", async () => {
   const h = heartbeatScheduler({ turn: "in-flight" }, { now: at("2026-08-02T01:00:00.000Z") })
   try {
-    h.storage.setRecurringPromptBySlug(h.slug, { prompt: null, stopHook: false, heartbeat: false, postCompaction: false, pauseOnQuestions: false, intervalMs: null, armedAt: "2026-08-02T00:00:00.000Z" })
+    h.storage.setRecurringPromptBySlug(h.slug, { prompt: null, stopHook: false, heartbeat: false, postCompaction: false, intervalMs: null, armedAt: "2026-08-02T00:00:00.000Z" })
     h.storage.setSnoozedUntil(h.slug, "2026-08-02T00:30:00.000Z", "back to it")
     await h.s.tick()
     assert.deepEqual(h.delivered, [], "a snooze waits for the thread to come to rest, as it always did")
@@ -517,14 +517,14 @@ test("recurring prompt: switching the schedule trigger OFF keeps the cadence for
   // surviving rather than about how far the fixed clock happens to have advanced.
   const h = heartbeatScheduler({}, { now: at("2026-08-02T02:30:02.000Z") })
   try {
-    h.storage.setRecurringPromptBySlug(h.slug, { prompt: "check the deploy", stopHook: false, heartbeat: false, postCompaction: false, pauseOnQuestions: false, intervalMs: 1_800_000, armedAt: "2026-08-02T02:00:00.000Z" })
+    h.storage.setRecurringPromptBySlug(h.slug, { prompt: "check the deploy", stopHook: false, heartbeat: false, postCompaction: false, intervalMs: 1_800_000, armedAt: "2026-08-02T02:00:00.000Z" })
     const off = h.storage.getSession(h.slug)!
     assert.equal(off.recurring_on_schedule, 0, "the trigger is off")
     assert.equal(off.recurring_interval_ms, 1_800_000, "and the 30 minutes the operator chose is still there")
     assert.equal(off.recurring_prompt, "check the deploy", "as is the text")
 
     // Back on, at the SAME cadence, with no re-entry.
-    h.storage.setRecurringPromptBySlug(h.slug, { prompt: "check the deploy", stopHook: false, heartbeat: true, postCompaction: false, pauseOnQuestions: false, intervalMs: 1_800_000, armedAt: "2026-08-02T02:00:01.000Z" })
+    h.storage.setRecurringPromptBySlug(h.slug, { prompt: "check the deploy", stopHook: false, heartbeat: true, postCompaction: false, intervalMs: 1_800_000, armedAt: "2026-08-02T02:00:01.000Z" })
     assert.equal(h.storage.getSession(h.slug)!.recurring_interval_ms, 1_800_000)
     await h.s.tick()
     assert.equal(h.delivered.length, 1, "and it fires again on that cadence")
@@ -534,7 +534,7 @@ test("recurring prompt: switching the schedule trigger OFF keeps the cadence for
 test("heartbeat: a DISABLED heartbeat fires nothing but keeps its schedule and text", async () => {
   const h = heartbeatScheduler({}, { now: at("2026-08-02T01:00:00.000Z") })
   try {
-    h.storage.setRecurringPromptBySlug(h.slug, { prompt: "check the deploy", stopHook: false, heartbeat: false, postCompaction: false, pauseOnQuestions: false, intervalMs: 3_600_000, armedAt: "2026-08-02T00:00:00.000Z" })
+    h.storage.setRecurringPromptBySlug(h.slug, { prompt: "check the deploy", stopHook: false, heartbeat: false, postCompaction: false, intervalMs: 3_600_000, armedAt: "2026-08-02T00:00:00.000Z" })
     await h.s.tick()
     assert.deepEqual(h.delivered, [])
     const row = h.storage.getSession(h.slug)!
@@ -551,18 +551,18 @@ test("heartbeat: the generation survives a bare toggle flip and is minted by a s
     const gen = h.storage.getSession(h.slug)!.recurring_armed_at
     h.storage.stampRecurringScheduleFired(h.slug, gen!, "2026-08-02T00:05:00.000Z")
 
-    h.storage.setRecurringPromptBySlug(h.slug, { prompt: "check the deploy", stopHook: false, heartbeat: false, postCompaction: false, pauseOnQuestions: false, intervalMs: 3_600_000, armedAt: "2026-08-02T02:00:00.000Z" })
-    h.storage.setRecurringPromptBySlug(h.slug, { prompt: "check the deploy", stopHook: false, heartbeat: true, postCompaction: false, pauseOnQuestions: false, intervalMs: 3_600_000, armedAt: "2026-08-02T02:00:01.000Z" })
+    h.storage.setRecurringPromptBySlug(h.slug, { prompt: "check the deploy", stopHook: false, heartbeat: false, postCompaction: false, intervalMs: 3_600_000, armedAt: "2026-08-02T02:00:00.000Z" })
+    h.storage.setRecurringPromptBySlug(h.slug, { prompt: "check the deploy", stopHook: false, heartbeat: true, postCompaction: false, intervalMs: 3_600_000, armedAt: "2026-08-02T02:00:01.000Z" })
     assert.equal(h.storage.getSession(h.slug)!.recurring_armed_at, gen, "off/on is not a re-arming")
     assert.equal(h.storage.getSession(h.slug)!.recurring_schedule_fired_at, "2026-08-02T00:05:00.000Z", "so the clock is not reset either")
 
     // Same text, NEW schedule: a real change, so a new generation and a fresh clock.
-    h.storage.setRecurringPromptBySlug(h.slug, { prompt: "check the deploy", stopHook: false, heartbeat: true, postCompaction: false, pauseOnQuestions: false, intervalMs: 900_000, armedAt: "2026-08-02T03:00:00.000Z" })
+    h.storage.setRecurringPromptBySlug(h.slug, { prompt: "check the deploy", stopHook: false, heartbeat: true, postCompaction: false, intervalMs: 900_000, armedAt: "2026-08-02T03:00:00.000Z" })
     assert.equal(h.storage.getSession(h.slug)!.recurring_armed_at, "2026-08-02T03:00:00.000Z")
     assert.equal(h.storage.getSession(h.slug)!.recurring_schedule_fired_at, null)
 
     // Clearing empties the row.
-    h.storage.setRecurringPromptBySlug(h.slug, { prompt: null, stopHook: false, heartbeat: false, postCompaction: false, pauseOnQuestions: false, intervalMs: null, armedAt: "2026-08-02T04:00:00.000Z" })
+    h.storage.setRecurringPromptBySlug(h.slug, { prompt: null, stopHook: false, heartbeat: false, postCompaction: false, intervalMs: null, armedAt: "2026-08-02T04:00:00.000Z" })
     const cleared = h.storage.getSession(h.slug)!
     assert.equal(cleared.recurring_prompt, null)
     assert.equal(cleared.recurring_armed_at, null)
@@ -590,7 +590,7 @@ function compactScheduler(
   storage.setSetting("signoffNudge", "off")
   storage.setRecurringPromptBySlug(slug, {
     prompt: "Re-read .frizz/threads/sid/plan.md before continuing",
-    stopHook: false, heartbeat: false, postCompaction: true, pauseOnQuestions: false,
+    stopHook: false, heartbeat: false, postCompaction: true,
     intervalMs: null, armedAt: opts.armedAt ?? "2026-08-02T00:00:00.000Z",
   })
   const delivered: string[] = []
@@ -682,7 +682,7 @@ test("post-compaction: switching the trigger off supersedes a queued delivery", 
   try {
     h.storage.setRecurringPromptBySlug(h.slug, {
       prompt: "Re-read .frizz/threads/sid/plan.md before continuing",
-      stopHook: false, heartbeat: false, postCompaction: false, pauseOnQuestions: false,
+      stopHook: false, heartbeat: false, postCompaction: false,
       intervalMs: null, armedAt: "2026-08-02T00:00:00.000Z",
     })
     await h.s.tick()
@@ -690,48 +690,40 @@ test("post-compaction: switching the trigger off supersedes a queued delivery", 
   } finally { h.close() }
 })
 
-// ---- A PENDING QUESTION, and the two different things it does ------------------------------------
-// The stop hook asks a thread "you stopped — is there more?". A rest whose final message carries a
-// ```question fence has ALREADY answered that: there is more, and it needs the human. Bumping it there
-// makes the worker re-ask its own question with a paragraph of apology in front, and the operator gets
-// the same card twice.
+// ---- A PENDING QUESTION HOLDS NOTHING ------------------------------------------------------------
+// The stop hook asks a thread "you stopped — is there more?", and a ```question fence used to be read as
+// an answer to it: there is more, and it needs the human. That reading was switchable — the panel showed
+// a `pause_on_questions` column inverted as "Autonomous mode" — and on 2026-08-16 the switch AND the
+// reading went, so every trigger now fires while the thread is waiting on a human, by any means.
 //
-// UNLESS THE OPERATOR SAID OTHERWISE, which is the whole of Autonomous mode: "it needs the human" is
-// only an answer while the thread is one that waits for the human. So the question limb tracks the same
-// column the wider hold does, inverted — and the two rules that remain are:
-//   the HARD one — a ```done fence, or an ```awaiting on a wake frizz itself will deliver, holds the
-//   STOP HOOK always, whatever is configured (pinned elsewhere in this file);
-//   the SWITCHED one (`pauseOnQuestions`) — ANY way of waiting on the human holds ALL THREE triggers,
-//   and its OFF position additionally lets the at-rest bump cross a question fence.
+// Maintainer: "the stop hook should just fire even when there are open questions, unconditionally, and we
+// could just drop the AutonomousMode toggle… If somebody enables the stop hook goal, then that kind of
+// implies to me that they don't really want to answer any more questions."
 //
-// The harness defaults `pauseOnQuestions` to FALSE, so an `opts`-less case here is AUTONOMOUS.
+// WHAT SURVIVES is the fence rule and only the fence rule: a ```done, or an ```awaiting on a wake frizz
+// itself will deliver, still holds the stop hook — pinned by the test below, which is also this section's
+// failing control. Without it these tests would pass against a scheduler that had simply started firing
+// at everything.
 const nativeAsk = { id: "ask-1", questions: [{ question: "Which one?", header: "Pick", multiSelect: false, options: [] }] } as SessionTelemetry["pendingAsk"]
 
-// The maintainer's report, 2026-08-14: a thread with a Goal armed at rest and Autonomous mode ON came to
-// rest on a ```question and was never bumped, though the panel's gloss promises exactly this delivery.
-test("stop hook: AUTONOMOUS mode bumps a rest that ends in a question fence", async () => {
+// The maintainer's report, 2026-08-14: a thread with a Goal armed at rest came to rest on a ```question
+// and was never bumped. It was a settings-dependent bug then; it is unconditional behaviour now.
+test("stop hook: a rest that ends in a question fence is bumped", async () => {
   const asking = scheduler({ pendingQuestion: true }, { now: at("2026-08-02T00:00:05.000Z") })
   try {
     await asking.s.tick()
-    assert.equal(asking.delivered.length, 1, "autonomous mode is the operator saying they are not coming to answer it")
+    assert.equal(asking.delivered.length, 1, "an armed Goal is the operator saying they are not coming to answer it")
     // And the delivery is WORDED for it. Handed the bare goal on top of its own unanswered question, the
-    // honest move for a worker is to ask again — which is the duplicate card the hold existed to prevent.
-    assert.match(asking.delivered[0], /AUTONOMOUS MODE/)
+    // honest move for a worker is to ask again — which is the duplicate card the old hold existed to
+    // prevent, so the crossing has to say that no answer is coming.
+    assert.match(asking.delivered[0], /not waiting\s+to answer it/)
     assert.match(asking.delivered[0], /Do NOT re-ask it/)
   } finally { asking.close() }
-
-  // The control, on identical telemetry but for the flag — without it this test would pass against a
-  // scheduler that had simply started firing at everything.
-  const held = scheduler({ pendingQuestion: true }, { now: at("2026-08-02T00:00:05.000Z"), pauseOnQuestions: true })
-  try {
-    await held.s.tick()
-    assert.deepEqual(held.delivered, [], "with the hold armed the fence still answers the stop hook")
-  } finally { held.close() }
 })
 
 // The extra clause is for the crossing ONLY. A worker bumped on an ordinary rest is mid-work and has no
 // question outstanding; telling it not to re-ask one would be frizz inventing a state it is not in.
-test("stop hook: an ordinary autonomous rest is bumped with the plain trailer", async () => {
+test("stop hook: an ordinary rest is bumped with the plain trailer", async () => {
   const quiet = scheduler({ pendingQuestion: false }, { now: at("2026-08-02T00:00:05.000Z") })
   try {
     await quiet.s.tick()
@@ -740,24 +732,15 @@ test("stop hook: an ordinary autonomous rest is bumped with the plain trailer", 
   } finally { quiet.close() }
 })
 
-// Per-rest, exactly like ALLDONE: the flag rides the FINAL assistant message and the fold clears it on
-// the next user record, so answering the question re-opens the trigger with nothing stored to undo.
-test("stop hook: answering the question re-opens the trigger by itself", async () => {
-  const answered = scheduler({ pendingQuestion: false }, { lastFiredAt: "2026-08-02T00:00:05.000Z", now: at("2026-08-02T00:00:20.000Z"), pauseOnQuestions: true })
-  try {
-    await answered.s.tick()
-    assert.equal(answered.delivered.length, 1, "nothing was written when the fence held it, so nothing has to be cleared")
-  } finally { answered.close() }
-})
-
-// THE OVERRIDE REACHES THE QUESTION LIMB AND NOTHING ELSE. `done` is the loop's off switch, and a park on
-// a wake frizz itself will deliver is a duplicate wake rather than a rescue — neither becomes negotiable
-// because the operator asked the thread to decide its own questions. Both rows below are AUTONOMOUS.
-test("stop hook: autonomous mode does NOT reopen the done fence or a scheduler-owned park", async () => {
+// THE FENCE RULE IS UNTOUCHED, and this is the section's failing control: `done` is the loop's off switch,
+// and a park on a wake frizz itself will deliver is a duplicate wake rather than a rescue. Neither became
+// negotiable when the question hold was deleted — they answer the trigger's own question rather than
+// saying who is waiting on whom.
+test("stop hook: dropping the question hold does NOT reopen the done fence or a scheduler-owned park", async () => {
   const done = scheduler({ lastFence: { kind: "done", body: "shipped", hints: [] }, pendingQuestion: false }, { now: at("2026-08-02T00:00:05.000Z") })
   try {
     await done.s.tick()
-    assert.deepEqual(done.delivered, [], "a finished thread is finished in either mode")
+    assert.deepEqual(done.delivered, [], "a finished thread is finished")
   } finally { done.close() }
 
   // A REAL park: the fence names a shell this thread actually has running, so frizz can see the wait is
@@ -770,103 +753,44 @@ test("stop hook: autonomous mode does NOT reopen the done fence or a scheduler-o
   }, { now: at("2026-08-02T00:00:05.000Z") })
   try {
     await parked.s.tick()
-    assert.deepEqual(parked.delivered, [], "bumping a park frizz can verify is measured harm, whatever the mode")
+    assert.deepEqual(parked.delivered, [], "bumping a park frizz can verify is measured harm")
   } finally { parked.close() }
 })
 
-// The HARD rule is the FENCE and only the fence. A native ask is a different signal — the thread is
-// frozen on a modal rather than resting on a written question — and holding it unconditionally would be
-// a second, unasked-for policy. That is what the operator's toggle is for, one test down.
-test("stop hook: a native ask alone does NOT hold it — that is the toggle's job", async () => {
-  const asked = scheduler({ pendingAsk: nativeAsk }, { now: at("2026-08-02T00:00:05.000Z") })
-  try {
-    await asked.s.tick()
-    assert.equal(asked.delivered.length, 1)
-  } finally { asked.close() }
-
-  const held = scheduler({ pendingAsk: nativeAsk }, { now: at("2026-08-02T00:00:05.000Z"), pauseOnQuestions: true })
-  try {
-    await held.s.tick()
-    assert.deepEqual(held.delivered, [], "the operator armed the hold, so a native ask holds it too")
-  } finally { held.close() }
+// The other three ways a thread waits on a human. None of them is a fence, none of them ever held the
+// stop hook by itself, and there is no longer a setting that makes any of them hold it.
+test("stop hook: a native ask, a permission prompt and a pending question all fire", async () => {
+  for (const [what, tele] of [
+    ["a native ask", { pendingAsk: nativeAsk }],
+    ["a permission prompt", { permPrompt: true }],
+    ["a question fence", { pendingQuestion: true }],
+  ] as const) {
+    const h = scheduler(tele, { now: at("2026-08-02T00:00:05.000Z") })
+    try {
+      await h.s.tick()
+      assert.equal(h.delivered.length, 1, `${what} does not hold the stop hook`)
+    } finally { h.close() }
+  }
 })
 
-// A permission prompt is a question with a "Do you want to proceed?" on it. It counts. The panel seeds
-// the hold ON, but the COLUMN defaults off — an existing row, an older caller — so both states have to
-// behave, and the harness sets each explicitly rather than leaning on either default.
-test("the question hold counts a permission prompt, and does nothing while it is off", async () => {
-  const held = scheduler({ permPrompt: true }, { now: at("2026-08-02T00:00:05.000Z"), pauseOnQuestions: true })
-  try {
-    await held.s.tick()
-    assert.deepEqual(held.delivered, [])
-  } finally { held.close() }
-
-  const unheld = scheduler({ permPrompt: true }, { now: at("2026-08-02T00:00:05.000Z") })
-  try {
-    await unheld.s.tick()
-    assert.equal(unheld.delivered.length, 1, "a row without the hold is not held")
-  } finally { unheld.close() }
-})
-
-// The heartbeat is the trigger that consults NOTHING — rest, sub-agents, shells, all irrelevant. The
-// hold is the one operator-set exception, and the fence rule deliberately is not: "it has been an hour"
-// is not a question a pending fence answers.
-test("the question hold suppresses the HEARTBEAT; a fence alone does not", async () => {
+// The heartbeat is the trigger that consults NOTHING — rest, sub-agents, shells, questions, all
+// irrelevant. Only a ```done fence silences it, and that is pinned elsewhere in this file.
+test("a pending question does not suppress the HEARTBEAT", async () => {
   const fenced = heartbeatScheduler({ pendingQuestion: true }, { now: at("2026-08-02T01:00:00.000Z") })
   try {
     await fenced.s.tick()
     assert.equal(fenced.delivered.length, 1, "the beat asks a different question")
   } finally { fenced.close() }
-
-  const held = heartbeatScheduler({ pendingQuestion: true }, { now: at("2026-08-02T01:00:00.000Z") })
-  try {
-    held.storage.setRecurringPromptBySlug(held.slug, {
-      prompt: "check the deploy", stopHook: false, heartbeat: true, postCompaction: false,
-      pauseOnQuestions: true, intervalMs: 3_600_000, armedAt: "2026-08-02T00:00:00.000Z",
-    })
-    await held.s.tick()
-    assert.deepEqual(held.delivered, [])
-  } finally { held.close() }
 })
 
-test("the question hold suppresses POST-COMPACTION too", async () => {
-  const held = compactScheduler({ lastCompactionAt: "2026-08-02T01:00:00.000Z", pendingQuestion: true })
+// Nor post-compaction, which asks a third question again — "your context is gone" — that an unanswered
+// question answers least of all.
+test("a pending question does not suppress POST-COMPACTION", async () => {
+  const h = compactScheduler({ lastCompactionAt: "2026-08-02T01:00:00.000Z", pendingQuestion: true })
   try {
-    held.storage.setRecurringPromptBySlug(held.slug, {
-      prompt: "Re-read .frizz/threads/sid/plan.md before continuing",
-      stopHook: false, heartbeat: false, postCompaction: true, pauseOnQuestions: true,
-      intervalMs: null, armedAt: "2026-08-02T00:00:00.000Z",
-    })
-    await held.s.tick()
-    assert.deepEqual(held.delivered, [])
-  } finally { held.close() }
-
-  const unheld = compactScheduler({ lastCompactionAt: "2026-08-02T01:00:00.000Z", pendingQuestion: true })
-  try {
-    await unheld.s.tick()
-    assert.equal(unheld.delivered.length, 1, "off by default, and a compaction does not wait for an answer")
-  } finally { unheld.close() }
-})
-
-// The hold changes neither the words nor the cadence, so a delivery already queued still describes the
-// row exactly. Flipping it must not mint a generation or drop a "last sent" stamp — which would make the
-// panel's readout lie and re-send a bump the operator already watched land.
-test("storage: flipping the question hold keeps the generation and the last-fired stamp", () => {
-  const f = fixture()
-  try {
-    f.storage.setRecurringPromptIfCurrent(f.slug, "sid", 0, { prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false, pauseOnQuestions: false, intervalMs: null, armedAt: "2026-08-02T00:00:00.000Z" })
-    const armedAt = f.row().recurring_armed_at
-    f.storage.stampRecurringRestFired(f.slug, armedAt!, "2026-08-02T00:05:00.000Z")
-    f.storage.setRecurringPromptIfCurrent(f.slug, "sid", 0, { prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false, pauseOnQuestions: true, intervalMs: null, armedAt: "2026-08-02T00:10:00.000Z" })
-    assert.equal(f.row().recurring_pause_on_questions, 1)
-    assert.equal(f.row().recurring_armed_at, armedAt, "the hold is not a re-arming")
-    assert.equal(f.row().recurring_rest_fired_at, "2026-08-02T00:05:00.000Z")
-    // And it is cleared with everything else, so no row can hold a live hold over no prompt.
-    f.storage.setRecurringPromptIfCurrent(f.slug, "sid", 0, { prompt: null, stopHook: false, heartbeat: false, postCompaction: false, pauseOnQuestions: true, intervalMs: null, armedAt: "2026-08-02T00:12:00.000Z" })
-    assert.equal(f.row().recurring_pause_on_questions, 0)
-  } finally {
-    f.close()
-  }
+    await h.s.tick()
+    assert.equal(h.delivered.length, 1, "a compaction does not wait for an answer")
+  } finally { h.close() }
 })
 
 // A SIGNED-OUT PROVIDER answers in milliseconds, so the auth failure is a real assistant message and

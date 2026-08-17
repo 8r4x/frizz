@@ -233,12 +233,11 @@ test("a Goal and the reminder both queue for one rest, and a fence supersedes wh
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
     title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   } as SessionRow)
-  // The PANEL'S default: the question hold on, i.e. Autonomous mode OFF. The autonomous row is the test
-  // at the bottom of this file, and both must land the same two deliveries — the mode does not reach this
-  // source.
+  // An ordinary armed Goal — the stop hook and nothing else, which is what the footer panel arms when an
+  // operator flips one switch.
   storage.setRecurringPromptBySlug(slug, {
     prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false,
-    pauseOnQuestions: true, intervalMs: null, armedAt: "2026-08-12T00:00:00.000Z",
+    intervalMs: null, armedAt: "2026-08-12T00:00:00.000Z",
   })
   let fence: SessionTelemetry["lastFence"]
   const delivered: string[] = []
@@ -273,10 +272,12 @@ test("a Goal and the reminder both queue for one rest, and a fence supersedes wh
   } finally { void s.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) }
 })
 
-// ---- AND AUTONOMOUS MODE DOES NOT SWITCH IT OFF ---------------------------------------------------
-// It did, for one day (2026-08-13 → 2026-08-14), on the reading that this reminder buys a queue A HUMAN
-// triages and autonomous mode is the operator saying nobody is triaging this one. Two facts killed it and
-// this test is the guard against re-deriving the same argument:
+// ---- AND AN ARMED GOAL DOES NOT SWITCH IT OFF -----------------------------------------------------
+// It did, for one day (2026-08-13 → 2026-08-14), for the subset of Goals the panel then called Autonomous
+// mode — on the reading that this reminder buys a queue A HUMAN triages, and a self-driving thread is the
+// operator saying nobody is triaging this one. The switch is gone (2026-08-16) and every Goal is now that
+// kind, so the argument would apply to ALL of them if it held. Two facts killed it, and this test is the
+// guard against re-deriving it:
 //
 //   THE REMINDER STOPPED BEING A MENU OF WAYS TO STOP. It now OPENS by sending a half-finished thread back
 //   to the work, which is the Goal's own instruction — so the "two deliveries pulling opposite ways" the
@@ -287,14 +288,13 @@ test("a Goal and the reminder both queue for one rest, and a fence supersedes wh
 //   likely to be holding background work with no way to learn how to park on it. Measured over five
 //   consecutive bare rests with the suppression in: five Goal bumps, no reminder, the park never
 //   mentioned once.
-test("autonomous mode does not silence the reminder — the Goal and the reminder both land", async () => {
+test("an armed Goal does not silence the reminder — both land on one rest", async () => {
   const h = nudger({})
   try {
-    // Autonomous mode ON (`pauseOnQuestions: false`) with the at-rest trigger driving: the exact row the
-    // reverted gate keyed on.
+    // The at-rest trigger driving, which is the exact row the reverted gate keyed on.
     h.storage.setRecurringPromptBySlug(h.slug, {
       prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false,
-      pauseOnQuestions: false, intervalMs: null, armedAt: "2026-08-12T00:00:00.000Z",
+      intervalMs: null, armedAt: "2026-08-12T00:00:00.000Z",
     })
     await h.s.tick()
     assert.ok(h.delivered.some((m) => m.startsWith("keep going")), "the Goal fires")

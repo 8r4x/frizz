@@ -454,84 +454,47 @@ interface ArmedSchedule {
 type RecurringRow = Pick<
   SessionRow,
   | "recurring_prompt" | "recurring_on_rest" | "recurring_on_schedule" | "recurring_on_compact"
-  | "recurring_interval_ms" | "recurring_armed_at" | "recurring_pause_on_questions"
+  | "recurring_interval_ms" | "recurring_armed_at"
   | "recurring_rest_fired_at" | "recurring_schedule_fired_at" | "recurring_compact_fired_at"
 >
 
-// ---- WHAT A PENDING QUESTION DOES TO ALL THREE TRIGGERS -------------------------------------------
-// A thread that has asked the human something is not stalled — it is waiting, correctly, and it is
-// already sitting in the queue as a card with the answer's own input on it. Re-prompting it there is
-// worse than useless: the worker reads "keep going" as an instruction to act, and the honest reply to
-// its own question is to ask it again, so the operator gets the same card twice with a paragraph of
-// agent apology between them.
+// ---- WHAT A PENDING QUESTION DOES TO THE THREE TRIGGERS -------------------------------------------
+// NOTHING, as of 2026-08-16. A Goal fires over an unanswered question fence, a native ask and a
+// permission prompt alike, on every trigger, and there is no setting that changes it.
 //
-// TWO RULES, and they are deliberately different in strength.
+// THAT IS A DELETION, not a default flip. The row carried a `recurring_pause_on_questions` column and the
+// footer panel showed it inverted as an "Autonomous mode" switch; both are gone. Maintainer 2026-08-16:
+// "I feel like the stop hook should just fire even when there are open questions, unconditionally, and we
+// could just drop the AutonomousMode toggle… If somebody enables the stop hook goal, then that kind of
+// implies to me that they don't really want to answer any more questions." Arming a Goal IS the consent
+// the switch used to collect, so collecting it twice only bought a way to get it wrong — and the hold's
+// original job (a half-finished thread resting silently, with nobody to bring it back) belongs to the
+// built-in sign-off nudge now (SOURCE 9), which fires on exactly the rests that need it.
 //
-//   THE HARD ONE (`restMessageIsSignedOff`, below): the stop hook asks "you stopped — is there more?",
-//   and a ```question, a ```done, or an ```awaiting on a wait somebody else owns has already answered it
-//   in the very message that ENDED the turn. Firing over any of them is the trigger talking to itself.
+// WHAT STILL STOPS A BUMP is `restMessageIsSignedOff` below, and it is about the FENCE rather than about
+// questions: the stop hook asks "you stopped — is there more?", and a ```done or an ```awaiting on a wait
+// somebody else owns has already answered it in the very message that ENDED the turn. Firing over either
+// is the trigger talking to itself. A ```question fence used to be a third limb of that rule and no
+// longer is — it is an answer only for a thread that is waiting on a human, and a thread carrying a Goal
+// is not.
 //
-//   ITS QUESTION LIMB IS THE ONE PART AUTONOMOUS MODE OVERRIDES, and that is not a softening of the rule
-//   — it is the rule reading the operator's answer. "Is there more?" is answered by a question fence
-//   only because the thread is waiting for a human; a thread whose operator has said "decide for
-//   yourself, do not stop for me" is not waiting, so the fence has answered nothing. The other two limbs
-//   are NOT settings-dependent and never become so: `done` is the loop's off switch (below), and a park
-//   on a wake the scheduler itself will deliver is a duplicate wake rather than a rescue whatever mode
-//   the thread is in — including a `human:` gate, which stays held because bumping one is measured
-//   harm (see `parkedOnAWaitItCannotAdvance`) and because the fix for it is the operator, not a bump.
+// Its two surviving limbs reach different distances. A ```done fence ends the arrangement, so it also
+// stops the HEARTBEAT (`saidDone`) — it is the successor to the ALLDONE sentinel and inherits its reach
+// exactly. A parked ```awaiting stops the stop hook alone: the heartbeat asks "it has been an hour" and
+// the compaction trigger asks "your context is gone", and a PR nobody has reviewed is an answer to
+// neither. A `human:` gate stays held for the same reason it always did — bumping one is measured harm
+// (see `parkedOnAWaitItCannotAdvance`) and the fix for it is the operator, not a bump.
 //
-//   IT SHIPPED UNCONDITIONAL AND THAT WAS A BUG (maintainer 2026-08-14, "came to rest with a question,
-//   despite the fact that I have a goal set and its autonomous mode is enabled"). The panel's own gloss
-//   already promised this exact behaviour — "sends goal prompt when the agent asks questions instead of
-//   waiting for an answer" — while this line silently held the ON REST trigger, which on a thread armed
-//   at rest is the whole feature. Measured on the maintainer's board: project nub, thread
-//   `read-the-file-read-up`, `recurring_pause_on_questions = 0` and `recurring_on_rest = 1`, rested
-//   14:54:49Z on a ```question fence, and the Goal armed five minutes earlier never fired.
+// THE BUMP THAT CROSSES A QUESTION SAYS SO. A worker handed the bare goal on top of its own unanswered
+// question re-asks it, correctly — so `restPromptMessage(prompt, {overQuestion:true})` tells it no answer
+// is coming and to record the call instead. Without that clause this would produce the duplicate queue
+// card the old hold existed to prevent, rather than the forward motion asked for.
 //
-//   THE BUMP THAT CROSSES A QUESTION SAYS SO. A worker handed the bare goal on top of its own unanswered
-//   question re-asks it, correctly — so `restPromptMessage(prompt, {overQuestion:true})` tells it no
-//   answer is coming and to record the call instead. Without that clause this override would produce the
-//   duplicate card the unconditional hold existed to prevent, rather than the forward motion asked for.
-//
-//   Its parts reach different distances, though. A ```done fence ends the arrangement, so it also
-//   stops the HEARTBEAT (`saidDone`) — it is the successor to the ALLDONE sentinel and inherits its
-//   reach exactly. A pending QUESTION and a parked ```awaiting stop the stop hook alone: the heartbeat
-//   asks "it has been an hour" and the compaction trigger asks "your context is gone", and neither a
-//   question the human has not answered nor a PR nobody has reviewed is an answer to either.
-//
-//   THE SWITCHED ONE (`pauseOnQuestions`) is the operator's, and it is BROADER on both axes: it holds
-//   all three triggers, and it counts every way a thread can be blocked on a human — a fence, a native
-//   ask, a backend modal, an interactive permission prompt. The panel seeds it ON alongside the stop
-//   hook (maintainer 2026-08-11), because the two are one intent: "keep going" is not something to say
-//   to a thread that stopped to ask you a question, whichever way it asked.
-//
-//   THE PANEL SHOWS IT INVERTED, as "Autonomous mode" — switching that ON clears this flag, so the goal
-//   keeps arriving while an answer is outstanding and the agent decides for itself instead of waiting.
-//   Same default, a name that describes the behaviour rather than the mechanism. The inversion lives in
-//   the component; this column stays the mechanism it always was.
-//
-//   IT STOPS AT THE GOAL. It reached SOURCE 9 as well for one day (2026-08-13 → 2026-08-14), silencing
-//   frizz's own sign-off reminder on an autonomously-driven thread, and that is reverted rather than
-//   re-tuned: the reminder now OPENS by sending a half-finished thread back to the work, which is the
-//   Goal's own instruction, so the "two deliveries pulling opposite ways" the suppression was built on no
-//   longer exists — and the suppression cost the ```awaiting park, which the Goal's
-//   trailer deliberately does not name (see restPromptMessage). Measured over five consecutive bare
-//   rests: five bumps, no reminder, the park never mentioned. This column is about QUESTIONS.
-//
-//   THE `done` CARVE-OUT IS NOT ONE OF THESE, and is not switchable. It is the loop's OFF SWITCH: the
-//   delivered trailer tells the worker to sign off with `done` to stop the prompts, so a goal that kept
-//   firing over a `done` fence would be a loop with no terminating condition that frizz had also
-//   promised terminates. Predictability cuts the other way here — an unconditional trigger is only
-//   simpler until it is the thing reopening finished threads.
-//
-//   IT IS STILL A SWITCH, and the row's COLUMN still defaults to 0 — an existing armed row picks it up
-//   off, and so does any caller that has never heard of it. The default lives in the panel, where a
-//   default is a thing an operator can see and change, and not in the storage layer, where flipping it
-//   would silently re-interpret every row already on disk.
-type QuestionTele = Pick<
-  SessionTelemetry,
-  "pendingQuestion" | "pendingAsk" | "permPrompt" | "nativeInputRequired"
->
+// THE `done` CARVE-OUT IS THE LOOP'S OFF SWITCH, and is the one thing here that is not negotiable: the
+// delivered trailer tells the worker to sign off with `done` to stop the prompts, so a goal that kept
+// firing over a `done` fence would be a loop with no terminating condition that frizz had also promised
+// terminates. Predictability cuts the other way here — an unconditional trigger is only simpler until it
+// is the thing reopening finished threads.
 
 /** The thread SIGNED OFF: the message that ended the turn declares the work finished.
  *
@@ -546,27 +509,23 @@ function saidDone(tele: Pick<SessionTelemetry, "lastFence" | "lastAssistantAllDo
   return tele.lastFence?.kind === "done" || tele.lastAssistantAllDone === true
 }
 
-/** The stop hook asks "you stopped — is there more?", and this is the message that ALREADY ANSWERED it:
- *  the thread declared itself finished, it parked on a wait somebody else owns, or it asked the human
- *  something AND is in a mode where waiting for the human is what it should do. Firing over any of them
- *  is the trigger talking to itself.
- *
- *  `autonomous` reaches the QUESTION limb only, and the asymmetry is the point — see the header block.
- *  Both callers must pass the same value or a bump would be enqueued and then superseded before it was
- *  ever delivered, so it is read from the row by `autonomousModeOn` at each. */
 /** This thread's ARMED timer ids — the other registry a \`timer:\` line is checked against. */
 function armedTimerIdsOf(storage: Storage, slug: string): ReadonlySet<string> {
   return new Set(storage.listThreadTimers(slug, { armedOnly: true }).map((t) => t.id))
 }
 
+/** The stop hook asks "you stopped — is there more?", and this is the message that ALREADY ANSWERED it:
+ *  the thread declared itself finished, or it parked on a wait somebody else owns. Firing over either is
+ *  the trigger talking to itself.
+ *
+ *  A PENDING QUESTION IS NOT ONE OF THEM, since 2026-08-16 — see the header block. It was a third limb,
+ *  switchable off by the panel's "Autonomous mode", and the switch and the limb went together. */
 function restMessageIsSignedOff(
-  tele: Pick<SessionTelemetry, "pendingQuestion" | "lastFence" | "lastAssistantAllDone" | "bgShells" | "subAgents">,
-  autonomous: boolean,
+  tele: Pick<SessionTelemetry, "lastFence" | "lastAssistantAllDone" | "bgShells" | "subAgents">,
   registeredPrWatches: ReadonlySet<string> = new Set(),
   armedTimerIds: ReadonlySet<string> = new Set(),
 ): boolean {
-  if (saidDone(tele) || parkedOnAWaitItCannotAdvance(tele, registeredPrWatches, armedTimerIds)) return true
-  return tele.pendingQuestion === true && !autonomous
+  return saidDone(tele) || parkedOnAWaitItCannotAdvance(tele, registeredPrWatches, armedTimerIds)
 }
 
 /** What frizz can actually see running for this thread, in the shape `unaccountedItems` checks against.
@@ -636,34 +595,6 @@ function parkedOnAWaitItCannotAdvance(
  *  bump, because a declaration alone no longer means a wake is coming. */
 function registeredPrWatchesOf(storage: Storage, slug: string): ReadonlySet<string> {
   return new Set(storage.listPrWatches(slug, { armedOnly: true }).map((w) => `${w.owner}/${w.repo}#${w.number}`))
-}
-
-/** Is this thread blocked on the human RIGHT NOW, by any means? The `pauseOnQuestions` hold's input.
- *  Wider than the fence check above because the hold is the operator saying "don't nudge it while it is
- *  waiting on me", and a native ask or a permission prompt is exactly that. */
-function blockedOnHuman(tele: QuestionTele): boolean {
-  return tele.pendingQuestion === true
-    || tele.pendingAsk !== undefined
-    || tele.permPrompt === true
-    || tele.nativeInputRequired !== undefined
-}
-
-/** Does this row's question hold apply, given what the thread is doing? False when the hold is off, so
- *  callers read as one line at each of the three fire sites. */
-function heldByQuestion(row: Pick<SessionRow, "recurring_pause_on_questions">, tele: QuestionTele | undefined): boolean {
-  if (row.recurring_pause_on_questions !== 1) return false
-  return tele !== undefined && blockedOnHuman(tele)
-}
-
-/** The panel's "Autonomous mode": the same column `heldByQuestion` reads, inverted.
- *
- *  READING THE COLUMN ALONE IS SAFE HERE and nowhere else. It DEFAULTS TO 0, so on an arbitrary row
- *  "autonomous" and "never armed a Goal" are the same value, and a site that asks before establishing a
- *  live trigger reads the whole board as autonomous. Both callers of this one have already established
- *  an armed REST trigger before they ask, so the row in their hands is a Goal the operator configured
- *  and the 0 means what the switch says. Do not lift this to a site that has not. */
-function autonomousModeOn(row: Pick<SessionRow, "recurring_pause_on_questions">): boolean {
-  return row.recurring_pause_on_questions !== 1
 }
 
 // A row's live ON SCHEDULE trigger, if it has one. A switched-off trigger deliberately reads as ABSENT
@@ -1298,7 +1229,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (isStopHookFenceId(item.fenceId)) {
       const armed = armedRest(row)
       if (!armed || item.fenceId !== stopHookFenceId(armed.armedAt, tele.lastAssistantAt ?? "")) return "superseded"
-      if (restMessageIsSignedOff(tele, autonomousModeOn(row), registeredPrWatchesOf(deps.storage, item.slug), armedTimerIdsOf(deps.storage, item.slug))) return "superseded"
+      if (restMessageIsSignedOff(tele, registeredPrWatchesOf(deps.storage, item.slug), armedTimerIdsOf(deps.storage, item.slug))) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
     // A post-compaction delivery is bound to the generation AND to the exact compaction it was queued
@@ -1874,11 +1805,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // Frizz's own stop hook. Always on, not disableable per-thread, and invisible in the UI — orthogonal
   // to the operator's Goal, which keeps its own three triggers.
   //
-  // THE PER-THREAD OFF SWITCH WAS TRIED AND REVERTED (2026-08-13 → 2026-08-14): the Goal's AUTONOMOUS
-  // MODE silenced this for a day, on the argument that a thread told to keep going should not also be
-  // handed a menu of ways to stop. What killed it is that the reminder no longer IS that menu — it opens
-  // by sending a half-finished thread back to the work — and that suppressing it took the
-  // ```awaiting park with it, which nothing else on that thread's deliveries names.
+  // THE PER-THREAD OFF SWITCH WAS TRIED AND REVERTED (2026-08-13 → 2026-08-14): the Goal's then-existing
+  // "Autonomous mode" silenced this for a day, on the argument that a thread told to keep going should not
+  // also be handed a menu of ways to stop. What killed it is that the reminder no longer IS that menu — it
+  // opens by sending a half-finished thread back to the work — and that suppressing it took the
+  // ```awaiting park with it, which nothing else on that thread's deliveries names. That switch is gone
+  // entirely now (2026-08-16), so re-deriving the exemption would silence this on EVERY thread with a Goal.
   // The maintainer's 2026-08-12 call stands: keep it separate from the Goal, enabled all the time, and
   // pay the one extra transcript record.
   //
@@ -1949,7 +1881,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // of it in the trailer, which is its own kind of repetition. It is frizz's own hook now: identical
       // on every thread, whatever the operator has configured. The second delivery costs one transcript
       // record, collapsed to a hairline by the chat.
-      // NO AUTONOMOUS-MODE EXEMPTION HERE — see the SOURCE 9 header for the day it had one.
+      // AND NO GOAL-SHAPED EXEMPTION HERE — see the SOURCE 9 header for the day it had one.
       // THE CONSECUTIVE CAP. It counts fenceless rests and is cleared ONLY by a fence (above) — never by
       // a user record, because frizz's own delivery is one, and anchoring on that let the nudge reset its
       // own counter with its own message.
@@ -2451,10 +2383,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // so anything the thread says or receives afterwards reopens it.
       const beatTele = deps.tailer.get(row.slug)
       if (beatTele && saidDone(beatTele)) continue
-      // The OPERATOR's hold — the only other thing that silences a beat, and only because they asked
-      // for it. The hard rest-fence rule deliberately does NOT apply here: a beat asks "it has been an
-      // hour", which a pending question does not answer.
-      if (heldByQuestion(row, beatTele)) continue
+      // NOTHING ELSE SILENCES A BEAT — not a pending question, not a rest fence. A beat asks "it has been
+      // an hour", which neither of those answers. The operator's question hold used to reach here and was
+      // deleted with the switch that armed it (2026-08-16, see the header block).
       // One in flight at a time. Any open scheduled delivery for this thread — whatever its
       // generation — means the previous beat has not landed yet, so this interval is skipped rather
       // than stacked behind it.
@@ -2548,17 +2479,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // makes this able to rescue one parked behind a child that will never report. A worker that
       // genuinely has nothing to do until something returns says AWAITING — and an AWAITING naming a
       // wait the scheduler itself will fire is honoured, not bumped (`parkedOnAWaitItCannotAdvance`).
-      // THE REST ALREADY ANSWERED THIS TRIGGER'S QUESTION — the thread signed off as done, parked on a
-      // wait it cannot advance by working, or asked the human something while still in a mode that waits
-      // for the human. The first two hold whatever the settings say; the question limb is the one
-      // Autonomous mode overrides, and the bump it lets through is worded for it. See
-      // `restMessageIsSignedOff`.
+      // THE REST ALREADY ANSWERED THIS TRIGGER'S QUESTION — the thread signed off as done, or parked on a
+      // wait it cannot advance by working. A ```question fence does NOT answer it: a thread carrying a
+      // Goal is not waiting on the human, so the bump fires over it and is worded for it (see
+      // `restMessageIsSignedOff` and the header block).
       // Per-rest, and that is what makes it free: every fact it reads rides the FINAL assistant message,
       // so the next word on the thread re-opens the trigger with nothing stored to clear.
-      const autonomous = autonomousModeOn(row)
-      if (restMessageIsSignedOff(tele, autonomous, registeredPrWatchesOf(deps.storage, row.slug), armedTimerIdsOf(deps.storage, row.slug))) continue
-      // And the operator's own broader hold, when they armed it.
-      if (heldByQuestion(row, tele)) continue
+      if (restMessageIsSignedOff(tele, registeredPrWatchesOf(deps.storage, row.slug), armedTimerIdsOf(deps.storage, row.slug))) continue
       const fenceId = stopHookFenceId(armed.armedAt, restedAt)
       const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
       // Terminal rows stay in the store, so this alone is what makes a rest bump EXACTLY once: the same
@@ -2570,7 +2497,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         sessionId: row.session_id,
         fenceId,
         hintKey: STOP_HOOK_HINT_KEY,
-        message: restPromptMessage(armed.prompt, { overQuestion: autonomous && tele.pendingQuestion === true }),
+        message: restPromptMessage(armed.prompt, { overQuestion: tele.pendingQuestion === true }),
         reason: "recurring prompt at rest",
       }, nowMs).delivery
       log(`waker: queued ${row.slug} — ${item.reason}`)
@@ -2595,10 +2522,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // a thread that compacted an hour ago delivers immediately for an event the operator never saw —
       // and a thread that has compacted before is the common case, not the exotic one.
       if (tele.lastCompactionAt <= armed.armedAt) continue
-      // The operator's hold applies here too. Nothing else does: re-grounding a worker whose context was
-      // just emptied is worth doing whether or not it is mid-turn, and a fence it wrote before the
-      // compaction says nothing about whether it still remembers what it was doing.
-      if (heldByQuestion(row, tele)) continue
+      // NOTHING HOLDS THIS ONE. Re-grounding a worker whose context was just emptied is worth doing
+      // whether or not it is mid-turn, whether or not it is waiting on an answer, and a fence it wrote
+      // before the compaction says nothing about whether it still remembers what it was doing.
       const fenceId = compactFenceId(armed.armedAt, tele.lastCompactionAt)
       const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
       // Terminal rows stay in the store, so this alone is what makes a compaction bump EXACTLY once: the
