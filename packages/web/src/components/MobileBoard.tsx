@@ -1,8 +1,8 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useSnapshot } from "valtio"
-import { Check, ChevronLeft, Ellipsis, Hourglass, Plus } from "lucide-react"
+import { Check, ChevronLeft, ChevronRight, Ellipsis, FileText, Hourglass, Plus, Settings as SettingsIcon } from "lucide-react"
 import type { ThreadView } from "@frizz/shared"
-import { openThread, pushSubAgentDrawer, store } from "../store.ts"
+import { openThread, pushPlanDrawer, pushSubAgentDrawer, store, type ConnectionState } from "../store.ts"
 import { asThreads, useBoard } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
 import {
@@ -24,6 +24,8 @@ import { hintGloss } from "./Sidebar.tsx"
 import { useOptimisticallySteered } from "../lib/steering.ts"
 import { useOptimisticallyArchived } from "../lib/optimisticArchive.ts"
 import { projectIdentity } from "./Sidebar.tsx"
+import { QuotaChips } from "./QuotaBar.tsx"
+import type { PlanView } from "@frizz/shared"
 
 // THE PHONE'S BOARD — a nav bar, ONE list, a tab bar and a floating +.
 //
@@ -236,11 +238,99 @@ function TabButton({
   )
 }
 
+
+/**
+ * WHAT THE ⋯ CARRIES, and why it is a sheet rather than a link straight to Settings.
+ *
+ * Two things fell off the phone when the desktop status bar did: the PLANS band (a plan is only
+ * reachable from the rail, so on a phone it was reachable from nowhere at all) and the account-global
+ * readings — connection, and the two quota chips. Neither belongs in a 390pt nav bar and both have to
+ * live somewhere, so the ⋯ is that somewhere.
+ */
+const CONNECTION_WORD = {
+  open: { cls: "bg-live", word: "connected" },
+  connecting: { cls: "bg-accent", word: "connecting…" },
+  closed: { cls: "bg-red-500", word: "disconnected" },
+} as const
+
+function MoreSheet({ plans, connection, onClose }: { plans: readonly PlanView[]; connection: ConnectionState; onClose: () => void }) {
+  const conn = CONNECTION_WORD[connection]
+  const [shown, setShown] = useState(false)
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setShown(true))
+    return () => cancelAnimationFrame(raf)
+  }, [])
+  return (
+    <div data-mobile-more-sheet className="fixed inset-0 z-[70] flex flex-col justify-end">
+      <button aria-label="Close" onClick={onClose} className={`absolute inset-0 bg-black/50 transition-opacity duration-200 ${shown ? "opacity-100" : "opacity-0"}`} />
+      <div
+        className={`relative flex max-h-[80%] flex-col overflow-hidden rounded-t-[14px] border-t border-border-strong bg-panel pb-[calc(24px+env(safe-area-inset-bottom))] shadow-[0_-20px_60px_-10px_rgba(0,0,0,0.8)] transition-transform duration-200 ease-out motion-reduce:transition-none ${
+          shown ? "translate-y-0" : "translate-y-full"
+        }`}
+      >
+        <div className="mx-auto mt-[6px] h-[5px] w-[36px] shrink-0 rounded-full bg-muted/35" />
+        <div className="flex items-center justify-between gap-3 px-4 pb-3 pt-3">
+          <span className="flex items-baseline gap-2 text-[13px] text-muted">
+            <span className={`inline-block size-[7px] translate-y-[-1px] rounded-full ${conn.cls}`} />
+            {conn.word}
+          </span>
+          <QuotaChips />
+        </div>
+        <div className="min-h-0 overflow-y-auto">
+          <div className="border-y border-border/70 bg-panel/60">
+            <button
+              data-mobile-settings-row
+              onClick={() => {
+                store.showSettings = true
+                onClose()
+              }}
+              className="flex min-h-[48px] w-full items-center gap-3 px-4 text-left active:bg-white/[0.04]"
+            >
+              <SettingsIcon size={16} className="shrink-0 text-muted/70" />
+              <span className="min-w-0 flex-1 text-[16px] leading-[21px] text-fg">Settings</span>
+              <ChevronRight size={17} className="shrink-0 text-muted/45" />
+            </button>
+          </div>
+          {plans.length > 0 ? (
+            <>
+              <div className="px-4 pb-1.5 pt-4 text-[13px] font-medium text-muted">Plans</div>
+              <div className="border-y border-border/70 bg-panel/60">
+                {plans.map((plan, i) => (
+                  <div key={plan.path}>
+                    <button
+                      data-mobile-plan-row
+                      onClick={() => {
+                        pushPlanDrawer(plan.path, plan.title)
+                        onClose()
+                      }}
+                      className="flex min-h-[48px] w-full items-center gap-3 px-4 text-left active:bg-white/[0.04]"
+                    >
+                      <FileText size={16} className="shrink-0 text-muted/70" />
+                      <span className="min-w-0 flex-1 truncate text-[16px] leading-[21px] text-fg">{plan.title}</span>
+                      {plan.threadIds?.length ? (
+                        <span className="shrink-0 tabular-nums text-[12.5px] text-muted/55">{plan.threadIds.length}</span>
+                      ) : null}
+                      <ChevronRight size={17} className="shrink-0 text-muted/45" />
+                    </button>
+                    {i === plans.length - 1 ? null : <div className="ml-[52px] h-px bg-border/70" />}
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // The restart overlay, the drawer stack and the modals stay the App's: they are identical on both
 // shells and mounting them twice would stack two of everything.
 export function MobileBoard() {
+  const snap = useSnapshot(store)
   const board = useBoard()
   const [tab, setTab] = useState<Tab>("queue")
+  const [moreOpen, setMoreOpen] = useState(false)
   // Both optimistic overlays, exactly as the rail composes them: a just-sent steer pulls a row into the
   // running reading and a just-clicked Mark-as-done drops it into Done, each folded in BEFORE any band
   // is derived — so a row's appearance and its band always land together.
@@ -286,8 +376,9 @@ export function MobileBoard() {
             </span>
           </div>
           <button
-            aria-label="Settings"
-            onClick={() => (store.showSettings = true)}
+            aria-label="Board actions"
+            data-mobile-more
+            onClick={() => setMoreOpen(true)}
             className="ml-auto flex size-[44px] items-center justify-center rounded-full text-fg/85 active:bg-white/[0.06]"
           >
             <Ellipsis size={20} />
@@ -327,6 +418,10 @@ export function MobileBoard() {
       >
         <Plus size={24} strokeWidth={2.2} />
       </button>
+
+      {moreOpen ? (
+        <MoreSheet plans={(board?.plans ?? []) as PlanView[]} connection={snap.connection} onClose={() => setMoreOpen(false)} />
+      ) : null}
 
       <div className="fixed inset-x-0 bottom-0 z-30 border-t border-border/70 bg-bg/85 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl backdrop-saturate-150">
         <div className="flex h-[49px] items-stretch">
