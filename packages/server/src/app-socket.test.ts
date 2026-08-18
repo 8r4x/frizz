@@ -667,12 +667,26 @@ test("resource control: one batch reads once even when the snapshot cache is dis
   }
 })
 
+// What churn collapsing actually means is BATCH-LOCAL: one batch's Map+Set folds however many sub/unsub
+// frames it received onto one read and one surviving subscription. The batch BOUNDARY is not the
+// client's to set. These 81 frames run ~4.4KB, past the socket's read boundary, so the kernel hands the
+// server two chunks in two poll iterations often enough to matter — measured 2026-08-18: 6 runs in 100
+// split on an idle machine, and full-suite runs on 08-14 and 08-18 read twice. Under a real setImmediate
+// that is one batch per chunk, and each re-reads by DESIGN, because a later batch invalidates the
+// retained snapshot so a late subscriber still sees disk truth. Force every frame into its own poll
+// iteration and the pre-2026-08-18 shape of this test reads 16 times and ends UNSUBSCRIBED. So inject
+// the boundary the way the two coalescing tests above do, and only fire it once every frame is provably
+// inside the batch.
 test("resource control: rapid alternating sub/unsub churn collapses to one surviving read", async () => {
-  let reads = 0
+  const readSlugs: string[] = []
+  const armedBatches: (() => void)[] = []
   const h = await startHarness({
     maxMessagesPerWindow: 200,
-    readTranscript: () => {
-      reads++
+    scheduleSubscriptionFlush: (flush) => {
+      armedBatches.push(flush)
+    },
+    readTranscript: (slug) => {
+      readSlugs.push(slug)
       return [msg("stable")]
     },
   })
@@ -686,9 +700,23 @@ test("resource control: rapid alternating sub/unsub churn collapses to one survi
       c.ws.send(unsub)
     }
     c.ws.send(sub)
+    // Frames are handled in order, so this trailing marker registering proves every churn frame ahead of
+    // it has been handled — whatever the kernel did with the chunk boundaries.
+    c.ws.send(JSON.stringify({ t: "sub", topic: "transcript", slug: "churn-tail" }))
+    await waitFor(
+      () => h.appSocket.registry.hasSubscribers("churn-tail"),
+      "every churn frame to be handled",
+    )
+    assert.equal(armedBatches.length, 1, "the whole burst arms ONE batch, not one per socket read")
+    assert.deepEqual(readSlugs, [], "the batch defers every read until its boundary")
+    armedBatches[0]!()
     const pushed = await c.next()
     assert.equal(pushed.t, "transcript")
-    assert.equal(reads, 1)
+    assert.deepEqual(
+      readSlugs.sort(),
+      ["churn", "churn-tail"],
+      "81 alternating frames collapse onto ONE read of the churned slug",
+    )
     assert.equal(h.appSocket.registry.hasSubscribers("churn"), true)
     c.ws.close()
   } finally {
