@@ -31,7 +31,9 @@ export const CLAUDE_ULTRACODE_EFFORT = "xhigh"
 export const CLAUDE_ULTRACODE_MODELS: readonly string[] = ["fable", "opus", "sonnet"]
 
 export function claudeModelSupportsUltracode(model: string | undefined): boolean {
-  return Boolean(model) && CLAUDE_ULTRACODE_MODELS.includes(model!)
+  // A `[1m]` alias is the same model with the 1M context window — capability follows the family, so
+  // strip the window suffix before the membership check.
+  return Boolean(model) && CLAUDE_ULTRACODE_MODELS.includes(model!.replace(/\[1m\]$/, ""))
 }
 
 export interface ResolvedClaudeEffort {

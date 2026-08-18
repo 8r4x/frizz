@@ -47,3 +47,29 @@ test("observed model normalization accepts only the current provider's identitie
   assert.equal(normalizeObservedThreadModel("claude", "gpt-5.5"), undefined)
   assert.equal(normalizeObservedThreadModel("codex", "sonnet"), undefined)
 })
+
+test("1M window variants ride the catalogue like their base aliases", () => {
+  // A launchable pair, ultracode rung included: the [1m] alias is the same model, so capability
+  // follows the family rather than the literal string.
+  assert.doesNotThrow(() => validateThreadProfile("claude", "opus[1m]", "ultracode"))
+  assert.doesNotThrow(() => validateThreadProfile("claude", "sonnet[1m]", "xhigh"))
+  // There is no Haiku 1M — an invented one must fail closed like any unknown model.
+  assert.throws(() => validateThreadProfile("claude", "haiku[1m]", "high"), /Unsupported claude/)
+  assert.equal(normalizeObservedThreadModel("claude", "opus[1m]"), "opus[1m]")
+})
+
+test("observed telemetry never downgrades a 1M thread to its base alias", () => {
+  // THE regression this guards: Claude Code strips `[1m]` before the request, so the model the API
+  // echoes back is the bare id. Normalizing that on its own returns the family — and since the
+  // persisted model is the cold-resume launch target, writing it back would silently drop the 1M
+  // window on the next restart. The launch pick carries the suffix through instead.
+  assert.equal(normalizeObservedThreadModel("claude", "claude-opus-5", "opus[1m]"), "opus[1m]")
+  assert.equal(normalizeObservedThreadModel("claude", "claude-opus-5", "opus"), "opus")
+  assert.equal(normalizeObservedThreadModel("claude", "claude-opus-5"), "opus")
+  // A genuine model CHANGE still wins, and drops the suffix: nothing knows the new model's window.
+  assert.equal(normalizeObservedThreadModel("claude", "claude-sonnet-5", "opus[1m]"), "sonnet")
+  // Haiku has no 1M sibling, so a stray launch pick cannot conjure one.
+  assert.equal(normalizeObservedThreadModel("claude", "claude-haiku-4-5", "haiku[1m]"), "haiku")
+  // Should a future CLI stop stripping the suffix, the observation itself is honoured.
+  assert.equal(normalizeObservedThreadModel("claude", "claude-opus-5[1m]", "opus"), "opus[1m]")
+})

@@ -781,7 +781,7 @@ export function resolveSessionProfile(
   const supersededByOperatorSet = Number.isFinite(setAt) && setAt > observedAt
   const observedIsCurrent = Number.isFinite(observedAt) && Number.isFinite(spawnedAt) && observedAt >= spawnedAt && !supersededByOperatorSet
   const observedModel = tele?.model
-    ? normalizeObservedThreadModel(row.backend ?? "claude", tele.model) ?? tele.model.trim()
+    ? normalizeObservedThreadModel(row.backend ?? "claude", tele.model, persistedModel) ?? tele.model.trim()
     : undefined
   const model = (!persistedModel || observedIsCurrent ? observedModel : undefined) || persistedModel
   const effort = (!persistedEffort || observedIsCurrent ? tele?.effort?.trim() : undefined) || persistedEffort

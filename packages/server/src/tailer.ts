@@ -4237,7 +4237,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       if (profileRecordLanded && state.model && state.profileAt) {
         const observedAt = Date.parse(state.profileAt)
         const spawnedAt = Date.parse(row.spawned_at)
-        const model = normalizeObservedThreadModel(row.backend ?? "claude", state.model)
+        const model = normalizeObservedThreadModel(row.backend ?? "claude", state.model, row.model)
         const effort = state.effort?.trim() || row.effort?.trim()
         if (model && effort && Number.isFinite(observedAt) && Number.isFinite(spawnedAt) && observedAt >= spawnedAt) {
           try {

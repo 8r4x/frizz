@@ -64,11 +64,16 @@ export const PERMISSION_COLOR: Record<(typeof PERMISSION_MODES)[number], string>
 // id ⇒ backend "codex". "" = the CLI default (claude). The dependent permission/effort controls then
 // present the chosen backend's axis (Claude permission-mode vs Codex sandbox; the codex effort set).
 
-// Claude Code models — the `claude --model` aliases.
+// Claude Code models — the `claude --model` aliases. The `[1m]` rows are the same models with the
+// 1M-token context window (the CLI parses the suffix into the `context-1m-2025-08-07` beta header);
+// the mechanism note lives with the server's CLAUDE_THREAD_PROFILES. There is no Haiku 1M.
 export const CLAUDE_MODELS: SelectOption[] = [
   { value: "fable", label: "Fable" },
+  { value: "fable[1m]", label: "Fable 1M" },
   { value: "opus", label: "Opus" },
+  { value: "opus[1m]", label: "Opus 1M" },
   { value: "sonnet", label: "Sonnet" },
+  { value: "sonnet[1m]", label: "Sonnet 1M" },
   { value: "haiku", label: "Haiku" },
 ]
 
@@ -163,9 +168,10 @@ export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const
 export const ULTRACODE = "ultracode"
 const ULTRACODE_MODELS = new Set(["fable", "opus", "sonnet"])
 
-/** The Claude effort ladder for one model alias — the mirror of the server's claudeEffortsFor. */
+/** The Claude effort ladder for one model alias — the mirror of the server's claudeEffortsFor. A
+ * `[1m]` alias is the same model with the 1M window, so capability keys off the stripped family. */
 export function claudeEfforts(model: string | undefined): string[] {
-  return model && ULTRACODE_MODELS.has(model) ? [...EFFORTS, ULTRACODE] : [...EFFORTS]
+  return model && ULTRACODE_MODELS.has(model.replace(/\[1m\]$/, "")) ? [...EFFORTS, ULTRACODE] : [...EFFORTS]
 }
 
 // Labels span BOTH ladders: Claude's low..max (plus ultracode) and codex's "ultra". An unlabeled effort

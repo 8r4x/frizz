@@ -77,6 +77,14 @@ test("claudeEfforts: ultracode tops the ladder on xhigh-capable models and is wi
   assert.equal(claudeEffortOptions("opus", { withDefault: true })[0]!.value, "")
 })
 
+// A `[1m]` alias is the same model with the 1M window: it classifies as claude (unknowns default
+// there, and the loop above already walks every CLAUDE_MODELS row) and keeps the family's ladder.
+test("claudeEfforts: a [1m] window variant carries its family's ladder, ultracode included", () => {
+  assert.deepEqual(claudeEfforts("opus[1m]"), ["low", "medium", "high", "xhigh", "max", "ultracode"])
+  assert.equal(backendForModel("opus[1m]"), "claude")
+  assert.equal(claudeEffortForModel("sonnet[1m]", "ultracode"), "ultracode")
+})
+
 // The clamp keeps the select from rendering blank after a model switch strands a saved level.
 test("claudeEffortForModel: ultracode degrades to xhigh on a model that cannot honour it", () => {
   assert.equal(claudeEffortForModel("opus", "ultracode"), "ultracode")
