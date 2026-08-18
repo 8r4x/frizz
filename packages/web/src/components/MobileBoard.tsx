@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useSnapshot } from "valtio"
-import { Check, ChevronLeft, ChevronRight, Ellipsis, FileText, Hourglass, Plus, Settings as SettingsIcon } from "lucide-react"
+import { Check, ChevronLeft, ChevronRight, Clock, Ellipsis, FileText, Hourglass, Plus, Settings as SettingsIcon } from "lucide-react"
 import type { ThreadView } from "@frizz/shared"
 import { openThread, pushPlanDrawer, pushSubAgentDrawer, store, type ConnectionState } from "../store.ts"
 import { asThreads, useBoard } from "../hooks.ts"
@@ -22,7 +22,10 @@ import { ChildOpRow } from "./ChildOpRow.tsx"
 import { ProviderMark } from "./ProviderMark.tsx"
 import { hintGloss } from "./Sidebar.tsx"
 import { useOptimisticallySteered } from "../lib/steering.ts"
-import { useOptimisticallyArchived } from "../lib/optimisticArchive.ts"
+import { clearArchived, markArchived, useOptimisticallyArchived } from "../lib/optimisticArchive.ts"
+import { rpc } from "../api/rpc.ts"
+import { showToast } from "../store.ts"
+import { snoozePresetInstant, snoozePresetLabel } from "../lib/snooze.ts"
 import { projectIdentity } from "./Sidebar.tsx"
 import { QuotaChips } from "./QuotaBar.tsx"
 import type { PlanView } from "@frizz/shared"
@@ -121,6 +124,119 @@ function ThreadMark({ kind }: { kind: SessionIndicatorKind }) {
   return <StatusBox />
 }
 
+
+// SWIPE A ROW TO TRIAGE IT — snooze or finish without opening the thread.
+//
+// The two verbs are the two the queue actually needs away from a desk, and they are the SAME RPCs the
+// desktop's footer calls (`setThreadSnooze` with the user's own chosen preset, `markComplete`), so a
+// swipe and a click cannot mean different things.
+//
+// THE GESTURE, and the two details that decide whether it feels native rather than web:
+//
+//   · IT MUST NOT STEAL THE VERTICAL SCROLL. A row that follows the finger on any movement makes the
+//     list impossible to scroll, so the drag only claims the gesture once the movement is DOMINANTLY
+//     horizontal (|dx| > |dy| and past a small slop) — before that the browser keeps it and scrolls.
+//   · ONE ROW OPEN AT A TIME. Two half-open rows read as a rendering fault, so the open row's id lives
+//     in the LIST rather than in each row, and opening one closes the other.
+//
+// `touch-action: pan-y` tells the browser up front that this element will never want horizontal panning
+// from it, which is what stops Safari from starting a back-navigation swipe on the same drag.
+const SWIPE_ACTION_W = 76
+const SWIPE_OPEN = SWIPE_ACTION_W * 2
+const SWIPE_SLOP = 10
+
+function SwipeRow({
+  open,
+  onOpenChange,
+  onSnooze,
+  onDone,
+  snoozeLabel,
+  children,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onSnooze: () => void
+  onDone: () => void
+  snoozeLabel: string
+  children: React.ReactNode
+}) {
+  const [dx, setDx] = useState(0)
+  const start = useRef<{ x: number; y: number; claimed: boolean } | null>(null)
+  const offset = open ? -SWIPE_OPEN : 0
+  const shown = start.current?.claimed ? dx : offset
+
+  return (
+    <div className="relative overflow-hidden" style={{ touchAction: "pan-y" }}>
+      <div className="absolute inset-y-0 right-0 flex" aria-hidden={!open}>
+        <button
+          data-mobile-swipe-snooze
+          onClick={() => { onOpenChange(false); onSnooze() }}
+          className="flex flex-col items-center justify-center gap-1 bg-elevated text-muted active:bg-panel-2"
+          style={{ width: SWIPE_ACTION_W }}
+        >
+          <Clock size={19} />
+          <span className="text-[11.5px]">{snoozeLabel}</span>
+        </button>
+        <button
+          data-mobile-swipe-done
+          onClick={() => { onOpenChange(false); onDone() }}
+          className="flex flex-col items-center justify-center gap-1 bg-live/85 text-bg active:brightness-95"
+          style={{ width: SWIPE_ACTION_W }}
+        >
+          <Check size={19} strokeWidth={2.6} />
+          <span className="text-[11.5px] font-medium">Done</span>
+        </button>
+      </div>
+      <div
+        className={`relative bg-bg ${start.current?.claimed ? "" : "transition-transform duration-200 ease-out motion-reduce:transition-none"}`}
+        style={{ transform: `translateX(${shown}px)` }}
+        onPointerDown={(e) => {
+          if (e.pointerType === "mouse" && e.button !== 0) return
+          start.current = { x: e.clientX, y: e.clientY, claimed: false }
+        }}
+        onPointerMove={(e) => {
+          const s = start.current
+          if (!s) return
+          const moveX = e.clientX - s.x
+          const moveY = e.clientY - s.y
+          if (!s.claimed) {
+            // Undecided: let the browser scroll unless the movement is clearly sideways.
+            if (Math.abs(moveX) < SWIPE_SLOP || Math.abs(moveX) <= Math.abs(moveY)) return
+            s.claimed = true
+            e.currentTarget.setPointerCapture(e.pointerId)
+          }
+          // Rubber-band past the open width so the row cannot be flung off the screen, and never open
+          // rightwards — there is nothing under that edge.
+          const next = Math.min(0, Math.max(-SWIPE_OPEN - 24, offset + moveX))
+          setDx(next)
+        }}
+        onPointerUp={() => {
+          const s = start.current
+          start.current = null
+          if (!s?.claimed) return
+          const settled = dx < -SWIPE_OPEN / 2
+          setDx(0)
+          onOpenChange(settled)
+        }}
+        onPointerCancel={() => {
+          start.current = null
+          setDx(0)
+        }}
+        // A tap anywhere on an OPEN row closes it rather than opening the thread — the same rule Mail
+        // follows, and without it the only way back is a second swipe.
+        onClickCapture={(e) => {
+          if (!open) return
+          e.preventDefault()
+          e.stopPropagation()
+          onOpenChange(false)
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  )
+}
+
 /**
  * One thread, full width.
  *
@@ -128,7 +244,18 @@ function ThreadMark({ kind }: { kind: SessionIndicatorKind }) {
  * 64pt of a 358pt measure. The hairline is INSET to the text column (16 + 18 + 12 = 46) so the glyph
  * column reads as a gutter rather than as the first cell of a table.
  */
-function MobileThreadRow({ t, last }: { t: ThreadView; last?: boolean }) {
+function MobileThreadRow({
+  t,
+  last,
+  openSwipe,
+  onOpenSwipe,
+}: {
+  t: ThreadView
+  last?: boolean
+  openSwipe: boolean
+  onOpenSwipe: (open: boolean) => void
+}) {
+  const snoozePreset = useSnapshot(prefs).snoozePreset
   const now = useNowMs()
   const kind = sessionIndicatorKind(t)
   const running = isActivelyRunning(t)
@@ -139,6 +266,41 @@ function MobileThreadRow({ t, last }: { t: ThreadView; last?: boolean }) {
   const subs = visibleChildOps(t.subAgents ?? [], "rail")
   return (
     <div className={kind === "held" ? "opacity-60" : undefined}>
+      <SwipeRow
+        open={openSwipe}
+        onOpenChange={onOpenSwipe}
+        snoozeLabel={snoozePresetLabel(snoozePreset)}
+        onSnooze={async () => {
+          try {
+            await rpc.setThreadSnooze({ slug: t.id, sessionId: t.sessionId ?? "", until: snoozePresetInstant(snoozePreset), prompt: null })
+            showToast(`Snoozed · ${snoozePresetLabel(snoozePreset)}`)
+          } catch (error) {
+            showToast(error instanceof Error ? error.message.slice(0, 100) : "Snooze failed")
+          }
+        }}
+        onDone={async () => {
+          // `completeThread`, NOT `markComplete`. The latter is the LEGACY `.frizz` doc path — it shells
+          // out to a thread-file update and 500s on a session thread that has no `.md` behind it, which
+          // is exactly what this swipe did on its first outing (verified: the wire call went out, came
+          // back 500, and the row stayed in the queue while the desktop's own button on the same thread
+          // succeeded). The footer has always used the session-first mutation; so does this now.
+          markArchived(t.id) // the same optimism the footer runs on, so the row leaves the Queue at once
+          try {
+            const result = await rpc.completeThread({ slug: t.id, sessionId: t.sessionId ?? "", terminateLive: false })
+            if (result.needsConfirmation) {
+              // A turn is still executing, so finishing it is a decision with a dialog behind it. A
+              // swipe is not the place to answer that question — hand it back rather than guessing.
+              clearArchived(t.id)
+              showToast("Still running — open the thread to finish it")
+              return
+            }
+            showToast("Marked as done")
+          } catch (error) {
+            clearArchived(t.id)
+            showToast(error instanceof Error ? error.message.slice(0, 100) : "Could not mark as done")
+          }
+        }}
+      >
       <button
         data-mobile-thread-row={t.id}
         onClick={() => openThread(t.id)}
@@ -163,6 +325,7 @@ function MobileThreadRow({ t, last }: { t: ThreadView; last?: boolean }) {
           ) : null}
         </span>
       </button>
+      </SwipeRow>
       {subs.length > 0 ? (
         <div className="flex flex-col pb-1">
           {subs.map((s) => (
@@ -331,6 +494,8 @@ export function MobileBoard() {
   const board = useBoard()
   const [tab, setTab] = useState<Tab>("queue")
   const [moreOpen, setMoreOpen] = useState(false)
+  // ONE row open at a time — two half-open rows read as a rendering fault.
+  const [openSwipe, setOpenSwipe] = useState<string | null>(null)
   // Both optimistic overlays, exactly as the rail composes them: a just-sent steer pulls a row into the
   // running reading and a just-clicked Mark-as-done drops it into Done, each folded in BEFORE any band
   // is derived — so a row's appearance and its band always land together.
@@ -403,7 +568,13 @@ export function MobileBoard() {
         ) : (
           <div className="border-b border-border/70 bg-panel/60">
             {rows.map((t, i) => (
-              <MobileThreadRow key={t.id} t={t} last={i === rows.length - 1} />
+              <MobileThreadRow
+                key={t.id}
+                t={t}
+                last={i === rows.length - 1}
+                openSwipe={openSwipe === t.id}
+                onOpenSwipe={(open) => setOpenSwipe(open ? t.id : null)}
+              />
             ))}
           </div>
         )}
