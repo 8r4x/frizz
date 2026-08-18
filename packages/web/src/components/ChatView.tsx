@@ -27,6 +27,8 @@ import { GithubWakeCard } from "./GithubWakeCard.tsx"
 import { RecurringPromptLine } from "./RecurringPromptLine.tsx"
 import { WakeDivider } from "./WakeDivider.tsx"
 import { useLiveAnswering, type LiveAnswering } from "../lib/answering.ts"
+import { useIsMobile } from "../lib/mobile.ts"
+import { MobileAnswerSheet } from "./MobileAnswerSheet.tsx"
 import { sendEagerFollowUp } from "../lib/eagerComposerSubmission.ts"
 import { useUnqueueFollowUp, useUnqueueSupported } from "../lib/unqueueFollowUp.ts"
 import { useDeliverQueuedNow, useDeliverQueuedNowSupported } from "../lib/deliverQueuedNow.ts"
@@ -3082,6 +3084,11 @@ function UserBubble({ text, rawText, queued, sticky, deliveryUnconfirmed, delive
 // Lifecycle controls never belong to a transcript message: every Done card stays presentation-only,
 // while the owning thread surface renders one stable footer.
 export const Message = memo(function Message({ m, answering, dense, paired, sticky, textOnly, showSendButton, staleAwaiting }: { m: ChatMessage; answering?: MessageAnswering; dense?: boolean; paired?: PairedAnswer[] | null; sticky?: boolean; textOnly?: boolean; showSendButton?: boolean; staleAwaiting?: boolean }) {
+  // ANSWERING ON A PHONE happens in a sheet, one question at a time (MobileAnswerSheet) — the cards in
+  // the transcript stay READ-ONLY there, so the questions are still visible in the context that
+  // produced them but a 44pt-thumb answer never has to land on a 24pt chip inside a scrolling message.
+  const isMobile = useIsMobile()
+  const [answerSheetOpen, setAnswerSheetOpen] = useState(false)
   // An event line (a sub-agent completion) is transcript PUNCTUATION — a quiet full-width line, not a
   // bubble or a tool band. Rendered before the role branches (its role field is nominal).
   if (m.kind === "event") return <EventLine text={m.text} boundary={m.boundary} sourceId={m.sourceId} />
@@ -3152,6 +3159,9 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
     pictureEdges.push(edges)
   }
   const qi = { n: -1 }
+  // THIS message's open question blocks, in the order the answering controller numbers them. Only
+  // populated when the message actually has a controller (i.e. its ask is still open).
+  const askBlocks: { raw: string; kind: QuestionKind; danger: boolean; bi: number }[] = []
   const renderText = (text: string, keyBase: string) => {
     // Split SIGNAL fences (```done / ```awaiting) out first — each renders as a card in place of the
     // raw block — then run the remaining prose runs through the question/image pipeline. Fences never
@@ -3188,7 +3198,10 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
         }
         qi.n += 1
         const bi = qi.n
-        const interactive = answering
+        if (answering) askBlocks.push({ raw: seg.text, kind: seg.questionKind, danger: seg.danger, bi })
+        // On a phone the card is a READING surface and the sheet is the answering one, so it renders
+        // without an interactive controller even though this message has one.
+        const interactive = answering && !isMobile
           ? {
               answer: answering.answerFor(bi),
               onChip: (optIdx: number, optText: string) => answering.onChip(bi, optIdx, optText),
@@ -3238,7 +3251,22 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
   // block(s) (answering.onSubmit → sendAnswers(thisMessageIdentity)). `answering` is present only for a
   // message that still carries an open ask, so the button only appears where there's something to send;
   // the queue card leaves showSendButton unset (it owns a single card-level Send instead).
-  if (showSendButton && answering) {
+  if (showSendButton && answering && isMobile && askBlocks.length > 0) {
+    // One verb, and it OPENS the sheet rather than sending: nothing on a phone is answered from the
+    // transcript, so a "Send answers" here would be enabled by state the reader cannot see.
+    push(
+      <div key="answer-open" className="flex justify-start">
+        <button
+          type="button"
+          data-mobile-answer-open
+          onClick={() => setAnswerSheetOpen(true)}
+          className="flex h-[40px] items-center justify-center rounded-[12px] bg-accent px-4 text-[15px] font-semibold text-bg active:brightness-90"
+        >
+          {askBlocks.length > 1 ? `Answer ${askBlocks.length} questions` : "Answer"}
+        </button>
+      </div>,
+    )
+  } else if (showSendButton && answering) {
     push(
       <div key="send-answers" className="flex justify-start">
         <button
@@ -3260,6 +3288,9 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
   return (
     <div data-frizz-msg={m.sourceId} className="flex flex-col text-[13px] min-w-0">
       {withSpacers(blocks, pictureAwareGap(pictureEdges, STEP))}
+      {answerSheetOpen && answering && askBlocks.length > 0 ? (
+        <MobileAnswerSheet blocks={askBlocks} answering={answering} onClose={() => setAnswerSheetOpen(false)} />
+      ) : null}
     </div>
   )
 })
