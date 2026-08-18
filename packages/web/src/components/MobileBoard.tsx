@@ -28,6 +28,7 @@ import { showToast } from "../store.ts"
 import { snoozePresetInstant, snoozePresetLabel } from "../lib/snooze.ts"
 import { projectIdentity } from "./Sidebar.tsx"
 import { QuotaChips } from "./QuotaBar.tsx"
+import { StatusListView } from "./StatusListView.tsx"
 import type { PlanView } from "@frizz/shared"
 
 // THE PHONE'S BOARD — a nav bar, ONE list, a tab bar and a floating +.
@@ -517,6 +518,7 @@ export function MobileBoard() {
   const askCount = queue.filter(needsAction).length
 
   const rows = tab === "queue" ? queue : tab === "held" ? sections.held : sections.inactive
+  const statusView = snap.view.startsWith("status:") ? snap.view.slice(7) : null
   const identity = projectIdentity(board)
 
   return (
@@ -553,7 +555,13 @@ export function MobileBoard() {
 
       {/* The list. 48pt of nav bar above, 83pt of tab bar + home indicator below. */}
       <div className="flex min-h-dvh flex-col pb-[calc(83px+env(safe-area-inset-bottom))] pt-[calc(48px+env(safe-area-inset-top))]">
-        {rows.length === 0 ? (
+        {statusView ? (
+          // A `/status/<name>` URL is a real route on both shells; answering it with the queue would be
+          // the wrong list with nothing saying so. Same component the workpane renders.
+          <div className="flex min-h-0 flex-1 flex-col">
+            <StatusListView status={statusView} />
+          </div>
+        ) : rows.length === 0 ? (
           <EmptyBand
             label={
               !board
