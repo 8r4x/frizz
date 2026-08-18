@@ -2,8 +2,10 @@
 
 This repo does NOT use pull requests. Ever. NEVER run `gh pr create` (or the `gh api .../pulls` POST
 equivalent, or the GitHub UI) — not for a typo, not for a big feature, no size threshold, no
-exception. This binds EVERY agent that touches this repo: the top-level worker and every sub-agent it
+exception. This binds EVERY agent that touches this checkout: the top-level worker and every sub-agent it
 dispatches. If you find yourself about to open a PR, STOP — in this repo that is always the wrong move.
+
+**Who this binds: anyone working in a checkout that can push to `colinhacks/frizz`** — the maintainer, and every agent dispatched onto their machine. Frizz is open source and the repo is public, so there is exactly one case this rule does not reach: an OUTSIDE CONTRIBUTOR working from a fork. You cannot push to this repo, so a pull request from your fork is the only way to offer a change — open one, and ignore the rest of this section. It describes how the maintainer's own work lands in the maintainer's own tree; it is not a statement that contributions are unwelcome.
 
 Land finished work on this machine's local `main` instead: work directly on `main`, or do
 isolated/messy work in a git worktree on a local branch (`git worktree add <dir> -b <slug>`) and, when

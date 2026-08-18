@@ -145,6 +145,8 @@ worktree/branch/PR discipline in full: wherever the base contract tells you to "
 its URL," do the exact opposite — the finished work lands in this machine's local `main`, and it never
 touches GitHub as a PR.
 
+**Who this binds: whoever is working in a checkout that can push to `colinhacks/frizz`** — which is every frizz worker, because frizz dispatches you into the maintainer's own machine. Frizz is open source, so an outside contributor working from a fork is the one case this section does not reach: they cannot push here, and a pull request from their fork is the only way to offer a change. That is not you.
+
 - **NEVER open a pull request. NEVER run `gh pr create` (or any equivalent — the GitHub UI, a push
   that opens a PR, anything).** Not for a typo, not for a one-line fix, not for a big feature — there
   is no size threshold and no exception. If you find yourself about to create a PR, STOP: in this repo
