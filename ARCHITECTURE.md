@@ -43,6 +43,8 @@ A TTY launch repaints a step list while booting and settles into a static block 
 the project, and this run's log. It repaints only during the boot — once that block prints, nothing
 touches the cursor again, so a stray write can never land on a live region.
 
+Under that block the launcher APPENDS one timestamped line per lifecycle beat — Restart Frizz, Update Frizz, a control-plane crash, and the recovery that follows each. Appending keeps the no-repaint rule above intact. The supervisor raises these through `onActivity` (`SupervisorActivity` in `dev-supervisor.ts`), which every transition reaches through `writeStatus`, so a path added later announces itself without being wired up again; `renderSupervisorActivity` in `src/readout.ts` turns one into a row. Beats are suppressed until the first boot settles, because until then the readout owns the terminal. A launcher that re-execs itself for an update — `frizz-dev` keeps its pid and its tty across the handoff — builds a `noticeOnlyReadout` instead, or the generation that took over would be mute for the rest of the session. The registry launcher cannot: its successor is detached with its stdio closed, so it prints a farewell naming the new version and `frizz --stop` before it exits.
+
 Every process writes the complete feed to `<stateDir>/logs/frizz-<timestamp>-<pid>.log`, one file per
 run, with `logs/latest.log` pointing at the newest. The launcher passes that path down in
 `FRIZZ_LOG_FILE`, so the supervisor and the forked control-plane child append to the SAME file — they

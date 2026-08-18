@@ -11,6 +11,8 @@
 // the cursor for good, so a stray write from a dependency — or a crash stack — can never land on top
 // of a region we are still redrawing.
 
+import type { SupervisorActivity } from "@frizz/server/dev-supervisor"
+
 export interface ReadoutOutput {
   isTTY?: boolean
   columns?: number
@@ -18,6 +20,9 @@ export interface ReadoutOutput {
 }
 
 export type StepState = "pending" | "active" | "done" | "skipped" | "failed"
+
+/** How a post-boot lifecycle line reads: something is happening, it finished, it broke. */
+export type NoticeTone = "progress" | "done" | "failed"
 
 export interface Step {
   key: string
@@ -61,6 +66,12 @@ const ANSI = {
   red: "\x1b[31m",
 }
 
+/** Wall-clock HH:MM:SS, the stamp on a beat that lands long after the boot block. */
+export function clockTime(ms: number): string {
+  const at = new Date(ms)
+  return [at.getHours(), at.getMinutes(), at.getSeconds()].map((part) => String(part).padStart(2, "0")).join(":")
+}
+
 export function formatDuration(ms: number): string {
   if (ms < 1_000) return `${Math.round(ms)}ms`
   if (ms < 10_000) return `${(ms / 1_000).toFixed(1)}s`
@@ -91,6 +102,8 @@ export class Readout {
   private settled = false
   /** Non-TTY only: suppress repeating an identical status row. */
   private lastPlainLine = ""
+  /** Has a post-boot notice printed yet? The first one leads with a blank line, the rest stack. */
+  private noticed = false
 
   constructor(options: ReadoutOptions = {}) {
     this.out = options.output ?? process.stdout
@@ -251,8 +264,36 @@ export class Readout {
     this.out.write(`${line}\n`)
   }
 
+  /**
+   * A lifecycle line printed AFTER the ready block — the board restarting, updating, or falling over.
+   *
+   * The block above it is a snapshot of one moment; these are a timeline, and they arrive minutes or
+   * hours later because somebody clicked Restart in a browser or a control-plane child crashed. So
+   * this row carries a wall-clock time, which no other row here does: without one, a beat found on
+   * a scrolled-back terminal says what happened and gives no way to tell when.
+   */
+  notice(tone: NoticeTone, label: string, detail?: string): void {
+    const glyph = tone === "done" ? this.c(ANSI.green, "✓") : tone === "failed" ? this.c(ANSI.red, "✗") : this.c(ANSI.cyan, "↻")
+    if (!this.tty || this.debug) {
+      this.out.write(`frizz: ${label.toLowerCase()}${detail ? ` — ${detail}` : ""}\n`)
+      return
+    }
+    // One blank line separates the first beat from the ready block's hint; later beats stack against
+    // each other, so a burst (restarting → ready) reads as one event rather than three paragraphs.
+    const lead = this.noticed ? "" : "\n"
+    this.noticed = true
+    const time = this.c(ANSI.dim, clockTime(this.now()))
+    const tail = detail ? this.c(ANSI.dim, detail) : ""
+    this.write(`${lead}  ${glyph}  ${time}  ${tail ? label.padEnd(12) : label}${tail}`)
+  }
+
   /** Print a line without disturbing the repaint region (used for the debug feed and warnings). */
   note(line: string): void {
+    this.write(line)
+  }
+
+  /** Put one line on screen, above the repaint region if there still is one. */
+  private write(line: string): void {
     if (this.settled || !this.tty || this.debug) {
       this.out.write(`${line}\n`)
       return
@@ -382,4 +423,41 @@ export function sliceVisible(line: string, limit: number): string {
     index++
   }
   return `${out}${ANSI.reset}`
+}
+
+/**
+ * A Readout that only ever prints notices, never a boot region.
+ *
+ * For a generation that inherited a live terminal mid-run — frizz-dev re-execs itself in place when
+ * Update Frizz promotes a new artifact, so the successor owns the same tty with no boot to narrate.
+ * Without one of these that successor is mute for the rest of its life, and every later restart it
+ * performs is invisible again.
+ */
+export function noticeOnlyReadout(options: ReadoutOptions = {}): Readout {
+  const readout = new Readout(options)
+  readout.stop()
+  return readout
+}
+
+/**
+ * Put a supervisor lifecycle beat on the launcher's terminal.
+ *
+ * Both launchers render these identically, and both had exactly nothing here before: Restart Frizz
+ * and Update Frizz are clicked in a browser and a control-plane crash is clicked by nobody, so the
+ * foreground process took the board down and brought it back without ever saying so.
+ */
+export function renderSupervisorActivity(readout: Readout | undefined, event: SupervisorActivity): void {
+  if (!readout) return
+  switch (event.kind) {
+    case "restarting":
+      return readout.notice("progress", "Restarting", event.message)
+    case "updating":
+      return readout.notice("progress", "Updating", event.message)
+    case "ready":
+      // The duration is the whole point of this row — the message it replaces ("control plane ready")
+      // only repeats the glyph. Keep the message for the rare beat that arrives without timing.
+      return readout.notice("done", "Restarted", event.ms === undefined ? event.message : `in ${formatDuration(event.ms)}`)
+    case "failed":
+      return readout.notice("failed", "Failed", event.message)
+  }
 }

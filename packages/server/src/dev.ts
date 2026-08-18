@@ -41,6 +41,14 @@ if (process.env.FRIZZ_DEV_CHILD === "1") {
       childEntry: process.argv[1],
       // `pnpm dev` — source checkout, never the published bin. See RestartSupervisorProxy's `dev`.
       dev: true,
+      // This entry paints no readout, so a beat prints as a plain line. Without it a restart asked
+      // for from a browser tab cycles the board while the terminal that owns it says nothing.
+      onActivity: (event) =>
+        console.log(
+          event.kind === "ready" && event.ms !== undefined
+            ? `[frizz] restarted in ${Math.round(event.ms)}ms`
+            : `[frizz] ${event.kind}: ${event.message}`,
+        ),
     })
     await supervisor.firstBoot
   } catch (error) {

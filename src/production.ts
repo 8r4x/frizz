@@ -8,7 +8,7 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { launchApp, launchBrowserTab } from "./browser.ts";
-import { Readout, tildePath } from "./readout.ts";
+import { Readout, renderSupervisorActivity, tildePath } from "./readout.ts";
 import {
   appendCrashRecord,
   attachTerminalMirror,
@@ -408,6 +408,10 @@ async function runSupervisor(port: number, token: string): Promise<never> {
     childEntry,
     childEnvironment: () => ({ FRIZZ_STABLE_WEB_DIST: webDist, FRIZZ_STABLE_ARTIFACT: `npm:${PACKAGE_NAME}@${PACKAGE_VERSION}`, FRIZZ_SCRIPTS_DIR: scriptsDir, FRIZZ_WORKER_PLUGIN_DIR: workerPluginDir }),
     updateAvailable: () => updateAvailable,
+    // The terminal that owns the board says so when the board goes down and comes back. Everything
+    // here is triggered from a browser tab or by a crash, so without this the foreground process is
+    // the last place to learn what happened to it.
+    onActivity: (event) => renderSupervisorActivity(readout, event),
     updateRestart: async () => {
       try {
         const plan = await planRegistryUpdate(PACKAGE_NAME, PACKAGE_VERSION, npmRegistryReleaseAdapter);
@@ -424,6 +428,12 @@ async function runSupervisor(port: number, token: string): Promise<never> {
       const plan = plannedUpdate ?? await planRegistryUpdate(PACKAGE_NAME, PACKAGE_VERSION, npmRegistryReleaseAdapter);
       if (!plan) throw new Error("Frizz is already current");
       handoffToRegistrySuccessor(plan, { port, projectDir: workspace.root, cwd: workspace.root, env }, npmRegistryReleaseAdapter);
+      // This exit is the ONE that has to explain itself. The successor npm resolved is detached with
+      // its stdio closed, so this terminal is not handed to it — the process simply ends, the shell
+      // prompt returns, and the board is still serving from a PID this window can no longer signal.
+      // Said plainly, that is an update; unsaid, it is indistinguishable from Frizz dying.
+      readout?.notice("done", "Updated", `Frizz ${plan.latestVersion} is taking over on port ${port}`);
+      readout?.note(`\n  Frizz ${plan.latestVersion} now runs in the background — ctrl-c here no longer reaches it. Stop it with ${PACKAGE_NAME} --stop.\n`);
       // The successor adopts the same tokenized project lease. SQLite, tmux and provider sessions
       // are keyed project resources, so neither process copies, deletes, nor recreates them.
       process.exit(0);

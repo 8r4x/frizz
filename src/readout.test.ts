@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Readout, formatDuration, tildePath, visibleLength } from "./readout.ts";
+import { Readout, clockTime, formatDuration, noticeOnlyReadout, renderSupervisorActivity, tildePath, visibleLength } from "./readout.ts";
 
 class Capture {
   chunks: string[] = [];
@@ -237,4 +237,62 @@ test("colour is suppressed when asked, and emitted when not", () => {
   const colored = new Capture(true);
   new Readout({ output: colored, color: true, tickMs: 60_000 }).plan([{ key: "a", label: "A" }]);
   assert.equal(/\x1b\[3\dm/.test(colored.raw), true);
+});
+
+test("a lifecycle notice prints under the ready block without disturbing it", () => {
+  const out = new Capture(true);
+  const at = Date.UTC(2026, 0, 2, 3, 4, 5);
+  const readout = new Readout({ output: out, color: false, now: () => at + new Date(at).getTimezoneOffset() * 60_000 });
+  readout.plan([{ key: "server", label: "Server" }]);
+  readout.begin("server");
+  readout.ready([{ label: "Local", value: "http://127.0.0.1:3939" }], "press ctrl-c to stop");
+  const before = out.rendered;
+  readout.notice("progress", "Restarting", "Restart Frizz requested from browser");
+  readout.notice("done", "Restarted", "in 1.2s");
+  const rendered = out.rendered;
+  assert.ok(rendered.startsWith(before), "the ready block stays exactly as it was printed");
+  const added = rendered.slice(before.length).split("\n").filter((line) => line.trim());
+  assert.deepEqual(added, [
+    "  ↻  03:04:05  Restarting  Restart Frizz requested from browser",
+    "  ✓  03:04:05  Restarted   in 1.2s",
+  ]);
+});
+
+test("a notice still reaches a pipe, where there is no cursor to move", () => {
+  const out = new Capture(false);
+  const readout = new Readout({ output: out, color: false });
+  readout.notice("failed", "Failed", "control plane stopped (signal SIGKILL)");
+  assert.equal(out.raw, "frizz: failed — control plane stopped (signal SIGKILL)\n");
+});
+
+test("supervisor beats map onto the terminal's own vocabulary", () => {
+  const out = new Capture(true);
+  const readout = noticeOnlyReadout({ output: out, color: false, now: () => 0 });
+  for (const event of [
+    { kind: "restarting" as const, message: "unexpected control-plane exit" },
+    { kind: "updating" as const, message: "preparing the new build" },
+    { kind: "ready" as const, message: "control plane ready", ms: 1_240 },
+    { kind: "failed" as const, message: "the update could not be prepared" },
+  ]) renderSupervisorActivity(readout, event);
+  const rows = out.rendered.split("\n").filter((line) => line.trim()).map((line) => line.replace(/\d\d:\d\d:\d\d/, "TIME"));
+  assert.deepEqual(rows, [
+    "  ↻  TIME  Restarting  unexpected control-plane exit",
+    "  ↻  TIME  Updating    preparing the new build",
+    "  ✓  TIME  Restarted   in 1.2s",
+    "  ✗  TIME  Failed      the update could not be prepared",
+  ]);
+});
+
+test("a notice-only readout never paints a boot region over the terminal it inherited", async () => {
+  const out = new Capture(true);
+  const readout = noticeOnlyReadout({ output: out, color: false, tickMs: 1 });
+  await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+  assert.equal(out.raw, "", "nothing at all until there is a beat to report");
+  readout.notice("done", "Updated", "now serving abc123");
+  assert.match(out.raw, /Updated\s+now serving abc123/);
+});
+
+test("the clock stamp is what a person reads off a scrolled-back terminal", () => {
+  const noon = new Date(2026, 5, 1, 9, 7, 3).getTime();
+  assert.equal(clockTime(noon), "09:07:03");
 });

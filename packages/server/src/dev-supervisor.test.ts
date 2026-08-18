@@ -24,6 +24,7 @@ import {
   type DevBoot,
   type DevSupervisor,
   type DevSupervisorOptions,
+  type SupervisorActivity,
 } from "./dev-supervisor.ts"
 import { acquireProjectLaunchOwner, type ProjectLaunchLease } from "./project-launch.ts"
 import { createStorage } from "./storage.ts"
@@ -744,6 +745,88 @@ test("authenticated restart takes one fresh artifact launch snapshot and fails c
     const status = readSupervisorStatus(join(stateDir, "dev-supervisor.lock"))
     assert.equal(status?.state, "failed")
     assert.equal(status?.artifactDigest, undefined, "a failed launch never claims the promoted digest is running")
+  } finally {
+    await supervisor?.close()
+    owner.release()
+    rmSync(workspace, { recursive: true, force: true })
+  }
+})
+
+test("the foreground launcher is told when the board restarts, recovers, and fails", { timeout: 15_000 }, async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "frizz-dev-supervisor-activity-"))
+  const stateDir = join(workspace, ".state")
+  mkdirSync(stateDir, { recursive: true })
+  const entry = join(workspace, "child.mjs")
+  writeFileSync(entry, `
+    import {
+      projectLaunchOwnerTokenFromEnvironment,
+      projectLaunchTargetFromEnvironment,
+      registerProjectLaunchDelegate,
+    } from ${JSON.stringify(projectLaunchUrl)}
+    const target = projectLaunchTargetFromEnvironment(process.env)
+    const token = projectLaunchOwnerTokenFromEnvironment(process.env)
+    if (!target || !token) process.exit(73)
+    const delegate = registerProjectLaunchDelegate(target, token)
+    process.send?.({
+      type: "frizz-ready",
+      pid: delegate.pid,
+      processStart: delegate.processStart,
+      port: Number(process.env.FRIZZ_DEV_PORT),
+      bootId: \`activity-\${process.pid}-\${Date.now()}\`,
+    })
+    const stop = () => { delegate.release(); process.exit(0) }
+    process.once("SIGTERM", stop)
+    process.once("disconnect", stop)
+    setInterval(() => {}, 1000)
+  `)
+  const launchTarget = { projectId: randomUUID(), projectDir: workspace, stateDir }
+  const owner = acquireProjectLaunchOwner(launchTarget, "supervisor")
+  const port = await freeSupervisorPort()
+  const activity: SupervisorActivity[] = []
+  let usableEntry = true
+  let supervisor: DevSupervisor | undefined
+  try {
+    supervisor = await startDevSupervisor({
+      port,
+      cwd: workspace,
+      stateDir,
+      launchTarget,
+      launchOwnerToken: owner.token,
+      watch: false,
+      childLaunchProvider: () => {
+        if (!usableEntry) throw new Error("promoted artifact failed manifest verification")
+        return { entry, environment: {} }
+      },
+      log: () => {},
+      error: () => {},
+      onActivity: (event) => activity.push(event),
+    })
+    const first = await supervisor.firstBoot
+    // The boot readout is still painting its own region here, and a beat written into it would be
+    // erased by the next repaint. Nothing is announced until there is something to announce.
+    assert.equal(activity.length, 0, "the first boot is the readout's story, not a lifecycle beat")
+
+    const restart = await fetch(`http://127.0.0.1:${port}/_frizz/control/restart`, {
+      method: "POST",
+      headers: { origin: `http://127.0.0.1:${port}` },
+    })
+    assert.equal(restart.status, 202)
+    await nextBoot(supervisor, first.pid)
+    await eventually(() => activity.some((event) => event.kind === "ready") || undefined, "a ready beat")
+    assert.deepEqual(activity.map((event) => event.kind), ["restarting", "ready"])
+    assert.match(activity[0]!.message, /requested from browser/)
+    assert.ok(typeof activity[1]!.ms === "number", "the closing beat carries the restart's duration")
+
+    activity.length = 0
+    usableEntry = false
+    const failed = await fetch(`http://127.0.0.1:${port}/_frizz/control/restart`, {
+      method: "POST",
+      headers: { origin: `http://127.0.0.1:${port}` },
+    })
+    assert.equal(failed.status, 503)
+    const reported = activity.filter((event) => event.kind === "failed")
+    assert.equal(reported.length, 1, "a failure written twice reaches the terminal once")
+    assert.match(reported[0]!.message, /failed manifest verification/)
   } finally {
     await supervisor?.close()
     owner.release()

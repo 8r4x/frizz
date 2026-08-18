@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { launchApp, launchBrowserTab } from "./browser.ts";
-import { Readout, tildePath } from "./readout.ts";
+import { Readout, noticeOnlyReadout, renderSupervisorActivity, tildePath } from "./readout.ts";
 import {
   appendCrashRecord,
   attachTerminalMirror,
@@ -146,6 +146,17 @@ const interactiveLaunch =
 const readout = interactiveLaunch
   ? new Readout({ debug: options.debug, version: sourceVersion() })
   : undefined;
+
+/**
+ * Where supervisor lifecycle beats print. Normally the boot readout — but a launcher that re-execed
+ * itself through Update Frizz has no boot to narrate and still owns the operator's terminal, so it
+ * gets a notice-only one rather than falling silent for the rest of the session.
+ */
+const activityReadout =
+  readout ??
+  (process.env.FRIZZ_DEV_REEXEC === "1" && process.stdout.isTTY
+    ? noticeOnlyReadout({ version: sourceVersion() })
+    : undefined);
 
 readout?.plan([
   { key: "workspace", label: "Workspace" },
@@ -402,6 +413,14 @@ async function runSupervisor(
                   );
                   delete env.FRIZZ_DEV_CHILD;
                   delete env.FRIZZ_DEV_PORT;
+                  // execve keeps this pid and this terminal, so the successor announces itself below
+                  // once its first child is up. Saying it here too covers the window in between, which
+                  // is the whole build-and-boot of a new artifact.
+                  activityReadout?.notice(
+                    "progress",
+                    "Updating",
+                    `reloading this launcher in place on ${artifact.digest.slice(0, 12)}`
+                  );
                   process.execve!(
                     process.execPath,
                     [
@@ -450,6 +469,10 @@ async function runSupervisor(
       // where `import.meta.env.DEV` is statically false. Stated after the spread so no launch-mode
       // option can quietly take it away.
       dev: true,
+      // The terminal that owns the board says so when the board goes down and comes back. Restart
+      // Frizz and Update Frizz are clicked in a browser and a control-plane crash is clicked by
+      // nobody, so without this the foreground process is the last place to learn what happened.
+      onActivity: (event) => renderSupervisorActivity(activityReadout, event),
     });
     // The supervisor is listening now, so a code minted here is immediately redeemable.
     activeAccessLink = bind.publicOrigin ? supervisor.issueAccessLink() : null;
@@ -502,6 +525,15 @@ async function runSupervisor(
   process.on("SIGHUP", stop);
   void supervisor.stopRequested.then(stop);
   await supervisor.firstBoot;
+  // The re-exec'd generation prints no boot block (it is not an interactive launch), so this one line
+  // is the only thing that tells the operator the handoff finished. Two different things arrive here:
+  // Update Frizz execs into a promoted artifact and names its digest, while `--dev` re-execs this
+  // launcher whenever its own source changes, where there is no artifact and nothing was updated.
+  if (process.env.FRIZZ_DEV_REEXEC === "1") {
+    const digest = process.env.FRIZZ_STABLE_ARTIFACT?.slice(0, 12);
+    if (digest) activityReadout?.notice("done", "Updated", `now serving ${digest}`);
+    else activityReadout?.notice("done", "Restarted", "this launcher reloaded itself in place");
+  }
   persistLauncher(workspace, port, sourceWorkspaceDir());
   return await new Promise<never>(() => {});
 }

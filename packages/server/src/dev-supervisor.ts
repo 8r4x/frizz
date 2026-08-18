@@ -74,6 +74,26 @@ export interface DevBoot {
   bootId: string
 }
 
+/**
+ * A lifecycle beat the FOREGROUND launcher prints in the operator's terminal.
+ *
+ * Deliberately NOT the same channel as `log`/`error`, which carry the run log's full record: this is
+ * the short list of moments a person watching the launcher must not miss, and every one of them is a
+ * state change they did not start from that terminal. Restart Frizz and Update Frizz are clicked in a
+ * browser, and a control-plane crash is nobody's click at all — before this, all three left the
+ * foreground process silent while the board went down and came back, so the terminal that owns the
+ * board said less about it than the tab did.
+ *
+ * `ms` is present only on the beat that ENDS a restart, so a launcher can say how long it took.
+ */
+export interface SupervisorActivity {
+  kind: "restarting" | "updating" | "ready" | "failed"
+  /** One line, sentence case, already stripped of the "[frizz] " framing. */
+  message: string
+  /** Wall time of the restart this beat ends. */
+  ms?: number
+}
+
 export interface DevSupervisorOptions {
   port: number
   /**
@@ -133,6 +153,8 @@ export interface DevSupervisorOptions {
   reexec?: (request: { executable: string; argv: string[]; env: Record<string, string> }) => void
   log?: (line: string) => void
   error?: (line: string) => void
+  /** Lifecycle beats for the foreground launcher's terminal. See SupervisorActivity. */
+  onActivity?: (event: SupervisorActivity) => void
 }
 
 export interface DevSupervisor {
@@ -429,6 +451,13 @@ class Supervisor implements DevSupervisor {
   private readonly launchTarget: ProjectLaunchTarget
   private readonly logLine: (line: string) => void
   private readonly errorLine: (line: string) => void
+  private readonly onActivity?: (event: SupervisorActivity) => void
+  /** Suppresses activity beats until the first boot has settled; until then the readout owns the terminal. */
+  private booted = false
+  /** When the restart currently in flight began, so its "ready" beat can report a duration. */
+  private restartStartedAt: number | undefined
+  /** Last beat emitted, so a transition reported twice is printed once. */
+  private lastActivity: string | undefined
   private readonly publicProxy: RestartSupervisorProxy
   private readonly updateRestart?: () => Promise<RestartResult>
   private readonly rollbackUpdate?: () => Promise<void> | void
@@ -478,6 +507,7 @@ class Supervisor implements DevSupervisor {
     // surfaced through the readout or streamed by `--debug`.
     this.logLine = opts.log ?? ((line) => frizzLog.info("supervisor", stripPrefix(line)))
     this.errorLine = opts.error ?? ((line) => frizzLog.error("supervisor", stripPrefix(line)))
+    this.onActivity = opts.onActivity
     this.updateRestart = opts.updateRestart
     this.rollbackUpdate = opts.rollbackUpdate
     this.durableReexec = opts.durableReexec
@@ -666,8 +696,18 @@ class Supervisor implements DevSupervisor {
     if (!this.updateRestart) return { state: "failed", message: "Update & Restart is unavailable in this launcher mode" }
     // The candidate is built and validated while the known-good child stays live. Only a successful
     // candidate reaches the controlled restart path, so a failed build never takes the board down.
+    //
+    // Announced BEFORE the await, not through writeStatus like every other beat: preparing a
+    // candidate is the longest step of an update (a source build in frizz-dev, an npm resolve in the
+    // registry launcher) and it writes no status at all, so the terminal would otherwise sit silent
+    // for a minute and then jump straight to "restarting".
+    this.emitActivity("updating", "preparing the new build — the running one is untouched until it is ready")
     const candidate = await this.updateRestart()
-    if (candidate.state !== "ready") return candidate
+    if (candidate.state !== "ready") {
+      this.emitActivity("failed", candidate.message ?? "the update could not be prepared")
+      return candidate
+    }
+    if (candidate.message) this.emitActivity("updating", candidate.message)
     if (!this.durableReexec) {
       return this.failDurableUpdate(
         "Update & Restart requires a durable supervisor handoff; the current supervisor was left running",
@@ -856,7 +896,42 @@ class Supervisor implements DevSupervisor {
     })
   }
 
+  /**
+   * One beat to the foreground terminal, deduped.
+   *
+   * Every transition already funnels through writeStatus, so this hangs off that single point rather
+   * than off the dozen call sites that report one — a path added later cannot forget to announce
+   * itself. The dedupe matters because a failure is often written twice (the crash handler, then the
+   * browser-restart waiter that observed it), and the operator should read that once.
+   */
+  private emitActivity(kind: SupervisorActivity["kind"], message: string, ms?: number): void {
+    if (!this.onActivity) return
+    const signature = `${kind}\u0000${message}`
+    if (signature === this.lastActivity) return
+    this.lastActivity = signature
+    try {
+      this.onActivity({ kind, message, ...(ms === undefined ? {} : { ms }) })
+    } catch {
+      // A launcher whose terminal write fails must never take the board down with it.
+    }
+  }
+
   private writeStatus(state: "starting" | "restarting" | "ready" | "failed" | "degraded", message: string, boot = this.boot): void {
+    // Before the first ready the launcher's own boot readout is painting the terminal, and a beat
+    // printed into that region would be erased by the next repaint anyway.
+    if (state === "ready" && !this.booted) this.booted = true
+    else if (this.booted) {
+      if (state === "restarting") {
+        this.restartStartedAt = Date.now()
+        this.emitActivity("restarting", message)
+      } else if (state === "ready") {
+        const startedAt = this.restartStartedAt
+        this.restartStartedAt = undefined
+        this.emitActivity("ready", message, startedAt === undefined ? undefined : Date.now() - startedAt)
+      } else if (state === "failed" || state === "degraded") {
+        this.emitActivity("failed", message)
+      }
+    }
     if (!this.supervisorLock) return
     try {
       writeProjectStatus(this.supervisorLock, {
