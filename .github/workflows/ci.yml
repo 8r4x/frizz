@@ -1,7 +1,7 @@
 name: ci
 
-# The checks that run without a workspace install, a browser, tmux, or a signed-in provider CLI.
-# The full `pnpm test` suite deliberately does NOT run here: it drives tmux and real provider CLIs,
+# The checks that run without a workspace install, a browser, or a signed-in provider CLI.
+# The full `pnpm test` suite deliberately does NOT run here: it drives a browser and real provider CLIs,
 # so gating on it would fail for reasons unrelated to the change. `release.yml` typechecks the tree
 # before publishing.
 

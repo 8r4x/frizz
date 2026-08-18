@@ -276,6 +276,22 @@ Frizz has its own small vocabulary. Most of it names a feature, so this doubles 
 
 <br/>
 
+<h2 align="center">Contributing</h2>
+
+Issues and pull requests are welcome. Fork the repo, branch off `main`, and open the PR against `main` — CI runs on every pull request.
+
+Three checks run in CI, and they need no install:
+
+```sh
+$ node --test board/*.test.mjs
+$ node scripts/sync-portable-monitors.mjs --check
+$ node --test monitors/*.test.mjs
+```
+
+Everything else runs locally. Install with `pnpm install`, typecheck with `pnpm typecheck`, and run the full suite with `pnpm test` — that suite drives real agent CLIs and a real browser, which is why CI does not gate on it. Say in the PR what you ran.
+
+<br/>
+
 <h2 align="center">License</h2>
 
 MIT
