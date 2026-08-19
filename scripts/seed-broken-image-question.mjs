@@ -6,9 +6,9 @@
 // Enough filler turns are seeded ahead of it that the transcript is genuinely virtualized, so the row
 // measurement feedback path is the real one and not an artifact of a two-message thread.
 //
-// Follows the frizz-stack recipe: a session row + a live dummy tmux pane + a JSONL the REAL tailer reads.
+// Follows the frizz-stack recipe: a session row + a JSONL the REAL tailer reads.
 //
-// Usage: node scripts/seed-broken-image-question.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID
+// Usage: node scripts/seed-broken-image-question.mjs --home=/abs/temp-home
 import { execFileSync } from "node:child_process"
 import { globSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -16,9 +16,9 @@ import { join } from "node:path"
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
 )
-const { home, socket, cwd = "/Users/colinmcd94/Documents/projects/frizz" } = flags
-if (!home || !socket) {
-  console.error("usage: node seed-broken-image-question.mjs --home=/abs/temp-home --socket=<tmux-socket>")
+const { home, cwd = "/Users/colinmcd94/Documents/projects/frizz" } = flags
+if (!home) {
+  console.error("usage: node seed-broken-image-question.mjs --home=/abs/temp-home")
   process.exit(1)
 }
 
@@ -115,7 +115,6 @@ records.push(assistant([
 writeFileSync(join(jsonlDir, `${sessionId}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
 
 try {
-  execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", tmuxName, "sleep 7200"], { stdio: "ignore" })
 } catch {
   /* already exists */
 }

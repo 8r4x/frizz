@@ -9,13 +9,13 @@
 //   • digest-no-edits — the within-shot control: a run that only reads and searches, which must keep
 //     the bare `Ran 9 tool calls` with no trailing clause.
 //
-// Usage: node scripts/seed-digest-edits.mjs <home> <socket> <projectDir>
+// Usage: node scripts/seed-digest-edits.mjs <home> <unused> <projectDir>
 import { execFileSync } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
 
-const [home, socket, projectDir] = process.argv.slice(2)
-if (!home || !socket || !projectDir) throw new Error("usage: seed-digest-edits.mjs <home> <socket> <projectDir>")
+const [home, _socket, projectDir] = process.argv.slice(2)
+if (!home || !projectDir) throw new Error("usage: seed-digest-edits.mjs <home> <unused> <projectDir>")
 
 const cwdSlug = projectDir.replace(/[/.]/g, "-")
 const transcriptDir = path.join(home, ".claude", "projects", cwdSlug)
@@ -30,7 +30,6 @@ const result = (id, content) => ({ type: "tool_result", tool_use_id: id, content
 
 function write(slug, sessionId, title, records) {
   fs.writeFileSync(path.join(transcriptDir, `${sessionId}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
-  execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `frizz-${slug}`, "sleep 7200"])
   execFileSync("sqlite3", [
     db,
     `INSERT INTO session (slug, session_id, tmux_name, spawned_at, title, title_auto, backend, model, effort, permission_mode, state, unread, exited, archived)

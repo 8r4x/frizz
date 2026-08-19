@@ -17,13 +17,13 @@
 // Also seeds a NEGATIVE CONTROL: two genuinely distinct shells the model described identically, which
 // must keep BOTH rows — the fix must not collapse real concurrent work onto one line.
 //
-// Usage: node scripts/seed-dup-bg-shell.mjs <home> <socket> <projectDir>
+// Usage: node scripts/seed-dup-bg-shell.mjs <home> <unused> <projectDir>
 import { execFileSync } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
 
-const [home, socket, projectDir] = process.argv.slice(2)
-if (!home || !socket || !projectDir) throw new Error("usage: seed-dup-bg-shell.mjs <home> <socket> <projectDir>")
+const [home, _socket, projectDir] = process.argv.slice(2)
+if (!home || !projectDir) throw new Error("usage: seed-dup-bg-shell.mjs <home> <unused> <projectDir>")
 
 const cwdSlug = projectDir.replace(/[/.]/g, "-")
 const transcriptDir = path.join(home, ".claude", "projects", cwdSlug)
@@ -76,7 +76,6 @@ const threads = [
 fs.mkdirSync(path.join(home, "tasks"), { recursive: true })
 for (const t of threads) {
   fs.writeFileSync(path.join(transcriptDir, `${t.sessionId}.jsonl`), t.records.map((r) => JSON.stringify({ ...r, sessionId: t.sessionId })).join("\n") + "\n")
-  execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `frizz-${t.slug}`, "sleep 7200"])
   execFileSync("sqlite3", [
     db,
     `INSERT INTO session (slug, session_id, tmux_name, spawned_at, title, title_auto, backend, model, effort, permission_mode, state, unread, exited, archived)

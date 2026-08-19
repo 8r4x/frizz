@@ -2,7 +2,7 @@
 // state that renders the Sidebar's "No active threads" placeholder next to its Done/Plans neighbours,
 // which is the only way to judge that placeholder's left inset optically.
 //
-// Every seeded session is ARCHIVED and has NO live tmux pane, so groups.ts sectionOf() files all of
+// Every seeded session is ARCHIVED, so groups.ts sectionOf() files all of
 // them under "inactive" (Done) and Active stays empty. Plans come from the project's own .frizz/plans.
 //
 // Usage: node scripts/seed-empty-active.mjs --home=/abs/temp-home
@@ -41,7 +41,6 @@ for (const [i, s] of done.entries()) {
     { parentUuid: null, isSidechain: false, type: "assistant", uuid: uuid(), timestamp: at(i + 1), session_id: s.sessionId, cwd, message: { model: "claude-opus-5", id: `msg_${i}`, type: "message", role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "```done\n- Landed it on `main`.\n```" }], usage: { input_tokens: 2, output_tokens: 40 } } },
   ]
   writeFileSync(join(jsonlDir, `${s.sessionId}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
-  // NO tmux pane on purpose: an archived-but-running session would be pulled back into Active.
   execFileSync("sqlite3", [
     db,
     `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, rested_at, archived, state, exited)

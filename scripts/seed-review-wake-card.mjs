@@ -6,7 +6,7 @@
 // text, so the tail must be invisible to the human. That claim is only worth anything if the REAL card
 // renders the REAL delivered string — hence a JSONL the production tailer reads, not a props fixture.
 //
-// Usage: nub scripts/seed-review-wake-card.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID
+// Usage: nub scripts/seed-review-wake-card.mjs --home=/abs/temp-home
 import { execFileSync } from "node:child_process"
 import { mkdirSync, writeFileSync, globSync } from "node:fs"
 import { join } from "node:path"
@@ -15,9 +15,9 @@ import { formatGithubWakeSteer, wakeDeliveryToken } from "../packages/shared/src
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
 )
-const { home, socket, cwd = "/Users/colinmcd94/Documents/projects/frizz" } = flags
-if (!home || !socket) {
-  console.error("usage: node seed-review-wake-card.mjs --home=/abs/temp-home --socket=<tmux-socket>")
+const { home, cwd = "/Users/colinmcd94/Documents/projects/frizz" } = flags
+if (!home) {
+  console.error("usage: node seed-review-wake-card.mjs --home=/abs/temp-home")
   process.exit(1)
 }
 
@@ -115,7 +115,6 @@ CASES.forEach((c, n) => {
   writeFileSync(join(jsonlDir, `${sessionId}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
 
   try {
-    execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", tmuxName, "sleep 7200"], { stdio: "ignore" })
   } catch {
     /* already exists */
   }

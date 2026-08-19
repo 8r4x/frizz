@@ -13,9 +13,9 @@
 //       great-gr.   "Diff the two key shapes"    toolu_n3 / agent-nC   depth 3  (parent nB)
 //   child       "Sweep every call site"         toolu_n4 / agent-nD   depth 1  (no children)
 //
-// Follows the frizz-stack recipe: a session row + a live dummy tmux pane + a JSONL the REAL tailer folds.
+// Follows the frizz-stack recipe: a session row + a JSONL the REAL tailer folds.
 //
-// Usage: node scripts/seed-nested-subagents.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID
+// Usage: node scripts/seed-nested-subagents.mjs --home=/abs/temp-home
 import { execFileSync } from "node:child_process"
 import { globSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -23,9 +23,9 @@ import { join } from "node:path"
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
 )
-const { home, socket, cwd = process.cwd() } = flags
-if (!home || !socket) {
-  console.error("usage: node seed-nested-subagents.mjs --home=/abs/temp-home --socket=<tmux-socket>")
+const { home, cwd = process.cwd() } = flags
+if (!home) {
+  console.error("usage: node seed-nested-subagents.mjs --home=/abs/temp-home")
   process.exit(1)
 }
 
@@ -110,10 +110,6 @@ const records = [
 ]
 
 writeFileSync(join(jsonlDir, `${SESSION}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
-
-try {
-  execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", TMUX, "sleep 7200"], { stdio: "ignore" })
-} catch { /* already up */ }
 
 execFileSync("sqlite3", [
   db,

@@ -8,8 +8,8 @@
 // claude drops beside every descendant transcript, and the queue-operation notification that retires
 // the run.
 //
-// Usage (from ui/, against a running scripts/adhoc-stack.mjs — pass ITS home + socket):
-//   nub scripts/seed-rested-subagent.mjs --port=4931 --home=<stack home> --socket=<stack socket> [--tag=-b] [--project=/abs]
+// Usage (from ui/, against a running scripts/adhoc-stack.mjs — pass ITS home):
+//   nub scripts/seed-rested-subagent.mjs --port=4931 --home=<stack home> [--tag=-b] [--project=/abs]
 // Prints the thread slug + the board's own view of the branch, so the caller can assert before it shoots.
 // `--tag` suffixes the slug/session so several fixtures can coexist in one stack.
 import { execFileSync } from "node:child_process"
@@ -22,8 +22,7 @@ const args = process.argv.slice(2)
 const opt = (k, d) => { const hit = args.find((a) => a.startsWith(`--${k}=`)); return hit ? hit.slice(k.length + 3) : d }
 const port = Number(opt("port", "4931"))
 const home = opt("home")
-const socket = opt("socket")
-if (!home || !socket) { console.error("--home and --socket are required (from the stack's json line)"); process.exit(1) }
+if (!home) { console.error("--home is required (from the stack's json line)"); process.exit(1) }
 
 const tag = opt("tag", "")
 const SLUG = `sweep-the-grants-corpus${tag}`
@@ -111,7 +110,6 @@ for (const n of [1, 2, 3, 4, 6]) {
 // ── the registry row + a live dummy pane, so the tailer treats it as a real thread ────────────────
 const dbs = globSync(join(home, ".frizz", "projects", "*", "ui.db"))
 if (dbs.length !== 1) { console.error("expected exactly one sandbox ui.db, got", dbs); process.exit(1) }
-execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `frizz-${SLUG}`, "sleep 7200"])
 execFileSync("sqlite3", [dbs[0], `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, state, backend, model, effort, permission_mode, title_auto, unread, exited, archived) VALUES ('${SLUG}', '${SESSION}', 'frizz-${SLUG}', '${at(-900)}', 'Sweep the grants corpus', 'open', 'claude', 'opus', 'high', 'bypassPermissions', 0, 0, 0, 0)`])
 
 // ── let the tailer fold it, then report what the BOARD says ───────────────────────────────────────

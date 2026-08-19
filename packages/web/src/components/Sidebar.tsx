@@ -1,9 +1,9 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
-import { Check, ChevronRight, CircleDashed, Clock, Ellipsis, FileText, Github, Hourglass, House, Loader2, RotateCcw, Timer } from "lucide-react"
+import { Check, ChevronRight, CircleDashed, Clock, Ellipsis, FileText, Github, Hourglass, Loader2, RotateCcw, Timer } from "lucide-react"
 import type { BoardSnapshot, PlanView, ThreadView } from "@frizz/shared"
-import { store, openThread, scrollToQueueCard, queueCardTargetY, pushSubAgentDrawer, pushPlanDrawer, QUEUE_CARD_VIEWPORT_TOP, type ConnectionState } from "../store.ts"
+import { store, openThread, scrollToQueueCard, queueCardTargetY, pushSubAgentDrawer, pushPlanDrawer, QUEUE_CARD_VIEWPORT_TOP } from "../store.ts"
 import { useBoard, asThreads } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
 import { sectionThreads, partitionActive, needsAction, displayTitle, titleIsProvisional, isHeld, parkedAwaitingHint, sessionIndicatorKind, offersRetry, futureSnoozedUntil, lastActiveLabelAt } from "../groups.ts"
@@ -26,7 +26,6 @@ import { useOptimisticallySteered } from "../lib/steering.ts"
 import { useOptimisticallyArchived } from "../lib/optimisticArchive.ts"
 import { activeSidebarSection, queueNavigationSettled, railRevealDelta, type SidebarSectionGeometry } from "../lib/sidebarScrollspy.ts"
 import type { ReactElement, ReactNode } from "react"
-import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 
 // THE LEFT SIDEBAR — the thread list as a FLOATING column (no border, no fill: it floats in the
 // page's whitespace the way the old ToC nav did). App centers the sidebar + workpane as a PAIR with
@@ -911,10 +910,17 @@ function FaintDot() {
   return <span className="block rounded-full bg-muted/30" style={{ width: INDICATOR, height: INDICATOR }} />
 }
 
-// The top-left identity is intentionally derived only from the currently adopted board keyframe.
-// There is no session/local-storage cache: keeping a stale owner/repo while another project or boot
-// is becoming authoritative is worse than showing this small neutral reservation. A transport reset
-// leaves the adopted board in the store, so a normal reconnect keeps its known identity in place.
+// THE PROJECT IDENTITY, derived only from the currently adopted board keyframe. There is no
+// session/local-storage cache: keeping a stale owner/repo while another project or boot is becoming
+// authoritative is worse than showing the small neutral reservation. A transport reset leaves the
+// adopted board in the store, so a normal reconnect keeps its known identity in place.
+//
+// It LIVES here rather than in StatusRow because the rail derives from the same board and this file
+// already owns that derivation; StatusRow (which draws it, at the right edge of the row above the
+// prompt box) is the only consumer. The IdentityMark COMPONENT that used to sit beside this — the
+// home crumb, the name and the connection word as one cluster — is gone with the corner bar it was
+// laid out for: the row now places those three at two different ends, so there was nothing left for
+// one component to hold together.
 export type ProjectIdentity =
   | { state: "loading" }
   | { state: "unavailable" }
@@ -952,124 +958,4 @@ export function projectIdentity(
   // Nothing nameable at all. Only reachable from a keyframe carrying neither field, which is a broken
   // server rather than a project shape — the placeholder is honest there because something IS missing.
   return { state: "unavailable" }
-}
-
-// The workspace identity mark, pinned by App to the page's TOP-LEFT corner: verified labels use the
-// owner/repo styling — a muted owner, a muted slash, the repo name bright — plus the live SSE dot
-// and its state word. Before that identity exists, a static neutral reservation prevents a false
-// name and keeps the connection indicator optically anchored without a distracting shimmer.
-export function IdentityMark({
-  identity,
-  state,
-  boardFallback,
-  railVisible = false,
-}: {
-  identity: ProjectIdentity
-  state: ConnectionState
-  boardFallback?: { actualBytes: number; maxBytes: number } | null
-  /**
-   * Whether the project rail is showing. A PROP, not a hook: this component is presentational and its
-   * tests render it standalone with renderToStaticMarkup, outside any QueryClientProvider — reading
-   * the setting in here made six of them throw. Defaults to hidden, which is also the shipped default,
-   * so the crumb is present unless something says otherwise.
-   */
-  railVisible?: boolean
-}) {
-  const map = {
-    open: { cls: "bg-live", word: "connected" },
-    connecting: { cls: "bg-accent", word: "connecting…" },
-    closed: { cls: "bg-red-500", word: "disconnected" },
-  } as const
-  const m = map[state]
-  const usingFallback = state === "open" && !!boardFallback
-  // "Healthy" is an open socket carrying the board itself. An open socket that had to fall back to SSE
-  // is NOT healthy — it is the degraded mode the fallback exists to name — so it keeps its readout.
-  const degraded = state !== "open" || usingFallback
-  const connectionLabel = usingFallback ? "connected through SSE fallback" : m.word
-  const accessibleLabel = identity.state === "verified"
-    ? `Project: ${identity.label}; ${connectionLabel}`
-    : identity.state === "local"
-      // Named, and named accurately: this project HAS no owner/repo, so saying so is the whole point.
-      ? `Project: ${identity.name}; local repository with no git remote; ${connectionLabel}`
-      : identity.state === "loading"
-        ? `Project identity loading; ${connectionLabel}`
-        : `Project identity unavailable; ${connectionLabel}`
-  // Whether there is a NAME to draw. Both branches that have one behave identically from here down —
-  // the crumb separator, the resolved slot measure, the truncation — and only the tooltip differs.
-  const named = identity.state === "verified" || identity.state === "local"
-  return (
-    <div
-      className="flex items-center gap-2 min-w-0 max-w-full text-[12px]"
-      data-project-identity-state={identity.state}
-      aria-label={accessibleLabel}
-      aria-busy={identity.state === "loading" || undefined}
-    >
-      {/* THE WAY BACK, when the rail is not there to be it.
-          `home / repo` says where you are as well as where you can go, and it costs a click exactly
-          when you meant to switch projects and nothing when you did not. Rendered only while the rail
-          is hidden, so the two never both vanish and never both offer the same thing twice. 12px
-          lucide beside a 12px label is the pairing ICON_LABEL_NUDGE was measured for. */}
-      {!railVisible && (
-        <>
-          <a
-            href="/"
-            title="All projects"
-            aria-label="All projects"
-            className="shrink-0 rounded-sm text-muted/70 outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
-          >
-            <House size={12} className={`shrink-0 ${ICON_LABEL_NUDGE}`} />
-          </a>
-          {/* The separator belongs to the NAME, not to the crumb: a project with no name at all
-              renders nothing after it, and `home /` with a dangling slash reads as a broken
-              breadcrumb rather than a quiet one. A LOCAL repo has a name, so it keeps the slash. */}
-          {named && <span className="-ml-1 shrink-0 text-muted/60">/</span>}
-        </>
-      )}
-      <span className={`identity-slot ${named ? "identity-slot--resolved" : "identity-slot--placeholder"}`}>
-        {/* The FULL owner/repo. A home crumb briefly stood here and pushed the owner out — the header
-            read `home / owner / repo`, where only two of the three were somewhere you could go. The
-            project RAIL is the way back to the grid now, so the crumb is gone from this line and the
-            owner has its place back: it is the left half of a verified identity, and on a machine
-            serving many projects it is what tells two same-named repos apart. */}
-        {/* THE REPO ALONE when verified: the owner is not somewhere you can go, and it is not what
-            tells you which board you are on — the repo name is. It stays in the tooltip and the
-            accessible label. A LOCAL repo draws its directory name at the same weight, because that
-            IS this project's name; the only thing it lacks is an owner, and a dimmed or decorated
-            name would imply the identity is provisional when it is settled. Its tooltip is the plain
-            name, which earns its place the moment a 272px column truncates it. */}
-        {named ? (
-          <span
-            className="block min-w-0 truncate"
-            title={identity.state === "verified" ? identity.label : identity.name}
-          >
-            <span className="font-semibold text-fg/90">
-              {identity.state === "verified" ? identity.repo : identity.name}
-            </span>
-          </span>
-        ) : (
-          <span className="identity-placeholder" aria-hidden="true" />
-        )}
-      </span>
-      {/* THE CONNECTION, PAINTED ONLY WHEN IT IS DEGRADED. A green dot and the word "connected" used
-          to lead this cluster in every state, which meant it said the same thing every second of
-          every session and nothing at all in the one state worth knowing about (maintainer
-          2026-08-19: "drop the connected indicator, certainly. It's pretty useless"). A healthy
-          socket now renders NOTHING here — the board moving is the indicator — while connecting,
-          disconnected and the SSE fallback all still show, because a silently frozen board is the
-          failure this reading exists to catch. The accessible label above carries the state in every
-          case, healthy included.
-          Its content chooses the measure: reserving a fixed status column left a conspicuous blank
-          track after owner/repo resolved. */}
-      {degraded && (
-        <span
-          className="flex items-center gap-1 shrink-0"
-          data-board-sync-fallback={usingFallback || undefined}
-          title={usingFallback ? `Board payload exceeded the live socket limit; connected through SSE` : undefined}
-        >
-          <span className={`w-1.5 h-1.5 shrink-0 rounded-full ${m.cls}`} />
-          <span className="text-[10.5px] text-muted/70">{usingFallback ? "connected · SSE fallback" : m.word}</span>
-        </span>
-      )}
-    </div>
-  )
 }

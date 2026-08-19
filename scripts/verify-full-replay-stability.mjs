@@ -12,7 +12,7 @@
 // It is a DIAGNOSTIC first: it names the exact record that moved the reader, so a fix has a target.
 //
 // Usage — boot a disposable stack first (see .agents/skills/frizz-stack), then:
-//   node scripts/verify-full-replay-stability.mjs --home=/abs/temp-home --socket=<tmux-socket> \
+//   node scripts/verify-full-replay-stability.mjs --home=/abs/temp-home \
 //     --url=http://127.0.0.1:PORT/ --source=/abs/real.jsonl [--park=800] [--replay=200] [--seed-lines=600]
 import { execFileSync } from "node:child_process"
 import { mkdirSync, writeFileSync, appendFileSync, globSync, readFileSync } from "node:fs"
@@ -21,14 +21,14 @@ import { tmpdir } from "node:os"
 import puppeteer from "puppeteer"
 
 const flags = Object.fromEntries(process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")))
-const { home, socket, url, source } = flags
+const { home, url, source } = flags
 const cwd = flags.cwd ?? process.cwd()
 const shotDir = flags.shots ?? tmpdir()
 const parkTarget = Number(flags.park ?? 800)
 const replayCount = Number(flags.replay ?? 200)
 const seedLines = Number(flags["seed-lines"] ?? 600)
-if (!home || !socket || !url || !source) {
-  console.error("usage: node scripts/verify-full-replay-stability.mjs --home=… --socket=… --url=… --source=/abs/real.jsonl")
+if (!home || !url || !source) {
+  console.error("usage: node scripts/verify-full-replay-stability.mjs --home=… --url=… --source=/abs/real.jsonl")
   process.exit(1)
 }
 mkdirSync(shotDir, { recursive: true })
@@ -62,7 +62,6 @@ if (replay.length === 0) throw new Error(`nothing to replay: ${records.length} r
 console.log(`source ${source}: ${records.length} records — seeding ${seed.length}, replaying ${replay.length}`)
 
 writeFileSync(jsonl, seed.join("\n") + "\n")
-try { execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `frizz-${SLUG}`, "sleep 7200"], { stdio: "ignore" }) } catch {}
 execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode)
   VALUES ('${SLUG}', '${SESSION}', 'frizz-${SLUG}', '${new Date().toISOString()}', 'Replay ${parkTarget}px', 'claude', 'opus', 'high', 'default')`])
 

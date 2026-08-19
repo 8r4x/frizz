@@ -112,13 +112,10 @@ const codexRecords = [
 ]
 writeFileSync(join(codexDir, `rollout-2026-07-29T12-00-00-${CODEX_SESSION}.jsonl`), codexRecords.join("\n") + "\n")
 
-const socket = process.env.FRIZZ_TMUX_SOCKET ?? `frizz-adhoc-${port}`
 const projects = join(home, ".frizz", "projects")
 const db = join(projects, readdirSync(projects)[0], "ui.db")
 const seed = (slug, sessionId, title, backend, model) => {
   const tmuxName = `frizz-${slug}`
-  try { execFileSync("tmux", ["-L", socket, "kill-session", "-t", tmuxName], { stdio: "ignore" }) } catch {}
-  try { execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", tmuxName, "sleep 7200"]) } catch {}
   execFileSync("sqlite3", [db, `DELETE FROM session WHERE slug = '${slug}';`])
   execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session
     (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, unread, exited, archived, title_auto, runtime_generation, profile_revision)
@@ -410,8 +407,6 @@ try {
   check(pageErrors.length === 0, "no console or page errors (codex thread included)", pageErrors.join(" | "))
 } finally {
   await browser.close()
-  try { execFileSync("tmux", ["-L", socket, "kill-session", "-t", tmuxName], { stdio: "ignore" }) } catch {}
-  try { execFileSync("tmux", ["-L", socket, "kill-session", "-t", codexTmuxName], { stdio: "ignore" }) } catch {}
 }
 
 console.log(failures.length ? `\n${failures.length} FAILED:\n- ${failures.join("\n- ")}` : "\nall checks passed")

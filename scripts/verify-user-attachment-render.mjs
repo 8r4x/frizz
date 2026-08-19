@@ -67,10 +67,7 @@ user("No attachments here — just the ordinary bubble, unchanged.")            
 
 writeFileSync(join(logDir, `${SESSION_ID}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
 
-const socket = process.env.FRIZZ_TMUX_SOCKET ?? `frizz-adhoc-${port}`
 const tmuxName = `frizz-${SLUG}`
-try { execFileSync("tmux", ["-L", socket, "kill-session", "-t", tmuxName], { stdio: "ignore" }) } catch {}
-try { execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", tmuxName, "sleep 7200"]) } catch {}
 
 const projects = join(home, ".frizz", "projects")
 const db = join(projects, readdirSync(projects)[0], "ui.db")
@@ -129,7 +126,6 @@ try {
   check(pageErrors.length === 0, "no console or page errors", pageErrors.join(" | "))
 } finally {
   await browser.close()
-  try { execFileSync("tmux", ["-L", socket, "kill-session", "-t", tmuxName], { stdio: "ignore" }) } catch {}
 }
 
 console.log(failures.length ? `\n${failures.length} FAILED:\n- ${failures.join("\n- ")}` : "\nall checks passed")

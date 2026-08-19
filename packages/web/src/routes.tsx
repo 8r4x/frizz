@@ -52,7 +52,7 @@ function RootLayout() {
       {/* Outside the <Outlet/> on purpose: this is the element that must survive the navigation.
           OPT-IN: a permanent column of every project is a standing invitation to leave the thread
           you are in, so it is off unless asked for. Hidden, the way back is the status bar's home
-          crumb (Sidebar's IdentityMark), which costs a click exactly when you meant to switch. */}
+          crumb (StatusRow's home button), which costs a click exactly when you meant to switch. */}
       {railVisible ? <ProjectRail /> : null}
       <div className={railVisible ? RAIL_INSET_CLASS : undefined}>
         <Outlet />

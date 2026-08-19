@@ -3,10 +3,10 @@
 // judged in the REAL app — driven by the REAL tailer off a real transcript, not by a fixture that hands
 // the store a hand-written `subagentType`.
 //
-// Follows the frizz-stack recipe: a session row + a live dummy tmux pane + a JSONL the tailer reads.
+// Follows the frizz-stack recipe: a session row + a JSONL the tailer reads.
 // Nothing here writes board state directly; the Agent tool_use records drive it.
 //
-// Usage: node scripts/seed-subagent-profiles.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID
+// Usage: node scripts/seed-subagent-profiles.mjs --home=/abs/temp-home
 import { execFileSync } from "node:child_process"
 import { globSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -14,9 +14,9 @@ import { join } from "node:path"
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
 )
-const { home, socket, cwd = process.cwd() } = flags
-if (!home || !socket) {
-  console.error("usage: node seed-subagent-profiles.mjs --home=/abs/temp-home --socket=<tmux-socket>")
+const { home, cwd = process.cwd() } = flags
+if (!home) {
+  console.error("usage: node seed-subagent-profiles.mjs --home=/abs/temp-home")
   process.exit(1)
 }
 
@@ -78,10 +78,6 @@ const records = [
 ]
 
 writeFileSync(join(jsonlDir, `${SESSION}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
-
-try {
-  execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", TMUX, "sleep 7200"], { stdio: "ignore" })
-} catch { /* already up */ }
 
 execFileSync("sqlite3", [
   db,

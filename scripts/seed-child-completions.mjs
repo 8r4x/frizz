@@ -4,9 +4,9 @@
 // push, real browser. A fixture page proves the components; only this proves the SERVER actually sets
 // `agentCompletion` on the completion copy and not on the launch card.
 //
-// Follows the frizz-stack recipe: a session row + a live dummy tmux pane + a JSONL the tailer reads.
+// Follows the frizz-stack recipe: a session row + a JSONL the tailer reads.
 //
-// Usage: node scripts/seed-child-completions.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID
+// Usage: node scripts/seed-child-completions.mjs --home=/abs/temp-home
 import { execFileSync } from "node:child_process"
 import { globSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -14,9 +14,9 @@ import { join } from "node:path"
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
 )
-const { home, socket, cwd = process.cwd() } = flags
-if (!home || !socket) {
-  console.error("usage: node seed-child-completions.mjs --home=/abs/temp-home --socket=<tmux-socket>")
+const { home, cwd = process.cwd() } = flags
+if (!home) {
+  console.error("usage: node seed-child-completions.mjs --home=/abs/temp-home")
   process.exit(1)
 }
 
@@ -86,10 +86,6 @@ const records = [
 
 writeFileSync(join(jsonlDir, `${SESSION}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
 
-try {
-  execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", TMUX, "sleep 7200"], { stdio: "ignore" })
-} catch { /* already up */ }
-
 execFileSync("sqlite3", [
   db,
   `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
@@ -137,9 +133,6 @@ const liveRecords = [
   },
 ]
 writeFileSync(join(jsonlDir, `${LIVE_SESSION}.jsonl`), liveRecords.map((r) => JSON.stringify(r)).join("\n") + "\n")
-try {
-  execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", LIVE_TMUX, "sleep 7200"], { stdio: "ignore" })
-} catch { /* already up */ }
 execFileSync("sqlite3", [
   db,
   `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)

@@ -9,8 +9,8 @@
 //   · ThreadSlugContext — supplied by the drawer's own ChatView, so open the thread to exercise it.
 //   · backend !== "codex" — the row is a claude row.
 //
-// Follows the frizz-stack recipe: a session row + a live dummy tmux pane + a JSONL the tailer reads.
-// Usage: node scripts/seed-queued-unqueueable.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID --port=NNNN
+// Follows the frizz-stack recipe: a session row + a JSONL the tailer reads.
+// Usage: node scripts/seed-queued-unqueueable.mjs --home=/abs/temp-home --port=NNNN
 import { execFileSync } from "node:child_process"
 import { globSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -19,9 +19,9 @@ import { createRpcClient } from "./lib/rpc-client.mjs"
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
 )
-const { home, socket, port, cwd = process.cwd() } = flags
-if (!home || !socket || !port) {
-  console.error("usage: node seed-queued-unqueueable.mjs --home=/abs/temp-home --socket=<tmux-socket> --port=NNNN")
+const { home, port, cwd = process.cwd() } = flags
+if (!home || !port) {
+  console.error("usage: node seed-queued-unqueueable.mjs --home=/abs/temp-home --port=NNNN")
   process.exit(1)
 }
 
@@ -59,9 +59,6 @@ const records = [
 writeFileSync(join(jsonlDir, `${SESSION_ID}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
 
 const tmuxName = `frizz-${SLUG}`
-try {
-  execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", tmuxName, "sleep 7200"], { stdio: "ignore" })
-} catch { /* already up */ }
 
 // `enqueued` rather than `pending`: it is the state a real follow-up settles into once Claude Code has
 // written its enqueue record, and it deliberately never ages into the amber "check the terminal"

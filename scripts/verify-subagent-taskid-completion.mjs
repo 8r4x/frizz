@@ -19,7 +19,7 @@
 // carrying BOTH shapes, so the task-id-only child is checked beside a tool-use-id control that always
 // worked. Run against an `adhoc-stack.mjs` instance:
 //
-//   node scripts/verify-subagent-taskid-completion.mjs --port=4931 --home=<tempHome> --socket=<socket>
+//   node scripts/verify-subagent-taskid-completion.mjs --port=4931 --home=<tempHome>
 //
 // Usage note: the stack loads server modules once at boot, so RESTART it after editing transcript.ts.
 import { execFileSync } from "node:child_process"
@@ -31,8 +31,7 @@ import { createRpcClient } from "./lib/rpc-client.mjs"
 const arg = (name) => process.argv.find((a) => a.startsWith(`--${name}=`))?.split("=").slice(1).join("=")
 const port = arg("port") ?? "4931"
 const home = arg("home")
-const socket = arg("socket")
-if (!home || !socket) throw new Error("--home and --socket are required (take both from adhoc-stack's json line)")
+if (!home) throw new Error("--home is required (take it from adhoc-stack's json line)")
 
 const SLUG = `subagent-taskid-${Date.now().toString(36)}`
 const SESSION = randomUUID()
@@ -75,7 +74,6 @@ appendFileSync(transcript, notifyByTaskId("aab99c3e7b670a3ae", "Survey bun-compi
 
 // ── the session row + a live pane, so the board tails it for real ─────────────────────────────────
 const dbPath = execFileSync("bash", ["-lc", `ls ${home}/.frizz/projects/*/ui.db`]).toString().trim()
-execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `frizz-${SLUG}`, "sleep 7200"])
 execFileSync("sqlite3", [dbPath, `INSERT INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode) VALUES ('${SLUG}', '${SESSION}', 'frizz-${SLUG}', '${new Date().toISOString()}', 'Sub-agent task-id completion', 'claude', 'opus', 'high', 'auto')`])
 
 const api = createRpcClient(`http://127.0.0.1:${port}/`)

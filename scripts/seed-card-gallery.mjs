@@ -2,10 +2,10 @@
 // shape — a ```done fence, an ```awaiting fence (timer + pr-watch), and a ```question block — so the
 // card chrome can be judged in the REAL app (queue + thread drawer), not only in a fixture page.
 //
-// Follows the frizz-stack recipe: a session row + a live dummy tmux pane + a JSONL the REAL tailer
+// Follows the frizz-stack recipe: a session row + a JSONL the REAL tailer
 // reads. Nothing here writes board state directly; the transcript records drive it.
 //
-// Usage: node scripts/seed-card-gallery.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID
+// Usage: node scripts/seed-card-gallery.mjs --home=/abs/temp-home
 import { execFileSync } from "node:child_process"
 import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -14,9 +14,9 @@ import { globSync } from "node:fs"
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
 )
-const { home, socket, cwd = "/Users/colinmcd94/Documents/projects/frizz" } = flags
-if (!home || !socket) {
-  console.error("usage: node seed-card-gallery.mjs --home=/abs/temp-home --socket=<tmux-socket>")
+const { home, cwd = "/Users/colinmcd94/Documents/projects/frizz" } = flags
+if (!home) {
+  console.error("usage: node seed-card-gallery.mjs --home=/abs/temp-home")
   process.exit(1)
 }
 
@@ -120,7 +120,6 @@ for (const card of CARDS) {
 
   // A live pane so the thread reads as a real resting session rather than an exited one.
   try {
-    execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", tmuxName, "sleep 7200"], { stdio: "ignore" })
   } catch {
     /* already exists */
   }

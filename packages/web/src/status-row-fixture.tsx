@@ -16,7 +16,7 @@ import "./styles.css"
 //   ?state=weeklywall — a HEALTHY 5h window behind a nearly-spent weekly one. The chip must still read
 //                       the 5h number; this is the state where the old "swap to the tightest window"
 //                       headline used to hijack it and show the weekly figure instead.
-//   ?state=signedout  — Codex signed out (em dash + Sign in popover, and NO account line)
+//   ?state=signedout  — Codex signed out, which now renders NO Codex chip at all
 //   ?state=longemail  — an account address past the popover's width, to check the truncation
 //   ?connection=closed|connecting  — the only states that paint a connection indicator at all
 //   ?identity=loading|unavailable

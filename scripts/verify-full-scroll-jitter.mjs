@@ -15,7 +15,7 @@
 // notch the transcript ate.
 //
 // Usage — boot a disposable stack first (see .agents/skills/frizz-stack), then:
-//   node scripts/verify-full-scroll-jitter.mjs --home=… --socket=… --url=… [--steps=200] [--step=40]
+//   node scripts/verify-full-scroll-jitter.mjs --home=… --url=… [--steps=200] [--step=40]
 //     [--source=/abs/real.jsonl] [--seed-lines=1200]
 //
 // `--source` replays a REAL transcript instead of the synthetic seed, the way
@@ -29,14 +29,14 @@ import puppeteer from "puppeteer"
 import { createRpcClient } from "./lib/rpc-client.mjs"
 
 const flags = Object.fromEntries(process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")))
-const { home, socket, url } = flags
+const { home, url } = flags
 const cwd = flags.cwd ?? process.cwd()
 const shotDir = flags.shots ?? tmpdir()
 const steps = Number(flags.steps ?? 200)
 const step = Number(flags.step ?? 40)
 const label = flags.label ?? "run"
-if (!home || !socket || !url) {
-  console.error("usage: node scripts/verify-full-scroll-jitter.mjs --home=… --socket=… --url=…")
+if (!home || !url) {
+  console.error("usage: node scripts/verify-full-scroll-jitter.mjs --home=… --url=…")
   process.exit(1)
 }
 mkdirSync(shotDir, { recursive: true })
@@ -87,7 +87,6 @@ if (flags.source) {
   }
 }
 writeFileSync(jsonl, seed.map((r) => JSON.stringify(r)).join("\n") + "\n")
-try { execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `frizz-${SLUG}`, "sleep 7200"], { stdio: "ignore" }) } catch {}
 execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode)
   VALUES ('${SLUG}', '${SESSION}', 'frizz-${SLUG}', '${now()}', 'Scroll jitter', 'claude', 'opus', 'high', 'default')`])
 const api = createRpcClient(url)
