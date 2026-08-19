@@ -4,6 +4,8 @@ import {
   formatGithubWakeSteer,
   isGithubWakeBacklog,
   parseGithubWakeSteer,
+  parsePrWatchWake,
+  prWatchWakeMessage,
   splitWakeDeliveries,
   stripWakeDeliveryToken,
   wakeDeliveryToken,
@@ -218,4 +220,57 @@ test("a backlog replay is recognizable from its delivered text, and ordinary new
 test("the backlog tail leaves the steer parseable, unchanged", () => {
   assert.deepEqual(parseGithubWakeSteer(formatGithubWakeSteer(burst, { backlog: true })), burst)
   assert.deepEqual(parseGithubWakeSteer(formatGithubWakeSteer(single, { backlog: true })), single)
+})
+
+// ---- parsePrWatchWake ----
+//
+// Same contract as the steer's round trip, for the OTHER half of what a watcher says. These lines fell
+// through to the raw-text card for want of a parser, so the same watcher spoke in two voices down one
+// transcript; the pair below is what keeps them in one voice from now on.
+test("a pr-watch status line round-trips through its own parser", () => {
+  for (const [name, input, want] of [
+    ["merged", { target: "nubjs/nub#760", merged: true }, { ref: "nubjs/nub#760", kind: "merged" }],
+    ["closed", { target: "nubjs/nub#760", closed: true }, { ref: "nubjs/nub#760", kind: "closed" }],
+    ["ci green", { target: "acme/app#12", checks: { verdict: "passing", passed: 3, failed: 0, failing: [] } },
+      { ref: "acme/app#12", kind: "ci", verdict: "passing", passed: 3, failing: [] }],
+    ["ci green, one check", { target: "acme/app#12", checks: { verdict: "passing", passed: 1, failed: 0, failing: [] } },
+      { ref: "acme/app#12", kind: "ci", verdict: "passing", passed: 1, failing: [] }],
+    ["ci red", { target: "acme/app.js#12", checks: { verdict: "failing", passed: 1, failed: 2, failing: ["build", "test (macos)"] } },
+      { ref: "acme/app.js#12", kind: "ci", verdict: "failing", failing: ["build", "test (macos)"] }],
+    ["ci red, no named jobs", { target: "acme/app#12", checks: { verdict: "failing", passed: 0, failed: 1, failing: [] } },
+      { ref: "acme/app#12", kind: "ci", verdict: "failing", failing: [] }],
+  ] as [string, Parameters<typeof prWatchWakeMessage>[0], unknown][]) {
+    assert.deepEqual(parsePrWatchWake(prWatchWakeMessage(input)), want, name)
+  }
+})
+
+// A delivery routinely carries BOTH parts — one poll saw CI flip and a comment land — and the chat draws
+// a divider per part. Each parser must therefore find its own line and ignore the other's, whichever
+// order they arrive in, and neither may be defeated by the machine-facing tail below them.
+test("a wake carrying CI and review activity yields both parts", () => {
+  const text = prWatchWakeMessage({
+    target: "nubjs/nub#587",
+    checks: { verdict: "failing", passed: 1, failed: 1, failing: ["build"] },
+    review: formatGithubWakeSteer(single),
+  })
+  assert.deepEqual(parsePrWatchWake(text), { ref: "nubjs/nub#587", kind: "ci", verdict: "failing", failing: ["build"] })
+  assert.deepEqual(parseGithubWakeSteer(text.slice(text.indexOf(formatGithubWakeSteer(single)))), single)
+  // The STEER PARSER READS LINE 0 AND NOTHING ELSE, so a status line above one means the server serves
+  // no `wakeSteer` for this delivery. That is not an accident to be tidied up later — GithubWakeCard
+  // relies on it: it is what keeps an already-open tab on an older bundle rendering the whole text
+  // rather than drawing the review hairline alone and silently dropping the CI verdict beside it.
+  assert.equal(parseGithubWakeSteer(text), null, "a status line above the steer must defeat the served parse")
+  assert.deepEqual(parsePrWatchWake(`${text}\n\n${wakeDeliveryToken("a".repeat(64))}`), {
+    ref: "nubjs/nub#587", kind: "ci", verdict: "failing", failing: ["build"],
+  }, "a machine-facing tail must not cost the divider")
+})
+
+// The trailer, the review steer and ordinary agent prose are all NOT status lines. A false positive here
+// puts a divider on a message that never said a PR finished, which is worse than the card it replaces.
+test("text with no pr-watch status line parses as none", () => {
+  assert.equal(parsePrWatchWake(formatGithubWakeSteer(burst)), null)
+  assert.equal(parsePrWatchWake("(This watcher is spent — there is nothing further to report on a finished PR.)"), null)
+  assert.equal(parsePrWatchWake("⏰ Your background shell finished: `bzvtnt3ig` — the churn suite."), null)
+  assert.equal(parsePrWatchWake("⏰ nub#760 was CLOSED."), null, "a bare number is not an owner/repo#N")
+  assert.equal(parsePrWatchWake("⏰ nubjs/nub#760 was ABANDONED."), null)
 })

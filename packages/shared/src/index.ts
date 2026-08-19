@@ -768,7 +768,11 @@ export const TimerPromptText = z.string().trim().min(1).max(TIMER_PROMPT_MAX)
  *  glance at the same PR is a wasted turn.
  *
  *  It says the watcher is STILL ARMED, because the opposite is the expensive mistake: a worker that
- *  thinks its watcher is spent will re-register (a duplicate, so two wakes per event) or stop waiting. */
+ *  thinks its watcher is spent will re-register (a duplicate, so two wakes per event) or stop waiting.
+ *
+ *  Its STATUS lines read back out through `parsePrWatchWake`, which lives with the rest of the wake
+ *  grammar (the `WAKE_REF` pattern it shares is declared there). That is the pair the chat renders a
+ *  hairline divider from — change the wording of a line here and change it there in the same edit. */
 export function prWatchWakeMessage(input: {
   target: string
   checks?: { verdict: "passing" | "failing"; passed: number; failed: number; failing: string[] }
@@ -2388,6 +2392,56 @@ export function parseGithubWakeSteer(text: string): GithubWakeSteer | null {
   // from under this parser lands here and returns null, exactly as before.
   if (!items.length || items.length + omitted !== Number(head[2])) return null
   return { ref: head[3], omitted, items }
+}
+
+// ---- THE PR-WATCH STATUS LINE --------------------------------------------------------------------
+// The other half of what a registered PR watcher says, and the half that had no parser: a PR reaching a
+// terminal state, and CI reaching a terminal verdict. `prWatchWakeMessage` (above) writes both; this
+// reads them back, and the pair round-trips in github-wake.test.ts for the same reason the steer's pair
+// does — one wording tweak on the producer would otherwise silently downgrade every one of these to a
+// raw-text blob in the chat.
+//
+// Which is exactly what it was doing. A watcher's REVIEW activity has rendered as a hairline divider
+// since the card died (see GithubWakeCard), but "#760 was CLOSED" and "CI PASSED on #761" fell through
+// to the fallback card — so the same watcher, on the same PR, spoke in two completely different voices
+// down one transcript, and the louder voice was the one carrying the least news (maintainer 2026-08-18,
+// with a screenshot of two full-width CLOSED cards under a run of hairlines: "these callouts should
+// obviously be hairlines").
+//
+// It reads ONE line out of a delivery that may carry several parts — a CI verdict and a review steer
+// arrive together when one poll saw both — so the caller parses this AND `parseGithubWakeSteer`, and
+// renders a divider per part. Everything else in the message is the agent-facing trailer (the
+// still-armed / watcher-is-spent parenthetical), which is boilerplate frizz wrote for the worker and
+// has nothing to say to a human.
+export type PrWatchWake =
+  | { ref: string; kind: "merged" | "closed" }
+  // `passed` is absent on a failure because the FORMATTER does not write it — a red line names the
+  // failing jobs, not the tally. Never invent a field the text does not carry.
+  | { ref: string; kind: "ci"; verdict: "passing" | "failing"; passed?: number; failing: string[] }
+
+const PR_WATCH_FINISHED = new RegExp(String.raw`^⏰ (${WAKE_REF}) was (MERGED|CLOSED)\.$`)
+const PR_WATCH_CI_PASSED = new RegExp(String.raw`^✅ CI PASSED on (${WAKE_REF}) — (\d+) checks? green\.$`)
+const PR_WATCH_CI_FAILED = new RegExp(String.raw`^❌ CI FAILED on (${WAKE_REF})(?:: (.+?))?\.$`)
+
+/** The PR-watch status part of a delivered wake, or `null` when the text carries none.
+ *
+ *  SCANS rather than reading line 0, unlike `parseGithubWakeSteer`: this line can sit above a review
+ *  steer, below it in a legacy delivery, or alone. The three shapes are specific enough that scanning
+ *  costs nothing — each names its own emoji, its own verb and an `owner/repo#N`. */
+export function parsePrWatchWake(text: string): PrWatchWake | null {
+  for (const raw of text.split("\n")) {
+    const line = raw.trim()
+    if (!line) continue
+    const done = PR_WATCH_FINISHED.exec(line)
+    if (done) return { ref: done[1], kind: done[2] === "MERGED" ? "merged" : "closed" }
+    const passed = PR_WATCH_CI_PASSED.exec(line)
+    if (passed) return { ref: passed[1], kind: "ci", verdict: "passing", passed: Number(passed[2]), failing: [] }
+    const failed = PR_WATCH_CI_FAILED.exec(line)
+    // The formatter joins the job names with ", ", so a job whose own name contains a comma-space splits
+    // wrong here. It costs a label that lists one job as two — never the divider, and never the verdict.
+    if (failed) return { ref: failed[1], kind: "ci", verdict: "failing", failing: failed[2] ? failed[2].split(", ") : [] }
+  }
+  return null
 }
 
 // The server's gh-CLI availability signal. `installed`/`inRepo`/`nameWithOwner` are STABLE for the

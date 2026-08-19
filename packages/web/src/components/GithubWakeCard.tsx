@@ -17,7 +17,7 @@
 // shell has a body; and three marks on one row that all looked clickable (an underlined title, an
 // accent ref, the corner glyph) with no hierarchy between them.
 import { Bell, Github } from "lucide-react"
-import { isGithubWakeBacklog, parseGithubWakeSteer, type GithubWakeSteer } from "@frizz/shared"
+import { isGithubWakeBacklog, parseGithubWakeSteer, parsePrWatchWake, type GithubWakeSteer, type PrWatchWake } from "@frizz/shared"
 import { CARD_BODY, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 import { WakeDivider } from "./WakeDivider.tsx"
 import { githubRefUrl } from "../lib/githubRef.ts"
@@ -45,17 +45,27 @@ const DIVIDER_LINK = "rounded-sm underline decoration-muted/30 underline-offset-
 // the watcher fired and roughly what landed, with the PR one click away. That is the divider.
 
 export function GithubWakeCard({ steer: served, text, sourceId, wrap }: { steer?: GithubWakeSteer; text: string; sourceId?: string; wrap?: boolean }) {
+  // ONE DELIVERY, UP TO TWO PARTS. A poll that saw CI flip AND a comment land composes both into one
+  // message (prWatchWakeMessage), and each is its own event, so each gets its own hairline. The status
+  // part goes first because that is the order the scheduler wrote them in.
+  const status = parsePrWatchWake(text)
   // The SERVER's parse wins, because it is the only one that cannot be a build behind the formatter
   // that wrote this text (see TranscriptMessage.wakeSteer). Parsing here is the fallback for a legacy
   // transcript or a server too old to send the field — it is also what this component did exclusively
   // until a steer grew two lines the shipped parsers had never seen and every open tab lost its divider.
-  const steer = served ?? parseGithubWakeSteer(text)
-  // A steer the parser doesn't recognize — a legacy transcript, a CI/timer/limit wake, a format this
-  // build predates — still gets first-party chrome. Only the structured rows are lost, never the text.
-  // This one stays a CARD: there is arbitrary prose to show, and a divider is a one-line shape.
+  //
+  // The COMBINED case is the one exception, and it is deliberate that the server does not serve it: the
+  // steer's parser reads line 0 and nothing else, so a status line above it means no served steer — and
+  // that is what keeps an already-open tab on an older bundle rendering the whole text rather than
+  // silently dropping the CI verdict it would not know to draw. Here the status lines come off first
+  // (each is exactly what `parsePrWatchWake` recognizes on its own) and the remainder is the steer.
+  const steer = served ?? parseGithubWakeSteer(status ? text.split("\n").filter((line) => !parsePrWatchWake(line)).join("\n") : text)
+  // Neither part recognized — a legacy transcript, a timer or limit wake, a format this build predates —
+  // still gets first-party chrome. Only the structured lines are lost, never the text. This one stays a
+  // CARD: there is arbitrary prose to show, and a divider is a one-line shape.
   // NOT `self-end`: right-justification is the human's side of the conversation, and that placement is
   // most of what made a watcher notification read as something the operator sent.
-  if (!steer) {
+  if (!steer && !status) {
     return (
       <div data-frizz-msg={sourceId} data-frizz-wake className="min-w-0 max-w-[85%]">
         <TranscriptCard icon={Bell} label="Frizz">
@@ -64,6 +74,76 @@ export function GithubWakeCard({ steer: served, text, sourceId, wrap }: { steer?
       </div>
     )
   }
+  if (status) {
+    return (
+      <>
+        <PrWatchStatusDivider wake={status} sourceId={sourceId} />
+        {/* The second part takes no sourceId: `data-frizz-msg` is the chat's per-message handle (scroll
+            anchor, React key) and two rendered nodes must never claim one id. */}
+        {steer && <GithubSteerDivider steer={steer} text={text} />}
+      </>
+    )
+  }
+  return <GithubSteerDivider steer={steer!} text={text} sourceId={sourceId} />
+}
+
+// ---- THE STATUS HAIRLINE ---------------------------------------------------------------------------
+// A PR reaching a terminal state, or CI reaching a terminal verdict. Same watcher, same PR and the same
+// class of event as the review divider below, so it wears the same chrome — which it did not until
+// 2026-08-18, when it was the last thing a registered watcher said that still arrived as a full-width
+// bordered card. Two of them stacked under a run of hairlines is what prompted the fix ("these callouts
+// should obviously be hairlines"), and the card was carrying LESS news than the hairlines above it: the
+// only thing under its title was one line of state and a parenthetical addressed to the worker.
+//
+// THE TRAILER IS DROPPED, not rendered. "This watcher is spent" and "STILL ARMED — drop it with
+// mcp__frizz__watch_pr" are instructions to the agent about its own registration; a human reading the
+// transcript has no watcher to re-register and no tool to call.
+//
+// STATE FIRST, ref second, matching the review divider's `{title} on {ref}` — so the news survives the
+// truncation at queue-rail width, where the label clips from the right.
+function PrWatchStatusDivider({ wake, sourceId }: { wake: PrWatchWake; sourceId?: string }) {
+  const href = githubRefUrl(wake.ref)
+  const ref = href ? (
+    <a href={href} target="_blank" rel="noreferrer noopener" className={DIVIDER_LINK}>
+      {wake.ref}
+    </a>
+  ) : (
+    <span>{wake.ref}</span>
+  )
+  // ONE CASE TREATMENT ON THE LINE — petite caps end to end, ref included (see the note on the review
+  // divider's label). `PR` and `CI` are already uppercase, so they render as full caps and stay legible
+  // as the acronyms they are.
+  const lead = wake.kind === "ci" ? `CI ${wake.verdict === "passing" ? "passed" : "failed"} on ` : `PR ${wake.kind} on `
+  // The failing jobs ride INSIDE the truncating span: naming them is the most useful thing a red line can
+  // do, and losing the tail of a long list costs nothing the verdict has not already said.
+  const jobs = wake.kind === "ci" && wake.verdict === "failing" && wake.failing.length ? `: ${wake.failing.join(", ")}` : ""
+  const checks = wake.kind === "ci" && wake.verdict === "passing" && wake.passed !== undefined
+    ? `${wake.passed} ${wake.passed === 1 ? "check" : "checks"} green`
+    : null
+  return (
+    <WakeDivider
+      icon={Github}
+      sourceId={sourceId}
+      marker="github"
+      // Only the inert form takes the separator role — a divider carrying a focusable link may not.
+      ariaLabel={href ? undefined : `${lead}${wake.ref}${jobs}${checks ? ` · ${checks}` : ""}`}
+    >
+      <span className="min-w-0 truncate">
+        {lead}
+        {ref}
+        {jobs}
+      </span>
+      {checks && (
+        // Outside the truncating span, like the review divider's age: when the sentence clips, the tally
+        // is the one field small enough to always survive it.
+        <span className="shrink-0 tabular-nums">· {checks}</span>
+      )}
+    </WakeDivider>
+  )
+}
+
+// ---- THE REVIEW-ACTIVITY HAIRLINE ------------------------------------------------------------------
+function GithubSteerDivider({ steer, text, sourceId }: { steer: GithubWakeSteer; text: string; sourceId?: string }) {
   const refUrl = githubRefUrl(steer.ref)
   const total = steer.items.length + steer.omitted
   // THE FIRST-PARK REPLAY IS NOT NEWS, and saying "2 new items" about a PR's existing history is a lie
