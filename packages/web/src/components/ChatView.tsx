@@ -3579,7 +3579,18 @@ export function FenceCard({ fenceKind, body, hints, wrap, stale }: { fenceKind: 
   //
   // `done` is never stale: a finished thread stays finished, and its card is the thread's own outcome.
   if (stale === true && fenceKind === "awaiting") {
-    return <div className="text-[13px] leading-[1.55] text-muted" dangerouslySetInnerHTML={awaitingInner} />
+    // THE BODY ONLY, NEVER THE `reason:`. `reason:` is a CARD FIELD — a sentence fragment written to sit
+    // under an "Awaiting" heading beside the item it describes. Rendered free-standing it is gibberish:
+    // the maintainer's own thread drew "the ecosystem sweep — 16 real framework trees installed cold at
+    // the shipped default grant — which is the userbase-weighted measurement the 99.5% bar actually
+    // needs" as an orphan lowercase paragraph between two unrelated blocks (2026-08-18: "why is this
+    // still rendering so insanely?").
+    //
+    // What survives is the fence's real prose — whatever the worker wrote BELOW the `---` delimiter,
+    // which is ordinary Markdown it meant to be read as prose. A fence that is pure frontmatter has no
+    // prose, so a settled one renders NOTHING: the wait is over, and it was never a message.
+    if (body.trim() === "") return null
+    return <div className="text-[13px] leading-[1.55] text-muted" dangerouslySetInnerHTML={doneInner} />
   }
   const parkAction = awaitingParkAction(hints)
   const parkTitle = parkAction?.title ?? AWAITING_FALLBACK_TITLE
