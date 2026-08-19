@@ -507,7 +507,6 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
     t.actionableInteraction ||
       t.pendingAsk ||
       t.pendingQuestion ||
-      t.nativeInputRequired ||
       t.runtime === "perm-prompt" ||
       t.humanBlocked ||
       t.status === "needs-human",

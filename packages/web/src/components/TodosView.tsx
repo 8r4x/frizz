@@ -12,7 +12,7 @@ import { useLiveAnswering } from "../lib/answering.ts"
 import { hasQuestionBlock } from "../lib/questionBlocks.ts"
 import { collapseMiddleRuns, opensQueueSegment, queueCollapseSegments, segmentFolds, supersededAskIndices, survivesQueueCollapse } from "../lib/queueCollapse.ts"
 import { pairAllAnswers } from "../lib/answersMessage.ts"
-import { Message, NativeInputRequiredCard, PermPolicyDenialCard, PermPromptBanner, PendingAskCard, StickyUserBand, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText } from "./ChatView.tsx"
+import { Message, PermPolicyDenialCard, PermPromptBanner, PendingAskCard, StickyUserBand, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText } from "./ChatView.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_TOP, CARD_ACTION_EXPLAINER, CARD_PRIMARY_ACTION } from "./TranscriptCard.tsx"
 import { AwaitingBackgroundCard } from "./AwaitingBackgroundCard.tsx"
 import { agentCompletionCall } from "../lib/subAgentCompletion.ts"
@@ -1230,10 +1230,6 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
           <div className="mb-4">
             <PendingAskCard ask={thread.pendingAsk!} onTerminal={copyTerminalCommand} />
           </div>
-        ) : thread.nativeInputRequired ? (
-          <div className="mb-4">
-            <NativeInputRequiredCard input={thread.nativeInputRequired} onTerminal={copyTerminalCommand} />
-          </div>
         ) : thread.runtime === "perm-prompt" ? (
           <div className="mb-4">
             <PermPromptBanner onTerminal={copyTerminalCommand} />
@@ -1438,7 +1434,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
             the thread reached by resting at the END of that transcript — it is the newest thing on the
             card, so it belongs at the bottom, adjacent to the composer, where every other trailing
             control lives. Above the messages it read as a header for a turn that hadn't happened yet.
-            The gates above (pendingAsk / nativeInputRequired / perm-prompt) stay pinned at the top: they
+            The gates above (pendingAsk / perm-prompt) stay pinned at the top: they
             exist precisely because the turn parked mid-tool_use and there IS no message to sit under.
             No priority guard needed here — deriveAwaitingBackground already returns false for every one
             of those states (board.ts). */}

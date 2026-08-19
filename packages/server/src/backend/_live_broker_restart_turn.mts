@@ -88,7 +88,7 @@ function wire(): { ingest: ClaudeRuntimeIngest; bridge: ReturnType<typeof create
   })
   tailer = createTailer({
     project, storage, bus: new Bus(), backendFor,
-    onChange: () => {}, paneDead: () => false, capturePane: () => "",
+    onChange: () => {}, paneDead: () => false,
     runtimeLiveness: (sid) => ingest.liveness(sid),
     runtimeTasks: (sid) => ingest.tasks(sid),
   })

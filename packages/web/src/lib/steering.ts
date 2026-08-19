@@ -80,7 +80,6 @@ export function optimisticallySteered(t: ThreadView, at: number | undefined, now
     needsYou: false,
     pendingAsk: undefined,
     pendingQuestion: false,
-    nativeInputRequired: undefined,
     actionableInteraction: false,
     // The steer IS a user interaction, and the running band orders by user recency (groups.ts
     // orderByInteraction). Without this the row would enter the band at its STALE position and then

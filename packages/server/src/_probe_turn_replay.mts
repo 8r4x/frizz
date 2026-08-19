@@ -44,7 +44,7 @@ const STALE_AT = Date.now() - 2 * 60 * 60 * 1000
 
 const tailer = createTailer({
   project, storage, bus: new Bus(), backendFor,
-  onChange: () => {}, paneDead: () => false, capturePane: () => "",
+  onChange: () => {}, paneDead: () => false,
   runtimeLiveness: staleRunning
     ? () => ({ turn: "running" as const, at: STALE_AT, events: 1 })
     : undefined,

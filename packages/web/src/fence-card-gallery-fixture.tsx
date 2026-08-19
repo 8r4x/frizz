@@ -7,7 +7,6 @@ import {
   FenceCard,
   Message,
   LimitPauseCard,
-  NativeInputRequiredCard,
   PendingAskCard,
   PermPolicyDenialCard,
   PermPromptBanner,
@@ -307,9 +306,6 @@ function Fixture() {
             sessionId="s1"
             pause={{ backend: "claude", window: "session", at: new Date().toISOString(), resumesAt: Math.round(Date.now() / 1000) + 7200, autoResume: true }}
           />
-        </Section>
-        <Section label="native input required">
-          <NativeInputRequiredCard input={{ kind: "tool-approval", title: "Allow `rm -rf build/`?" }} onTerminal={() => {}} />
         </Section>
         <Section label="pending native ask">
           <PendingAskCard

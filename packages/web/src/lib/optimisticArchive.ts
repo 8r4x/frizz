@@ -68,7 +68,6 @@ export function optimisticallyArchived(t: ThreadView, at: number | undefined, no
     needsYou: false,
     pendingAsk: undefined,
     pendingQuestion: false,
-    nativeInputRequired: undefined,
     actionableInteraction: false,
   }
 }

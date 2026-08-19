@@ -1,14 +1,9 @@
 import type { ChatMessage } from "../hooks.ts"
 
-// The extra air beneath what the human said, on top of the ordinary STEP. A user message opens a turn,
-// and a little more room under its bottom edge is what separates "what I asked" from "what happened
-// next" (maintainer 2026-07-31: "a little more space underneath each user message, maybe 3 px more").
-//
-// It lands on the LAST message of a run, never on each one: consecutive user messages are one utterance
-// the human split across sends, and spacing them apart internally would break up the very thing this
-// exists to set off. Lives HERE rather than beside STEP in ChatView because ChatView imports this
-// module, so this is the end of the dependency that both spacing implementations can share.
-export const USER_TAIL_EXTRA = 3
+// USER_TAIL_EXTRA lived here for one reason — ChatView imports this module, so it could not be declared
+// beside STEP in ChatView — and that reason ended when the rhythm moved into components/rhythm.tsx,
+// which imports nothing. It is re-exported so the row builder's callers keep one import.
+export { USER_TAIL_EXTRA } from "../components/rhythm.tsx"
 
 export interface VirtualTranscriptMessageRow {
   key: string

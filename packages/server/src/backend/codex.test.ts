@@ -11,7 +11,6 @@ import {
   codexSandbox,
   codexEffort,
   findRolloutById,
-  detectCodexNativeInput,
   extractCodexFrizzTitle,
   scanForeignRollouts,
 } from "./codex.ts"
@@ -51,75 +50,6 @@ function firstLineOf(pred: (rec: any) => boolean): string {
   }
   throw new Error("no fixture line matched")
 }
-
-// ==== native TUI modal detection (real Codex 0.144.1 chrome, pane-only — legacy pre-app-server rows) ====
-
-const githubApprovalPane = `
-  Field 1/1
-  Allow GitHub to create a Git blob?
-
-  Repository: nubjs/nub
-  Content: secret-content-that-must-never-cross-the-wire
-  encoding: base64
-
-  › 1. Allow                   Run the tool and continue.
-    2. Allow for this session  Allow this tool for the rest of the session.
-    3. Always allow            Always allow this tool.
-    4. Cancel                  Cancel this tool call.
-  enter to submit | esc to cancel
-`
-
-test("detectCodexNativeInput: captured GitHub tool approval emits only a fixed safe kind/title", () => {
-  const found = detectCodexNativeInput(githubApprovalPane)
-  assert.deepEqual(found, { kind: "tool-approval", title: "GitHub tool approval required" })
-  const serialized = JSON.stringify(found)
-  assert.doesNotMatch(serialized, /nubjs|secret-content|base64|Always allow/)
-})
-
-test("detectCodexNativeInput: unsafe tool question text is never copied into telemetry", () => {
-  const pane = githubApprovalPane
-    .replace("Allow GitHub to create a Git blob?", "Allow SecretConnector to expose sk-live-do-not-leak?")
-  assert.deepEqual(detectCodexNativeInput(pane), { kind: "tool-approval", title: "Tool approval required" })
-  assert.doesNotMatch(JSON.stringify(detectCodexNativeInput(pane)), /SecretConnector|sk-live/)
-})
-
-test("detectCodexNativeInput: verified permission menus and generic field selectors are classified", () => {
-  assert.deepEqual(
-    detectCodexNativeInput(
-      "Update Model Permissions\n› 1. Ask for approval\n  2. Approve for me\n  3. Full Access\nPress enter to confirm or esc to go back",
-    ),
-    { kind: "permission", title: "Choose model permissions" },
-  )
-  assert.deepEqual(
-    detectCodexNativeInput(
-      "Enable full access?\n› 1. Yes, continue anyway\n  2. Yes, and don't ask again\n  3. Cancel\nPress enter to confirm or esc to go back",
-    ),
-    { kind: "permission", title: "Confirm full access" },
-  )
-  assert.deepEqual(
-    detectCodexNativeInput("Field 1/1\nChoose a target\n› 1. Current target\n  2. New target\n  3. Cancel\nenter to submit | esc to cancel"),
-    { kind: "selection", title: "Terminal choice required" },
-  )
-  assert.deepEqual(
-    detectCodexNativeInput("Field 1/1\nContinue?\n› 1. Yes\n  2. No\n  3. Cancel\nenter to submit | esc to cancel"),
-    { kind: "confirmation", title: "Confirmation required" },
-  )
-})
-
-test("detectCodexNativeInput: normal activity and prompt-like transcript prose do not trigger", () => {
-  assert.equal(
-    detectCodexNativeInput("Working on it…\n\n› Add tests\n\n  gpt-5.6 high · 97% left · esc to interrupt"),
-    undefined,
-  )
-  // Even an exact-looking block in scrollback is inert once the real Codex composer/status chrome is
-  // below it. Detection is anchored to the final nonblank line, never a global prose search.
-  assert.equal(
-    detectCodexNativeInput(`${githubApprovalPane}\n\n› Describe what you want changed\n\n  ? for shortcuts`),
-    undefined,
-  )
-  // A submit footer alone, arbitrary numbered prose, or an unverified modal family fails closed.
-  assert.equal(detectCodexNativeInput("1. one\n2. two\nenter to submit | esc to cancel"), undefined)
-})
 
 // ==== parseCodexLine — the rollout → NormalizedEvent mapping, asserted on REAL fixture lines ====
 

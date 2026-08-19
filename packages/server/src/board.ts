@@ -575,9 +575,6 @@ export function deriveNeedsYou(
   if (hasActionableInteraction) return true
   if (runtime === "perm-prompt") return true
   if (tele?.pendingAsk) return true
-  // Codex connector/tool approvals and verified native selectors leave the rollout in-flight. They
-  // are nevertheless hard human gates, so queue them independently of runtime/at-rest semantics.
-  if (tele?.nativeInputRequired) return true
   const atRest = runtime === "turn-idle" || runtime === "exited"
   if (!atRest) return false
   // CRASH/STALL net: the worker EXITED while the turn was still in flight (last record a tool_use, never
@@ -727,7 +724,7 @@ export function deriveAwaitingBackground(
   // it is waiting on, and says nothing when the worker said nothing.
   if (runtime !== "turn-idle" || !hasDeclaredWait(tele, nowMs)) return false
   // Any hard human gate or completion signal outranks this reason → the thread cards as THAT, not here.
-  if (hasActionableInteraction || tele?.pendingAsk || tele?.nativeInputRequired || tele?.pendingQuestion) return false
+  if (hasActionableInteraction || tele?.pendingAsk || tele?.pendingQuestion) return false
   // A signal fence — ```done OR ```awaiting — is the worker's OWN explicit statement about why it
   // stopped, and it renders its own card in the transcript body. That is strictly more specific than
   // "it has background work running", so it wins: show the fence card ALONE, never both. This is the
@@ -1034,7 +1031,6 @@ function sessionThreadView(
     // registry behind either any more (`thread_watch`, retired 2026-08-14).
     watches: fenceWatchViews(row.slug, tele, tele?.lastAssistantAt, github, armedPrWatches),
     pendingAsk: tele?.pendingAsk ? { questions: tele.pendingAsk.questions } : undefined,
-    nativeInputRequired: tele?.nativeInputRequired,
     pendingQuestion: tele?.pendingQuestion ?? false,
     lastUserAt: tele?.lastUserAt,
     // Runtime provider-auth rejection (claude-auth plan): only the typed category travels — the raw

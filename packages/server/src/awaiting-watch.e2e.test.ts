@@ -115,7 +115,7 @@ async function harness(target?: string) {
   const tailer = createTailer({
     project: { cwdSlug: "x" } as Project,
     storage, bus: new Bus(), sessionLogDir: dir,
-    onChange: () => {}, paneDead: () => false, capturePane: () => "",
+    onChange: () => {}, paneDead: () => false,
   })
   const delivered: string[] = []
   const logs: string[] = []
@@ -242,7 +242,7 @@ test("a poll publishes a reading the BOARD can actually read, and the queue rule
   const tailer = createTailer({
     project: { cwdSlug: "x" } as Project,
     storage, bus: new Bus(), sessionLogDir: dir,
-    onChange: () => {}, paneDead: () => false, capturePane: () => "",
+    onChange: () => {}, paneDead: () => false,
   })
   storage.setBackend(SLUG, "claude")
   storage.setClaudeRuntime(SLUG, "broker")
@@ -331,7 +331,7 @@ async function prHarness() {
   const tailer = createTailer({
     project: { cwdSlug: "x" } as Project,
     storage, bus: new Bus(), sessionLogDir: dir,
-    onChange: () => {}, paneDead: () => false, capturePane: () => "",
+    onChange: () => {}, paneDead: () => false,
   })
   storage.setBackend(SLUG, "claude")
   storage.setClaudeRuntime(SLUG, "broker")
@@ -609,7 +609,7 @@ test("a fence naming a timer that was never registered is corrected, off a real 
   const tailer = createTailer({
     project: { cwdSlug: "x" } as Project,
     storage, bus: new Bus(), sessionLogDir: dir,
-    onChange: () => {}, paneDead: () => false, capturePane: () => "",
+    onChange: () => {}, paneDead: () => false,
   })
   const delivered: string[] = []
   const s = createScheduler({ storage, tailer, resume: async (_slug, m) => { delivered.push(m) }, log: () => {} })

@@ -57,7 +57,6 @@ function boot(h: Harness, over: Partial<Parameters<typeof createTailer>[0]> = {}
     onChange: () => {},
     now: () => Date.parse("2026-07-01T01:00:00.000Z"),
     paneDead: () => true,
-    capturePane: () => "",
     sessionLogDir: h.dir,
     ...over,
   })
@@ -274,8 +273,8 @@ test("tail-cache: a MISSING table degrades to correct-but-slow rather than throw
 })
 
 // A field the fold does NOT derive from the transcript has no business surviving in this cache. The
-// marker-derived permission state is exactly that — permPrompt and nativeInputRequired are already in
-// UNRESTORED_TAIL_FIELDS for the same reason — and permPolicy was left out.
+// marker-derived permission state is exactly that — permPrompt is already in UNRESTORED_TAIL_FIELDS
+// for the same reason — and permPolicy was left out.
 //
 // It matters more than the usual staleness because the fold-schema digest CANNOT save us here. In a
 // promoted artifact the .ts sources are not shipped (verified: `find ~/.frizz/builds -name tailer.ts`

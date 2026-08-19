@@ -240,16 +240,6 @@ test("deriveNeedsYou: a native pendingAsk always queues, even if seen", () => {
   assert.equal(deriveNeedsYou(row({ seen_at: LATER }), tele({ pendingAsk: { id: "x", questions: [] }, lastActivityAt: T0 }), "turn-idle"), true)
 })
 
-test("deriveNeedsYou: a verified native terminal modal queues even while the rollout remains running", () => {
-  const blocked = tele({
-    turn: "in-flight",
-    nativeInputRequired: { kind: "tool-approval", title: "GitHub tool approval required" },
-    lastActivityAt: T0,
-  })
-  assert.equal(deriveNeedsYou(row({ seen_at: LATER }), blocked, "running"), true)
-  assert.equal(deriveNeedsYou(row({ seen_at: LATER }), blocked, "spawning"), true)
-})
-
 test("deriveNeedsYou: a scoped typed interaction queues immediately, independent of turn state", () => {
   assert.equal(deriveNeedsYou(row(), tele({ turn: "in-flight" }), "running", true), true)
   assert.equal(deriveNeedsYou(row(), tele({ turn: "idle" }), "turn-idle", true), true)
@@ -823,7 +813,6 @@ test("deriveNeedsYou: manual snooze suppresses every queue reason until its exac
   assert.equal(deriveNeedsYou(snoozed, tele({ lastFence: { kind: "done", body: "done", hints: [] } }), "turn-idle", false, now), false)
   assert.equal(deriveNeedsYou(snoozed, tele({ pendingQuestion: true }), "turn-idle", false, now), false)
   assert.equal(deriveNeedsYou(snoozed, tele({ pendingAsk: { id: "ask", questions: [] } }), "turn-idle", false, now), false)
-  assert.equal(deriveNeedsYou(snoozed, tele({ nativeInputRequired: { kind: "permission", title: "Permission required" } }), "turn-idle", false, now), false)
   assert.equal(deriveNeedsYou(snoozed, tele({ turn: "in-flight" }), "exited", false, now), false)
   assert.equal(deriveNeedsYou(snoozed, tele(), "turn-idle", true, now), false, "typed interaction is parked too")
   assert.equal(deriveNeedsYou(snoozed, tele(), "perm-prompt", false, now), false)

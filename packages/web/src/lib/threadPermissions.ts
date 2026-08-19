@@ -8,7 +8,6 @@ export interface ThreadPermissionState {
   foreign?: boolean
   runtime?: string
   pendingAsk?: unknown
-  nativeInputRequired?: unknown
   subAgents?: readonly { state: string }[]
   bgShells?: readonly { state: string }[]
   permissionPending?: unknown
@@ -33,7 +32,7 @@ export function threadPermissionBlockedReason(thread: ThreadPermissionState): st
   if (thread.permissionChangePending || thread.permissionPending) return "A permission change is already in progress"
   if (thread.profileChangePending) return "A model and effort change is already in progress"
   if (thread.runtimeControlPending) return "Another runtime control is already in progress"
-  if (thread.pendingAsk || thread.nativeInputRequired || thread.runtime === "perm-prompt") {
+  if (thread.pendingAsk || thread.runtime === "perm-prompt") {
     return "Resolve the current terminal approval or question first"
   }
   // ---- everything below this line fences the CLAUDE process restart specifically ----

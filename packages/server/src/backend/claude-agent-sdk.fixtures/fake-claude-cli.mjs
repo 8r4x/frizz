@@ -64,6 +64,13 @@ record({
     awsSecretAccessKeyPresent: process.env.AWS_SECRET_ACCESS_KEY !== undefined,
     frizzSecretPresent: process.env.FRIZZ_SHOULD_NOT_LEAK !== undefined,
     arbitrarySecretPresent: process.env.ARBITRARY_SECRET !== undefined,
+    // The lifted worker caps, captured as the values that ACTUALLY reached the process. They spent
+    // their whole life set on a spawn path nothing called, so every reader believed they were applied
+    // while a real worker ran on Claude Code's own defaults. Reported from here because this is the
+    // only place that can prove otherwise: the process itself.
+    maxWebSearches: process.env.CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION,
+    maxSubagents: process.env.CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION,
+    maxConcurrentSubagents: process.env.CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS,
   },
 })
 

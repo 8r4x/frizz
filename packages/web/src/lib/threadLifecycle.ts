@@ -44,7 +44,7 @@ export function threadLifecycleAvailability(thread: ThreadView): ThreadLifecycle
 // toward NON-optimistic (waiting), never toward skipping a dialog the server would have shown.
 export function completionArchivesImmediately(thread: ThreadView): boolean {
   // Paused-for-a-human states are explicitly safe to stop on the server, regardless of any background work.
-  if (thread.runtime === "perm-prompt" || thread.pendingAsk || thread.nativeInputRequired) return true
+  if (thread.runtime === "perm-prompt" || thread.pendingAsk) return true
   // An executing (or still-spawning) turn always prompts.
   if (thread.runtime === "running" || thread.runtime === "spawning") return false
   // A resting/exited shell prompts only if it still has live background sub-agents or shells.

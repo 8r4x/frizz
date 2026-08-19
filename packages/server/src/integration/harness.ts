@@ -91,10 +91,10 @@ export function createIntegrationHarness(): IntegrationHarness {
     backendFor,
     sessionLogDir: logDir,
     now: () => clock.ms,
-    // Every row this harness dispatches is headless, so the tailer never sniffs a pane — but a
-    // fixture must not be able to shell out even by accident.
+    // Every row this harness dispatches is headless, so paneDeadForRow answers from `exited` / the
+    // broker daemon probe and never reaches this seam. Pinned anyway so a row that somehow arrives
+    // non-headless reads as LIVE rather than taking the production default's "dead".
     paneDead: () => false,
-    capturePane: () => "",
     onChange: () => { refreshes++; board.refresh() },
     runtimeLiveness: (sessionId) => ingest.liveness(sessionId),
     runtimeTasks: (sessionId) => ingest.tasks(sessionId),

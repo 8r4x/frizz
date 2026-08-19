@@ -61,7 +61,6 @@ function generation(label: string) {
     project, storage, bus: new Bus(), backendFor,
     onChange: () => {},
     paneDead: () => false,
-    capturePane: () => "",
     runtimeLiveness: (sid) => ingest.liveness(sid),
     runtimeContextWindow: (sid) => ingest.contextWindow(sid),
   })

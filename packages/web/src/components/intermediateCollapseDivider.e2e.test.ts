@@ -319,3 +319,49 @@ test("the collapsed intermediate run is a hairline divider that names its tool c
     await browser.close()
   }
 })
+
+// THREE SUCCESSIVE HAIRLINES STAND AT ONE PITCH — measured in the browser, because the number is not
+// written anywhere in the tree. A divider's own `my-1` draws 4px of air on each side, and the STEP
+// between two messages is charged on top of it by whatever surface is stacking them, so a pair of
+// adjacent rules is 22px apart everywhere in the app. The exception was a delivery that carries BOTH a
+// CI verdict and a review comment: `FrizzWake` returned the two hairlines as a bare fragment, so the
+// queue card's gap-less column put nothing between them and they collapsed to the 8px their margins
+// leave — a fold, a CI line and a comment line drawn one under the other at two different pitches
+// (maintainer 2026-08-19: "inconsistent heights on three successive airlines"). One delivery or two is
+// an accident of when the watcher polled, and it must not be visible.
+test("successive wake hairlines stand at one pitch, however many deliveries carried them", {
+  skip: !baseUrl,
+  timeout: 120_000,
+}, async () => {
+  const { browser, page, errors } = await launch()
+  try {
+    await page.goto(variant("stackedwakes"), { waitUntil: "networkidle0" })
+    await page.waitForSelector('[data-wake-divider="github"]', { timeout: 10_000 })
+    const ladder = await page.$$eval("[data-wake-divider]", (ns) =>
+      ns.map((n) => {
+        const r = (n as HTMLElement).getBoundingClientRect()
+        return { label: `${n.getAttribute("data-wake-divider")}: ${(n as HTMLElement).innerText.replace(/\s+/g, " ").trim()}`, top: r.top, bottom: r.bottom }
+      }),
+    )
+    assert.deepEqual(
+      ladder.map((r) => r.label),
+      [
+        "intermediate-summary: 2 tool calls · Click to expand",
+        "middle-runs-summary: 3 more rounds · 6 tool calls · Click to expand",
+        "github: CI passed on colinhacks/zod#6440 · 10 checks green",
+        "github: New review comment from @pullfrog on colinhacks/zod#6440 · 16m ago",
+      ],
+      `the card draws the fold and both halves of the combined delivery, got ${ladder.map((r) => r.label).join(" | ")}`,
+    )
+    // The two gaps under test: fold → CI verdict (two messages) and CI verdict → review comment (ONE
+    // message). Sub-pixel tolerance, like every other measured pitch here.
+    const gaps = ladder.slice(2).map((r, i) => r.top - ladder[i + 1].bottom)
+    for (const [i, gap] of gaps.entries()) {
+      assert.ok(Math.abs(gap - 22) < 0.5, `hairline gap ${i + 1}: expected ~22px, got ${gap}px`)
+    }
+
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})

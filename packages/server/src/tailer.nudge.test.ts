@@ -38,7 +38,6 @@ function fixture() {
     sessionLogDir: dir,
     onChange: () => {},
     paneDead: () => false,
-    capturePane: () => "",
   })
   tailer.tick() // prime, so the counter below measures steady-state ticks only
   reads.n = 0

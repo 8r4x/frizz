@@ -75,7 +75,6 @@ tailer = createTailer({
   project, storage, bus: new Bus(), backendFor,
   onChange: () => {},
   paneDead: () => false,
-  capturePane: () => "",
   runtimeLiveness: (sessionId) => ingest.liveness(sessionId),
   runtimeTasks: (sessionId) => ingest.tasks(sessionId),
 })

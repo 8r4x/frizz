@@ -3,7 +3,7 @@ import { homedir } from "node:os"
 import { readdirSync, statSync, openSync, readSync, closeSync } from "node:fs"
 import type { PermissionMode } from "@frizz/shared"
 import { applyEvent } from "../tailer.ts"
-import type { AgentBackend, BuiltCommand, FoldState, NativeInputRequiredData, NormalizedEvent, ResumeOpts, SpawnOpts } from "./types.ts"
+import type { AgentBackend, BuiltCommand, FoldState, NormalizedEvent, ResumeOpts, SpawnOpts } from "./types.ts"
 
 // CodexBackend: everything Codex-CLI-specific behind the AgentBackend seam (Codex-support epic,
 // Phase 2). Unlike ClaudeBackend — which reuses the tailer's corpus-verified applyRecord — codex's
@@ -75,99 +75,6 @@ export function codexSandbox(mode: PermissionMode): string {
     default:
       return "workspace-write"
   }
-}
-
-// ---- native TUI modal detection ----
-// A LEGACY codex row (dispatched as an interactive `codex` process before the app-server cutover, and
-// never adopted) rendered its approval/selection modals only on its terminal screen — the rollout never
-// records them — and this detector is what read them. It is INERT in this build: an app-server codex row
-// is headless, and nothing captures screen text for any row (the tailer's capture dependency is injected
-// by test fixtures only), so the input is always the empty string. The contract is kept because it is the
-// expensive part. Detection is BOTTOM-ANCHORED on the modal's exact footer: prompt-like prose in
-// transcript history is ignored once Codex's ordinary composer/status footer is below it. We also require
-// the selector + multiple independent family markers. The return value is fixed presentation copy —
-// repository/content/commands/options never leave the server.
-const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g
-const SUBMIT_FOOTER = /^enter to submit\s*\|\s*esc to cancel$/i
-const CONFIRM_FOOTER = /^press enter to confirm or esc to go back$/i
-const SELECTED_OPTION = /^[›>]\s*\d+\.\s+\S/
-const OPTION = /^(?:[›>]\s*)?\d+\.\s+\S/
-const CANCEL_OPTION = /^(?:[›>]\s*)?\d+\.\s+Cancel\b/i
-
-function codexModalTail(pane: string): { lines: string[]; footer: "submit" | "confirm" } | undefined {
-  if (!pane) return undefined
-  const lines = pane
-    .replace(ANSI_RE, "")
-    .replace(/\r/g, "")
-    .split("\n")
-  while (lines.length && !lines.at(-1)?.trim()) lines.pop()
-  const last = lines.at(-1)?.trim() ?? ""
-  const footer = SUBMIT_FOOTER.test(last) ? "submit" : CONFIRM_FOOTER.test(last) ? "confirm" : undefined
-  if (!footer) return undefined
-  // A Codex modal fits comfortably in 32 rows. Bounding the window prevents matching a stale family
-  // heading or option block much earlier in a long screen while a different footer happens to be last.
-  return { lines: lines.slice(-32, -1).map((line) => line.trim()), footer }
-}
-
-export function detectCodexNativeInput(pane: string): NativeInputRequiredData | undefined {
-  const modal = codexModalTail(pane)
-  if (!modal) return undefined
-  const { lines, footer } = modal
-  const options = lines.filter((line) => OPTION.test(line))
-  if (options.length < 2 || !lines.some((line) => SELECTED_OPTION.test(line))) return undefined
-
-  // Human-owned `/permissions` menu and its Full Access confirmation. Frizz's controller never drives
-  // these selectors; it reopens only an idle saved conversation with the documented launch flag.
-  if (
-    footer === "confirm" &&
-    lines.includes("Update Model Permissions") &&
-    lines.some((line) => /^(?:[›>]\s*)?1\.\s+Ask for approval$/i.test(line)) &&
-    lines.some((line) => /^(?:[›>]\s*)?2\.\s+Approve for me$/i.test(line)) &&
-    lines.some((line) => /^(?:[›>]\s*)?3\.\s+Full Access$/i.test(line))
-  ) {
-    return { kind: "permission", title: "Choose model permissions" }
-  }
-  if (
-    footer === "confirm" &&
-    lines.includes("Enable full access?") &&
-    lines.some((line) => /^(?:[›>]\s*)?1\.\s+Yes, continue anyway$/i.test(line)) &&
-    lines.some((line) => /^(?:[›>]\s*)?2\.\s+Yes, and don't ask again$/i.test(line)) &&
-    lines.some((line) => /^(?:[›>]\s*)?3\.\s+Cancel$/i.test(line))
-  ) {
-    return { kind: "permission", title: "Confirm full access" }
-  }
-
-  const hasFieldCounter = lines.some((line) => /^Field \d+\/\d+$/i.test(line))
-  const hasCancel = lines.some((line) => CANCEL_OPTION.test(line))
-  const question = lines.find((line) => /\?$/.test(line))
-
-  // Captured connector approval family, e.g. "Allow GitHub to create a Git blob?". Require all of:
-  // Field counter, Allow question, selected first Allow option, Cancel option, and submit footer.
-  if (
-    footer === "submit" &&
-    hasFieldCounter &&
-    hasCancel &&
-    question &&
-    /^Allow\b.*\?$/.test(question) &&
-    lines.some((line) => /^[›>]\s*1\.\s+Allow\b/i.test(line))
-  ) {
-    return {
-      kind: "tool-approval",
-      title: /^Allow GitHub\b/i.test(question) ? "GitHub tool approval required" : "Tool approval required",
-    }
-  }
-
-  // Other verified Codex field selectors share the Field x/y counter, numbered selector, Cancel, and
-  // submit footer. We expose only the family. A yes/confirm/continue first option is a confirmation;
-  // otherwise it is a selection. Unknown modal shapes fail closed (undefined).
-  if (footer === "submit" && hasFieldCounter && hasCancel) {
-    const affirmative = lines.some((line) => /^[›>]\s*1\.\s+(?:Yes\b|Confirm\b|Continue\b)/i.test(line))
-    return affirmative
-      ? { kind: "confirmation", title: "Confirmation required" }
-      : { kind: "selection", title: "Terminal choice required" }
-  }
-
-  return undefined
 }
 
 export interface CodexBackendOptions {
@@ -1041,12 +948,5 @@ export function createCodexBackend(opts: CodexBackendOptions = {}): AgentBackend
         applyEvent(state, ev)
       }
     },
-
-    // A legacy (pre-cutover, not-yet-adopted) codex row rendered connector/tool approvals and its native
-    // selectors only on its terminal screen — the rollout never records them. This surfaces them to the
-    // tailer as a safe structured blocker; it never answers them (the human must use Terminal). Inert in
-    // this build: an app-server codex row is headless, and nothing captures screen text — see the
-    // detector's own note above.
-    detectNativeInput: detectCodexNativeInput,
   }
 }

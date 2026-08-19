@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, ArrowUpRight, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, Sparkles, TerminalSquare, X, type LucideIcon } from "lucide-react"
 import { parseRecurringPrompt } from "@frizz/shared"
-import type { AwaitingHint, BgShellView, NativeInputRequired as NativeInputRequiredData, PendingAsk, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@frizz/shared"
+import type { AwaitingHint, BgShellView, PendingAsk, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@frizz/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { useBackgroundShellLines, useBoard, useProjectDir, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
@@ -82,10 +82,11 @@ import { SignInModal } from "./SignInModal.tsx"
 import { PROVIDER_LABEL } from "../lib/signIn.ts"
 import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
 import { prependEarlierPage } from "../lib/transcriptPagination.ts"
-import { buildVirtualTranscriptMessageRows, earlierLoadGate, nextTailFollow, TAIL_FOLLOW_PX, USER_TAIL_EXTRA, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
+import { buildVirtualTranscriptMessageRows, earlierLoadGate, nextTailFollow, TAIL_FOLLOW_PX, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
 import { withoutRedundantRestDividers } from "../lib/restDividers.ts"
 import { coalesceToolActivityMessages, editedFileCount, historicalToolActivityMessages, isPictureTool, isToolActivityException, liveRuntimeStartedAt, liveToolActivityRun, liveToolActivityTail, settledToolActivityLabel, thinkingToolActivityLabel, toolActivityLabel } from "../lib/toolActivity.ts"
 import { CodexDirectiveCard, MermaidDiagram } from "./CodexRichOutput.tsx"
+import { META_CARD_STEP, PICTURE_STEP, STEP, USER_TAIL_EXTRA, VSpace } from "./rhythm.tsx"
 
 // Answer types moved to lib/questionBlocks.ts (shared by the queue card, the thread view, and the
 // answering controller). Re-exported here so existing importers keep working.
@@ -203,9 +204,6 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   const board = useBoard()
   const thread = threadBySlug(board, slug)
   const running = thread?.runtime === "running" || thread?.runtime === "spawning"
-  // Foreign terminals are transcript-only: even if a stale/malformed snapshot happened to carry a
-  // native modal field, never offer a terminal control Frizz does not own.
-  const nativeInputRequired = thread?.foreign ? undefined : thread?.nativeInputRequired
   const copyTerminalCommand = useCopyTerminalCommand(slug)
   // The safety-net readout for a session frozen at a native AskUserQuestion — "answer it in your
   // external terminal". That is the WRONG thing to say once frizz OWNS the question: the broker path
@@ -364,7 +362,6 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
           paired={paired}
           answeringForMessage={answeringForMessage}
           thread={thread}
-          nativeInputRequired={nativeInputRequired}
           running={running}
           copyTerminalCommand={copyTerminalCommand}
           stickyUserMessage={stickyUserMessage}
@@ -481,9 +478,9 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
             )}
             {/* Same rule as the virtualized path's runtime-status row: the Working… rung is a quiet meta
                 line that joins the tight run under a meta tail; every card rung keeps STEP. */}
-            {(thread?.providerFault || thread?.limitPause || frozenAsk || nativeInputRequired || thread?.runtime === "perm-prompt" || showWorking || thread?.awaitingBackground) && (
+            {(thread?.providerFault || thread?.limitPause || frozenAsk || thread?.runtime === "perm-prompt" || showWorking || thread?.awaitingBackground) && (
               <VSpace h={
-                showWorking && !thread?.providerFault && !thread?.limitPause && !frozenAsk && !nativeInputRequired && thread?.runtime !== "perm-prompt"
+                showWorking && !thread?.providerFault && !thread?.limitPause && !frozenAsk && thread?.runtime !== "perm-prompt"
                   ? workingIndicatorGap(activityMessages.map((entry) => entry.message))
                   : STEP
               } />
@@ -504,8 +501,6 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
               <LimitPauseCard slug={slug} sessionId={thread.sessionId} pause={thread.limitPause} />
             ) : frozenAsk ? (
               <PendingAskCard ask={frozenAsk} onTerminal={copyTerminalCommand} />
-            ) : nativeInputRequired ? (
-              <NativeInputRequiredCard input={nativeInputRequired} onTerminal={copyTerminalCommand} />
             ) : thread?.runtime === "perm-prompt" ? (
               <PermPromptBanner onTerminal={copyTerminalCommand} />
             ) : showWorking ? (
@@ -624,7 +619,6 @@ function VirtualizedThreadTranscript({
   paired,
   answeringForMessage,
   thread,
-  nativeInputRequired,
   running,
   copyTerminalCommand,
   stickyUserMessage,
@@ -646,7 +640,6 @@ function VirtualizedThreadTranscript({
   paired: (PairedAnswer[] | null)[]
   answeringForMessage: LiveAnswering["answeringForMessage"]
   thread: ThreadViewData | undefined
-  nativeInputRequired: NativeInputRequiredData | undefined
   running: boolean
   copyTerminalCommand: () => void
   stickyUserMessage: boolean
@@ -699,7 +692,6 @@ function VirtualizedThreadTranscript({
     (thread?.providerFault && !thread.foreign)
       || (thread?.limitPause && !thread.foreign)
       || (thread?.pendingInteraction ? undefined : thread?.pendingAsk)
-      || nativeInputRequired
       || thread?.runtime === "perm-prompt"
       || showWorking
       || thread?.awaitingBackground,
@@ -712,10 +704,9 @@ function VirtualizedThreadTranscript({
       && !(thread?.providerFault && !thread.foreign)
       && !(thread?.limitPause && !thread.foreign)
       && !(thread?.pendingInteraction ? undefined : thread?.pendingAsk)
-      && !nativeInputRequired
       && thread?.runtime !== "perm-prompt"
     return workingWins ? workingIndicatorGap(activityMessages.map((entry) => entry.message)) : STEP
-  }, [activityMessages, nativeInputRequired, showWorking, thread])
+  }, [activityMessages, showWorking, thread])
   const rows = useMemo<VirtualThreadRow[]>(() => {
     const next: VirtualThreadRow[] = [{ key: "head-anchor", kind: "head-anchor" }]
     if (transportFallback) next.push({ key: "transport-fallback", kind: "transport-fallback" })
@@ -1262,8 +1253,6 @@ function VirtualizedThreadTranscript({
                   <LimitPauseCard slug={slug} sessionId={thread.sessionId} pause={thread.limitPause} />
                 ) : (thread?.pendingInteraction ? undefined : thread?.pendingAsk) ? (
                   <PendingAskCard ask={thread!.pendingAsk!} onTerminal={copyTerminalCommand} />
-                ) : nativeInputRequired ? (
-                  <NativeInputRequiredCard input={nativeInputRequired} onTerminal={copyTerminalCommand} />
                 ) : thread?.runtime === "perm-prompt" ? (
                   <PermPromptBanner onTerminal={copyTerminalCommand} />
                 ) : showWorking ? (
@@ -1527,44 +1516,11 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
   )
 }
 
-
-
-
-
-// BETWEEN-BLOCK RHYTHM is expressed as explicit spacer ELEMENTS, never margins/padding/gap on the
-// blocks themselves. An explicit element is visible in the tree, one uniform size, and can't collapse
-// or double the way adjacent margins silently do. Padding INSIDE a block (its own chrome) is fine;
-// the space BETWEEN sibling blocks is always a VSpace. STEP is the single between-block unit.
-export const STEP = 14
-// The tight run, and the ONE thing it is for: erasing the seam between two adjacent CARDS. A card is a
-// bordered block with its own inset, so 6px of clear space between two borders already reads as a
-// separation — which is why a burst of tool calls can sit this close without turning to mush.
-//
-// It was never for two bare LABEL rows — `Ran N tool calls`, a collapsed `Reasoning` row, the live
-// shimmer. A label has no border and no inset, so the gap is the ONLY separation there is,
-// and two labels are not one batch: they are two separate statements. Those take the ordinary STEP (see
-// messageGap). At 6px they sat 26px apart — the rows are 14px/20px and assistant prose is 14px/1.7 =
-// 23.8px — so three stacked read as one wrapped paragraph of grey rather than as three lines (maintainer
-// 2026-08-01, on `Ran 8 tool calls` / `Thought for 33s` / the shimmer: "All of these labels are way too
-// close together", and again after a first pass only reached 10px: "the issue I was most concerned with
-// was the fact that those three labels were all stacked so closely together").
-//
-// STEP is also the CEILING, measured rather than assumed: at 18px the labels stand further apart than
-// the prose→label boundary above them, which inverts the hierarchy and reads as three orphaned lines.
-// What makes these rows recede is their tone and size, never their spacing.
-export const META_CARD_STEP = 6
-// The gap a PICTURE takes, on whichever side it has a neighbour. A rendered screenshot is the one tool
-// card that is not a compact band, and the tight run's premise ("two borders 6px apart already read as
-// two objects") fails twice over on it: the frame is tall enough to be its own region, and the picture
-// inside is usually dark UI whose own edges sit within a few px of the frame's faint one. At 6px the
-// next row lands on the image — measured 6.19px from the frame's bottom border to the shimmer's box
-// (maintainer 2026-08-11: "we need better spacing under the screenshots … it's too close").
-//
-// It is BIGGER than STEP rather than equal to it because STEP separates rows of one weight class from
-// each other; a picture outweighs everything around it, and matching the ordinary between-block gap
-// still reads as the shimmer captioning the image. Symmetric — the air above a picture and the air
-// below it are the same air, and splitting them made the frame look dropped rather than spaced.
-export const PICTURE_STEP = 22
+// The transcript's between-block RHYTHM — STEP, the tight run, the picture gap, and the VSpace element
+// that draws them — lives in ./rhythm.tsx, and is re-exported here because every caller already reaches
+// for it through ChatView. It moved out so the frizz wake renderer can charge the same STEP between the
+// two hairlines of a two-part delivery: ChatView imports that renderer, so it cannot import ChatView.
+export { STEP, META_CARD_STEP, PICTURE_STEP, USER_TAIL_EXTRA, VSpace } from "./rhythm.tsx"
 // Adjacent tool activity must read at the SAME tight run whether it's batched in one message or split
 // across messages (the tailer chunks a burst of tool calls arbitrarily). The boundary between two
 // messages joins that run iff the FIRST ends with a tool band AND the SECOND begins with one (tool-tail
@@ -1693,9 +1649,6 @@ export function messageHasRenderableText(m: ChatMessage): boolean {
   if (m.parts && m.parts.length > 0) return m.parts.some((p) => p.kind === "text" && !blankText(m, p.text))
   return typeof m.text === "string" && !blankText(m, m.text)
 }
-export function VSpace({ h = STEP }: { h?: number }) {
-  return <div aria-hidden className="shrink-0" style={{ height: h }} />
-}
 
 // The leading gap for the shimmer that tails a live transcript. The shimmer is a quiet single-line row
 // — the LIVE continuation of the very meta column that the reasoning rows and tool bands form above
@@ -1722,9 +1675,9 @@ export function workingIndicatorGap(messages: readonly ChatMessage[]): number {
   return 0
 }
 
-// USER_TAIL_EXTRA (the extra air under the last user message of a run) is defined in
-// lib/virtualTranscript.ts — the VIRTUALIZED row builder is the production path, and both spacing
-// implementations have to charge the same number.
+// USER_TAIL_EXTRA (the extra air under the last user message of a run) lives in ./rhythm.tsx with the
+// rest of them — the VIRTUALIZED row builder is the production path, and both spacing implementations
+// have to charge the same number.
 
 // The plain (non-virtualized) message column — the sub-agent drawer. Every surface that stacks messages
 // charges its gaps through messageGap, so no surface can invent its own rhythm. That is the whole
@@ -3962,38 +3915,6 @@ export function PermPolicyDenialCard({ policy, denies }: { policy: NonNullable<T
         Rule <code className="rounded bg-panel px-1 py-0.5">{policy.rule}</code>
         {denies && denies > 1 ? ` · ${denies} denials this session` : ""}
       </span>
-    </TranscriptCard>
-  )
-}
-
-// A verified Codex-native modal is also invisible to the rollout, but unlike the legacy boolean
-// permission sniff we know its coarse family. Keep it prominent and explicit about the trust boundary:
-// Frizz never copies option/payload detail into Chat and never chooses an answer on the user's behalf.
-export function NativeInputRequiredCard({ input, onTerminal }: { input: NativeInputRequiredData; onTerminal: () => void }) {
-  const label =
-    input.kind === "tool-approval"
-      ? "Tool approval required"
-      : input.kind === "permission"
-        ? "Permission choice required"
-        : input.kind === "confirmation"
-          ? "Confirmation required"
-          : "Choice required"
-  return (
-    <TranscriptCard data-native-input-required tone="attention" icon={AlertTriangle} label={label}>
-      {/* The modal's own title is the one line here that carries weight — it's the thing being asked.
-          It stays at the body scale and earns its emphasis from the medium weight and full-strength
-          fg, not from a larger size that made this card's copy visibly bigger than every sibling's. */}
-      <div className="min-w-0 text-[12px] font-medium leading-5 text-fg">{input.title}</div>
-      <div className="mt-1 text-[12px] leading-5 text-muted">Review and respond in your external terminal. Frizz will not choose for you.</div>
-      <CardActions>
-        <button
-          onClick={() => onTerminal()}
-          onMouseDown={(e) => e.preventDefault()}
-          className={CARD_PRIMARY_ACTION}
-        >
-          Copy terminal command
-        </button>
-      </CardActions>
     </TranscriptCard>
   )
 }

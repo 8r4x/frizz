@@ -67,7 +67,7 @@ function fixture(runtimeTasks?: readonly ClaudeRuntimeTask[]) {
   const tailer = createTailer({
     project: { cwdSlug: "x" } as Project,
     storage, bus: new Bus(), sessionLogDir: dir,
-    onChange: () => {}, paneDead: () => false, capturePane: () => "",
+    onChange: () => {}, paneDead: () => false,
     ...(runtimeTasks ? { runtimeTasks: () => runtimeTasks } : {}),
   })
   tailer.tick()
@@ -581,7 +581,7 @@ function strandedFixture() {
   const tailer = createTailer({
     project: { cwdSlug: "x" } as Project,
     storage, bus: new Bus(), sessionLogDir: derived, // frizz looks HERE; nothing of this session is here
-    onChange: () => {}, paneDead: () => false, capturePane: () => "",
+    onChange: () => {}, paneDead: () => false,
     now: () => Date.parse("2026-07-01T01:00:00.000Z"), // past the discovery grace window
   })
   tailer.tick()

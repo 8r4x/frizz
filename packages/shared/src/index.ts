@@ -287,14 +287,6 @@ export const PendingAsk = z.object({
 })
 export type PendingAsk = z.infer<typeof PendingAsk>
 
-// A backend-native terminal modal that has paused the session outside the transcript. Deliberately
-// carries no option values or tool payload: those may contain commands, repository data, or secrets;
-// Frizz only needs a safe family/title to route the human to the terminal without auto-answering.
-export const NativeInputRequired = z.object({
-  kind: z.enum(["tool-approval", "permission", "confirmation", "selection"]),
-  title: z.string().max(120),
-})
-export type NativeInputRequired = z.infer<typeof NativeInputRequired>
 // ---- THE AWAITING FENCE ---------------------------------------------------------------------------
 // A worker ends every turn in exactly ONE of three terminal states: a ```question (it needs the human), a
 // ```awaiting park (it is waiting on work that is actually running), or ```done. This is that middle one,
@@ -1376,10 +1368,6 @@ export const ThreadView = z.object({
   // A pending native AskUserQuestion the session is frozen on (tailer-derived). Optional — absent
   // when there's no unanswered ask. Feeds needsAction + the read-only question render + "Answer in Terminal".
   pendingAsk: PendingAsk.optional(),
-  // A verified backend-native terminal modal (Codex tool approval / permission / confirmation /
-  // selection) that is blocking transcript progress. The title is fixed/sanitized server-side and
-  // options/tool payloads are never exposed. Registered sessions only; foreign rows remain read-only.
-  nativeInputRequired: NativeInputRequired.optional(),
   // Derived safety net (tailer): at rest with an unanswered ```question the worker asked in chat but
   // never encoded as blocked. Defaults false so old snapshots/rows parse. Feeds needsAction.
   pendingQuestion: z.boolean().default(false),

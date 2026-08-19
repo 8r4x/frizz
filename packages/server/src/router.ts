@@ -365,7 +365,7 @@ export function completionConfirmationHold(telemetry: SessionTelemetry | undefin
 
   // These are paused waiting for a person, not churning. They are safe to stop as part of an
   // immediate Done transition; neither is evidence of an executing model/tool turn.
-  if (telemetry.permPrompt || telemetry.nativeInputRequired || telemetry.pendingAsk) return undefined
+  if (telemetry.permPrompt || telemetry.pendingAsk) return undefined
 
   // Only ACTIVELY-running work holds Done back. A `stale` sub-agent — its completion signal lost AND its
   // transcript silent past the 15-min staleness ceiling (which already clears Claude's 600s foreground

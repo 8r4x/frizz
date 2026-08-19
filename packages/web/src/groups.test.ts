@@ -121,7 +121,6 @@ test("sessionIndicatorKind: bare queued rest stays rest while concrete input sta
   assert.equal(sessionIndicatorKind(thread({ kind: "session", needsYou: true, runtime: "turn-idle" })), "rest")
   assert.equal(sessionIndicatorKind(thread({ needsYou: true, pendingQuestion: true, runtime: "exited" })), "needs-input")
   assert.equal(sessionIndicatorKind(thread({ needsYou: true, pendingAsk: { questions: [] }, runtime: "turn-idle" })), "needs-input")
-  assert.equal(sessionIndicatorKind(thread({ needsYou: true, nativeInputRequired: { kind: "permission", title: "Permission required" }, runtime: "turn-idle" })), "needs-input")
   assert.equal(sessionIndicatorKind(thread({ needsYou: true, actionableInteraction: true, runtime: "turn-idle" })), "needs-input")
   assert.equal(sessionIndicatorKind(thread({ needsYou: true, status: "needs-human", humanBlocked: true, runtime: "exited" })), "needs-input")
   // STALLED keys on the PROCESS being gone (runtime "exited"), NOT on the server's `crashed` bit —

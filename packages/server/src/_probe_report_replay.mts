@@ -111,7 +111,7 @@ function fold(path: string): Set<string> {
     storage.setTranscriptId(slug, sessionId)
     const tailer = createTailer({
       project, storage, bus: new Bus(), backendFor: (): AgentBackend => backend,
-      onChange: () => {}, paneDead: () => false, capturePane: () => "",
+      onChange: () => {}, paneDead: () => false,
       // Point the fold straight at the real file rather than at a discovered one.
       sessionLogDir: path.slice(0, path.lastIndexOf("/")),
     })

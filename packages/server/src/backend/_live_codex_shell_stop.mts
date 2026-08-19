@@ -81,7 +81,6 @@ try {
     backendFor: () => codexBackend,
     onChange: () => {},
     paneDead: () => false,
-    capturePane: () => "",
     codexBackgroundExecs: (slug, sessionId) => bridge.backgroundExecs(slug, sessionId),
   })
   const board = createBoard(project, storage, new Bus(), tailer, "probe", {

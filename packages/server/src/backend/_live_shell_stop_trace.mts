@@ -57,7 +57,7 @@ const bridge = createClaudeAgentBrokerBridge({
 })
 tailer = createTailer({
   project, storage, bus: new Bus(), backendFor: () => claudeBackend,
-  onChange: () => {}, paneDead: () => false, capturePane: () => "",
+  onChange: () => {}, paneDead: () => false,
   runtimeLiveness: (sessionId) => ingest.liveness(sessionId),
   runtimeTasks: (sessionId) => ingest.tasks(sessionId),
 })

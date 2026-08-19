@@ -234,12 +234,6 @@ test("createClaudeBackend: foldLine folds a Claude record into the tail state; a
   assert.equal(state.lastAssistant, "hi there")
 })
 
-test("createClaudeBackend: matchesPermPrompt delegates to the empirical Claude markers", () => {
-  const backend = createClaudeBackend({ logDir: "/logs" })
-  assert.equal(backend.matchesPermPrompt?.("❯ 1. Yes\nDo you want to proceed?"), true)
-  assert.equal(backend.matchesPermPrompt?.(""), false)
-})
-
 // The Phase-1 no-behavior-change guarantee, locked into the suite: the argv the injected backend
 // builds (production path) must be BYTE-IDENTICAL to a direct legacy `buildClaude*` call (the path
 // dispatch/resume take when no backend is injected). Regression fence against future backend edits.

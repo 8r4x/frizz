@@ -32,6 +32,7 @@ import { useId, useState } from "react"
 import { AlarmClock, Bell, Github, Hourglass, TerminalSquare } from "lucide-react"
 import { isGithubWakeBacklog, parseGithubWakeSteer, parseLimitResumeWake, parsePrWatchWake, parseShellDoneWake, parseTimerWake, type GithubWakeSteer, type LimitWindow, type PrWatchWake, type ShellDoneWake, type TimerWake } from "@frizz/shared"
 import { CARD_BODY, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
+import { VSpace } from "./rhythm.tsx"
 import { WakeDivider } from "./WakeDivider.tsx"
 import { githubRefUrl } from "../lib/githubRef.ts"
 import { wakeCardTitle, wakeItemAge } from "../lib/githubWakeCard.ts"
@@ -96,13 +97,32 @@ export function FrizzWake({ steer: served, text, sourceId, wrap }: { steer?: Git
     )
   }
   if (status) {
+    // ONE ELEMENT, AND A REAL STEP BETWEEN THE TWO HAIRLINES. This branch used to return a bare
+    // fragment, which got both of them wrong at once. Every surface that stacks messages charges the
+    // gap BETWEEN them itself — the queue card and the virtualized thread with an explicit VSpace, the
+    // wake fixture with a container `gap` — so a fragment handed its two parts to that machinery as if
+    // they were two separate messages: in a gapped container they were pushed a whole step further
+    // apart than the hairlines they were nested in, and in a gap-less one they collapsed to the 8px
+    // their own `my-1` margins leave, against the 22px every other pair of successive dividers stands
+    // at. Three hairlines in a row therefore drew two different pitches — 40px then 26px — depending
+    // only on which of them happened to arrive in one delivery (maintainer 2026-08-19, on a card whose
+    // fold, CI verdict and review comment stacked exactly that way).
+    //
+    // A wrapper makes the delivery ONE block to whatever stacks it, and the VSpace inside it charges
+    // the same STEP a message boundary would. The two parts are two events either way — the file's
+    // whole premise — so the pitch between them must not say which delivery carried them.
     return (
-      <>
+      <div data-frizz-wake className="flex flex-col">
         <PrWatchStatusDivider wake={status} sourceId={sourceId} />
         {/* The second part takes no sourceId: `data-frizz-msg` is the chat's per-message handle (scroll
             anchor, React key) and two rendered nodes must never claim one id. */}
-        {steer && <GithubSteerDivider steer={steer} text={text} />}
-      </>
+        {steer && (
+          <>
+            <VSpace />
+            <GithubSteerDivider steer={steer} text={text} />
+          </>
+        )}
+      </div>
     )
   }
   return <GithubSteerDivider steer={steer!} text={text} sourceId={sourceId} />

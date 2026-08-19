@@ -84,7 +84,6 @@ test("completionArchivesImmediately mirrors the server's no-confirmation cases",
   assert.equal(completionArchivesImmediately(thread({ runtime: "exited", crashed: true })), true)
   assert.equal(completionArchivesImmediately(thread({ runtime: "perm-prompt" })), true)
   assert.equal(completionArchivesImmediately(thread({ pendingAsk: { questions: [] } })), true)
-  assert.equal(completionArchivesImmediately(thread({ nativeInputRequired: { kind: "tool-approval", title: "Approval required" } })), true)
   // A human-blocked shell is safe to stop even with live background work (server short-circuits on it).
   assert.equal(completionArchivesImmediately(thread({ runtime: "perm-prompt", subAgents: [busySub] })), true)
 
@@ -151,7 +150,6 @@ test("every owned open queue reason retains enabled lifecycle actions in the foo
   for (const state of [
     thread({ pendingQuestion: true }),
     thread({ pendingAsk: { questions: [] } }),
-    thread({ nativeInputRequired: { kind: "tool-approval", title: "Approval required" } }),
     thread({ runtime: "perm-prompt" }),
     thread({ actionableInteraction: true }),
     thread({ crashed: true, runtime: "exited" }),

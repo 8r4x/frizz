@@ -8,7 +8,7 @@ import { permMarkerPath, type Project } from "./project.ts"
 import { isBrokerClaudeRow, isHeadlessRow } from "./storage.ts"
 import type { Storage, SessionRow } from "./storage.ts"
 import { discoverTranscriptDir, discoverTranscriptId, DISCOVERY_GRACE_MS } from "./discover.ts"
-import type { AgentBackend, FoldState, NativeInputRequiredData, NormalizedEvent, NormalizedTail } from "./backend/types.ts"
+import type { AgentBackend, FoldState, NormalizedEvent, NormalizedTail } from "./backend/types.ts"
 import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 import { normalizeObservedThreadModel, validateThreadProfile } from "./backend/thread-profiles.ts"
 import { resolveRuntimeTurn, type ClaudeRuntimeTask } from "./backend/claude-runtime-ingest.ts"
@@ -100,13 +100,6 @@ const EMPTY_BUFFER = Buffer.alloc(0)
 // Ceiling on the adaptive poll (see scheduleTick). A tick this expensive means something is badly
 // wrong, but the tailer is still the only source of turn/liveness telemetry — it must keep running.
 const MAX_POLL_MS = 10_000
-// HISTORICAL, and nothing reads it now. From the era when frizz ran each worker in a terminal it
-// could read back: Claude writes an untimestamped permission sidecar just before (or alongside) its
-// footer redraw, so an incremental observation was held for the arrival poll plus two more redraw
-// polls before a stable mismatch was discarded — otherwise a killed worker's late sidecar drove a
-// permanent capture/SQLite hot loop. The live permission signal is the cc-worker hook's marker file
-// (see permMarkerBlocks), which carries its own timestamp and needs no confirmation window.
-const CLAUDE_PERMISSION_CONFIRM_POLLS = 3
 // A tracked background sub-agent whose transcript file has gone this long without an append is
 // treated as "stale" — a liveness fallback for a completion record we somehow missed (the child
 // died, or the worker session ended before the <task-notification> landed).
@@ -171,13 +164,6 @@ function activityMinute(at: string | undefined): string {
   const ms = Date.parse(at)
   return Number.isFinite(ms) ? String(Math.floor(ms / 60_000)) : ""
 }
-// HISTORICAL quiet-gate, and nothing reads it now. How long the transcript had to stay silent, while
-// a turn still looked in-flight, before frizz spent a subprocess capturing the worker's rendered
-// terminal to look for an interactive permission prompt. It kept the tick from shelling out on a
-// healthily-streaming turn; a real prompt only appears after a tool_use record (which stamps
-// lastActivityAt), so by the time one showed the transcript had already gone quiet. Kept because the
-// comments below name it as the latency the marker path (permMarkerBlocks) removed.
-const PERM_SNIFF_MS = 4000
 // Whole-directory FOREIGN-session discovery: a *.jsonl in the log dir with no registry row is a
 // maintainer terminal, surfaced as a read-only thread. Only files touched within this window are
 // "live" foreign threads (the dir accumulates every session ever); a file that ages past it drops
@@ -276,9 +262,6 @@ export interface SessionTelemetry extends NormalizedTail {
   // why it needs surfacing: it is otherwise invisible.
   permPolicy?: PermPolicyView
   permDenies?: number
-  // A verified backend-native modal that blocks transcript progress. Its fixed presentation-safe
-  // title/kind are the ONLY detector-derived data exposed; option/detail content never leaves the server.
-  nativeInputRequired?: NativeInputRequiredData
   // Monotonic within this tail state. The permission controller uses it to distinguish an
   // authoritative profile emitted by the freshly attached backend from the pre-reattach fold.
   permissionModeRevision?: number
@@ -310,136 +293,6 @@ export interface SessionTelemetry extends NormalizedTail {
   noTranscript?: boolean
   contextTokens?: number // tokens the model's last request carried (see FoldState.contextTokens)
   contextWindow?: number // the model's context size, provider-reported (see FoldState.contextWindow)
-}
-
-// ---- Interactive permission-prompt matcher (rendered terminal text; no jsonl signal) ----
-// DORMANT IN THIS BUILD, and kept deliberately. Frizz no longer renders a worker into a terminal it
-// can read back: a Claude worker runs inside the detached broker daemon and reports an approval as a
-// typed permission request, and the live signal here is the cc-worker hook's marker file (see
-// permMarkerBlocks). So no tick calls this matcher; it survives as a pure, tested function on the
-// AgentBackend contract (backend/claude.ts wires it as `matchesPermPrompt`), because the empirical
-// record below cost 81 real captures to build and the next runtime that CAN hand frizz screen text
-// will want it. Everything from here down to and including `detectClaudeBootModal` describes that
-// historical screen-reading path.
-//
-// Even under `--permission-mode auto`, claude still stops on an interactive permission prompt for
-// some tool calls, and the transcript gives NO signal — the last record stays assistant +
-// stop_reason:"tool_use" (in-flight) indefinitely. The only observable was the rendered TUI. These
-// markers were captured empirically (claude 2.1.198, --permission-mode default) for both a Bash
-// and an Edit approval:
-//
-//   Bash command
-//     touch approved-me.txt
-//     Create empty file approved-me.txt
-//   Do you want to proceed?
-//   ❯ 1. Yes
-//     2. Yes, and always allow access to permtest/ from this project
-//     3. No
-//   Esc to cancel · Tab to amend · ctrl+e to explain
-//
-//   Edit file / file.txt / <diff>
-//   Do you want to make this edit to file.txt?
-//   ❯ 1. Yes
-//     2. Yes, allow all edits during this session (shift+tab)
-//     3. No
-//   Esc to cancel · Tab to amend
-//
-// Recurring across tools: a question line ("Do you want…"), a numbered "1. Yes" option, and the modal
-// footer "Esc to cancel" (an idle prompt shows neither). We require the "1. Yes" option AND (the
-// question OR the footer) — two independent signals, so a model merely printing "Do you want…" or its
-// own numbered list can't trip it.
-//
-// The wording is NOT stable across every modal, so both signals carry alternates. ExitPlanMode's
-// approval asks "Would you like to proceed?" and footers with "ctrl+g to edit in VS Code · …" — it
-// matches NEITHER original spelling and was invisible here (adversarial review, claude 2.1.214). That
-// was a hang-forever miss, not a cosmetic one: `detectNativeInput` is registered on the Codex backend
-// ONLY (backend/codex.ts), so while the screen read ran this matcher was a Claude worker's single
-// blocking-modal signal.
-//
-// Those content signals alone are NOT enough, because the input is the whole visible SCREEN: any
-// TRANSCRIPT text on it counts. A worker that quoted an approval prompt, read this very file, or
-// pasted a probe's terminal output re-tripped the matcher on every ≥PERM_SNIFF_MS quiet gap and the
-// thread oscillated between the sidebar's running band and Needs-you (reported 2026-07-18). Two
-// STRUCTURAL gates fix that, both empirically grounded in 81 real-prompt captures (claude 2.x — the
-// pre-boot trust prompt, a Bash approval, an Edit/Write approval) against 87 negatives (69 captures of
-// a live screen merely quoting a prompt, plus every live worker screen on this box):
-//
-//   1. A live composer means the screen is ACCEPTING INPUT, so anything on it is transcript. A modal
-//      replaces the composer: not one real-prompt capture carries the composer's mode line
-//      ("⏵⏵ auto mode on", "⏸ manual mode on", "⏵⏵ accept edits on", "bypass permissions on"), while
-//      every idle AND streaming Claude screen does. `ctrl+o`'s detailed-transcript view is the one
-//      other composer-less-but-live screen (its own footer replaces the composer, and it is sticky for
-//      the session), so it counts as a composer here — without it, a worker toggled into that view kept
-//      re-tripping on quoted text. Scoped to the last rows, never the whole screen, so an agent that
-//      merely PRINTS "auto mode on" mid-transcript cannot suppress a genuine prompt.
-//   2. The modal is always the BOTTOM block. Its option row and footer land within the last handful
-//      of non-blank rows, so only that tail is scanned — history scrolled above it is not evidence.
-const PERM_YES_OPTION = /(^|\n)\s*(❯\s*)?1\.\s+Yes\b/
-const PERM_QUESTION = /\b(?:Do you want|Would you like)\b/
-const PERM_FOOTER = /\bEsc to (cancel|reject)\b/
-// The four mode-footer spellings, plus plan mode and the ctrl+o transcript view.
-const PERM_COMPOSER_FOOTER = /\bbypass permissions on\b|\baccept edits(?: mode)? on\b|\b(?:auto|manual|plan) mode on\b|\bShowing detailed transcript\b/i
-// Rows of the modal's own tail that must contain the signals. Deepest `1. Yes` row observed is
-// ExitPlanMode's at 6 rows from the end (Bash 4, trust 3); this keeps real margin over that.
-const PERM_MODAL_TAIL_ROWS = 16
-// Rows the composer occupies at the bottom of an input-accepting screen (divider, prompt row, divider,
-// project line, mode line) — the mode line is always last, so this window need not cover all five.
-const PERM_COMPOSER_TAIL_ROWS = 4
-
-export function matchesPermPrompt(pane: string): boolean {
-  if (!pane) return false
-  const rows = pane.split("\n").filter((row) => row.trim() !== "")
-  if (rows.length === 0) return false
-  if (rows.slice(-PERM_COMPOSER_TAIL_ROWS).some((row) => PERM_COMPOSER_FOOTER.test(row))) return false
-  const tail = rows.slice(-PERM_MODAL_TAIL_ROWS).join("\n")
-  if (!PERM_YES_OPTION.test(tail)) return false
-  return PERM_QUESTION.test(tail) || PERM_FOOTER.test(tail)
-}
-
-// ---- pre-session boot modals (NAMING the wedge matchesPermPrompt can only flag) ----
-// Claude Code can block on an interactive screen BEFORE it opens a session, so the worker writes no
-// transcript at all: agent_session_id stays empty and the pinned jsonl never appears. matchesPermPrompt
-// already fires on these screens, but "blocked" alone made every such row card as a bare "Stalled" while
-// the reason sat unread in the stall log. These name the two screens whose chrome is known, captured
-// verbatim from real ones (claude 2.1.218) — the API-key screen from a worker wedged in production,
-// the trust screen reproduced in a disposable HOME (its fixture is PANE_PERM_TRUST):
-//
-//   Detected a custom API key in your environment      Quick safety check: Is this a project you
-//   ANTHROPIC_API_KEY: sk-ant-...<suffix>              created or one you trust? …
-//   Do you want to use this API key?                   ❯ 1. Yes, I trust this folder
-//     1. Yes                                             2. No, exit
-//   ❯ 2. No (recommended)                              Enter to confirm · Esc to cancel
-//   Enter to confirm · Esc to cancel
-//
-// Two signals each (headline + question, or question + its exact option) so one stray line cannot trip
-// either. Titles are FIXED strings: per the AgentBackend contract captured screen text never crosses
-// the server boundary, and here it holds a masked credential and the workspace path.
-//
-// Lives here rather than in backend/claude.ts for the same reason matchesPermPrompt does: the tailer's
-// defaultBackend must stay identical to the injected ClaudeBackend (tests drive the default), and
-// backend/claude.ts already imports from this module, so the dependency can only run one way.
-const BOOT_APIKEY_HEADLINE = /Detected a custom API key in your environment/
-const BOOT_APIKEY_QUESTION = /Do you want to use this API key\?/
-const BOOT_TRUST_QUESTION = /Is this a project you created or one you trust\?/
-const BOOT_TRUST_OPTION = /(^|\n)\s*(❯\s*)?1\.\s+Yes, I trust this folder\b/
-// Both modals put their decisive rows within a few non-blank rows of the end; the trust screen is the
-// deeper of the two (its blurb precedes the options). 24 keeps real margin over that.
-const BOOT_MODAL_TAIL_ROWS = 24
-// Fallback for a boot wedge whose screen trips the generic matcher but matches no chrome we can name.
-// Deliberately vague — the alternative is the silent "Stalled" card, and an uncatalogued startup screen
-// is still worth sending the human to look at.
-const GENERIC_BOOT_MODAL: NativeInputRequiredData = { kind: "confirmation", title: "Blocked on a startup prompt" }
-
-export function detectClaudeBootModal(pane: string): NativeInputRequiredData | undefined {
-  if (!pane) return undefined
-  const tail = pane.split("\n").filter((row) => row.trim() !== "").slice(-BOOT_MODAL_TAIL_ROWS).join("\n")
-  if (BOOT_APIKEY_HEADLINE.test(tail) && BOOT_APIKEY_QUESTION.test(tail)) {
-    return { kind: "confirmation", title: "Confirm the API key in your environment" }
-  }
-  if (BOOT_TRUST_QUESTION.test(tail) && BOOT_TRUST_OPTION.test(tail)) {
-    return { kind: "confirmation", title: "Trust this folder" }
-  }
-  return undefined
 }
 
 // One tracked live background sub-agent, keyed in TailState by its dispatch tool_use id (the
@@ -700,7 +553,6 @@ export interface TailState extends FoldState {
   // transition tracking (dedupe)
   primed: boolean // first tick restores state WITHOUT firing transition notifies (boot/restart)
   permPrompt: boolean // last permission-block verdict (see sniffPane / permMarkerBlocks)
-  nativeInputRequired?: NativeInputRequiredData // last structured native-modal verdict
   permPolicy?: PermPolicyView // last DENIAL from the worker's permission policy (display only)
   permDenies?: number // how many policy DENIALS this thread has accumulated
   paneDead: boolean
@@ -797,7 +649,6 @@ export function newTailState(
     primed: false,
     turn: "in-flight",
     permPrompt: false,
-    nativeInputRequired: undefined,
     paneDead: false,
     noTranscript: false,
     nextDiscoverMs: 0,
@@ -2218,12 +2069,6 @@ export interface TailerDeps {
   // session's discovery record and probes its pid. A fixture that omits it gets `() => true` when the
   // project has no stateDir, i.e. the pre-existing `exited`-only behavior.
   brokerDaemonAlive?: (sessionId: string) => boolean
-  // Retained as inert test seams: nothing captures a worker's screen any more (a worker is a headless
-  // daemon — there is no terminal to read back), but fixtures still pass `capturePane` and a narrower
-  // type here would be churn for no behaviour. `capturePanesAsync` is wired by NOTHING, fixtures
-  // included, so the batched prefetch inside createTailer never runs at all.
-  capturePane?: (slug: string) => string
-  capturePanesAsync?: (slugs: readonly string[]) => Promise<Map<string, string>>
   sessionLogDir?: string // injectable transcript dir (tests); defaults to the Claude Code path
   codexHome?: string // injectable $CODEX_HOME (tests); where a codex sub-agent's child rollout is located
   mtimeMs?: (path: string) => number | undefined // injectable file mtime (tests); a sub-agent transcript's staleness clock
@@ -2431,9 +2276,8 @@ export function defaultBrokerDaemonAlive(project: Project, now: () => number): (
 }
 
 // The slice of AgentBackend the tailer drives: locate a session's transcript and fold a raw line into
-// the accumulator. The three matcher members ride along for the contract's sake — each took the
-// worker's rendered screen as input, and nothing renders one any more (see sniffPane).
-type TailBackend = Pick<AgentBackend, "transcriptPath" | "foldLine" | "matchesPermPrompt" | "detectNativeInput" | "detectBootModal">
+// the accumulator.
+type TailBackend = Pick<AgentBackend, "transcriptPath" | "foldLine">
 
 // Fields the durable prime cache must NEVER restore. Identity comes from the live registry row; the
 // liveness/discovery fields are re-derived by the prime branch on every boot and a stale value would
@@ -2445,9 +2289,9 @@ type TailBackend = Pick<AgentBackend, "transcriptPath" | "foldLine" | "matchesPe
 // below a live bug, so the set is now a tested contract rather than a private detail.
 export const UNRESTORED_TAIL_FIELDS: ReadonlySet<string> = new Set([
   "slug", "sessionId", "nativeSessionId", "runtimeGeneration", "path", "foreign",
-  "primed", "permPrompt", "nativeInputRequired", "paneDead", "subAgentsSig",
-  // Marker-DERIVED, exactly like permPrompt and nativeInputRequired above: this cache exists to skip
-  // re-folding the TRANSCRIPT, and none of these three come from it. Re-derived from the on-disk
+  "primed", "permPrompt", "paneDead", "subAgentsSig",
+  // Marker-DERIVED, exactly like permPrompt above: this cache exists to skip re-folding the
+  // TRANSCRIPT, and none of these three come from it. Re-derived from the on-disk
   // marker on the next tick anyway, so dropping them costs nothing and restoring them costs a lot —
   // the fold-schema digest cannot invalidate a stale one, because a promoted artifact ships no .ts
   // sources (verified) and foldSchemaDigest therefore falls back to a FIXED constant that every build
@@ -2494,8 +2338,6 @@ export function createTailer(deps: TailerDeps): Tailer {
   // for fixtures.
   const paneDead = deps.paneDead ?? (() => true)
   const brokerDaemonAlive = deps.brokerDaemonAlive ?? defaultBrokerDaemonAlive(deps.project, now)
-  const capturePane = deps.capturePane ?? (() => "")
-  const capturePanesAsync = deps.capturePanesAsync
   const logDir = deps.sessionLogDir ?? defaultLogDir(deps.project)
   // Keyed on THIS project's state dir: the stall log is named for a thread slug alone, which is not
   // unique across projects (and, in a shared /tmp, not across OS users either).
@@ -2675,89 +2517,9 @@ export function createTailer(deps: TailerDeps): Tailer {
     return paneDead(row.slug)
   }
 
-  // ---- Off-loop screen-capture prefetch (INERT — nothing wires `capturePanesAsync`) ----------------
-  // HISTORY, kept because it explains the shape of the three functions below. When frizz ran each
-  // worker in a terminal it could read back, the permission sniff was the tick's dominant cost: one
-  // capture was one subprocess, ~105ms measured on the maintainer's machine. Batching every quiet
-  // in-flight thread into ONE invocation cut the spawn COUNT, but that one invocation was still
-  // SYNCHRONOUS — a fork/exec + round-trip whose duration grew with the board's worker count, run on
-  // the event loop every tick. And any thread absent from the batch fell back to a per-slug capture,
-  // so a board with N exited/reaped workers paid N synchronous spawns per tick — 13-15 spawns / 2-4s
-  // measured 2026-07-23.
-  //
-  // So the prefetch moved OFF the loop: at the END of each tick it kicks a single async batched
-  // capture for every unbound row, and the NEXT tick's sniff reads its result from `paneTextCache`.
-  // Nothing in the tick body ever blocks on a capture. The verdict it fed (a permission prompt) was
-  // already gated on PERM_SNIFF_MS of quiet and confirmed over CLAUDE_PERMISSION_CONFIRM_POLLS, so a
-  // ≤1-tick-older capture changed no outcome — and an absent capture simply wasn't in the cache (empty
-  // text), never a synchronous per-slug spawn.
-  //
-  // NONE OF IT RUNS IN THIS BUILD: no composition layer passes `capturePanesAsync` (context.ts wires
-  // neither it nor `capturePane`), so refreshPaneTextAsync returns immediately and paneTextCache is
-  // never populated. The synchronous fallback below survives only for the fixtures that inject
-  // `capturePane`.
-  let paneTextCache: Map<string, string> | null = null
-  let paneTextRefreshing = false
-
-  function paneTextPrefetchSlugs(): string[] {
-    const slugs: string[] = []
-    for (const row of deps.storage.allSessions()) {
-      if (isHeadlessRow(row)) continue // headless (codex app-server / claude broker): nothing to capture
-      if (adoptionBinding(row).kind !== "unbound") continue // an adopted row captured by exact identity
-      // A batched capture ABORTED at its first bad target, so only rows the capture backend actually
-      // knew were asked for. The liveness map is already cached, so this filter is free. A dead-but-
-      // frozen worker was kept — its final screen still held the boot-failure/frozen-modal text the
-      // sniff and captureStall read.
-      slugs.push(row.slug)
-    }
-    return slugs
-  }
-
-  // Kick the async batched capture (single-flight). Fire-and-forget from the tick end; its result is
-  // swapped into paneTextCache for subsequent ticks to serve. Never awaited on the tick path.
-  function refreshPaneTextAsync(): void {
-    if (!capturePanesAsync || paneTextRefreshing) return
-    const slugs = paneTextPrefetchSlugs()
-    if (slugs.length === 0) {
-      paneTextCache = new Map()
-      return
-    }
-    paneTextRefreshing = true
-    Promise.resolve(capturePanesAsync(slugs))
-      .then((map) => { paneTextCache = map })
-      .catch(() => { /* transient capture failure — keep the prior snapshot, retry next tick */ })
-      .finally(() => { paneTextRefreshing = false })
-  }
-
-  // UNCALLED in this build — nothing reads a worker's screen on the tick path any more. Kept beside
-  // the prefetch it consumes rather than deleted piecemeal; see the block header above.
-  function capturePaneForRow(row: SessionRow): string {
-    const binding = adoptionBinding(row)
-    if (binding.kind === "unbound") {
-      const cached = paneTextCache?.get(row.slug)
-      if (cached !== undefined) return cached
-      // Async-prefetch mode: the cache is authoritative. A miss means nothing was captured for this row
-      // → empty, NEVER a synchronous per-slug spawn (that was the O(N) block).
-      if (capturePanesAsync) return ""
-      // Sync-fallback mode (test fixtures inject only capturePane): capture synchronously, as before.
-      return capturePane(row.slug)
-    }
-    if (binding.kind === "conflict") return ""
-    return ""
-  }
-
-  // Synchronous one-shot capture for the boot-failure stall log (captureStall fires once per stalled
-  // row, guarded by stallLogged — not a per-tick cost — so a blocking capture here is fine, and it had
-  // to read the dead worker's FROZEN final screen directly rather than the possibly-empty prefetch
-  // cache). `deps.capturePane` is a fixture-only seam now, so on a real server this returns "".
-  function capturePaneForRowSync(row: SessionRow): string {
-    const binding = adoptionBinding(row)
-    if (binding.kind === "unbound") return capturePane(row.slug)
-    return ""
-  }
   // Default backend = this file's own corpus-verified Claude fold (identical to the injected
-  // ClaudeBackend, which reuses the same applyRecord/parseLine/matchesPermPrompt). Tests never inject
-  // a backend, so this default is the regression-proof path.
+  // ClaudeBackend, which reuses the same applyRecord/parseLine). Tests never inject a backend, so
+  // this default is the regression-proof path.
   const defaultBackend: TailBackend = {
     transcriptPath: (sessionId) => join(logDir, `${sessionId}.jsonl`),
     foldLine: (state, line) => {
@@ -2767,8 +2529,6 @@ export function createTailer(deps: TailerDeps): Tailer {
       // FoldState doesn't carry, so narrow back to it. Byte-identical to the pre-refactor fold.
       if (rec) applyRecord(state as TailState, rec)
     },
-    matchesPermPrompt,
-    detectBootModal: detectClaudeBootModal,
   }
   // Resolve the backend for a row by its `backend` column. Prod injects `backendFor` (claude|codex);
   // a single injected `backend` or the local default covers every row otherwise. For claude (and every
@@ -3442,11 +3202,6 @@ export function createTailer(deps: TailerDeps): Tailer {
 
   interface PaneSniff {
     permPrompt: boolean
-    nativeInputRequired?: NativeInputRequiredData
-  }
-
-  function sameNativeInput(a: NativeInputRequiredData | undefined, b: NativeInputRequiredData | undefined): boolean {
-    return a?.kind === b?.kind && a?.title === b?.title
   }
 
   // A live PermissionRequest marker (Claude workers with the frizz plugin) is an ACTIVE block iff the
@@ -3517,13 +3272,16 @@ export function createTailer(deps: TailerDeps): Tailer {
   // fallback it used to have read a quiet in-flight turn's rendered screen, which covered the screens
   // that emit no PermissionRequest (pre-boot workspace-trust, /login and other selectors) and
   // plugin-less foreign sessions; a headless worker renders no screen, so that cover went with it. The
-  // native structured detector (Codex) rode the same capture and is likewise unreachable from here.
+  // native structured detector (Codex) rode the same capture; every approval it used to scrape off the
+  // TUI now reaches frizz as a typed request on the app-server channel (see codex-app-server.ts —
+  // item/commandExecution/requestApproval, item/fileChange/requestApproval,
+  // item/permissions/requestApproval and MCP elicitation, each raised through interactionRequest).
   //
   // KNOWN EDGE (accepted): a background sub-agent completing WHILE the parent is blocked appends a
   // system user-record that advances lastActivityAt past the marker, so permMarkerBlocks reads false.
-  // That used to degrade to the regex fallback, which re-detected the real modal after PERM_SNIFF_MS of
-  // quiet; with no fallback left, the block stays unreported until the request resolves or the hook
-  // writes a newer marker.
+  // That used to degrade to the regex fallback, which re-detected the real modal after a 4s quiet gate;
+  // with no fallback left, the block stays unreported until the request resolves or the hook writes a
+  // newer marker.
   function sniffPane(
     state: TailState,
     row: SessionRow,
@@ -4043,8 +3801,8 @@ export function createTailer(deps: TailerDeps): Tailer {
   // Record a stalled worker's boot-failure evidence ONCE, to the server console + a per-session sink.
   // This used to capture the dead worker's frozen final screen, which held claude's own error text;
   // with no screen left to read, what survives is a pointer to the evidence that DOES exist for the
-  // row's runtime (see `evidence` below). Best-effort — the whole point is root-causing the missing
-  // transcript, but a capture failure must never break the tick.
+  // row's runtime (see `detail` below). Best-effort — the whole point is root-causing the missing
+  // transcript, so a failure to write the sink must never break the tick.
   function captureStall(state: TailState, row: SessionRow): void {
     if (state.stallLogged) return
     // "No transcript 60s after dispatch" is a BOOT-FAILURE alarm: it means a worker the operator just
@@ -4060,40 +3818,29 @@ export function createTailer(deps: TailerDeps): Tailer {
     // ever reopened and still cannot bind, that is a live problem again and gets its one ERROR then.
     if (row.exited && rowIsArchived(row)) return
     state.stallLogged = true
-    let pane = ""
-    try {
-      pane = capturePaneForRowSync(row)
-    } catch {
-      pane = ""
-    }
-    // Boot-failure auth classifier (claude-auth plan): a worker that dies before writing a transcript,
-    // with the 401/login text in whatever output was captured, is a rejected credential, not a generic
-    // stall. Only the typed category persists — the raw capture (which may carry OAuth URLs/codes from
-    // a login attempt) is REDACTED from the console line and the stall sink in this case.
-    const authFailure = row.backend !== "codex" && isClaudeAuthErrorText(pane)
-    if (authFailure) state.authFault = "authentication_rejected"
-    // A headless row never had a terminal to capture (capturePaneForRowSync is skipped for it
-    // upstream), so the generic "Pane: (pane empty / unavailable)" line sent whoever read it hunting a
-    // terminal multiplexer for a runtime that never had one — measured cost on 2026-07-31, a real boot
-    // failure investigated at the wrong layer first. Name the evidence that DOES exist for this runtime
-    // instead: for the broker that is the daemon's own diagnostics log, which records the session's
-    // lifecycle and any dropped input.
-    const evidence = isBrokerClaudeRow(row) && deps.project.stateDir
+    // A headless row never had a terminal to capture, so the generic "Pane: (pane empty / unavailable)"
+    // line sent whoever read it hunting a terminal multiplexer for a runtime that never had one —
+    // measured cost on 2026-07-31, a real boot failure investigated at the wrong layer first. Name the
+    // evidence that DOES exist for this runtime instead: for the broker that is the daemon's own
+    // diagnostics log, which records the session's lifecycle and any dropped input.
+    //
+    // This is now the WHOLE detail, because the screen capture that used to precede it is gone: no
+    // runtime frizz drives renders a terminal, and nothing wired a capture into the tailer. The
+    // boot-failure auth classifier that read the captured text (`isClaudeAuthErrorText` over the frozen
+    // final screen, setting authFault="authentication_rejected") went with it — it had been running on
+    // the empty string. The fold-side classifier is unaffected and is the live one: applyRecord sets
+    // the same authFault from a real isApiErrorMessage 401/login record in the transcript.
+    const detail = isBrokerClaudeRow(row) && deps.project.stateDir
       ? `no worker terminal to capture (broker runtime). Daemon diagnostics: ${claudeBrokerDiagnosticLogPath(deps.project.stateDir, row.session_id)}`
       : isHeadlessRow(row)
       ? `no worker terminal to capture (headless ${row.backend === "codex" ? "codex app-server" : "claude broker"} runtime)`
-      // Neither runtime above, i.e. a pre-cutover row. Nothing in this build captures anything —
-      // `deps.capturePane` is wired by fixtures only, and no worker renders a terminal to capture from —
-      // so the old "(pane empty / unavailable)" described output that SHOULD have existed and sent the
-      // reader hunting for a screen that cannot. Say why there is nothing instead.
+      // Neither runtime above, i.e. a pre-cutover row. Nothing in this build captures anything, so the
+      // old "(pane empty / unavailable)" described output that SHOULD have existed and sent the reader
+      // hunting for a screen that cannot exist. Say why there is nothing instead.
       : "no worker output captured (this build captures no terminal)"
-    const detail = authFailure
-      ? "(claude authentication failure — captured output redacted; sign in and retry)"
-      : pane.trim() || evidence
-    // Frame the detail as captured output only when it actually IS captured output.
     frizzLog.error(
       "tailer",
-      `thread ${row.slug} (session ${row.session_id}): no transcript ${DISCOVERY_GRACE_MS / 1000}s after dispatch — likely a boot failure. ${pane.trim() && !authFailure ? "Captured output:\n" : ""}${detail.slice(0, 4000)}`,
+      `thread ${row.slug} (session ${row.session_id}): no transcript ${DISCOVERY_GRACE_MS / 1000}s after dispatch — likely a boot failure. ${detail.slice(0, 4000)}`,
     )
     try {
       mkdirSync(stallLogDir, { recursive: true })
@@ -4202,9 +3949,6 @@ export function createTailer(deps: TailerDeps): Tailer {
     // /ws transcript producer at the end so it pushes only for genuinely-changed threads.
     const transcriptDirty: string[] = []
     const nowMs = now()
-    // paneTextCache holds the LAST async prefetch's result and is read (never written) during the tick;
-    // a fresh batched capture is kicked off the loop at the tick's end (see refreshPaneTextAsync —
-    // inert in this build, since nothing wires `capturePanesAsync`).
     adoptionBindings = new Map()
     const rows = deps.storage.allSessions()
     // ARCHIVED ROWS PRIME LAST. Priming is bounded per tick, so on a cold board the registry's order
@@ -4328,7 +4072,6 @@ export function createTailer(deps: TailerDeps): Tailer {
           backend,
         )
         state.permPrompt = pane.permPrompt
-        state.nativeInputRequired = pane.nativeInputRequired
         state.paneDead = paneDeadForRow(row)
         applyRuntimeTasks(row, state, nowMs)
         applyRuntimeContextWindow(row, state)
@@ -4463,9 +4206,7 @@ export function createTailer(deps: TailerDeps): Tailer {
         backend,
       )
       if (pane.permPrompt !== state.permPrompt) dirty = true
-      if (!sameNativeInput(pane.nativeInputRequired, state.nativeInputRequired)) dirty = true
       state.permPrompt = pane.permPrompt
-      state.nativeInputRequired = pane.nativeInputRequired
 
       // The OWNER-death half stays guarded — that reasoning is still sound, and it is the half the
       // comment was actually written about.
@@ -4561,13 +4302,8 @@ export function createTailer(deps: TailerDeps): Tailer {
     if (dirty) deps.onChange()
     if (transcriptDirty.length) deps.onTranscriptChange?.(transcriptDirty)
 
-    // Refresh the capture cache OFF the loop for the next tick's sniff. INERT in this build: nothing
-    // wires `capturePanesAsync`, so this returns immediately. Kicked last so it never sits in front of
-    // this tick's board push.
-    refreshPaneTextAsync()
-
     // A session's provider events have outrun its transcript — look again shortly. Last, so it can
-    // never delay this tick's board push, and after refreshPaneTextAsync for the same reason.
+    // never delay this tick's board push.
     if (chaseWanted) nudge()
   }
 
@@ -4738,7 +4474,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       // an unanswered ```question fence (a user reply clears the flag and flips the turn in-flight).
       const pendingQuestion = s.turn === "idle" && s.lastAssistantHasQuestion
       const nowMs = now()
-      return { turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, nativeInputRequired: s.nativeInputRequired, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: s.lastAssistantAllDone, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt }
+      return { turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: s.lastAssistantAllDone, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt }
     },
     // The CURRENT fresh foreign session ids (mtime within FOREIGN_FRESH_MS, capped), mtime-desc. Kept
     // as the last scan's result — recomputed at most every FOREIGN_SCAN_EVERY ticks.

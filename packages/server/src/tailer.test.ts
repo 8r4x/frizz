@@ -7,7 +7,7 @@ import { createStorage, type Storage, type SessionRow } from "./storage.ts"
 import { Bus } from "./bus.ts"
 import type { ServerEvent } from "@frizz/shared"
 import { permMarkerPath, type Project } from "./project.ts"
-import { parseLine, applyRecord, applyEvent, computeTurn, newTailState, createTailer, defaultBrokerDaemonAlive, matchesPermPrompt, detectClaudeBootModal, hasQuestionBlock, isClaudeAuthErrorText, isRealUserMessage, parseSignalFence, markerDecision, unwrapShellCommand, FOREIGN_FRESH_MS } from "./tailer.ts"
+import { parseLine, applyRecord, applyEvent, computeTurn, newTailState, createTailer, defaultBrokerDaemonAlive, hasQuestionBlock, isClaudeAuthErrorText, isRealUserMessage, parseSignalFence, markerDecision, unwrapShellCommand, FOREIGN_FRESH_MS } from "./tailer.ts"
 import { claudeBrokerRecordPath } from "./backend/claude-broker-host.ts"
 import type { AgentBackend, NormalizedEvent } from "./backend/types.ts"
 import { createClaudeBackend } from "./backend/claude.ts"
@@ -1017,7 +1017,6 @@ test("tailer: surfaces running vs stale sub-agents (via injected mtime) and clea
     onChange: () => h.changes.n++,
     now: () => h.clock.ms,
     paneDead: () => h.dead.v,
-    capturePane: () => h.pane.text,
     sessionLogDir: h.logDir,
     mtimeMs: () => childMtime,
   })
@@ -1061,7 +1060,6 @@ test("tailer: a `stopped` recovery notification clears EVERY orphaned sub-agent 
     onChange: () => h.changes.n++,
     now: () => h.clock.ms,
     paneDead: () => h.dead.v,
-    capturePane: () => h.pane.text,
     sessionLogDir: h.logDir,
     mtimeMs: () => childMtime,
   })
@@ -1092,7 +1090,7 @@ test("tailer: dismissOp retires a live sub-agent AND a live shell by id, immedia
   const t = createTailer({
     project: { cwdSlug: "x" } as Project,
     storage: h.storage, bus: h.bus, onChange: () => h.changes.n++,
-    now: () => h.clock.ms, paneDead: () => h.dead.v, capturePane: () => h.pane.text,
+    now: () => h.clock.ms, paneDead: () => h.dead.v,
     sessionLogDir: h.logDir, mtimeMs: () => Date.parse("2026-07-01T00:00:02.000Z"),
   })
   h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z")
@@ -1130,7 +1128,6 @@ test("tailer: a shell whose task id has not arrived yet is NOT marked stoppable"
     onChange: () => h.changes.n++,
     now: () => h.clock.ms,
     paneDead: () => h.dead.v,
-    capturePane: () => h.pane.text,
     sessionLogDir: h.logDir,
     mtimeMs: () => Date.parse("2026-07-01T00:00:02.000Z"),
   })
@@ -1160,7 +1157,6 @@ test("tailer: a shell's view carries the runtime's own background-task id, not j
     onChange: () => h.changes.n++,
     now: () => h.clock.ms,
     paneDead: () => h.dead.v,
-    capturePane: () => h.pane.text,
     sessionLogDir: h.logDir,
     mtimeMs: () => Date.parse("2026-07-01T00:00:02.000Z"),
   })
@@ -1185,7 +1181,6 @@ test("tailer: a dead pane clears its background shells — a shell cannot outliv
     onChange: () => h.changes.n++,
     now: () => h.clock.ms,
     paneDead: () => h.dead.v,
-    capturePane: () => h.pane.text,
     sessionLogDir: h.logDir,
     mtimeMs: () => shellMtime,
   })
@@ -1228,7 +1223,6 @@ test("tailer: a BROKER (headless) thread reports its live background shells — 
     now: () => h.clock.ms,
     // The real pane probe's answer for a slug with no pane, which is EVERY headless row: dead.
     paneDead: (slug) => { deadCalls.push(slug); return true },
-    capturePane: () => h.pane.text,
     sessionLogDir: h.logDir,
     mtimeMs: () => shellMtime,
   })
@@ -1261,7 +1255,6 @@ test("tailer: stopping a BROKER thread clears its live background shells (the he
     onChange: () => h.changes.n++,
     now: () => h.clock.ms,
     paneDead: () => false,
-    capturePane: () => h.pane.text,
     sessionLogDir: h.logDir,
     mtimeMs: () => shellMtime,
   })
@@ -1303,7 +1296,6 @@ test("tailer: a broker daemon that dies UNSTOPPED clears its shells — `exited`
     onChange: () => h.changes.n++,
     now: () => h.clock.ms,
     paneDead: () => false,
-    capturePane: () => h.pane.text,
     sessionLogDir: h.logDir,
     mtimeMs: () => shellMtime,
     brokerDaemonAlive: () => daemon.alive,
@@ -1345,7 +1337,6 @@ test("tailer: a broker daemon that dies holding a follow-up retires it instead o
     onChange: () => h.changes.n++,
     now: () => h.clock.ms,
     paneDead: () => false,
-    capturePane: () => h.pane.text,
     sessionLogDir: h.logDir,
     brokerDaemonAlive: () => daemon.alive,
   })
@@ -1423,7 +1414,6 @@ test("tailer: end-to-end, a real broker record naming a dead pid clears the shel
     onChange: () => h.changes.n++,
     now: () => h.clock.ms,
     paneDead: () => false,
-    capturePane: () => h.pane.text,
     sessionLogDir: h.logDir,
     mtimeMs: () => Date.parse("2026-07-01T00:00:02.000Z"),
   })
@@ -1511,7 +1501,6 @@ test("tailer: ownerGone answers for a pane death on a non-broker row, not just a
     onChange: () => h.changes.n++,
     now: () => h.clock.ms,
     paneDead: () => h.dead.v,
-    capturePane: () => h.pane.text,
     sessionLogDir: h.logDir,
   })
 
@@ -1545,7 +1534,6 @@ test("tailer: broker-daemon liveness is never consulted for a non-broker row", (
     onChange: () => h.changes.n++,
     now: () => h.clock.ms,
     paneDead: () => false,
-    capturePane: () => h.pane.text,
     sessionLogDir: h.logDir,
     mtimeMs: () => Date.parse("2026-07-01T00:00:02.000Z"),
     brokerDaemonAlive: () => { asked++; return false },
@@ -1574,7 +1562,6 @@ test("tailer: a manual TaskStop clears a live background shell from the board vi
     onChange: () => h.changes.n++,
     now: () => h.clock.ms,
     paneDead: () => h.dead.v, // pane STAYS ALIVE — the stop, not pane death, must clear the row
-    capturePane: () => h.pane.text,
     sessionLogDir: h.logDir,
     mtimeMs: () => shellMtime,
   })
@@ -1603,7 +1590,6 @@ test("tailer: subAgent() resolves a LIVE child, then its RETAINED completion, th
     onChange: () => h.changes.n++,
     now: () => h.clock.ms,
     paneDead: () => h.dead.v,
-    capturePane: () => h.pane.text,
     sessionLogDir: h.logDir,
     mtimeMs: () => childMtime,
   })
@@ -1641,7 +1627,6 @@ test("tailer: a resolved-but-missing output file (deleted child transcript) degr
     onChange: () => h.changes.n++,
     now: () => h.clock.ms,
     paneDead: () => h.dead.v,
-    capturePane: () => h.pane.text,
     sessionLogDir: h.logDir,
     mtimeMs: () => undefined, // the child's transcript no longer stats (deleted / bridged elsewhere)
   })
@@ -1763,211 +1748,6 @@ test("tailer: lastUserAt tracks the newest REAL user message; a tool_result does
   assert.equal(t.get("t")?.lastUserAt, "2026-07-01T00:00:30.000Z", "a real user steer bumps the interaction key")
 })
 
-// ---- permission-prompt pane matcher (empirical fixtures, claude 2.1.198) ----
-
-// Real capture of a pending Bash-tool approval (--permission-mode default).
-const PANE_PERM_BASH = [
-  " Bash command",
-  "   touch approved-me.txt",
-  "   Create empty file approved-me.txt",
-  " Do you want to proceed?",
-  " ❯ 1. Yes",
-  "   2. Yes, and always allow access to permtest/ from this project",
-  "   3. No",
-  " Esc to cancel · Tab to amend · ctrl+e to explain",
-].join("\n")
-
-// Real capture of a pending Edit-tool approval — different question wording, same modal shape.
-const PANE_PERM_EDIT = [
-  " Edit file",
-  " file.txt",
-  " 1 -hello",
-  " 1 +goodbye",
-  " Do you want to make this edit to file.txt?",
-  " ❯ 1. Yes",
-  "   2. Yes, allow all edits during this session (shift+tab)",
-  "   3. No",
-  " Esc to cancel · Tab to amend",
-].join("\n")
-
-// Negative: a normal streaming turn. A real mid-turn pane KEEPS the whole composer (divider, `❯` row,
-// divider, project line, mode line) — verified against live claude 2.1.214 — so this fixture carries it
-// and therefore exercises the composer gate, not only the content gate.
-const PANE_STREAMING = [
-  "❯ Use the Edit tool to change the word hello to goodbye in file.txt",
-  "  Reading 1 file…",
-  "  ⎿  file.txt",
-  "✳ Canoodling… (11s · ↑ 95 tokens)",
-  "────────────────────────────────────────",
-  "❯ ",
-  "────────────────────────────────────────",
-  "  permtest · main · Fable 5 · 3%",
-  "  ⏵⏵ auto mode on (shift+tab to cycle)",
-].join("\n")
-
-// Negative: idle at the prompt.
-const PANE_IDLE = ["⏺ Clean working tree on main, nothing to commit.", "❯ ", "  permtest · main · Fable 5 · 3%"].join("\n")
-
-// Negative: the model printing its OWN numbered list (incl. "1. Yes") in prose — the two-signal
-// guard (numbered Yes AND question/footer) must NOT fire on this.
-const PANE_MODEL_LIST = [
-  "⏺ Here are the options I'm weighing:",
-  "  1. Yes, refactor the parser now",
-  "  2. No, leave it for later",
-  "  Which would you prefer?",
-].join("\n")
-
-// Real capture of the PRE-BOOT workspace-trust prompt — a third modal shape, and the one every fresh
-// worker in an untrusted cwd hits. No question line; the footer alone must carry it.
-const PANE_PERM_TRUST = [
-  " Accessing workspace:",
-  " /tmp/repro",
-  " Quick safety check: Is this a project you created or one you trust?",
-  " Claude Code'll be able to read, edit, and execute files here.",
-  " Security guide",
-  " ❯ 1. Yes, I trust this folder",
-  "   2. No, exit",
-  " Enter to confirm · Esc to cancel",
-].join("\n")
-
-// Real capture (2026-07-18, claude 2.x, live worker) of the FALSE POSITIVE that parked healthy auto-mode
-// threads in Needs-you: the agent's own reply quotes a prompt's lines while the composer — `❯` row,
-// divider, project line, `⏸ manual mode on` — is still on screen and accepting input. Content-only
-// matching fires here; the composer's presence in the last rows proves it must not.
-const PANE_QUOTING_PROMPT = [
-  "⏺ Do you want to proceed?",
-  "  1. Yes",
-  "  2. No",
-  "  Esc to cancel",
-  "✻ Crunched for 1s",
-  "────────────────────────────────────────",
-  "❯ ",
-  "────────────────────────────────────────",
-  "  repro · main · Haiku 4.5 · 17%                    /rc",
-  "  ⏸ manual mode on · ← 3 agents",
-].join("\n")
-
-// Same quote under every other mode line, since the mode the worker runs in must not change the verdict.
-const quotingUnderMode = (mode: string) => PANE_QUOTING_PROMPT.replace("⏸ manual mode on", mode)
-
-// The modal shape scrolled up into history, with real output below it and the composer at the bottom —
-// the same class as above but with the signals well outside the modal's tail window.
-const PANE_SCROLLED_PAST_PROMPT = [
-  " Do you want to proceed?",
-  " ❯ 1. Yes",
-  "   2. No",
-  " Esc to cancel · Tab to amend",
-  ...Array.from({ length: 14 }, (_, i) => `⏺ later output line ${i}`),
-  "❯ ",
-  "  repro · main · Opus 4.8 · 7%",
-  "  ⏵⏵ auto mode on · ← 3 agents",
-].join("\n")
-
-// Real capture of the ExitPlanMode approval (claude 2.1.214). It shares NEITHER original content
-// spelling — the question is "Would you like to proceed?" and the footer is "ctrl+g to edit in VS Code"
-// — so it was silently invisible. A miss here hangs the worker forever: `detectNativeInput` is a Codex-
-// only backend hook, leaving this matcher as the sole blocking-modal signal for a Claude worker.
-const PANE_PERM_EXIT_PLAN = [
-  "   Claude has written up a plan and is ready to execute. Would you like to proceed?",
-  "   ❯ 1. Yes, and use auto mode",
-  "     2. Yes, manually approve edits",
-  "     3. No, refine with Ultraplan on Claude Code on the web",
-  "     4. Tell Claude what to change",
-  "        shift+tab to approve with this feedback",
-  "   ctrl+g to edit in VS Code · ~/.claude/plans/plan-name.md",
-].join("\n")
-
-// Real capture shape of `ctrl+o`'s detailed-transcript view: it REPLACES the composer with its own
-// footer, so the pane is composer-less yet fully live — and the toggle is sticky for the session. A
-// worker quoting prompt text under it re-tripped the matcher until this footer counted as a composer.
-const PANE_TRANSCRIPT_VIEW = [
-  "⏺ Do you want to proceed?",
-  "  1. Yes",
-  "  2. No",
-  "  Esc to cancel",
-  "  Showing detailed transcript · ctrl+o to toggle · ↑↓ scroll · v to open in code · ? for shortcuts    verbose",
-].join("\n")
-
-test("matchesPermPrompt: fires on real Bash + Edit + trust + ExitPlanMode approval panes", () => {
-  assert.equal(matchesPermPrompt(PANE_PERM_BASH), true)
-  assert.equal(matchesPermPrompt(PANE_PERM_EDIT), true)
-  assert.equal(matchesPermPrompt(PANE_PERM_TRUST), true)
-  assert.equal(matchesPermPrompt(PANE_PERM_EXIT_PLAN), true)
-})
-
-// The ctrl+o view is composer-less but LIVE, so it must not be read as a modal.
-test("matchesPermPrompt: the ctrl+o transcript view counts as a live composer", () => {
-  assert.equal(matchesPermPrompt(PANE_TRANSCRIPT_VIEW), false)
-})
-
-// Verbatim capture (2026-07-22, claude 2.1.218) from the worker that wedged in production: a stray
-// ANTHROPIC_API_KEY in the environment gates the session before it opens, so nothing is ever written
-// to the transcript and the board had only "No message yet." to show.
-const PANE_BOOT_APIKEY = [
-  "─".repeat(96),
-  "  Detected a custom API key in your environment",
-  "",
-  "  ANTHROPIC_API_KEY: sk-ant-...1gsVZdvC3IA-dfjolgAA",
-  "",
-  "  Do you want to use this API key?",
-  "",
-  "    1. Yes",
-  "  ❯ 2. No (recommended)",
-  "",
-  "  Enter to confirm · Esc to cancel",
-].join("\n")
-
-test("detectClaudeBootModal: names the API-key and trust screens with fixed, pane-free titles", () => {
-  assert.deepEqual(detectClaudeBootModal(PANE_BOOT_APIKEY), {
-    kind: "confirmation",
-    title: "Confirm the API key in your environment",
-  })
-  assert.deepEqual(detectClaudeBootModal(PANE_PERM_TRUST), { kind: "confirmation", title: "Trust this folder" })
-  // The contract is presentation-safe: the masked credential and the workspace path must not ride along.
-  const title = detectClaudeBootModal(PANE_BOOT_APIKEY)!.title
-  assert.equal(title.includes("sk-ant"), false)
-  assert.equal(detectClaudeBootModal(PANE_PERM_TRUST)!.title.includes("/tmp/repro"), false)
-})
-
-test("detectClaudeBootModal: no match on ordinary approvals, a quoted prompt, or an empty pane", () => {
-  // These ARE modals (matchesPermPrompt fires) but they are mid-session, not boot screens — the
-  // fallback title covers them; a specific one would be a lie.
-  assert.equal(detectClaudeBootModal(PANE_PERM_BASH), undefined)
-  assert.equal(detectClaudeBootModal(PANE_PERM_EDIT), undefined)
-  assert.equal(detectClaudeBootModal(PANE_QUOTING_PROMPT), undefined)
-  assert.equal(detectClaudeBootModal(""), undefined)
-  // One signal is not enough: the headline alone (e.g. an agent echoing it) must not trip the matcher.
-  assert.equal(detectClaudeBootModal("Detected a custom API key in your environment"), undefined)
-  assert.equal(detectClaudeBootModal("Is this a project you created or one you trust?"), undefined)
-})
-
-test("matchesPermPrompt: rejects streaming / idle / a model's own numbered list / empty", () => {
-  assert.equal(matchesPermPrompt(PANE_STREAMING), false)
-  assert.equal(matchesPermPrompt(PANE_IDLE), false)
-  assert.equal(matchesPermPrompt(PANE_MODEL_LIST), false) // has "1. Yes" but no question/footer
-  assert.equal(matchesPermPrompt(""), false)
-})
-
-// A live composer in the last rows means the TUI is accepting input, so every prompt signal on screen
-// is transcript text. Without this the thread oscillated between the sidebar's running band and
-// Needs-you on every ≥PERM_SNIFF_MS quiet gap (reported 2026-07-18).
-test("matchesPermPrompt: a visible composer footer beats quoted prompt text in any mode", () => {
-  assert.equal(matchesPermPrompt(PANE_QUOTING_PROMPT), false)
-  for (const mode of ["⏵⏵ auto mode on (shift+tab to cycle)", "⏵ accept edits on", "⏵⏵ bypass permissions on", "⏸ plan mode on"]) {
-    assert.equal(matchesPermPrompt(quotingUnderMode(mode)), false, mode)
-  }
-})
-
-test("matchesPermPrompt: only the modal's own tail counts — scrolled-past prompt text does not", () => {
-  assert.equal(matchesPermPrompt(PANE_SCROLLED_PAST_PROMPT), false)
-})
-
-// Fail-safe direction: the composer gate reads only the last rows, so an agent that merely PRINTS a
-// mode line mid-transcript can never suppress a genuine prompt sitting at the bottom of the pane.
-test("matchesPermPrompt: a mode line in transcript history does not suppress a real prompt", () => {
-  assert.equal(matchesPermPrompt(["⏺ The footer reads: ⏵⏵ auto mode on", ...PANE_PERM_BASH.split("\n")].join("\n")), true)
-})
-
 // ---- integration: tick loop over a fixture transcript ----
 
 // A couple of real-shaped lines (copied from the corpus schema) plus sidecar noise.
@@ -1991,7 +1771,6 @@ interface Harness {
   changes: { n: number }
   clock: { ms: number }
   dead: { v: boolean }
-  pane: { text: string; reads: number }
 }
 
 function harness(): Harness {
@@ -2007,7 +1786,7 @@ function harness(): Harness {
   const bus = new Bus()
   const events: ServerEvent[] = []
   bus.subscribe((e) => events.push(e))
-  return { storage, bus, events, logDir: dir, changes: { n: 0 }, clock: { ms: 1000 }, dead: { v: false }, pane: { text: "", reads: 0 } }
+  return { storage, bus, events, logDir: dir, changes: { n: 0 }, clock: { ms: 1000 }, dead: { v: false } }
 }
 
 function makeTailer(h: Harness, over: Partial<Parameters<typeof createTailer>[0]> = {}) {
@@ -2018,10 +1797,6 @@ function makeTailer(h: Harness, over: Partial<Parameters<typeof createTailer>[0]
     onChange: () => h.changes.n++,
     now: () => h.clock.ms,
     paneDead: () => h.dead.v,
-    capturePane: () => {
-      h.pane.reads++
-      return h.pane.text
-    },
     sessionLogDir: h.logDir,
     ...over,
   })
@@ -2060,14 +1835,13 @@ test("tailer: a fresh PermissionRequest marker sets permPrompt immediately (no q
   const h = harness()
   h.storage.upsertSession(row())
   fixture(h.logDir, "sid", [IN_FLIGHT, TOOL]) // in-flight, unresolved tool_use
-  // Only 0.5s since the last record — the pane-sniff fallback would be gated out (needs 4s quiet); the
-  // marker must still fire, and WITHOUT any pane capture.
+  // Only 0.5s since the last record. The pane-sniff fallback this replaced was gated on 4s of quiet,
+  // so it could not have fired here at all; the marker must.
   h.clock.ms = Date.parse("2026-07-01T00:00:01.500Z")
   const t = makeTailer(h, { readPermMarker: () => permMarker("2026-07-01T00:00:05.000Z") })
   t.tick()
   assert.equal(t.get("t")?.turn, "in-flight")
   assert.equal(t.get("t")?.permPrompt, true, "the structured marker blocks the thread on the human")
-  assert.equal(h.pane.reads, 0, "the precise marker needs no pane capture")
 })
 
 // The policy hook (cc-worker/hooks/perm-policy.mjs) records what it DID with the request. A request it
@@ -2281,7 +2055,7 @@ test("tailer: a codex row never consults the Claude marker", () => {
   fixture(h.logDir, "sid", [IN_FLIGHT, TOOL])
   h.clock.ms = Date.parse("2026-07-01T00:00:01.500Z")
   let reads = 0
-  const t = makeTailer(h, { readPermMarker: () => { reads++; return permMarker("2026-07-01T00:00:05.000Z") }, capturePane: () => "" })
+  const t = makeTailer(h, { readPermMarker: () => { reads++; return permMarker("2026-07-01T00:00:05.000Z") } })
   t.tick()
   assert.equal(reads, 0, "codex owns native input detection; the Claude marker is skipped")
 })
@@ -2322,7 +2096,7 @@ test("tailer: the default reader round-trips a real on-disk marker (blocked → 
   assert.equal(t.get("t")?.permPrompt, false, "a transcript record after the marker supersedes it")
 })
 
-test("tailer rejects a stale row snapshot without name-dead checks or name capture", () => {
+test("tailer rejects a stale row snapshot without name-dead checks", () => {
   const h = harness()
   const stale = row({ session_id: "owner-a", runtime_generation: 4 })
   h.storage.upsertSession(stale)
@@ -2336,7 +2110,6 @@ test("tailer rejects a stale row snapshot without name-dead checks or name captu
     },
   })
   let nameDeadChecks = 0
-  let nameCaptures = 0
   const t = createTailer({
     project: { cwdSlug: "x" } as Project,
     storage: staleStorage,
@@ -2344,14 +2117,12 @@ test("tailer rejects a stale row snapshot without name-dead checks or name captu
     onChange: () => {},
     now: () => h.clock.ms,
     paneDead: () => { nameDeadChecks++; return false },
-    capturePane: () => { nameCaptures++; return "COMPETITOR APPROVAL SCREEN" },
     sessionLogDir: h.logDir,
   })
   t.tick()
   h.clock.ms += 10_000
   t.tick()
   assert.equal(nameDeadChecks, 0)
-  assert.equal(nameCaptures, 0)
   assert.equal(t.get(stale.slug), undefined, "cached telemetry for stale A is never exposed under replacement B")
 })
 
@@ -2411,11 +2182,10 @@ test("tailer: a new runtime generation resets its byte cursor before reading rep
   assert.equal(h.events.length, 0, "generation replacement primes silently instead of emitting historical completion")
 })
 
-test("tailer: a permanently mismatched Claude sidecar expires without a capture/write hot loop", () => {
+test("tailer: a permanently mismatched Claude sidecar expires without a write/change hot loop", () => {
   const h = harness()
   h.storage.upsertSession(row({ backend: "claude", permission_mode: "bypassPermissions" }))
   fixture(h.logDir, "sid", [PERMISSION_BYPASS, IN_FLIGHT, DONE])
-  h.pane.text = "history\n❯\u00a0\n────────\n  bypass permissions on"
   const t = makeTailer(h)
   t.tick()
 
@@ -2425,17 +2195,14 @@ test("tailer: a permanently mismatched Claude sidecar expires without a capture/
     writes++
     return persistObserved(...args)
   }
-  h.pane.reads = 0
   appendFileSync(join(h.logDir, "sid.jsonl"), PERMISSION_DEFAULT + "\n")
   t.tick() // arrival poll: old footer still wins
   t.tick() // redraw opportunity one
   t.tick() // redraw opportunity two: stable mismatch expires
 
-  const readsAfterExpiry = h.pane.reads
   const changesAfterExpiry = h.changes.n
   t.tick()
   t.tick()
-  assert.equal(h.pane.reads, readsAfterExpiry, "expired candidates stop synchronous capture-pane polling")
   assert.equal(writes, 0, "an unchanged authoritative footer never causes a SQLite write")
   assert.equal(h.changes.n, changesAfterExpiry, "expired candidates stop producing board changes")
   assert.equal(h.storage.getSession("t")?.permission_mode, "bypassPermissions")
@@ -2635,10 +2402,9 @@ test("tailer: surfaces a signal fence through get()", () => {
 
 // ---- whole-directory FOREIGN session discovery (maintainer terminals: read-only threads) ----
 
-// A tailer whose paneDead/capturePane are SPIES — records every slug they're asked about, so a test
-// can prove a foreign thread never triggers a pane shell-out.
+// A tailer whose paneDead is a SPY — records every slug it's asked about, so a test can prove a
+// foreign thread never triggers a liveness probe.
 function foreignTailer(h: Harness) {
-  const paneCalls: string[] = []
   const deadCalls: string[] = []
   const t = createTailer({
     project: { cwdSlug: "x" } as Project,
@@ -2647,10 +2413,9 @@ function foreignTailer(h: Harness) {
     onChange: () => h.changes.n++,
     now: () => h.clock.ms,
     paneDead: (slug) => { deadCalls.push(slug); return h.dead.v },
-    capturePane: (slug) => { paneCalls.push(slug); return h.pane.text },
     sessionLogDir: h.logDir,
   })
-  return { t, paneCalls, deadCalls }
+  return { t, deadCalls }
 }
 
 // Write a foreign transcript with a controlled mtime (drives the freshness window against now()).
@@ -2746,18 +2511,16 @@ test("tailer: foreign ids are ordered most-recent-mtime first", () => {
   assert.deepEqual(t.foreignIds(), ["newer", "older"])
 })
 
-test("tailer: NEVER pane-sniffs or pane-death-checks a foreign thread (structural)", () => {
+test("tailer: NEVER perm-sniffs or pane-death-checks a foreign thread (structural)", () => {
   const h = harness()
   h.clock.ms = FCLOCK
-  h.pane.text = PANE_PERM_BASH // would trip a perm-prompt IF a foreign thread were ever sniffed
-  const { t, paneCalls, deadCalls } = foreignTailer(h)
+  const { t, deadCalls } = foreignTailer(h)
   foreignFile(h.logDir, "foreign-q", [IN_FLIGHT, TOOL], FRESH_MTIME) // in-flight, then quiet
   t.tick() // prime
-  h.clock.ms = FCLOCK + 60_000 // long past PERM_SNIFF_MS with no new bytes
+  h.clock.ms = FCLOCK + 60_000 // a long quiet gap with no new bytes
   t.tick()
   assert.equal(t.get("foreign-q")?.turn, "in-flight")
   assert.equal(t.get("foreign-q")?.permPrompt, false, "a foreign thread's perm-prompt is structurally false")
-  assert.ok(!paneCalls.includes("foreign-q"), "capturePane is never called for a foreign id")
   assert.ok(!deadCalls.includes("foreign-q"), "paneDead is never called for a foreign id")
 })
 
@@ -2811,7 +2574,6 @@ test("tailer: a transcript missing past the grace window → noTranscript degrad
   const stallLog = join(frizzTempDir("frizz-worker-logs"), `${slug}.stall.log`)
   try { rmSync(stallLog) } catch { /* not there */ }
   h.storage.upsertSession(row({ slug, thread_name: `frizz-${slug}` }))
-  h.pane.text = "Error: Session ID sid is already in use." // claude's own boot-failure text in the pane
   const t = makeTailer(h)
 
   h.clock.ms = Date.parse(SPAWN)
@@ -2823,9 +2585,12 @@ test("tailer: a transcript missing past the grace window → noTranscript degrad
   t.tick()
   assert.equal(t.get(slug)?.noTranscript, true, "past grace + no transcript + no discovery hit → degraded")
   assert.ok(h.changes.n > before, "the degraded flip marks the board dirty (no waiting for the reconcile)")
-  // claude's pane output was captured to disk for root-causing (point 5).
+  // The boot-failure evidence is persisted to disk for root-causing (point 5). Nothing captures a
+  // worker's screen any more, so what the sink carries is the pointer to the evidence that DOES
+  // exist for this row's runtime — deliberately worded (2026-07-31) to stop a reader hunting for
+  // terminal output that cannot exist.
   const log = readFileSync(stallLog, "utf8")
-  assert.match(log, /already in use/, "the boot-failure pane is persisted for triage")
+  assert.match(log, /no worker output captured/, "the boot-failure evidence is persisted for triage")
   try { rmSync(stallLog) } catch { /* cleanup */ }
 })
 
@@ -2964,7 +2729,6 @@ test("tailer: a replacement during transcript discovery cannot inherit or transi
     onChange: () => {},
     now: () => PAST_GRACE,
     paneDead: () => false,
-    capturePane: () => "",
     sessionLogDir: h.logDir,
   })
 
@@ -3058,7 +2822,6 @@ function codexTailer(h: Harness, codexHome: string) {
     onChange: () => h.changes.n++,
     now: () => h.clock.ms,
     paneDead: () => h.dead.v,
-    capturePane: () => h.pane.text,
     sessionLogDir: h.logDir,
     backendFor,
   })
@@ -3461,12 +3224,11 @@ test("tailer: an exited+archived row flags noTranscript but raises NO boot-failu
   // archive, and it is what the board reads. Archive it the way the Archive button does.
   h.storage.upsertSession(row({ slug, thread_name: `frizz-${slug}`, exited: 1 }))
   h.storage.setState(slug, "archived")
-  h.pane.text = "Error: Session ID sid is already in use."
   const t = makeTailer(h)
 
   h.clock.ms = PAST_GRACE
   t.tick()
-  // The BOARD still learns the row is degraded — only the ERROR-level alarm and its capture are skipped.
+  // The BOARD still learns the row is degraded — only the ERROR-level alarm and its sink are skipped.
   assert.equal(t.get(slug)?.noTranscript, true, "the degraded flag is unchanged: the board still knows")
   assert.throws(() => readFileSync(stallLog, "utf8"), "no stall sink written for an archived, exited row")
 })
@@ -3477,13 +3239,12 @@ test("tailer: a LIVE row still raises the boot-failure alarm (the archived skip 
   const stallLog = join(frizzTempDir("frizz-worker-logs"), `${slug}.stall.log`)
   try { rmSync(stallLog) } catch { /* not there */ }
   h.storage.upsertSession(row({ slug, thread_name: `frizz-${slug}`, exited: 0, archived: 0 }))
-  h.pane.text = "Error: Session ID sid is already in use."
   const t = makeTailer(h)
 
   h.clock.ms = PAST_GRACE
   t.tick()
   assert.equal(t.get(slug)?.noTranscript, true)
-  assert.match(readFileSync(stallLog, "utf8"), /already in use/, "a worker that failed to boot is still captured")
+  assert.match(readFileSync(stallLog, "utf8"), /no worker output captured/, "a worker that failed to boot is still recorded")
   try { rmSync(stallLog) } catch { /* cleanup */ }
 })
 
@@ -3585,7 +3346,7 @@ test("tailer: a shell the OS says nobody is running goes stale; alive and unknow
     const t = createTailer({
       project: { cwdSlug: "x" } as Project,
       storage: h.storage, bus: h.bus, onChange: () => h.changes.n++,
-      now: () => h.clock.ms, paneDead: () => h.dead.v, capturePane: () => h.pane.text,
+      now: () => h.clock.ms, paneDead: () => h.dead.v,
       sessionLogDir: h.logDir,
       shellAlive: () => alive,
     })

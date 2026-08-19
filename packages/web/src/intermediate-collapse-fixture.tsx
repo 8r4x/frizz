@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
-import { formatGithubWakeSteer } from "@frizz/shared"
+import { formatGithubWakeSteer, prWatchWakeMessage } from "@frizz/shared"
 import type { BoardSnapshot, ThreadView as ThreadViewModel, TranscriptMessage, TranscriptToolCall } from "@frizz/shared"
 import { TodosView } from "./components/TodosView.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
@@ -59,6 +59,13 @@ import "./styles.css"
 //                     (served `wakeSteer`, so the real FrizzWake renders). Each run must get its OWN
 //                     fold, each wake its own hairline BETWEEN the run it ended and the run it caused, and
 //                     the third run — one prose message over four calls — must fold on its wake alone.
+//   ?variant=stackedwakes THREE SUCCESSIVE HAIRLINES with nothing between them: the middle-runs fold, then
+//                      ONE delivery that carries both a CI verdict and a review comment. The two parts of
+//                      that delivery must stand exactly as far apart as the fold stands from the first of
+//                      them — 22px of clear space, 40px pitch. They did not: a bare fragment handed the
+//                      pair to the card's own spacer walk as two messages, which in a gap-less column
+//                      left only the 8px their `my-1` margins draw (maintainer 2026-08-19: "inconsistent
+//                      heights on three successive airlines").
 //   ?variant=priorrest TWO turns — an ask, a rest, a background wake, then a second turn ending in a
 //                      question and another rest. The window reaches back to the HUMAN's ask, so both
 //                      turns render; neither "Agent rested" rule may be drawn at either end.
@@ -513,6 +520,74 @@ const goalwakes: TranscriptMessage[] = [
   withId(boundaryEvent("rest", "Agent rested")),
 ]
 
+// THREE AIRLINES IN A ROW, which is the only arrangement that shows the defect at all. Five runs against
+// one ask, so the middle three collapse into a single fold; the last run is woken by ONE poll that saw
+// both CI settle and a comment land, and `prWatchWakeMessage` composes those into a single delivery. The
+// card therefore draws fold → CI verdict → review comment with no prose between any of them, and the
+// three gaps have to be the same gap. Written with the REAL formatter, so the pair only renders as two
+// hairlines for as long as the shipped wording still parses.
+const combinedWake = (ref: string, passed: number, actor: string, minutesAgo: number): TranscriptMessage =>
+  withId({
+    role: "user",
+    wake: true,
+    text: prWatchWakeMessage({
+      target: ref,
+      checks: { verdict: "passing", passed, failed: 0, failing: [] },
+      review: formatGithubWakeSteer({
+        ref,
+        omitted: 0,
+        items: [{
+          label: "review comment",
+          actor,
+          bot: true,
+          at: new Date(Date.now() - minutesAgo * 60_000).toISOString(),
+          url: `https://github.com/${ref.split("#")[0]}/pull/${ref.split("#")[1]}#pullrequestreview-4930112233`,
+        }],
+      }),
+    }),
+    tools: [],
+    parts: [],
+  } as unknown as TranscriptMessage)
+
+const stackedwakes: TranscriptMessage[] = [
+  { sourceId: "u-stacked", role: "user", text: "Take #6440 to merge-readiness — address whatever the reviewers raise.", tools: [], parts: [] },
+  withId(asst("Reading the PR and its open threads before I touch anything.", [
+    tool("Bash", { detail: "gh pr view 6440 --json title,body,files", desc: "Reading the PR" }),
+    tool("Bash", { detail: "gh api repos/colinhacks/zod/pulls/6440/comments", desc: "Reading the inline review comments" }),
+  ])),
+  withId(asst("Two of the four findings are real. Fixing both and pushing.")),
+  withId(boundaryEvent("rest", "Agent rested")),
+  prWake("colinhacks/zod#6440", [
+    { label: "review comment", actor: "copilot-pull-request-reviewer", bot: true, at: new Date(Date.now() - 96 * 60_000).toISOString() },
+  ]),
+  withId(asst("That one is a false positive — the guard it wants is already two frames up.", [
+    tool("Read", { detail: "packages/zod/src/v4/core/parse.ts" }),
+    tool("Bash", { detail: "nub --test", desc: "Re-running the suite" }),
+  ])),
+  withId(boundaryEvent("rest", "Agent rested")),
+  prWake("colinhacks/zod#6440", [
+    { label: "review", actor: "pullfrog", bot: true, at: new Date(Date.now() - 64 * 60_000).toISOString() },
+  ]),
+  withId(asst("Addressed the naming nit and rebased onto main.", [
+    tool("Edit", { detail: "packages/zod/src/v4/classic/schemas.ts" }),
+    tool("Bash", { detail: "git rebase origin/main", desc: "Rebasing onto main" }),
+    tool("Bash", { detail: "git push --force-with-lease", desc: "Pushing the rebase" }),
+  ])),
+  withId(boundaryEvent("rest", "Agent rested")),
+  prWake("colinhacks/zod#6440", [
+    { label: "review comment", actor: "copilot-pull-request-reviewer", bot: true, at: new Date(Date.now() - 41 * 60_000).toISOString() },
+  ]),
+  withId(asst("Nothing actionable in that one either. Waiting on the rebased CI run.", [
+    tool("Bash", { detail: "gh pr checks 6440 --watch", desc: "Watching the rebased run" }),
+  ])),
+  withId(boundaryEvent("rest", "Agent rested")),
+  // THE COMBINED DELIVERY: one poll, two events, two hairlines — and the pair the fold above them is
+  // measured against.
+  combinedWake("colinhacks/zod#6440", 10, "pullfrog", 16),
+  withId(asst('"No new issues found." #6440 is fully green on `f94f6138` — all checks passed, `MERGEABLE` / `CLEAN`, zero unresolved threads, five commits, +166/−4. Ready to merge whenever you want.')),
+  withId(boundaryEvent("rest", "Agent rested")),
+]
+
 const messages =
   replay?.messages ??
   (variant === "goalwakes" ? goalwakes
@@ -528,6 +603,7 @@ const messages =
   : variant === "buriedask" ? buriedask
   : variant === "twoasks" ? twoasks
   : variant === "humanpast" ? humanpast
+  : variant === "stackedwakes" ? stackedwakes
   : variant === "priorrest" ? priorrest
   : heavy)
 

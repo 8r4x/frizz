@@ -1,14 +1,13 @@
 import { join } from "node:path"
 import { buildClaudeCommand, buildClaudeResumeCommand, claudeWorkerEnvironment, workerPluginDir } from "../dispatch.ts"
-import { parseLine as parseClaudeRecord, applyRecord, matchesPermPrompt, detectClaudeBootModal, isRealUserMessage, type TailState } from "../tailer.ts"
-import type { AgentBackend, BuiltCommand, FoldState, NativeInputRequiredData, NormalizedEvent, ResumeOpts, SpawnOpts } from "./types.ts"
+import { parseLine as parseClaudeRecord, applyRecord, isRealUserMessage, type TailState } from "../tailer.ts"
+import type { AgentBackend, BuiltCommand, FoldState, NormalizedEvent, ResumeOpts, SpawnOpts } from "./types.ts"
 
 // ClaudeBackend: everything Claude-Code-specific behind the AgentBackend seam — the spawn/resume argv
 // (Claude's `--session-id` pin + `--append-system-prompt-file` worker-contract injection), the
 // deterministic transcript path (~/.claude/projects/<cwdSlug>/<sessionId>.jsonl), the corpus-verified
-// line fold (foldLine → the tailer's applyRecord), a normalized parseLine view, and the perm-prompt
-// screen matcher (inert in this build — nothing captures terminal text; see AgentBackend). The heavy Claude derivation (applyRecord + helpers, computeTurn, the fence grammar)
-// still LIVES in tailer.ts — behavior-critical and corpus-verified — and this backend reuses it
+// line fold (foldLine → the tailer's applyRecord) and a normalized parseLine view. The heavy Claude
+// derivation (applyRecord + helpers, computeTurn, the fence grammar) still LIVES in tailer.ts — behavior-critical and corpus-verified — and this backend reuses it
 // verbatim, so Phase 1 is byte-for-byte no-behavior-change. This module is a facade over those.
 
 export interface ClaudeBackendOptions {
@@ -148,15 +147,6 @@ export function createClaudeBackend(opts: ClaudeBackendOptions): AgentBackend {
     foldLine(state: FoldState, line: string): void {
       const rec = parseClaudeRecord(line)
       if (rec) applyRecord(state as TailState, rec)
-    },
-
-    matchesPermPrompt(pane: string): boolean {
-      return matchesPermPrompt(pane)
-    },
-
-    // Pre-session screens only; the tailer runs it on the no-transcript stall path.
-    detectBootModal(pane: string): NativeInputRequiredData | undefined {
-      return detectClaudeBootModal(pane)
     },
   }
 }

@@ -29,13 +29,12 @@ export function aiRenameAvailability(thread: {
   backend?: "claude" | "codex"
   runtime: "none" | "spawning" | "running" | "perm-prompt" | "turn-idle" | "exited"
   pendingAsk?: unknown
-  nativeInputRequired?: unknown
 }): AiRenameAvailability {
   if (thread.kind !== "session" || thread.foreign || thread.backend === "codex") {
     return { show: false, enabled: false, label: "" }
   }
   if (thread.runtime === "turn-idle") return { show: true, enabled: true, label: "Rename with Claude" }
-  if (thread.runtime === "perm-prompt" || thread.pendingAsk || thread.nativeInputRequired) {
+  if (thread.runtime === "perm-prompt" || thread.pendingAsk) {
     return { show: true, enabled: false, label: "Resolve Claude's terminal prompt before renaming" }
   }
   if (thread.runtime === "running" || thread.runtime === "spawning") {
