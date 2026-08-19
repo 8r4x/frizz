@@ -3,6 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import assert from "node:assert/strict"
 import { test } from "node:test"
+import type { LocalFileOpener } from "@frizz/shared"
 import { MARKDOWN_READ_LIMIT, openLocalFile, readLocalMarkdown, resolveLocalFile, resolveOpenableFile } from "./local-file.ts"
 
 test("local opener canonicalizes a regular file inside its trusted root and uses fixed argv", () => {
@@ -18,6 +19,29 @@ test("local opener canonicalizes a regular file inside its trusted root and uses
   assert.equal(calls.length, 1)
   assert.equal(calls[0].args.at(-1), realpathSync(file))
   assert.equal(calls[0].shell, false)
+})
+
+test("each opener preference selects its own app, and an image ignores the preference entirely", () => {
+  const root = mkdtempSync(join(tmpdir(), "frizz-local-file-opener-"))
+  const file = join(root, "app.ts")
+  writeFileSync(file, "safe")
+  const argvFor = (opener: LocalFileOpener, forceSystem = false) => {
+    let call: { command: string; args: readonly string[] } | undefined
+    openLocalFile(file, opener, [root], { forceSystem, spawn: (command, args) => { call = { command, args }; return { unref() {} } } })
+    return [call!.command, ...call!.args.slice(0, -1)]
+  }
+  // The reported bug was upstream of here — the transcript's file links carried a `cursor://` href the
+  // OS resolved, so "VS Code" never reached this function at all — but nothing pinned the mapping the
+  // setting is FOR, so a swap here would have gone unnoticed too.
+  const expected = process.platform === "darwin"
+    ? { system: ["open"], cursor: ["open", "-a", "Cursor"], vscode: ["open", "-a", "Visual Studio Code"], finder: ["open", "-R"] }
+    : { system: ["xdg-open"], cursor: ["cursor"], vscode: ["code"], finder: ["xdg-open"] }
+  assert.deepEqual(argvFor("system"), expected.system)
+  assert.deepEqual(argvFor("cursor"), expected.cursor)
+  assert.deepEqual(argvFor("vscode"), expected.vscode)
+  assert.deepEqual(argvFor("finder"), expected.finder)
+  // An image has a viewer of its own, so it goes to the OS default whatever the editor preference says.
+  assert.deepEqual(argvFor("vscode", true), expected.system)
 })
 
 test("local opener refuses relative, outside, directory, and escaping symlink paths", () => {

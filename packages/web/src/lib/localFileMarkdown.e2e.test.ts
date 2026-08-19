@@ -87,6 +87,30 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
         { kind: "markdown", path: "/fixture/.frizz/threads/6d56ea2f/HANDOFF.md" },
       ],
     })
+
+    // A tool card's header path (PathLink) is the OTHER producer of a local-file link, and it used to
+    // be an `<a href="cursor://file/…">` handed straight to the OS — which meant it opened Cursor no
+    // matter what "Local file links" said. Nothing on this page may carry an editor-scheme href.
+    assert.deepEqual(await page.$$eval('a[href]', (nodes) => nodes.map((n) => n.getAttribute("href"))), [])
+
+    // It routes by the same two rules as the markdown links, and — because the header it sits in is
+    // also the disclosure control — the click must open the file and leave the block's state alone.
+    const expandedBefore = await page.$eval(".frizz-diff-header", (n) => n.getAttribute("data-expanded"))
+    await page.click('.frizz-diff-header button[title="/fixture/src/app.ts"]')
+    await page.click('.frizz-diff-header button[title="/fixture/notes.md"]')
+    const fromHeaders = await page.evaluate(() => ({
+      opened: (window as unknown as { __localFileFixtureOpened?: string[] }).__localFileFixtureOpened ?? [],
+      drawers: (window as unknown as { __localFileFixtureDrawers: () => unknown[] }).__localFileFixtureDrawers(),
+      expanded: document.querySelector(".frizz-diff-header")?.getAttribute("data-expanded"),
+    }))
+    assert.deepEqual(fromHeaders.opened, ["/fixture/contract.pdf", "/fixture/src/app.ts"])
+    assert.deepEqual(fromHeaders.drawers, [
+      { kind: "markdown", path: "/fixture/report.md" },
+      { kind: "markdown", path: "/fixture/.frizz/threads/6d56ea2f/HANDOFF.md" },
+      { kind: "markdown", path: "/fixture/notes.md" },
+    ])
+    assert.equal(fromHeaders.expanded, expandedBefore)
+
     assert.deepEqual(pageErrors, [])
   } finally {
     await browser.close()

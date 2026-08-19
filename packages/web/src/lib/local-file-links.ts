@@ -13,16 +13,7 @@ export function installLocalFileLinkInterceptor(): () => void {
     if (!source || !path) return
     event.preventDefault()
     event.stopPropagation()
-    // A `.md` file is prose Frizz can render itself, so it opens in the built-in reader instead of
-    // launching an editor. The decision lives HERE, in the one place every local-path click passes
-    // through, rather than in each producer of a `data-local-path` — markdown links, resolved inline-code
-    // paths, attachment chips and the Codex file rows all get the reader from this single branch. An
-    // image is excluded on its own attribute: those have a viewer of their own.
-    if (source.dataset.localImage !== "true" && isLocalMarkdownFile(path)) {
-      pushMarkdownDrawer(path)
-      return
-    }
-    void open(path, source.dataset.localImage === "true")
+    openLocalPath(path, source.dataset.localImage === "true")
   }
   document.addEventListener("click", handler)
   const failed = imageFailureHandler()
@@ -65,6 +56,24 @@ function imageFailureHandler(): (event: Event) => void {
     // advertising a picture that isn't there. BlockImage drops its frame on the same failure.
     ;(img.closest(".md-image-frame") ?? img).replaceWith(missing)
   }
+}
+
+// Act on a vetted local path: a `.md` file is prose Frizz can render itself, so it opens in the built-in
+// reader instead of launching an editor; everything else goes to the server, which realpath-gates it and
+// hands it to the opener the `localFileOpener` setting names. The decision lives HERE, in the one place
+// every local-path activation passes through, rather than in each producer — markdown links, resolved
+// inline-code paths, attachment chips, the Codex file rows and the tool-header path links all get the
+// same routing from this single branch. An image is excluded: those have a viewer of their own.
+//
+// Components that own their own click (PathLink, whose row swallows the event before it can reach the
+// delegated listener below) call this directly; everything that only tags itself `data-local-path`
+// arrives through the interceptor.
+export function openLocalPath(path: string, image = false): void {
+  if (!image && isLocalMarkdownFile(path)) {
+    pushMarkdownDrawer(path)
+    return
+  }
+  void open(path, image)
 }
 
 async function open(path: string, image: boolean) {

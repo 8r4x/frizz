@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client"
 import "./styles.css"
+import { DiffBlock } from "./components/DiffBlock.tsx"
 import { mdToHtml } from "./lib/markdown.ts"
 import { installLocalFileLinkInterceptor } from "./lib/local-file-links.ts"
 import { store } from "./store.ts"
@@ -58,5 +59,16 @@ createRoot(document.getElementById("root")!).render(
         ].join("\n"), { baseDir: BASE_DIR, homeDir: HOME_DIR }),
       }}
     />
+    {/* The OTHER producer of a local-file link: a tool card's header path (PathLink), here in its diff
+        form. It used to be an `<a href="cursor://file/…">` the OS resolved, so it ignored the opener
+        setting entirely and always landed in Cursor. It now takes the same route as everything above —
+        including the `.md` split — so both destinations are asserted for it too. The header is also a
+        disclosure control, so the click must open the file WITHOUT toggling the block. */}
+    <div className="mt-6">
+      <DiffBlock edits={[{ file: "/fixture/src/app.ts", old: "a\n", new: "b\n" }]} />
+    </div>
+    <div className="mt-4">
+      <DiffBlock edits={[{ file: "/fixture/notes.md", old: "a\n", new: "b\n" }]} />
+    </div>
   </main>,
 )

@@ -3,24 +3,34 @@ import { useSnapshot } from "valtio"
 import type { TranscriptEdit } from "@frizz/shared"
 import { renderDiff, type DiffHunk } from "../lib/diff/index.ts"
 import "../lib/diff/diff.css"
+import { openLocalPath } from "../lib/local-file-links.ts"
 import { prefs } from "../lib/prefs.ts"
 import { ToolDisclosureHeader } from "./ToolDisclosureHeader.ts"
 
-// Open a file in the user's editor. The absolute path already carries its leading slash, so it
-// concatenates directly onto the scheme's empty authority (cursor://file + /Users/… ). An optional
-// 1-based line appends as `:N`.
-export function cursorHref(path: string, line?: number | null): string {
-  return `cursor://file${path}${line ? `:${line}` : ""}`
-}
-
-// A file path rendered as an editor deep-link. Plain (inherits the surrounding gray); brightens +
+// A file path rendered as an openable link. Plain (inherits the surrounding gray); brightens +
 // underlines on hover. Used by the tool-call one-liners and the diff header.
-export function PathLink({ path, line, className = "", children }: { path: string; line?: number | null; className?: string; children?: React.ReactNode }) {
+//
+// It opens through `openLocalPath`, the same route every other local-path click in the app takes, so it
+// honours the "Local file links" setting. It used to render `<a href="cursor://file/Users/…">` and let
+// the OS resolve the scheme — which meant it ALWAYS landed in Cursor, whatever the setting said.
+export function PathLink({ path, className = "", children }: { path: string; className?: string; children?: React.ReactNode }) {
   return (
-    // File paths ALWAYS render mono, even under the sans app font.
-    <a href={cursorHref(path, line)} title={path} className={`font-mono-keep cursor-pointer hover:underline hover:text-fg/80 ${className}`}>
+    // A button, not an anchor: there is no URL to navigate to, and ToolDisclosureHeader recognises a
+    // button as an action of its own and stands down, so the click opens the file instead of toggling
+    // the row. It TRUNCATES ITSELF rather than leaning on the ancestor `truncate` the anchor sat under:
+    // Blink blockifies a button (`display: inline` computes to `inline-block` however you ask), so an
+    // over-long path stopped being part of the parent's line box and got hard-clipped mid-glyph with no
+    // ellipsis. Measured at a 240px width: the inline-block overflowed its 174px wrapper by 350px; block
+    // + truncate lands on 174px exactly, and sits 0.2px off the label's box instead of the anchor's
+    // 2.4px. File paths ALWAYS render mono, even under the sans app font.
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); openLocalPath(path) }}
+      title={path}
+      className={`font-mono-keep block max-w-full cursor-pointer truncate text-left hover:underline hover:text-fg/80 ${className}`}
+    >
       {children ?? path}
-    </a>
+    </button>
   )
 }
 
