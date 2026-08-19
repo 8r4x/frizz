@@ -17,6 +17,7 @@ import type {
   BoardSnapshot,
   Settings,
   DispatchInput,
+  AdoptSessionInput,
   AdoptThreadInput,
   AdoptThreadResult,
   FollowUpInput,
@@ -133,6 +134,9 @@ export interface Api {
   interactionCancel(input: CancelInteractionInput): Promise<CancelInteractionResult>
   dispatch(input: DispatchInput): Promise<{ slug: string; sessionId: string }>
   adoptThread(input: AdoptThreadInput): Promise<AdoptThreadResult>
+  // Take over one of the human's own terminals from the Non-Frizz band. Creates the row only; the
+  // session is at rest, so the next follow-up resumes it like any other rested thread.
+  adoptSession(input: AdoptSessionInput): Promise<AdoptThreadResult>
   followUp(input: FollowUpInput): Promise<void>
   unqueueFollowUp(input: UnqueueFollowUpInput): Promise<UnqueueFollowUpResult>
   // The ↑ on a queued bubble: stop waiting and make the worker read what is already queued. No message
@@ -305,6 +309,7 @@ export const PROCEDURES = {
   interactionCancel: "mutation",
   dispatch: "mutation",
   adoptThread: "mutation",
+  adoptSession: "mutation",
   followUp: "mutation",
   unqueueFollowUp: "mutation",
   deliverQueuedNow: "mutation",

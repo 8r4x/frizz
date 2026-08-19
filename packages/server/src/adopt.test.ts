@@ -563,3 +563,63 @@ test("no injected preflight (unit-test composition) leaves dispatch untouched", 
   assert.equal(h.spawned.length, 1)
   assert.ok(h.storage.getSession(res.slug))
 })
+
+// ---- adoptSession: taking over one of the human's OWN terminals (the Non-Frizz band's verb) ----
+//
+// Distinct from adopt() above in both directions: it binds to a conversation that already exists
+// rather than cold-starting a worker on a thread file, and it deliberately spawns NOTHING. The band
+// only ever lists sessions at rest, and a rested frizz thread is resumed by its next follow-up — so
+// adoption that also spawned would be a second resume path to keep correct forever.
+test("adoptSession: a claude terminal keeps its transcript, and no worker is started", async () => {
+  const h = harness()
+  const FOREIGN = "6543d3fb-e38e-461a-b10a-9c78261b67b2"
+  const res = await h.dispatcher.adoptSession({ sessionId: FOREIGN, backend: "claude", title: "Debug Frizz thread startup issue" })
+
+  // THE BINDING THAT MATTERS: claude's transcript IS `<session_id>.jsonl`, so the row must adopt the
+  // foreign id as its own session_id or the tailer binds a file that does not exist and the adopted
+  // thread renders with no history at all.
+  assert.equal(res.sessionId, FOREIGN)
+  const row = h.storage.getSession(res.slug)
+  assert.equal(row?.session_id, FOREIGN)
+  assert.equal(row?.backend, "claude")
+  assert.equal(row?.agent_session_id ?? null, null, "claude mints no id of its own")
+  assert.equal(row?.thread_name, `frizz-${res.slug}`)
+  // The name the human just read in the rail, kept — and NOT marked provisional, because it is a real
+  // name (Claude's own ai-title) rather than the dispatch chop that placeholder exists for.
+  assert.equal(row?.title, "Debug Frizz thread startup issue")
+  assert.equal(row?.title_auto, 0)
+  assert.equal(res.slug, slugify("Debug Frizz thread startup issue"))
+  assert.equal(h.spawned.length, 0, "adoption starts no worker; the next follow-up resumes it")
+})
+
+test("adoptSession: a codex terminal pins its rollout on agent_session_id, not session_id", async () => {
+  const h = harness()
+  const ROLLOUT = "01a01b81-bbf3-7841-b704-a7c4b95b7bd7"
+  const res = await h.dispatcher.adoptSession({ sessionId: ROLLOUT, backend: "codex" })
+
+  // Codex mints its OWN rollout id, so frizz keeps a session_id of its own (the scratch-directory key
+  // every worker contract references) and pins the rollout where the tailer looks for it — the same
+  // split a codex dispatch makes after discovery.
+  assert.notEqual(res.sessionId, ROLLOUT)
+  const row = h.storage.getSession(res.slug)
+  assert.equal(row?.agent_session_id, ROLLOUT)
+  assert.equal(row?.backend, "codex")
+  // Codex writes no title record, so there is no name to inherit — the short id stands.
+  assert.equal(row?.title, `Session ${ROLLOUT.slice(0, 8)}`)
+})
+
+test("adoptSession: a session frizz already owns cannot be adopted again, through EITHER id column", async () => {
+  const h = harness()
+  const CLAUDE_ID = "6543d3fb-e38e-461a-b10a-9c78261b67b2"
+  const ROLLOUT = "01a01b81-bbf3-7841-b704-a7c4b95b7bd7"
+  await h.dispatcher.adoptSession({ sessionId: CLAUDE_ID, backend: "claude", title: "First" })
+  await h.dispatcher.adoptSession({ sessionId: ROLLOUT, backend: "codex", title: "Second" })
+
+  // The registry is re-read rather than the caller's claim trusted: the request arrives from a browser
+  // saying "this came from the foreign band", and a crafted one must not be able to mint a second row
+  // over a thread frizz is already driving.
+  await assert.rejects(() => h.dispatcher.adoptSession({ sessionId: CLAUDE_ID, backend: "claude" }), /already a frizz thread/)
+  await assert.rejects(() => h.dispatcher.adoptSession({ sessionId: ROLLOUT, backend: "codex" }), /already a frizz thread/)
+  // And a malformed id is refused before anything is written.
+  await assert.rejects(() => h.dispatcher.adoptSession({ sessionId: "../escape", backend: "claude" }), /cannot be adopted/)
+})

@@ -3,6 +3,7 @@ import { basename, join, resolve, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 import { createHash, randomUUID } from "node:crypto"
 import {
+  AdoptSessionInput,
   AdoptThreadInput,
   DISPATCH_TASK_BANNER_MARKER,
   DispatchInput,
@@ -19,7 +20,11 @@ import { PERM_DIR_ENV, permRequestDir, type Project } from "./project.ts"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { BoardManager } from "./board.ts"
 import type { AgentBackend, BackendKind, BuiltCommand, FrizzMcp } from "./backend/types.ts"
-import { CHROME_DEVTOOLS_MCP, CLAUDE_WORKER_ENV, FRIZZ_MCP, WORKER_DISALLOWED_TOOLS, frizzMcpEnv } from "./backend/types.ts"
+import { CHROME_DEVTOOLS_MCP, FRIZZ_MCP, WORKER_DISALLOWED_TOOLS, chromeDevtoolsMcpMount, claudeWorkerEnv, frizzMcpEnv } from "./backend/types.ts"
+// The lifted worker caps live beside the shared worker environment they belong to (backend/types.ts).
+// Re-exported here because this is where callers have always reached for them.
+export { WORKER_MAX_WEB_SEARCHES, WORKER_MAX_SUBAGENTS, WORKER_MAX_CONCURRENT_SUBAGENTS } from "./backend/types.ts"
+import { resolveWorkerPluginDir } from "./worker-plugin-dir.ts"
 import { buildWorkerPrompt } from "./workerPrompt.ts"
 import { codexSandbox, CODEX_FIRST_OUTPUT_TITLE_DEVELOPER_INSTRUCTIONS } from "./backend/codex.ts"
 import type { CodexAppServerBridge } from "./backend/codex-app-server.ts"
@@ -517,7 +522,9 @@ export interface ClaudeMcpConfig { mcpServers: Record<string, ClaudeMcpStdioConf
 // allowedTools). One source of truth so both forms mount the SAME servers with the SAME pre-approvals.
 export function claudeMcpConfig(mcp?: FrizzMcp): ClaudeMcpConfig {
   const mcpServers: Record<string, ClaudeMcpStdioConfig> = {
-    [CHROME_DEVTOOLS_MCP.name]: { command: CHROME_DEVTOOLS_MCP.command, args: [...CHROME_DEVTOOLS_MCP.args] },
+    // chromeDevtoolsMcpMount(), never the fields: it is the ONE builder both backends render, and it
+    // is what mounts frizz's lazy proxy instead of the real server (backend/types.ts).
+    [CHROME_DEVTOOLS_MCP.name]: chromeDevtoolsMcpMount(),
   }
   const allowedTools = [`mcp__${CHROME_DEVTOOLS_MCP.name}`]
   if (mcp) {
@@ -621,26 +628,11 @@ export function buildClaudeCommand(opts: {
   return argv
 }
 
-// The frizz-worker plugin (single-thread worker contract + hooks), a sibling of board/ in the Frizz
-// source tree. Deployed artifacts carry it at runtime/cc-worker, but pnpm may load this module
-// through a nested store rather than the flat node_modules layout. Search module ancestors so the
-// closure remains discoverable in either layout; an explicitly verified artifact path wins.
-export function resolveWorkerPluginDir(
-  moduleUrl = import.meta.url,
-  env: NodeJS.ProcessEnv = process.env
-): string | undefined {
-  const override = env.FRIZZ_WORKER_PLUGIN_DIR
-  if (override && existsSync(join(override, ".claude-plugin", "plugin.json")))
-    return override
-  let current = dirname(fileURLToPath(moduleUrl))
-  for (;;) {
-    const candidate = join(current, "cc-worker")
-    if (existsSync(join(candidate, ".claude-plugin", "plugin.json"))) return candidate
-    const parent = dirname(current)
-    if (parent === current) return undefined
-    current = parent
-  }
-}
+// The frizz-worker plugin directory. The implementation moved to worker-plugin-dir.ts so that
+// backend/types.ts can resolve the plugin's bin/ too (the lazy browser-MCP proxy lives there) without
+// importing this module and closing an import cycle; re-exported here because this is where every
+// caller and every test has always reached for it.
+export { resolveWorkerPluginDir } from "./worker-plugin-dir.ts"
 
 // Whether the "no worker plugin" alarm has already sounded in this process — the condition is a
 // property of the INSTALL, not of any one dispatch, so it is worth exactly one loud line.
@@ -678,68 +670,14 @@ export function workerPluginDir(): string | undefined {
   return dir
 }
 
-// Claude Code caps WebSearch at 200 calls per SESSION (verified in the 2.1.220 bundle:
-// `CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION ?? 200`, enforced in the WebSearch tool against a
-// `taskRegistry` counter). A frizz worker is long-lived and research-heavy — it burns that budget on
-// work a chat session never would — and past the cap the tool stops searching and merely returns
-// "this session has used its web search budget", which reads to the model as a dead end rather than
-// as a quota. Raise it far enough that a real effort never hits it, while keeping a finite backstop
-// against a runaway search loop; Claude Code has no unlimited sentinel, so a large integer is the
-// only expression of "effectively uncapped".
-export const WORKER_MAX_WEB_SEARCHES = 10000
-
-// The SAME quiet-cap problem, on the sub-agent path (verified in the same 2.1.220 bundle — all three
-// read `Z.<VAR> ?? <default>` through the identical `int({min:1,digitsOnly:true})` parser):
-//
-//   CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION  default 200 — TOTAL Task spawns for the whole session.
-//     Past it every spawn throws "Subagent spawn limit reached (N of 200 agents spawned)… ask the user
-//     to raise CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION". A frizz worker is long-lived and dispatches a
-//     helper per prong across many turns, so it reaches 200 on work a chat session never would — and
-//     the failure reads to the model as "stop delegating", not as a quota. Lifted like the search
-//     budget: no machine cost to a high ceiling, since this counts spawns over time, not live ones.
-//
-//   CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS   default 20 — LIVE agents at once. Past it a spawn throws
-//     "Concurrent subagent limit reached… Do not retry", so a fan-out wider than 20 silently loses its
-//     tail. Raised, but NOT to the same sentinel: every live sub-agent is a real process and API
-//     stream on this machine, so this one is a genuine resource dial (the orphan-reaper work exists
-//     because runaway fan-out really does burn the box). 100 clears any real fan-out with a bound left.
-//
-// NOT lifted: CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH. Its default is not a constant at all — it resolves
-// through a server-gated feature value — but the worker contract already tells workers to keep fan-out
-// shallow because a rested sub-agent is not reliably re-woken by grandchildren. Raising the nesting cap
-// would buy depth that frizz's own wake path cannot deliver on, so the cap and the contract agree.
-export const WORKER_MAX_SUBAGENTS = 10000
-export const WORKER_MAX_CONCURRENT_SUBAGENTS = 100
-
-// Claude Code parses these variables as a strictly-digits integer >= 1 (`int({min:1,digitsOnly:true})`)
-// and silently falls back to its own default on anything else, so an operator override is honored
-// only in exactly that shape.
-function workerCap(name: string, lifted: number, env: NodeJS.ProcessEnv): string {
-  const override = env[name]
-  if (override !== undefined && /^[1-9][0-9]*$/.test(override)) return override
-  return String(lifted)
-}
-
-// Claude Code reads these inherited process variables as sub-agent profile defaults. A Frizz worker
-// chooses its profile explicitly through the launch argv and plugin agent profiles, so let neither
-// a shell nor a globally configured Claude session silently replace that selection. An EMPTY entry
-// here overrides the inherited value while preserving every auth/config variable.
-//
-// The CAPS are the deliberate exception to that masking: a profile override hijacks the worker's
-// identity, but a cap is operator policy, so an explicitly configured one is passed through rather
-// than overridden. They are always set EXPLICITLY (never left to inheritance) because inheritance is
-// not a stable source: a worker used to be launched inside a long-lived multiplexer server whose own
-// environment was captured whenever IT first started, which could predate the current frizz process
-// by days. Nothing inherits that way now, but an explicit value is still the only one that cannot
-// drift with the launch context.
+// The argv builder's own additions on top of that. The two profile masks stay ARGV-ONLY: they exist
+// because a `claude` process inherits a shell's environment, and the broker's worker environment is
+// composed rather than inherited.
 export function claudeWorkerEnvironment(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
   return {
-    ...CLAUDE_WORKER_ENV,
+    ...claudeWorkerEnv(env),
     CLAUDE_CODE_SUBAGENT_MODEL: "",
     CLAUDE_CODE_EFFORT_LEVEL: "",
-    CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION: workerCap("CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION", WORKER_MAX_WEB_SEARCHES, env),
-    CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION: workerCap("CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION", WORKER_MAX_SUBAGENTS, env),
-    CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS: workerCap("CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS", WORKER_MAX_CONCURRENT_SUBAGENTS, env),
   }
 }
 
@@ -790,6 +728,10 @@ export interface Dispatcher {
   // board): spawn a fresh worker pointed at the thread file. Frizz's contract makes this sound —
   // the doc, not the conversation, is the durable context; the worker reads it and continues.
   adopt(slug: string, message?: string): Promise<{ slug: string; sessionId: string }>
+  // Take over a NON-FRIZZ session — one of the human's own `claude`/`codex` terminals, listed in the
+  // rail's Non-Frizz band. Distinct from `adopt` above, which cold-starts a fresh worker on a thread
+  // FILE: this one binds frizz to a conversation that already exists and continues it.
+  adoptSession(input: { sessionId: string; backend: BackendKind; title?: string }): Promise<{ slug: string; sessionId: string }>
 }
 
 export interface DispatchDeps {
@@ -1074,6 +1016,68 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       // a runtime state a dispatch should silently degrade on.
       cleanupDispatchFiles(scratchRel, { argv: [], env: {}, prewrite: [] }, sessionId)
       throw new Error(`unsupported backend for dispatch: ${String(kind)}`)
+    },
+
+    // ---- take over one of the human's OWN terminals (the Non-Frizz band's verb) ----
+    //
+    // It creates a ROW and stops. No worker is started and no message is sent, which is the whole
+    // design: the session is at rest (the band lists nothing else), and a rested frizz thread is
+    // resumed by its next follow-up through the ordinary path — the same broker resume every other
+    // rested thread takes. Adoption that ALSO spawned would be a second, parallel resume path to keep
+    // correct forever, in exchange for saving the human one keystroke.
+    //
+    // The two backends bind through different columns, and getting this wrong is silent: the tailer
+    // would keep the row's transcript unresolved and the board would show a thread with no history.
+    //   • CLAUDE mints nothing of its own — the transcript IS `<session_id>.jsonl`, so the row adopts
+    //     the foreign id AS its session_id and the tailer binds the same file it was already reading.
+    //   • CODEX mints its own rollout id, so frizz keeps a fresh session_id (the scratch-dir key that
+    //     every worker contract references) and pins the rollout on `agent_session_id`, exactly as a
+    //     codex dispatch does after discovery.
+    // Either way the id now belongs to a registry row, so the foreign scan stops surfacing it and the
+    // session leaves the Non-Frizz band on the next tick — there is no separate hand-off to forget.
+    async adoptSession(input) {
+      const parsed = AdoptSessionInput.safeParse(input)
+      if (!parsed.success) throw new Error("that session cannot be adopted")
+      const { sessionId: foreignId, backend, title } = parsed.data
+      // The id must be genuinely UNOWNED. Checking the registry (rather than trusting the caller's
+      // claim that this row came from the foreign band) is what stops a crafted request from minting a
+      // second row over a thread frizz is already driving.
+      for (const row of deps.storage.allSessions()) {
+        if (row.session_id === foreignId || row.agent_session_id === foreignId || row.transcript_id === foreignId) {
+          throw new Error("that session is already a frizz thread")
+        }
+      }
+      const displayTitle = title?.trim() || `Session ${foreignId.slice(0, 8)}`
+      const frizzDir = join(deps.project.dir, ".frizz")
+      const slug = resolveSlug(frizzDir, slugify(displayTitle), (s) => deps.storage.getSession(s) !== undefined)
+      const sessionId = backend === "codex" ? randomUUID() : foreignId
+      // The worker's scratch directory keys on the row's OWN session_id for both backends, matching
+      // dispatch — so an adopted claude thread's scratch dir is named for the transcript it inherited.
+      writeScratchDir(deps.project.dir, sessionId)
+      deps.storage.upsertSession({
+        slug,
+        session_id: sessionId,
+        thread_name: threadIdentityName(slug),
+        spawned_at: new Date().toISOString(),
+        last_read_at: null,
+        unread: 0,
+        exited: 0,
+        archived: 0,
+        rested_at: new Date().toISOString(),
+        // The name came from the session's OWN title (Claude's ai-title) or a short id — a real name
+        // either way, not the dispatch chop, so it is not marked provisional. It stays replaceable:
+        // the worker's own later title for the task is nearly always the more informative one.
+        title_auto: 0,
+        title: displayTitle,
+        transcript_id: null,
+        state: "open",
+        meta: null,
+        seen_at: null,
+        plan_path: null,
+      })
+      deps.storage.setBackend(slug, backend)
+      if (backend === "codex") deps.storage.setAgentSession(slug, foreignId)
+      return { slug, sessionId }
     },
 
     async adopt(slug, message) {

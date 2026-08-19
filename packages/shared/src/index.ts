@@ -305,9 +305,10 @@ export type NativeInputRequired = z.infer<typeof NativeInputRequired>
 //   timer:  tmr_…               a timer it set                      → checked against thread_timer
 //   pr:     owner/repo#123      a PR watcher it registered          → checked against its PR registry
 //   for:    2h                  REQUIRED. How long the park may stand (parseAwaitingDuration).
-//   reason: <one sentence>      What the human reads on the resting card, and on the rail row's hover
-//                               popover — where it stands ALONE, under frizz's own sentence, so it is
-//                               presented as a sentence (reasonSentence capitalizes a legacy one).
+//   reason: <one sentence>      SUPERSEDED by the `---` body below, and still valid. What the human
+//                               reads is `awaitingProse`: the body's first paragraph if there is one,
+//                               else this line — set as a sentence either way, since both stand ALONE
+//                               on the rail row's hover popover under frizz's own sentence.
 //
 // …then, after a `---` line, as much arbitrary Markdown as the worker wants (2026-08-17). The structural
 // lines are FRONTMATTER; the delimiter is what makes "is this line structural?" answerable, which is what
@@ -934,8 +935,9 @@ export function signoffNudgeMessage(ops?: SignoffLiveOps): string {
   const lines = liveOpsLines(ops)
   if (lines.length) {
     lines.push("", "An ```awaiting fence takes one such line per thing you are ACTUALLY waiting on, plus a")
-    lines.push("required `for:` duration (`30s`/`15m`/`2h`/`3d`) and a one-line `reason:`. Frizz checks every")
-    lines.push("id: name something that is not running and you are bumped rather than parked.")
+    lines.push("required `for:` duration (`30s`/`15m`/`2h`/`3d`), then a `---` line and whatever prose you want")
+    lines.push("(optional). Frizz checks every id: name something that is not running and you are bumped")
+    lines.push("rather than parked.")
   }
   return lines.length === 0 ? SIGNOFF_NUDGE_MESSAGE : `${SIGNOFF_NUDGE_MESSAGE}\n${lines.join("\n")}`
 }
@@ -974,14 +976,16 @@ export const SIGNOFF_NUDGE_MESSAGE = [
   "- `` ```done `` — genuinely FINISHED. A DISMISSAL: the card is filed away and nobody looks again, so",
   "  if anything is still owed, it is not done. Body: 1-3 sentences, then bullets, each opening with a",
   "  **bolded verb phrase**.",
-  "- `` ```awaiting `` — you are WAITING on work that is actually running. It is PURE STRUCTURE: one line",
-  "  per thing you are waiting on, a REQUIRED `for:` duration, and one SENTENCE of `reason:` prose.",
+  "- `` ```awaiting `` — you are WAITING on work that is actually running. FRONTMATTER, THEN MARKDOWN:",
+  "  one structural line per thing you are waiting on, a REQUIRED `for:` duration, then a `---` line and",
+  "  as much prose as you want. The prose is OPTIONAL; the lines above it are not.",
   "",
   "  ```awaiting",
   "  shell: <the id your runtime gave you>",
   "  pr: owner/repo#123",
   "  for: 2h",
-  "  reason: What you are waiting for, as one sentence",
+  "  ---",
+  "  What you are waiting for, in your own words — this is what the human reads on your card.",
   "  ```",
   "",
   "  Frizz CHECKS every line: name something that is not running and you are bumped rather than parked.",
@@ -1818,6 +1822,17 @@ export const AdoptThreadInput = z.object({
 export type AdoptThreadInput = z.infer<typeof AdoptThreadInput>
 export const AdoptThreadResult = z.object({ slug: ThreadSlug, sessionId: z.string().min(1) }).strict()
 export type AdoptThreadResult = z.infer<typeof AdoptThreadResult>
+
+// Take over one of the human's OWN terminals — a session listed in the rail's Non-Frizz band. The id
+// is the one the board row carries, which for a foreign thread IS its session id. `title` is the name
+// the row already displays, passed through so the adopted thread keeps the name the human just read
+// rather than being re-derived from a transcript the server would have to re-open.
+export const AdoptSessionInput = z.object({
+  sessionId: ThreadSlug, // a bare session uuid — the same contract every other thread id satisfies
+  backend: z.enum(["claude", "codex"]),
+  title: z.string().max(200).optional(),
+}).strict()
+export type AdoptSessionInput = z.infer<typeof AdoptSessionInput>
 
 export const FollowUpInput = z.object({
   slug: ThreadSlug,

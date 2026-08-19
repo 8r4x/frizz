@@ -6,6 +6,7 @@ import { z } from "zod"
 import { query, mutation } from "@frizz/rpc/server"
 import {
   BoardSnapshot,
+  AdoptSessionInput,
   AdoptThreadInput,
   AdoptThreadResult,
   DispatchInput,
@@ -1428,6 +1429,15 @@ export function createRouter(ctx: AppContext) {
       input: AdoptThreadInput,
       output: AdoptThreadResult,
       handler: ({ input }) => ctx.dispatcher.adopt(input.slug, input.message),
+    }),
+
+    // Take over one of the human's OWN terminals from the rail's Non-Frizz band. It creates the row
+    // and stops — the session is already at rest, so the human's next message resumes it through the
+    // ordinary follow-up path rather than a second spawn path built just for this.
+    adoptSession: mutation({
+      input: AdoptSessionInput,
+      output: AdoptThreadResult,
+      handler: ({ input }) => ctx.dispatcher.adoptSession(input),
     }),
 
     followUp: mutation({
