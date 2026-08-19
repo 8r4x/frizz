@@ -260,17 +260,23 @@ test("three or more runs keep the first and last, and collapse the middle whole"
   )
   assert.equal(segs.length, 4, "four runs to start with")
   const { kept, middle } = collapseMiddleRuns(segs)
+  const first = segs[0]
   assert.equal(kept.length, 2, "the first run and the last one survive")
   assert.equal(kept[0], segs[0])
   assert.equal(kept[1], segs[3])
   assert.ok(middle, "and the two between them collapse")
   assert.equal(middle.runs, 2, "counted in ROUNDS — what the reader wants is how many times it went round")
   assert.equal(middle.tools, segs[1].tools + segs[2].tools, "with every call inside them")
-  // The span covers the hidden runs and NOTHING else: the last run's own waker sits after it, so the
-  // final message still has the hairline above it that says what resumed the agent.
-  assert.equal(middle.start, segs[1].start)
+  // IT REACHES BACK OVER THE OPENING WAKE. A resumed run's `start` is the message AFTER the wake that
+  // opened it, so keying on `start` left that wake rendering above the collapse line — the card drew a
+  // "Goal · at rest" hairline for a round it was hiding. Found by looking at the rendered card, not here:
+  // the walk's own output was right, which is exactly why a unit test could not see it.
+  assert.equal(middle.start, segs[1].start - 1, "the awakening that opened the middle goes WITH the middle")
   assert.equal(middle.end, segs[2].end)
-  assert.ok(middle.end < segs[3].start, "the last run is untouched, waker and all")
+  // …and it stops short of the LAST run's waker, which must stay visible: it is what says why the final
+  // message exists.
+  assert.ok(middle.end < segs[3].start - 1, "the last run keeps its own waker")
+  assert.ok(middle.start > first.end, "and it never reaches back into the first run")
 })
 
 test("two runs are left alone — there is no middle to hide", () => {

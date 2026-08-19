@@ -893,6 +893,13 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
     [collapseSteps, lastUserIdx],
   )
   const { kept, middle } = useMemo(() => collapseMiddleRuns(allSegments), [allSegments])
+  // THE LAST THING THE AGENT SAID, for the same reason the thread view computes it: any ```awaiting fence
+  // above it states a wait that has already resolved, and must not keep drawing as a live card.
+  const lastAgentIdx = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) if (messages[i].role === "assistant") return i
+    return -1
+  }, [messages])
+  const isStaleAwaiting = (idx: number) => lastAgentIdx >= 0 && idx < lastAgentIdx
   const segments = useMemo(() => kept.filter(segmentFolds), [kept])
   // Index → the segment folding it, for the render loop. Only folding segments are indexed: a run with
   // nothing worth hiding renders exactly as it did before.
@@ -1371,7 +1378,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                   const textKey = m.sourceId ?? `legacy-${globalIdx}`
                   out.push(
                     <div key={textKey} data-transcript-source-id={textKey} className="flex flex-col">
-                      <Message m={m} dense textOnly answering={answeringForMessage(m)} paired={paired[globalIdx]} />
+                      <Message m={m} dense textOnly answering={answeringForMessage(m)} paired={paired[globalIdx]} staleAwaiting={isStaleAwaiting(globalIdx)} />
                     </div>,
                   )
                   // Text-only → the row ends in prose (tool band dropped), so the next gap is a full STEP.
@@ -1388,6 +1395,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                   <Message
                     m={m}
                     dense
+                    staleAwaiting={isStaleAwaiting(globalIdx)}
                     answering={answeringForMessage(m)}
                     paired={paired[globalIdx]}
                     sticky={isSticky}

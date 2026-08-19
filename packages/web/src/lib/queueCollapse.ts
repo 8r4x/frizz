@@ -309,7 +309,16 @@ export function collapseMiddleRuns(
   return {
     kept: [first, last],
     middle: {
-      start: inner[0].start,
+      // ONE BEFORE the first hidden run, because a resumed run's `start` is the message AFTER the wake
+      // that opened it — so keying on `start` alone left that wake rendering above the collapse line, and
+      // the card drew a "Goal · at rest" hairline for a round it was busy hiding. The maintainer asked for
+      // the awakenings in the middle to go WITH the middle. Caught by looking at the rendered card; no
+      // unit test on the segment walk could see it, because the walk's output was correct.
+      //
+      // Clamped to the first run's end so this can never reach back into content that must stay visible.
+      // For a run cut by a REST rather than a wake, `start - 1` is the rest record, which renders nothing
+      // anyway — harmless to swallow.
+      start: Math.max(first.end + 1, inner[0].start - 1),
       // Up to the last hidden run's END, so the wake or rest that opens the FINAL run still renders: it
       // is what says why the last message exists, and the maintainer has already reported once that
       // resumed work with nothing above it reads as unexplained.
