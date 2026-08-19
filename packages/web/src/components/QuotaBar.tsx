@@ -8,18 +8,19 @@ import { Popover, PopoverContent, PopoverTrigger } from "./ui/Popover.tsx"
 import { SignInModal } from "./SignInModal.tsx"
 import { PROVIDER_LABEL } from "../lib/signIn.ts"
 
-// THE QUOTA CHIPS — the tail of the top-left StatusBar, one compact chip per backend (Claude, Codex)
+// THE QUOTA CHIPS — the tail of the StatusRow above the prompt box, one compact chip per backend
 // showing REMAINING subscription quota as a battery-style meter. Click a chip for the full per-window
 // breakdown. The chip is ALSO the provider auth surface: a signed-out provider shows the em dash and
 // its popover leads with a Sign in button instead of a quota breakdown a signed-out account can't have.
 //
-// These used to float above the sidebar's dispatch box. Quota is ACCOUNT-global — it was never a
-// property of the composer it was parked on — so it now sits with the rest of the global status.
-// The chips carry no wrapper padding or justification of their own: StatusBar owns the layout, and a
+// These are back above the sidebar's dispatch box, where they briefly floated on their own before a
+// spell in a fixed corner bar. Quota is ACCOUNT-global — it was never a property of the composer it
+// sits over — which is why it rides a GLOBAL status row rather than being composer decoration.
+// The chips carry no wrapper padding or justification of their own: StatusRow owns the layout, and a
 // chip that brought its own box would break the single-line rhythm.
 //
-// The live connection state is NOT repeated here: it lives in the same bar's IdentityMark (the one
-// canonical connection indicator), a few pixels to the left.
+// The live connection state is NOT repeated here: it lives in the same row's IdentityMark, which
+// paints it only while it is DEGRADED — a healthy socket shows nothing at all.
 //
 // Quota is polled (rpc.quota) rather than pushed on the board: it is ACCOUNT-global, not per-thread.
 // The server keeps the reading warm on its own 1-minute heartbeat (refreshClaudeQuotaInBackground), so
@@ -41,6 +42,23 @@ const RECHECK_TIMEOUT_MS = 45_000
 function deadline(ms: number, signal?: AbortSignal): AbortSignal {
   return signal ? AbortSignal.any([signal, AbortSignal.timeout(ms)]) : AbortSignal.timeout(ms)
 }
+
+// THE READING IS SMALL ON PURPOSE (maintainer 2026-08-19: "I wish we'd make the percentages a lot
+// smaller. The actual text of the percentage numbers should be small"). 9px, down from 11px, against
+// the row's 12px identity — the smallest type anywhere in this app, deliberately. The chips are
+// ambient background information, not something to read on every glance, and at 11px two of them
+// carried nearly the same weight as the project name they sit opposite. It stops at 9 because tabular
+// digits below that stop being legible at a glance, which would trade one problem for another.
+//
+// It applies to the WRAPPER, so every branch inherits it: the percentage, the em dash a signed-out or
+// unavailable provider shows, and the "··" first-fetch placeholder. Those three occupy the same slot
+// and a size that only reached one of them would make the chip resize as its state changed.
+//
+// The PROVIDER MARKS do not shrink with it. They are fixed px in PROVIDER_MARK_GEOMETRY (11px Claude,
+// 10px Codex — optically matched to each other, not to any font size), so the mark stays put and only
+// the number drops. That is the intended reading: the mark identifies the provider, the small number
+// is its current level.
+const QUOTA_READING = "text-[9px]"
 
 export function QuotaChips() {
   const queryClient = useQueryClient()
@@ -85,13 +103,13 @@ export function QuotaChips() {
   }
 
   return (
-    // `gap-3` is the STATUS BAR's one optical distance, not a value of this component's own: these two
-    // chips sit in that strip, and a chip-to-chip gap that differs from the strip's is exactly the
-    // inconsistency the trims in lib/statusBar.ts were cut to remove. Both provider marks reach their
+    // `gap-3` is the STATUS ROW's one optical distance, not a value of this component's own: these two
+    // chips sit in that row, and a chip-to-chip gap that differs from the row's is exactly the
+    // inconsistency the trims in lib/statusRow.ts were cut to remove. Both provider marks reach their
     // own box edge, so this gap needs no trim to mean 12px of ink (measured 12.25). The 6px INSIDE a
     // chip (mark → percentage) is deliberately half of it — that is what keeps each mark reading as
     // one pill rather than four loose glyphs.
-    <div data-quota-bar className="flex shrink-0 items-center gap-3 text-[11px]">
+    <div data-quota-bar className={`flex shrink-0 items-center gap-3 ${QUOTA_READING}`}>
       <QuotaChip backend="claude" quota={quota.data?.claude} auth={auth.data?.claude} email={auth.data?.emails?.claude} loading={quota.isLoading} fetching={quota.isFetching || rechecking} onRecheck={() => recheck("claude")} />
       <QuotaChip backend="codex" quota={quota.data?.codex} auth={auth.data?.codex} email={auth.data?.emails?.codex} loading={quota.isLoading} fetching={quota.isFetching || rechecking} onRecheck={() => recheck("codex")} />
     </div>

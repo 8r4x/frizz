@@ -132,7 +132,9 @@ const threads: ThreadView[] = [
   } as unknown as ThreadView,
 ]
 
-store.board = { projectDir: "/fixture/frizz", threads, plans: [] } as unknown as BoardSnapshot
+// `projectLabel` is what the StatusRow above the prompt box renders as this board's identity; without
+// it the rail draws a nameless placeholder where every real board shows its repo.
+store.board = { projectDir: "/fixture/frizz", projectLabel: "colinhacks/frizz", threads, plans: [] } as unknown as BoardSnapshot
 store.drawers = []
 
 // The rail's composer and its pickers read the ordinary RPC surface; answer everything with the empty

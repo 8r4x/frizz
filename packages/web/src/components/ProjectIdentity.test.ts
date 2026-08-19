@@ -52,6 +52,30 @@ test("the home crumb steps aside when the project rail is showing", () => {
   assert.match(html, /<span class="font-semibold text-fg\/90">frizz<\/span>/)
 })
 
+test("a healthy connection paints no indicator at all", () => {
+  // A green dot and the word "connected" led this cluster in every state until 2026-08-19, which meant
+  // it said the same thing every second of every session (maintainer: "drop the connected indicator,
+  // certainly. It's pretty useless"). The board moving IS the indicator now. The state still reaches
+  // assistive technology through the aria-label, which is asserted above.
+  const html = render("openai/frizz", "open")
+
+  assert.doesNotMatch(html, />connected</)
+  assert.doesNotMatch(html, /rounded-full/)
+})
+
+test("a DEGRADED connection still paints, because a silently frozen board is the failure it catches", () => {
+  assert.match(render("openai/frizz", "connecting"), />connecting…</)
+  assert.match(render("openai/frizz", "closed"), />disconnected</)
+  // An open socket that had to fall back to SSE is degraded too — that is the whole point of naming it.
+  const fallback = renderToStaticMarkup(createElement(IdentityMark, {
+    identity: projectIdentity(board("openai/frizz")),
+    state: "open" as const,
+    boardFallback: { actualBytes: 9_000_000, maxBytes: 8_000_000 },
+  }))
+  assert.match(fallback, />connected · SSE fallback</)
+  assert.match(fallback, /data-board-sync-fallback="true"/)
+})
+
 test("a reconnect retains the currently adopted verified identity", () => {
   // The app keeps its last adopted board while the stream reconnects; projectIdentity is deliberately
   // stateless, so passing that same board cannot flash a loading fallback.
@@ -96,7 +120,20 @@ test("the resolved identity and live status form one compact flexible cluster", 
   const html = render("openai/frizz", "open")
 
   assert.match(html, /class="identity-slot identity-slot--resolved"/)
-  assert.match(html, /class="flex items-center gap-1 shrink-0"/)
   assert.doesNotMatch(html, /w-16/)
   assert.doesNotMatch(html, /identity-slot--placeholder/)
+  // The status cluster's own measure is chosen by its CONTENT — reserving a fixed column left a
+  // conspicuous blank track after owner/repo resolved. It renders only while degraded now, so a
+  // healthy render is the one that must carry no track at all.
+  assert.doesNotMatch(html, /class="flex items-center gap-1 shrink-0"/)
+  assert.match(render("openai/frizz", "closed"), /class="flex items-center gap-1 shrink-0"/)
+})
+
+test("a board keyframe without a project label is unavailable, never a crash", () => {
+  // The identity renders inside the SIDEBAR COLUMN now, above the prompt box — a throw here takes the
+  // whole rail with it rather than one line of detached corner chrome. `projectLabel` is required on
+  // the wire, so this guards only a partial keyframe, which is exactly the case that used to reach
+  // `.trim()` of undefined.
+  assert.deepEqual(projectIdentity({} as { projectLabel: string }), { state: "unavailable" })
+  assert.deepEqual(projectIdentity({ projectLabel: "   " }), { state: "unavailable" })
 })

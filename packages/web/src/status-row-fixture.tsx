@@ -2,11 +2,14 @@ import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import "./styles.css"
 
-// STATUS-BAR FIXTURE — the top-left bar in its FULLY POPULATED state, which no sandboxed stack can
-// produce: an adhoc stack has no restart-capable supervisor (so the reload button renders null) and no
-// provider credentials under its temp HOME (so both quota chips sit on the loading placeholder
-// forever). Stubbing the three reads the bar depends on is the only way to actually LOOK at the
-// finished thing: identity + connection + settings + reload + two live quota percentages on one line.
+// STATUS-ROW FIXTURE — the row above the prompt box in its FULLY POPULATED state, which no sandboxed
+// stack can produce: an adhoc stack has no restart-capable supervisor (so the reload button renders
+// null) and no provider credentials under its temp HOME (so both quota chips sit on the loading
+// placeholder forever). Stubbing the reads the row depends on is the only way to actually LOOK at the
+// finished thing: identity + settings + reload + two live quota percentages on one line.
+//
+// It renders over a stand-in prompt box, because the row's two ends are supposed to land on that box's
+// border and a row measured in a void cannot show that.
 //
 // Query params drive the states worth eyeballing:
 //   ?state=low        — Claude in the amber warn zone, Codex critical
@@ -15,8 +18,11 @@ import "./styles.css"
 //                       headline used to hijack it and show the weekly figure instead.
 //   ?state=signedout  — Codex signed out (em dash + Sign in popover, and NO account line)
 //   ?state=longemail  — an account address past the popover's width, to check the truncation
-//   ?connection=closed|connecting
+//   ?connection=closed|connecting  — the only states that paint a connection indicator at all
 //   ?identity=loading|unavailable
+//   ?font=mono                     — this app renders in TWO type families (html[data-font], applied
+//                                    before first paint); a fixture that leaves it unset silently
+//                                    renders mono and hides half the answer.
 
 const params = new URLSearchParams(window.location.search)
 const state = params.get("state") ?? "healthy"
@@ -73,23 +79,32 @@ window.fetch = async (input, init) => {
   return nativeFetch(input, init)
 }
 
-const { StatusBar } = await import("./components/StatusBar.tsx")
-const { projectIdentity } = await import("./components/Sidebar.tsx")
+document.documentElement.dataset.font = params.get("font") === "mono" ? "mono" : "sans"
 
+const { StatusRow } = await import("./components/StatusRow.tsx")
+const { store } = await import("./store.ts")
 const identityMode = params.get("identity")
-const identity = projectIdentity(
-  identityMode === "loading" ? null : { projectLabel: identityMode === "unavailable" ? "frizz" : "colinhacks/frizz" },
-)
-const connection = (params.get("connection") ?? "open") as "open" | "connecting" | "closed"
+
+// StatusRow reads identity and connection off the store itself, so the fixture seeds the store rather
+// than passing props — which is also the only way to exercise the real read path.
+store.board = (identityMode === "loading"
+  ? null
+  : { projectLabel: identityMode === "unavailable" ? "frizz" : "colinhacks/frizz", threads: [], plans: [] }) as never
+store.connection = (params.get("connection") ?? "open") as "open" | "connecting" | "closed"
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
 
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={queryClient}>
-    <main className="min-h-screen bg-bg text-fg">
-      <StatusBar identity={identity} connection={connection} />
-      {/* A stand-in for the page body, so the bar is judged against real content, not a void. */}
-      <div className="px-4 pt-16 text-[13px] text-muted">Page content sits below the bar.</div>
+    <main className="min-h-screen bg-bg p-6 text-fg">
+      {/* The sidebar column's real width at a 1440px viewport, so the row's split reads at the measure
+          it actually ships at. */}
+      <div className="w-[489px]">
+        <StatusRow />
+        <div className="rounded-xl border border-border bg-panel px-3 py-6 text-[13px] text-muted">
+          A stand-in prompt box. The row's two ends land on THIS border.
+        </div>
+      </div>
     </main>
   </QueryClientProvider>,
 )

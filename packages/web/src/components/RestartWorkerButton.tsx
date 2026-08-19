@@ -71,7 +71,7 @@ export function RestartWorkerButton({ thread }: { thread: ThreadView }) {
         // border used to do — an earlier pass shipped this as bare TEXT with no box at all and read as
         // a static label, and that is the failure being avoided here, not the absence of a border.
         //
-        // 24px square, mirroring this app's OWN icon-action size (lib/statusBar.ts: "the WCAG 2.2
+        // 24px square, mirroring this app's OWN icon-action size (lib/statusRow.ts: "the WCAG 2.2
         // minimum pointer target, and the largest size that still reads as part of a 12px text strip
         // rather than as chrome parked next to it"). The glyph stays at the strip's own 12px so the
         // one verb WITHOUT a label does not out-weigh the two with them, and the tone sits a step

@@ -23,6 +23,7 @@ import { BackgroundOpsStrip, ThreadSlugContext, QueueDismissContext } from "./Ch
 import { HeaderActions } from "./HeaderActions.tsx"
 import { ThreadLifecycleFooter } from "./ThreadLifecycleFooter.tsx"
 import { DispatchForm } from "./NewThreadModal.tsx"
+import { StatusRow } from "./StatusRow.tsx"
 import { InteractionStack } from "./InteractionCards.tsx"
 import { QueueSubAgentLines, hasQueueSubAgentLines } from "./QueueSubAgentLines.tsx"
 import { WakeDivider } from "./WakeDivider.tsx"
@@ -538,6 +539,12 @@ export function TodosView() {
         // appears and this same box shunts to its top; this column then holds only the queue.
         <div className="w-full flex flex-col gap-3">
           <h2 className="text-[15px] font-medium text-center">What should the agent do?</h2>
+          {/* The status row rides the top of the PROMPT BOX, and on a brand-new project this is the
+              prompt box — the sidebar that normally carries it is hidden here. Without this the one
+              screen a fresh install starts on would have no project identity, no way to settings, no
+              reload and no quota reading at all. It sits below the heading rather than above it: the
+              heading is this screen's title, the row belongs to the composer under it. */}
+          <StatusRow />
           {/* The GitHub picker's door rides inside DispatchForm's composer now (a small icon left of
               the send button), so no separate trigger here. */}
           <DispatchForm autoFocus />
@@ -1315,7 +1322,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                 const isFirst = seg !== undefined && globalIdx === seg.open
                 const isLast = seg !== undefined && globalIdx === seg.close
                 // A lifted-out WAKE takes the ORDINARY path at the foot of this loop instead of the
-                // collapse branch's textOnly render. Its content IS a card or a rule — a GithubWakeCard
+                // collapse branch's textOnly render. Its content IS a card or a rule — a FrizzWake
                 // built from `wakeSteer`, a sub-agent or background-shell completion divider — and
                 // messageHasRenderableText reports all of those as no prose at all, so the textOnly path
                 // would drop it on the floor rather than show it.

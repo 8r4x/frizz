@@ -25,8 +25,8 @@ test("Update and restart keeps its clockwise arrow treatment", () => {
 test("Update and restart is one compact icon-only action with an accessible name", () => {
   const html = renderToStaticMarkup(createElement(RestartActionButton, { update: true, busy: false, onClick: () => undefined }))
   assert.match(html, /aria-label="Update Frizz"/)
-  // Sized by STATUS_BAR_ACTION — it shares the top-left bar with the settings gear and the two must
-  // carry identical weight (was a lone 32px corner button before the bar existed).
+  // Sized by STATUS_ROW_ACTION — it shares the prompt box's status row with the settings gear, and
+  // the two must carry identical weight (this was a lone 32px corner button before the row existed).
   assert.match(html, /h-6 w-6/)
   assert.match(html, /lucide-refresh-cw/)
   assert.doesNotMatch(html, />\s*Update Frizz\s*</)

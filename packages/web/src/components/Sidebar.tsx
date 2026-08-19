@@ -15,6 +15,7 @@ import { visibleChildOps } from "../lib/childOps.ts"
 import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { MarkAsButton } from "./MarkAsButton.tsx"
 import { DispatchForm } from "./NewThreadModal.tsx"
+import { StatusRow } from "./StatusRow.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { ProviderMark } from "./ProviderMark.tsx"
 import { STATUS_CHIP } from "../lib/status.ts"
@@ -171,24 +172,27 @@ export function Sidebar() {
     // for nav and left the queue with the remainder. 272px still holds the dispatch composer's profile
     // chip and its icon buttons on one line, and hands the difference back to the queue.
     <aside className="sticky top-0 self-start h-screen w-[clamp(272px,34vw,680px)] shrink-0 flex flex-col justify-center max-[800px]:static max-[800px]:h-auto max-[800px]:w-full max-[800px]:justify-start max-[800px]:pt-16">
-      {/* The content column FILLS the aside track (no narrow inner cap). Its cap reserves 44px top AND
-          bottom (symmetric, so the column stays centred): the top 44px is the band the fixed status bar
-          occupies (top-2.5 + h-7 = 38px, plus a 6px gap). Below that cap the column grows and then
-          scrolls INTERNALLY, so a long thread list can no longer push the dispatch composer up under the
-          identity/gear/quota strip — it stops just short of it. Short boards are unaffected: they never
-          reach the cap, so nothing moves. A viewport-scrolled rail (the narrow layout, where this cap is
-          lifted) still passes BEHIND the bar, which is opaque for exactly that reason. */}
-      <div className="flex max-h-[calc(100vh-88px)] min-h-0 min-w-0 w-full flex-col max-[800px]:max-h-none">
+      {/* The content column FILLS the aside track (no narrow inner cap). Its cap reserves 16px top AND
+          bottom (symmetric, so the column stays centred), and below it the column grows and then
+          scrolls INTERNALLY. The reserve used to be 44px a side, holding open the band the FIXED
+          status bar occupied in the page's top-left corner so a long thread list could not push the
+          composer up underneath it. That bar is gone — its contents are the StatusRow at the top of
+          this very column now — so the lane it needed goes with it and the rail gets the 56px back.
+          Short boards are unaffected: they never reach the cap. */}
+      <div className="flex max-h-[calc(100vh-32px)] min-h-0 min-w-0 w-full flex-col max-[800px]:max-h-none">
         {/* THE PROMPT BOX lives at the sidebar top (it replaced the New-thread pill — maintainer
             2026-07-09): always present, type + Enter dispatches a new thread. A brand-new repo shows
             this same box CENTERED as the whole screen (App hides the sidebar); the first dispatch
             shunts it here to the left. */}
         <div className="mb-5 shrink-0 px-0.5">
-          {/* The quota chips used to float here, above the prompt box. Quota is ACCOUNT-global, not a
-              property of this composer, so they moved into the top-left StatusBar with the rest of the
-              global status. */}
+          {/* THE STATUS ROW rides the top of the prompt box: project identity at the left edge, the
+              settings/reload pair and both quota chips at the right. The quota chips did once float
+              here on their own, then moved out to a fixed corner bar because quota is ACCOUNT-global
+              rather than a property of this composer — which is still true, and is why they come back
+              as part of a GLOBAL status row instead of as a composer decoration. */}
           {/* The GitHub picker's door now lives INSIDE the dispatch composer (a small icon left of the
               send button — see DispatchForm/Composer leftAction); no separate pill here. */}
+          <StatusRow />
           <DispatchForm />
         </div>
         <div ref={railRef} data-sidebar-rail className="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden max-[800px]:overflow-y-visible">
@@ -929,7 +933,12 @@ export type ProjectIdentity =
 
 export function projectIdentity(board: Pick<BoardSnapshot, "projectLabel"> | null | undefined): ProjectIdentity {
   if (!board) return { state: "loading" }
-  const label = board.projectLabel.trim()
+  // A board WITHOUT a projectLabel is "unavailable", not a crash. The field is required on the wire, so
+  // this only guards a board keyframe that arrived partial — but the identity now renders inside the
+  // SIDEBAR COLUMN rather than as detached corner chrome, so a throw here takes the whole rail (and the
+  // prompt box with it) rather than one line of chrome. Caught the moment StatusRow moved: every
+  // fixture that seeds a board without a label crashed on `.trim()` of undefined.
+  const label = board.projectLabel?.trim() ?? ""
   const cut = label.lastIndexOf("/")
   const owner = cut === -1 ? "" : label.slice(0, cut).trim()
   const repo = cut === -1 ? "" : label.slice(cut + 1).trim()
@@ -966,6 +975,9 @@ export function IdentityMark({
   } as const
   const m = map[state]
   const usingFallback = state === "open" && !!boardFallback
+  // "Healthy" is an open socket carrying the board itself. An open socket that had to fall back to SSE
+  // is NOT healthy — it is the degraded mode the fallback exists to name — so it keeps its readout.
+  const degraded = state !== "open" || usingFallback
   const connectionLabel = usingFallback ? "connected through SSE fallback" : m.word
   const accessibleLabel = identity.state === "verified"
     ? `Project: ${identity.label}; ${connectionLabel}`
@@ -1018,16 +1030,26 @@ export function IdentityMark({
           <span className="identity-placeholder" aria-hidden="true" />
         )}
       </span>
-      <span
-        // Identity and live state are one compact header cluster. Its content chooses the measure:
-        // reserving a fixed status column left a conspicuous blank track after owner/repo resolved.
-        className="flex items-center gap-1 shrink-0"
-        data-board-sync-fallback={usingFallback || undefined}
-        title={usingFallback ? `Board payload exceeded the live socket limit; connected through SSE` : undefined}
-      >
-        <span className={`w-1.5 h-1.5 shrink-0 rounded-full ${m.cls}`} />
-        <span className="text-[10.5px] text-muted/70">{usingFallback ? "connected · SSE fallback" : m.word}</span>
-      </span>
+      {/* THE CONNECTION, PAINTED ONLY WHEN IT IS DEGRADED. A green dot and the word "connected" used
+          to lead this cluster in every state, which meant it said the same thing every second of
+          every session and nothing at all in the one state worth knowing about (maintainer
+          2026-08-19: "drop the connected indicator, certainly. It's pretty useless"). A healthy
+          socket now renders NOTHING here — the board moving is the indicator — while connecting,
+          disconnected and the SSE fallback all still show, because a silently frozen board is the
+          failure this reading exists to catch. The accessible label above carries the state in every
+          case, healthy included.
+          Its content chooses the measure: reserving a fixed status column left a conspicuous blank
+          track after owner/repo resolved. */}
+      {degraded && (
+        <span
+          className="flex items-center gap-1 shrink-0"
+          data-board-sync-fallback={usingFallback || undefined}
+          title={usingFallback ? `Board payload exceeded the live socket limit; connected through SSE` : undefined}
+        >
+          <span className={`w-1.5 h-1.5 shrink-0 rounded-full ${m.cls}`} />
+          <span className="text-[10.5px] text-muted/70">{usingFallback ? "connected · SSE fallback" : m.word}</span>
+        </span>
+      )}
     </div>
   )
 }

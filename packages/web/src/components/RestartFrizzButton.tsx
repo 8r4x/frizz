@@ -3,7 +3,7 @@ import { useSnapshot } from "valtio"
 import { AlertTriangle, RefreshCw, X } from "lucide-react"
 import { canRestart, canUpdateRestart, FRIZZ_SUPERVISOR_STATUS_WAKE_EVENT, getFrizzSupervisorStatus, requestFrizzRestart, requestFrizzUpdateRestart } from "../api/restart.ts"
 import { showToast, store } from "../store.ts"
-import { STATUS_BAR_ACTION, STATUS_BAR_ICON } from "../lib/statusBar.ts"
+import { STATUS_ROW_ACTION, STATUS_ROW_ICON } from "../lib/statusRow.ts"
 
 // RefreshCw's arrowheads advance clockwise, matching Tailwind's clockwise animate-spin keyframes.
 // Keep this exported contract covered by the focused component test when either icon or animation changes.
@@ -19,7 +19,7 @@ const restartCopy = "Restart Frizz. Your running threads will not be affected."
 // puts either panel over the sidebar and the composer.
 //
 // `-left-1.5` (not `left-0`) because this wrapper is no longer the width of the 24px button: the ink
-// trim on STATUS_BAR_ACTION (lib/statusBar.ts) collapses that square onto its 12px glyph, so the
+// trim on STATUS_ROW_ACTION (lib/statusRow.ts) collapses that square onto its 12px glyph, so the
 // wrapper's own left edge now sits 6px INSIDE the target. Backing the panel out by that same 6px puts
 // it exactly where it was before the trim, which is what keeps both panels' `left-1.5` arrows centred
 // on the mark. Moving the arrows instead would have hung their rotated corner outside the panel.
@@ -144,12 +144,12 @@ export function RestartActionButton({
       aria-label={update ? "Update Frizz" : "Restart Frizz"}
       disabled={busy}
       aria-busy={busy || undefined}
-      className={STATUS_BAR_ACTION}
+      className={STATUS_ROW_ACTION}
       onFocus={onFocus}
       onBlur={onBlur}
       onClick={onClick}
     >
-      <RefreshCw size={STATUS_BAR_ICON} aria-hidden="true" className={busy ? "animate-spin" : undefined} />
+      <RefreshCw size={STATUS_ROW_ICON} aria-hidden="true" className={busy ? "animate-spin" : undefined} />
     </button>
   )
 }

@@ -9,10 +9,9 @@ import { takeScrollAfterUnlock } from "./lib/pageScrollLock.ts"
 import { startRouter } from "./lib/router.ts"
 import { nextSidebarPresence, type SidebarPresence } from "./lib/sidebarPresence.ts"
 import { rpc } from "./api/rpc.ts"
-import { Sidebar, projectIdentity } from "./components/Sidebar.tsx"
+import { Sidebar } from "./components/Sidebar.tsx"
 import { MobileBoard } from "./components/MobileBoard.tsx"
 import { useIsMobile } from "./lib/mobile.ts"
-import { StatusBar } from "./components/StatusBar.tsx"
 import { DrawerStack } from "./components/DrawerStack.tsx"
 import { TodosView } from "./components/TodosView.tsx"
 import { NewThreadDialog } from "./components/NewThreadModal.tsx"
@@ -224,10 +223,6 @@ export function App() {
 
   sidebarPresence.current = nextSidebarPresence(sidebarPresence.current, board)
   const showSidebar = board !== null && sidebarPresence.current.hasBeenVisible
-  // A missing board is not evidence that this project is named "frizz". Keep the header neutral until
-  // a board keyframe supplies an actual owner/repo identity; reconnects retain their adopted board.
-  const identity = projectIdentity(board)
-
   // Window title carries the project identity. In the INSTALLED APP window (display-mode:
   // standalone) Chrome prefixes the title bar with the app name itself ("Frizz - <title>"), so the
   // page title must NOT repeat the wordmark — just the repo label ("Frizz - nubjs/nub"). In an
@@ -253,17 +248,12 @@ export function App() {
     {/* While restarting, the whole app subtree goes inert so nothing behind the scrim is focusable or
         clickable; the overlay above is a sibling OUTSIDE it so it stays interactive. */}
     <div inert={snap.controlPlaneState === "restarting"} className="relative min-h-screen bg-bg text-fg text-sm">
-      {/* Fixed chrome: ONE status bar in the upper-left carrying identity, connection, settings,
-          reload and both quota chips (see StatusBar.tsx). The top-right corner is deliberately empty
-          now — the settings/reload pair used to live there, a screen's width away from the identity
-          they describe. Everything else flows; the PAGE is the one and only scroll container — a tall
-          card simply runs off both edges. */}
-      {/* The status bar is DESKTOP CHROME. On a phone its six readings (identity, connection, settings,
-          reload, two quota chips) do not fit a 390pt strip, and the two that matter most — the project
-          and the way to settings — are already in the mobile nav bar. */}
-      {isMobile ? null : (
-        <StatusBar identity={identity} connection={snap.connection} boardFallback={snap.socketBoardFallback} />
-      )}
+      {/* NO FIXED CHROME IN EITHER TOP CORNER. Identity, settings, reload and both quota chips used to
+          be a bar pinned to the upper-left, a screen's width from the column they describe; they are
+          the StatusRow along the top of the prompt box now (Sidebar.tsx, and TodosView's centered
+          first-task box on a brand-new project). Everything flows; the PAGE is the one and only scroll
+          container — a tall card simply runs off both edges. On a phone none of it renders at all: the
+          project and the way to settings are already in the mobile nav bar. */}
       {/* (The old fixed "New thread" pill moved INTO the sidebar's top — one entry point, same modal
           flow; the ⌘K palette's "New thread" item and the always-visible dispatch box are the
           other doors — deliberately NOT ⌘N, which belongs to the browser.) */}

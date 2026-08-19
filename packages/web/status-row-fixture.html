@@ -1,19 +1,19 @@
 <!doctype html>
 <!-- `data-font="sans"` because the prose/UI font is a SETTING (lib/font.ts → html[data-font], applied in
      index.html before first paint) and a fixture that leaves it unset silently renders the MONO default.
-     The bar's identity label and quota percentages are text, so their ink — and every gap measured
-     against it — moves with this. Flip it to "mono" to judge the other half of what ships. -->
+     The row's identity label and quota percentages are text, so their ink — and every gap measured
+     against it — moves with this. `?font=mono` judges the other half of what ships. -->
 <html lang="en" data-font="sans">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Status bar fixture</title>
+    <title>Status row fixture</title>
     <!-- An empty data: icon, so the fixture's console stays clean of a favicon 404 the verification
          script would otherwise have to special-case. -->
     <link rel="icon" href="data:," />
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/status-bar-fixture.tsx"></script>
+    <script type="module" src="/src/status-row-fixture.tsx"></script>
   </body>
 </html>
