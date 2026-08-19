@@ -6,7 +6,7 @@ import type { BoardSnapshot, PlanView, ThreadView } from "@frizz/shared"
 import { store, openThread, scrollToQueueCard, queueCardTargetY, pushSubAgentDrawer, pushPlanDrawer, QUEUE_CARD_VIEWPORT_TOP } from "../store.ts"
 import { useBoard, asThreads } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
-import { sectionThreads, foreignThreads, partitionActive, needsAction, displayTitle, titleIsProvisional, isHeld, parkedAwaitingHint, sessionIndicatorKind, offersRetry, futureSnoozedUntil, lastActiveLabelAt } from "../groups.ts"
+import { sectionThreads, foreignThreads, orderByInteraction, partitionActive, needsAction, displayTitle, titleIsProvisional, isHeld, parkedAwaitingHint, sessionIndicatorKind, offersRetry, futureSnoozedUntil, lastActiveLabelAt } from "../groups.ts"
 import { ageSpan, relativeAge } from "../lib/activityTime.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { BoxSpinner, STATUS_BOX } from "./BoxSpinner.tsx"
@@ -72,7 +72,11 @@ export function Sidebar() {
   // Its own partition, deliberately NOT a SectionKey: sectionThreads drops foreign rows entirely, and
   // that stays true — a non-frizz session must never be able to land in Active, Held or Done by
   // accident. This band is the only place they render.
-  const foreignSessions = foreignThreads(all)
+  // Ordered by the SAME key the rest of the rail uses, so the rest-time column reads monotonically down
+  // the band. It cannot be left to discovery order: the tailer returns foreign ids by file MTIME, while
+  // the label prints the agent's own last output — two clocks that disagree whenever a transcript is
+  // touched without the agent speaking (a resume that writes a header, a copy, a restore).
+  const foreignSessions = orderByInteraction(foreignThreads(all))
   const plans = (board?.plans ?? []) as PlanView[]
   const collapsed = snap.sidebarCollapsed
   const activeThreads = sections.active
@@ -468,6 +472,18 @@ export const ThreadRow = memo(function ThreadRow({
             <span className={`min-w-0 flex-1 break-words text-[13px] leading-[19px] ${dimLabel ? "text-fg/50" : held ? "text-fg/75" : "text-fg/90"}`}>
               <TitleWithTrailers title={displayTitle(t)}>
                 {!legacy && <ProviderMark backend={t.backend} className="ml-1" />}
+                {/* MEASURED 2026-08-19, the first time this tag ever rendered (it was written for a
+                    foreign row and no foreign row reached the rail until the Non-Frizz band). Readings
+                    on the real rail at dsf 4, `scripts/ink-gaps.mjs` + the visual-review cap-band probe:
+                      title's last word → provider mark   box 4px  → ink 4.15px
+                      provider mark     → this tag        box 6px  → ink 6.00px   (a bordered pill's
+                                                                     border IS its ink: deadLeft 0)
+                    The 1.4× step is the grouping and is deliberate — the mark is the title's own
+                    adornment and clings to it, the tag is a separate label and stands off.
+                    VERTICAL: this pill's ink centre rides 0.42px ABOVE the title's cap band, and the
+                    provider mark beside it 0.08px below. Both are under half a device pixel at the
+                    shipped size, so `align-[2px]` stands as measured rather than as a guess.
+                    RE-MEASURE rather than re-guess if the type scale or the pill's size moves. */}
                 {foreign && (
                   <span
                     className="petite-caps ml-1.5 inline-block rounded border border-border/60 px-1 align-[2px] text-[9.5px] leading-[14px] text-muted/55"
