@@ -215,9 +215,16 @@ const defaultExec: Exec = (file, args) =>
  * rather than split on raw newlines. Returns only same-user, parseable rows. macOS `ps -E` cannot read
  * the env of SIP platform binaries like /bin/sleep, but every process a worker actually leaks — node
  * MCP/dev servers and Chrome browsers — is a non-system binary whose env IS readable (verified in the
- * harness). A total env-pass failure fails closed (every slug null → nothing reapable), and since a
- * root and its aux share one env read there is no partial mode that hides a live root while surfacing
- * its aux.
+ * harness). A total env-pass failure fails closed (every slug null → nothing reapable).
+ *
+ * A PARTIAL failure, though, does NOT fail closed, and this comment claimed the opposite until
+ * 2026-08-19 — "since a root and its aux share one env read there is no partial mode that hides a live
+ * root while surfacing its aux." They share the `ps` CALL, not the per-record PARSE, and the parse is
+ * per-pid: anything that drops one record while keeping its neighbours' is exactly that partial mode.
+ * The pid-column padding bug at (c) below was one, and it hid live ROOTS specifically. So the invariant
+ * to hold on to is narrower than it looks — a null slug is safe on an AUX row (never reaped) and
+ * dangerous on a ROOT row (its whole thread reads dead), and any future change here has to be judged
+ * against the second case, not the first.
  */
 export function enumerateProcs(exec: Exec = defaultExec): ProcRow[] {
   // `-ww` (both passes) disables ps's column truncation so pass-1 argv is the FULL argv — required
@@ -246,6 +253,15 @@ export function enumerateProcs(exec: Exec = defaultExec): ProcRow[] {
   //  (b) an env VALUE can contain newlines (PEM keys, JSON), so a record spans multiple physical
   //      lines. Split on record starts (`<pid> <argv>`), re-merging any line that isn't a real
   //      record start (a false split inside a multiline value), rather than splitting on raw \n.
+  //  (c) `-o pid=` RIGHT-ALIGNS the pid in a fixed-width column, so a record for a pid narrower than
+  //      that column starts with PADDING — ` 1154 /path/claude …`, not `1154 /path/claude …`. Every
+  //      record-start match here therefore tolerates leading blanks and the padding is stripped before
+  //      the argv prefix is measured. Requiring a bare digit (as this did until 2026-08-19) silently
+  //      dropped every sub-10000 pid: its record was re-merged into its predecessor's, so its own slug
+  //      read as null. A worker's `claude` session root landing on a short pid then made its thread
+  //      look DEAD to decideOrphans — and the reaper SIGKILLed that live worker's aux, adhoc-stack
+  //      verification servers included. Measured on the maintainer's machine that day: 3 of 3 session
+  //      roots with a 4-digit pid unattributed, 34 of 34 with a 5-digit pid attributed correctly.
   let text: string
   try {
     text = exec("ps", ["-Eww", "-o", "pid=,command=", "-p", pids.join(",")])
@@ -253,10 +269,11 @@ export function enumerateProcs(exec: Exec = defaultExec): ProcRow[] {
     return rows // env unreadable → every slug null → reap nothing this pass (fail closed)
   }
   const records: string[] = []
-  for (const chunk of text.split(/\n(?=\d+ )/)) {
-    const pid = Number(chunk.match(/^(\d+) /)?.[1])
+  for (const chunk of text.split(/\n(?=[ \t]*\d+ )/)) {
+    const record = chunk.replace(/^[ \t]+/, "") // drop the pid column's right-alignment padding
+    const pid = Number(record.match(/^(\d+) /)?.[1])
     const argv = byPid.get(pid)?.command
-    if (argv !== undefined && chunk.startsWith(`${pid} ${argv}`)) records.push(chunk)
+    if (argv !== undefined && record.startsWith(`${pid} ${argv}`)) records.push(record)
     else if (records.length) records[records.length - 1] += `\n${chunk}` // false split → re-merge
   }
   for (const rec of records) {

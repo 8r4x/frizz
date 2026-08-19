@@ -180,6 +180,37 @@ test("enumerateProcs: reads the slug across a multiline env value and re-merges 
   assert.equal(procs[0]!.slug, "realslug")
 })
 
+// `ps -o pid=` RIGHT-ALIGNS the pid in a fixed-width column, so every record for a pid narrower than
+// that column starts with PADDING. The fixtures above all happen to use flush-left pass-2 lines, which
+// is why this went unseen: in production the pass-2 splitter dropped every sub-10000 pid's record into
+// its predecessor's, leaving its own slug null. When the pid that lost its slug was a worker's `claude`
+// SESSION ROOT, its thread vanished from `live` — and the reaper SIGKILLed that live worker's aux,
+// including the adhoc-stack verification servers it had booted. Measured on the maintainer's machine
+// 2026-08-19: 3 of 3 session roots with a 4-digit pid unattributed, 34 of 34 with a 5-digit pid fine.
+test("enumerateProcs: a pid narrower than ps's right-aligned pid column still gets its slug", () => {
+  const base = [
+    "  1154        1 21:44:15 claude --session-id A",
+    " 48311     1154 03:00 node scripts/adhoc-stack.mjs --port=48311",
+    " 65816     1154 03:00 Google Chrome for Testing --headless",
+  ].join("\n")
+  // Exactly what `ps -Eww -o pid=,command=` emits: the pid column is 5 wide, so a 5-digit pid is flush
+  // left and everything shorter carries leading blanks.
+  const env = [
+    " 1154 claude --session-id A HOME=/Users/x FRIZZ_THREAD=live-worker",
+    "48311 node scripts/adhoc-stack.mjs --port=48311 HOME=/tmp/sandbox FRIZZ_THREAD=live-worker",
+    "65816 Google Chrome for Testing --headless FRIZZ_THREAD=live-worker",
+  ].join("\n")
+  const procs = enumerateProcs(fakePs(base, env))
+  const byPid = new Map(procs.map((p) => [p.pid, p]))
+  assert.equal(byPid.get(1154)!.slug, "live-worker") // the padded record is a record, not a merge artifact
+  assert.equal(byPid.get(48311)!.slug, "live-worker")
+
+  // …and the consequence that actually bit: the thread reads LIVE, so its adhoc stack is never reaped.
+  const decision = decideOrphans(procs, { minAgeMs: ORPHAN_GUARD, protectedPids: new Set() })
+  assert.deepEqual(decision.liveSlugs, ["live-worker"])
+  assert.deepEqual(decision.reap, [])
+})
+
 test("enumerateProcs: a pid whose pass-2 argv does not match pass-1 (reuse) yields no slug (fail-safe)", () => {
   const base = ["  100 1 10:00 node real-argv"].join("\n")
   const env = ["100 node DIFFERENT-argv FRIZZ_THREAD=whatever"].join("\n") // marker mismatch
