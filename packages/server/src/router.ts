@@ -90,6 +90,7 @@ import {
   PR_WATCH_MAX_ARMED,
   PR_WATCH_DEFAULT_FOR_MS,
   type PrWatchView,
+  humanGapNote,
 } from "@frizz/shared"
 import { mayHaveLiveBackgroundWork, needsFreshProcessForLimit, type AppContext } from "./context.ts"
 import { appServerTurnStalled, resolveRecurringPrompt } from "./board.ts"
@@ -1460,6 +1461,16 @@ export function createRouter(ctx: AppContext) {
         // That is the state the "send a message to reopen it" readout promises against, so it has to hold
         // for every runtime. Raised 2026-07-31 against a live broker thread ("showing up as done… but it
         // is actually running actively").
+        // THE GAP THE HUMAN LEFT, appended to what the worker receives — and to that ONLY. A worker has no
+        // clock of its own, so an answer arriving after four hours is indistinguishable from one arriving
+        // after four seconds; it will resume on a stale premise and re-run work whose result went cold.
+        //
+        // The BUBBLE and the delivery LEDGER keep the human's text untouched (see the `input.message`
+        // uses below): what the human typed is what the board shows. Only the copy handed to the worker
+        // carries the note, and the note names frizz as its author because the message it rides on is
+        // not frizz's.
+        const gapNote = humanGapNote(Date.now(), ctx.tailer.get(input.slug)?.lastAssistantAt)
+        const messageForWorker = gapNote ? `${input.message}\n\n${gapNote}` : input.message
         if (row) reopenArchivedThreadForFollowUp(ctx, row)
         // Un-park HERE, above the runtime branches, for the same reason the reopen is here: a broker
         // Claude row and an app-server Codex row both return from their own branch below, so anything
@@ -1502,7 +1513,7 @@ export function createRouter(ctx: AppContext) {
           await bridge.followUp({
             threadSlug: input.slug,
             sessionId: row.session_id,
-            text: input.message,
+            text: messageForWorker,
             deliveryId: input.deliveryId,
             model: row.model ?? undefined,
             effort: row.effort ?? undefined,
@@ -1546,7 +1557,7 @@ export function createRouter(ctx: AppContext) {
             threadSlug: input.slug,
             sessionId: row.session_id,
             cwd: ctx.project.dir,
-            text: input.message,
+            text: messageForWorker,
             // Rides through to the SDK as this input's uuid, which the SDK echoes back on the record
             // that delivers it — the ledger then correlates by identity rather than by text.
             deliveryId: input.deliveryId,
@@ -1618,7 +1629,7 @@ export function createRouter(ctx: AppContext) {
         // The deliveryId rides along so the composer paths can stamp the send with its invisible marker
         // (delivery-marker.ts) — that is what lets the tailer confirm delivery by IDENTITY instead of by
         // comparing prose the tmux+TUI paste channel is free to rewrite. Codex never takes this path.
-        resumeThread({ project: ctx.project, storage: ctx.storage, board: ctx.board, getSettings: ctx.getSettings, backendFor: ctx.backendFor }, input.slug, input.message,
+        resumeThread({ project: ctx.project, storage: ctx.storage, board: ctx.board, getSettings: ctx.getSettings, backendFor: ctx.backendFor }, input.slug, messageForWorker,
           input.deliveryId && row?.backend !== "codex" ? input.deliveryId : undefined,
           // "Continue now" on a limit-paused tmux thread relaunches it, for the same reason the broker
           // branch above swaps its process: the running one is not listening.

@@ -61,7 +61,7 @@ export const RuntimeState = z.enum([
   "running", // process alive, turn in flight
   "perm-prompt", // process alive, paused on an interactive permission prompt (answer in the terminal)
   "turn-idle", // process alive, waiting at the prompt
-  "exited", // tmux session gone or pane dead
+  "exited", // the worker process that owned this session is gone, or is no longer driving its turn
 ])
 export type RuntimeState = z.infer<typeof RuntimeState>
 
@@ -138,8 +138,8 @@ export const SubAgentView = z.object({
   //
   // It exists because the × that offers to stop a child must not appear on a row where stopping is
   // impossible (maintainer 2026-07-30: "We shouldn't show the X if it doesn't fucking work"). Only a
-  // broker-backed Claude thread has a per-child control channel (`Query.stopTask`); a tmux thread runs
-  // its sub-agents inside the CLI process and a codex thread inside its own, and neither exposes one.
+  // broker-backed Claude thread has a per-child control channel (`Query.stopTask`); a codex thread runs
+  // its sub-agents inside its own app-server process, which exposes no such channel.
   // Absent/false on a pre-restart server's snapshot ⇒ the × is simply not offered on a RUNNING row,
   // which fails toward showing no control rather than a false one.
   stoppable: z.boolean().optional(),
@@ -152,7 +152,7 @@ export const SubAgentView = z.object({
   // ---- what the child is actually DOING, from the provider's own task_* event stream ----
   // A live sub-agent used to be a name and a spinner: start, stop, nothing in between. These come off
   // the Claude Agent SDK's typed task lifecycle (stream-only — none of it is in the session JSONL), so
-  // they are present for a BROKER thread and absent for a tmux one, an older CLI, or a pre-restart
+  // they are present for a BROKER thread and absent for a codex one, an older CLI, or a pre-restart
   // server. Render each only when set; never assume they arrive together.
   activity: z.string().optional(), // the tool the child is running right now (e.g. "Bash", "Edit")
   // What the current step IS, in words — the provider rewrites it per tool call ("Running Print
@@ -1330,7 +1330,7 @@ export const ThreadView = z.object({
   // runtime overlay (from the UI server, not the .frizz file)
   runtime: RuntimeState,
   sessionId: z.string().optional(),
-  tmuxName: z.string().optional(),
+  threadName: z.string().optional(),
   unread: z.boolean(),
   archived: z.boolean(), // user hid the row from the nav; respawn/resume un-archives
   lastAssistant: z.string().optional(), // trimmed preview of last assistant text
@@ -1403,7 +1403,7 @@ export const ThreadView = z.object({
   // file row, rendered read-only in the collapsed Legacy shelf.
   kind: z.enum(["session", "legacy"]).optional(),
   // No registry row (a maintainer terminal discovered from the JSONL dir): read-only transcript,
-  // no tmux verbs (no composer / kill / resume), never in Needs-you, no archive/seen state.
+  // no lifecycle verbs (no composer / kill / resume), never in Needs-you, no archive/seen state.
   foreign: z.boolean().optional(),
   // ui.db lifecycle for session threads (open|archived) — written ONLY by explicit Archive/Reopen.
   state: z.enum(["open", "archived"]).optional(),
@@ -1425,11 +1425,12 @@ export const ThreadView = z.object({
    *  explicitly parked THIS rest, showing them the same card with the same button one surface over is
    *  not information, and they said so. */
   bgSnoozed: z.boolean().optional(),
-  // Which Claude transport serves this thread: "broker" = a session-broker-owned Agent SDK session
-  // (typed control channel), "tmux" = the interactive TUI in a pane. Only the broker can be asked to
-  // reload its plugin closure in place, so the board needs it to decide whether to offer that verb at
+  // Which Claude transport serves this thread. "broker" — a session-broker-owned Agent SDK session with
+  // a typed control channel — is the only one there is; ABSENT means a row dispatched before the broker
+  // became the sole transport, which frizz can no longer reach that way. Only the broker can be asked to
+  // reload its plugin closure in place, so the board needs this to decide whether to offer that verb at
   // all rather than render a button that throws.
-  claudeRuntime: z.enum(["tmux", "broker"]).optional(),
+  claudeRuntime: z.literal("broker").optional(),
   // The thread's recurring prompt, when one has been written. Present with BOTH triggers false ⇒ the
   // text and the cadence are kept but nothing fires — that pair of falses IS the off state, which is
   // why there is no separate enable flag here to disagree with them.
@@ -1516,7 +1517,8 @@ export const ThreadView = z.object({
   // are provider-measured and the field is emitted ONLY when both are present, so a client never has
   // to decide what to do with half a fraction: absent ⇒ no reading, never a 0% dial. Codex reports
   // both on every `token_count`; a Claude row gets `tokens` from each assistant record's usage but
-  // `window` only once its first broker turn has ended (and never at all for a tmux/foreign row).
+  // `window` only once its first broker turn has ended (and never at all for a foreign row, or one
+  // dispatched before the broker became the only Claude transport).
   // `tokens` legitimately DROPS after a compaction — the context really did get smaller.
   context: z.object({ tokens: z.number(), window: z.number() }).optional(),
 })
@@ -2257,6 +2259,29 @@ export function wakeTimeHeader(nowMs: number, lastAssistantAt?: string | null): 
   const since = lastAssistantAt ? Date.parse(lastAssistantAt) : NaN
   const elapsed = Number.isFinite(since) && nowMs >= since ? ` — you last spoke ${formatElapsed(nowMs - since)} ago` : ""
   return `⏱ ${stamp}${elapsed}.`
+}
+
+/** The gap the HUMAN left before replying, as a line frizz appends to their message.
+ *
+ *  A worker has no clock of its own (a broker-run one is told neither the date nor the time by its
+ *  runtime), so an answer arriving after four hours is indistinguishable from one arriving after four
+ *  seconds. That matters for more than tone: a worker resuming on a stale premise will happily re-run a
+ *  build whose result has since gone cold, or re-park on a shell that finished while nobody was reading.
+ *
+ *  Below the floor it returns undefined — a live back-and-forth needs no stamp on every turn, and a note
+ *  on each one is noise that teaches nothing.
+ *
+ *  ATTRIBUTED, because the message it rides on is the human's and this line is not. Frizz names itself
+ *  here for the same reason SIGNOFF_NUDGE_MARKER does. */
+export const HUMAN_GAP_FLOOR_MS = 20 * 60_000
+
+export function humanGapNote(nowMs: number, lastAssistantAt?: string | null): string | undefined {
+  const since = lastAssistantAt ? Date.parse(lastAssistantAt) : NaN
+  if (!Number.isFinite(since) || nowMs - since < HUMAN_GAP_FLOOR_MS) return undefined
+  const d = new Date(nowMs)
+  const p2 = (n: number) => String(n).padStart(2, "0")
+  const stamp = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`
+  return `⏱ Frizz: the message above arrived ${formatElapsed(nowMs - since)} after your last one. It is now ${stamp}.`
 }
 
 export function wakeDeliveryToken(id: string): string {
@@ -3311,6 +3336,6 @@ export function fallbackPort(base: number): number {
   return base + 10_000
 }
 // A thread's stable identity string, `frizz-<slug>`. It named a tmux session once; frizz has no tmux,
-// and this survives as the integrity check on the session row's `tmux_name` column — a row whose
+// and this survives as the integrity check on the session row's `thread_name` column — a row whose
 // stored name does not re-derive from its own slug has been tampered with or mis-keyed.
 export const threadIdentityName = (slug: string) => `frizz-${ThreadSlug.parse(slug)}`

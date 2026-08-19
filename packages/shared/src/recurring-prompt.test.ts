@@ -3,7 +3,7 @@
 // wording delivered and the wording recognized have to agree, and nothing else in the system checks it.
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { ALLDONE_SENTINEL, DEFAULT_RECURRING_PROMPT, SetOwnThreadRecurringPromptInput, SetThreadRecurringPromptInput, saysAllDone, restPromptMessage, schedulePromptMessage, formatIntervalLabel, parseRecurringPrompt } from "./index.ts"
+import { ALLDONE_SENTINEL, DEFAULT_RECURRING_PROMPT, SetOwnThreadRecurringPromptInput, SetThreadRecurringPromptInput, saysAllDone, restPromptMessage, schedulePromptMessage, formatIntervalLabel, parseRecurringPrompt , humanGapNote, formatElapsed } from "./index.ts"
 
 // THE DEFAULT TEXT IS THE ONE GOAL MOST THREADS EVER RUN: the footer panel prefills an unarmed thread's
 // with it, so almost nobody types their own. Its BIAS is therefore a product decision rather than a
@@ -197,4 +197,45 @@ test("a pre-2026-08-16 worker's `start` still parses, and the hold is dropped ra
   assert.throws(() => SetThreadRecurringPromptInput.parse({
     slug: "keep-going", sessionId: "sid", prompt: "keep going", stopHook: true, heartbeat: false, pauseOnQuestions: true,
   }))
+})
+
+
+// WHAT THE HUMAN'S SILENCE COST, told to the worker that cannot measure it.
+//
+// A broker-run worker is given no clock at all, so an answer arriving after four hours is
+// indistinguishable from one arriving after four seconds — and it will resume on a stale premise, re-run
+// a build whose result has gone cold, or re-park on a shell that finished while nobody was reading
+// (maintainer 2026-08-19: "when the user responds to a message after an hour of silence… is there a
+// reason why we can't inject some temporal information in that scenario?").
+test("a human reply after a long gap carries the gap; a fast one carries nothing", () => {
+  const spoke = "2026-08-19T06:00:00.000Z"
+  const at = (mins) => Date.parse(spoke) + mins * 60_000
+
+  // BELOW THE FLOOR there is no note: a live back-and-forth does not need a stamp on every turn, and one
+  // on each is noise that teaches nothing.
+  assert.equal(humanGapNote(at(1), spoke), undefined)
+  assert.equal(humanGapNote(at(19), spoke), undefined)
+
+  // ABOVE IT, the elapsed number and the wall clock — the two facts the worker cannot derive.
+  const note = humanGapNote(at(192), spoke)
+  assert.match(note ?? "", /arrived 3h12m after your last one/)
+  assert.match(note ?? "", /It is now \d{4}-\d{2}-\d{2} \d{2}:\d{2}\./)
+  // ATTRIBUTED: it rides on the HUMAN's message, so it must not read as something the human wrote.
+  assert.match(note ?? "", /^⏱ Frizz:/)
+
+  // NO ANCHOR, NO GUESS — a thread whose worker has never spoken gets nothing rather than a fabricated
+  // elapsed time.
+  assert.equal(humanGapNote(at(999), undefined), undefined)
+  assert.equal(humanGapNote(at(999), "not-a-date"), undefined)
+})
+
+test("formatElapsed reads in the units a human would say it in", () => {
+  assert.equal(formatElapsed(45_000), "45s")
+  assert.equal(formatElapsed(90_000), "1m")
+  assert.equal(formatElapsed(60 * 60_000), "1h")
+  assert.equal(formatElapsed(192 * 60_000), "3h12m")
+  assert.equal(formatElapsed(48 * 60 * 60_000), "2d")
+  assert.equal(formatElapsed(50 * 60 * 60_000), "2d2h")
+  // A clock that has gone backwards is never reported as a negative age.
+  assert.equal(formatElapsed(-5), "an unknown time")
 })
