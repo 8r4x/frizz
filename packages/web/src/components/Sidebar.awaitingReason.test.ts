@@ -10,8 +10,12 @@ import { TooltipProvider } from "./Tooltip.tsx"
 // A RAIL ROW IS ITS TITLE, AND EVERYTHING ELSE IS ONE HOVER AWAY (maintainer 2026-08-19: "there should
 // never ever be any fucking thing in the sidebar except for the fucking title"). The row has no
 // subtitle line in any state — no PR ref, no snooze, no activity gloss — and the indicator's popover is
-// where what frizz knows about the wait now lives: the fence's own items, generated deterministically,
-// then the worker's `reason:`.
+// where what frizz knows about the wait now lives.
+//
+// That popover is ONE SENTENCE, not a stack of facts. Its first cut printed a fragment per hint kind,
+// which read as a machine dumping its record (same day: "that popover text looks fucking terrible"), so
+// the state and the fence's clause are joined the way every other tooltip on this rail already joins
+// them, and only the worker's own `reason:` gets a line of its own.
 //
 // The two halves are one decision, and this file pins both. The popover half is asserted on the TIP
 // rather than on rendered markup, deliberately: a Radix tooltip renders nothing until it opens, so
@@ -46,12 +50,13 @@ function markup(t: ThreadView) {
 
 const WAIT = [{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "2h" }]
 
-test("a parked awaiting thread puts its whole wait in the POPOVER, state first and reason last", () => {
+test("a parked awaiting thread reads as one sentence, with the worker's own line under it", () => {
   const t = thread([...WAIT, { kind: "reason", value: REASON }])
-  const lines = (sessionIndicatorFor(t).tip ?? "").split("\n")
-  // The band the row is IN leads — that is what the glyph you pointed at is claiming — then what the
-  // fence names, then the one line frizz did not write.
-  assert.deepEqual(lines, ["Held", "Waiting on a background shell", REASON])
+  // The band the row is IN leads — that is what the glyph you pointed at is claiming — and what the
+  // fence names finishes the sentence. The reason is the only line frizz did not write, so it is the
+  // only one set off on its own: a PARAGRAPH, because the sentence above it wraps and a reason tucked
+  // straight under a wrapped line reads as its third line.
+  assert.deepEqual((sessionIndicatorFor(t).tip ?? "").split("\n\n"), ["Held — waiting on a background shell", REASON])
 })
 
 // The same fence frizz could NOT honour (nothing running behind it) leaves the row in the queue wearing
@@ -61,7 +66,7 @@ test("a fence frizz did not park on swaps the state word and nothing else", () =
   // needsYou keeps the row in the queue (isHeld refuses it), which is the shape of a park the server
   // could not honour: the fence still says what it thinks it is waiting on, and the popover still says it.
   const t = thread([...WAIT, { kind: "reason", value: REASON }], { needsYou: true } as Partial<ThreadView>)
-  assert.deepEqual((sessionIndicatorFor(t).tip ?? "").split("\n"), ["At rest", "Waiting on a background shell", REASON])
+  assert.deepEqual((sessionIndicatorFor(t).tip ?? "").split("\n\n"), ["At rest — waiting on a background shell", REASON])
 })
 
 test("…and NONE of it reaches the row, which is a title and nothing else", () => {
@@ -78,18 +83,31 @@ test("a legacy activity gloss is not a subtitle either", () => {
 
 test("a fence with no reason leaves the popover saying only what it knows", () => {
   const tip = sessionIndicatorFor(thread(WAIT)).tip ?? ""
-  assert.deepEqual(tip.split("\n"), ["Held", "Waiting on a background shell"])
+  assert.deepEqual(tip.split("\n"), ["Held — waiting on a background shell"], "and no blank paragraph where a reason would have gone")
   assert.doesNotMatch(tip, new RegExp(REASON.slice(0, 20)), "nothing invented")
 })
 
-test("a watched PR leads the popover, because it names a thing rather than a shape", () => {
+test("a watched PR leads the list, because it names a thing rather than a shape", () => {
   const t = thread([{ kind: "pr", value: "acme/app#391" }, ...WAIT, { kind: "reason", value: REASON }])
-  assert.deepEqual((sessionIndicatorFor(t).tip ?? "").split("\n"), [
-    "Held",
-    "Watching acme/app#391 — new activity wakes it",
-    "Waiting on a background shell",
+  assert.deepEqual((sessionIndicatorFor(t).tip ?? "").split("\n\n"), [
+    "Held — waiting on acme/app#391 and a background shell",
     REASON,
   ])
+})
+
+// A snooze on a row the park does not quiet (running, or still waiting on a sub-agent) is stacked onto
+// the STATE, not onto the end of the tooltip — the end is the worker's paragraph, and a park line
+// landing inside it is the same running-together this shape exists to prevent.
+test("a snooze stacks under the state, never inside the worker's paragraph", () => {
+  // A row with live background work is excused from Held (hasLiveOps), so it keeps its own glyph and the
+  // snooze has to be said in the popover — over a fence that still carries a reason.
+  const t = thread([...WAIT, { kind: "reason", value: REASON }], {
+    awaitingBackground: true,
+    snoozedUntil: new Date(Date.now() + 26 * 60 * 60 * 1000).toISOString(),
+  } as Partial<ThreadView>)
+  const [state, reason] = (sessionIndicatorFor(t).tip ?? "").split("\n\n")
+  assert.match(state ?? "", /^At rest — waiting on a background shell\nSnoozed until /, "the park is the state's second line")
+  assert.equal(reason, REASON, "…and the worker's sentence still owns the paragraph below")
 })
 
 test("awaitingReason reads only an awaiting fence, and only a non-empty one", () => {

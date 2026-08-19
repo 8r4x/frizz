@@ -78,9 +78,12 @@ assistant("Got it — that matches what I measured.")
 
 writeFileSync(join(logDir, `${SESSION_ID}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
 
+const socket = process.env.FRIZZ_TMUX_SOCKET ?? `frizz-adhoc-${port}`
 const projects = join(home, ".frizz", "projects")
 const db = join(projects, readdirSync(projects)[0], "ui.db")
 const tmuxName = `frizz-${SLUG}`
+try { execFileSync("tmux", ["-L", socket, "kill-session", "-t", tmuxName], { stdio: "ignore" }) } catch {}
+try { execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", tmuxName, "sleep 7200"]) } catch {}
 execFileSync("sqlite3", [db, `DELETE FROM session WHERE slug = '${SLUG}';`])
 execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session
   (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, unread, exited, archived, title_auto, runtime_generation, profile_revision)
@@ -88,4 +91,4 @@ execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session
 
 const api = createRpcClient(`http://127.0.0.1:${port}/`)
 await api.waitForHealth()
-console.log(JSON.stringify({ url: `http://127.0.0.1:${port}/thread/${SLUG}`, slug: SLUG, tmuxName }))
+console.log(JSON.stringify({ url: `http://127.0.0.1:${port}/thread/${SLUG}`, slug: SLUG, tmuxName, socket }))

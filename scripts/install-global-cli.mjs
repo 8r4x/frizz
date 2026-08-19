@@ -50,9 +50,9 @@ const launcher = realpathSync(
 const quote = (value) => `'${value.replaceAll("'", `"'"'`)}'`;
 // `--no-env-file` disables nub's automatic `.env*` discovery for the launcher process only. nub
 // resolves those files from the CWD's project root, so launching a board from any repo carrying an
-// ANTHROPIC_API_KEY in its .env put that key in the frizz server env — and from there into every
-// detached worker daemon it forks, each of which outlives the shell, where Claude Code blocks on
-// "Detected a custom API key". v4 fixed this with `env -u` and was
+// ANTHROPIC_API_KEY in its .env put that key in the frizz server env — and from there into the
+// long-lived per-project tmux server, which outlives the shell and hands it to every worker pane,
+// where Claude Code blocks on "Detected a custom API key". v4 fixed this with `env -u` and was
 // reverted (3f311e9) for being too invasive: it also stripped a key the developer had deliberately
 // exported. This is the narrower cut — it drops only what nub read off DISK. A key exported in the
 // shell still reaches the worker, so letting an API key supersede the subscription stays available.

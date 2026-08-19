@@ -11,7 +11,7 @@
 // Usage:
 //   nub scripts/adhoc-stack.mjs [--port=4930] [--project=/abs/dir] [--claude-bin=/abs/bin] [--wakers] [--reaper] [--keep] [--home=/abs] [--seed]
 //
-// It prints ONE json line to stdout: {"url","port","home","project"} once /health is green,
+// It prints ONE json line to stdout: {"url","port","home","socket","project"} once /health is green,
 // then stays up until SIGINT/SIGTERM, deleting the temp HOME on exit (unless --keep). Run it with Bash
 // run_in_background:true, parse that json line, then drive the url with Chrome DevTools MCP or shot.mjs.
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, symlinkSync } from "node:fs"

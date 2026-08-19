@@ -14,7 +14,7 @@
 // scrollTop, which a virtualizer legitimately moves to hold rows still.
 //
 // Usage — boot a disposable stack first (see .agents/skills/frizz-stack), then:
-//   node scripts/verify-full-append-stability.mjs --home=/abs/temp-home --url=http://127.0.0.1:PORT/
+//   node scripts/verify-full-append-stability.mjs --home=/abs/temp-home --socket=<tmux-socket> --url=http://127.0.0.1:PORT/
 import { execFileSync } from "node:child_process"
 import { mkdirSync, writeFileSync, appendFileSync, globSync } from "node:fs"
 import { join } from "node:path"
@@ -23,11 +23,11 @@ import puppeteer from "puppeteer"
 import { createRpcClient } from "./lib/rpc-client.mjs"
 
 const flags = Object.fromEntries(process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")))
-const { home, url } = flags
+const { home, socket, url } = flags
 const cwd = flags.cwd ?? process.cwd()
 const shotDir = flags.shots ?? tmpdir()
-if (!home || !url) {
-  console.error("usage: node scripts/verify-full-append-stability.mjs --home=/abs/temp-home --url=http://127.0.0.1:PORT/")
+if (!home || !socket || !url) {
+  console.error("usage: node scripts/verify-full-append-stability.mjs --home=/abs/temp-home --socket=<tmux-socket> --url=http://127.0.0.1:PORT/")
   process.exit(1)
 }
 mkdirSync(shotDir, { recursive: true })
@@ -75,6 +75,7 @@ for (let i = 0; i < 14; i++) seed.push(assistant(prose(3 + (i % 4), `Working ste
 // The id of the message now at the tail — what a tool call in this turn merges into.
 const TAIL_ID = `msg_${n}`
 writeFileSync(jsonl, seed.map((r) => JSON.stringify(r)).join("\n") + "\n")
+try { execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `frizz-${SLUG}`, "sleep 7200"], { stdio: "ignore" }) } catch {}
 execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode)
   VALUES ('${SLUG}', '${SESSION}', 'frizz-${SLUG}', '${now()}', 'Full append stability', 'claude', 'opus', 'high', 'default')`])
 const append = (record) => appendFileSync(jsonl, JSON.stringify(record) + "\n")

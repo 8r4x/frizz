@@ -11,7 +11,7 @@
 // Every earlier harness seeded a transcript comfortably UNDER 300 messages, so none of them ever ran it.
 //
 // Usage — boot a disposable stack first (see .agents/skills/frizz-stack), then:
-//   node scripts/verify-full-window-slide.mjs --home=… --url=… [--park=900] [--appends=25]
+//   node scripts/verify-full-window-slide.mjs --home=… --socket=… --url=… [--park=900] [--appends=25]
 import { execFileSync } from "node:child_process"
 import { mkdirSync, writeFileSync, appendFileSync, globSync } from "node:fs"
 import { join } from "node:path"
@@ -20,13 +20,13 @@ import puppeteer from "puppeteer"
 import { createRpcClient } from "./lib/rpc-client.mjs"
 
 const flags = Object.fromEntries(process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")))
-const { home, url } = flags
+const { home, socket, url } = flags
 const cwd = flags.cwd ?? process.cwd()
 const shotDir = flags.shots ?? tmpdir()
 const parkTarget = Number(flags.park ?? 900)
 const appends = Number(flags.appends ?? 25)
-if (!home || !url) {
-  console.error("usage: node scripts/verify-full-window-slide.mjs --home=… --url=…")
+if (!home || !socket || !url) {
+  console.error("usage: node scripts/verify-full-window-slide.mjs --home=… --socket=… --url=…")
   process.exit(1)
 }
 mkdirSync(shotDir, { recursive: true })
@@ -70,6 +70,7 @@ seed.push(user(`TASK:\n${prose(3, "The standing ask")}`))
 for (let i = 0; i < 12; i++) seed.push(assistant(prose(2 + (i % 3), `Working step ${i + 1}`)))
 let tailId = `msg_${n}`
 writeFileSync(jsonl, seed.map((r) => JSON.stringify(r)).join("\n") + "\n")
+try { execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `frizz-${SLUG}`, "sleep 7200"], { stdio: "ignore" }) } catch {}
 execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode)
   VALUES ('${SLUG}', '${SESSION}', 'frizz-${SLUG}', '${now()}', 'Window slide', 'claude', 'opus', 'high', 'default')`])
 const append = (record) => appendFileSync(jsonl, JSON.stringify(record) + "\n")

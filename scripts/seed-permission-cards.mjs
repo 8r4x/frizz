@@ -7,7 +7,7 @@
 // schema validates it, and the real InteractionStore writes it to the sandbox DB the server serves.
 // Only the provider event is simulated.
 //
-// Usage: nub scripts/seed-permission-cards.mjs --home=/abs/temp-home
+// Usage: nub scripts/seed-permission-cards.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID
 import { execFileSync } from "node:child_process"
 import { globSync, mkdirSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
@@ -18,9 +18,9 @@ import { createInteractionStore } from "../packages/server/src/interaction-store
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
 )
-const { home, cwd = "/Users/colinmcd94/Documents/projects/frizz" } = flags
-if (!home) {
-  console.error("usage: nub scripts/seed-permission-cards.mjs --home=/abs/temp-home")
+const { home, socket, cwd = "/Users/colinmcd94/Documents/projects/frizz" } = flags
+if (!home || !socket) {
+  console.error("usage: nub scripts/seed-permission-cards.mjs --home=/abs/temp-home --socket=<tmux-socket>")
   process.exit(1)
 }
 
@@ -178,6 +178,7 @@ for (const card of [...CARDS, CODEX_CARD, MCP_CARD]) {
 
   // A live pane so the thread reads as a real working session rather than an exited one.
   try {
+    execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", tmuxName, "sleep 7200"], { stdio: "ignore" })
   } catch {
     /* already exists */
   }

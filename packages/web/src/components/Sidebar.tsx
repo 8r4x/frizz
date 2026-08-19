@@ -21,7 +21,7 @@ import { ProviderMark } from "./ProviderMark.tsx"
 import { STATUS_CHIP } from "../lib/status.ts"
 import { retrySession } from "../lib/retrySession.ts"
 import { formatSnoozedUntil, formatAutoSnoozedUntil, formatUserSnooze } from "../lib/snooze.ts"
-import { awaitingFragments, prWatchRefs } from "../lib/awaitingPresentation.ts"
+import { awaitingWaitClause, prWatchRefs } from "../lib/awaitingPresentation.ts"
 import { useOptimisticallySteered } from "../lib/steering.ts"
 import { useOptimisticallyArchived } from "../lib/optimisticArchive.ts"
 import { activeSidebarSection, queueNavigationSettled, railRevealDelta, type SidebarSectionGeometry } from "../lib/sidebarScrollspy.ts"
@@ -389,7 +389,7 @@ export const ThreadRow = memo(function ThreadRow({
   // of NAMES you scan, and each caption added there made the next one harder to find.
   //
   // What frizz knows about the row still exists, one hover away: the indicator's popover composes it
-  // from the AWAITING BLOCK deterministically (awaitingFragments) plus the worker's own `reason:`, so
+  // from the AWAITING BLOCK deterministically (awaitingWaitClause) plus the worker's own `reason:`, so
   // the detail is available on demand and never spends a line of the rail. That is the same call that
   // hid the SNOOZED label (2026-08-03) and the worker's reason (2026-08-16), applied to the last of them.
   return (
@@ -617,18 +617,30 @@ function StatusChip({ status }: { status: string }) {
 }
 
 
-/** THE ROW'S POPOVER, composed — the state its glyph is claiming, then what its awaiting fence says it
- *  is waiting on, then the worker's own `reason:`, one fragment per line in that order.
+/** THE ROW'S POPOVER — ONE SENTENCE about the wait, then the worker's own sentence under it.
  *
- *  The rail's rows are TITLE-ONLY (see ThreadRow), so this popover is the only place any of it is
- *  legible, and the order is what keeps it readable: the glyph's own claim leads, because that is the
- *  pixel you pointed at; the generated fence fragments follow, because they say what the glyph means on
- *  THIS row; the worker's sentence lands last, because it is the only line frizz did not write.
+ *  The rail's rows are TITLE-ONLY (see ThreadRow), so this is the only place the wait is legible, which
+ *  means it has to READ rather than merely be complete. The first cut stacked one fragment per hint
+ *  kind and the reason under that — four lines of record, no sentence anywhere in it (maintainer
+ *  2026-08-19: "that popover text looks fucking terrible"). Now the state and what it is waiting on are
+ *  joined into one clause, exactly the shape every other tooltip on this rail already has ("Stalled —
+ *  the agent's process exited"):
  *
- *  Nulls and blanks drop out, so a fence naming nothing simply yields the state on its own. */
-function popover(t: Pick<ThreadView, "lastFence">, ...lead: (string | null)[]): string {
+ *      Snoozed until tomorrow at 11:11 AM — waiting on acme/app#391 and a background shell
+ *
+ *      the tap submission is queued behind their CI backlog
+ *
+ *  The STATE leads because it is what the glyph you pointed at is claiming; the fence's clause follows
+ *  because it says what that glyph means on THIS row; the worker's `reason:` takes a PARAGRAPH of its
+ *  own, because it is the one line frizz did not write. The blank line is load-bearing: the sentence
+ *  above it wraps, and a reason set directly under a wrapped line reads as its third line — which is
+ *  exactly how it looked when they were merely stacked. Nulls and blanks drop out, so a row with no
+ *  fence is just its state. */
+function popover(t: Pick<ThreadView, "lastFence">, state: string | null): string {
   const hints = t.lastFence?.kind === "awaiting" ? t.lastFence.hints : []
-  return [...lead, ...awaitingFragments(hints), awaitingReason(t)].filter((line) => Boolean(line)).join("\n")
+  const wait = awaitingWaitClause(hints)
+  const head = [state, wait].filter((part) => Boolean(part)).join(" — ")
+  return [head, awaitingReason(t)].filter((line) => Boolean(line)).join("\n\n")
 }
 
 /** The worker's own one-line `reason:`, for a POPOVER. Null when the fence carries none — a tooltip that
@@ -708,7 +720,18 @@ export function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: s
   const snoozedUntil = futureSnoozedUntil(t)
   const parked = snoozedUntil ? formatUserSnooze(snoozedUntil, t.snoozePrompt) : null
   if (!parked) return base
-  return { node: base.node, tip: base.tip ? `${base.tip}\n${parked}` : parked }
+  return { node: base.node, tip: stackParked(base.tip, parked) }
+}
+
+/** A snooze stacks under the row's STATE, never under the worker's `reason:`.
+ *
+ *  The reason is a PARAGRAPH — see `popover`, which sets it off with a blank line precisely so a wrapped
+ *  state sentence and a human one cannot be read as one run of lines. Appending the park to the end
+ *  would land it inside that paragraph and undo exactly that. */
+function stackParked(tip: string | null, parked: string): string {
+  if (!tip) return parked
+  const [state, ...reason] = tip.split("\n\n")
+  return [`${state}\n${parked}`, ...reason].join("\n\n")
 }
 
 function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: string | null } {
@@ -726,8 +749,8 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
   // both surfaces say "a shell is alive behind this" in one language.
   if (kind === "background") {
     // The fence, when there is one, names the shell itself (and any PR riding beside it), so the lead
-    // drops to a bare "At rest" rather than saying "a background shell" twice in three lines.
-    const fenced = t.lastFence?.kind === "awaiting" && awaitingFragments(t.lastFence.hints).length > 0
+    // drops to a bare "At rest" rather than saying "a background shell" twice in one sentence.
+    const fenced = t.lastFence?.kind === "awaiting" && awaitingWaitClause(t.lastFence.hints) !== null
     return {
       node: <StatusBox><span aria-hidden className="frizz-rail-dot" data-running-indicator="thread-background" /></StatusBox>,
       tip: popover(t, fenced ? "At rest" : "At rest — a background shell is still running"),
@@ -786,11 +809,11 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     // worker's assertion alone; both are deleted (2026-08-15) and the server now decides Held from a
     // checked declaration. What is left to draw is the SHAPE of the wait.
     const hk = t.lastFence.hints.find((h) => h.kind === "pr" || h.kind === "shell" || h.kind === "agent" || h.kind === "timer")?.kind
-    // The tooltip's WORDS come from the fence itself (popover → awaitingFragments), which names the
+    // The tooltip's WORDS come from the fence itself (popover → awaitingWaitClause), which names the
     // things it parked on; the arms below only pick the GLYPH that matches the leading kind. They used
-    // to say the shape in prose too — "Waiting on its own background work" — which restated in a
-    // sentence what the fragment says exactly ("Waiting on 2 background shells and a timer"), and was
-    // the only place the popover's text was hand-written per arm instead of derived.
+    // to say the shape in prose too — "Waiting on its own background work" — which restated vaguely
+    // what the clause says exactly ("waiting on 2 background shells and a timer"), and was the only
+    // place the popover's text was hand-written per arm instead of derived.
     const mark = hk === "pr"
       ? github
       : hk === "shell" || hk === "agent"

@@ -11,7 +11,7 @@
 // reader-gesture window expire, then lands three real appends and reports whether the reader moved.
 //
 // Usage — boot a disposable stack first (see .agents/skills/frizz-stack), then:
-//   node scripts/verify-full-nudge-threshold.mjs --home=… --url=… [--gaps=24,48,96,200]
+//   node scripts/verify-full-nudge-threshold.mjs --home=… --socket=… --url=… [--gaps=24,48,96,200]
 import { execFileSync } from "node:child_process"
 import { mkdirSync, writeFileSync, appendFileSync, globSync } from "node:fs"
 import { join } from "node:path"
@@ -19,12 +19,12 @@ import { tmpdir } from "node:os"
 import puppeteer from "puppeteer"
 
 const flags = Object.fromEntries(process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")))
-const { home, url } = flags
+const { home, socket, url } = flags
 const cwd = flags.cwd ?? process.cwd()
 const shotDir = flags.shots ?? tmpdir()
 const gaps = (flags.gaps ?? "24,48,96,200,400").split(",").map(Number)
-if (!home || !url) {
-  console.error("usage: node scripts/verify-full-nudge-threshold.mjs --home=… --url=…")
+if (!home || !socket || !url) {
+  console.error("usage: node scripts/verify-full-nudge-threshold.mjs --home=… --socket=… --url=…")
   process.exit(1)
 }
 mkdirSync(shotDir, { recursive: true })
@@ -63,6 +63,7 @@ seed.push(user(`TASK:\n${prose(3, "The standing ask")}`))
 for (let i = 0; i < 12; i++) seed.push(assistant(prose(3 + (i % 3), `Working step ${i + 1}`)))
 let tailId = `msg_${n}`
 writeFileSync(jsonl, seed.map((r) => JSON.stringify(r)).join("\n") + "\n")
+try { execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `frizz-${SLUG}`, "sleep 7200"], { stdio: "ignore" }) } catch {}
 execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode)
   VALUES ('${SLUG}', '${SESSION}', 'frizz-${SLUG}', '${now()}', 'Nudge threshold', 'claude', 'opus', 'high', 'default')`])
 const append = (record) => appendFileSync(jsonl, JSON.stringify(record) + "\n")

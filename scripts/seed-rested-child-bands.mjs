@@ -17,8 +17,8 @@
 // A and D together are the point of the change: the row must look the SAME in both, so nothing moves when
 // the parent's own turn ends.
 //
-// Usage (from ui/, against a running scripts/adhoc-stack.mjs — pass ITS home):
-//   nub scripts/seed-rested-child-bands.mjs --port=4930 --home=<stack home>
+// Usage (from ui/, against a running scripts/adhoc-stack.mjs — pass ITS home + socket):
+//   nub scripts/seed-rested-child-bands.mjs --port=4930 --home=<stack home> --socket=<stack socket>
 import { execFileSync } from "node:child_process"
 import { mkdirSync, writeFileSync, globSync } from "node:fs"
 import { join } from "node:path"
@@ -28,7 +28,8 @@ const args = process.argv.slice(2)
 const opt = (k, d) => { const hit = args.find((a) => a.startsWith(`--${k}=`)); return hit ? hit.slice(k.length + 3) : d }
 const port = Number(opt("port", "4930"))
 const home = opt("home")
-if (!home) { console.error("--home is required (from the stack's json line)"); process.exit(1) }
+const socket = opt("socket")
+if (!home || !socket) { console.error("--home and --socket are required (from the stack's json line)"); process.exit(1) }
 
 const PROJECT = opt("project", process.cwd())
 const cwdSlug = PROJECT.replace(/\//g, "-")
@@ -47,6 +48,7 @@ function seed({ slug, session, title, records, ageSec }) {
   mkdirSync(join(sessionDir, "subagents"), { recursive: true })
   const rows = records(join(sessionDir, "subagents"))
   writeFileSync(join(logDir, `${session}.jsonl`), `${rows.map((r) => JSON.stringify(r)).join("\n")}\n`)
+  execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `frizz-${slug}`, "sleep 7200"])
   execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, state, backend, model, effort, permission_mode, title_auto, unread, exited, archived) VALUES ('${slug}', '${session}', 'frizz-${slug}', '${at(ageSec)}', '${title}', 'open', 'claude', 'opus', 'high', 'bypassPermissions', 0, 0, 0, 0)`])
 }
 

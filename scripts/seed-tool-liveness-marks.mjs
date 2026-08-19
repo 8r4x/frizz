@@ -12,13 +12,13 @@
 // The last one is the control the whole change is measured against: a shell card and a dispatch card
 // must mark their liveness in the same place, differing only in hue.
 //
-// Usage: node scripts/seed-tool-liveness-marks.mjs <home> <unused> <projectDir>
+// Usage: node scripts/seed-tool-liveness-marks.mjs <home> <socket> <projectDir>
 import { execFileSync } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
 
-const [home, _socket, projectDir] = process.argv.slice(2)
-if (!home || !projectDir) throw new Error("usage: seed-tool-liveness-marks.mjs <home> <unused> <projectDir>")
+const [home, socket, projectDir] = process.argv.slice(2)
+if (!home || !socket || !projectDir) throw new Error("usage: seed-tool-liveness-marks.mjs <home> <socket> <projectDir>")
 
 const cwdSlug = projectDir.replace(/[/.]/g, "-")
 const transcriptDir = path.join(home, ".claude", "projects", cwdSlug)
@@ -84,6 +84,7 @@ const records = [
 ]
 
 fs.writeFileSync(path.join(transcriptDir, `${sessionId}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
+execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `frizz-${slug}`, "sleep 7200"])
 execFileSync("sqlite3", [
   db,
   `INSERT INTO session (slug, session_id, tmux_name, spawned_at, title, title_auto, backend, model, effort, permission_mode, state, unread, exited, archived)

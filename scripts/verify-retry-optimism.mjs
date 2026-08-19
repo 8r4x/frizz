@@ -10,12 +10,13 @@
 // Node-side polling loop cannot resolve this: one CDP evaluate round-trip on a loaded machine is
 // ~1.3s, the same order as the bug itself, so it reports "instant" and "two seconds" identically.
 //
-//   node scripts/verify-retry-optimism.mjs <url> <unused> [slug]
+//   node scripts/verify-retry-optimism.mjs <url> <tmux-socket> [slug]
 import puppeteer from "puppeteer"
+import { execFileSync } from "node:child_process"
 
-const [url, _socket, slug = "worker-6"] = process.argv.slice(2)
-if (!url) {
-  console.error("usage: node verify-retry-optimism.mjs <url> <unused> [slug]")
+const [url, socket, slug = "worker-6"] = process.argv.slice(2)
+if (!url || !socket) {
+  console.error("usage: node verify-retry-optimism.mjs <url> <tmux-socket> [slug]")
   process.exit(1)
 }
 
@@ -50,6 +51,7 @@ try {
   await p.waitForSelector(`[data-sidebar-item="${slug}"]`, { timeout: 60_000 })
 
   // Make it STALL: kill the pane out from under the row. deriveRuntime then reads "exited".
+  execFileSync("tmux", ["-L", socket, "kill-session", "-t", `frizz-${slug}`], { stdio: "ignore" })
   let stalled = null
   for (let i = 0; i < 60; i++) {
     stalled = await p.evaluate(READ_ROW(slug))

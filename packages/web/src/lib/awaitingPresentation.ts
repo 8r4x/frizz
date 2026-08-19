@@ -99,33 +99,33 @@ export function awaitingForLabel(hints: readonly AwaitingHint[]): string | null 
   return value ? `for ${value}` : null
 }
 
-/** THE AWAITING FENCE AS POPOVER FRAGMENTS — what a hovered rail row says it is waiting on.
+/** WHAT THIS THREAD IS WAITING ON, as a CLAUSE — the middle of a sentence the row's popover finishes.
  *
  *  The rail's rows carry a TITLE and nothing else (maintainer 2026-08-19: "there should never ever be
  *  any fucking thing in the sidebar except for the fucking title"), so every fence detail that used to
- *  ride a subtitle moved into the row's popover. It is GENERATED, never prose: the fragments are derived
- *  from the hint KINDS in a fixed order, so two fences naming the same things read identically whatever
- *  order the worker wrote them in.
+ *  ride a subtitle moved into the row's popover — and it has to READ there, not merely be present. The
+ *  first cut printed one fragment per hint kind, stacked ("Watching acme/app#391 — new activity wakes
+ *  it" over "Waiting on a background shell" over the reason), which is a machine dumping its record
+ *  rather than a sentence telling you anything (maintainer, same day: "that popover text looks fucking
+ *  terrible").
  *
- *  A PR leads and keeps its own line, because a ref names a THING while every other kind names a shape —
- *  and because the watcher behind it is the one wait whose wake is worth stating. The rest collapse into
- *  a single counted fragment: a runtime id ("bzvtnt3ig") means nothing on hover and three of them is a
- *  wall, so "2 background shells and a timer" is the whole of what a glance wants.
+ *  So: ONE verb over ONE list. "waiting on" is what a person actually says about all of it — a PR, a
+ *  shell, a child, a clock — and a single conjoined list is what makes four facts read as one thought.
+ *  The PR keeps its REF because that names a thing you might go look at; everything else is COUNTED,
+ *  because a runtime id ("bzvtnt3ig") means nothing on a hover and three of them is a wall.
  *
- *  Empty when the fence names nothing — which is a park the server refuses anyway, so the popover says
- *  what it knows and invents no wait. */
-export function awaitingFragments(hints: readonly AwaitingHint[]): string[] {
-  const out: string[] = []
-  const prs = prWatchRefs(hints).map((pr) => pr.ref)
-  if (prs.length > 0) out.push(`Watching ${joinList(prs)} — new activity wakes it`)
+ *  Order is fixed by KIND, not by the order the worker wrote the fence in, so two fences naming the
+ *  same things read identically. Null when the fence names nothing — a park the server refuses anyway,
+ *  so the popover says what it knows and invents no wait. */
+export function awaitingWaitClause(hints: readonly AwaitingHint[]): string | null {
   const count = (kind: AwaitingHint["kind"]) => hints.filter((h) => h.kind === kind && h.value.trim()).length
-  const items = [
+  const parts = [
+    ...prWatchRefs(hints).map((pr) => pr.ref),
     plural(count("shell"), "background shell", "background shells"),
     plural(count("agent"), "sub-agent", "sub-agents"),
     plural(count("timer"), "timer", "timers"),
   ].filter((part): part is string => part !== null)
-  if (items.length > 0) out.push(`Waiting on ${joinList(items)}`)
-  return out
+  return parts.length > 0 ? `waiting on ${joinList(parts)}` : null
 }
 
 /** "a timer" / "2 timers" / nothing at all — the counted form, because the ids themselves are noise. */
@@ -134,8 +134,8 @@ function plural(n: number, one: string, many: string): string | null {
   return n === 1 ? `a ${one}` : `${n} ${many}`
 }
 
-/** "a", "a and b", "a, b and c" — the Oxford comma is deliberately absent; these are two- and
- *  three-item lists in a hover label, not prose. */
+/** "a", "a and b", "a, b and c" — the Oxford comma is deliberately absent; this is one short spoken
+ *  list in a hover label, not a specification. */
 function joinList(parts: readonly string[]): string {
   if (parts.length <= 1) return parts.join("")
   return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`

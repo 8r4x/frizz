@@ -13,8 +13,8 @@
 //   context-high  — 87% full  (nearly all the way round)
 //   context-none  — a claude row with a numerator and NO window ⇒ must render NOTHING, not an empty ring
 //
-// Follows the frizz-stack recipe: a session row + a transcript the tailer reads.
-// Usage: node scripts/seed-context-meter.mjs --home=/abs/temp-home
+// Follows the frizz-stack recipe: a session row + a live dummy tmux pane + a transcript the tailer reads.
+// Usage: node scripts/seed-context-meter.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID
 import { execFileSync } from "node:child_process"
 import { globSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -22,9 +22,9 @@ import { join } from "node:path"
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
 )
-const { home, cwd = process.cwd() } = flags
-if (!home) {
-  console.error("usage: node seed-context-meter.mjs --home=/abs/temp-home")
+const { home, socket, cwd = process.cwd() } = flags
+if (!home || !socket) {
+  console.error("usage: node seed-context-meter.mjs --home=/abs/temp-home --socket=<tmux-socket>")
   process.exit(1)
 }
 
@@ -36,6 +36,9 @@ const at = (m) => new Date(T0 + m * 60_000).toISOString()
 
 function row({ slug, sessionId, agentSessionId, title, backend, restedAt }) {
   const tmuxName = `frizz-${slug}`
+  try {
+    execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", tmuxName, "sleep 7200"], { stdio: "ignore" })
+  } catch { /* already up */ }
   execFileSync("sqlite3", [
     db,
     `INSERT OR REPLACE INTO session (slug, session_id, agent_session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)

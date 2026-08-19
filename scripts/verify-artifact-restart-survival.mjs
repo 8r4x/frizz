@@ -8,7 +8,7 @@
 // emitted), so the survival property has never once held for a real user. This proves it where it
 // actually has to hold — a built artifact, killed hard, restarted.
 //
-// Isolation: temp HOME + state dir + project dir, unique port, wakers/reaper off.
+// Isolation: temp HOME + state dir + project dir, unique port and tmux socket, wakers/reaper off.
 // CODEX_HOME points at the real ~/.codex so the app-server can authenticate.
 //
 //   nub scripts/verify-artifact-restart-survival.mjs

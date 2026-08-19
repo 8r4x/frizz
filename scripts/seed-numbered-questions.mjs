@@ -9,9 +9,9 @@
 //                 to work, answered afterwards. composeAnswerWire renumbers those rows from 1, so the
 //                 answers card printed "1" beside a question reading "9. …".
 //
-// Follows the frizz-stack recipe: a session row + a JSONL the REAL tailer reads.
+// Follows the frizz-stack recipe: a session row + a live dummy tmux pane + a JSONL the REAL tailer reads.
 //
-// Usage: node scripts/seed-numbered-questions.mjs --home=/abs/temp-home
+// Usage: node scripts/seed-numbered-questions.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID
 import { execFileSync } from "node:child_process"
 import { mkdirSync, writeFileSync, globSync } from "node:fs"
 import { join } from "node:path"
@@ -19,9 +19,9 @@ import { join } from "node:path"
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
 )
-const { home, cwd = "/Users/colinmcd94/Documents/projects/frizz" } = flags
-if (!home) {
-  console.error("usage: node seed-numbered-questions.mjs --home=/abs/temp-home")
+const { home, socket, cwd = "/Users/colinmcd94/Documents/projects/frizz" } = flags
+if (!home || !socket) {
+  console.error("usage: node seed-numbered-questions.mjs --home=/abs/temp-home --socket=<tmux-socket>")
   process.exit(1)
 }
 
@@ -214,6 +214,9 @@ for (const t of THREADS) {
   const tmuxName = `frizz-${t.slug}`
   const records = t.records.map((r) => ({ ...r, session_id: sessionId }))
   writeFileSync(join(jsonlDir, `${sessionId}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
+  try {
+    execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", tmuxName, "sleep 7200"], { stdio: "ignore" })
+  } catch { /* already exists */ }
   execFileSync("sqlite3", [
     db,
     `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)

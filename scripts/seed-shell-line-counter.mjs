@@ -53,7 +53,7 @@ if (socket === "--ack") {
   process.exit(0)
 }
 
-if (!projectDir) throw new Error("usage: seed-shell-line-counter.mjs <home> <socket> <projectDir>")
+if (!socket || !projectDir) throw new Error("usage: seed-shell-line-counter.mjs <home> <socket> <projectDir>")
 
 const cwdSlug = projectDir.replace(/[/.]/g, "-")
 const transcriptDir = path.join(home, ".claude", "projects", cwdSlug)
@@ -99,6 +99,7 @@ const preackRecords = [
 
 function seed({ slug, sessionId, title, records }) {
   fs.writeFileSync(path.join(transcriptDir, `${sessionId}.jsonl`), records.map((r) => JSON.stringify({ ...r, sessionId })).join("\n") + "\n")
+  execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `frizz-${slug}`, "sleep 7200"])
   execFileSync("sqlite3", [
     db,
     `INSERT INTO session (slug, session_id, tmux_name, spawned_at, title, title_auto, backend, model, effort, permission_mode, state, unread, exited, archived)

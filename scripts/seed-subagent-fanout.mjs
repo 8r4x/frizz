@@ -6,13 +6,13 @@
 // of every depth writes into that session's FLAT `subagents/` dir beside an `agent-<id>.meta.json`
 // sidecar naming its dispatch tool_use id and its parent.
 //
-// Usage: nub scripts/seed-subagent-fanout.mjs <tempHome> <unused> [slug]
+// Usage: nub scripts/seed-subagent-fanout.mjs <tempHome> <tmuxSocket> [slug]
 import { execFileSync } from "node:child_process"
 import { mkdirSync, readdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 
-const [home, _socket, slug = "fanout"] = process.argv.slice(2)
-if (!home) throw new Error("usage: seed-subagent-fanout.mjs <tempHome> <unused> [slug]")
+const [home, socket, slug = "fanout"] = process.argv.slice(2)
+if (!home || !socket) throw new Error("usage: seed-subagent-fanout.mjs <tempHome> <tmuxSocket> [slug]")
 
 const SESSION = "11111111-2222-3333-4444-555555555555"
 const at = new Date(Date.now() - 22 * 60_000).toISOString()
@@ -70,6 +70,10 @@ transcript("aGrandB", [assistant([{ type: "text", text: "Reading the migration."
 // Depth 3 — a great-grandchild, to prove the indent keeps stepping.
 sidecar("aGreat", { agentType: "general-purpose", description: "Trace one cache collision", toolUseId: "toolu_great", parentAgentId: "aGrandA", spawnDepth: 3 })
 transcript("aGreat", [assistant([{ type: "text", text: "Still tracing." }])])
+
+// A live dummy pane on the SANDBOX socket, so the tailer does not read the thread as dead.
+try { execFileSync("tmux", ["-L", socket, "kill-session", "-t", `frizz-${slug}`], { stdio: "ignore" }) } catch {}
+execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `frizz-${slug}`, "sleep 7200"])
 
 const db = readdirSync(join(home, ".frizz", "projects")).map((id) => join(home, ".frizz", "projects", id, "ui.db"))[0]
 execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, title_auto, backend, state, unread, exited, archived, claude_runtime)

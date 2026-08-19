@@ -12,8 +12,8 @@
 // the only writer of state='archived' in production, and using it keeps the fixture honest about the
 // board refresh + SSE delta that follow it.
 //
-// Follows the frizz-stack recipe: a session row + a JSONL the tailer reads.
-// Usage: node scripts/seed-done-thread.mjs --home=/abs/temp-home --port=NNNN
+// Follows the frizz-stack recipe: a session row + a live dummy tmux pane + a JSONL the tailer reads.
+// Usage: node scripts/seed-done-thread.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID --port=NNNN
 import { execFileSync } from "node:child_process"
 import { globSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -22,9 +22,9 @@ import { createRpcClient } from "./lib/rpc-client.mjs"
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
 )
-const { home, port, cwd = process.cwd() } = flags
-if (!home || !port) {
-  console.error("usage: node seed-done-thread.mjs --home=/abs/temp-home --port=NNNN")
+const { home, socket, port, cwd = process.cwd() } = flags
+if (!home || !socket || !port) {
+  console.error("usage: node seed-done-thread.mjs --home=/abs/temp-home --socket=<tmux-socket> --port=NNNN")
   process.exit(1)
 }
 
@@ -65,6 +65,9 @@ function seed({ slug, sessionId, title, prompt }) {
     },
   ]
   writeFileSync(join(jsonlDir, `${sessionId}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
+  try {
+    execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", tmuxName, "sleep 7200"], { stdio: "ignore" })
+  } catch { /* already up */ }
   execFileSync("sqlite3", [
     db,
     `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)

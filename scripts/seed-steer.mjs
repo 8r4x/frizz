@@ -1,16 +1,16 @@
 // Seed an adhoc stack (scripts/adhoc-stack.mjs) with a realistic board: N simulated Claude workers
-// (real session rows, real JSONL transcripts) so a board-scale
+// (real tmux panes on the sandbox socket, real session rows, real JSONL transcripts) so a board-scale
 // behavior — steering latency, board-refresh cost, rail rendering — can be exercised against something
 // that looks like a working operator's board rather than one empty thread. Pairs with steer-stack.sh,
 // which boots the stack and calls this. Kept in-tree because "the board is slow" recurs and reproducing
 // it needs a populated board.
 //
-//   node scripts/seed-steer.mjs <tempHome> <unused> <projectDir> [count=25] [inFlight=0]
+//   node scripts/seed-steer.mjs <tempHome> <tmuxSocket> <projectDir> [count=25] [inFlight=0]
 import { mkdirSync, writeFileSync, readdirSync, realpathSync } from "node:fs"
 import { join } from "node:path"
 import { execFileSync } from "node:child_process"
 
-const [home, _socket, projectDirArg, countArg, inFlightArg] = process.argv.slice(2)
+const [home, socket, projectDirArg, countArg, inFlightArg] = process.argv.slice(2)
 // The server resolves its project dir through realpath, so on macOS `/tmp/x` becomes `/private/tmp/x`
 // and its Claude log dir is `-private-tmp-x`. Seeding under the un-resolved spelling put every fixture
 // transcript somewhere the tailer never looks: each row read as noTranscript, which degrades to the
@@ -24,8 +24,8 @@ const count = Number(countArg ?? 25)
 // N agents that think/run-tools for tens of seconds looks exactly like this, so latency work has to be
 // measured against it — a board of resting threads hides the whole problem.
 const inFlight = Number(inFlightArg ?? 0)
-if (!home || !projectDir) {
-  console.error("usage: node seed-steer.mjs <tempHome> <unused> <projectDir> [count] [inFlight]")
+if (!home || !socket || !projectDir) {
+  console.error("usage: node seed-steer.mjs <tempHome> <tmuxSocket> <projectDir> [count] [inFlight]")
   process.exit(1)
 }
 
@@ -67,6 +67,9 @@ for (let i = 0; i < count; i++) {
   }
   writeFileSync(join(jsonlDir, `${sessionId}.jsonl`), rows.map((r) => JSON.stringify(r)).join("\n") + "\n")
 
+  try {
+    execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `frizz-${slug}`, "sleep 7200"], { stdio: "ignore" })
+  } catch {}
   sql.push(
     `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, state) ` +
     `VALUES ('${slug}','${sessionId}','frizz-${slug}','${ts(700)}','${title}','claude','opus','high','default','active');`,

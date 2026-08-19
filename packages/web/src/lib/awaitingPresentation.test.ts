@@ -10,7 +10,7 @@ import {
   prWatchRefs,
   awaitingItemLabels,
   awaitingForLabel,
-  awaitingFragments,
+  awaitingWaitClause,
   hintGloss,
 } from "./awaitingPresentation.ts"
 
@@ -113,10 +113,11 @@ test("the items and the duration render as labels, and PRs are left to their own
 })
 
 
-// THE RAIL'S POPOVER FRAGMENTS. The sidebar row is a TITLE and nothing else (maintainer 2026-08-19), so
-// what the fence names is only legible on hover — and it is GENERATED there, never prose, which is what
-// these pin: the same items in any order read the same way, and the ids never reach the human.
-test("the fence becomes two ordered fragments: the PR it watches, then what it counts", () => {
+// THE RAIL'S WAIT CLAUSE. The sidebar row is a TITLE and nothing else (maintainer 2026-08-19), so what
+// the fence names is only legible on hover — and it has to READ there. One verb over one conjoined
+// list, generated from the hint KINDS, so the same fence always reads the same way and no runtime id
+// ever reaches the human.
+test("the fence becomes one clause: the PR it watches, then what it counts", () => {
   const hints = [
     { kind: "for" as const, value: "2h" },
     { kind: "agent" as const, value: "agent_7" },
@@ -125,35 +126,35 @@ test("the fence becomes two ordered fragments: the PR it watches, then what it c
     { kind: "reason" as const, value: "the macOS leg is the flaky one" },
     { kind: "shell" as const, value: "k92hs01x2" },
   ]
-  assert.deepEqual(awaitingFragments(hints), [
-    "Watching acme/app#391 — new activity wakes it",
-    "Waiting on 2 background shells and a sub-agent",
-  ])
-  // The order the worker wrote them in must not change a word of it — the fragments key on KIND.
-  assert.deepEqual(awaitingFragments([...hints].reverse()), awaitingFragments(hints))
-  // The reason is the ONE line frizz does not generate, so it is not one of these: the popover appends
-  // it itself, last, where a human sentence cannot be mistaken for a derived one.
-  assert.doesNotMatch(awaitingFragments(hints).join("\n"), /macOS/)
+  assert.equal(awaitingWaitClause(hints), "waiting on acme/app#391, 2 background shells and a sub-agent")
+  // The order the worker wrote them in must not change a word of it — the clause keys on KIND.
+  assert.equal(awaitingWaitClause([...hints].reverse()), awaitingWaitClause(hints))
+  // The reason is the ONE line frizz does not generate, so it is not in here: the popover puts it on
+  // its own line, where a human sentence cannot be mistaken for a derived one.
+  assert.doesNotMatch(awaitingWaitClause(hints) ?? "", /macOS/)
 })
 
 test("a runtime id never reaches the popover — it is counted, not listed", () => {
-  assert.deepEqual(awaitingFragments([{ kind: "shell", value: "bvg44v4ij" }]), ["Waiting on a background shell"])
-  assert.deepEqual(awaitingFragments([{ kind: "timer", value: "tmr_a1b2c3" }]), ["Waiting on a timer"])
-  assert.deepEqual(awaitingFragments([
-    { kind: "timer", value: "tmr_a1" },
-    { kind: "timer", value: "tmr_b2" },
-    { kind: "agent", value: "agent_7" },
-  ]), ["Waiting on a sub-agent and 2 timers"])
-  // Three PRs read as a list, because each one is a THING the human may want to go look at.
-  assert.deepEqual(awaitingFragments([
-    { kind: "pr", value: "acme/app#391" },
-    { kind: "pr", value: "acme/app#392" },
-  ]), ["Watching acme/app#391 and acme/app#392 — new activity wakes it"])
+  assert.equal(awaitingWaitClause([{ kind: "shell", value: "bvg44v4ij" }]), "waiting on a background shell")
+  assert.equal(awaitingWaitClause([{ kind: "timer", value: "tmr_a1b2c3" }]), "waiting on a timer")
+  assert.equal(
+    awaitingWaitClause([
+      { kind: "timer", value: "tmr_a1" },
+      { kind: "timer", value: "tmr_b2" },
+      { kind: "agent", value: "agent_7" },
+    ]),
+    "waiting on a sub-agent and 2 timers",
+  )
+  // Two PRs read as two refs, because each one is a THING the human may want to go look at.
+  assert.equal(
+    awaitingWaitClause([{ kind: "pr", value: "acme/app#391" }, { kind: "pr", value: "acme/app#392" }]),
+    "waiting on acme/app#391 and acme/app#392",
+  )
 })
 
 test("a fence naming nothing yields nothing, so the popover cannot invent a wait", () => {
-  assert.deepEqual(awaitingFragments([{ kind: "for", value: "2h" }, { kind: "reason", value: "…" }]), [])
-  assert.deepEqual(awaitingFragments([{ kind: "shell", value: "  " }]), [], "a blank value names nothing")
+  assert.equal(awaitingWaitClause([{ kind: "for", value: "2h" }, { kind: "reason", value: "…" }]), null)
+  assert.equal(awaitingWaitClause([{ kind: "shell", value: "  " }]), null, "a blank value names nothing")
 })
 
 // The MOBILE row keeps one inline caption, because a phone has no hover to move it to.

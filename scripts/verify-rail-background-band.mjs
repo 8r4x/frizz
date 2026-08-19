@@ -11,7 +11,8 @@
 // so a real `claude` cannot authenticate) — but everything DOWNSTREAM of the transcript is the shipped
 // code path, which is exactly the part under test.
 //
-// Usage: nub scripts/verify-rail-background-band.mjs --url=http://127.0.0.1:4931/ --home=/tmp/frizz-adhoc-home-X
+// Usage: nub scripts/verify-rail-background-band.mjs --url=http://127.0.0.1:4931/ --home=/tmp/frizz-adhoc-home-X --socket=frizz-adhoc-4931-1234
+import { execFileSync } from "node:child_process"
 import { mkdirSync, writeFileSync, appendFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
@@ -20,9 +21,10 @@ const args = process.argv.slice(2)
 const opt = (k, d) => { const hit = args.find((a) => a.startsWith(`--${k}=`)); return hit ? hit.slice(k.length + 3) : d }
 const url = opt("url")
 const home = opt("home")
+const socket = opt("socket")
 const shots = opt("shots", "/tmp/rail-shots")
-if (!url || !home) {
-  console.error("usage: nub scripts/verify-rail-background-band.mjs --url= --home=  (both from the adhoc-stack json line)")
+if (!url || !home || !socket) {
+  console.error("usage: nub scripts/verify-rail-background-band.mjs --url= --home= --socket=  (all from the adhoc-stack json line)")
   process.exit(1)
 }
 
@@ -61,7 +63,11 @@ try {
   mkdirSync(transcriptDir, { recursive: true })
   const jsonl = join(transcriptDir, `${SESSION_ID}.jsonl`)
 
-  // 1. The transcript: a user turn, an assistant turn that LAUNCHES a background shell, its tool
+  // 1. A live pane on the SANDBOX socket. bgShellViews returns [] the moment the pane is dead, so a
+  //    shell can only read as live behind a real, live pane — no pane, no test.
+  execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", TMUX, "sleep 3600"])
+
+  // 2. The transcript: a user turn, an assistant turn that LAUNCHES a background shell, its tool
   //    result, then the assistant coming to REST. This is the exact shape the rule is about — the
   //    worker has stopped, the shell has not.
   writeFileSync(jsonl, "")
@@ -91,7 +97,7 @@ try {
     message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "The preview server is up on port 5173. Watching it." }] },
   }))
 
-  // 2. The session row that binds slug → transcript. The sanctioned fixture write: the row IS
+  // 3. The session row that binds slug → transcript → pane. The sanctioned fixture write: the row IS
   //    the fixture, and everything read off it afterwards is the real pipeline.
   db.prepare(`INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, state, permission_mode)
               VALUES (?, ?, ?, ?, ?, 'claude', 'open', 'default')`)
@@ -102,6 +108,7 @@ try {
   //     nothing else.
   const ctrlRec = recFor(CTRL_SESSION_ID)
   const ctrlJsonl = join(transcriptDir, `${CTRL_SESSION_ID}.jsonl`)
+  execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", CTRL_TMUX, "sleep 3600"])
   writeFileSync(ctrlJsonl, "")
   appendFileSync(ctrlJsonl, ctrlRec({ type: "user", timestamp: at(-60_000), message: { role: "user", content: "Audit the broker crash paths" } }))
   appendFileSync(ctrlJsonl, ctrlRec({
@@ -136,12 +143,13 @@ try {
               VALUES (?, ?, ?, ?, ?, 'claude', 'open', 'default')`)
     .run(CTRL_SLUG, CTRL_SESSION_ID, CTRL_TMUX, at(-70_000), "Audit the broker crash paths")
 
-  // 3. Let the tailer notice. It watches the transcript dir, but a row's runtime is only re-derived on
-  //    a tick, so a brand-new session reads as "exited" until that turns over. Wait past it — at 6s the
-  //    second session was still landing with no children, which looks exactly like the carve-out failing.
+  // 4. Let the tailer notice. It watches the transcript dir, but pane liveness is a CACHED tmux read
+  //    refreshed on a tick (board.deriveRuntime → tmux.isLiveCached), so a brand-new pane reads as
+  //    "exited" until that cache turns over. Wait past it — at 6s the second session was still landing
+  //    as a dead pane with no children, which looks exactly like the carve-out failing.
   await new Promise((r) => setTimeout(r, 15_000))
 
-  // 4. Read the SERVER's own board — before any browser is involved, so a client-side pass cannot mask
+  // 5. Read the SERVER's own board — before any browser is involved, so a client-side pass cannot mask
   //    a server that never set the flag.
   const { createRpcClient } = await import("./lib/rpc-client.mjs")
   const api = createRpcClient(url)
@@ -171,7 +179,7 @@ try {
     if (!kids.some((s) => s.state === "running")) failures.push("the control has no running sub-agent — it cannot prove the carve-out")
   }
 
-  // 5. Now the rail itself, in a real browser against the real board.
+  // 6. Now the rail itself, in a real browser against the real board.
   const { default: puppeteer } = await import("puppeteer")
   const browser = await puppeteer.launch({ headless: "new", args: ["--no-sandbox", "--force-color-profile=srgb"] })
   try {
@@ -255,7 +263,8 @@ try {
     await browser.close()
   }
 } finally {
-  // Tear the fixture down: the row and the transcript. The temp HOME goes with the stack.
+  // Tear the fixture down: the pane, the row, the transcript. The temp HOME goes with the stack.
+  for (const pane of [TMUX, CTRL_TMUX]) { try { execFileSync("tmux", ["-L", socket, "kill-session", "-t", pane]) } catch {} }
   for (const slug of [SLUG, CTRL_SLUG]) { try { db.prepare("DELETE FROM session WHERE slug = ?").run(slug) } catch {} }
 }
 

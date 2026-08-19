@@ -6,10 +6,10 @@
 //   · a LEGACY ```question approval danger block (degrades to a danger-styled two-option card),
 //   · a freetext-only question (no options) — the box that has to take newlines.
 //
-// Follows the frizz-stack recipe: a session row + a JSONL the REAL tailer reads.
+// Follows the frizz-stack recipe: a session row + a live dummy tmux pane + a JSONL the REAL tailer reads.
 // Nothing writes board state directly; the transcript records drive it.
 //
-// Usage: node scripts/seed-question-cards.mjs --home=/abs/temp-home
+// Usage: node scripts/seed-question-cards.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID
 import { execFileSync } from "node:child_process"
 import { globSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -17,9 +17,9 @@ import { join } from "node:path"
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
 )
-const { home, cwd = "/Users/colinmcd94/Documents/projects/frizz" } = flags
-if (!home) {
-  console.error("usage: node seed-question-cards.mjs --home=/abs/temp-home")
+const { home, socket, cwd = "/Users/colinmcd94/Documents/projects/frizz" } = flags
+if (!home || !socket) {
+  console.error("usage: node seed-question-cards.mjs --home=/abs/temp-home --socket=<tmux-socket>")
   process.exit(1)
 }
 
@@ -126,6 +126,7 @@ for (const card of CARDS) {
 
   // A live pane so the thread reads as a real resting session rather than an exited one.
   try {
+    execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", tmuxName, "sleep 7200"], { stdio: "ignore" })
   } catch {
     /* already exists */
   }

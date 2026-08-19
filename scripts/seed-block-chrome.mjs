@@ -7,14 +7,14 @@
 // block · a Bash card · a Read card · an Edit diff card · a to-do card · a sub-agent card · a
 // ```done signal card · a GitHub wake card · a ```question card.
 //
-// Usage: node scripts/seed-block-chrome.mjs <home> <unused> <projectDir>
+// Usage: node scripts/seed-block-chrome.mjs <home> <socket> <projectDir>
 import { execFileSync } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
 import { formatGithubWakeSteer, wakeDeliveryToken } from "../packages/shared/src/index.ts"
 
-const [home, _socket, projectDir] = process.argv.slice(2)
-if (!home || !projectDir) throw new Error("usage: seed-block-chrome.mjs <home> <unused> <projectDir>")
+const [home, socket, projectDir] = process.argv.slice(2)
+if (!home || !socket || !projectDir) throw new Error("usage: seed-block-chrome.mjs <home> <socket> <projectDir>")
 
 const cwdSlug = projectDir.replace(/[/.]/g, "-")
 const transcriptDir = path.join(home, ".claude", "projects", cwdSlug)
@@ -105,6 +105,7 @@ const barRecords = [
 function land(slug, sessionId, title, rows, restedAt) {
   fs.writeFileSync(path.join(transcriptDir, `${sessionId}.jsonl`), rows.map((r) => JSON.stringify(r)).join("\n") + "\n")
   try {
+    execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `frizz-${slug}`, "sleep 7200"], { stdio: "ignore" })
   } catch {
     /* already exists */
   }

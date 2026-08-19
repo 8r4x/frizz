@@ -7,8 +7,8 @@
 // real tailer → projection → push → `/thread/<slug>` render, which is the only way to see the run
 // splitting (ChatView is not unit-renderable and `*-fixture.html` is not servable through the stack).
 //
-// Follows the frizz-stack recipe: a session row + a transcript the tailer reads.
-// Usage: node scripts/seed-agent-listing-batch.mjs --home=/abs/temp-home
+// Follows the frizz-stack recipe: a session row + a live dummy tmux pane + a transcript the tailer reads.
+// Usage: node scripts/seed-agent-listing-batch.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID
 import { execFileSync } from "node:child_process"
 import { globSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -16,9 +16,9 @@ import { join } from "node:path"
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
 )
-const { home, cwd = process.cwd() } = flags
-if (!home) {
-  console.error("usage: node seed-agent-listing-batch.mjs --home=/abs/temp-home")
+const { home, socket, cwd = process.cwd() } = flags
+if (!home || !socket) {
+  console.error("usage: node seed-agent-listing-batch.mjs --home=/abs/temp-home --socket=<tmux-socket>")
   process.exit(1)
 }
 
@@ -68,6 +68,9 @@ mkdirSync(shard, { recursive: true })
 writeFileSync(join(shard, `rollout-2026-07-31T10-00-00-${ROLLOUT_ID}.jsonl`), lines.join("\n") + "\n")
 
 const tmuxName = `frizz-${SLUG}`
+try {
+  execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", tmuxName, "sleep 7200"], { stdio: "ignore" })
+} catch { /* already up */ }
 execFileSync("sqlite3", [
   db,
   `INSERT OR REPLACE INTO session (slug, session_id, agent_session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)

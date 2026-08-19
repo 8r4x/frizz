@@ -2,11 +2,11 @@
 // so the first-party wake card can be judged in the REAL app across all its branches — not just the
 // burst shape a live poll happens to produce.
 //
-// Follows the frizz-stack recipe: a session row + a JSONL the REAL tailer reads.
+// Follows the frizz-stack recipe: a session row + a live dummy tmux pane + a JSONL the REAL tailer reads.
 // The delivered text is composed by the SAME shared formatter the scheduler uses, and carries the real
 // wake-delivery token, so these exercise the production render path rather than a hand-written string.
 //
-// Usage: node scripts/seed-wake-cards.mjs --home=/abs/temp-home
+// Usage: node scripts/seed-wake-cards.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID
 import { execFileSync } from "node:child_process"
 import { mkdirSync, writeFileSync, globSync } from "node:fs"
 import { join } from "node:path"
@@ -15,9 +15,9 @@ import { formatGithubWakeSteer, wakeDeliveryToken } from "../packages/shared/src
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
 )
-const { home, cwd = "/Users/colinmcd94/Documents/projects/frizz" } = flags
-if (!home) {
-  console.error("usage: node seed-wake-cards.mjs --home=/abs/temp-home")
+const { home, socket, cwd = "/Users/colinmcd94/Documents/projects/frizz" } = flags
+if (!home || !socket) {
+  console.error("usage: node seed-wake-cards.mjs --home=/abs/temp-home --socket=<tmux-socket>")
   process.exit(1)
 }
 
@@ -114,6 +114,7 @@ CASES.forEach((c, n) => {
   writeFileSync(join(jsonlDir, `${sessionId}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
 
   try {
+    execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", tmuxName, "sleep 7200"], { stdio: "ignore" })
   } catch {
     /* already exists */
   }
