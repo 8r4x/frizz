@@ -1,4 +1,5 @@
 import { statSync, openSync, readSync, closeSync, readdirSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs"
+import { execFileSync } from "node:child_process"
 import { basename, join } from "node:path"
 import { homedir, tmpdir } from "node:os"
 import { insideFence, PermissionMode, saysAllDone } from "@frizz/shared"
@@ -119,21 +120,45 @@ const CLAUDE_PERMISSION_CONFIRM_POLLS = 3
 // AGENTS ONLY: a child appends on every step, so silence there is a real (if coarse) liveness signal.
 // A background SHELL has no such property and is not judged this way at all — see bgShellViews.
 const SUBAGENT_STALE_MS = 15 * 60_000
-// A BACKGROUND SHELL'S liveness fallback, and it is deliberately far coarser than the sub-agent one.
+
+// IS A BACKGROUND SHELL STILL ALIVE? Asked of the OPERATING SYSTEM, not guessed from age or output.
 //
-// Frizz does not own these processes (see dismissOp) and holds no pid, so the ONLY thing that has ever
-// retired a shell is its `<task-notification>`. A shell whose process dies without emitting one — killed,
-// reaped, lost with a machine sleep — therefore stayed "running" FOREVER: the maintainer's board showed
-// one at `RUNNING · 2583 MIN` (43 hours) on 2026-08-18, whose process did not exist, whose output file
-// had not been touched in two days, and whose `until`-loop was polling for a sentinel that never appeared.
+// Frizz spawns none of these processes — Claude/Codex does — and the runtime records no pid anywhere
+// frizz can read (measured 2026-08-19: the task dir holds `<taskId>.output` and nothing else). So until
+// now the ONLY thing that retired a shell was its `<task-notification>`, and one whose process died
+// without emitting one stayed "running" forever: the maintainer's board showed `RUNNING · 2583 MIN` —
+// 43 hours — for a process that did not exist.
 //
-// WHY THE THRESHOLD IS HOURS AND NOT MINUTES: the sub-agent rule keys on transcript mtime, and a sub-agent
-// that writes nothing for 15 minutes really is wedged. A shell is different — frizz's own contract tells
-// workers to WAIT with `until <condition>; do sleep 5; done`, which prints nothing by design, so silence
-// is the normal shape of a healthy wait here. That rules out any short window, and it rules out keying on
-// output entirely. What is left is age: a shell still unretired after half a day is a phantom in every
-// case observed, while `for:` (capped at 24h) already bounds the park that might name it.
-const BGSHELL_STALE_MS = 12 * 60 * 60_000
+// The correlation key frizz already holds is the OUTPUT PATH. A background shell's stdout and stderr are
+// redirected into `<taskId>.output`, so whichever process holds that file open IS the shell. Verified
+// against a known-alive control (two holders, fds 1w and 2w, pid visible) and a known-dead one (zero).
+// That makes this an exact question with an exact answer, which is what an age threshold could never be —
+// and it matters here specifically because frizz's own contract tells workers to wait with
+// `until <cond>; do sleep 5; done`, a healthy shell that prints nothing for hours by design.
+//
+// UNDEFINED means "cannot tell" and is never treated as dead: no probe, no path, or a platform without
+// `lsof` all leave the shell exactly as it was.
+const SHELL_PROBE_TTL_MS = 30_000
+const SHELL_PROBE_GRACE_MS = 60_000 // a just-launched shell is alive by construction; do not pay for it
+
+function probeShellAlive(outputFile: string): boolean | undefined {
+  // NO FILE, NO VERDICT. `lsof` exits 1 both for "nobody holds this" and for "this path does not exist",
+  // so without this check a shell whose output file has not been created yet — or was rotated or cleaned
+  // away underneath it — reads as DEAD while it is running. Absence of evidence, not evidence of death.
+  if (!existsSync(outputFile)) return undefined
+  try {
+    // `-t` prints pids only; a non-zero exit with empty output means "nobody holds it", which is the
+    // answer we want rather than an error. `lsof` is absent on Windows — undefined, not dead.
+    const out = execFileSync("lsof", ["-t", "--", outputFile], { encoding: "utf8", timeout: 4000, stdio: ["ignore", "pipe", "ignore"] })
+    return out.trim().length > 0
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException & { status?: number }
+    if (e.code === "ENOENT") return undefined // no lsof on this platform
+    // lsof exits 1 when no process holds the file — that is a real DEAD verdict, not a failure.
+    if (e.status === 1) return false
+    return undefined
+  }
+}
 // The minute bucket of an ISO instant, for the board signature: a child's "N min ago" reading only
 // changes when this changes, so folding this (not the raw mtime) into the sig means a steadily-active
 // child re-pushes at most once a minute. "" when absent/unparseable — an absent reading is stable.
@@ -2170,6 +2195,11 @@ export interface TailerDeps {
   sessionLogDir?: string // injectable transcript dir (tests); defaults to the Claude Code path
   codexHome?: string // injectable $CODEX_HOME (tests); where a codex sub-agent's child rollout is located
   mtimeMs?: (path: string) => number | undefined // injectable file mtime (tests); a sub-agent transcript's staleness clock
+  /** Is a background shell still alive? EXACT, not a heuristic: a shell's stdout is redirected to its
+   *  `<taskId>.output`, so whichever process holds that file open IS the shell. Returns undefined when
+   *  liveness cannot be established (probe unavailable, path unknown) — never a guess. Injectable for
+   *  tests; the default shells out to `lsof`. */
+  shellAlive?: (outputFile: string) => boolean | undefined
   // The agent backend that locates + folds a session's transcript (Codex-support epic). Injected by
   // the composition layer as a ClaudeBackend; when absent (tests) the tailer folds with its own
   // corpus-verified applyRecord + deterministic Claude path — a byte-identical default.
@@ -2843,11 +2873,11 @@ export function createTailer(deps: TailerDeps): Tailer {
       // between its tool_use (which creates the entry) and its launch ack (which names the task).
       // `taskId` travels as well as gating `stoppable`: it is the handle the RUNTIME hands the model, so
       // it is the id a worker registers a `shell` watcher against (see BgShellView.taskId).
-      // AGE decides, against the shell's own last sign of life (its launch, if it has never spoken).
-      // `ToolStatusMeta` and the drawer have rendered a "stale" shell all along; nothing ever produced
-      // one, because this was the literal `"running"`.
-      const since = Date.parse(lastActivityAt ?? e.startedAt)
-      const shellState = Number.isFinite(since) && now() - since > BGSHELL_STALE_MS ? "stale" as const : "running" as const
+      // LIVENESS, asked of the OS and cached — see probeShellAlive. A shell inside its grace window, or
+      // one we cannot establish an answer for, stays "running": this only ever DEMOTES a shell we have
+      // positively confirmed nobody is running. `ToolStatusMeta` and the drawer have rendered a "stale"
+      // shell all along; nothing ever produced one, because this was a literal "running".
+      const shellState = shellIsGone(e) ? "stale" as const : "running" as const
       out.push({ label: e.label, startedAt: e.startedAt, state: shellState, id: e.toolUseId, ...(e.taskId ? { stoppable: true, taskId: e.taskId } : {}), ...(lastActivityAt ? { lastActivityAt } : {}) })
     }
     return out
@@ -3290,6 +3320,24 @@ export function createTailer(deps: TailerDeps): Tailer {
       }
     }
     return undefined
+  }
+
+  /** Has this shell positively been confirmed gone? Cached, grace-windowed, and biased to "no": every
+   *  uncertain answer leaves the shell running, so a wrong verdict can only ever under-report. */
+  // PER TAILER, deliberately: a DEAD verdict is terminal and never re-probed, so a module-level cache
+  // would let one tailer's verdict decide another's shells — and make the whole thing unclearable.
+  const shellAliveCache = new Map<string, { at: number; alive: boolean }>()
+  function shellIsGone(e: { outputFile?: string; startedAt: string }): boolean {
+    if (!e.outputFile) return false
+    const started = Date.parse(e.startedAt)
+    if (!Number.isFinite(started) || now() - started < SHELL_PROBE_GRACE_MS) return false
+    const cached = shellAliveCache.get(e.outputFile)
+    // A DEAD verdict is terminal — a process cannot come back — so it is never re-probed.
+    if (cached && (cached.alive === false || now() - cached.at < SHELL_PROBE_TTL_MS)) return !cached.alive
+    const alive = (deps.shellAlive ?? probeShellAlive)(e.outputFile)
+    if (alive === undefined) return false // cannot tell ⇒ unchanged
+    shellAliveCache.set(e.outputFile, { at: now(), alive })
+    return !alive
   }
 
   function backgroundShellLookup(slug: string, id: string): { command?: string; outputFile?: string; state: "running" | "done" } | undefined {
