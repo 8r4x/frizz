@@ -2009,7 +2009,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         // `watch:` line without going looking for an id it cannot see. Shells are named by `taskId` —
         // the handle the runtime actually showed the worker — because that is the string it will
         // naturally reach for, and the one the fence's own integrity check matches on.
-        message: signoffNudgeMessage({
+        message: withClock(signoffNudgeMessage({
           shells: (tele.bgShells ?? []).filter((sh) => sh.state === "running").map((sh) => ({ id: sh.taskId ?? sh.id, label: sh.label })),
           subAgents: (tele.subAgents ?? []).filter((a) => a.state === "running").map((a) => ({ id: a.id, label: a.label })),
           // The other two registries, so the nudge lists EVERY kind an awaiting fence can name rather
@@ -2019,7 +2019,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
             .map((t) => ({ id: t.id, label: t.prompt.trim().replace(/\s+/g, " ").slice(0, 80) })),
           prs: deps.storage.listPrWatches(row.slug, { armedOnly: true })
             .map((w) => ({ id: `${w.owner}/${w.repo}#${w.number}`, label: `${w.owner}/${w.repo}#${w.number}` })),
-        }),
+        }), spokeAt),
         reason: "rested without signing off",
       }, nowMs).delivery
       log(`waker: queued ${row.slug} — ${item.reason}`)
@@ -2049,6 +2049,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   //     everything rather than the wait simply continuing, and re-parking on the same still-running
   //     items is UNLIMITED (maintainer 2026-08-15) — a three-hour build under a one-hour estimate is a
   //     bad estimate, not a failure, and each bump is a real checkpoint where it could decide otherwise.
+  /** Frizz's own message, with the clock on it. Used ONLY where frizz is the author — never on an
+   *  operator-authored prompt (a Goal, a heartbeat, a snooze), whose text is delivered verbatim by
+   *  invariant. A broker-run worker is told neither the date nor the time by its runtime, so without this
+   *  it cannot tell a four-minute park from a four-hour one. */
+  function withClock(message: string, spokeAt?: string | null): string {
+    return `${message}\n\n${wakeTimeHeader(now(), spokeAt)}`
+  }
+
   function evalParkIntegrity(nowMs: number): void {
     for (const row of deps.storage.allSessions()) {
       if (row.state === "archived" || row.archived === 1) continue
@@ -2485,7 +2493,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (outbox.get(deliveryId)) return
     const item = outbox.enqueue({
       id: deliveryId, slug: row.slug, sessionId: row.session_id, fenceId,
-      hintKey: `${PR_WATCH_FENCE_PREFIX}:${watchId}`, message, reason,
+      // Frizz's own words about someone else's PR, so the clock rides along: a watcher wake is the one
+      // most likely to land on a thread that has been parked for hours without knowing it.
+      hintKey: `${PR_WATCH_FENCE_PREFIX}:${watchId}`, message: withClock(message, deps.tailer.get(row.slug)?.lastAssistantAt), reason,
     }, nowMs).delivery
     log(`waker: queued ${row.slug} — ${item.reason}`)
     checkpoint("after-enqueue", item)
@@ -2537,7 +2547,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           sessionId: row.session_id,
           fenceId,
           hintKey: `${SHELL_FENCE_PREFIX}:${shell.id}`,
-          message: shellDoneMessage(shell),
+          message: withClock(shellDoneMessage(shell), tele.lastAssistantAt),
           reason: `background shell finished (${shell.taskId ?? shell.label})`,
         }, nowMs).delivery
         log(`waker: queued ${row.slug} — ${item.reason}`)
