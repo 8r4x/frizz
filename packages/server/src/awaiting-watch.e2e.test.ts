@@ -363,6 +363,8 @@ async function prHarness() {
     setActivity: (next: typeof activity) => { activity = next },
     // Each tick steps past the per-PR poll floor, so every call really re-reads GitHub.
     tick: async () => { clock += 90_000; await s.tick() },
+    /** Run the clock past the watcher's own `expiresAtMs` without eighty ticks to get there. */
+    jump: (ms: number) => { clock += ms },
     close: () => { void s.stop(); tailer.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) },
   }
 }
@@ -537,4 +539,94 @@ test("a merged PR reports once and settles the watcher", async () => {
     await h.tick()
     assert.equal(h.delivered.length, 1)
   } finally { h.close() }
+})
+
+// A WATCHER'S EXPIRY HAS TO REACH THE WORKER, and it is the one report that cannot be retried: the row
+// is settled on the way out, so a lost expiry leaves a thread parked forever on a wait nothing will
+// ever answer — the exact unbounded stall this grammar was built to end.
+//
+// It was lost. The report is minted under its own `prwatch-expired:` prefix, and the predicate that
+// routes a watcher delivery tested `startsWith("prwatch:")` — which that spelling does not satisfy. So
+// it fell to the awaiting-fence tail of deliveryContext() and was superseded at zero attempts, 7 for 7
+// on the maintainer's live board (2026-08-18). Same class as the park correction below it: a fallthrough
+// that supersedes means a new prefix without a branch is silently undeliverable.
+test("a watcher that runs out of time tells its worker so", async () => {
+  const h = await prHarness()
+  try {
+    await h.tick()
+    h.delivered.length = 0
+    h.jump(3 * 3600_000) // past the two-hour registration
+    await h.tick()
+    assert.equal(h.delivered.length, 1, "an expiry nobody receives is a thread waiting on nothing")
+    assert.match(h.delivered[0], /acme\/app#391 has expired/)
+    assert.match(h.delivered[0], /mcp__frizz__watch_pr/, "…and how to re-register it")
+    // Settled on the way out, so it cannot fire twice or be polled again.
+    await h.tick()
+    assert.equal(h.delivered.length, 1, "one expiry, one report")
+  } finally { h.close() }
+})
+
+// ---- THE STALL THAT SURFACED BOTH BUGS, REPLAYED THROUGH THE REAL FOLD ---------------------------
+// The maintainer's own thread, 2026-08-18: a worker signed off with `timer: none` — the WORD, not a
+// registered row — plus `for: 15m`. Frizz refused the park (correctly: nothing named there can wake
+// anything), queued the correction (correctly), and then dropped it on the floor. The thread sat in the
+// queue for three hours with nothing able to reach it, and the maintainer asked why.
+//
+// Every other test for SOURCE 12 uses a stubbed tailer, so this one uses the real fold: the fence has to
+// come off a real transcript file, in the shape a real worker writes, and the correction has to arrive.
+function stalledParkRecord(at: string): string {
+  return line({
+    type: "assistant", timestamp: at, sessionId: SESSION, uuid: "s1",
+    message: {
+      role: "assistant",
+      content: [{
+        type: "text",
+        text: [
+          "The silent-fallback class is closed on all three platforms, and both VMs are stopped.",
+          "",
+          "```awaiting",
+          "timer: none",
+          "for: 15m",
+          "reason: nothing is running; I'm holding briefly before picking up the age-gate question",
+          "```",
+        ].join("\n"),
+      }],
+    },
+  })
+}
+
+test("a fence naming a timer that was never registered is corrected, off a real transcript", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-stall-e2e-"))
+  const at = new Date(Date.now() - 60_000).toISOString()
+  writeFileSync(join(dir, `${SESSION}.jsonl`), stalledParkRecord(at))
+  const storage = createStorage(join(dir, "ui.db"))
+  storage.setSetting("signoffNudge", "off")
+  storage.upsertSession({
+    slug: SLUG, session_id: SESSION, tmux_name: `frizz-${SLUG}`, spawned_at: at,
+    last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: at, title_auto: 1,
+    title: SLUG, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
+  } as SessionRow)
+  const tailer = createTailer({
+    project: { cwdSlug: "x" } as Project,
+    storage, bus: new Bus(), sessionLogDir: dir,
+    onChange: () => {}, paneDead: () => false, capturePane: () => "",
+  })
+  const delivered: string[] = []
+  const s = createScheduler({ storage, tailer, resume: async (_slug, m) => { delivered.push(m) }, log: () => {} })
+  storage.setBackend(SLUG, "claude")
+  storage.setClaudeRuntime(SLUG, "broker")
+  tailer.tick()
+  try {
+    // The fold first — the correction is worthless if the fence never parsed.
+    assert.deepEqual(tailer.get(SLUG)?.lastFence?.hints, [
+      { kind: "timer", value: "none" },
+      { kind: "for", value: "15m" },
+      { kind: "reason", value: "nothing is running; I'm holding briefly before picking up the age-gate question" },
+    ], "the real fold reads the fence the worker actually wrote")
+
+    await s.tick()
+    assert.equal(delivered.length, 1, "three hours of silence is the bug; one correction is the fix")
+    assert.match(delivered[0], /`timer: none` — NOT RUNNING/, "and it says WHICH line is wrong")
+    assert.match(delivered[0], /nothing that could wake you/, "…and that a wait on nothing is not a wait")
+  } finally { void s.stop(); tailer.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) }
 })

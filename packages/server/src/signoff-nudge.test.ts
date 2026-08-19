@@ -40,7 +40,13 @@ function nudger(tele: Partial<SessionTelemetry>, opts: { setting?: string } = {}
     resume: async (_slug, message) => { delivered.push(message) },
     log: () => {},
   })
-  return { s, storage, slug, delivered, close: () => { void s.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) } }
+  // THE NUDGE'S OWN DELIVERIES. `delivered` is every wake the scheduler sent, and an awaiting fence
+  // frizz cannot honour legitimately draws SOURCE 12's correction on the same rest — so "the nudge held"
+  // has to be asked of the nudge's namespace, not of an empty array.
+  const nudges = () => storage.db
+    .prepare("SELECT message FROM wake_delivery WHERE thread_slug = ? AND fence_id LIKE 'signoff:%' AND state = 'delivered'")
+    .all(slug) as { message: string }[]
+  return { s, storage, slug, delivered, nudges, close: () => { void s.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) } }
 }
 
 test("a rest with no fence is told how to sign off, and the text names all three ways", async () => {
@@ -129,7 +135,7 @@ for (const [what, tele] of [
     const h = nudger(tele)
     try {
       await h.s.tick()
-      assert.deepEqual(h.delivered, [])
+      assert.deepEqual(h.nudges(), [])
     } finally { h.close() }
   })
 }

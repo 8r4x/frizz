@@ -233,7 +233,14 @@ function scheduler(
     fetchPr: async () => undefined,
     fetchGithubReview: async () => [],
   })
-  return { s, storage, slug, delivered, close: () => { void s.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) } }
+  // DELIVERIES FROM THE GOAL ALONE. `delivered` is every wake the scheduler sent, and on a rest the
+  // scheduler is correcting, SOURCE 12 legitimately speaks too — so "the Goal held" has to be asked of
+  // the Goal's own namespace rather than of an empty array. (It was asked of the empty array while
+  // SOURCE 12 could not deliver at all, which made the weaker assertion look identical to this one.)
+  const goalBumps = () => storage.db
+    .prepare("SELECT message FROM wake_delivery WHERE thread_slug = ? AND fence_id LIKE 'stophook:%' AND state = 'delivered'")
+    .all(slug) as { message: string }[]
+  return { s, storage, slug, delivered, goalBumps, close: () => { void s.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) } }
 }
 
 const at = (iso: string) => () => Date.parse(iso)
@@ -796,7 +803,11 @@ test("an awaiting fence the scheduler cannot honour STILL holds the Goal — SOU
   const h = scheduler({ lastFence: deadKind, pendingQuestion: false }, { now: at("2026-08-02T00:00:05.000Z") })
   try {
     await h.s.tick()
-    assert.deepEqual(h.delivered, [], "the Goal must not bump a rest the scheduler is already correcting")
+    assert.deepEqual(h.goalBumps(), [], "the Goal must not bump a rest the scheduler is already correcting")
+    // …and the correcting voice DOES speak, which is the half of the arrangement that makes holding the
+    // Goal safe rather than silencing.
+    assert.equal(h.delivered.length, 1, "SOURCE 12 owns the rest — it must actually take it")
+    assert.match(h.delivered[0], /names nothing to wait on/)
   } finally { h.close() }
 })
 

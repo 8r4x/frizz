@@ -159,6 +159,9 @@ function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; restedAt
   storage.setSetting("signoffNudge", "off") // isolate SOURCE 12 from the nudge
   const slug = "parked"
   const restedAt = opts.restedAt ?? new Date(Date.now() - 60_000).toISOString()
+  // WHAT ACTUALLY REACHED THE WORKER. Every test in this file used to stop at the outbox row, which is
+  // exactly how a correction that could never be delivered survived: enqueue is not delivery.
+  const sent: string[] = []
   storage.upsertSession({
     slug, session_id: "sid", tmux_name: `frizz-${slug}`, spawned_at: "2026-08-15T11:00:00.000Z",
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: restedAt, title_auto: 0,
@@ -178,11 +181,12 @@ function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; restedAt
         lastFence: { kind: "awaiting", body: opts.body ?? "", hints },
       }),
     } as never,
-    resume: async () => {},
+    resume: async (_slug, message) => { sent.push(message) },
     log: () => {},
   })
-  const queued = () => storage.db.prepare("SELECT fence_id, message FROM wake_delivery WHERE thread_slug = ?").all(slug) as { fence_id: string; message: string }[]
-  return { s, storage, queued, close: () => { void s.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) } }
+  const queued = () => storage.db.prepare("SELECT fence_id, message FROM wake_delivery WHERE thread_slug = ?").all(slug) as { fence_id: string; message: string; state: string }[]
+  const state = () => storage.db.prepare("SELECT fence_id, state FROM wake_delivery WHERE thread_slug = ?").all(slug) as { fence_id: string; state: string }[]
+  return { s, storage, queued, state, sent, close: () => { void s.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) } }
 }
 
 const LIVE_SHELL = { label: "the suite", startedAt: "2026-08-15T11:59:00.000Z", state: "running" as const, id: "toolu_x", taskId: "bzvtnt3ig" }
@@ -416,5 +420,66 @@ test("every retired kind is recognized, and a repeat teaches once", async () => 
     }
     // Two `pr-watch:` lines are ONE thing to learn.
     assert.equal(msg.match(/`pr-watch:` is GONE/g)?.length, 1, "deduped by kind, not by line")
+  } finally { h.close() }
+})
+
+// ---- AND IT HAS TO ACTUALLY ARRIVE ---------------------------------------------------------------
+// Every test above this line asserts on the OUTBOX ROW, and for a year that was the whole suite. It is
+// also why SOURCE 12 shipped broken and stayed broken: `deliveryContext()` had no branch for a `park:…`
+// id, so each correction fell to the awaiting-fence tail, whose `isActionable` has been hardwired false
+// since the 2026-08-15 grammar cut, and read as SUPERSEDED at zero attempts. Enqueue is not delivery.
+//
+// Measured on the maintainer's own board 2026-08-18, across four projects: 2034 park corrections
+// enqueued, 0 delivered, ever — while `stophook` ran 963/963 and `prwatch` 33/33, because those have a
+// branch. The thread that surfaced it wrote `timer: none`, was correctly refused a park, and sat in the
+// queue for three hours with nothing able to tell it so.
+test("the correction is DELIVERED, not just queued", async () => {
+  const h = parkHarness([{ kind: "shell", value: "bGONE" }, { kind: "for", value: "2h" }])
+  try {
+    await h.s.tick()
+    assert.equal(h.sent.length, 1, "a queued correction nobody receives is the same silence it exists to end")
+    assert.match(h.sent[0], /not running/i)
+    assert.deepEqual(h.state().map((r) => r.state), ["delivered"])
+  } finally { h.close() }
+})
+
+// The exact shape of the thread that surfaced it: `timer: none` — the word, not a registered row.
+test("a fence naming a timer that was never registered reaches the worker", async () => {
+  const h = parkHarness([{ kind: "timer", value: "none" }, { kind: "for", value: "15m" }])
+  try {
+    await h.s.tick()
+    assert.equal(h.sent.length, 1)
+    assert.match(h.sent[0], /`timer: none` — NOT RUNNING/)
+  } finally { h.close() }
+})
+
+// …and the OTHER cause, which is the one that decides whether an over-running wait ever ends. An expiry
+// bump is uncapped by design, so a lost one is a thread parked forever on a `for:` nobody honours.
+test("an expired park is delivered too", async () => {
+  const h = parkHarness([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "30s" }], {
+    shells: [LIVE_SHELL],
+    restedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+  })
+  try {
+    await h.s.tick()
+    assert.equal(h.sent.length, 1)
+    assert.match(h.sent[0], /Your wait expired/)
+  } finally { h.close() }
+})
+
+// THE NEGATIVE CONTROL, and it is what proves the branch is a binding and not a rubber stamp: a
+// correction is bound to the rest it was minted for. The worker speaking again means it is no longer
+// looking at the fence being corrected, so the queued bump must die rather than land on a new turn.
+test("a correction for a rest the worker has already moved past is not delivered", async () => {
+  const h = parkHarness([{ kind: "shell", value: "bGONE" }, { kind: "for", value: "2h" }])
+  try {
+    await h.s.tick()
+    assert.equal(h.sent.length, 1, "control: it lands while the rest is current")
+    // Re-mint the same correction against a rest the telemetry no longer reports.
+    const row = h.queued()[0]
+    h.storage.db.prepare("UPDATE wake_delivery SET fence_id = ?, state = 'pending', delivered_at = NULL WHERE fence_id = ?")
+      .run("park:dead:2020-01-01T00:00:00.000Z", row.fence_id)
+    await h.s.tick()
+    assert.equal(h.sent.length, 1, "a stale rest's correction is superseded, not sent")
   } finally { h.close() }
 })

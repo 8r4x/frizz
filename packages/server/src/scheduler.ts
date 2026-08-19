@@ -802,11 +802,21 @@ function isShellFenceId(fenceId: string): boolean {
  *  because this watcher fires many times over one PR's life — the id alone would dedupe every wake after
  *  the first, which is exactly the bug a one-shot namespace would hide. */
 const PR_WATCH_FENCE_PREFIX = "prwatch"
+/** The same watcher's LAST word — its registration ran out. A separate namespace because it is a
+ *  different piece of news from a report, and one-shot: the watcher is settled by the time it is sent. */
+const PR_WATCH_EXPIRED_FENCE_PREFIX = "prwatch-expired"
 function prWatchFenceId(watchId: string, report: number): string {
   return `${PR_WATCH_FENCE_PREFIX}:${watchId}:${report}`
 }
+function prWatchExpiredFenceId(watchId: string): string {
+  return `${PR_WATCH_EXPIRED_FENCE_PREFIX}:${watchId}`
+}
+// BOTH spellings, and the expired one is why this cannot be a bare `startsWith(prefix + ":")`:
+// `prwatch-expired:…` does NOT start with `prwatch:`, so it fell past every branch in deliveryContext()
+// and into the awaiting-fence tail, which supersedes unconditionally. 7 expiry reports were enqueued and
+// 0 delivered on the live board before anyone looked (2026-08-18).
 function isPrWatchFenceId(fenceId: string): boolean {
-  return fenceId.startsWith(`${PR_WATCH_FENCE_PREFIX}:`)
+  return fenceId.startsWith(`${PR_WATCH_FENCE_PREFIX}:`) || fenceId.startsWith(`${PR_WATCH_EXPIRED_FENCE_PREFIX}:`)
 }
 /** How often a registered watcher re-reads GitHub, per PR. The fence poller's floor, for the same
  *  reason: this is somebody else's API and the answer changes on a human's timescale. */
@@ -828,6 +838,22 @@ function signoffFenceId(restedAt: string): string {
 }
 function isSignoffFenceId(fenceId: string): boolean {
   return fenceId.startsWith(`${SIGNOFF_FENCE_PREFIX}:`)
+}
+
+/** SOURCE 12's delivery namespace — `park:<cause>:<the rest it corrects>`. The cause is in the key so a
+ *  fence bumped for a dead id and later for expiry is two pieces of news rather than one deduped away. */
+const PARK_FENCE_PREFIX = "park"
+function parkFenceId(cause: string, spokeAt: string): string {
+  return `${PARK_FENCE_PREFIX}:${cause}:${spokeAt}`
+}
+function isParkFenceId(fenceId: string): boolean {
+  return fenceId.startsWith(`${PARK_FENCE_PREFIX}:`)
+}
+/** The rest instant a correction was minted for. Sliced past the SECOND colon, never `split(":")[2]` —
+ *  the value is an ISO instant and carries colons of its own. */
+function parkFenceRestOf(fenceId: string): string {
+  const cut = fenceId.indexOf(":", PARK_FENCE_PREFIX.length + 1)
+  return cut < 0 ? "" : fenceId.slice(cut + 1)
 }
 
 
@@ -1331,6 +1357,35 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const stillMissing = tele.droppedReports?.some((r) => reportFenceId(r.taskId) === item.fenceId)
       if (!stillMissing) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
+    }
+    // SOURCE 12's correction is bound to the exact REST it was minted for, and to that rest still being
+    // the thread's last word — a follow-up or a new turn means the worker is no longer looking at the
+    // fence being corrected. Nothing else can supersede it: whether the fence is still wrong is settled
+    // at ENQUEUE, and re-deciding it here would race the very bump that fixes it.
+    //
+    // THIS BRANCH IS WHY THE SOURCE WORKED AT ALL. Without it a `park:…` id fell to the awaiting-fence
+    // tail below, whose `isActionable` has been hardwired false since the 2026-08-15 grammar cut — so
+    // every correction read as superseded, at zero attempts, and the one voice that can get a worker out
+    // of a bad fence was silent. Measured on the maintainer's own board 2026-08-18: 2034 corrections
+    // enqueued across four projects, 0 delivered, ever, while every kind that HAS a branch here ran at
+    // ~100%. The thread that surfaced it wrote `timer: none` and sat for three hours.
+    //
+    // THE GENERAL SHAPE OF THAT BUG: a fallthrough that supersedes is a fallthrough that fails CLOSED, so
+    // a source minting a new prefix without a branch here is silently undeliverable and the enqueue-side
+    // tests still pass. Any new wake source needs its branch here and a test that asserts `resume` ran.
+    if (isParkFenceId(item.fenceId)) {
+      if (parkFenceRestOf(item.fenceId) !== (tele.lastAssistantAt ?? "")) return "superseded"
+      return tele.turn === "idle" ? "current-idle" : "current-busy"
+    }
+    // THE TAIL IS THE AWAITING-FENCE SOURCE, AND ONLY THAT. Everything above claims its own prefix; a
+    // fence identity is `<instant>\u0001<hints>` (see fenceIdentity), so an id reaching here WITHOUT the
+    // separator belongs to a source that mints a prefix nobody routes — and the tail supersedes, so that
+    // source is silently undeliverable while its enqueue-side tests stay green. Both bugs found on
+    // 2026-08-18 were exactly this, and neither was visible without querying the database. It still
+    // supersedes (failing open would deliver an id we cannot reason about), but it SAYS SO.
+    if (!item.fenceId.includes("\u0001")) {
+      log(`waker: UNROUTED wake prefix ${item.fenceId.split(":")[0]} for ${item.slug} — no deliveryContext branch, superseding`)
+      return "superseded"
     }
     const fence = tele.lastFence
     if (!fence || fence.kind !== "awaiting" || !fence.hints.some(isActionable)) return "superseded"
@@ -2138,7 +2193,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (cause !== "expired" && (row.park_bumps ?? 0) >= PARK_BUMP_MAX) continue
       // Keyed on the REST plus which failure it is, so one fence gets one bump per cause: a park that is
       // bumped for a dead id and later expires is two different pieces of news.
-      const fenceId = `park:${cause}:${spokeAt}`
+      const fenceId = parkFenceId(cause, spokeAt)
       const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
       if (outbox.get(deliveryId)) continue
       const item = outbox.enqueue({
@@ -2207,7 +2262,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const ref = `${w.owner}/${w.repo}#${w.number}`
       log(`waker: settled ${w.thread_slug} — pr watcher ${w.id} expired (${ref})`)
       if (!row || row.state === "archived" || row.archived === 1) continue
-      const fenceId = `prwatch-expired:${w.id}`
+      const fenceId = prWatchExpiredFenceId(w.id)
       const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
       if (outbox.get(deliveryId)) continue
       const item = outbox.enqueue({
@@ -2215,7 +2270,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         slug: row.slug,
         sessionId: row.session_id,
         fenceId,
-        hintKey: `prwatch-expired:${w.id}`,
+        hintKey: fenceId,
         message:
           `⏰ Your watcher on ${ref} has expired and is no longer armed — nothing on that PR will wake ` +
           `you now.\n\nIf you still care about it, register it again with \`mcp__frizz__watch_pr\` and a ` +
