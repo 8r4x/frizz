@@ -11,6 +11,7 @@ import {
   awaitingItemLabels,
   awaitingForLabel,
   awaitingWaitClause,
+  reasonSentence,
   hintGloss,
 } from "./awaitingPresentation.ts"
 
@@ -40,9 +41,11 @@ test("no fence offers a park action any more — the worker's own tools own the 
 
 test("the card's sentence is the worker's own `reason:`, and nothing else", () => {
   const REASON = "waiting on the three-platform run before porting the v2 drivers"
+  // The worker's words, verbatim but for the capital every surface that draws it standing alone needs
+  // — see reasonSentence, which the rail popover shares.
   assert.equal(
     awaitingHintSentence([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "2h" }, { kind: "reason", value: REASON }]),
-    REASON,
+    "Waiting on the three-platform run before porting the v2 drivers",
   )
   // No reason ⇒ nothing. A card that invents a sentence from ids is worse than one that shows the rows.
   assert.equal(awaitingHintSentence([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "2h" }]), null)
@@ -161,4 +164,32 @@ test("a fence naming nothing yields nothing, so the popover cannot invent a wait
 test("hintGloss is the phone's one line, and it is the PR ref", () => {
   assert.equal(hintGloss([{ kind: "pr", value: "acme/app#391" }, { kind: "reason", value: "…" }]), "PR acme/app#391")
   assert.equal(hintGloss([{ kind: "shell", value: "bvg44v4ij" }]), null)
+})
+
+
+// THE WORKER'S REASON, SET AS A SENTENCE. It stands alone everywhere frizz draws it — its own paragraph
+// under the rail popover's sentence, its own line on the card — and it arrives lowercase because the
+// shipped contract's example was a fragment (maintainer 2026-08-19: "why is that second sentence
+// fucking lowercase?"). The contract now models a sentence; this carries every worker dispatched before
+// it, whose prompt is frozen.
+test("a lowercase reason is presented as a sentence, and only its first letter is touched", () => {
+  assert.equal(
+    reasonSentence("the tap submission is queued behind their CI backlog"),
+    "The tap submission is queued behind their CI backlog",
+  )
+  assert.equal(reasonSentence("Already a sentence"), "Already a sentence", "nothing to do")
+  // Only the first letter — the rest of the line is the worker's, verbatim, capitals and all.
+  assert.equal(reasonSentence("waiting on CI for the v2 drivers"), "Waiting on CI for the v2 drivers")
+})
+
+test("a reason that opens on CODE is left exactly as written", () => {
+  const cases = [
+    "awaitingFragments still returns the old shape", // an identifier: a capital would be a WRONG NAME
+    "packages/web has not rebuilt yet", // a path
+    "v2.1 is still tagging", // a ref
+    "#391 is waiting on a second approval", // an issue number
+    "npm test is still running", // lowercase by name, not by accident
+    "gh pr checks reports one job queued",
+  ]
+  for (const reason of cases) assert.equal(reasonSentence(reason), reason, reason)
 })

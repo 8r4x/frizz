@@ -33,7 +33,11 @@ const base = {
   subAgents: [],
 } as unknown as ThreadView
 
+// What the worker WROTE, and what the popover SETS — a fence's reason arrives as a lowercase fragment
+// (frizz's own contract modelled one until 2026-08-19), and every surface that draws it standing alone
+// presents it as the sentence it is. reasonSentence owns that, and only the first letter moves.
 const REASON = "waiting on the three-platform run before porting the v2 drivers"
+const SET = "Waiting on the three-platform run before porting the v2 drivers"
 
 const thread = (hints: { kind: string; value: string }[], extra: Partial<ThreadView> = {}) =>
   ({ ...base, id: "resting-thread", lastFence: { kind: "awaiting", body: "", hints }, ...extra }) as unknown as ThreadView
@@ -56,7 +60,7 @@ test("a parked awaiting thread reads as one sentence, with the worker's own line
   // fence names finishes the sentence. The reason is the only line frizz did not write, so it is the
   // only one set off on its own: a PARAGRAPH, because the sentence above it wraps and a reason tucked
   // straight under a wrapped line reads as its third line.
-  assert.deepEqual((sessionIndicatorFor(t).tip ?? "").split("\n\n"), ["Held — waiting on a background shell", REASON])
+  assert.deepEqual((sessionIndicatorFor(t).tip ?? "").split("\n\n"), ["Held — waiting on a background shell", SET])
 })
 
 // The same fence frizz could NOT honour (nothing running behind it) leaves the row in the queue wearing
@@ -66,7 +70,7 @@ test("a fence frizz did not park on swaps the state word and nothing else", () =
   // needsYou keeps the row in the queue (isHeld refuses it), which is the shape of a park the server
   // could not honour: the fence still says what it thinks it is waiting on, and the popover still says it.
   const t = thread([...WAIT, { kind: "reason", value: REASON }], { needsYou: true } as Partial<ThreadView>)
-  assert.deepEqual((sessionIndicatorFor(t).tip ?? "").split("\n\n"), ["At rest — waiting on a background shell", REASON])
+  assert.deepEqual((sessionIndicatorFor(t).tip ?? "").split("\n\n"), ["At rest — waiting on a background shell", SET])
 })
 
 test("…and NONE of it reaches the row, which is a title and nothing else", () => {
@@ -91,7 +95,7 @@ test("a watched PR leads the list, because it names a thing rather than a shape"
   const t = thread([{ kind: "pr", value: "acme/app#391" }, ...WAIT, { kind: "reason", value: REASON }])
   assert.deepEqual((sessionIndicatorFor(t).tip ?? "").split("\n\n"), [
     "Held — waiting on acme/app#391 and a background shell",
-    REASON,
+    SET,
   ])
 })
 
@@ -107,11 +111,11 @@ test("a snooze stacks under the state, never inside the worker's paragraph", () 
   } as Partial<ThreadView>)
   const [state, reason] = (sessionIndicatorFor(t).tip ?? "").split("\n\n")
   assert.match(state ?? "", /^At rest — waiting on a background shell\nSnoozed until /, "the park is the state's second line")
-  assert.equal(reason, REASON, "…and the worker's sentence still owns the paragraph below")
+  assert.equal(reason, SET, "…and the worker's sentence still owns the paragraph below")
 })
 
 test("awaitingReason reads only an awaiting fence, and only a non-empty one", () => {
-  assert.equal(awaitingReason(thread([...WAIT, { kind: "reason", value: REASON }])), REASON)
+  assert.equal(awaitingReason(thread([...WAIT, { kind: "reason", value: REASON }])), SET)
   assert.equal(awaitingReason(thread([...WAIT, { kind: "reason", value: "   " }])), null, "whitespace is not a reason")
   assert.equal(awaitingReason(thread(WAIT)), null)
   assert.equal(awaitingReason({ lastFence: { kind: "done", body: "", hints: [] } } as unknown as ThreadView), null)

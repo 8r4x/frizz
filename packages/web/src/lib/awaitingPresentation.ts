@@ -57,8 +57,33 @@ export function prWatchRefs(hints: readonly AwaitingHint[]): { ref: string; url:
  *  synthesize — and nothing to get wrong. The ITEMS are rendered as rows, not as a sentence. */
 export function awaitingHintSentence(hints: readonly AwaitingHint[], _nowMs = Date.now()): string | null {
   const reason = hints.find((hint) => hint.kind === "reason")?.value.trim()
-  return reason ? reason : null
+  return reason ? reasonSentence(reason) : null
 }
+
+/** THE WORKER'S `reason:`, PRESENTED AS A SENTENCE — capitalized, because everywhere frizz draws it, it
+ *  stands alone: its own paragraph under the rail popover's sentence, its own line in the awaiting card.
+ *
+ *  Workers write it lowercase, and that is frizz's own doing — the shipped contract's example read
+ *  `reason: what you are waiting for, in one line`, so a fence arrived as a fragment and rendered as one
+ *  ("At rest — waiting on acme/app#391" over "the tap submission is queued…", maintainer 2026-08-19:
+ *  "why is that second sentence fucking lowercase?"). The example now models a sentence, but a worker's
+ *  contract is FROZEN INTO ITS SYSTEM PROMPT AT DISPATCH: every session already running keeps writing
+ *  the old shape, so the presentation has to carry it and always will.
+ *
+ *  It only ever touches the FIRST LETTER, and not when the first word is code — an identifier
+ *  (`awaitingFragments`), a path (`packages/web`), a ref (`v2.1`, `#391`) or a lowercase-by-name tool
+ *  (`npm`, `gh`). Capitalizing "npm" is not a typo the way capitalizing an identifier is a WRONG NAME,
+ *  and a reason that opens on a bare command is the one case where leaving it alone reads better. */
+export function reasonSentence(reason: string): string {
+  const first = (reason.split(/\s/, 1)[0] ?? "").replace(/[.,:;]+$/, "")
+  const isCode = /[^a-zA-Z]/.test(first) || /[A-Z]/.test(first.slice(1)) || LOWERCASE_BY_NAME.has(first)
+  return isCode ? reason : reason.charAt(0).toUpperCase() + reason.slice(1)
+}
+
+/** Tools whose names are lowercase BY NAME, not by accident — the ones that actually open a reason in
+ *  this repo. A short list on purpose: it exists to catch the common opener, not to enumerate every
+ *  command on earth, and a miss costs one capital letter rather than a wrong name. */
+const LOWERCASE_BY_NAME = new Set(["npm", "npx", "pnpm", "nub", "nubx", "gh", "git", "node", "bun", "tsc", "vite", "curl", "ssh"])
 
 // THE CARD'S PROSE, and under the structural grammar the BODY IS NOT PART OF IT.
 //

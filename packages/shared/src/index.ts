@@ -305,7 +305,9 @@ export type NativeInputRequired = z.infer<typeof NativeInputRequired>
 //   timer:  tmr_…               a timer it set                      → checked against thread_timer
 //   pr:     owner/repo#123      a PR watcher it registered          → checked against its PR registry
 //   for:    2h                  REQUIRED. How long the park may stand (parseAwaitingDuration).
-//   reason: <one line>          What the human reads on the resting card.
+//   reason: <one sentence>      What the human reads on the resting card, and on the rail row's hover
+//                               popover — where it stands ALONE, under frizz's own sentence, so it is
+//                               presented as a sentence (reasonSentence capitalizes a legacy one).
 //
 // …then, after a `---` line, as much arbitrary Markdown as the worker wants (2026-08-17). The structural
 // lines are FRONTMATTER; the delimiter is what makes "is this line structural?" answerable, which is what
@@ -973,13 +975,13 @@ export const SIGNOFF_NUDGE_MESSAGE = [
   "  if anything is still owed, it is not done. Body: 1-3 sentences, then bullets, each opening with a",
   "  **bolded verb phrase**.",
   "- `` ```awaiting `` — you are WAITING on work that is actually running. It is PURE STRUCTURE: one line",
-  "  per thing you are waiting on, a REQUIRED `for:` duration, and one line of `reason:` prose.",
+  "  per thing you are waiting on, a REQUIRED `for:` duration, and one SENTENCE of `reason:` prose.",
   "",
   "  ```awaiting",
   "  shell: <the id your runtime gave you>",
   "  pr: owner/repo#123",
   "  for: 2h",
-  "  reason: what you are waiting for, in one line",
+  "  reason: What you are waiting for, as one sentence",
   "  ```",
   "",
   "  Frizz CHECKS every line: name something that is not running and you are bumped rather than parked.",
