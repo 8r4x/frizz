@@ -35,7 +35,8 @@ function Fixture() {
       <div inert={restarting}>
         {/* A focusable background control so QA can prove Tab cannot reach behind the scrim. */}
         <button type="button" data-testid="decoy" className="mb-4 rounded border border-border px-2 py-1">decoy</button>
-        {/* Left-aligned, mirroring the real top-left status-bar placement its popover anchors to. */}
+        {/* Left-aligned, so the panel opens rightward off a `w-fit` wrapper exactly as it does off the
+            status row above the prompt box, which is where this button really lives. */}
         <div className="w-fit"><RestartFrizzButton /></div>
       </div>
     </main>

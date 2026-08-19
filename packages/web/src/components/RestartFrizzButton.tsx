@@ -12,11 +12,17 @@ export const UPDATE_RESTART_ICON_ROTATION = "clockwise"
 const updateCopy = "Install the latest version of Frizz. Your running threads will not be affected."
 const restartCopy = "Restart Frizz. Your running threads will not be affected."
 
-// The one anchor both panels that hang off this button use. Narrow: a full-width strip pinned under
-// the status bar. Desktop: anchored to the button's LEFT edge and opening rightward — this control
-// lives in the top-left status bar now, so the old right-0 anchor pushed a 23rem panel straight off
-// the left of the viewport. z-50 rides inside the bar's own z-20 stacking context, which is what
-// puts either panel over the sidebar and the composer.
+// The one anchor both panels that hang off this button use. Desktop: anchored to the button's LEFT
+// edge and opening RIGHTWARD, into the gutter and the workpane beyond it. The button sits at the
+// right end of the status row above the prompt box, so there is always a workpane's width to its
+// right and never enough room to its left for a 23rem panel — a right-0 anchor pushed it off-screen
+// back when this control was corner chrome, and would still push it across the sidebar now. z-50 is
+// a ROOT-level z now: the status row is loose on the page and carries no stacking context of its own
+// (it was a z-20 chip until 2026-08-19), and the sidebar deliberately has no z-index, so z-50 is what
+// puts either panel over the rail and the composer.
+//
+// The `fixed left-3 right-3 top-12` full-width strip below `sm:` (640px) is unreachable and kept only
+// as a floor: this button renders only on the desktop shell, which the phone shell replaces at 700px.
 //
 // `-left-1.5` (not `left-0`) because this wrapper is no longer the width of the 24px button: the ink
 // trim on STATUS_ROW_ACTION (lib/statusRow.ts) collapses that square onto its 12px glyph, so the
@@ -115,7 +121,7 @@ export function RestartFailureNotice({
       </div>
       <p className="relative mt-2.5 text-[12px] leading-relaxed text-muted">{failureCopy}</p>
       {/* The cap comes from the CARD's ceiling, not from any one log: ~360px is as tall as a transient
-          notice hanging off a status-bar button should ever get, and the chrome above takes ~100px of
+          notice hanging off a status-row button should ever get, and the chrome above takes ~100px of
           that. Chrome reserves this block's scrollbar gutter but paints no thumb at rest, so a fold
           that lands mid-glyph reads as broken rather than as "scroll me" — at 256px an ordinary build
           failure lands inside the box entirely and only genuinely huge output ever meets the fold. */}
