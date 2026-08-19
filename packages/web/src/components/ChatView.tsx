@@ -23,7 +23,7 @@ import { TodoBlock } from "./TodoBlock.tsx"
 import { splitQuestionBlocks, parseQuestionBlock, type QuestionKind, type BlockAnswer, type MessageAnswering } from "../lib/questionBlocks.ts"
 import { splitFenceBlocks, type FenceKind } from "../lib/fenceBlocks.ts"
 import { parseAnswersCard, pairAllAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
-import { GithubWakeCard } from "./GithubWakeCard.tsx"
+import { FrizzWake } from "./FrizzWake.tsx"
 import { RecurringPromptLine } from "./RecurringPromptLine.tsx"
 import { WakeDivider } from "./WakeDivider.tsx"
 import { useLiveAnswering, type LiveAnswering } from "../lib/answering.ts"
@@ -1672,16 +1672,26 @@ export function messageGap(previous: ChatMessage, next: ChatMessage): number {
 // takes no slot, so the adjacency-spacer walk must SKIP it (else two spacers stack into a double gap).
 export function messageRendersNothing(m: ChatMessage): boolean {
   if (m.kind === "event" || m.kind === "reasoning" || m.role === "user") return false
-  if (m.parts && m.parts.length > 0) return m.parts.every((p) => (p.kind === "tools" ? p.tools.length === 0 : !p.text.trim()))
-  return (m.tools?.length ?? 0) === 0 && !m.text.trim()
+  if (m.parts && m.parts.length > 0) return m.parts.every((p) => (p.kind === "tools" ? p.tools.length === 0 : blankText(m, p.text)))
+  return (m.tools?.length ?? 0) === 0 && blankText(m, m.text)
+}
+// Does this text draw NOTHING? Ordinarily that is "is it blank", but a REFUSED awaiting fence draws
+// nothing either (see renderText) — and the contract invites a worker to reply with the fence ALONE, so
+// a whole message can be one refused fence and no prose. Left un-stripped it reported as visible, which
+// spends an adjacency spacer on an empty slot and saves a rest divider with nothing under it.
+function blankText(m: ChatMessage, text: string): boolean {
+  if (!m.fenceRefused) return !text.trim()
+  // splitFenceBlocks already drops whitespace-only prose runs, so "every segment is a refused fence"
+  // is the whole test. A ```done fence still draws its card and keeps the message visible.
+  return splitFenceBlocks(text).every((s) => s.kind === "fence" && s.fenceKind === "awaiting")
 }
 // Would this message render anything under `textOnly` (tool bands dropped)? Mirrors messageRendersNothing
 // but counts ONLY text parts — the queue card uses it to decide whether a first/last agent message that
 // is pure batched tool calls (no prose) contributes a visible row, or folds entirely into the bar.
 export function messageHasRenderableText(m: ChatMessage): boolean {
   if (m.kind === "event" || m.kind === "reasoning" || m.role === "user") return false
-  if (m.parts && m.parts.length > 0) return m.parts.some((p) => p.kind === "text" && p.text.trim() !== "")
-  return typeof m.text === "string" && m.text.trim() !== ""
+  if (m.parts && m.parts.length > 0) return m.parts.some((p) => p.kind === "text" && !blankText(m, p.text))
+  return typeof m.text === "string" && !blankText(m, m.text)
 }
 export function VSpace({ h = STEP }: { h?: number }) {
   return <div aria-hidden className="shrink-0" style={{ height: h }} />
@@ -3125,7 +3135,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
     // can lose its text to this.
     const recurring = m.wake ? parseRecurringPrompt(text) : undefined
     if (recurring) return <RecurringPromptLine bump={recurring} sourceId={m.sourceId} />
-    if (m.wake) return <GithubWakeCard steer={m.wakeSteer} text={text} sourceId={m.sourceId} wrap={dense} />
+    if (m.wake) return <FrizzWake steer={m.wakeSteer} text={text} sourceId={m.sourceId} wrap={dense} />
     // …and the same correction for the OTHER writer of a user turn the human didn't type: a background
     // sub-agent pushing a report up to its parent through `SendMessage({to:"main"})`. `m.peerFrom` is the
     // server's own tell (it parsed the <agent-message> wrapper and put the body in displayText, which
@@ -3169,6 +3179,10 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
     // controller (which numbers ```question blocks over the flat text in the same order).
     for (const [fi, fseg] of splitFenceBlocks(text).entries()) {
       if (fseg.kind === "fence") {
+        // A REFUSED fence draws nothing at all (see TranscriptMessage.fenceRefused). Skipped here rather
+        // than returned as null from the card, so the block list never carries an empty slot and the
+        // spacer either side of it collapses with it.
+        if (m.fenceRefused && fseg.fenceKind === "awaiting") continue
         push(
           <FenceCard
             key={`${keyBase}-f${fi}`}
@@ -3505,6 +3519,13 @@ export function FenceCard({ fenceKind, body, hints, wrap, stale }: { fenceKind: 
   // BLOCK markdown, not inline. The fence's prose is arbitrary Markdown since frontmatter landed
   // (2026-08-17), and inline rendering flattened a worker's paragraphs and lists into one run — the shape
   // a handoff most often takes. `done` has rendered as blocks all along; this is the same treatment.
+  //
+  // AND THE CLASS HAS TO FOLLOW THE RENDERER. That change swapped the markdown call and left every one
+  // of these bodies on `md-inline`, which styles only code/strong/em/links — so a `<ul>` arrived with
+  // Tailwind's preflight reset still on it and a handoff's bullet list came out as flat unmarked lines
+  // that read as a run of labels (maintainer 2026-08-19: "renders as light gray labels?"). `md-body` is
+  // the block sheet; inside a card `.card-md` pulls it to the card's own 13px and lets the colour inherit,
+  // which is why no CARD_BODY rides alongside it.
   const awaitingInner = useInnerHtml(useMarkdownHtml(awaitingLine))
   // WHAT IT IS WAITING ON, as structure rather than as the raw `kind: value` lines the fence is made of.
   // The reason above is the sentence; this is the SET, and it is the part a human scans to answer "will
@@ -3590,7 +3611,17 @@ export function FenceCard({ fenceKind, body, hints, wrap, stale }: { fenceKind: 
     // which is ordinary Markdown it meant to be read as prose. A fence that is pure frontmatter has no
     // prose, so a settled one renders NOTHING: the wait is over, and it was never a message.
     if (body.trim() === "") return null
-    return <div className="text-[13px] leading-[1.55] text-muted" dangerouslySetInnerHTML={doneInner} />
+    // AND IT IS RENDERED AS THE MARKDOWN IT IS. Dropping the card frame took `md-body` with it, and a
+    // handoff's bullet list is the shape this prose most often takes — so three list items came out as
+    // three flat grey lines with no markers and no indent (Tailwind's preflight resets `ul`), which reads
+    // as a run of labels rather than as a list (maintainer 2026-08-19: "renders as light gray labels?").
+    // `card-md` is the same wrapper the cards use to pull markdown to 13px and let the colour inherit —
+    // `.card-md .md-body` sets `color: inherit`, which is why the muted tone rides the wrapper here.
+    return (
+      <div className="card-md text-muted">
+        <div className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={doneInner} />
+      </div>
+    )
   }
   const parkAction = awaitingParkAction(hints)
   const parkTitle = parkAction?.title ?? AWAITING_FALLBACK_TITLE
@@ -3627,7 +3658,7 @@ export function FenceCard({ fenceKind, body, hints, wrap, stale }: { fenceKind: 
     const listedBelow = (fenceThread?.watches ?? []).some((w) => w.state === "armed")
     return (
       <div data-awaiting-fence className="flex flex-col">
-        <div className={`md-inline ${wrap ? QUEUE_WRAP : ""}`} dangerouslySetInnerHTML={awaitingInner} />
+        <div className={`md-body ${wrap ? QUEUE_WRAP : ""}`} dangerouslySetInnerHTML={awaitingInner} />
         {watched.length > 0 && !listedBelow && (
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5">
             {watched.map((watch) => <WatchedRef key={watch.ref} watch={watch} />)}
@@ -3639,7 +3670,7 @@ export function FenceCard({ fenceKind, body, hints, wrap, stale }: { fenceKind: 
   return (
     <TranscriptCard data-awaiting-fence icon={AwaitingIcon} label={parkTitle} aside={watched.length === 1 ? <WatchedRef watch={watched[0]} /> : undefined}>
       <div
-        className={`md-inline ${CARD_BODY}${wrap ? ` ${QUEUE_WRAP}` : ""}`}
+        className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`}
         dangerouslySetInnerHTML={awaitingInner}
       />
       {(itemLabels.length > 0 || forLabel) && (

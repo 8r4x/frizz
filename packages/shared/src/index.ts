@@ -813,6 +813,39 @@ export function shellDoneMessage(shell: { taskId?: string; label: string; status
   )
 }
 
+/** The delivered shell-done wake, read back — `null` for anything else.
+ *
+ *  Same producer/parser pair, and the same reason for it, as the PR-watch status line: the chat draws
+ *  this event as a hairline and has nothing but the text to draw it from.
+ *
+ *  IT EXISTS TO MAKE ONE EVENT READ AS ONE EVENT. A background shell finishing while the worker is
+ *  RUNNING is reported by the runtime, and the transcript has always drawn that as a wake divider
+ *  (`backgroundWakeLabel` — "Background task «…» finished"). The very same shell finishing while the
+ *  worker RESTS is reported by frizz instead, because the runtime's notification only ever reaches a
+ *  running turn — and that one arrived as a full-width card. So whether a shell's completion was a
+ *  hairline or a panel came down to whether anyone happened to be awake, which is not a distinction the
+ *  transcript should be drawing at all (maintainer 2026-08-19, extending the pr-watch fix: "yes").
+ *
+ *  The trailer is not parsed and not rendered: "frizz sends this because your runtime's own completion
+ *  notification does not reach you" explains frizz to the agent, and the human it is shown to never had
+ *  that expectation to correct. */
+export interface ShellDoneWake {
+  taskId?: string
+  label: string
+  outcome: "finished" | "failed" | "stopped"
+}
+
+const SHELL_DONE = /^⏰ Your background shell (finished|FAILED|was STOPPED): (?:`([^`]+)` — )?(.+)\.$/
+
+export function parseShellDoneWake(text: string): ShellDoneWake | null {
+  // The FIRST line, unlike the PR-watch scan: this delivery is composed alone and never rides beside
+  // another part, so a match anywhere else would mean the agent quoted the message back at itself.
+  const m = SHELL_DONE.exec(text.trim().split("\n")[0]?.trim() ?? "")
+  if (!m) return null
+  const outcome = m[1] === "FAILED" ? "failed" : m[1] === "was STOPPED" ? "stopped" : "finished"
+  return { ...(m[2] ? { taskId: m[2] } : {}), label: m[3], outcome }
+}
+
 // ---- THE BUILT-IN SIGN-OFF NUDGE (scheduler SOURCE 9) --------------------------------------------
 // The rules arrive when they are ABOUT TO BE USED, rather than 200k tokens earlier in a system prompt
 // the agent has long since stopped attending to. Maintainer 2026-08-11: "the agent seems to often
@@ -972,6 +1005,35 @@ export const SIGNOFF_NUDGE_MESSAGE = [
   "seen nothing since their own last message — the Goal, this reminder, a watcher wake all came from",
   "frizz — so anything you assumed they had followed, they have not.",
 ].join("\n")
+
+// ---- THE FENCE CORRECTIONS (scheduler SOURCE 12) -------------------------------------------------
+// Frizz refusing a park and telling the worker why: a fence naming something that is not running, a
+// fence naming nothing at all, a fence written in a line kind that no longer exists.
+//
+// THEY ARE INVISIBLE IN THE CHAT, and that is the whole reason these two strings live here. A
+// correction is frizz talking to the AGENT about its own grammar — there is no news in it and nothing
+// for the human to do — and left as a first-party card it dominated the very handoff it was complaining
+// about, then sat above the worker's re-fence as a second, louder copy of a conversation the human was
+// never part of (maintainer 2026-08-19, with a screenshot of exactly that). It is the same verdict the
+// sign-off nudge got on 2026-08-12, one step further: that one collapses to a hairline, this one is
+// dropped from the transcript entirely.
+//
+// The LEADS are matched rather than a marker being minted, so the corrections already sitting in every
+// open thread on disk disappear too — a marker would only ever reach the ones written after it shipped.
+// A text match is honest for the same reason it is honest for `SIGNOFF_NUDGE_MARKER`: frizz writes these
+// strings and frizz reads them, and the formatter in scheduler.ts builds its heads FROM them, so the two
+// cannot drift.
+//
+// `⏰ Your wait expired` is deliberately NOT one of them. That is not a correction — the fence was right
+// and the clock ran out — it is the wake that ENDED the park, and the reason the thread is moving again.
+// The scheduler draws the same line for its bump cap (`cause !== "expired"`).
+export const PARK_CORRECTION_NAMES_LEAD = "⚠️ Your ```awaiting fence names "
+export const PARK_CORRECTION_RETIRED_LEAD = "⛔ Your ```awaiting fence uses "
+/** Is this delivered wake one of frizz's fence corrections? */
+export function isParkCorrection(text: string): boolean {
+  const t = text.trimStart()
+  return t.startsWith(PARK_CORRECTION_NAMES_LEAD) || t.startsWith(PARK_CORRECTION_RETIRED_LEAD)
+}
 
 export function timerPromptMessage(prompt: string, fireAt: string): string {
   return `${prompt.trim()}\n\n(One-off timer, set for ${fireAt}. It has fired and will not repeat.)`
@@ -2947,6 +3009,15 @@ export const TranscriptMessage = z.object({
   // pairing, and `projectTranscriptPeerNames` uses this id to ask it. Never a drawer key on its own —
   // that is `peerDispatchId`, which the same pass can also supply once this resolves.
   peerSenderTaskId: z.string().optional(),
+  // FRIZZ REFUSED the ```awaiting fence this message ends in — it named something that is not running,
+  // or named nothing at all, or used a retired line kind (see `isParkCorrection`). The fence is not a
+  // park, so the chat draws nothing for it: an hourglass card with a park button asserts a wait that
+  // frizz declined to arm, and the settled-fence prose beneath it is a handoff the worker is about to
+  // write again in its re-fence. Set by the server when it drops the correction that followed, so the
+  // signal and the thing it is derived from can never disagree in the browser.
+  //
+  // Additive + optional: an old client ignores it and renders the fence as it did before.
+  fenceRefused: z.literal(true).optional(),
 })
 export type TranscriptMessage = z.infer<typeof TranscriptMessage>
 

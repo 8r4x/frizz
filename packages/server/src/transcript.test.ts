@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { projectRetiredBackgroundOps, projectTranscriptPeerNames } from "./transcript.ts"
 import { relayMessage } from "./completion-relay.ts"
 import type { TranscriptMessage } from "@frizz/shared"
-import { DISPATCH_TASK_BANNER_MARKER, formatGithubWakeSteer, GITHUB_DISPATCH_UI_BOUNDARY, parseRecurringPrompt, restPromptMessage, wakeDeliveryToken, type GithubWakeSteer } from "@frizz/shared"
+import { DISPATCH_TASK_BANNER_MARKER, formatGithubWakeSteer, GITHUB_DISPATCH_UI_BOUNDARY, PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_RETIRED_LEAD, parseRecurringPrompt, restPromptMessage, wakeDeliveryToken, type GithubWakeSteer } from "@frizz/shared"
 import {
   createTranscriptFold,
   frizzDispatchDisplayText,
@@ -134,6 +134,52 @@ test("a wake token riding a QUEUED follow-up is hidden too, and the pending bubb
   assert.equal(queued[1].text, delivered)
   assert.equal(queued[1].displayText, wakeSteer)
   assert.equal(queued[1].wake, true, "a wake pasted into a mid-turn worker is still frizz speaking")
+})
+
+// SOURCE 12's correction is frizz talking to the WORKER about its own fence grammar — no news, nothing
+// for the human to do — so it never becomes a message. The one mark it leaves on the chat is on the
+// fence it refused, which stops drawing rather than claiming a park frizz declined to arm.
+const refusedFence = [
+  "I'll wait on the two of them.",
+  "",
+  "```awaiting",
+  "pr: colinhacks/zod#5910",
+  "agent: toolu_theWrongId",
+  "for: 3h",
+  "---",
+  "Waiting on CI and the bisect.",
+  "```",
+].join("\n")
+
+function correctionTranscript(delivered: string): TranscriptMessage[] {
+  return parseTranscript([
+    JSON.stringify({ type: "user", timestamp: "2026-07-01T00:00:00.000Z", message: { content: "orientation\n\nTASK:\nthe original task" } }),
+    JSON.stringify({ type: "assistant", timestamp: "2026-07-01T00:00:05.000Z", message: { id: "m1", content: [{ type: "text", text: refusedFence }] } }),
+    JSON.stringify({ type: "user", timestamp: "2026-07-01T00:00:10.000Z", message: { content: `${delivered}\n\n${wakeDeliveryToken(wakeId)}` } }),
+  ].join("\n"))
+}
+
+test("a fence correction leaves the chat entirely, and the fence it refused stops drawing", () => {
+  const msgs = correctionTranscript(
+    `${PARK_CORRECTION_NAMES_LEAD}something that is not running, so it is not a park and your thread stayed in the queue.\n\n- \`agent: toolu_theWrongId\` — NOT RUNNING`,
+  )
+  assert.equal(msgs.filter((m) => m.role === "user").length, 1, "only the dispatch — the correction never becomes a message")
+  const rested = msgs[msgs.length - 1]
+  assert.equal(rested.text, refusedFence, "the worker's own words are untouched")
+  assert.equal(rested.fenceRefused, true)
+})
+
+test("a retired-line-kind correction refuses its fence too, and an expired wake refuses nothing", () => {
+  const retired = correctionTranscript(`${PARK_CORRECTION_RETIRED_LEAD}a line kind that no longer exist, so frizz ignored it — the\nfence named nothing and your thread stayed in the queue.`)
+  assert.equal(retired.filter((m) => m.role === "user").length, 1)
+  assert.equal(retired[retired.length - 1].fenceRefused, true)
+  // The expiry wake is NOT a correction: the fence was right and the clock ran out, so it stays a
+  // message (it is why the thread is moving again) and the fence it names was a real park.
+  const expired = correctionTranscript("⏰ Your wait expired, nothing resolved. Check back in on everything.")
+  const wake = expired[expired.length - 1]
+  assert.equal(wake.role, "user")
+  assert.equal(wake.wake, true)
+  assert.equal(expired.find((m) => m.text === refusedFence)?.fenceRefused, undefined)
 })
 
 test("a wake token is projected out only from the delivery tail, never from quoted prose", () => {

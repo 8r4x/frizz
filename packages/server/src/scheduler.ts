@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, formatGithubWakeSteer, type GithubWatchStatus, prWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, type QuotaSnapshot } from "@frizz/shared"
+import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_RETIRED_LEAD, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, formatGithubWakeSteer, type GithubWatchStatus, prWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, type QuotaSnapshot } from "@frizz/shared"
 import { GITHUB_STATUS_SETTING, parkExpiresAt, parkIsHonoured, readAwaitingPark, unaccountedItems, type LiveActivity } from "./awaiting.ts"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
@@ -2104,7 +2104,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const retired = retiredAwaitingKindsIn(tele.lastFence.body ?? "")
       const head = retired.length > 0
         ? [
-          `⛔ Your \`\`\`awaiting fence uses ${retired.length === 1 ? "a line kind" : "line kinds"} that no longer exist, so frizz ignored ${retired.length === 1 ? "it" : "them"} — the`,
+          // The LEAD comes from shared so the transcript can recognise this delivery as a correction and
+          // drop it (isParkCorrection) — one string, written and read in one place, never two that drift.
+          `${PARK_CORRECTION_RETIRED_LEAD}${retired.length === 1 ? "a line kind" : "line kinds"} that no longer exist, so frizz ignored ${retired.length === 1 ? "it" : "them"} — the`,
           "fence named nothing and your thread stayed in the queue.",
           "",
           ...retired.map((k) => `- \`${k}:\` is GONE → ${RETIRED_AWAITING_REPLACEMENT[k]}`),
@@ -2123,7 +2125,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         ].join("\n")
         : nameless
         ? [
-          "⚠️ Your ```awaiting fence names nothing to wait on, so it is not a park — your thread is still",
+          `${PARK_CORRECTION_NAMES_LEAD}nothing to wait on, so it is not a park — your thread is still`,
           "in the queue, and nothing will wake you.",
           "",
           "A wait has to be something frizz can SEE. Register one, then name it:",
@@ -2150,7 +2152,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           "```question.",
         ].join("\n")
         : [
-          `⚠️ Your \`\`\`awaiting fence names ${dead.length === 1 ? "something that is" : "things that are"} not running, so it is not a park and your thread stayed in the queue.`,
+          `${PARK_CORRECTION_NAMES_LEAD}${dead.length === 1 ? "something that is" : "things that are"} not running, so it is not a park and your thread stayed in the queue.`,
           "",
           ...status,
           "",

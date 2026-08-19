@@ -8,6 +8,7 @@ import {
   GITHUB_DISPATCH_UI_BOUNDARY,
   ATTACHMENT_IMAGE_EXTENSIONS,
   attachmentExtension,
+  isParkCorrection,
   isWakeDelivery,
   parseAgentMessage,
   parseGithubWakeSteer,
@@ -27,7 +28,7 @@ import { stripDeliveryMarkers } from "./delivery-marker.ts"
 import { RELAYED_MARKER, relayNotificationBlock } from "./completion-relay.ts"
 import { CODEX_FIRST_FINAL_TITLE_TRANSPORT, CODEX_LEGACY_FIRST_FINAL_TITLE_TRANSPORT, parseCodexLine, createCodexBackend, extractCodexFrizzTitle } from "./backend/codex.ts"
 import { discoverTranscriptDir, discoverTranscriptId, DISCOVERY_GRACE_MS } from "./discover.ts"
-import { isClaudeAuthErrorText } from "./tailer.ts"
+import { isClaudeAuthErrorText, parseSignalFence } from "./tailer.ts"
 import { redactCredentialStructure, redactCredentialSyntax } from "./credential-redaction.ts"
 import { hasEscapingBackgroundJob } from "../../../cc-worker/hooks/bash-background.mjs"
 import { frizzTempDir } from "./frizz-paths.ts"
@@ -241,12 +242,53 @@ function userProjection(text: string, first: boolean): { displayText?: string; w
 // takes a `#u<i>` suffix. The `u` namespace matters: when this record ALSO drew completion dividers
 // they already claimed `#0`, `#1`, … and the collision is silent on the server — it surfaces only as a
 // React duplicate-key warning in the browser, which is where this was actually caught.
-function pushUserRecord(out: TranscriptMessage[], sourceId: string, text: string, at: string | undefined, shareId = true): void {
+function pushUserRecord(out: TranscriptMessage[], sourceId: string, text: string, at: string | undefined, dropCorrection: CorrectionSink, shareId = true): void {
   for (const [i, segment] of splitWakeDeliveries(text).entries()) {
     if (isInjectedNoise(segment)) continue
+    if (dropCorrection(segment)) continue
     const projection = userProjection(segment, out.length === 0)
     const id = i === 0 && shareId ? sourceId : `${sourceId}#u${i}`
     out.push({ sourceId: id, role: "user", text: segment, ...projection, tools: [], parts: [], at })
+  }
+}
+
+// A FENCE CORRECTION IS NOT A MESSAGE (see isParkCorrection): the record carrying it never renders, and
+// the one mark it leaves on the chat is that the fence it refused stops drawing.
+//
+// It is a per-fold closure because ONE delivery reaches the JSONL through up to three carriers — the
+// `queue-operation enqueue`, the `queued_command` attachment, and the plain user record — and every one
+// of them has to be dropped or the correction simply renders through the carrier that was missed. That
+// is also why the MARK is deduped by text: the attachment routinely lands well after the worker has
+// already replied (measured p50 20.9s, max 9.6min), so a second walk from there would reach past the
+// refused fence and mark the worker's re-fence, which is the good one.
+type CorrectionSink = (text: string) => boolean
+function createCorrectionSink(out: TranscriptMessage[]): CorrectionSink {
+  const marked = new Set<string>()
+  return (text: string) => {
+    if (!isParkCorrection(text)) return false
+    if (!marked.has(text)) {
+      marked.add(text)
+      markFenceRefused(out)
+    }
+    return true
+  }
+}
+
+// The rest a correction answers is the newest assistant PROSE message, because that is the only fence
+// the scheduler ever corrects: SOURCE 12 reads `tele.lastFence`, minted at `tele.lastAssistantAt`, and
+// only ever speaks while the thread is idle. So the walk steps over dividers and tool-only messages
+// (neither carries a fence), takes the first message that has prose, and stops — at a user turn it stops
+// without marking anything, because a correction never reaches back past one.
+//
+// A fence that does not parse as `awaiting` leaves the message untouched rather than falling through to
+// an older one. The correction is about THIS rest; if its fence cannot be read, nothing is refused.
+function markFenceRefused(out: TranscriptMessage[]): void {
+  for (let i = out.length - 1; i >= 0; i--) {
+    const m = out[i]
+    if (m.role === "user") return
+    if (m.kind || !m.text.trim()) continue
+    if (parseSignalFence(m.text)?.kind === "awaiting") m.fenceRefused = true
+    return
   }
 }
 
@@ -392,6 +434,7 @@ export interface TranscriptFold {
 
 export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold {
   const out: TranscriptMessage[] = []
+  const dropCorrection = createCorrectionSink(out)
   let lastAssistantId: string | null = null
   // Tool calls awaiting their tool_result, keyed by tool_use id. Claude records every result as a
   // later synthetic `user` record, so the call card starts pending and is back-filled in place with
@@ -600,7 +643,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
     if (rec.type === "queue-operation") {
       const op = typeof rec.operation === "string" ? rec.operation : ""
       const content = typeof rec.content === "string" ? normalizeNewlines(rec.content) : ""
-      if (op === "enqueue" && content.trim() && !isInjectedNoise(content)) {
+      if (op === "enqueue" && content.trim() && !isInjectedNoise(content) && !dropCorrection(content)) {
         // Undelivered → a grayed "queued" user bubble (queued:true reuses the client's optimistic-send
         // styling). Do NOT reset lastAssistantId: this bubble is transient (it may be spliced out on
         // delivery), and the assistant-merge tail-role check already blocks merging across a live bubble.
@@ -667,7 +710,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
       // text+image). Reading only the string shape dropped those on the floor entirely — combined with
       // the removal above, an image-bearing queued message disappeared from the chat for good.
       const prompt = normalizeNewlines(attachmentPromptText(att.prompt))
-      if (prompt.trim() && humanDelivery && att.commandMode === "prompt" && !isInjectedNoise(prompt)) {
+      if (prompt.trim() && humanDelivery && att.commandMode === "prompt" && !isInjectedNoise(prompt) && !dropCorrection(prompt)) {
         // Resolve the pending bubble IN PLACE — same object, same position, just un-gray it. Never emit
         // a second copy (the enqueue already placed it where the human hit send).
         if (!resolveQueued(prompt)) {
@@ -848,7 +891,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
         // The first user message is the composed dispatch prompt (scratchpad orientation + project
         // instructions + banner + TASK). Only what sits below the banner is the human's words — that
         // narrowing is a DISPLAY projection (userDisplayText), never a rewrite of the stored text.
-        pushUserRecord(out, sourceId, text, rec.timestamp, !drewEvents)
+        pushUserRecord(out, sourceId, text, rec.timestamp, dropCorrection, !drewEvents)
         lastAssistantId = null
       }
       return
@@ -2185,6 +2228,7 @@ function resolveTranscriptPath(project: Project, sessionId: string): string {
 // Same defensive posture as parseTranscript: a bad line → parseCodexLine [] → skipped, never throws.
 export function projectCodexTranscript(raw: string, identityPrefix = "codex"): TranscriptMessage[] {
   const out: TranscriptMessage[] = []
+  const dropCorrection = createCorrectionSink(out)
   // The open assistant message the current turn's text/tool events append to. A user turn closes it
   // (→ null) so the next assistant content starts a fresh message.
   let cur: TranscriptMessage | null = null
@@ -2437,7 +2481,7 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
           // The first user message is the composed dispatch prompt (orientation + banner + TASK +
           // sentinel). Only what sits below the banner is the human's words, and — as in parseTranscript
           // — that narrowing is a DISPLAY projection, so the stored text keeps the machine-facing prompt.
-          if (text) pushUserRecord(out, sourceId, text, ev.at)
+          if (text) pushUserRecord(out, sourceId, text, ev.at, dropCorrection)
           break
         }
         case "agent-report": {
