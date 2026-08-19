@@ -2,7 +2,7 @@
 // a real forked daemon — no real claude, no network). Proves: a tool-permission escalation the daemon
 // relays is journaled as a provider-neutral approval interaction (provider.kind "claude",
 // payload.kind "permission-approval"), and the human's dashboard decision is applied back to the daemon.
-import { chmodSync, copyFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -12,9 +12,10 @@ import assert from "node:assert/strict"
 import Database from "../sqlite.ts"
 import { createInteractionStore } from "../interaction-store.ts"
 import { createClaudeAgentBrokerBridge } from "./claude-agent-broker-bridge.ts"
-import { claudeBrokerRecordPath, readBrokerRecord } from "./claude-broker-host.ts"
+import { claudeBrokerRecordPath, claudeBrokerRetirementPath, killBroker, liveBrokerRecords, markBrokerRetired, readBrokerRecord, takeBrokerRetirement } from "./claude-broker-host.ts"
 import { describeClaudeBrokerDiagnostic } from "./claude-broker-diagnostics.ts"
 import { CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX, type ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
+import { WORKER_MAX_CONCURRENT_SUBAGENTS, WORKER_MAX_SUBAGENTS, WORKER_MAX_WEB_SEARCHES } from "./types.ts"
 
 const fakeCli = fileURLToPath(new URL("./claude-agent-sdk.fixtures/fake-claude-cli.mjs", import.meta.url))
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -263,6 +264,133 @@ test("a refused input reaches the bridge's onDiagnostic — the server's only vi
     assert.match(drop.message, /already outstanding/, "…and why it was refused")
     // The mapping the server applies to it is describeClaudeBrokerDiagnostic's, tested beside it.
     assert.equal(describeClaudeBrokerDiagnostic({ kind: "stderr", message: drop.message, truncated: false }), drop.message)
+  } finally {
+    bridge.releaseSession(slug, sessionId, "session-deleted")
+    bridge.close()
+    try { const r = readBrokerRecord(claudeBrokerRecordPath(dir, sessionId)); if (r) process.kill(r.daemonPid, "SIGKILL") } catch {}
+    await rmEventually(dir)
+  }
+})
+
+// THE ONE REAL GAP HIBERNATION OPENED, and it predates hibernation: `attach` reports a death whenever a
+// resume has to cold-start, because that is normally the only way frizz learns a daemon died unobserved.
+// But THREE paths retire a daemon on purpose while the conversation carries on — a permission-mode
+// change (retireDaemon), a usage-limit resume (freshProcess), and now hibernation — and every one of
+// them ends in exactly that cold start. Each was telling the operator their thread had crashed, in the
+// same words a real crash uses. Hibernation runs unattended on a timer, so it would have turned that
+// into a steady drip of false crash reports.
+//
+// The negative control is the whole test: the SAME SIGTERM, the SAME cold resume, with and without the
+// retirement mark. If suppression came from anything but the mark, the second half would be silent too.
+test("a cold resume after an INTENTIONAL retirement reports no death — and the same teardown unmarked still does", { timeout: 25_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cbrk-hibernate-"))
+  const exe = join(dir, "fake-claude--hibernate.mjs")
+  copyFileSync(fakeCli, exe); chmodSync(exe, 0o700)
+  const crashes: { slug: string; message?: string }[] = []
+  const bridge = createClaudeAgentBrokerBridge({
+    stateDir: dir, executablePath: exe,
+    env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" },
+    onDiagnostic: (slug, _sid, d) => { if (d.kind === "lifecycle" && d.phase === "crashed") crashes.push({ slug, message: d.message }) },
+  })
+  const sessionId = randomUUID()
+  const slug = "hibernating-thread"
+  const recordOf = () => readBrokerRecord(claudeBrokerRecordPath(dir, sessionId))
+  const markPath = claudeBrokerRetirementPath(dir, sessionId)
+  try {
+    await bridge.spawnDispatch({ threadSlug: slug, sessionId, cwd: dir, prompt: "start the work", permissionMode: "auto" })
+    const first = recordOf()
+    assert.ok(first, "the dispatch forked a daemon")
+
+    // ---- hibernation: retire, then wake ----
+    assert.equal(bridge.retireDaemon({ threadSlug: slug, sessionId, reason: "hibernate" }), true, "the resting daemon was retired")
+    assert.ok(existsSync(markPath), "…leaving the mark that says frizz did it on purpose")
+    await bridge.followUp({ threadSlug: slug, sessionId, cwd: dir, text: "wake up" })
+    const second = recordOf()
+    assert.ok(second, "the follow-up cold-resumed a replacement daemon")
+    assert.notEqual(second.daemonPid, first.daemonPid, "…a genuinely different process")
+    assert.equal(second.sessionId, sessionId, "…on the same session")
+    assert.equal(crashes.length, 0, "THE POINT: waking a hibernated thread is not a crash to report")
+    assert.equal(existsSync(markPath), false, "the mark is one-shot — it explains exactly one resume")
+
+    // ---- the control: the identical teardown, unmarked ----
+    // killBroker without a reason is what a stop/complete does; here it stands in for the unobserved
+    // death the report exists for. Same signal, same cold resume, no mark.
+    assert.equal(killBroker(dir, sessionId), true, "the daemon was taken down without a retirement mark")
+    await bridge.followUp({ threadSlug: slug, sessionId, cwd: dir, text: "and again" })
+    const deadline = Date.now() + 10_000
+    while (crashes.length === 0) {
+      if (Date.now() > deadline) throw new Error("an unmarked daemon death was never reported — the suppression is too wide")
+      await sleep(100)
+    }
+    assert.equal(crashes[0].slug, slug, "the report names the thread")
+    assert.match(crashes[0].message ?? "", /signal-SIGTERM/, "…and carries the dead daemon's own recorded cause")
+  } finally {
+    bridge.releaseSession(slug, sessionId, "session-deleted")
+    bridge.close()
+    try { const r = recordOf(); if (r) process.kill(r.daemonPid, "SIGKILL") } catch {}
+    await rmEventually(dir)
+  }
+})
+
+// A mark left for one daemon must never explain a LATER one's genuine death. The generation is what
+// keeps the suppression narrow; the one-shot consume is what keeps it from outliving its resume.
+test("the retirement mark is one-shot and names the exact daemon it explains", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cbrk-mark-"))
+  try {
+    assert.equal(takeBrokerRetirement(dir, "sess-none"), null, "no mark, nothing to explain")
+    markBrokerRetired(dir, "sess-1", "hibernate", "gen-a")
+    const mark = takeBrokerRetirement(dir, "sess-1")
+    assert.equal(mark?.reason, "hibernate")
+    assert.equal(mark?.generation, "gen-a", "the mark names the daemon it was left for")
+    assert.equal(takeBrokerRetirement(dir, "sess-1"), null, "…and reading it consumes it")
+    // It sits in the record directory but must never be READ as a record: liveBrokerRecords() unlinks
+    // every *.json there whose pid probe fails, which would delete the mark the moment it was written.
+    markBrokerRetired(dir, "sess-2", "retire", "gen-b")
+    assert.equal(liveBrokerRecords(dir).length, 0)
+    assert.ok(existsSync(claudeBrokerRetirementPath(dir, "sess-2")), "the mark survives a live-record enumeration")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// ---- the lifted worker caps actually reach a worker ------------------------------------------------
+// dispatch.ts lifts Claude Code's WebSearch and sub-agent ceilings far above their 200/200/20 defaults,
+// with a page of reasoning about why a long-lived frizz worker hits them and a chat session does not.
+// None of it reached a worker. The caps were set only by `claudeWorkerEnvironment()`, which only the
+// argv builder called, and the argv builder has had no caller since the broker became the sole Claude
+// transport; the bridge spread `CLAUDE_WORKER_ENV`, which did not carry them. Nothing failed — the
+// worker simply ran on the defaults the lift existed to escape, and `backend/types.ts` recorded the
+// split as a known distinction rather than a defect (found 2026-08-19).
+//
+// Asserted against the REAL forked process's own environment rather than against the record frizz
+// composes, because composing it correctly is exactly what was never in doubt.
+test("the lifted worker caps reach the process the broker actually forks", { timeout: 25_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cbrk-caps-"))
+  const exe = join(dir, "fake-claude--basic.mjs")
+  copyFileSync(fakeCli, exe); chmodSync(exe, 0o700)
+  const bridge = createClaudeAgentBrokerBridge({
+    stateDir: dir, executablePath: exe,
+    env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" },
+  })
+  const sessionId = randomUUID()
+  const slug = "caps-thread"
+  const startup = () => {
+    try {
+      return readFileSync(join(dir, "capture.jsonl"), "utf8")
+        .split("\n").filter(Boolean)
+        .map((l) => JSON.parse(l) as { kind: string; environment?: Record<string, unknown> })
+        .find((r) => r.kind === "startup")
+    } catch { return undefined }
+  }
+  try {
+    await bridge.spawnDispatch({ threadSlug: slug, sessionId, cwd: dir, prompt: "do the thing", permissionMode: "default" })
+    const deadline = Date.now() + 10_000
+    while (!startup() && Date.now() < deadline) await sleep(100)
+    const env = startup()?.environment
+    assert.ok(env, "the fake claude recorded its startup environment")
+    assert.equal(env.maxWebSearches, String(WORKER_MAX_WEB_SEARCHES), "the web-search lift reaches the worker")
+    assert.equal(env.maxSubagents, String(WORKER_MAX_SUBAGENTS), "the sub-agent spawn lift reaches the worker")
+    assert.equal(env.maxConcurrentSubagents, String(WORKER_MAX_CONCURRENT_SUBAGENTS), "the concurrency lift reaches the worker")
   } finally {
     bridge.releaseSession(slug, sessionId, "session-deleted")
     bridge.close()

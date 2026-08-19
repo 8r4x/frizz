@@ -44,6 +44,8 @@ import {
   reconcileAdoptionClaims,
 } from "./adoption-recovery.ts"
 import { startOrphanReaper } from "./orphan-reaper.ts"
+import { hibernationEnabled, startThreadHibernator } from "./thread-hibernation.ts"
+import { liveBrokerRecords } from "./backend/claude-broker-host.ts"
 import {
   createRetryableCleanup,
   createShutdownBarrier,
@@ -76,6 +78,7 @@ export type ContextStartupPhase =
   | "permission producer"
   | "profile producer"
   | "wake scheduler"
+  | "thread hibernation"
 
 export interface ContextStartupFence {
   whenSafe(): Promise<void>
@@ -920,6 +923,30 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   })
   resources.scheduler = scheduler
   opts.startup?.afterPhase?.("wake scheduler")
+
+  // Reclaim the ~504 MB an IDLE broker thread holds — the `claude` CLI, the chrome-devtools MCP pair it
+  // always mounts, the broker daemon and the frizz MCP server — by retiring the daemon of a thread that
+  // has rested past the prompt-cache TTL and has nothing outstanding. It is not an end: the transcript
+  // is on disk and the next input (an operator message, a fired timer, a recurring prompt, a PR event —
+  // all of which route through the bridge's followUp) cold-resumes it with `resume: true`. Above the TTL
+  // that resume costs no extra tokens, because the cache is already gone.
+  //
+  // Wired here, after the tailer, because the sweep's whole safety predicate is read off it. Requires
+  // the bridge for the same reason: without one there is no daemon to retire.
+  // FRIZZ_HIBERNATE_OFF=1 disables it (mirrors FRIZZ_ORPHAN_REAPER_OFF); FRIZZ_HIBERNATE_IDLE_MINUTES
+  // moves the threshold.
+  if (claudeBroker && hibernationEnabled()) {
+    contextUnsubscribers.push(startThreadHibernator({
+      liveDaemons: () => liveBrokerRecords(project.stateDir).map((r) => ({ sessionId: r.sessionId, createdAt: r.createdAt })),
+      rows: () => storage.allSessions(),
+      telemetry: (slug) => tailer.get(slug),
+      pendingInteractions: (threadSlug, sessionId) =>
+        storage.interactions.listPending({ projectId: project.id, threadSlug, sessionId }).length,
+      retire: (input) => claudeBroker.retireDaemon(input),
+      log: (m) => frizzLog.info("hibernate", m),
+    }))
+  }
+  opts.startup?.afterPhase?.("thread hibernation")
 
   return {
     bootId,

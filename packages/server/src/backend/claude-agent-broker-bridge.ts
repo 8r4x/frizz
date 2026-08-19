@@ -5,7 +5,7 @@
 // auto-allow, honoring the thread's permission mode — matching the retired argv path's
 // `--permission-mode auto`), and sends follow-up turns.
 import { randomUUID } from "node:crypto"
-import { adoptOrForkBroker, killBroker, liveBrokerRecord, liveBrokerRecords, claudeBrokerRecordPath, resolveClaudeExecutableAbsolute } from "./claude-broker-host.ts"
+import { adoptOrForkBroker, killBroker, liveBrokerRecord, liveBrokerRecords, claudeBrokerRecordPath, resolveClaudeExecutableAbsolute, takeBrokerRetirement, type BrokerRetirementMark, type BrokerRetirementReason } from "./claude-broker-host.ts"
 import { connectClaudeBroker, type ClaudeBrokerClient } from "./claude-broker-client.ts"
 import { describeClaudeBrokerExit, readClaudeBrokerExit, type ClaudeBrokerExitRecord } from "./claude-broker-diagnostics.ts"
 import type { ClaudeDiagnostic, ClaudePermissionDecision, ClaudePermissionRequest, ClaudePluginReload, ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
@@ -23,7 +23,7 @@ import {
   parseClaudeAskUserQuestion,
   type ClaudeAskSpec,
 } from "./claude-permission-interactions.ts"
-import { CLAUDE_WORKER_ENV, FRIZZ_MCP } from "./types.ts"
+import { FRIZZ_MCP, claudeWorkerEnv } from "./types.ts"
 
 type BrokerMcpServers = NonNullable<ClaudeBrokerConfig["mcpServers"]>
 
@@ -250,8 +250,13 @@ export interface ClaudeAgentBrokerBridge {
    * --dangerously-skip-permissions" (`_live_sdk_mode_switch.mts`). Same shape as `freshProcess` on
    * followUp and as the Restart worker verb; the cost is the in-memory sub-agents, which is why the
    * caller must not reach for this while any of them is running.
+   *
+   * `reason` (default `"retire"`) only names the teardown on the mark it leaves for the cold resume
+   * that follows — it changes nothing about what is torn down. HIBERNATION is the same act with a
+   * different motive: reclaim ~504 MB from a thread that has rested past the prompt-cache TTL, where
+   * the resume costs no extra tokens because the cache is already gone (thread-hibernation.ts).
    */
-  retireDaemon(input: { threadSlug: string; sessionId: string }): boolean
+  retireDaemon(input: { threadSlug: string; sessionId: string; reason?: BrokerRetirementReason }): boolean
   releaseSession(threadSlug: string, sessionId: string, reason: "session-replaced" | "session-deleted"): boolean
   close(): void
 }
@@ -394,10 +399,20 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
   // generation. A death is a one-time fact; re-announcing it on every later follow-up would turn an
   // attribution into noise.
   const reportedDeaths = new Set<string>()
-  const reportDeath = (slug: string, sessionId: string): void => {
+  const reportDeath = (slug: string, sessionId: string, retirement: BrokerRetirementMark | null): void => {
     if (!deps.onDiagnostic) return
     let exit: ClaudeBrokerExitRecord | null = null
     try { exit = readClaudeBrokerExit(deps.stateDir, sessionId) } catch { /* forensics degrade, never throw */ }
+    // A teardown FRIZZ PERFORMED is not a death to report. Three paths retire a daemon on purpose while
+    // the conversation carries on — a launch-flag change (retireDaemon), a usage-limit resume
+    // (freshProcess), and hibernation (thread-hibernation.ts) — and every one of them ends with exactly
+    // the cold resume this function was written to attribute. Without the mark each of them told the
+    // operator their thread had crashed, in the same words a real crash uses.
+    //
+    // Narrow on PURPOSE, so genuine crash detection is untouched: the mark is one-shot (takeBrokerRetirement
+    // consumed it before this call), and it only explains the daemon it actually named. A death whose exit
+    // record carries a DIFFERENT generation is a different daemon, and is still reported.
+    if (retirement && (!exit || exit.generation === retirement.generation)) return
     const key = `${sessionId}\0${exit?.generation ?? ""}\0${exit?.at ?? ""}`
     if (reportedDeaths.has(key)) return
     reportedDeaths.add(key)
@@ -444,10 +459,13 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
     const we = deps.workerEnv
     const workerEnv: Record<string, string> = {
       FRIZZ_THREAD: slug,
-      // Tell the worker its token budget rather than leaving it to guess — see CLAUDE_WORKER_ENV. The
-      // argv path gets this through claudeWorkerEnvironment(); on the broker path it rides workerEnv,
-      // which is also what gives these per-thread values priority over anything inherited.
-      ...CLAUDE_WORKER_ENV,
+      // Every Claude worker's environment — the token budget, the bash timeouts, and the lifted
+      // web-search / sub-agent caps — as ONE record, so a cap added there cannot miss this path. It
+      // used to spread CLAUDE_WORKER_ENV, which carried the first two and not the caps, and since the
+      // broker is the only transport that meant no worker ever received a lift (fixed 2026-08-19; see
+      // claudeWorkerEnv). Spread here rather than inherited, which is what gives these per-thread
+      // values priority over anything in the environment frizz itself was launched with.
+      ...claudeWorkerEnv(),
       ...(we?.permDir ? { FRIZZ_PERM_DIR: we.permDir } : {}),
       // The cc-worker plugin's PreToolUse hook DENIES AskUserQuestion, because without frizz in the
       // loop a blocking question freezes a headless worker where nobody can answer it. On the broker path
@@ -472,7 +490,14 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
     // dead daemon's own exit record now, while the record is still on disk, rather than leaving the
     // operator with "the thread went quiet". A fresh dispatch (no resume) is not a death: there was
     // never a daemon to lose.
-    if (!reattached && fork.resume) reportDeath(slug, sessionId)
+    //
+    // …unless frizz itself retired that daemon, which is what the mark says. Consumed UNCONDITIONALLY
+    // here rather than inside the branch: this fork is the cold resume the mark was left for, so it has
+    // done its job either way and must not survive to explain some later death.
+    if (!reattached) {
+      const retirement = takeBrokerRetirement(deps.stateDir, sessionId)
+      if (fork.resume) reportDeath(slug, sessionId, retirement)
+    }
     return bind(slug, sessionId, cwd, record)
   }
 
@@ -555,7 +580,7 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
       // latched parent's children are already dead by the same 429 that latched it.
       if (input.freshProcess && held) {
         held.client.close()
-        killBroker(deps.stateDir, held.sessionId)
+        killBroker(deps.stateDir, held.sessionId, "fresh-process")
         sessions.delete(input.threadSlug)
         held = undefined
       }
@@ -740,7 +765,7 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
       const alive = liveBrokerRecord(claudeBrokerRecordPath(deps.stateDir, input.sessionId)) !== null
       const held = current(input.threadSlug, input.sessionId)
       if (held) { held.client.close(); sessions.delete(input.threadSlug) }
-      killBroker(deps.stateDir, input.sessionId)
+      killBroker(deps.stateDir, input.sessionId, input.reason ?? "retire")
       // NOTHING is terminalized here — no `retirePendingFor`, no pendingPerms sweep. This is not the end
       // of a session, it is the end of a PROCESS, and the conversation carries on in the next one. (The
       // caller refuses to run while a turn, a sub-agent or an approval is outstanding, so there is

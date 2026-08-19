@@ -3,7 +3,7 @@
 // codex-app-server-host.ts (fork/record/adopt), keyed per Claude session id (one broker per thread).
 import { spawn } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
-import { accessSync, constants as fsConstants, mkdirSync, readFileSync, readdirSync, unlinkSync } from "node:fs"
+import { accessSync, constants as fsConstants, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs"
 import { delimiter, dirname, isAbsolute, join } from "node:path"
 import { resolveDetachedDaemonEntry } from "../detached-daemons.ts"
 import type { BrokerRecord, ClaudeBrokerConfig } from "./claude-agent-broker.ts"
@@ -73,6 +73,61 @@ export function claudeBrokerSocketPath(stateDir: string, sessionId: string): str
 export function claudeBrokerRecordPath(stateDir: string, sessionId: string): string {
   const key = createHash("sha256").update(sessionId).digest("hex").slice(0, 16)
   return join(stateDir, "claude-broker", `${key}.json`)
+}
+
+/** Why frizz retired a daemon ON PURPOSE, while keeping the conversation. Every one of these ends a
+ *  PROCESS, never a session: the transcript is on disk and the next input cold-resumes it.
+ *   - `retire`        — a launch flag changed (permission mode / restart worker), so the next turn
+ *                       has to start under a new process. See the bridge's retireDaemon.
+ *   - `fresh-process` — a usage-limit resume; the latched `claude` would refuse the message.
+ *   - `hibernate`     — the thread has rested past the idle threshold and its memory was reclaimed.
+ *                       See thread-hibernation.ts. */
+export type BrokerRetirementReason = "retire" | "fresh-process" | "hibernate"
+
+/** The breadcrumb one intentional teardown leaves for the cold resume that follows it. */
+export interface BrokerRetirementMark {
+  at: string
+  /** The generation of the daemon that was retired. A LATER daemon's genuine death must never be
+   *  masked by a mark left for its predecessor, so the consumer compares this against the exit
+   *  record's own generation before it suppresses anything. */
+  generation: string
+  reason: BrokerRetirementReason
+}
+
+/** Sits beside the record and the diagnostics log so a session's whole broker footprint stays in one
+ *  directory. Deliberately NOT a `.json` name: liveBrokerRecords() reads every `*.json` here as a
+ *  BrokerRecord and unlinks whatever fails its pid probe, which would delete this the moment it was
+ *  written. */
+export function claudeBrokerRetirementPath(stateDir: string, sessionId: string): string {
+  const key = createHash("sha256").update(sessionId).digest("hex").slice(0, 16)
+  return join(stateDir, "claude-broker", `${key}.retired`)
+}
+
+/** Record that the daemon about to die is dying because frizz asked. Best-effort: a mark that cannot
+ *  be written costs one spurious "the thread crashed" log line, never the teardown itself. */
+export function markBrokerRetired(stateDir: string, sessionId: string, reason: BrokerRetirementReason, generation: string): void {
+  const mark: BrokerRetirementMark = { at: new Date().toISOString(), generation, reason }
+  try {
+    const path = claudeBrokerRetirementPath(stateDir, sessionId)
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, JSON.stringify(mark))
+  } catch { /* forensics degrade, never throw */ }
+}
+
+/** Read and CONSUME the mark — one intentional teardown explains exactly one cold resume. Consuming
+ *  it here (rather than leaving it for a later reader) is what stops a stale mark from ever swallowing
+ *  a second, genuine death. */
+export function takeBrokerRetirement(stateDir: string, sessionId: string): BrokerRetirementMark | null {
+  const path = claudeBrokerRetirementPath(stateDir, sessionId)
+  let mark: BrokerRetirementMark | null = null
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as Partial<BrokerRetirementMark>
+    if (typeof parsed?.at === "string" && typeof parsed.generation === "string" && typeof parsed.reason === "string") {
+      mark = { at: parsed.at, generation: parsed.generation, reason: parsed.reason as BrokerRetirementReason }
+    }
+  } catch { /* no mark, or a torn write — either way there is nothing to explain a death with */ }
+  try { unlinkSync(path) } catch {}
+  return mark
 }
 
 function pidAlive(pid: number): boolean {
@@ -179,10 +234,19 @@ export async function adoptOrForkBroker(options: ForkBrokerOptions): Promise<{ r
 }
 
 /** Best-effort terminate: SIGTERM the daemon and drop its record. Detach (client.close) is NOT this.
- *  Returns whether a live daemon record was present (i.e. there was something to stop). */
-export function killBroker(stateDir: string, sessionId: string): boolean {
+ *  Returns whether a live daemon record was present (i.e. there was something to stop).
+ *
+ *  `retireReason` says this teardown is one frizz CHOSE while keeping the conversation, and leaves the
+ *  mark that stops the cold resume behind it being reported to the operator as a crash. Omit it for a
+ *  teardown that ends the session itself (a stop, a completion, a replaced session): there is no later
+ *  resume to explain, and no death to suppress — and any mark an EARLIER retirement left is void, so
+ *  this clears it rather than leaving a promise of a resume that is never coming. The mark is written
+ *  BEFORE the signal so a frizz that dies mid-teardown still leaves the truth on disk. */
+export function killBroker(stateDir: string, sessionId: string, retireReason?: BrokerRetirementReason): boolean {
   const recordPath = claudeBrokerRecordPath(stateDir, sessionId)
   const record = liveBrokerRecord(recordPath)
+  if (retireReason) { if (record) markBrokerRetired(stateDir, sessionId, retireReason, record.generation) }
+  else takeBrokerRetirement(stateDir, sessionId)
   if (record) { try { process.kill(record.daemonPid, "SIGTERM") } catch {} }
   try { unlinkSync(recordPath) } catch {}
   return record !== null
