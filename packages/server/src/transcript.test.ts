@@ -12,6 +12,9 @@ import {
   frizzDispatchDisplayText,
   githubDispatchDisplayText,
   latestTranscriptWindow,
+  latestWindowStart,
+  LATEST_WINDOW_ASK_REACH_ITEMS,
+  MAX_MESSAGES,
   pageProjectedTranscript,
   projectClaudeTranscript,
   parseTranscript,
@@ -393,9 +396,11 @@ test("latest transcript window pins unresolved background shells that launched b
     parts: [],
     at: "2026-07-01T00:00:00.000Z",
   }
+  // Assistant-only, so the cut lands exactly at the 300 cap: a human message near the head would make
+  // the window reach BACK for it (latestWindowStart) and this test would be measuring that instead.
   const filler = Array.from({ length: 305 }, (_, index) => ({
     sourceId: `filler-${index}`,
-    role: index % 2 ? "assistant" as const : "user" as const,
+    role: "assistant" as const,
     text: `message ${index}`,
     tools: [],
     parts: [],
@@ -413,6 +418,96 @@ test("latest transcript window pins unresolved background shells that launched b
     false,
     "a terminal fold removes the synthetic card on the next reload",
   )
+})
+
+// THE QUEUE CARD'S ANCHOR. The card windows on the human's last message and shows everything after it,
+// so a latest window that cuts above that message leaves the card opening mid-turn on an assistant
+// sentence answering a question the reader can no longer see. Measured on the maintainer's `nub` board
+// 2026-08-18: 300 messages in the window, 14 `user` records in it, 13 of them frizz's own wakes, and the
+// human's ask sitting 13 messages above the head — one earlier page away and invisible.
+const windowFiller = (n: number, from = 0): TranscriptMessage[] =>
+  Array.from({ length: n }, (_, i) => ({
+    sourceId: `w-${from + i}`,
+    role: "assistant" as const,
+    text: `step ${from + i}`,
+    tools: [],
+    parts: [],
+  }))
+
+const humanAsk = (text: string, extra: Partial<TranscriptMessage> = {}): TranscriptMessage => ({
+  sourceId: `ask-${text}`,
+  role: "user",
+  text,
+  tools: [],
+  parts: [],
+  ...extra,
+})
+
+test("the latest window reaches back past its cap to keep the human's last message at the head", () => {
+  const messages = [...windowFiller(40), humanAsk("what I asked"), ...windowFiller(320, 40)]
+  assert.equal(messages.length - MAX_MESSAGES, 61, "the raw cap would cut 21 messages BELOW the ask")
+  const start = latestWindowStart(messages)
+  assert.equal(messages[start].text, "what I asked")
+  assert.equal(messages.length - start, 321)
+})
+
+test("frizz's own user records are not the human, so the window reaches past every one of them", () => {
+  // The exact shape of the card that provoked this: the tail is full of `wake` records (PR-watcher
+  // pings, the sign-off reminder, "Keep going" stop-hook prompts) and one undelivered queued send.
+  const noise = [
+    humanAsk("🤖 New GitHub review comment", { sourceId: "wake-1", wake: true }),
+    ...windowFiller(5, 900),
+    humanAsk("Keep going.", { sourceId: "wake-2", wake: true }),
+    ...windowFiller(5, 910),
+    humanAsk("not sent yet", { sourceId: "queued-1", queued: true }),
+  ]
+  const messages = [...windowFiller(20), humanAsk("the real ask"), ...windowFiller(310, 20), ...noise]
+  const start = latestWindowStart(messages)
+  assert.equal(messages[start].text, "the real ask")
+})
+
+test("the reach is all-or-nothing: an ask further back than the allowance leaves the window exactly where it was", () => {
+  const tooFar = LATEST_WINDOW_ASK_REACH_ITEMS + 1
+  const messages = [humanAsk("far too far back"), ...windowFiller(MAX_MESSAGES + tooFar)]
+  const start = latestWindowStart(messages)
+  assert.equal(start, messages.length - MAX_MESSAGES, "no partial extension — it buys no anchor and still ships the bytes")
+  assert.equal(latestWindowStart([...windowFiller(1), ...windowFiller(MAX_MESSAGES + 50, 1)]), 51,
+    "and a window with no human message anywhere above it is untouched too")
+})
+
+test("a transcript inside the cap is returned whole, ask or no ask", () => {
+  const messages = [humanAsk("hi"), ...windowFiller(10)]
+  assert.equal(latestWindowStart(messages), 0)
+  assert.equal(latestTranscriptWindow(messages).length, 11)
+})
+
+test("both latest-window producers agree, so a live push cannot splice the ask back out", () => {
+  // readLatestThreadTranscriptPage renders the RPC page and createTranscriptFold().messages() renders
+  // the /ws push. reconcileLiveMessages replaces the window wholesale, so a push whose head sat further
+  // forward than the page's would undo the anchoring on the very next frame.
+  const lines: string[] = []
+  lines.push(USER_LINE("the real ask"))
+  for (let i = 0; i < 320; i++) {
+    lines.push(JSON.stringify({
+      type: "assistant",
+      timestamp: "2026-07-10T18:00:01.000Z",
+      message: { id: `a-${i}`, content: [{ type: "text", text: `assistant-${i}` }] },
+    }))
+  }
+  const h = txHarness()
+  try {
+    h.store.upsertSession(txRow({}))
+    h.writeJsonl("sid", lines)
+    const page = readLatestThreadTranscriptPage(h.project, h.store, "t")
+    const push = readThreadTranscript(h.project, h.store, "t")
+    assert.equal(page.messages[0].text, "the real ask")
+    assert.deepEqual(push.map((m) => m.sourceId), page.messages.map((m) => m.sourceId))
+    // The cursor names the window's REAL head, so the first "Load earlier messages" click pages over
+    // history the card is NOT already showing.
+    assert.equal(page.hasEarlier, false, "the whole turn fit, so there is nothing earlier to fetch")
+  } finally {
+    h.cleanup()
+  }
 })
 
 test("a background shell completion emits a labeled turn-boundary event that breaks the merge chain", () => {
@@ -1628,7 +1723,10 @@ test("pagination cursor survives restart-like replay and concurrent append, but 
     }
     h.writeJsonl("sid", lines)
     const latest = readLatestThreadTranscriptPage(h.project, h.store, "t")
-    assert.equal(latest.messages.length, 300)
+    // 310 projected messages, capped to the latest window and then pulled back the extra two that put
+    // the human's last message at its head — the anchor the queue card windows on.
+    assert.equal(latest.messages.length, 302)
+    assert.equal(latest.messages[0].text, "user-4")
     assert.ok(latest.beforeCursor)
 
     const first = readEarlierThreadTranscriptPage(h.project, h.store, "t", latest.beforeCursor!)

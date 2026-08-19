@@ -42,6 +42,12 @@ type Raw = Record<string, any>
 
 export const MAX_MESSAGES = 300
 
+// How far PAST that cap the latest window may reach to keep the human's last message inside it, and the
+// all-or-nothing rule that governs the reach — see latestWindowStart. One earlier page's worth, which is
+// exactly what the reader would have got for one click of "Load earlier messages".
+export const LATEST_WINDOW_ASK_REACH_ITEMS = 100
+export const LATEST_WINDOW_ASK_REACH_BYTES = 512 * 1024
+
 // A user-record that is actually harness plumbing: task-notifications from background children,
 // bare system-reminder wrappers, frizz orchestrator pulses. Matched on the LEADING tag so a human
 // message that merely quotes one of these somewhere inside still renders.
@@ -375,7 +381,7 @@ export function retireStaleQueuedBubbles(messages: TranscriptMessage[], nowMs: n
 export interface TranscriptFold {
   ingest(chunk: string): void
   finalize(): void
-  // Capped to the MAX_MESSAGES render window (what parseTranscript/readTranscript return).
+  // Capped to the latest render window (latestWindowStart — what parseTranscript/readTranscript return).
   messages(): TranscriptMessage[]
   // The full retained projection, uncapped (what projectClaudeTranscript returns).
   allMessages(): TranscriptMessage[]
@@ -1015,9 +1021,14 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
   return {
     ingest,
     finalize,
+    // The SAME window the paged reader returns (latestWindowStart), because this is the OTHER producer:
+    // the /ws push renders from here while the RPC page renders from there, and a push whose head sat
+    // further forward than the page's would splice the human's ask straight back out of a card that had
+    // just anchored on it (reconcileLiveMessages replaces the window wholesale).
     messages: () => {
       const all = projected()
-      return all.length > MAX_MESSAGES ? all.slice(-MAX_MESSAGES) : all
+      const start = latestWindowStart(all)
+      return start === 0 ? all : all.slice(start)
     },
     allMessages: projected,
     consumedBytes: () => offset + Buffer.byteLength(buffer),
@@ -2564,8 +2575,51 @@ const MAX_PINNED_BACKGROUND_OPERATIONS = 128
 // would leave it above the queue card's most-recent-user window and therefore still invisible. The
 // paginated history carries the canonical message and the client replaces this synthetic card when
 // that page is loaded.
+// Where the latest window BEGINS: the last MAX_MESSAGES, pulled further back when that cut would land
+// past the human's own last message.
+//
+// The queue card anchors itself on that message (`lastUserIdx` in TodosView) and shows everything after
+// it, so a window that does not contain it leaves the card with nothing to anchor on — it falls back to
+// the window head and opens mid-turn, on an assistant sentence answering a question the reader can no
+// longer see. That is exactly what the maintainer has now objected to twice (2026-08-12: "queue cards
+// STILL need to go all the way back to the last user message"; 2026-08-18 on a `nub` card that opened on
+// "It replaced a generic 'keep going' stop-hook prompt"). The EARLIER-page reader has always had this
+// boundary rule (pageProjectedTranscript); the latest reader was a blind `slice(-MAX_MESSAGES)`, so the
+// two disagreed about where a turn starts and only the paginated one was right.
+//
+// `role === "user"` alone is not the human — the same trap pageProjectedTranscript documents. Frizz
+// writes as the user (Goal delivery, sign-off reminder, watcher wake), all carrying `wake`, and a queued
+// send has not been delivered. The measured card had 14 user records in its window and 13 of them were
+// frizz's own; the human's ask sat 13 messages above the head.
+//
+// THE REACH IS ALL-OR-NOTHING. A partial extension buys no anchor and still ships the extra megabyte, so
+// when the ask is further back than one earlier page's allowance the window stays exactly where it was
+// and "Load earlier messages" remains the route to it.
+export function latestWindowStart(messages: readonly TranscriptMessage[]): number {
+  const tail = Math.max(0, messages.length - MAX_MESSAGES)
+  if (tail === 0) return 0
+  let boundary = -1
+  for (let i = tail - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m.role === "user" && !m.wake && !m.queued) {
+      boundary = i
+      break
+    }
+  }
+  if (boundary < 0) return tail
+  let start = tail
+  let bytes = 0
+  while (start > boundary && tail - start < LATEST_WINDOW_ASK_REACH_ITEMS) {
+    const nextBytes = messageBytes(messages[start - 1])
+    if (bytes + nextBytes > LATEST_WINDOW_ASK_REACH_BYTES) break
+    start--
+    bytes += nextBytes
+  }
+  return start === boundary ? start : tail
+}
+
 export function latestTranscriptWindow(messages: readonly TranscriptMessage[]): TranscriptMessage[] {
-  const start = Math.max(0, messages.length - MAX_MESSAGES)
+  const start = latestWindowStart(messages)
   if (start === 0) return [...messages]
   const pinned: TranscriptMessage[] = []
   for (let i = 0; i < start; i++) {
@@ -3877,7 +3931,10 @@ export function readLatestThreadTranscriptPage(
     }
   }
   const latest = latestTranscriptWindow(projected)
-  const canonicalStart = Math.max(0, projected.length - MAX_MESSAGES)
+  // The cursor has to name the window's REAL head, not the raw MAX_MESSAGES cut: once the window reaches
+  // back for the human's ask, a cursor anchored at the cut sits INSIDE what was already sent, and the
+  // first "Load earlier messages" click would page over messages the card is already showing.
+  const canonicalStart = latestWindowStart(projected)
   // The latest window carries the delivery-ledger projection (same as readThreadTranscript): a tracked
   // follow-up renders as its gray queued bubble at the tail even before any JSONL evidence exists. The
   // LATEST page only — earlier pages are settled history a pending send can never belong to.

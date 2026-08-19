@@ -15,10 +15,11 @@ export function previousUserBoundary(messages: readonly TranscriptMessage[], cur
 
 // Where a queue card's visible window starts, given the message the reader explicitly expanded back to.
 //
-// The subtlety is the message going MISSING. The server projects at most MAX_MESSAGES, so on a thread past
-// that cap every new message pushes one off the head of the window — and "View more" walks back INSIDE
-// that window without fetching (so nothing marks the prefix as loaded history, which is what would make a
-// push retain it). The reader's chosen start can therefore be trimmed away underneath them, and falling
+// The subtlety is the message going MISSING. The server's latest window is bounded — MAX_MESSAGES, reaching
+// further back only as far as the human's last message (latestWindowStart) — so on a long enough thread
+// every new message pushes one off the head of the window, and "View more" walks back INSIDE that window
+// without fetching (so nothing marks the prefix as loaded history, which is what would make a push retain
+// it). The reader's chosen start can therefore be trimmed away underneath them, and falling
 // back to `lastUserIdx` there silently collapses the card they had just expanded, all the way back to the
 // latest turn. Keep the intent instead: they asked to see further back, so show everything still held.
 export function resolveVisibleStart(
@@ -73,9 +74,9 @@ export function reconcileLatestPage(
 // A live push carries MESSAGES ONLY — never a page envelope — so the envelope can only come from what we
 // already hold. Overlapping source ids mean it is the same transcript, whatever else moved.
 //
-// `previousIndex > 0` is the SLID WINDOW: the server projects at most MAX_MESSAGES, so once a thread
-// passes that cap every new message also pushes one off the HEAD, and the push's first message is one we
-// already have further in. That is an ordinary live update on a long thread — not a session replacement —
+// `previousIndex > 0` is the SLID WINDOW: the server's latest window is bounded (see latestWindowStart), so
+// on a long enough thread every new message also pushes one off the HEAD, and the push's first message is
+// one we already have further in. That is an ordinary live update on a long thread — not a session replacement —
 // and dropping the envelope there was destroying `hasEarlier`/`beforeCursor`/`transcriptKey` on the FIRST
 // push of any thread past the cap, which removed the "Load earlier messages" affordance outright (and
 // with it the only route back to the history the slide had just trimmed away, since loadEarlier needs
