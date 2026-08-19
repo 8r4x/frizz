@@ -4,7 +4,7 @@
 // the JSONL, the real board derives needsYou/pendingInteraction, the real RPC serves the interaction, and
 // the real ChatView decides where the card goes.
 //
-//   nub scripts/verify-ask-card-placement.mjs <tempHome> <socket> <port> [slug] [--no-ask]
+//   nub scripts/verify-ask-card-placement.mjs <tempHome> <unused> <port> [slug] [--no-ask]
 //
 // `--no-ask` seeds the SAME long transcript with no pending interaction — the control that proves the
 // fixed-key head-anchor row costs nothing when there is no card to show.
@@ -15,8 +15,8 @@ import { mkdirSync, writeFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 
-const [home, socket, port, slugArg] = process.argv.slice(2)
-if (!home || !socket || !port) throw new Error("usage: <tempHome> <socket> <port> [slug] [--no-ask]")
+const [home, _socket, port, slugArg] = process.argv.slice(2)
+if (!home || !port) throw new Error("usage: <tempHome> <unused> <port> [slug] [--no-ask]")
 const withAsk = !process.argv.includes("--no-ask")
 
 const projectDir = "/Users/colinmcd94/Documents/projects/frizz"
@@ -67,7 +67,6 @@ mkdirSync(transcriptDir, { recursive: true })
 writeFileSync(join(transcriptDir, `${sessionId}.jsonl`), `${lines.join("\n")}\n`)
 
 // ---- 2. a live pane so the row reads as a running session ------------------------------------------
-execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `frizz-${slug}`, "sleep 7200"])
 
 // ---- 3. the session row + the pending interaction --------------------------------------------------
 const projectsRoot = join(home, ".frizz", "projects")

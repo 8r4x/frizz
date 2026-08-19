@@ -22,11 +22,11 @@ const opt = (k, d) => { const hit = args.find((a) => a.startsWith(`--${k}=`)); r
 const url = opt("url", "http://localhost:5421/held-rows-fixture.html")
 const shots = opt("shots")
 
-// slug → the mark it must wear, and the fence fragment its tooltip must carry. The park state LEADS the
-// popover (that is what the glyph claims) and the generated fence fragments follow it — see
-// Sidebar.tsx `popover`, which is the one place that order is decided.
+// slug → the mark it must wear, and the fence clause its tooltip must carry. The popover is ONE
+// sentence: the park state leads (that is what the glyph claims) and the generated wait clause finishes
+// it — see Sidebar.tsx `popover`, which is the one place that shape is decided.
 const CASES = [
-  { slug: "watch-the-resolver-pr", icon: "lucide-github", tip: /^Watching acme\/app#391 — new activity wakes it$/m },
+  { slug: "watch-the-resolver-pr", icon: "lucide-github", tip: /^Snoozed until .* — waiting on acme\/app#391$/ },
   // The other three Held rows are the control: a timer park, a plain user snooze, and a usage-limit
   // park. None of them is watching anything, so none may pick up the PR mark. The timer wears a CLOCK,
   // not the hourglass — the hourglass stopped being the generic park mark when the 2026-08-15 grammar
@@ -86,12 +86,10 @@ try {
         return copy.textContent
       })
     } catch { /* left empty — the assertion below reports it */ }
-    if (!c.tip.test(text)) fail(`${c.slug}: tooltip must name the watched ref on its own line; saw ${JSON.stringify(text)}`)
-    else pass(`${c.slug} tooltip names the watched PR (${JSON.stringify(text)})`)
-    // The park LEADS — it is what the glyph you pointed at is claiming — and the watch rides under it.
-    // The watch replaces the glyph, not the story.
-    if (!/^Snoozed until /m.test(text.split("\n")[0])) fail(`${c.slug}: the park must lead the tooltip; saw ${JSON.stringify(text)}`)
-    else pass(`${c.slug} tooltip leads with its park line`)
+    // ONE sentence: the park leads (it is what the glyph you pointed at is claiming) and the watched ref
+    // finishes it. The watch replaces the glyph, not the story.
+    if (!c.tip.test(text)) fail(`${c.slug}: tooltip must read "<park> — waiting on <ref>"; saw ${JSON.stringify(text)}`)
+    else pass(`${c.slug} tooltip is one sentence, park first (${JSON.stringify(text)})`)
     await page.mouse.move(0, 0)
   }
 

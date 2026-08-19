@@ -1,7 +1,7 @@
 // End-to-end proof that a REAL frizz launcher shuts down gracefully and leaves nothing behind.
 //
 // Boots the actual dev supervisor + forked control-plane child on a fully-ISOLATED stack (temp HOME,
-// unique port, unique tmux socket, wakers/reaper off), puts REAL load on it (an open /events SSE board
+// unique port, wakers/reaper off), puts REAL load on it (an open /events SSE board
 // stream, an open /ws application socket, in-flight RPC calls), then delivers a signal to the whole
 // process group exactly the way Ctrl-C does — and asserts:
 //

@@ -14,16 +14,16 @@
 //                 own "Send answers" action is down until a chip is filled — but the ask itself, once
 //                 "Load earlier messages" brings it back, still takes chips.
 //
-// Follows the frizz-stack recipe: a session row + a live dummy tmux pane + a JSONL the REAL tailer reads.
+// Follows the frizz-stack recipe: a session row + a JSONL the REAL tailer reads.
 // Nothing writes board state directly; the transcript records drive it.
 //
-// Usage: node scripts/seed-buried-question-queue.mjs <home> <socket> <projectDir>
+// Usage: node scripts/seed-buried-question-queue.mjs <home> <unused> <projectDir>
 import { execFileSync } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
 
-const [home, socket, projectDir] = process.argv.slice(2)
-if (!home || !socket || !projectDir) throw new Error("usage: seed-buried-question-queue.mjs <home> <socket> <projectDir>")
+const [home, _socket, projectDir] = process.argv.slice(2)
+if (!home || !projectDir) throw new Error("usage: seed-buried-question-queue.mjs <home> <unused> <projectDir>")
 
 const cwdSlug = projectDir.replace(/[/.]/g, "-")
 const transcriptDir = path.join(home, ".claude", "projects", cwdSlug)
@@ -90,9 +90,6 @@ const human = (sessionId, text) => [{ type: "user", timestamp: at(), sessionId, 
 
 function write(slug, sessionId, title, records) {
   fs.writeFileSync(path.join(transcriptDir, `${sessionId}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
-  try {
-    execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", `frizz-${slug}`, "sleep 7200"], { stdio: "ignore" })
-  } catch { /* already exists */ }
   execFileSync("sqlite3", [
     db,
     `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, title_auto, backend, model, effort, permission_mode, state, unread, exited, archived, rested_at)

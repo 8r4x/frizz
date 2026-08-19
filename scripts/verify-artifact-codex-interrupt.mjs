@@ -12,7 +12,7 @@
 // ROLLOUT ITSELF as ground truth — `turn_aborted` (the turn was interrupted) must appear and
 // `task_complete` (the turn ran to its own ending) must NOT.
 //
-// Isolation: temp HOME + state dir + project dir, unique port and tmux socket, wakers/reaper off.
+// Isolation: temp HOME + state dir + project dir, unique port, wakers/reaper off.
 // CODEX_HOME points at the real ~/.codex so the app-server can authenticate; nothing is written there
 // beyond the throwaway rollouts codex records for itself.
 //

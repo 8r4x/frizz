@@ -6,7 +6,7 @@
 // "codex app-server daemon exited before it became ready" (live outage 2026-07-23). A source-run
 // stack cannot see it either way, so this builds a REAL artifact and drives the REAL app from it.
 //
-// Isolation: temp HOME + state dir, unique port and tmux socket, wakers and reaper off. CODEX_HOME
+// Isolation: temp HOME + state dir, unique port, wakers and reaper off. CODEX_HOME
 // points at the real ~/.codex so the app-server can authenticate; nothing is written there beyond the
 // throwaway rollout codex records for itself.
 //

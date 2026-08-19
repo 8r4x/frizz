@@ -7,9 +7,9 @@
 // (the shell rows). This is the only state where their shared rhythm is visible, and it is the state
 // the maintainer screenshotted on 2026-07-30 when the agent→shell gap read as a group break.
 //
-// Follows the frizz-stack recipe: a session row + a live dummy tmux pane + a JSONL the REAL tailer folds.
+// Follows the frizz-stack recipe: a session row + a JSONL the REAL tailer folds.
 //
-// Usage: node scripts/seed-queue-ops-column.mjs --home=/abs/temp-home --socket=frizz-adhoc-NNNN-PID
+// Usage: node scripts/seed-queue-ops-column.mjs --home=/abs/temp-home
 import { execFileSync } from "node:child_process"
 import { globSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -17,9 +17,9 @@ import { join } from "node:path"
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
 )
-const { home, socket, cwd = process.cwd() } = flags
-if (!home || !socket) {
-  console.error("usage: node seed-queue-ops-column.mjs --home=/abs/temp-home --socket=<tmux-socket>")
+const { home, cwd = process.cwd() } = flags
+if (!home) {
+  console.error("usage: node seed-queue-ops-column.mjs --home=/abs/temp-home")
   process.exit(1)
 }
 
@@ -105,10 +105,6 @@ const records = [
 ]
 
 writeFileSync(join(jsonlDir, `${SESSION}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
-
-try {
-  execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", TMUX, "sleep 7200"], { stdio: "ignore" })
-} catch { /* already up */ }
 
 execFileSync("sqlite3", [
   db,
