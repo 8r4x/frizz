@@ -22,12 +22,17 @@ const opt = (k, d) => { const hit = args.find((a) => a.startsWith(`--${k}=`)); r
 const url = opt("url", "http://localhost:5421/held-rows-fixture.html")
 const shots = opt("shots")
 
-// slug → the mark it must wear, and what its tooltip must lead with.
+// slug → the mark it must wear, and the fence fragment its tooltip must carry. The park state LEADS the
+// popover (that is what the glyph claims) and the generated fence fragments follow it — see
+// Sidebar.tsx `popover`, which is the one place that order is decided.
 const CASES = [
   { slug: "watch-the-resolver-pr", icon: "lucide-github", tip: /^Watching acme\/app#391 — new activity wakes it$/m },
   // The other three Held rows are the control: a timer park, a plain user snooze, and a usage-limit
-  // park. None of them is watching anything, so none may pick up the PR mark.
-  { slug: "check-in-on-create-prs", icon: "lucide-hourglass", tip: null },
+  // park. None of them is watching anything, so none may pick up the PR mark. The timer wears a CLOCK,
+  // not the hourglass — the hourglass stopped being the generic park mark when the 2026-08-15 grammar
+  // made every kind name a live thing, and each park has worn its own shape since (Sidebar.heldWatch's
+  // "each park wears its own shape"). This expectation was left behind by that change.
+  { slug: "check-in-on-create-prs", icon: "lucide-clock", tip: null },
   { slug: "dependabot-nub-ecosystem", icon: "lucide-hourglass", tip: null },
   { slug: "refactor-usage-endpoint", icon: "lucide-hourglass", tip: null },
 ]
@@ -81,11 +86,12 @@ try {
         return copy.textContent
       })
     } catch { /* left empty — the assertion below reports it */ }
-    if (!c.tip.test(text)) fail(`${c.slug}: tooltip must lead with the watched ref; saw ${JSON.stringify(text)}`)
-    else pass(`${c.slug} tooltip leads with the watched PR (${JSON.stringify(text.split("\n")[0])})`)
-    // The park detail still has to ride along under it — the watch REPLACES the glyph, not the story.
-    if (!/^Snoozed until /m.test(text)) fail(`${c.slug}: tooltip lost its park line; saw ${JSON.stringify(text)}`)
-    else pass(`${c.slug} tooltip keeps its park line`)
+    if (!c.tip.test(text)) fail(`${c.slug}: tooltip must name the watched ref on its own line; saw ${JSON.stringify(text)}`)
+    else pass(`${c.slug} tooltip names the watched PR (${JSON.stringify(text)})`)
+    // The park LEADS — it is what the glyph you pointed at is claiming — and the watch rides under it.
+    // The watch replaces the glyph, not the story.
+    if (!/^Snoozed until /m.test(text.split("\n")[0])) fail(`${c.slug}: the park must lead the tooltip; saw ${JSON.stringify(text)}`)
+    else pass(`${c.slug} tooltip leads with its park line`)
     await page.mouse.move(0, 0)
   }
 

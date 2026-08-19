@@ -7,12 +7,13 @@ import type { ThreadView } from "@frizz/shared"
 import { ThreadRow } from "./Sidebar.tsx"
 import { TooltipProvider } from "./Tooltip.tsx"
 
-// A SNOOZE IS TOOLTIP-ONLY ON THE RAIL. No sidebar row spends a subtitle line on a park — not the Held
-// ones (single-line since the two-styles fix), and since 2026-08-03 not the ones a park does not quiet
-// either: a running thread and one still waiting on a sub-agent kept an inline "SNOOZED · Today at 5:00
-// PM" / "BUMPS · …" gloss, which spent the rail's scarcest real estate restating what the hourglass
-// beside it already signals ("hide the SNOOZED label from the sidebar … the user should be able to see
-// the snooze duration by hovering over the icon").
+// A SNOOZE IS TOOLTIP-ONLY ON THE RAIL, and so is everything else. No sidebar row spends a subtitle line
+// on a park — not the Held ones (single-line since the two-styles fix), and since 2026-08-03 not the ones
+// a park does not quiet either: a running thread and one still waiting on a sub-agent kept an inline
+// "SNOOZED · Today at 5:00 PM" / "BUMPS · …" gloss, which spent the rail's scarcest real estate
+// restating what the hourglass beside it already signals ("hide the SNOOZED label from the sidebar … the
+// user should be able to see the snooze duration by hovering over the icon"). The rail has since dropped
+// the subtitle ENTIRELY (2026-08-19), which is the last test in this file.
 //
 // This pins the ABSENCE. The tooltip half cannot be asserted here — Radix portals its content only once
 // open, so static markup never contains it — and is pinned by a real hover in
@@ -67,11 +68,11 @@ test("a snoozed row never glosses its park inline, in any band", () => {
   }
 })
 
-test("a NON-snoozed awaiting row keeps its inline hint gloss", () => {
-  // The subtitle still exists — dropping the park label must not take the PR ref with it, which is the
-  // one thing a row genuinely cannot say any other way. `needsYou` because a HELD row collapses to a
-  // single line by design, and an honoured park is Held now: the gloss belongs to the awaiting row the
-  // server left in the QUEUE, which is the row that still has a subtitle to put it in.
+test("and neither does anything else — the row is a title, full stop", () => {
+  // The park label went first (2026-08-03), the worker's reason next (2026-08-16), and the PR ref last
+  // (maintainer 2026-08-19: "there should never ever be any fucking thing in the sidebar except for the
+  // fucking title"). `needsYou` is the row that held out longest: the server leaves an unhonoured park in
+  // the QUEUE, and that row is the one that still had a subtitle to put a ref in.
   const html = row({ needsYou: true, lastFence: { kind: "awaiting", body: "", hints: [{ kind: "pr", value: "acme/app#391" }] } } as Partial<ThreadView>)
-  assert.match(html, /acme\/app#391/, "a queued PR wait still glosses its ref inline")
+  assert.doesNotMatch(html, /acme\/app#391/, "the ref is a hover away, on the indicator's popover")
 })

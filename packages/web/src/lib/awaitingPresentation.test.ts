@@ -10,6 +10,8 @@ import {
   prWatchRefs,
   awaitingItemLabels,
   awaitingForLabel,
+  awaitingFragments,
+  hintGloss,
 } from "./awaitingPresentation.ts"
 
 const now = Date.parse("2026-07-21T18:00:00.000Z")
@@ -108,4 +110,54 @@ test("the items and the duration render as labels, and PRs are left to their own
   // No `for:` is a MALFORMED park rather than an unbounded one — frizz refuses it, so the card must not
   // imply a wait is running by inventing a duration.
   assert.equal(awaitingForLabel([{ kind: "shell", value: "b1" }]), null)
+})
+
+
+// THE RAIL'S POPOVER FRAGMENTS. The sidebar row is a TITLE and nothing else (maintainer 2026-08-19), so
+// what the fence names is only legible on hover — and it is GENERATED there, never prose, which is what
+// these pin: the same items in any order read the same way, and the ids never reach the human.
+test("the fence becomes two ordered fragments: the PR it watches, then what it counts", () => {
+  const hints = [
+    { kind: "for" as const, value: "2h" },
+    { kind: "agent" as const, value: "agent_7" },
+    { kind: "pr" as const, value: "acme/app#391" },
+    { kind: "shell" as const, value: "bvg44v4ij" },
+    { kind: "reason" as const, value: "the macOS leg is the flaky one" },
+    { kind: "shell" as const, value: "k92hs01x2" },
+  ]
+  assert.deepEqual(awaitingFragments(hints), [
+    "Watching acme/app#391 — new activity wakes it",
+    "Waiting on 2 background shells and a sub-agent",
+  ])
+  // The order the worker wrote them in must not change a word of it — the fragments key on KIND.
+  assert.deepEqual(awaitingFragments([...hints].reverse()), awaitingFragments(hints))
+  // The reason is the ONE line frizz does not generate, so it is not one of these: the popover appends
+  // it itself, last, where a human sentence cannot be mistaken for a derived one.
+  assert.doesNotMatch(awaitingFragments(hints).join("\n"), /macOS/)
+})
+
+test("a runtime id never reaches the popover — it is counted, not listed", () => {
+  assert.deepEqual(awaitingFragments([{ kind: "shell", value: "bvg44v4ij" }]), ["Waiting on a background shell"])
+  assert.deepEqual(awaitingFragments([{ kind: "timer", value: "tmr_a1b2c3" }]), ["Waiting on a timer"])
+  assert.deepEqual(awaitingFragments([
+    { kind: "timer", value: "tmr_a1" },
+    { kind: "timer", value: "tmr_b2" },
+    { kind: "agent", value: "agent_7" },
+  ]), ["Waiting on a sub-agent and 2 timers"])
+  // Three PRs read as a list, because each one is a THING the human may want to go look at.
+  assert.deepEqual(awaitingFragments([
+    { kind: "pr", value: "acme/app#391" },
+    { kind: "pr", value: "acme/app#392" },
+  ]), ["Watching acme/app#391 and acme/app#392 — new activity wakes it"])
+})
+
+test("a fence naming nothing yields nothing, so the popover cannot invent a wait", () => {
+  assert.deepEqual(awaitingFragments([{ kind: "for", value: "2h" }, { kind: "reason", value: "…" }]), [])
+  assert.deepEqual(awaitingFragments([{ kind: "shell", value: "  " }]), [], "a blank value names nothing")
+})
+
+// The MOBILE row keeps one inline caption, because a phone has no hover to move it to.
+test("hintGloss is the phone's one line, and it is the PR ref", () => {
+  assert.equal(hintGloss([{ kind: "pr", value: "acme/app#391" }, { kind: "reason", value: "…" }]), "PR acme/app#391")
+  assert.equal(hintGloss([{ kind: "shell", value: "bvg44v4ij" }]), null)
 })

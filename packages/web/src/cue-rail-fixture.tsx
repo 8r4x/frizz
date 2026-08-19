@@ -88,9 +88,27 @@ const threads: ThreadView[] = [
   ),
   cue("ship-it", "Ship it", 14 * MIN),
   cue("align-the-composer-icons", "Align the composer icons", 20_000, {
-    // A gloss + an activity line: the label sits on the first line, above both.
+    // A legacy `.frizz` activity gloss, kept as data the row must IGNORE: a rail row is a title and
+    // nothing else (2026-08-19), so this string must not appear anywhere under it.
     activity: "Measuring the chevron's ink box",
   }),
+  // THE ROW THAT USED TO CARRY A SUBTITLE: at rest with a live background shell (the pulsing dot) and a
+  // fence naming the PR it registered a watcher on. It printed "PR Homebrew/homebrew-core#298614" under
+  // its title until 2026-08-19; now the ref is on the indicator's popover and the row is a title alone.
+  cue("investigate-homebrew-core-tap", "Investigate homebrew core tap submission for nub", 5 * MIN, {
+    awaitingBackground: true,
+    bgShells: [{ id: "bzvtnt3ig", label: "brew audit", startedAt: ago(4 * MIN), state: "running" }],
+    lastFence: {
+      kind: "awaiting",
+      body: "",
+      hints: [
+        { kind: "pr", value: "Homebrew/homebrew-core#298614" },
+        { kind: "shell", value: "bzvtnt3ig" },
+        { kind: "for", value: "2h" },
+        { kind: "reason", value: "the tap submission is queued behind their CI backlog" },
+      ],
+    },
+  } as Partial<ThreadView>),
   // A STALLED cue row: `offersRetry`, so the hover-revealed Retry button is pinned to the SAME right
   // edge as the rest time. The label has to yield to it rather than be half-covered by it.
   cue("kill-the-tailer-flake", "Kill the tailer flake", 47 * MIN, { runtime: "exited", crashed: true }),

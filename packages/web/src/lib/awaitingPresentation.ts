@@ -98,3 +98,57 @@ export function awaitingForLabel(hints: readonly AwaitingHint[]): string | null 
   const value = hints.find((h) => h.kind === "for")?.value.trim()
   return value ? `for ${value}` : null
 }
+
+/** THE AWAITING FENCE AS POPOVER FRAGMENTS — what a hovered rail row says it is waiting on.
+ *
+ *  The rail's rows carry a TITLE and nothing else (maintainer 2026-08-19: "there should never ever be
+ *  any fucking thing in the sidebar except for the fucking title"), so every fence detail that used to
+ *  ride a subtitle moved into the row's popover. It is GENERATED, never prose: the fragments are derived
+ *  from the hint KINDS in a fixed order, so two fences naming the same things read identically whatever
+ *  order the worker wrote them in.
+ *
+ *  A PR leads and keeps its own line, because a ref names a THING while every other kind names a shape —
+ *  and because the watcher behind it is the one wait whose wake is worth stating. The rest collapse into
+ *  a single counted fragment: a runtime id ("bzvtnt3ig") means nothing on hover and three of them is a
+ *  wall, so "2 background shells and a timer" is the whole of what a glance wants.
+ *
+ *  Empty when the fence names nothing — which is a park the server refuses anyway, so the popover says
+ *  what it knows and invents no wait. */
+export function awaitingFragments(hints: readonly AwaitingHint[]): string[] {
+  const out: string[] = []
+  const prs = prWatchRefs(hints).map((pr) => pr.ref)
+  if (prs.length > 0) out.push(`Watching ${joinList(prs)} — new activity wakes it`)
+  const count = (kind: AwaitingHint["kind"]) => hints.filter((h) => h.kind === kind && h.value.trim()).length
+  const items = [
+    plural(count("shell"), "background shell", "background shells"),
+    plural(count("agent"), "sub-agent", "sub-agents"),
+    plural(count("timer"), "timer", "timers"),
+  ].filter((part): part is string => part !== null)
+  if (items.length > 0) out.push(`Waiting on ${joinList(items)}`)
+  return out
+}
+
+/** "a timer" / "2 timers" / nothing at all — the counted form, because the ids themselves are noise. */
+function plural(n: number, one: string, many: string): string | null {
+  if (n <= 0) return null
+  return n === 1 ? `a ${one}` : `${n} ${many}`
+}
+
+/** "a", "a and b", "a, b and c" — the Oxford comma is deliberately absent; these are two- and
+ *  three-item lists in a hover label, not prose. */
+function joinList(parts: readonly string[]): string {
+  if (parts.length <= 1) return parts.join("")
+  return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`
+}
+
+/** THE MOBILE BOARD'S one-line gloss, and the LAST inline caption frizz draws under a thread title.
+ *
+ *  The desktop rail dropped its subtitle entirely (maintainer 2026-08-19) and moved every fence detail
+ *  into the row's hover popover. A phone has no hover, so the mobile row keeps the one fragment worth a
+ *  line without one: a PR ref names a THING rather than describing a wait, and it exists nowhere else on
+ *  that row. Everything else the fence carries — the ids, the duration, the worker's `reason:` — stays
+ *  off it, exactly as it does on the rail. */
+export function hintGloss(hints: readonly AwaitingHint[]): string | null {
+  const pr = hints.find((h) => h.kind === "pr")
+  return pr ? `PR ${pr.value}` : null
+}

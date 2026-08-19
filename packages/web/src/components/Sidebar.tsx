@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 
 import { useQueryClient } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
 import { Check, ChevronRight, CircleDashed, Clock, Ellipsis, FileText, Github, Hourglass, House, Loader2, RotateCcw, Timer } from "lucide-react"
-import type { AwaitingHint, BoardSnapshot, PlanView, ThreadView } from "@frizz/shared"
+import type { BoardSnapshot, PlanView, ThreadView } from "@frizz/shared"
 import { store, openThread, scrollToQueueCard, queueCardTargetY, pushSubAgentDrawer, pushPlanDrawer, QUEUE_CARD_VIEWPORT_TOP, type ConnectionState } from "../store.ts"
 import { useBoard, asThreads } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
@@ -21,7 +21,7 @@ import { ProviderMark } from "./ProviderMark.tsx"
 import { STATUS_CHIP } from "../lib/status.ts"
 import { retrySession } from "../lib/retrySession.ts"
 import { formatSnoozedUntil, formatAutoSnoozedUntil, formatUserSnooze } from "../lib/snooze.ts"
-import { prWatchRefs } from "../lib/awaitingPresentation.ts"
+import { awaitingFragments, prWatchRefs } from "../lib/awaitingPresentation.ts"
 import { useOptimisticallySteered } from "../lib/steering.ts"
 import { useOptimisticallyArchived } from "../lib/optimisticArchive.ts"
 import { activeSidebarSection, queueNavigationSettled, railRevealDelta, type SidebarSectionGeometry } from "../lib/sidebarScrollspy.ts"
@@ -382,26 +382,16 @@ export const ThreadRow = memo(function ThreadRow({
   // in-drawer "Continue now" than waiting for the window). The queue card and drawer header read the
   // SAME helper, so no surface can disagree with the rail about which threads offer Retry.
   const canRestart = !legacy && offersRetry(t)
-  // A SNOOZE never spends a subtitle line, on any row. The wake time (and the follow-up a bump carries)
-  // lives ENTIRELY in the indicator's hover tooltip — see sessionIndicatorFor, which appends it to
-  // whatever the glyph already says on the rows a park does not quiet (a running one, or one whose
-  // sub-agent is still out). It used to gloss those as "SNOOZED · Today at 5:00 PM", which spent the
-  // rail's scarcest real estate restating a state the hourglass beside it already signals, and read as a
-  // second competing status next to the row's live one (maintainer 2026-08-03: "hide the SNOOZED label
-  // from the sidebar … the user should be able to see the snooze duration by hovering over the icon").
+  // A ROW IS ITS TITLE, AND NOTHING ELSE (maintainer 2026-08-19: "there should never ever be any fucking
+  // thing in the sidebar except for the fucking title"). There is no subtitle line on any row, in any
+  // state: not the fence's PR ref, not a snooze, not the legacy `.frizz` activity gloss, not a sub-agent
+  // count. Every one of them was a second, competing status beside the row's own — the rail is a column
+  // of NAMES you scan, and each caption added there made the next one harder to find.
   //
-  // Held rows collapse to a SINGLE LINE for the same reason. Only NON-held rows gloss inline: a legacy
-  // pr/ci awaiting fence (stays Active) shows its "PR owner/repo#12" hint.
-  const gloss = held || legacy
-    ? null
-    : t.lastFence?.kind === "awaiting"
-      ? hintGloss(t.lastFence.hints)
-      : null
-  // Live sub-agents get their OWN indented ⤷ rows below this one (SubAgentRows), so they must not also
-  // arm the subtitle: they used to, via a one-line "N sub-agents" summary that has since been replaced
-  // by those rows. The summary went; the truthiness term stayed — so a thread with sub-agents but no
-  // activity and no gloss opened an EMPTY subtitle <span>, a phantom spacer under the title.
-  const hasSubtitle = !held && (Boolean(t.activity) || gloss !== null)
+  // What frizz knows about the row still exists, one hover away: the indicator's popover composes it
+  // from the AWAITING BLOCK deterministically (awaitingFragments) plus the worker's own `reason:`, so
+  // the detail is available on demand and never spends a line of the rail. That is the same call that
+  // hid the SNOOZED label (2026-08-03) and the worker's reason (2026-08-16), applied to the last of them.
   return (
     <div
       data-sidebar-item={t.id}
@@ -462,16 +452,6 @@ export const ThreadRow = memo(function ThreadRow({
                 on hover instead: the button is why you pointed at the row. */}
             {restedAge && <RestedAge t={t} yieldsToRetry={canRestart} />}
           </span>
-          {hasSubtitle && (
-            <span className="mt-0.5 flex flex-col gap-0.5 min-w-0 text-[11.5px] leading-[15px]">
-              {gloss && (
-                <span className="min-w-0 truncate text-muted/70" title={gloss}>{gloss}</span>
-              )}
-              {t.activity && (
-                <span className="min-w-0 truncate text-muted/70" title={t.activity}>{t.activity}</span>
-              )}
-            </span>
-          )}
         </span>
       </button>
       {/* The Mark-as verb survives ONLY on legacy rows (a .frizz verb). Session lifecycle controls
@@ -636,30 +616,19 @@ function StatusChip({ status }: { status: string }) {
   )
 }
 
-// Format a parked-wait hint as a compact row subtitle. Current human/timer hints take precedence;
-// legacy PR/CI remain readable. A `session` hint is NOT glossed — its value is an internal id that reads as
-// leaked internals in the row subtitle (maintainer 2026-07-10: "what the fuck is that?! looks bad");
-// the CircleDashed indicator + its "Waiting on another session" tooltip already carry that state.
-// Null when there's no glossable hint.
-// THE INLINE SUBTITLE, and `reason:` DELIBERATELY DOES NOT BELONG IN IT (maintainer 2026-08-16: "you
-// should not be showing that reason in a sidebar label"). The reason is a sentence the worker wrote for
-// a human, and the rail's subtitle is its scarcest line — a sentence there competes with the row's own
-// status instead of supplementing it, which is the same complaint that hid the SNOOZED label. It goes in
-// the HOVER POPOVER instead, where there is room for it and where you go when you want the detail
-// (see `awaitingReason`, used by the row indicator below).
-//
-// What is left to gloss inline is a PR ref: the one fence line that names a THING rather than describing
-// the wait, and that exists nowhere else on the row.
-export function hintGloss(hints: readonly AwaitingHint[]): string | null {
-  const pr = hints.find((h) => h.kind === "pr")
-  return pr ? `PR ${pr.value}` : null
-}
 
-/** `what`, plus the worker's own reason when it wrote one — the composition every awaiting popover
- *  shares, so the shape of the wait always leads and the sentence always follows. */
-function reasonSuffix(t: Pick<ThreadView, "lastFence">, what: string): string {
-  const reason = awaitingReason(t)
-  return reason ? `${what} — ${reason}` : what
+/** THE ROW'S POPOVER, composed — the state its glyph is claiming, then what its awaiting fence says it
+ *  is waiting on, then the worker's own `reason:`, one fragment per line in that order.
+ *
+ *  The rail's rows are TITLE-ONLY (see ThreadRow), so this popover is the only place any of it is
+ *  legible, and the order is what keeps it readable: the glyph's own claim leads, because that is the
+ *  pixel you pointed at; the generated fence fragments follow, because they say what the glyph means on
+ *  THIS row; the worker's sentence lands last, because it is the only line frizz did not write.
+ *
+ *  Nulls and blanks drop out, so a fence naming nothing simply yields the state on its own. */
+function popover(t: Pick<ThreadView, "lastFence">, ...lead: (string | null)[]): string {
+  const hints = t.lastFence?.kind === "awaiting" ? t.lastFence.hints : []
+  return [...lead, ...awaitingFragments(hints), awaitingReason(t)].filter((line) => Boolean(line)).join("\n")
 }
 
 /** The worker's own one-line `reason:`, for a POPOVER. Null when the fence carries none — a tooltip that
@@ -756,9 +725,12 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
   // same pulse as the transcript's live-shell dot, sized to this box (styles.css .frizz-rail-dot), so
   // both surfaces say "a shell is alive behind this" in one language.
   if (kind === "background") {
+    // The fence, when there is one, names the shell itself (and any PR riding beside it), so the lead
+    // drops to a bare "At rest" rather than saying "a background shell" twice in three lines.
+    const fenced = t.lastFence?.kind === "awaiting" && awaitingFragments(t.lastFence.hints).length > 0
     return {
       node: <StatusBox><span aria-hidden className="frizz-rail-dot" data-running-indicator="thread-background" /></StatusBox>,
-      tip: "At rest — a background shell is still running",
+      tip: popover(t, fenced ? "At rest" : "At rest — a background shell is still running"),
     }
   }
   if (kind === "done") return { node: <StatusBox><Check size={10} strokeWidth={3} className="text-muted/75" /></StatusBox>, tip: "Done" }
@@ -784,12 +756,8 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     // without parking the thread in Held.) All were previously indistinguishable from a plain timer park.
     const watched = t.lastFence?.kind === "awaiting" ? prWatchRefs(t.lastFence.hints) : []
     const heldMark = watched.length > 0 ? github : hourglass
-    // The refs are what the watch is ABOUT and they live nowhere else on the row (hintGloss keeps
-    // pr-watch out of the subtitle), so they lead the tooltip; the park detail follows on its own line.
-    const withWatch = (tip: string) =>
-      watched.length > 0 ? `Watching ${watched.map((w) => w.ref).join(", ")} — new activity wakes it\n${tip}` : tip
-    // A single-line held row carries its whole "what it's held for" story HERE, in the tooltip. The two
-    // time-based holds are ONE concept — a snooze (park until a wall-clock instant) — sharing the same
+    // A held row carries its whole "what it's held for" story HERE, in the popover — the rail row itself
+    // is a title and nothing else. The two time-based holds are ONE concept — a snooze (park until a wall-clock instant) — sharing the same
     // heldMark + single-line layout. They differ only in WHO resolves the park at the deadline, which
     // the tooltip wording marks as an `auto` variant of the same word rather than a separate idea:
     //   • a user snooze re-surfaces the CARD for you  → "Snoozed until <wake>"       (you act next)
@@ -798,7 +766,7 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     // so formatUserSnooze reads it as the auto variant and names the follow-up it will send.
     const snoozedUntil = futureSnoozedUntil(t)
     if (snoozedUntil) {
-      return { node: heldMark, tip: withWatch(formatUserSnooze(snoozedUntil, t.snoozePrompt) ?? "Snoozed until a scheduled check") }
+      return { node: heldMark, tip: popover(t, formatUserSnooze(snoozedUntil, t.snoozePrompt) ?? "Snoozed until a scheduled check") }
     }
     // A usage-limit park is the third member of that same "held on the clock" family — frizz resolves
     // this one too, so it reads as an auto-snooze, named by what actually stopped the work.
@@ -813,23 +781,22 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
       return { node: hourglass, tip: timed ?? "Auto-snoozed until a scheduled check" }
     }
     // Reserve the park mark (hourglass, or GitHub when a watch is riding along) for intentional park
-    // states: a specific external human gate, a durable GitHub human-review cursor, or a VALID
-    // scheduled instant. Legacy/malformed waits stay readable but do not claim that a working wake is
-    // armed — which is why the legacy `pr` row below wears the SAME GitHub glyph with the opposite
-    // tooltip: both are PR-shaped waits, and the tooltip is what separates "watching" from "not armed".
+    // states: a durable GitHub review cursor, the thread's own live work, or a VALID scheduled instant.
     // NO HINT KIND PARKS ON ITS OWN. `human:` and `timer: <instant>` each drew the Held mark from the
     // worker's assertion alone; both are deleted (2026-08-15) and the server now decides Held from a
     // checked declaration. What is left to draw is the SHAPE of the wait.
     const hk = t.lastFence.hints.find((h) => h.kind === "pr" || h.kind === "shell" || h.kind === "agent" || h.kind === "timer")?.kind
-    // The worker's `reason:` rides every one of these too. A HELD row is rested and awaiting just as
-    // much as the at-rest one below, and splitting the behaviour — the reason on one popover and a
-    // generic sentence on the other — would make the tooltip mean something different depending on
-    // whether frizz happened to honour the park. The SHAPE of the wait leads, because that is what the
-    // glyph beside it is claiming; the reason follows, because that is what the human wrote.
-    const shape = (what: string) => withWatch(reasonSuffix(t, what))
-    if (hk === "pr") return { node: github, tip: shape("Watching a pull request") }
-    if (hk === "shell" || hk === "agent") return { node: <StatusBox><CircleDashed size={10} className="text-muted/70" /></StatusBox>, tip: shape("Waiting on its own background work") }
-    return { node: <StatusBox><Clock size={9} className="text-muted/70" /></StatusBox>, tip: shape("Waiting on a timer") }
+    // The tooltip's WORDS come from the fence itself (popover → awaitingFragments), which names the
+    // things it parked on; the arms below only pick the GLYPH that matches the leading kind. They used
+    // to say the shape in prose too — "Waiting on its own background work" — which restated in a
+    // sentence what the fragment says exactly ("Waiting on 2 background shells and a timer"), and was
+    // the only place the popover's text was hand-written per arm instead of derived.
+    const mark = hk === "pr"
+      ? github
+      : hk === "shell" || hk === "agent"
+        ? <StatusBox><CircleDashed size={10} className="text-muted/70" /></StatusBox>
+        : <StatusBox><Clock size={9} className="text-muted/70" /></StatusBox>
+    return { node: mark, tip: popover(t, "Held") }
   }
   // At rest (no fence, nothing pending) with the process still ALIVE — a worker that came to rest
   // WITHOUT declaring done or a machine-wait, and with NOTHING it launched still running (that is the
@@ -844,10 +811,9 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
   // the ordinary at-rest mark. That row is exactly where the worker's `reason:` earns its place: the
   // glyph says "at rest" and the popover says what it thinks it is waiting for, which is the one thing
   // the rail cannot show and the operator most wants on hover (maintainer 2026-08-16).
-  const reason = awaitingReason(t)
   return {
     node: <StatusBox><Ellipsis size={11} className="text-muted/70" /></StatusBox>,
-    tip: reason ? `At rest — ${reason}` : "At rest",
+    tip: popover(t, "At rest"),
   }
 }
 
