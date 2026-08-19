@@ -1114,11 +1114,13 @@ function sessionThreadView(
 // so a terminal session never writes one. That single absence is why HELD and DONE cannot be derived
 // for these rows at all — a park is a fence/timer/snooze and an archive is a human's lifecycle write —
 // and why they get their own band instead of being sorted into frizz's.
-function foreignThreadView(sessionId: string, tele: SessionTelemetry): ThreadView {
+function foreignThreadView(sessionId: string, tele: SessionTelemetry, backend: "claude" | "codex"): ThreadView {
   return {
     id: sessionId,
     // Claude's own `ai-title` when it has landed one, else a short id — never the frizz "Spinning up…"
-    // placeholder, which promises a title that is on its way. Nothing is on its way here.
+    // placeholder, which promises a title that is on its way. Nothing is on its way here, and for a
+    // CODEX row nothing ever will be: codex writes no title record at all, and the one frizz normally
+    // gets is a title its own dispatch ASKED for. So a foreign codex session is always the short id.
     title: tele.aiTitle ?? `Session ${sessionId.slice(0, 8)}`,
     aiTitle: tele.aiTitle,
     titleAuto: tele.aiTitle === undefined,
@@ -1159,8 +1161,7 @@ function foreignThreadView(sessionId: string, tele: SessionTelemetry): ThreadVie
     needsYou: false,
     awaitingBackground: false,
     crashed: false,
-    // The Claude log dir is the only place these are discovered today, so the badge is honest.
-    backend: "claude",
+    backend,
     permissionMode: tele.permissionMode,
     model: tele.model,
     effort: tele.effort,
@@ -1361,7 +1362,9 @@ export function createBoard(
       if (!ThreadSlug.safeParse(id).success) continue
       const tele = tailer.get(id)
       if (!tele || tele.turn !== "idle") continue
-      out.push(foreignThreadView(id, tele))
+      // Absent (an older tailer, or a narrow fixture) reads as claude — what every foreign thread was
+      // before codex rollouts joined the scan.
+      out.push(foreignThreadView(id, tele, tailer.foreignBackend?.(id) ?? "claude"))
     }
     return out
   }

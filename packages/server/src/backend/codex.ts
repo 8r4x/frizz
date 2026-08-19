@@ -1,6 +1,6 @@
 import { join } from "node:path"
 import { homedir } from "node:os"
-import { readdirSync, statSync } from "node:fs"
+import { readdirSync, statSync, openSync, readSync, closeSync } from "node:fs"
 import type { PermissionMode } from "@frizz/shared"
 import { applyEvent } from "../tailer.ts"
 import type { AgentBackend, BuiltCommand, FoldState, NativeInputRequiredData, NormalizedEvent, ResumeOpts, SpawnOpts } from "./types.ts"
@@ -852,6 +852,86 @@ export function findRolloutsByIds(sessionIds: readonly string[], codexHome = def
     if (!wanted.size) break
   }
   return out
+}
+
+// ---- FOREIGN rollout discovery (a codex session in this project that frizz did NOT dispatch) ----
+//
+// The Claude side of this is a directory listing: Claude shards its transcripts by the cwd a session
+// was born in, so "every session in this project" is one readdir. Codex has ONE GLOBAL TREE for every
+// project on the machine, so the project filter lives INSIDE each file — `session_meta.payload.cwd` on
+// line 1 — and the scan has to open a candidate to know whether it belongs here at all.
+//
+// That is affordable only because the freshness window comes FIRST. Measured on the maintainer's real
+// corpus (1,586 rollouts, 2026-08-19): the recursive walk plus one stat per file is 10ms warm (266ms on
+// a cold FS cache, once), and of those files exactly 3 fell inside a 24h window and cost 1.3ms to
+// head-read. Widen the window to 30 days and it is 621 files and 452ms — so the window is not a
+// nicety here the way it is for Claude, it is what makes the scan cheap enough to run at all.
+//
+// TWO FILTERS BEYOND FRESHNESS, both of which produce a wrong board row if skipped:
+//   • SUB-AGENT CHILDREN. A codex thread's children get their own rollouts in the same tree — 332 of
+//     the 621 files in a 30-day window on this machine. Each would otherwise list as its own session.
+//   • THE PROJECT. `cwd` is compared against BOTH the project dir and its realpath: a rollout records
+//     the cwd the process actually had, which on macOS is `/private/tmp/x` where frizz holds `/tmp/x`.
+const FOREIGN_ROLLOUT_HEAD_BYTES = 256 * 1024 // line 1 inlines `base_instructions`; 16KB truncates it
+export interface ForeignRolloutScan {
+  cwds: readonly string[] // the project dir and any alias of it (realpath); a rollout matching ANY belongs here
+  nowMs: number
+  freshMs: number
+  exclude: ReadonlySet<string> // ids owned by a registry row — never surface one of those as foreign
+  max: number
+}
+/** Rollouts in THIS project, fresh, human-started, and not owned by a frizz row — newest first.
+ *  Telemetry-grade: any fs/parse surprise skips that file, never throws. */
+export function scanForeignRollouts(scan: ForeignRolloutScan, codexHome = defaultCodexHome()): { id: string; path: string }[] {
+  const wanted = new Set(scan.cwds)
+  const out: { id: string; path: string }[] = []
+  for (const r of allRolloutsByMtime(codexHome)) {
+    if (out.length >= scan.max) break
+    if (scan.nowMs - r.mtimeMs > scan.freshMs) continue
+    const id = rolloutIdOf(r.path)
+    if (!id || scan.exclude.has(id)) continue
+    const meta = readSessionMeta(r.path)
+    if (!meta || !meta.cwd || !wanted.has(meta.cwd)) continue
+    // A child rollout is not a session anybody opened; it is a tool call with a transcript.
+    if (meta.threadSource === "subagent" || meta.parentThreadId) continue
+    out.push({ id, path: r.path })
+  }
+  return out
+}
+
+/** The session uuid a rollout filename ends with (`rollout-<ISO8601>-<uuid>.jsonl`), or undefined. */
+function rolloutIdOf(path: string): string | undefined {
+  const name = path.slice(path.lastIndexOf("/") + 1)
+  // The ISO timestamp between the prefix and the id contains hyphens too, so anchor on the TAIL: a
+  // canonical uuid is the last 36 characters before `.jsonl`.
+  const stem = name.endsWith(".jsonl") ? name.slice(0, -".jsonl".length) : name
+  const tail = stem.slice(-36)
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tail) ? tail.toLowerCase() : undefined
+}
+
+/** Line 1's `session_meta` payload, reduced to the three fields the foreign scan reads. */
+function readSessionMeta(path: string): { cwd?: string; threadSource?: string; parentThreadId?: string } | undefined {
+  let fd: number | undefined
+  try {
+    fd = openSync(path, "r")
+    const buf = Buffer.allocUnsafe(FOREIGN_ROLLOUT_HEAD_BYTES)
+    const n = readSync(fd, buf, 0, FOREIGN_ROLLOUT_HEAD_BYTES, 0)
+    const line = buf.toString("utf8", 0, n).split("\n", 1)[0]
+    const record = JSON.parse(line) as { type?: string; payload?: Record<string, unknown> }
+    if (record.type !== "session_meta" || !record.payload) return undefined
+    const p = record.payload
+    return {
+      cwd: typeof p.cwd === "string" ? p.cwd : undefined,
+      threadSource: typeof p.thread_source === "string" ? p.thread_source : undefined,
+      parentThreadId: typeof p.parent_thread_id === "string" ? p.parent_thread_id : undefined,
+    }
+  } catch {
+    return undefined
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd) } catch { /* best-effort */ }
+    }
+  }
 }
 
 export function createCodexBackend(opts: CodexBackendOptions = {}): AgentBackend {

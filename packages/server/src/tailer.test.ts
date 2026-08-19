@@ -2688,6 +2688,25 @@ test("tailer: a REGISTERED session_id's file is never foreign (registered rows w
   assert.deepEqual(t.foreignIds(), ["foreign-2"], "the registered session_id is excluded; only the unregistered file is foreign")
 })
 
+// The exclusion that a CODEX row depends on entirely. Frizz mints `session_id` itself, but codex mints
+// its own rollout id and frizz pins it in `agent_session_id` — so for a codex thread that column is the
+// ONLY one naming the file on disk. Missing it, every codex thread frizz dispatched came back as its own
+// read-only foreign twin in the Non-Frizz band, which promises the opposite of a thread frizz drives.
+test("tailer: a registered row's agent_session_id is excluded from foreign discovery too", () => {
+  const h = harness()
+  h.storage.upsertSession(row({ slug: "codex-thread", session_id: "frizz-minted-id" }))
+  // Pinned AFTER dispatch by its own setter — the shared upsert deliberately leaves it alone, which is
+  // exactly why it is easy to forget on the read side.
+  h.storage.setAgentSession("codex-thread", "codex-rollout-id")
+  h.clock.ms = FCLOCK
+  const { t } = foreignTailer(h)
+  foreignFile(h.logDir, "codex-rollout-id", [IN_FLIGHT, TOOL, DONE], FRESH_MTIME) // the backend's own id
+  foreignFile(h.logDir, "frizz-minted-id", [IN_FLIGHT], FRESH_MTIME)              // the frizz-minted id
+  foreignFile(h.logDir, "genuinely-foreign", [IN_FLIGHT], FRESH_MTIME)
+  t.tick()
+  assert.deepEqual(t.foreignIds(), ["genuinely-foreign"], "neither id a row owns may surface as a foreign thread")
+})
+
 test("tailer: a FORGOTTEN phantom's transcript is never re-added by foreign discovery (tombstone)", () => {
   const h = harness()
   h.clock.ms = FCLOCK

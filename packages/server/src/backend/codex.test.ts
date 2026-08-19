@@ -13,6 +13,7 @@ import {
   findRolloutById,
   detectCodexNativeInput,
   extractCodexFrizzTitle,
+  scanForeignRollouts,
 } from "./codex.ts"
 import { newTailState, applyEvent } from "../tailer.ts"
 import type { NormalizedEvent } from "./types.ts"
@@ -873,6 +874,72 @@ test("findRolloutById / transcriptPath: locate a rollout by its codex id suffix"
     assert.equal(findRolloutById("does-not-exist", home), undefined)
     const backend = createCodexBackend({ codexHome: home })
     assert.equal(backend.transcriptPath("FFFFFFFF-ffff-ffff-ffff-ffffffffffff"), p)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+// ---- FOREIGN rollout discovery: which of the machine's rollouts belong to THIS project ----
+//
+// Codex keeps one global sessions tree, so unlike Claude's per-project bucket every filter that decides
+// whether a rollout is one of this project's own terminals lives inside the file. Each exclusion below
+// is one that produces a WRONG board row if it is skipped, not a tidiness rule.
+test("scanForeignRollouts: this project's own human-started rollouts, and nothing else", () => {
+  const home = mkdtempSync(join(tmpdir(), "codexhome-foreign-"))
+  const shard = join(home, "sessions", "2026", "08", "19")
+  mkdirSync(shard, { recursive: true })
+  const NOW = Date.parse("2026-08-19T12:00:00.000Z")
+
+  // `base_instructions` is inlined on line 1 in real rollouts and pushes it past any small head read,
+  // so the fixture carries a bulky one too — a 16KB reader would truncate the JSON and match nothing.
+  const write = (id: string, meta: Record<string, unknown>, ageMs = 60_000) => {
+    const path = join(shard, `rollout-2026-08-19T11-00-00-${id}.jsonl`)
+    const line = JSON.stringify({
+      timestamp: "2026-08-19T11:00:00.000Z",
+      type: "session_meta",
+      payload: { session_id: id, base_instructions: { text: "x".repeat(40_000) }, ...meta },
+    })
+    writeFileSync(path, `${line}\n`)
+    utimesSync(path, new Date(NOW - ageMs), new Date(NOW - ageMs))
+    return path
+  }
+
+  const MINE = "11111111-1111-4111-8111-111111111111"
+  const CHILD = "22222222-2222-4222-8222-222222222222"
+  const OTHER_PROJECT = "33333333-3333-4333-8333-333333333333"
+  const STALE = "44444444-4444-4444-8444-444444444444"
+  const DISPATCHED = "55555555-5555-4555-8555-555555555555"
+  const LEGACY_CHILD = "66666666-6666-4666-8666-666666666666"
+
+  write(MINE, { cwd: "/work/app", thread_source: "user" })
+  write(CHILD, { cwd: "/work/app", thread_source: "subagent" })
+  // An older rollout predating `thread_source` still names its parent, which is the same answer.
+  write(LEGACY_CHILD, { cwd: "/work/app", parent_thread_id: MINE })
+  write(OTHER_PROJECT, { cwd: "/work/other", thread_source: "user" })
+  write(STALE, { cwd: "/work/app", thread_source: "user" }, 48 * 3600_000)
+  write(DISPATCHED, { cwd: "/work/app", thread_source: "user" })
+
+  try {
+    const found = scanForeignRollouts({
+      cwds: ["/work/app"],
+      nowMs: NOW,
+      freshMs: 24 * 3600_000,
+      // A frizz-dispatched codex thread pins its rollout id in `agent_session_id`. Without it here the
+      // thread frizz is actively driving comes back as its own read-only twin.
+      exclude: new Set([DISPATCHED]),
+      max: 20,
+    }, home)
+    assert.deepEqual(found.map((f) => f.id), [MINE])
+
+    // The project is matched against every cwd spelling offered, because a rollout records the cwd the
+    // codex process actually had — on macOS `/private/tmp/x` where frizz holds `/tmp/x`.
+    const aliased = scanForeignRollouts({
+      cwds: ["/tmp/app", "/work/app"], nowMs: NOW, freshMs: 24 * 3600_000, exclude: new Set(), max: 20,
+    }, home)
+    assert.deepEqual(aliased.map((f) => f.id).sort(), [DISPATCHED, MINE].sort())
+
+    // The cap is honoured, and a home with no sessions tree at all is empty rather than a throw.
+    assert.equal(scanForeignRollouts({ cwds: ["/work/app"], nowMs: NOW, freshMs: 24 * 3600_000, exclude: new Set(), max: 1 }, home).length, 1)
+    assert.deepEqual(scanForeignRollouts({ cwds: ["/work/app"], nowMs: NOW, freshMs: 24 * 3600_000, exclude: new Set(), max: 20 }, join(home, "nope")), [])
   } finally {
     rmSync(home, { recursive: true, force: true })
   }

@@ -3654,14 +3654,24 @@ function sourceForThread(
     }
   }
   if (!FOREIGN_SESSION_ID_RE.test(slug)) return undefined
-  return {
-    slug,
-    sessionId: slug,
-    nativeId: slug,
-    backend: "claude",
-    runtimeGeneration: 0,
-    path: resolveTranscriptPath(project, slug),
+  // A FOREIGN thread — a terminal frizz did not start, so there is no row to read the backend off.
+  // Both agents mint a bare uuid, so the id itself cannot say which one wrote it and the binding has
+  // to be PROBED. Claude first because its probe is a single stat of a known path; codex's walks the
+  // global sessions tree (~10ms warm on a 1,586-rollout corpus, and this runs per VIEW, not per tick).
+  // Before the Non-Frizz band this returned "claude" unconditionally, which was right while the Claude
+  // log dir was the only place a foreign thread could come from — a codex rollout would have rendered
+  // as an empty conversation with nothing to say why.
+  const claudePath = resolveTranscriptPath(project, slug)
+  if (existsSync(claudePath)) {
+    return { slug, sessionId: slug, nativeId: slug, backend: "claude", runtimeGeneration: 0, path: claudePath }
   }
+  const rollout = (backendFor?.("codex") ?? defaultCodexBackend()).transcriptPath(slug)
+  if (rollout) {
+    return { slug, sessionId: slug, nativeId: slug, backend: "codex", runtimeGeneration: 0, path: rollout }
+  }
+  // Neither found it. Keep the Claude binding rather than returning undefined: the caller renders an
+  // empty page either way, and a thread whose transcript has not been written YET must still bind.
+  return { slug, sessionId: slug, nativeId: slug, backend: "claude", runtimeGeneration: 0, path: claudePath }
 }
 
 function discoveredClaudeSource(

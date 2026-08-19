@@ -1,4 +1,4 @@
-import { statSync, openSync, readSync, closeSync, readdirSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs"
+import { statSync, openSync, readSync, closeSync, readdirSync, realpathSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs"
 import { execFileSync } from "node:child_process"
 import { basename, join } from "node:path"
 import { homedir, tmpdir } from "node:os"
@@ -17,6 +17,7 @@ import { claudeBrokerDiagnosticLogPath } from "./backend/claude-broker-diagnosti
 import { claudeBrokerRecordPath, readBrokerRecord } from "./backend/claude-broker-host.ts"
 import { parseDeliveryLedger, correlateDeliveryRecord, ageDeliveries, serializeDeliveryLedger, type DeliveryLedgerItem } from "./delivery-ledger.ts"
 import { createCodexSubAgentTracker, type CodexSubAgentTracker } from "./codex-subagents.ts"
+import { defaultCodexHome, scanForeignRollouts } from "./backend/codex.ts"
 import {
   isModelFacingCarrier, reportKind, blockTaskIds, parseReportBlock, relayedTaskIds,
   MAX_TRACKED_REPORTS, type QueuedReport,
@@ -2131,6 +2132,12 @@ export interface Tailer {
   // whose transcript is FRESH (recent mtime): the board lists these as read-only session threads.
   // Keyed by session id (the thread id for a foreign thread IS its session id).
   foreignIds(): string[]
+  // Which agent wrote a foreign thread's transcript. Additive and OPTIONAL so the many narrow fixtures
+  // that hand-roll a Tailer keep compiling; absent reads as "claude", which is what every foreign
+  // thread was before codex rollouts joined the scan. The board needs it for the row's provider badge —
+  // and, more than cosmetically, because a codex session carries NO title record, so the row's name has
+  // to fall back rather than wait for an `aiTitle` that is never coming.
+  foreignBackend?(id: string): "claude" | "codex" | undefined
   // Drill-in drawer lookup: a tracked or retained sub-agent's transcript path + state, or undefined if
   // unknown (never dispatched, or aged out of the retained ring). The router maps undefined → "gone".
   // `outputFormat` tells the reader which schema the file is: absent = Claude JSONL, "codex" = the
@@ -3559,12 +3566,59 @@ export function createTailer(deps: TailerDeps): Tailer {
   // file that ages out of the fresh set keeps its cached tail here but stops being reported.
   const foreignStates = new Map<string, TailState>()
   // The current fresh foreign set (mtime-desc, capped), refreshed on scan ticks and reused between.
-  let foreignFresh: { id: string; path: string }[] = []
+  let foreignFresh: { id: string; path: string; backend: "claude" | "codex" }[] = []
   let foreignScanTick = 0
   let timer: NodeJS.Timeout | null = null
   let stopped = false
   // Set for the duration of the FIRST tick only (see start): the launcher's progress signal.
   let primeProgress: ((done: number, total: number) => void) | undefined
+
+  // Every id a registry row OWNS, in any of the three columns a transcript can be keyed by, plus the
+  // graveyard. A foreign scan that misses one of these surfaces a DUPLICATE of a thread frizz is
+  // already driving — read-only, unsteerable, and sitting in a band that promises the opposite.
+  //   • `session_id`       — the frizz-minted id; for Claude it IS the transcript's name.
+  //   • `transcript_id`    — a DISCOVERED (drifted) transcript, owned by its row.
+  //   • `agent_session_id` — the backend's OWN id where it differs. Codex mints its rollout id itself,
+  //                          so this is the ONLY column that names a codex thread's file. Omitting it
+  //                          made every dispatched codex thread come back as its own foreign twin.
+  function registeredIds(): Set<string> {
+    const registered = new Set<string>()
+    for (const r of deps.storage.allSessions()) {
+      registered.add(r.session_id)
+      if (r.transcript_id) registered.add(r.transcript_id)
+      if (r.agent_session_id) registered.add(r.agent_session_id)
+    }
+    // A transcript whose row was hard-deleted via forgetSession must STAY gone — never let a dismissed
+    // phantom's file re-surface as a read-only foreign thread on a later rescan.
+    for (const id of deps.storage.forgottenIds()) registered.add(id)
+    return registered
+  }
+
+  // The CODEX half of foreign discovery. Claude shards transcripts by birth cwd, so its scan is one
+  // readdir of this project's own directory; codex keeps one global tree for every project on the
+  // machine, so the project filter lives inside each rollout and the scan is delegated to the codex
+  // backend, which owns that format. See scanForeignRollouts for the cost measurements that make it
+  // affordable and for the two filters (sub-agent children, project cwd) it applies.
+  //
+  // Both cwd spellings are offered because a rollout records the cwd the codex PROCESS had, which on
+  // macOS resolves symlinks — a project frizz knows as `/tmp/x` writes `/private/tmp/x`.
+  function scanForeignCodex(nowMs: number): { id: string; path: string }[] {
+    if (!deps.project.dir) return []
+    const cwds = new Set<string>([deps.project.dir])
+    try {
+      cwds.add(realpathSync(deps.project.dir))
+    } catch {
+      // an unreadable project dir simply contributes no alias
+    }
+    try {
+      return scanForeignRollouts(
+        { cwds: [...cwds], nowMs, freshMs: FOREIGN_FRESH_MS, exclude: registeredIds(), max: FOREIGN_MAX },
+        deps.codexHome ?? defaultCodexHome(),
+      )
+    } catch {
+      return []
+    }
+  }
 
   // Discover FOREIGN sessions: *.jsonl in the log dir whose stem is not any registered row's
   // session_id, touched within FOREIGN_FRESH_MS, most-recent-first, capped at FOREIGN_MAX. Registered
@@ -3577,16 +3631,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     } catch {
       return []
     }
-    const registered = new Set<string>()
-    for (const r of deps.storage.allSessions()) {
-      registered.add(r.session_id)
-      // A DISCOVERED (drifted) transcript is owned by its row — exclude its id too, or the re-linked
-      // file would resurface as a duplicate read-only "foreign" thread (split-brain).
-      if (r.transcript_id) registered.add(r.transcript_id)
-    }
-    // Graveyard: a transcript whose row was hard-deleted via forgetSession must STAY gone — never let a
-    // dismissed phantom's *.jsonl re-surface as a read-only foreign thread on a later rescan.
-    for (const id of deps.storage.forgottenIds()) registered.add(id)
+    const registered = registeredIds()
     const found: { id: string; path: string; mtime: number }[] = []
     for (const name of names) {
       if (name.startsWith(".") || !name.endsWith(".jsonl")) continue
@@ -4484,14 +4529,18 @@ export function createTailer(deps: TailerDeps): Tailer {
     // FOREIGN threads: refresh the fresh set on a scan tick (a change in membership/order is itself
     // dirty), then tail every fresh one (reusing the cached set between scans).
     if (foreignScanTick % FOREIGN_SCAN_EVERY === 0) {
-      const next = scanForeign(nowMs)
+      // BOTH agents' terminals, tagged with the backend that has to FOLD each one — a rollout put
+      // through the Claude parser yields a silent empty thread, not an error. Claude first so that if
+      // the two ever exceed the cap together it is the codex tail that is dropped: Claude's scan is the
+      // one that reads a directory frizz itself writes to, so it is never speculative.
+      const next = [
+        ...scanForeign(nowMs).map((f) => ({ ...f, backend: "claude" as const })),
+        ...scanForeignCodex(nowMs).map((f) => ({ ...f, backend: "codex" as const })),
+      ].slice(0, FOREIGN_MAX)
       if (!sameForeign(next, foreignFresh)) dirty = true
       foreignFresh = next
     }
     foreignScanTick++
-    // Foreign threads are Claude maintainer terminals discovered in the Claude log dir — always the
-    // Claude fold (resolveBackend("claude") returns the injected ClaudeBackend, or the default).
-    const foreignBackend = resolveBackend("claude")
     for (const f of foreignFresh) {
       let state = foreignStates.get(f.id)
       if (!state) {
@@ -4499,7 +4548,7 @@ export function createTailer(deps: TailerDeps): Tailer {
         hydrateFromCache(state, null, f.id)
         foreignStates.set(f.id, state)
       }
-      if (tailForeign(state, nowMs, transcriptDirty, foreignBackend)) dirty = true
+      if (tailForeign(state, nowMs, transcriptDirty, resolveBackend(f.backend))) dirty = true
     }
 
     // Persist the prime cache. The FIRST tick always flushes (that is the boot the next one inherits);
@@ -4694,6 +4743,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     // The CURRENT fresh foreign session ids (mtime within FOREIGN_FRESH_MS, capped), mtime-desc. Kept
     // as the last scan's result — recomputed at most every FOREIGN_SCAN_EVERY ticks.
     foreignIds: () => foreignFresh.map((f) => f.id),
+    foreignBackend: (id) => foreignFresh.find((f) => f.id === id)?.backend,
     subAgent: subAgentLookup,
     subAgentByTaskId,
     subAgentDescendantTasks,
