@@ -112,8 +112,11 @@ const sourceCommand = process.env.FRIZZ_SOURCE_COMMAND ?? "frizz-dev";
 /**
  * `up` is an ordinary launch that also brings the tunnel up — NOT an artifact verb like build/promote.
  * It is kept out of `command` for exactly that reason: those three suppress the readout and the
- * foreground hold, and `up` needs both. It takes no positional path; the whole point is that you run it
- * inside the repo you mean.
+ * foreground hold, and `up` needs both.
+ *
+ * It takes no positional path because ONE SERVER SERVES EVERY PROJECT. Frizz stopped being one board
+ * per repo, so "which repo is this for" is not a question `up` has; accepting a path would imply a
+ * coupling that no longer exists.
  */
 const upCommand = argv[0] === "up";
 const command = ["build", "promote", "restart"].includes(argv[0] ?? "")
@@ -126,7 +129,7 @@ try {
   );
   if (upCommand) {
     if (options.repoPath) {
-      fail("frizz up takes no path — run it inside the repository you want to serve");
+      fail(`${sourceCommand} up takes no path — one server serves every project on this machine`);
     }
     options.cloud = true;
   }

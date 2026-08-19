@@ -105,7 +105,7 @@ if (options.help) {
     `Frizz production launcher
 
 Usage: npx ${PACKAGE_NAME} [options] [repository]
-       npx ${PACKAGE_NAME} up            serve this repo publicly, board + tunnel together
+       npx ${PACKAGE_NAME} up            start the server plus its public tunnel
 
 Runs the npm-resolved immutable Frizz package, then opens it in your default browser. Use frizz-dev
 only for a source checkout.

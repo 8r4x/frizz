@@ -443,8 +443,8 @@ Environment:
   FRIZZ_PUBLIC_ORIGIN    same as --public-origin
 
 Commands:
-  up                     serve this repo publicly: starts the board AND its tunnel (asks once, then
-                         remembers). Run it inside the repository you want to serve.
+  up                     start the server and its public tunnel together, so the board is reachable
+                         remotely. Serves every project, same as the bare command. Asked once.
   build                  build a new immutable candidate from the configured Frizz source checkout
   promote <digest>       explicitly select a verified candidate for this workspace
   restart                restart the currently promoted artifact without building
