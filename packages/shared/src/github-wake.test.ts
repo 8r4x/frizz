@@ -262,7 +262,7 @@ test("a wake carrying CI and review activity yields both parts", () => {
   assert.deepEqual(parsePrWatchWake(text), { ref: "nubjs/nub#587", kind: "ci", verdict: "failing", failing: ["build"] })
   assert.deepEqual(parseGithubWakeSteer(text.slice(text.indexOf(formatGithubWakeSteer(single)))), single)
   // The STEER PARSER READS LINE 0 AND NOTHING ELSE, so a status line above one means the server serves
-  // no `wakeSteer` for this delivery. That is not an accident to be tidied up later — GithubWakeCard
+  // no `wakeSteer` for this delivery. That is not an accident to be tidied up later — FrizzWake
   // relies on it: it is what keeps an already-open tab on an older bundle rendering the whole text
   // rather than drawing the review hairline alone and silently dropping the CI verdict beside it.
   assert.equal(parseGithubWakeSteer(text), null, "a status line above the steer must defeat the served parse")

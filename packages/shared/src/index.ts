@@ -2407,7 +2407,7 @@ function wakeItemTail(item: GithubWakeItem): string {
 //
 // The tail is DERIVED from the items and never stored: the parser drops these lines and rebuilds the
 // steer from the header and item lines alone, which is what keeps the round-trip exact without adding a
-// field to GithubWakeSteer. It is also invisible to the human — GithubWakeCard renders from the PARSE,
+// field to GithubWakeSteer. It is also invisible to the human — FrizzWake renders from the PARSE,
 // not from this text — so it costs the card nothing to speak to the worker here.
 const WAKE_REVIEW_LEAD = "A review's body is often empty because its substance is inline comments. Read them, one call each:"
 
@@ -2562,7 +2562,7 @@ export function parseGithubWakeSteer(text: string): GithubWakeSteer | null {
 // raw-text blob in the chat.
 //
 // Which is exactly what it was doing. A watcher's REVIEW activity has rendered as a hairline divider
-// since the card died (see GithubWakeCard), but "#760 was CLOSED" and "CI PASSED on #761" fell through
+// since the card died (see FrizzWake), but "#760 was CLOSED" and "CI PASSED on #761" fell through
 // to the fallback card — so the same watcher, on the same PR, spoke in two completely different voices
 // down one transcript, and the louder voice was the one carrying the least news (maintainer 2026-08-18,
 // with a screenshot of two full-width CLOSED cards under a run of hairlines: "these callouts should
