@@ -1766,7 +1766,7 @@ test("a bind probe reports why it failed, not merely that it did", async () => {
   assert.equal(await probeBindPort(port, "127.0.0.1"), undefined);
 });
 
-test("two distinct repositories concurrently reserve different launch ports without sharing tmux ownership", async () => {
+test("two distinct repositories concurrently reserve different launch ports without sharing launch ownership", async () => {
   const base = mkdtempSync(join(tmpdir(), "frizz-concurrent-repo-ports-"));
   const home = join(base, "home");
   const repos = [join(base, "repo-one"), join(base, "repo-two")];

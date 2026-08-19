@@ -190,11 +190,12 @@ try {
     process.env.FRIZZ_DEV_REEXEC === "1";
   if (internal && !pinned)
     throw new Error("internal launch is missing its pinned project identity");
-  // Resolving a workspace already shells out to `git` and to `tmux` and opens this project's
-  // database, so check first and name what is wrong. The Node floor is part of it for a real launch:
-  // on an unsupported release SQLite SEGFAULTS rather than erroring, and a segfault mid-boot reads as
-  // "Frizz is broken" instead of "upgrade Node". `--stop`/`--status` and the repair commands keep the
-  // executables-only check, since they only read a status file and signal a process.
+  // Resolving a workspace opens this project's database, so check first and name what is wrong. The
+  // Node floor is the live half for a real launch: on an unsupported release SQLite SEGFAULTS rather
+  // than erroring, and a segfault mid-boot reads as "Frizz is broken" instead of "upgrade Node".
+  // `--stop`/`--status` and the repair commands keep the executables-only check, since they only read a
+  // status file and signal a process — that list is EMPTY today (nothing shells out to `git` or `tmux`
+  // any more; see preflight.ts) and survives as the seam for the next hard dependency.
   if (!internal) {
     if (interactiveLaunch) assertLaunchPrerequisites();
     else assertRequiredExecutables();
@@ -403,8 +404,8 @@ async function runSupervisor(
                   // Update & Restart promotes a complete deployed CLI/runtime, not merely the
                   // child HTTP entry. Replace this owner with that immutable CLI so
                   // server/supervisor fixes take effect too. The tokenized launch lease stays in
-                  // the environment across execve; SQLite, tmux and provider-side sessions are
-                  // project resources and are never copied or torn down for this handoff.
+                  // the environment across execve; SQLite and provider-side sessions are project
+                  // resources and are never copied or torn down for this handoff.
                   const artifact = readStableArtifact(
                     workspace.stateDir,
                     defaultArtifactRoot()
@@ -864,6 +865,15 @@ async function openOrPrint(
   );
 }
 
+// Why a stop is safe, said correctly. There is no multiplexer: a Claude thread's worker lives in a
+// broker daemon and a Codex thread's in the app-server daemon, each forked `detached: true` into its
+// own process group, so stopping the board never signals them and a turn in flight keeps running.
+// This line used to claim tmux preserved them, which has been false since the runtime moved and had
+// operators reaching for a pane that does not exist.
+function stoppedMessage(): string {
+  return `stopped Frizz for ${workspace.root}; detached agent daemons were preserved`;
+}
+
 async function stopWorkspace(): Promise<void> {
   const target = launchTarget;
   const owner = readProjectLaunchOwner(workspace.stateDir);
@@ -892,9 +902,7 @@ async function stopWorkspace(): Promise<void> {
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
     if (!readProjectLaunchOwner(workspace.stateDir)) {
-      console.log(
-        `stopped Frizz for ${workspace.root}; tmux agent sessions were preserved`
-      );
+      console.log(stoppedMessage());
       return;
     }
     // A process can exit after accepting authenticated control but before its finally block removes
@@ -904,9 +912,7 @@ async function stopWorkspace(): Promise<void> {
     });
     if (reaped.kind === "acquired") {
       reaped.lease.release();
-      console.log(
-        `stopped Frizz for ${workspace.root}; tmux agent sessions were preserved`
-      );
+      console.log(stoppedMessage());
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -917,9 +923,7 @@ async function stopWorkspace(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 100));
   const lateOwner = readProjectLaunchOwner(workspace.stateDir);
   if (!lateOwner) {
-    console.log(
-      `stopped Frizz for ${workspace.root}; tmux agent sessions were preserved`
-    );
+    console.log(stoppedMessage());
     return;
   }
   if (processGenerationIsStale(lateOwner)) {
@@ -928,9 +932,7 @@ async function stopWorkspace(): Promise<void> {
     });
     if (reaped.kind === "acquired") {
       reaped.lease.release();
-      console.log(
-        `stopped Frizz for ${workspace.root}; tmux agent sessions were preserved`
-      );
+      console.log(stoppedMessage());
       return;
     }
   }

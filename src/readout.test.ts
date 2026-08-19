@@ -189,9 +189,9 @@ test("a note scrolls above the region instead of landing inside it", () => {
   const readout = new Readout({ output: out, color: false, tickMs: 60_000 });
   readout.plan([{ key: "server", label: "Server" }]);
   readout.begin("server");
-  readout.note("warning: tmux is old");
+  readout.note("warning: port 9494 is in use");
   const lines = out.rendered.split("\n");
-  const noteRow = lines.findIndex((line) => line.includes("warning: tmux is old"));
+  const noteRow = lines.findIndex((line) => line.includes("warning: port 9494 is in use"));
   const stepRow = lines.findIndex((line) => line.includes("Server"));
   assert.notEqual(noteRow, -1);
   assert.equal(noteRow < stepRow, true, `the note must stay above the region:\n${out.rendered}`);

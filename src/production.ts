@@ -147,11 +147,12 @@ const bind = (() => {
 let launchIntent: LaunchIntent | undefined;
 const workspace: Workspace = (() => {
   try {
-  // BEFORE the workspace is resolved, because resolving it already shells out to `git` and to `tmux`
-  // and opens this project's database — so a machine missing a tool, or running a Node the database
-  // cannot survive, learns it here by name instead of from whichever internal step tripped over it
-  // first. The Node floor matters most: on an unsupported release SQLite does not misbehave, it
-  // SEGFAULTS, and a segfault mid-boot is indistinguishable from Frizz being broken.
+  // BEFORE the workspace is resolved, because resolving it opens this project's database — so a
+  // machine running a Node the database cannot survive learns it here by name instead of from whichever
+  // internal step tripped over it first. The Node floor is effectively the whole check now: on an
+  // unsupported release SQLite does not misbehave, it SEGFAULTS, and a segfault mid-boot is
+  // indistinguishable from Frizz being broken. The executables list beside it is empty — nothing shells
+  // out to `git` or `tmux` any more (see preflight.ts).
   //
   // `--stop` and `--status` skip the Node floor deliberately: they only read a status file and signal
   // a process, both of which work on any runtime, and they are how someone shuts down a board after
@@ -434,8 +435,8 @@ async function runSupervisor(port: number, token: string): Promise<never> {
       // Said plainly, that is an update; unsaid, it is indistinguishable from Frizz dying.
       readout?.notice("done", "Updated", `Frizz ${plan.latestVersion} is taking over on port ${port}`);
       readout?.note(`\n  Frizz ${plan.latestVersion} now runs in the background — ctrl-c here no longer reaches it. Stop it with ${PACKAGE_NAME} --stop.\n`);
-      // The successor adopts the same tokenized project lease. SQLite, tmux and provider sessions
-      // are keyed project resources, so neither process copies, deletes, nor recreates them.
+      // The successor adopts the same tokenized project lease. SQLite and provider sessions are
+      // keyed project resources, so neither process copies, deletes, nor recreates them.
       process.exit(0);
     },
   });
