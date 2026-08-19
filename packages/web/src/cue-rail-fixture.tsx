@@ -98,14 +98,21 @@ const threads: ThreadView[] = [
   cue("investigate-homebrew-core-tap", "Investigate homebrew core tap submission for nub", 5 * MIN, {
     awaitingBackground: true,
     bgShells: [{ id: "bzvtnt3ig", label: "brew audit", startedAt: ago(4 * MIN), state: "running" }],
+    // A fence written the CURRENT way: frontmatter, a `---`, then Markdown. The prose lives in the BODY
+    // and there is no `reason:` line at all — the shape the popover has to read, and the one it dropped
+    // on the floor while it read only the hint.
     lastFence: {
       kind: "awaiting",
-      body: "",
+      body: [
+        "The tap submission is queued behind their CI backlog.",
+        "",
+        "- the audit passes locally, so this is their queue rather than the formula",
+        "- if it goes red I will re-run rather than resubmit",
+      ].join("\n"),
       hints: [
         { kind: "pr", value: "Homebrew/homebrew-core#298614" },
         { kind: "shell", value: "bzvtnt3ig" },
         { kind: "for", value: "2h" },
-        { kind: "reason", value: "the tap submission is queued behind their CI backlog" },
       ],
     },
   } as Partial<ThreadView>),

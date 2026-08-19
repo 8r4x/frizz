@@ -62,7 +62,12 @@ test("a rest with no fence is told how to sign off, and the text names all three
     // the audience that most needs the right one.
     assert.match(h.delivered[0], /shell: <the id your runtime gave you>/)
     assert.match(h.delivered[0], /for: 2h/)
-    assert.match(h.delivered[0], /reason:/)
+    // FRONTMATTER, THEN MARKDOWN (2026-08-17): the structural lines, a `---`, and the worker's prose
+    // below it. This pinned `reason:` — the ONE-LINE form that shape replaced — for two days after the
+    // parser stopped needing it, which is the same staleness the comment above is about: the example
+    // kept teaching the superseded field to the audience least able to know it was superseded.
+    assert.match(h.delivered[0], /^\s*---\s*$/m, "the delimiter, which is what makes the prose prose")
+    assert.doesNotMatch(h.delivered[0], /reason:/, "and not the one-line form it replaced")
     assert.doesNotMatch(h.delivered[0], /`watch: <id>`/, "the deleted grammar must not come back")
     // THE GOAL'S VERBIAGE LIVES HERE NOW. A new thread no longer arms the default Goal (2026-08-16) —
     // the bump is the same nudge — so the bump has to carry what the Goal used to say about finishing

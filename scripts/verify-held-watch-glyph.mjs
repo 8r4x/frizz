@@ -26,7 +26,9 @@ const shots = opt("shots")
 // sentence: the park state leads (that is what the glyph claims) and the generated wait clause finishes
 // it — see Sidebar.tsx `popover`, which is the one place that shape is decided.
 const CASES = [
-  { slug: "watch-the-resolver-pr", icon: "lucide-github", tip: /^Snoozed until .* — waiting on acme\/app#391$/ },
+  // The FIRST line only: frizz's own sentence. A fence's prose — its Markdown body, or a legacy
+  // `reason:` — follows as its own paragraph, and this fixture's watch row carries one.
+  { slug: "watch-the-resolver-pr", icon: "lucide-github", tip: /^Snoozed until .* — waiting on acme\/app#391\n/ },
   // The other three Held rows are the control: a timer park, a plain user snooze, and a usage-limit
   // park. None of them is watching anything, so none may pick up the PR mark. The timer wears a CLOCK,
   // not the hourglass — the hourglass stopped being the generic park mark when the 2026-08-15 grammar

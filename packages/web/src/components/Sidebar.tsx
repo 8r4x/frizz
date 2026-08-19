@@ -21,7 +21,7 @@ import { ProviderMark } from "./ProviderMark.tsx"
 import { STATUS_CHIP } from "../lib/status.ts"
 import { retrySession } from "../lib/retrySession.ts"
 import { formatSnoozedUntil, formatAutoSnoozedUntil, formatUserSnooze } from "../lib/snooze.ts"
-import { awaitingWaitClause, prWatchRefs, reasonSentence } from "../lib/awaitingPresentation.ts"
+import { awaitingProse, awaitingWaitClause, prWatchRefs } from "../lib/awaitingPresentation.ts"
 import { useOptimisticallySteered } from "../lib/steering.ts"
 import { useOptimisticallyArchived } from "../lib/optimisticArchive.ts"
 import { activeSidebarSection, queueNavigationSettled, railRevealDelta, type SidebarSectionGeometry } from "../lib/sidebarScrollspy.ts"
@@ -692,13 +692,13 @@ function popover(t: Pick<ThreadView, "lastFence">, state: string | null): string
   return [head, awaitingReason(t)].filter((line) => Boolean(line)).join("\n\n")
 }
 
-/** The worker's own `reason:`, for a POPOVER, presented as the SENTENCE it is set as — see
- *  reasonSentence, which is shared with the awaiting card because both draw it standing alone. Null when
- *  the fence carries none: a tooltip that invents a sentence is worse than one that just names the state. */
+/** The worker's own prose for this row's POPOVER — the fence's Markdown body, else its legacy
+ *  `reason:` line, as one sentence. awaitingProse owns both halves of that; see it for why reading only
+ *  `reason:` silently dropped the handoff of every fence written in the current frontmatter shape.
+ *  Null when the fence carries neither, which is an ordinary park. */
 export function awaitingReason(t: Pick<ThreadView, "lastFence">): string | null {
   if (t.lastFence?.kind !== "awaiting") return null
-  const reason = t.lastFence.hints.find((h) => h.kind === "reason")?.value.trim()
-  return reason ? reasonSentence(reason) : null
+  return awaitingProse(t.lastFence)
 }
 
 // ── the indicator (one per row) ──────────────────────────────────────────────────────────────────

@@ -39,8 +39,8 @@ const base = {
 const REASON = "waiting on the three-platform run before porting the v2 drivers"
 const SET = "Waiting on the three-platform run before porting the v2 drivers"
 
-const thread = (hints: { kind: string; value: string }[], extra: Partial<ThreadView> = {}) =>
-  ({ ...base, id: "resting-thread", lastFence: { kind: "awaiting", body: "", hints }, ...extra }) as unknown as ThreadView
+const thread = (hints: { kind: string; value: string }[], extra: Partial<ThreadView> = {}, body = "") =>
+  ({ ...base, id: "resting-thread", lastFence: { kind: "awaiting", body, hints }, ...extra }) as unknown as ThreadView
 
 function markup(t: ThreadView) {
   return renderToStaticMarkup(
@@ -112,6 +112,17 @@ test("a snooze stacks under the state, never inside the worker's paragraph", () 
   const [state, reason] = (sessionIndicatorFor(t).tip ?? "").split("\n\n")
   assert.match(state ?? "", /^At rest — waiting on a background shell\nSnoozed until /, "the park is the state's second line")
   assert.equal(reason, SET, "…and the worker's sentence still owns the paragraph below")
+})
+
+// A fence written the CURRENT way — frontmatter, a `---`, then Markdown — carries its handoff in the
+// BODY, and `reason:` is the one-line form that shape replaced. The popover reads the body first, or it
+// would show the state and drop the worker's own words entirely.
+test("the popover takes the fence's Markdown body over its legacy reason line", () => {
+  const t = thread([...WAIT, { kind: "reason", value: REASON }], {}, "The tap submission is queued behind their CI backlog.")
+  assert.deepEqual((sessionIndicatorFor(t).tip ?? "").split("\n\n"), [
+    "Held — waiting on a background shell",
+    "The tap submission is queued behind their CI backlog.",
+  ])
 })
 
 test("awaitingReason reads only an awaiting fence, and only a non-empty one", () => {

@@ -12,6 +12,7 @@ import {
   awaitingForLabel,
   awaitingWaitClause,
   reasonSentence,
+  awaitingProse,
   hintGloss,
 } from "./awaitingPresentation.ts"
 
@@ -192,4 +193,52 @@ test("a reason that opens on CODE is left exactly as written", () => {
     "gh pr checks reports one job queued",
   ]
   for (const reason of cases) assert.equal(reasonSentence(reason), reason, reason)
+})
+
+
+// WHAT THE POPOVER READS, and why it is not `reason:`. An awaiting fence is FRONTMATTER, THEN MARKDOWN
+// (2026-08-17): structural lines, a `---`, and below it as much prose as the worker wants — optional
+// prose, since what frizz requires is a live item and a `for:`. Reading only `reason:` dropped the
+// handoff of every fence written that way, which is exactly what the rail popover did (maintainer
+// 2026-08-19: "the actual block content … was all below the triple hyphen, sort of like a front matter
+// with Markdown beneath it").
+const HINTS = [{ kind: "shell" as const, value: "bzvtnt3ig" }, { kind: "for" as const, value: "2h" }]
+
+test("the popover reads the fence's BODY — the prose below the delimiter", () => {
+  const body = "The tap submission is queued behind their CI backlog."
+  assert.equal(awaitingProse({ body, hints: HINTS }), body)
+})
+
+test("…and falls back to the legacy `reason:` when a fence has no body", () => {
+  assert.equal(
+    awaitingProse({ body: "", hints: [...HINTS, { kind: "reason", value: "waiting on the release job" }] }),
+    "Waiting on the release job",
+    "set as a sentence, the same as a body",
+  )
+})
+
+test("the prose is OPTIONAL — a fence with neither says nothing rather than inventing a wait", () => {
+  assert.equal(awaitingProse({ body: "", hints: HINTS }), null)
+  assert.equal(awaitingProse({ hints: HINTS }), null, "and an absent body is not a crash")
+  assert.equal(awaitingProse({ body: "   \n\n  ", hints: HINTS }), null, "whitespace is not prose")
+})
+
+test("only the FIRST paragraph reaches a hover label, flattened onto one line", () => {
+  const body = [
+    "Waiting on the three-platform run",
+    "before porting the v2 drivers.",
+    "",
+    "- the macOS leg is the one that has been flaky",
+    "- if it goes red I will bisect rather than re-run",
+  ].join("\n")
+  assert.equal(awaitingProse({ body, hints: HINTS }), "Waiting on the three-platform run before porting the v2 drivers.")
+})
+
+test("a long lede is cut on a word boundary, not mid-word", () => {
+  const body = `The release job ${"keeps timing out on the arm64 leg and ".repeat(6)}so I am waiting`
+  const out = awaitingProse({ body, hints: HINTS }) ?? ""
+  assert.ok(out.length <= 241, `capped, got ${out.length}`)
+  assert.match(out, /…$/, "and says so")
+  assert.doesNotMatch(out, /\s…$/, "no dangling space before the ellipsis")
+  assert.ok(body.startsWith(out.slice(0, -1)), "the kept text is the worker's own, unaltered")
 })

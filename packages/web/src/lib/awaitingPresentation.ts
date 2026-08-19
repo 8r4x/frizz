@@ -60,6 +60,38 @@ export function awaitingHintSentence(hints: readonly AwaitingHint[], _nowMs = Da
   return reason ? reasonSentence(reason) : null
 }
 
+/** THE WORKER'S OWN PROSE for a hover popover — the fence's Markdown BODY, else its legacy `reason:`.
+ *
+ *  An awaiting fence is FRONTMATTER, then Markdown (2026-08-17): structural lines, a `---` delimiter, and
+ *  below it as much prose as the worker wants — OPTIONAL prose, since what frizz actually requires is a
+ *  live item and a `for:`. `reason:` is the one-line form that shape replaced, kept valid so fences
+ *  already written that way keep parsing. Reading only `reason:` therefore drops the handoff of every
+ *  fence written the CURRENT way, which is what the rail popover did until this existed.
+ *
+ *  The FIRST PARAGRAPH only, and its internal line breaks flattened: a body may run to 500 characters of
+ *  headings and bullets, and a hover label is not where you read that. It is the lede a worker already
+ *  writes — the card below the rail renders the whole thing.
+ *
+ *  Null when the fence carries neither, which is an ordinary park: a popover that invents prose is worse
+ *  than one that just names the state. */
+export function awaitingProse(fence: { body?: string; hints: readonly AwaitingHint[] }): string | null {
+  const lede = (fence.body ?? "").split(/\n\s*\n/).map((para) => para.trim()).find(Boolean)
+  const reason = fence.hints.find((hint) => hint.kind === "reason")?.value.trim()
+  const prose = lede ?? reason
+  return prose ? reasonSentence(capForHover(prose.replace(/\s*\n\s*/g, " "))) : null
+}
+
+/** One paragraph is still a paragraph. Cut on a word boundary so a long lede reads as trimmed rather
+ *  than broken — the awaiting card carries the full body for anyone who wants it. */
+function capForHover(prose: string): string {
+  if (prose.length <= HOVER_PROSE_MAX) return prose
+  const cut = prose.slice(0, HOVER_PROSE_MAX)
+  const space = cut.lastIndexOf(" ")
+  return `${(space > HOVER_PROSE_MAX / 2 ? cut.slice(0, space) : cut).replace(/[.,;:]$/, "")}…`
+}
+
+const HOVER_PROSE_MAX = 240
+
 /** THE WORKER'S `reason:`, PRESENTED AS A SENTENCE — capitalized, because everywhere frizz draws it, it
  *  stands alone: its own paragraph under the rail popover's sentence, its own line in the awaiting card.
  *
