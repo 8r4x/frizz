@@ -81,9 +81,10 @@ Invoking `nub --test` by hand is fine for one file, but it bypasses that check.
   Ctrl-C on the server does not reach it and why a turn survives a restart. The surviving names are
   legacy spellings of "the identity string for this thread", nothing more. Treat any present-tense
   tmux comment as stale until proven otherwise, and prefer `git log -S` over believing it.
-- **Workspace-scoped.** One server per repo, launched from the repo root. It watches only that
-  repo's `.frizz/` and only the matching `~/.claude/projects/<cwd-slug>/` session logs. No
-  cross-repo anything.
+- **One server, every project.** A SINGLETON: one server on one origin serves every project on the
+  machine, each named by a URL prefix. It was one server per repo until 2026-08; if you find a
+  statement to that effect anywhere, it is stale. See "URL shape (one server, every project)" below —
+  that section is load-bearing, and most bugs in this area come from carrying the old model forward.
 - **Frizz files are the source of truth for thread status.** The server imports the board logic
   from `../../board/*.mjs` (zero-dep, plain node) — NEVER duplicate the parser. Writes
   to thread files go through the same code paths as `frizz-update` (import `thread-update.mjs`

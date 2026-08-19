@@ -196,7 +196,7 @@ trades the code for a session cookie, so the link itself stops working the momen
 <details>
 <summary><b>Can I run it on several repos at once?</b></summary>
 
-> Yes — one server and one tab per repo, each fully isolated. There is deliberately no cross-repo board.
+> Yes. One Frizz server serves every project on your machine — you don't start one per repo. Run `frizz` in any of them and switch projects from the board; each project's threads, settings and state stay separate.
 
 </details>
 
