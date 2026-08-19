@@ -1,6 +1,6 @@
 // The hairline+label+hairline chrome of a WAKE DIVIDER — extracted from ChatView so any surface can
-// wear it without importing the whole thread view (and without a module cycle: ChatView imports the
-// GitHub wake card, so the wake card could not reach back into ChatView for this).
+// wear it without importing the whole thread view (and without a module cycle: ChatView imports the frizz
+// wake renderer, so that renderer could not reach back into ChatView for this).
 //
 // It is the one rendering EVERY child-event now shares. A background shell coming to rest, a Monitor
 // timing out, a sub-agent finishing, a sub-agent reporting up mid-flight, and a pr-watch wake are the
@@ -21,9 +21,13 @@ import type { LucideIcon } from "lucide-react"
 // intermediate run — renders its root as a `<button>` instead of a `<div>`, and it carries no
 // `sourceId`: it stands in for a SPAN of messages, so there is no single one to identify. The union
 // states that instead of leaving it to a comment.
+// `ariaExpanded`/`ariaControls` ride the interactive form only, and only for a divider that TOGGLES a
+// body — the fired-timer wake, which is the one member of the family that keeps prose to reveal. The two
+// dividers that came before it expand ONE WAY and unmount, so a disclosure state would be a lie on them;
+// leaving the props optional is what keeps them honest without a second component.
 type WakeDividerProps = { icon?: LucideIcon; children: ReactNode; ariaLabel?: string; marker?: string } & (
-  | { onClick: () => void; sourceId?: never }
-  | { onClick?: never; sourceId?: string }
+  | { onClick: () => void; sourceId?: never; ariaExpanded?: boolean; ariaControls?: string }
+  | { onClick?: never; sourceId?: string; ariaExpanded?: never; ariaControls?: never }
 )
 
 // `icon` is a prop rather than something each caller renders into `children`, so the glyph's size, its
@@ -31,7 +35,7 @@ type WakeDividerProps = { icon?: LucideIcon; children: ReactNode; ariaLabel?: st
 // dividers wear one now (maintainer 2026-07-31, on the GitHub one: "I like it so much that I think we
 // should include a similar icon for the other hairline dividers"), and five hand-rolled copies of a
 // sub-pixel optical correction is exactly how a family drifts apart.
-export function WakeDivider({ icon: Icon, children, sourceId, ariaLabel, marker, onClick }: WakeDividerProps) {
+export function WakeDivider({ icon: Icon, children, sourceId, ariaLabel, marker, onClick, ariaExpanded, ariaControls }: WakeDividerProps) {
   // The chrome itself, identical in both roots. The `group-hover/wake:` variants are inert on the inert
   // form (nothing names that group there) and are what makes the clickable form respond as ONE row —
   // its hairlines brighten with its label, so the affordance is the whole rule rather than the words.
@@ -55,6 +59,8 @@ export function WakeDivider({ icon: Icon, children, sourceId, ariaLabel, marker,
         // transcript affordance extends (see the sub-agent drill-in links).
         onMouseDown={(e) => e.preventDefault()}
         aria-label={ariaLabel}
+        aria-expanded={ariaExpanded}
+        aria-controls={ariaControls}
         className="group/wake my-1 flex w-full items-center gap-3 rounded-sm text-left outline-none focus-visible:ring-1 focus-visible:ring-fg/60"
       >
         {chrome}

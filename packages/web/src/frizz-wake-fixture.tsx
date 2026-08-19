@@ -1,6 +1,6 @@
 import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { formatGithubWakeSteer, prWatchWakeMessage, shellDoneMessage } from "@frizz/shared"
+import { formatGithubWakeSteer, limitResumeSteer, prWatchWakeMessage, shellDoneMessage, timerPromptMessage } from "@frizz/shared"
 import type { ChatMessage } from "./hooks.ts"
 import { Message } from "./components/ChatView.tsx"
 import "./styles.css"
@@ -62,10 +62,21 @@ const messages: ChatMessage[] = [
   wake("w9", shellDoneMessage({ taskId: "bzvtnt3ig", label: "the churn suite", status: "completed" })),
   wake("w10", shellDoneMessage({ taskId: "b52kqwc13", label: "vite --port 5199 --strictPort", status: "failed" })),
   wake("w11", shellDoneMessage({ label: "Running the focused tests", status: "killed" })),
+  // A USAGE WINDOW rolling over. The amber pause card it answers is the notable state and keeps its
+  // card; this is one line saying the thread is going again.
+  wake("w12", limitResumeSteer("weekly")),
+  // THE ONE WAKE THAT KEEPS A BODY — click it. Its text is the worker's own, and a fired one-off's
+  // registration is gone the instant it delivers, so this disclosure is the only rendering that text
+  // ever gets. Two of them, because the second is the case a bare hairline would have destroyed.
+  wake("w13", timerPromptMessage("Re-check the promoted artifact once the release job finishes.", new Date(Date.now() - 4 * 60_000).toISOString())),
+  wake("w14", timerPromptMessage(
+    "Re-read `.frizz/threads/cfcb00d9/plan.md` before continuing — it is the authoritative account of this effort.\n\nIf the churn suite is still red, bisect rather than re-run it.",
+    new Date(Date.now() - 3 * 3_600_000).toISOString(),
+  )),
   // The FALLBACK still has to work: a wake this build cannot read keeps its first-party card and loses
-  // no text. A one-off timer is the everyday example — and it keeps the card on purpose, because the
-  // body is the WORKER'S OWN prose and a hairline is a one-line shape with nowhere to put it.
-  wake("w12", "⏰ Re-check the promoted artifact once the release job finishes.\n\n(Timer — set for 2026-08-18T18:15:00Z. It will not fire again.)"),
+  // no text. Nothing frizz composes lands here any more, so this is a legacy transcript or a format a
+  // future frizz writes and this build has never seen.
+  wake("w15", "⏰ Frizz has invented a wake shape this build predates.\n\n(And whatever it says, the text must survive — the card is what guarantees that.)"),
 ]
 
 function Fixture() {
@@ -74,7 +85,7 @@ function Fixture() {
       <section className="mx-auto flex max-w-[760px] flex-col border border-border bg-panel px-5 py-4 shadow-xl shadow-black/30 sm:px-7">
         <header className="border-b border-border pb-3">
           <h1 className="text-[16px] font-semibold text-fg">Frizz wakes — every shape frizz speaks in</h1>
-          <p className="mt-0.5 text-[12px] text-muted">Review activity, a finished PR, a CI verdict, both at once, a background shell, and the unparsed fallback.</p>
+          <p className="mt-0.5 text-[12px] text-muted">Review activity, a finished PR, a CI verdict, both at once, a background shell, a usage window, a fired timer — and the unparsed fallback.</p>
         </header>
         <div className="flex flex-1 flex-col gap-3.5 py-5">
           {messages.map((message) => <Message key={message.sourceId} m={message} />)}

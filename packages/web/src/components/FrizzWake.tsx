@@ -28,8 +28,9 @@
 // and a right-pinned ref; a p-4 inset wrapped around a SINGLE 20px line, when every other card in that
 // shell has a body; and three marks on one row that all looked clickable (an underlined title, an
 // accent ref, the corner glyph) with no hierarchy between them.
-import { Bell, Github, TerminalSquare } from "lucide-react"
-import { isGithubWakeBacklog, parseGithubWakeSteer, parsePrWatchWake, parseShellDoneWake, type GithubWakeSteer, type PrWatchWake, type ShellDoneWake } from "@frizz/shared"
+import { useId, useState } from "react"
+import { AlarmClock, Bell, Github, Hourglass, TerminalSquare } from "lucide-react"
+import { isGithubWakeBacklog, parseGithubWakeSteer, parseLimitResumeWake, parsePrWatchWake, parseShellDoneWake, parseTimerWake, type GithubWakeSteer, type LimitWindow, type PrWatchWake, type ShellDoneWake, type TimerWake } from "@frizz/shared"
 import { CARD_BODY, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 import { WakeDivider } from "./WakeDivider.tsx"
 import { githubRefUrl } from "../lib/githubRef.ts"
@@ -57,10 +58,14 @@ const DIVIDER_LINK = "rounded-sm underline decoration-muted/30 underline-offset-
 // the watcher fired and roughly what landed, with the PR one click away. That is the divider.
 
 export function FrizzWake({ steer: served, text, sourceId, wrap }: { steer?: GithubWakeSteer; text: string; sourceId?: string; wrap?: boolean }) {
-  // A BACKGROUND SHELL that finished behind a resting worker. Settled first and on its own: it is a
-  // whole delivery, never a part of one, and it shares nothing with the GitHub grammar below.
+  // THE WHOLE-DELIVERY WAKES, settled first and each on its own: none is ever a PART of a message, and
+  // none shares anything with the GitHub grammar below.
   const shell = parseShellDoneWake(text)
   if (shell) return <ShellDoneDivider wake={shell} sourceId={sourceId} />
+  const timer = parseTimerWake(text)
+  if (timer) return <TimerDivider wake={timer} sourceId={sourceId} />
+  const limit = parseLimitResumeWake(text)
+  if (limit) return <LimitResumeDivider window={limit.window} sourceId={sourceId} />
   // ONE DELIVERY, UP TO TWO PARTS. A poll that saw CI flip AND a comment land composes both into one
   // message (prWatchWakeMessage), and each is its own event, so each gets its own hairline. The status
   // part goes first because that is the order the scheduler wrote them in.
@@ -101,6 +106,80 @@ export function FrizzWake({ steer: served, text, sourceId, wrap }: { steer?: Git
     )
   }
   return <GithubSteerDivider steer={steer!} text={text} sourceId={sourceId} />
+}
+
+// ---- THE FIRED-TIMER HAIRLINE, WHICH IS THE ONE THAT KEEPS A BODY -----------------------------------
+// Every other wake here is frizz's own sentence about something outside the turn, and a hairline says all
+// of it. This one carries the WORKER'S OWN prose — whatever it asked frizz to hand back at this instant —
+// so a bare hairline would be the only place in the app that text has ever been rendered, and it would
+// destroy it. The Goal prompt collapses to a bare label for a reason that does not reach here: its text
+// is the ARMED text, still sitting legible and editable in the footer panel (see RecurringPromptLine).
+// A one-off's registration is gone the moment it delivers.
+//
+// So: the family's shape, with the body one click away (maintainer 2026-08-19, over both a card and a
+// bare line). The TOGGLE is real — the two clickable dividers that came before this one expand ONE WAY
+// and unmount — which is why `WakeDivider` grew `ariaExpanded`/`ariaControls` for it.
+//
+// The affordance rides the LABEL, not the icon, and that is deliberate: every wake divider's glyph says
+// what KIND of event this is, and a fired alarm is an event. The two elision dividers wear a chevron
+// glyph instead precisely because they stand for nothing that happened. "Click to expand" is spelled the
+// way `MiddleRunsSummary` already spells it, so the transcript has one phrase for this and not two.
+function TimerDivider({ wake, sourceId }: { wake: TimerWake; sourceId?: string }) {
+  const [open, setOpen] = useState(false)
+  const bodyId = useId()
+  const age = wakeItemAge(wake.at)
+  return (
+    <div data-frizz-msg={sourceId} className="flex flex-col">
+      <WakeDivider
+        icon={AlarmClock}
+        marker="timer"
+        onClick={() => setOpen((v) => !v)}
+        ariaExpanded={open}
+        ariaControls={bodyId}
+        ariaLabel={`${open ? "Collapse" : "Expand"} the text this timer handed back`}
+      >
+        <span className="shrink-0">Timer</span>
+        {age && (
+          <>
+            <span aria-hidden="true" className="shrink-0 opacity-50">·</span>
+            {/* `title` keeps the exact instant, which is the only thing that says WHICH timer this was
+                when several were armed at once. */}
+            <span title={wake.at} className="shrink-0 tabular-nums">{age}</span>
+          </>
+        )}
+        <span aria-hidden="true" className="shrink-0 opacity-50">·</span>
+        <span className="shrink-0">{open ? "Click to collapse" : "Click to expand"}</span>
+      </WakeDivider>
+      {open && (
+        // The same ruled aside the reasoning disclosure uses, and PLAIN pre-wrapped text rather than
+        // markdown: this is what the worker typed into `mcp__frizz__timer`, and rendering it as markdown
+        // would restyle a sentence that was never written as any.
+        // Flush LEFT, unlike the reasoning aside this borrows its rule from: that one indents to sit
+        // under its own left-flush label, and this divider's label is centred, so 5px of inset would be
+        // aligned to nothing. The transcript's own edge is the only reference on the row.
+        <div id={bodyId} className="mt-1.5 whitespace-pre-wrap border-l border-border/70 pl-3 text-[13px] text-muted [overflow-wrap:anywhere]">
+          {wake.prompt}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---- THE USAGE-LIMIT RESUME HAIRLINE -----------------------------------------------------------------
+// The counterpart to the amber pause card, and deliberately much quieter than it. The PAUSE is the
+// notable state — the turn was cut off mid-work and the human may want to act — and it keeps its card.
+// This is only "the window rolled and the thread is going again", which is one line of news (maintainer
+// 2026-08-19). The agent-facing half of the sentence, "Continue exactly where you left off", is dropped
+// like every other trailer here: it is an instruction to the worker, and the human has nothing to
+// continue.
+function LimitResumeDivider({ window, sourceId }: { window: LimitWindow; sourceId?: string }) {
+  const which = window === "weekly" ? "Weekly usage limit" : window === "session" ? "Session usage limit" : "Usage limit"
+  const label = `${which} reset — resuming`
+  return (
+    <WakeDivider icon={Hourglass} sourceId={sourceId} marker="limit-resume" ariaLabel={label}>
+      <span className="min-w-0 truncate">{label}</span>
+    </WakeDivider>
+  )
 }
 
 // ---- THE BACKGROUND-SHELL HAIRLINE -----------------------------------------------------------------

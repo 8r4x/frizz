@@ -4,10 +4,14 @@ import {
   formatGithubWakeSteer,
   isGithubWakeBacklog,
   parseGithubWakeSteer,
+  parseLimitResumeWake,
   parsePrWatchWake,
   parseShellDoneWake,
+  parseTimerWake,
+  limitResumeSteer,
   prWatchWakeMessage,
   shellDoneMessage,
+  timerPromptMessage,
   splitWakeDeliveries,
   stripWakeDeliveryToken,
   wakeDeliveryToken,
@@ -312,4 +316,47 @@ test("text that is not a shell-done wake parses as none", () => {
     null,
     "only the first line may claim the divider",
   )
+})
+
+// ---- parseTimerWake ----
+//
+// The one wake in the family that keeps a BODY, so this pair guards something the others do not: the
+// worker's prose must come back out whole. A fired one-off's registration is gone the moment it
+// delivers, which makes this rendering the only one that text ever gets.
+test("a fired timer round-trips through its own parser, body and instant intact", () => {
+  const at = "2026-08-19T02:00:00Z"
+  for (const [name, prompt] of [
+    ["one line", "Re-check the promoted artifact."],
+    ["several paragraphs", "Re-check the promoted artifact.\n\nIf the release job is still red, bisect rather than re-run."],
+    // The trailer is matched at the END, so prose that merely LOOKS like one must not truncate the body.
+    ["prose containing a lookalike trailer", "It said (One-off timer, set for X. It has fired and will not repeat.) — check that."],
+  ] as [string, string][]) {
+    assert.deepEqual(parseTimerWake(timerPromptMessage(prompt, at)), { prompt, at }, name)
+  }
+})
+
+test("text that is not a fired timer parses as none", () => {
+  assert.equal(parseTimerWake(formatGithubWakeSteer(single)), null)
+  assert.equal(parseTimerWake(prWatchWakeMessage({ target: "nubjs/nub#760", merged: true })), null)
+  // A trailer with NOTHING above it is not a delivery — the worker's own text is the whole message here.
+  assert.equal(parseTimerWake("(One-off timer, set for 2026-08-19T02:00:00Z. It has fired and will not repeat.)"), null)
+  // A REPEATING bump wears its own trailer and collapses through parseRecurringPrompt, never this.
+  assert.equal(parseTimerWake("Keep going.\n\n(Goal — sent every 15 minutes. Reply ALLDONE to stop.)"), null)
+})
+
+// ---- parseLimitResumeWake ----
+//
+// This formatter moved out of the scheduler to sit beside its parser: the chat rebuilds the hairline from
+// the delivered text alone, so the pair has to live in the one package both sides can reach. The round
+// trip is what makes that move safe to have made.
+test("a usage-limit resume round-trips through its own parser", () => {
+  for (const window of ["weekly", "session", "unknown"] as const) {
+    assert.deepEqual(parseLimitResumeWake(limitResumeSteer(window)), { window }, window)
+  }
+})
+
+test("text that is not a usage-limit resume parses as none", () => {
+  assert.equal(parseLimitResumeWake(formatGithubWakeSteer(single)), null)
+  assert.equal(parseLimitResumeWake("⏳ The weekly usage limit that interrupted you has reset."), null)
+  assert.equal(parseLimitResumeWake("⏳ The context window that interrupted you has reset. Continue exactly where you left off."), null)
 })
