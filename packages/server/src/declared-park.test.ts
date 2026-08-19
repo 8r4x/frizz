@@ -520,3 +520,28 @@ test("a park naming something that never existed still reads as a wrong fence", 
     assert.doesNotMatch(msg, /has FINISHED/)
   } finally { h.close() }
 })
+
+// THE CLOCK, on frizz's own correction only.
+//
+// A broker-run worker is told neither the date nor the time by its runtime — measured 2026-08-19 on
+// `read-the-file-read-up` (`claude_runtime = broker`, as 181 of that project's 338 sessions are): ZERO
+// date injections and ZERO system-reminders across its entire life. So a worker writing `for: 1h` is not
+// estimating badly; it has no clock to estimate against, and no way to notice that its last four parks
+// each lasted four minutes.
+//
+// It rides ONLY on messages frizz itself authors. Two pinned invariants forbid the blanket version — "the
+// operator's text leads, verbatim" (Goal/heartbeat) and "the prompt VERBATIM" (snooze) — and frizz's own
+// corrections are in any case the only deliveries that discuss the fence.
+test("a park correction tells the worker what time it is and how long it has been gone", async () => {
+  const h = parkHarness([{ kind: "for", value: "24h" }, { kind: "reason", value: "waiting" }], {
+    restedAt: new Date(Date.now() - 3 * 60 * 60_000 - 12 * 60_000).toISOString(),
+  })
+  try {
+    await h.s.tick()
+    const msg = h.queued()[0].message
+    assert.match(msg, /⏱ \d{4}-\d{2}-\d{2} \d{2}:\d{2}/, "an absolute wall clock…")
+    assert.match(msg, /you last spoke 3h12m ago/, "…and the ELAPSED number, which is the one that teaches")
+    // At the FOOT: the correction's own instruction is what the worker must act on first.
+    assert.ok(msg.trimEnd().endsWith("ago."), "the clock is frizz's footnote, not its headline")
+  } finally { h.close() }
+})

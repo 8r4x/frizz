@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_RETIRED_LEAD, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, formatGithubWakeSteer, type GithubWatchStatus, prWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, type QuotaSnapshot } from "@frizz/shared"
+import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_RETIRED_LEAD, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, formatGithubWakeSteer, type GithubWatchStatus, prWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
 import { GITHUB_STATUS_SETTING, parkExpiresAt, parkIsHonoured, readAwaitingPark, unaccountedItems, type LiveActivity } from "./awaiting.ts"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
@@ -357,13 +357,9 @@ function isLimitFenceId(fenceId: string): boolean {
   return fenceId.startsWith(LIMIT_FENCE_PREFIX)
 }
 
-// The message the resumed worker actually receives. Deliberately a plain continue — the agent's own
-// transcript already holds everything it was doing, so the useful thing to add is only WHY it stopped
-// and that it should pick the work back up rather than re-plan or re-report.
-export function limitResumeSteer(window: LimitFault["window"]): string {
-  const which = window === "weekly" ? "weekly usage limit" : window === "session" ? "session usage limit" : "usage limit"
-  return `⏳ The ${which} that interrupted you has reset. Continue exactly where you left off.`
-}
+// The message the resumed worker actually receives now lives in @frizz/shared (imported above), beside
+// its parser and every other wake formatter — the chat rebuilds this delivery's hairline from the
+// delivered text alone, so the pair has to sit in the one package both sides can reach.
 
 // ---- SOURCE 4: DROPPED SUB-AGENT REPORT REPAIR ---------------------------------------------------
 // Where the limit source asks "did the wall come down?", this one asks "is this agent missing findings
@@ -2203,6 +2199,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       })
       // NOTHING RUNNING is itself the answer, and the most common one for a nameless fence: a worker
       // waiting on nothing is not awaiting, it is done. Said plainly rather than left as an empty list.
+      // THE CLOCK, on frizz's own correction. A broker-run worker is told neither the date nor the time by
+      // its runtime (measured: zero date injections across an entire session), so it cannot tell that the
+      // `for: 1h` it keeps writing has never once been reached — its last four parks each lasted minutes.
+      // Elapsed is the feedback that turns the next `for:` into a judgement instead of a guess.
+      const clock = wakeTimeHeader(nowMs, spokeAt)
       const message = ops.length > 0
         ? `${head}\n${ops.join("\n")}`
         : cause === "expired"
@@ -2221,6 +2222,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // Keyed on the REST plus which failure it is, so one fence gets one bump per cause: a park that is
       // bumped for a dead id and later expires is two different pieces of news.
       const fenceId = parkFenceId(cause, spokeAt)
+      const messageWithClock = `${message}\n\n${clock}`
       const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
       if (outbox.get(deliveryId)) continue
       const item = outbox.enqueue({
@@ -2229,7 +2231,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         sessionId: row.session_id,
         fenceId,
         hintKey: fenceId,
-        message,
+        message: messageWithClock,
         reason: retired.length > 0 ? `awaiting fence uses retired kind(s): ${retired.join(", ")}` : nameless ? "awaiting park names nothing" : expired ? "awaiting park expired" : `awaiting park named ${dead.length} dead item(s)`,
       }, nowMs).delivery
       // COUNTED AT ENQUEUE, not at delivery — the one place the sign-off nudge's idiom does not transfer.
@@ -2886,6 +2888,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       }
 
       try {
+        // THE CLOCK RIDES ON EVERY DELIVERY. A broker-run worker is told neither the date nor the time
+        // by its runtime (measured: zero date injections across a whole session), so it has no way to
+        // judge how long its own parks actually last — which is why `for:` values are guesses. This is
+        // the one place every frizz wake passes through, so one line here reaches all of them.
         await deps.resume(item.slug, item.message, item.id)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)

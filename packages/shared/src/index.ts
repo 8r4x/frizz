@@ -1039,6 +1039,64 @@ export function timerPromptMessage(prompt: string, fireAt: string): string {
   return `${prompt.trim()}\n\n(One-off timer, set for ${fireAt}. It has fired and will not repeat.)`
 }
 
+/** A fired one-off timer, read back out of its delivery.
+ *
+ *  THIS ONE KEEPS ITS BODY, and it is the only wake in the family that does. Everything else frizz
+ *  composes is frizz's own sentence about something outside the turn, so a hairline says all of it; this
+ *  is the WORKER'S OWN prose, arbitrary and up to TIMER_PROMPT_MAX long. The recurring prompt collapses
+ *  to a bare label for a reason that does NOT hold here — its text is the ARMED text, still legible and
+ *  editable in the footer panel, so repeating it inline adds nothing (see RecurringPromptLine). A fired
+ *  one-off has no such second home: the registration is gone the instant it delivers, so a bare hairline
+ *  would destroy the only rendering of that text anywhere in the app.
+ *
+ *  Hence a hairline WITH a disclosure — the family's shape, the body one click away (maintainer
+ *  2026-08-19, choosing that over both a card and a bare line).
+ *
+ *  Matched on the TRAILER, exactly like `parseRecurringPrompt`: frizz writes it and frizz reads it, both
+ *  from this file, and the prompt above it is arbitrary text no pattern could anchor on. */
+export interface TimerWake {
+  prompt: string
+  /** The instant it was set for. With several timers armed at once this is the only thing that says
+   *  WHICH one fired — the same reason the producer puts it in the trailer. */
+  at: string
+}
+
+const TIMER_TRAILER = /\n\n\(One-off timer, set for (\S+?)\. It has fired and will not repeat\.\)$/
+
+export function parseTimerWake(text: string): TimerWake | null {
+  const trimmed = text.trimEnd()
+  const m = TIMER_TRAILER.exec(trimmed)
+  if (!m) return null
+  const prompt = trimmed.slice(0, m.index).trim()
+  // A trailer with nothing above it is not a timer delivery — the worker's text IS the message here.
+  return prompt ? { prompt, at: m[1] } : null
+}
+
+/** The message a worker receives when the usage window that cut it off has rolled over.
+ *
+ *  MOVED HERE FROM THE SCHEDULER on 2026-08-19, when this became the last frizz-composed wake still
+ *  arriving as a card. It could not be a hairline while it lived in the server package: the chat has
+ *  nothing but the delivered text to draw from, so the parser has to sit beside the formatter, and only
+ *  this package is reachable from both sides. Every other wake formatter is here for that same reason.
+ *
+ *  Deliberately a plain continue — the agent's own transcript already holds everything it was doing, so
+ *  the useful thing to add is only WHY it stopped and that it should pick the work back up rather than
+ *  re-plan or re-report. */
+export function limitResumeSteer(window: LimitWindow): string {
+  const which = window === "weekly" ? "weekly usage limit" : window === "session" ? "session usage limit" : "usage limit"
+  return `⏳ The ${which} that interrupted you has reset. Continue exactly where you left off.`
+}
+
+const LIMIT_RESUME = /^⏳ The (weekly usage limit|session usage limit|usage limit) that interrupted you has reset\. Continue exactly where you left off\.$/
+
+/** Which window reset, or `null` when this is not a limit-resume wake. The chat draws one hairline from
+ *  it; the amber pause card already standing above it carries the weight of the interruption itself. */
+export function parseLimitResumeWake(text: string): { window: LimitWindow } | null {
+  const m = LIMIT_RESUME.exec(text.trim())
+  if (!m) return null
+  return { window: m[1] === "weekly usage limit" ? "weekly" : m[1] === "session usage limit" ? "session" : "unknown" }
+}
+
 /** What is being waited ON: one of the worker's own background shells, or a pull request. */
 // NEITHER KIND HAS A REGISTRY ROW BEHIND IT any more (2026-08-14). Both are derived from the worker's
 // own ```awaiting fence — `shell` from a `watch:` line, `github` from a `pr-watch:` one — so this strip
@@ -2161,6 +2219,44 @@ export const GITHUB_DISPATCH_UI_BOUNDARY = "<!-- frizz:github-dispatch-ui-bounda
 // turn, and the chat renders user text VERBATIM (a pre-wrap bubble, not markdown), so an unstripped
 // token is shown to the human as literal `<!-- frizz-wake:… -->`. A format change on one side without the
 // other silently brings that back; keeping the pair adjacent is the guard.
+// WHAT TIME IT IS, AND HOW LONG YOU HAVE BEEN GONE — because a broker-run worker is told neither.
+//
+// Measured 2026-08-19 on `read-the-file-read-up` (`claude_runtime = broker`, as 181 of that project's 338
+// sessions are): its transcript contains ZERO system-reminders and ZERO date injections across its whole
+// life. The runtime's env block does not reach a broker daemon, so these workers have no idea what day it
+// is, let alone how long they have been parked.
+//
+// That is the root of arbitrary `for:` values. A worker writing `for: 1h` is not estimating badly — it
+// has no clock to estimate against, and no way to notice that its last four parks each lasted four
+// minutes. ELAPSED is the number that teaches it: "you last spoke 3h12m ago" is the feedback that makes
+// the next `for:` an actual judgement.
+//
+// Frizz cannot fix the runtime's env block, but every wake IT sends lands in the worker's context, so
+// this rides along on all of them — one line, at the point every delivery passes through.
+export function formatElapsed(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "an unknown time"
+  const s = Math.floor(ms / 1000)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m`
+  const h = Math.floor(m / 60)
+  if (h < 24) return m % 60 === 0 ? `${h}h` : `${h}h${m % 60}m`
+  const d = Math.floor(h / 24)
+  return h % 24 === 0 ? `${d}d` : `${d}d${h % 24}h`
+}
+
+/** One line of wall clock, prepended to every frizz delivery. Local time, because that is the clock the
+ *  human reading the transcript is on. `lastAssistantAt` absent ⇒ the elapsed clause is dropped rather
+ *  than guessed. */
+export function wakeTimeHeader(nowMs: number, lastAssistantAt?: string | null): string {
+  const d = new Date(nowMs)
+  const p2 = (n: number) => String(n).padStart(2, "0")
+  const stamp = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`
+  const since = lastAssistantAt ? Date.parse(lastAssistantAt) : NaN
+  const elapsed = Number.isFinite(since) && nowMs >= since ? ` — you last spoke ${formatElapsed(nowMs - since)} ago` : ""
+  return `⏱ ${stamp}${elapsed}.`
+}
+
 export function wakeDeliveryToken(id: string): string {
   return `<!-- frizz-wake:${id} -->`
 }
