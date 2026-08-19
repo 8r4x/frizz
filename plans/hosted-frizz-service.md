@@ -352,3 +352,60 @@ breaks the first time someone runs two boards or has 9494 occupied.
 Stage 2 is where you begin creating tunnels *on behalf of other people*, which is precisely the activity
 §2.2.1(j) describes. Building it first and asking afterwards risks discovering the data plane has to move
 after the code assumes it never will. Ask, then build.
+
+## "Just give them a subdomain pointing at their own IP" — can we stay off the data path entirely?
+
+The instinct: provision `<name>.frizz.sh`, point it at the user's own public IP, and let their machine
+serve the traffic. Frizz-the-company does DNS and nothing else. Worth taking seriously, because it is
+the cheapest possible business and it fails for a reason that is easy to miss.
+
+### First: the current design already keeps us off the data path
+
+Worth saying plainly, because it may dissolve the whole concern. With Cloudflare Tunnel, traffic goes
+browser → **Cloudflare's** edge → the user's own tunnel → their laptop. It does not touch anything we
+run. We pay no bandwidth, host no proxy, and cannot see the traffic. The only thing we would operate is
+the registration Worker, which runs once at signup and never again.
+
+So "I don't want traffic routed through our own thing" is already satisfied. The thing traffic routes
+through is Cloudflare, and that is also true of the DNS-only design, just at a different layer.
+
+### The DNS-only version, and why it cannot serve a laptop
+
+An A record pointing at the user's IP needs all of:
+
+- **A reachable public IP.** Home connections are behind NAT, and a growing share are behind CARRIER-GRADE
+  NAT, where the user has no unique public address at all and no amount of configuration produces one.
+- **Inbound port forwarding**, configured on their router. This is the step that ends most self-hosting
+  stories, and it is not something a CLI can do for them.
+- **A STABLE address.** This is the one that kills it outright for Frizz. The product runs on a laptop
+  that moves between home, an office, a café, a hotel. Its public IP changes with every network — so the
+  A record is stale minutes after it is written. Dynamic DNS (the machine reports its own IP and we
+  update the record) fixes staleness but nothing else, and it cannot fix NAT.
+
+For a desktop with a static IP, or a VPS, DNS-only works fine. For the machine Frizz actually runs on,
+it does not, and no amount of engineering on our side changes that.
+
+### The certificate problem, which IS solvable
+
+Even where the IP works, an A record alone gets you `http://`. Frizz over plain HTTP is not acceptable:
+no secure context (so no clipboard), and the session cookie crosses the internet in the clear. A
+certificate for `<name>.frizz.sh` needs a private key on the USER's machine, so we cannot issue it
+centrally without shipping keys around.
+
+The clean answer is [ACME DNS-01 with CNAME delegation](https://cert-manager.io/docs/configuration/acme/dns01/):
+we host a `_acme-challenge.<name>.frizz.sh` record (or delegate it to a minimal challenge-only service,
+which is what [acmedns.org](https://acmedns.org/) does), the user's machine runs the ACME client, and
+Let's Encrypt issues the certificate directly to them. The private key never leaves their disk and we
+never hold it. That is a genuinely nice property and it is the piece worth remembering if the DNS-only
+route is ever revisited — but it solves the cert, not the reachability.
+
+### Where that leaves it
+
+- **Tunnel (current).** The only option that works on a laptop behind NAT on someone else's wifi. Already
+  keeps us off the data path. Cost to us is zero bandwidth.
+- **DNS-only + ACME delegation.** Purest form of "we only do DNS". Viable for static-IP desktops and VPSes
+  — a real audience, just not the primary one. Worth offering as a second tier, never as the default.
+- **Dynamic DNS.** Solves a changing IP, not NAT. Only worth building on top of the DNS-only tier.
+
+The conclusion that matters: the tunnel is not a compromise forced by laziness. For a laptop it is the
+only mechanism that works at all, and it already has the property that motivated the question.
