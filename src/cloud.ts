@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 /**
- * `frizz-dev --cloud` — one command for "serve this board at my public hostname".
+ * `frizz up` — one command for "start the server and reach it from anywhere".
  *
  * Before this, reaching a board from a phone meant two terminals and three flags: a launch with
  * `--public-origin https://…`, a separate `cloudflared tunnel … run …` in another window, and
@@ -17,6 +17,10 @@ import { dirname, join } from "node:path";
  *
  * Deliberately does NOT ask about the port. There is a default, and `FRIZZ_PORT` overrides it for the
  * few people who care — a prompt for it would be a question almost nobody has an answer to.
+ *
+ * NOTE: this runs a tunnel the operator ALREADY OWNS. It does not create one, and it cannot: creating a
+ * tunnel and its DNS record needs a zone-scoped Cloudflare token, which can never live on a user's
+ * machine. Self-service is Stage 2 in plans/hosted-frizz-service.md.
  */
 
 export interface CloudConfig {
@@ -60,7 +64,7 @@ export function normalizeHostname(raw: string): string {
 
 /**
  * Ask once, remember forever. Asked only when there is no saved config and no explicit hostname —
- * the whole point is that the second run of `--cloud` is a single word.
+ * the whole point is that the second run of `up` is a single word.
  */
 export async function promptForCloudConfig(): Promise<CloudConfig> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -95,7 +99,12 @@ export interface TunnelHandle {
  * tunnel connection" lines plus QUIC noise) and interleaving that with the board readout makes both
  * unreadable. What matters is whether it came up, and that is reported by the caller.
  */
-export function startTunnel(config: CloudConfig, onExit: (code: number | null) => void, home = homedir()): TunnelHandle {
+export function startTunnel(
+  config: CloudConfig,
+  onExit: (code: number | null) => void,
+  onError: (message: string) => void,
+  home = homedir(),
+): TunnelHandle {
   const configPath = resolveTunnelConfigPath(config, home);
   const args = [
     "tunnel",
@@ -105,6 +114,17 @@ export function startTunnel(config: CloudConfig, onExit: (code: number | null) =
     config.tunnel,
   ];
   const child = spawn("cloudflared", args, { stdio: ["ignore", "pipe", "pipe"] });
+  // ENOENT arrives as an 'error' event, and an unhandled one on a ChildProcess THROWS — so without
+  // this, `frizz up` on a machine without cloudflared crashed with a stack trace instead of saying
+  // which program to install. That is the first thing a new user hits, so it is the last thing that
+  // should be a crash.
+  child.once("error", (error: NodeJS.ErrnoException) => {
+    onError(
+      error.code === "ENOENT"
+        ? "cloudflared is not installed or not on PATH — install it from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
+        : `could not start cloudflared: ${error.message}`,
+    );
+  });
   child.once("exit", (code) => onExit(code));
   return {
     child,

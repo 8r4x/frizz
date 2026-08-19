@@ -497,10 +497,17 @@ async function runSupervisor(
       // The tunnel is a CHILD of this launcher, so the two halves share a lifetime and cannot drift
       // apart. A tunnel that dies while the board lives is the "Cloudflare error" state; a board that
       // dies while the tunnel lives is the 530. Both were reachable when these were separate commands.
-      tunnel = startTunnel(cloudConfig, (code) => {
-        if (code === 0 || code === null) return;
-        logger.error("tunnel", `cloudflared exited with code ${code}; the public hostname is now unreachable`);
-      });
+      tunnel = startTunnel(
+        cloudConfig,
+        (code) => {
+          if (code === 0 || code === null) return;
+          logger.error("tunnel", `cloudflared exited with code ${code}; the public hostname is now unreachable`);
+        },
+        (message) => {
+          logger.error("tunnel", message);
+          console.error(`frizz: ${message}`);
+        },
+      );
       logger.info("tunnel", `running cloudflared tunnel ${cloudConfig.tunnel} for ${cloudConfig.hostname}`);
     }
     // "Press L for a fresh link" — the only way to reissue without restarting the board. Returns null
