@@ -41,6 +41,16 @@ cd "$REPO" && exec env \
   FRIZZ_CLAUDE_BROKER_BRIDGE=1 frizz-dev
 ```
 
+**REAL HOME MEANS REAL SHARED STATE, and the project registry is the part that bites.** `~/.frizz/registry.json` is global to HOME, not per-server — so the throwaway repo you launch against is written straight into the maintainer's real project list, and it shows up on their board. This is not hypothetical: it happened on 2026-08-19, during the run that added this warning. There is no flag that prevents it, because the isolation this recipe gives you is a throwaway PROJECT, never a throwaway HOME.
+
+So treat the registry as something you borrowed and must put back:
+
+```bash
+nub -e 'const r=JSON.parse(require("fs").readFileSync(process.env.HOME+"/.frizz/registry.json","utf8"));console.log(r.projects.length);for(const p of r.projects)console.log(p.slug,p.path)'
+```
+
+Run that BEFORE you launch and again after you clean up, and diff the two. Any project of yours that survives is one the maintainer now has to delete by hand. Remove the registry entry and its `~/.frizz/projects/<id>` state dir, then re-run the check and confirm the list matches what you started with.
+
 Run it with Bash `run_in_background: true`. First launch BUILDS the artifact (esbuild runtime + web build,
 ~30-90s). Wait for `requested Frizz in your default browser — http://127.0.0.1:<PROXY>` (the proxy port; the
 child API logs `server on http://127.0.0.1:<CHILD> (prod)` — `(prod)` confirms it's the artifact, not dev).
