@@ -17,7 +17,7 @@ import type { ChatMessage } from "../hooks.ts"
 //     hairlines that are kind of unnecessary").
 //
 // A frizz wake DELIVERY counts as a divider even though it is a `role: "user"` record: `wake: true`
-// messages render as the GithubWakeCard or a RecurringPromptLine, never as a plain bubble, so they
+// messages render as a FrizzWake or a RecurringPromptLine, never as a plain bubble, so they
 // carry the seam themselves. The human's own messages are the only `user` records that do not.
 //
 // This is presentation, not projection — the server still emits every rest boundary. Dropping them

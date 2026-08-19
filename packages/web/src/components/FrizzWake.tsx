@@ -1,4 +1,16 @@
-// A scheduler wake, rendered as FRIZZ speaking rather than as the human's own words.
+// EVERY WAKE FRIZZ DELIVERS, rendered as frizz speaking rather than as the human's own words.
+//
+// Named for the whole family since 2026-08-19, when the last two members joined it: it was
+// `GithubWakeCard` back when a review steer was the only thing it drew, and the name outlived the job by
+// two features. What arrives here is any user turn the server flagged `wake` — a PR watcher's review
+// activity, its status lines, a background shell that finished while nobody was awake, and whatever the
+// parsers below do not recognize.
+//
+// THE RULE THE WHOLE FILE FOLLOWS: a wake frizz composed ITSELF is a hairline, because it is one line of
+// news about something outside the turn. A wake carrying prose someone else WROTE — a worker's own timer
+// text, a message this build cannot parse — keeps the card, because a card is the shape with a body in
+// it. The agent-facing trailer that frizz appends to its own messages is dropped in every case: it
+// instructs the worker about its own registrations, and the human reading the transcript has none.
 //
 // The wake is recorded as an ordinary user turn (it is pasted into the worker's composer), so the chat
 // rendered it in the off-white right-justified bubble the human's messages wear — which claimed the
@@ -16,8 +28,8 @@
 // and a right-pinned ref; a p-4 inset wrapped around a SINGLE 20px line, when every other card in that
 // shell has a body; and three marks on one row that all looked clickable (an underlined title, an
 // accent ref, the corner glyph) with no hierarchy between them.
-import { Bell, Github } from "lucide-react"
-import { isGithubWakeBacklog, parseGithubWakeSteer, parsePrWatchWake, type GithubWakeSteer, type PrWatchWake } from "@frizz/shared"
+import { Bell, Github, TerminalSquare } from "lucide-react"
+import { isGithubWakeBacklog, parseGithubWakeSteer, parsePrWatchWake, parseShellDoneWake, type GithubWakeSteer, type PrWatchWake, type ShellDoneWake } from "@frizz/shared"
 import { CARD_BODY, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 import { WakeDivider } from "./WakeDivider.tsx"
 import { githubRefUrl } from "../lib/githubRef.ts"
@@ -44,7 +56,11 @@ const DIVIDER_LINK = "rounded-sm underline decoration-muted/30 underline-offset-
 // history… the agent can kind of handle it itself". What the transcript owes a human is one line saying
 // the watcher fired and roughly what landed, with the PR one click away. That is the divider.
 
-export function GithubWakeCard({ steer: served, text, sourceId, wrap }: { steer?: GithubWakeSteer; text: string; sourceId?: string; wrap?: boolean }) {
+export function FrizzWake({ steer: served, text, sourceId, wrap }: { steer?: GithubWakeSteer; text: string; sourceId?: string; wrap?: boolean }) {
+  // A BACKGROUND SHELL that finished behind a resting worker. Settled first and on its own: it is a
+  // whole delivery, never a part of one, and it shares nothing with the GitHub grammar below.
+  const shell = parseShellDoneWake(text)
+  if (shell) return <ShellDoneDivider wake={shell} sourceId={sourceId} />
   // ONE DELIVERY, UP TO TWO PARTS. A poll that saw CI flip AND a comment land composes both into one
   // message (prWatchWakeMessage), and each is its own event, so each gets its own hairline. The status
   // part goes first because that is the order the scheduler wrote them in.
@@ -85,6 +101,27 @@ export function GithubWakeCard({ steer: served, text, sourceId, wrap }: { steer?
     )
   }
   return <GithubSteerDivider steer={steer!} text={text} sourceId={sourceId} />
+}
+
+// ---- THE BACKGROUND-SHELL HAIRLINE -----------------------------------------------------------------
+// Deliberately INDISTINGUISHABLE from the divider the runtime-reported completion draws — same glyph,
+// same «guillemets», same outcome words as the server's own `backgroundWakeLabel`. That is the entire
+// point: one shell finishing is one event, and which of the two reporters saw it is an accident of
+// whether the worker happened to be at rest.
+//
+// The TASK ID is parsed but not drawn. It is the handle the worker names on an `awaiting` fence, not
+// something a reader correlates by eye, and the runtime's own line has never carried one — printing it
+// on only the half of the cases frizz reports would put the difference back on the screen.
+function ShellDoneDivider({ wake, sourceId }: { wake: ShellDoneWake; sourceId?: string }) {
+  // The server truncates its own label at 64 chars for the same reason: a divider is a hairline, and a
+  // 400-character shell description wraps it into a paragraph.
+  const desc = wake.label.length > 64 ? `${wake.label.slice(0, 63)}…` : wake.label
+  const label = `Background task «${desc}» ${wake.outcome}`
+  return (
+    <WakeDivider icon={TerminalSquare} sourceId={sourceId} marker="event" ariaLabel={label}>
+      <span className="min-w-0 truncate">{label}</span>
+    </WakeDivider>
+  )
 }
 
 // ---- THE STATUS HAIRLINE ---------------------------------------------------------------------------

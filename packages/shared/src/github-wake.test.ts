@@ -5,7 +5,9 @@ import {
   isGithubWakeBacklog,
   parseGithubWakeSteer,
   parsePrWatchWake,
+  parseShellDoneWake,
   prWatchWakeMessage,
+  shellDoneMessage,
   splitWakeDeliveries,
   stripWakeDeliveryToken,
   wakeDeliveryToken,
@@ -273,4 +275,41 @@ test("text with no pr-watch status line parses as none", () => {
   assert.equal(parsePrWatchWake("⏰ Your background shell finished: `bzvtnt3ig` — the churn suite."), null)
   assert.equal(parsePrWatchWake("⏰ nub#760 was CLOSED."), null, "a bare number is not an owner/repo#N")
   assert.equal(parsePrWatchWake("⏰ nubjs/nub#760 was ABANDONED."), null)
+})
+
+// ---- parseShellDoneWake ----
+//
+// The third producer/parser pair, for the same reason as the other two. This one guards a distinction
+// the transcript should never have been drawing: the same shell finishing drew a hairline when the
+// worker was awake (the runtime reported it) and a card when it was resting (frizz reported it).
+test("a shell-done wake round-trips through its own parser", () => {
+  for (const [name, shell, want] of [
+    ["completed, with a task id", { taskId: "bzvtnt3ig", label: "the churn suite", status: "completed" },
+      { taskId: "bzvtnt3ig", label: "the churn suite", outcome: "finished" }],
+    ["failed", { taskId: "bzvtnt3ig", label: "the churn suite", status: "failed" },
+      { taskId: "bzvtnt3ig", label: "the churn suite", outcome: "failed" }],
+    ["killed", { taskId: "b52kqwc13", label: "vite --port 5199", status: "killed" },
+      { taskId: "b52kqwc13", label: "vite --port 5199", outcome: "stopped" }],
+    // No id is the shape a legacy delivery wears, and the label is then the whole subject.
+    ["no task id", { label: "Running the focused tests", status: "completed" },
+      { label: "Running the focused tests", outcome: "finished" }],
+    // A label ending in its own period must not eat the sentence's — the greedy tail is what buys this.
+    ["a label that ends in a period", { taskId: "a1", label: "nub --test packages/shared/src/index.ts", status: "completed" },
+      { taskId: "a1", label: "nub --test packages/shared/src/index.ts", outcome: "finished" }],
+  ] as [string, Parameters<typeof shellDoneMessage>[0], unknown][]) {
+    assert.deepEqual(parseShellDoneWake(shellDoneMessage(shell)), want, name)
+  }
+})
+
+// The other wakes are NOT shell completions, and neither is the agent quoting one back at itself. A
+// false positive here draws a terminal hairline over a message that never reported a shell.
+test("text that is not a shell-done wake parses as none", () => {
+  assert.equal(parseShellDoneWake(prWatchWakeMessage({ target: "nubjs/nub#760", merged: true })), null)
+  assert.equal(parseShellDoneWake(formatGithubWakeSteer(single)), null)
+  assert.equal(parseShellDoneWake("⏰ Your background shell EXPLODED: `a1` — the churn suite."), null)
+  assert.equal(
+    parseShellDoneWake("Which shell was it?\n\n⏰ Your background shell finished: `a1` — the churn suite."),
+    null,
+    "only the first line may claim the divider",
+  )
 })

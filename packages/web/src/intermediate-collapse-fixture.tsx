@@ -56,7 +56,7 @@ import "./styles.css"
 //                      Under "Load earlier messages" the old ask must still take chips; the card's own
 //                      "Send answers" action stands down until one is filled (nothing stands at the tail).
 //   ?variant=prwakes  THE SEGMENTED SHAPE: one ask, then three runs separated by two real pr-watch wakes
-//                     (served `wakeSteer`, so the real GithubWakeCard renders). Each run must get its OWN
+//                     (served `wakeSteer`, so the real FrizzWake renders). Each run must get its OWN
 //                     fold, each wake its own hairline BETWEEN the run it ended and the run it caused, and
 //                     the third run — one prose message over four calls — must fold on its wake alone.
 //   ?variant=priorrest TWO turns — an ask, a rest, a background wake, then a second turn ending in a
@@ -382,7 +382,7 @@ const priorrest: TranscriptMessage[] = [
 // they were reawoken."
 //
 // The wake messages carry a SERVED `wakeSteer`, exactly as the server sends it, so this drives the real
-// GithubWakeCard rather than the parser fallback. The third run is deliberately ONE prose message with a
+// FrizzWake rather than the parser fallback. The third run is deliberately ONE prose message with a
 // pile of calls behind it: a woken run folds on the strength of its own wake hairline, which is the case
 // the old single-span collapse could not fold at all.
 // The `text` is built by the REAL formatter, not hand-written, because the card reads it: a first-park
