@@ -97,14 +97,34 @@ test("a new boot or project has no retained identity and only accepts its own bo
   assert.deepEqual(replacement, { state: "verified", label: "other-org/new-project", owner: "other-org", repo: "new-project" })
 })
 
-test("a board without an owner/repo identity stays neutral rather than showing its directory name", () => {
-  const identity = projectIdentity(board("frizz"))
-  const html = render("frizz", "open")
+test("a repo with NO REMOTE shows its directory name, not the loading skeleton", () => {
+  // `projectLabel` falls back to the directory basename when there is no origin remote, and this used
+  // to fold into "unavailable" — which draws the cold placeholder. No keyframe was ever going to
+  // resolve it into an owner/repo, so that skeleton stayed up for the life of the session (maintainer
+  // 2026-08-19: "it just shows a skeleton forever"). It is a settled ANSWER, not a pending one.
+  const identity = projectIdentity(board("scratch-pad"))
+  const html = render("scratch-pad", "open")
 
-  assert.deepEqual(identity, { state: "unavailable" })
-  assert.match(html, /aria-label="Project identity unavailable; connected"/)
-  assert.match(html, /identity-placeholder/)
-  assert.doesNotMatch(html, />frizz</)
+  assert.deepEqual(identity, { state: "local", name: "scratch-pad" })
+  assert.match(html, /data-project-identity-state="local"/)
+  assert.match(html, /<span class="font-semibold text-fg\/90">scratch-pad<\/span>/)
+  assert.doesNotMatch(html, /identity-placeholder/)
+  // Not aria-busy, and the label says WHAT it is rather than that something is missing.
+  assert.doesNotMatch(html, /aria-busy/)
+  assert.match(html, /aria-label="Project: scratch-pad; local repository with no git remote; connected"/)
+  // It still refuses to GUESS an owner — the identity carries a name and no owner/repo at all, which
+  // the deepEqual above pins. (The only slash on screen is the home crumb's separator, below.)
+  // That separator belongs to the NAME, so a local repo keeps `home / scratch-pad`.
+  assert.match(html, /aria-label="All projects"/)
+  assert.match(html, /class="-ml-1 shrink-0 text-muted\/60">\//)
+})
+
+test("only a keyframe with NOTHING nameable falls back to the placeholder", () => {
+  // A broken server, not a project shape. The placeholder is honest here because something really is
+  // missing — which is exactly what it stopped meaning while it also covered every remote-less repo.
+  assert.deepEqual(projectIdentity({ projectLabel: "", projectName: "" }), { state: "unavailable" })
+  // …and `projectName` is the second chance before it: the server always computes a basename.
+  assert.deepEqual(projectIdentity({ projectLabel: "", projectName: "scratch-pad" }), { state: "local", name: "scratch-pad" })
 })
 
 test("long repository names remain truncatable and expose the full accessible identity", () => {

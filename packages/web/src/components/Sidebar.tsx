@@ -895,22 +895,40 @@ function FaintDot() {
 export type ProjectIdentity =
   | { state: "loading" }
   | { state: "unavailable" }
+  /**
+   * A repo with NO ORIGIN REMOTE (or one whose URL yields no owner/repo). There is no owner half to
+   * show and there never will be, so this is a settled answer, not a pending one — `local` exists to
+   * keep it from wearing the loading skeleton forever. The name is the directory basename, which is
+   * what the server already falls back to for `projectLabel`.
+   */
+  | { state: "local"; name: string }
   | { state: "verified"; label: string; owner: string; repo: string }
 
-export function projectIdentity(board: Pick<BoardSnapshot, "projectLabel"> | null | undefined): ProjectIdentity {
+export function projectIdentity(
+  board: (Pick<BoardSnapshot, "projectLabel"> & Partial<Pick<BoardSnapshot, "projectName">>) | null | undefined,
+): ProjectIdentity {
   if (!board) return { state: "loading" }
-  // A board WITHOUT a projectLabel is "unavailable", not a crash. The field is required on the wire, so
-  // this only guards a board keyframe that arrived partial — but the identity now renders inside the
-  // SIDEBAR COLUMN rather than as detached corner chrome, so a throw here takes the whole rail (and the
-  // prompt box with it) rather than one line of chrome. Caught the moment StatusRow moved: every
-  // fixture that seeds a board without a label crashed on `.trim()` of undefined.
+  // A board WITHOUT a projectLabel is not a crash. The field is required on the wire, so this only
+  // guards a board keyframe that arrived partial — but the identity renders inside the SIDEBAR COLUMN
+  // rather than as detached corner chrome, so a throw here takes the whole rail (and the prompt box
+  // with it) rather than one line of chrome. Caught the moment StatusRow moved: every fixture that
+  // seeds a board without a label crashed on `.trim()` of undefined.
   const label = board.projectLabel?.trim() ?? ""
   const cut = label.lastIndexOf("/")
   const owner = cut === -1 ? "" : label.slice(0, cut).trim()
   const repo = cut === -1 ? "" : label.slice(cut + 1).trim()
-  // `projectLabel` deliberately falls back to the directory basename when there is no origin. That
-  // name is useful server metadata, but it is not a verified owner/repo identity and must not guess.
-  return owner && repo ? { state: "verified", label, owner, repo } : { state: "unavailable" }
+  if (owner && repo) return { state: "verified", label, owner, repo }
+  // NO OWNER/REPO — a local-only git repo with no origin remote, which is an ANSWER and must read as
+  // one. `projectLabel` deliberately falls back to the directory basename in that case, and this used
+  // to fold that fallback into "unavailable": the row then rendered the cold loading skeleton, and
+  // kept rendering it, because no keyframe was ever going to resolve into an owner/repo (maintainer
+  // 2026-08-19: "it just shows a skeleton forever"). It still must not GUESS an owner — there is
+  // simply nothing to guess, and the directory name is a fact the server already computed.
+  const name = label || board.projectName?.trim() || ""
+  if (name) return { state: "local", name }
+  // Nothing nameable at all. Only reachable from a keyframe carrying neither field, which is a broken
+  // server rather than a project shape — the placeholder is honest there because something IS missing.
+  return { state: "unavailable" }
 }
 
 // The workspace identity mark, pinned by App to the page's TOP-LEFT corner: verified labels use the
@@ -947,9 +965,15 @@ export function IdentityMark({
   const connectionLabel = usingFallback ? "connected through SSE fallback" : m.word
   const accessibleLabel = identity.state === "verified"
     ? `Project: ${identity.label}; ${connectionLabel}`
-    : identity.state === "loading"
-      ? `Project identity loading; ${connectionLabel}`
-      : `Project identity unavailable; ${connectionLabel}`
+    : identity.state === "local"
+      // Named, and named accurately: this project HAS no owner/repo, so saying so is the whole point.
+      ? `Project: ${identity.name}; local repository with no git remote; ${connectionLabel}`
+      : identity.state === "loading"
+        ? `Project identity loading; ${connectionLabel}`
+        : `Project identity unavailable; ${connectionLabel}`
+  // Whether there is a NAME to draw. Both branches that have one behave identically from here down —
+  // the crumb separator, the resolved slot measure, the truncation — and only the tooltip differs.
+  const named = identity.state === "verified" || identity.state === "local"
   return (
     <div
       className="flex items-center gap-2 min-w-0 max-w-full text-[12px]"
@@ -972,25 +996,32 @@ export function IdentityMark({
           >
             <House size={12} className={`shrink-0 ${ICON_LABEL_NUDGE}`} />
           </a>
-          {/* The separator belongs to the NAME, not to the crumb: a project with no verified
-              owner/repo renders nothing after it, and `home /` with a dangling slash reads as a
-              broken breadcrumb rather than a quiet one. */}
-          {identity.state === "verified" && (
-            <span className="-ml-1 shrink-0 text-muted/60">/</span>
-          )}
+          {/* The separator belongs to the NAME, not to the crumb: a project with no name at all
+              renders nothing after it, and `home /` with a dangling slash reads as a broken
+              breadcrumb rather than a quiet one. A LOCAL repo has a name, so it keeps the slash. */}
+          {named && <span className="-ml-1 shrink-0 text-muted/60">/</span>}
         </>
       )}
-      <span className={`identity-slot ${identity.state === "verified" ? "identity-slot--resolved" : "identity-slot--placeholder"}`}>
+      <span className={`identity-slot ${named ? "identity-slot--resolved" : "identity-slot--placeholder"}`}>
         {/* The FULL owner/repo. A home crumb briefly stood here and pushed the owner out — the header
             read `home / owner / repo`, where only two of the three were somewhere you could go. The
             project RAIL is the way back to the grid now, so the crumb is gone from this line and the
             owner has its place back: it is the left half of a verified identity, and on a machine
             serving many projects it is what tells two same-named repos apart. */}
-        {identity.state === "verified" ? (
-          // The REPO alone. The owner is not somewhere you can go, and it is not what tells you which
-          // board you are on — the repo name is. It stays in the tooltip and the accessible label.
-          <span className="block min-w-0 truncate" title={identity.label}>
-            <span className="font-semibold text-fg/90">{identity.repo}</span>
+        {/* THE REPO ALONE when verified: the owner is not somewhere you can go, and it is not what
+            tells you which board you are on — the repo name is. It stays in the tooltip and the
+            accessible label. A LOCAL repo draws its directory name at the same weight, because that
+            IS this project's name; the only thing it lacks is an owner, and a dimmed or decorated
+            name would imply the identity is provisional when it is settled. Its tooltip is the plain
+            name, which earns its place the moment a 272px column truncates it. */}
+        {named ? (
+          <span
+            className="block min-w-0 truncate"
+            title={identity.state === "verified" ? identity.label : identity.name}
+          >
+            <span className="font-semibold text-fg/90">
+              {identity.state === "verified" ? identity.repo : identity.name}
+            </span>
           </span>
         ) : (
           <span className="identity-placeholder" aria-hidden="true" />
