@@ -12,6 +12,7 @@ import {
   type SDKUserMessage,
 } from "@frizz/claude-agent-sdk-runtime"
 import { claudeUltracodeSettings, resolveClaudeEffort } from "./claude-effort.ts"
+import { resolveClaudeLaunchModel } from "./claude-context-window.ts"
 import {
   CLAUDE_AGENT_SDK_MAX_DIAGNOSTIC_BYTES,
   CLAUDE_AGENT_SDK_MAX_EVENT_TEXT_BYTES,
@@ -850,6 +851,7 @@ function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptio
     : undefined
 
   const claudeEffort = resolveClaudeEffort(options.effort)
+  const launchModel = resolveClaudeLaunchModel(options.model)
 
   const raw = query({
     prompt: input,
@@ -885,7 +887,12 @@ function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptio
       // Keep Claude's default (preset) system prompt and APPEND the frizz worker contract, the SDK
       // equivalent of the tmux path's --append-system-prompt-file.
       ...(options.appendSystemPrompt ? { systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: options.appendSystemPrompt } } : {}),
-      ...(options.model ? { model: options.model } : {}),
+      // The 1M context window rides the MODEL value as a `[1m]` suffix, always paired with the bare
+      // alias as `fallbackModel` — an unavailable long-context beta is a hard 400 that kills the
+      // session, and the fallback is what makes asking for it safe on every subscription. See
+      // claude-context-window.ts for the measurements.
+      ...(launchModel ? { model: launchModel.model } : {}),
+      ...(launchModel?.fallbackModel ? { fallbackModel: launchModel.fallbackModel } : {}),
       // "ultracode" is not an `effort` value — it resolves to xhigh plus a session setting, and the two
       // must travel TOGETHER or the setting is silently ignored (see resolveClaudeEffort). `settings` is
       // an additional highest-precedence settings source, layered over `settingSources` above.

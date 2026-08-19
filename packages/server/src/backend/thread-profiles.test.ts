@@ -47,3 +47,16 @@ test("observed model normalization accepts only the current provider's identitie
   assert.equal(normalizeObservedThreadModel("claude", "gpt-5.5"), undefined)
   assert.equal(normalizeObservedThreadModel("codex", "sonnet"), undefined)
 })
+
+// LOAD-BEARING since the spawn edge started requesting the 1M window: every Claude dispatch of a
+// 1M-capable alias now launches as `opus[1m]`, so the model Claude reports back carries the suffix
+// (`claude-opus-5[1m]`). It must normalize to the BARE picker alias — the catalogue has no `[1m]` row,
+// and a value that failed to collapse would strand the thread's model select on an unknown option.
+// See claude-context-window.ts.
+test("an observed 1M model collapses to the bare picker alias", () => {
+  assert.equal(normalizeObservedThreadModel("claude", "claude-opus-5[1m]"), "opus")
+  assert.equal(normalizeObservedThreadModel("claude", "claude-sonnet-5[1m]"), "sonnet")
+  assert.equal(normalizeObservedThreadModel("claude", "opus[1m]"), "opus")
+  // The bare id is unaffected — an account already on 1M reports no suffix at all.
+  assert.equal(normalizeObservedThreadModel("claude", "claude-opus-5"), "opus")
+})

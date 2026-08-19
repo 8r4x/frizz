@@ -593,6 +593,12 @@ export function buildClaudeCommand(opts: {
   frizzMcp?: FrizzMcp
 }): string[] {
   const argv = [opts.claudeBin ?? "claude", "--session-id", opts.sessionId, "--permission-mode", workerPermissionMode(opts.permissionMode)]
+  // NO 1M window here, deliberately. The broker spawn requests it (claude-context-window.ts), but only
+  // because it can pair the request with `fallbackModel` — and `--fallback-model` is documented
+  // "(only works with --print)", which this interactive argv is not. An unpaired `[1m]` is a hard 400
+  // that kills the session on any subscription without the long-context beta, so this path asks for
+  // nothing. It costs no live thread: every claude row is stamped claude_runtime="broker" at dispatch
+  // and never migrated (isBrokerClaudeRow), so this argv is the legacy transport.
   if (opts.model) argv.push("--model", opts.model)
   // "ultracode" is a settings flag, not an --effort value, and it only takes when the pinned effort is
   // xhigh — see resolveClaudeEffort.
