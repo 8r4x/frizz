@@ -431,7 +431,6 @@ Options:
   --host [address]       serve on a network address instead of loopback (bare --host means 0.0.0.0)
   --allowed-host <name>  with --host, also accept this DNS name as the board's address (repeatable)
   --public-origin <url>  serve behind a proxy/tunnel reachable at this exact origin
-  --cloud                serve at your public hostname, running the tunnel too (asked once)
   --link                 print a fresh single-use access link for the already-running board
   --debug                stream the full event feed to the terminal instead of the compact readout
   --status               report this workspace's stable server and artifact
@@ -444,6 +443,8 @@ Environment:
   FRIZZ_PUBLIC_ORIGIN    same as --public-origin
 
 Commands:
+  up                     serve this repo publicly: starts the board AND its tunnel (asks once, then
+                         remembers). Run it inside the repository you want to serve.
   build                  build a new immutable candidate from the configured Frizz source checkout
   promote <digest>       explicitly select a verified candidate for this workspace
   restart                restart the currently promoted artifact without building

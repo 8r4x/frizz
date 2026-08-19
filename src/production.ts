@@ -105,6 +105,7 @@ if (options.help) {
     `Frizz production launcher
 
 Usage: npx ${PACKAGE_NAME} [options] [repository]
+       npx ${PACKAGE_NAME} up            serve this repo publicly, board + tunnel together
 
 Runs the npm-resolved immutable Frizz package, then opens it in your default browser. Use frizz-dev
 only for a source checkout.
@@ -116,7 +117,6 @@ Options:
   --host [address]       serve on a network address instead of loopback (bare --host means 0.0.0.0)
   --allowed-host <name>  with --host, also accept this DNS name as the board's address (repeatable)
   --public-origin <url>  serve behind a proxy/tunnel reachable at this exact origin
-  --cloud                serve at your public hostname, running the tunnel too (asked once)
   --link                 print a fresh single-use access link for the running board
   --debug                stream the full event feed to the terminal instead of the compact readout
   -h, --help             show this help

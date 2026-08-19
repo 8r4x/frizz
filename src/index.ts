@@ -109,14 +109,27 @@ function sourceVersion(): string | undefined {
 
 const argv = process.argv.slice(2);
 const sourceCommand = process.env.FRIZZ_SOURCE_COMMAND ?? "frizz-dev";
+/**
+ * `up` is an ordinary launch that also brings the tunnel up — NOT an artifact verb like build/promote.
+ * It is kept out of `command` for exactly that reason: those three suppress the readout and the
+ * foreground hold, and `up` needs both. It takes no positional path; the whole point is that you run it
+ * inside the repo you mean.
+ */
+const upCommand = argv[0] === "up";
 const command = ["build", "promote", "restart"].includes(argv[0] ?? "")
   ? argv[0]
   : undefined;
 let options: CliOptions;
 try {
   options = parseCliArgs(
-    command === "promote" ? argv.slice(2) : command ? argv.slice(1) : argv
+    command === "promote" ? argv.slice(2) : command || upCommand ? argv.slice(1) : argv
   );
+  if (upCommand) {
+    if (options.repoPath) {
+      fail("frizz up takes no path — run it inside the repository you want to serve");
+    }
+    options.cloud = true;
+  }
 } catch (error) {
   fail(error);
 }
@@ -977,8 +990,8 @@ try {
     if (ignored.length > 0) {
       console.error(
         `frizz: a board is already running on port ${before.port}, so ${ignored.join(" and ")} would be ignored.\n` +
-          `       Stop it first, then relaunch:\n\n` +
-          `         frizz-dev --stop\n`
+          `       Stop it first, then run it again:\n\n` +
+          `         ${sourceCommand} --stop\n`
       );
       process.exit(1);
     }
