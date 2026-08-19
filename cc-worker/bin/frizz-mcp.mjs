@@ -49,6 +49,9 @@ const DISPATCH_TIMEOUT_MS = 30_000
 const SPAWN_THREAD = {
   name: "spawn_thread",
   description:
+    "LAST RESORT — try the two cheaper exits FIRST. Follow-up work you discovered is not a reason to spawn: " +
+    "if you could DO it (dispatching an in-session sub-agent, whose result comes back to you, so the work " +
+    "lands on YOUR card under one review), do that instead; if the human should choose, ASK instead. " +
     "Spawn a brand-new, separate top-level frizz thread — its own board card, session, and scratchpad, " +
     "driving INDEPENDENTLY. This is FIRE-AND-FORGET: the new thread reports to the HUMAN on the board via " +
     "its own final message, and its results NEVER come back to you, the caller. It is NOT an in-session " +
@@ -60,6 +63,11 @@ const SPAWN_THREAD = {
     "those are in-session sub-agents (Claude: the Agent tool with `run_in_background`; Codex: native " +
     "delegation), which return their findings to you. Spawning such a helper here STRANDS it — its work lands " +
     "on another card and never reaches you, so you gain nothing. " +
+    "Because nothing it learns ever returns to you OR to its siblings, a chain of spawned threads re-derives " +
+    "the same facts in parallel and nobody notices — measured here: one thread spawned four, three of those " +
+    "spawned more, and three descendants independently rediscovered the same root cause over twenty hours. " +
+    "Spawn only when the work genuinely cannot ride on your own card: a different repo, a different long-lived " +
+    "runtime, an effort that must outlive yours. Never spawn merely to clear your own `done` fence. " +
     "You MUST deliberately choose `model` and `effort` to match the NEW thread's task complexity — they are " +
     "required, there is NO default. Do not reflexively pick the cheapest; a hard task on a weak model/effort " +
     "wastes the whole thread.",

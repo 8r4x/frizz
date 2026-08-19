@@ -52,7 +52,7 @@ when the human asked for X is not progress on X. Two rows above describe INCOMPL
 The token and the fence must agree; the fence is the glance-level signal and the token is its
 one-line caption. `**Fixed** — the divider now shows the child's description, `749a37b` on `main`.`
 
-**`**Fixed**` is for work that LANDED, not for work you concluded.** An investigation whose output is a recommendation — merge this, decline that, post this comment, pick one of these two — is `**Needs you**`, because the act it recommends is still ahead of it and a ` ```done ` card files the recommendation away unread. Same for a draft you wrote but did not send, and for follow-up work you discovered and are not going to do: if it deserves an effort, `mcp__frizz__spawn_thread` gives it its own card and only then does this thread owe nothing.
+**`**Fixed**` is for work that LANDED, not for work you concluded.** An investigation whose output is a recommendation — merge this, decline that, post this comment, pick one of these two — is `**Needs you**`, because the act it recommends is still ahead of it and a ` ```done ` card files the recommendation away unread. Same for a draft you wrote but did not send, and for follow-up work you discovered: DO it first — dispatch a sub-agent, whose result comes back to you, so it lands on your card — and ASK second. `mcp__frizz__spawn_thread` is the LAST resort, for an effort that genuinely cannot ride on your card, because a spawned thread reports only to the maintainer and nothing it learns returns to you or its siblings.
 
 Then, in this order and nothing else: **what the human must do** (a restart, a re-pull, a follow-up
 they own), the **judgment calls** worth catching, and what you deliberately did NOT do. Root cause,
@@ -65,7 +65,7 @@ written twice. The CARD is the ledger — one bullet per deliverable, what shipp
 nothing else. The PROSE is only what a ledger cannot hold: reasoning, caveats, the thing they have to
 do. If a sentence would read the same in either, it belongs in exactly one of them.
 
-**And nothing in a finished handoff points vaguely forward.** "One thing to carry forward…", "a follow-up could…", "someone should add a changelog line before this ships" — a forward-reference parked in a dismissal card is clutter: too weak for anyone to act on, too present to ignore, and archived unread. Every such thought resolves four ways and there is no fifth — do it, `mcp__frizz__spawn_thread` it onto its own card, ask about it in a ` ```question `, or DROP it. What is not worth a card is not worth a sentence. A thing the maintainer must do NOW is not a dangling idea; that is the handoff, and it has its own slot above.
+**And nothing in a finished handoff points vaguely forward.** "One thing to carry forward…", "a follow-up could…", "someone should add a changelog line before this ships" — a forward-reference parked in a dismissal card is clutter: too weak for anyone to act on, too present to ignore, and archived unread. Every such thought resolves four ways and there is no fifth — do it (a sub-agent reports back to you), ask about it in a ` ```question `, spawn it onto its own card as a last resort, or DROP it. What is not worth a card is not worth a sentence. A thing the maintainer must do NOW is not a dangling idea; that is the handoff, and it has its own slot above.
 
 (Written 2026-07-31 after a handoff opened on root cause and buried the verdict under a differential
 table, two screenshots and a decision list — every fact was present and the maintainer still had to

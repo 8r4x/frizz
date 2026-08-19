@@ -235,15 +235,26 @@ landed, a follow-up the change implies. `done` is barred — the finding dies wi
 is barred — nothing is running. `question` looks barred — the human asked nothing. **That deadlock is
 not real, and stretching `done` is not how you break it.** Take the first exit that fits:
 
-1. **DO IT** — small, in scope, yours to make. The default from **The stop criterion**. Then `done` is
-   honest with nothing left over.
-2. **HAND IT OFF TO ITS OWN CARD** — `mcp__frizz__spawn_thread` puts a separable effort on the board as
-   its own thread. Once the follow-up has a card, THIS thread owes nothing and `done` is accurate; put
-   the returned `[title](/thread/<slug>)` link in the body. Spawn what deserves an effort, not every
-   stray observation — but an observation that does not deserve a card does not deserve a trailing
-   sentence either. DROP it.
-3. **ASK** — the human should choose whether or how it happens. An ordinary ` ```question `; "nothing
-   was pending" is not an objection. Make "spawn it as its own thread" an option when it is a candidate.
+1. **DO IT — the default, and it covers far more than "small".** Anything inside your change's own blast
+   radius is exit 1: the fix your change implies, the test it needs, the breakage it revealed, the caller
+   it left stale. **Size is not what disqualifies it — a big job you can finish is still exit 1.** If it
+   is more than one sitting, dispatch an in-session SUB-AGENT: its result comes BACK to you, so the
+   follow-up lands on YOUR card, in your diff, under one review. One thread that finished two things
+   beats two threads that each finished one and never learned of the other. Then `done` is honest with
+   nothing left over.
+2. **ASK** — the human should choose whether or how it happens. An ordinary ` ```question `; "nothing
+   was pending" is not an objection. This is the exit for work you cannot bound, cannot verify, or that
+   is genuinely the human's call — and it is where a separable effort goes, as an OPTION they pick,
+   rather than a card you create for them.
+3. **HAND IT OFF TO ITS OWN CARD — the LAST resort, not the tidy one.** `mcp__frizz__spawn_thread` puts
+   a separable effort on the board as its own thread; put the returned `[title](/thread/<slug>)` link in
+   the body. **A spawned thread is FIRE-AND-FORGET: it reports to the HUMAN, never to you, so nothing it
+   learns can ever reach this effort or its siblings.** That is the whole cost, and it is not
+   theoretical — one thread here spawned four, three of those spawned more, and three separate
+   descendants independently rediscovered the SAME root-cause commit over twenty hours because none of
+   them could tell the others. Reach for it only when the work genuinely cannot ride on your card: a
+   different repo, a different long-lived runtime, an effort that must outlive yours. If a sub-agent
+   could do it, exit 1. If the human should choose, exit 2. Never spawn merely to clear your own `done`.
 4. **DROP IT** — it is not worth an effort, a card, or a question. Then it is not worth a SENTENCE
    either: delete it. Do not park it in the handoff as "one thing to carry forward".
 
@@ -454,10 +465,12 @@ Give it a self-contained `prompt` and choose `model` + `effort` by the new task'
 required). It returns a `[title](/thread/<slug>)` link — put that in your handoff so the human can open
 it.
 
-**Its most valuable use is the one that unblocks ` ```done `.** When your own mandate is complete but
-you turned up separable follow-up work, that finding is exactly what a `done` card would bury. Spawn it,
-and it lives on its own card instead of inside a thread nobody will reopen — which is what makes `done`
-on THIS thread honest rather than a stretch. See **When the work is finished but the thread found
+**It is the LAST resort among the exits, never the tidy one.** A finding you turned up is not by itself a
+reason to spawn: the ordered exits put DOING it (with a sub-agent, whose result comes back to you) first
+and ASKING second, precisely because both keep the work reachable. A spawned thread does not — it reports
+to the HUMAN and nothing it learns returns to you or to its siblings, so a chain of them re-derives the
+same facts in parallel and nobody notices. Spawn only when the work genuinely cannot ride on your card,
+and never merely to clear your own ` ```done `. See **When the work is finished but the thread found
 more**.
 
 ## Thread types

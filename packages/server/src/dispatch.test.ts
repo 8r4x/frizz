@@ -473,13 +473,33 @@ test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting pa
     assert.match(c, /DELETE EVERY DANGLING "WORTH DOING LATER"/)
     assert.match(c, /one thing to\s+carry forward…/i)
     assert.match(c, /DO it, SPAWN it onto\s+its own card, ASK about it, or DROP it/)
-    assert.match(c, /does not deserve a trailing\s+sentence either. DROP it/)
+    // The 2026-08-18 DEMOTION. A spawned thread is fire-and-forget, so a chain of them re-derives the
+    // same facts in parallel: `read the file, read up…` (nub) spawned four, three of those spawned more,
+    // and three separate descendants independently rediscovered commit 4001cec5c5 over twenty hours
+    // because none of them could tell the others. The exits now put DOING it — with a SUB-AGENT, whose
+    // result comes back — first, ASK second, and a new card LAST. Maintainer: "these should be SUBAGENTS".
+    assert.match(c, /DO IT — the default, and it covers far more than "small"/)
+    assert.match(c, /dispatch an in-session SUB-AGENT: its result comes BACK to you/)
+    assert.match(c, /Size is not what disqualifies it/)
+    assert.match(c, /HAND IT OFF TO ITS OWN CARD — the LAST resort, not the tidy one/)
+    assert.match(c, /Never spawn merely to clear your own `done`/)
+    // ...and the exits are in that ORDER, since a worker takes the first one that fits.
+    const exits = c.indexOf("Take the first exit that fits")
+    assert.ok(exits > 0)
+    const order = ["1. **DO IT", "2. **ASK", "3. **HAND IT OFF TO ITS OWN CARD", "4. **DROP IT"].map((m) => c.indexOf(m, exits))
+    assert.ok(order.every((i) => i > 0), "all four exits present")
+    assert.deepEqual(order, [...order].sort((a, b) => a - b), "do it → ask → own card → drop")
     // ...and the card must not restate the prose. Same maintainer note; the rule already existed in
     // this repo's FRIZZ.md but never in the contract every worker gets.
     assert.match(c, /TWO SURFACES, NOT ONE MESSAGE WRITTEN TWICE/)
     assert.match(c, /would read the same in either,\s+it belongs in exactly ONE of them/)
-    // ...and spawn_thread's own section points BACK, so a worker reading either one finds the link.
-    assert.match(c, /Its most valuable use is the one that unblocks/)
+    // ...and spawn_thread's own section points BACK, so a worker reading either one finds the link —
+    // carrying the same demotion, because a worker that reads only that section must not come away
+    // thinking a spawned card is how it tidies up a barred `done`.
+    assert.match(c, /It is the LAST resort among the exits, never the tidy one/)
+    assert.match(c, /nothing it learns returns to you or to its siblings/)
+    assert.match(c, /When the work is finished but the thread found\s+more/)
+    assert.doesNotMatch(c, /Its most valuable use is the one that unblocks/)
     // The stop criterion's "you marked it (recommended), so you already knew — implement it instead"
     // is the counter-pull that pushed zod #6022 away from a question. It only holds where the worker
     // CAN act; under a read-only boundary the recommendation IS the question, never a silent `done`.
@@ -510,7 +530,10 @@ test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting pa
   // scrolls the system prompt still gets the recommendation rule and the discovered-follow-up rule.
   assert.match(SESSION_SEED, /follow-up work you DISCOVERED even when someone else will do it/)
   assert.match(SESSION_SEED, /never a done card, because a draft you wrote but did not send is filed away with the thread/)
-  assert.match(SESSION_SEED, /mcp__frizz__spawn_thread gives it its own card and only THEN is done honest/)
+  // The seed carries the 2026-08-18 demotion too — sub-agent first, ask second, a new card last.
+  assert.match(SESSION_SEED, /DO it first — dispatch a sub-agent, whose result comes BACK to you/)
+  assert.match(SESSION_SEED, /mcp__frizz__spawn_thread is the LAST resort/)
+  assert.doesNotMatch(SESSION_SEED, /gives it its own card and only THEN is done honest/)
   assert.match(SESSION_SEED, /TWO SURFACES, not one message written twice/)
   assert.match(SESSION_SEED, /if it is not worth a card it is not worth a sentence/)
   assert.match(SESSION_SEED, /code LANDED on the mainline — an open PR is NOT done, park it on ```awaiting until it MERGES/)
