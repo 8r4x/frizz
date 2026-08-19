@@ -85,12 +85,12 @@ function check(label, actual, expected) {
   if (!ok) failures.push(label)
 }
 
-// A registered thread for the old binaries to arm. `tmux_name` is the legacy COLUMN name for the thread
+// A registered thread for the old binaries to arm. `thread_name` is the legacy COLUMN name for the thread
 // identity string, not a pane — nothing here needs a real worker process.
 const slug = "legacy-mcp-thread"
 const at = new Date().toISOString()
 sql(
-  `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
+  `INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
    VALUES ('${slug}', '33333333-3333-4333-8333-333333333333', 'frizz-${slug}', '${at}', 'Legacy MCP thread', 'claude', 'opus', 'high', 'default', '${at}')`,
 )
 

@@ -35,8 +35,9 @@ const DELIVERABLE_CONTROL_CODES = new Set([9, 10, 13])
  * with a pasted BOM, a zero-width space and a soft hyphen. And because the daemon swallowed the
  * refusal (`claude-agent-broker.ts`) the message then VANISHED while frizz's RPC answered success.
  * Measured live in `_live_broker_input_drop.mts`: one sentence delivered plain, and the same sentence
- * disappeared with a single emoji appended. The identical bytes pasted into a tmux-backed thread go
- * through untouched, so the broker path was silently stricter than its sibling for the same prompt.
+ * disappeared with a single emoji appended. The identical bytes typed straight into a `claude` CLI go
+ * through untouched, so the broker path was silently stricter than the provider itself for the same
+ * prompt.
  *
  * What stays refused is what is genuinely undeliverable: LONE surrogates (not encodable as UTF-8 on
  * the wire) and the C0/C1 control ranges. Iterating by code point is load-bearing — a valid surrogate
@@ -98,9 +99,9 @@ export const CLAUDE_BROKER_CAPABILITY_STOP_TASK = "stop-task-v1"
 // unknown frame, so the bridge refuses up front rather than letting the UI claim a reload happened.
 export const CLAUDE_BROKER_CAPABILITY_RELOAD_PLUGINS = "reload-plugins-v1"
 
-// On-demand re-title through the SDK's `generateSessionTitle`. It replaces typing `/rename` into a
-// pane — the last user-facing verb that still needed one — so the affordance survives the tmux
-// removal instead of being deleted with the transport that happened to implement it. Gated like the
+// On-demand re-title through the SDK's `generateSessionTitle`. It replaces typing `/rename` at an
+// interactive `claude` prompt — the last user-facing verb that still needed a terminal — so the
+// affordance survives the retirement of that transport instead of being deleted with it. Gated like the
 // others: an older surviving daemon ignores the frame, and the operator would be left watching a
 // rename that never happened.
 export const CLAUDE_BROKER_CAPABILITY_RENAME = "rename-v1"

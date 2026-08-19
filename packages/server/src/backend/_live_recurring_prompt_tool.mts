@@ -36,7 +36,7 @@ const storage = createStorage(join(stateDir, "ui.db"))
 const now = new Date().toISOString()
 for (const slug of ["mine", "someone-else"]) {
   storage.upsertSession({
-    slug, session_id: `sid-${slug}`, tmux_name: `frizz-${slug}`, spawned_at: now,
+    slug, session_id: `sid-${slug}`, thread_name: `frizz-${slug}`, spawned_at: now,
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
     title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   } as Parameters<typeof storage.upsertSession>[0])

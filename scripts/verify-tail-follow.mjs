@@ -56,7 +56,7 @@ for (let i = 0; i < 8; i++) {
 }
 seed.push(user("TASK:\nAsk 9: this turn is still in flight while we watch the tail."))
 writeFileSync(jsonl, seed.map((r) => JSON.stringify(r)).join("\n") + "\n")
-execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode)
+execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode)
   VALUES ('${SLUG}', '${SESSION}', 'frizz-${SLUG}', '${now()}', 'Tail follow', 'claude', 'opus', 'high', 'default')`])
 const append = (record) => appendFileSync(jsonl, JSON.stringify(record) + "\n")
 

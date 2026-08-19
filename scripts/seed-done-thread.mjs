@@ -49,7 +49,7 @@ const FENCE = [
 ].join("\n")
 
 function seed({ slug, sessionId, title, prompt }) {
-  const tmuxName = `frizz-${slug}`
+  const threadName = `frizz-${slug}`
   const records = [
     {
       parentUuid: null, isSidechain: false, type: "user", uuid: uuid(), timestamp: at(0), session_id: sessionId, cwd,
@@ -67,8 +67,8 @@ function seed({ slug, sessionId, title, prompt }) {
   writeFileSync(join(jsonlDir, `${sessionId}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
   execFileSync("sqlite3", [
     db,
-    `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
-     VALUES ('${slug}', '${sessionId}', '${tmuxName}', '${at(0)}', '${title}', 'claude', 'opus', 'high', 'default', '${at(3)}')`,
+    `INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
+     VALUES ('${slug}', '${sessionId}', '${threadName}', '${at(0)}', '${title}', 'claude', 'opus', 'high', 'default', '${at(3)}')`,
   ])
   console.log(`seeded ${slug} → ${sessionId}`)
 }

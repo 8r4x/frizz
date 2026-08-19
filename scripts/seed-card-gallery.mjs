@@ -85,7 +85,7 @@ const CARDS = [
 
 for (const card of CARDS) {
   const sessionId = `${card.slug}-0000-4000-8000-000000000000`.slice(0, 36)
-  const tmuxName = `frizz-${card.slug}`
+  const threadName = `frizz-${card.slug}`
   const records = [
     {
       parentUuid: null,
@@ -126,8 +126,8 @@ for (const card of CARDS) {
 
   execFileSync("sqlite3", [
     db,
-    `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
-     VALUES ('${card.slug}', '${sessionId}', '${tmuxName}', '${now()}', '${card.title}', 'claude', 'opus', 'high', 'default', '${now()}')`,
+    `INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
+     VALUES ('${card.slug}', '${sessionId}', '${threadName}', '${now()}', '${card.title}', 'claude', 'opus', 'high', 'default', '${now()}')`,
   ])
   console.log(`seeded ${card.slug} → ${sessionId}`)
 }

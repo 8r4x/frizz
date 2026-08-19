@@ -22,7 +22,7 @@ const LATER = "2026-07-09T11:00:00.000Z"
 
 function row(over: Partial<SessionRow> = {}): SessionRow {
   return {
-    slug: "t", session_id: "s", tmux_name: "frizz-t", spawned_at: T0, last_read_at: null,
+    slug: "t", session_id: "s", thread_name: "frizz-t", spawned_at: T0, last_read_at: null,
     unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0, title: null,
     state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null, ...over,
   }
@@ -315,7 +315,7 @@ test("board interaction presence cache follows the exact session and rechecks af
     cwdSlug: "fixture",
   }
   const storage = createStorage(join(dir, "ui.db"))
-  storage.upsertSession(row({ slug: "typed", session_id: "session-a", tmux_name: "frizz-typed" }))
+  storage.upsertSession(row({ slug: "typed", session_id: "session-a", thread_name: "frizz-typed" }))
   const tailer = {
     get: () => undefined,
     foreignIds: () => [],
@@ -390,7 +390,7 @@ test("board interaction presence cache follows the exact session and rechecks af
     storage.interactions.create(request("old-session-request")).interaction
     assert.equal(current().pendingInteraction, true)
     assert.equal(current().actionableInteraction, true)
-    storage.upsertSession(row({ slug: "typed", session_id: "session-b", tmux_name: "frizz-typed" }))
+    storage.upsertSession(row({ slug: "typed", session_id: "session-b", thread_name: "frizz-typed" }))
     assert.equal(current().pendingInteraction, false, "a replacement session cannot inherit the old journal scope")
     assert.equal(current().actionableInteraction, false, "a replacement session cannot inherit the old actionability bit")
   } finally {
@@ -423,7 +423,7 @@ test("board keeps provider delivery visible while ordinary resting-thread queue 
   } satisfies Tailer
   const dbPath = join(dir, "ui.db")
   let storage = createStorage(dbPath)
-  storage.upsertSession(row({ slug: "provider", session_id: "provider-session", tmux_name: "frizz-provider" }))
+  storage.upsertSession(row({ slug: "provider", session_id: "provider-session", thread_name: "frizz-provider" }))
   let board = createBoard(project, storage, new Bus(), tailer, "provider-boot-1")
   let unsubscribe = storage.interactions.subscribe((change) => board.interactionChanged?.(change))
   const request: InteractionRequest = {
@@ -724,15 +724,15 @@ test("deriveNeedsYou: an EXITED parent surfaces even when a SUB-AGENT still read
 })
 
 test("board: an EXITED parent resting on a 'running' sub-agent surfaces as a stalled crash, not buried", async () => {
-  // End-to-end through board assembly: a dead pane (no tmux → runtime 'exited') whose telemetry still
+  // End-to-end through board assembly: a dead worker (no live process → runtime 'exited') whose telemetry still
   // reports a running sub-agent must enter Queue (needsYou) AND card as a crash/stall (crashed), so the
   // human sees it instead of it silently dangling under stale child liveness.
   const dir = mkdtempSync(join(tmpdir(), "frizz-board-crash-bgwork-"))
   const project: Project = { dir, id: "board-crash-bgwork", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
   const storage = createStorage(join(dir, "ui.db"))
-  storage.upsertSession(row({ slug: "dead-parent", tmux_name: "frizz-dead-parent", seen_at: LATER }))
+  storage.upsertSession(row({ slug: "dead-parent", thread_name: "frizz-dead-parent", seen_at: LATER }))
   // Sibling with an already-STALE child: it must still surface, but as a bare rest, NOT a stalled crash.
-  storage.upsertSession(row({ slug: "dead-parent-stale", tmux_name: "frizz-dead-parent-stale", seen_at: LATER }))
+  storage.upsertSession(row({ slug: "dead-parent-stale", thread_name: "frizz-dead-parent-stale", seen_at: LATER }))
   const tailer = {
     get: (slug: string) => tele({
       turn: "idle",
@@ -762,15 +762,15 @@ test("board: an EXITED parent resting on a 'running' sub-agent surfaces as a sta
 })
 
 test("board: a codex app-server thread whose turn died with its app-server cards as a stall, not a spinner", async () => {
-  // The live 2026-07-22 failure, end-to-end through board assembly: an app-server thread has NO tmux
-  // pane, so its runtime comes only from the rollout — which froze mid-turn when the process died and
-  // therefore reads "in-flight" forever. The bridge's liveness answer is what makes the difference
+  // The live 2026-07-22 failure, end-to-end through board assembly: an app-server thread runs its turn
+  // inside the shared codex daemon and has no process of its own to probe, so its runtime comes only
+  // from the rollout — which froze mid-turn when the process died and therefore reads "in-flight" forever. The bridge's liveness answer is what makes the difference
   // between a thread that spins on `running` and never queues, and one the human actually sees.
   const dir = mkdtempSync(join(tmpdir(), "frizz-board-appserver-stall-"))
   const project: Project = { dir, id: "board-appserver-stall", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
   const storage = createStorage(join(dir, "ui.db"))
   for (const slug of ["stalled", "driving", "mirrored"]) {
-    storage.upsertSession(row({ slug, session_id: `${slug}-s`, tmux_name: `frizz-${slug}`, seen_at: LATER }))
+    storage.upsertSession(row({ slug, session_id: `${slug}-s`, thread_name: `frizz-${slug}`, seen_at: LATER }))
     storage.setBackend(slug, "codex")
     storage.setCodexRuntime(slug, "app-server")
   }
@@ -876,7 +876,7 @@ test("board arms the exact durable snooze deadline, clears it, and requeues ordi
   storage.upsertSession(row({
     slug: "snooze-wake",
     session_id: "snooze-session",
-    tmux_name: "frizz-snooze-wake",
+    thread_name: "frizz-snooze-wake",
     snoozed_until: until,
   }))
   const tailer = {
@@ -927,7 +927,7 @@ test("board immediately expires a snooze whose deadline passes between assembly 
   storage.upsertSession(row({
     slug: "snooze-race",
     session_id: "snooze-race-session",
-    tmux_name: "frizz-snooze-race",
+    thread_name: "frizz-snooze-race",
     snoozed_until: until,
   }))
   const tailer = {
@@ -996,7 +996,7 @@ test("a rested broker thread whose daemon died holding live sub-agents surfaces 
   const dir = mkdtempSync(join(tmpdir(), "frizz-board-deaddaemon-"))
   const project: Project = { dir, id: "project-dd", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
   const storage = createStorage(join(dir, "ui.db"))
-  storage.upsertSession(row({ slug: "orphaned", session_id: "sess-orphaned", tmux_name: "frizz-orphaned", rested_at: T0 }))
+  storage.upsertSession(row({ slug: "orphaned", session_id: "sess-orphaned", thread_name: "frizz-orphaned", rested_at: T0 }))
   storage.setBackend("orphaned", "claude")
   storage.setClaudeRuntime("orphaned", "broker")
 
@@ -1058,7 +1058,7 @@ test("a rested broker thread whose daemon died with NO outstanding work stays an
   const dir = mkdtempSync(join(tmpdir(), "frizz-board-quietdaemon-"))
   const project: Project = { dir, id: "project-qd", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
   const storage = createStorage(join(dir, "ui.db"))
-  storage.upsertSession(row({ slug: "quiet", session_id: "sess-quiet", tmux_name: "frizz-quiet", rested_at: T0 }))
+  storage.upsertSession(row({ slug: "quiet", session_id: "sess-quiet", thread_name: "frizz-quiet", rested_at: T0 }))
   storage.setBackend("quiet", "claude")
   storage.setClaudeRuntime("quiet", "broker")
 
@@ -1083,7 +1083,7 @@ test("a broker thread whose daemon died still holding a follow-up returns to the
   const dir = mkdtempSync(join(tmpdir(), "frizz-board-deadsend-"))
   const project: Project = { dir, id: "project-ds", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
   const storage = createStorage(join(dir, "ui.db"))
-  storage.upsertSession(row({ slug: "stranded", session_id: "sess-stranded", tmux_name: "frizz-stranded", rested_at: T0 }))
+  storage.upsertSession(row({ slug: "stranded", session_id: "sess-stranded", thread_name: "frizz-stranded", rested_at: T0 }))
   storage.setBackend("stranded", "claude")
   storage.setClaudeRuntime("stranded", "broker")
   storage.setDeliveryLedger("stranded", ledger("enqueued"))
@@ -1107,10 +1107,10 @@ test("a broker claude thread with no transcript reads as stalled, while a codex 
   const dir = mkdtempSync(join(tmpdir(), "frizz-board-notranscript-"))
   const project: Project = { dir, id: "project-nt", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
   const storage = createStorage(join(dir, "ui.db"))
-  storage.upsertSession(row({ slug: "broker", session_id: "sess-broker", tmux_name: "frizz-broker" }))
+  storage.upsertSession(row({ slug: "broker", session_id: "sess-broker", thread_name: "frizz-broker" }))
   storage.setBackend("broker", "claude")
   storage.setClaudeRuntime("broker", "broker")
-  storage.upsertSession(row({ slug: "codex", session_id: "sess-codex", tmux_name: "frizz-codex" }))
+  storage.upsertSession(row({ slug: "codex", session_id: "sess-codex", thread_name: "frizz-codex" }))
   storage.setBackend("codex", "codex")
   storage.setCodexRuntime("codex", "app-server")
 
@@ -1200,7 +1200,7 @@ test("registered auto-titles stay in SQLite/transcript and never sync into a pla
     storage.upsertSession(row({
       slug,
       session_id: `session-${slug}`,
-      tmux_name: `frizz-${slug}`,
+      thread_name: `frizz-${slug}`,
       title: "Stored fallback",
       title_auto: 1,
       state: null,
@@ -1245,7 +1245,7 @@ test("registered auto-titles stay in SQLite/transcript and never sync into a pla
   }
 })
 
-test("board provenance excludes legacy files and foreign transcripts while registered sessions survive restart", async () => {
+test("board provenance excludes legacy files, keeps a foreign transcript read-only, and survives restart", async () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-board-provenance-"))
   mkdirSync(join(dir, ".frizz", "plans"), { recursive: true })
   const reportedInvalidFiles = [
@@ -1280,7 +1280,7 @@ test("board provenance excludes legacy files and foreign transcripts while regis
   storage.upsertSession(row({
     slug: "ui-claude",
     session_id: "claude-session",
-    tmux_name: "frizz-ui-claude",
+    thread_name: "frizz-ui-claude",
     title: "Claude UI thread",
     title_auto: 0,
     state: null,
@@ -1289,7 +1289,7 @@ test("board provenance excludes legacy files and foreign transcripts while regis
   storage.upsertSession(row({
     slug: "ui-codex",
     session_id: "codex-session",
-    tmux_name: "frizz-ui-codex",
+    thread_name: "frizz-ui-codex",
     title: "Codex UI thread",
     backend: "codex",
     state: "archived",
@@ -1298,7 +1298,7 @@ test("board provenance excludes legacy files and foreign transcripts while regis
   storage.upsertSession(row({
     slug: "migrated-ui-done",
     session_id: "migrated-session",
-    tmux_name: "frizz-migrated-ui-done",
+    thread_name: "frizz-migrated-ui-done",
     title: "Migrated UI thread",
     state: null,
     archived: 0,
@@ -1324,8 +1324,20 @@ test("board provenance excludes legacy files and foreign transcripts while regis
 
   try {
     let snapshot = await board.snapshot()
-    assert.deepEqual(snapshot.threads.map((thread) => thread.id).sort(), ["migrated-ui-done", "ui-claude", "ui-codex"])
-    assert.equal(snapshot.threads.some((thread) => thread.foreign || thread.kind === "legacy"), false)
+    assert.deepEqual(snapshot.threads.map((thread) => thread.id).sort(), ["foreign-terminal-origin", "migrated-ui-done", "ui-claude", "ui-codex"])
+    // LEGACY provenance is still absolute: an unregistered `.frizz` file never becomes a row. A FOREIGN
+    // transcript now does — the Non-Frizz sessions band (2026-08-19) — but it arrives read-only and
+    // carries none of the row-derived state it has no source for.
+    assert.equal(snapshot.threads.some((thread) => thread.kind === "legacy"), false)
+    const foreignRow = snapshot.threads.find((thread) => thread.id === "foreign-terminal-origin")
+    assert.equal(foreignRow?.foreign, true)
+    assert.equal(foreignRow?.kind, "session")
+    // It never enters the queue, whatever its transcript says. The fixture deliberately hands this one
+    // a `done` FENCE — a thing a terminal session cannot actually write — to prove the row is built
+    // from the foreign projection rather than from the registered one.
+    assert.equal(foreignRow?.needsYou, false)
+    assert.equal(foreignRow?.lastFence, undefined)
+    assert.equal(foreignRow?.state, undefined)
     assert.equal(snapshot.threads.find((thread) => thread.id === "ui-claude")?.needsYou, true)
     assert.equal(snapshot.threads.find((thread) => thread.id === "ui-claude")?.backend, "claude")
     assert.equal(snapshot.threads.find((thread) => thread.id === "ui-codex")?.backend, "codex")
@@ -1344,7 +1356,7 @@ test("board provenance excludes legacy files and foreign transcripts while regis
     storage.upsertSession(row({
       slug: "adopted-through-ui",
       session_id: "adopted-session",
-      tmux_name: "frizz-adopted-through-ui",
+      thread_name: "frizz-adopted-through-ui",
       title: "Adopted through UI",
       state: "open",
     }))
@@ -1363,6 +1375,7 @@ test("board provenance excludes legacy files and foreign transcripts while regis
     snapshot = await board.snapshot()
     assert.deepEqual(snapshot.threads.map((thread) => thread.id).sort(), [
       "adopted-through-ui",
+      "foreign-terminal-origin",
       "migrated-ui-done",
       "ui-claude",
       "ui-codex",
@@ -1371,6 +1384,76 @@ test("board provenance excludes legacy files and foreign transcripts while regis
     assert.equal(snapshot.threads.find((thread) => thread.id === "ui-codex")?.state, "open")
     assert.equal(snapshot.threads.find((thread) => thread.id === "migrated-ui-done")?.state, "archived")
     assert.deepEqual(snapshot.errorItems, [])
+  } finally {
+    await board.stop()
+    storage.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// The band's ONE selection rule, and the reason it exists (maintainer 2026-08-19): "they should only
+// be showing the rested ones because if something is currently running, then presumably the user
+// already has that open in Claude Code." A spinning terminal session is one the human is watching in
+// the window it belongs to; listing it here would be noise, and clicking into it would invite two
+// drivers on one transcript.
+test("the Non-Frizz band lists only RESTED foreign sessions, and drops one the moment its turn starts", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-board-foreign-band-"))
+  mkdirSync(join(dir, ".frizz"), { recursive: true })
+  const project: Project = {
+    dir,
+    id: "project-board-foreign-band",
+    name: "fixture",
+    label: "fixture",
+    stateDir: dir,
+    cwdSlug: "fixture",
+  }
+  const storage = createStorage(join(dir, "ui.db"))
+  const telemetry = new Map<string, SessionTelemetry>([
+    ["rested-terminal", tele({ turn: "idle", aiTitle: "Debug a flaky test", lastAssistant: "done for now", lastAssistantAt: LATER })],
+    ["spinning-terminal", tele({ turn: "in-flight", aiTitle: "Refactor the parser" })],
+  ])
+  const tailer = {
+    get: (slug: string) => telemetry.get(slug),
+    foreignIds: () => ["rested-terminal", "spinning-terminal"],
+    subAgent: () => undefined,
+    forget: () => {},
+    start: () => {},
+    stop: () => {},
+    tick: () => {},
+  } satisfies Tailer
+  const board = createBoard(project, storage, new Bus(), tailer, "foreign-band-boot")
+
+  try {
+    const snapshot = await board.snapshot()
+    assert.deepEqual(snapshot.threads.map((thread) => thread.id), ["rested-terminal"], "the spinning terminal is not listed")
+    const rested = snapshot.threads[0]
+    assert.equal(rested?.foreign, true)
+    assert.equal(rested?.kind, "session")
+    // Claude titles its own sessions, so a real terminal row carries a real name rather than a slug.
+    assert.equal(rested?.title, "Debug a flaky test")
+    assert.equal(rested?.aiTitle, "Debug a flaky test")
+    assert.equal(rested?.lastAssistant, "done for now")
+    // Only rested rows are emitted, so this is the only truthful runtime.
+    assert.equal(rested?.runtime, "turn-idle")
+    // None of the row-derived state exists for a session with no row, and none of it is invented.
+    assert.equal(rested?.needsYou, false)
+    assert.equal(rested?.awaitingBackground, false)
+    assert.equal(rested?.pendingQuestion, false)
+    assert.equal(rested?.state, undefined)
+    assert.equal(rested?.snoozedUntil, undefined)
+    assert.deepEqual(rested?.subAgents, [])
+    assert.deepEqual(rested?.watches, [])
+
+    // The turn STARTS: the human went back to their terminal. The row leaves the band on the next build.
+    telemetry.set("rested-terminal", tele({ turn: "in-flight", aiTitle: "Debug a flaky test" }))
+    assert.deepEqual(board.refresh().threads.map((thread) => thread.id), [], "a foreign session that starts working drops out")
+
+    // And a title-less session still rows, under a short-id name rather than a spinning-up placeholder
+    // (nothing is on its way — no titler runs for a session frizz did not dispatch).
+    telemetry.set("rested-terminal", tele({ turn: "idle" }))
+    const untitled = board.refresh().threads.find((thread) => thread.id === "rested-terminal")
+    assert.equal(untitled?.title, "Session rested-t")
+    assert.equal(untitled?.titleAuto, true)
   } finally {
     await board.stop()
     storage.close()
@@ -1434,7 +1517,7 @@ test("board exposes a typed providerFault from tailer auth telemetry — categor
   const dir = mkdtempSync(join(tmpdir(), "frizz-board-auth-fault-"))
   const project: Project = { dir, id: "board-auth-fault", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
   const storage = createStorage(join(dir, "ui.db"))
-  storage.upsertSession(row({ slug: "auth-fault", tmux_name: "frizz-auth-fault", backend: "claude" }))
+  storage.upsertSession(row({ slug: "auth-fault", thread_name: "frizz-auth-fault", backend: "claude" }))
   const tailer = {
     get: (slug: string) => (slug === "auth-fault" ? tele({ authFault: "authentication_rejected" }) : undefined),
     foreignIds: () => [],

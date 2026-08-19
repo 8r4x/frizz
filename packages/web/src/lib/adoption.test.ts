@@ -37,7 +37,7 @@ test("legacy adoption affordance mirrors the server's conservative eligibility c
   assert.equal(canAdoptThread(legacy({ foreign: true })), false)
   assert.equal(canAdoptThread(legacy({ runtime: "exited" })), false)
   assert.equal(canAdoptThread(legacy({ sessionId: "owner" })), false)
-  assert.equal(canAdoptThread(legacy({ tmuxName: "frizz-legacy-thread" })), false)
+  assert.equal(canAdoptThread(legacy({ threadName: "frizz-legacy-thread" })), false)
   assert.equal(canAdoptThread(legacy({ owner: "external-owner" })), false)
   assert.equal(canAdoptThread(legacy({ agents: [{ id: "agent" }] })), false)
   assert.equal(canAdoptThread(legacy({ errors: ["invalid"] })), false)

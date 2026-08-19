@@ -72,7 +72,7 @@ const projects = join(home, ".frizz", "projects")
 const db = join(projects, readdirSync(projects)[0], "ui.db")
 execFileSync("sqlite3", [db, `DELETE FROM session WHERE slug = '${SLUG}';`])
 execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session
-  (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, unread, exited, archived, title_auto, runtime_generation, profile_revision)
+  (slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode, unread, exited, archived, title_auto, runtime_generation, profile_revision)
   VALUES ('${SLUG}', '${SESSION_ID}', 'frizz-${SLUG}', '${now}', 'GitHub refs', 'claude', 'opus', 'high', 'default', 0, 0, 0, 0, 0, 0);`])
 
 const api = createRpcClient(`http://127.0.0.1:${port}/`)

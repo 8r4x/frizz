@@ -71,7 +71,7 @@ test("the happy path resolves only AFTER the follow-up actually landed", async (
   assert.deepEqual(b.calls, ["followUp"], "an already-active app-server binding needs no adopt or resume")
 })
 
-test("a legacy tmux rollout is adopted and marked app-server before the follow-up", async () => {
+test("a legacy pre-app-server rollout is adopted and marked app-server before the follow-up", async () => {
   const b = bridge()
   const s = storage()
   await deliverCodexWake({

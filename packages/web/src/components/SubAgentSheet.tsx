@@ -27,7 +27,7 @@ import { SheetHeader } from "./ui/SheetHeader.tsx"
 //    SDK 0.3.207: the child acted on it and only the CHILD's transcript carried the token, while the
 //    same session's unaddressed control reached only the main thread. It is also the ONLY channel —
 //    It works for a broker-backed Claude thread's OWN Agent-tool children, and not
-//    for a codex child, a tmux thread, or a grandchild. Critically, addressing a child that has
+//    for a codex child or a grandchild. Critically, addressing a child that has
 //    already FINISHED does not fail — the CLI falls the message back onto the parent's main thread,
 //    where it lands as an instruction nobody aimed there. So the SERVER decides steerability, the box
 //    is rendered only off that answer, and where it is absent the drawer states the reason instead of

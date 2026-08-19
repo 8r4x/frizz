@@ -108,7 +108,7 @@ async function harness(target?: string) {
   // fire — but silence it anyway so a delivery count is unambiguous about what produced it.
   storage.setSetting("signoffNudge", "off")
   storage.upsertSession({
-    slug: SLUG, session_id: SESSION, tmux_name: `frizz-${SLUG}`, spawned_at: at,
+    slug: SLUG, session_id: SESSION, thread_name: `frizz-${SLUG}`, spawned_at: at,
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: at, title_auto: 1,
     title: SLUG, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   } as SessionRow)
@@ -235,7 +235,7 @@ test("a poll publishes a reading the BOARD can actually read, and the queue rule
   const storage = createStorage(join(dir, "ui.db"))
   storage.setSetting("signoffNudge", "off")
   storage.upsertSession({
-    slug: SLUG, session_id: SESSION, tmux_name: `frizz-${SLUG}`, spawned_at: at,
+    slug: SLUG, session_id: SESSION, thread_name: `frizz-${SLUG}`, spawned_at: at,
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: at, title_auto: 1,
     title: SLUG, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   } as SessionRow)
@@ -324,7 +324,7 @@ async function prHarness() {
   const storage = createStorage(join(dir, "ui.db"))
   storage.setSetting("signoffNudge", "off")
   storage.upsertSession({
-    slug: SLUG, session_id: SESSION, tmux_name: `frizz-${SLUG}`, spawned_at: at,
+    slug: SLUG, session_id: SESSION, thread_name: `frizz-${SLUG}`, spawned_at: at,
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: at, title_auto: 1,
     title: SLUG, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   } as SessionRow)
@@ -602,7 +602,7 @@ test("a fence naming a timer that was never registered is corrected, off a real 
   const storage = createStorage(join(dir, "ui.db"))
   storage.setSetting("signoffNudge", "off")
   storage.upsertSession({
-    slug: SLUG, session_id: SESSION, tmux_name: `frizz-${SLUG}`, spawned_at: at,
+    slug: SLUG, session_id: SESSION, thread_name: `frizz-${SLUG}`, spawned_at: at,
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: at, title_auto: 1,
     title: SLUG, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   } as SessionRow)

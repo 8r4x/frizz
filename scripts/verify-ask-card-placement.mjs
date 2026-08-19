@@ -75,7 +75,7 @@ if (!projectId) throw new Error("the stack has not created its project state dir
 const db = join(projectsRoot, projectId, "ui.db")
 const sql = (text) => execFileSync("sqlite3", [db, text], { encoding: "utf8" })
 
-sql(`INSERT INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, state)
+sql(`INSERT INTO session (slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode, state)
      VALUES ('${slug}', '${sessionId}', 'frizz-${slug}', '${t(0)}', 'Ask card placement probe', 'claude', 'opus', 'xhigh', 'auto', 'open')`)
 
 if (!withAsk) {

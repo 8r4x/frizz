@@ -19,7 +19,7 @@ import type { PaneIdentity } from "./adoption-recovery.ts"
 // instead of "Spinning up…") that no human authored (title_locked 0, so the worker's own aiTitle
 // supersedes it). Both halves matter and they live on DIFFERENT columns, which is exactly how the
 // Claude broker path lost one: it was added a day before the flags were split, so the split patched
-// the tmux and codex writers and left the broker's registry row without `title_locked` at all.
+// the spawned-CLI and codex writers and left the broker's registry row without `title_locked` at all.
 // An absent value is not a type error and normalises to LOCKED (sessionTitleLocked fails safe), so
 // every GitHub-dispatched thread froze on `Investigate owner/repo#N` while the far better title the
 // worker had already reported sat unread in its transcript.
@@ -62,11 +62,11 @@ function harness() {
 
 const CALLER_TITLE = "Investigate acme/app#391"
 
-for (const transport of ["claude-broker", "claude-tmux", "codex"] as const) {
+for (const transport of ["claude-broker", "claude-cli", "codex"] as const) {
   test(`${transport}: a caller's dispatch title is shown as a name but never locked against the worker's own`, async (t) => {
     // The broker is the DEFAULT claude transport (opt out with FRIZZ_CLAUDE_BROKER_BRIDGE=0), so the
-    // tmux case has to switch it off for the length of its own dispatch.
-    if (transport === "claude-tmux") {
+    // spawned-CLI case has to switch it off for the length of its own dispatch.
+    if (transport === "claude-cli") {
       const prior = process.env.FRIZZ_CLAUDE_BROKER_BRIDGE
       process.env.FRIZZ_CLAUDE_BROKER_BRIDGE = "0"
       t.after(() => {

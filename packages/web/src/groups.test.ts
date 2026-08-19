@@ -74,7 +74,7 @@ test("needsAction: crash net — a spawned agent gone while IN-FLIGHT (active/pl
 })
 
 test("needsAction: crash net does NOT card a `blocked` MACHINE-wait whose session was cleaned up", () => {
-  // blocked = waiting on revalidate_at / blocking_threads. killAgent / reboot kills the tmux session
+  // blocked = waiting on revalidate_at / blocking_threads. killAgent / reboot kills the worker process
   // (runtime exited/none, spawnedAt set) — but the agent is LEGITIMATELY absent, not crashed. It must
   // NOT card and must NOT steal the blue dot from its timer/threads glyph (Nav short-circuits on this).
   assert.equal(needsAction(thread({ status: "blocked", runtime: "exited", spawnedAt: "2026-07-08T00:00:00.000Z", mechanism: "timer" })), false)

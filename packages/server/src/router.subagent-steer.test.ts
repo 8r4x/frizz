@@ -115,7 +115,7 @@ function row(slug: string, over: Partial<SessionRow> = {}): SessionRow {
   return {
     slug,
     session_id: `sid-${slug}`,
-    tmux_name: `frizz-${slug}`,
+    thread_name: `frizz-${slug}`,
     spawned_at: "2026-07-28T00:00:00.000Z",
     last_read_at: null,
     unread: 0,
@@ -357,19 +357,20 @@ test("a FAILED stop leaves the row on the board — hiding live work is the bug 
 })
 
 test("a runtime with no stop path still clears the row, but SAYS the work may survive", async () => {
-  // A tmux claude thread — the maintainer's own repro. Its sub-agents run inside the CLI process and
-  // there is no per-child control channel at all, so the × can only clear the row. It must not do that
-  // silently: the note is the whole difference between an honest control and the original complaint.
-  const tmux = harness(() => RUNNING_DIRECT)
+  // A non-broker claude thread (a spawned CLI) — the maintainer's own repro. Its sub-agents run inside
+  // the CLI process and there is no per-child control channel at all, so the × can only clear the row. It
+  // must not do that silently: the note is the whole difference between an honest control and the
+  // original complaint.
+  const cli = harness(() => RUNNING_DIRECT)
   try {
-    seed(tmux.storage, "t", { claudeRuntime: null })
-    const result = await tmux.router.stopBackgroundOp.handler({ input: { slug: "t", id: "toolu_child" } })
+    seed(cli.storage, "t", { claudeRuntime: null })
+    const result = await cli.router.stopBackgroundOp.handler({ input: { slug: "t", id: "toolu_child" } })
     assert.equal(result.stopped, false)
     assert.equal(result.dismissed, true, "the phantom-row escape hatch survives")
     assert.match(result.note ?? "", /needs the Claude session broker/)
-    assert.deepEqual(tmux.stops, [], "nothing was sent to a bridge that could not carry it")
+    assert.deepEqual(cli.stops, [], "nothing was sent to a bridge that could not carry it")
   } finally {
-    rmSync(tmux.dir, { recursive: true, force: true })
+    rmSync(cli.dir, { recursive: true, force: true })
   }
 
   // A background SHELL on a runtime with no control channel says so in the SHELL's own words. The
@@ -507,7 +508,7 @@ test("subAgentSteer refuses a codex thread's child and says why", async () => {
   }
 })
 
-test("subAgentSteer refuses a tmux claude row — a steer rides the broker's live stream, and there is none", async () => {
+test("subAgentSteer refuses a non-broker claude row — a steer rides the broker's live stream, and there is none", async () => {
   const h = harness(() => RUNNING_DIRECT)
   try {
     seed(h.storage, "t", { claudeRuntime: null })

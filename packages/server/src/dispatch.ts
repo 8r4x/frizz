@@ -37,10 +37,12 @@ import {
 } from "./adoption-recovery.ts"
 
 // Dispatch = provision the thread's scratch DIRECTORY + compose the full prompt + fork a detached
-// BROKER DAEMON for the session + register the session row. NOT tmux: this file still says the word
-// thirty times in comments below, all of them describing a path that no longer exists (there is no
-// tmux.ts and dispatch never execs tmux — see the invariant in ARCHITECTURE.md). A Claude thread is
-// `claude_runtime="broker"`, forked by claude-broker-host.ts with `detached: true`.
+// BROKER DAEMON for the session + register the session row. There is no terminal, no multiplexer and
+// no TUI anywhere in that chain — see the invariant in ARCHITECTURE.md. A Claude thread is
+// `claude_runtime="broker"`, forked by claude-broker-host.ts with `detached: true` into its own
+// process group; a Codex thread runs its turns inside the app-server daemon. (Some thirty comments
+// below narrated a terminal pane in the present tense until 2026-08-19, which is how reader after
+// reader — human and agent — kept re-deriving a transport frizz stopped having.)
 // Session-first (2026-07-09): a new dispatch
 // writes NO .frizz/<slug>.md thread file — the session IS the thread, and it gets an empty folder
 // (.frizz/threads/<sessionId>/) to use as it likes. The prompt is the ONLY intelligence: the worker
@@ -446,11 +448,13 @@ export function effectivePermissionMode(kind: BackendKind, mode: PermissionMode)
 }
 
 // The assembled system prompt (worker norms + spawn-specific orientation) is ~16KB — passing it
-// inline as `--append-system-prompt <text>` on the tmux `new-session` command line EXCEEDS tmux's
-// command-length limit and fails EVERY spawn with a silent "command too long" (found 2026-07-09:
-// 100% of dispatch/adopt/resume broken). claude accepts `--append-system-prompt-file <path>`, so we
-// write the prompt to a per-session file and pass the (short) path instead — the tmux command stays
-// tiny. Written per invocation (dispatch AND resume) into a stable per-session path, so a resume
+// inline as `--append-system-prompt <text>` puts all 16KB on the launch command line. That is what
+// broke every spawn on 2026-07-09 (100% of dispatch/adopt/resume): the terminal multiplexer frizz
+// launched workers through back then capped its command length and failed each one with a silent
+// "command too long". That launch path is retired, but a command line is a bounded resource in its
+// own right (execvp's ARG_MAX), so the fix stays: claude accepts `--append-system-prompt-file
+// <path>`, so we write the prompt to a per-session file and pass the (short) path instead — the argv
+// stays tiny. Written per invocation (dispatch AND resume) into a stable per-session path, so a resume
 // after OS temp-cleanup just rewrites it. Returns the flag pair to splice into argv (empty if no
 // system prompt). NOTE: keep using `--append-system-prompt` for genuinely SHORT text would also
 // work, but a single file path is uniformly safe regardless of prompt growth.
@@ -500,7 +504,7 @@ export function resolveFrizzMcp(
 
 // Claude flags that mount the frizz-injected MCP servers via ONE inline `--mcp-config` JSON and
 // PRE-APPROVE their tools (`--allowedTools`) so a headless worker never blocks on a permission prompt
-// it has nobody to answer. execvp runs the argv with NO shell (tmux.ts), so the JSON travels literally.
+// it has nobody to answer. The argv is exec'd with NO shell in between, so the JSON travels literally.
 // chrome-devtools is ALWAYS mounted (a worker gets a browser out of the box on any
 // machine — parity with the codex backend's `-c` injection, same CHROME_DEVTOOLS_MCP spec); the
 // server-level `mcp__chrome-devtools` rule pre-approves every tool it exposes. The unified `frizz`
@@ -508,9 +512,9 @@ export function resolveFrizzMcp(
 export interface ClaudeMcpStdioConfig { command: string; args?: string[]; env?: Record<string, string> }
 export interface ClaudeMcpConfig { mcpServers: Record<string, ClaudeMcpStdioConfig>; allowedTools: string[] }
 
-// The structured frizz MCP mount, shared by the tmux CLI path (rendered to --mcp-config/--allowedTools
-// flags below) AND the broker SDK path (passed straight into query()'s mcpServers/allowedTools). One
-// source of truth so both transports mount the SAME servers with the SAME pre-approvals.
+// The structured frizz MCP mount, shared by the `claude` CLI argv (rendered to --mcp-config/
+// --allowedTools flags below) AND the broker SDK path (passed straight into query()'s mcpServers/
+// allowedTools). One source of truth so both forms mount the SAME servers with the SAME pre-approvals.
 export function claudeMcpConfig(mcp?: FrizzMcp): ClaudeMcpConfig {
   const mcpServers: Record<string, ClaudeMcpStdioConfig> = {
     [CHROME_DEVTOOLS_MCP.name]: { command: CHROME_DEVTOOLS_MCP.command, args: [...CHROME_DEVTOOLS_MCP.args] },
@@ -519,7 +523,7 @@ export function claudeMcpConfig(mcp?: FrizzMcp): ClaudeMcpConfig {
   if (mcp) {
     // command is the ABSOLUTE node path (process.execPath — the node running the frizz server), NOT bare
     // "node": Claude spawns the MCP-server process itself, and a worker's PATH varies by launch context
-    // (a GUI-launched tmux, a login-shell difference) — if `node` isn't on it, the MCP server never
+    // (a GUI-launched frizz, a login-shell difference) — if `node` isn't on it, the MCP server never
     // starts and the tool silently never appears in the worker. An absolute path removes that dependency.
     // FRIZZ_THREAD_SLUG is the MCP server's CALLER IDENTITY — the channel through which a tool could act
     // on its own thread. The MCP server is spawned per worker and nothing in the MCP protocol carries a
@@ -543,7 +547,7 @@ export function claudeMcpConfig(mcp?: FrizzMcp): ClaudeMcpConfig {
 
 // Claude flags that mount the frizz-injected MCP servers via ONE inline `--mcp-config` JSON and
 // PRE-APPROVE their tools (`--allowedTools`) so a headless worker never blocks on a permission prompt
-// it has nobody to answer. execvp runs the argv with NO shell (tmux.ts), so the JSON travels literally.
+// it has nobody to answer. The argv is exec'd with NO shell in between, so the JSON travels literally.
 // chrome-devtools is ALWAYS mounted (a worker gets a browser out of the box on any
 // machine — parity with the codex backend's `-c` injection, same CHROME_DEVTOOLS_MCP spec); the
 // server-level `mcp__chrome-devtools` rule pre-approves every tool it exposes. The unified `frizz`
@@ -567,7 +571,7 @@ export function claudeMcpFlags(mcp?: FrizzMcp): string[] {
 // somehow reaches the tool anyway). EQUALS form for the same reason as --allowedTools: the flag is
 // variadic and a space-separated value would swallow the positional prompt behind it.
 //
-// This is the TMUX path only. The broker deliberately does NOT drop the same tool — it can put the
+// This is the CLI-argv path only. The broker deliberately does NOT drop the same tool — it can put the
 // question in front of the operator as a card — so the list lives in WORKER_DISALLOWED_TOOLS
 // (backend/types.ts) where that asymmetry is written down rather than being inferable only from a
 // missing call site.
@@ -718,14 +722,16 @@ function workerCap(name: string, lifted: number, env: NodeJS.ProcessEnv): string
 
 // Claude Code reads these inherited process variables as sub-agent profile defaults. A Frizz worker
 // chooses its profile explicitly through the launch argv and plugin agent profiles, so let neither
-// a shell nor a globally configured Claude session silently replace that selection. Empty tmux
-// environment entries override inherited values while preserving every auth/config variable.
+// a shell nor a globally configured Claude session silently replace that selection. An EMPTY entry
+// here overrides the inherited value while preserving every auth/config variable.
 //
 // The CAPS are the deliberate exception to that masking: a profile override hijacks the worker's
 // identity, but a cap is operator policy, so an explicitly configured one is passed through rather
-// than overridden. They are always set EXPLICITLY (never left to inheritance) because a tmux pane
-// inherits the tmux SERVER's environment — captured whenever that server first started, which may
-// predate the current frizz process by days.
+// than overridden. They are always set EXPLICITLY (never left to inheritance) because inheritance is
+// not a stable source: a worker used to be launched inside a long-lived multiplexer server whose own
+// environment was captured whenever IT first started, which could predate the current frizz process
+// by days. Nothing inherits that way now, but an explicit value is still the only one that cannot
+// drift with the launch context.
 export function claudeWorkerEnvironment(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
   return {
     ...CLAUDE_WORKER_ENV,
@@ -737,8 +743,8 @@ export function claudeWorkerEnvironment(env: NodeJS.ProcessEnv = process.env): R
   }
 }
 
-// The `claude` argv to RESUME an existing session with a follow-up (used when the tmux session
-// has died and a live sendKeys is impossible).
+// The `claude` argv to RESUME an existing session with a follow-up — the COLD form, which reopens the
+// pinned conversation from disk because there is no live worker left to hand the message to.
 export function buildClaudeResumeCommand(opts: {
   sessionId: string
   permissionMode: PermissionMode
@@ -764,8 +770,8 @@ export function buildClaudeResumeCommand(opts: {
   argv.push(...claudeMcpFlags(opts.frizzMcp))
   argv.push(...workerDisallowedToolFlags())
   // The system prompt is rebuilt per invocation — the resume must re-carry the worker norms too.
-  // Same file-based path as buildClaudeCommand (see systemPromptFlags): inline would blow tmux's
-  // command-length limit.
+  // Same file-based path as buildClaudeCommand (see systemPromptFlags): inline would put the whole
+  // ~16KB on the command line.
   const worker = opts.workerPrompt ?? loadWorkerPrompt()
   const system = [worker, opts.extraSystemPrompt?.trim()].filter(Boolean).join("\n\n")
   argv.push(...systemPromptFlags(opts.sessionId, system))
@@ -795,8 +801,9 @@ export interface DispatchDeps {
   readBoard?: typeof readBoard
   getSettings: () => Settings
   claudeBin?: string // injectable (tests / a stand-in command)
-  // Inert since the broker became the only transport: dispatch spawns through the bridge, and there
-  // is no pane to roll back. Both stay as accepted-and-ignored seams so existing fixtures still typecheck.
+  // Inert since the broker became the only transport: dispatch spawns through the bridge, and the
+  // rollback these seams performed — killing the terminal a worker had been claimed in — has nothing
+  // left to kill. Both stay as accepted-and-ignored seams so existing fixtures still typecheck.
   spawn?: unknown
   killExpectedAdoptionPane?: unknown
   // Per-session agent-backend resolver that builds the spawn argv + injection (Codex-support epic).
@@ -804,14 +811,14 @@ export interface DispatchDeps {
   // local Claude argv builder, producing a byte-identical command. Selected by `opts.backend`.
   backendFor?: (kind?: string) => AgentBackend
   // The Codex app-server bridge (context.ts). A codex dispatch runs SOLELY over the JSON-RPC bridge
-  // (persisted session + turn/start); there is no tmux TUI transport. Absent ⇒ a codex dispatch fails
-  // loudly rather than falling back to a retired path.
+  // (persisted session + turn/start); the interactive-TUI transport it replaced is gone. Absent ⇒ a
+  // codex dispatch fails loudly rather than falling back to a retired path.
   codexAppServer?: CodexAppServerBridge
-  // The Claude session-broker bridge (context.ts). When present + the broker flag is on, a claude
-  // dispatch runs over the broker (headless, no tmux pane) instead of the interactive TUI.
+  // The Claude session-broker bridge (context.ts). Every claude dispatch runs over it — headless, in a
+  // detached daemon, with no terminal and no PTY. Absent ⇒ a claude dispatch fails loudly.
   claudeBroker?: ClaudeAgentBrokerBridge
-  // Failure cleanup targets only the exact freshly-spawned slug. Injectable so timeout tests can prove
-  // no neighboring tmux session is touched.
+  // Failure cleanup targets only the exact freshly-spawned slug and its session-id-keyed files
+  // (cleanupDispatchFiles), so a failed dispatch can never disturb a neighbouring thread.
   // Provider auth preflight (claude-auth plan, Slice A): resolves the target provider's credential
   // state BEFORE any thread state exists; a positive "signed-out" rejects the dispatch with
   // ProviderAuthRequiredError. Injected by the composition layer (context.ts: `claude auth status
@@ -824,8 +831,10 @@ export interface DispatchDeps {
   // "daemon exited before it became ready" a missing binary otherwise produces. Fails open on
   // "unknown". Absent (tests) ⇒ no probe.
   preflightCodexBinary?: () => Promise<"present" | "missing" | "unknown">
-  // Durable adoption recovery seams. Production uses tmux's token-aware exact-pane implementation;
-  // focused tests inject an in-memory private server and deterministic time.
+  // Durable adoption recovery seams. The production runtime is INERT since the transport cutover —
+  // it answers "absent" to every lookup, because the terminal panes its token-aware exact-match
+  // implementation used to identify no longer exist — so recovery now rests entirely on the durable
+  // SQLite claim/token ledger; focused tests inject an in-memory runtime and deterministic time.
   adoptionRuntime?: AdoptionRecoveryRuntime
   adoptionNow?: () => number
   adoptionAttemptToken?: () => string
@@ -866,13 +875,13 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
   return {
     async dispatch(input, opts) {
       // Dispatcher is a server boundary too: tests, schedulers, and future transports may call it
-      // without traversing the RPC parser. Reject malformed explicit slugs before scratch/tmux/SQLite.
+      // without traversing the RPC parser. Reject malformed explicit slugs before scratch/spawn/SQLite.
       input = DispatchInput.parse(input)
       const settings = deps.getSettings()
       const kind: BackendKind = opts?.backend ?? "claude"
       // Auth preflight (Slice A): block ONLY on a positive "signed-out" — "unknown" (flaky read,
       // missing binary, timeout) fails OPEN so a network blip never traps a logged-in user. Runs
-      // before the scratchpad/tmux/registry so a rejected dispatch leaves zero trace; the browser
+      // before the scratchpad/spawn/registry so a rejected dispatch leaves zero trace; the browser
       // keeps the draft and opens the sign-in modal off the sentinel message.
       if (deps.preflightAuth && (await deps.preflightAuth(kind).catch((): ProviderAuth => "unknown")) === "signed-out") {
         throw new ProviderAuthRequiredError(kind)
@@ -887,7 +896,8 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       }
       // Title: explicit human title, else the heuristic chop. (A headless `claude -p` titling pass
       // was tried and REMOVED — print mode is going away for Max subscription auth, which is the
-      // whole reason the workers run as interactive tmux sessions. Claude's own evolving ai-title
+      // whole reason a frizz worker has never been a `-p` invocation: it runs as a full interactive
+      // session, today inside the broker daemon. Claude's own evolving ai-title
       // takes over the display name seconds after the session starts; only the slug is heuristic.)
       const title = input.title?.trim() || fallbackTitle(input.prompt)
       const base = input.slug ?? slugify(title)
@@ -915,10 +925,10 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       const prompt = composePrompt(sessionId, input.prompt, kind)
 
       // Codex app-server transport: a PERSISTED JSON-RPC session + the prompt as its first turn. No
-      // tmux pane and no rollout discovery — the bridge returns the codex session id, which the tailer
+      // terminal and no rollout discovery — the bridge returns the codex session id, which the tailer
       // locates on disk exactly like a discovered rollout (identical filename suffix). This is the SOLE
-      // codex transport: the tmux TUI path was retired, so a codex dispatch that can't reach the bridge
-      // fails loudly rather than degrading. The worker contract + scratchpad orientation ride
+      // codex transport: the interactive TUI path was retired, so a codex dispatch that can't reach the
+      // bridge fails loudly rather than degrading. The worker contract + scratchpad orientation ride
       // baseInstructions, and the frizz title protocol rides developerInstructions.
       if (kind === "codex") {
         const bridge = deps.codexAppServer
@@ -944,7 +954,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           deps.storage.upsertSession({
             slug,
             session_id: sessionId,
-            tmux_name: threadIdentityName(slug),
+            thread_name: threadIdentityName(slug),
             spawned_at: new Date().toISOString(),
             last_read_at: null,
             unread: 0,
@@ -976,7 +986,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           void deps.board.rebuild().catch(() => {})
           return { slug, sessionId }
         } catch (err) {
-          // No tmux fallback — the app-server is the sole codex transport. If it can't be reached (or the
+          // No second transport — the app-server is the sole codex one. If it can't be reached (or the
           // installed codex drifted from the pinned protocol), fail LOUDLY with an actionable hint rather
           // than silently degrading to the retired TUI path. Clean up the scratchpad + any partial bridge
           // binding so a failed dispatch leaves no trace.
@@ -986,17 +996,16 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         }
       }
 
-      // Claude session-broker transport: a DETACHED daemon owns the Claude Agent SDK session over a
-      // local socket, so the session OUTLIVES frizz — a restart reconnects to the LIVE session instead
-      // of cold resume-from-disk — while keeping structured TYPED permissions (no tmux pane, no PTY, no
-      // TUI scraping). Gated behind FRIZZ_CLAUDE_BROKER_BRIDGE until the cutover is proven live; when off
-      // (or the bridge is absent, e.g. tests), claude falls through to the tmux path below, byte-identical
-      // to before. The worker contract + scratchpad orientation ride the appended system prompt, and
-      // persistSession makes the daemon write the tailer-readable transcript JSONL — read exactly like
-      // any tmux claude thread — so the board/tailer treat this row as headless via isHeadlessRow.
-      // Claude session-broker transport, the SOLE claude transport — the tmux TUI path was retired,
-      // so a claude dispatch that can't reach the broker fails loudly rather than degrading. Exactly
-      // the shape the codex branch above already had.
+      // Claude session-broker transport, the SOLE claude transport — exactly the shape the codex branch
+      // above already has. A DETACHED daemon owns the Claude Agent SDK session over a local socket, so
+      // the session OUTLIVES frizz: a restart reconnects to the LIVE session instead of cold
+      // resume-from-disk, and permissions stay structured and TYPED (no terminal, no PTY, no TUI
+      // scraping — none of which frizz has had since the cutover). FRIZZ_CLAUDE_BROKER_BRIDGE="0" is a
+      // kill switch, not a fallback: with the bridge absent (that switch, or a test context) there is no
+      // other path left, so the dispatch fails loudly rather than degrading. The worker contract +
+      // scratchpad orientation ride the appended system prompt, and persistSession makes the daemon
+      // write the tailer-readable transcript JSONL — the same format and the same reader every claude
+      // thread has always used — so the board/tailer treat this row as headless via isHeadlessRow.
       if (kind === "claude") {
         const bridge = deps.claudeBroker
         if (!bridge) {
@@ -1022,7 +1031,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           deps.storage.upsertSession({
             slug,
             session_id: sessionId,
-            tmux_name: threadIdentityName(slug),
+            thread_name: threadIdentityName(slug),
             spawned_at: new Date().toISOString(),
             last_read_at: null,
             unread: 0,
@@ -1052,7 +1061,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           void deps.board.rebuild().catch(() => {})
           return { slug, sessionId }
         } catch (err) {
-          // No tmux fallback once we've committed to the broker for this dispatch: fail LOUDLY and leave
+          // No second transport to fall back to once the broker has this dispatch: fail LOUDLY and leave
           // no trace. Release any partial daemon binding and roll back the scratchpad.
           try { bridge.releaseSession(slug, sessionId, "session-deleted") } catch { /* best-effort */ }
           cleanupDispatchFiles(scratchRel, { argv: [], env: {}, prewrite: [] }, sessionId)
@@ -1076,7 +1085,8 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
 
       // Authorization is deliberately reconstructed from current raw inputs instead of trusting a
       // browser affordance or the BoardManager cache: exact direct file identity + one fresh, valid,
-      // nonterminal, unowned, agentless board row + no registry/tmux owner. Every precondition shares
+      // nonterminal, unowned, agentless board row + no registry row and no adoption claim already
+      // owning the slug. Every precondition shares
       // one non-oracular failure and occurs before ensureServer, scratch creation, spawn, or storage.
       const source = resolveLegacyThreadFile(deps.project.dir, slug)
       if (!source) throw unavailable()
@@ -1175,7 +1185,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       const prompt = composePrompt(sessionId, task)
       const permissionMode = workerDispatchPermission("claude", settings)
 
-      // Adoption spawns through the broker, exactly like a fresh dispatch. It used to claim a tmux
+      // Adoption spawns through the broker, exactly like a fresh dispatch. It used to claim a terminal
       // pane under a leased attempt token and rebind the pane identity across slow post-create setup —
       // a multi-process protocol whose entire purpose was making a PANE claim safe. There is no pane
       // to claim now: the daemon record plus the session id is the identity, so the attempt token
@@ -1217,7 +1227,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       const adopted = {
         slug,
         session_id: sessionId,
-        tmux_name: threadIdentityName(slug),
+        thread_name: threadIdentityName(slug),
         spawned_at: new Date(now()).toISOString(),
         last_read_at: null,
         unread: 0,

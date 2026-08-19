@@ -18,8 +18,9 @@ import { Tooltip } from "./Tooltip.tsx"
 // OFFERED only where it can actually work, on the same discipline as RestartWorkerButton — a button
 // that throws is worse than an absent one:
 //  • a session thread, not a read-only foreign row;
-//  • a BROKER-backed Claude thread. The tmux path has no control channel to ask, and frizz's codex
-//    app-server client speaks no reload method at all.
+//  • a BROKER-backed Claude thread. A row dispatched before the broker became the sole Claude
+//    transport has no control channel to ask, and frizz's codex app-server client speaks no reload
+//    method at all.
 //  • a live process. On an exited thread the next follow-up already cold-starts on current tooling.
 export function ReloadPluginsButton({ thread }: { thread: ThreadView }) {
   const [busy, setBusy] = useState(false)

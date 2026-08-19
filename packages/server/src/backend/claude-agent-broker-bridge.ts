@@ -2,8 +2,8 @@
 // leaner because the broker DAEMON owns the session state (and the transcript lands on disk via
 // persistSession, read by the tailer like any Claude thread). The bridge forks/adopts a broker per
 // thread, connects a typed client, routes tool-permission requests to a decision hook (default:
-// auto-allow, honoring the thread's permission mode — matching today's tmux `--permission-mode auto`;
-// wiring these to the dashboard InteractionStore is the next slice), and sends follow-up turns.
+// auto-allow, honoring the thread's permission mode — matching the retired argv path's
+// `--permission-mode auto`), and sends follow-up turns.
 import { randomUUID } from "node:crypto"
 import { adoptOrForkBroker, killBroker, liveBrokerRecord, liveBrokerRecords, claudeBrokerRecordPath, resolveClaudeExecutableAbsolute } from "./claude-broker-host.ts"
 import { connectClaudeBroker, type ClaudeBrokerClient } from "./claude-broker-client.ts"
@@ -36,7 +36,8 @@ function withFrizzThreadSlug(servers: BrokerMcpServers | undefined, slug: string
   return { ...servers, [FRIZZ_MCP.name]: { ...frizz, env: { ...frizz.env, FRIZZ_THREAD_SLUG: slug } } }
 }
 
-/** Gate for routing Claude dispatch through the session broker instead of the tmux TUI. Default ON
+/** Gate for routing Claude dispatch through the session broker rather than launching an interactive
+ *  `claude` process (the retired path). Default ON
  *  (opt out with FRIZZ_CLAUDE_BROKER_BRIDGE=0). Verified end-to-end on a real PROMOTED ARTIFACT (not just
  *  the dev stack): a dispatched broker thread starts its daemon and the agent replies. The promoted-
  *  artifact regression was the SDK requiring an absolute claude executable (a bare "claude" crashed the
@@ -77,7 +78,8 @@ export interface ClaudeBrokerBridgeDeps {
   interactions?: InteractionStore
   projectId?: string
   /** Decide a tool-permission request when NOT routing to the dashboard (tests / interactions absent).
-   *  Defaults to auto-allow, honoring the thread's permission mode — matching today's tmux `auto`. */
+   *  Defaults to auto-allow, honoring the thread's permission mode — matching the retired argv path's
+   *  `--permission-mode auto`. */
   decidePermission?: (slug: string, sessionId: string, request: ClaudePermissionRequest) => Promise<ClaudePermissionDecision>
   /** Observe the session/transcript event stream (board liveness / telemetry). Optional. */
   onEvent?: (slug: string, sessionId: string, event: ClaudeQueryEvent) => void
@@ -132,7 +134,7 @@ export interface ClaudeAgentBrokerBridge {
   spawnDispatch(input: ClaudeSpawnDispatchInput): Promise<{ binding: ClaudeBrokerBinding }>
   /** Deliver a follow-up turn. If the daemon is live we reattach its socket (context intact); if it
    *  died, we cold-start a fresh daemon that RESUMES the on-disk transcript — so the resume context
-   *  (worker system prompt + profile) must be re-supplied, exactly like the tmux `claude -r` path. */
+   *  (worker system prompt + profile) must be re-supplied, exactly like a `claude -r` invocation. */
   /**
    * `freshProcess` retires a LIVE daemon before delivering, so the text lands in a `claude` that has
    * just started. Set it when the running process cannot act on the message no matter what it says —
@@ -166,7 +168,8 @@ export interface ClaudeAgentBrokerBridge {
    */
   reloadPlugins(input: { threadSlug: string; sessionId: string }): Promise<ClaudePluginReload>
   /**
-   * Re-title the LIVE session through the provider — the replacement for typing `/rename` into a pane.
+   * Re-title the LIVE session through the provider — the replacement for typing `/rename` at an
+   * interactive `claude` prompt.
    * Resolves with the provider's chosen title, or undefined when it declined to name the session.
    */
   renameSession(input: { threadSlug: string; sessionId: string; description: string }): Promise<string | undefined>
@@ -285,7 +288,8 @@ export function validatedInput(message: { id: string; text: string; parentToolUs
 export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): ClaudeAgentBrokerBridge {
   const sessions = new Map<string, ActiveSession>() // keyed by slug — one active session per thread
   // Resolve the claude executable to an ABSOLUTE path ONCE: the SDK the forked daemon runs rejects a bare
-  // name (unlike the tmux execvp path), and a bare "claude" is the default on a promoted artifact.
+  // name (unlike an execvp of the CLI, which resolves it on PATH), and a bare "claude" is the default
+  // on a promoted artifact.
   const executablePath = resolveClaudeExecutableAbsolute(deps.executablePath, deps.env)
 
   // Pending tool-permission escalations awaiting a human dashboard decision, keyed by interaction id.
@@ -441,12 +445,12 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
     const workerEnv: Record<string, string> = {
       FRIZZ_THREAD: slug,
       // Tell the worker its token budget rather than leaving it to guess — see CLAUDE_WORKER_ENV. The
-      // tmux path gets this through claudeWorkerEnvironment(); on the broker path it rides workerEnv,
+      // argv path gets this through claudeWorkerEnvironment(); on the broker path it rides workerEnv,
       // which is also what gives these per-thread values priority over anything inherited.
       ...CLAUDE_WORKER_ENV,
       ...(we?.permDir ? { FRIZZ_PERM_DIR: we.permDir } : {}),
-      // The cc-worker plugin's PreToolUse hook DENIES AskUserQuestion, because on the tmux path a
-      // blocking question freezes a headless worker where nobody can answer it. On the broker path
+      // The cc-worker plugin's PreToolUse hook DENIES AskUserQuestion, because without frizz in the
+      // loop a blocking question freezes a headless worker where nobody can answer it. On the broker path
       // frizz CAN answer it — the call becomes a dashboard question card — so the hook is told to stand
       // down, but only when a store is actually wired to render and resolve the card.
       ...(deps.interactions && deps.projectId ? { FRIZZ_NATIVE_ASK: "1" } : {}),

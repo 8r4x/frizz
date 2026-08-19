@@ -87,7 +87,7 @@ if (flags.source) {
   }
 }
 writeFileSync(jsonl, seed.map((r) => JSON.stringify(r)).join("\n") + "\n")
-execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode)
+execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode)
   VALUES ('${SLUG}', '${SESSION}', 'frizz-${SLUG}', '${now()}', 'Scroll jitter', 'claude', 'opus', 'high', 'default')`])
 const api = createRpcClient(url)
 

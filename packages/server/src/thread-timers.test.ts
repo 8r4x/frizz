@@ -30,7 +30,7 @@ function fixture(tele: Partial<SessionTelemetry> = {}, opts: { now?: string; arc
   // it is about; the nudge has its own file.
   storage.setSetting("signoffNudge", "off")
   storage.upsertSession({
-    slug: SLUG, session_id: "sid", tmux_name: `frizz-${SLUG}`, spawned_at: T0,
+    slug: SLUG, session_id: "sid", thread_name: `frizz-${SLUG}`, spawned_at: T0,
     last_read_at: null, unread: 0, exited: 0, archived: opts.archived ? 1 : 0, rested_at: null,
     title_auto: 1, title: SLUG, state: opts.archived ? "archived" : "open", meta: null, seen_at: null,
     plan_path: null, transcript_id: null,
@@ -69,7 +69,7 @@ test("storage: timers are many per thread, cancel is slug-scoped, and firing is 
   try {
     for (const slug of ["mine", "yours"]) {
       storage.upsertSession({
-        slug, session_id: `sid-${slug}`, tmux_name: `frizz-${slug}`, spawned_at: T0,
+        slug, session_id: `sid-${slug}`, thread_name: `frizz-${slug}`, spawned_at: T0,
         last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
         title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
       } as SessionRow)

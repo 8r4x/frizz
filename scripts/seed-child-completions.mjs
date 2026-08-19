@@ -27,7 +27,7 @@ mkdirSync(jsonlDir, { recursive: true })
 
 const SLUG = "child-completions"
 const SESSION = "c41ld-c0mp-4let-8000-000000000001"
-const TMUX = `frizz-${SLUG}`
+const THREAD_NAME = `frizz-${SLUG}`
 const AGENT_ID = "toolu_audit"
 const SHELL_ID = "toolu_vite"
 // A fixed timeline so the elapsed readings are stable across runs; ending "now" so the thread reads live.
@@ -88,8 +88,8 @@ writeFileSync(join(jsonlDir, `${SESSION}.jsonl`), records.map((r) => JSON.string
 
 execFileSync("sqlite3", [
   db,
-  `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
-   VALUES ('${SLUG}', '${SESSION}', '${TMUX}', '${at(0)}', 'Refactor the pricing parser', 'claude', 'opus', 'high', 'default', '${at(39)}')`,
+  `INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
+   VALUES ('${SLUG}', '${SESSION}', '${THREAD_NAME}', '${at(0)}', 'Refactor the pricing parser', 'claude', 'opus', 'high', 'default', '${at(39)}')`,
 ])
 console.log(`seeded ${SLUG} → ${SESSION} (one sub-agent completion + one background-shell wake)`)
 
@@ -99,7 +99,7 @@ console.log(`seeded ${SLUG} → ${SESSION} (one sub-agent completion + one backg
 // notification, so the tailer keeps them in the live set and the board pushes them as rows.
 const LIVE_SLUG = "live-children"
 const LIVE_SESSION = "11ve-c41d-4ren-8000-000000000002"
-const LIVE_TMUX = `frizz-${LIVE_SLUG}`
+const LIVE_THREAD_NAME = `frizz-${LIVE_SLUG}`
 const LIVE = [
   { id: "toolu_live1", label: "Sweep every call site of the renamed board projection helper", type: "frizz:opus-xhigh" },
   { id: "toolu_live2", label: "Harvest the fixture inventory", type: "frizz:haiku" },
@@ -135,7 +135,7 @@ const liveRecords = [
 writeFileSync(join(jsonlDir, `${LIVE_SESSION}.jsonl`), liveRecords.map((r) => JSON.stringify(r)).join("\n") + "\n")
 execFileSync("sqlite3", [
   db,
-  `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
-   VALUES ('${LIVE_SLUG}', '${LIVE_SESSION}', '${LIVE_TMUX}', '${at(0)}', 'Fan the audit out', 'claude', 'opus', 'high', 'default', '${at(2)}')`,
+  `INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
+   VALUES ('${LIVE_SLUG}', '${LIVE_SESSION}', '${LIVE_THREAD_NAME}', '${at(0)}', 'Fan the audit out', 'claude', 'opus', 'high', 'default', '${at(2)}')`,
 ])
 console.log(`seeded ${LIVE_SLUG} → ${LIVE_SESSION} (${LIVE.length} live sub-agents + 1 live shell)`)

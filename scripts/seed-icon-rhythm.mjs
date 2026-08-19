@@ -59,11 +59,11 @@ const records = [
 ]
 writeFileSync(join(jsonlDir, `${SESSION}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
 
-// `tmux_name` is the legacy COLUMN name for the thread identity string, not a pane — a simulated
+// `thread_name` is the legacy COLUMN name for the thread identity string, not a pane — a simulated
 // worker needs no process at all.
 execFileSync("sqlite3", [
   db,
-  `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, rested_at, claude_runtime)
+  `INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode, rested_at, claude_runtime)
    VALUES ('${SLUG}', '${SESSION}', 'frizz-${SLUG}', '${at}', 'Icon rhythm', 'claude', 'opus', 'high', 'default', '${at}', 'broker')`,
 ])
 

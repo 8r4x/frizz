@@ -19,7 +19,7 @@ try {
     storage.upsertSession({
       slug,
       session_id: `sid-${slug}`,
-      tmux_name: `frizz-${slug}`,
+      thread_name: `frizz-${slug}`,
       spawned_at: fenceAt,
       last_read_at: null,
       unread: 0,

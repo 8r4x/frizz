@@ -20,7 +20,7 @@ const TERM_PATH = new RegExp(`^${FRIZZ_ROUTE_PREFIX}/term/([^/?]+)$`)
 // Keep the raw websocket bounded before JSON parsing, and independently validate the decoded input.
 // A terminal paste may reasonably be large, but accepting ws's 100 MiB default would let one local
 // client pin the control plane. Grid dimensions are deliberately far above any real xterm viewport
-// while staying comfortably inside node-pty/tmux's useful range.
+// while staying comfortably inside node-pty's useful range.
 export const TERMINAL_MAX_INPUT_BYTES = 1_048_576
 export const TERMINAL_MAX_MESSAGE_BYTES = TERMINAL_MAX_INPUT_BYTES + 1_024
 export const TERMINAL_MAX_COLS = 1_000
@@ -265,7 +265,8 @@ export function createTerminalServer(deps: TerminalServerDeps = {}): TerminalSer
         try {
           ownedTerm.kill()
         } catch {
-          // The attach PTY may already have exited. It is never the underlying tmux worker.
+          // The sign-in PTY may already have exited. It is never an agent worker: no agent runs on a
+          // pty, so nothing an agent depends on is reachable from here.
         }
       }
     }
@@ -323,8 +324,8 @@ export function createTerminalServer(deps: TerminalServerDeps = {}): TerminalSer
     }
 
     // /term serves exactly ONE thing now: a provider sign-in attempt, whose pty the login utility
-    // owns and shares across viewers. Agent threads have no pane to attach to — they run in the
-    // broker over pipes — so a slug that is not a live login attempt is simply not attachable.
+    // owns and shares across viewers. An agent thread has no terminal to attach to — it runs inside a
+    // detached daemon over pipes — so a slug that is not a live login attempt is simply not attachable.
     let loginAttachment: LoginAttachment | null = null
     try {
       loginAttachment = deps.resolveLogin?.(slug) ?? null
@@ -414,7 +415,7 @@ export function createTerminalServer(deps: TerminalServerDeps = {}): TerminalSer
         }
       } catch {
         // A valid message can still race a dead/detached PTY. Contain that failure to this viewer;
-        // the Frizz control plane and independent tmux worker must survive.
+        // the Frizz control plane and every running agent worker must survive.
         beginClose(1011, "terminal unavailable")
       }
     })

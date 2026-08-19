@@ -86,11 +86,11 @@ test("dev supervisor classifies runtime and launcher/config changes without touc
   )
 })
 
-test("dev child inherits the complete environment including the tmux socket", () => {
+test("dev child inherits the complete environment and adds only the child markers", () => {
   const input: NodeJS.ProcessEnv = {
     HOME: "/tmp/frizz-home",
     PATH: "/bin:/usr/bin",
-    FRIZZ_TMUX_SOCKET: "frizz-legacy-nub",
+    SSH_AUTH_SOCK: "/tmp/agent-legacy.sock",
     CUSTOM_VALUE: "kept",
   }
   const output = devChildEnv(input, 51234)
@@ -106,14 +106,14 @@ test("dev child inherits the complete environment including the tmux socket", ()
 test("dev launcher re-exec preserves user environment and drops only child-private markers", () => {
   const output = devReexecEnv({
     HOME: "/tmp/frizz-home",
-    FRIZZ_TMUX_SOCKET: "frizz-nub",
+    SSH_AUTH_SOCK: "/tmp/agent.sock",
     CUSTOM_VALUE: "kept",
     FRIZZ_DEV_CHILD: "1",
     FRIZZ_DEV_PORT: "4917",
   })
   assert.deepEqual(output, {
     HOME: "/tmp/frizz-home",
-    FRIZZ_TMUX_SOCKET: "frizz-nub",
+    SSH_AUTH_SOCK: "/tmp/agent.sock",
     CUSTOM_VALUE: "kept",
     FRIZZ_DEV_REEXEC: "1",
   })
@@ -580,7 +580,7 @@ test("Update & Restart hands the durable owner to a fresh supervisor without cop
   // Codex input. The handoff must leave it in place rather than export/import a lossy snapshot.
   const storage = createStorage(join(stateDir, "ui.db"))
   storage.upsertSession({
-    slug: "kept", session_id: "frizz-session", tmux_name: "frizz-kept", spawned_at: new Date().toISOString(),
+    slug: "kept", session_id: "frizz-session", thread_name: "frizz-kept", spawned_at: new Date().toISOString(),
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0,
     title: null, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
     backend: "codex", agent_session_id: "provider-rollout", control_error: "existing draft",

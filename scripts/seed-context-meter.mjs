@@ -35,11 +35,11 @@ const T0 = Date.now() - 25 * 60_000
 const at = (m) => new Date(T0 + m * 60_000).toISOString()
 
 function row({ slug, sessionId, agentSessionId, title, backend, restedAt }) {
-  const tmuxName = `frizz-${slug}`
+  const threadName = `frizz-${slug}`
   execFileSync("sqlite3", [
     db,
-    `INSERT OR REPLACE INTO session (slug, session_id, agent_session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
-     VALUES ('${slug}', '${sessionId}', ${agentSessionId ? `'${agentSessionId}'` : "NULL"}, '${tmuxName}', '${at(0)}', '${title}', '${backend}', '${backend === "codex" ? "gpt-5-codex" : "opus"}', 'high', 'default', '${restedAt}')`,
+    `INSERT OR REPLACE INTO session (slug, session_id, agent_session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
+     VALUES ('${slug}', '${sessionId}', ${agentSessionId ? `'${agentSessionId}'` : "NULL"}, '${threadName}', '${at(0)}', '${title}', '${backend}', '${backend === "codex" ? "gpt-5-codex" : "opus"}', 'high', 'default', '${restedAt}')`,
   ])
   console.log(`seeded ${slug} → ${sessionId}`)
 }

@@ -30,7 +30,7 @@ mkdirSync(jsonlDir, { recursive: true })
 
 const SLUG = "queue-ops-column"
 const SESSION = "7c0110ff-0000-4000-8000-000000000001"
-const TMUX = `frizz-${SLUG}`
+const THREAD_NAME = `frizz-${SLUG}`
 const now = () => new Date().toISOString()
 let n = 0
 const uuid = () => `00000000-0000-4000-8000-${String(++n).padStart(12, "0")}`
@@ -108,7 +108,7 @@ writeFileSync(join(jsonlDir, `${SESSION}.jsonl`), records.map((r) => JSON.string
 
 execFileSync("sqlite3", [
   db,
-  `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, title_auto, backend, model, effort, permission_mode, state, unread, exited, archived, rested_at)
-   VALUES ('${SLUG}', '${SESSION}', '${TMUX}', '${now()}', 'Promote the catalog', 0, 'claude', 'opus', 'xhigh', 'default', 'open', 0, 0, 0, '${now()}')`,
+  `INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, title_auto, backend, model, effort, permission_mode, state, unread, exited, archived, rested_at)
+   VALUES ('${SLUG}', '${SESSION}', '${THREAD_NAME}', '${now()}', 'Promote the catalog', 0, 'claude', 'opus', 'xhigh', 'default', 'open', 0, 0, 0, '${now()}')`,
 ])
 console.log(`seeded ${SLUG} → ${SESSION} (1 sub-agent + ${SHELLS.length} background shells)`)

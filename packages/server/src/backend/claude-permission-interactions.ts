@@ -4,7 +4,8 @@
 // fires only for the genuinely risky minority the classifier escalates. Those are exactly the ones that
 // belong in front of a human, so the broker journals each as a provider-neutral approval interaction
 // (provider.kind "claude") and gates the tool on the dashboard decision — the SDK-typed equivalent of
-// what a tmux worker surfaces, but as a clean approve/deny card instead of a stuck pane.
+// what an interactive `claude` surfaces in its terminal, but as a clean approve/deny card instead of a
+// worker wedged on a prompt nobody can see.
 //
 // ONE tool on that channel is not an authorization request at all: AskUserQuestion. See the second
 // half of this file — it renders a question card and returns the ANSWER, not a grant.

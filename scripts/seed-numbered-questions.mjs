@@ -211,13 +211,13 @@ const THREADS = [
 
 for (const t of THREADS) {
   const sessionId = `${t.slug}-0000-4000-8000-000000000000`.slice(0, 36)
-  const tmuxName = `frizz-${t.slug}`
+  const threadName = `frizz-${t.slug}`
   const records = t.records.map((r) => ({ ...r, session_id: sessionId }))
   writeFileSync(join(jsonlDir, `${sessionId}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
   execFileSync("sqlite3", [
     db,
-    `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
-     VALUES ('${t.slug}', '${sessionId}', '${tmuxName}', '${now()}', '${t.title}', 'claude', 'opus', 'high', 'default', '${now()}')`,
+    `INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
+     VALUES ('${t.slug}', '${sessionId}', '${threadName}', '${now()}', '${t.title}', 'claude', 'opus', 'high', 'default', '${now()}')`,
   ])
   console.log(`seeded ${t.slug} → ${sessionId}`)
 }

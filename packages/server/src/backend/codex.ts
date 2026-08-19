@@ -32,12 +32,12 @@ function sessionsDir(codexHome: string): string {
 export const CODEX_FIRST_FINAL_TITLE_TRANSPORT =
   'FRIZZ TITLE TRANSPORT (required): your very first assistant message must begin with one concise `<!-- frizz title="Concise thread title" -->` comment before any commentary, acknowledgement, or tool call. Frizz removes that comment from chat and uses only its quoted title as this thread\'s automatic title.'
 
-// Codex exposes no dedicated `--append-system-prompt` flag, but its documented `-c` overrides accept
-// the `developer_instructions` config key for one invocation. Use that higher-priority, non-rendered
-// surface for the small title protocol instead of relying on a task-adjacent user instruction alone.
-// The full worker contract stays in the prompt because sending ~18KB as a `-c` value would reintroduce
-// tmux's command-length failure. This instruction is spawn-only: replaying it on `codex resume` would
-// incorrectly request a second title from an existing conversation.
+// Codex exposes no dedicated `--append-system-prompt` flag. Its app-server `newSession` takes a
+// `developerInstructions` field instead — a higher-priority, non-rendered surface — so the small title
+// protocol rides that rather than a task-adjacent user instruction alone (dispatch.ts passes it there).
+// The full ~18KB worker contract goes through the sibling `baseInstructions` field, which is the surface
+// meant for bulk; this one is for a short protocol note. Spawn-only: replaying it on a resumed session
+// would incorrectly request a second title from an existing conversation.
 export const CODEX_FIRST_OUTPUT_TITLE_DEVELOPER_INSTRUCTIONS =
   'FRIZZ UI metadata protocol (mandatory): the very first assistant message in this new session, before any commentary, acknowledgement, tool call, or other action, MUST begin on its first line with exactly one `<!-- frizz title="..." -->` HTML comment. Replace `...` with a concise human-readable 3-8 word title for the user\'s task. Put no text before the comment. You may continue the message normally after it. Emit this title comment exactly once. Do not explain the protocol. Frizz removes the comment before displaying the conversation.'
 
@@ -78,12 +78,14 @@ export function codexSandbox(mode: PermissionMode): string {
 }
 
 // ---- native TUI modal detection ----
-// A LEGACY tmux codex row (dispatched before the app-server cutover, not yet adopted) still renders its
-// approval/selection modals only in the pane — the rollout never records them. The tailer pane-sniffs
-// those live legacy panes through this detector (app-server codex rows are headless and skip capture
-// entirely). Detection is BOTTOM-ANCHORED on the modal's exact footer: prompt-like prose in transcript
-// history is ignored once Codex's ordinary composer/status footer is below it. We also require the
-// selector + multiple independent family markers. The return value is fixed presentation copy —
+// A LEGACY codex row (dispatched as an interactive `codex` process before the app-server cutover, and
+// never adopted) rendered its approval/selection modals only on its terminal screen — the rollout never
+// records them — and this detector is what read them. It is INERT in this build: an app-server codex row
+// is headless, and nothing captures screen text for any row (the tailer's capture dependency is injected
+// by test fixtures only), so the input is always the empty string. The contract is kept because it is the
+// expensive part. Detection is BOTTOM-ANCHORED on the modal's exact footer: prompt-like prose in
+// transcript history is ignored once Codex's ordinary composer/status footer is below it. We also require
+// the selector + multiple independent family markers. The return value is fixed presentation copy —
 // repository/content/commands/options never leave the server.
 const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g
 const SUBMIT_FOOTER = /^enter to submit\s*\|\s*esc to cancel$/i
@@ -103,7 +105,7 @@ function codexModalTail(pane: string): { lines: string[]; footer: "submit" | "co
   const footer = SUBMIT_FOOTER.test(last) ? "submit" : CONFIRM_FOOTER.test(last) ? "confirm" : undefined
   if (!footer) return undefined
   // A Codex modal fits comfortably in 32 rows. Bounding the window prevents matching a stale family
-  // heading or option block much earlier in a long pane while a different footer happens to be last.
+  // heading or option block much earlier in a long screen while a different footer happens to be last.
   return { lines: lines.slice(-32, -1).map((line) => line.trim()), footer }
 }
 
@@ -858,15 +860,15 @@ export function createCodexBackend(opts: CodexBackendOptions = {}): AgentBackend
   return {
     kind: "codex",
 
-    // The tmux TUI transport was retired: codex now runs SOLELY on the app-server bridge
-    // (backend/codex-app-server.ts). These argv builders exist only to satisfy the AgentBackend
-    // interface; nothing should call them for a codex row anymore.
+    // The interactive-CLI transport was retired: codex now runs SOLELY on the app-server bridge
+    // (backend/codex-app-server.ts), inside a detached daemon. These argv builders exist only to satisfy
+    // the AgentBackend interface; nothing should call them for a codex row anymore.
     buildSpawn(_o: SpawnOpts): BuiltCommand {
-      throw new Error("codex runs via the app-server bridge, not tmux")
+      throw new Error("codex runs via the app-server bridge; this argv builder has no live caller")
     },
 
     buildResume(_o: ResumeOpts): BuiltCommand {
-      throw new Error("codex runs via the app-server bridge, not tmux")
+      throw new Error("codex runs via the app-server bridge; this argv builder has no live caller")
     },
 
     // Codex's id is minted by codex and not known until it writes session_meta, so there is no
@@ -960,10 +962,11 @@ export function createCodexBackend(opts: CodexBackendOptions = {}): AgentBackend
       }
     },
 
-    // A legacy (pre-cutover, not-yet-adopted) codex row still renders connector/tool approvals and its
-    // native selectors only in the tmux pane — the rollout never records them. Surface them to the
-    // tailer as a safe structured blocker; never answer them here (the human must use Terminal).
-    // App-server codex rows are headless and never reach this (the tailer skips their pane capture).
+    // A legacy (pre-cutover, not-yet-adopted) codex row rendered connector/tool approvals and its native
+    // selectors only on its terminal screen — the rollout never records them. This surfaces them to the
+    // tailer as a safe structured blocker; it never answers them (the human must use Terminal). Inert in
+    // this build: an app-server codex row is headless, and nothing captures screen text — see the
+    // detector's own note above.
     detectNativeInput: detectCodexNativeInput,
   }
 }

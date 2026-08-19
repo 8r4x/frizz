@@ -93,11 +93,11 @@ export interface ClaudeQueryStartOptions {
   // stays false so nothing that used this as a standalone foundation starts persisting unexpectedly.
   persistSession?: boolean
   // Text APPENDED to Claude's default (preset) system prompt — how the frizz worker contract rides the
-  // SDK path, the equivalent of the tmux path's --append-system-prompt-file.
+  // SDK path, the equivalent of the retired argv path's --append-system-prompt-file.
   appendSystemPrompt?: string
   model?: string
   effort?: string
-  // The frizz WORKER ENVIRONMENT — the SDK equivalents of the tmux path's --plugin-dir / --mcp-config /
+  // The frizz WORKER ENVIRONMENT — the SDK equivalents of the argv path's --plugin-dir / --mcp-config /
   // --allowedTools. Without these a broker session is a bare SDK worker: no frizz:<model>-<effort>
   // sub-agent profiles, no frizz MCP (spawn_thread), no chrome-devtools (the browser gate), and none of
   // the cc-worker hooks (deny-ask/deny-plan/agent-bind). `pluginDir` loads the local cc-worker plugin
@@ -106,9 +106,9 @@ export interface ClaudeQueryStartOptions {
   pluginDir?: string
   mcpServers?: Record<string, { type?: "stdio"; command: string; args?: string[]; env?: Record<string, string> }>
   allowedTools?: string[]
-  // Tools taken away from the session outright — the SDK equivalent of the tmux path's
+  // Tools taken away from the session outright — the SDK equivalent of the argv path's
   // `--disallowedTools=`. NOTHING passes it today: the broker deliberately keeps AskUserQuestion (it can
-  // render the question as a dashboard card), which is the only tool the tmux argv drops. Kept as the
+  // render the question as a dashboard card), which is the only tool that argv drops. Kept as the
   // plumbed seam so a future prohibition does not have to be argued for AND wired in the same change.
   disallowedTools?: readonly string[]
   // Which of Claude Code's own settings layers the session loads — and, critically, whether it reads
@@ -870,7 +870,7 @@ function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptio
       // `AGENTS.md` and its `.claude/skills`. Measured differential in the frizz repo, one variable:
       // this factory answered `NO-CLAUDE-MD` where a plain `claude -p` in the same cwd answered
       // "# No pull requests — land on local `main`". That fix restored PROJECT + LOCAL and left USER
-      // out, which kept a second, quieter half of the same regression: the tmux transport ran plain
+      // out, which kept a second, quieter half of the same regression: the retired transport ran plain
       // `claude` and got all three scopes, so a broker session was the only place the operator's
       // `~/.claude/settings.json` stopped applying. Measured 2026-08-16 against the maintainer's real
       // config, one variable: `--setting-sources=project,local` reported their `env` block UNSET where
@@ -885,7 +885,7 @@ function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptio
       ...(options.disallowedTools?.length ? { disallowedTools: [...options.disallowedTools] } : {}),
       persistSession: options.persistSession ?? false,
       // Keep Claude's default (preset) system prompt and APPEND the frizz worker contract, the SDK
-      // equivalent of the tmux path's --append-system-prompt-file.
+      // equivalent of the argv path's --append-system-prompt-file.
       ...(options.appendSystemPrompt ? { systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: options.appendSystemPrompt } } : {}),
       // The 1M context window rides the MODEL value as a `[1m]` suffix, always paired with the bare
       // alias as `fallbackModel` — an unavailable long-context beta is a hard 400 that kills the

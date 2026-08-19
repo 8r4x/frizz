@@ -111,7 +111,7 @@ test("a contention refusal is retried in place instead of surfacing", async () =
   assert.deepEqual(attempts, [1, 2, 3], "the send should land on the third attempt")
 })
 
-test("an AMBIGUOUS failure is never replayed — the text may already have crossed tmux", async () => {
+test("an AMBIGUOUS failure is never replayed — the text may already have reached the worker", async () => {
   let calls = 0
   await assert.rejects(
     withDeliveryRetry(async () => { calls++; throw new Error("network died mid-flight") }, () => {}, instant),

@@ -7,7 +7,7 @@
 //   1. ctx.dispatcher.dispatch({backend:"claude"}) → the dispatch.ts BROKER BRANCH (forks the daemon,
 //      stamps backend=claude + claude_runtime=broker).
 //   2. ctx.board.snapshot() → deriveRuntime's HEADLESS path + the daemon stall-net reader (live, not exited).
-//   3. router.followUp.handler → the router's BROKER BRANCH (bridge.followUp, no tmux composer).
+//   3. router.followUp.handler → the router's BROKER BRANCH (bridge.followUp, no TUI composer).
 //   4. RESTART: tear ctx1 down (daemon SURVIVES) → new ctx2 on the same project → reconcileSessions must
 //      NOT mark the row exited, and the board must still read it live — the whole ownerless-reconnect point.
 //   5. followUp again through ctx2 → a turn lands on the SAME session across the "restart".

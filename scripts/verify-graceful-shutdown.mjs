@@ -121,7 +121,7 @@ if (process.env.FRIZZ_SHUTDOWN_HARNESS === "launcher") {
       HOME: home,
       FRIZZ_SHUTDOWN_HARNESS: "launcher",
       FRIZZ_SHUTDOWN_HARNESS_PORT: String(port),
-      FRIZZ_TMUX_SOCKET: `frizz-shutdown-verify-${port}-${process.pid}`,
+      FRIZZ_SANDBOX_TAG: `frizz-shutdown-verify-${port}-${process.pid}`,
       FRIZZ_WAKERS_OFF: "1",
       FRIZZ_ORPHAN_REAPER_OFF: "1",
       FRIZZ_DIRECT_SUPERVISOR: "1",

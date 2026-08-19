@@ -79,11 +79,11 @@ writeFileSync(join(logDir, `${SESSION_ID}.jsonl`), records.map((r) => JSON.strin
 
 const projects = join(home, ".frizz", "projects")
 const db = join(projects, readdirSync(projects)[0], "ui.db")
-const tmuxName = `frizz-${SLUG}`
+const threadName = `frizz-${SLUG}`
 execFileSync("sqlite3", [db, `DELETE FROM session WHERE slug = '${SLUG}';`])
 execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session
-  (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, unread, exited, archived, title_auto, runtime_generation, profile_revision)
-  VALUES ('${SLUG}', '${SESSION_ID}', '${tmuxName}', '${now}', 'Tool pill click', 'claude', 'opus', 'high', 'default', 0, 0, 0, 0, 0, 0);`])
+  (slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode, unread, exited, archived, title_auto, runtime_generation, profile_revision)
+  VALUES ('${SLUG}', '${SESSION_ID}', '${threadName}', '${now}', 'Tool pill click', 'claude', 'opus', 'high', 'default', 0, 0, 0, 0, 0, 0);`])
 
 const api = createRpcClient(`http://127.0.0.1:${port}/`)
 await api.waitForHealth()

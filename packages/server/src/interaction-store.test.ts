@@ -866,7 +866,7 @@ function sessionRow(over: Partial<SessionRow> = {}): SessionRow {
   return {
     slug: "thread-1",
     session_id: "session-1",
-    tmux_name: "frizz-thread-1",
+    thread_name: "frizz-thread-1",
     spawned_at: T0,
     last_read_at: null,
     unread: 0,

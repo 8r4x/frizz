@@ -1,26 +1,33 @@
 // ── The invisible delivery marker ──────────────────────────────────────────────────────────────────
 //
-// frizz steers a Claude worker by pasting into a human-facing TUI composer over tmux, and that channel
-// REWRITES the bytes on the way through. Measured against a live claude 2.1.219 TUI, driven by frizz's
-// own paste sequence: tmux `paste-buffer` turns LF into CR, then the TUI's paste handler turns CR/CRLF
-// back into LF and expands every TAB into four spaces — so a tab-bearing send and a CRLF-bearing send
-// both arrive as different bytes than frizz sent. Confirming delivery by comparing those bytes is
-// therefore inference, and every mangling class frizz has not yet met strands a send as "unconfirmed"
-// while the agent has already read and acted on it.
+// WHY THIS EXISTS, AND WHAT OF IT STILL RUNS. frizz used to steer a Claude worker by pasting into a
+// human-facing TUI composer, and that channel REWROTE the bytes on the way through. Measured against a
+// live claude 2.1.219 TUI, driven by frizz's own paste sequence: the paste transport turned LF into CR,
+// then the TUI's paste handler turned CR/CRLF back into LF and expanded every TAB into four spaces — so
+// a tab-bearing send and a CRLF-bearing send both arrived as different bytes than frizz sent. Confirming
+// delivery by comparing those bytes was therefore inference, and every mangling class frizz had not yet
+// met stranded a send as "unconfirmed" while the agent had already read and acted on it.
 //
-// This replaces the inference with IDENTITY. Every follow-up frizz pastes carries a marker encoding its
-// deliveryId, so the correlator recognises its own send by looking the id up rather than by comparing
-// prose. That is immune to any rewrite of the surrounding text, and it stays correct when the TUI glues
-// several sends into one submission — each constituent brings its own marker along.
+// This replaced the inference with IDENTITY. Every follow-up frizz pasted carried a marker encoding its
+// deliveryId, so the correlator recognised its own send by looking the id up rather than by comparing
+// prose. That was immune to any rewrite of the surrounding text, and it stayed correct when the TUI
+// glued several sends into one submission — each constituent brought its own marker along.
+//
+// The broker path needs no marker: frizz hands the SDK a `uuid` with every input and the SDK echoes it
+// back on the record that materializes it, so delivery-ledger.ts resolves the send from that id (see its
+// IDENTITY section) and nothing emits a marker any more. What still runs here is the READ side —
+// decodeDeliveryMarkers for a record that predates the cutover, and above all stripDeliveryMarkers,
+// which transcript.ts applies to every record so a marker in an older transcript can neither reach a
+// human's eyes nor perturb a text comparison.
 //
 // ── Why zero-width, and why these three codepoints ────────────────────────────────────────────────
-// The marker must survive the channel and must not be visible to the human reading their own terminal.
-// Measured on the same live TUI: U+200B / U+200C / U+2060 round-trip BYTE-INTACT through tmux and the
-// composer into the JSONL, and `tmux capture-pane` renders the line with no visible artefact. They are
-// also deliberately NOT matched by JavaScript's `\s`, so a marker can never be mistaken for the
-// whitespace the ledger's text comparison collapses.
+// The marker had to survive the channel and had to stay invisible to the human reading their own
+// terminal. Measured on the same live TUI: U+200B / U+200C / U+2060 round-tripped BYTE-INTACT through
+// the paste transport and the composer into the JSONL, and the terminal rendered the line with no
+// visible artefact. They are also deliberately NOT matched by JavaScript's `\s`, so a marker can never
+// be mistaken for the whitespace the ledger's text comparison collapses.
 //
-// The cost is honest and bounded: the model sees 34 invisible codepoints at the end of each steer. frizz
+// The cost was honest and bounded: the model saw 34 invisible codepoints at the end of each steer. frizz
 // owns every surface that renders this text, so the marker is stripped from the transcript before the
 // human ever sees it (see stripDeliveryMarkers).
 //
@@ -76,9 +83,11 @@ export function decodeDeliveryMarkers(text: string): number[] {
   return out
 }
 
-// Remove every marker codepoint. Used on BOTH sides of the seam: on transcript text so the human never
-// sees a marker, and on composer captures so delivery-confirm.ts still recognises frizz's own unsent
-// text in a pane. Cheap-exits on the overwhelmingly common marker-free string.
+// Remove every marker codepoint. Used on transcript text so the human never sees a marker, and on the
+// ledger's own comparisons so a marked record still matches an unmarked item. It was used on a third
+// surface too — the composer captures the submit-confirmer read, to recognise frizz's own unsent text
+// in the worker's terminal — until delivery-confirm.ts went with the rest of that apparatus (8a57e29).
+// Cheap-exits on the overwhelmingly common marker-free string.
 export function stripDeliveryMarkers(text: string): string {
   if (!text.includes(EDGE) && !text.includes(ZERO) && !text.includes(ONE)) return text
   return text.replace(MARKER_CHARS, "")

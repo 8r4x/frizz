@@ -624,8 +624,8 @@ async function callRpc(procedure, body) {
   return await res.json().catch(() => null)
 }
 
-/** Which thread this MCP server belongs to. Stamped into our env at spawn (dispatch.ts for the tmux
- * path, the broker bridge for the SDK path) because the MCP protocol carries no caller identity.
+/** Which thread this MCP server belongs to. Stamped into our env at spawn (the broker bridge, on the
+ * Claude SDK path) because the MCP protocol carries no caller identity.
  * FRIZZ_THREAD is the fallback: every frizz worker process is tagged with it, so it is right
  * whenever the env is inherited — but it is not relied upon, hence the explicit var first.
  *

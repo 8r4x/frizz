@@ -41,7 +41,7 @@ test("isSessionRoot: claude/codex binary or --session-id anywhere", () => {
   assert.ok(!isSessionRoot("Google Chrome for Testing --remote-debugging-port=0"))
 })
 
-test("isTmuxServer matches only the tmux binary", () => {
+test("isTmuxServer matches only a leftover pre-cutover tmux binary", () => {
   assert.ok(isTmuxServer("tmux -L frizz-repo-x new-session -d"))
   assert.ok(!isTmuxServer("node tmux-thing"))
 })
@@ -53,7 +53,7 @@ test("decideOrphans: reap aux whose slug has no live root; keep everything prote
     row({ pid: 200, command: "Google Chrome for Testing --remote-debugging-port=0", slug: "beta" }), // aux, dead beta → REAP
     row({ pid: 201, command: "node --watch server.js", slug: "beta" }), // aux, dead beta → REAP
     row({ pid: 300, command: "codex --cd /x", slug: "gamma" }), // a session root with no aux; dead-ish but NEVER reaped
-    row({ pid: 400, command: "tmux -L frizz-repo-x new-session", slug: "delta" }), // tmux tagged, dead → keep
+    row({ pid: 400, command: "tmux -L frizz-repo-x new-session", slug: "delta" }), // a pre-cutover leftover, dead → keep
   ]
   const { reap, liveSlugs } = decideOrphans(rows, { minAgeMs: ORPHAN_GUARD, protectedPids: new Set() })
   assert.deepEqual([...reap].sort((a, b) => a - b), [200, 201])
@@ -140,7 +140,7 @@ test("enumerateProcs joins argv pass with env pass, slug from the ENV segment on
   const base = [
     "  100        1 10:00 claude --session-id A",
     "  200      100 09:00 Google Chrome for Testing --remote-debugging-port=0",
-    // tmux carries a FRIZZ_THREAD literal in ARGV (the `-e` flag); its OWN env has a different one
+    // A leftover tmux server carries a FRIZZ_THREAD literal in ARGV (the `-e` flag); its OWN env has a different one
     "  400        1 20:00 tmux -L frizz-repo-x new-session -d -e FRIZZ_THREAD=argvslug",
   ].join("\n")
   const env = [

@@ -74,7 +74,7 @@ appendFileSync(transcript, notifyByTaskId("aab99c3e7b670a3ae", "Survey bun-compi
 
 // ── the session row + a live pane, so the board tails it for real ─────────────────────────────────
 const dbPath = execFileSync("bash", ["-lc", `ls ${home}/.frizz/projects/*/ui.db`]).toString().trim()
-execFileSync("sqlite3", [dbPath, `INSERT INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode) VALUES ('${SLUG}', '${SESSION}', 'frizz-${SLUG}', '${new Date().toISOString()}', 'Sub-agent task-id completion', 'claude', 'opus', 'high', 'auto')`])
+execFileSync("sqlite3", [dbPath, `INSERT INTO session (slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode) VALUES ('${SLUG}', '${SESSION}', 'frizz-${SLUG}', '${new Date().toISOString()}', 'Sub-agent task-id completion', 'claude', 'opus', 'high', 'auto')`])
 
 const api = createRpcClient(`http://127.0.0.1:${port}/`)
 await api.waitForHealth()

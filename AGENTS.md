@@ -90,13 +90,24 @@ dispatches a worker", never "frizz dispatches a worker". Lowercase survives only
 identifiers, where it is part of the name: `npx frizz`, `FRIZZ.md`, `.frizz/`, `~/.frizz/`,
 `frizz-<slug>` session names, the `frizz`/`frizz-update` CLIs, and the `frizz:*` skill and sub-agent profile names.
 
+# ONE server, EVERY project — never one per repo
+
+Frizz is a SINGLETON. One server on one origin serves every project on the machine, each named by a URL prefix (`/project/<slug>/…`). It ran one server per repo until 2026-08 and the change is recent enough that stale statements survive in comments, docs and muscle memory — `ARCHITECTURE.md` itself still said "One server per repo" in one bullet while explaining the singleton in another, and the README still promised "one server and one tab per repo" (both corrected 2026-08-19).
+
+The practical consequences, because getting these wrong produces working-but-wrong code and copy:
+
+- **Nothing is scoped to "the repo you launched from."** A command does not serve *a project*; it starts *the server*. Copy that says "serve this repo" is wrong, and so is a CLI shape that takes a repository path to decide what to serve.
+- **`--host` / `--public-origin` / a tunnel expose EVERY project**, not the one you are standing in. Any auth story has to be told at that altitude.
+- **A second launch JOINS the running server rather than starting one**, so flags on it are not applied — the launcher now refuses rather than ignoring them silently (`352455e`).
+- Full detail, including the characteristic bug (another project's data rendered under this project's URL), is in `ARCHITECTURE.md` § "URL shape (one server, every project — the singleton)".
+
 # There is NO tmux. Agents are detached broker daemons
 
-Every agent that touches this repo eventually tells the maintainer that stopping Frizz is safe "because the agents are in tmux," and every one of them is wrong. They are reading it off the codebase: `tmux_name` is a session column, `FRIZZ_LAUNCH_TMUX_SOCKET` is a launch variable, and dozens of comments in `router.ts`, `tailer.ts` and `dispatch.ts` still narrate a tmux pane. **None of it runs.** There is no `tmux.ts`, nothing imports one, and dispatch never execs `tmux` — check it in ten seconds with `ls packages/server/src/tmux*` and `grep -rn '"tmux"' --include='*.ts' packages/server/src`.
+Agents ran in tmux panes once, and the vocabulary outlived the transport by weeks: a `tmux_name` column, a `FRIZZ_LAUNCH_TMUX_SOCKET` launch variable, hundreds of comments in `router.ts`, `tailer.ts` and `dispatch.ts` narrating a pane, and 53 seed scripts opening a dummy pane nothing read. Every agent that read them eventually told the maintainer that stopping Frizz was safe "because the agents are in tmux" — wrong, and saying the wrong reason cost real trust. **That vocabulary was swept out on 2026-08-19.** The column is `thread_name`, the launch variable is gone, no script execs or installs tmux, and `packages/server/src/tmux.ts` has not existed since 2026-08-02. Check it in ten seconds with `grep -rn tmux --include='*.ts' packages/server/src`.
 
 What actually happens: a Claude thread is `claude_runtime="broker"`, and `claude-broker-host.ts` forks a daemon with `detached: true, stdio: "ignore"` into its **own process group**. That single fact is the answer to most operational questions — Ctrl-C on the server signals the launcher's group and cannot reach the daemon, so a running turn survives a stop; its events queue in a 20,000-frame backlog rather than dropping while nothing is attached, and the bridge replays them on reconnect. Sub-agents live inside that daemon's SDK session, so they ride along too.
 
-**So: never tell the operator anything about tmux, and never repeat "the agents are in tmux" as a reason a restart is safe.** It is safe, for a different reason, and saying the wrong one has cost real trust here. The surviving tmux names are legacy spellings of "the identity string for this thread" — kept because the column is load-bearing on disk. Treat any present-tense tmux comment as stale, and prefer `git log -S` over believing it.
+**So: never tell the operator anything about tmux, and never repeat "the agents are in tmux" as a reason a restart is safe.** It is safe, for a different reason, and saying the wrong one has cost real trust here. Exactly one tmux reference survives on purpose — `isTmuxServer` in `orphan-reaper.ts`, which refuses to reap a tmux server process, because upgrading from a pre-cutover Frizz can leave one holding panes an operator is still reading. Everything else that still says tmux is either dated design history under `plans/` (left as a record, not as guidance) or something the sweep missed; treat the second kind as a bug and prefer `git log -S` over believing it.
 
 # Board nomenclature: "active" means SPINNING, and nothing else
 

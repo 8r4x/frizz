@@ -10,7 +10,7 @@ import type { BrokerRecord, ClaudeBrokerConfig } from "./claude-agent-broker.ts"
 import { claudeBrokerDiagnosticLogPath } from "./claude-broker-diagnostics.ts"
 
 // The Claude Agent SDK REQUIRES an absolute `pathToClaudeCodeExecutable` (validateExecutablePath rejects
-// a bare name), unlike the tmux path where execvp resolves "claude" on PATH. When the dispatch layer
+// a bare name), unlike an execvp of the CLI, which resolves "claude" on PATH itself. When the dispatch layer
 // hands us a bare "claude" (the default when no --claude-bin is configured — the promoted-artifact case),
 // resolve it to an absolute path on PATH here, or the forked daemon dies on startup ("executablePath must
 // be absolute") before it can publish its record and every dispatch times out with "did not become ready".

@@ -119,7 +119,7 @@ function row(slug: string): SessionRow {
   return {
     slug,
     session_id: `sid-${slug}`,
-    tmux_name: `frizz-${slug}`,
+    thread_name: `frizz-${slug}`,
     spawned_at: "2026-07-12T00:00:00.000Z",
     last_read_at: null,
     unread: 0,
@@ -230,9 +230,9 @@ test("threadTerminalCommand offers the verified provider resume command in every
       "Codex resumes its provider rollout ID directly from the owned registry row",
     )
 
-    // The row is exited (no pane left to attach to), so a resume is the honest offer regardless of what
-    // the board snapshot says the runtime is — the command is still offered, never gated on "wait for
-    // it to exit". The live-pane case gets an ATTACH instead; see the real-tmux test below.
+    // The row is exited, so a resume is the honest offer regardless of what the board snapshot says
+    // the runtime is — the command is still offered, never gated on "wait for it to exit". A live row
+    // gets the same resume: a headless worker has nothing to attach to.
     h.snapshot.threads.at(-1)!.runtime = "turn-idle"
     assert.deepEqual(
       await h.router.threadTerminalCommand.handler({ input: { slug: "codex-resume" } }),
@@ -265,11 +265,6 @@ test("threadTerminalCommand offers the verified provider resume command in every
   }
 })
 
-// A LIVE pane must yield an ATTACH, never a resume. Driven against a REAL tmux server, because the
-// whole point is the tmux liveness answer — a stubbed one would prove nothing about the branch that
-// matters. `<cli> resume` starts a SEPARATE process off the transcript, so handing it back for a live
-// worker sends the human to a terminal that cannot show the in-flight turn or the permission prompt
-// the worker is parked on (that prompt is never written to the transcript at all).
 test("planBody RPC returns only a securely resolved direct plan file", async () => {
   const h = harness()
   const plans = join(h.dir, ".frizz", "plans")
@@ -415,7 +410,7 @@ test("renameThread RPC: empty titles are rejected and rowless/foreign threads re
 })
 
 // Provider rename now goes through the Claude broker's typed control channel (the SDK's
-// `generateSessionTitle`) rather than typing `/rename` into a tmux pane, so the refusal a non-Claude
+// `generateSessionTitle`) rather than typing `/rename` into a terminal, so the refusal a non-Claude
 // or non-broker thread gets names the transport rather than the backend.
 test("aiRenameThread RPC: only a running broker-backed Claude thread can be renamed by the provider", async () => {
   const h = harness()
@@ -439,7 +434,7 @@ test("setThreadPermission RPC: validates input and persists an exited thread ove
   h.storage.close()
 })
 
-// The permission/profile controllers are CLAUDE-only since the codex tmux composer was removed (they
+// The permission/profile controllers are CLAUDE-only since the codex TUI composer was removed (they
 // parse the pane with inspectClaudeComposer). A LEGACY codex row — dispatched before the app-server
 // cutover, so codex_runtime is still NULL — must therefore persist like any other codex row instead of
 // being handed to them, which is what gating on `codex_runtime === "app-server"` used to do.
@@ -562,8 +557,8 @@ test("followUp yields to a live external writer but still answers a thread whose
 
 // Reprompting IS re-engagement, so it disables the park: without this the answer to the turn you just
 // sent re-parks the moment it rests and drops back out of your queue unseen. Driven through the codex
-// app-server branch because it is the one followUp path that reaches a stubbable bridge instead of real
-// tmux; the un-park runs above the runtime split, so the invariant is branch-independent.
+// app-server branch because it is the one followUp path that reaches a stubbable bridge instead of a
+// real worker; the un-park runs above the runtime split, so the invariant is branch-independent.
 test("followUp wakes a snoozed thread and disarms the bump it owed", async () => {
   const h = harness()
   const slug = "snoozed-followup"
@@ -909,7 +904,7 @@ test("rowless name teardown is fenced against a claim appearing after the optimi
   assert.deepEqual(h.killedPanes, [])
 })
 
-test("rowless adoption claim blocks kill, dismiss-status, and forget RPC handlers before tmux", async () => {
+test("rowless adoption claim blocks kill, dismiss-status, and forget RPC handlers before the terminator", async () => {
   const h = harness()
   const slug = "rowless-rpc-adoption"
   assert.equal(h.storage.reserveAdoptionClaim({
@@ -989,16 +984,16 @@ test("stale forget loses to a finalized successor token and preserves its row an
 })
 
 // ── Stopping an app-server Codex thread (2026-07-23) ───────────────────────────────────────────────
-// An app-server Codex thread has NO tmux pane: its worker is a turn inside the shared codex
-// app-server, which now lives in a DETACHED daemon that outlives the frizz runtime. Routed through the
-// tmux terminator every stop verb took stopRegisteredRuntime's `unbound` branch, issued kill-session
+// An app-server Codex thread has NO worker process of its own: its worker is a turn inside the shared
+// codex app-server, which now lives in a DETACHED daemon that outlives the frizz runtime. Routed through
+// the registered-runtime terminator every stop verb took stopRegisteredRuntime's `unbound` branch, issued kill-session
 // for a session that never existed, and reported "stopped" — while the turn kept running, burning
 // tokens and touching the repo with no frizz-side owner. Before the daemon worked this was masked,
 // because the app-server died with the runtime.
 function codexSessionRow(
   storage: ReturnType<typeof createStorage>,
   slug: string,
-  runtime: "app-server" | "legacy-tmux",
+  runtime: "app-server" | "pre-app-server",
 ): SessionRow {
   storage.upsertSession({ ...row(slug), exited: 0 })
   storage.setBackend(slug, "codex")
@@ -1020,7 +1015,7 @@ function bridgeStub(options: { turnLive: boolean; interrupt?: () => Promise<{ in
   }
 }
 
-test("killAgent interrupts a live app-server Codex turn instead of killing a tmux pane it never had", async () => {
+test("killAgent interrupts a live app-server Codex turn instead of killing a worker process it never had", async () => {
   const h = harness()
   const slug = "codex-kill"
   codexSessionRow(h.storage, slug, "app-server")
@@ -1068,14 +1063,14 @@ test("stopping a Codex thread with no active turn is a no-op, not an error", asy
   h.storage.close()
 })
 
-test("a LEGACY tmux Codex row keeps the tmux terminator and never reaches the bridge", async () => {
+test("a LEGACY pre-app-server Codex row keeps the registered-runtime terminator and never reaches the bridge", async () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-legacy-codex-stop-"))
   const storage = createStorage(join(dir, "ui.db"))
   const slug = "legacy-codex"
   // Dispatched pre-cutover: backend=codex but codex_runtime is NULL, so it really does own a pane and
   // is migrated only when a follow-up first touches it. followUp/setThreadPermission branch on the
   // BACKEND because the controller they avoid is Claude-only; termination is the opposite case.
-  const saved = codexSessionRow(storage, slug, "legacy-tmux")
+  const saved = codexSessionRow(storage, slug, "pre-app-server")
   assert.equal(isAppServerCodexRow(saved), false)
   const killed: string[] = []
   const outcome = await stopThreadRuntime(
@@ -1088,8 +1083,8 @@ test("a LEGACY tmux Codex row keeps the tmux terminator and never reaches the br
       isLive: () => false,
     },
     {
-      turnLiveness: () => { throw new Error("a legacy tmux row must not consult the bridge") },
-      interruptTurn: async () => { throw new Error("a legacy tmux row must not be interrupted") },
+      turnLiveness: () => { throw new Error("a legacy pre-app-server row must not consult the bridge") },
+      interruptTurn: async () => { throw new Error("a legacy pre-app-server row must not be interrupted") },
     },
   )
   assert.equal(outcome, "stopped")
@@ -1105,7 +1100,7 @@ test("Mark as done asks before ending a running Codex turn, then actually interr
   const stub = bridgeStub({ turnLive: true })
   ;(h.ctx as { codexAppServer?: unknown }).codexAppServer = stub.bridge
 
-  // Before this change the tmux terminator answered "not live" for every app-server codex row, so the
+  // Before this change the registered-runtime terminator answered "not live" for every app-server codex row, so the
   // hold was never computed: a running codex thread archived silently, unasked and uninterrupted.
   const asked = await h.router.completeThread.handler({ input: { slug, sessionId: `sid-${slug}`, terminateLive: false } })
   assert.equal(asked.needsConfirmation, true)
@@ -1315,11 +1310,11 @@ test("push-it-now reports a thread with no running turn instead of throwing", as
   h.storage.close()
 })
 
-// A tmux Claude row's follow-up was typed into Claude Code's own TUI composer and a codex steer went
-// straight into the running turn — neither leaves frizz a turn it can preempt.
+// A pre-broker Claude row's follow-up was typed into Claude Code's own TUI composer and a codex steer
+// went straight into the running turn — neither leaves frizz a turn it can preempt.
 test("push-it-now refuses a runtime frizz holds no control channel into", async () => {
   const { h, slug } = interruptHarness()
-  h.storage.setClaudeRuntime(slug, "tmux")
+  h.storage.setClaudeRuntime(slug, "legacy")
   const result = await h.router.deliverQueuedNow.handler({ input: { slug, sessionId: `sid-${slug}` } })
   assert.equal(result.interrupted, false)
   assert.match(result.reason ?? "", /can't be interrupted/)
@@ -1340,7 +1335,7 @@ test("push-it-now fails closed for a stale session id", async () => {
 // ── Reopening an archived thread by messaging it (every runtime) ─────────────────────────────────
 // There is no Reopen verb in frizz: an archived thread's footer states "Done" and the composer under it
 // IS the reopen affordance ("Marked done — send a message to reopen it"). The un-archive that backs that
-// promise lived inside resumeThread, which ONLY the tmux path reaches — so a broker-backed Claude row
+// promise lived inside resumeThread, which ONLY the spawned-CLI path reaches — so a broker-backed Claude row
 // and an app-server Codex row resumed their WORKER and left their ROW archived. The thread then executed
 // away while the board rendered it Done, and an archived thread has no lifecycle verbs, so there was no
 // Mark-as-done button left to stop it with. Observed 2026-07-31 on a live broker thread: a `--resume`

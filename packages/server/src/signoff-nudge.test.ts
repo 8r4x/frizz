@@ -19,7 +19,7 @@ function nudger(tele: Partial<SessionTelemetry>, opts: { setting?: string } = {}
   const storage = createStorage(join(dir, "ui.db"))
   const slug = "resting"
   storage.upsertSession({
-    slug, session_id: "sid", tmux_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
+    slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
     title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   } as SessionRow)
@@ -246,7 +246,7 @@ test("a Goal and the reminder both queue for one rest, and a fence supersedes wh
   const storage = createStorage(join(dir, "ui.db"))
   const slug = "both"
   storage.upsertSession({
-    slug, session_id: "sid", tmux_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
+    slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
     title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   } as SessionRow)

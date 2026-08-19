@@ -714,8 +714,9 @@ class Supervisor implements DevSupervisor {
         false,
       )
     }
-    // The child must be cleanly drained before exec.  The owner token, project database, tmux
-    // server and provider sessions are not child resources and deliberately survive this handoff.
+    // The child must be cleanly drained before exec.  The owner token, project database and the
+    // detached worker daemons holding the provider sessions are not child resources and deliberately
+    // survive this handoff.
     let handoffPreparationStarted = false
     try {
       handoffPreparationStarted = true
@@ -1038,8 +1039,9 @@ class Supervisor implements DevSupervisor {
   /**
    * Second-Ctrl-C escalation. `stopChild` waits up to CHILD_STOP_TIMEOUT_MS for a clean drain; an
    * operator who signals again has withdrawn that patience, so take the control plane down now. The
-   * child owns only Frizz's own handles — worker tmux sessions and the detached Codex app-server
-   * daemon are keyed project resources in their own process trees and deliberately survive this.
+   * child owns only Frizz's own handles — the detached worker daemons (a Claude thread's session
+   * broker, the Codex app-server) are keyed project resources in their own process groups and
+   * deliberately survive this.
    */
   forceStop(): void {
     this.closed = true

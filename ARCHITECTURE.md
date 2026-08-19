@@ -72,15 +72,17 @@ Invoking `nub --test` by hand is fine for one file, but it bypasses that check.
 
 ## Invariants
 
-- **THERE IS NO TMUX. Agents run as detached broker daemons.** Say it here because the codebase is
-  full of the old vocabulary and every reader keeps re-deriving the wrong answer from it: `tmux_name`
-  is a session column, `FRIZZ_LAUNCH_TMUX_SOCKET` is a launch variable, and dozens of comments still
-  narrate a tmux pane. None of it runs. There is no `tmux.ts`, nothing imports one, and dispatch
-  never execs `tmux` — a Claude thread is `claude_runtime="broker"`, forked by
-  `claude-broker-host.ts` with `detached: true` into its own process group, which is exactly why
-  Ctrl-C on the server does not reach it and why a turn survives a restart. The surviving names are
-  legacy spellings of "the identity string for this thread", nothing more. Treat any present-tense
-  tmux comment as stale until proven otherwise, and prefer `git log -S` over believing it.
+- **THERE IS NO TMUX. Agents run as detached broker daemons.** A Claude thread is
+  `claude_runtime="broker"`, forked by `claude-broker-host.ts` with `detached: true` into its own
+  process group, which is exactly why Ctrl-C on the server does not reach it and why a turn survives
+  a restart. `packages/server/src/tmux.ts` has not existed since 2026-08-02, and nothing execs,
+  spawns or imports tmux. The old vocabulary outlived the transport for weeks and had every reader
+  re-deriving the wrong answer from it, so it was swept out on 2026-08-19: the session column is
+  `thread_name` (the thread identity string `frizz-<slug>`, never a pane name), the launch variable
+  is gone, and no seed or verify script opens a pane. One reference survives on purpose —
+  `isTmuxServer` in `orphan-reaper.ts` refuses to reap a tmux server left behind by a pre-cutover
+  Frizz. Anything else still saying tmux outside `plans/` is a miss; prefer `git log -S` over
+  believing it.
 - **One server, every project.** A SINGLETON: one server on one origin serves every project on the
   machine, each named by a URL prefix. It was one server per repo until 2026-08; if you find a
   statement to that effect anywhere, it is stale. See "URL shape (one server, every project)" below —

@@ -521,7 +521,6 @@ test("projectScopedEnvironment strips the launching project's identity and resta
     FRIZZ_LAUNCH_STATE_DIR: "/state/launcher-project",
     FRIZZ_LAUNCH_IDENTITY_SCOPE: "worktree",
     FRIZZ_LAUNCH_OWNER_TOKEN: "someone-elses-token",
-    FRIZZ_LAUNCH_TMUX_SOCKET: "/tmp/old.sock",
     FRIZZ_STATE_DIR: "/state/launcher-project",
     FRIZZ_PERM_DIR: "/state/launcher-project/perm-requests",
     FRIZZ_LOG_FILE: "/state/launcher-project/logs/run.log",
@@ -543,7 +542,7 @@ test("projectScopedEnvironment strips the launching project's identity and resta
   assert.equal(env.FRIZZ_LAUNCH_IDENTITY_SCOPE, "repository", "not the launcher's worktree scope")
 
   // Nothing scoped to the launching project or thread may survive.
-  for (const leaked of ["FRIZZ_LAUNCH_TMUX_SOCKET", "FRIZZ_STATE_DIR", "FRIZZ_PERM_DIR", "FRIZZ_LOG_FILE", "FRIZZ_THREAD"]) {
+  for (const leaked of ["FRIZZ_STATE_DIR", "FRIZZ_PERM_DIR", "FRIZZ_LOG_FILE", "FRIZZ_THREAD"]) {
     assert.equal(env[leaked], undefined, `${leaked} must not reach another project's agent`)
   }
   // A token is a capability: never inherited, only granted explicitly.

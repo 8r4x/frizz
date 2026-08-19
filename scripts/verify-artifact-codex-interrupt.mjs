@@ -1,8 +1,8 @@
 // END-TO-END proof that STOPPING a Codex thread actually stops the Codex turn.
 //
-// The bug this guards against: an app-server Codex thread has NO tmux pane, so every "stop this
-// thread" verb went through the tmux terminator — kill-session for a session that never existed,
-// reported as "stopped", while the turn kept running. That was masked while the app-server died with
+// The bug this guards against: back when frizz still drove workers through tmux, an app-server Codex
+// thread had no pane, yet every "stop this thread" verb went through the tmux terminator —
+// kill-session for a session that never existed, reported as "stopped", while the turn kept running. That was masked while the app-server died with
 // the frizz runtime. It no longer does: the app-server lives in a DETACHED daemon that deliberately
 // outlives us (see verify-artifact-restart-survival.mjs), so a turn frizz claims to have stopped keeps
 // burning tokens and touching the repo with no frizz-side owner and no UI trace.
@@ -98,7 +98,7 @@ function bootServer(artifact, target, token, label) {
         FRIZZ_DEV_PORT: String(PORT),
         FRIZZ_WAKERS_OFF: "1",
         FRIZZ_ORPHAN_REAPER_OFF: "1",
-        FRIZZ_TMUX_SOCKET: `frizz-interrupt-${PORT}-${process.pid}`,
+        FRIZZ_SANDBOX_TAG: `frizz-interrupt-${PORT}-${process.pid}`,
         FRIZZ_STABLE_ARTIFACT: artifact.digest,
         FRIZZ_STABLE_WEB_DIST: artifact.webDir,
         FRIZZ_SCRIPTS_DIR: join(artifact.runtimeDir, "board"),

@@ -1,8 +1,8 @@
 // LIVE spike: prove the Claude Agent SDK backend's PERMISSION ROUND-TRIP against real `claude`.
 //   nub packages/server/src/backend/_live_sdk_permission.mts
 //
-// Drives the ACTUAL production factory (createClaudeQueryFactory -> the code that would replace the
-// tmux path), not a reimplementation. Proves the thing that is fragile today: a tool-permission
+// Drives the ACTUAL production factory (createClaudeQueryFactory -> the code that replaced the
+// spawned-CLI path), not a reimplementation. Proves the thing that is fragile today: a tool-permission
 // request arrives as a TYPED CALLBACK we answer synchronously (allow / deny) — no TUI scraping, no
 // keystroke injection — and subscription/OAuth auth is preserved (it spawns the real `claude` binary).
 import { execFileSync } from "node:child_process"

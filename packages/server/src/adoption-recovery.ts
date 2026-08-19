@@ -14,10 +14,12 @@ export type AdoptionReconcileOutcome =
   | "recovery-in-progress"
   | "identity-conflict"
 
-// An adoption claim used to bind a tmux PANE, and recovery's job was finding and killing the orphan
-// one a dead frizz left behind. Adoption spawns through the broker now, so a claim never has a pane and
-// recovery is purely a record question: is this claim stale, and may it be abandoned. The seam stays so
-// callers and their tests keep their shape; every lookup is simply absent.
+// An adoption claim used to bind ONE interactive multiplexer session, and recovery's job was finding
+// and killing the orphan a dead frizz left behind. Adoption spawns through the broker now, so a claim
+// binds nothing and recovery is purely a record question: is this claim stale, and may it be
+// abandoned. The seam stays so callers and their tests keep their shape; every lookup in
+// productionRuntime is simply absent, and the `pane`/`Pane` names below are the on-disk column names
+// that outlived the thing they were named for.
 export interface PaneIdentity {
   paneId: string
   panePid: number
@@ -86,8 +88,8 @@ export type AdoptionRuntimeBinding =
   | { kind: "bound"; claim: AdoptionClaimRow }
   | { kind: "conflict"; claim?: AdoptionClaimRow }
 
-// Any non-finalized claim alongside a session row is precisely the CAS-loss window: the row and pane
-// may belong to different contenders. Readers must fail closed until recovery removes the loser.
+// Any non-finalized claim alongside a session row is precisely the CAS-loss window: the row and the
+// claim may belong to different contenders. Readers must fail closed until recovery removes the loser.
 export function adoptionRuntimeBinding(
   storage: Pick<Storage, "getAdoptionClaim"> & Partial<Pick<Storage, "getSession" | "getAdoptionRuntimeSnapshot">>,
   row: Pick<SessionRow, "slug" | "session_id" | "runtime_generation">,
@@ -124,9 +126,12 @@ export interface ReconcileAdoptionOptions {
   includeFinalized?: boolean
 }
 
-// Boot and retry share this exact state machine. It never targets a tmux name for teardown: a stale
-// attempt is killed only after its unguessable token discovers one pane, and a persisted tuple must
-// match that pane before cleanup. A same-name competitor is therefore observed, never attached/killed.
+// Boot and retry share this exact state machine. It has never targeted a thread's NAME for teardown:
+// a stale attempt is killed only after its unguessable token discovers exactly one runtime, and the
+// persisted tuple must match that runtime before cleanup. A same-name competitor is therefore
+// observed, never attached to or killed. Nothing reaches the teardown at all on the broker path —
+// productionRuntime discovers nothing — but the ordering is kept so the protocol stays total across
+// process versions.
 export function reconcileAdoptionClaims(options: ReconcileAdoptionOptions): Map<string, AdoptionReconcileOutcome> {
   const now = options.now ?? Date.now
   const runtime = options.runtime ?? productionRuntime
@@ -139,9 +144,9 @@ export function reconcileAdoptionClaims(options: ReconcileAdoptionOptions): Map<
   const outcomes = new Map<string, AdoptionReconcileOutcome>()
   const blockedSlugs = new Set<string>()
 
-  // Retirements are a durable backstop for a pre-upgrade/stale process that creates its token pane
-  // after recovery gave up the claim. The normal spawn fence makes this impossible for current code,
-  // but retaining and reconciling the token ledger makes the protocol safe across process versions.
+  // Retirements are a durable backstop for a pre-upgrade/stale process that starts its token-tagged
+  // runtime after recovery gave up the claim. The normal spawn fence makes this impossible for current
+  // code, but retaining and reconciling the token ledger makes the protocol safe across process versions.
   const retired = options.storage.allRetiredAdoptionAttempts()
     .filter((attempt) => !options.slug || attempt.slug === options.slug)
   const retiredLookups = runtime.findAdoptionPanes?.(retired.map((attempt) => attempt.attempt_token))

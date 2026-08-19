@@ -68,7 +68,7 @@ for (let i = 0; i < count; i++) {
   writeFileSync(join(jsonlDir, `${sessionId}.jsonl`), rows.map((r) => JSON.stringify(r)).join("\n") + "\n")
 
   sql.push(
-    `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, state) ` +
+    `INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode, state) ` +
     `VALUES ('${slug}','${sessionId}','frizz-${slug}','${ts(700)}','${title}','claude','opus','high','default','active');`,
   )
 }

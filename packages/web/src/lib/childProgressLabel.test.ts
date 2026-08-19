@@ -3,7 +3,7 @@ import test from "node:test"
 import { childProgressLabel } from "./childOps.ts"
 
 // The "how far has it got" counter beside a live child's current step. Every field it reads is
-// OPTIONAL — absent for a tmux thread, a codex child, or an older CLI — so the interesting cases are
+// OPTIONAL — absent for a codex child or an older CLI — so the interesting cases are
 // all the ways it must produce NOTHING rather than a half-formed reading.
 
 test("both counters read as one compact group", () => {

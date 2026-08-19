@@ -62,7 +62,7 @@ function seed({ slug, title, prompt, closing, archived = false }) {
   writeFileSync(brokerRecordPath(sessionId), JSON.stringify({ sessionId, daemonPid: daemon.pid, socketPath: join(stateDir, "claude-broker", `${slug}.sock`) }))
   execFileSync("sqlite3", [
     db,
-    `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, claude_runtime, model, effort, permission_mode, rested_at, archived, state)
+    `INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, backend, claude_runtime, model, effort, permission_mode, rested_at, archived, state)
      VALUES ('${slug}', '${sessionId}', 'frizz-${slug}', '${at(0)}', '${title}', 'claude', 'broker', 'opus', 'high', 'default', '${at(2)}', ${archived ? 1 : 0}, '${archived ? "archived" : "active"}')`,
   ])
   console.log(`seeded ${slug} → ${sessionId}`)

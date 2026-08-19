@@ -244,7 +244,7 @@ export function StateButton({
           // The server wants confirmation after all (an executing/ambiguous turn, or a rare mispredict).
           // Reinstate the optimistically-dismissed card (onDismissCancel cancels its pending unmount too),
           // then open the dialog over it. The server returns needsConfirmation from a cheap liveness/telemetry
-          // check BEFORE any tmux kill, so this reply normally lands before the card's exit and the button is
+          // check BEFORE any worker teardown, so this reply normally lands before the card's exit and the button is
           // still mounted → the dialog opens. If it arrives after the card already unmounted (a slow reply
           // under event-loop contention), the card still reinstates but this setConfirmOpen no-ops on the
           // gone instance — the user simply sees the card return and can click again. Safe either way.
@@ -270,8 +270,8 @@ export function StateButton({
     <>
       <button
         type="button"
-        // The server owns the execution verdict. A live tmux shell can be resting at its provider
-        // prompt, in which case Done should immediately stop it and archive the thread.
+        // The server owns the execution verdict. A live worker can be resting between turns, in
+        // which case Done should immediately stop it and archive the thread.
         onClick={() => complete(false, canOptimistic)}
         disabled={pending}
         aria-label="Mark as done"

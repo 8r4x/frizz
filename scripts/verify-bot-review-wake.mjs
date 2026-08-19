@@ -51,7 +51,7 @@ function scheduler() {
 
 try {
   storage.upsertSession({
-    slug: SLUG, session_id: `sid-${SLUG}`, tmux_name: `frizz-${SLUG}`, spawned_at: fenceAt,
+    slug: SLUG, session_id: `sid-${SLUG}`, thread_name: `frizz-${SLUG}`, spawned_at: fenceAt,
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0,
     title: SLUG, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   })

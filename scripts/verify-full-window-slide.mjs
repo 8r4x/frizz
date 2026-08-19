@@ -70,7 +70,7 @@ seed.push(user(`TASK:\n${prose(3, "The standing ask")}`))
 for (let i = 0; i < 12; i++) seed.push(assistant(prose(2 + (i % 3), `Working step ${i + 1}`)))
 let tailId = `msg_${n}`
 writeFileSync(jsonl, seed.map((r) => JSON.stringify(r)).join("\n") + "\n")
-execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode)
+execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode)
   VALUES ('${SLUG}', '${SESSION}', 'frizz-${SLUG}', '${now()}', 'Window slide', 'claude', 'opus', 'high', 'default')`])
 const append = (record) => appendFileSync(jsonl, JSON.stringify(record) + "\n")
 const api = createRpcClient(url)

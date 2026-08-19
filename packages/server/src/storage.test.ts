@@ -32,7 +32,7 @@ function row(over: Partial<SessionRow> = {}): SessionRow {
   const result = {
     slug: "t",
     session_id: "sid",
-    tmux_name: "frizz-t",
+    thread_name: "frizz-t",
     spawned_at: "2026-07-01T00:00:00.000Z",
     last_read_at: null,
     unread: 0,
@@ -48,7 +48,7 @@ function row(over: Partial<SessionRow> = {}): SessionRow {
     transcript_id: null,
     ...over,
   }
-  if (over.slug !== undefined && over.tmux_name === undefined) result.tmux_name = `frizz-${result.slug}`
+  if (over.slug !== undefined && over.thread_name === undefined) result.thread_name = `frizz-${result.slug}`
   return result
 }
 
@@ -405,11 +405,11 @@ test("session permission actual/pending values round-trip independently and surv
   reopened.close()
 })
 
-// The retired tmux codex composer held a DURABLE 'codex-input' runtime lock across restarts, and both
+// The retired Codex TUI composer held a DURABLE 'codex-input' runtime lock across restarts, and both
 // its writer (queueFollowUp) and its releaser are gone. A row still holding one would report
 // runtimeControlPending forever — permanently fencing that thread's composer, model, and sandbox
 // controls with nothing left in the product able to clear it. Boot releases it exactly once.
-test("boot releases a stranded 'codex-input' runtime lock left by the retired tmux composer", () => {
+test("boot releases a stranded 'codex-input' runtime lock left by the retired Codex composer", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-storage-codex-input-"))
   const path = join(dir, "ui.db")
   const s = createStorage(path)
@@ -452,10 +452,10 @@ test("boot releases a 'follow-up' lock a hard kill stranded, and never the durab
   reopened.close()
 })
 
-// Same class as above: a CODEX row can also still hold the tmux-era PROFILE handoff from a pre-cutover
-// crash. It can never complete (recovery reads the pane with the Claude composer parser), and the
+// Same class as above: a CODEX row can also still hold the PRE-CUTOVER profile handoff from a crash on
+// the retired composer path. It can never complete (recovery reads the pane with the Claude composer parser), and the
 // recovery loop would re-block the thread on every tick. Boot abandons it and explains why.
-test("boot abandons a codex row still holding the retired tmux profile handoff", () => {
+test("boot abandons a codex row still holding the retired Codex profile handoff", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-storage-codex-profile-"))
   const path = join(dir, "ui.db")
   const s = createStorage(path)
@@ -479,7 +479,7 @@ test("boot abandons a codex row still holding the retired tmux profile handoff",
   assert.equal(codex.profile_pending_model ?? null, null, "its unreachable pending pair is abandoned")
   assert.equal(codex.profile_pending_effort ?? null, null)
   assert.equal(codex.profile_handoff ?? null, null, "and so is its journal")
-  assert.match(codex.control_error ?? "", /armed on the retired Codex tmux path/, "the operator is told why it vanished")
+  assert.match(codex.control_error ?? "", /armed on the retired Codex interactive path/, "the operator is told why it vanished")
 
   const claude = reopened.getSession("claude-stuck")!
   assert.equal(claude.runtime_control, "profile", "a CLAUDE handoff still recovers normally")
@@ -1135,9 +1135,9 @@ test("setProfile stamps the operator set-time; the observed write-back never tou
 })
 
 // The rebrand's one-time migration was deleted once the projects in use had been converted — but ten
-// project databases on this machine had simply not been opened since, and `tmux_name` is re-derived
+// project databases on this machine had simply not been opened since, and `thread_name` is re-derived
 // and checked on every write, so the next write to one of those rows would have been rejected.
-test("opening a database adopts a pre-rebrand tmux_name, and leaves a current one alone", () => {
+test("opening a database adopts a pre-rebrand thread_name, and leaves a current one alone", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-rebrand-rows-"))
   const path = join(dir, "ui.db")
   try {
@@ -1148,14 +1148,14 @@ test("opening a database adopts a pre-rebrand tmux_name, and leaves a current on
 
     // Put one row back exactly the way the pre-rebrand code wrote it.
     const raw = new Database(path)
-    raw.exec("UPDATE session SET tmux_name = 'fray-old-thread' WHERE slug = 'old-thread'")
+    raw.exec("UPDATE session SET thread_name = 'fray-old-thread' WHERE slug = 'old-thread'")
     raw.close()
 
     // Opening IS the migration — there is nothing else to run.
     const reopened = createStorage(path)
     try {
-      assert.equal(reopened.getSession("old-thread")?.tmux_name, "frizz-old-thread")
-      assert.equal(reopened.getSession("new-thread")?.tmux_name, "frizz-new-thread")
+      assert.equal(reopened.getSession("old-thread")?.thread_name, "frizz-old-thread")
+      assert.equal(reopened.getSession("new-thread")?.thread_name, "frizz-new-thread")
     } finally {
       reopened.close()
     }

@@ -95,9 +95,9 @@ export function createLoginUtility(deps: {
   const lifetimeMs = deps.lifetimeMs ?? ATTEMPT_LIFETIME_MS
   const attempts = new Map<string, LiveAttempt>()
 
-  // No boot-time orphan sweep, unlike the tmux implementation. A pty is a CHILD of this process, so a
-  // crash takes it with us — there is no equivalent of a `remain-on-exit` pane surviving in a
-  // detached tmux server with OAuth bytes in its scrollback. That whole class of leak is gone.
+  // No boot-time orphan sweep, unlike the tmux implementation this replaced. A pty is a CHILD of this
+  // process, so a crash takes it with us — there is no equivalent of a `remain-on-exit` pane surviving
+  // in a detached tmux server with OAuth bytes in its scrollback. That whole class of leak is gone.
 
   function loginArgv(backend: Backend): { file: string; args: string[] } {
     return backend === "codex"

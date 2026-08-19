@@ -86,7 +86,7 @@ function row(slug: string, over: Partial<SessionRow> = {}): SessionRow {
   return {
     slug,
     session_id: `sid-${slug}`,
-    tmux_name: `frizz-${slug}`,
+    thread_name: `frizz-${slug}`,
     spawned_at: "2026-07-01T00:00:00.000Z",
     last_read_at: null,
     unread: 0,
@@ -851,7 +851,7 @@ test("hard crash after successful delivery but before ack is confirmed by the st
       h.resumes.push({ slug: "delivery-crash", message: "delivered", deliveryId })
     },
     crashPoint: (point) => {
-      if (point === "after-delivery") throw new Error("SIGKILL after tmux accepted input")
+      if (point === "after-delivery") throw new Error("SIGKILL after the worker accepted input")
     },
   })
   await scheduler.tick()
@@ -1028,7 +1028,7 @@ test("attempt counts surface only where they inform: the failure, then the deliv
     retryMaxMs: 40,
     maxDeliveryAttempts: 3,
     resume: (slug, message, deliveryId) => {
-      if (failing) throw new Error("tmux pane busy")
+      if (failing) throw new Error("worker busy")
       h.resumes.push({ slug, message, deliveryId })
     },
   })
@@ -1041,7 +1041,7 @@ test("attempt counts surface only where they inform: the failure, then the deliv
   assert.equal(h.resumes.length, 1)
   assert.deepEqual(logs, [
     `waker: queued flaky — one-off timer elapsed (${iso(target)})`,
-    "waker: delivery FAILED for flaky (attempt 1 of 3): tmux pane busy",
+    "waker: delivery FAILED for flaky (attempt 1 of 3): worker busy",
     `waker: delivered flaky — one-off timer elapsed (${iso(target)}) (on attempt 2)`,
   ])
 })

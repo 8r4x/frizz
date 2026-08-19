@@ -37,8 +37,6 @@ export const FRIZZ_LAUNCH_PROJECT_ID = "FRIZZ_LAUNCH_PROJECT_ID"
 export const FRIZZ_LAUNCH_PROJECT_DIR = "FRIZZ_LAUNCH_PROJECT_DIR"
 export const FRIZZ_LAUNCH_STATE_DIR = "FRIZZ_LAUNCH_STATE_DIR"
 export const FRIZZ_LAUNCH_IDENTITY_SCOPE = "FRIZZ_LAUNCH_IDENTITY_SCOPE"
-export const FRIZZ_LAUNCH_TMUX_SOCKET = "FRIZZ_LAUNCH_TMUX_SOCKET"
-export const FRIZZ_LAUNCH_TMUX_SOCKET_MANAGED = "FRIZZ_LAUNCH_TMUX_SOCKET_MANAGED"
 
 export type ProjectLaunchRole = "launcher" | "supervisor" | "server"
 
@@ -744,8 +742,6 @@ export function projectScopedEnvironment(
     FRIZZ_LAUNCH_PROJECT_DIR,
     FRIZZ_LAUNCH_STATE_DIR,
     FRIZZ_LAUNCH_IDENTITY_SCOPE,
-    FRIZZ_LAUNCH_TMUX_SOCKET,
-    FRIZZ_LAUNCH_TMUX_SOCKET_MANAGED,
     // Not launch identity, but just as project- or thread-pinned: the state dir a worker MCP writes
     // through, the permission-marker directory, this run log, and the thread slug of whatever worker
     // may have started the server.
@@ -772,8 +768,6 @@ export function projectLaunchTargetFromEnvironment(env: NodeJS.ProcessEnv): Proj
   const projectDir = env[FRIZZ_LAUNCH_PROJECT_DIR]
   const stateDir = env[FRIZZ_LAUNCH_STATE_DIR]
   const scope = env[FRIZZ_LAUNCH_IDENTITY_SCOPE]
-  const tmuxSocket = env[FRIZZ_LAUNCH_TMUX_SOCKET]
-  const tmuxManaged = env[FRIZZ_LAUNCH_TMUX_SOCKET_MANAGED]
   if (
     !projectId ||
     !UUID_RE.test(projectId) ||
@@ -781,17 +775,13 @@ export function projectLaunchTargetFromEnvironment(env: NodeJS.ProcessEnv): Proj
     !isAbsolute(projectDir) ||
     !stateDir ||
     !isAbsolute(stateDir) ||
-    (scope !== "repository" && scope !== "worktree") ||
-    (tmuxSocket !== undefined && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/u.test(tmuxSocket)) ||
-    (tmuxManaged !== undefined && tmuxManaged !== "0" && tmuxManaged !== "1") ||
-    ((tmuxSocket === undefined) !== (tmuxManaged === undefined))
+    (scope !== "repository" && scope !== "worktree")
   ) return null
   return {
     projectId,
     projectDir,
     stateDir,
     ...(scope === "worktree" ? { identityScope: "worktree" as const } : {}),
-    ...(tmuxSocket ? { tmuxSocket, tmuxSocketManaged: tmuxManaged !== "0" } : {}),
   }
 }
 

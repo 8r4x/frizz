@@ -19,9 +19,10 @@ export interface LimitFault {
 export type BackendKind = "claude" | "codex"
 
 // A verified native TUI modal that blocks the backend before it can append another transcript
-// record. This is intentionally tiny and presentation-safe: pane contents/options never cross the
-// server boundary (they can contain commands, repository data, or secrets). Backends emit only a
-// coarse family plus a fixed, sanitized title after matching their own version-grounded modal chrome.
+// record. This is intentionally tiny and presentation-safe: the raw screen text and its options never
+// cross the server boundary (they can contain commands, repository data, or secrets). Backends emit
+// only a coarse family plus a fixed, sanitized title after matching their own version-grounded modal
+// chrome.
 export type NativeInputKind = "tool-approval" | "permission" | "confirmation" | "selection"
 export interface NativeInputRequiredData {
   kind: NativeInputKind
@@ -75,7 +76,8 @@ export type NormalizedEvent =
   | { kind: "context-usage"; at?: string; tokens: number; window?: number }
 
 // The shape a backend's fold produces per session — the SAME shape board.ts already consumes as
-// SessionTelemetry, minus `permPrompt` (which is pane-sniffed live, not folded from the transcript).
+// SessionTelemetry, minus `permPrompt` (which is sniffed off a live terminal screen, not folded from
+// the transcript).
 // A documented contract for what every backend's fold must surface; Phase-1 Claude realizes it as
 // SessionTelemetry directly (see tailer.get()).
 export interface NormalizedTail {
@@ -166,8 +168,8 @@ export interface FoldState {
   // Runtime provider-auth rejection (claude-auth plan, Slice A). Set when the backend records a
   // SYNTHETIC auth-error response (Claude: isApiErrorMessage + 401/login text) — never from user or
   // ordinary assistant content — and cleared by the next real assistant text (a genuine response
-  // proves the credential works). Only this typed category ever leaves the fold; raw error/pane text
-  // stays out of persisted state.
+  // proves the credential works). Only this typed category ever leaves the fold; raw error/terminal
+  // text stays out of persisted state.
   authFault?: "authentication_rejected"
   // Subscription usage-limit pause (auto-resume). Set when the backend records a limit stop — for
   // Claude the synthetic record carrying the structured `error:"rate_limit"` category, never a text
@@ -186,7 +188,7 @@ export interface FoldState {
   // same canonical model otherwise reports 200_000), so only the provider can answer for THIS session.
   // Codex names it on every token_count; Claude names it on the SDK `result` message, which means a
   // Claude row has a numerator from its first assistant record but no denominator until its first turn
-  // ends — and a tmux/foreign Claude row never gets one at all. Absent ⇒ NO reading is rendered.
+  // ends — and a pre-broker/foreign Claude row never gets one at all. Absent ⇒ NO reading is rendered.
   contextWindow?: number
   // Newest context compaction — the post-compaction trigger's clock (see NormalizedTail.lastCompactionAt).
   // The two backends observe it differently and neither has a second signal: Claude injects its
@@ -296,13 +298,15 @@ export const CHROME_DEVTOOLS_MCP = {
   startupTimeoutSec: 120,
 } as const
 
-// The environment EVERY frizz Claude worker gets, on BOTH spawn paths. Kept as one record with one
-// spread per call site (claudeWorkerEnvironment() for tmux, the bridge's `workerEnv` for the broker,
-// plus the SDK's key allowlist) so a new entry cannot reach one path and silently miss the other.
-// Spread it, never re-spell a key — a typo here is silent, and each failure mode below is quiet.
+// The environment EVERY frizz Claude worker gets, on EVERY spawn path. Kept as one record with one
+// spread per call site (the bridge's `workerEnv` for the broker daemon, the SDK's key allowlist, and
+// claudeWorkerEnvironment() for the argv builder) so a new entry cannot reach one path and silently
+// miss the other. Spread it, never re-spell a key — a typo here is silent, and each failure mode
+// below is quiet.
 //
-// Distinct from claudeWorkerEnvironment()'s CAPS, which are tmux-only today: these are settings a
-// worker needs on whichever path it was dispatched through.
+// Distinct from claudeWorkerEnvironment()'s CAPS, which only ever reached a worker frizz launched as
+// its own `claude` process: these are settings a worker needs on whichever path it was dispatched
+// through.
 //
 // ── CLAUDE_CODE_TOTAL_TOKENS_REMINDER ──────────────────────────────────────────────────────────
 // The token budget a Claude worker is TOLD it has. Claude Code's `totalTokensReminder` writes a
@@ -378,12 +382,14 @@ export const CLAUDE_WORKER_ENV = {
   BASH_MAX_TIMEOUT_MS: String(24 * 60 * 60 * 1000),
 } as const
 
-// Tools a TMUX worker never gets — the argv turns this into `--disallowedTools=…`.
+// Tools an ARGV-SPAWNED Claude worker never gets — the argv turns this into `--disallowedTools=…`.
 //
-// TMUX ONLY, and the asymmetry is deliberate. There AskUserQuestion opens a native TUI dialog in a pane
-// nobody is watching, so the question has literally nowhere to go and the session freezes invisibly. The
-// BROKER path does NOT pass this: it intercepts the same call at canUseTool and renders a real dashboard
-// question card whose answer reaches the model (claude-agent-broker.ts says so at the query site).
+// ARGV PATH ONLY, and the asymmetry is deliberate. A worker frizz launched as its own interactive
+// `claude` process answered AskUserQuestion with a native TUI dialog on a terminal screen nobody was
+// watching, so the question had literally nowhere to go and the session froze invisibly. The BROKER
+// path — how every Claude thread is dispatched today — does NOT pass this: it intercepts the same call
+// at canUseTool and renders a real dashboard question card whose answer reaches the model
+// (claude-agent-broker.ts says so at the query site).
 //
 // The other hazard — a parked turn swallowing a follow-up the operator typed instead of answering —
 // argued for blocking it on both paths for a few hours on 2026-08-02. It is handled where it actually
@@ -412,8 +418,11 @@ export interface AgentBackend {
   readonly kind: BackendKind
 
   // ---- spawn / resume (argv + injection) ----
-  // Build the detached-spawn argv + any files that must exist on disk first. The caller runs
-  // `tmux.spawn(slug, argv, cwd, env)` after writing the prewrite files.
+  // Build the detached-spawn argv + any files that must exist on disk first: a caller launches the
+  // provider CLI itself with that argv, cwd and env once the prewrite files are on disk. No dispatch
+  // path does that today — a Claude thread runs inside the session broker daemon and a codex thread
+  // inside the app-server daemon — so this survives as the argv contract its unit tests pin
+  // (CodexBackend's implementation throws outright).
   buildSpawn(opts: SpawnOpts): BuiltCommand
   // Resume/reattach the pinned session; `message` starts a turn when present, otherwise the CLI opens
   // idle at its prompt (used for a controlled permission-profile restart).
@@ -438,15 +447,20 @@ export interface AgentBackend {
   // implement this as `for (const ev of this.parseLine(line)) applyEvent(state, ev)`.
   foldLine(state: FoldState, line: string): void
 
-  // ---- optional pane-sniff (native interactive prompt; no jsonl signal) ----
+  // ---- optional terminal-screen sniff (native interactive prompt; no jsonl signal) ----
+  // For a modal that blocks the provider CLI without writing a transcript record, the tailer hands the
+  // backend the text of that CLI's terminal screen. Nothing in this build produces that text — the
+  // tailer's capture dependency is injected by test fixtures only, never by the server — so today these
+  // run on the empty string and their contracts are pinned by tests rather than by a live board.
   matchesPermPrompt?(pane: string): boolean // claude: the empirical markers; codex: its own or omitted
   // Structured, backend-specific native-modal detection. Implementations MUST match verified terminal
-  // chrome rather than arbitrary model output and MUST NOT return pane-derived option/detail text.
+  // chrome rather than arbitrary model output and MUST NOT return option/detail text read off the screen.
   detectNativeInput?(pane: string): NativeInputRequiredData | undefined
   // PRE-SESSION modals only — the screens a backend can block on BEFORE it opens a session and writes
   // its first transcript record. Kept separate from detectNativeInput because the tailer runs it on a
   // different path (the no-transcript stall, where no transcript-derived signal exists) and because a
-  // boot screen must never be matched against a live session's pane, where ordinary transcript text
-  // could quote the same chrome. Same presentation-safe contract: fixed titles, never pane-derived.
+  // boot screen must never be matched against a live session's screen text, where ordinary transcript
+  // text could quote the same chrome. Same presentation-safe contract: fixed titles, never read off
+  // the screen.
   detectBootModal?(pane: string): NativeInputRequiredData | undefined
 }

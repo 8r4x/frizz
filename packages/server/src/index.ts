@@ -628,7 +628,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
 
   const createLifecycleBarrier = (): ShutdownBarrier => createShutdownBarrier({
     timeoutMs: opts.shutdownTimeoutMs ?? SERVER_SHUTDOWN_TIMEOUT_MS,
-    // A wedged producer (e.g. an in-flight wake delivery shelling out to tmux/git) must not stall the
+    // A wedged producer (e.g. an in-flight wake delivery shelling out to git) must not stall the
     // authoritative drain until the supervisor's 15s SIGKILL. This bounds+names each phase so the
     // child's post-deadline ownership wait settles promptly instead of hanging to the hard kill.
     phaseTimeoutMs: DEFAULT_SHUTDOWN_PHASE_TIMEOUT_MS,

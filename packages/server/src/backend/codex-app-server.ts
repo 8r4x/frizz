@@ -102,7 +102,7 @@ export type CodexVersionVerdict =
  *
  * This was exact string equality against the audited version. That is unsafe-CLOSED, and it is the
  * single most dangerous property in the whole Codex integration: `codex` ships a stable release about
- * every two days, frizz has no tmux fallback for it (dispatch.ts throws), and `ensureConnected` gates
+ * every two days, frizz has no second transport for it (dispatch.ts throws), and `ensureConnected` gates
  * ALL EIGHT operation entry points — dispatch, follow-up, steer, interrupt, resume, warm-up, settings.
  * So one `npm i -g @openai/codex` turned every Codex thread into a permanent hard failure recoverable
  * only by editing a source constant and rebuilding frizz. The drift is continuous: the pin was 0.144.6
@@ -229,9 +229,9 @@ export function codexSandboxModeOfPolicy(policy: { type?: unknown } | null | und
 }
 
 // The approval policy frizz establishes at `thread/start` (see startDisposableSession) and re-asserts on
-// every `thread/resume`. `never` is the ONLY correct value for a frizz worker: nobody is watching the
-// pane, so an approval request is not a safety gate — it is a thread that stops working until a human
-// happens to open the dashboard. Under `never` a sandbox-denied action fails back to the model, which
+// every `thread/resume`. `never` is the ONLY correct value for a frizz worker: the worker runs headless
+// inside a detached daemon with nobody watching, so an approval request is not a safety gate — it is a
+// thread that stops working until a human happens to open the dashboard. Under `never` a sandbox-denied action fails back to the model, which
 // can then adapt, say so, or ask the human in its own words; the sandbox stays the actual boundary.
 //
 // It has to be re-sent alongside `sandbox` on a COLD `thread/resume`, because those two params are
@@ -916,11 +916,12 @@ export interface StartCodexAppServerSessionInput {
   // The foundation defaults to disposable sessions. A later opt-in UI may explicitly request a
   // persisted bridge-owned session; existing TUI sessions are never imported into this table.
   ephemeral?: boolean
-  // Session-scoped instruction surfaces the tmux path expressed via prompt-inlining + `-c`:
-  //   baseInstructions   — the worker contract (the tmux path inlines this ~18KB into the prompt).
-  //   developerInstructions — the one-shot title protocol (tmux passes it as `-c developer_instructions`).
+  // Session-scoped instruction surfaces. The retired interactive-CLI path expressed these by inlining
+  // them into the prompt and through `-c` flags; the app-server takes them as typed fields instead:
+  //   baseInstructions   — the worker contract (~18KB; the CLI path inlined it into the prompt).
+  //   developerInstructions — the one-shot title protocol (the CLI path passed `-c developer_instructions`).
   //   config             — arbitrary codex config overrides (e.g. { model_reasoning_summary: "detailed" }),
-  //                        the app-server equivalent of the tmux `-c key=value` flags.
+  //                        the app-server equivalent of the CLI's `-c key=value` flags.
   baseInstructions?: string
   developerInstructions?: string
   config?: Record<string, unknown>
@@ -1939,10 +1940,11 @@ export class CodexAppServerBridge {
     }
   }
 
-  // Adopt a rollout this bridge did NOT create — a legacy tmux Codex thread (its `agent_session_id` is
-  // the on-disk rollout id). `thread/resume` reads that rollout by id (verified live: the app-server
-  // resumes an external `codex exec`/TUI rollout), so an old tmux row migrates to the app-server on its
-  // next follow-up and every subsequent turn/steer/interrupt flows through here. Idempotent: an already
+  // Adopt a rollout this bridge did NOT create — a legacy Codex thread from before the app-server
+  // cutover, dispatched as its own `codex` process (its `agent_session_id` is the on-disk rollout id).
+  // `thread/resume` reads that rollout by id (verified live: the app-server resumes an external
+  // `codex exec`/TUI rollout), so such a row migrates to the app-server on its next follow-up and every
+  // subsequent turn/steer/interrupt flows through here. Idempotent: an already
   // bound scope returns its binding.
   async adoptExternalRollout(input: {
     threadSlug: string
@@ -1963,7 +1965,7 @@ export class CodexAppServerBridge {
         throw new Error("Codex app-server thread slug, session id, or rollout is already bound")
       }
       const connection = await this.ensureConnected()
-      // A legacy tmux row's sandbox is whatever the CLI was launched with; frizz's registry is the
+      // A legacy row's sandbox is whatever its CLI was launched with; frizz's registry is the
       // operator's stated intent, so adoption is the moment the two are unified.
       const adoptionOverride = this.resumeSandboxOverride({
         thread_slug: input.threadSlug, frizz_session_id: input.sessionId, sandbox: null, intended_sandbox: null,
@@ -2085,7 +2087,8 @@ export class CodexAppServerBridge {
   // cleared by the ensuing turn/completed notification.
   //
   // This is a TERMINATOR — for an app-server Codex thread it is the ONLY thing that stops the worker
-  // (there is no tmux pane to kill), and since the app-server moved into a detached daemon the turn
+  // (the turn runs inside the daemon, so there is no worker process of frizz's own to kill), and since
+  // the app-server moved into a detached daemon the turn
   // outlives the frizz runtime, so a stop that did not happen has no backstop. It therefore resolves
   // only once the stop is PROVED, and never reports one that did not land:
   //
@@ -3744,10 +3747,11 @@ export function createCodexAppServerBridge(options: CodexAppServerBridgeOptions)
   return new CodexAppServerBridge(options)
 }
 
-// The Codex app-server bridge is the SOLE transport for codex threads (the tmux TUI path is retired).
-// Always enabled. If `codex app-server` can't be reached (or its protocol drifted from the pinned
-// revision), a codex dispatch fails LOUDLY with a re-pin hint rather than silently degrading — there is
-// no tmux fallback to hide behind. Kept as a function so callers/tests have a single source of truth.
+// The Codex app-server bridge is the SOLE transport for codex threads (the interactive-CLI path is
+// retired). Always enabled. If `codex app-server` can't be reached (or its protocol drifted from the
+// pinned revision), a codex dispatch fails LOUDLY with a re-pin hint rather than silently degrading —
+// there is no second transport to fall back to. Kept as a function so callers/tests have a single
+// source of truth.
 export function codexAppServerBridgeEnabled(): boolean {
   return true
 }

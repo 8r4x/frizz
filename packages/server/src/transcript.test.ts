@@ -248,7 +248,7 @@ test("a coalesced user record splits back into the deliveries the scheduler actu
 })
 
 // frizz's own dispatch envelope. The bubble shows the operator's prompt and nothing else — on the plain
-// `user` record the tmux runtime writes AND on the `queue-operation` enqueue record the broker writes.
+// `user` record the spawned-CLI runtime writes AND on the `queue-operation` enqueue record the broker writes.
 test("frizz dispatch envelope is projected out of the first bubble on every record shape", () => {
   const task = "Fix the thing.\n\nWith a second paragraph."
   const composed = `Your scratchpad is \`.frizz/threads/sid/scratch.md\` — …${DISPATCH_TASK_BANNER_MARKER}${task}`
@@ -1594,7 +1594,7 @@ function txHarness() {
   return { slug, logDir, store, project, writeJsonl, cleanup }
 }
 function txRow(over: Partial<SessionRow>): SessionRow {
-  return { slug: "t", session_id: "sid", tmux_name: "frizz-t", spawned_at: new Date().toISOString(), last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0, title: null, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null, ...over }
+  return { slug: "t", session_id: "sid", thread_name: "frizz-t", spawned_at: new Date().toISOString(), last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0, title: null, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null, ...over }
 }
 const USER_LINE = (text: string) => JSON.stringify({ type: "user", timestamp: "2026-07-10T18:00:00.000Z", message: { role: "user", content: text } })
 
@@ -1993,7 +1993,7 @@ test("the SDK path coalesces two queued messages into one record — both resolv
 })
 
 // The broker/SDK path writes NO `origin` on its queued_command attachments — measured over this
-// machine's corpus, all 78 sdk prompt attachments carry none while 1664 tmux ones carry
+// machine's corpus, all 78 sdk prompt attachments carry none while 1664 pre-broker CLI ones carry
 // origin.kind "human", and every sdk one carries `source_uuid` instead. Requiring origin made the
 // delivery branch structurally dead on every broker thread, so the bubble stayed gray until the far
 // later `queue-operation remove` (p50 20.9s, p90 130s, max 9.6min after the agent already had the

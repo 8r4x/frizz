@@ -68,7 +68,7 @@ export function resultEvent(sessionId: string, isError = false): ClaudeQueryEven
 
 // ---- record builders for a BACKGROUND SUB-AGENT, in the prose shapes the tailer folds ----
 // These are the three records the regex path depends on. They stay in the harness because the whole
-// point of the structured task stream is that it must coexist with them, not replace them: a tmux
+// point of the structured task stream is that it must coexist with them, not replace them: a pre-broker
 // thread has only these, and a broker thread has both.
 
 /** The `Agent` tool_use that registers a live child, keyed by its tool_use id. */

@@ -1,8 +1,8 @@
 // The Claude session broker DAEMON: a detached process that owns one Claude Agent SDK session and
 // relays it over a local socket. This is the piece Claude Code doesn't ship (codex's app-server is
 // the same shape): the session OUTLIVES frizz, so frizz reconnects to the LIVE session after a restart
-// instead of cold resume-from-disk, while keeping structured TYPED control (no TUI scraping, no tmux,
-// no PTY — stream-json is pipes). The SDK stays as this daemon's implementation detail; frizz speaks a
+// instead of cold resume-from-disk, while keeping structured TYPED control (no TUI scraping, no PTY,
+// no terminal of any kind — stream-json over pipes). The SDK stays as this daemon's implementation detail; frizz speaks a
 // small typed socket protocol (claude-broker-client.ts), never the SDK directly.
 //
 // Wire protocol — newline-delimited JSON frames:
@@ -52,9 +52,9 @@ export interface ClaudeBrokerConfig {
   /** Resume the session from its on-disk transcript instead of starting a fresh one. Set when a
    *  follow-up cold-starts a daemon after the previous one died (the live-daemon reconnect never forks). */
   resume?: boolean
-  /** The frizz WORKER ENVIRONMENT — the SDK equivalents of the tmux path's plugin/MCP injection. Without
-   *  these a broker worker is bare: no frizz sub-agent profiles, no frizz/chrome-devtools MCP, no cc-worker
-   *  hooks. `pluginDir` loads the local cc-worker plugin; `mcpServers`/`allowedTools` mount + pre-approve
+  /** The frizz WORKER ENVIRONMENT — the SDK equivalents of the argv path's --plugin-dir/--mcp-config
+   *  injection. Without these a broker worker is bare: no frizz sub-agent profiles, no frizz/chrome-devtools
+   *  MCP, no cc-worker hooks. `pluginDir` loads the local cc-worker plugin; `mcpServers`/`allowedTools` mount + pre-approve
    *  the MCP servers; `workerEnv` carries the per-thread frizz vars the plugin hooks gate on (FRIZZ_THREAD,
    *  FRIZZ_PERM_DIR) — merged into the SDK env AFTER the ambient allowlist. */
   pluginDir?: string
@@ -157,9 +157,10 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
     pluginDir: config.pluginDir,
     mcpServers: config.mcpServers,
     allowedTools: config.allowedTools,
-    // NO `disallowedTools` here, and the asymmetry with the tmux path (WORKER_DISALLOWED_TOOLS →
-    // `--disallowedTools=AskUserQuestion`) is DELIBERATE. That flag exists because a tmux worker's
-    // question has nowhere to go: it opens a TUI dialog in a pane nobody is looking at. On this path it
+    // NO `disallowedTools` here, and the asymmetry with the argv path (WORKER_DISALLOWED_TOOLS →
+    // `--disallowedTools=AskUserQuestion`) is DELIBERATE. That flag exists because a worker launched as
+    // its own interactive `claude` process had nowhere to put the question: it opened a TUI dialog on a
+    // terminal screen nobody was looking at. On this path it
     // has somewhere to go — canUseTool routes it to a real dashboard question card, the operator answers
     // it, and the chosen labels reach the model. A follow-up sent instead of an answer retires the card
     // and unwinds the tool call (see retirePendingFor in the bridge), so a parked turn is still steerable.
@@ -346,7 +347,7 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
           )
         }
         else if (msg.t === "rename") {
-          // On-demand re-title, the SDK equivalent of typing `/rename` into a pane. Same
+          // On-demand re-title, the SDK equivalent of typing `/rename` at an interactive prompt. Same
           // request/response discipline as the other control actions: the caller is blocked on the
           // title, so a silent drop would read as a wedged daemon rather than a failed rename.
           const requestId = msg.requestId as string

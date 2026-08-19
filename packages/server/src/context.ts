@@ -126,7 +126,8 @@ export interface AppContext {
   // Experimental foundation for NEW bridge-owned Codex sessions only. Undefined by default; it is
   // never selected by backendFor and therefore cannot migrate or control an existing TUI session.
   codexAppServer?: CodexAppServerBridge
-  // Session-broker bridge for Claude (the tmux-TUI replacement). Undefined unless the broker flag is on.
+  // Session-broker bridge for Claude: the detached daemon that owns every claude thread's SDK session.
+  // Undefined only under the FRIZZ_CLAUDE_BROKER_BRIDGE="0" kill switch, which leaves claude no transport.
   claudeBroker?: ClaudeAgentBrokerBridge
   board: BoardManager
   tailer: Tailer
@@ -192,28 +193,28 @@ export interface ContextOptions {
   }
 }
 
-// Boot reconcile: a session row whose tmux session is no longer live was orphaned by a prior
-// server exit (or the agent finished/was killed) — stamp exited so the registry doesn't show a
-// forever-running ghost. Runtime is also derived live on each board build; this keeps the stored
-// column honest too.
+// Boot reconcile: a session row whose worker is no longer live was orphaned by a prior server exit
+// (or the agent finished/was killed) — stamp exited so the registry doesn't show a forever-running
+// ghost. Runtime is also derived live on each board build; this keeps the stored column honest too.
 //
-// Liveness is asked through the BATCHED cache (one `list-panes -a` for the whole tmux server), not the
-// per-slug `tmux.isLive`. The uncached form is one subprocess per row, run synchronously, before the
-// server can listen: 165 rows measured 5.2-6.3s of pure process-spawn on the maintainer's board and
-// grows linearly with thread count — it was the larger half of the "context" boot phase. The truth
-// table is identical (missing session → dead, present-but-exited → dead, present-and-running → live);
-// the only difference is that every row now reads the same ≤900ms-old inventory, which for a
-// boot-time reconcile is the same instant.
+// It spawns nothing and asks the OS nothing, because both answers below are decidable from the row
+// itself. It used to probe a live inventory of the machine's worker terminals — one subprocess per
+// row, run synchronously, before the server could listen: 165 rows measured 5.2-6.3s of pure
+// process-spawn on the maintainer's board and grew linearly with thread count, the larger half of the
+// "context" boot phase. Batching that inventory into one ≤900ms-old snapshot removed the cost; the
+// transport cutover removed the question.
 export function reconcileSessions(storage: Storage) {
   for (const row of storage.allSessions()) {
-    // A headless thread (codex app-server OR broker Claude) has NO tmux pane by construction — it lives
-    // in a detached daemon that OUTLIVES frizz. Sniffing tmux for it would stamp `exited` on every healthy
-    // headless thread at every boot — the exact trap deriveRuntime() in board.ts refuses to fall into, and
-    // for the broker it would destroy the whole ownerless-reconnect premise. Its liveness is resolved live
-    // on each board build (the bridge's turn state / the daemon record); leave the stored column alone.
+    // A headless thread (codex app-server OR broker Claude) has NO process of frizz's own to look at by
+    // construction — it lives in a detached daemon that OUTLIVES frizz. Reading its absence from this
+    // process as death would stamp `exited` on every healthy headless thread at every boot — the exact
+    // trap deriveRuntime() in board.ts refuses to fall into, and for the broker it would destroy the
+    // whole ownerless-reconnect premise. Its liveness is resolved live on each board build (the bridge's
+    // turn state / the daemon record); leave the stored column alone.
     if (isHeadlessRow(row)) continue
-    // A non-headless row is PRE-CUTOVER: its transport was a tmux pane and there is none any more, so
-    // it cannot be alive. Mark it exited once at boot rather than probing a pane that cannot exist.
+    // A non-headless row is PRE-CUTOVER: its transport was an interactive terminal session, and frizz
+    // has not launched one since, so it cannot be alive. Mark it exited once at boot rather than
+    // probing for a runtime that cannot exist.
     if (row.exited !== 1) {
       storage.setExitedIfCurrent(row.slug, row.session_id, row.runtime_generation ?? 0, true)
     }
@@ -291,7 +292,7 @@ function contextCleanupBarrier(
 }
 
 /**
- * Deliver a scheduler wake to a CODEX thread over the app-server bridge — adopting a legacy tmux
+ * Deliver a scheduler wake to a CODEX thread over the app-server bridge — adopting a legacy TUI-era
  * rollout first, then reactivating the persisted thread — exactly like the followUp RPC.
  *
  * Extracted from the scheduler `resume` closure so the promise contract below is directly testable.
@@ -327,9 +328,10 @@ export function deliverCodexWake(deps: {
 
 /**
  * A scheduled wake (awaiting-timer, limit-auto-resume) for a broker-backed Claude thread. The broker
- * has no tmux pane, so the tmux `resumeThread` path would misfire; route through the bridge, which
- * reconnects the live daemon's socket or cold-resumes a dead one. Returns the promise so the scheduler
- * owns the retry/supersede policy (see deliverCodexWake for why detaching it loses the wake silently).
+ * has no local process to inject into, so the legacy `resumeThread` path would misfire (it throws
+ * outright now); route through the bridge, which reconnects the live daemon's socket or cold-resumes a
+ * dead one. Returns the promise so the scheduler owns the retry/supersede policy (see
+ * deliverCodexWake for why detaching it loses the wake silently).
  * The worker system prompt is rebuilt so a cold resume re-applies it (ignored when the daemon is live).
  */
 export function deliverClaudeBrokerWake(deps: {
@@ -498,13 +500,16 @@ export async function createContext(opts: ContextOptions = {}): Promise<AppConte
 function createContextUnchecked(opts: ContextOptions, resources: PartialContextResources): AppContext {
   const home = opts.home ?? homedir()
   const project = opts.project ?? resolveProject()
-  // Isolate this instance's tmux server by PROJECT (C3): two frizz instances sharing one
-  // `tmux -L frizz` server would collide on frizz-<slug> session names. Derive the socket from the
-  // stable project id BEFORE any tmux call — reconcileSessions below calls tmux.isLive, and the
-  // wrong socket would find no live sessions and wrongly mark them all exited on every boot.
-  // The launcher/project resolver performs the crash-safe legacy migration exactly once and pins the
-  // result through supervisor/child/reexec ownership. Never re-read FRIZZ_TMUX_SOCKET in a disposable
-  // child: an environment drift must not move live workers to another server mid-run.
+  // Per-PROJECT isolation (C3): two frizz instances must never see each other's workers. Everything
+  // that could collide now keys on the resolved project's own state dir — this registry DB, the broker
+  // daemon's record under `<stateDir>/claude-broker/` and the socket path hashed from it, the
+  // app-server record — so isolation follows from resolving the project and there is no separate
+  // per-instance runtime identity to derive. (There was one: workers ran under a shared multiplexer
+  // server keyed by socket name, whose sessions were all called `frizz-<slug>`, so the socket had to be
+  // derived from the stable project id before anything touched it, and a disposable child that re-read
+  // it from the environment could move live workers onto another server mid-run.) The launcher/project
+  // resolver still performs the crash-safe legacy migration exactly once and pins the result through
+  // supervisor/child/reexec ownership.
   const dbPath = join(project.stateDir, "ui.db")
   const storage = createStorage(dbPath)
   resources.storage = storage
@@ -559,8 +564,10 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   reconcileAdoptionClaims({ storage, projectDir: project.dir })
   opts.startup?.afterPhase?.("adoption reconcile")
   // Permanent retired tokens are an active fence for pre-upgrade actors only if enforcement is
-  // level-triggered. Sweep the single batched tmux inventory periodically so a late token pane is
-  // killed within a bounded window even when no restart or new adoption occurs.
+  // level-triggered. Sweep the durable claim/token ledger periodically so a stale claim is retired
+  // within a bounded window even when no restart or new adoption occurs. (The sweep also asks the
+  // recovery runtime whether a late token ever materialized as a worker to kill; the production
+  // runtime answers "absent" to every such lookup since the cutover, so the ledger is the whole fence.)
   const adoptionReconcileTimer = setInterval(() => {
     try {
       reconcileAdoptionClaims({ storage, projectDir: project.dir, includeFinalized: false })
@@ -588,10 +595,12 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   }
 
   // Reap this machine's leaked worker aux — verification browsers (agent-browser/chrome-devtools/
-  // puppeteer) and MCP/dev servers that daemonized out of a stopped worker's tmux tree, so nothing
+  // puppeteer) and MCP/dev servers that daemonized out of a stopped worker's process tree, so nothing
   // else ever collects them. A sweep on startup clears accumulated leaks; the interval catches new
-  // orphans (a stopped/crashed thread's browsers) within a bounded window. Reaps ONLY processes
-  // whose FRIZZ_THREAD slug has no live claude/codex root; never a session/tmux/self process.
+  // orphans (a stopped/crashed thread's browsers) within a bounded window. Reaps ONLY processes whose
+  // FRIZZ_THREAD slug has no live claude/codex root; never a session root, never frizz itself, and
+  // never a leftover multiplexer server from a pre-cutover frizz (orphan-reaper.ts keeps that one
+  // guard deliberately — an operator may still be reading those panes).
   // FRIZZ_ORPHAN_REAPER_OFF disables it for disposable adhoc/test stacks (mirrors FRIZZ_WAKERS_OFF) so a
   // throwaway instance never reaps the real machine's processes.
   if (!process.env.FRIZZ_ORPHAN_REAPER_OFF) {
@@ -685,8 +694,9 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   const claudeRuntimeIngest = claudeBrokerBridgeEnabled() ? createClaudeRuntimeIngest({ nudge: () => tailer.nudge?.() }) : undefined
   resources.claudeRuntimeIngest = claudeRuntimeIngest
 
-  // Claude session-broker bridge — the tmux-TUI replacement for Claude. Off unless the flag is set;
-  // when off, backendFor + dispatch stay byte-identical to the tmux path. Permissions auto-allow for
+  // Claude session-broker bridge — the detached daemon that owns every claude thread's SDK session,
+  // and the only claude transport. FRIZZ_CLAUDE_BROKER_BRIDGE="0" turns it off, which leaves a claude
+  // dispatch with nothing to run on rather than a second path. Permissions auto-allow for
   // now (matching today's `--permission-mode auto`); dashboard approval routing is the next slice.
   const claudeBroker = claudeBrokerBridgeEnabled()
     ? createClaudeAgentBrokerBridge({
@@ -706,7 +716,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         // InteractionStore; the same store + web cards codex approvals use).
         interactions: storage.interactions,
         projectId: project.id,
-        // The frizz worker environment — the SDK equivalent of the tmux path's --plugin-dir / --mcp-config.
+        // The frizz worker environment — the SDK equivalent of the CLI argv's --plugin-dir / --mcp-config.
         // Computed ONCE here (constant per project) and applied on every broker fork so a broker worker
         // gets the frizz sub-agent profiles, the frizz + chrome-devtools MCP, and the cc-worker hooks.
         workerEnv: {
@@ -716,8 +726,8 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         },
         // Which broker threads warmUp() may reattach at boot. Same predicate codex's shouldAutoResume
         // applies: never wake a thread the human has already put away — a boot reattach is only for a
-        // thread that is still open and still theirs to come back to. Broker-backed rows only; a tmux
-        // claude row has no daemon and a codex row is the other bridge's business.
+        // thread that is still open and still theirs to come back to. Broker-backed rows only; a
+        // pre-cutover claude row has no daemon and a codex row is the other bridge's business.
         ownedSessions: () =>
           storage.allSessions()
             .filter((row) => isBrokerClaudeRow(row) && row.state !== "archived" && row.archived !== 1)
@@ -853,9 +863,9 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     resume: (slug, message, deliveryId) => {
       const deliveryMessage = `${message}\n\n${wakeDeliveryToken(deliveryId)}`
       const row = storage.getSession(slug)
-      // Codex wake: deliver over the app-server bridge (adopting a legacy tmux rollout first, then
-      // reactivating the persisted thread), exactly like the followUp RPC. Codex never uses tmux resume
-      // — resumeThread is a CLAUDE-only path now, so a codex row must never reach it even when the
+      // Codex wake: deliver over the app-server bridge (adopting a legacy TUI-era rollout first, then
+      // reactivating the persisted thread), exactly like the followUp RPC. Codex never used the legacy
+      // `resumeThread` path — it is CLAUDE-only, so a codex row must never reach it even when the
       // bridge is absent (only possible in a test context): drop the wake loudly instead of degrading.
       if (row?.backend === "codex") {
         const bridge = codexAppServer
@@ -865,8 +875,9 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         }
         return deliverCodexWake({ bridge, storage, cwd: project.dir, row, slug, deliveryMessage, deliveryId })
       }
-      // Broker Claude wake: no tmux pane — deliver over the bridge (reconnect the live daemon or
-      // cold-resume a dead one), exactly like the followUp RPC. Never reaches the tmux resumeThread path.
+      // Broker Claude wake: no local process to inject into — deliver over the bridge (reconnect the
+      // live daemon or cold-resume a dead one), exactly like the followUp RPC. Never reaches the legacy
+      // `resumeThread` path.
       if (row?.backend === "claude" && row.claude_runtime === "broker") {
         if (!claudeBroker) {
           process.stderr.write(`[frizz] claude-broker wake for ${slug} dropped: the session broker is unavailable\n`)
@@ -893,7 +904,10 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         slug,
         deliveryMessage,
         undefined,
-        // Same latch, other transport: a tmux worker that hit the wall needs relaunching, not a paste.
+        // Same latch, other transport: a pre-cutover worker that hit the wall needed a relaunch, not a
+        // message injected into a process that was refusing input. Nothing reaches this arm with a live
+        // transport any more — `resumeThread` throws for every row that can get here — so the flag is
+        // carried for the shape of the call, not for a path that runs.
         {
           freshProcess: needsFreshProcessForLimit(
             tailer.get(slug)?.limitFault,

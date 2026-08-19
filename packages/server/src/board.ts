@@ -70,10 +70,10 @@ export function appServerTurnStalled(
   return nowMs - ownedSince > STALL_GRACE_MS
 }
 
-// Runtime derivation: no session row → never spawned (none); a row whose tmux session is dead/absent
-// → exited; a live session paused on an interactive permission prompt → perm-prompt (pane-sniffed by
-// the tailer, no jsonl signal); otherwise the tailer's turn state (running while a turn is in flight,
-// turn-idle once it ends).
+// Runtime derivation: no session row → never spawned (none); a row whose worker is dead/absent →
+// exited; a live session paused on a permission prompt → perm-prompt (reported by the bridge, no
+// jsonl signal); otherwise the tailer's turn state (running while a turn is in flight, turn-idle
+// once it ends).
 function deriveRuntime(
   slug: string,
   row: SessionRow | undefined,
@@ -86,9 +86,10 @@ function deriveRuntime(
   headlessLostWork = false,
 ): RuntimeState {
   if (!row) return "none"
-  // App-server codex sessions have NO tmux pane. A persisted bridge thread is always resumable, so
-  // liveness is never "is a pane alive" — it's the rollout-tailed turn state. Deriving from tmux here
-  // would mark every headless thread "exited" (and, mid-turn, trip the crash-net). Never do that.
+  // App-server codex sessions have NO process of their own for frizz to probe. A persisted bridge
+  // thread is always resumable, so liveness is never "is some process alive" — it's the rollout-tailed
+  // turn state. Probing for one here would mark every headless thread "exited" (and, mid-turn, trip
+  // the crash-net). Never do that.
   if (isHeadlessRow(row)) {
     if (permPrompt) return "perm-prompt"
     // Checked BEFORE the idle branch, which is the whole point. A worker that came to rest holding live
@@ -102,24 +103,25 @@ function deriveRuntime(
     if (headlessLostWork) return "exited"
     if (turn === "idle") return "turn-idle"
     // Mid-turn with nobody driving it: the process that owned this turn is gone. Reuse "exited" so the
-    // pair (exited + in-flight) trips the SAME crash-net a dead pane does — the thread cards as
+    // pair (exited + in-flight) trips the SAME crash-net a dead worker does — the thread cards as
     // "Stalled" and enters the queue instead of spinning forever.
     return appServerStalled ? "exited" : "running"
   }
   // Every live row is headless and returned above. Anything reaching here is a PRE-CUTOVER row whose
-  // transport was a tmux pane — there is none any more, so its process cannot be alive. Reporting
-  // "exited" is what puts it in front of the operator (stalled card + Retry) instead of leaving it
-  // spinning against a liveness probe that can never succeed.
+  // transport was an interactive terminal — frizz has driven none since the broker landed, so that
+  // row's process cannot be alive. Reporting "exited" is what puts it in front of the operator
+  // (stalled card + Retry) instead of leaving it spinning against a liveness probe that can never
+  // succeed.
   void slug; void permPrompt; void turn
   return "exited"
 }
 
 // A worker whose transcript never materialized (a boot failure the tailer flagged noTranscript) would
-// otherwise read "running" forever — deriveRuntime sees a live tmux pane with no telemetry and defaults
-// to running, so the row spins with nothing to tail. Downgrade ONLY that spinner to the degraded "exited"
-// affordance ("Stalled", a "!" glyph); with the "in-flight" turn a transcript-less session keeps, this
-// also trips deriveNeedsYou's crash-net so it cards for the human. Every other runtime is left as-is (a
-// dead pane is already "exited"; a healthily-bound session is never noTranscript). Reused "exited" rather
+// otherwise read "running" forever — deriveRuntime sees a bridge-owned row with no telemetry and
+// defaults to running, so the row spins with nothing to tail. Downgrade ONLY that spinner to the degraded
+// "exited" affordance ("Stalled", a "!" glyph); with the "in-flight" turn a transcript-less session keeps,
+// this also trips deriveNeedsYou's crash-net so it cards for the human. Every other runtime is left as-is
+// (a dead worker is already "exited"; a healthily-bound session is never noTranscript). Reused "exited" rather
 // than minting a new RuntimeState — see session-transcript-drift (a distinct error enum is a follow-up).
 export function degradeIfNoTranscript(runtime: RuntimeState, noTranscript: boolean | undefined): RuntimeState {
   return noTranscript && runtime === "running" ? "exited" : runtime
@@ -219,9 +221,10 @@ function hasUnretiredOwnAgents(tele: SessionTelemetry | undefined): boolean {
 //
 // Only a broker-backed Claude thread has a per-child control channel: `Query.stopTask`, whose registry
 // is session-wide (so a DESCENDANT is as reachable as a direct child — whether the × is offered on a
-// descendant ROW is a separate client-side question about whether the row can then be cleared). A tmux
-// claude thread runs its sub-agents inside the CLI process and a codex thread inside its own; neither
-// exposes anything to address one child with, so their rows must not offer a stop at all.
+// descendant ROW is a separate client-side question about whether the row can then be cleared). A
+// legacy pre-broker claude row ran its sub-agents inside the CLI process and a codex thread runs its
+// own inside itself; neither exposes anything to address one child with, so those rows must not offer
+// a stop at all.
 //
 // Only RUNNING rows are marked: a stale/rested row's × means "clear this from the list", which needs no
 // provider control and works everywhere. The flag answers "can this be KILLED", not "can this be clicked".
@@ -233,8 +236,8 @@ function stampStoppable(agents: ThreadView["subAgents"], row: SessionRow): Threa
 // The same question for a background SHELL, and it is deliberately the other way round: the tailer has
 // already said whether frizz holds a handle for each shell (BgShellView.stoppable), so all this adds is
 // the TRANSPORT half — and on a thread with no control channel it must REVOKE the tailer's half rather
-// than merely decline to add one. A shell on a TMUX thread carries a task id in its launch ack just the
-// same; nothing can be done with it from outside that pane.
+// than merely decline to add one. A shell on a legacy pre-cutover thread carries a task id in its
+// launch ack just the same; nothing outside that worker's own terminal could ever act on it.
 //
 // BOTH headless runtimes have a per-shell channel, reached differently and verified separately:
 //   claude broker    → `Query.stopTask(taskId)`                     (backend/_live_shell_stop.mts)
@@ -253,9 +256,9 @@ function stampStoppableShells(shells: ThreadView["bgShells"], row: SessionRow): 
 // into the excusal on 2026-08-01 and taken back out on 2026-08-04; the CARD spanned both kinds
 // throughout, which is why the two predicates exist side by side.
 //
-// hasLiveBackgroundWork also owns the CRASH bit, where the same distinction is real: a dead pane with a
-// child still reading "running" died mid-work, while a dead pane with a shell behind it is just a shell
-// whose owner is gone.
+// hasLiveBackgroundWork also owns the CRASH bit, where the same distinction is real: a dead worker with
+// a child still reading "running" died mid-work, while a dead worker with a shell behind it is just a
+// shell whose owner is gone.
 // ---- THE DECLARED PARK ---------------------------------------------------------------------------
 // A thread is "awaiting background work" when it SAYS SO, naming what it waits on — not when frizz
 // notices it happens to have something running. That inference is what put the resting card on a thread
@@ -577,7 +580,7 @@ export function deriveNeedsYou(
   if (tele?.nativeInputRequired) return true
   const atRest = runtime === "turn-idle" || runtime === "exited"
   if (!atRest) return false
-  // CRASH/STALL net: the pane EXITED while the turn was still in flight (last record a tool_use, never
+  // CRASH/STALL net: the worker EXITED while the turn was still in flight (last record a tool_use, never
   // reached end_turn) — the agent died mid-work. This is a stall the human MUST see, and it is NOT
   // clearable by a prior glance (a dead process produces no new activity to re-arm bare-rest, so
   // interaction-clearance would bury it forever after one view). The legacy needsAction had this net
@@ -653,7 +656,7 @@ export function deriveNeedsYou(
   // at its call site). All three card, and all three honour an armed event-snooze for the current rest.
   //
   // An EXITED parent with "running" children is a crash, not this card — the runtime!=="exited" guard
-  // drops it to the crash/bare-rest net below (a dead pane's children keep reading "running" until their
+  // drops it to the crash/bare-rest net below (a dead worker's children keep reading "running" until their
   // transcript goes stale; the parent cannot actually still be waiting on them). A done fence outranks
   // this too: respect the worker's completion signal (show the done card).
   // A DECLARED PARK KEEPS THE THREAD OUT OF THE QUEUE. The worker named what it is waiting on and every
@@ -758,7 +761,7 @@ export function deriveAwaitingBackground(
   return deriveNeedsYou({ ...row, bg_snooze_rested_at: null }, tele, runtime, hasActionableInteraction, nowMs, limitPause, false, deliveryProcessGone)
 }
 
-// A REGISTERED session thread's view (id = row.slug). Runtime via the shared deriveRuntime (tmux-aware);
+// A REGISTERED session thread's view (id = row.slug). Runtime via the shared deriveRuntime (transport-aware);
 // telemetry fields mirror the legacy path; title provenance is resolved before the snapshot is emitted.
 export function resolveSessionProfile(
   row: Pick<SessionRow, "backend" | "model" | "effort" | "spawned_at" | "profile_set_at">,
@@ -984,7 +987,7 @@ function sessionThreadView(
   const limitPause = resolveLimitPause(row, tele, nowMs)
   const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches)
   const awaitingBackground = archived ? false : deriveAwaitingBackground(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, deliveryProcessGone, github, registeredPrWatches)
-  // A pane that exited with work still outstanding — a turn in flight, OR a sub-agent still reading
+  // A worker that exited with work still outstanding — a turn in flight, OR a sub-agent still reading
   // "running" (its parent is gone, so it cannot actually be live) — is a crash/stall, not a clean
   // handoff, so it cards as "stalled" not a bare "rest". Mirrors deriveNeedsYou's surfacing above.
   // hasLiveBackgroundWork keys on sub-agents only (a background shell is never treated as live work);
@@ -1016,7 +1019,7 @@ function sessionThreadView(
     warnings: [],
     runtime,
     sessionId: row.session_id,
-    tmuxName: row.tmux_name,
+    threadName: row.thread_name,
     unread: row.unread === 1,
     archived,
     lastAssistant: tele?.lastAssistant,
@@ -1035,7 +1038,7 @@ function sessionThreadView(
     pendingQuestion: tele?.pendingQuestion ?? false,
     lastUserAt: tele?.lastUserAt,
     // Runtime provider-auth rejection (claude-auth plan): only the typed category travels — the raw
-    // error/pane text never leaves the server. Drives the trusted sign-in recovery card in ChatView.
+    // error/provider text never leaves the server. Drives the trusted sign-in recovery card in ChatView.
     providerFault: tele?.authFault
       ? { backend: row.backend === "codex" ? "codex" as const : "claude" as const, category: tele.authFault }
       : undefined,
@@ -1056,7 +1059,7 @@ function sessionThreadView(
     // states whether the thread is waiting, which the snooze does not change — so the suppression is a
     // presentation rule the client applies, not a second opinion about the thread's state.
     bgSnoozed: bgSnoozeArmed(row) || undefined,
-    claudeRuntime: row.claude_runtime === "broker" ? "broker" as const : row.claude_runtime === "tmux" ? "tmux" as const : undefined,
+    claudeRuntime: row.claude_runtime === "broker" ? "broker" as const : undefined,
     // The recurring prompt — the same projection the worker's own `action: "get"` reads back.
     recurringPrompt: resolveRecurringPrompt(row),
     needsYou,
@@ -1093,6 +1096,75 @@ function sessionThreadView(
     // dial rather than an empty one. A Claude row therefore carries no `context` until its first turn
     // has ended; codex carries one from its first token_count.
     context: tele?.contextTokens !== undefined && tele?.contextWindow !== undefined && tele.contextWindow > 0
+      ? { tokens: tele.contextTokens, window: tele.contextWindow }
+      : undefined,
+  }
+}
+
+// A NON-FRIZZ session: a transcript the tailer found in the project's agent log dir with no registry
+// row behind it — the maintainer's own `claude`/`codex` terminal. Read-only by construction, and
+// deliberately THIN: everything a registered row derives from its row (lifecycle state, needs-you,
+// snooze, watches, delivery, permission/profile intent) has no source here, and inventing one would be
+// a fabricated reading rather than a missing field.
+//
+// WHAT IS HONEST TO SHOW, measured against three real terminal transcripts through this same tailer
+// (2026-08-19): `aiTitle` — Claude titles its own sessions, so these rows carry real names; the rest
+// instants; the last assistant line as the preview; the profile chips and the context dial. What is
+// structurally ABSENT is `lastFence`: fences come from the worker contract frizz injects at dispatch,
+// so a terminal session never writes one. That single absence is why HELD and DONE cannot be derived
+// for these rows at all — a park is a fence/timer/snooze and an archive is a human's lifecycle write —
+// and why they get their own band instead of being sorted into frizz's.
+function foreignThreadView(sessionId: string, tele: SessionTelemetry): ThreadView {
+  return {
+    id: sessionId,
+    // Claude's own `ai-title` when it has landed one, else a short id — never the frizz "Spinning up…"
+    // placeholder, which promises a title that is on its way. Nothing is on its way here.
+    title: tele.aiTitle ?? `Session ${sessionId.slice(0, 8)}`,
+    aiTitle: tele.aiTitle,
+    titleAuto: tele.aiTitle === undefined,
+    status: "active", // synthesized: required by the shape, UNUSED for session rows (see sessionThreadView)
+    hasPlan: false,
+    mechanism: null,
+    humanBlocked: false,
+    ready: false,
+    dependsOn: [],
+    externalDeps: [],
+    agents: [],
+    errors: [],
+    warnings: [],
+    // Only RESTED sessions are emitted (see buildForeignThreads), so this is the one truthful value.
+    runtime: "turn-idle",
+    sessionId,
+    unread: false,
+    archived: false,
+    lastAssistant: tele.lastAssistant,
+    lastActivityAt: tele.lastActivityAt,
+    lastAssistantAt: tele.lastAssistantAt,
+    lastUserAt: tele.lastUserAt,
+    // Deliberately EMPTY rather than passed through. The tailer does derive a foreign session's
+    // sub-agents and shells, but every rendering of them is a control surface (drill in, stop) that a
+    // row with no runtime cannot honour — and a rested session's children have finished anyway.
+    subAgents: [],
+    bgShells: [],
+    watches: [],
+    // Passed through: an unanswered native ask is a real, transcript-derived fact, and the client
+    // renders it read-only with "answer in the terminal" for a foreign row. It never queues here —
+    // the interaction surface is the terminal the human is already sitting in (groups.ts).
+    pendingAsk: tele.pendingAsk ? { questions: tele.pendingAsk.questions } : undefined,
+    // ALWAYS false, and not for want of trying: this is `at rest with an unanswered ```question fence`,
+    // and a session frizz did not dispatch has no fence to read.
+    pendingQuestion: false,
+    kind: "session",
+    foreign: true,
+    needsYou: false,
+    awaitingBackground: false,
+    crashed: false,
+    // The Claude log dir is the only place these are discovered today, so the badge is honest.
+    backend: "claude",
+    permissionMode: tele.permissionMode,
+    model: tele.model,
+    effort: tele.effort,
+    context: tele.contextTokens !== undefined && tele.contextWindow !== undefined && tele.contextWindow > 0
       ? { tokens: tele.contextTokens, window: tele.contextWindow }
       : undefined,
   }
@@ -1217,7 +1289,7 @@ export function createBoard(
   // same durable shape. Raw tailer discoveries never confer ownership.
   function buildSessionThreads(nowMs: number): ThreadView[] {
     // Old/corrupt databases predate the canonical storage guard. Keep such rows inert instead of
-    // emitting an invalid board id or allowing it to reach tailer/tmux consumers.
+    // emitting an invalid board id or allowing it to reach tailer/dispatch consumers.
     const rows = storage.allSessions().filter((row) => ThreadSlug.safeParse(row.slug).success)
     // ONE READ PER BUILD, not per thread: the watched-PR book is keyed by ref and shared by every thread
     // watching that PR, and it is parsed on the way in.
@@ -1269,9 +1341,34 @@ export function createBoard(
     return out
   }
 
-  // Assemble a snapshot from registered sessions + plan artifacts. Unregistered legacy files and
-  // foreign transcripts are excluded before any legacy parser is invoked, so they cannot contribute a
-  // row, queue card, warning, or error. `.frizz/` presence is deliberately NOT reported: it gates only
+  // The project's NON-FRIZZ sessions: transcripts the tailer discovered with no registry row behind
+  // them. They are their own rail band, never part of the registered set — see foreignThreadView for
+  // why they cannot be sorted into frizz's own bands at all.
+  //
+  // RESTED ONLY, by explicit decision (maintainer 2026-08-19): "if something is currently running,
+  // then presumably the user already has that open in Claude Code." A spinning terminal session is one
+  // the human is watching in the window it belongs to, so listing it here is noise at best and an
+  // invitation to double-drive one transcript at worst. `turn === "idle"` is the tailer's own rest
+  // reading and is the SAME derivation a registered row's rest uses, so the two can never disagree.
+  //
+  // The tailer already bounds this set (a 24h freshness window and a cap of 20, newest first), so
+  // there is no second cap here — one would only be able to disagree with that one.
+  function buildForeignThreads(): ThreadView[] {
+    const out: ThreadView[] = []
+    for (const id of tailer.foreignIds()) {
+      // A discovered id is a session id, and a session id satisfies the slug contract (lowercase hex +
+      // hyphens). Checked anyway: the id comes off a FILENAME, and an invalid board id must never ship.
+      if (!ThreadSlug.safeParse(id).success) continue
+      const tele = tailer.get(id)
+      if (!tele || tele.turn !== "idle") continue
+      out.push(foreignThreadView(id, tele))
+    }
+    return out
+  }
+
+  // Assemble a snapshot from registered sessions + non-frizz sessions + plan artifacts. Unregistered
+  // legacy files are excluded before any legacy parser is invoked, so they cannot contribute a row,
+  // queue card, warning, or error. `.frizz/` presence is deliberately NOT reported: it gates only
   // plan/scratchpad storage (probed locally where that matters), never whether this project has a board.
   function assemble(): BoardSnapshot {
     // One clock sample owns every snooze decision in this snapshot: expiry clearing, visibility,
@@ -1292,11 +1389,16 @@ export function createBoard(
       homeDir: homedir(),
     }
     const sessionThreads = buildSessionThreads(assembledAtMs)
+    // REGISTERED ROWS ONLY reach these two, and that is the point rather than an oversight. A snooze
+    // is a durable column on a row a foreign session does not have, and a needs-decision notification
+    // is frizz telling you a WORKER is waiting on you — a terminal session is waiting on you in the
+    // window you opened it in, and pushing a notification for it would be frizz claiming an ask it
+    // neither received nor can answer.
     armSnoozeWake(sessionThreads, assembledAtMs)
     notifyNeedsYou(sessionThreads)
     return {
       ...base,
-      threads: sessionThreads,
+      threads: [...sessionThreads, ...buildForeignThreads()],
       errors: [],
       warnings: [],
       errorItems: [],

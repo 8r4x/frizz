@@ -163,7 +163,7 @@ function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; restedAt
   // exactly how a correction that could never be delivered survived: enqueue is not delivery.
   const sent: string[] = []
   storage.upsertSession({
-    slug, session_id: "sid", tmux_name: `frizz-${slug}`, spawned_at: "2026-08-15T11:00:00.000Z",
+    slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: "2026-08-15T11:00:00.000Z",
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: restedAt, title_auto: 0,
     title: null, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   } as SessionRow)
@@ -356,7 +356,7 @@ function loopHarness(body: string) {
   storage.setSetting("signoffNudge", "off")
   const slug = "looping"
   storage.upsertSession({
-    slug, session_id: "sid", tmux_name: `frizz-${slug}`, spawned_at: "2026-08-17T11:00:00.000Z",
+    slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: "2026-08-17T11:00:00.000Z",
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: new Date().toISOString(),
     title_auto: 0, title: null, state: "open", meta: null, seen_at: null, plan_path: null,
     transcript_id: null,

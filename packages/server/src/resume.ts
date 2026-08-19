@@ -60,10 +60,10 @@ export class TerminalDeliveryError extends Error {
  * this instant, or a lifecycle CAS that moved under us.
  *
  * The distinction that matters is DELIVERY SAFETY, not the sentence: every site raising this sits
- * strictly upstream of the first tmux write, so a caller retrying it CANNOT double-send. That is the
- * entire licence for `sendEagerFollowUp` to retry instead of handing the operator's message back —
- * an ambiguous failure (text may have crossed tmux before a later step threw) must stay an ordinary
- * Error so it is never replayed. `retryableDelivery` is duck-typed for the same reason
+ * strictly upstream of the first byte written toward the worker, so a caller retrying it CANNOT
+ * double-send. That is the entire licence for `sendEagerFollowUp` to retry instead of handing the
+ * operator's message back — an ambiguous failure (the text may already have reached the worker before
+ * a later step threw) must stay an ordinary Error so it is never replayed. `retryableDelivery` is duck-typed for the same reason
  * `terminalDelivery` is: the RPC layer reads it without importing this module.
  */
 export class RetryableDeliveryError extends Error {
@@ -80,17 +80,18 @@ export class RetryableDeliveryError extends Error {
  * the "Done" readout IS the reopen affordance (see web ThreadLifecycleFooter) — so this un-archive is
  * the entire mechanism behind that promise, and every runtime has to honour it.
  *
- * It lives HERE, above `resumeThreadOwned`, because only the tmux path goes through that function. A
- * broker-backed Claude row (detached daemon) and an app-server Codex row (bridge) both branch away in
- * the followUp RPC long before it, so while this lived inside `resumeThreadOwned` those two reopened
- * their WORKER without reopening their ROW: the daemon cold-resumed and started executing while the
- * board still read `state='archived'`, which renders the thread as Done and — because an archived
- * thread has no lifecycle verbs — leaves it with no Mark-as-done button to stop it with. Observed
+ * It lives HERE, above `resumeThreadOwned`, because that function only ever served the retired
+ * inject-into-a-live-CLI path. A broker-backed Claude row (detached daemon) and an app-server Codex
+ * row (bridge) both branch away in the followUp RPC long before it, so while this lived inside
+ * `resumeThreadOwned` those two reopened their WORKER without reopening their ROW: the daemon
+ * cold-resumed and started executing while the board still read `state='archived'`, which renders the
+ * thread as Done and — because an archived thread has no lifecycle verbs — leaves it with no
+ * Mark-as-done button to stop it with. Observed
  * 2026-07-31 on a live broker thread: `claude --resume` running for minutes against a row still
  * carrying `exited=1, state='archived'`.
  *
- * Called UP FRONT, before the live/dead branch, so a still-LIVE archived thread reactivates too rather
- * than being stranded in Inactive by the live-inject path's early return. Touch the row only when it is
+ * Called UP FRONT, above the runtime branches, so a still-LIVE archived thread reactivates too rather
+ * than being stranded in Inactive by a delivery path that returns from its own branch. Touch the row only when it is
  * actually archived, so an ordinary live steer emits no needless per-keystroke delta. Session-guarded:
  * a row that was re-dispatched under us is a CAS miss, not a reopen. (The wakers scheduler never
  * reaches this — it filters archived threads out — so this only ever un-hides a thread on an EXPLICIT
@@ -147,14 +148,22 @@ export function wakeParkedThreadForFollowUp(
 
 // The ONE resume/steer path, shared by the followUp RPC (a human steer) and the wakers scheduler (a
 // fired machine-wait). Kept in its own module so the scheduler can reuse it without importing the RPC
-// router. Live session → inject into the running claude (paste-buffer for multiline so newlines
-// survive, literal send-keys for a single line). DEAD session → resume the pinned conversation
-// (`claude -r <sessionId>`) in a fresh tmux session of the same name, killing the dead remain-on-exit
-// pane first and re-carrying the scratchpad orientation at SYSTEM level (the resume rebuilds the system
-// prompt from scratch, so without this the worker forgets its scratchpad). Throws if no row exists.
+// router. What it still does is the OWNERSHIP fencing: refuse a row with a permission/profile change or
+// another runtime control in flight, take `runtime_control='follow-up'` under a CAS, and release it on
+// the way out. Throws if no row exists.
+//
+// It no longer DELIVERS anything. A broker-backed Claude row and an app-server Codex row are both routed
+// to their bridge by the caller, and `resumeThreadOwned` throws for everything else (see below). It used
+// to be the delivery too: a live session took the message injected straight into the running `claude` (a
+// paste buffer for multiline so newlines survived, a literal key-send for a single line), and a dead one
+// was cold-resumed on the pinned conversation (`claude -r <sessionId>`) in a fresh terminal session of
+// the same name, killing the dead remain-on-exit worker first and re-carrying the scratchpad orientation
+// at SYSTEM level — a resume rebuilds the system prompt from scratch, so without that the worker forgets
+// its scratchpad. The broker replaced both halves; the SYSTEM-level re-carry survives in the bridge's
+// cold resume (context.ts `deliverClaudeBrokerWake`).
 
-// The tmux surface resumeThread touches — injectable so tests exercise the un-archive/section logic
-// without a real tmux server (mirrors dispatch.ts's `spawn?` injection). Defaults to the real module.
+// The surface resumeThread touches — injected by the composition layer (context.ts) and by tests, which
+// exercise the un-archive/section logic without any real worker.
 export interface ResumeDeps {
   project: Project
   storage: Storage
@@ -291,7 +300,8 @@ function profileExpectedFromRow(row: SessionRow): ProfileChangeExpectation {
 }
 
 // Restart recovery for a durable profile journal. Every destructive action is preceded by a SQLite
-// checkpoint carrying an unguessable tmux environment token; every successful outcome returns only
+// checkpoint carrying an unguessable handoff token — planted in the relaunched worker's environment,
+// so the exact process could be re-identified after a crash; every successful outcome returns only
 // after the exact token+tuple runtime has been proven. The controller performs the final atomic
 // commit/restore and otherwise deliberately leaves runtime_control='profile'.
 /** Per-call shaping for a resume. See `freshProcess` — the usage-limit latch escape hatch. */
@@ -299,8 +309,8 @@ export interface ResumeOptions {
   /**
    * Relaunch the worker instead of injecting into the one that is already running.
    *
-   * Set for a usage-limit resume fired before the provider's stated reset: the `claude` behind that
-   * pane latched on its 429 and refuses every input until then, so a paste into its composer is a
+   * Set for a usage-limit resume fired before the provider's stated reset: the `claude` process behind
+   * that thread latched on its 429 and refuses every input until then, so handing it the message is a
    * guaranteed no-op (see usage-limit.ts `limitResumeNeedsFreshProcess`). The broker path expresses the
    * same thing as `followUp({freshProcess})`.
    */
@@ -309,11 +319,11 @@ export interface ResumeOptions {
 
 function resumeThreadOwned(deps: ResumeDeps, slug: string, message: string, deliveryId?: string, opts: ResumeOptions = {}): void {
   void deps; void message; void deliveryId; void opts
-  // There is no tmux transport any more: every claude thread is broker-backed and every caller (the
-  // followUp RPC, the wake scheduler) routes such a row to the bridge before reaching here. This
+  // There is no local-CLI transport any more: every claude thread is broker-backed and every caller
+  // (the followUp RPC, the wake scheduler) routes such a row to the bridge before reaching here. This
   // remains as the loud backstop so a future caller that forgets can never silently try to resume a
-  // pane that does not exist, rather than as a path anything is expected to take.
-  throw new Error(`${slug} must resume through the session broker; frizz has no tmux transport`)
+  // worker that does not exist, rather than as a path anything is expected to take.
+  throw new Error(`${slug} must resume through the session broker; frizz has no other claude transport`)
 }
 
 export function resumeThread(deps: ResumeDeps, slug: string, message: string, deliveryId?: string, opts: ResumeOptions = {}): void {

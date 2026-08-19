@@ -125,8 +125,8 @@ export async function readCodexBinaryState(
   }
 }
 
-// Dispatch preflight rejection: the server refuses to create ANY thread state (scratchpad, tmux
-// session, registry row) for a provider that is positively signed out. The message is a stable
+// Dispatch preflight rejection: the server refuses to create ANY thread state (scratchpad, worker
+// daemon, registry row) for a provider that is positively signed out. The message is a stable
 // sentinel the web client parses to open the sign-in modal instead of a generic failure toast.
 export class ProviderAuthRequiredError extends Error {
   readonly backend: "claude" | "codex"
@@ -187,8 +187,9 @@ export async function readClaudeAuthStatusCli(opts?: {
 // it still fails open (readAuthSnapshot instead lets the local signed-out stand, because a gate that
 // can't confirm should keep offering sign-in).
 //
-// This preflight is the FIRST thing dispatch() does — before the scratchpad, the worker prompt, tmux,
-// the registry — so anything it waits on is dead time between Enter and the worker existing at all.
+// This preflight is the FIRST thing dispatch() does — before the scratchpad, the worker prompt, the
+// daemon, the registry — so anything it waits on is dead time between Enter and the worker existing at
+// all.
 // Reaching for the CLI unconditionally put a fork+exec of a heavy binary doing a network round trip
 // on that path; under worker-fleet load it routinely blew its own 5s timeout and fell back to
 // "unknown", i.e. the common case paid five seconds to learn nothing. Measured under load: CLI

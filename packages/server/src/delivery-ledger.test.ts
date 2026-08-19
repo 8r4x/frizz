@@ -155,8 +155,8 @@ test("a SHORT send is never resolved by merely appearing inside an unrelated mes
 })
 
 // ---- channel rewrites (the "Delivery unconfirmed" bug class) ----
-// The steer channel is tmux `paste-buffer` (LF→CR) composed with Claude Code's TUI paste handler
-// (CR/CRLF→LF, TAB→four spaces). Measured against a live claude 2.1.219 TUI driven through frizz's own
+// The pre-broker steer channel pasted into Claude Code's TUI: an LF→CR paste boundary composed with the
+// TUI's own paste handler (CR/CRLF→LF, TAB→four spaces). Measured against a live claude 2.1.219 TUI driven through frizz's own
 // paste sequence: a tab becomes four spaces and a CRLF becomes TWO newlines. Both classes stranded a
 // send that the agent had already read. TABBED below is the maintainer's own stranded text
 // (2026-07-25, `were-taking-over-from-another-agent`).
@@ -357,7 +357,7 @@ test("aging is identity-stable when nothing changes", () => {
 
 // The escape hatch for a send whose delivery record the correlator could not attribute. The provider's
 // queue is FIFO, so a user turn at or after the send's own instant means the queue already moved past it.
-// Every live state goes — `unconfirmed`'s amber "check the terminal" warning is falsified by a later user
+// Every live state goes — `unconfirmed`'s amber "no receipt from the worker" warning is falsified by a later user
 // turn exactly as squarely as an `enqueued` claim is.
 test("a user turn at/after an outstanding send is proof it was delivered — every live state drops", () => {
   const live = [
@@ -482,7 +482,7 @@ test("an unrelated uuid degrades to the text path rather than resolving anything
 })
 
 // ---- codex: the ledger as a RENDERING guarantee ----
-// Codex has no provider-side queue and no tmux composer, so its ledger entry exists only to keep the
+// Codex has no provider-side queue and no composer of its own, so its ledger entry exists only to keep the
 // queued bubble on screen until the rollout materialises the message. Measured against frizz's own
 // delivery records: 8 of 75 codex sends took longer than the client's 60s ghost floor to appear (steers
 // at 71s, 212s and 4.6h), so without this the only copy of the message could be retired from the drawer.
@@ -503,8 +503,8 @@ test("a codex entry resolves by MARKER-free whitespace invariance too", () => {
 })
 
 test("a codex entry opens ENQUEUED so it can never age into the amber warning", () => {
-  // `pending` is what becomes `unconfirmed` ("check the terminal") — meaningless for an app-server
-  // thread, which has no terminal composer. Enqueued skips that path entirely.
+  // `pending` is what becomes `unconfirmed` ("no receipt from the worker") — meaningless for an
+  // app-server thread, whose RPC return IS the receipt. Enqueued skips that path entirely.
   const enqueued = [item({ state: "enqueued" })]
   assert.equal(ageDeliveries(enqueued, T0 + PENDING_TIMEOUT_MS + 5000), enqueued)
   assert.equal(ageDeliveries(enqueued, T0 + PENDING_TIMEOUT_MS + 5000)[0].state, "enqueued")

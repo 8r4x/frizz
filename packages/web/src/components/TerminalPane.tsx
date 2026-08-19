@@ -7,8 +7,9 @@ import { FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
 import { apiBase } from "../lib/base-path.ts"
 
 // One xterm + WebSocket per selected thread. Remounts on slug change (keyed by
-// the parent), so mount = attach and unmount = detach. The server kills only the
-// tmux attach client on ws close, so reattach cheaply replays the screen state.
+// the parent), so mount = attach and unmount = detach. The pty is owned by the login
+// utility and shared across viewers — a ws close releases only THIS viewer's hold —
+// so reattach cheaply replays the buffered screen state.
 //
 // RENDERER: the built-in DOM renderer, NOT @xterm/addon-webgl. The WebGL addon desynced its
 // canvas backing store from xterm's dpr-scaled cell geometry whenever the effective
@@ -162,7 +163,7 @@ export function TerminalPane({ slug }: { slug: string }) {
     }
     document.addEventListener("visibilitychange", onVisibility)
     // React cleanup is not guaranteed during a hard navigation or BFCache transition. Close the
-    // attach on pagehide so Cmd-R / direct navigation cannot strand a live tmux client; pages restored
+    // attach on pagehide so Cmd-R / direct navigation cannot strand a live viewer socket; pages restored
     // from BFCache reconnect through the same path without losing the xterm buffer or pending input.
     const onPageHide = () => {
       pageSuspended = true
@@ -187,9 +188,9 @@ export function TerminalPane({ slug }: { slug: string }) {
     // Resize ONLY when the grid actually changes. The naive version (fit + send on every
     // ResizeObserver tick) fed a repaint storm: each ~1s board push re-rendered the layout, the
     // observer fired on no-op layout passes, every fit() forced an xterm reflow, and every resize
-    // message forced tmux to redraw the whole pane ("random line-shifting repaints"). Now we
-    // debounce a beat, compute the PROPOSED grid, and touch xterm/tmux only on a real cols/rows
-    // change.
+    // message forced the pty to reflow and repaint the whole screen ("random line-shifting
+    // repaints"). Now we debounce a beat, compute the PROPOSED grid, and touch xterm/the pty only on
+    // a real cols/rows change.
     let resizeTimer: ReturnType<typeof setTimeout> | undefined
     const ro = new ResizeObserver(() => {
       clearTimeout(resizeTimer)

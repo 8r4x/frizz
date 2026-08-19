@@ -115,7 +115,7 @@ export function ThreadComposerBox({
         // NOT `|| followUp.pending`. The send is already committed locally (draft cleared, bubble
         // appended, and in the queue the card has already begun dissolving), so gating the textarea on
         // its round-trip only made the box go dead — and, because the browser blurs a disabled element,
-        // cost the caret — for the ~½s the tmux injection takes. What remains is a genuine backend
+        // cost the caret — for the ~½s the injection takes. What remains is a genuine backend
         // fence: a permission/profile change owning the runtime.
         busy={controls.busy}
         footer={controls.footer}

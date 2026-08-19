@@ -21,7 +21,7 @@ const projectDir = process.cwd()
 const home = mkdtempSync(join(tmpdir(), "frizz-shutdown-probe-"))
 mkdirSync(join(home, ".frizz"), { recursive: true })
 process.env.HOME = home
-process.env.FRIZZ_TMUX_SOCKET = `frizz-probe-${port}-${process.pid}`
+process.env.FRIZZ_SANDBOX_TAG = `frizz-probe-${port}-${process.pid}`
 process.env.FRIZZ_WAKERS_OFF = "1"
 process.env.FRIZZ_ORPHAN_REAPER_OFF = "1"
 process.chdir(projectDir)

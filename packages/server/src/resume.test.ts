@@ -38,8 +38,8 @@ function fakeProject(dir: string): Project {
   return { dir, id: "test-id", name: "test", label: "test", stateDir: dir, cwdSlug: "test" }
 }
 
-// A Tailer stub with no telemetry (get → undefined, no foreign ids): the board derives runtime from tmux
-// alone, which is fine here — sectioning keys on `state`, not runtime.
+// A Tailer stub with no telemetry (get → undefined, no foreign ids): the board derives runtime from the
+// registry row alone, which is fine here — sectioning keys on `state`, not runtime.
 const noopTailer: Tailer = {
   get: () => undefined,
   foreignIds: () => [],
@@ -136,7 +136,7 @@ function sessionRow(slug: string, over: Partial<SessionRow> = {}): SessionRow {
   return {
     slug,
     session_id: `sid-${slug}`,
-    tmux_name: `frizz-${slug}`,
+    thread_name: `frizz-${slug}`,
     spawned_at: "2026-07-01T00:00:00.000Z",
     last_read_at: null,
     unread: 0,
@@ -237,7 +237,7 @@ test("a lost runtime-control CAS is marked retryable and injects nothing", () =>
     resumeThread({ project: fakeProject("/tmp"), storage, board, getSettings: () => settings }, slug, "continue")
   } catch (error) { raised = error }
 
-  assert.equal(injected, 0, "a contention refusal must happen strictly upstream of the first tmux write")
+  assert.equal(injected, 0, "a contention refusal must happen strictly upstream of the first delivery write")
   assert.equal((raised as { retryableDelivery?: unknown })?.retryableDelivery, true,
     "the client may only replay a send it is told took no effect")
 })

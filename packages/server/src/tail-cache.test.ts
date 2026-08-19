@@ -42,7 +42,7 @@ function harness(): Harness {
 
 function row(over: Partial<SessionRow> = {}): SessionRow {
   return {
-    slug: "t", session_id: "sid", tmux_name: "frizz-t", spawned_at: "2026-07-01T00:00:00.000Z",
+    slug: "t", session_id: "sid", thread_name: "frizz-t", spawned_at: "2026-07-01T00:00:00.000Z",
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0, title: null,
     state: null, meta: null, seen_at: null, plan_path: null, transcript_id: null, ...over,
   }
@@ -251,7 +251,7 @@ test("tail-cache: a row with an OPEN delivery ledger keeps its full replay", () 
 test("tail-cache: an entry for a slug the registry no longer has is pruned", () => {
   const h = harness()
   h.storage.upsertSession(row())
-  h.storage.upsertSession(row({ slug: "u", session_id: "sid2", tmux_name: "frizz-u" }))
+  h.storage.upsertSession(row({ slug: "u", session_id: "sid2", thread_name: "frizz-u" }))
   writeFileSync(h.path("sid"), [user(1, "go"), assistant(2, "a")].map((l) => l + "\n").join(""))
   writeFileSync(h.path("sid2"), [user(1, "go"), assistant(2, "b")].map((l) => l + "\n").join(""))
   boot(h)

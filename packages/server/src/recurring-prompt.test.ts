@@ -61,7 +61,7 @@ function fixture() {
   const storage = createStorage(join(dir, "ui.db"))
   const slug = "stophook-t"
   storage.upsertSession({
-    slug, session_id: "sid", tmux_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
+    slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
     title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   } as SessionRow)
@@ -135,7 +135,7 @@ test("storage: the worker path writes by slug alone, across a session change the
   try {
     // A resume: the row now belongs to a new session and generation, exactly as after a restart.
     f.storage.upsertSession({
-      slug: f.slug, session_id: "sid-2", tmux_name: `frizz-${f.slug}`, spawned_at: new Date().toISOString(),
+      slug: f.slug, session_id: "sid-2", thread_name: `frizz-${f.slug}`, spawned_at: new Date().toISOString(),
       last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
       title: f.slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
     } as SessionRow)
@@ -200,7 +200,7 @@ function scheduler(
   const storage = createStorage(join(dir, "ui.db"))
   const slug = "hooked"
   storage.upsertSession({
-    slug, session_id: "sid", tmux_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
+    slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
     title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   } as SessionRow)
@@ -363,7 +363,7 @@ function heartbeatScheduler(
   const storage = createStorage(join(dir, "ui.db"))
   const slug = "beating"
   storage.upsertSession({
-    slug, session_id: "sid", tmux_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
+    slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
     title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   } as SessionRow)
@@ -558,7 +558,7 @@ function compactScheduler(
   const storage = createStorage(join(dir, "ui.db"))
   const slug = "compacting"
   storage.upsertSession({
-    slug, session_id: "sid", tmux_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
+    slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
     title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   } as SessionRow)

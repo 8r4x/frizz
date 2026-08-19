@@ -8,8 +8,9 @@
 // WHY PermissionRequest, not PreToolUse: ExitPlanMode is a PERMISSION surface, not a plain tool —
 // it is denied via PermissionRequest (AskUserQuestion, a real tool, is denied via PreToolUse in the
 // sibling deny-ask.mjs). CAVEAT: PermissionRequest hooks do NOT fire under `claude -p` (headless
-// print mode); frizz workers run as INTERACTIVE tmux `claude` sessions, where they DO fire. So
-// this protects the real worker path; the `-p` smoke test cannot exercise it (documented).
+// print mode); a frizz worker runs as an INTERACTIVE `claude` session inside its session-broker
+// daemon, where they DO fire. So this protects the real worker path; the `-p` smoke test cannot
+// exercise it (documented).
 //
 // PLAN-MODE SOFTLOCK — why this denies UNCONDITIONALLY when gated: a session genuinely IN plan mode
 // is read-only until ExitPlanMode is approved, so denying ExitPlanMode there would SOFTLOCK it

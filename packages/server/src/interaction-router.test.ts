@@ -25,7 +25,7 @@ function session(): SessionRow {
   return {
     slug: "owned-thread",
     session_id: "owned-session",
-    tmux_name: "frizz-owned-thread",
+    thread_name: "frizz-owned-thread",
     spawned_at: "2026-07-13T12:00:00.000Z",
     last_read_at: null,
     unread: 0,

@@ -110,7 +110,7 @@ function land(slug, sessionId, title, rows, restedAt) {
   }
   execFileSync("sqlite3", [
     db,
-    `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, title_auto, backend, model, effort, permission_mode, state, unread, exited, archived, rested_at)
+    `INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, title_auto, backend, model, effort, permission_mode, state, unread, exited, archived, rested_at)
      VALUES ('${slug}', '${sessionId}', 'frizz-${slug}', '${T(0)}', '${title}', 0, 'claude', 'opus', 'high', 'auto', 'open', 0, 0, 0, '${restedAt}')`,
   ])
   console.log(`seeded ${slug} (${sessionId})`)

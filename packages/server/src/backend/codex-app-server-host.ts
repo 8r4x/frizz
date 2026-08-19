@@ -6,8 +6,10 @@
 // The whole point is the lifetime split. `kill()` on this adapter DETACHES the socket; it never kills
 // the daemon. So when the disposable frizz runtime is recycled by Update & Restart, the app-server —
 // and every turn running inside it — keeps going, and the next runtime generation reattaches to the
-// SAME process. (Claude threads get the same immunity from tmux, which holds their PTY outside frizz
-// entirely; an older PTY session broker that once did this for PTY sessions was removed as dead code.)
+// SAME process. (A Claude thread gets the same immunity from its own session broker daemon, which holds
+// the SDK session outside frizz entirely — see claude-broker-host.ts. That job belonged to tmux until
+// the multiplexer was stripped on 2026-08-02; an earlier PTY session broker had been removed as dead
+// code before that.)
 //
 // A long-lived process needs someone to END it. That is what `stopCodexAppServerDaemon` is for, and
 // the one production caller is the bridge's version-skew recovery: a daemon caches its `initialize`

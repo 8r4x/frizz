@@ -115,15 +115,15 @@ writeFileSync(join(codexDir, `rollout-2026-07-29T12-00-00-${CODEX_SESSION}.jsonl
 const projects = join(home, ".frizz", "projects")
 const db = join(projects, readdirSync(projects)[0], "ui.db")
 const seed = (slug, sessionId, title, backend, model) => {
-  const tmuxName = `frizz-${slug}`
+  const threadName = `frizz-${slug}`
   execFileSync("sqlite3", [db, `DELETE FROM session WHERE slug = '${slug}';`])
   execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session
-    (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, unread, exited, archived, title_auto, runtime_generation, profile_revision)
-    VALUES ('${slug}', '${sessionId}', '${tmuxName}', '${now}', '${title}', '${backend}', '${model}', 'high', 'default', 0, 0, 0, 0, 0, 0);`])
-  return tmuxName
+    (slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode, unread, exited, archived, title_auto, runtime_generation, profile_revision)
+    VALUES ('${slug}', '${sessionId}', '${threadName}', '${now}', '${title}', '${backend}', '${model}', 'high', 'default', 0, 0, 0, 0, 0, 0);`])
+  return threadName
 }
-const tmuxName = seed(SLUG, SESSION_ID, "Todo render check", "claude", "opus")
-const codexTmuxName = seed(CODEX_SLUG, CODEX_SESSION, "Todo render codex", "codex", "gpt-5.6-terra")
+const threadName = seed(SLUG, SESSION_ID, "Todo render check", "claude", "opus")
+const codexThreadName = seed(CODEX_SLUG, CODEX_SESSION, "Todo render codex", "codex", "gpt-5.6-terra")
 
 const api = createRpcClient(`http://127.0.0.1:${port}/`)
 await api.waitForHealth()

@@ -4,7 +4,7 @@
 //
 // WHY THIS IS THE HARNESS THAT MATTERS: frizz dispatches on the broker path by default, and both
 // observed early-quit sessions ran on it (`entrypoint: "sdk-ts"`). It is also a DIFFERENT chain from
-// tmux, with one extra gate that can silently drop a variable — the bridge's `workerEnv` map.
+// the spawned-CLI path, with one extra gate that can silently drop a variable — the bridge's `workerEnv` map.
 // (buildEnvironment's EXPLICIT_CLAUDE_ENV_KEYS allowlist was the second gate until 2026-08-02; a
 // worker now inherits frizz's environment minus frizz's own control plane — see worker-env.ts.)
 //
@@ -95,7 +95,7 @@ try {
 
   // NOT ASSERTED HERE: that BASH_DEFAULT_TIMEOUT_MS changes behavior — not because it doesn't, but
   // because NO harness on this machine reproduces the trigger. Measured, not assumed: a 150s command
-  // completes in the turn at the 120s default under both `claude -p` (the tmux harness) and a raw SDK
+  // completes in the turn at the 120s default under both `claude -p` (the spawned-CLI harness) and a raw SDK
   // session here, so a check on either surface would pass identically with and without the variable.
   // Nothing is gained by a check whose control cannot fail.
   //

@@ -6,7 +6,7 @@ import type { BoardSnapshot, PlanView, ThreadView } from "@frizz/shared"
 import { store, openThread, scrollToQueueCard, queueCardTargetY, pushSubAgentDrawer, pushPlanDrawer, QUEUE_CARD_VIEWPORT_TOP } from "../store.ts"
 import { useBoard, asThreads } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
-import { sectionThreads, partitionActive, needsAction, displayTitle, titleIsProvisional, isHeld, parkedAwaitingHint, sessionIndicatorKind, offersRetry, futureSnoozedUntil, lastActiveLabelAt } from "../groups.ts"
+import { sectionThreads, foreignThreads, partitionActive, needsAction, displayTitle, titleIsProvisional, isHeld, parkedAwaitingHint, sessionIndicatorKind, offersRetry, futureSnoozedUntil, lastActiveLabelAt } from "../groups.ts"
 import { ageSpan, relativeAge } from "../lib/activityTime.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { BoxSpinner, STATUS_BOX } from "./BoxSpinner.tsx"
@@ -47,8 +47,11 @@ import type { ReactElement, ReactNode } from "react"
 // and stays spinning in Active undimmed; only external waiters drop into the dimmed band (groups.ts
 // isHeld).
 // Needs-you renders as the row INDICATOR + the queue; awaiting as the hint gloss.
-// Plans from board.plans; Done = explicitly completed. Legacy .frizz rows and foreign terminal
-// sessions do not render at all.
+// Plans from board.plans; Done = explicitly completed. Legacy .frizz rows do not render at all.
+//
+// Below those four, and outside the vocabulary entirely, sits NON-FRIZZ SESSIONS — the project's own
+// `claude`/`codex` terminals. They are not a fifth band of frizz's model, they are a separate listing
+// of work frizz can read but does not drive, so nothing about the four names above applies to them.
 
 
 export function Sidebar() {
@@ -66,6 +69,10 @@ export function Sidebar() {
   // already skipped (lib/steering.ts, lib/optimisticArchive.ts).
   const all = useOptimisticallyArchived(useOptimisticallySteered(asThreads(board?.threads ?? [])))
   const sections = sectionThreads(all, useSnapshot(prefs).queueOrder)
+  // Its own partition, deliberately NOT a SectionKey: sectionThreads drops foreign rows entirely, and
+  // that stays true — a non-frizz session must never be able to land in Active, Held or Done by
+  // accident. This band is the only place they render.
+  const foreignSessions = foreignThreads(all)
   const plans = (board?.plans ?? []) as PlanView[]
   const collapsed = snap.sidebarCollapsed
   const activeThreads = sections.active
@@ -272,6 +279,33 @@ export function Sidebar() {
                   </div>
                 ))}
             </div>
+          )}
+          {/* NON-FRIZZ SESSIONS — the project's own `claude`/`codex` terminals, which frizz reads but
+              does not drive. LAST in the rail and collapsed by default: it is the only band that is not
+              frizz's work at all, so it must never compete with the queue for the reader's eye. Only
+              RESTED sessions are in it — the server drops a spinning one, because a session that is
+              working is one the human already has open in its own window (maintainer 2026-08-19).
+              Rows are read-only: ThreadActionBar swaps the composer for a plain "running in an external
+              terminal" line, and there is no queue card, no verb and no Held/Done to fall into. */}
+          {foreignSessions.length > 0 && (
+            <section aria-label="Non-Frizz sessions">
+              <hr className="my-3 border-border/50" />
+              <SectionHeader
+                label="Non-Frizz sessions"
+                count={foreignSessions.length}
+                collapsed={collapsed.foreign}
+                onToggle={() => (store.sidebarCollapsed.foreign = !store.sidebarCollapsed.foreign)}
+              />
+              {/* The rest-time column is ON here, unlike Held and Done. Every row in this band is by
+                  definition at rest, so "how long ago" is the only thing that distinguishes them — it is
+                  what tells you which terminal you wandered away from an hour ago and which one is from
+                  last Tuesday. Held rows carry their own hint gloss and Done rows are over; neither has
+                  that problem. */}
+              {!collapsed.foreign &&
+                foreignSessions.map((t) => (
+                  <ThreadRow key={t.id} t={t} active={activeId === t.id} onQueueNavigate={navigateToQueueCard} restedAge />
+                ))}
+            </section>
           )}
           {/* PLANS — collapsible, OMITTED (with its rule) when empty. Artifacts, not threads. */}
           {plans.length > 0 && (

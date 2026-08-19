@@ -301,7 +301,7 @@ function sessionRow(slug: string, sessionId: string, backend = "claude"): Sessio
   return {
     slug,
     session_id: sessionId,
-    tmux_name: `frizz-${slug}`,
+    thread_name: `frizz-${slug}`,
     spawned_at: "2026-07-13T12:00:00.000Z",
     last_read_at: null,
     unread: 0,
@@ -320,7 +320,7 @@ function sessionRow(slug: string, sessionId: string, backend = "claude"): Sessio
 }
 
 test("bridge is the sole codex transport (always enabled) and negotiates exact installed protocol over stdio", async () => {
-  // The tmux TUI path is retired: app-server is always the codex transport.
+  // The TUI path is retired: app-server is always the codex transport.
   assert.equal(codexAppServerBridgeEnabled(), true)
   const h = harness()
   const binding = await h.bridge.startDisposableSession({
@@ -1666,7 +1666,7 @@ function aheadOfPin(): string {
 
 test("a NEWER Codex RUNS, and records that it is ahead of the audit", async () => {
   // This case used to be a hard refusal, and that made one `npm i -g @openai/codex` a total,
-  // permanent Codex outage: no tmux fallback, every operation gated behind ensureConnected, recovery
+  // permanent Codex outage: no fallback transport, every operation gated behind ensureConnected, recovery
   // only by editing a source constant and rebuilding frizz. codex ships a stable roughly every two
   // days, so the pin is behind a published stable almost immediately after every re-audit.
   // Derived from the pin rather than written as a literal: a re-pin used to silently turn this test's

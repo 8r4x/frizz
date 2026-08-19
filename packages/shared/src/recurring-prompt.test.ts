@@ -209,7 +209,7 @@ test("a pre-2026-08-16 worker's `start` still parses, and the hold is dropped ra
 // reason why we can't inject some temporal information in that scenario?").
 test("a human reply after a long gap carries the gap; a fast one carries nothing", () => {
   const spoke = "2026-08-19T06:00:00.000Z"
-  const at = (mins) => Date.parse(spoke) + mins * 60_000
+  const at = (mins: number) => Date.parse(spoke) + mins * 60_000
 
   // BELOW THE FLOOR there is no note: a live back-and-forth does not need a stamp on every turn, and one
   // on each is noise that teaches nothing.

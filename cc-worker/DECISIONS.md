@@ -249,8 +249,8 @@ shell-out, so they take effect on the next board rebuild with NO server restart.
   **top-level `additionalContext`** (NOT `decision.message`), which Claude injects to the model as a
   plain-text system-reminder; exit 0 with the JSON on stdout (exit 2 makes Claude ignore it). CAVEAT:
   PermissionRequest hooks do NOT fire under `claude -p` (headless print mode), so the `-p` smoke test
-  can't exercise it — but frizz workers run as INTERACTIVE tmux `claude` sessions, where they DO
-  fire. Both deny hooks are FRIZZ_THREAD-gated and fail-open. (`AskUserQuestion` was not surfaced as
+  can't exercise it — but a frizz worker runs as an INTERACTIVE `claude` session inside its
+  session-broker daemon, where they DO fire. Both deny hooks are FRIZZ_THREAD-gated and fail-open. (`AskUserQuestion` was not surfaced as
   an invokable tool in the `-p` harness either, so both hooks were verified by piping their exact hook
   payloads rather than by driving a live prompt.)
 

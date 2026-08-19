@@ -230,7 +230,7 @@ writeFileSync(join(jsonlDir, `${sessionId}.jsonl`), records.map((r) => JSON.stri
 
 execFileSync("sqlite3", [
   db,
-  `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
+  `INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
    VALUES ('${slug}', '${sessionId}', 'frizz-${slug}', '${now()}', 'syntax highlighting', 'claude', 'opus', 'high', 'default', '${now()}')`,
 ])
 console.log(`seeded ${slug} → ${sessionId}`)

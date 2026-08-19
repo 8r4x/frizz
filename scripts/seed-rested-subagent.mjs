@@ -110,7 +110,7 @@ for (const n of [1, 2, 3, 4, 6]) {
 // ── the registry row + a live dummy pane, so the tailer treats it as a real thread ────────────────
 const dbs = globSync(join(home, ".frizz", "projects", "*", "ui.db"))
 if (dbs.length !== 1) { console.error("expected exactly one sandbox ui.db, got", dbs); process.exit(1) }
-execFileSync("sqlite3", [dbs[0], `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, state, backend, model, effort, permission_mode, title_auto, unread, exited, archived) VALUES ('${SLUG}', '${SESSION}', 'frizz-${SLUG}', '${at(-900)}', 'Sweep the grants corpus', 'open', 'claude', 'opus', 'high', 'bypassPermissions', 0, 0, 0, 0)`])
+execFileSync("sqlite3", [dbs[0], `INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, state, backend, model, effort, permission_mode, title_auto, unread, exited, archived) VALUES ('${SLUG}', '${SESSION}', 'frizz-${SLUG}', '${at(-900)}', 'Sweep the grants corpus', 'open', 'claude', 'opus', 'high', 'bypassPermissions', 0, 0, 0, 0)`])
 
 // ── let the tailer fold it, then report what the BOARD says ───────────────────────────────────────
 const api = createRpcClient(`http://127.0.0.1:${port}/`)

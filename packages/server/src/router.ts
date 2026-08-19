@@ -190,18 +190,21 @@ interface RegisteredRuntimeTerminator {
   isLive(slug: string): boolean
 }
 
-// The terminator completeThread runs on. Its standalone liveness check trusts the BATCHED cache (one
-// `list-panes -a` answers every session) for a "live" verdict — the common resting-shell path — instead of
-// the default uncached isLive (its own `list-panes` exec, run before AND after the kill). Those stacked
-// sync tmux execs on the request path are exactly what starved the event loop and pushed Mark-as-done
-// latency to seconds while an agent streamed (see tmux.ts liveness cache). A cached "dead" verdict is
-// CONFIRMED with one fresh uncached check before it is trusted: paneMap() caches an all-dead map for its
-// 900ms TTL after a transient `list-panes` throw, and archiving a still-live shell without stopping it
-// would orphan it. So live→fast, dead→verified. killSession invalidates the cache, so the post-kill
-// re-check reads fresh too — the "prove the runtime stopped before recording Done" invariant is preserved.
-// The adoption path (findExpectedAdoptionPane) is unchanged; only the standalone isLive check moves here.
-// A no-op terminator. Every live row is headless and answered by the codex/claude branches; a
-// pre-cutover row's pane is long gone, so there is nothing left for this to stop.
+// The terminator completeThread runs on, and today it answers nothing. Every live row is headless and
+// is handled by the codex/claude branches in stopThreadRuntime; a pre-cutover row's worker is long gone,
+// so there is nothing left here to probe or to stop, and every lookup is simply absent.
+//
+// It stays a seam rather than an inlined `false` because of what it used to carry and because the
+// invariant that shape defended still binds. Liveness was once a per-request probe of an external
+// process table, and the naive form — one uncached exec before AND after the kill — is exactly what
+// starved the event loop and pushed Mark-as-done latency to seconds while an agent streamed (see the
+// liveness cache in `tmux.ts`, deleted 2026-08-02 in 05996657). The fix was to trust a BATCHED cache
+// (one query answered every session) for a "live" verdict — the common resting-shell path — and to
+// CONFIRM a "dead" one with a single fresh uncached check, because that cache latched an all-dead map
+// for its 900ms TTL after a transient throw and archiving a still-live worker without stopping it would
+// orphan it. So live→fast, dead→verified; killSession invalidated the cache so the post-kill re-check
+// read fresh too. What survives all of it is the rule the branches below still keep: prove the runtime
+// stopped before recording Done.
 const cachedLivenessTerminator: RegisteredRuntimeTerminator = {
   findExpectedAdoptionPane: () => ({ kind: "absent" }),
   killExpectedAdoptionPane: () => true,
@@ -209,37 +212,40 @@ const cachedLivenessTerminator: RegisteredRuntimeTerminator = {
   isLive: () => false,
 }
 
-// The other terminator. An app-server Codex thread has NO tmux pane: its worker is a TURN running
-// inside the shared codex app-server, which now lives in a DETACHED daemon that deliberately outlives
-// the frizz runtime. Routed through the tmux terminator it takes stopRegisteredRuntime's `unbound`
-// branch, issues `kill-session` for a session that never existed, and reports "stopped" — while the
-// turn keeps running, burning tokens and touching the repo with no frizz-side owner and no UI trace.
-// Before the daemon worked this was masked, because the app-server died with the runtime. `turn/interrupt`
-// over the bridge is the only thing that actually stops it. (Subset of CodexAppServerBridge so the
-// router does not depend on the whole bridge and a test can substitute a stub.)
+// The other terminator. An app-server Codex thread has NO runtime of its own to kill: its worker is a
+// TURN running inside the shared codex app-server, which now lives in a DETACHED daemon that
+// deliberately outlives the frizz runtime. Routed through the registered-runtime terminator it takes
+// stopRegisteredRuntime's `unbound` branch, kills a session that never existed, and reports "stopped" —
+// while the turn keeps running, burning tokens and touching the repo with no frizz-side owner and no UI
+// trace. Before the daemon worked this was masked, because the app-server died with the runtime.
+// `turn/interrupt` over the bridge is the only thing that actually stops it. (Subset of
+// CodexAppServerBridge so the router does not depend on the whole bridge and a test can substitute a
+// stub.)
 export interface CodexTurnTerminator {
   turnLiveness(threadSlug: string, sessionId: string): { bridgeTurn: boolean } | undefined
   interruptTurn(threadSlug: string, sessionId: string): Promise<{ interrupted: boolean }>
 }
 
-// Which rows the bridge, not tmux, owns. A LEGACY tmux Codex row — dispatched pre-cutover, `codex_runtime`
-// NULL, migrated only when a follow-up first touches it (see followUp) — really does own a tmux pane, so
-// it keeps the tmux terminator. This is deliberately the OPPOSITE test from setThreadPermission /
-// setThreadProfile: those branch on the BACKEND alone because the controller they avoid is Claude-only and
-// would parse a legacy Codex TUI as a Claude composer, so a legacy row must not reach it. Here the tmux
-// path is CORRECT for a legacy row and wrong only for a migrated app-server one, so the runtime column —
-// the thing that actually says where the worker lives — is the right discriminator.
+// Which rows the bridge owns. A LEGACY Codex row — dispatched pre-cutover, `codex_runtime` NULL,
+// migrated only when a follow-up first touches it (see followUp) — was never an app-server thread, so it
+// keeps the registered-runtime terminator, which finds nothing to stop because that row's pre-cutover
+// worker is long gone. This is deliberately the OPPOSITE test from setThreadPermission /
+// setThreadProfile: those branch on the BACKEND alone because the controller they avoided was Claude-only
+// and would have parsed a legacy Codex TUI as a Claude composer, so a legacy row must not reach it. Here
+// the legacy path is CORRECT for a legacy row and wrong only for a migrated app-server one, so the
+// runtime column — the thing that actually says where the worker lives — is the right discriminator.
 export function isAppServerCodexRow(row: Pick<SessionRow, "backend" | "codex_runtime">): boolean {
   return row.backend === "codex" && row.codex_runtime === "app-server"
 }
 
-// The Claude twin of the codex turn terminator. A broker-backed Claude row also has NO tmux pane: its
-// worker is a Claude session owned by a DETACHED daemon that outlives frizz. Routed through the tmux
-// terminator it would take stopRegisteredRuntime's `unbound` branch, `kill-session` a pane that never
-// existed, and report "stopped" while the ownerless daemon keeps running — the same phantom-stop the
-// codex terminator exists to prevent. releaseSession SIGTERMs the daemon by record (even when this frizz
-// process holds no live socket, e.g. after a restart); isDaemonAlive reports whether one was there to
-// stop. (Subset of ClaudeAgentBrokerBridge so the router needn't depend on the whole bridge.)
+// The Claude twin of the codex turn terminator. A broker-backed Claude row also has NO runtime of its
+// own to kill: its worker is a Claude session owned by a DETACHED daemon that outlives frizz. Routed
+// through the registered-runtime terminator it would take stopRegisteredRuntime's `unbound` branch, kill
+// a session that never existed, and report "stopped" while the ownerless daemon keeps running — the same
+// phantom-stop the codex terminator exists to prevent. releaseSession SIGTERMs the daemon by record
+// (even when this frizz process holds no live socket, e.g. after a restart); isDaemonAlive reports
+// whether one was there to stop. (Subset of ClaudeAgentBrokerBridge so the router needn't depend on the
+// whole bridge.)
 export interface ClaudeBrokerTerminator {
   isDaemonAlive(sessionId: string): boolean
   releaseSession(threadSlug: string, sessionId: string, reason: "session-replaced" | "session-deleted"): boolean
@@ -258,9 +264,11 @@ export function appServerCodexTurnLive(
 }
 
 // THE seam every "stop this thread's worker" verb goes through, so a new verb cannot silently
-// reacquire the tmux-only hole. Returns "stopped" only for a termination that actually landed; an
-// interrupt that could not be delivered THROWS rather than degrading to "stopped", because the caller's
-// next act is to record the worker as exited/done and that record must not outrun the truth.
+// reacquire the hole this closed: a stop that only knew how to kill a REGISTERED runtime, and so
+// reported success for a headless row whose daemon it never touched. Returns "stopped" only for a
+// termination that actually landed; an interrupt that could not be delivered THROWS rather than
+// degrading to "stopped", because the caller's next act is to record the worker as exited/done and that
+// record must not outrun the truth.
 export async function stopThreadRuntime(
   storage: Pick<Storage, "getAdoptionClaim"> & Partial<Pick<Storage, "getSession" | "getAdoptionRuntimeSnapshot">>,
   row: SessionRow,
@@ -278,8 +286,9 @@ export async function stopThreadRuntime(
   if (isBrokerClaudeRow(row)) {
     if (!claudeBroker) throw new Error("The Claude session broker is unavailable; nothing was stopped")
     // Kill the ownerless daemon. Unlike a codex turn-interrupt (session survives), a broker daemon owns
-    // exactly ONE session, so this terminates the worker outright — the tmux-Claude parity: kill-pane
-    // ends the claude process. isDaemonAlive is read FIRST so we report "absent" for an already-dead one.
+    // exactly ONE session, so this terminates the worker outright — the same all-or-nothing stop a Claude
+    // worker has always had, where ending the process ends the session with it. isDaemonAlive is read
+    // FIRST so we report "absent" for an already-dead one.
     const wasAlive = claudeBroker.isDaemonAlive(row.session_id)
     claudeBroker.releaseSession(row.slug, row.session_id, "session-deleted")
     return wasAlive ? "stopped" : "absent"
@@ -287,10 +296,13 @@ export async function stopThreadRuntime(
   return stopRegisteredRuntime(storage, row, runtime)
 }
 
-// A finalized cold adoption is permanently bound to one exact tmux generation. Destructive UI
+// A finalized cold adoption is permanently bound to one exact runtime generation. Destructive UI
 // actions must never fall back to the reusable session name: another process may already occupy it
 // after the owner exited. Verify token + full tuple, kill that tuple only, then prove it disappeared
-// before deleting registry ownership or reporting the worker stopped.
+// before deleting registry ownership or reporting the worker stopped. Adoption spawns through the broker
+// now, so a live claim carries no runtime tuple and every lookup answers "absent" (see
+// adoption-recovery.ts); the protocol is kept because a claim written by a PRE-cutover frizz still has
+// to be refused safely rather than resolved to a name someone else may hold.
 export function stopRegisteredRuntime(
   storage: Pick<Storage, "getAdoptionClaim"> & Partial<Pick<Storage, "getSession" | "getAdoptionRuntimeSnapshot">>,
   row: Pick<SessionRow, "slug" | "session_id" | "runtime_generation">,
@@ -334,13 +346,13 @@ export async function stopRuntimeBySlug(
   const row = storage.getSession(slug)
   if (row) return { outcome: await stopThreadRuntime(storage, row, runtime, codex, claudeBroker), row }
   if (storage.getAdoptionClaim(slug)) throw new Error("An adoption attempt is in progress; nothing was stopped")
-  // A rowless tmux name has no durable owner identity. Even a DB lock cannot make a forked tmux
-  // client crash-safe after this process dies, so never issue a reusable-name kill without a row.
+  // A rowless thread name has no durable owner identity. Even a DB lock cannot make a detached worker
+  // crash-safe after this process dies, so never issue a reusable-name kill without a row.
   throw new Error("No registered runtime identity is available; nothing was stopped")
 }
 
 // A live provider shell is deliberately not synonymous with a live *turn*. Providers keep their
-// tmux session around at an idle prompt so a later steer can reuse it. Marking that resting shell
+// session resident at an idle prompt so a later steer can reuse it. Marking that resting shell
 // done is safe to perform immediately (and must still terminate it so it is not orphaned). We ask
 // only when the server can see work still being executed. Missing telemetry is intentionally
 // conservative: a live, unobservable runtime may still be in the middle of a turn.
@@ -405,7 +417,7 @@ export function completionNeedsConfirmation(telemetry: SessionTelemetry | undefi
 // *registered* runtime is still executing, and it only records Done after any necessary termination
 // has been proved. A live resting shell is stopped and archived in one click; an executing or
 // unobservable runtime requires explicit confirmation. Adopted workers stay bound to their exact
-// pane tuple; a same-name replacement is never killed or mistaken for the original worker.
+// runtime tuple; a same-name replacement is never killed or mistaken for the original worker.
 export async function completeRegisteredThread(
   storage: Pick<Storage,
     "getAdoptionClaim" | "getAdoptionRuntimeSnapshot" | "getSession" | "completeIfCurrent"
@@ -421,16 +433,16 @@ export async function completeRegisteredThread(
   if (binding.kind === "conflict") {
     throw new Error("This thread has a competing adoption attempt; nothing was changed")
   }
-  // An app-server Codex row is never "live" to tmux — it has no pane — so asking tmux made Mark-as-done
-  // on a RUNNING codex thread archive it silently: no confirmation dialog (live was false, so the hold
-  // was never computed) and no termination. The bridge answers for it instead, which restores BOTH
-  // halves: an executing turn now earns the same "End this session?" confirmation a Claude shell does,
-  // and confirming it actually interrupts the turn.
+  // An app-server Codex row is never "live" to the registered-runtime probe — it has no runtime of its
+  // own — so asking that probe made Mark-as-done on a RUNNING codex thread archive it silently: no
+  // confirmation dialog (live was false, so the hold was never computed) and no termination. The bridge
+  // answers for it instead, which restores BOTH halves: an executing turn now earns the same "End this
+  // session?" confirmation a Claude shell does, and confirming it actually interrupts the turn.
   const appServerCodex = isAppServerCodexRow(row)
   const brokerClaude = isBrokerClaudeRow(row)
-  // A broker Claude row is "live" iff its ownerless daemon is running — never a tmux pane. Without this
-  // Mark-as-done on a running broker thread would archive it silently (live=false → no confirmation, no
-  // termination) and orphan the daemon, the exact codex bug this branch mirrors.
+  // A broker Claude row is "live" iff its ownerless daemon is running — never a registered runtime.
+  // Without this, Mark-as-done on a running broker thread would archive it silently (live=false → no
+  // confirmation, no termination) and orphan the daemon, the exact codex bug this branch mirrors.
   // A pre-cutover row has no transport left, so it can never be live; every current row is one of the
   // two headless kinds above.
   const live = brokerClaude
@@ -447,10 +459,10 @@ export async function completeRegisteredThread(
     // change exists to remove, and for codex it is unrecoverable from the UI (the daemon outlives us
     // and an archived thread has no card left to act on).
     await stopThreadRuntime(storage, row, runtime, codex, claudeBroker)
-    // For standalone sessions this is the postcondition that turns tmux's idempotent kill into a
-    // safe completion operation. An adopted binding is already verified by stopRegisteredRuntime, an
+    // For a standalone registered session this is the postcondition that turns an idempotent kill into
+    // a safe completion operation. An adopted binding is already verified by stopRegisteredRuntime, an
     // app-server codex turn by interruptTurn's own proof that the turn retired, and a broker Claude
-    // session by releaseSession's SIGTERM-by-record (no tmux pane to re-probe).
+    // session by releaseSession's SIGTERM-by-record (there is no separate runtime left to re-probe).
     if (!appServerCodex && !brokerClaude && binding.kind === "unbound" && runtime.isLive(row.slug)) {
       throw new Error("The session could not be confirmed stopped; it was not marked done")
     }
@@ -490,7 +502,8 @@ export async function stopAndForgetRegisteredRuntime(
 }
 
 // The typed RPC surface. Every handler is thin: state mutations go through frizz scripts
-// (thread files) or tmux (agents), then rebuild the board so a fresh snapshot fans out on SSE.
+// (thread files) or a worker daemon's bridge (agents), then rebuild the board so a fresh snapshot fans
+// out on SSE.
 /**
  * Register a folder as a project: the one implementation behind both the picker and a typed path.
  *
@@ -763,10 +776,10 @@ export function createRouter(ctx: AppContext) {
   // condition below is load-bearing and each was measured rather than assumed:
   //
   //  - the row must be a BROKER-backed claude thread. Steering rides an addressed input message on
-  //    the live SDK stream, which only the broker daemon has. A tmux claude row has no such channel;
-  //    a codex row's children are spawned inside codex's own process and the app-server protocol
-  //    exposes no per-child address at all (`turn/steer` addresses a THREAD, and a codex child's
-  //    thread is not one this app-server connection started).
+  //    the live SDK stream, which only the broker daemon has. A LEGACY (pre-cutover) claude row has no
+  //    such channel; a codex row's children are spawned inside codex's own process and the app-server
+  //    protocol exposes no per-child address at all (`turn/steer` addresses a THREAD, and a codex
+  //    child's thread is not one this app-server connection started).
   //  - the child must be DIRECT (this session's own Agent-tool dispatch, not a grandchild resolved
   //    through the descendant sidecar and not a background shell) — the CLI only knows tool_use ids
   //    its own main thread issued. MEASURED, not assumed (`_live_broker_steer_depth.mts`, 2026-07-30):
@@ -799,7 +812,7 @@ export function createRouter(ctx: AppContext) {
     if (!row) return blocked(null)
     if (row.backend === "codex") return blocked("Codex runs its sub-agents inside its own process and exposes no way to address one, so this child can't be steered from here.")
     if (row.claude_runtime !== "broker" || !ctx.claudeBroker) {
-      return blocked("Steering a sub-agent needs the Claude session broker; this thread runs in a terminal.")
+      return blocked("Steering a sub-agent needs the Claude session broker; this thread predates it.")
     }
     return { sessionId: row.session_id }
   }
@@ -852,9 +865,9 @@ export function createRouter(ctx: AppContext) {
     const retired = retiredOpsFor(ctx.storage, slug)
     // A dead OWNER retires every still-pending background card on the thread, for the same reason and
     // more strongly than the × retires one: those ops are children of the process that is gone. Read
-    // from the tailer, which already answers this once per tick for all three runtimes — a dead tmux
-    // pane as well as a dead broker daemon. Asking the broker bridge directly, as this first did, was
-    // both a second implementation of the same question and blind to every tmux row.
+    // from the tailer, which already answers this once per tick for all three runtimes — a legacy row's
+    // long-gone worker as well as a dead broker daemon. Asking the broker bridge directly, as this first
+    // did, was both a second implementation of the same question and blind to every non-broker row.
     const gone = ctx.tailer.ownerGone?.(slug) ?? false
     if (retired.size === 0 && !gone) return page
     return { ...page, messages: projectRetiredBackgroundOps(page.messages, retired, gone) }
@@ -879,7 +892,7 @@ export function createRouter(ctx: AppContext) {
         : "Codex does not expose per-sub-agent interruption to Frizz, so this child can't be stopped from here.")
     }
     if (row.claude_runtime !== "broker" || !ctx.claudeBroker) {
-      return blocked(`Stopping a ${noun} needs the Claude session broker; this thread runs in a terminal.`)
+      return blocked(`Stopping a ${noun} needs the Claude session broker; this thread predates it.`)
     }
     if (!info.taskId) return blocked(`This ${noun} did not publish the task identifier needed to stop it.`)
     return { sessionId: row.session_id, taskId: info.taskId, shell: Boolean(shell) }
@@ -1197,7 +1210,7 @@ export function createRouter(ctx: AppContext) {
         const info = ctx.tailer.subAgent(input.slug, input.id)
         if (!info) return { messages: [], state: "gone" as const, steerable: false, steerNote: null, stoppable: false, stopNote: null }
         // A CODEX sub-agent is itself a codex thread, so its "output file" is a rollout in codex's own
-        // schema — parse it with the codex reader or the drawer renders an empty pane.
+        // schema — parse it with the codex reader or the drawer renders empty.
         const read = info.outputFormat === "codex" ? readCodexTranscriptFile : readTranscriptFile
         const messages = info.outputFile ? read(info.outputFile) : []
         const steer = subAgentSteerable(input.slug, input.id)
@@ -1349,7 +1362,7 @@ export function createRouter(ctx: AppContext) {
     //     noticeShellStopped), so the worker is not left waiting on a watcher frizz already killed.
     //  2. The stop THREW → do NOT retire. A failed stop means the child is still working, and hiding
     //     it is exactly the bug above; the row stays and the error reaches the operator.
-    //  3. NOT stoppable (a tmux claude thread, a codex thread, a stale/finished op) → retire anyway,
+    //  3. NOT stoppable (a legacy claude thread, a codex thread, a stale/finished op) → retire anyway,
     //     because clearing a phantom is the escape hatch the × was built for and is still the only way
     //     to unstick a finished op whose completion was never recorded. But return the REASON, so the
     //     client can say plainly that the work may still be running rather than letting the row vanish
@@ -1420,9 +1433,12 @@ export function createRouter(ctx: AppContext) {
     followUp: mutation({
       input: FollowUpInput,
       handler: async ({ input }) => {
-        // Codex's TUI drops Enter when it follows literal text in the same instant, so this path is
-        // persisted + capture-gated and submits through one atomic paste-and-key. Claude keeps its native
-        // live injection, and any dead session resumes through the backend command.
+        // Every follow-up crosses a TYPED CONTROL CHANNEL now, never a terminal: a codex row goes to the
+        // app-server bridge and a claude row to the session broker, each of which owns its own
+        // steer-vs-start decision and reconnects or cold-resumes a dead session itself. Nothing types
+        // into a provider TUI any more, so the capture-gated atomic paste-and-key this used to open with
+        // — which existed only because Codex's TUI dropped Enter when it followed literal text in the
+        // same instant — went with the transport that needed it.
         //
         // A follow-up DISABLES any snooze on this row — see wakeParkedThreadForFollowUp, which owns the
         // rule and the reasoning. Short version: re-parking after the turn you just asked for would hide
@@ -1453,14 +1469,14 @@ export function createRouter(ctx: AppContext) {
           // finish (maintainer 2026-08-01: "do not disable the button when there are sub-agents
           // running"). The children die; that is what the operator asked for and already knows.
         }
-        // Reopen an archived thread HERE, above the runtime branches, because only the tmux path reaches
-        // resumeThread (where this used to live alone). A broker-backed Claude row and an app-server
-        // Codex row both return from their own branch below, so sending them a follow-up used to resume
-        // the WORKER while leaving the ROW archived: the thread executed away while the board read Done,
-        // and — an archived thread having no lifecycle verbs — offered no Mark-as-done button to stop it.
-        // That is the state the "send a message to reopen it" readout promises against, so it has to hold
-        // for every runtime. Raised 2026-07-31 against a live broker thread ("showing up as done… but it
-        // is actually running actively").
+        // Reopen an archived thread HERE, above the runtime branches, because only the LEGACY
+        // fall-through reaches resumeThread (where this used to live alone). A broker-backed Claude row
+        // and an app-server Codex row both return from their own branch below, so sending them a
+        // follow-up used to resume the WORKER while leaving the ROW archived: the thread executed away
+        // while the board read Done, and — an archived thread having no lifecycle verbs — offered no
+        // Mark-as-done button to stop it. That is the state the "send a message to reopen it" readout
+        // promises against, so it has to hold for every runtime. Raised 2026-07-31 against a live broker
+        // thread ("showing up as done… but it is actually running actively").
         // THE GAP THE HUMAN LEFT, appended to what the worker receives — and to that ONLY. A worker has no
         // clock of its own, so an answer arriving after four hours is indistinguishable from one arriving
         // after four seconds; it will resume on a stale premise and re-run work whose result went cold.
@@ -1476,9 +1492,9 @@ export function createRouter(ctx: AppContext) {
         // Claude row and an app-server Codex row both return from their own branch below, so anything
         // that must hold for every runtime has to run before the split.
         if (row) wakeParkedThreadForFollowUp(ctx, row)
-        // Every Codex follow-up flows through the app-server bridge — no tmux composer, no queue, no
+        // Every Codex follow-up flows through the app-server bridge — no terminal composer, no queue, no
         // stale-draft class. The bridge owns the steer-vs-start decision atomically and dedups on
-        // deliveryId. A LEGACY tmux Codex row (dispatched before the cutover) is migrated on its first
+        // deliveryId. A LEGACY Codex row (dispatched before the cutover) is migrated on its first
         // follow-up by adopting its rollout; from then on it is an ordinary app-server thread.
         if (row?.backend === "codex") {
           const bridge = ctx.codexAppServer
@@ -1520,7 +1536,7 @@ export function createRouter(ctx: AppContext) {
           })
           // Codex gets a ledger entry too — as SERVER TRUTH for the queued bubble, not as a delivery
           // guess: the bridge already dedups on deliveryId and its return IS the receipt, so the item
-          // opens `enqueued` and can never age into the amber "check the terminal" warning (there is no
+          // opens `enqueued` and can never age into the amber "no receipt from the worker" warning (there is no
           // terminal composer on an app-server thread). Without it the ONLY thing rendering a just-sent
           // codex steer is the client's optimistic bubble, and mergeOptimistic's ghost floor retires
           // that once the transcript advances 60s past it — measured against frizz's own delivery
@@ -1533,15 +1549,16 @@ export function createRouter(ctx: AppContext) {
           ctx.board.refresh()
           return
         }
-        // Claude session-broker follow-up: a broker-backed claude row owns a DETACHED daemon, not a tmux
-        // pane, so it can't go through the composer/sendKeys path. Route through the bridge — it reconnects
-        // the live daemon's socket (context intact) or cold-resumes a dead one. Branch on the ROW's runtime
-        // (not the flag): a row dispatched via the broker must always be served via the broker. The worker
-        // system prompt is rebuilt so a cold resume re-applies it (ignored when the daemon is still alive).
+        // Claude session-broker follow-up: a broker-backed claude row owns a DETACHED daemon, so its
+        // follow-up is a message on that daemon's own control channel and nothing else can reach it.
+        // Route through the bridge — it reconnects the live daemon's socket (context intact) or
+        // cold-resumes a dead one. Branch on the ROW's runtime (not the flag): a row dispatched via the
+        // broker must always be served via the broker. The worker system prompt is rebuilt so a cold
+        // resume re-applies it (ignored when the daemon is still alive).
         if (row?.backend === "claude" && row.claude_runtime === "broker") {
           const bridge = ctx.claudeBroker
           if (!bridge) throw new Error("Claude session broker is unavailable; cannot deliver this follow-up")
-          // Replay guard, same as the tmux path below: the ledger entry is written only once
+          // Replay guard, same as the legacy fall-through below: the ledger entry is written only once
           // `bridge.followUp` RETURNS, so a hit proves the text already crossed into the daemon. The
           // broker branch returns before that check, so it had none — a replayed deliveryId sent the
           // message a SECOND time. It also matters now that the deliveryId IS the SDK input uuid: the
@@ -1580,15 +1597,16 @@ export function createRouter(ctx: AppContext) {
               mayHaveLiveBackgroundWork(ctx.tailer.get(input.slug)),
             ),
           })
-          // The ledger's RELIABILITY half is indeed tmux-only — flush-stuck-composer and the
-          // pane-inspected receipt are skipped for a headless row (isHeadlessRow gates both), and no
-          // delivery marker is stamped because nothing rewrites bytes on the way to the SDK. But its
-          // RENDERING half applies here exactly as it does to codex: until the JSONL carries the
-          // message, the only thing showing the human their own just-sent steer is the client's
-          // optimistic bubble, and mergeOptimistic's ghost floor retires that once the transcript
-          // advances 60s past it. So open an entry — `enqueued`, because the SDK call returning IS the
-          // receipt, which also keeps it out of the amber "check the terminal" state that would be
-          // meaningless on a thread with no terminal. The tailer drops it as soon as the record lands.
+          // The ledger's RELIABILITY half died with the terminal transport — the stuck-composer flush and
+          // the screen-inspected receipt were the only things it bought, and both were skipped for a
+          // headless row even then; no delivery marker is stamped either, because nothing rewrites bytes
+          // on the way to the SDK. But its RENDERING half applies here exactly as it does to codex:
+          // until the JSONL carries the message, the only thing showing the human their own just-sent
+          // steer is the client's optimistic bubble, and mergeOptimistic's ghost floor retires that once
+          // the transcript advances 60s past it. So open an entry — `enqueued`, because the SDK call
+          // returning IS the receipt, which also keeps it out of the amber "no receipt" state that
+          // would be meaningless on a thread whose transport acknowledges every send. The tailer drops it as soon as the
+          // record lands.
           // A restart RETIRED the process every earlier outstanding send was handed to, so those sends
           // are dead and their queued bubbles are now claims about a process that no longer exists.
           // Clear them here, BEFORE this restart's own entry is opened, so the continuation is the only
@@ -1616,8 +1634,8 @@ export function createRouter(ctx: AppContext) {
         //
         // What actually guarantees the retry loop cannot double-send is the CLASSIFICATION, not this
         // check: the client only replays an error typed RetryableDeliveryError, and every such throw is
-        // raised strictly upstream of the first tmux write, so a replayed send never had a first copy to
-        // duplicate. This dedup is defense-in-depth for replays from OTHER sources (a stale tab, an
+        // raised strictly upstream of the first write to the worker, so a replayed send never had a first
+        // copy to duplicate. This dedup is defense-in-depth for replays from OTHER sources (a stale tab, an
         // at-least-once transport). It deliberately does NOT cover a throw misclassified as retryable
         // AFTER an injection: `appendDelivery` runs only once `resumeThread` returns, so such a throw
         // leaves no ledger row and this check would miss it. Keeping every retryable throw pre-injection
@@ -1626,12 +1644,15 @@ export function createRouter(ctx: AppContext) {
             hasDelivery(ctx.storage, input.slug, input.deliveryId)) {
           return
         }
-        // The deliveryId rides along so the composer paths can stamp the send with its invisible marker
-        // (delivery-marker.ts) — that is what lets the tailer confirm delivery by IDENTITY instead of by
-        // comparing prose the tmux+TUI paste channel is free to rewrite. Codex never takes this path.
+        // The LEGACY fall-through: a claude row that is not broker-backed, i.e. one dispatched before the
+        // cutover. The deliveryId rides along because the old terminal transport stamped each send with
+        // an invisible marker (delivery-marker.ts) — that is what let the tailer confirm delivery by
+        // IDENTITY instead of by comparing prose a paste channel was free to rewrite. Codex never takes
+        // this path, and frizz has no transport left for the rows that do: resumeThread refuses every one
+        // of them by design (see resume.ts), so this is a loud backstop, not a delivery.
         resumeThread({ project: ctx.project, storage: ctx.storage, board: ctx.board, getSettings: ctx.getSettings, backendFor: ctx.backendFor }, input.slug, messageForWorker,
           input.deliveryId && row?.backend !== "codex" ? input.deliveryId : undefined,
-          // "Continue now" on a limit-paused tmux thread relaunches it, for the same reason the broker
+          // "Continue now" on a limit-paused legacy thread relaunches it, for the same reason the broker
           // branch above swaps its process: the running one is not listening.
           {
             freshProcess: needsFreshProcessForLimit(
@@ -1656,9 +1677,10 @@ export function createRouter(ctx: AppContext) {
     // whether the provider actually removed the message, and never claims a retraction it did not get.
     //
     // Only a broker-backed Claude row can do it, because only there does frizz hold a control channel
-    // into a queue that still exists. A tmux row's text was typed into Claude Code's own TUI composer
-    // and a codex app-server steer went straight into the running turn — in both cases the message has
-    // left every surface frizz can address, and the honest answer is "too late", not a silent no-op.
+    // into a queue that still exists. A LEGACY row's text was typed into Claude Code's own TUI composer
+    // back when frizz drove one, and a codex app-server steer goes straight into the running turn — in
+    // both cases the message has left every surface frizz can address, and the honest answer is
+    // "too late", not a silent no-op.
     unqueueFollowUp: mutation({
       input: UnqueueFollowUpInput,
       output: UnqueueFollowUpResult,
@@ -1717,8 +1739,8 @@ export function createRouter(ctx: AppContext) {
     // the next turn opens on what is queued — which is exactly what the operator is asking for.
     //
     // Same gates as unqueueFollowUp, and for the same reason: only a broker-backed Claude row gives frizz
-    // a control channel into a live turn. A tmux row and a codex steer have no interrupt frizz can send,
-    // and the honest answer is to say so rather than no-op.
+    // a control channel into a live turn. A legacy row and a codex steer have no interrupt frizz can
+    // send, and the honest answer is to say so rather than no-op.
     deliverQueuedNow: mutation({
       input: DeliverQueuedNowInput,
       output: DeliverQueuedNowResult,
@@ -1747,12 +1769,12 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         const thread = (await ctx.board.snapshot()).threads.find((t) => t.id === input.slug)
         if (!thread || thread.foreign || thread.kind !== "session") throw new Error(`thread ${input.slug} is not editable`)
-        // EVERY codex thread persists its sandbox and applies it on the next turn: there is no tmux pane
-        // to reattach, and the permission controller is now a CLAUDE-only path (it inspects the pane with
-        // inspectClaudeComposer). Keying this on `codex_runtime === "app-server"` instead of the backend
-        // let a LEGACY codex row (dispatched pre-cutover, codex_runtime NULL, not yet migrated) fall into
-        // that controller and get its Codex TUI parsed as a Claude composer. followUp already branches on
-        // the backend alone and migrates such a row on contact; match it.
+        // EVERY codex thread persists its sandbox and applies it on the next turn: there is no separate
+        // worker process to reattach. Keying this on `codex_runtime === "app-server"` instead of the
+        // backend let a LEGACY codex row (dispatched pre-cutover, codex_runtime NULL, not yet migrated)
+        // fall into the CLAUDE-only permission controller that used to follow, which would have read its
+        // Codex TUI as a Claude composer. That controller is gone (see the Claude branch below), but the
+        // BACKEND test stays: followUp branches the same way and migrates such a row on contact.
         const permRow = ctx.storage.getSession(input.slug)
         if (permRow?.backend === "codex") {
           // Persist FIRST and unconditionally: the registry is the operator's stated intent, it is what
@@ -1798,11 +1820,11 @@ export function createRouter(ctx: AppContext) {
         // idle and has no unresolved background operation (threadPermissions.ts), and why the effect
         // reported below is `next-turn` rather than `applied`: no turn is running to apply it TO.
         //
-        // This used to branch — a broker row persisted and reported next-resume, while a PANE row went
-        // through the permission controller, which inspected the live TUI's composer to protect an
-        // unsent draft and then relaunched the conversation with a different launch flag. There are no
-        // pane rows any more, so that whole apparatus (permission-controller.ts, 421 lines of pane
-        // scraping) went with the tmux transport and this is the only path left.
+        // This used to branch — a broker row persisted and reported next-resume, while a TERMINAL-backed
+        // row went through the permission controller, which inspected the live TUI's composer to protect
+        // an unsent draft and then relaunched the conversation with a different launch flag. No row runs
+        // in a terminal any more, so that whole apparatus (permission-controller.ts, 421 lines of screen
+        // scraping) went with the transport it served and this is the only path left.
         ctx.storage.setPermissionMode(input.slug, input.permissionMode)
         ctx.board.refresh()
         // `next-resume` is the honest answer when there was no process to retire: the intent is stored
@@ -1831,9 +1853,10 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         const thread = (await ctx.board.snapshot()).threads.find((candidate) => candidate.id === input.slug)
         if (!thread || thread.foreign || thread.kind !== "session") throw new Error(`thread ${input.slug} is not editable`)
-        // Codex takes model/effort per turn (turn/start) — no tmux process handoff. Persist them; the
+        // Codex takes model/effort per turn (turn/start) — no process handoff at all. Persist them; the
         // next follow-up turn picks them up. Branch on the BACKEND, not codex_runtime: the profile
-        // controller is Claude-only now, so a legacy (unmigrated) codex row must not reach its reattach.
+        // controller that used to follow was Claude-only, so a legacy (unmigrated) codex row must not
+        // reach its reattach.
         const profRow = ctx.storage.getSession(input.slug)
         if (profRow?.backend === "codex") {
           ctx.storage.setProfile(input.slug, input.model, input.effort)
@@ -1842,8 +1865,9 @@ export function createRouter(ctx: AppContext) {
         }
         // Claude: model/effort are fixed at fork time (the SDK takes them at query start), so a live
         // daemon cannot retune mid-session. Persist the intent and let the next cold-resume fork carry
-        // it. The pane branch that used to follow — profile-controller relaunching the conversation
-        // under new flags after inspecting the composer for an unsent draft — went with tmux.
+        // it. The terminal-backed branch that used to follow — profile-controller relaunching the
+        // conversation under new flags after inspecting the composer for an unsent draft — went with the
+        // transport it served.
         validateThreadProfile("claude", input.model, input.effort)
         ctx.storage.setProfile(input.slug, input.model, input.effort)
         ctx.board.refresh()
@@ -1958,7 +1982,7 @@ export function createRouter(ctx: AppContext) {
     // common case (edit a hook or a skill, want the running worker to pick it up) that is far too
     // blunt, and it is exactly what an operator iterating on the worker closure does all day.
     //
-    // Claude-broker threads only. The tmux path has no control channel to ask, and frizz's codex
+    // Claude-broker threads only. A legacy row has no control channel to ask through, and frizz's codex
     // app-server client speaks no reload method — both surface as a plain refusal rather than a
     // silently-ignored click.
     reloadThreadPlugins: mutation({
@@ -2323,7 +2347,7 @@ export function createRouter(ctx: AppContext) {
     // shelved (Archive = state='archived', still listed in Inactive). Removes the registry row AND
     // tombstones its transcript id so a log-dir rescan / foreign-discovery can never resurrect it, then
     // drops the tailer's in-memory state. GATED on a NOT-live row: only a thread whose derived runtime is
-    // "exited" (a dead pane, or a boot-failure "Stalled" session degradeIfNoTranscript flags) can be
+    // "exited" (a dead worker, or a boot-failure "Stalled" session degradeIfNoTranscript flags) can be
     // forgotten — a genuinely-live session (running / turn-idle / perm-prompt) is refused so it can't be
     // yanked out from under itself. Idempotent: an already-forgotten slug no-ops.
     forgetThread: mutation({
@@ -2374,7 +2398,7 @@ export function createRouter(ctx: AppContext) {
     // Copy only a provider-native resume invocation. The durable session registry is the ownership
     // boundary: board session views are derived from these exact rows, while foreign discoveries and
     // legacy docs have no row. Avoid rebuilding the full board on this latency-sensitive click path.
-    // The command attaches a SECOND provider client and never touches Frizz's private tmux pane, so it
+    // The command attaches a SECOND provider client and never touches Frizz's own worker daemon, so it
     // is offered in every runtime state, live too. An absent/replaced row fails closed.
     threadTerminalCommand: query({
       input: SlugInput,
@@ -2384,15 +2408,11 @@ export function createRouter(ctx: AppContext) {
         if (!row) {
           throw new Error("No Frizz-owned terminal session is available for this thread")
         }
-        // A LIVE pane gets an ATTACH, not a resume. `<cli> resume` is not a second view of a running
-        // session — it starts a SEPARATE process that replays the transcript — so it structurally
-        // cannot show live runtime state, and the state a human most often opens a terminal to deal
-        // with is exactly that: a permission prompt the worker is parked on, which is never written to
-        // the transcript at all. Handing back a resume there sends the human to a terminal that looks
-        // Always a RESUME. There used to be an ATTACH branch for a live tmux pane — a genuinely
-        // different thing, since `<cli> resume` replays the transcript in a separate process and can
-        // show neither live runtime state nor a permission prompt the worker is parked on. Workers do
-        // not run in panes any more, so there is nothing to attach to and the resume is the only
+        // Always a RESUME. There used to be an ATTACH branch for a worker frizz held open in a terminal
+        // — a genuinely different thing, since `<cli> resume` replays the transcript in a SEPARATE
+        // process and can show neither live runtime state nor a permission prompt the worker is parked
+        // on, which is never written to the transcript at all. Workers run in detached daemons now, with
+        // no terminal for a human to join, so there is nothing to attach to and the resume is the only
         // honest offer.
         // Gated only on a real provider-native id existing — no paternalistic "wait for it" block.
         const backend = row.backend
@@ -2549,9 +2569,9 @@ export function createRouter(ctx: AppContext) {
 
     // Ask the provider to name this thread — the "Rename with Claude" verb in the drawer header.
     //
-    // This used to type `/rename` into the session's tmux pane and scrape the result back out. It now
+    // This used to type `/rename` into the session's terminal and scrape the result back out. It now
     // goes through the broker's typed control channel to the SDK's own `generateSessionTitle`, which is
-    // the same call the daemon already makes to seed a title on the first message. The pane path was
+    // the same call the daemon already makes to seed a title on the first message. The scraping path was
     // not merely legacy: it threw on every broker-backed thread, i.e. on every thread dispatched since
     // the broker cutover, so this verb was dead in the UI until now.
     aiRenameThread: mutation({
@@ -2580,7 +2600,7 @@ export function createRouter(ctx: AppContext) {
       input: SlugInput,
       handler: async ({ input }) => {
         // Termination goes through stopRuntimeBySlug's seam, so an app-server Codex thread is stopped
-        // with turn/interrupt rather than a tmux kill-session for a pane that never existed. A stop that
+        // with turn/interrupt rather than a kill aimed at a registered runtime it never had. A stop that
         // could not be delivered throws out of here BEFORE setExitedIfCurrent, so the row is never
         // marked exited on the strength of a termination that did not happen.
         const stopped = await stopRuntimeBySlug(ctx.storage, input.slug, cachedLivenessTerminator, ctx.codexAppServer, ctx.claudeBroker)
@@ -2641,8 +2661,9 @@ export function createRouter(ctx: AppContext) {
     }),
 
     // Slice B login utility: the sign-in modal's PRIMARY action. Starts (or re-attaches to) the one
-    // live `claude auth login` tmux session, addressed by a server-issued slug-shaped attempt id the
-    // browser then attaches to over the existing hardened /term transport.
+    // live `claude auth login` pty — login-utility.ts runs it on node-pty directly — addressed by a
+    // server-issued slug-shaped attempt id the browser then attaches to over the existing hardened
+    // /term transport.
     accountLoginStart: mutation({
       input: AccountLoginStartInput,
       output: AccountLoginStartResult,
@@ -2655,8 +2676,8 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         const { state, backend } = ctx.loginUtility.status(input.attemptId)
         const auth = await readAuthSnapshot({ claudeBin: ctx.claudeBin })
-        // The login CLI finished → the pane is spent; tear it down eagerly so the OAuth bytes don't
-        // linger in a dead pane. Cancel is idempotent.
+        // The login CLI finished → the pty is spent; tear it down eagerly so the OAuth bytes don't
+        // linger in its replay buffer. Cancel is idempotent.
         if (state === "exited") ctx.loginUtility.cancel(input.attemptId)
         return { state, auth: auth[backend ?? "claude"] }
       },
@@ -2915,7 +2936,7 @@ export function createRouter(ctx: AppContext) {
 
     // Spin up one frizz thread per checked item: hydrate each fresh from gh, template a server-side
     // prompt (single source of truth, unit-tested), then REUSE ctx.dispatcher.dispatch (no new spawn
-    // logic). SEQUENTIAL — a burst of 20 concurrent tmux spawns would hammer the box (risk 5). A
+    // logic). SEQUENTIAL — a burst of 20 concurrent worker spawns would hammer the box (risk 5). A
     // per-item failure is captured in `failed[]` and never aborts the rest of the batch.
     githubDispatchBatch: mutation({
       input: GithubBatchInput,

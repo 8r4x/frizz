@@ -212,7 +212,7 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   // journals the same tool call as an answerable interaction, which renders as the question card just
   // above, and pointing the operator at a terminal while an answerable copy sits on screen is worse
   // than saying nothing. So the net stands down whenever this thread has a pending interaction, and
-  // still covers the sessions it exists for — pre-contract, adopted, or tmux threads that reach the
+  // still covers the sessions it exists for — pre-contract, adopted, or foreign threads that reach the
   // tool with no broker to intercept it.
   const frozenAsk = thread?.pendingInteraction ? undefined : thread?.pendingAsk
 
@@ -3056,11 +3056,13 @@ function UserBubble({ text, rawText, queued, sticky, deliveryUnconfirmed, delive
           )}
         </div>
       )}
-      {/* Delivery-ledger verdict: no JSONL evidence within the confirmation window — the injection
-          likely mutated or never reached the agent. Quiet one-liner (not a modal): the terminal pane
-          is the recovery surface, and the bubble stays gray so the send is still legible above it. */}
+      {/* Delivery-ledger verdict: no JSONL evidence within the confirmation window — the send likely
+          mutated or never reached the agent. Quiet one-liner (not a modal): re-sending is the recovery,
+          and the bubble stays gray so the send is still legible above it. This used to read "check the
+          terminal", from when a worker sat in a pane an operator could open; there is no such surface
+          now, so it states the fact and leaves the next move to them. */}
       {deliveryUnconfirmed && (
-        <div className="text-[11px] text-amber-400/80">Delivery unconfirmed — check the terminal</div>
+        <div className="text-[11px] text-amber-400/80">Delivery unconfirmed — no receipt from the worker</div>
       )}
       {/* No "click to unqueue" hint: the hover lift above already says the bubble is live, and a
           label spelling that out is noise on every queued send. Only the IN-FLIGHT retraction gets a
@@ -4091,7 +4093,7 @@ export function BackgroundOpsStrip({
           depth={s.displayDepth ?? s.depth}
           startedAt={s.startedAt}
           // The ops strip is where the full live reading belongs: the child's current step plus how far
-          // it has got. All three are absent for a tmux/codex child, which just reads as it did before.
+          // it has got. All three are absent for a codex child, which just reads as it did before.
           onOpen={s.id ? () => pushSubAgentDrawer(slug, s.id!, { label: s.label, subagentType: s.subagentType, startedAt: s.startedAt }) : undefined}
           onDismiss={childOpDismisser(slug, s)}
         />

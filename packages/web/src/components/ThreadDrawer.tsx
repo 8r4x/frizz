@@ -41,7 +41,7 @@ export function ThreadDrawer({ id, slug, title, depth, widthDepth }: { id: numbe
 
   // Session-less composite (see header comment): runtime "none" = no session ever spawned. Submit =
   // adopt (spawn a worker on the thread FILE — the durable context) + followUp (the user's message
-  // lands as the worker's first steer via tmux stdin), then swap this doc layer into the CHAT layer
+  // lands as the worker's first steer), then swap this doc layer into the CHAT layer
   // in place — the chat view's "Session starting…" spinner covers the spawn.
   const thread = threadBySlug(snap.board as BoardSnapshot | null, slug)
   const adoptable = canAdoptThread(thread)

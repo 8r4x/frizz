@@ -62,7 +62,7 @@ import { frizzTempDir } from "./frizz-paths.ts"
 //                                          Opus tool latency routinely exceeds 5s)
 //   - assistant, stop_reason missing/other → BACKSTOP: idle iff no append for >5s, else in-flight
 //   - user (a fresh prompt or a tool_result) → in-flight (the model is about to respond)
-//   - no substantive records yet             → in-flight (spawning; the pane is live)
+//   - no substantive records yet             → in-flight (spawning; the worker is live)
 // The 5s backstop only fires for an UNKNOWN stop_reason, so it can never override a clear tool_use.
 
 const IDLE_BACKSTOP_MS = 5000
@@ -99,9 +99,12 @@ const EMPTY_BUFFER = Buffer.alloc(0)
 // Ceiling on the adaptive poll (see scheduleTick). A tick this expensive means something is badly
 // wrong, but the tailer is still the only source of turn/liveness telemetry — it must keep running.
 const MAX_POLL_MS = 10_000
-// Claude writes an untimestamped permission sidecar just before (or alongside) its footer redraw.
-// Give the footer the arrival poll plus two more redraw polls, then discard a stable mismatch so a
-// killed pane's late sidecar cannot cause a permanent capture-pane/SQLite hot loop.
+// HISTORICAL, and nothing reads it now. From the era when frizz ran each worker in a terminal it
+// could read back: Claude writes an untimestamped permission sidecar just before (or alongside) its
+// footer redraw, so an incremental observation was held for the arrival poll plus two more redraw
+// polls before a stable mismatch was discarded — otherwise a killed worker's late sidecar drove a
+// permanent capture/SQLite hot loop. The live permission signal is the cc-worker hook's marker file
+// (see permMarkerBlocks), which carries its own timestamp and needs no confirmation window.
 const CLAUDE_PERMISSION_CONFIRM_POLLS = 3
 // A tracked background sub-agent whose transcript file has gone this long without an append is
 // treated as "stale" — a liveness fallback for a completion record we somehow missed (the child
@@ -167,10 +170,12 @@ function activityMinute(at: string | undefined): string {
   const ms = Date.parse(at)
   return Number.isFinite(ms) ? String(Math.floor(ms / 60_000)) : ""
 }
-// How long the transcript must be silent while a turn still looks in-flight before we spend a
-// tmux capture-pane to sniff for an interactive permission prompt. Keeps us from shelling out
-// every tick for a healthily-streaming turn; a real prompt only appears after a tool_use record
-// (which stamps lastActivityAt), so by the time one shows the transcript has already gone quiet.
+// HISTORICAL quiet-gate, and nothing reads it now. How long the transcript had to stay silent, while
+// a turn still looked in-flight, before frizz spent a subprocess capturing the worker's rendered
+// terminal to look for an interactive permission prompt. It kept the tick from shelling out on a
+// healthily-streaming turn; a real prompt only appears after a tool_use record (which stamps
+// lastActivityAt), so by the time one showed the transcript had already gone quiet. Kept because the
+// comments below name it as the latency the marker path (permMarkerBlocks) removed.
 const PERM_SNIFF_MS = 4000
 // Whole-directory FOREIGN-session discovery: a *.jsonl in the log dir with no registry row is a
 // maintainer terminal, surfaced as a read-only thread. Only files touched within this window are
@@ -208,8 +213,10 @@ const DISCOVER_RETRY_MS = 15_000
 // SWEEPS only — a row whose own pinned `<session_id>.jsonl` gets bytes binds on the next tick
 // regardless of how deep its miss streak is, which is what makes backing off safe for a live boot.
 const DISCOVER_RETRY_MAX_MS = 15 * 60_000
-// Per-session sink for a captured boot-failure pane, so a stall's root cause (claude's own error text,
-// frozen in the remain-on-exit pane) survives past the pane being killed. Best-effort; inert litter.
+// Per-session sink for a boot-failure stall, so its root cause survives past the worker being gone —
+// historically claude's own error text, frozen on the dead worker's last screen, which is where the
+// name comes from; today the pointer to whatever evidence that row's runtime does keep (see
+// captureStall). Best-effort; inert litter.
 // NOTE: per-PROJECT, resolved inside createTailer — the filename is a bare thread slug, so two
 // projects with a thread called `fix-auth` overwrite each other's captured agent output. See
 // stallLogDir below.
@@ -229,8 +236,9 @@ export interface SubAgentView {
   lastActivityAt?: string // ISO8601 of the child transcript's last append (its output-file mtime)
   // ---- provider-reported progress (broker Claude rows only; see applyRuntimeTasks) ----
   // "there's not really any indication of what they're up to aside from starts and stops" — this is
-  // that indication. Every field is ABSENT unless the SDK reported it for this exact child, so a tmux
-  // thread (prose-only) and an older claude that emits no task_* events render exactly as before.
+  // that indication. Every field is ABSENT unless the SDK reported it for this exact child, so a row
+  // with no provider event stream (prose-only) and an older claude that emits no task_* events render
+  // exactly as before.
   activity?: string // the tool the child is running RIGHT NOW (SDK last_tool_name)
   activityDetail?: string // what that step IS, in words (e.g. "Running Print current date and time")
   summary?: string // the provider's rolling one-line summary of the child's work
@@ -256,18 +264,19 @@ export interface FenceView {
 }
 
 // Per-session derived telemetry surfaced to the board overlay. Structurally a NormalizedTail (the
-// backend-neutral fold-output contract) PLUS `permPrompt` — which is pane-sniffed live, not folded
-// from the transcript. `extends` makes tsc enforce that this stays a superset of the shared contract.
+// backend-neutral fold-output contract) PLUS `permPrompt` — which is read live off the worker's
+// permission marker, not folded from the transcript. `extends` makes tsc enforce that this stays a
+// superset of the shared contract.
 export interface SessionTelemetry extends NormalizedTail {
   turn: TurnState
-  permPrompt: boolean // paused on an interactive permission prompt (pane-sniffed; no jsonl signal)
+  permPrompt: boolean // paused on an interactive permission prompt (from the marker; no jsonl signal)
   // The last allow/deny frizz's permission POLICY made for this thread, and how many denials it has
   // made this session. Purely informational — a policy decision never blocks anyone, which is exactly
   // why it needs surfacing: it is otherwise invisible.
   permPolicy?: PermPolicyView
   permDenies?: number
   // A verified backend-native modal that blocks transcript progress. Its fixed presentation-safe
-  // title/kind are the ONLY pane-derived data exposed; option/detail content never leaves the server.
+  // title/kind are the ONLY detector-derived data exposed; option/detail content never leaves the server.
   nativeInputRequired?: NativeInputRequiredData
   // Monotonic within this tail state. The permission controller uses it to distinguish an
   // authoritative profile emitted by the freshly attached backend from the pre-reattach fold.
@@ -302,10 +311,19 @@ export interface SessionTelemetry extends NormalizedTail {
   contextWindow?: number // the model's context size, provider-reported (see FoldState.contextWindow)
 }
 
-// ---- Interactive permission-prompt sniff (pane text; no jsonl signal) ----
+// ---- Interactive permission-prompt matcher (rendered terminal text; no jsonl signal) ----
+// DORMANT IN THIS BUILD, and kept deliberately. Frizz no longer renders a worker into a terminal it
+// can read back: a Claude worker runs inside the detached broker daemon and reports an approval as a
+// typed permission request, and the live signal here is the cc-worker hook's marker file (see
+// permMarkerBlocks). So no tick calls this matcher; it survives as a pure, tested function on the
+// AgentBackend contract (backend/claude.ts wires it as `matchesPermPrompt`), because the empirical
+// record below cost 81 real captures to build and the next runtime that CAN hand frizz screen text
+// will want it. Everything from here down to and including `detectClaudeBootModal` describes that
+// historical screen-reading path.
+//
 // Even under `--permission-mode auto`, claude still stops on an interactive permission prompt for
 // some tool calls, and the transcript gives NO signal — the last record stays assistant +
-// stop_reason:"tool_use" (in-flight) indefinitely. The only observable is the rendered TUI. These
+// stop_reason:"tool_use" (in-flight) indefinitely. The only observable was the rendered TUI. These
 // markers were captured empirically (claude 2.1.198, --permission-mode default) for both a Bash
 // and an Edit approval:
 //
@@ -333,24 +351,25 @@ export interface SessionTelemetry extends NormalizedTail {
 // The wording is NOT stable across every modal, so both signals carry alternates. ExitPlanMode's
 // approval asks "Would you like to proceed?" and footers with "ctrl+g to edit in VS Code · …" — it
 // matches NEITHER original spelling and was invisible here (adversarial review, claude 2.1.214). That
-// is a hang-forever miss, not a cosmetic one: `detectNativeInput` is registered on the Codex backend
-// ONLY (backend/codex.ts), so for a Claude worker this matcher is the single blocking-modal signal.
+// was a hang-forever miss, not a cosmetic one: `detectNativeInput` is registered on the Codex backend
+// ONLY (backend/codex.ts), so while the screen read ran this matcher was a Claude worker's single
+// blocking-modal signal.
 //
-// Those content signals alone are NOT enough, because the capture is the whole visible pane: any
-// TRANSCRIPT text on screen counts. A worker that quotes an approval prompt, reads this very file, or
-// pastes a probe's terminal output re-trips the matcher on every ≥PERM_SNIFF_MS quiet gap and the
-// thread oscillates between the sidebar's running band and Needs-you (reported 2026-07-18). Two
+// Those content signals alone are NOT enough, because the input is the whole visible SCREEN: any
+// TRANSCRIPT text on it counts. A worker that quoted an approval prompt, read this very file, or
+// pasted a probe's terminal output re-tripped the matcher on every ≥PERM_SNIFF_MS quiet gap and the
+// thread oscillated between the sidebar's running band and Needs-you (reported 2026-07-18). Two
 // STRUCTURAL gates fix that, both empirically grounded in 81 real-prompt captures (claude 2.x — the
 // pre-boot trust prompt, a Bash approval, an Edit/Write approval) against 87 negatives (69 captures of
-// a live pane merely quoting a prompt, plus every live worker pane on this box):
+// a live screen merely quoting a prompt, plus every live worker screen on this box):
 //
-//   1. A live composer means the pane is ACCEPTING INPUT, so anything on it is transcript. A modal
+//   1. A live composer means the screen is ACCEPTING INPUT, so anything on it is transcript. A modal
 //      replaces the composer: not one real-prompt capture carries the composer's mode line
 //      ("⏵⏵ auto mode on", "⏸ manual mode on", "⏵⏵ accept edits on", "bypass permissions on"), while
-//      every idle AND streaming Claude pane does. `ctrl+o`'s detailed-transcript view is the one other
-//      composer-less-but-live screen (its own footer replaces the composer, and it is sticky for the
-//      session), so it counts as a composer here — without it, a worker toggled into that view kept
-//      re-tripping on quoted text. Scoped to the last rows, never the whole pane, so an agent that
+//      every idle AND streaming Claude screen does. `ctrl+o`'s detailed-transcript view is the one
+//      other composer-less-but-live screen (its own footer replaces the composer, and it is sticky for
+//      the session), so it counts as a composer here — without it, a worker toggled into that view kept
+//      re-tripping on quoted text. Scoped to the last rows, never the whole screen, so an agent that
 //      merely PRINTS "auto mode on" mid-transcript cannot suppress a genuine prompt.
 //   2. The modal is always the BOTTOM block. Its option row and footer land within the last handful
 //      of non-blank rows, so only that tail is scanned — history scrolled above it is not evidence.
@@ -362,7 +381,7 @@ const PERM_COMPOSER_FOOTER = /\bbypass permissions on\b|\baccept edits(?: mode)?
 // Rows of the modal's own tail that must contain the signals. Deepest `1. Yes` row observed is
 // ExitPlanMode's at 6 rows from the end (Bash 4, trust 3); this keeps real margin over that.
 const PERM_MODAL_TAIL_ROWS = 16
-// Rows the composer occupies at the bottom of an input-accepting pane (divider, prompt row, divider,
+// Rows the composer occupies at the bottom of an input-accepting screen (divider, prompt row, divider,
 // project line, mode line) — the mode line is always last, so this window need not cover all five.
 const PERM_COMPOSER_TAIL_ROWS = 4
 
@@ -379,9 +398,9 @@ export function matchesPermPrompt(pane: string): boolean {
 // ---- pre-session boot modals (NAMING the wedge matchesPermPrompt can only flag) ----
 // Claude Code can block on an interactive screen BEFORE it opens a session, so the worker writes no
 // transcript at all: agent_session_id stays empty and the pinned jsonl never appears. matchesPermPrompt
-// already fires on these panes, but "blocked" alone made every such row card as a bare "Stalled" while
+// already fires on these screens, but "blocked" alone made every such row card as a bare "Stalled" while
 // the reason sat unread in the stall log. These name the two screens whose chrome is known, captured
-// verbatim from real panes (claude 2.1.218) — the API-key screen from a worker wedged in production,
+// verbatim from real ones (claude 2.1.218) — the API-key screen from a worker wedged in production,
 // the trust screen reproduced in a disposable HOME (its fixture is PANE_PERM_TRUST):
 //
 //   Detected a custom API key in your environment      Quick safety check: Is this a project you
@@ -392,8 +411,8 @@ export function matchesPermPrompt(pane: string): boolean {
 //   Enter to confirm · Esc to cancel
 //
 // Two signals each (headline + question, or question + its exact option) so one stray line cannot trip
-// either. Titles are FIXED strings: per the AgentBackend contract pane text never crosses the server
-// boundary, and here it holds a masked credential and the workspace path.
+// either. Titles are FIXED strings: per the AgentBackend contract captured screen text never crosses
+// the server boundary, and here it holds a masked credential and the workspace path.
 //
 // Lives here rather than in backend/claude.ts for the same reason matchesPermPrompt does: the tailer's
 // defaultBackend must stay identical to the injected ClaudeBackend (tests drive the default), and
@@ -405,7 +424,7 @@ const BOOT_TRUST_OPTION = /(^|\n)\s*(❯\s*)?1\.\s+Yes, I trust this folder\b/
 // Both modals put their decisive rows within a few non-blank rows of the end; the trust screen is the
 // deeper of the two (its blurb precedes the options). 24 keeps real margin over that.
 const BOOT_MODAL_TAIL_ROWS = 24
-// Fallback for a boot wedge whose pane trips the generic matcher but matches no chrome we can name.
+// Fallback for a boot wedge whose screen trips the generic matcher but matches no chrome we can name.
 // Deliberately vague — the alternative is the silent "Stalled" card, and an uncatalogued startup screen
 // is still worth sending the human to look at.
 const GENERIC_BOOT_MODAL: NativeInputRequiredData = { kind: "confirmation", title: "Blocked on a startup prompt" }
@@ -447,7 +466,7 @@ interface SubAgentEntry {
   // ack prose parsing above landing.
   taskId?: string
   // What the provider says this child is doing, folded from the SDK `task_*` stream (broker rows only).
-  // Purely additive telemetry: absent for every tmux thread and every codex row.
+  // Purely additive telemetry: absent for every codex row and every row with no provider event stream.
   progress?: SubAgentProgress
 }
 
@@ -582,8 +601,9 @@ export interface TailState extends FoldState {
   // what re-projects the transcript to already-subscribed clients within one tick.
   deliveryLedgerSeen?: string | null
   // A FOREIGN thread (a maintainer terminal discovered from the log dir, no registry row). Structural
-  // guarantee that this state can NEVER shell out to tmux — no pane-sniff, no pane-death, no notify /
-  // storage write — since no `frizz-<slug>` tmux session exists for it. Keyed by session id, not slug.
+  // guarantee that this state does none of the things frizz does to a thread it owns — no permission
+  // sniff, no owner-death check, no notify / storage write — since frizz never dispatched it and holds
+  // no `frizz-<slug>` runtime for it. Keyed by session id, not slug.
   foreign: boolean
   offset: number
   partial: string
@@ -678,7 +698,7 @@ export interface TailState extends FoldState {
   subAgentsSig?: string // last-emitted signature of the derived background-ops + ask view (dirty-change detection)
   // transition tracking (dedupe)
   primed: boolean // first tick restores state WITHOUT firing transition notifies (boot/restart)
-  permPrompt: boolean // last pane-sniff verdict (see matchesPermPrompt)
+  permPrompt: boolean // last permission-block verdict (see sniffPane / permMarkerBlocks)
   nativeInputRequired?: NativeInputRequiredData // last structured native-modal verdict
   permPolicy?: PermPolicyView // last DENIAL from the worker's permission policy (display only)
   permDenies?: number // how many policy DENIALS this thread has accumulated
@@ -692,13 +712,15 @@ export interface TailState extends FoldState {
   // Consecutive discovery misses for this row, which set the interval above (see DISCOVER_RETRY_MAX_MS).
   // Reset to 0 the moment anything binds, so a row that heals returns to the responsive base interval.
   discoverMisses: number
-  // One-shot guard so a stall's pane is captured/logged once, not every tick.
+  // One-shot guard so a stall's evidence is captured/logged once, not every tick.
   stallLogged: boolean
   customTitle?: string
   customTitleRevision: number
-  // Claude permission sidecars are untimestamped. Hold an incremental observation until the live
-  // footer redraw proves which generation emitted it; do not lose a genuine record that arrived a
-  // tick before the footer became visible.
+  // HISTORICAL, and the field it documented is already gone: Claude permission sidecars are
+  // untimestamped, so an incremental observation used to be held until the worker's redrawn footer
+  // proved which generation emitted it, rather than losing a genuine record that arrived a tick before
+  // that footer became visible. Nothing renders a footer frizz can read now — the marker file carries
+  // its own timestamp (see permMarkerBlocks).
 }
 
 // A single parsed JSONL record — only the fields the derivation needs are typed; the rest are
@@ -1658,7 +1680,7 @@ function boundReportMaps(state: TailState): void {
 // the op. Its structured result confirms "Successfully stopped task: <id>" and carries the runtime
 // `task_id` — the SAME id captured at launch, and the ONLY correlation key a manual stop exposes (it
 // has no tool_use id). This is the signal that retires a shell/agent killed by hand — the one the
-// board previously never saw, leaving a phantom pulsing row until the pane died.
+// board previously never saw, leaving a phantom pulsing row until the process owning it died.
 function stoppedTaskId(text: string): string | undefined {
   // Guard on the success confirmation so a failed/no-op stop never retires a still-live row, then read
   // the structured task_id field (the first match is the real field — it precedes `command` in the JSON).
@@ -2137,7 +2159,8 @@ export interface Tailer {
   backgroundShell?(slug: string, id: string): { command?: string; outputFile?: string; state: "running" | "done" } | undefined
   // "Is the process that owned this thread's background ops gone?" — ONE authority for a question three
   // runtimes answer differently, already computed once per tick as `paneDead` (see paneDeadForRow): a
-  // dead tmux pane, a broker whose daemon record fails its pid probe, or a headless row frizz stopped.
+  // broker whose daemon record fails its pid probe, an app-server codex row frizz stopped, or a
+  // pre-cutover row with no transport left, which answers dead by default.
   // Exposed because the TRANSCRIPT producers need it too. `bgShellViews` drops a dead owner's shells
   // from the board, but the ops strip is a UNION of that list and the transcript's own pending
   // background cards, so the board dropping a row merely moves it — the transcript side has to hear the
@@ -2188,8 +2211,10 @@ export interface TailerDeps {
   // session's discovery record and probes its pid. A fixture that omits it gets `() => true` when the
   // project has no stateDir, i.e. the pre-existing `exited`-only behavior.
   brokerDaemonAlive?: (sessionId: string) => boolean
-  // Retained as inert test seams: nothing captures a pane any more (there are none), but fixtures
-  // still pass them and a narrower type here would be churn for no behaviour.
+  // Retained as inert test seams: nothing captures a worker's screen any more (a worker is a headless
+  // daemon — there is no terminal to read back), but fixtures still pass `capturePane` and a narrower
+  // type here would be churn for no behaviour. `capturePanesAsync` is wired by NOTHING, fixtures
+  // included, so the batched prefetch inside createTailer never runs at all.
   capturePane?: (slug: string) => string
   capturePanesAsync?: (slugs: readonly string[]) => Promise<Map<string, string>>
   sessionLogDir?: string // injectable transcript dir (tests); defaults to the Claude Code path
@@ -2213,7 +2238,8 @@ export interface TailerDeps {
   // The structured PermissionRequest signal (Claude workers with the cc-worker plugin): the worker's
   // perm-observe.mjs hook drops `<stateDir>/perm-requests/<slug>.json` the instant Claude creates a
   // tool-approval prompt. Injectable for tests; the default reads that file. Absent stateDir (narrow
-  // test fixtures) → always undefined, so the pane-sniff regex fallback covers exactly as before.
+  // test fixtures) → always undefined, which now simply means no permission-block signal: the regex
+  // fallback that used to cover it read a screen no runtime renders any more (see sniffPane).
   readPermMarker?: (slug: string) => PermMarker | undefined
   // Durable prime cache (see tail-cache.ts). Defaults to a table in the project's own SQLite DB;
   // pass `null` to disable it entirely, which restores the historical "fold every transcript from
@@ -2230,13 +2256,15 @@ export interface TailerDeps {
   //     a folded rest (see RUNNING_OVERRIDE_MAX_AGE_MS).
   //   * `events` — how many events this session has produced, which is what lets a tick tell that the
   //     provider has reported activity the transcript has not caught up with yet. See RUNTIME_CHASE_MAX.
-  // Absent (tmux threads, tests, bridge-less server) ⇒ the fold decides alone, byte-identical to before.
+  // Absent (codex rows, pre-broker claude rows, tests, bridge-less server) ⇒ the fold decides alone,
+  // byte-identical to before.
   runtimeLiveness?: (sessionId: string) => { turn?: "running" | "settled"; at: number; events: number } | undefined
   // The provider's OWN view of a broker session's background tasks (backend/claude-runtime-ingest.ts):
   // what each child is doing right now, and which ones the SDK says are finished. Consulted ONLY
   // through applyRuntimeTasks, which may ENRICH a folded entry and RETIRE one the provider reports
-  // terminal — and may never invent an entry the fold does not know about. Absent (tmux threads, codex
-  // rows, tests, bridge-less server) ⇒ the prose fold decides alone, byte-identical to before.
+  // terminal — and may never invent an entry the fold does not know about. Absent (codex rows,
+  // pre-broker claude rows, tests, bridge-less server) ⇒ the prose fold decides alone, byte-identical
+  // to before.
   runtimeTasks?: (sessionId: string) => readonly ClaudeRuntimeTask[]
   // CODEX's live background execs, off the app-server item stream (backend/codex-app-server.ts
   // `backgroundExecs`). The exact counterpart of `runtimeTasks` for the other provider, and the ONLY
@@ -2250,7 +2278,7 @@ export interface TailerDeps {
   // The model's context SIZE for a broker Claude session, as the SDK reported it on that session's
   // `result` message (backend/claude-runtime-ingest.ts). It is the only place Claude names the number:
   // the JSONL carries per-request usage (the numerator) and nothing at all about the window. Absent
-  // (codex rows — which name their own window on every token_count — tmux/foreign Claude rows, tests,
+  // (codex rows — which name their own window on every token_count — pre-broker/foreign Claude rows, tests,
   // a bridge-less server) ⇒ the fold keeps whatever window it already has, and a Claude row that never
   // gets one renders no reading rather than a guessed one.
   runtimeContextWindow?: (sessionId: string) => number | undefined
@@ -2324,7 +2352,7 @@ export function defaultLogDir(project: Project): string {
 
 // Reads the worker's PermissionRequest marker from the per-project stateDir. Telemetry-grade: a missing
 // stateDir (narrow test fixtures), an absent/half-written/corrupt file all degrade to undefined — the
-// pane-sniff fallback then covers exactly as before. Never throws.
+// thread simply reports no permission block that tick. Never throws.
 function defaultReadPermMarker(project: Project): (slug: string) => PermMarker | undefined {
   if (!project.stateDir) return () => undefined
   return (slug) => {
@@ -2337,8 +2365,8 @@ function defaultReadPermMarker(project: Project): (slug: string) => PermMarker |
   }
 }
 
-// "Is this broker session's daemon still running?" — the honest liveness a broker row has instead of a
-// tmux pane, read from the same discovery record the bridge connects through (a `{daemonPid}` JSON under
+// "Is this broker session's daemon still running?" — the honest liveness reading a broker row has, taken
+// from the same discovery record the bridge connects through (a `{daemonPid}` JSON under
 // <stateDir>/claude-broker) plus a signal-0 probe of that pid.
 //
 // This exists because `exited` alone is NOT that answer. `exited` is stamped only when frizz DELIBERATELY
@@ -2395,12 +2423,13 @@ export function defaultBrokerDaemonAlive(project: Project, now: () => number): (
   }
 }
 
-// The slice of AgentBackend the tailer drives: locate a session's transcript, fold a raw line into
-// the accumulator, and (registered sessions only) sniff the pane for a permission prompt.
+// The slice of AgentBackend the tailer drives: locate a session's transcript and fold a raw line into
+// the accumulator. The three matcher members ride along for the contract's sake — each took the
+// worker's rendered screen as input, and nothing renders one any more (see sniffPane).
 type TailBackend = Pick<AgentBackend, "transcriptPath" | "foldLine" | "matchesPermPrompt" | "detectNativeInput" | "detectBootModal">
 
 // Fields the durable prime cache must NEVER restore. Identity comes from the live registry row; the
-// pane/discovery fields are re-derived by the prime branch on every boot and a stale value would
+// liveness/discovery fields are re-derived by the prime branch on every boot and a stale value would
 // suppress a genuine observation (a stall that must be captured, a discovery that must be retried).
 //
 // EXPORTED so a test can assert against the real set: the cache codec is deliberately generic (see
@@ -2453,8 +2482,9 @@ function rowIsArchived(row: SessionRow): boolean {
 
 export function createTailer(deps: TailerDeps): Tailer {
   const now = deps.now ?? Date.now
-  // No panes: a row's liveness comes from its runtime (broker daemon / app-server). A PRE-CUTOVER row
-  // has no transport left, so the default answers "dead" — the seam stays injectable for fixtures.
+  // A row's liveness comes from its runtime (broker daemon / app-server), never from a screen. A
+  // PRE-CUTOVER row has no transport left, so the default answers "dead" — the seam stays injectable
+  // for fixtures.
   const paneDead = deps.paneDead ?? (() => true)
   const brokerDaemonAlive = deps.brokerDaemonAlive ?? defaultBrokerDaemonAlive(deps.project, now)
   const capturePane = deps.capturePane ?? (() => "")
@@ -2477,15 +2507,15 @@ export function createTailer(deps: TailerDeps): Tailer {
         }
       })()
 
-  // Resolved at most ONCE per row per tick. Every row asks for its binding at least twice (pane
-  // liveness and pane text), and each ask is two registry point-queries — 4 queries per row per second
-  // that can only ever return the same answer, since a tick describes one instant. Reset at the top of
-  // each tick alongside the pane caches.
+  // Resolved at most ONCE per row per tick. Every row asks for its binding at least twice (liveness
+  // and the text-capture seam), and each ask is two registry point-queries — 4 queries per row per
+  // second that can only ever return the same answer, since a tick describes one instant. Reset at the
+  // top of each tick alongside the capture caches.
   let adoptionBindings = new Map<string, ReturnType<typeof adoptionRuntimeBinding>>()
 
   // The turn a row is IN, folding in the provider's own reading when there is one. For every row
-  // without a runtime signal — every tmux thread, every codex row, every test fixture — this is
-  // exactly `computeTurn(state, nowMs)`.
+  // without a runtime signal — every codex row, every non-broker claude row, every test fixture —
+  // this is exactly `computeTurn(state, nowMs)`.
   function turnFor(row: SessionRow, state: TailState, nowMs: number): TurnState {
     const detailed = computeTurnDetailed(state, nowMs)
     if (!deps.runtimeLiveness || !isBrokerClaudeRow(row)) return detailed.turn
@@ -2527,8 +2557,8 @@ export function createTailer(deps: TailerDeps): Tailer {
   // states outright which child is running which tool, what it has spent, and when it is done, where
   // `launchOutputFile` / `launchTaskId` / `trackCompletions` have to recognize English sentences
   // ("Command running in background with ID:", "Monitor started (task", "<task-notification>"). Those
-  // stay exactly where they are: they are the ONLY signal a tmux thread has, and a broker session that
-  // predates these events (or drops one) still folds identically.
+  // stay exactly where they are: they are the ONLY signal a session with no provider event stream has,
+  // and a broker session that predates these events (or drops one) still folds identically.
   //
   // The authority split mirrors resolveRuntimeTurn's, and the SECOND rule is the load-bearing one:
   //
@@ -2608,16 +2638,20 @@ export function createTailer(deps: TailerDeps): Tailer {
     return binding
   }
 
-  // "Is the process that owns this session's children gone?" — pane death for a tmux row, and the
-  // registry's own exit stamp for a HEADLESS one (broker claude / app-server codex), which has no tmux
-  // pane by construction. Sniffing tmux for a headless row can only ever answer "dead", the exact trap
-  // deriveRuntime (board.ts) and reconcileSessions (context.ts) each refuse by name — and the tailer
-  // fell into it at PRIME, where this was called unguarded while the steady tick below guards it with
-  // !isHeadlessRow. That latched paneDead=true on every broker thread at first sighting and never
-  // revisited it, so bgShellViews returned [] for all of them: a live CI watcher, correctly tracked by
-  // the fold, rendered nowhere (measured 2026-07-29 — 13 threads holding live shell entries, the only
-  // one with paneDead=false a legacy tmux row). `exited` is the headless stand-in: for those rows nothing
-  // sniffs tmux to set it, so it is stamped only when frizz genuinely stops the session.
+  // "Is the process that owns this session's children gone?" — the registry's own exit stamp for a
+  // HEADLESS row (broker claude / app-server codex), plus, for a broker row, a probe of its daemon's
+  // own pid.
+  //
+  // HISTORY, because it is the whole reason the guard below exists. Frizz used to run each worker in a
+  // terminal of its own and read that terminal's death as the answer. A headless row never had one, so
+  // asking that question about one could only ever answer "dead" — the exact trap deriveRuntime
+  // (board.ts) and reconcileSessions (context.ts) each refuse by name — and the tailer fell into it at
+  // PRIME, where this was called unguarded while the steady tick below guards it with !isHeadlessRow.
+  // That latched paneDead=true on every broker thread at first sighting and never revisited it, so
+  // bgShellViews returned [] for all of them: a live CI watcher, correctly tracked by the fold,
+  // rendered nowhere (measured 2026-07-29 — 13 threads holding live shell entries, the only one with
+  // paneDead=false a legacy pre-broker row). `exited` is the headless stand-in: nothing observes a
+  // process death to set it, so it is stamped only when frizz genuinely stops the session.
   //
   // Which makes `exited` a FLOOR, not the whole answer — it knows the deliberate stop and no other death.
   // A BROKER claude row can do better, because its daemon publishes a discovery record naming its pid; an
@@ -2634,34 +2668,39 @@ export function createTailer(deps: TailerDeps): Tailer {
     return paneDead(row.slug)
   }
 
-  // ---- Off-loop pane-capture prefetch --------------------------------------------------------------
-  // The pane sniff is the tick's dominant cost: `capture-pane` is one tmux subprocess, ~105ms measured
-  // on the maintainer's machine. Batching every quiet in-flight thread into ONE tmux invocation cut the
-  // spawn COUNT, but that one invocation was still SYNCHRONOUS — a fork/exec + tmux round-trip whose
-  // duration grows with the board's pane count, run on the event loop every tick. And any thread whose
-  // pane was absent from the batch fell back to a per-slug `capture-pane`, so a board with N exited/
-  // reaped panes paid N synchronous spawns per tick — 13-15 spawns / 2-4s measured 2026-07-23.
+  // ---- Off-loop screen-capture prefetch (INERT — nothing wires `capturePanesAsync`) ----------------
+  // HISTORY, kept because it explains the shape of the three functions below. When frizz ran each
+  // worker in a terminal it could read back, the permission sniff was the tick's dominant cost: one
+  // capture was one subprocess, ~105ms measured on the maintainer's machine. Batching every quiet
+  // in-flight thread into ONE invocation cut the spawn COUNT, but that one invocation was still
+  // SYNCHRONOUS — a fork/exec + round-trip whose duration grew with the board's worker count, run on
+  // the event loop every tick. And any thread absent from the batch fell back to a per-slug capture,
+  // so a board with N exited/reaped workers paid N synchronous spawns per tick — 13-15 spawns / 2-4s
+  // measured 2026-07-23.
   //
-  // So the prefetch now runs OFF the loop: at the END of each tick we kick a single async batched
-  // `capture-pane` (tmux.capturePanesAsync) for every unbound row with a live-or-frozen pane, and the
-  // NEXT tick's sniff reads its result from `paneTextCache`. Nothing in the tick body ever blocks on a
-  // capture. The verdict it feeds (a permission prompt) is already gated on PERM_SNIFF_MS of quiet and
-  // confirmed over CLAUDE_PERMISSION_CONFIRM_POLLS, so a ≤1-tick-older capture changes no outcome — and
-  // an absent pane simply isn't in the cache (empty text), never a synchronous per-slug spawn.
+  // So the prefetch moved OFF the loop: at the END of each tick it kicks a single async batched
+  // capture for every unbound row, and the NEXT tick's sniff reads its result from `paneTextCache`.
+  // Nothing in the tick body ever blocks on a capture. The verdict it fed (a permission prompt) was
+  // already gated on PERM_SNIFF_MS of quiet and confirmed over CLAUDE_PERMISSION_CONFIRM_POLLS, so a
+  // ≤1-tick-older capture changed no outcome — and an absent capture simply wasn't in the cache (empty
+  // text), never a synchronous per-slug spawn.
   //
-  // `capturePanesAsync` is undefined only for narrow test fixtures that inject a synchronous `capturePane`
-  // fake; those keep the old in-tick synchronous fallback below (byte-identical to the pre-batch path).
+  // NONE OF IT RUNS IN THIS BUILD: no composition layer passes `capturePanesAsync` (context.ts wires
+  // neither it nor `capturePane`), so refreshPaneTextAsync returns immediately and paneTextCache is
+  // never populated. The synchronous fallback below survives only for the fixtures that inject
+  // `capturePane`.
   let paneTextCache: Map<string, string> | null = null
   let paneTextRefreshing = false
 
   function paneTextPrefetchSlugs(): string[] {
     const slugs: string[] = []
     for (const row of deps.storage.allSessions()) {
-      if (isHeadlessRow(row)) continue // headless (codex app-server / claude broker): no pane to capture
-      if (adoptionBinding(row).kind !== "unbound") continue // adopted rows capture by exact pane tuple
-      // A command list ABORTS at its first bad target, so only ask for panes tmux actually knows. The
-      // liveness map is already cached, so this filter is free. A dead-but-present pane is kept —
-      // remain-on-exit panes still hold the boot-failure/frozen-modal text the sniff and captureStall read.
+      if (isHeadlessRow(row)) continue // headless (codex app-server / claude broker): nothing to capture
+      if (adoptionBinding(row).kind !== "unbound") continue // an adopted row captured by exact identity
+      // A batched capture ABORTED at its first bad target, so only rows the capture backend actually
+      // knew were asked for. The liveness map is already cached, so this filter is free. A dead-but-
+      // frozen worker was kept — its final screen still held the boot-failure/frozen-modal text the
+      // sniff and captureStall read.
       slugs.push(row.slug)
     }
     return slugs
@@ -2679,17 +2718,19 @@ export function createTailer(deps: TailerDeps): Tailer {
     paneTextRefreshing = true
     Promise.resolve(capturePanesAsync(slugs))
       .then((map) => { paneTextCache = map })
-      .catch(() => { /* transient tmux failure — keep the prior snapshot, retry next tick */ })
+      .catch(() => { /* transient capture failure — keep the prior snapshot, retry next tick */ })
       .finally(() => { paneTextRefreshing = false })
   }
 
+  // UNCALLED in this build — nothing reads a worker's screen on the tick path any more. Kept beside
+  // the prefetch it consumes rather than deleted piecemeal; see the block header above.
   function capturePaneForRow(row: SessionRow): string {
     const binding = adoptionBinding(row)
     if (binding.kind === "unbound") {
       const cached = paneTextCache?.get(row.slug)
       if (cached !== undefined) return cached
-      // Async-prefetch mode (production): the cache is authoritative. A miss means the pane is absent
-      // or not yet prefetched → empty, NEVER a synchronous per-slug spawn (that was the O(N) block).
+      // Async-prefetch mode: the cache is authoritative. A miss means nothing was captured for this row
+      // → empty, NEVER a synchronous per-slug spawn (that was the O(N) block).
       if (capturePanesAsync) return ""
       // Sync-fallback mode (test fixtures inject only capturePane): capture synchronously, as before.
       return capturePane(row.slug)
@@ -2699,8 +2740,9 @@ export function createTailer(deps: TailerDeps): Tailer {
   }
 
   // Synchronous one-shot capture for the boot-failure stall log (captureStall fires once per stalled
-  // row, guarded by stallLogged — not a per-tick cost — so a blocking capture here is fine, and it must
-  // read the FROZEN remain-on-exit pane directly rather than the possibly-empty prefetch cache).
+  // row, guarded by stallLogged — not a per-tick cost — so a blocking capture here is fine, and it had
+  // to read the dead worker's FROZEN final screen directly rather than the possibly-empty prefetch
+  // cache). `deps.capturePane` is a fixture-only seam now, so on a real server this returns "".
   function capturePaneForRowSync(row: SessionRow): string {
     const binding = adoptionBinding(row)
     if (binding.kind === "unbound") return capturePane(row.slug)
@@ -2848,13 +2890,13 @@ export function createTailer(deps: TailerDeps): Tailer {
   // "alive", quietly breathing, forever). The normal path — a shell exiting while the agent lives —
   // still clears via its terminal notification.
   //
-  // `paneDead` is that death, and it is NOT a tmux fact: a headless row (broker claude / app-server
-  // codex) has no pane at all and answers from its exit stamp — plus, for a broker row, a probe of its
-  // daemon's own pid — instead. See paneDeadForRow, where asking tmux about a paneless row silently
-  // emptied this list for every broker thread, and where the stamp ALONE later kept a dead process's
-  // shells breathing here for seven hours (2026-08-02).
+  // `paneDead` is that death, and it is not a fact about any screen: a headless row (broker claude /
+  // app-server codex) answers from its exit stamp — plus, for a broker row, a probe of its daemon's own
+  // pid. See paneDeadForRow, where asking the old terminal-death question about a screenless row
+  // silently emptied this list for every broker thread, and where the stamp ALONE later kept a dead
+  // process's shells breathing here for seven hours (2026-08-02).
   //
-  // A tracked, pane-alive shell is simply "running" — there is no age-based staleness. `run_in_background`
+  // A tracked shell whose owner is alive is simply "running" — there is no age-based staleness. `run_in_background`
   // cannot tell a CI watcher (ends soon) from a vite dev server (runs forever), so NO clock is a correct
   // clock: an mtime rule falsely killed quiet watchers, and an absolute-age cap would falsely kill
   // long-lived servers. None of that can bury a thread: a shell does not excuse a rest from the queue
@@ -3047,7 +3089,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   // A descendant's liveness, in order of authority.
   //
   //  1. The provider's own task table, when it holds the row — its task id IS the agent id, and it says
-  //     outright whether the child finished. Broker rows only; a tmux row has no such table.
+  //     outright whether the child finished. Broker rows only; a row with no event stream has no table.
   //  2. This thread's own transcript: the descendant's terminal <task-notification>, folded by
   //     trackCompletions into `descendantTerminals`. Available on EVERY backend, because it rides the
   //     file the tailer already reads. See recordDescendantTerminal for why it exists.
@@ -3359,7 +3401,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   // escape hatch for the ONE residual the `stopped` recovery can't reach: a finished op whose completion
   // was never recorded while its parent stays alive. It is NOT a process kill — frizz tracks these by
   // folding the worker's transcript and does not own the child processes, so a genuinely-still-running
-  // child ends only when its owning pane dies; the × just stops frizz showing a phantom. Returns whether
+  // child ends only when the process owning it dies; the × just stops frizz showing a phantom. Returns whether
   // an entry was actually live to dismiss (a no-op for an unknown/already-gone id).
   function dismissOp(slug: string, id: string): boolean {
     const state = states.get(slug)
@@ -3405,7 +3447,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   // a resolved request always advances the transcript past it. The caller gates this on
   // turn === "in-flight" (a real block is always mid tool_use) and on the row being non-codex, which
   // both bounds the per-tick file read to actively-working Claude sessions and means a stale marker on
-  // a crashed/exited pane is inert (deriveRuntime returns "exited" before it ever consults permPrompt).
+  // a crashed/exited row is inert (deriveRuntime returns "exited" before it ever consults permPrompt).
   function permMarkerBlocks(state: TailState, row: SessionRow): boolean {
     const marker = readPermMarker(row.slug)
     if (!marker) return false
@@ -3423,8 +3465,8 @@ export function createTailer(deps: TailerDeps): Tailer {
     // rather than recomputed per tick, so it survives the turn ending — a refusal stays readable after
     // the worker moves on, and it changed what the worker could do.
     // APPROVALS ARE DELIBERATELY NOT RETAINED. They were, on the theory that a silent auto-approval is
-    // otherwise invisible (Claude Code renders "Allowed by PermissionRequest hook" in the pane and
-    // writes nothing about an allow to the transcript). But this state has no clear: the note it fed
+    // otherwise invisible (Claude Code reports "Allowed by PermissionRequest hook" in its own UI only
+    // and writes nothing about an allow to the transcript). But this state has no clear: the note it fed
     // sat at the bottom of the thread FOREVER, long after the command it described, naming one
     // arbitrary `git status` as though it were the thread's standing condition. An approval is routine,
     // it blocks nobody, and the line answered no question anyone was asking (maintainer 2026-08-07:
@@ -3462,17 +3504,19 @@ export function createTailer(deps: TailerDeps): Tailer {
     return at > last
   }
 
-  // Perm-blocked verdict for a session. PRIMARY: the structured PermissionRequest marker — precise (it
-  // fires exactly when Claude created the prompt), so it surfaces immediately with no quiet-gate delay
-  // and cannot false-trip on transcript text that merely LOOKS like a prompt. FALLBACK (unchanged): a
-  // pane-sniff of a quiet in-flight turn, for the screens that emit no PermissionRequest (pre-boot
-  // workspace-trust, /login and other selectors) and for plugin-less foreign sessions. The native
-  // structured detector (Codex) still rides the same single capture.
+  // Perm-blocked verdict for a session, and the structured PermissionRequest marker is now the ONLY
+  // source — precise (it fires exactly when Claude created the prompt), so it surfaces immediately with
+  // no quiet-gate delay and cannot false-trip on transcript text that merely LOOKS like a prompt. The
+  // fallback it used to have read a quiet in-flight turn's rendered screen, which covered the screens
+  // that emit no PermissionRequest (pre-boot workspace-trust, /login and other selectors) and
+  // plugin-less foreign sessions; a headless worker renders no screen, so that cover went with it. The
+  // native structured detector (Codex) rode the same capture and is likewise unreachable from here.
   //
   // KNOWN EDGE (accepted): a background sub-agent completing WHILE the parent is blocked appends a
-  // system user-record that advances lastActivityAt past the marker, so permMarkerBlocks briefly reads
-  // false. This is not a regression — it degrades to the regex fallback, which re-detects the real
-  // modal after PERM_SNIFF_MS of quiet (the same latency the pre-marker path always had).
+  // system user-record that advances lastActivityAt past the marker, so permMarkerBlocks reads false.
+  // That used to degrade to the regex fallback, which re-detected the real modal after PERM_SNIFF_MS of
+  // quiet; with no fallback left, the block stays unreported until the request resolves or the hook
+  // writes a newer marker.
   function sniffPane(
     state: TailState,
     row: SessionRow,
@@ -3484,9 +3528,10 @@ export function createTailer(deps: TailerDeps): Tailer {
     if (state.foreign) return { permPrompt: false }
     // The MARKER path is all that is left, and it is the one that always worked headlessly: the
     // cc-worker hook writes a marker into FRIZZ_PERM_DIR when a tool call is waiting on the operator.
-    // Below this there used to be a fallback that captured the tmux pane and matched the TUI's modal
-    // chrome by regex — the only way to see a prompt in a pane. There are no panes, and a broker
-    // thread's approvals arrive as typed permission requests over the control channel anyway.
+    // Below this there used to be a fallback that captured the worker's rendered terminal and matched
+    // the TUI's modal chrome by regex — the only way to see a prompt on a screen. No worker renders one
+    // now, and a broker thread's approvals arrive as typed permission requests over the control channel
+    // anyway.
     if (turn === "in-flight" && row.backend !== "codex" && permMarkerBlocks(state, row)) {
       return { permPrompt: true }
     }
@@ -3562,8 +3607,9 @@ export function createTailer(deps: TailerDeps): Tailer {
   }
 
   // Tail one FOREIGN state: same fold/derivation as a registered session (consume → computeTurn →
-  // derivedSignature, priming the first sighting silently) but with NO pane sniff, NO pane-death
-  // check, and NO notify / storage write — a foreign thread has no tmux session and no registry row.
+  // derivedSignature, priming the first sighting silently) but with NO permission sniff, NO owner-death
+  // check, and NO notify / storage write — frizz never dispatched a foreign thread, so it has no
+  // frizz-owned runtime and no registry row.
   // Returns whether its derived telemetry changed (→ board dirty). Pushes to transcriptDirty on bytes.
   function tailForeign(state: TailState, nowMs: number, transcriptDirty: string[], backend: TailBackend): boolean {
     const key = `foreign:${state.slug}`
@@ -3949,9 +3995,11 @@ export function createTailer(deps: TailerDeps): Tailer {
     return ids
   }
 
-  // Capture a stalled worker's (remain-on-exit) pane ONCE, so claude's own boot-failure output survives
-  // to the server console + a per-session sink before the pane is ever killed. Best-effort — the whole
-  // point is root-causing the missing transcript, but a capture failure must never break the tick.
+  // Record a stalled worker's boot-failure evidence ONCE, to the server console + a per-session sink.
+  // This used to capture the dead worker's frozen final screen, which held claude's own error text;
+  // with no screen left to read, what survives is a pointer to the evidence that DOES exist for the
+  // row's runtime (see `evidence` below). Best-effort — the whole point is root-causing the missing
+  // transcript, but a capture failure must never break the tick.
   function captureStall(state: TailState, row: SessionRow): void {
     if (state.stallLogged) return
     // "No transcript 60s after dispatch" is a BOOT-FAILURE alarm: it means a worker the operator just
@@ -3973,33 +4021,34 @@ export function createTailer(deps: TailerDeps): Tailer {
     } catch {
       pane = ""
     }
-    // Boot-failure auth classifier (claude-auth plan): a worker that dies before writing a transcript
-    // with the 401/login text on its pane is a rejected credential, not a generic stall. Only the
-    // typed category persists — the raw pane (which may carry OAuth URLs/codes from a login attempt)
-    // is REDACTED from the console line and the stall sink in this case.
+    // Boot-failure auth classifier (claude-auth plan): a worker that dies before writing a transcript,
+    // with the 401/login text in whatever output was captured, is a rejected credential, not a generic
+    // stall. Only the typed category persists — the raw capture (which may carry OAuth URLs/codes from
+    // a login attempt) is REDACTED from the console line and the stall sink in this case.
     const authFailure = row.backend !== "codex" && isClaudeAuthErrorText(pane)
     if (authFailure) state.authFault = "authentication_rejected"
-    // A headless row has no tmux pane at ALL (capturePaneForRowSync is skipped for it upstream), so the
-    // generic "Pane: (pane empty / unavailable)" line sent whoever read it to tmux for a runtime that
-    // never had a pane — measured cost on 2026-07-31, a real boot failure investigated at the wrong
-    // layer first. Name the evidence that DOES exist for this runtime instead: for the broker that is the
-    // daemon's own diagnostics log, which records the session's lifecycle and any dropped input.
+    // A headless row never had a terminal to capture (capturePaneForRowSync is skipped for it
+    // upstream), so the generic "Pane: (pane empty / unavailable)" line sent whoever read it hunting a
+    // terminal multiplexer for a runtime that never had one — measured cost on 2026-07-31, a real boot
+    // failure investigated at the wrong layer first. Name the evidence that DOES exist for this runtime
+    // instead: for the broker that is the daemon's own diagnostics log, which records the session's
+    // lifecycle and any dropped input.
     const evidence = isBrokerClaudeRow(row) && deps.project.stateDir
-      ? `no tmux pane (broker runtime). Daemon diagnostics: ${claudeBrokerDiagnosticLogPath(deps.project.stateDir, row.session_id)}`
+      ? `no worker terminal to capture (broker runtime). Daemon diagnostics: ${claudeBrokerDiagnosticLogPath(deps.project.stateDir, row.session_id)}`
       : isHeadlessRow(row)
-      ? `no tmux pane (headless ${row.backend === "codex" ? "codex app-server" : "claude broker"} runtime)`
-      // Neither runtime above, i.e. a row from the tmux era. Nothing in this build captures a pane —
-      // `deps.capturePane` is wired by fixtures only, and there is no tmux left to capture from — so the
-      // old "(pane empty / unavailable)" described a pane that SHOULD have had content and sent the
-      // reader hunting for one that cannot exist. Say why there is nothing instead.
-      : "no pane captured (this build runs no tmux)"
+      ? `no worker terminal to capture (headless ${row.backend === "codex" ? "codex app-server" : "claude broker"} runtime)`
+      // Neither runtime above, i.e. a pre-cutover row. Nothing in this build captures anything —
+      // `deps.capturePane` is wired by fixtures only, and no worker renders a terminal to capture from —
+      // so the old "(pane empty / unavailable)" described output that SHOULD have existed and sent the
+      // reader hunting for a screen that cannot. Say why there is nothing instead.
+      : "no worker output captured (this build captures no terminal)"
     const detail = authFailure
-      ? "(claude authentication failure — pane content redacted; sign in and retry)"
+      ? "(claude authentication failure — captured output redacted; sign in and retry)"
       : pane.trim() || evidence
-    // Frame the detail as pane output only when it actually IS pane output.
+    // Frame the detail as captured output only when it actually IS captured output.
     frizzLog.error(
       "tailer",
-      `thread ${row.slug} (session ${row.session_id}): no transcript ${DISCOVERY_GRACE_MS / 1000}s after dispatch — likely a boot failure. ${pane.trim() && !authFailure ? "Pane:\n" : ""}${detail.slice(0, 4000)}`,
+      `thread ${row.slug} (session ${row.session_id}): no transcript ${DISCOVERY_GRACE_MS / 1000}s after dispatch — likely a boot failure. ${pane.trim() && !authFailure ? "Captured output:\n" : ""}${detail.slice(0, 4000)}`,
     )
     try {
       mkdirSync(stallLogDir, { recursive: true })
@@ -4109,7 +4158,8 @@ export function createTailer(deps: TailerDeps): Tailer {
     const transcriptDirty: string[] = []
     const nowMs = now()
     // paneTextCache holds the LAST async prefetch's result and is read (never written) during the tick;
-    // a fresh batched capture is kicked off the loop at the tick's end (see refreshPaneTextAsync).
+    // a fresh batched capture is kicked off the loop at the tick's end (see refreshPaneTextAsync —
+    // inert in this build, since nothing wires `capturePanesAsync`).
     adoptionBindings = new Map()
     const rows = deps.storage.allSessions()
     // ARCHIVED ROWS PRIME LAST. Priming is bounded per tick, so on a cold board the registry's order
@@ -4342,17 +4392,18 @@ export function createTailer(deps: TailerDeps): Tailer {
         state.turn = nextTurn
       }
 
-      // interactive permission prompt: no jsonl signal, so pane-sniff a quiet in-flight turn.
-      // Cleared automatically once jsonl activity resumes (turn no longer quiet) or the pane stops
-      // matching. Rides the board snapshot only — no notify, no unread (it's not a completed turn).
-      // App-server codex sessions are headless (no tmux pane): pane capture is meaningless and a
-      // "missing pane" must NOT read as process death. Native approvals arrive via the bridge's
+      // interactive permission prompt: no jsonl signal, so read the worker's permission marker on a
+      // quiet in-flight turn. Cleared automatically once jsonl activity resumes (turn no longer quiet)
+      // or the marker stops blocking. Rides the board snapshot only — no notify, no unread (it's not a
+      // completed turn).
+      // App-server codex sessions are headless: there was never a screen to read, and "no screen" must
+      // NOT read as process death. Native approvals arrive via the bridge's
       // InteractionStore (surfaced through interactionPresence), not a scraped modal; rest is stamped
       // by onTurnDone off the rollout, not onPaneDeath.
       // EVERY row, headless included — the prime path has always called this unguarded, and the steady
       // tick must agree or the reading LATCHES at boot. It used to sit inside the `!isHeadlessRow`
-      // guard below, on the reasoning quoted there: pane capture is meaningless without a pane. But
-      // sniffPane no longer captures one — all that survives is the MARKER read, whose own comment
+      // guard below, on the reasoning quoted there: capturing a screen is meaningless without one. But
+      // sniffPane captures nothing now — all that survives is the MARKER read, whose own comment
       // says it "always worked headlessly" — and every live Claude thread is claude_runtime="broker",
       // hence headless. So the guard silently reduced the marker to a once-per-boot reading for the
       // entire Claude fleet: a block or a policy denial that began after prime was never seen, and one
@@ -4371,14 +4422,15 @@ export function createTailer(deps: TailerDeps): Tailer {
       state.permPrompt = pane.permPrompt
       state.nativeInputRequired = pane.nativeInputRequired
 
-      // The PANE-death half stays guarded — that reasoning is still sound, and it is the half the
+      // The OWNER-death half stays guarded — that reasoning is still sound, and it is the half the
       // comment was actually written about.
       if (!isHeadlessRow(row)) {
-        // pane death (tmux remain-on-exit pane went dead) — the agent process exited.
+        // Owner death — the agent process exited. Only a pre-cutover row reaches this arm now, and its
+        // transport is gone, so the default liveness seam answers "dead" for it.
         // Asked only while the answer can still change anything. Once a row is stamped exited AND its
-        // pane has been observed dead, the death edge has already fired and nothing un-exits a row —
-        // so re-observing it every second buys nothing and costs the batched tmux inventory. On a board
-        // of finished threads this is what makes an idle tick cost NO subprocess at all.
+        // owner has been observed dead, the death edge has already fired and nothing un-exits a row —
+        // so re-observing it every second buys nothing and used to cost a batched process inventory. On
+        // a board of finished threads this is what makes an idle tick cost NO subprocess at all.
         if (row.exited !== 1 || !state.paneDead) {
           const dead = paneDeadForRow(row)
           if (dead && !state.paneDead) {
@@ -4388,12 +4440,11 @@ export function createTailer(deps: TailerDeps): Tailer {
           state.paneDead = dead
         }
       } else {
-        // No pane to observe a death on, but the "owning process is gone" flag still has to stay
-        // CURRENT: it is what
-        // clears a headless thread's background shells when frizz stops the session, exactly as a dead
-        // pane clears a tmux thread's. Assigned without the death EDGE — onPaneDeath stamps `exited`
-        // and fires the one-shot notify, and for a headless row `exited` is the input here, not the
-        // output. Left out, the prime-time reading would latch for the life of the process.
+        // Nothing to observe a death ON for a headless row, but the "owning process is gone" flag still
+        // has to stay CURRENT: it is what clears a headless thread's background shells when frizz stops
+        // the session. Assigned without the death EDGE — onPaneDeath stamps `exited` and fires the
+        // one-shot notify, and for a headless row `exited` is the input here, not the output. Left out,
+        // the prime-time reading would latch for the life of the process.
         state.paneDead = paneDeadForRow(row)
       }
 
@@ -4461,9 +4512,9 @@ export function createTailer(deps: TailerDeps): Tailer {
     if (dirty) deps.onChange()
     if (transcriptDirty.length) deps.onTranscriptChange?.(transcriptDirty)
 
-    // Refresh the pane-text cache OFF the loop for the next tick's sniff (production only; test fixtures
-    // with a synchronous capturePane fake take the in-tick fallback instead). Kicked last so it never
-    // sits in front of this tick's board push.
+    // Refresh the capture cache OFF the loop for the next tick's sniff. INERT in this build: nothing
+    // wires `capturePanesAsync`, so this returns immediately. Kicked last so it never sits in front of
+    // this tick's board push.
     refreshPaneTextAsync()
 
     // A session's provider events have outrun its transcript — look again shortly. Last, so it can
@@ -4491,7 +4542,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     })
   }
 
-  // pane death: stamp exited (keeps the stored column honest for the overlay) + badge unread +
+  // owner death: stamp exited (keeps the stored column honest for the overlay) + badge unread +
   // one-shot exited notify.
   function onPaneDeath(row: SessionRow): void {
     const generation = row.runtime_generation ?? 0

@@ -23,6 +23,17 @@ test("desktop sidebar persists through empty live keyframes, drawer lifecycle, r
   }
 })
 
+// 2026-08-19, reversing the earlier rule. A repo you have only ever worked in from the terminal is the
+// project where the Non-Frizz sessions band has the most to show, and discounting those rows here hid
+// the one surface that could show them. Only a board with nothing of ANY origin is still "fresh".
+test("a board holding only non-frizz sessions mounts the rail; a board holding nothing does not", () => {
+  const foreignOnly = nextSidebarPresence({ projectDir: null, hasBeenVisible: false }, board("/work/terminal-only", { owned: false }))
+  assert.deepEqual(foreignOnly, { projectDir: "/work/terminal-only", hasBeenVisible: true })
+
+  const empty = nextSidebarPresence({ projectDir: null, hasBeenVisible: false }, board("/work/brand-new"))
+  assert.deepEqual(empty, { projectDir: "/work/brand-new", hasBeenVisible: false })
+})
+
 test("a different project still receives the intentional fresh-workspace shell", () => {
   const populated = nextSidebarPresence({ projectDir: null, hasBeenVisible: false }, board("/work/old", { plans: 1 }))
   const fresh = nextSidebarPresence(populated, board("/work/new"))

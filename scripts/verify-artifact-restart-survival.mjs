@@ -58,7 +58,7 @@ function bootServer(artifact, target, token, label) {
         FRIZZ_DEV_PORT: String(PORT),
         FRIZZ_WAKERS_OFF: "1",
         FRIZZ_ORPHAN_REAPER_OFF: "1",
-        FRIZZ_TMUX_SOCKET: `frizz-survival-${PORT}-${process.pid}`,
+        FRIZZ_SANDBOX_TAG: `frizz-survival-${PORT}-${process.pid}`,
         FRIZZ_STABLE_ARTIFACT: artifact.digest,
         FRIZZ_STABLE_WEB_DIST: artifact.webDir,
         FRIZZ_SCRIPTS_DIR: join(artifact.runtimeDir, "board"),

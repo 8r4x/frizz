@@ -1,9 +1,11 @@
 // The detached Codex app-server daemon: ONE per project. It owns the `codex app-server --stdio`
 // child and serves its JSON-RPC over a local socket, so the app-server OUTLIVES the disposable frizz
 // runtime that spawned it — which is what makes an in-flight codex turn survive Update & Restart.
-// It buys Codex the immunity a Claude thread already has from running inside TMUX, whose server is
-// likewise not a child of frizz. (An older PTY session broker once did this for PTY sessions; it was
-// removed as dead code, so tmux — not that broker — is why Claude threads live through a restart.)
+// It buys Codex the same immunity a Claude thread gets from ITS OWN detached daemon — the session
+// broker (claude-broker-host.ts), likewise forked with `detached: true` into its own process group and
+// likewise not a child of frizz. That is the mechanism today, and only today: until the multiplexer was
+// stripped on 2026-08-02 a Claude thread got the immunity from tmux instead, and an earlier PTY session
+// broker had been removed as dead code before that. Nothing here runs a multiplexer.
 //
 // Before this existed the app-server was an ordinary stdio child of the runtime: every restart
 // SIGTERMed it and every in-flight turn died mid-sentence with no `task_complete`, no `turn_aborted`

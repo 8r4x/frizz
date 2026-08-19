@@ -54,7 +54,7 @@ function harness() {
 
 function row(slug: string, over: Partial<SessionRow> = {}): SessionRow {
   return {
-    slug, session_id: `sid-${slug}`, tmux_name: `frizz-${slug}`, spawned_at: "2026-08-14T00:00:00.000Z",
+    slug, session_id: `sid-${slug}`, thread_name: `frizz-${slug}`, spawned_at: "2026-08-14T00:00:00.000Z",
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0,
     title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null, ...over,
   }

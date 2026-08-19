@@ -27,7 +27,7 @@ mkdirSync(jsonlDir, { recursive: true })
 
 const SLUG = "subagent-profiles"
 const SESSION = "5ubagen7-9r0f-4ile-8000-000000000001"
-const TMUX = `frizz-${SLUG}`
+const THREAD_NAME = `frizz-${SLUG}`
 const now = () => new Date().toISOString()
 let n = 0
 const uuid = () => `00000000-0000-4000-8000-${String(++n).padStart(12, "0")}`
@@ -81,7 +81,7 @@ writeFileSync(join(jsonlDir, `${SESSION}.jsonl`), records.map((r) => JSON.string
 
 execFileSync("sqlite3", [
   db,
-  `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
-   VALUES ('${SLUG}', '${SESSION}', '${TMUX}', '${now()}', 'Audit the resume path', 'claude', 'opus', 'high', 'default', '${now()}')`,
+  `INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
+   VALUES ('${SLUG}', '${SESSION}', '${THREAD_NAME}', '${now()}', 'Audit the resume path', 'claude', 'opus', 'high', 'default', '${now()}')`,
 ])
 console.log(`seeded ${SLUG} → ${SESSION} (${DISPATCHES.length} background dispatches)`)

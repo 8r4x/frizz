@@ -1194,7 +1194,7 @@ test("tailer: a dead pane clears its background shells — a shell cannot outliv
   t.tick()
   assert.deepEqual(t.get("t")?.bgShells, [{ id: "toolu_sh", label: "Watch CI", startedAt: "2026-07-01T00:00:01.000Z", state: "running", stoppable: true, taskId: "b8p", lastActivityAt: "2026-07-01T00:00:02.000Z" }])
 
-  // The agent process dies (its tmux pane went dead) WITHOUT a terminal notification landing for the
+  // The agent process dies WITHOUT a terminal notification landing for the
   // shell. The shell is a child of that process, so it died with it — the board must stop reporting it
   // as live (otherwise it would breathe "alive" forever).
   h.dead.v = true
@@ -1204,12 +1204,12 @@ test("tailer: a dead pane clears its background shells — a shell cannot outliv
   assert.ok(h.changes.n > before, "the shell vanishing marks the board dirty")
 })
 
-// A HEADLESS row (broker claude / app-server codex) has NO tmux pane, so the pane probe can only ever
+// A HEADLESS row (broker claude / app-server codex) has NO pane at all, so the pane probe can only ever
 // answer "dead" for it — and the prime path asked anyway, latching paneDead=true at first sighting while
 // the steady tick (guarded by !isHeadlessRow) never revisited it. Every broker thread therefore reported
 // bgShells:[] for the life of the process, however many shells the fold was tracking. Measured on the
 // real board 2026-07-29: 174 threads, 13 holding live shell entries, ZERO rendering one — the sole
-// paneDead=false row was a legacy tmux thread. The pane probe must not be consulted at all here.
+// paneDead=false row was a legacy pre-broker thread. The pane probe must not be consulted at all here.
 test("tailer: a BROKER (headless) thread reports its live background shells — the pane probe is never asked", () => {
   const h = harness()
   h.storage.upsertSession(row())
@@ -1226,7 +1226,7 @@ test("tailer: a BROKER (headless) thread reports its live background shells — 
     bus: h.bus,
     onChange: () => h.changes.n++,
     now: () => h.clock.ms,
-    // The real tmux probe's answer for a slug with no pane, which is EVERY headless row: dead.
+    // The real pane probe's answer for a slug with no pane, which is EVERY headless row: dead.
     paneDead: (slug) => { deadCalls.push(slug); return true },
     capturePane: () => h.pane.text,
     sessionLogDir: h.logDir,
@@ -1499,10 +1499,10 @@ test("defaultBrokerDaemonAlive: memoises within the TTL and re-probes after it",
 // runtimes — the board's own shell list already does (bgShellViews drops them on paneDead), but the ops
 // strip is a UNION of that list and the transcript's pending background cards, so dropping the board row
 // only MOVES the phantom unless the transcript hears the same fact. Scoping that to broker rows, as the
-// first cut did, left every TMUX thread's dead-pane shells still rendering "running".
-test("tailer: ownerGone answers for a tmux pane death, not just a dead broker daemon", () => {
+// first cut did, left every NON-BROKER thread's dead-pane shells still rendering "running".
+test("tailer: ownerGone answers for a pane death on a non-broker row, not just a dead broker daemon", () => {
   const h = harness()
-  h.storage.upsertSession(row()) // a plain tmux row — no broker runtime
+  h.storage.upsertSession(row()) // a plain pre-broker row — no broker runtime
   fixture(h.logDir, "sid", [IN_FLIGHT])
   const t = createTailer({
     project: { cwdSlug: "x" } as Project,
@@ -1528,7 +1528,7 @@ test("tailer: ownerGone answers for a tmux pane death, not just a dead broker da
   assert.equal(t.ownerGone?.("never-seen"), false, "an unknown slug is never reported gone")
 })
 
-// The guard on the fix above. A tmux row has no broker record to read, and a probe that answered "dead"
+// The guard on the fix above. A non-broker row has no broker record to read, and a probe that answered "dead"
 // for one would empty its shells wholesale — the exact shape of the 2026-07-29 regression this file
 // already pins from the other direction (a pane sniff wrongly applied to a headless row).
 test("tailer: broker-daemon liveness is never consulted for a non-broker row", () => {
@@ -1553,7 +1553,7 @@ test("tailer: broker-daemon liveness is never consulted for a non-broker row", (
 
   h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z")
   t.tick()
-  assert.equal(asked, 0, "a tmux row never asks about a broker daemon")
+  assert.equal(asked, 0, "a non-broker row never asks about a broker daemon")
   assert.equal(t.get("t")?.bgShells.length, 1, "and its live shell is untouched")
 })
 
@@ -2028,8 +2028,8 @@ function makeTailer(h: Harness, over: Partial<Parameters<typeof createTailer>[0]
 }
 
 function row(over: Partial<SessionRow> = {}): SessionRow {
-  const result = { slug: "t", session_id: "sid", tmux_name: "frizz-t", spawned_at: "2026-07-01T00:00:00.000Z", last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0, title: null, state: null, meta: null, seen_at: null, plan_path: null, transcript_id: null, ...over }
-  if (over.slug !== undefined && over.tmux_name === undefined) result.tmux_name = `frizz-${result.slug}`
+  const result = { slug: "t", session_id: "sid", thread_name: "frizz-t", spawned_at: "2026-07-01T00:00:00.000Z", last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0, title: null, state: null, meta: null, seen_at: null, plan_path: null, transcript_id: null, ...over }
+  if (over.slug !== undefined && over.thread_name === undefined) result.thread_name = `frizz-${result.slug}`
   return result
 }
 
@@ -2364,7 +2364,7 @@ test("tailer: Claude permission mode initializes from the transcript", () => {
   assert.equal(t.get("t")?.permissionMode, "auto")
   assert.equal(h.storage.getSession("t")?.permission_mode, "auto", "hard reload starts from the observed runtime mode")
 
-  // The pane-footer confirmation poll that used to drive a live transition went with the tmux
+  // The pane-footer confirmation poll that used to drive a live transition went with the pre-broker
   // transport; a headless row takes its mode from the transcript sidecar alone.
   appendFileSync(join(h.logDir, "sid.jsonl"), PERMISSION_BYPASS + "\n")
   t.tick()
@@ -2636,7 +2636,7 @@ test("tailer: surfaces a signal fence through get()", () => {
 // ---- whole-directory FOREIGN session discovery (maintainer terminals: read-only threads) ----
 
 // A tailer whose paneDead/capturePane are SPIES — records every slug they're asked about, so a test
-// can prove a foreign thread never triggers a tmux shell-out.
+// can prove a foreign thread never triggers a pane shell-out.
 function foreignTailer(h: Harness) {
   const paneCalls: string[] = []
   const deadCalls: string[] = []
@@ -2791,7 +2791,7 @@ test("tailer: a transcript missing past the grace window → noTranscript degrad
   // sides fall back to the per-install directory; ask for it the same way or this looks in an empty one.
   const stallLog = join(frizzTempDir("frizz-worker-logs"), `${slug}.stall.log`)
   try { rmSync(stallLog) } catch { /* not there */ }
-  h.storage.upsertSession(row({ slug, tmux_name: `frizz-${slug}` }))
+  h.storage.upsertSession(row({ slug, thread_name: `frizz-${slug}` }))
   h.pane.text = "Error: Session ID sid is already in use." // claude's own boot-failure text in the pane
   const t = makeTailer(h)
 
@@ -2818,7 +2818,7 @@ test("tailer: a present-but-EMPTY (0-byte) transcript past grace is treated as M
   const stallLog = join(frizzTempDir("frizz-worker-logs"), `${slug}.stall.log`)
   try { rmSync(stallLog) } catch { /* not there */ }
   const h = harness()
-  h.storage.upsertSession(row({ slug, tmux_name: `frizz-${slug}` }))
+  h.storage.upsertSession(row({ slug, thread_name: `frizz-${slug}` }))
   fixture(h.logDir, "sid", []) // <sid>.jsonl EXISTS but is 0 bytes (worker created it then crashed)
   const t = makeTailer(h)
 
@@ -3440,7 +3440,7 @@ test("tailer: an exited+archived row flags noTranscript but raises NO boot-failu
   // A thread the operator finished with and archived. Its transcript never existed and never will.
   // `archived` is a legacy column upsertSession does not even write — setState is the only way to
   // archive, and it is what the board reads. Archive it the way the Archive button does.
-  h.storage.upsertSession(row({ slug, tmux_name: `frizz-${slug}`, exited: 1 }))
+  h.storage.upsertSession(row({ slug, thread_name: `frizz-${slug}`, exited: 1 }))
   h.storage.setState(slug, "archived")
   h.pane.text = "Error: Session ID sid is already in use."
   const t = makeTailer(h)
@@ -3457,7 +3457,7 @@ test("tailer: a LIVE row still raises the boot-failure alarm (the archived skip 
   const slug = "really-stalled"
   const stallLog = join(frizzTempDir("frizz-worker-logs"), `${slug}.stall.log`)
   try { rmSync(stallLog) } catch { /* not there */ }
-  h.storage.upsertSession(row({ slug, tmux_name: `frizz-${slug}`, exited: 0, archived: 0 }))
+  h.storage.upsertSession(row({ slug, thread_name: `frizz-${slug}`, exited: 0, archived: 0 }))
   h.pane.text = "Error: Session ID sid is already in use."
   const t = makeTailer(h)
 
@@ -3477,12 +3477,12 @@ test("tailer: cold ARCHIVED rows yield their prime slots until every visible row
   // registry order alone would starve the visible row.
   for (let i = 0; i < 60; i++) {
     const slug = `archived-${i}`
-    h.storage.upsertSession(row({ slug, tmux_name: `frizz-${slug}`, session_id: `arch-sid-${i}`, exited: 1 }))
+    h.storage.upsertSession(row({ slug, thread_name: `frizz-${slug}`, session_id: `arch-sid-${i}`, exited: 1 }))
     h.storage.setState(slug, "archived")
     fixture(h.logDir, `arch-sid-${i}`, [IN_FLIGHT, DONE])
   }
   const slug = "on-screen"
-  h.storage.upsertSession(row({ slug, tmux_name: `frizz-${slug}`, session_id: "visible-sid" }))
+  h.storage.upsertSession(row({ slug, thread_name: `frizz-${slug}`, session_id: "visible-sid" }))
   h.storage.setState(slug, "open")
   fixture(h.logDir, "visible-sid", [IN_FLIGHT, TOOL, DONE, TITLE])
 

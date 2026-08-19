@@ -51,7 +51,7 @@ function firstLineOf(pred: (rec: any) => boolean): string {
   throw new Error("no fixture line matched")
 }
 
-// ==== native TUI modal detection (real Codex 0.144.1 chrome, pane-only — legacy tmux rows) ====
+// ==== native TUI modal detection (real Codex 0.144.1 chrome, pane-only — legacy pre-app-server rows) ====
 
 const githubApprovalPane = `
   Field 1/1

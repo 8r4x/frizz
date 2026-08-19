@@ -32,7 +32,7 @@ function write(slug, sessionId, title, records) {
   fs.writeFileSync(path.join(transcriptDir, `${sessionId}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
   execFileSync("sqlite3", [
     db,
-    `INSERT INTO session (slug, session_id, tmux_name, spawned_at, title, title_auto, backend, model, effort, permission_mode, state, unread, exited, archived)
+    `INSERT INTO session (slug, session_id, thread_name, spawned_at, title, title_auto, backend, model, effort, permission_mode, state, unread, exited, archived)
      VALUES ('${slug}', '${sessionId}', 'frizz-${slug}', '${T(0)}', '${title}', 0, 'claude', 'opus', 'high', 'auto', 'open', 0, 0, 0)`,
   ])
   console.log(`seeded ${slug} (${sessionId})`)

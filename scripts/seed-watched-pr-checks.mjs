@@ -142,7 +142,7 @@ for (const [n, c] of CASES.entries()) {
     // reports `exited` for it and nothing downstream reads as a rest. The broker arm needs a discovery
     // record whose pid is alive, or the daemon probe answers "gone" and drops the thread's background
     // shells — correctly, which is exactly why this seeder writes one (see brokerRecord below).
-    `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, claude_runtime, model, effort, permission_mode, rested_at)
+    `INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, backend, claude_runtime, model, effort, permission_mode, rested_at)
      VALUES ('${c.slug}', '${sessionId}', 'frizz-${c.slug}', '${at}', '${c.title}', 'claude', 'broker', 'opus', 'high', 'default', '${at}')`,
   ])
   console.log(`seeded ${c.slug}`)

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // @ts-check
 // PermissionRequest hook (frizz worker), matcher "*" — the worker's permission POLICY, and the durable
-// structured signal the tailer reads instead of scraping the tmux pane.
+// structured signal the tailer reads instead of scraping the worker's terminal output.
 //
 // WHY THIS DECIDES (it used to only observe): a frizz worker runs under a dashboard with nobody at the
 // keyboard, so a tool-approval prompt parks the thread invisibly until a human happens to look. frizz

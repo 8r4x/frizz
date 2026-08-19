@@ -23,9 +23,10 @@ import { draftKey, draftStore, useProjectDir } from "./drafts.ts"
 
 // Which surfaces can offer this at all. Only a Claude thread has a queue frizz holds a control channel
 // into; a codex steer goes straight into the running turn, so there is never anything to take back and
-// the affordance would be a dead click. (A LEGACY tmux Claude row also can't — its text was typed into
-// Claude Code's own TUI composer — but nothing distinguishes it from a broker row on the client, so
-// that one refusal is surfaced as the server's reason rather than predicted here.)
+// the affordance would be a dead click. (A LEGACY Claude row dispatched before the broker became the
+// sole transport also can't — its text was typed into Claude Code's own TUI composer — but nothing
+// distinguishes it from a broker row on the client, so that one refusal is surfaced as the server's
+// reason rather than predicted here.)
 export function useUnqueueSupported(slug: string | null): boolean {
   // useSyncExternalStore over a SCALAR rather than useSnapshot: this runs in every user bubble in the
   // transcript, and a snapshot proxy would re-render all of them on every board push (the threads array

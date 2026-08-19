@@ -1,6 +1,6 @@
 // End-to-end over the REAL frizz graph — storage → tailer fold → board assembly — driven by a
 // scripted Claude provider that writes the same two artifacts a live broker session does: records on
-// disk and typed events over the socket. No `claude`, no daemon, no tmux, no browser, no sleeps.
+// disk and typed events over the socket. No `claude`, no daemon, no browser, no sleeps.
 //
 // These are the assertions that decide whether consuming the broker's event stream (item 1 of
 // plans/t3code-adoption-spike.md) made the board FASTER without making it WRONG. The wrongness risk
@@ -154,8 +154,8 @@ test("integration: a `result` event short-circuits the 5s unknown-stop_reason ba
 })
 
 test("integration: without a runtime signal the backstop behaves exactly as before", async () => {
-  // The control for the test above — same script, no `result` event. This is what every tmux thread
-  // and every pre-broker session still does, and it must be untouched.
+  // The control for the test above — same script, no `result` event. This is what every pre-broker
+  // session still does, and it must be untouched.
   const h = createIntegrationHarness()
   try {
     const OUT = childTranscript(h)
@@ -331,8 +331,8 @@ test("integration: a runtime event drives a tailer re-read with no poll tick at 
 // ---- sub-agent progress: the structured stream over the prose fold --------------------------------
 // "There's not really any indication of what they're up to aside from starts and stops." These pin the
 // three rules that answer it: the structured stream ENRICHES a folded child, it may RETIRE one, and it
-// may never INVENT one. The prose path is exercised alongside in every case, because a tmux thread has
-// nothing else and must keep behaving exactly as it did.
+// may never INVENT one. The prose path is exercised alongside in every case, because a pre-broker thread
+// has nothing else and must keep behaving exactly as it did.
 
 // The child's own transcript, which the fold resolves out of the launch ack's prose and then stats as
 // the staleness clock. It has to EXIST: a path that never stats reads as stale, which is correct
@@ -570,7 +570,7 @@ test("integration: the structured stream never INVENTS a sub-agent the fold does
 })
 
 test("integration: the PROSE fold still retires a child on its own, with no structured stream at all", async () => {
-  // The fallback that must not rot. A tmux thread emits no task events ever, so this is the whole of
+  // The fallback that must not rot. A pre-broker thread emits no task events ever, so this is the whole of
   // its sub-agent lifecycle — byte-identical to before this change existed.
   const h = createIntegrationHarness()
   try {

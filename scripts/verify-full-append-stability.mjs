@@ -75,7 +75,7 @@ for (let i = 0; i < 14; i++) seed.push(assistant(prose(3 + (i % 4), `Working ste
 // The id of the message now at the tail — what a tool call in this turn merges into.
 const TAIL_ID = `msg_${n}`
 writeFileSync(jsonl, seed.map((r) => JSON.stringify(r)).join("\n") + "\n")
-execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode)
+execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode)
   VALUES ('${SLUG}', '${SESSION}', 'frizz-${SLUG}', '${now()}', 'Full append stability', 'claude', 'opus', 'high', 'default')`])
 const append = (record) => appendFileSync(jsonl, JSON.stringify(record) + "\n")
 const api = createRpcClient(url)

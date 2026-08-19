@@ -57,7 +57,7 @@ function fixture(runtimeTasks?: readonly ClaudeRuntimeTask[]) {
   transcript("aGreat", [assistant([{ type: "text", text: "LEAF-DONE" }])])
 
   storage.upsertSession({
-    slug: SLUG, session_id: SESSION, tmux_name: `frizz-${SLUG}`, spawned_at: new Date().toISOString(),
+    slug: SLUG, session_id: SESSION, thread_name: `frizz-${SLUG}`, spawned_at: new Date().toISOString(),
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
     title: SLUG, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   })
@@ -571,7 +571,7 @@ function strandedFixture() {
   writeFileSync(join(subagents, "agent-aGrand.jsonl"), `${assistant([{ type: "text", text: "LEAF-DONE" }])}\n`)
 
   storage.upsertSession({
-    slug: SLUG, session_id: SESSION, tmux_name: `frizz-${SLUG}`, spawned_at: "2026-07-01T00:00:00.000Z",
+    slug: SLUG, session_id: SESSION, thread_name: `frizz-${SLUG}`, spawned_at: "2026-07-01T00:00:00.000Z",
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
     title: SLUG, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   })

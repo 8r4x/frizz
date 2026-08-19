@@ -43,7 +43,7 @@ for (const [i, s] of done.entries()) {
   writeFileSync(join(jsonlDir, `${s.sessionId}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
   execFileSync("sqlite3", [
     db,
-    `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, rested_at, archived, state, exited)
+    `INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode, rested_at, archived, state, exited)
      VALUES ('${s.slug}', '${s.sessionId}', 'frizz-${s.slug}', '${at(i)}', '${s.title}', 'claude', 'opus', 'high', 'default', '${at(i + 1)}', 1, 'archived', 1)`,
   ])
   console.log(`seeded ${s.slug} → done`)

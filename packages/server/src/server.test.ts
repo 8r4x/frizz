@@ -33,7 +33,7 @@ function fakePaneIdentity(n = 1): PaneIdentity {
   return { paneId: `%${n}`, panePid: 10_000 + n, sessionCreated: 20_000 + n }
 }
 
-// A dispatcher wired to a tmp project + real storage + a stub board + injected tmux seams. No test in
+// A dispatcher wired to a tmp project + real storage + a stub board + injected spawn seams. No test in
 // this harness contacts the live project socket or starts a real worker.
 function dispatcherHarness(settings = defaultSettings()) {
   const dir = tmp("frizz-dispatch-")
@@ -73,7 +73,7 @@ function dispatcherHarness(settings = defaultSettings()) {
     }),
     getSettings: () => settings,
     // The broker is the only claude transport now, so what a dispatch "carries" lives in the
-    // spawnDispatch input rather than in a tmux argv. `cmd` keeps the prompt + system prompt so the
+    // spawnDispatch input rather than in a spawned argv. `cmd` keeps the prompt + system prompt so the
     // assertions below still read the same facts.
     claudeBroker: {
       spawnDispatch: async (input: { threadSlug: string; sessionId: string; cwd: string; prompt: string; appendSystemPrompt?: string }) => {
@@ -87,7 +87,7 @@ function dispatcherHarness(settings = defaultSettings()) {
 }
 
 // The system prompt a spawn carries. It rides `--append-system-prompt-file <path>` (inline text
-// would blow tmux's command-length limit), so resolve the path and read the file. Falls back to a
+// would blow the OS command-length limit), so resolve the path and read the file. Falls back to a
 // legacy inline `--append-system-prompt <text>` if present. "" when neither is set.
 // Two shapes. `buildClaudeCommand` still produces a real argv (resume uses it), where the system
 // prompt rides `--append-system-prompt[-file]`. A DISPATCH has no argv at all — the broker takes the
@@ -114,7 +114,7 @@ test("storage: session roundtrip + markRead + exited", () => {
   s.upsertSession({
     slug: "t",
     session_id: "sid-1",
-    tmux_name: "frizz-t",
+    thread_name: "frizz-t",
     spawned_at: "2026-07-01T00:00:00.000Z",
     last_read_at: null,
     unread: 1,
@@ -154,7 +154,7 @@ test("storage: transcript_id cache round-trips, survives restart, resets on re-d
   const dbPath = join(dir, "ui.db")
   const s = createStorage(dbPath)
   s.upsertSession({
-    slug: "t", session_id: "sid-1", tmux_name: "frizz-t", spawned_at: "2026-07-01T00:00:00.000Z",
+    slug: "t", session_id: "sid-1", thread_name: "frizz-t", spawned_at: "2026-07-01T00:00:00.000Z",
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0, title: null,
     state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   })
@@ -315,7 +315,7 @@ test("buildClaudeCommand: pins session-id, permission mode, optional model/effor
     workerPrompt: "WORKER_NORMS",
   })
   // The worker norms ride --append-system-prompt-file (a path), not inline text — inline would blow
-  // tmux's command-length limit. Assert the fixed head, the file-flag, the file CONTENT, and the
+  // the OS command-length limit. Assert the fixed head, the file-flag, the file CONTENT, and the
   // trailing prompt.
   assert.deepEqual(full.slice(0, 9), [
     "claude",
@@ -523,7 +523,7 @@ function codexDispatcherHarness(codexAppServer?: Partial<CodexAppServerBridge>) 
   return { dir, codexHome, storage, project, spawned, dispatcher, CODEX_ID }
 }
 
-test("dispatch(codex): a failing app-server bridge throws loudly — there is NO tmux fallback (retired)", async () => {
+test("dispatch(codex): a failing app-server bridge throws loudly — there is NO TUI fallback (retired)", async () => {
   let released = 0
   const h = codexDispatcherHarness({
     spawnDispatch: async () => { throw new Error("app-server unavailable (protocol drift)") },
@@ -533,7 +533,7 @@ test("dispatch(codex): a failing app-server bridge throws loudly — there is NO
     h.dispatcher.dispatch({ prompt: "No fallback." }, { backend: "codex" }),
     /Codex app-server could not start this thread/,
   )
-  assert.equal(h.spawned.length, 0, "no tmux spawn — the TUI path is retired")
+  assert.equal(h.spawned.length, 0, "no spawn at all — the TUI path is retired")
   assert.equal(released, 1, "the partial bridge binding was released")
   // Assert on the REGISTRY, not a guessed slug: dispatch throws before any upsertSession, so a
   // slug-keyed lookup would pass even if it were aimed at the wrong row.

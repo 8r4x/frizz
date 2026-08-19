@@ -130,11 +130,11 @@ export function needsAction(t: ThreadView): boolean {
   if (t.pendingQuestion && t.runtime !== "running" && t.runtime !== "spawning") return true
   // CRASH / STALL net (replaces the old `unread`-gated clause — `unread` no longer drives anything).
   // A thread whose status still claims WORK IN FLIGHT (active or planning) but whose backing agent
-  // PROCESS is gone — `exited` (session row present, tmux pane dead) or `none` (registry lost the row)
+  // PROCESS is gone — `exited` (session row present, worker process dead) or `none` (registry lost the row)
   // — is a crash/stall the human must see. Deliberately SCOPED to the in-flight work statuses, because
   // "an agent died MID-WORK" is exactly active/planning:
   //   • `blocked` is a MACHINE-wait — its agent is LEGITIMATELY absent (waiting on revalidate_at /
-  //     blocking_threads), and a killed/rebooted session (tmux dies → every spawned thread goes
+  //     blocking_threads), and a killed/rebooted session (the workers die → every spawned thread goes
   //     exited/none) must NOT card it or steal its timer/threads glyph (Nav short-circuits on
   //     needsAction before those glyphs). blocked never cards — that's the spec.
   //   • `needs-human` with a session already cards via the humanBlocked clause above (session-less
@@ -257,10 +257,14 @@ export function queued(t: ThreadView): boolean {
   return t.kind === "session" && t.foreign !== true && t.needsYou === true && t.state !== "archived"
 }
 
-// Foreign sessions — Claude Code sessions discovered in the project's JSONL dir that frizz did NOT
-// originate (the maintainer's own terminals). NOT rail rows (maintainer 2026-07-09: only
-// frizz-originated threads belong in the rail) — the Sidebar renders them as a one-line ambient
-// presence strip, preserving the earlier "detect active Claude Code sessions" ask without the noise.
+// NON-FRIZZ SESSIONS — agent sessions discovered in the project's transcript dir that frizz did NOT
+// originate (the maintainer's own terminals). They are NOT part of the four frizz bands and never can
+// be: a foreign session writes no ```awaiting fence and has no lifecycle row, so Held and Done have
+// nothing to derive from (see the server's foreignThreadView). So they get their own collapsible
+// section at the bottom of the rail instead — one the reader can ignore wholesale, which is the point.
+//
+// The server emits only RESTED ones (maintainer 2026-08-19: a spinning terminal session is one you
+// already have open), so this is a plain partition rather than a second opinion about rest.
 export function foreignThreads(threads: readonly ThreadView[]): ThreadView[] {
   return threads.filter((t) => t.kind === "session" && t.foreign === true)
 }

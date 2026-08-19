@@ -27,7 +27,7 @@ function sessionRow(slug: string, sessionId: string): SessionRow {
   return {
     slug,
     session_id: sessionId,
-    tmux_name: `frizz-${slug}`,
+    thread_name: `frizz-${slug}`,
     spawned_at: "2026-07-13T00:00:00.000Z",
     last_read_at: null,
     unread: 0,

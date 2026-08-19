@@ -5,27 +5,26 @@ import { log } from "./logging.ts"
 
 // The UI-state store (never .frizz/): session registry + settings. SQLite at
 // stateDir/ui.db, WAL for concurrent read while the watcher writes. Frizz thread files stay
-// the source of truth for STATUS; this DB holds only runtime overlay (which tmux session
+// the source of truth for STATUS; this DB holds only runtime overlay (which worker session
 // backs a thread, unread, last-read) and settings.
 
 export interface SessionRow {
   slug: string
   session_id: string
-  // Legacy column NAME, live column: the thread identity string (`frizz-<slug>`). It is not renamed
-  // because every existing ui.db on disk carries it; see threadIdentityName.
   /**
-   * LEGACY NAME. Nothing here has been a tmux session since the broker landed: this is the thread's
-   * IDENTITY STRING, `frizz-<slug>`, re-derived and checked on every write by
-   * validateSessionIdentity. It is not renamed because the column is load-bearing on disk in every
-   * existing database; see the tmux invariant in ARCHITECTURE.md.
+   * The thread's IDENTITY STRING, `frizz-<slug>`, re-derived and checked on every write by
+   * validateSessionIdentity (see threadIdentityName). The column was called `tmux_name` and is
+   * renamed in place on first boot — see THE COLUMN THAT OUTLIVED THE MULTIPLEXER below. The VALUE
+   * never named a multiplexer pane, only a name that happened to be given to one, and no worker has
+   * run in one since the broker landed; see the "there is no tmux" invariant in ARCHITECTURE.md.
    */
-  tmux_name: string
+  thread_name: string
   spawned_at: string // ISO8601
   last_read_at: string | null // ISO8601
   unread: number // 0 | 1
   exited: number // 0 | 1
   archived: number // 0 | 1 — user hid the row from the nav; any respawn/resume un-archives
-  rested_at: string | null // ISO8601 — when the agent last came to REST (turn end / pane death); drives nav order
+  rested_at: string | null // ISO8601 — when the agent last came to REST (turn end / worker exit); drives nav order
   // 0 | 1 — the stored `title` is a machine GUESS (the prompt chop), not a real name. Display-only:
   // it is what makes the UI show "Spinning up…"/"Untitled thread" instead of an internal-looking slug.
   // It does NOT decide whether a later machine title may land — that is `title_locked` below.
@@ -179,29 +178,33 @@ export interface SessionRow {
   // respawn/reattach so output or async completion from an older process cannot mutate the new one.
   runtime_generation?: number
   // Durable, mutually-exclusive native runtime control. The revision prevents ABA when one control
-  // finishes and another starts with the same kind while an async pane operation is still returning.
+  // finishes and another starts with the same kind while an async runtime operation is still returning.
   runtime_control?: string | null
   runtime_control_revision?: number
-  // Codex transport: NULL/'tmux' = legacy interactive-TUI-in-tmux; 'app-server' = a bridge-owned
-  // JSON-RPC session. Only meaningful for backend='codex' rows.
+  // Codex transport: 'app-server' = a bridge-owned JSON-RPC session, and the only value frizz writes.
+  // NULL/'tmux' is the PRE-APP-SERVER legacy value, left on rows that have not been dispatched since
+  // the cutover; no code path can create one now. Only meaningful for backend='codex' rows.
   codex_runtime?: string | null
-  // Claude transport: NULL/'tmux' = interactive-TUI-in-tmux; 'broker' = a session-broker-owned Agent
-  // SDK session. Only meaningful for backend='claude' rows.
+  // Claude transport: 'broker' = a session-broker-owned Agent SDK session, and the only value frizz
+  // writes. NULL/'tmux' is the PRE-BROKER legacy value, readable on an old database and never written
+  // again. Only meaningful for backend='claude' rows.
   claude_runtime?: string | null
 }
 
 /**
- * A HEADLESS thread has no tmux pane: input goes through a bridge, liveness comes from the bridge /
- * the on-disk transcript, and nothing captures a pane. Both bridge-owned transports are headless —
- * codex over its app-server, claude over its session broker. Use this wherever the intent is "does
- * this thread live in a tmux pane?" rather than a codex- or claude-specific branch.
+ * A HEADLESS thread has no terminal of its own: input goes through a bridge, liveness comes from the
+ * bridge / the on-disk transcript, and there is no interactive UI for anything to read back. Both
+ * bridge-owned transports are headless — codex over its app-server, claude over its session broker —
+ * which between them is every row frizz creates. Use this wherever the intent is "is this row
+ * bridge-owned?" rather than a codex- or claude-specific branch; the false side is only ever a
+ * legacy row left by the pre-cutover interactive path.
  */
 export function isHeadlessRow(row: Pick<SessionRow, "backend" | "codex_runtime" | "claude_runtime">): boolean {
   return (row.backend === "codex" && row.codex_runtime === "app-server") ||
     (row.backend === "claude" && row.claude_runtime === "broker")
 }
 
-/** A Claude row whose session lives in the detached broker daemon (no tmux pane). Stamped
+/** A Claude row whose session lives in the detached broker daemon, not in any terminal. Stamped
  *  claude_runtime="broker" at dispatch and never migrated, so — unlike legacy codex rows — the runtime
  *  column is authoritative from birth. The Claude twin of isAppServerCodexRow. */
 export function isBrokerClaudeRow(row: Pick<SessionRow, "backend" | "claude_runtime">): boolean {
@@ -305,10 +308,13 @@ export interface AutoTitleExpectation {
 
 export type AdoptionClaimState = "reserved" | "spawned" | "recovering" | "finalized"
 
-// A cold-adoption attempt owns its slug in SQLite before it is allowed to create a tmux session.
-// The tmux tuple is filled immediately after new-session returns; the attempt token is also embedded
-// in the tmux session environment, which lets restart recovery identify the otherwise tiny window
-// between tmux creation and this row update without guessing from a reusable slug or PID.
+// A cold-adoption attempt owns its slug in SQLite before it is allowed to start a worker at all.
+// The pane_* tuple below is LEGACY. When adoption spawned an interactive multiplexer session, that
+// tuple was filled immediately after the session was created and the attempt token was embedded in
+// the session's environment, which let restart recovery identify the otherwise tiny window between
+// the spawn and this row update without guessing from a reusable slug or PID. Adoption spawns
+// through the broker now, so those three columns stay NULL and the reservation itself is the claim
+// (see finalizeAdoptionClaimTxn).
 export interface AdoptionClaimRow {
   slug: string
   attempt_token: string
@@ -338,8 +344,8 @@ export interface AdoptionReservation {
 }
 
 // Tokens are never reusable after an attempt gives up ownership. Keeping the retirement ledger
-// durable lets boot recovery find a pane created by an old process that resumed after its lease was
-// recovered. New processes are additionally fenced under SQLite's writer lock before spawning.
+// durable lets boot recovery find a worker started by an old process that resumed after its lease
+// was recovered. New processes are additionally fenced under SQLite's writer lock before spawning.
 export interface RetiredAdoptionAttemptRow {
   attempt_token: string
   slug: string
@@ -417,7 +423,7 @@ export interface Storage {
   allAdoptionClaims(): AdoptionClaimRow[]
   allRetiredAdoptionAttempts(): RetiredAdoptionAttemptRow[]
   // INSERT ... WHERE no session owner exists. The slug PK and token UNIQUE constraint serialize
-  // separate Frizz processes/connections; a loser never reaches tmux.
+  // separate Frizz processes/connections; a loser never reaches the spawn.
   reserveAdoptionClaim(reservation: AdoptionReservation): boolean
   recordAdoptionPane(
     slug: string,
@@ -425,8 +431,11 @@ export interface Storage {
     identity: AdoptionPaneIdentity,
     leaseExpiresAtMs: number,
   ): boolean
-  // Revalidate the exact token while holding SQLite's write lock across new-session and the first
-  // pane bind. Recovery on another connection cannot retire the token in the validation→spawn gap.
+  // Revalidate the exact token while holding SQLite's write lock across the spawn and its first
+  // identity bind. Recovery on another connection cannot retire the token in the validation→spawn
+  // gap. LEGACY SHAPE: only the multiplexer-era adoption spawn bound an identity here — a
+  // broker-backed adoption reserves and finalizes without one, so nothing outside the tests reaches
+  // this today.
   withAdoptionSpawnFence<T>(
     slug: string,
     attemptToken: string,
@@ -434,10 +443,12 @@ export interface Storage {
     spawn: (bindPane: (identity: AdoptionPaneIdentity, leaseExpiresAtMs: number) => boolean) => T,
   ): AdoptionSpawnFenceResult<T>
   // The session INSERT and claim finalization are one SQLite transaction. False means another row
-  // won; the spawned attempt remains recoverable and must be exact-pane cleaned by its owner/restart.
+  // won; the spawned attempt remains recoverable and its owner/restart must clean it up against the
+  // exact identity it recorded, never by name.
   finalizeAdoptionClaim(slug: string, attemptToken: string, row: SessionRow, finalizedAtMs: number): boolean
   // Reuse the durable binding for a legitimate resume without an unbound gap. While reserved/spawned,
-  // every reader sees a conflict and fails closed; recovery restores a finalized no-pane binding.
+  // every reader sees a conflict and fails closed; recovery restores a finalized binding with the
+  // identity columns cleared.
   rearmFinalizedAdoptionClaim(reservation: AdoptionReservation, previousAttemptToken: string): boolean
   finalizeAdoptionRespawnClaim(
     slug: string,
@@ -445,7 +456,8 @@ export interface Storage {
     sessionId: string,
     finalizedAtMs: number,
   ): boolean
-  // The live owner may abandon only its own non-finalized token after proving its pane is absent.
+  // The live owner may abandon only its own non-finalized token after proving nothing still runs
+  // under it.
   abandonAdoptionClaim(slug: string, attemptToken: string): boolean
   // Lease takeover is itself CAS + leased, so two booting servers cannot both clean one attempt and
   // a recovery process killed midway can be safely superseded after its recovery lease expires.
@@ -728,7 +740,7 @@ export function createStorage(dbPath: string): Storage {
     CREATE TABLE IF NOT EXISTS session (
       slug        TEXT PRIMARY KEY,
       session_id  TEXT NOT NULL,
-      tmux_name   TEXT NOT NULL,
+      thread_name   TEXT NOT NULL,
       spawned_at  TEXT NOT NULL,
       last_read_at TEXT,
       unread      INTEGER NOT NULL DEFAULT 0,
@@ -851,6 +863,20 @@ export function createStorage(dbPath: string): Storage {
     -- table, which costs nothing and is safer than a migration to remove it.
     -- (No backticks in this comment: the whole schema is a template literal.)
   `)
+  // THE COLUMN THAT OUTLIVED THE MULTIPLEXER (2026-08-19). This held the thread identity string
+  // `frizz-<slug>` and was called `tmux_name` for years after the last pane went away, which is most of
+  // why every reader kept concluding the agents still live in tmux. It is a plain rename: the VALUE was
+  // never a pane name, only a name that happened to be given to one.
+  //
+  // FIRST, above every statement below, because `CREATE TABLE IF NOT EXISTS` does not reshape a table
+  // that already exists — so on any database that has booted before, the column is still `tmux_name`
+  // here, and every later statement naming `thread_name` would fail against it. Idempotent by failing:
+  // once renamed there is no `tmux_name` left to rename, and a fresh database never had one.
+  try {
+    db.exec("ALTER TABLE session RENAME COLUMN tmux_name TO thread_name")
+  } catch {
+    // already renamed, or a database created with the new name
+  }
   // Best-effort inline migration for older DBs. Session-first/profile columns are nullable ADDs
   // (except the existing boolean/backend defaults) — additive + idempotent, safe while another server
   // process holds the db open (the live server never sees a shape it can't read).
@@ -891,11 +917,13 @@ export function createStorage(dbPath: string): Storage {
     "runtime_generation INTEGER NOT NULL DEFAULT 0",
     "runtime_control TEXT",
     "runtime_control_revision INTEGER NOT NULL DEFAULT 0",
-    // Codex transport discriminator: NULL/'tmux' = the legacy interactive-TUI path; 'app-server' = a
-    // bridge-owned JSON-RPC session (input via turn/start|steer, liveness from the bridge not a pane).
+    // Codex transport discriminator: 'app-server' = a bridge-owned JSON-RPC session (input via
+    // turn/start|steer, liveness from the bridge). NULL/'tmux' is the pre-app-server legacy value,
+    // still readable on an old database and never written again.
     "codex_runtime TEXT",
-    // Claude transport discriminator: NULL/'tmux' = the interactive-TUI path in a tmux pane; 'broker'
-    // = a session-broker-owned Agent SDK session (input via the bridge, liveness from it, not a pane).
+    // Claude transport discriminator: 'broker' = a session-broker-owned Agent SDK session (input via
+    // the bridge, liveness from it). NULL/'tmux' is the pre-broker legacy value, same story: readable,
+    // not creatable.
     "claude_runtime TEXT",
     // The legacy two-feature columns. Superseded 2026-08-03 by the `recurring_*` set below, which
     // merged the stop hook and the heartbeat into ONE prompt with two triggers. They are still declared
@@ -962,7 +990,7 @@ export function createStorage(dbPath: string): Storage {
   } catch {
     // column already exists
   }
-  // THE REBRAND LEFT THESE ROWS BEHIND (2026-08-06). `tmux_name` is re-derived as
+  // THE REBRAND LEFT THESE ROWS BEHIND (2026-08-06). `thread_name` is re-derived as
   // `frizz-<slug>` and checked on EVERY write by validateSessionIdentity, so a row still holding
   // `fray-<slug>` is a row whose next write is rejected. The one-time migration that fixed this was
   // deleted once the projects in use had been converted — but ten project databases had simply not
@@ -973,7 +1001,7 @@ export function createStorage(dbPath: string): Storage {
   // LIKE matches nothing once a database has been through it, so it costs one no-op scan per boot and
   // there is nothing left to delete later.
   try {
-    db.exec("UPDATE session SET tmux_name = 'frizz-' || substr(tmux_name, 6) WHERE tmux_name LIKE 'fray-%'")
+    db.exec("UPDATE session SET thread_name = 'frizz-' || substr(thread_name, 6) WHERE thread_name LIKE 'fray-%'")
   } catch {
     // A pre-schema database, or one without the column yet. The ALTERs above own that case.
   }
@@ -1082,7 +1110,7 @@ export function createStorage(dbPath: string): Storage {
       db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
         .run(agentTitleRepairKey, new Date().toISOString())
     }
-    // The tmux codex composer is gone, and with it every writer AND releaser of its durable
+    // The interactive Codex composer is gone, and with it every writer AND releaser of its durable
     // 'codex-input' runtime lock. A row that still holds one was locked by the retired subsystem and
     // nothing can ever clear it again: the board reports runtimeControlPending forever, which fences
     // that thread's composer, model, and sandbox controls permanently. Release it once, at boot.
@@ -1094,16 +1122,18 @@ export function createStorage(dbPath: string): Storage {
     // Note what is NOT swept: 'profile' is DURABLE by design — profile_handoff rides with it and restart
     // recovery must prove one exact runtime before clearing either (see the codex-only abandon above).
     db.exec("UPDATE session SET runtime_control = NULL WHERE runtime_control = 'follow-up'")
-    // Same class, one step further: a CODEX row can also still hold the tmux-era PROFILE handoff from a
-    // pre-cutover crash. That handoff can never complete now — recovery reattaches a tmux pane and reads
-    // it with the Claude composer parser, which a Codex pane never satisfies, so the recovery loop
-    // re-blocks the thread on every tick forever. Abandon the pending pair and say why; codex takes
-    // model/effort per turn, so nothing is lost but the stuck arming.
+    // Same class, one step further: a CODEX row can also still hold the PROFILE handoff a pre-cutover
+    // crash left behind, from when a model/effort change was applied by relaunching an interactive
+    // worker. That handoff can never complete now — its recovery step reattached the worker's terminal
+    // and read it with the Claude composer parser, which a Codex worker never satisfied, and no such
+    // path exists at all any more — so the recovery loop re-blocks the thread on every tick forever.
+    // Abandon the pending pair and say why; codex takes model/effort per turn, so nothing is lost but
+    // the stuck arming.
     db.exec(`
       UPDATE session
       SET runtime_control = NULL, profile_pending_model = NULL, profile_pending_effort = NULL,
           profile_handoff = NULL,
-          control_error = 'A model/effort change armed on the retired Codex tmux path was abandoned; set it again.'
+          control_error = 'A model/effort change armed on the retired Codex interactive path was abandoned; set it again.'
       WHERE backend = 'codex' AND runtime_control = 'profile'
     `)
     // Heal every app-server codex row that was downgraded behind the operator's back. Until the fixes
@@ -1206,11 +1236,11 @@ export function createStorage(dbPath: string): Storage {
     return cachedBySlug.get(slug) ?? selOne.get(slug)
   }
   const upsertStmt = db.prepare(`
-    INSERT INTO session (slug, session_id, tmux_name, spawned_at, last_read_at, unread, exited, title_auto, title_locked, title, state, snoozed_until, snooze_prompt, awaiting_fence_id, awaiting_confirmed_at, meta, seen_at, plan_path, transcript_id, model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff, permission_mode, permission_pending, control_error, runtime_generation, runtime_control, runtime_control_revision)
-    VALUES (@slug, @session_id, @tmux_name, @spawned_at, @last_read_at, @unread, @exited, @title_auto, @title_locked, @title, @state, @snoozed_until, @snooze_prompt, @awaiting_fence_id, @awaiting_confirmed_at, @meta, @seen_at, @plan_path, @transcript_id, @model, @effort, @profile_pending_model, @profile_pending_effort, @profile_revision, @profile_handoff, @permission_mode, @permission_pending, @control_error, @runtime_generation, @runtime_control, @runtime_control_revision)
+    INSERT INTO session (slug, session_id, thread_name, spawned_at, last_read_at, unread, exited, title_auto, title_locked, title, state, snoozed_until, snooze_prompt, awaiting_fence_id, awaiting_confirmed_at, meta, seen_at, plan_path, transcript_id, model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff, permission_mode, permission_pending, control_error, runtime_generation, runtime_control, runtime_control_revision)
+    VALUES (@slug, @session_id, @thread_name, @spawned_at, @last_read_at, @unread, @exited, @title_auto, @title_locked, @title, @state, @snoozed_until, @snooze_prompt, @awaiting_fence_id, @awaiting_confirmed_at, @meta, @seen_at, @plan_path, @transcript_id, @model, @effort, @profile_pending_model, @profile_pending_effort, @profile_revision, @profile_handoff, @permission_mode, @permission_pending, @control_error, @runtime_generation, @runtime_control, @runtime_control_revision)
     ON CONFLICT(slug) DO UPDATE SET
       session_id = excluded.session_id,
-      tmux_name  = excluded.tmux_name,
+      thread_name  = excluded.thread_name,
       spawned_at = excluded.spawned_at,
       last_read_at = excluded.last_read_at,
       unread = excluded.unread,
@@ -1260,7 +1290,7 @@ export function createStorage(dbPath: string): Storage {
   `)
   const insertSessionIfAbsentStmt = db.prepare(`
     INSERT INTO session (
-      slug, session_id, tmux_name, spawned_at, last_read_at, unread, exited, archived, rested_at,
+      slug, session_id, thread_name, spawned_at, last_read_at, unread, exited, archived, rested_at,
       title_auto, title_locked, title, transcript_id, state, snoozed_until, snooze_prompt, awaiting_fence_id, awaiting_confirmed_at,
       meta, seen_at, plan_path, backend, agent_session_id,
       model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff,
@@ -1268,7 +1298,7 @@ export function createStorage(dbPath: string): Storage {
       runtime_generation, runtime_control, runtime_control_revision
     )
     VALUES (
-      @slug, @session_id, @tmux_name, @spawned_at, @last_read_at, @unread, @exited, @archived,
+      @slug, @session_id, @thread_name, @spawned_at, @last_read_at, @unread, @exited, @archived,
       @rested_at, @title_auto, @title_locked, @title, @transcript_id, @state, @snoozed_until, @snooze_prompt,
       @awaiting_fence_id, @awaiting_confirmed_at, @meta, @seen_at, @plan_path,
       @backend, @agent_session_id, @model, @effort, @profile_pending_model,
@@ -1853,7 +1883,7 @@ export function createStorage(dbPath: string): Storage {
 
   const validateSessionIdentity = (row: SessionRow) => {
     const slug = ThreadSlug.parse(row.slug)
-    if (row.tmux_name !== threadIdentityName(slug)) throw new Error("invalid session thread identity")
+    if (row.thread_name !== threadIdentityName(slug)) throw new Error("invalid session thread identity")
   }
 
   const validateAdoptionReservation = (reservation: AdoptionReservation) => {
@@ -1915,10 +1945,12 @@ export function createStorage(dbPath: string): Storage {
         db.exec("ROLLBACK")
         return { acquired: false }
       }
-      // Hold BEGIN IMMEDIATE only through new-session. onCreated calls bindPane, which commits the
-      // exact tuple and releases the recovery fence BEFORE remain-on-exit/status setup continues.
-      // Thus a pre-bind SIGKILL rolls back to the durable token-only reservation, while every later
-      // setup crash retains the exact tuple instead of rolling it back with the spawn fence.
+      // Hold BEGIN IMMEDIATE only through the spawn itself. The spawn calls bindPane the moment the
+      // runtime exists, which commits the exact tuple and releases the recovery fence BEFORE the rest
+      // of that runtime's setup continues. Thus a pre-bind SIGKILL rolls back to the durable
+      // token-only reservation, while every later setup crash retains the exact tuple instead of
+      // rolling it back with the spawn fence. (The multiplexer-era shape: a broker-backed adoption
+      // binds no tuple at all — see finalizeAdoptionClaimTxn below.)
       const bindPane = (identity: AdoptionPaneIdentity, nextLeaseExpiresAtMs: number): boolean => {
         if (bound || !db.inTransaction) return false
         validateAdoptionPane(identity)
@@ -2081,7 +2113,7 @@ export function createStorage(dbPath: string): Storage {
     interactions,
     // Databases created before the canonical guard may contain an overlong or otherwise unsafe id.
     // Keep those legacy/corrupt rows inert so boot reconciliation and pollers never feed them to
-    // tmux, filesystem, transcript, or event boundaries.
+    // spawn, filesystem, transcript, or event boundaries.
     getSession,
     allSessions,
     subscribeSessionLifecycle(listener) {

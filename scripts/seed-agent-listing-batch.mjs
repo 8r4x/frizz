@@ -67,10 +67,10 @@ const shard = join(home, ".codex", "sessions", "2026", "07", "31")
 mkdirSync(shard, { recursive: true })
 writeFileSync(join(shard, `rollout-2026-07-31T10-00-00-${ROLLOUT_ID}.jsonl`), lines.join("\n") + "\n")
 
-const tmuxName = `frizz-${SLUG}`
+const threadName = `frizz-${SLUG}`
 execFileSync("sqlite3", [
   db,
-  `INSERT OR REPLACE INTO session (slug, session_id, agent_session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
-   VALUES ('${SLUG}', '${ROLLOUT_ID}', '${ROLLOUT_ID}', '${tmuxName}', '${at(0)}', 'Fold the roster poll into the run', 'codex', 'gpt-5-codex', 'high', 'default', '${at(3)}')`,
+  `INSERT OR REPLACE INTO session (slug, session_id, agent_session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
+   VALUES ('${SLUG}', '${ROLLOUT_ID}', '${ROLLOUT_ID}', '${threadName}', '${at(0)}', 'Fold the roster poll into the run', 'codex', 'gpt-5-codex', 'high', 'default', '${at(3)}')`,
 ])
 console.log(`seeded ${SLUG} → ${ROLLOUT_ID}`)

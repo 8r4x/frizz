@@ -733,7 +733,7 @@ test("workerDispatchPermission: codex ignores the Claude setting and stays at fu
 })
 
 test("buildClaudeCommand carries bypassPermissions through to --permission-mode", () => {
-  // The tmux fallback transport. (The broker — the default — passes the same mode into the SDK, which
+  // The spawned-CLI fallback transport. (The broker — the default — passes the same mode into the SDK, which
   // additionally sets allowDangerouslySkipPermissions for exactly this value.)
   const argv = buildClaudeCommand({ sessionId: "bypass-dispatch", permissionMode: "bypassPermissions", prompt: "test", workerPrompt: "" })
   assert.deepEqual(

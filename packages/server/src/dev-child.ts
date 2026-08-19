@@ -1,6 +1,7 @@
 // Disposable dev control-plane child. The long-lived supervisor forks this process and replaces it
-// whenever server/shared/RPC source changes. Claude/Codex workers remain in their independent tmux
-// server; this process owns only Frizz's HTTP/Vite/watch/tailer/storage handles.
+// whenever server/shared/RPC source changes. Claude and Codex workers are unaffected: each lives in its
+// own detached daemon, which this process neither owns nor forks. It owns only Frizz's HTTP/Vite/watch/
+// tailer/storage handles.
 import { projectFromLaunchTarget } from "./project.ts"
 import { existsSync } from "node:fs"
 import { join } from "node:path"

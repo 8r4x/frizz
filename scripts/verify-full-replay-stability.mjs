@@ -62,7 +62,7 @@ if (replay.length === 0) throw new Error(`nothing to replay: ${records.length} r
 console.log(`source ${source}: ${records.length} records — seeding ${seed.length}, replaying ${replay.length}`)
 
 writeFileSync(jsonl, seed.join("\n") + "\n")
-execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode)
+execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode)
   VALUES ('${SLUG}', '${SESSION}', 'frizz-${SLUG}', '${new Date().toISOString()}', 'Replay ${parkTarget}px', 'claude', 'opus', 'high', 'default')`])
 
 // A one-line label for the record that just landed, so a drift report names its own cause.

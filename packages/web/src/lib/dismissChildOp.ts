@@ -50,7 +50,7 @@ export function dismissChildOp(slug: string, id: string, kind: "AGENT" | "SHELL"
 //     a silent no-op. (`stopTask` alone could reach a descendant, but the row would then not clear,
 //     which is the same lie in the other direction. The drawer's "Stop sub-agent" covers those.)
 //  2. RUNNING, BUT NOT STOPPABLE. The row is live work frizz has no channel to end: any op on a
-//     tmux/codex thread, or one whose provider task handle frizz never captured. `stoppable` is the
+//     codex thread, or one whose provider task handle frizz never captured. `stoppable` is the
 //     SERVER's answer and is never re-derived here — the policy depends on the thread's TRANSPORT,
 //     which the browser has no honest way to know.
 //

@@ -17,7 +17,7 @@ export function ThreadActionBar({ slug, ops }: { slug: string; onTerminal?: () =
 
   if (!thread) return null
   // A FOREIGN session (a maintainer terminal — no registry row) is a read-only transcript view: no
-  // composer, no verbs. Say so plainly instead of the follow-up box (there's no tmux stdin to steer).
+  // composer, no verbs. Say so plainly instead of the follow-up box (frizz owns no channel into it).
   if (thread.foreign) {
     return (
       <div className="shrink-0 px-4 py-3 text-[11.5px] text-muted/70">

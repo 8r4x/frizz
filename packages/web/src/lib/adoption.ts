@@ -12,7 +12,7 @@ export function canAdoptThread(thread: ThreadView | undefined): boolean {
     !thread.foreign &&
     thread.runtime === "none" &&
     !thread.sessionId &&
-    !thread.tmuxName &&
+    !thread.threadName &&
     !thread.owner &&
     thread.agents.length === 0 &&
     thread.errors.length === 0 &&

@@ -113,7 +113,7 @@ let two: ReturnType<typeof wire> | undefined
 try {
   await one.bridge.spawnDispatch({ threadSlug: slug, sessionId, cwd, prompt: PROMPT })
   storage.upsertSession({
-    slug, session_id: sessionId, tmux_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
+    slug, session_id: sessionId, thread_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
     title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
   })

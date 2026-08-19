@@ -3,16 +3,17 @@ import type { Storage } from "./storage.ts"
 import { decodeDeliveryMarkers, deliveryTag, stripDeliveryMarkers } from "./delivery-marker.ts"
 
 // ── The Claude follow-up delivery ledger ───────────────────────────────────────────────────────────────
-// Frizz's Claude steer path used to be fire-and-forget: tmux keys went into the pane and the ONLY record
-// that a follow-up existed was the CLIENT's optimistic gray bubble, reconciled by exact text match
-// against whatever later appeared in the JSONL. That made the queued/delivered rendering an inference —
-// a mangled injection (the multiline split), a slash command, or a plain reload made the message ghost
-// or vanish. This ledger makes the send a server-owned state machine instead:
+// Frizz's Claude steer path used to be fire-and-forget: keystrokes went into the worker's own terminal
+// and the ONLY record that a follow-up existed was the CLIENT's optimistic gray bubble, reconciled by
+// exact text match against whatever later appeared in the JSONL. That made the queued/delivered
+// rendering an inference — a mangled injection (the multiline split), a slash command, or a plain
+// reload made the message ghost or vanish. This ledger makes the send a server-owned state machine
+// instead:
 //
 //   followUp(deliveryId) ──▶ pending ──(enqueue record matches)──▶ enqueued ──(queued_command /
 //   user record matches)──▶ delivered (dropped from the ledger — the real transcript record takes over)
 //   pending ──(no evidence for PENDING_TIMEOUT_MS)──▶ unconfirmed (kept, projected with a warning,
-//   dropped after UNCONFIRMED_DROP_MS — the terminal pane is the recovery surface)
+//   dropped after UNCONFIRMED_DROP_MS — after which sending it again is the only recovery)
 //
 // The ledger is persisted on the session row (`delivery_ledger`, a small JSON array), correlated by the
 // tailer as it folds new JSONL records, and PROJECTED into
@@ -64,17 +65,20 @@ export interface DeliveryLedgerItem {
   state: DeliveryState
   at: string // ISO8601 — when frizz accepted/injected the follow-up
   updatedAt: string
-  // How many times the submit-confirmer (delivery-confirm.ts) has re-sent a BARE Enter because this
-  // item was still provably sitting in the pane's composer. Absent on every pre-existing row; capped by
-  // MAX_SUBMIT_ATTEMPTS, after which the item is aged straight to `unconfirmed` so the drawer says so.
+  // LEGACY COUNTER, read by nothing. How many times the submit-confirmer re-sent a BARE Enter because
+  // this item was still provably sitting in the worker's own composer — capped at MAX_SUBMIT_ATTEMPTS,
+  // after which the item aged straight to `unconfirmed` so the drawer said so. It was absent on every
+  // row that predated it and is absent on every row written since: delivery-confirm.ts and that cap
+  // went with the rest of the terminal-control apparatus (8a57e29), and a broker send has no keystroke
+  // to re-send. Kept on the type as the record of what an old persisted row may still carry.
   submitAttempts?: number
 }
 
 // The form every text comparison in this module runs in.
 //
-// The steer channel REWRITES frizz's bytes before they reach the JSONL, so the text frizz sent and the
-// text the transcript records are not equal and an exact compare strands the send as `unconfirmed`
-// forever. The channel is a COMPOSITION of two rewriters frizz does not own — tmux `paste-buffer`
+// The steer channel REWROTE frizz's bytes before they reached the JSONL, so the text frizz sent and the
+// text the transcript recorded were not equal and an exact compare stranded the send as `unconfirmed`
+// forever. That channel was a COMPOSITION of two rewriters frizz did not own — the paste transport
 // (LF→CR) and Claude Code's TUI paste handler (`/\r\n|\r/`→`\n`, `\t`→four spaces) — and measuring it
 // against a live claude 2.1.219 TUI, driven through frizz's own paste sequence, showed:
 //
@@ -86,21 +90,24 @@ export interface DeliveryLedgerItem {
 //
 // Two distinct classes, not one. The maintainer hit the tab class (2026-07-25,
 // `were-taking-over-from-another-agent`: a 1448-char send with two tabs recorded as 1454 chars with
-// none, 34ms after the send, and still marked unconfirmed at the 60s timeout). The CRLF class is worse
+// none, 34ms after the send, and still marked unconfirmed at the 60s timeout). The CRLF class was worse
 // and just as reachable — anything pasted from a Windows-authored source or many web textareas — and a
 // comparison that preserved line COUNT still stranded it.
 //
 // So do not model the channel; be INVARIANT to it. Every whitespace run — spaces, tabs, newlines alike
-// — collapses to a single space, which is stable under every rewrite above and under any future
-// re-flow in the same family (a re-wrap, a trailing-space trim, a different tab width). What actually
-// keeps this safe is unchanged and lives elsewhere: evidence must be CONTEMPORANEOUS, a mid-record
-// match must clear COMPOSED_ANCHOR_MIN, and composition consumes items in order. Precedent: the far
-// more dangerous decision in this system — whether to press Enter on a live composer — has always been
-// gated on FULL whitespace removal (`squash` in delivery-confirm.ts). Applied to BOTH sides of every
-// comparison, so the composition offsets in matchComposedText stay internally consistent.
+// — collapses to a single space, which was stable under every rewrite above and is stable under any
+// future re-flow in the same family (a re-wrap, a trailing-space trim, a different tab width). A broker
+// send reaches the JSONL unrewritten, so those two classes cannot recur — but the separator a COALESCED
+// record inserts between two glued sends is exactly this kind of difference, so the canonical form is
+// still what lets composition line up. What actually keeps it safe is unchanged and lives elsewhere:
+// evidence must be CONTEMPORANEOUS, a mid-record match must clear COMPOSED_ANCHOR_MIN, and composition
+// consumes items in order. Precedent: the far more dangerous decision this system ever made — whether
+// to press Enter on a live composer — was gated on FULL whitespace removal (`squash`, in the since
+// deleted delivery-confirm.ts). Applied to BOTH sides of every comparison, so the composition offsets
+// in matchComposedText stay internally consistent.
 //
-// What this deliberately does NOT forgive: differing WORDS. A send whose text the channel altered
-// beyond whitespace still ages to `unconfirmed`, which is the warning doing its job.
+// What this deliberately does NOT forgive: differing WORDS. A send whose recorded text differs beyond
+// whitespace still ages to `unconfirmed`, which is the warning doing its job.
 const canon = (s: string): string => s.replace(/\s+/g, " ").trim()
 
 function isItem(v: unknown): v is DeliveryLedgerItem {
@@ -130,7 +137,7 @@ export function serializeDeliveryLedger(items: DeliveryLedgerItem[]): string | n
 // `state` defaults to `pending` — a Claude send is fire-into-a-composer and has no receipt until the
 // JSONL shows one. A CODEX send passes `enqueued` instead, because the app-server RPC returning a turn
 // id IS the receipt: the provider has positively accepted the text. That distinction matters beyond
-// bookkeeping — `pending` is what ages into the amber "check the terminal" warning, and a codex
+// bookkeeping — `pending` is what ages into the amber "no receipt from the worker" warning, and a codex
 // app-server thread has no terminal composer to check, so it must never enter that state.
 // Bound the row, oldest-first, counting live sends and tombstones against their OWN caps so a run of
 // ordinary follow-ups can never evict a cancellation. Order is otherwise preserved: matchComposedText
@@ -294,7 +301,7 @@ function codexUserMessageText(r: Record<string, unknown>): string {
 
 // The id frizz itself supplied for this input, if the record is one the SDK minted FROM a frizz input.
 // Deliberately narrow — only the two record shapes measured to echo it — so nothing else in a
-// transcript can be mistaken for a delivery receipt. Returns null for every tmux record.
+// transcript can be mistaken for a delivery receipt. Returns null for every pre-broker record.
 export function echoedInputId(rec: Record<string, unknown>): string | null {
   if (rec.type === "attachment") {
     const att = rec.attachment as { type?: unknown; commandMode?: unknown; source_uuid?: unknown } | undefined
@@ -371,7 +378,7 @@ export function correlateDeliveryRecord(
   // on 78/78 sdk prompt attachments in this machine's corpus. No prose is compared, so the case text
   // matching gets WRONG — two sends the agent dequeues in the same instant, either of which the fuzzy
   // matcher can attribute to the other — resolves exactly. Degrades to the text paths below whenever the
-  // id is absent (every tmux row, and the coalesced record, which mints a fresh uuid of its own).
+  // id is absent (every pre-broker row, and the coalesced record, which mints a fresh uuid of its own).
   const echoed = echoedInputId(r)
   if (echoed !== null) {
     const index = items.findIndex((item) => item.id === echoed && item.state !== "cancelled")
@@ -410,15 +417,18 @@ export function correlateDeliveryRecord(
 
 // Which ledger items one evidence record accounts for — BY IDENTITY first, by text only as the fallback.
 //
-// frizz stamps every follow-up it pastes with an invisible marker carrying that send's deliveryId
-// (delivery-marker.ts), so the normal path is an exact lookup: no prose is compared at all and no
-// rewrite of the surrounding text — tab expansion, CRLF doubling, a re-wrap, a future mangling nobody
-// has met yet — can break it. A record that glues several sends together carries every constituent's
-// marker, so all of them resolve from the one record.
+// frizz used to stamp every follow-up it pasted with an invisible marker carrying that send's
+// deliveryId (delivery-marker.ts), so the normal path was an exact lookup: no prose compared at all and
+// no rewrite of the surrounding text — tab expansion, CRLF doubling, a re-wrap, a future mangling
+// nobody had met yet — could break it. A record that glued several sends together carried every
+// constituent's marker, so all of them resolved from the one record. A broker send needs none of that
+// (the SDK echoes frizz's own `uuid` back — see the IDENTITY section in correlateDeliveryRecord), so nothing
+// stamps a marker now; this branch still reads one out of an older transcript.
 //
-// The text path remains for everything a marker cannot cover: sends already in flight when this shipped,
-// adopted/foreign panes, and any send whose marker the channel destroyed. It runs on the STRIPPED text
-// so a marker never perturbs the comparison.
+// The text path remains for everything neither a marker nor an echoed id covers: sends already in
+// flight across an upgrade, a record from a worker frizz adopted rather than launched, and any send
+// whose marker the old channel destroyed. It runs on the STRIPPED text so a marker never perturbs the
+// comparison.
 export function accountFor(
   items: readonly DeliveryLedgerItem[],
   recordText: string,
@@ -454,29 +464,32 @@ export function accountFor(
 
 // A merged submission's constituent text must be at least this long before it may be matched at a
 // non-zero offset (i.e. after content this ledger never sent — a draft the operator had already typed
-// into the pane). Whole-record and prefix-anchored matches are exact and are not length-gated; this
-// bound exists so a short generic send ("continue") can't be resolved by merely APPEARING inside an
-// unrelated message the human typed in the terminal.
+// into the worker's own composer). Whole-record and prefix-anchored matches are exact and are not
+// length-gated; this bound exists so a short generic send ("continue") can't be resolved by merely
+// APPEARING inside an unrelated message the human typed themselves.
 const COMPOSED_ANCHOR_MIN = 24
 
 // Which ledger items a single JSONL evidence record accounts for.
 //
 // The naive rule — whole-string equality — is what shipped, and it is wrong for the case the operator
-// actually hit. frizz injects a follow-up by pasting into Claude Code's composer and sending Enter, and
-// the TUI can SWALLOW that Enter while it is mid-render: the text stays in the composer, and the NEXT
-// follow-up's paste lands after it, so its Enter submits the ACCUMULATION as one message. Claude Code
-// then writes exactly one `queue-operation enqueue` and one `queued_command` attachment whose text is
-// the CONCATENATION of the N sends. Verified byte-exact against the maintainer's own transcript
-// (2026-07-23, thread `why-when-i-try-to-change`): a 709-char enqueue = item(565) + "\n" + item(143),
-// and a 379-char enqueue = item(196) + item(183) with no separator at all. Under whole-string equality
-// NONE of the four constituents matched, all four aged to `unconfirmed`, and the drawer told the
-// operator to "check the terminal" for four messages the agent had already read and acted on.
+// actually hit. frizz injected a follow-up by pasting into Claude Code's composer and sending Enter,
+// and the TUI could SWALLOW that Enter while it was mid-render: the text stayed in the composer, the
+// NEXT follow-up's paste landed after it, and its Enter submitted the ACCUMULATION as one message.
+// Claude Code then wrote exactly one `queue-operation enqueue` and one `queued_command` attachment
+// whose text was the CONCATENATION of the N sends. Verified byte-exact against the maintainer's own
+// transcript (2026-07-23, thread `why-when-i-try-to-change`): a 709-char enqueue = item(565) + "\n" +
+// item(143), and a 379-char enqueue = item(196) + item(183) with no separator at all. Under
+// whole-string equality NONE of the four constituents matched, all four aged to `unconfirmed`, and the
+// drawer told the operator to "check the terminal" for four messages the agent had already read and
+// acted on.
 //
 // So: consume the record left-to-right, taking any unconsumed item whose text is a PREFIX of what's
-// left (skipping the newline the composer may insert between pastes). Every consumed segment is a
-// whole item text anchored at a boundary the previous items produced, so this is strictly a
+// left (skipping the newline a glued submission may carry between two sends). Every consumed segment is
+// a whole item text anchored at a boundary the previous items produced, so this is strictly a
 // generalization of equality — it can only match MORE of a record that the ledger genuinely composed,
-// never a coincidental substring in the middle of an unrelated message.
+// never a coincidental substring in the middle of an unrelated message. Still live, not history: a
+// COALESCED record mints a fresh uuid of its own, so the echoed-id path cannot resolve one and this
+// path must (see the IDENTITY section in correlateDeliveryRecord).
 export function matchComposedText(
   items: readonly DeliveryLedgerItem[],
   recordText: string,
@@ -485,9 +498,9 @@ export function matchComposedText(
   const matched = new Set<number>()
   if (!recordText) return matched
   let rest = recordText
-  // The composer may already have held content this ledger never sent (a draft the human typed in the
-  // pane). Anchor once on the earliest long-enough item that occurs in the record, then compose forward
-  // from it — every later segment must be a clean prefix of what remains.
+  // The record may open with content this ledger never sent (a draft the human had typed into the
+  // worker's own composer). Anchor once on the earliest long-enough item that occurs in the record,
+  // then compose forward from it — every later segment must be a clean prefix of what remains.
   let anchored = false
   const candidate = (index: number): string | null => {
     if (matched.has(index)) return null
@@ -565,7 +578,7 @@ export function ageDeliveries(items: DeliveryLedgerItem[], nowMs: number, observ
     // sends arrive, by which point the orphaned enqueue is far up in settled history.
     if (item.state === "cancelled") { next.push(item); continue }
     // Delivered, on the transcript's own evidence — see `supersededByUserTurn`. Applies to `unconfirmed`
-    // as well: that state's amber "check the terminal" warning is a claim about a send nobody read, and a
+    // as well: that state's amber "no receipt from the worker" warning is a claim about a send nobody read, and a
     // later user turn falsifies it just as squarely as it does a live one.
     if (supersededByUserTurn(item)) { changed = true; continue }
     const born = Date.parse(item.at)

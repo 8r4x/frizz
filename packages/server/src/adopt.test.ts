@@ -23,7 +23,7 @@ function sessionRow(slug: string, over: Partial<SessionRow> = {}): SessionRow {
   return {
     slug,
     session_id: `${slug}-owner`,
-    tmux_name: `frizz-${slug}`,
+    thread_name: `frizz-${slug}`,
     spawned_at: "2026-07-13T00:00:00.000Z",
     last_read_at: null,
     unread: 0,
@@ -104,7 +104,7 @@ function harness(options: {
       }
     },
     getSettings: () => ({ ...defaultSettings(), model: "sonnet", effort: "high" }),
-    // Adoption spawns through the broker now, not a tmux pane. The fake records the same facts the
+    // Adoption spawns through the broker daemon. The fake records the same facts the
     // assertions below rely on (which slug/session/cwd, and the composed prompt).
     claudeBroker: {
       spawnDispatch: async (input: { threadSlug: string; sessionId: string; cwd: string; prompt: string; appendSystemPrompt?: string }) => {
@@ -216,7 +216,7 @@ test("derived and collision slugs remain canonical at the maximum length", () =>
   assert.equal(ThreadSlug.safeParse(collision).success, true)
 })
 
-test("direct dispatcher entry points reject hostile slugs before board, tmux, scratch, or storage", async () => {
+test("direct dispatcher entry points reject hostile slugs before board, spawn, scratch, or storage", async () => {
   const h = harness()
   for (const invalid of HOSTILE_SLUGS) {
     await assert.rejects(h.dispatcher.adopt(invalid), /thread is not available for adoption/)
@@ -228,11 +228,11 @@ test("direct dispatcher entry points reject hostile slugs before board, tmux, sc
   assert.equal(existsSync(join(h.dir, ".frizz")), false)
 })
 
-test("storage rejects a noncanonical thread/tmux identity at its direct mutation boundary", () => {
+test("storage rejects a noncanonical thread identity at its direct mutation boundary", () => {
   const h = harness()
   assert.throws(() => h.storage.insertSessionIfAbsent(sessionRow("../escape")))
   assert.throws(() => h.storage.upsertSession(sessionRow("-option")))
-  assert.throws(() => h.storage.upsertSession(sessionRow("safe", { tmux_name: "frizz-someone-else" })))
+  assert.throws(() => h.storage.upsertSession(sessionRow("safe", { thread_name: "frizz-someone-else" })))
   assert.equal(h.storage.allSessions().length, 0)
 })
 
@@ -399,7 +399,7 @@ test("two adoption requests for the same slug produce one worker and one owner",
   assert.equal(h.storage.getSession("double")?.session_id, results.find((result) => result.status === "fulfilled")?.value.sessionId)
 })
 
-test("an unexpired durable adoption reservation blocks retry before tmux or file provisioning", async () => {
+test("an unexpired durable adoption reservation blocks retry before spawn or file provisioning", async () => {
   const h = harness()
   h.addLegacyFile("reserved")
   const now = Date.now()
@@ -417,7 +417,7 @@ test("an unexpired durable adoption reservation blocks retry before tmux or file
 })
 
 
-test("a registered active worker owns its slug and adoption never touches tmux", async () => {
+test("a registered active worker owns its slug and adoption never spawns a worker", async () => {
   const h = harness({ hasSession: () => true })
   h.addLegacyFile("registered")
   assert.equal(h.storage.insertSessionIfAbsent(sessionRow("registered", {
@@ -461,21 +461,21 @@ test("exited and archived rows still own their slugs and cannot be adopted over"
   assert.equal(h.spawned.length, 0)
 })
 
-// The sibling of the test above, for the OTHER way an adoption rollback can end. Above, tmux proves
-// the losing pane is gone, so the rollback is complete: claim retired, scratchpad removed.
+// The sibling of the test above, for the OTHER way an adoption rollback can end. Above, the liveness
+// probe proves the losing worker is gone, so the rollback is complete: claim retired, scratchpad removed.
 //
-// Here tmux cannot answer (`unknown`), so the spawned pane may still be ALIVE and still writing the
-// scratchpad it was given. abandonAdoptionAttempt deliberately refuses to release anything it cannot
+// Here the probe cannot answer (`unknown`), so the spawned worker may still be ALIVE and still writing
+// the scratchpad it was given. abandonAdoptionAttempt deliberately refuses to release anything it cannot
 // prove dead — the claim and the session's files are RETAINED for boot recovery rather than deleted
 // out from under a possible orphan. That asymmetry is the whole point of the tri-state lookup, so it
 // is pinned here: a future "just always clean up in rollback" simplification must fail this test.
 //
 // Retained is not leaked. Recovery is retire-only — it never resumes an attempt — and it reads the
-// session id from the CLAIM, not from the scratchpad, so once tmux answers again the level-triggered
+// session id from the CLAIM, not from the scratchpad, so once the probe answers again the level-triggered
 // sweep in context.ts finishes exactly the cleanup the rollback declined to do.
 // ---- Dispatch auth preflight (claude-auth plan, Slice A) ----
 
-test("signed-out preflight rejects dispatch before scratch, tmux, and storage", async () => {
+test("signed-out preflight rejects dispatch before scratch, spawn, and storage", async () => {
   const seen: string[] = []
   const h = harness({
     preflightAuth: async (kind) => {

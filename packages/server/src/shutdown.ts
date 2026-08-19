@@ -40,7 +40,7 @@ export interface ShutdownPhase {
   name: string
   run: () => void | Promise<void>
   /**
-   * Upper bound on THIS phase's own drain. A producer that never settles (a wedged tmux/git/gh call,
+   * Upper bound on THIS phase's own drain. A producer that never settles (a wedged git/gh call,
    * a hung watcher) would otherwise stall the whole barrier until the process is hard-killed. When set
    * — or when the barrier supplies phaseTimeoutMs — an over-running phase is abandoned and surfaced as
    * a NAMED ShutdownPhaseTimeoutError through the same required/optional failure paths (a storage

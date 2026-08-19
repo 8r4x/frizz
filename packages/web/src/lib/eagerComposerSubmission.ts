@@ -53,7 +53,7 @@ export function beginEagerSubmission({
 //     order decides which reaches the worker's stdin first. The operator typed them in an order and
 //     means it.
 //   · The server's runtime-control CAS. `resumeThread` claims the row (beginRuntimeControl) for the
-//     duration of the tmux injection; a second follow-up arriving inside that window loses the CAS
+//     duration of the injection; a second follow-up arriving inside that window loses the CAS
 //     and comes back "another runtime control is in progress" — a hard failure for a message the
 //     human already watched appear in the transcript.
 //
@@ -75,7 +75,7 @@ export function enqueueThreadSend(slug: string, run: () => Promise<void>): Promi
 // ── delivery retry ───────────────────────────────────────────────────────────────────────────────
 // A follow-up used to get exactly ONE attempt: any rejection handed the operator's message straight
 // back to the composer under "Steer failed". But what actually fires here is CONTENTION, not refusal —
-// resumeThread owns the row for the 300-830ms its synchronous tmux injection takes, and a second writer
+// resumeThread owns the row for the 300-830ms its synchronous injection takes, and a second writer
 // arriving inside that window (the wakers scheduler, another tab, the submit-confirmer) loses the
 // runtime-control CAS. The per-slug FIFO above only orders THIS tab's sends; it cannot see those. A
 // build promotion is the same story from the other end: the mutation is refused before it is ever put
@@ -83,7 +83,7 @@ export function enqueueThreadSend(slug: string, run: () => Promise<void>): Promi
 //
 // So a refusal that provably took NO EFFECT is now waited out instead of surfaced. Only errors the
 // transport marked replayable are retried (isRetryableRpcError); an ambiguous failure — where the text
-// may already have crossed tmux — is never re-sent. The server independently dedups a replayed
+// may already have reached the worker — is never re-sent. The server independently dedups a replayed
 // deliveryId against its delivery ledger, so even a misclassification here cannot paste a second copy.
 //
 // The retry deliberately runs INSIDE the FIFO link: a later send must not overtake the one being
@@ -108,7 +108,7 @@ export async function withDeliveryRetry(
       await send()
     } catch (error) {
       // Only a REFUSAL the transport proved took no effect is replayable; an ambiguous failure
-      // (the text may already have crossed tmux) falls straight through to the caller's rollback.
+      // (the text may already have reached the worker) falls straight through to the caller's rollback.
       if (attempt >= DELIVERY_RETRY_BACKOFF_MS.length || !isRetryableRpcError(error)) throw error
       reanchor()
       await sleep(DELIVERY_RETRY_BACKOFF_MS[attempt])
@@ -157,7 +157,7 @@ export function sendEagerFollowUp(
     optimistic: () => {
       callbacks.onOptimistic?.()
       appendQueuedMessage(queryClient, slug, message, { scrollToBottom: callbacks.scrollToBottom, deliveryId })
-      // The row is working again the instant the operator commits, not when the tmux injection
+      // The row is working again the instant the operator commits, not when the injection
       // returns ~half a second later — see lib/steering.ts.
       markSteered(slug)
       rpc.markRead({ slug }).catch(() => {})

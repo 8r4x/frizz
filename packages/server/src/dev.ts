@@ -1,5 +1,5 @@
 // Dev entry: a durable source watcher supervising a disposable API + Vite control-plane child.
-// Run with `nub packages/server/src/dev.ts` from ui/. Worker tmux sessions remain independent.
+// Run with `nub packages/server/src/dev.ts` from ui/. Worker daemons remain independent.
 import { DEFAULT_PORT } from "@frizz/shared"
 import { projectFromLaunchTarget, projectLaunchTarget, resolveProject } from "./project.ts"
 import {

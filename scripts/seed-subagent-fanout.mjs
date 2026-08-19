@@ -72,7 +72,7 @@ sidecar("aGreat", { agentType: "general-purpose", description: "Trace one cache 
 transcript("aGreat", [assistant([{ type: "text", text: "Still tracing." }])])
 
 const db = readdirSync(join(home, ".frizz", "projects")).map((id) => join(home, ".frizz", "projects", id, "ui.db"))[0]
-execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, title_auto, backend, state, unread, exited, archived, claude_runtime)
+execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, title_auto, backend, state, unread, exited, archived, claude_runtime)
   VALUES ('${slug}', '${SESSION}', 'frizz-${slug}', '${at}', 'Review the resolver change', 0, 'claude', 'open', 0, 0, 0, 'broker')`])
 
 console.log(JSON.stringify({ slug, session: SESSION, logDir, db }))

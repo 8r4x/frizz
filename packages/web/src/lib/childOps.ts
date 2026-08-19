@@ -52,7 +52,7 @@ export const CHILD_OPEN_TITLE = { AGENT: "Open sub-agent transcript", SHELL: "Op
 //
 // A live sub-agent used to be a name and a spinner. `activityDetail` (the provider's per-tool-call
 // sentence) says what it is doing RIGHT NOW; this says how far it has got. Both come off the Claude
-// Agent SDK's typed task stream, so both are absent for a tmux thread, a codex child, or an older CLI
+// Agent SDK's typed task stream, so both are absent for a codex child or an older CLI
 // — the row must read fine without them, never leave a gap where one would have been.
 //
 // `toolUses` rides the board signature (it pushes promptly); `tokens` deliberately does NOT (it would

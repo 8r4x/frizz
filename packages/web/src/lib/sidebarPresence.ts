@@ -15,7 +15,14 @@ export function nextSidebarPresence(
 ): SidebarPresence {
   if (!board) return previous
   const projectChanged = previous.projectDir !== board.projectDir
-  const hasWorkspaceContent = board.threads.some((thread) => thread.foreign !== true) || (board.plans?.length ?? 0) > 0
+  // FOREIGN SESSIONS COUNT (2026-08-19, reversing the earlier rule that they did not). They used to be
+  // discounted because nothing rendered them, so a board holding only terminal sessions was blank in
+  // every meaningful sense. Now they have their own rail band — and the project where that band matters
+  // MOST is exactly the one this predicate used to call fresh: a repo you have worked in from the
+  // terminal and never dispatched a frizz thread in. Discounting them there hid the only surface that
+  // could show them. A truly empty board — no threads of any origin, no plans — still gets the centered
+  // first-task view.
+  const hasWorkspaceContent = board.threads.length > 0 || (board.plans?.length ?? 0) > 0
   return {
     projectDir: board.projectDir,
     hasBeenVisible: projectChanged ? hasWorkspaceContent : previous.hasBeenVisible || hasWorkspaceContent,

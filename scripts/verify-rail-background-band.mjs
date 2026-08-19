@@ -33,14 +33,14 @@ if (!url || !home) {
 const RUN = Date.now().toString(36).slice(-6)
 const SLUG = `preview-server-e2e-${RUN}`
 const SESSION_ID = `e2e11111-2222-3333-4444-${RUN.padStart(12, "0")}`
-const TMUX = `frizz-${SLUG}`
+const THREAD_NAME = `frizz-${SLUG}`
 // THE NEGATIVE CONTROL, and it is not optional: the maintainer scoped this mark with "this should not
 // show up if there are sub-agents". A pass on the shell case alone would not distinguish "the dot
 // appears for a live shell" from "the dot appears for any live background work" — the exact thing the
 // scope forbids. So a second real session rests on a real dispatched CHILD and must keep the spinner.
 const CTRL_SLUG = `subagent-control-e2e-${RUN}`
 const CTRL_SESSION_ID = `e2e99999-8888-7777-6666-${RUN.padStart(12, "0")}`
-const CTRL_TMUX = `frizz-${CTRL_SLUG}`
+const CTRL_THREAD_NAME = `frizz-${CTRL_SLUG}`
 const failures = []
 
 // The sandbox project dir the stack created, and the Claude transcript dir keyed by the project's cwd
@@ -93,9 +93,9 @@ try {
 
   // 2. The session row that binds slug → transcript. The sanctioned fixture write: the row IS
   //    the fixture, and everything read off it afterwards is the real pipeline.
-  db.prepare(`INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, state, permission_mode)
+  db.prepare(`INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, backend, state, permission_mode)
               VALUES (?, ?, ?, ?, ?, 'claude', 'open', 'default')`)
-    .run(SLUG, SESSION_ID, TMUX, at(-70_000), "Wire up the preview server")
+    .run(SLUG, SESSION_ID, THREAD_NAME, at(-70_000), "Wire up the preview server")
 
   // 3b. THE CONTROL — the same rest, but on a dispatched Agent instead of a Bash. Everything else about
   //     these two threads is identical, so whatever differs on the rail is the sub-agent carve-out and
@@ -132,9 +132,9 @@ try {
     timestamp: at(-10_000),
     message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "Dispatched the audit; waiting on it." }] },
   }))
-  db.prepare(`INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, state, permission_mode)
+  db.prepare(`INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, backend, state, permission_mode)
               VALUES (?, ?, ?, ?, ?, 'claude', 'open', 'default')`)
-    .run(CTRL_SLUG, CTRL_SESSION_ID, CTRL_TMUX, at(-70_000), "Audit the broker crash paths")
+    .run(CTRL_SLUG, CTRL_SESSION_ID, CTRL_THREAD_NAME, at(-70_000), "Audit the broker crash paths")
 
   // 3. Let the tailer notice. It watches the transcript dir, but a row's runtime is only re-derived on
   //    a tick, so a brand-new session reads as "exited" until that turns over. Wait past it — at 6s the

@@ -108,7 +108,7 @@ test("the book drops a malformed entry rather than failing the whole read", () =
 
 function row(over: Partial<SessionRow> = {}): SessionRow {
   return {
-    slug: "t", session_id: "s", tmux_name: "frizz-t", spawned_at: AT, last_read_at: null,
+    slug: "t", session_id: "s", thread_name: "frizz-t", spawned_at: AT, last_read_at: null,
     unread: 0, exited: 0, archived: 0, rested_at: AT, title_auto: 0, title: null,
     state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null, ...over,
   } as SessionRow

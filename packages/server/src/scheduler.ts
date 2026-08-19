@@ -49,7 +49,7 @@ import { log as frizzLog } from "./logging.ts"
 // SQLite outbox row is committed BEFORE terminal delivery. Atomic leases serialize multiple scheduler
 // instances; delivery acknowledgement, transcript-token confirmation, and exact-fence supersession
 // produce explicit terminal states. A crash leaves pending/leased work recoverable instead of burning
-// a fired bit before the wake crossed tmux.
+// a fired bit before the wake reached the worker.
 
 export interface PrRef {
   owner: string
@@ -1259,7 +1259,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (tele.lastUserText?.includes(wakeDeliveryToken(item.id))) return "confirmed"
     // A limit wake is bound to its interruption, not to a fence: it stays deliverable exactly as long
     // as THAT limit fault is still the thread's live tail state. The fault clears on the first user
-    // record, so a delivery that crossed tmux before the process died reads as superseded on the next
+    // record, so a delivery that reached the worker before the process died reads as superseded on the next
     // pass instead of being sent twice — the same supersession safety the fence path gets, obtained
     // from the fold rather than from anything the scheduler had to persist.
     if (isLimitFenceId(item.fenceId)) {
@@ -2918,8 +2918,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           log(`waker: delivery ABANDONED for ${item.slug} (terminal, no retry): ${message}`)
           continue
         }
-        // A thrown non-terminal operation can still be ambiguous (for example, text crossed tmux before
-        // a later storage write failed). Keep the item leased through a confirmation window; recovery
+        // A thrown non-terminal operation can still be ambiguous (for example, text reached the worker
+        // before a later storage write failed). Keep the item leased through a confirmation window; recovery
         // checks the token/fence before making it retryable.
         outbox.deferFailure(
           item.id,

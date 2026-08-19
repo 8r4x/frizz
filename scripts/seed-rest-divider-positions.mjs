@@ -70,7 +70,7 @@ const records = [
 writeFileSync(join(jsonlDir, `${sessionId}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
 execFileSync("sqlite3", [
   db,
-  `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
+  `INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
    VALUES ('${slug}', '${sessionId}', 'frizz-${slug}', '${at(0)}', 'Rest divider positions', 'claude', 'opus', 'high', 'default', '${at(33)}')`,
 ])
 

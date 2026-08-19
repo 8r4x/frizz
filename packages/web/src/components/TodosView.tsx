@@ -508,8 +508,11 @@ export function TodosView() {
   // Only a BRAND-NEW board — zero threads of ANY status (a board with only done/dismissed threads is
   // NOT a new user) — centers the prompt box as the whole screen; App hides the sidebar in lockstep
   // on this same predicate, so the fresh-user experience is just the prompt + corner chrome.
-  // Foreign (terminal) sessions don't count — only frizz-originated threads/plans make a board "real".
-  const nothingAtAll = !board?.threads.some((t) => t.foreign !== true) && (board?.plans?.length ?? 0) === 0
+  // Foreign (terminal) sessions DO count, since 2026-08-19 — they have a rail band now, and a project
+  // whose only content is your own terminal sessions is not a blank slate, it is the one place that
+  // band has something to say. Kept in lockstep with lib/sidebarPresence.ts, which decides whether the
+  // rail mounts at all; the two disagreeing would centre the prompt beside a populated sidebar.
+  const nothingAtAll = (board?.threads.length ?? 0) === 0 && (board?.plans?.length ?? 0) === 0
 
   return (
     // The queue column, top to bottom: queue cards (or the empty-inbox state) → rule → dispatch box.

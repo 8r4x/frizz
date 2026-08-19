@@ -96,15 +96,15 @@ window.fetch = async (input, init) => {
     const card = CARDS.find((c) => c.id === slug) ?? CARDS[0]
     return new Response(JSON.stringify({ result: transcriptFor(card.id, card.title) }), { headers: { "content-type": "application/json" } })
   }
-  // The action under test. FAITHFUL to production timing: the real server does real tmux work (stop the
-  // resting shell + prove it stopped) before responding, THEN board.refresh() drops the row. We model that
+  // The action under test. FAITHFUL to production timing: the real server does real teardown work (stop
+  // the resting worker + prove it stopped) before responding, THEN board.refresh() drops the row. We model that
   // with a fixed delay and prune the board only when the (delayed) response resolves. The card must already
   // be fading well before this point — that is the whole fix.
   if (url.pathname === "/_frizz/rpc/completeThread") {
     const slug = slugFromBody(init)
     telemetry.completeCalledAt = performance.now()
     // ?needsConfirmation=1 models a mispredict / executing turn. FAITHFUL to the server: it returns
-    // needsConfirmation from a cheap liveness + telemetry check BEFORE any tmux kill, so this path is FAST
+    // needsConfirmation from a cheap liveness + telemetry check BEFORE any worker teardown, so this path is FAST
     // (well under the ~320ms card-exit window) — the optimistically-dismissed card is still mounted and must
     // reinstate (onDismissCancel → unresolve) and open the "End this session?" dialog. Nothing is archived.
     if (new URLSearchParams(location.search).get("needsConfirmation") === "1") {
@@ -122,7 +122,7 @@ window.fetch = async (input, init) => {
       }
       return new Response(JSON.stringify({ result: { needsConfirmation: true, hold } }), { headers: { "content-type": "application/json" } })
     }
-    // The real completion path does real tmux work (stop the shell + prove it stopped) before responding,
+    // The real completion path does real teardown work (stop the worker + prove it stopped) before responding,
     // THEN board.refresh() drops the row — modelled by the fixed delay + prune. The card must already be
     // fading well before this point.
     await new Promise((resolve) => setTimeout(resolve, RPC_DELAY_MS))

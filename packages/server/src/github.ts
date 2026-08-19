@@ -471,9 +471,12 @@ export async function hydratePr(repo: string, n: number): Promise<HydratedPr> {
 
 // --- Prompt templating (pure; unit-tested) ---
 
-// The TASK prompt is a raw tmux CLI arg (NOT the system-prompt file), so a giant issue/PR body risks
-// tmux's command-length limit (see dispatch.ts:158). Cap the body defensively and mark the cut with
-// a pointer to the full item. ~8KB is far under the limit while preserving the substance.
+// The TASK prompt is the worker's FIRST USER MESSAGE (not the system-prompt file), so a giant issue/PR
+// body lands whole in the thread's opening context. The cap was originally an OS arg-length guard,
+// back when the prompt rode a CLI arg; dispatch now hands it to the session broker / app-server daemon
+// as a JSON message over the daemon's socket, so no length limit applies and what the cap buys is
+// context. Cap the body defensively and mark the cut with a pointer to the full item. ~8KB preserves
+// the substance of essentially every real item.
 const BODY_CAP = 8 * 1024
 export function truncateBody(body: string, n: number, kind: "issue" | "pr"): string {
   if (body.length <= BODY_CAP) return body
@@ -567,8 +570,9 @@ export const PROMPT_TOKENS = ["repo", "n", "title", "url", "labels", "body"] as 
 //  • Substitutes {repo} {n} {title} {url} {labels} {body} in a SINGLE pass, so a {token} that appears
 //    inside a substituted value (e.g. a hostile issue body containing "{repo}") is NOT re-expanded —
 //    there is no injection-via-item-content and no order-dependence between tokens.
-//  • {body} is truncated defensively (kind-aware pointer) so a giant issue/PR body can't blow tmux's
-//    arg-length limit (the task prompt is a CLI arg, not the system-prompt file — see dispatch.ts).
+//  • {body} is truncated defensively (kind-aware pointer) so a giant issue/PR body can't swallow the
+//    thread's opening context (the task prompt is the worker's first message, not the system-prompt
+//    file — see truncateBody).
 //  • Prepends a generated envelope: the `THREAD: <slug>` binding, a compact human-facing GitHub lead,
 //    then an exact UI boundary. The FULL substituted template remains below the boundary for the
 //    worker; transcript presentation alone hides that machine-facing tail.

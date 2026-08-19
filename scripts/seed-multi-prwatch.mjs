@@ -66,7 +66,7 @@ const CASES = [
 
 CASES.forEach((c, n) => {
   const sessionId = `${c.slug}-0000-4000-8000-000000000000`.slice(0, 36)
-  const tmuxName = `frizz-${c.slug}`
+  const threadName = `frizz-${c.slug}`
   const at = ago(3)
   const records = [
     {
@@ -92,8 +92,8 @@ CASES.forEach((c, n) => {
   }
   execFileSync("sqlite3", [
     db,
-    `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
-     VALUES ('${c.slug}', '${sessionId}', '${tmuxName}', '${at}', '${c.title}', 'claude', 'opus', 'high', 'default', '${at}')`,
+    `INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
+     VALUES ('${c.slug}', '${sessionId}', '${threadName}', '${at}', '${c.title}', 'claude', 'opus', 'high', 'default', '${at}')`,
   ])
   console.log(`seeded ${c.slug}`)
 })

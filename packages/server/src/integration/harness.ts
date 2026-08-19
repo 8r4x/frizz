@@ -1,6 +1,6 @@
 // The in-process integration harness: a REAL frizz server graph — storage, tailer, board, runtime
-// ingest — booted against a temp project, driven by a scripted provider, with no LLM, no daemon, no
-// tmux and no browser.
+// ingest — booted against a temp project, driven by a scripted provider, with no LLM, no daemon and
+// no browser.
 //
 // This is plans/t3code-adoption-spike.md item 4, and it exists because of the cost asymmetry the
 // briefing names: frizz's only gate for orchestration logic today is "launch a promoted artifact,
@@ -91,8 +91,8 @@ export function createIntegrationHarness(): IntegrationHarness {
     backendFor,
     sessionLogDir: logDir,
     now: () => clock.ms,
-    // No tmux in this harness. Every row it dispatches is headless, so the tailer never sniffs a
-    // pane — but a fixture must not be able to shell out even by accident.
+    // Every row this harness dispatches is headless, so the tailer never sniffs a pane — but a
+    // fixture must not be able to shell out even by accident.
     paneDead: () => false,
     capturePane: () => "",
     onChange: () => { refreshes++; board.refresh() },
@@ -120,7 +120,7 @@ export function createIntegrationHarness(): IntegrationHarness {
       const row: SessionRow = {
         slug,
         session_id: sessionId,
-        tmux_name: `frizz-${slug}`,
+        thread_name: `frizz-${slug}`,
         spawned_at: new Date(clock.ms).toISOString(),
         last_read_at: null,
         unread: 0,

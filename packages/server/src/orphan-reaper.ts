@@ -1,9 +1,10 @@
-// Orphan process reaper — frizz spawns a worker per thread (a detached `claude`/`codex` in a tmux
-// pane) and each worker spawns auxiliary processes for its task: MCP servers, dev/watch servers, and
-// verification browsers (chrome-devtools-mcp, agent-browser, puppeteer). `tmux kill-session` signals
-// only the pane's process group, so anything that daemonized out of that group (agent-browser
-// double-forks its Chrome to launchd; a `node --watch` reparents on crash) SURVIVES the stop and
-// leaks — permanently, since nothing else collects it. Over days this accretes GBs of orphaned
+// Orphan process reaper — frizz runs a worker per thread inside a DETACHED DAEMON (a Claude thread in
+// its own session broker, a codex thread in the app-server; both forked with `detached: true` into
+// their own process group), and each worker spawns auxiliary processes for its task: MCP servers,
+// dev/watch servers, and verification browsers (chrome-devtools-mcp, agent-browser, puppeteer).
+// Stopping a thread SIGTERMs the daemon's pid, so anything that daemonized out of that process group
+// (agent-browser double-forks its Chrome to launchd; a `node --watch` reparents on crash) SURVIVES the
+// stop and leaks — permanently, since nothing else collects it. Over days this accretes GBs of orphaned
 // Chrome/node whose owning thread is long gone. This module reaps exactly those.
 //
 // Ownership is read from the env marker every worker carries: FRIZZ_THREAD=<slug> (set at spawn in
@@ -17,9 +18,10 @@
 // of this file). Same story — an artifact of a worker that is gone, which nothing else revisits.
 //
 // SAFETY — the reaper only ever kills an AUXILIARY process whose slug is live NOWHERE. It never
-// touches: a session root (`claude`/`codex`, or anything bearing `--session-id`), a tmux server
-// (they carry the first thread's slug in env but are shared infrastructure), the reaper's own
-// process or any ancestor (so it can never kill the server it runs in — which is untagged anyway,
+// touches: a session root (`claude`/`codex`, or anything bearing `--session-id`), a leftover tmux
+// server from a pre-cutover frizz (it carries the first thread's slug in env but is shared
+// infrastructure — see isTmuxServer), the reaper's own process or any ancestor (so it can never kill
+// the server it runs in — which is untagged anyway,
 // being user-spawned rather than worker-spawned), or any process whose slug is currently live. Every
 // enumeration failure fails CLOSED (reap nothing). An age guard skips just-spawned processes.
 
@@ -61,10 +63,11 @@ export function isSessionRoot(command: string): boolean {
 }
 
 /**
- * Frizz no longer spawns tmux, but this guard OUTLIVES the strip on purpose: upgrading from a
- * pre-cutover frizz can leave a tmux server holding panes the operator may still be reading, and it
- * inherits the first thread's FRIZZ_THREAD in env — which is exactly what makes it look reapable.
- * Killing it would take those panes with it.
+ * Frizz has not spawned tmux since 2026-08-02 (commit 3dc5bb1d, which deleted the last two modules
+ * that did), but this guard OUTLIVES the strip on purpose: upgrading from a pre-cutover frizz can
+ * leave a tmux server holding panes the operator may still be reading, and it inherits the first
+ * thread's FRIZZ_THREAD in env — which is exactly what makes it look reapable. Killing it would take
+ * those panes with it.
  */
 export function isTmuxServer(command: string): boolean {
   return firstTokenBasename(command) === "tmux"
@@ -197,8 +200,8 @@ const defaultExec: Exec = (file, args) =>
  * Two `ps` passes joined by pid: pass 1 (`-o command=`, argv only) for pid/ppid/etime/command; pass 2
  * (`-Eww`, env appended) to read the FRIZZ_THREAD slug FROM THE ENV SEGMENT ONLY (the pass-1 argv
  * is stripped off first). Reading the slug from env — never argv — is what stops a literal
- * `FRIZZ_THREAD=x` inside a process's argv (pasted task text, a tmux `-e` flag, a grep) from
- * spoofing ownership and mis-attributing a live thread's slug.
+ * `FRIZZ_THREAD=x` inside a process's argv (pasted task text, an `env FRIZZ_THREAD=x …` invocation,
+ * a grep) from spoofing ownership and mis-attributing a live thread's slug.
  *
  * Deliberately TWO passes, not one `-Eww` pass storing the whole line: a process's full environment
  * (which `ps -E` appends) contains its secrets — API keys, tokens, private keys. The retained
@@ -238,7 +241,7 @@ export function enumerateProcs(exec: Exec = defaultExec): ProcRow[] {
 
   // Pass 2: `-Eww -o pid=,command=` appends the full ENVIRONMENT after argv. Two subtleties:
   //  (a) the slug MUST come from the env, not argv — a process whose argv contains a literal
-  //      `FRIZZ_THREAD=x` (pasted task text, a grep, a tmux `-e` flag) would otherwise spoof
+  //      `FRIZZ_THREAD=x` (pasted task text, a grep, an `env FRIZZ_THREAD=x …` invocation) would spoof
   //      ownership. So strip the known pass-1 argv prefix and read the slug only from what follows.
   //  (b) an env VALUE can contain newlines (PEM keys, JSON), so a record spans multiple physical
   //      lines. Split on record starts (`<pid> <argv>`), re-merging any line that isn't a real

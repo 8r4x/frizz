@@ -15,7 +15,7 @@ function ledger(over: Partial<SessionRow> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-cancel-ledger-"))
   const storage = createStorage(join(dir, "ui.db"))
   storage.upsertSession({
-    slug: "t", session_id: "s", tmux_name: "frizz-t", spawned_at: T0, last_read_at: null,
+    slug: "t", session_id: "s", thread_name: "frizz-t", spawned_at: T0, last_read_at: null,
     unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0, title: null,
     state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null, ...over,
   })

@@ -78,7 +78,7 @@ for (const t of threads) {
   fs.writeFileSync(path.join(transcriptDir, `${t.sessionId}.jsonl`), t.records.map((r) => JSON.stringify({ ...r, sessionId: t.sessionId })).join("\n") + "\n")
   execFileSync("sqlite3", [
     db,
-    `INSERT INTO session (slug, session_id, tmux_name, spawned_at, title, title_auto, backend, model, effort, permission_mode, state, unread, exited, archived)
+    `INSERT INTO session (slug, session_id, thread_name, spawned_at, title, title_auto, backend, model, effort, permission_mode, state, unread, exited, archived)
      VALUES ('${t.slug}', '${t.sessionId}', 'frizz-${t.slug}', '${T(0)}', '${t.title}', 0, 'claude', 'opus', 'high', 'auto', 'open', 0, 0, 0)`,
   ])
   console.log(`seeded ${t.slug} (${t.sessionId})`)

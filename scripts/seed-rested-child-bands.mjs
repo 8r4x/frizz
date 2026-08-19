@@ -47,7 +47,7 @@ function seed({ slug, session, title, records, ageSec }) {
   mkdirSync(join(sessionDir, "subagents"), { recursive: true })
   const rows = records(join(sessionDir, "subagents"))
   writeFileSync(join(logDir, `${session}.jsonl`), `${rows.map((r) => JSON.stringify(r)).join("\n")}\n`)
-  execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, state, backend, model, effort, permission_mode, title_auto, unread, exited, archived) VALUES ('${slug}', '${session}', 'frizz-${slug}', '${at(ageSec)}', '${title}', 'open', 'claude', 'opus', 'high', 'bypassPermissions', 0, 0, 0, 0)`])
+  execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, state, backend, model, effort, permission_mode, title_auto, unread, exited, archived) VALUES ('${slug}', '${session}', 'frizz-${slug}', '${at(ageSec)}', '${title}', 'open', 'claude', 'opus', 'high', 'bypassPermissions', 0, 0, 0, 0)`])
 }
 
 const assistant = (content, ts, stop = "end_turn") => ({ type: "assistant", timestamp: ts, message: { id: `m${Math.random().toString(36).slice(2)}`, role: "assistant", stop_reason: stop, content } })

@@ -89,7 +89,7 @@ The traps, each of which costs a full boot cycle to rediscover:
 - **An unprefixed `/_frizz/rpc/…` is the LAUNCHING project**, silently. That is the correct design, and it
   is why a tenant bug looks like "it worked" — your call landed on the launcher's board. An UNKNOWN project
   segment 404s instead, which is the safe direction; check for the 404 before assuming your id is wrong.
-- **The broker is the SOLE claude transport.** The tmux/CLI path is retired, so `FRIZZ_CLAUDE_BROKER_BRIDGE=0`
+- **The broker is the SOLE claude transport.** The interactive-TUI path is retired, so `FRIZZ_CLAUDE_BROKER_BRIDGE=0`
   does not "fall back" — dispatch fails outright with *"Claude session broker is unavailable"*. You cannot
   capture a worker's argv with a stub `claude`; to see the env a worker really gets, dispatch a real one and
   read it off the process table (`ps -Ao pid,command | grep FRIZZ_PROJECT_ID`).
@@ -145,10 +145,9 @@ For transcript/board/telemetry flows, the tailer needs only three things, all in
    (copy real record shapes: `user` / `assistant` (+`stop_reason`) / `queue-operation` / `queued_command`
    attachment — `transcript.ts` + `tailer.ts` document what each field drives);
 2. one `session` row in the sandbox DB (`sqlite3 <tempHome>/.frizz/projects/*/ui.db "INSERT INTO session
-   (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode) VALUES (…)"`)
-   — `tmux_name` is a legacy COLUMN name holding the thread identity string `frizz-<slug>`, not a pane.
-   There is no pane to create: liveness comes from the row's runtime, so a simulated worker needs no
-   process at all.
+   (slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode) VALUES (…)"`)
+   — `thread_name` is the thread identity string `frizz-<slug>`. There is nothing to spawn beside it:
+   liveness comes from the row's runtime, so a simulated worker needs no process at all.
 
 This is the sanctioned exception to "never hand-write rows": the row is the fixture, and appending records
 then exercises the REAL tailer → board → push → render pipeline end-to-end. Dozens of worked examples live

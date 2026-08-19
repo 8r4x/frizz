@@ -14,7 +14,7 @@ const TerminalPane = lazy(() => import("./TerminalPane.tsx").then((m) => ({ defa
 // The sign-in gate modal. Shown when a dispatch targets a signed-out provider or the runtime 401
 // classifier flags a rejected credential. The PRIMARY action embeds the provider's own login CLI
 // (`claude auth login`) in a restricted, short-lived terminal (Slice B): the server spawns exactly
-// that argv in a dedicated tmux session addressed by an opaque attempt id, the browser attaches over
+// that argv in a dedicated pty addressed by an opaque attempt id, the browser attaches over
 // the existing hardened /term transport, and frizz polls the credential state to detect completion.
 // The copyable command remains the fallback when the embedded flow can't start or the user prefers
 // their own terminal. Fails open — the gate only ever reaches here on a positive "signed-out".

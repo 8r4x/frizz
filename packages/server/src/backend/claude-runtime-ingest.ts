@@ -36,7 +36,8 @@
 //     English prose out of launch acks ("output_file:", "Command running in background with ID:") — a
 //     path whose own comments record three separate phantom-sub-agent leaks. `tasks()` below is that
 //     payload, kept per session; the tailer reads it the same way it reads `liveness()`, as a signal it
-//     may consult, and the prose fold stays exactly where it is for tmux threads that have nothing else.
+//     may consult, and the prose fold stays exactly where it is for pre-broker threads that have nothing
+//     else.
 import type { ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
 import { createDrainableWorker, type DrainableWorker, type ReceiptBus } from "@frizz/shared"
 
@@ -128,13 +129,13 @@ export interface ClaudeRuntimeIngest {
   /**
    * The provider's own view of this session's background tasks — what each child is doing right now,
    * and which ones it says are finished. Empty for a session that has emitted no `task_*` event (every
-   * tmux thread, every codex row, an older claude that does not emit them).
+   * pre-broker thread, every codex row, an older claude that does not emit them).
    */
   tasks(sessionId: string): readonly ClaudeRuntimeTask[]
   /**
    * The context SIZE of the model this session is running, as the SDK reported it. Undefined until the
    * session's first turn ENDS (the window rides `result` and nothing earlier), and undefined forever
-   * for a tmux/foreign row that has no broker at all. The numerator comes off disk on every assistant
+   * for a pre-broker/foreign row that has no broker at all. The numerator comes off disk on every assistant
    * record, so this is the half that decides whether a Claude row has a readout — and an undefined
    * here must render nothing, never a fabricated denominator.
    */

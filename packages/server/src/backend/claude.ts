@@ -7,7 +7,7 @@ import type { AgentBackend, BuiltCommand, FoldState, NativeInputRequiredData, No
 // (Claude's `--session-id` pin + `--append-system-prompt-file` worker-contract injection), the
 // deterministic transcript path (~/.claude/projects/<cwdSlug>/<sessionId>.jsonl), the corpus-verified
 // line fold (foldLine → the tailer's applyRecord), a normalized parseLine view, and the perm-prompt
-// pane matcher. The heavy Claude derivation (applyRecord + helpers, computeTurn, the fence grammar)
+// screen matcher (inert in this build — nothing captures terminal text; see AgentBackend). The heavy Claude derivation (applyRecord + helpers, computeTurn, the fence grammar)
 // still LIVES in tailer.ts — behavior-critical and corpus-verified — and this backend reuses it
 // verbatim, so Phase 1 is byte-for-byte no-behavior-change. This module is a facade over those.
 

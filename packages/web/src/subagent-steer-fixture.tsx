@@ -9,7 +9,7 @@ import "./styles.css"
 // Browser QA for the SUB-AGENT DRAWER's controls and regular transcript-tail liveness —
 // across every state the server can put them in. The live adhoc stack can produce exactly one of
 // these (a steerable broker child), because the provider's task_* progress stream only exists behind
-// a real broker daemon and a codex/tmux row needs a whole second runtime. So the states that differ
+// a real broker daemon and a codex row needs a whole second runtime. So the states that differ
 // only by what the SERVER answered are driven here, off the same mocked RPC shape the real drawer
 // consumes, and the one state the stack CAN reach is verified against the stack itself.
 //
@@ -45,9 +45,9 @@ const RESPONSES: Record<string, { state: string; steerable: boolean; steerNote: 
   "note-tmux": {
     state: "running",
     steerable: false,
-    steerNote: "Steering a sub-agent needs the Claude session broker; this thread runs in a terminal.",
+    steerNote: "Steering a sub-agent needs the Claude session broker; this thread predates it.",
     stoppable: false,
-    stopNote: "Stopping a sub-agent needs the Claude session broker; this thread runs in a terminal.",
+    stopNote: "Stopping a sub-agent needs the Claude session broker; this thread predates it.",
   },
   // Descendant steering is unsafe (the CLI misdelivers it to the root), but stopTask's registry is
   // session-wide: this state must show the honest explanation AND a working stop control.

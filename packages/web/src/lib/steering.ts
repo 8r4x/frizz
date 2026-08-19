@@ -5,7 +5,7 @@ import type { ThreadView } from "@frizz/shared"
 // OPTIMISTIC STEER STATE — "your message is in, this thread is working again", rendered the instant
 // the operator commits rather than when the server can prove it.
 //
-// Why this needs to exist at all: delivering a follow-up is a synchronous tmux injection that takes
+// Why this needs to exist at all: delivering a follow-up is a synchronous injection that takes
 // ~250–800ms of subprocess work, and the thread only reads as RUNNING once the tailer subsequently
 // observes the worker's turn start in the JSONL — seconds later, on a poll frizz does not control. In
 // between, every board-driven surface still renders the thread exactly as it was: at rest, or worse,

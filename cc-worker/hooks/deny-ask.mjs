@@ -11,8 +11,8 @@
 // intercepts the call at canUseTool and renders it as a real question card on the dashboard, which the
 // operator answers and which returns the chosen labels to the tool. The broker bridge sets that var
 // only when an InteractionStore is actually wired to render and resolve the card, so a denial here
-// would block a question the operator CAN see. The tmux path never sets it (and additionally drops the
-// tool with --disallowedTools), so it keeps the deny plus the ```question redirect.
+// would block a question the operator CAN see. Any other path leaves the var unset, so it keeps the
+// deny plus the ```question redirect.
 import { readFileSync } from 'node:fs';
 
 const slug = process.env.FRIZZ_THREAD;

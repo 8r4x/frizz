@@ -36,7 +36,7 @@ const uuid = () => `0000000${(++uuidN).toString().padStart(4, "0")}-0000-4000-80
 // already-tailed JSONL in place leaves the projection stuck on the old content.
 const slug = flags.slug ?? "broken-image-flash"
 const sessionId = `${slug}-0000-4000-8000-000000000000`.slice(0, 36)
-const tmuxName = `frizz-${slug}`
+const threadName = `frizz-${slug}`
 
 // The path is deliberately absent from disk: /local-image resolves it, fails realpath, and 404s.
 const MISSING = "/tmp/frizz-does-not-exist-1785612974807.png"
@@ -121,7 +121,7 @@ try {
 
 execFileSync("sqlite3", [
   db,
-  `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
-   VALUES ('${slug}', '${sessionId}', '${tmuxName}', '${now()}', 'broken image + multi question', 'claude', 'opus', 'high', 'default', '${now()}')`,
+  `INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
+   VALUES ('${slug}', '${sessionId}', '${threadName}', '${now()}', 'broken image + multi question', 'claude', 'opus', 'high', 'default', '${now()}')`,
 ])
 console.log(`seeded ${slug} → ${sessionId} (missing image ${MISSING})`)

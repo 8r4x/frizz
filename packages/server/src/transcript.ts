@@ -161,7 +161,7 @@ const LEGACY_BANNER_PREAMBLE =
 // operator's prompt and nothing else. Everything below DISPATCH_TASK_BANNER_MARKER is verbatim theirs.
 //
 // This is the ONLY place the envelope is cut, which is the point: a broker thread's first prompt
-// arrives as a `queue-operation` enqueue record, a tmux thread's as an ordinary `user` record, and a
+// arrives as a `queue-operation` enqueue record, a pre-broker thread's as an ordinary `user` record, and a
 // resumed one as a `queued_command` attachment. The old cut lived inline in the plain-`user` arm alone,
 // so under the broker the whole composed prompt — orientation, instructions, banner and all — rendered
 // in the chat bubble. Returns undefined when `text` carries no envelope (any turn but the first).
@@ -691,7 +691,8 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
     // origin.kind "human" + commandMode "prompt" is a plain typed message; other commandModes (notably
     // "task-notification" — a sub-agent completion materialized the same way) are harness plumbing → skip.
     //
-    // …and `origin` is a TMUX-TUI-ONLY field. The SDK/broker path writes none, so requiring it made this
+    // …and `origin` is a TUI-ONLY field — only an interactive `claude` process writes it, which is how
+    // every pre-broker thread ran. The SDK/broker path writes none, so requiring it made this
     // whole branch STRUCTURALLY DEAD on every broker thread: the delivery record was ignored and the gray
     // bubble waited for the much later `queue-operation remove` to clear it. Measured over this machine's
     // corpus, that wait is p50 20.9s, p90 130s, max 9.6min AFTER the agent already had the message — long

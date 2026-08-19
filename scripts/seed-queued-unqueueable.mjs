@@ -58,7 +58,7 @@ const records = [
 ]
 writeFileSync(join(jsonlDir, `${SESSION_ID}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
 
-const tmuxName = `frizz-${SLUG}`
+const threadName = `frizz-${SLUG}`
 
 // `enqueued` rather than `pending`: it is the state a real follow-up settles into once Claude Code has
 // written its enqueue record, and it deliberately never ages into the amber "check the terminal"
@@ -69,8 +69,8 @@ const ledger = JSON.stringify([
 
 execFileSync("sqlite3", [
   db,
-  `INSERT OR REPLACE INTO session (slug, session_id, tmux_name, spawned_at, title, backend, model, effort, permission_mode, delivery_ledger)
-   VALUES ('${SLUG}', '${SESSION_ID}', '${tmuxName}', '${at(0)}', 'Fix the tier-boundary rounding', 'claude', 'opus', 'high', 'default', '${ledger.replace(/'/g, "''")}')`,
+  `INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode, delivery_ledger)
+   VALUES ('${SLUG}', '${SESSION_ID}', '${threadName}', '${at(0)}', 'Fix the tier-boundary rounding', 'claude', 'opus', 'high', 'default', '${ledger.replace(/'/g, "''")}')`,
 ])
 
 const api = createRpcClient(`http://127.0.0.1:${port}/`)
