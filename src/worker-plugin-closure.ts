@@ -28,6 +28,13 @@ export const WORKER_PLUGIN_REQUIRED_FILES = [
   "cc-worker/hooks/agent-bind.mjs",
   "cc-worker/bin/frizz",
   "cc-worker/bin/frizz-update",
+  // The lazy browser-MCP proxy + the tool-schema snapshot it answers `tools/list` from. Both are
+  // required because losing either is a SILENT downgrade, not a failure: with no proxy the mount
+  // degrades back to `npx -y chrome-devtools-mcp` (the 159 MB-per-worker shape this replaced), and
+  // with no snapshot the first worker on a machine pays a live install+boot inside its client's MCP
+  // startup window. See packages/server/src/backend/types.ts.
+  "cc-worker/bin/browser-mcp.mjs",
+  "cc-worker/bin/browser-mcp-tools.json",
   "board/config.mjs",
   "board/agent-bindings.mjs",
   "board/index.mjs",

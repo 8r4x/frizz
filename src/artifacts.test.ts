@@ -34,6 +34,10 @@ import {
   readStableArtifact,
   relevantSourceFingerprint,
 } from "./artifacts.ts";
+// The closure list is IMPORTED, never re-typed: three fixtures each carried their own hand-copy, which
+// is precisely the drift worker-plugin-closure.ts warns about — they agreed only between the first edit
+// and the last.
+import { WORKER_PLUGIN_REQUIRED_FILES } from "./worker-plugin-closure.ts";
 import {
   acquireProjectLaunchOwner,
   projectLaunchEnvironment,
@@ -96,6 +100,8 @@ function fixture(root: string, content: string): string {
   mkdirSync(join(dir, "runtime", "cc-worker", "scripts", "frizz"), { recursive: true });
   writeFileSync(join(dir, "runtime", "cc-worker", "bin", "frizz"), "board");
   writeFileSync(join(dir, "runtime", "cc-worker", "bin", "frizz-update"), "update");
+  writeFileSync(join(dir, "runtime", "cc-worker", "bin", "browser-mcp.mjs"), "proxy");
+  writeFileSync(join(dir, "runtime", "cc-worker", "bin", "browser-mcp-tools.json"), "schemas");
   writeFileSync(join(dir, "runtime", "board", "config.mjs"), "config");
   writeFileSync(join(dir, "runtime", "board", "agent-bindings.mjs"), "bindings");
   writeFileSync(join(dir, "runtime", "board", "index.mjs"), "index");
@@ -119,6 +125,8 @@ function fixture(root: string, content: string): string {
         "cc-worker/hooks/agent-bind.mjs": hash("bind"),
         "cc-worker/bin/frizz": hash("board"),
         "cc-worker/bin/frizz-update": hash("update"),
+        "cc-worker/bin/browser-mcp.mjs": hash("proxy"),
+        "cc-worker/bin/browser-mcp-tools.json": hash("schemas"),
         "board/config.mjs": hash("config"),
         "board/agent-bindings.mjs": hash("bindings"),
         "board/index.mjs": hash("index"),
@@ -511,17 +519,7 @@ test("a captured source snapshot remains usable after the checkout changes", () 
   const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-snapshot-mutation-"));
   const source = sourceFixture(root);
   mkdirSync(join(source, "node_modules"));
-  for (const file of [
-    "cc-worker/.claude-plugin/plugin.json",
-    "cc-worker/hooks/session-seed.mjs",
-    "cc-worker/hooks/agent-bind.mjs",
-    "cc-worker/bin/frizz",
-    "cc-worker/bin/frizz-update",
-    "board/config.mjs",
-    "board/agent-bindings.mjs",
-    "board/index.mjs",
-    "board/thread-update.mjs",
-  ]) {
+  for (const file of WORKER_PLUGIN_REQUIRED_FILES) {
     // The worker-plugin closure lives INSIDE the source root: the workspace is the repo root now, so
     // cc-worker/ and cc/ are siblings of packages/ rather than a reach-back above the source.
     mkdirSync(dirname(join(source, file)), { recursive: true });
@@ -549,17 +547,7 @@ test("a captured source snapshot is its own scan root, so an ancestor .gitignore
   writeFileSync(join(root, ".gitignore"), "*\n");
   const source = sourceFixture(root);
   mkdirSync(join(source, "node_modules"));
-  for (const file of [
-    "cc-worker/.claude-plugin/plugin.json",
-    "cc-worker/hooks/session-seed.mjs",
-    "cc-worker/hooks/agent-bind.mjs",
-    "cc-worker/bin/frizz",
-    "cc-worker/bin/frizz-update",
-    "board/config.mjs",
-    "board/agent-bindings.mjs",
-    "board/index.mjs",
-    "board/thread-update.mjs",
-  ]) {
+  for (const file of WORKER_PLUGIN_REQUIRED_FILES) {
     mkdirSync(dirname(join(source, file)), { recursive: true });
     writeFileSync(join(source, file), "snapshot fixture\n");
   }
@@ -777,17 +765,7 @@ test.skip("legacy deploy snapshot harness is superseded by the real bundled-arti
   );
   writeFileSync(versionFile, "before\n");
   writeFileSync(join(source, "packages", "shared", "version.txt"), "snapshot workspace\n");
-  for (const file of [
-    "cc-worker/.claude-plugin/plugin.json",
-    "cc-worker/hooks/session-seed.mjs",
-    "cc-worker/hooks/agent-bind.mjs",
-    "cc-worker/bin/frizz",
-    "cc-worker/bin/frizz-update",
-    "board/config.mjs",
-    "board/agent-bindings.mjs",
-    "board/index.mjs",
-    "board/thread-update.mjs",
-  ]) {
+  for (const file of WORKER_PLUGIN_REQUIRED_FILES) {
     mkdirSync(dirname(join(root, file)), { recursive: true });
     writeFileSync(join(root, file), `${file}\n`);
   }

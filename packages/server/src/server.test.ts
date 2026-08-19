@@ -23,6 +23,7 @@ import { createCodexBackend } from "./backend/codex.ts"
 import type { CodexAppServerBridge } from "./backend/codex-app-server.ts"
 import type { ClaudeAgentBrokerBridge } from "./backend/claude-agent-broker-bridge.ts"
 import type { AgentBackend } from "./backend/types.ts"
+import { chromeDevtoolsMcpMount } from "./backend/types.ts"
 import type { PaneIdentity } from "./adoption-recovery.ts"
 
 function tmp(prefix: string) {
@@ -301,8 +302,11 @@ test("buildClaudeCommand: pins session-id, permission mode, optional model/effor
     claudeBin: "sleep",
     workerPrompt: "", // disabled for the argv-shape assertion
   })
-  // Every dispatch mounts chrome-devtools (+ its equals-form pre-approval) — see claudeMcpFlags.
-  const CDT_CFG = JSON.stringify({ mcpServers: { "chrome-devtools": { command: "npx", args: ["-y", "chrome-devtools-mcp@latest", "--experimentalPageIdRouting", "--headless", "--isolated", "--no-usage-statistics"] } } })
+  // Every dispatch mounts chrome-devtools (+ its equals-form pre-approval) — see claudeMcpFlags. What
+  // it mounts is frizz's LAZY PROXY, not the upstream server; chromeDevtoolsMcpSpec() is the one
+  // builder both backends render, so this asserts the argv POSITION of the flags rather than restating
+  // the spec (which backend/browser-mcp.test.ts pins on its own).
+  const CDT_CFG = JSON.stringify({ mcpServers: { "chrome-devtools": chromeDevtoolsMcpMount() } })
   const CDT_FLAGS = ["--mcp-config", CDT_CFG, "--allowedTools=mcp__chrome-devtools", "--disallowedTools=AskUserQuestion"]
   assert.deepEqual(base, ["sleep", "--session-id", "uuid-1", "--permission-mode", "acceptEdits", ...CDT_FLAGS, "hello"])
 
@@ -349,7 +353,7 @@ test("buildClaudeCommand: pins session-id, permission mode, optional model/effor
 
 test("buildClaudeResumeCommand: -r <sessionId> with the follow-up + worker system prompt", () => {
   const cmd = buildClaudeResumeCommand({ sessionId: "sid", permissionMode: "acceptEdits", message: "more", workerPrompt: "" })
-  const RESUME_CDT_CFG = JSON.stringify({ mcpServers: { "chrome-devtools": { command: "npx", args: ["-y", "chrome-devtools-mcp@latest", "--experimentalPageIdRouting", "--headless", "--isolated", "--no-usage-statistics"] } } })
+  const RESUME_CDT_CFG = JSON.stringify({ mcpServers: { "chrome-devtools": chromeDevtoolsMcpMount() } })
   assert.deepEqual(cmd, ["claude", "--permission-mode", "acceptEdits", "--mcp-config", RESUME_CDT_CFG, "--allowedTools=mcp__chrome-devtools", "--disallowedTools=AskUserQuestion", "-r", "sid", "more"])
   // Resume re-carries the worker norms (system prompt is rebuilt per invocation) via the file flag.
   const dflt = buildClaudeResumeCommand({ sessionId: "sid", permissionMode: "auto", message: "m" })

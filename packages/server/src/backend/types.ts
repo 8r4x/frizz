@@ -1,4 +1,7 @@
+import { existsSync } from "node:fs"
+import { join } from "node:path"
 import type { LimitWindow, PermissionMode } from "@frizz/shared"
+import { resolveWorkerPluginDir } from "../worker-plugin-dir.ts"
 import type { FenceView, SubAgentView, BgShellView, PendingAskData, TurnState } from "../tailer.ts"
 
 // A turn cut off by an exhausted SUBSCRIPTION window, as a backend's fold observed it. Carries only
@@ -17,17 +20,6 @@ export interface LimitFault {
 // identical observable behavior; Phase 2 adds CodexBackend behind this same interface.
 
 export type BackendKind = "claude" | "codex"
-
-// A verified native TUI modal that blocks the backend before it can append another transcript
-// record. This is intentionally tiny and presentation-safe: the raw screen text and its options never
-// cross the server boundary (they can contain commands, repository data, or secrets). Backends emit
-// only a coarse family plus a fixed, sanitized title after matching their own version-grounded modal
-// chrome.
-export type NativeInputKind = "tool-approval" | "permission" | "confirmation" | "selection"
-export interface NativeInputRequiredData {
-  kind: NativeInputKind
-  title: string
-}
 
 // A backend-neutral transcript record: the vocabulary a backend's parser emits, and — for a backend
 // whose turn model maps cleanly onto it (codex's explicit task_started/task_complete brackets) — the
@@ -273,30 +265,98 @@ export function frizzMcpEnv(mcp: FrizzMcp): Record<string, string> {
 // it via `-c` TOML overrides (+ `default_tools_approval_mode="approve"`) on the APP-SERVER's argv in
 // codex-mcp.ts — process-level, because a per-thread override mounts nothing at all. Deriving both
 // from this constant is what keeps the two backends' browser tooling in lockstep — edit HERE, never in
-// one backend alone. (The codex half was DESCRIBED here long before it was written: for a while this
-// paragraph was the only place it existed, and codex threads had no browser — read codex-mcp.ts.)
+// one backend alone, and mount it through chromeDevtoolsMcpSpec() rather than reading the fields.
+// (The codex half was DESCRIBED here long before it was written: for a while this paragraph was the
+// only place it existed, and codex threads had no browser — read codex-mcp.ts.)
 // `--isolated` gives each worker a disposable browser profile (never the operator's own Chrome), and
 // `--headless` keeps the window off the operator's screen. BOTH are required and both default to
 // false upstream: this is the same pair `.mcp.json` pins for agents working in THIS repo, and the
-// same policy `.agents/skills/adhoc-cdp` states in as many words — "NEVER put a browser window on the
-// maintainer's screen … a verification run must be invisible". That rule was written for agents
+// same policy `.agents/skills/headless-browser` states in as many words — "NEVER put a browser window
+// on the maintainer's screen … a verification run must be invisible". That rule was written for agents
 // editing frizz and never reached the workers frizz DISPATCHES, which is how the 2026-07-28 complaint
 // ("it keeps opening tabs in my actual real Chrome") came back on 2026-08-06 from a worker doing
-// ordinary browser QA in someone else's repo. A worker shares the desktop exactly as a fray agent
-// does, so it gets the same two flags.
+// ordinary browser QA in someone else's repo. A worker shares the desktop exactly as an agent editing
+// this repo does, so it gets the same two flags. The args below are forwarded to the upstream server
+// byte-for-byte; the proxy in front of it never edits them.
+//
+// ── WHAT IS MOUNTED IS A LAZY PROXY, NOT THE SERVER ──────────────────────────────────────────────
+// `command` is node running frizz's own `cc-worker/bin/browser-mcp.mjs`, which answers `initialize`
+// and `tools/list` from a disk snapshot and spawns the real `chrome-devtools-mcp` only when a worker
+// makes its first `tools/call`. Read that file's header for the whole design. The two numbers behind
+// the change, measured on the maintainer's machine 2026-08-19 with 38 live workers: the eager
+// `npx -y chrome-devtools-mcp@latest` mount cost 6.07 GB over 78 processes (39 × 89 MB of real server
+// nobody had asked for a browser from, plus 39 × 70 MB of `npm exec` shim that execs the real one and
+// then idles forever), which was 32% of frizz's entire footprint. The proxy costs ~17 MB per worker,
+// the same as frizz-mcp.mjs, and the 70 MB shim is gone outright because the real server is exec'd as
+// `node <resolved bin>` with no npm in the picture at all.
+//
+// VERSION is PINNED rather than `@latest`. It is the tool-schema cache key, so a bump here is what
+// makes every worker re-harvest; `@latest` would have re-resolved against the registry on every single
+// spawn and could change the tool surface under a running board. To bump: edit `version`, then
+// `nub scripts/harvest-browser-mcp-tools.mjs` (a test fails if the committed snapshot and this pin
+// disagree).
 export const CHROME_DEVTOOLS_MCP = {
   name: "chrome-devtools",
-  command: "npx",
+  // Resolved under <worker plugin dir>/bin/, exactly like FRIZZ_MCP.script.
+  script: "browser-mcp.mjs",
+  package: "chrome-devtools-mcp",
+  version: "1.7.0",
   args: [
-    "-y",
-    "chrome-devtools-mcp@latest",
     "--experimentalPageIdRouting",
     "--headless",
     "--isolated",
     "--no-usage-statistics",
   ],
-  startupTimeoutSec: 120,
 } as const
+
+/** A stdio MCP server as both backends need to describe it. */
+export interface McpStdioSpec {
+  command: string
+  args: string[]
+  env?: Record<string, string>
+}
+
+/**
+ * The chrome-devtools mount, built ONCE for both backends.
+ *
+ * Normally: node + the lazy proxy from the worker plugin, with the pinned package stamped into its env
+ * so the version lives in this file alone.
+ *
+ * FALLBACK: when the worker plugin cannot be resolved there is no proxy on disk to run, so this
+ * degrades to the old `npx -y chrome-devtools-mcp@<version>` mount rather than to no browser at all —
+ * "a worker gets a browser out of the box on any machine" is the invariant this whole constant exists
+ * to hold, and a worker whose plugin dir is missing is already degraded in five other ways
+ * (workerPluginDir() shouts about it). Both `--headless` and `--isolated` still ride the fallback.
+ */
+export function chromeDevtoolsMcpSpec(scriptPath: string | undefined, nodeBin: string): McpStdioSpec {
+  const args = [...CHROME_DEVTOOLS_MCP.args]
+  if (!scriptPath) return { command: "npx", args: ["-y", `${CHROME_DEVTOOLS_MCP.package}@${CHROME_DEVTOOLS_MCP.version}`, ...args] }
+  return {
+    command: nodeBin,
+    args: [scriptPath, ...args],
+    env: { FRIZZ_BROWSER_MCP_PACKAGE: `${CHROME_DEVTOOLS_MCP.package}@${CHROME_DEVTOOLS_MCP.version}` },
+  }
+}
+
+/**
+ * The mount as production wants it. NEITHER parameter of chromeDevtoolsMcpSpec has a default, on
+ * purpose: a default parameter is re-triggered by an EXPLICIT `undefined`, so a caller (or a test)
+ * that meant "no plugin dir" would silently get the resolved one instead and pin the wrong branch.
+ */
+export function chromeDevtoolsMcpMount(): McpStdioSpec {
+  return chromeDevtoolsMcpSpec(resolveBrowserMcpScript(), process.execPath)
+}
+
+/** The absolute path to the shipped proxy, or undefined when the worker plugin cannot be resolved. */
+export function resolveBrowserMcpScript(
+  moduleUrl = import.meta.url,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const pluginDir = resolveWorkerPluginDir(moduleUrl, env)
+  if (!pluginDir) return undefined
+  const scriptPath = join(pluginDir, "bin", CHROME_DEVTOOLS_MCP.script)
+  return existsSync(scriptPath) ? scriptPath : undefined
+}
 
 // The environment EVERY frizz Claude worker gets, on EVERY spawn path. Kept as one record with one
 // spread per call site (the bridge's `workerEnv` for the broker daemon, the SDK's key allowlist, and
@@ -376,11 +436,82 @@ export const CHROME_DEVTOOLS_MCP = {
 // reproduces the auto-background bounce that real dispatched workers get, so a behavioral check
 // there passes identically with and without the variable. See the NOT ASSERTED note in
 // _live_sdk_worker_env.mts.
+// Claude Code caps WebSearch at 200 calls per SESSION (verified in the 2.1.220 bundle:
+// `CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION ?? 200`, enforced in the WebSearch tool against a
+// `taskRegistry` counter). A frizz worker is long-lived and research-heavy — it burns that budget on
+// work a chat session never would — and past the cap the tool stops searching and merely returns
+// "this session has used its web search budget", which reads to the model as a dead end rather than
+// as a quota. Raise it far enough that a real effort never hits it, while keeping a finite backstop
+// against a runaway search loop; Claude Code has no unlimited sentinel, so a large integer is the
+// only expression of "effectively uncapped".
+export const WORKER_MAX_WEB_SEARCHES = 10000
+
+// The SAME quiet-cap problem, on the sub-agent path (verified in the same 2.1.220 bundle — all three
+// read `Z.<VAR> ?? <default>` through the identical `int({min:1,digitsOnly:true})` parser):
+//
+//   CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION  default 200 — TOTAL Task spawns for the whole session.
+//     Past it every spawn throws "Subagent spawn limit reached (N of 200 agents spawned)… ask the user
+//     to raise CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION". A frizz worker is long-lived and dispatches a
+//     helper per prong across many turns, so it reaches 200 on work a chat session never would — and
+//     the failure reads to the model as "stop delegating", not as a quota. Lifted like the search
+//     budget: no machine cost to a high ceiling, since this counts spawns over time, not live ones.
+//
+//   CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS   default 20 — LIVE agents at once. Past it a spawn throws
+//     "Concurrent subagent limit reached… Do not retry", so a fan-out wider than 20 silently loses its
+//     tail. Raised, but NOT to the same sentinel: every live sub-agent is a real process and API
+//     stream on this machine, so this one is a genuine resource dial (the orphan-reaper work exists
+//     because runaway fan-out really does burn the box). 100 clears any real fan-out with a bound left.
+//
+// NOT lifted: CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH. Its default is not a constant at all — it resolves
+// through a server-gated feature value — but the worker contract already tells workers to keep fan-out
+// shallow because a rested sub-agent is not reliably re-woken by grandchildren. Raising the nesting cap
+// would buy depth that frizz's own wake path cannot deliver on, so the cap and the contract agree.
+export const WORKER_MAX_SUBAGENTS = 10000
+export const WORKER_MAX_CONCURRENT_SUBAGENTS = 100
+
+// Claude Code parses these variables as a strictly-digits integer >= 1 (`int({min:1,digitsOnly:true})`)
+// and silently falls back to its own default on anything else, so an operator override is honored
+// only in exactly that shape.
+function workerCap(name: string, lifted: number, env: NodeJS.ProcessEnv): string {
+  const override = env[name]
+  if (override !== undefined && /^[1-9][0-9]*$/.test(override)) return override
+  return String(lifted)
+}
+
+// Claude Code reads these inherited process variables as sub-agent profile defaults. A Frizz worker
+// chooses its profile explicitly through the launch argv and plugin agent profiles, so let neither
+// a shell nor a globally configured Claude session silently replace that selection. An EMPTY entry
+// here overrides the inherited value while preserving every auth/config variable.
+//
+// The CAPS are the deliberate exception to that masking: a profile override hijacks the worker's
+// identity, but a cap is operator policy, so an explicitly configured one is passed through rather
+// than overridden. They are always set EXPLICITLY (never left to inheritance) because inheritance is
+// not a stable source: a worker used to be launched inside a long-lived multiplexer server whose own
+// environment was captured whenever IT first started, which could predate the current frizz process
+// by days. Nothing inherits that way now, but an explicit value is still the only one that cannot
+// drift with the launch context.
+
 export const CLAUDE_WORKER_ENV = {
   CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "infinite",
   BASH_DEFAULT_TIMEOUT_MS: "60000",
   BASH_MAX_TIMEOUT_MS: String(24 * 60 * 60 * 1000),
 } as const
+
+// EVERY Claude worker's environment, on EVERY transport — the static entries in CLAUDE_WORKER_ENV plus
+// the lifted caps above. One function, spread whole at each call site, because the caps spent their
+// whole life on the argv builder alone: `claudeWorkerEnvironment()` set them, nothing but the retired
+// argv path called it, and the broker — the only transport there is — spread CLAUDE_WORKER_ENV, which
+// did not carry them. So every lift documented above reached no worker at all, and a real frizz worker
+// ran on Claude Code's own 200/200/20 defaults (found 2026-08-19 while clearing out the multiplexer's
+// remains). Add a cap HERE, never at a call site, and it cannot miss a path again.
+export function claudeWorkerEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  return {
+    ...CLAUDE_WORKER_ENV,
+    CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION: workerCap("CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION", WORKER_MAX_WEB_SEARCHES, env),
+    CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION: workerCap("CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION", WORKER_MAX_SUBAGENTS, env),
+    CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS: workerCap("CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS", WORKER_MAX_CONCURRENT_SUBAGENTS, env),
+  }
+}
 
 // Tools an ARGV-SPAWNED Claude worker never gets — the argv turns this into `--disallowedTools=…`.
 //
@@ -446,21 +577,4 @@ export interface AgentBackend {
   // (narrowing FoldState back to the concrete TailState the tailer hands it); a codex backend can
   // implement this as `for (const ev of this.parseLine(line)) applyEvent(state, ev)`.
   foldLine(state: FoldState, line: string): void
-
-  // ---- optional terminal-screen sniff (native interactive prompt; no jsonl signal) ----
-  // For a modal that blocks the provider CLI without writing a transcript record, the tailer hands the
-  // backend the text of that CLI's terminal screen. Nothing in this build produces that text — the
-  // tailer's capture dependency is injected by test fixtures only, never by the server — so today these
-  // run on the empty string and their contracts are pinned by tests rather than by a live board.
-  matchesPermPrompt?(pane: string): boolean // claude: the empirical markers; codex: its own or omitted
-  // Structured, backend-specific native-modal detection. Implementations MUST match verified terminal
-  // chrome rather than arbitrary model output and MUST NOT return option/detail text read off the screen.
-  detectNativeInput?(pane: string): NativeInputRequiredData | undefined
-  // PRE-SESSION modals only — the screens a backend can block on BEFORE it opens a session and writes
-  // its first transcript record. Kept separate from detectNativeInput because the tailer runs it on a
-  // different path (the no-transcript stall, where no transcript-derived signal exists) and because a
-  // boot screen must never be matched against a live session's screen text, where ordinary transcript
-  // text could quote the same chrome. Same presentation-safe contract: fixed titles, never read off
-  // the screen.
-  detectBootModal?(pane: string): NativeInputRequiredData | undefined
 }

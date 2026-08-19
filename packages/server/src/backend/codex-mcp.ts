@@ -1,4 +1,4 @@
-import { CHROME_DEVTOOLS_MCP, FRIZZ_MCP, frizzMcpEnv, type FrizzMcp } from "./types.ts"
+import { CHROME_DEVTOOLS_MCP, FRIZZ_MCP, chromeDevtoolsMcpSpec, frizzMcpEnv, resolveBrowserMcpScript, type FrizzMcp } from "./types.ts"
 
 // ---- Codex MCP injection -------------------------------------------------------------------------
 // The codex twin of dispatch.ts's `claudeMcpFlags`. Claude mounts frizz's MCP servers via one inline
@@ -50,17 +50,25 @@ function serverTable(command: string, args: readonly string[], env?: Record<stri
  * The `-c` overrides that mount frizz's MCP servers into a codex app-server.
  *
  * chrome-devtools is ALWAYS mounted (a worker gets a browser out of the box on any
- * machine — the same CHROME_DEVTOOLS_MCP spec claude uses, which is what keeps the two backends in
- * lockstep). The unified `frizz` server rides along when its descriptor resolved; absent ⇒ the worker
- * simply lacks those tools, exactly as on the claude side.
+ * machine — rendered from chromeDevtoolsMcpSpec(), the same builder claude uses, which is what keeps
+ * the two backends in lockstep). What that mounts is frizz's LAZY PROXY: one small node process per
+ * app-server that answers `tools/list` from a disk snapshot and spawns the real `chrome-devtools-mcp`
+ * on the first `tools/call`. The unified `frizz` server rides along when its descriptor resolved;
+ * absent ⇒ the worker simply lacks those tools, exactly as on the claude side.
+ *
+ * `browserMcpScript` is injectable for the same reason `nodeBin` is: so a test can pin the rendered
+ * TOML without depending on where the worker plugin happens to sit on the machine running it. Omitted
+ * ⇒ resolved from the worker plugin; unresolvable ⇒ chromeDevtoolsMcpSpec degrades to a pinned npx
+ * mount, which backend/browser-mcp.test.ts pins directly.
  *
  * Returns a flat argv fragment: ["-c", "…", "-c", "…"]. Pure and exported so a regression cannot
  * silently stop mounting them — the shape is unit-pinned rather than only observable by running codex.
  */
-export function codexMcpConfigArgs(frizzMcp?: FrizzMcp, nodeBin: string = process.execPath): string[] {
+export function codexMcpConfigArgs(frizzMcp?: FrizzMcp, nodeBin: string = process.execPath, browserMcpScript?: string): string[] {
+  const chrome = chromeDevtoolsMcpSpec(browserMcpScript ?? resolveBrowserMcpScript(), nodeBin)
   const args: string[] = [
     "-c",
-    `mcp_servers.${CHROME_DEVTOOLS_MCP.name}=${serverTable(CHROME_DEVTOOLS_MCP.command, CHROME_DEVTOOLS_MCP.args)}`,
+    `mcp_servers.${CHROME_DEVTOOLS_MCP.name}=${serverTable(chrome.command, chrome.args, chrome.env)}`,
   ]
   if (frizzMcp) {
     // The ABSOLUTE node path, never bare "node": the app-server spawns this itself and its PATH varies

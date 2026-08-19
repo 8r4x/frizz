@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 import { DISPATCH_TASK_BANNER_MARKER } from "@frizz/shared"
 import { buildClaudeCommand, loadWorkerPrompt, composePrompt, monitorScriptsDir, resolveWorkerPluginDir, scratchpadOrientation, workerPluginDir, frizzConfigBlock, workerDispatchPermission, WORKER_DISPATCH_PERMISSION } from "./dispatch.ts"
 import { parseTranscript } from "./transcript.ts"
-import { CHROME_DEVTOOLS_MCP, FRIZZ_MCP } from "./backend/types.ts"
+import { CHROME_DEVTOOLS_MCP, FRIZZ_MCP, chromeDevtoolsMcpMount } from "./backend/types.ts"
 
 // ---- Backend-aware worker contract (worker-contract-backend-aware) ----
 // loadWorkerPrompt(kind) delegates to buildWorkerPrompt in workerPrompt.ts (a single compiled-in TS
@@ -54,11 +54,8 @@ test("Claude dispatch mounts chrome-devtools + the unified frizz MCP server and 
   assert.ok(cfgRaw, "argv must carry an inline --mcp-config")
   const cfg = JSON.parse(cfgRaw)
   // Chrome DevTools rides EVERY dispatch (runtime-gate browser QA, parity with the codex `-c`
-  // injection — both derive from the canonical CHROME_DEVTOOLS_MCP spec).
-  assert.deepEqual(cfg.mcpServers[CHROME_DEVTOOLS_MCP.name], {
-    command: CHROME_DEVTOOLS_MCP.command,
-    args: [...CHROME_DEVTOOLS_MCP.args],
-  })
+  // injection — both render the canonical chromeDevtoolsMcpSpec()).
+  assert.deepEqual(cfg.mcpServers[CHROME_DEVTOOLS_MCP.name], chromeDevtoolsMcpMount())
   assert.deepEqual(cfg.mcpServers[FRIZZ_MCP.name], {
     command: process.execPath, // absolute node path, not bare "node" (worker PATH-independence)
     args: ["/abs/plugin/bin/frizz-mcp.mjs"],

@@ -19,14 +19,25 @@ function values(args: string[]): string[] {
 }
 
 test("codexMcpConfigArgs: chrome-devtools is mounted even with no frizz descriptor", () => {
-  const vals = values(codexMcpConfigArgs(undefined))
+  const vals = values(codexMcpConfigArgs(undefined, "/abs/node", "/abs/plugin/bin/browser-mcp.mjs"))
   const chrome = vals.find((v) => v.startsWith(`mcp_servers.${CHROME_DEVTOOLS_MCP.name}=`))
   assert.ok(chrome, "chrome-devtools override missing")
   // The runtime release gate needs a browser on any machine; this must not be conditional.
-  assert.match(chrome, /command="npx"/)
+  // What is mounted is frizz's LAZY PROXY under the ABSOLUTE node path — never `npx`, whose `npm exec`
+  // shim was 70 MB per worker of pure waste and whose real server started whether or not the worker
+  // ever opened a page (backend/types.ts).
+  assert.match(chrome, /command="\/abs\/node"/)
+  assert.ok(chrome.includes(JSON.stringify("/abs/plugin/bin/browser-mcp.mjs")), "the proxy script must be argv[0]")
+  assert.ok(!chrome.includes("npx"), "npx must not survive anywhere in the codex mount")
   for (const arg of CHROME_DEVTOOLS_MCP.args) assert.ok(chrome.includes(JSON.stringify(arg)), `missing ${arg}`)
+  // The version pin travels in the env, so backend/types.ts stays the only place it is written down.
+  assert.ok(
+    chrome.includes(`FRIZZ_BROWSER_MCP_PACKAGE="${CHROME_DEVTOOLS_MCP.package}@${CHROME_DEVTOOLS_MCP.version}"`),
+    "the pinned package must ride the mount env",
+  )
   assert.ok(!vals.some((v) => v.startsWith(`mcp_servers.${FRIZZ_MCP.name}=`)), "frizz must not be mounted without a descriptor")
 })
+
 
 test("codexMcpConfigArgs: the frizz server carries an ABSOLUTE node path and its FRIZZ_STATE_DIR", () => {
   const vals = values(codexMcpConfigArgs({ scriptPath: "/abs/plugin/bin/frizz-mcp.mjs", stateDir: "/abs/state" }, "/abs/node"))
