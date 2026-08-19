@@ -119,6 +119,21 @@ const CLAUDE_PERMISSION_CONFIRM_POLLS = 3
 // AGENTS ONLY: a child appends on every step, so silence there is a real (if coarse) liveness signal.
 // A background SHELL has no such property and is not judged this way at all — see bgShellViews.
 const SUBAGENT_STALE_MS = 15 * 60_000
+// A BACKGROUND SHELL'S liveness fallback, and it is deliberately far coarser than the sub-agent one.
+//
+// Frizz does not own these processes (see dismissOp) and holds no pid, so the ONLY thing that has ever
+// retired a shell is its `<task-notification>`. A shell whose process dies without emitting one — killed,
+// reaped, lost with a machine sleep — therefore stayed "running" FOREVER: the maintainer's board showed
+// one at `RUNNING · 2583 MIN` (43 hours) on 2026-08-18, whose process did not exist, whose output file
+// had not been touched in two days, and whose `until`-loop was polling for a sentinel that never appeared.
+//
+// WHY THE THRESHOLD IS HOURS AND NOT MINUTES: the sub-agent rule keys on transcript mtime, and a sub-agent
+// that writes nothing for 15 minutes really is wedged. A shell is different — frizz's own contract tells
+// workers to WAIT with `until <condition>; do sleep 5; done`, which prints nothing by design, so silence
+// is the normal shape of a healthy wait here. That rules out any short window, and it rules out keying on
+// output entirely. What is left is age: a shell still unretired after half a day is a phantom in every
+// case observed, while `for:` (capped at 24h) already bounds the park that might name it.
+const BGSHELL_STALE_MS = 12 * 60 * 60_000
 // The minute bucket of an ISO instant, for the board signature: a child's "N min ago" reading only
 // changes when this changes, so folding this (not the raw mtime) into the sig means a steadily-active
 // child re-pushes at most once a minute. "" when absent/unparseable — an absent reading is stable.
@@ -2828,7 +2843,12 @@ export function createTailer(deps: TailerDeps): Tailer {
       // between its tool_use (which creates the entry) and its launch ack (which names the task).
       // `taskId` travels as well as gating `stoppable`: it is the handle the RUNTIME hands the model, so
       // it is the id a worker registers a `shell` watcher against (see BgShellView.taskId).
-      out.push({ label: e.label, startedAt: e.startedAt, state: "running", id: e.toolUseId, ...(e.taskId ? { stoppable: true, taskId: e.taskId } : {}), ...(lastActivityAt ? { lastActivityAt } : {}) })
+      // AGE decides, against the shell's own last sign of life (its launch, if it has never spoken).
+      // `ToolStatusMeta` and the drawer have rendered a "stale" shell all along; nothing ever produced
+      // one, because this was the literal `"running"`.
+      const since = Date.parse(lastActivityAt ?? e.startedAt)
+      const shellState = Number.isFinite(since) && now() - since > BGSHELL_STALE_MS ? "stale" as const : "running" as const
+      out.push({ label: e.label, startedAt: e.startedAt, state: shellState, id: e.toolUseId, ...(e.taskId ? { stoppable: true, taskId: e.taskId } : {}), ...(lastActivityAt ? { lastActivityAt } : {}) })
     }
     return out
   }

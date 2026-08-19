@@ -3542,3 +3542,41 @@ test("parseSignalFence: a `shell:` line after the delimiter is prose, not a wait
   assert.deepEqual(parsed?.hints, [{ kind: "for", value: "2h" }])
   assert.match(parsed?.body ?? "", /shell: bnope/)
 })
+
+// A BACKGROUND SHELL'S LIVENESS FALLBACK. Frizz owns none of these processes and holds no pid, so before
+// this the ONLY thing that ever retired a shell was its `<task-notification>` — and one that dies without
+// emitting one stayed "running" forever. The maintainer's board showed `RUNNING · 2583 MIN` (43 hours) for
+// a shell whose process did not exist and whose output file was two days cold (2026-08-18).
+//
+// The threshold is HOURS, not minutes, and that is the whole design: frizz's own contract tells workers to
+// wait with `until <cond>; do sleep 5; done`, which prints nothing by design. Silence is the normal shape
+// of a healthy wait here, so a short window — or any rule keyed on output — would declare live waits dead.
+test("tailer: a background shell goes stale on AGE, and a long quiet wait does not", () => {
+  const h = harness()
+  h.storage.upsertSession(row())
+  fixture(h.logDir, "sid", [
+    IN_FLIGHT,
+    JSON.stringify(bashBg("toolu_sh", "Waiting for the verification and suite", "until grep -q done out; do sleep 5; done")),
+    JSON.stringify(resultText("toolu_sh", "Command running in background with ID: bQuiet. Output is being written to: /tmp/tasks/bQuiet.output.")),
+  ])
+  const t = createTailer({
+    project: { cwdSlug: "x" } as Project,
+    storage: h.storage, bus: h.bus, onChange: () => h.changes.n++,
+    now: () => h.clock.ms, paneDead: () => h.dead.v, capturePane: () => h.pane.text,
+    sessionLogDir: h.logDir,
+  })
+  const launchedAt = Date.parse("2026-07-01T00:00:01.000Z") // the shell's own launch record
+
+  // ELEVEN HOURS of total silence is still a RUNNING wait — this is the shape the contract recommends,
+  // and calling it dead would break every legitimate `until` loop.
+  h.clock.ms = launchedAt + 11 * 60 * 60_000
+  t.tick()
+  assert.equal(t.get("t")?.bgShells[0]?.state, "running", "a quiet wait is not a dead one")
+
+  // PAST THE THRESHOLD it is a phantom: nothing has retired it and nothing ever will.
+  h.clock.ms = launchedAt + 13 * 60 * 60_000
+  t.tick()
+  assert.equal(t.get("t")?.bgShells[0]?.state, "stale", "an unretired shell this old is a phantom")
+  // …and it is still LISTED, not deleted: the row (and its × ) is how the human clears it.
+  assert.equal(t.get("t")?.bgShells.length, 1, "stale is a state, not a removal")
+})
