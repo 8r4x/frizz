@@ -215,8 +215,13 @@ export interface ClaudeResultEvent {
    * control-initialize `models` capability list mentions it. Keyed rather than flattened because a
    * session that dispatched sub-agents bills several models at once and the windows differ — the main
    * thread's row is the one that describes the main thread's context. The alias matters as much as the
-   * model does: `claude-opus-5[1m]` reports 1_000_000 where plain `claude-opus-5` reports 200_000,
-   * which is precisely why a hardcoded per-model table would be wrong rather than merely stale.
+   * model does: `claude-opus-5[1m]` reports 1_000_000 where plain `claude-opus-5` MAY report either
+   * 1_000_000 or 200_000 — the window is granted by the SUBSCRIPTION, not by the alias alone. Measured
+   * 2026-08-18 on the maintainer's account: bare `opus` and bare `sonnet` both report 1_000_000 (so the
+   * `[1m]` suffix changes nothing there), while issue #19 reports a bare alias landing on 200_000 for a
+   * different subscription tier. So the same alias names two different windows on two accounts, which is
+   * precisely why a hardcoded per-model table would be wrong rather than merely stale — reading it off
+   * `modelUsage` per session is the only correct source.
    * Optional/bounded — informational, and a build that stops reporting it must cost the readout, never
    * the session.
    */
