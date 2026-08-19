@@ -2097,10 +2097,24 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // whole grammar in one message — a better teacher than a correction aimed at one line.
       if (park.forMs === null && !nameless) continue
 
+      // FINISHED IS NOT THE SAME AS MISSING, and conflating them is what drove the worst churn observed.
+      // `read-the-file-read-up` wrote 284 awaiting fences: it parked on a build, the build FINISHED, and
+      // frizz answered "NOT RUNNING" — which reads as "your fence is broken", so the worker relaunched
+      // instead of reading the output it was waiting for, and went round again. Frizz knows the
+      // difference (the fold retires a shell with its finish instant), so it should say which.
+      const finishedHandles = new Set<string>()
+      for (const sh of tele.retiredShells ?? []) {
+        for (const h of [sh.taskId, sh.id, sh.label]) if (h) finishedHandles.add(h)
+      }
+      const finishedItem = (i: { value: string }) => finishedHandles.has(i.value)
       const status = park.items.map((i) => {
         const gone = dead.some((d) => d.kind === i.kind && d.value === i.value)
-        return `- \`${i.kind}: ${i.value}\` — ${gone ? "NOT RUNNING" : "still running"}`
+        const note = !gone ? "still running" : finishedItem(i) ? "FINISHED — its result is waiting for you" : "NOT RUNNING (nothing by that name)"
+        return `- \`${i.kind}: ${i.value}\` — ${note}`
       })
+      // When EVERY dead name simply finished, the news is not "your fence is wrong" — it is "the thing
+      // you were waiting for is done". Different fact, different next action.
+      const allFinished = dead.length > 0 && dead.every(finishedItem)
       const retired = retiredAwaitingKindsIn(tele.lastFence.body ?? "")
       const head = retired.length > 0
         ? [
@@ -2150,6 +2164,17 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           "Re-park if they are genuinely still going — there is no limit on that, and a long job is not a",
           "failure. If something is finished, read its result. If nothing is left, end in ```done or ask a",
           "```question.",
+        ].join("\n")
+        : allFinished
+        ? [
+          `✅ ${dead.length === 1 ? "The work you parked on has FINISHED" : "Everything you parked on has FINISHED"}, so the park is over and your thread is back in the queue.`,
+          "",
+          ...status,
+          "",
+          "READ ITS OUTPUT AND CARRY ON. This is not a broken fence and there is nothing to fix: the wait",
+          "you declared simply ended. Do NOT relaunch the same work — its result is already on disk.",
+          "",
+          "Then park on whatever comes next, or end in ```done or a ```question if nothing is left.",
         ].join("\n")
         : [
           `${PARK_CORRECTION_NAMES_LEAD}${dead.length === 1 ? "something that is" : "things that are"} not running, so it is not a park and your thread stayed in the queue.`,

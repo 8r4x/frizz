@@ -153,7 +153,7 @@ test("own background work does both — it cards AND it leaves the queue", () =>
 // blocking call that starved its own notification, a timer written in the past. Each one left a thread
 // looking parked forever, and frizz said nothing.
 
-function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; restedAt?: string; body?: string } = {}) {
+function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; restedAt?: string; body?: string; retired?: any[] } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-park-"))
   const storage = createStorage(join(dir, "ui.db"))
   storage.setSetting("signoffNudge", "off") // isolate SOURCE 12 from the nudge
@@ -176,6 +176,7 @@ function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; restedAt
         lastActivityAt: restedAt,
         subAgents: [],
         bgShells: opts.shells ?? [],
+        retiredShells: opts.retired ?? [],
         pendingQuestion: false,
         permPrompt: false,
         lastFence: { kind: "awaiting", body: opts.body ?? "", hints },
@@ -481,5 +482,41 @@ test("a correction for a rest the worker has already moved past is not delivered
       .run("park:dead:2020-01-01T00:00:00.000Z", row.fence_id)
     await h.s.tick()
     assert.equal(h.sent.length, 1, "a stale rest's correction is superseded, not sent")
+  } finally { h.close() }
+})
+
+// FINISHED IS NOT MISSING, and the difference is the whole message.
+//
+// `read-the-file-read-up` wrote 284 awaiting fences. Each one parked on a build; the build FINISHED; and
+// frizz answered "NOT RUNNING", which reads as "your fence is broken" — so the worker relaunched the work
+// instead of reading the output it had been waiting for, and went round again. Frizz has always known the
+// difference: the fold retires a shell with its finish instant.
+test("a park whose work simply FINISHED is told to read the result, not that its fence is wrong", async () => {
+  const h = parkHarness([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "2h" }], {
+    shells: [],
+    retired: [{ id: "toolu_x", taskId: "bzvtnt3ig", label: "the suite", status: "completed", finishedAt: AT }],
+  })
+  try {
+    await h.s.tick()
+    const rows = h.queued()
+    assert.equal(rows.length, 1, "the park is still over — the thread must come back")
+    assert.match(rows[0].fence_id, /^park:dead:/, "same cause; only the wording changes")
+    assert.match(rows[0].message, /has FINISHED/)
+    assert.match(rows[0].message, /its result is waiting for you/)
+    // THE ANTI-CHURN INSTRUCTION, which is the point of the whole distinction.
+    assert.match(rows[0].message, /Do NOT relaunch the same work/)
+    // …and it must NOT read as a broken fence, or the worker fixes something that was never wrong.
+    assert.doesNotMatch(rows[0].message, /not running, so it is not a park/)
+  } finally { h.close() }
+})
+
+test("a park naming something that never existed still reads as a wrong fence", async () => {
+  const h = parkHarness([{ kind: "shell", value: "bGHOST" }, { kind: "for", value: "2h" }], { shells: [] })
+  try {
+    await h.s.tick()
+    const msg = h.queued()[0].message
+    assert.match(msg, /nothing by that name/, "an id matching nothing is a typo, not a finished job")
+    assert.match(msg, /mcp__frizz__activity/, "…so it is pointed at the ids it actually has")
+    assert.doesNotMatch(msg, /has FINISHED/)
   } finally { h.close() }
 })
