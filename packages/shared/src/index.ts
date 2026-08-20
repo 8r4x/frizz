@@ -2287,6 +2287,26 @@ export function humanGapNote(nowMs: number, lastAssistantAt?: string | null): st
   return `⏱ Frizz: the message above arrived ${formatElapsed(nowMs - since)} after your last one. It is now ${stamp}.`
 }
 
+// PRODUCER AND STRIPPER LIVE TOGETHER, for the reason the wake token's pair does — except this one is
+// worse if it drifts, because the text it rides on is the HUMAN'S OWN. The router appends the note only
+// to the copy handed to the worker and leaves the bubble and the delivery ledger untouched; but the chat
+// does not read either of those. It reads the worker's TRANSCRIPT, where the note is simply part of the
+// user record — so it rendered inside the operator's own right-justified bubble, over their own words,
+// as if they had typed it (reported 2026-08-20: "can we make these invisible? they're showing up in my
+// own user messages"). Stripping it is a DISPLAY projection only: the stored text keeps the note, which
+// is the whole point of sending it.
+//
+// Anchored to end-of-text on a line of its own, and required to match the note's FULL shape down to the
+// wall clock, so a message that merely quotes one — a bug report pasting the line, this comment's own
+// wording — is left in the bubble intact. The round-trip test over humanGapNote is what keeps a wording
+// change on the producer from silently putting the note back in front of the human.
+const HUMAN_GAP_NOTE_TAIL = /\n+⏱ Frizz: the message above arrived [^\n]* after your last one\. It is now \d{4}-\d{2}-\d{2} \d{2}:\d{2}\.[ \t]*$/
+
+/** Display projection: the human's message without the clock note frizz appended for the worker. */
+export function stripHumanGapNote(text: string): string {
+  return text.replace(HUMAN_GAP_NOTE_TAIL, "")
+}
+
 export function wakeDeliveryToken(id: string): string {
   return `<!-- frizz-wake:${id} -->`
 }

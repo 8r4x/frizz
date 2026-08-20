@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { projectRetiredBackgroundOps, projectTranscriptPeerNames } from "./transcript.ts"
 import { relayMessage } from "./completion-relay.ts"
 import type { TranscriptMessage } from "@frizz/shared"
-import { DISPATCH_TASK_BANNER_MARKER, formatGithubWakeSteer, GITHUB_DISPATCH_UI_BOUNDARY, PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_RETIRED_LEAD, parseRecurringPrompt, restPromptMessage, wakeDeliveryToken, type GithubWakeSteer } from "@frizz/shared"
+import { DISPATCH_TASK_BANNER_MARKER, formatGithubWakeSteer, GITHUB_DISPATCH_UI_BOUNDARY, humanGapNote, PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_RETIRED_LEAD, parseRecurringPrompt, restPromptMessage, wakeDeliveryToken, type GithubWakeSteer } from "@frizz/shared"
 import {
   createTranscriptFold,
   frizzDispatchDisplayText,
@@ -91,6 +91,26 @@ test("Claude wake delivery hides the wake token in the bubble while the stored t
   assert.equal(wake.wake, true)
   // …and a limit wake is not a GitHub wake, so there is no structured steer to hand over.
   assert.equal(wake.wakeSteer, undefined)
+})
+
+// The router appends the clock note to the WORKER's copy only, and says so — but the chat renders the
+// worker's TRANSCRIPT, not the delivery ledger the router left untouched, so the note landed inside the
+// operator's own right-justified bubble underneath their own words, unattributed and un-asked-for
+// ("can we make these invisible? they're showing up in my own user messages", 2026-08-20). It is hidden
+// the way the wake token is hidden: a display projection, with the stored text keeping every byte.
+test("the gap note frizz appends to a human follow-up stays out of the human's own bubble", () => {
+  const note = humanGapNote(Date.parse("2026-08-20T07:17:00.000Z"), "2026-08-19T17:00:00.000Z")!
+  const delivered = `can we make these invisible?\n\n${note}`
+  const raw = [
+    JSON.stringify({ type: "user", timestamp: "2026-08-19T16:00:00.000Z", message: { content: "orientation\n\nTASK:\nthe original task" } }),
+    JSON.stringify({ type: "assistant", timestamp: "2026-08-19T17:00:00.000Z", message: { id: "m1", content: [{ type: "text", text: "done" }] } }),
+    JSON.stringify({ type: "user", timestamp: "2026-08-20T07:17:00.000Z", message: { content: delivered } }),
+  ].join("\n")
+  const follow = parseTranscript(raw).at(-1)!
+  assert.equal(follow.text, delivered, "the worker keeps the clock it has no other way to read")
+  assert.equal(follow.displayText, "can we make these invisible?")
+  // The human WROTE this turn — hiding frizz's line must not turn their message into a frizz card.
+  assert.equal(follow.wake, undefined)
 })
 
 // The chat's divider must not be re-derived from prose in the browser: a tab keeps its bundle across a

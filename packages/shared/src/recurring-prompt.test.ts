@@ -3,7 +3,7 @@
 // wording delivered and the wording recognized have to agree, and nothing else in the system checks it.
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { ALLDONE_SENTINEL, DEFAULT_RECURRING_PROMPT, SetOwnThreadRecurringPromptInput, SetThreadRecurringPromptInput, saysAllDone, restPromptMessage, schedulePromptMessage, formatIntervalLabel, parseRecurringPrompt , humanGapNote, formatElapsed } from "./index.ts"
+import { ALLDONE_SENTINEL, DEFAULT_RECURRING_PROMPT, SetOwnThreadRecurringPromptInput, SetThreadRecurringPromptInput, saysAllDone, restPromptMessage, schedulePromptMessage, formatIntervalLabel, parseRecurringPrompt , humanGapNote, stripHumanGapNote, formatElapsed } from "./index.ts"
 
 // THE DEFAULT TEXT IS THE ONE GOAL MOST THREADS EVER RUN: the footer panel prefills an unarmed thread's
 // with it, so almost nobody types their own. Its BIAS is therefore a product decision rather than a
@@ -227,6 +227,30 @@ test("a human reply after a long gap carries the gap; a fast one carries nothing
   // elapsed time.
   assert.equal(humanGapNote(at(999), undefined), undefined)
   assert.equal(humanGapNote(at(999), "not-a-date"), undefined)
+})
+
+// The note is appended to the WORKER's copy only, but the chat renders the worker's transcript — so the
+// display projection is the only thing standing between frizz's clock line and the operator's own bubble
+// ("can we make these invisible? they're showing up in my own user messages", 2026-08-20). Producer and
+// stripper are pinned to each other here: a wording change on one that the other does not follow fails
+// this test instead of silently reappearing over the human's words.
+test("the gap note is stripped back off for display, and only when frizz wrote it", () => {
+  const spoke = "2026-08-19T06:00:00.000Z"
+  const note = humanGapNote(Date.parse(spoke) + 192 * 60_000, spoke)
+  assert.ok(note)
+
+  // ROUND TRIP: exactly how router.ts appends it, gone without a trace.
+  assert.equal(stripHumanGapNote(`ship it\n\n${note}`), "ship it")
+  // A note is the LAST thing on the record, so a multi-line message keeps every line of its own.
+  assert.equal(stripHumanGapNote(`one\n\ntwo\n\n${note}`), "one\n\ntwo")
+
+  // AND NOTHING ELSE. The text this rides on is the human's own, so prose that merely quotes or
+  // describes the note stays in the bubble intact — including the report that produced this fix.
+  const quoting = `why does "${note}" show up in my own messages?`
+  assert.equal(stripHumanGapNote(quoting), quoting)
+  const truncated = "ship it\n\n⏱ Frizz: the message above arrived 3h12m after your last one."
+  assert.equal(stripHumanGapNote(truncated), truncated)
+  assert.equal(stripHumanGapNote("ship it"), "ship it")
 })
 
 test("formatElapsed reads in the units a human would say it in", () => {

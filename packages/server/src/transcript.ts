@@ -13,6 +13,7 @@ import {
   parseAgentMessage,
   parseGithubWakeSteer,
   splitWakeDeliveries,
+  stripHumanGapNote,
   stripWakeDeliveryToken,
   type GithubWakeSteer,
   type TranscriptMessage,
@@ -187,7 +188,10 @@ export function frizzDispatchDisplayText(text: string): string | undefined {
 //     BELOW frizz's banner, so it is peeled from the remainder, not from the raw record;
 //   • the scheduler's wake-delivery token, which rides ANY turn a wake lands on. That's the case the
 //     old `out.length === 0` gate missed entirely: a wake is by definition a later turn, so its token
-//     reached the pre-wrap user bubble and rendered as literal `<!-- frizz-wake:… -->`.
+//     reached the pre-wrap user bubble and rendered as literal `<!-- frizz-wake:… -->`;
+//   • the clock note frizz appends to a human follow-up after a long gap. The router adds it to the
+//     worker's copy ONLY — but the chat renders this transcript, not the ledger the router wrote, so the
+//     note showed up inside the operator's own bubble underneath their own words.
 // `text` is never narrowed — the outbox acks a delivery by finding that token in the worker's own
 // record, the queued-bubble map keys on the raw enqueued content, and persistence/search keep the full
 // machine-facing prompt.
@@ -198,6 +202,7 @@ function userDisplayText(text: string, first: boolean): string | undefined {
     projected = githubDispatchDisplayText(projected) ?? projected
   }
   projected = stripWakeDeliveryToken(projected)
+  projected = stripHumanGapNote(projected)
   return projected === text ? undefined : projected
 }
 
