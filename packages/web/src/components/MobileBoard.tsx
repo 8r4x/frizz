@@ -7,7 +7,6 @@ import { asThreads, useBoard } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
 import {
   displayTitle,
-  isActivelyRunning,
   lastActiveLabelAt,
   needsAction,
   sectionThreads,
@@ -259,10 +258,14 @@ function MobileThreadRow({
   const snoozePreset = useSnapshot(prefs).snoozePreset
   const now = useNowMs()
   const kind = sessionIndicatorKind(t)
-  const running = isActivelyRunning(t)
   const at = lastActiveLabelAt(t)
   // A rest time dates a HANDOFF, so a row that is still going has nothing to date — the rail's own rule.
-  const age = running ? null : ageSpan(at, now)
+  // "Still going" is the MARK's answer, not `isActivelyRunning`'s. The two part company on one shape: a
+  // thread parked on a PR whose CI has already settled counts as live work to the server flag behind
+  // `isActivelyRunning` (it earns the resting card), while nothing about it is actually moving — so it
+  // reads […] here, and a row that reads at-rest has to carry the rest time that goes with it.
+  const inMotion = t.runtime === "running" || t.runtime === "spawning" || kind === "working" || kind === "background"
+  const age = inMotion ? null : ageSpan(at, now)
   const gloss = t.lastFence?.kind === "awaiting" ? hintGloss(t.lastFence.hints) : null
   const subs = visibleChildOps(t.subAgents ?? [], "rail")
   return (

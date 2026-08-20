@@ -29,6 +29,11 @@ function thread(over: Partial<ThreadView> = {}): ThreadView {
   }
 }
 
+/** A running background shell — the plain "something it launched is still going" fixture. */
+function shell(over: Partial<NonNullable<ThreadView["bgShells"]>[number]> = {}): NonNullable<ThreadView["bgShells"]>[number] {
+  return { label: "vite dev", startedAt: "2026-08-14T00:00:00.000Z", state: "running", id: "s1", ...over }
+}
+
 // ---- needsAction: the queue definition ----
 
 test("needsAction: needs-human AT REST cards — but only with a SESSION (humanBlocked derived from status)", () => {
@@ -776,7 +781,7 @@ test("Codex automatic titles follow runtime and never expose the raw initial-pro
 // existed when the reading was written: a declared `watch:` park, and a pr-watch park whose CI is
 // still running.
 test("sessionIndicatorKind: a declared wait draws the quiet dot in the ACTIVE band, not a spinner", () => {
-  const awaiting = thread({ kind: "session", runtime: "turn-idle", needsYou: false, awaitingBackground: true })
+  const awaiting = thread({ kind: "session", runtime: "turn-idle", needsYou: false, awaitingBackground: true, bgShells: [shell()] })
   assert.equal(sessionIndicatorKind(awaiting), "background", "its own mark — not the spinner, not the at-rest ellipsis")
   assert.deepEqual(partitionActive([awaiting]).running.map((t) => t.id), [awaiting.id], "and it bands ACTIVE")
   assert.equal(queued(awaiting), false, "…so it is not in the queue")
@@ -784,7 +789,7 @@ test("sessionIndicatorKind: a declared wait draws the quiet dot in the ACTIVE ba
   // within seconds, so the thread is mid-flight in substance, and the spinner tells the truth. The dot
   // is for a wait on something that merely runs on.
   const withChild = thread({
-    kind: "session", runtime: "turn-idle", needsYou: false, awaitingBackground: true,
+    kind: "session", runtime: "turn-idle", needsYou: false, awaitingBackground: true, bgShells: [shell()],
     subAgents: [{ label: "reviewer", startedAt: "2026-08-14T00:00:00.000Z", state: "running", id: "a1" }],
   })
   assert.equal(sessionIndicatorKind(withChild), "working")
@@ -793,8 +798,40 @@ test("sessionIndicatorKind: a declared wait draws the quiet dot in the ACTIVE ba
   // The MARK deliberately does not: the dot says "something it launched is still going", which is still
   // true of a thread whose second shell is running, and that reading predates this change (2026-08-04,
   // when a shell-only rest started carding while keeping its dot).
-  const requeued = thread({ kind: "session", runtime: "turn-idle", needsYou: true, awaitingBackground: true })
+  const requeued = thread({ kind: "session", runtime: "turn-idle", needsYou: true, awaitingBackground: true, bgShells: [shell()] })
   assert.equal(queued(requeued), true)
   assert.deepEqual(partitionActive([requeued]).running, [], "it leaves the Active band for the queue's own")
   assert.equal(sessionIndicatorKind(requeued), "background", "…while the dot keeps stating the live work")
+})
+
+// THE DOT NEEDS SOMETHING TO ACTUALLY BE MOVING. A `pr-watch:` rest earns `awaitingBackground` too (it
+// carries the resting card and that card's snooze), but unlike a shell its subject can be ALREADY DONE:
+// a green PR is a handoff sitting on the human's merge, not work in flight, and it wore the same live
+// blue dot as a running dev server (maintainer 2026-08-19: "this task should not be listed as in the
+// actively running rail if it's only awaiting a PR with green CI").
+test("sessionIndicatorKind: a watched PR that has SETTLED reads at-rest; one still running keeps the dot", () => {
+  const watching = (checks: "running" | "passing" | "failing" | "none", over: Partial<ThreadView> = {}) => thread({
+    kind: "session", runtime: "turn-idle", awaitingBackground: true,
+    watches: [{
+      id: "github:t:o/r#1", kind: "github", target: "o/r#1", state: "armed", createdAt: "2026-08-19T00:00:00.000Z",
+      github: { checks, running: checks === "running" ? 1 : 0, passed: 10, failed: 0, failing: [], merge: "mergeable", state: "open", polledAt: "2026-08-19T00:00:00.000Z" },
+    }],
+    ...over,
+  })
+  // CI green, so the server has already banded it back into the queue — and the mark now agrees with the
+  // band instead of contradicting it.
+  const green = watching("passing", { needsYou: true })
+  assert.equal(sessionIndicatorKind(green), "rest", "nothing is running: the ordinary at-rest ellipsis")
+  assert.equal(queued(green), true, "…and it is a queue handoff, which is what the rest mark says")
+  // Red is settled too — the wait is over either way, and the human is the one who acts next.
+  assert.equal(sessionIndicatorKind(watching("failing", { needsYou: true })), "rest")
+  // A PR with NO checks at all never had CI to wait for.
+  assert.equal(sessionIndicatorKind(watching("none", { needsYou: true })), "rest")
+  // CI STILL RUNNING is the case the dot exists for, and the server excuses it from the queue for the
+  // same reason (board.heldByRunningChecks) — so the row sits in the Active band, marked as alive.
+  const live = watching("running", { needsYou: false })
+  assert.equal(sessionIndicatorKind(live), "background", "something IS moving")
+  assert.deepEqual(partitionActive([live]).running.map((t) => t.id), [live.id], "and it bands ACTIVE")
+  // A settled watcher beside a live shell still has motion behind it — the shell's.
+  assert.equal(sessionIndicatorKind(watching("passing", { needsYou: true, bgShells: [shell()] })), "background")
 })

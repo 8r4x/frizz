@@ -444,18 +444,18 @@ export function isActivelyRunning(t: ThreadView): boolean {
 // Still load-bearing for the EXITED parent whose children keep reading "running" until their transcript
 // goes stale. Without this it would resolve to "working" and hide the [!] stall mark behind a spinner
 // for a pane that is already dead. (The other case it used to cover — a shell-only rest, which queues
-// again since 2026-08-04 — now has its own mark; see restingOnBackgroundShell, which is checked first
+// again since 2026-08-04 — now has its own mark; see restingOnBackgroundWork, which is checked first
 // and gives it the dot rather than this ellipsis.)
 function restedQueueHandoff(t: ThreadView): boolean {
   return t.needsYou === true && atRest(t)
 }
 
-// RESTING ON A BACKGROUND SHELL, AND NOTHING ELSE: the thread's own turn is OVER (turn-idle) and the
-// only thing it still has out is a launched background shell/Monitor. That earns its own mark — the
-// pulsing blue dot in the rail's rounded box (maintainer 2026-08-01: "if a thread has rested but it
-// still has background work going, like background shells, we should keep it in the actively running
-// rail, but we should stop the spinner and put a pulsing blue dot in the middle of the rounded circle
-// shape").
+// RESTING ON BACKGROUND WORK, AND NOTHING ELSE: the thread's own turn is OVER (turn-idle) and the only
+// thing it still has out is something it launched or parked on — a background shell/Monitor, or (since
+// 2026-08-13) a PR watcher. That earns its own mark — the pulsing blue dot in the rail's rounded box
+// (maintainer 2026-08-01: "if a thread has rested but it still has background work going, like
+// background shells, we should keep it in the actively running rail, but we should stop the spinner and
+// put a pulsing blue dot in the middle of the rounded circle shape").
 //
 // The MARK outlived the band. Since 2026-08-04 such a thread carries a queue card again (maintainer:
 // "if a thread has rested and the only thing remaining is background shells, we should put it into the
@@ -476,8 +476,41 @@ function restedQueueHandoff(t: ThreadView): boolean {
 // Gated on `turn-idle`, never `exited`: a dead pane cannot be waiting on anything, and that parent must
 // keep its [!] stall mark rather than advertise live work behind a dot. `awaitingBackground` is server
 // truth and already excludes a fenced thread — see hasLiveOps for why a raw `bgShells` read would be wrong.
-function restingOnBackgroundShell(t: ThreadView): boolean {
+//
+// This is only HALF the dot's gate: whether any of that work is still MOVING is the next question, and
+// `restingOnLiveBackgroundWork` below answers it. The broad reading survives here because the `working`
+// branch needs it — a thread at rest behind its own declared work must never spin, moving or not.
+function restingOnBackgroundWork(t: ThreadView): boolean {
   return t.runtime === "turn-idle" && t.awaitingBackground === true && !hasLiveSubAgents(t)
+}
+
+// …AND IS ANY OF IT ACTUALLY MOVING? The dot says "alive, not moving"; it must never say that about a
+// thread where nothing is running at all. A PR watcher joined `awaitingBackground` on 2026-08-13 (it
+// earns the resting card and that card's snooze), and it brought a shape a shell never has: a wait whose
+// subject has ALREADY FINISHED. A green PR is not background work in flight — it is a handoff sitting on
+// the human's merge, and the row wore the same live blue dot as a running dev server (maintainer
+// 2026-08-19, on a `pr-watch:` rest whose card read "10 successful · no conflicts": "this task should not
+// be listed as in the actively running rail if it's only awaiting a PR with green CI").
+//
+// So the dot needs motion, and this is the SAME rule the band already draws server-side — CI still
+// running holds the thread out of the queue (board.heldByRunningChecks, maintainer 2026-08-14: "only if
+// CI has failed or completed successfully should it show up back in the queue"). The mark simply never
+// got it, so the two disagreed about one thread: banded as a handoff, marked as live work.
+//
+// ANY watched PR still running counts, where the band's excusal needs ALL of them. The two questions are
+// different: the band asks "is there anything for the human to do yet" (one PR going green is), the mark
+// asks "is anything still in motion" (the other one is). A settled watcher — passing, failing, no checks
+// at all, closed, or never polled — is not motion, and falls through to the at-rest ellipsis.
+//
+// Reading raw `bgShells` here is safe where hasLiveOps could not: this is already gated on the server's
+// own `awaitingBackground` verdict, so a stale shell cannot pull a thread into the state — it only picks
+// which mark a thread the server already called at-rest-with-work wears.
+function restingOnLiveBackgroundWork(t: ThreadView): boolean {
+  if (!restingOnBackgroundWork(t)) return false
+  if ((t.bgShells ?? []).some((s) => s.state === "running")) return true
+  return (t.watches ?? []).some(
+    (w) => w.kind === "github" && w.state === "armed" && w.github?.checks === "running" && w.github.state === "open",
+  )
 }
 
 // One status-priority decision shared by the sidebar renderer and its tests. The order is important:
@@ -517,7 +550,7 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
   // thread falls through to the at-rest ellipsis below no matter how many sub-agents it still has out —
   // see restedQueueHandoff. A shell-only rest is carved out because it is never motion at all; the dot
   // below is its mark, and without this clause an event-snoozed one would still spin.
-  if (activelyRunning && !restedQueueHandoff(t) && !restingOnBackgroundShell(t)) return "working"
+  if (activelyRunning && !restedQueueHandoff(t) && !restingOnBackgroundWork(t)) return "working"
 
   if (isHeld(t)) return "held"
   if (t.lastFence?.kind === "done" && atRest(t)) return "done"
@@ -527,7 +560,7 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
   // launched is still going". In practice neither can collide with this at all, since
   // deriveAwaitingBackground drops any fenced thread; the ordering states the intent rather than
   // resolving a live conflict.
-  if (restingOnBackgroundShell(t)) return "background"
+  if (restingOnLiveBackgroundWork(t)) return "background"
   // STALLED = this thread's PROCESS IS GONE with the work unfinished. That is exactly `canRetry`: an
   // OWNED (non-foreign) session row whose runtime is `exited`. It deliberately does NOT consult the
   // server's `crashed` bit (= exited AND turn-in-flight/live-background-work). `crashed` says only HOW
