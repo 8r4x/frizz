@@ -36,8 +36,22 @@ test("every awaiting-fence body renders through the block markdown sheet", () =>
   // match would be satisfied by that sentence rather than by the code.
   const code = card.replace(/^\s*\/\/.*$/gm, "")
   assert.doesNotMatch(code, /md-inline/, "a fence body is block markdown — md-inline gives its lists no markers")
-  // The settled body carries the muted tone on a `card-md` WRAPPER, because `.card-md .md-body` inherits
-  // colour by design and would otherwise outrank a utility class on the element itself.
-  assert.match(code, /className="card-md text-muted"/, "the settled body's tone rides a wrapper")
   assert.match(code, /if \(body\.trim\(\) === ""\) return null/, "a fence that is pure frontmatter has no prose to leave behind")
+})
+
+// A SETTLED fence's body is ordinary prose: plain `md-body`, no muted tone and no card scale. Both were
+// leftovers from the card frame this branch exists to strip, and they survived it riding a `card-md
+// text-muted` wrapper — so free-standing the body drew a 13px grey paragraph between two 14px white ones
+// with no chrome to explain the difference, and read as broken (maintainer 2026-08-20: "still seeing this
+// fucking light gray lines"). "Settled" retracts the claim that a wait is still open — the frame, the
+// hourglass, the item table, the park button. It was never a reason to whisper the message.
+test("a settled awaiting fence's prose reads like every other thing the worker said", () => {
+  const card = source.match(/export function FenceCard\([\s\S]*?\n}/)?.[0]
+  assert.ok(card, "FenceCard must exist")
+  // The stale branch alone — the card branches below it legitimately mute their own machinery rows.
+  const settled = card.match(/if \(stale === true && fenceKind === "awaiting"\) \{[\s\S]*?\n {2}\}/)?.[0]
+  assert.ok(settled, "the settled-fence branch must exist")
+  const code = settled.replace(/^\s*\/\/.*$/gm, "")
+  assert.doesNotMatch(code, /card-md|text-muted|text-fg\//, "a settled body wears no dimming and no card scale")
+  assert.match(code, /className=\{`md-body\$\{wrap \? ` \$\{QUEUE_WRAP\}` : ""\}`\}/, "it renders through the same plain block sheet ProseHtml uses")
 })

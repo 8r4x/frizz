@@ -3566,17 +3566,21 @@ export function FenceCard({ fenceKind, body, hints, wrap, stale }: { fenceKind: 
     // which is ordinary Markdown it meant to be read as prose. A fence that is pure frontmatter has no
     // prose, so a settled one renders NOTHING: the wait is over, and it was never a message.
     if (body.trim() === "") return null
-    // AND IT IS RENDERED AS THE MARKDOWN IT IS. Dropping the card frame took `md-body` with it, and a
-    // handoff's bullet list is the shape this prose most often takes — so three list items came out as
-    // three flat grey lines with no markers and no indent (Tailwind's preflight resets `ul`), which reads
-    // as a run of labels rather than as a list (maintainer 2026-08-19: "renders as light gray labels?").
-    // `card-md` is the same wrapper the cards use to pull markdown to 13px and let the colour inherit —
-    // `.card-md .md-body` sets `color: inherit`, which is why the muted tone rides the wrapper here.
-    return (
-      <div className="card-md text-muted">
-        <div className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={doneInner} />
-      </div>
-    )
+    // AND IT IS RENDERED AS THE ORDINARY PROSE IT IS — plain `md-body`, exactly what ProseHtml gives an
+    // unfenced paragraph: 14px, full-strength `fg`, block markdown so a handoff's bullet list keeps its
+    // markers (Tailwind's preflight resets `ul`, which is how three list items once came out as three
+    // flat unmarked lines — maintainer 2026-08-19: "renders as light gray labels?").
+    //
+    // NO MUTED TONE, AND NO CARD SCALE. The dimming is a leftover from when this body lived inside a card
+    // frame, and it survived the frame's removal riding a `card-md text-muted` wrapper (`.card-md
+    // .md-body` inherits colour, so the tone could not sit on the element itself). Free-standing it has
+    // nothing to be quiet relative to: the reader sees a bare 13px grey paragraph between two 14px white
+    // ones, with no chrome to explain the difference, and reads it as broken (maintainer 2026-08-20:
+    // "still seeing this fucking light gray lines"). A settled fence's body is the worker's handoff prose
+    // — the same words it would have written unfenced — so it reads like every other thing the worker
+    // said. What "settled" removes is the CLAIM that a wait is open: the frame, the hourglass, the item
+    // table, the park button. It was never a reason to whisper the message.
+    return <div className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={doneInner} />
   }
   const parkAction = awaitingParkAction(hints)
   const parkTitle = parkAction?.title ?? AWAITING_FALLBACK_TITLE
