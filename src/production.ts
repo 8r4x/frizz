@@ -104,11 +104,12 @@ if (options.help) {
   console.log(
     `Frizz production launcher
 
-Usage: npx ${PACKAGE_NAME} [options] [repository]
-       npx ${PACKAGE_NAME} up            start the server plus its public tunnel
+Usage: npx ${PACKAGE_NAME} [options]
 
-Runs the npm-resolved immutable Frizz package, then opens it in your default browser. Use frizz-dev
-only for a source checkout.
+Run it in the directory you want to work in. One server serves EVERY project on this machine,
+each at its own /project/<name> URL, so a second run joins the one already going. Runs the
+npm-resolved immutable Frizz package, then opens it in your default browser. Use frizz-dev only
+for a source checkout.
 
 Options:
   --app                  use the legacy dedicated app window instead of a browser tab
@@ -117,8 +118,8 @@ Options:
   --host [address]       serve on a network address instead of loopback (bare --host means 0.0.0.0)
   --allowed-host <name>  with --host, also accept this DNS name as the board's address (repeatable)
   --public-origin <url>  serve behind a proxy/tunnel reachable at this exact origin
-  --cloud                what the up command sets: serve at the saved public hostname and run the
-                         tunnel as a supervised child
+  --cloud                serve at the saved hostname and run its Cloudflare tunnel as a child
+                         process; asked once, then remembered
   --link                 print a fresh single-use access link for the running board
   --debug                stream the full event feed to the terminal instead of the compact readout
   -h, --help             show this help
@@ -172,7 +173,7 @@ const workspace: Workspace = (() => {
   // whatever directory it is handed — so `frizz` in $HOME minted a project id inside Frizz's own
   // `~/.frizz` state root, the failure frizz-dev was fixed for in 95d81bd and this file was not.
   // A repository still opens as itself and is still adopted on sight; see resolveLaunchIntent.
-  const intent = resolveLaunchIntent(options.repoPath);
+  const intent = resolveLaunchIntent();
   if (intent.kind === "empty")
     throw new Error(
       intent.reason === "home"

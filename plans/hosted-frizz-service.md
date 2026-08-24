@@ -1,7 +1,15 @@
 # Hosted Frizz: `<name>.frizz.sh` as a paid service
 
-Status: THINKING. No code written for this. Owner effort: frizz worker thread (remote-access).
-Prerequisite already shipped: `--public-origin` (`ab88796`, `a730613`) — the self-host tier works today.
+Status: **NOT BUILDING** (decided 2026-08-24). No code was written for it. Owner effort: frizz worker thread (remote-access).
+
+The analysis below stands — the Stage 2 mechanism is sound, and it is recorded so nobody has to derive it again. What killed the product is not the mechanism:
+
+- **It contradicts what Frizz is.** "Local only. No cloud, no account, no telemetry" is a headline feature. Hosted subdomains need accounts, a registry, revocation and an operated service.
+- **It buys an abuse surface with no control.** Every board is shell access. Reports about `<someone>.frizz.sh` arrive at the registrant, who can see nothing and fix nothing — the design deliberately keeps us off the data path.
+- **The terms question was never resolved.** Creating tunnels on behalf of other people is what §2.2.1(j) covers, and settling it needs a conversation with Cloudflare.
+- **The value was thin.** It saves a user four `cloudflared` commands against a domain they already own.
+
+What replaces it: [docs/remote-access.md](../docs/remote-access.md), a guide per method. The primitive both paths always depended on — `--public-origin` plus single-use access links — shipped and is unaffected.
 
 ## Why
 

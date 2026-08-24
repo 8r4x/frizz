@@ -24,17 +24,9 @@ import { fileURLToPath } from "node:url";
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
 const PORT = Number(process.env.VERIFY_PORT ?? 47311);
-/**
- * `up` and `--cloud` are two spellings of one launch — the subcommand sets `options.cloud` and nothing
- * else. Run this script both ways (VERIFY_SPELLING=cloud) so the alias cannot quietly drift away from
- * the flag it desugars to; the durable re-exec re-enters through the FLAG, so a divergence there would
- * only ever show up after an update.
- */
-const SPELLING = process.env.VERIFY_SPELLING ?? "up";
-const LAUNCH_ARGS =
-  SPELLING === "cloud"
-    ? ["--port", String(PORT), "--dev", "--no-app", "--cloud"]
-    : ["up", "--port", String(PORT), "--dev", "--no-app"];
+// There is ONE way to launch: the bare command with flags. `up` was a second spelling of this and is
+// gone; `--cloud` is what it always set, and what the durable re-exec re-enters through.
+const LAUNCH_ARGS = ["--port", String(PORT), "--dev", "--no-app", "--cloud"];
 const HOSTNAME = "e2e.frizz.sh";
 const ORIGIN = `https://${HOSTNAME}`;
 
@@ -219,7 +211,7 @@ try {
 
   // 6. The tunnel was spawned as a child, with the tunnel name from cloud.json.
   const argv = existsSync(argvLog) ? readFileSync(argvLog, "utf8").trim() : "";
-  check("up spawned cloudflared itself", argv.length > 0, argv);
+  check("the launch spawned cloudflared itself", argv.length > 0, argv);
   check(
     "it runs the tunnel named in cloud.json",
     /(^|\s)run\s+frizz-e2e$/.test(argv) && argv.startsWith("tunnel "),
@@ -250,5 +242,5 @@ try {
 }
 
 const failed = checks.filter((c) => !c.ok);
-console.log(`\n${checks.length - failed.length}/${checks.length} checks passed (spelling: ${SPELLING})`);
+console.log(`\n${checks.length - failed.length}/${checks.length} checks passed`);
 process.exit(failed.length === 0 ? 0 : 1);

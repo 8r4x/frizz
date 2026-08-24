@@ -62,7 +62,7 @@ Frizz is a browser tab, a queue, and the agent CLIs you already pay for. It brin
 - 🐙 **GitHub integration.** Browse your repo's issues and pull requests without leaving the composer, and turn a selection of them into threads. Workers can read issues, diffs, and CI on their own.
 - 👀 **Built-in CI and PR watchers.** A worker waiting on a build or a review doesn't hand the thread back to you to be told "keep going." It watches, and picks the work back up when the run goes green or a review lands.
 - 📝 **No magic.** A thread behaves like a Claude Code session you started yourself. Frizz adds no worktrees, no branches, no dev server, no build integration, no workflow engine to fight with.
-- 🔒 **Local only.** No cloud, no account, no telemetry. The server binds `127.0.0.1` by default and its state lives in your user directory, never in your checkout.
+- 🔒 **Local only.** No cloud, no account, no telemetry. The server binds `127.0.0.1` by default and its state lives in your user directory, never in your checkout. To reach a board from a phone, put your own tunnel or proxy in front of it — see [Remote access](docs/remote-access.md).
 
 ### The queue
 
@@ -121,11 +121,12 @@ $ npx frizz --help
 
 Frizz production launcher
 
-Usage: npx frizz [options] [repository]
-       npx frizz up            start the server plus its public tunnel
+Usage: npx frizz [options]
 
-Runs the npm-resolved immutable Frizz package, then opens it in your default browser. Use frizz-dev
-only for a source checkout.
+Run it in the directory you want to work in. One server serves EVERY project on this machine,
+each at its own /project/<name> URL, so a second run joins the one already going. Runs the
+npm-resolved immutable Frizz package, then opens it in your default browser. Use frizz-dev only
+for a source checkout.
 
 Options:
   --app                  use the legacy dedicated app window instead of a browser tab
@@ -134,6 +135,8 @@ Options:
   --host [address]       serve on a network address instead of loopback (bare --host means 0.0.0.0)
   --allowed-host <name>  with --host, also accept this DNS name as the board's address (repeatable)
   --public-origin <url>  serve behind a proxy/tunnel reachable at this exact origin
+  --cloud                serve at the saved hostname and run its Cloudflare tunnel as a child
+                         process; asked once, then remembered
   --link                 print a fresh single-use access link for the running board
   --debug                stream the full event feed to the terminal instead of the compact readout
   -h, --help             show this help

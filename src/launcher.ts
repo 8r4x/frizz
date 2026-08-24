@@ -82,8 +82,6 @@ export interface CliOptions {
   link: boolean;
   /** `--cloud`: serve at the saved public hostname and run the tunnel as a supervised child. */
   cloud: boolean;
-  /** Optional Git repository to serve. Defaults to the caller's current directory. */
-  repoPath?: string;
 }
 
 export interface Workspace {
@@ -180,10 +178,11 @@ function looksLikeBindHost(value: string | undefined): boolean {
 export function durableReexecArgs(options: {
   entry: string;
   port: number;
-  root: string;
   cloud: boolean;
   publicOrigin?: string | undefined;
 }): string[] {
+  // No workspace argument: an internal launch reads its pinned project out of the environment
+  // (`projectLaunchTargetFromEnvironment`), and never consults a path at all.
   return [
     options.entry,
     "--port",
@@ -193,7 +192,6 @@ export function durableReexecArgs(options: {
       : options.publicOrigin
         ? ["--public-origin", options.publicOrigin]
         : []),
-    options.root,
   ];
 }
 
@@ -203,7 +201,6 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let rawHost: string | undefined;
   let rawPublicOrigin: string | undefined;
   const rawAllowedHosts: string[] = [];
-  let repoPath: string | undefined;
   const consumed = new Set<number>();
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index]!;
@@ -257,9 +254,19 @@ export function parseCliArgs(argv: string[]): CliOptions {
       continue;
     }
     if (arg.startsWith("-")) continue;
-    if (repoPath !== undefined)
-      throw new Error("provide at most one repository path");
-    repoPath = arg;
+    // A retired command names its replacement. `up` was sugar for `--cloud`, and anyone who has it in
+    // muscle memory or in a script is owed better than being told they passed a repository path.
+    if (arg === "up")
+      throw new Error(
+        "the up command was removed — there is one way to launch Frizz, so use --cloud instead: it serves at the saved hostname and runs its tunnel"
+      );
+    // ONE SERVER SERVES EVERY PROJECT, so "which repository" is not a question a launch has. The
+    // positional was a leftover from one-server-per-repo and it kept the wrong mental model alive:
+    // `frizz /some/repo` reads as "serve that repo", when the server it starts serves all of them.
+    // Refuse rather than ignore — someone with this in a script deserves to be told where it went.
+    throw new Error(
+      `unexpected argument: ${arg} — Frizz takes no repository path, because one server serves every project on this machine. cd into the directory you want and run it with no arguments.`
+    );
   }
   let port: number | undefined;
   if (rawPort !== undefined) {
@@ -295,7 +302,6 @@ export function parseCliArgs(argv: string[]): CliOptions {
       continue;
     }
     if (arg.startsWith("--port=") || arg.startsWith("--host=") || arg.startsWith("--allowed-host=") || arg.startsWith("--public-origin=")) continue;
-    if (!arg.startsWith("-") && arg === repoPath) continue;
     if (!known.has(arg)) throw new Error(`unknown option: ${arg}`);
   }
   if (args.has("--detach"))
@@ -318,7 +324,6 @@ export function parseCliArgs(argv: string[]): CliOptions {
     host,
     allowedHosts: normalizeAllowedHosts(rawAllowedHosts),
     ...(rawPublicOrigin === undefined ? {} : { publicOrigin: normalizePublicOrigin(rawPublicOrigin) }),
-    repoPath,
   };
 }
 
@@ -450,11 +455,12 @@ export function networkUrls(
 export function helpText(command = "frizz-dev"): string {
   return `Frizz source launcher
 
-Usage: ${command} [options] [repository]
+Usage: ${command} [options]
 
-Run from any Git repository, or pass an explicit repository path. Frizz serves a verified immutable
-artifact for that workspace, selecting or safely building one on first launch, then opens it in your
-default browser; source edits never restart the shared board.
+Run it in the directory you want to work in. One server serves EVERY project on this machine,
+each at its own /project/<name> URL, so a second run joins the one already going. Frizz serves a
+verified immutable artifact, selecting or safely building one on first launch, then opens it in
+your default browser; source edits never restart the shared board.
 
 Options:
   --app                  use the legacy dedicated app window instead of a browser tab
@@ -465,8 +471,8 @@ Options:
   --host [address]       serve on a network address instead of loopback (bare --host means 0.0.0.0)
   --allowed-host <name>  with --host, also accept this DNS name as the board's address (repeatable)
   --public-origin <url>  serve behind a proxy/tunnel reachable at this exact origin
-  --cloud                what the up command sets: serve at the saved public hostname and run the
-                         tunnel as a supervised child
+  --cloud                serve at the saved hostname and run its Cloudflare tunnel as a child
+                         process; asked once, then remembered
   --link                 print a fresh single-use access link for the already-running board
   --debug                stream the full event feed to the terminal instead of the compact readout
   --status               report this workspace's stable server and artifact
@@ -479,9 +485,6 @@ Environment:
   FRIZZ_PUBLIC_ORIGIN    same as --public-origin
 
 Commands:
-  up                     start the server and its public tunnel together, so the board is reachable
-                         remotely. Serves every project, same as the bare command. Asked once.
-                         Sugar for --cloud, which is the spelling to compose with other flags.
   build                  build a new immutable candidate from the configured Frizz source checkout
   promote <digest>       explicitly select a verified candidate for this workspace
   restart                restart the currently promoted artifact without building

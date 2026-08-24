@@ -111,29 +111,18 @@ function sourceVersion(): string | undefined {
 const argv = process.argv.slice(2);
 const sourceCommand = process.env.FRIZZ_SOURCE_COMMAND ?? "frizz-dev";
 /**
- * `up` is an ordinary launch that also brings the tunnel up — NOT an artifact verb like build/promote.
- * It is kept out of `command` for exactly that reason: those three suppress the readout and the
- * foreground hold, and `up` needs both.
- *
- * It takes no positional path because ONE SERVER SERVES EVERY PROJECT. Frizz stopped being one board
- * per repo, so "which repo is this for" is not a question `up` has; accepting a path would imply a
- * coupling that no longer exists.
+ * build/promote/restart are ARTIFACT verbs: they suppress the readout and the foreground hold, do one
+ * job and exit. Launching is not one of them — there is exactly one way to start Frizz, and it is the
+ * bare command with flags. `up` used to be a fourth verb here, sugar for `--cloud`; it was removed
+ * because a second spelling of "start the server" is a second thing to explain, and because it read as
+ * a per-project command on a server that has never been per-project.
  */
-const upCommand = argv[0] === "up";
 const command = ["build", "promote", "restart"].includes(argv[0] ?? "")
   ? argv[0]
   : undefined;
 let options: CliOptions;
 try {
-  options = parseCliArgs(
-    command === "promote" ? argv.slice(2) : command || upCommand ? argv.slice(1) : argv
-  );
-  if (upCommand) {
-    if (options.repoPath) {
-      fail(`${sourceCommand} up takes no path — one server serves every project on this machine`);
-    }
-    options.cloud = true;
-  }
+  options = parseCliArgs(command === "promote" ? argv.slice(2) : command ? argv.slice(1) : argv);
 } catch (error) {
   fail(error);
 }
@@ -209,7 +198,7 @@ try {
   // grid; $HOME is never asked about at all.
   let hosted: Workspace | undefined;
   if (!internal) {
-    const intent = resolveLaunchIntent(options.repoPath);
+    const intent = resolveLaunchIntent();
     if (intent.kind === "empty") {
       throw new Error(
         intent.reason === "home"
@@ -452,7 +441,6 @@ async function runSupervisor(
                       ...durableReexecArgs({
                         entry: join(artifact.runtimeDir, "src", "index.js"),
                         port,
-                        root: workspace.root,
                         cloud: Boolean(cloudConfig),
                         publicOrigin: bind.publicOrigin,
                       }),

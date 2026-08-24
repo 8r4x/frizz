@@ -421,7 +421,6 @@ test("CLI options default to immutable mode and make source/HMR explicit", () =>
     host: undefined,
     link: false,
     allowedHosts: [],
-    repoPath: undefined,
   });
   assert.deepEqual(parseCliArgs(["--no-app", "--foreground", "--port=5123"]), {
     noApp: true,
@@ -437,16 +436,17 @@ test("CLI options default to immutable mode and make source/HMR explicit", () =>
     host: undefined,
     link: false,
     allowedHosts: [],
-    repoPath: undefined,
   });
   assert.equal(parseCliArgs(["--dev"]).dev, true);
   // --debug swaps the compact readout for the full event feed; it is orthogonal to --dev.
   assert.equal(parseCliArgs(["--debug"]).debug, true);
   assert.equal(parseCliArgs(["--debug"]).dev, false);
   assert.equal(parseCliArgs(["--no-app", "--debug"]).debug, true);
-  assert.equal(
-    parseCliArgs(["--no-app", "/tmp/repo with spaces"]).repoPath,
-    "/tmp/repo with spaces"
+  // A repository path is REFUSED, not ignored. One server serves every project, so `frizz /some/repo`
+  // asked a question the launcher no longer has — and someone with it in a script deserves to be told.
+  assert.throws(
+    () => parseCliArgs(["--no-app", "/tmp/repo with spaces"]),
+    /takes no repository path/
   );
   assert.equal(parseCliArgs(["--app"]).appMode, true);
   assert.throws(() => parseCliArgs(["--port", "nope"]), /invalid --port/);
@@ -454,10 +454,9 @@ test("CLI options default to immutable mode and make source/HMR explicit", () =>
   assert.equal(parseCliArgs(["--foreground"]).foreground, true);
   assert.throws(() => parseCliArgs(["--detach"]), /always runs in the foreground/);
   assert.throws(() => parseCliArgs(["--app", "--no-app"]), /either/);
-  assert.throws(
-    () => parseCliArgs(["one", "two"]),
-    /at most one repository path/
-  );
+  assert.throws(() => parseCliArgs(["one", "two"]), /takes no repository path/);
+  // A retired command names its replacement rather than being swept into the generic refusal.
+  assert.throws(() => parseCliArgs(["up"]), /the up command was removed .* use --cloud instead/);
   assert.throws(() => parseCliArgs(["--mystery"]), /unknown option/);
   assert.match(helpText(), /always runs in the foreground/);
   assert.match(helpText(), /default browser/);
@@ -500,14 +499,13 @@ test("--host: a bare flag means every interface, and a value must be an address"
   // A DNS name is refused rather than resolved: listen() would silently pick one A record and the
   // operator would have no way to see which interface they had just exposed.
   assert.throws(() => parseCliArgs(["--host=example.com"]), /invalid --host address/);
-  // `--host` takes an OPTIONAL value and the launcher also takes a positional repo path. The next
-  // token is only the host when it actually is an address, so this cannot eat the repository.
-  const withRepo = parseCliArgs(["--host", "/tmp/some repo"]);
-  assert.equal(withRepo.host, "0.0.0.0");
-  assert.equal(withRepo.repoPath, "/tmp/some repo");
-  const both = parseCliArgs(["--host", "10.0.0.4", "/tmp/some repo"]);
-  assert.equal(both.host, "10.0.0.4");
-  assert.equal(both.repoPath, "/tmp/some repo");
+  // `--host` takes an OPTIONAL value, so the token after it is only the host when it really is an
+  // address. A bare `--host` still means every interface, and anything else is now an error rather
+  // than a repository path being quietly swallowed.
+  assert.equal(parseCliArgs(["--host", "--no-app"]).host, "0.0.0.0");
+  assert.equal(parseCliArgs(["--host"]).host, "0.0.0.0");
+  assert.equal(parseCliArgs(["--host", "10.0.0.4"]).host, "10.0.0.4");
+  assert.throws(() => parseCliArgs(["--host", "/tmp/some repo"]), /takes no repository path/);
 });
 
 test("--allowed-host: repeatable, comma-splittable, lowercased and deduped", () => {
@@ -2464,13 +2462,13 @@ test("an update carries the public origin across the re-exec", () => {
   // it with a bare `--port`, and the successor came back with its origin gate DISARMED — the public
   // hostname answered Forbidden, and then 1033 once the tunnel went with it. Nothing said why: the new
   // process had no idea it was ever meant to be public.
-  const base = { entry: "/artifact/src/index.js", port: 9494, root: "/repo" };
+  const base = { entry: "/artifact/src/index.js", port: 9494 };
 
+  // No workspace argument: an internal launch reads its pinned project from the environment.
   assert.deepEqual(durableReexecArgs({ ...base, cloud: false }), [
     "/artifact/src/index.js",
     "--port",
     "9494",
-    "/repo",
   ]);
 
   // A cloud launch restores BOTH halves. `--public-origin` alone would arm the gate and leave the
@@ -2480,7 +2478,6 @@ test("an update carries the public origin across the re-exec", () => {
     "--port",
     "9494",
     "--cloud",
-    "/repo",
   ]);
 
   // `--public-origin` without a saved cloud config is carried verbatim; the operator runs their own
@@ -2491,6 +2488,5 @@ test("an update carries the public origin across the re-exec", () => {
     "9494",
     "--public-origin",
     "https://board.example",
-    "/repo",
   ]);
 });
