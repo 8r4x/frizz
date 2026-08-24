@@ -1,4 +1,4 @@
-import type { TranscriptMessage } from "@frizz/shared"
+import { stripHumanGapNote, stripWakeDeliveryToken, type TranscriptMessage } from "@frizz/shared"
 import type { Storage } from "./storage.ts"
 import { decodeDeliveryMarkers, deliveryTag, stripDeliveryMarkers } from "./delivery-marker.ts"
 
@@ -630,6 +630,20 @@ export function ageDeliveries(items: DeliveryLedgerItem[], nowMs: number, observ
   return changed ? next : items
 }
 
+// The canonical form for matching a LEDGER item against a RENDERED transcript message.
+//
+// The worker's copy of a follow-up can carry riders the ledger deliberately never records: the
+// human-gap clock note (humanGapNote — appended by the router to any follow-up landing ≥20min after
+// the agent last spoke) and the wake delivery token. The JSONL records that copy verbatim, so the
+// fold's queued bubble for a noted send is the ledger text PLUS the note — and comparing with bare
+// `canon` misses it, which made projectDeliveryLedger append a SECOND bubble for the very send the
+// fold already rendered: two identical gray bubbles, since the note is display-stripped on both
+// (the maintainer's 2026-08-24 double render). Correlation never had this problem — its composed
+// matcher takes the item as a PREFIX of the record — but the projection compares whole strings, so
+// it must shed the riders first. Applied to BOTH sides, so a message that genuinely ends in a
+// quoted note still matches its own record.
+const renderMatchKey = (s: string): string => canon(stripHumanGapNote(stripWakeDeliveryToken(stripDeliveryMarkers(s))))
+
 // How far past the cancellation instant a rendered bubble may still be the cancelled send. Covers the
 // clock skew between frizz's own timestamp and the CLI's record, and nothing more: the bound is what
 // keeps a LATER re-send of the same words — the likely next thing the operator does, since unqueueing
@@ -664,13 +678,13 @@ function dropCancelled(
   const dropped = new Set<number>()
   for (const item of items) {
     if (item.state !== "cancelled") continue
-    const text = canon(item.text)
+    const text = renderMatchKey(item.text)
     const from = Date.parse(item.at) - 5_000
     const to = Date.parse(item.updatedAt) + CANCEL_MATCH_SLACK_MS
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i]
       if (m.role !== "user" || dropped.has(i)) continue
-      if (canon(stripDeliveryMarkers(m.text)) !== text) continue
+      if (renderMatchKey(m.text) !== text) continue
       // An untimestamped bubble cannot be placed in the window; nothing but this send could have
       // rendered it, so accepting it is safe and leaving it on screen is not.
       const at = m.at ? Date.parse(m.at) : NaN
@@ -707,7 +721,7 @@ export function projectDeliveryLedger(messages: TranscriptMessage[], items: Deli
   // ledger holding both, exactly one gray bubble on screen).
   const claimed = new Set<number>()
   for (const item of cancelled.live) {
-    const text = canon(item.text)
+    const text = renderMatchKey(item.text)
     const tag = deliveryTag(item.id)
     let handled = false
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -716,7 +730,7 @@ export function projectDeliveryLedger(messages: TranscriptMessage[], items: Deli
       // Same order as correlation: identity if the rendered copy still carries our marker, text
       // otherwise. Transcript text is stripped for display before it reaches here, so in practice this
       // is the text compare — the tag check costs nothing and covers any surface that keeps the raw.
-      if (!decodeDeliveryMarkers(m.text).includes(tag) && canon(stripDeliveryMarkers(m.text)) !== text) continue
+      if (!decodeDeliveryMarkers(m.text).includes(tag) && renderMatchKey(m.text) !== text) continue
       if (m.queued) {
         if (item.state === "delivered") {
           // The provider took this send straight into a turn, but the fold has only seen its enqueue

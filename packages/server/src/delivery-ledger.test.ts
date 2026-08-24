@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import type { TranscriptMessage } from "@frizz/shared"
+import { humanGapNote, type TranscriptMessage } from "@frizz/shared"
 import {
   parseDeliveryLedger,
   serializeDeliveryLedger,
@@ -412,6 +412,29 @@ test("the JSONL's own enqueue bubble is tagged in place, not double-rendered", (
   assert.equal(out.length, 1)
   assert.equal(existing.deliveryId, "d-1")
   assert.equal(existing.deliveryState, "enqueued")
+})
+
+// THE DOUBLE RENDER (maintainer 2026-08-24, zod `eaf90e17`): the router appends the human-gap clock
+// note to the WORKER's copy of a follow-up and deliberately leaves the ledger untouched, so the fold's
+// enqueue bubble carries `text + note` while the item carries bare `text`. The strict compare missed,
+// the projection appended its own delivery:<id> bubble beside the fold's, and both display-strip the
+// note — two identical gray queued bubbles for one send. Built with the real producer so a wording
+// change on humanGapNote cannot silently reopen the gap.
+test("an enqueue bubble carrying the human-gap note is still tagged in place, not double-rendered", () => {
+  const note = humanGapNote(T0, iso(T0 - 5 * 3_600_000))
+  assert.ok(note, "the gap producer must emit above its floor")
+  const existing = msg({ queued: true, sourceId: "s:9", text: `fix the bug\n\n${note}` })
+  const out = projectDeliveryLedger([existing], [item({ state: "enqueued" })])
+  assert.equal(out.length, 1, "no second bubble")
+  assert.equal(existing.deliveryId, "d-1")
+  assert.equal(existing.deliveryState, "enqueued")
+})
+
+test("a cancelled send's orphan bubble is suppressed even when it carries the gap note", () => {
+  const note = humanGapNote(T0, iso(T0 - 5 * 3_600_000))
+  const messages = [msg({ text: `retracted\n\n${note}`, sourceId: "s:2", at: iso(T0 + 1000) })]
+  const out = suppressCancelledDeliveries(messages, [item({ id: "t", state: "cancelled", text: "retracted", updatedAt: iso(T0 + 4000) })])
+  assert.deepEqual(out, [], "the noted orphan is gone")
 })
 
 test("an already-delivered copy suppresses projection entirely (prune race)", () => {
