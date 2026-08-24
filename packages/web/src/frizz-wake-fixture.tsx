@@ -1,6 +1,6 @@
 import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { formatGithubWakeSteer, limitResumeSteer, prWatchWakeMessage, shellDoneMessage, timerPromptMessage } from "@frizz/shared"
+import { formatGithubWakeSteer, limitResumeSteer, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, prWatchWakeMessage, shellDoneMessage, timerPromptMessage } from "@frizz/shared"
 import type { ChatMessage } from "./hooks.ts"
 import { Message } from "./components/ChatView.tsx"
 import "./styles.css"
@@ -73,6 +73,19 @@ const messages: ChatMessage[] = [
     "Re-read `.frizz/threads/cfcb00d9/plan.md` before continuing — it is the authoritative account of this effort.\n\nIf the churn suite is still red, bisect rather than re-run it.",
     new Date(Date.now() - 3 * 3_600_000).toISOString(),
   )),
+  // THE PARK-INTEGRITY WAKES (scheduler SOURCE 12), which arrived as full bordered cards of agent
+  // instructions until 2026-08-24 — "THE ONLY LINE KINDS NOW SUPPORTED", which tool to call, which fence
+  // to write. Measured across every transcript on the maintainer's machine, they were 32 of the 73
+  // deliveries still drawing that card. The expired one keeps a disclosure because WHICH items are still
+  // outstanding is the reader's half of the news; the instruction paragraph under it is not.
+  wake("w16", parkExpiredWakeMessage(["- `shell: bkjf8exat` — still running", "- `pr: nubjs/nub#777` — CI running"])),
+  wake("w17", parkFinishedWakeMessage(["- `agent: azf10ktb2` — finished"], false)),
+  // NOTHING TO DISCLOSE is its own shape: a bare hairline, because a control that opens onto an empty
+  // aside is worse than no control.
+  wake("w18", parkExpiredWakeMessage([])),
+  // A REGISTERED WATCHER whose own `for:` ran out. The ref is the only thing on the line a reader can
+  // act on, so it is the link.
+  wake("w19", prWatchExpiredWakeMessage("nubjs/nub#777")),
   // The FALLBACK still has to work: a wake this build cannot read keeps its first-party card and loses
   // no text. Nothing frizz composes lands here any more, so this is a legacy transcript or a format a
   // future frizz writes and this build has never seen.
@@ -85,7 +98,7 @@ function Fixture() {
       <section className="mx-auto flex max-w-[760px] flex-col border border-border bg-panel px-5 py-4 shadow-xl shadow-black/30 sm:px-7">
         <header className="border-b border-border pb-3">
           <h1 className="text-[16px] font-semibold text-fg">Frizz wakes — every shape frizz speaks in</h1>
-          <p className="mt-0.5 text-[12px] text-muted">Review activity, a finished PR, a CI verdict, both at once, a background shell, a usage window, a fired timer — and the unparsed fallback.</p>
+          <p className="mt-0.5 text-[12px] text-muted">Review activity, a finished PR, a CI verdict, both at once, a background shell, a usage window, a fired timer, a park that ran out or finished, a lapsed watcher — and the unparsed fallback.</p>
         </header>
         <div className="flex flex-1 flex-col gap-3.5 py-5">
           {messages.map((message) => <Message key={message.sourceId} m={message} />)}

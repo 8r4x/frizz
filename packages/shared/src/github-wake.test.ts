@@ -5,10 +5,15 @@ import {
   isGithubWakeBacklog,
   parseGithubWakeSteer,
   parseLimitResumeWake,
+  parseParkWake,
+  parsePrWatchExpiredWake,
   parsePrWatchWake,
   parseShellDoneWake,
   parseTimerWake,
   limitResumeSteer,
+  parkExpiredWakeMessage,
+  parkFinishedWakeMessage,
+  prWatchExpiredWakeMessage,
   prWatchWakeMessage,
   shellDoneMessage,
   timerPromptMessage,
@@ -359,4 +364,94 @@ test("text that is not a usage-limit resume parses as none", () => {
   assert.equal(parseLimitResumeWake(formatGithubWakeSteer(single)), null)
   assert.equal(parseLimitResumeWake("⏳ The weekly usage limit that interrupted you has reset."), null)
   assert.equal(parseLimitResumeWake("⏳ The context window that interrupted you has reset. Continue exactly where you left off."), null)
+})
+
+// ---- parseParkWake / parsePrWatchExpiredWake ----
+//
+// The three formatters that stayed in the SERVER package until 2026-08-24 and so had no parser the chat
+// could reach. Every one fell through FrizzWake's legacy fallback and printed its whole agent-facing
+// body as a bordered "Frizz" card in the human's transcript — which tool to call, which fence to write
+// (maintainer: "frizz cards that seem to be exposing internals"). Measured across every transcript on
+// the machine: 73 of 12 891 delivered wakes drew that card, and every live one was one of these.
+//
+// Round-tripped against the REAL formatter, never a hand-written string, for the same reason every test
+// above is: a parser pinned to a copy of the wording cannot notice the wording moving.
+
+const parkStatus = ["- `shell: bkjf8exat` — still running", "- `pr: nubjs/nub#777` — CI running"]
+
+test("parseParkWake: an expired park round-trips, and its item list is the disclosure", () => {
+  const wake = parseParkWake(parkExpiredWakeMessage(parkStatus))
+  assert.deepEqual(wake, { kind: "expired", items: parkStatus })
+})
+
+test("parseParkWake: a finished park round-trips in both its singular and plural wordings", () => {
+  assert.equal(parseParkWake(parkFinishedWakeMessage(["- `agent: azf10ktb2` — finished"], false))?.kind, "finished")
+  assert.equal(parseParkWake(parkFinishedWakeMessage(parkStatus, true))?.kind, "finished")
+})
+
+test("parseParkWake: a park with nothing to list still parses — the divider just draws no disclosure", () => {
+  assert.deepEqual(parseParkWake(parkExpiredWakeMessage([])), { kind: "expired", items: [] })
+})
+
+// THE CLOCK RIDES EVERY ONE OF THESE. scheduler SOURCE 12 appends `wakeTimeHeader` to its own messages,
+// so the parser has to survive a trailer it never wrote — the same shape that would have broken it in
+// production while every unit test passed.
+test("parseParkWake: the appended wake-time header does not break the match", () => {
+  const delivered = `${parkExpiredWakeMessage(parkStatus)}\n\n⏱ 2026-08-24 09:50 — you last spoke 1h30m ago.`
+  assert.equal(parseParkWake(delivered)?.kind, "expired")
+})
+
+test("parseParkWake: prose that merely QUOTES a park head is not a park wake", () => {
+  assert.equal(parseParkWake("Why does ⏰ Your wait expired, nothing resolved. keep showing up?"), null)
+  assert.equal(parseParkWake("all clear"), null)
+})
+
+test("parsePrWatchExpiredWake: the lapsed watcher's ref is the whole of what a reader can act on", () => {
+  assert.deepEqual(parsePrWatchExpiredWake(prWatchExpiredWakeMessage("nubjs/nub#777")), { ref: "nubjs/nub#777" })
+  assert.equal(parsePrWatchExpiredWake(prWatchWakeMessage({ target: "nubjs/nub#777", merged: true })), null)
+  assert.equal(parsePrWatchExpiredWake("I watched nubjs/nub#777 expire"), null)
+})
+
+// ---- THE FALLBACK IS FOR LEGACY TEXT, NOT FOR ANYTHING FRIZZ WRITES TODAY -------------------------
+//
+// `FrizzWake` ends in a branch that prints an unrecognized wake VERBATIM in a bordered card, and that
+// branch is correct: a transcript written by an older frizz, or by a newer one, must never lose its
+// text. What is NOT correct is a formatter shipping into it — every one of them is frizz instructing
+// the WORKER about its own registrations, and the human reading the transcript has none of them.
+//
+// It happened three times, silently, because a formatter and its parser could live in different
+// packages: the park bumps and the lapsed-watcher notice sat in `scheduler.ts` where the chat could not
+// reach them, and printed "THE ONLY LINE KINDS NOW SUPPORTED" into a human's transcript for five days.
+//
+// THIS TABLE IS THE CONTRACT. A new frizz-composed wake adds a row here and a parser beside its
+// formatter, or this fails — which is the point. It is the machine-checked half of the `frizz-wake`
+// fixture's claim to hold "every wake frizz delivers".
+const RECOGNIZERS = [
+  parseShellDoneWake, parseTimerWake, parseLimitResumeWake, parsePrWatchWake, parseGithubWakeSteer,
+  parseParkWake, parsePrWatchExpiredWake,
+] as const
+
+test("every wake frizz composes is recognized by a parser — none may reach the verbatim fallback", () => {
+  const composed: [string, string][] = [
+    ["shell finished", shellDoneMessage({ taskId: "b1", label: "the churn suite", status: "completed" })],
+    ["shell failed", shellDoneMessage({ label: "vite --port 5199", status: "failed" })],
+    ["timer fired", timerPromptMessage("Re-check the promoted artifact.", "2026-08-24T09:50:00.000Z")],
+    ["limit reset", limitResumeSteer("weekly")],
+    ["pr merged", prWatchWakeMessage({ target: "nubjs/nub#777", merged: true })],
+    ["pr checks", prWatchWakeMessage({ target: "nubjs/nub#777", checks: { verdict: "failing", passed: 1, failed: 1, failing: ["typecheck"] } })],
+    ["review activity", formatGithubWakeSteer(single)],
+    ["park expired", parkExpiredWakeMessage(parkStatus)],
+    ["park expired, nothing listed", parkExpiredWakeMessage([])],
+    ["park finished", parkFinishedWakeMessage(parkStatus, true)],
+    ["watcher lapsed", prWatchExpiredWakeMessage("nubjs/nub#777")],
+  ]
+  for (const [name, text] of composed) {
+    assert.ok(RECOGNIZERS.some((parse) => parse(text)), `${name} falls through to the verbatim card`)
+  }
+})
+
+// …and the fallback still has to WORK, or the guard above would be satisfied by deleting it.
+test("a shape no parser knows still reaches the fallback, so its text survives", () => {
+  const future = "⏰ Frizz has invented a wake shape this build predates.\n\nAnd whatever it says, the text must survive."
+  assert.ok(RECOGNIZERS.every((parse) => !parse(future)))
 })

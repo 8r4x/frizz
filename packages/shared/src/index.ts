@@ -1253,6 +1253,91 @@ export function parseLimitResumeWake(text: string): { window: LimitWindow } | nu
   return { window: m[1] === "weekly usage limit" ? "weekly" : m[1] === "session usage limit" ? "session" : "unknown" }
 }
 
+// ---- THE PARK-INTEGRITY WAKES (scheduler SOURCE 12) ------------------------------------------------
+// THE RULE THIS FILE ALREADY STATES, applied to the three formatters that never made it here: a wake
+// frizz composes ITSELF is a hairline, because it is one line of news about something outside the turn,
+// and the instructions under that line are addressed to the WORKER — its own registrations, its own
+// fence grammar, the tools it should call. Left in the server package a formatter has no parser the chat
+// can reach, so it fell through `FrizzWake`'s legacy fallback and printed VERBATIM: a bordered "Frizz"
+// card of agent-contract prose, in the human's transcript (maintainer 2026-08-24, on a card reading
+// "THE ONLY LINE KINDS NOW SUPPORTED": "frizz cards that seem to be exposing internals").
+//
+// Measured before the move: 73 of 12 891 delivered wakes on this machine drew that raw card, and every
+// live one was one of the three below. So they move here for the same reason `limitResumeSteer` did on
+// 2026-08-19 — "the parser has to sit beside the formatter, and only this package is reachable from both
+// sides". The agent-facing wording is UNCHANGED, byte for byte: workers read it and it is carefully
+// written; what changes is that the human now gets the one line it is news about.
+
+/** Scheduler SOURCE 12, cause `expired`: the `for:` ran out and nothing resolved. `status` is the live
+ *  readout of what the fence named, already formatted by the caller. */
+export function parkExpiredWakeMessage(status: readonly string[]): string {
+  return [
+    "⏰ Your wait expired, nothing resolved. Check back in on everything.",
+    "",
+    ...status,
+    "",
+    "Re-park if they are genuinely still going — there is no limit on that, and a long job is not a",
+    "failure. If something is finished, read its result. If nothing is left, end in ```done or ask a",
+    "```question.",
+  ].join("\n")
+}
+
+/** Scheduler SOURCE 12, cause `dead` where every named item FINISHED: the park is simply over. */
+export function parkFinishedWakeMessage(status: readonly string[], several: boolean): string {
+  return [
+    `✅ ${several ? "Everything you parked on has FINISHED" : "The work you parked on has FINISHED"}, so the park is over and your thread is back in the queue.`,
+    "",
+    ...status,
+    "",
+    "READ ITS OUTPUT AND CARRY ON. This is not a broken fence and there is nothing to fix: the wait",
+    "you declared simply ended. Do NOT relaunch the same work — its result is already on disk.",
+    "",
+    "Then park on whatever comes next, or end in ```done or a ```question if nothing is left.",
+  ].join("\n")
+}
+
+/** Scheduler SOURCE 11: a registered PR watcher whose own `for:` ran out. */
+export function prWatchExpiredWakeMessage(ref: string): string {
+  return (
+    `⏰ Your watcher on ${ref} has expired and is no longer armed — nothing on that PR will wake ` +
+    `you now.\n\nIf you still care about it, register it again with \`mcp__frizz__watch_pr\` and a ` +
+    `fresh \`for:\`. If you do not, and it was the only thing you were waiting on, end in a proper ` +
+    `terminal state instead of parking on it again.`
+  )
+}
+
+/** One park-integrity wake, read back out of its delivery. `items` is the status readout the message
+ *  carried — the only part of the body a human has any use for, and the reason the divider can open. */
+export interface ParkWake {
+  kind: "expired" | "finished"
+  items: string[]
+}
+
+const PARK_EXPIRED_HEAD = /^⏰ Your wait expired, nothing resolved\./
+const PARK_FINISHED_HEAD = /^✅ (?:The work you parked on has|Everything you parked on has) FINISHED, so the park is over/
+
+/** The status lines between the head and the instruction paragraph. They are the worker's own item
+ *  labels (`- \`shell: bkjf8exat\` — still running`), which is the one thing here a human reads. */
+function parkWakeItems(body: string): string[] {
+  return body.split("\n").filter((line) => line.trimStart().startsWith("- "))
+}
+
+export function parseParkWake(text: string): ParkWake | null {
+  const trimmed = text.trim()
+  if (PARK_EXPIRED_HEAD.test(trimmed)) return { kind: "expired", items: parkWakeItems(trimmed) }
+  if (PARK_FINISHED_HEAD.test(trimmed)) return { kind: "finished", items: parkWakeItems(trimmed) }
+  return null
+}
+
+const PR_WATCH_EXPIRED_HEAD = /^⏰ Your watcher on (\S+) has expired and is no longer armed\b/
+
+/** The PR whose watcher lapsed, or null. One hairline: the registration is gone, and the ref is the
+ *  only thing on it a reader can act on. */
+export function parsePrWatchExpiredWake(text: string): { ref: string } | null {
+  const m = PR_WATCH_EXPIRED_HEAD.exec(text.trim())
+  return m ? { ref: m[1] } : null
+}
+
 /** What is being waited ON: one of the worker's own background shells, or a pull request. */
 // NEITHER KIND HAS A REGISTRY ROW BEHIND IT any more (2026-08-14). Both are derived from the worker's
 // own ```awaiting fence — `shell` from its `shells:` list, `github` from its `prs:` list — so this strip

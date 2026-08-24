@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_RETIRED_LEAD, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, formatGithubWakeSteer, type GithubWatchStatus, prWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
+import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_RETIRED_LEAD, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, formatGithubWakeSteer, type GithubWatchStatus, prWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
 import { GITHUB_STATUS_SETTING, parkExpiresAt, parkIsHonoured, readAwaitingPark, unaccountedItems, type LiveActivity } from "./awaiting.ts"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
@@ -1623,27 +1623,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           "AND IF YOU ARE NOT WAITING ON ANYTHING, you are not awaiting — you are done. End with ```done,",
           "or ask a ```question if you need the human.",
         ].join("\n")
+        // THESE TWO LIVE IN @frizz/shared, beside the parsers that read them back. Same rule as
+        // `limitResumeSteer`: a formatter the chat cannot parse falls through FrizzWake's legacy
+        // fallback and prints its agent-facing body verbatim as a bordered card. The wording is
+        // unchanged — only its address is.
         : expired
-        ? [
-          "⏰ Your wait expired, nothing resolved. Check back in on everything.",
-          "",
-          ...status,
-          "",
-          "Re-park if they are genuinely still going — there is no limit on that, and a long job is not a",
-          "failure. If something is finished, read its result. If nothing is left, end in ```done or ask a",
-          "```question.",
-        ].join("\n")
+        ? parkExpiredWakeMessage(status)
         : allFinished
-        ? [
-          `✅ ${dead.length === 1 ? "The work you parked on has FINISHED" : "Everything you parked on has FINISHED"}, so the park is over and your thread is back in the queue.`,
-          "",
-          ...status,
-          "",
-          "READ ITS OUTPUT AND CARRY ON. This is not a broken fence and there is nothing to fix: the wait",
-          "you declared simply ended. Do NOT relaunch the same work — its result is already on disk.",
-          "",
-          "Then park on whatever comes next, or end in ```done or a ```question if nothing is left.",
-        ].join("\n")
+        ? parkFinishedWakeMessage(status, dead.length !== 1)
         : [
           `${PARK_CORRECTION_NAMES_LEAD}${dead.length === 1 ? "something that is" : "things that are"} not running, so it is not a park and your thread stayed in the queue.`,
           "",
@@ -1772,11 +1759,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         sessionId: row.session_id,
         fenceId,
         hintKey: fenceId,
-        message:
-          `⏰ Your watcher on ${ref} has expired and is no longer armed — nothing on that PR will wake ` +
-          `you now.\n\nIf you still care about it, register it again with \`mcp__frizz__watch_pr\` and a ` +
-          `fresh \`for:\`. If you do not, and it was the only thing you were waiting on, end in a proper ` +
-          `terminal state instead of parking on it again.`,
+        // In @frizz/shared beside `parsePrWatchExpiredWake`, for the reason above.
+        message: prWatchExpiredWakeMessage(ref),
         reason: `pr watcher ${w.id} expired (${ref})`,
       }, nowMs).delivery
       log(`waker: queued ${row.slug} — ${item.reason}`)

@@ -30,7 +30,7 @@
 // accent ref, the corner glyph) with no hierarchy between them.
 import { useId, useState } from "react"
 import { AlarmClock, Bell, Github, Hourglass, TerminalSquare } from "lucide-react"
-import { isGithubWakeBacklog, parseGithubWakeSteer, parseLimitResumeWake, parsePrWatchWake, parseShellDoneWake, parseTimerWake, type GithubWakeSteer, type LimitWindow, type PrWatchWake, type ShellDoneWake, type TimerWake } from "@frizz/shared"
+import { isGithubWakeBacklog, parseGithubWakeSteer, parseLimitResumeWake, parseParkWake, parsePrWatchExpiredWake, parsePrWatchWake, parseShellDoneWake, parseTimerWake, type GithubWakeSteer, type LimitWindow, type ParkWake, type PrWatchWake, type ShellDoneWake, type TimerWake } from "@frizz/shared"
 import { CARD_BODY, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 import { VSpace } from "./rhythm.tsx"
 import { WakeDivider } from "./WakeDivider.tsx"
@@ -67,6 +67,10 @@ export function FrizzWake({ steer: served, text, sourceId, wrap }: { steer?: Git
   if (timer) return <TimerDivider wake={timer} sourceId={sourceId} />
   const limit = parseLimitResumeWake(text)
   if (limit) return <LimitResumeDivider window={limit.window} sourceId={sourceId} />
+  const park = parseParkWake(text)
+  if (park) return <ParkDivider wake={park} sourceId={sourceId} />
+  const lapsed = parsePrWatchExpiredWake(text)
+  if (lapsed) return <PrWatchExpiredDivider watchRef={lapsed.ref} sourceId={sourceId} />
   // ONE DELIVERY, UP TO TWO PARTS. A poll that saw CI flip AND a comment land composes both into one
   // message (prWatchWakeMessage), and each is its own event, so each gets its own hairline. The status
   // part goes first because that is the order the scheduler wrote them in.
@@ -182,6 +186,75 @@ function TimerDivider({ wake, sourceId }: { wake: TimerWake; sourceId?: string }
         </div>
       )}
     </div>
+  )
+}
+
+// ---- THE PARK-INTEGRITY HAIRLINES ------------------------------------------------------------------
+// A declared wait that ran out, or one whose work finished. Both are the same class as every other
+// divider in this file — an external event the worker was waiting on reached a notable state and
+// re-invoked it — and they belong to the family for the same reason a shell finishing does.
+//
+// They arrived as CARDS until 2026-08-24, printing their whole body: which tool to call, which fence to
+// write, "end in ```done or ask a ```question". None of that is addressed to the reader (maintainer:
+// "frizz cards that seem to be exposing internals"). What IS theirs is the one line of news plus, on
+// the expired one, WHICH items are still outstanding — so the item list is the disclosure and the
+// instruction paragraph is dropped, exactly as the timer's agent-facing trailer is.
+// `Hourglass` deliberately, and it is NOT borrowed from the limit-resume line below: the hourglass is
+// already this app's mark for a parked thread — the rail's Held band wears it — so a park ending is
+// exactly what it should draw. The limit line is the one that shares it.
+function ParkDivider({ wake, sourceId }: { wake: ParkWake; sourceId?: string }) {
+  const [open, setOpen] = useState(false)
+  const bodyId = useId()
+  // Terse, because every sibling on this rule is ("PR merged on …", "Background task «…» finished"). The
+  // first draft read "The declared wait is over — its work finished" and was the longest line on the
+  // page by half again.
+  const label = wake.kind === "expired" ? "Wait expired — nothing resolved" : "Wait over — its work finished"
+  // No disclosure without items: an empty aside is a control that opens onto nothing.
+  if (!wake.items.length) {
+    return (
+      <WakeDivider icon={Hourglass} sourceId={sourceId} marker="event" ariaLabel={label}>
+        <span className="min-w-0 truncate">{label}</span>
+      </WakeDivider>
+    )
+  }
+  return (
+    <div data-frizz-msg={sourceId} className="flex flex-col">
+      <WakeDivider
+        icon={Hourglass}
+        marker="event"
+        onClick={() => setOpen((v) => !v)}
+        ariaExpanded={open}
+        ariaControls={bodyId}
+        ariaLabel={`${open ? "Collapse" : "Expand"} what this wait named`}
+      >
+        <span className="min-w-0 truncate">{label}</span>
+        <span aria-hidden="true" className="shrink-0 opacity-50">·</span>
+        <span className="shrink-0">{open ? "Click to collapse" : "Click to expand"}</span>
+      </WakeDivider>
+      {open && (
+        <div id={bodyId} className="mt-1.5 whitespace-pre-wrap border-l border-border/70 pl-3 text-[13px] text-muted [overflow-wrap:anywhere]">
+          {wake.items.join("\n")}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// A registered watcher whose own `for:` ran out. One line, and the ref is the only thing on it a reader
+// can act on — so it is the link, the same muted underline every other divider's link wears.
+function PrWatchExpiredDivider({ watchRef, sourceId }: { watchRef: string; sourceId?: string }) {
+  const url = githubRefUrl(watchRef)
+  const label = `Watcher on ${watchRef} expired`
+  return (
+    <WakeDivider icon={Github} sourceId={sourceId} marker="event" ariaLabel={label}>
+      <span className="min-w-0 truncate">
+        Watcher on{" "}
+        {url
+          ? <a href={url} target="_blank" rel="noreferrer" className={DIVIDER_LINK}>{watchRef}</a>
+          : watchRef}
+        {" "}expired
+      </span>
+    </WakeDivider>
   )
 }
 
