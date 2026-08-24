@@ -5,7 +5,7 @@ import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_RETIRED_LEAD, RETIRED_AWAIT
 import { GITHUB_STATUS_SETTING, parkExpiresAt, parkIsHonoured, readAwaitingPark, unaccountedItems, type LiveActivity } from "./awaiting.ts"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
-import type { FenceView, SessionTelemetry } from "./tailer.ts"
+import type { SessionTelemetry } from "./tailer.ts"
 import type { LimitFault } from "./backend/types.ts"
 import { limitFaultResetKey, limitPauseIsStale, quotaWindowKeyFor, quotaWindowRecovered, textResetInstant } from "./backend/usage-limit.ts"
 import { createWakeDeliveryStore, type WakeDelivery } from "./wake-store.ts"
@@ -28,28 +28,25 @@ export {
 } from "./github-review.ts"
 import { log as frizzLog } from "./logging.ts"
 
-// ---- DURABLE TIMER WAKER + PR-WATCH + LEGACY COMPATIBILITY ----------------------------------------
-// New workers use `awaiting` for a PR-activity watcher (`pr-watch:`), a specific external HUMAN gate
-// (`human:`), or a wall-clock checkpoint (`timer:`). `pr-watch` wakes on ANY new activity on the PR
-// after this fence — a review or a comment, from a human or a bot, with no actor filter whatsoever
-// (most review today is filed by an app, and the ones that post findings as a conversation comment
-// are precisely what a bot filter drops) — while a registered timer remains
-// durable across server/worker restarts and resumes when it crosses. Historical transcripts may still
-// carry `pr:`/`ci:` hints, so their existing
-// out-of-band wake behavior remains as a compatibility bridge. Other automated waits should instead
-// stay ACTIVE through Bash/Monitor (Claude) or a blocking
-// exec wait (Codex). The resumed turn supersedes the fence, naturally making the wake idempotent.
+// ---- THE DURABLE WAKER ---------------------------------------------------------------------------
+// NOTHING IN AN ```awaiting FENCE WAKES A THREAD. A fence STATES what a thread is waiting on; every
+// wait frizz can actually fire is a REGISTRATION the worker made through a tool — a `thread_timer` row
+// (`mcp__frizz__timer`), a `pr_watch` row (`mcp__frizz__watch_pr`, SOURCE 11), a background shell's own
+// telemetry — or a condition the server itself observes: a provider limit lifting, a human's snooze
+// coming due, a recurring prompt's schedule, a rest with nothing declared. The limb that polled
+// `pr-watch:`/`pr:`/`ci:`/`timer:` hints out of the fence was hardwired off by the 2026-08-15 grammar
+// cut and deleted on 2026-08-24, because a line frizz cannot check is a wait that can silently never
+// resolve. Any other automated wait should stay ACTIVE instead, through Bash/Monitor (Claude) or a
+// blocking exec wait (Codex).
 //
 // ---- THE BOOT-MASS-FIRE SAFETY GUARD (critical — the maintainer has ~14 real sessions) ----
-// We fire ONLY on a wait registered by this scheduler, or a legacy condition we witness transition
-// from UNMET → MET. Future timers and GitHub-review baselines are PERSISTED before they can fire, so a
-// crossing/activity during downtime still wakes after restart. An already-past UNREGISTERED timer (an
-// old transcript inherited during migration) never fires, preserving the boot no-mass-resume guard.
-// Legacy pr/ci hints remain in-memory transition watches only. Once a condition fires, a deterministic
-// SQLite outbox row is committed BEFORE terminal delivery. Atomic leases serialize multiple scheduler
-// instances; delivery acknowledgement, transcript-token confirmation, and exact-fence supersession
-// produce explicit terminal states. A crash leaves pending/leased work recoverable instead of burning
-// a fired bit before the wake reached the worker.
+// We fire ONLY on a wait REGISTERED with this scheduler, and every registration is persisted before it
+// can fire — so a timer crossing or PR activity during downtime still wakes after a restart, while a
+// thread that merely inherited an old transcript has registered nothing and therefore wakes nothing.
+// Once a condition fires, a deterministic SQLite outbox row is committed BEFORE terminal delivery.
+// Atomic leases serialize multiple scheduler instances; delivery acknowledgement, transcript-token
+// confirmation, and per-source supersession produce explicit terminal states. A crash leaves
+// pending/leased work recoverable instead of burning a fired bit before the wake reached the worker.
 
 export interface PrRef {
   owner: string
@@ -71,7 +68,7 @@ export interface PrStatus {
    *  verdict is only news against the commit it was reached on (see the pr-watch cursor). */
   head?: string
   // Workflow runs queried by the PR's exact head SHA. statusCheckRollup can omit a fork-gated
-  // ACTION_REQUIRED run, so it is never sufficient evidence that a legacy `ci:` fence passed.
+  // ACTION_REQUIRED run, so the exact-head runs are what let a watcher NAME the jobs that went red.
   workflowRuns?: WorkflowRun[]
 }
 
@@ -123,8 +120,9 @@ export function failureSignature(rollup: RollupEntry[]): string {
   return createHash("sha1").update(ids.sort().join("\n")).digest("hex").slice(0, 12)
 }
 
-// Parse a PR reference out of a hint value: `owner/repo#123` or a GitHub PR URL. Undefined when neither
-// shape matches (e.g. an actions-run URL with no PR number) → that hint is simply not actionable.
+// Parse a PR reference: `owner/repo#123` or a GitHub PR URL. Undefined when neither shape matches
+// (e.g. an actions-run URL with no PR number). Duplicated from `awaiting.ts`, which the board and the
+// router parse with — the two are byte-identical and worth collapsing, but that is its own change.
 const PR_REF_RE = /(?:https?:\/\/github\.com\/)?([A-Za-z0-9][\w.-]*)\/([A-Za-z0-9][\w.-]*?)(?:\/pull\/|\/pulls\/|#)(\d+)/
 export function parsePrRef(value: string): PrRef | undefined {
   const m = value.trim().match(PR_REF_RE)
@@ -133,37 +131,21 @@ export function parsePrRef(value: string): PrRef | undefined {
   if (!Number.isFinite(number) || number <= 0) return undefined
   return { owner: m[1], repo: m[2].replace(/\.git$/, ""), number }
 }
-function refKey(r: PrRef): string {
-  return `${r.owner}/${r.repo}#${r.number}`
-}
 
 // `gh pr view` does not accept owner/repo#N as its positional selector. Pin the CLI-compatible shape:
 // numeric selector plus an explicit repository. Kept pure/exported so a regression cannot silently
-// turn every healthy legacy PR/CI poll into an "unavailable" result again.
+// turn every healthy watcher poll into an "unavailable" result again.
 export function ghPrViewArgs(ref: PrRef): string[] {
   return ["pr", "view", String(ref.number), "--repo", `${ref.owner}/${ref.repo}`, "--json", "state,mergedAt,statusCheckRollup,headRefOid,mergeable,reviewDecision"]
 }
 
-// Retries preserve obsolete failed/ACTION_REQUIRED runs on the same SHA. Match the plugin monitor:
-// the newest run for a workflow/event is the current verdict, not the oldest blocked attempt.
-export function latestWorkflowRuns(runs: WorkflowRun[]): WorkflowRun[] {
-  const latest = new Map<string, WorkflowRun>()
-  for (const run of runs) {
-    if (!run || typeof run !== "object") continue
-    const key = `${run.workflowName ?? run.name ?? "unknown"}\u0000${run.event ?? ""}`
-    const old = latest.get(key)
-    const stamp = String(run.createdAt ?? "")
-    const oldStamp = String(old?.createdAt ?? "")
-    const id = Number(run.databaseId ?? 0)
-    const oldId = Number(old?.databaseId ?? 0)
-    if (!old || stamp > oldStamp || (stamp === oldStamp && id > oldId)) latest.set(key, run)
-  }
-  return [...latest.values()]
-}
-
 // Reduce a statusCheckRollup to a terminal verdict. `done` = every check has reached a terminal state
-// (nothing queued/in-progress/pending); `ok` = none concluded in failure. An EMPTY rollup is treated
-// as still-pending (no checks reported yet) so a `ci:` wait never fires before any check exists.
+// (nothing queued/in-progress/pending); `ok` = none concluded in failure. An EMPTY rollup is treated as
+// still-pending: no check has reported yet, which is not the same answer as green.
+//
+// This is the REFERENCE reading of a rollup. `githubWatchStatus` below re-derives the same verdict
+// beside its counts rather than calling it, so this stays exported and unit-tested as the thing that
+// reading must not be allowed to drift from.
 export function evalRollup(rollup: RollupEntry[]): { done: boolean; ok: boolean } {
   if (!Array.isArray(rollup) || rollup.length === 0) return { done: false, ok: false }
   let pending = false
@@ -176,7 +158,7 @@ export function evalRollup(rollup: RollupEntry[]): { done: boolean; ok: boolean 
     // An entry is terminal ONLY if it AFFIRMATIVELY says so: a CheckRun with status COMPLETED, or a
     // StatusContext whose state is a settled value. An entry we can't classify (no recognizable
     // status/state — a `{}` or a future/unknown shape) is treated as still-PENDING, never as
-    // done+green — so a shape surprise can never launder a `ci:` wait into a false "green" fire.
+    // done+green — so a shape surprise can never launder an unknown check into a false "green" verdict.
     const terminal = status ? status === "COMPLETED" : state ? state !== "PENDING" && state !== "EXPECTED" : false
     if (!terminal) pending = true
     if (rollupEntryFailed(conclusion, state)) failed = true
@@ -217,8 +199,8 @@ export function failedCheckNames(rollup: RollupEntry[], runs: WorkflowRun[] = []
   }
   for (const run of Array.isArray(runs) ? runs : []) {
     if (!run || typeof run !== "object") continue
-    // An unapproved fork run reads ACTION_REQUIRED but is a pending approval, not a failure — the same
-    // reading `evalHint` gives it, so it must not be listed as a failed job either.
+    // An unapproved fork run reads ACTION_REQUIRED but is a pending approval, not a failure, so it
+    // must not be listed as a failed job.
     if (run.conclusion === "ACTION_REQUIRED") continue
     if (!rollupEntryFailed(run.conclusion ?? undefined, undefined)) continue
     push(run.workflowName ?? run.name)
@@ -227,11 +209,10 @@ export function failedCheckNames(rollup: RollupEntry[], runs: WorkflowRun[] = []
 }
 
 // ---- WHAT A WATCHED PR'S CHECKS LOOK LIKE FROM OUTSIDE ------------------------------------------
-// The same rollup the legacy `ci:` verdict reads, projected into the shape GitHub's own merge box
-// states — because it now DECIDES A QUEUE RULE and not just a readout (maintainer 2026-08-14: "if
-// there is a GitHub watcher registered and the GitHub actions are still running, then that should
-// remain in the running active rail. Only if CI has failed or completed successfully should it show up
-// back in the queue").
+// The `gh pr view` rollup, projected into the shape GitHub's own merge box states — because it DECIDES
+// A QUEUE RULE and not just a readout (maintainer 2026-08-14: "if there is a GitHub watcher registered
+// and the GitHub actions are still running, then that should remain in the running active rail. Only if
+// CI has failed or completed successfully should it show up back in the queue").
 //
 // `none` and `running` are deliberately different answers. An EMPTY rollup means no check has reported
 // yet, which `evalRollup` already treats as pending — but a PR with no CI at all would then wait
@@ -276,39 +257,6 @@ export function githubWatchStatus(pr: PrStatus, polledAt: string): GithubWatchSt
     head: pr.head,
     failureSig: failureSignature(entries),
   }
-}
-
-// The PR-activity watcher hint. A one-line predicate (rather than inlining `=== "pr-watch"`) keeps
-// every scheduler branch reading uniformly and leaves an obvious seam if the watcher ever grows a
-// second spelling again. (`github-review`, the prior name, was removed 2026-07-22.)
-function isPrWatchHint(_kind: FenceView["hints"][number]["kind"]): boolean {
-  return false // the grammar has no pr-watch kind since 2026-08-15; a PR is a registered watcher (SOURCE 11)
-}
-
-// Is a hint one this scheduler can act on? A current STRICT ISO `timer:`, a machine-readable
-// `pr-watch:` PR ref, plus legacy `pr:`/`ci:` refs. `human:` is descriptive by
-// definition and `session:` has no cross-session liveness signal, so neither is resolved here.
-function isActionable(_hint: FenceView["hints"][number]): boolean {
-  // NOTHING IN A FENCE IS ACTIONABLE ANY MORE (2026-08-15). Every kind this used to fire has become a
-  // REGISTRATION the worker makes through a tool, and the fence only NAMES what already exists: a timer
-  // is a `thread_timer` row, a PR is a `watch_pr` registration, a shell/agent is live telemetry. The
-  // arming/polling machinery below is therefore unreachable for the current grammar and survives only
-  // for the legacy `pr:`/`ci:` spellings, which no worker has emitted since long before this.
-  return false
-}
-
-// A stable identity for the CURRENT awaiting rest of a thread: the sorted set of its actionable hints.
-// A different set (the agent re-awaits something new) is a fresh arming cycle; the same set across ticks
-// (and across a restart — hints are derived deterministically from the JSONL) is the same wait.
-function fenceIdentity(hints: FenceView["hints"], fenceAt?: string): string {
-  const hintId = hints
-    .filter(isActionable)
-    .map((h) => `${h.kind}:${h.value}`)
-    .sort()
-    .join("|")
-  // The final-message timestamp is the generation id. Re-emitting the SAME hint after a follow-up is
-  // a fresh wait/baseline even if the scheduler did not happen to tick while the old fence was clear.
-  return `${fenceAt ?? ""}\u0001${hintId}`
 }
 
 function wakeDeliveryId(slug: string, sessionId: string, fenceId: string): string {
@@ -777,13 +725,10 @@ function armedCompact(row: RecurringRow): ArmedRest | undefined {
 const TIMER_FENCE_PREFIX = "timer"
 const TIMER_HINT_PREFIX = "timer:"
 
-// Safe against the awaiting-fence namespace even though `timer:` is also an awaiting HINT kind: an
-// awaiting fence id is `<fence instant><kind>:<value>…` (see fenceIdentity), so it can never begin
-// with this prefix.
-// A registered watcher's delivery namespace (scheduler SOURCE 8). Safe against every neighbour for the
-// same reason the timer's is: an awaiting fence id begins with its own fence instant, and no other
-// prefix here starts with these characters.
-// The built-in sign-off nudge's delivery namespace (scheduler SOURCE 9), and its consecutive cap.
+// Every delivery-id namespace here is safe against its neighbours: no prefix minted below is a prefix
+// of another, and a source that mints an id outside all of them is superseded by `deliveryContext`'s
+// tail rather than delivered. (A registered watcher is scheduler SOURCE 8; the built-in sign-off nudge
+// is SOURCE 9, and it carries its own consecutive cap.)
 /** A finished background shell's delivery namespace. The shell's own launch tool_use id is the whole
  *  key, so one shell can wake its thread exactly once, ever — no counter, no cursor, no way to loop. */
 const SHELL_FENCE_PREFIX = "shell"
@@ -863,59 +808,6 @@ function timerIdOf(fenceId: string): string {
   return fenceId.slice(TIMER_FENCE_PREFIX.length + 1)
 }
 
-// A single hint's verdict this tick: met? + the steer to send when it fires. `undefined` = indeterminate
-// (a PR fetch we couldn't complete) → neither arm nor fire; try again next poll.
-interface Verdict {
-  met: boolean
-  steer: string
-  reason: string
-}
-function evalHint(hint: FenceView["hints"][number], nowMs: number, prCache: Map<string, PrStatus>, fenceBody: string): Verdict | undefined {
-  if (isPrWatchHint(hint.kind)) return undefined // evaluated against its persisted activity cursor below
-  const ref = parsePrRef(hint.value)
-  if (!ref) return undefined
-  const s = prCache.get(refKey(ref))
-  if (!s) return undefined // no PR data this window (fetch failed / not yet polled) → indeterminate
-  if (hint.kind === "pr") {
-    const merged = !!s.mergedAt || s.state === "MERGED"
-    const closed = s.state === "CLOSED"
-    const steer = merged
-      ? `✅ PR ${refKey(ref)} merged. Continue.`
-      : `ℹ️ PR ${refKey(ref)} was closed without merging. Continue.`
-    return { met: merged || closed, steer, reason: `pr ${refKey(ref)} ${s.state}` }
-  }
-  // ci
-  // Exact-head Actions runs are mandatory evidence for legacy CI. A partial rollup can look green
-  // while a fork gate is ACTION_REQUIRED or a matrix job is still queued. An approved rerun replaces
-  // its older same-workflow attempt, just as the worker-side CI monitor does.
-  if (!Array.isArray(s.workflowRuns)) {
-    return { met: false, steer: "", reason: `ci ${refKey(ref)} workflow runs unavailable` }
-  }
-  const runs = latestWorkflowRuns(s.workflowRuns)
-  if (runs.length === 0) return { met: false, steer: "", reason: `ci ${refKey(ref)} no exact-head workflow runs` }
-  // An old fork-gated check remains in statusCheckRollup after a maintainer approves a rerun. The
-  // exact, deduplicated workflow list is authoritative for that one stale conclusion; other rollup
-  // failures/pending contexts still participate in the combined verdict.
-  const rollup = s.rollup.map((check) => check?.conclusion === "ACTION_REQUIRED"
-    ? { ...check, conclusion: undefined }
-    : check)
-  const rollupVerdict = evalRollup(rollup)
-  const workflowVerdict = evalRollup(runs.map((run) => {
-    // GitHub reports an unapproved fork run as COMPLETED/ACTION_REQUIRED. It is semantically a
-    // pending approval, not a terminal CI failure, until a newer rerun replaces it.
-    if (run.conclusion === "ACTION_REQUIRED") return { status: "IN_PROGRESS" }
-    return { status: run.status, conclusion: run.conclusion ?? undefined }
-  }))
-  const done = rollupVerdict.done && workflowVerdict.done
-  const ok = rollupVerdict.ok && workflowVerdict.ok
-  const failures = failedCheckNames(rollup, runs)
-  const named = failures.names.length
-    ? ` — ${failures.names.join(", ")}${failures.omitted > 0 ? `, and ${failures.omitted} more` : ""}`
-    : ""
-  const steer = ok ? `✅ CI is green on ${refKey(ref)}. Continue.` : `❌ CI failed on ${refKey(ref)}${named}. Continue.`
-  return { met: done, steer, reason: `ci ${refKey(ref)} ${done ? (ok ? "green" : "failed") : "pending"}` }
-}
-
 // Default gh-backed PR fetcher. Uses the USER'S `gh` (their auth) via execFile — NO shell. Any failure
 // (gh missing → ENOENT, not authed / rate-limited → nonzero exit, malformed JSON) resolves to undefined
 // so the tick logs + skips and NEVER crashes. Timeout-bounded so a hung gh can't wedge the scheduler.
@@ -956,67 +848,14 @@ async function defaultFetchPr(ref: PrRef): Promise<PrStatus | undefined> {
   }
 }
 
-// Per-thread arming state for the CURRENT awaiting rest (reset when the fence identity changes/clears).
-interface ThreadWake {
-  fenceId: string
-  armed: Map<string, boolean> // hintKey → have we witnessed it UNMET at least once?
-  fired: boolean // this rest already has a legacy fired marker or durable outbox row
-  lastPollAt: number // last gh poll for this thread's pr/ci/review hints (throttle)
-  prCache: Map<string, PrStatus> // last-known PR statuses, keyed by refKey (kept between polls)
-  reviewCache: Map<string, GithubReviewActivity[]> // current review/comment activity snapshot by ref
-}
-
-const FIRED_CAP = 500 // legacy pre-outbox marker cap (read during rolling upgrade, never newly added)
 /** How many PRs' readings the book keeps. Shared by ref, so two threads watching one PR see one reading
  *  and cost one fetch. The key itself lives in awaiting.ts, beside the parser the board reads it with. */
 const GITHUB_STATUS_CAP = 200
-const REGISTRATION_CAP = 500
 const REVIEW_SEEN_CAP = 300
-// (thread, PR) pairs whose pre-existing activity has already been replayed once. Sized like the other
-// ledgers; an eviction costs at most one extra backlog wake on a thread that has been idle for hundreds
-// of other parks, which is exactly the wake it would have wanted anyway.
-const INTRODUCED_CAP = 500
 // How many fresh activities a single wake steer enumerates. One poll interval can collect a whole
 // review app's burst; naming ten of them is already a long steer, and the count line tells the worker
 // how many it did not get named individually.
 const REVIEW_STEER_CAP = 10
-
-interface ReviewCursor {
-  baseline: true
-  seen: string[]
-  // Every newly-observed event is recorded before the wake outbox is enqueued. If GitHub is
-  // temporarily unavailable on restart, this cursor still reproduces the exact pending events; the
-  // deterministic outbox id prevents a second delivery row for the same fence generation. It is a
-  // LIST because one poll interval routinely collects several: naming only the newest while marking
-  // the rest seen dropped the others on the floor, unmentioned to anyone, forever.
-  pending?: GithubReviewActivity[]
-  // How many fresh activities exceeded REVIEW_STEER_CAP and so were counted but not named. Persisted
-  // so a retried delivery reproduces the SAME steer rather than quietly dropping the "and N more" line.
-  pendingOmitted?: number
-}
-// Re-hydrate one persisted activity. Anything without the three load-bearing fields is dropped rather
-// than half-restored, so a corrupt row can never synthesize a wake naming a `@undefined` actor.
-function parsePersistedActivity(raw: unknown): GithubReviewActivity | undefined {
-  if (!raw || typeof raw !== "object") return undefined
-  const p = raw as Record<string, unknown>
-  if (typeof p.id !== "string" || typeof p.actor !== "string") return undefined
-  if (p.kind !== "review" && p.kind !== "comment") return undefined
-  return {
-    id: p.id,
-    actor: p.actor,
-    actorType: typeof p.actorType === "string" ? p.actorType : undefined,
-    at: typeof p.at === "string" ? p.at : undefined,
-    kind: p.kind,
-    ...(typeof p.reviewState === "string" ? { reviewState: p.reviewState } : {}),
-    ...(typeof p.url === "string" && p.url ? { url: p.url } : {}),
-  }
-}
-
-interface PersistedRegistration {
-  key: string
-  timers: Record<string, string> // hint key → exact ISO target; presence means durably armed
-  reviews: Record<string, ReviewCursor> // hint key → durable activity baseline/cursor
-}
 
 export interface SchedulerDeps {
   storage: Storage
@@ -1037,7 +876,6 @@ export interface SchedulerDeps {
   fetchGithubReview?: (ref: PrRef) => Promise<GithubReviewActivity[] | GithubReviewFetchResult | undefined>
   log?: (msg: string) => void
   tickMs?: number // how often to check (timers resolve at this cadence)
-  pollMs?: number // minimum spacing between gh polls for a given thread's pr/ci hints
   deliveryLeaseMs?: number
   retryBaseMs?: number
   retryMaxMs?: number
@@ -1062,7 +900,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const fetchGithubReview = deps.fetchGithubReview ?? createGithubReviewFetcher({ now })
   const log = deps.log ?? ((m: string) => frizzLog.info("scheduler", m))
   const tickMs = deps.tickMs ?? 10_000
-  const pollMs = deps.pollMs ?? 60_000
   const deliveryLeaseMs = Math.max(1, deps.deliveryLeaseMs ?? 30_000)
   const retryBaseMs = Math.max(1, deps.retryBaseMs ?? 5_000)
   const retryMaxMs = Math.max(retryBaseMs, deps.retryMaxMs ?? 5 * 60_000)
@@ -1071,15 +908,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const deliveryOwner = randomUUID()
   const outbox = createWakeDeliveryStore(deps.storage.db)
 
-  const threads = new Map<string, ThreadWake>() // slug → arming state
   const reviewFailures = new Map<string, { signature: string; loggedAt: number; suppressed: number }>()
-  // Compatibility for wakes fired by the pre-outbox scheduler during a rolling upgrade. New wakes
-  // never enter this set; the durable wake_delivery table below owns their lifecycle.
-  const fired = new Set<string>(loadFired())
-  // Future timer registrations + GitHub review baselines. Unlike legacy pr/ci arming, these MUST
-  // survive a process restart because their purpose is to own transitions while the worker/server is
-  // absent. The exact fence generation (timestamp + hints) is part of each key.
-  const registrations = new Map<string, PersistedRegistration>(loadRegistrations().map((r) => [r.key, r]))
   let timer: NodeJS.Timeout | null = null
   let activeTick: Promise<void> | null = null // guard + shutdown drain for a slow poll/delivery
   let stopped = false
@@ -1102,132 +931,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     for (const stale of keys.slice(0, Math.max(0, keys.length - GITHUB_STATUS_CAP))) delete book[stale]
     deps.storage.setSetting(GITHUB_STATUS_SETTING, book)
   }
-
-  function loadFired(): string[] {
-    const raw = deps.storage.getSetting("waker.fired")
-    return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string") : []
-  }
-  function saveFired(): void {
-    deps.storage.setSetting("waker.fired", [...fired].slice(-FIRED_CAP))
-  }
-  function forgetFired(key: string): void {
-    if (fired.delete(key)) saveFired()
-  }
-  function loadRegistrations(): PersistedRegistration[] {
-    const raw = deps.storage.getSetting("waker.registrations.v1")
-    if (!Array.isArray(raw)) return []
-    const out: PersistedRegistration[] = []
-    for (const item of raw.slice(-REGISTRATION_CAP)) {
-      if (!item || typeof item !== "object") continue
-      const obj = item as Record<string, unknown>
-      if (typeof obj.key !== "string" || !obj.key) continue
-      const timers: Record<string, string> = {}
-      if (obj.timers && typeof obj.timers === "object" && !Array.isArray(obj.timers)) {
-        for (const [k, v] of Object.entries(obj.timers as Record<string, unknown>)) if (typeof v === "string") timers[k] = v
-      }
-      const reviews: Record<string, ReviewCursor> = {}
-      if (obj.reviews && typeof obj.reviews === "object" && !Array.isArray(obj.reviews)) {
-        for (const [k, v] of Object.entries(obj.reviews as Record<string, unknown>)) {
-          if (!v || typeof v !== "object") continue
-          const seen = (v as { seen?: unknown }).seen
-          if (!Array.isArray(seen)) continue
-          // `pending` was a single activity before the steer learned to enumerate a burst. A
-          // registration written by that scheduler is still on disk across the upgrade, so read the
-          // bare object as a one-element list rather than discarding a wake already owed to a worker.
-          const rawPending = (v as { pending?: unknown }).pending
-          const pending = (Array.isArray(rawPending) ? rawPending : rawPending === undefined ? [] : [rawPending])
-            .map(parsePersistedActivity)
-            .filter((p): p is GithubReviewActivity => p !== undefined)
-            .slice(0, REVIEW_STEER_CAP)
-          const rawOmitted = (v as { pendingOmitted?: unknown }).pendingOmitted
-          const pendingOmitted = typeof rawOmitted === "number" && Number.isFinite(rawOmitted) && rawOmitted > 0
-            ? Math.floor(rawOmitted)
-            : 0
-          reviews[k] = {
-            baseline: true,
-            // Cursors are stored newest-first (saveReviewCursor prepends the current page), so retain
-            // the head on load too. Keeping the oldest tail would forget recent activity after a
-            // restart and could misclassify it as a fresh human review.
-            seen: seen.filter((x): x is string => typeof x === "string").slice(0, REVIEW_SEEN_CAP),
-            ...(pending.length ? { pending } : {}),
-            ...(pending.length && pendingOmitted ? { pendingOmitted } : {}),
-          }
-        }
-      }
-      out.push({ key: obj.key, timers, reviews })
-    }
-    return out
-  }
-  function saveRegistrations(): void {
-    deps.storage.setSetting("waker.registrations.v1", [...registrations.values()].slice(-REGISTRATION_CAP))
-  }
-  function registration(key: string): PersistedRegistration {
-    const existing = registrations.get(key)
-    if (existing) return existing
-    const created: PersistedRegistration = { key, timers: {}, reviews: {} }
-    registrations.set(key, created)
-    while (registrations.size > REGISTRATION_CAP) {
-      const oldest = registrations.keys().next().value
-      if (oldest === undefined) break
-      registrations.delete(oldest)
-    }
-    return created
-  }
-  function armTimer(key: string, hintKey: string, target: string): void {
-    const r = registration(key)
-    if (r.timers[hintKey] === target) return
-    r.timers[hintKey] = target
-    saveRegistrations()
-  }
-  function saveReviewCursor(key: string, hintKey: string, seen: string[], pending?: GithubReviewActivity[], pendingOmitted = 0): void {
-    const r = registration(key)
-    const unique = [...new Set(seen)].slice(0, REVIEW_SEEN_CAP)
-    const next: ReviewCursor = {
-      baseline: true,
-      seen: unique,
-      ...(pending?.length ? { pending } : {}),
-      ...(pending?.length && pendingOmitted > 0 ? { pendingOmitted } : {}),
-    }
-    if (JSON.stringify(r.reviews[hintKey] ?? null) === JSON.stringify(next)) return
-    r.reviews[hintKey] = next
-    saveRegistrations()
-  }
-  function forgetRegistration(key: string): void {
-    if (registrations.delete(key)) saveRegistrations()
-  }
-  // ---- the pr-watch INTRODUCTION ledger ------------------------------------------------------------
-  // Which (thread, PR) pairs have already had the PR's pre-existing activity replayed to them. It is a
-  // ledger of its own, and it has to be, because every other piece of watcher state is keyed by FENCE
-  // GENERATION and is therefore wiped between parks: `registrations` is keyed on the fence instant, and
-  // runTick's sweep forgets it outright the moment the thread stops being idle. So "have I already told
-  // this worker what was on this PR?" cannot be answered from any of it.
-  //
-  // Getting that wrong is not a cosmetic bug, it is an infinite loop: replay the backlog on every park
-  // with no durable memory of having done it, and the wake makes the worker turn, the turn makes it
-  // re-park, and the re-park replays the same backlog again, forever. This ledger is the one bit that
-  // makes "once per thread per PR" true across re-parks, restarts and archival.
-  const introduced = new Set<string>(loadIntroduced())
-  function loadIntroduced(): string[] {
-    const raw = deps.storage.getSetting("waker.prwatch.introduced.v1")
-    return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string").slice(-INTRODUCED_CAP) : []
-  }
-  // Same NUL-delimiting rationale as firedKey: neither a slug nor a normalized owner/repo#N can contain
-  // one, so no pair can forge another's key.
-  const introducedKey = (slug: string, ref: PrRef) => `${slug}\u0000${refKey(ref)}`
-  function markIntroduced(slug: string, ref: PrRef): void {
-    const key = introducedKey(slug, ref)
-    if (introduced.has(key)) return
-    introduced.add(key)
-    while (introduced.size > INTRODUCED_CAP) {
-      const oldest = introduced.keys().next().value
-      if (oldest === undefined) break
-      introduced.delete(oldest)
-    }
-    deps.storage.setSetting("waker.prwatch.introduced.v1", [...introduced])
-  }
-  // NUL-delimited so no slug/fenceId content can forge a different pair's key (slugs match a
-  // space-free regex and actionable hint values carry no NUL, so this is collision-proof).
-  const firedKey = (slug: string, fenceId: string) => `${slug}\u0000${fenceId}`
 
   class InjectedSchedulerCrash extends Error {
     constructor(cause: unknown) {
@@ -1359,12 +1062,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     // fence being corrected. Nothing else can supersede it: whether the fence is still wrong is settled
     // at ENQUEUE, and re-deciding it here would race the very bump that fixes it.
     //
-    // THIS BRANCH IS WHY THE SOURCE WORKED AT ALL. Without it a `park:…` id fell to the awaiting-fence
-    // tail below, whose `isActionable` has been hardwired false since the 2026-08-15 grammar cut — so
-    // every correction read as superseded, at zero attempts, and the one voice that can get a worker out
-    // of a bad fence was silent. Measured on the maintainer's own board 2026-08-18: 2034 corrections
-    // enqueued across four projects, 0 delivered, ever, while every kind that HAS a branch here ran at
-    // ~100%. The thread that surfaced it wrote `timer: none` and sat for three hours.
+    // THIS BRANCH IS WHY THE SOURCE WORKED AT ALL. Without it a `park:…` id fell to the tail below,
+    // which supersedes everything that reaches it — so every correction read as superseded, at zero
+    // attempts, and the one voice that can get a worker out of a bad fence was silent. Measured on the
+    // maintainer's own board 2026-08-18: 2034 corrections enqueued across four projects, 0 delivered,
+    // ever, while every kind that HAS a branch here ran at ~100%. The thread that surfaced it wrote
+    // `timer: none` and sat for three hours.
     //
     // THE GENERAL SHAPE OF THAT BUG: a fallthrough that supersedes is a fallthrough that fails CLOSED, so
     // a source minting a new prefix without a branch here is silently undeliverable and the enqueue-side
@@ -1373,20 +1076,20 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (parkFenceRestOf(item.fenceId) !== (tele.lastAssistantAt ?? "")) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
-    // THE TAIL IS THE AWAITING-FENCE SOURCE, AND ONLY THAT. Everything above claims its own prefix; a
-    // fence identity is `<instant>\u0001<hints>` (see fenceIdentity), so an id reaching here WITHOUT the
-    // separator belongs to a source that mints a prefix nobody routes — and the tail supersedes, so that
-    // source is silently undeliverable while its enqueue-side tests stay green. Both bugs found on
-    // 2026-08-18 were exactly this, and neither was visible without querying the database. It still
-    // supersedes (failing open would deliver an id we cannot reason about), but it SAYS SO.
+    // NOTHING ROUTES TO THE TAIL ANY MORE, so everything that reaches it supersedes. Every live source
+    // above claims its own prefix; an id arriving here belongs to a source that mints one nobody routes,
+    // and a fallthrough that supersedes is a fallthrough that fails CLOSED — that source is silently
+    // undeliverable while its enqueue-side tests stay green. Both bugs found on 2026-08-18 were exactly
+    // this, and neither was visible without querying the database. It still supersedes (failing open
+    // would deliver an id we cannot reason about), but it SAYS SO.
+    //
+    // The one id shape that is NOT a bug is a fence identity from a pre-cutover scheduler, still sitting
+    // in an old outbox. That source was deleted on 2026-08-24 and nothing mints those ids now, so
+    // superseding one is the right answer and it needs no alarm — hence the separator check below.
     if (!item.fenceId.includes("\u0001")) {
       log(`waker: UNROUTED wake prefix ${item.fenceId.split(":")[0]} for ${item.slug} — no deliveryContext branch, superseding`)
-      return "superseded"
     }
-    const fence = tele.lastFence
-    if (!fence || fence.kind !== "awaiting" || !fence.hints.some(isActionable)) return "superseded"
-    if (fenceIdentity(fence.hints, tele.lastActivityAt) !== item.fenceId) return "superseded"
-    return tele.turn === "idle" ? "current-idle" : "current-busy"
+    return "superseded"
   }
 
   // May this item go out RIGHT NOW? Most sources wait for the thread to come to rest, because they are
@@ -1440,125 +1143,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   }
 
-  // Who + when + WHICH ONE. The steer used to name only the PR and the actor, which is not enough to
-  // find the thing that woke the worker: its only move was a broad re-read of the thread
-  // (`gh pr view N --json comments`), and that hands back every comment the actor ever left. A worker
-  // woken for one fresh comment on nubjs/nub#587 pulled back TWO and re-litigated a stale one it had
-  // already handled hours earlier. The permalink is the fix — it addresses exactly one item — and the
-  // ISO timestamp lets the worker order it against its own last turn even if the URL is unavailable.
-  //
-  // The steer must never imply a person: an app filed most of what wakes this watcher. It must also
-  // never read as an instruction to MUTATE the PR. "Re-open the PR and continue" meant "open the PR
-  // again and read it", but a worker parses `gh pr reopen` — so the steer either burned a turn on the
-  // ambiguity or, worse, reopened a PR the maintainer closed on purpose. The wake is a NOTIFICATION;
-  // what to do about it is the worker's call. Keep the verb about reading, like the merged/closed/CI
-  // steers that just say "Continue."
-  //
-  // The FORMAT itself lives in @frizz/shared beside its parser, because the chat rebuilds a
-  // first-party card from this exact string — the structured activity never reaches the transcript.
-  //
-  // `activities` is chronological and may hold several: one poll interval routinely collects a burst,
-  // and every one of them is marked seen, so anything this steer does not name is never mentioned to
-  // anyone again. `omitted` is how many more than the cap were dropped from the enumeration.
-  function activitySteer(activities: GithubReviewActivity[], ref: PrRef, omitted = 0, backlog = false): string {
-    return formatGithubWakeSteer({
-      ref: refKey(ref),
-      omitted,
-      items: activities.map((a) => ({
-        label: activityLabel(a),
-        actor: a.actor,
-        bot: isBotGithubActor(a),
-        ...(a.at ? { at: a.at } : {}),
-        ...(a.url ? { url: a.url } : {}),
-      })),
-    }, { backlog })
-  }
-
-  // The operator-facing log line for this wake. Names the distinct actors rather than a count, since
-  // "by pullfrog" is what makes a `waker: queued` line legible when scanning the server log.
-  function reviewReason(ref: PrRef, activities: GithubReviewActivity[], omitted = 0): string {
-    const actors = [...new Set(activities.map((a) => a.actor))]
-    const total = activities.length + omitted
-    return `pr-watch ${refKey(ref)} by ${actors.join(", ")}${total > 1 ? ` (${total} items)` : ""}`
-  }
-
-  function reviewVerdict(
-    slug: string,
-    persistKey: string,
-    hint: FenceView["hints"][number],
-    activities: GithubReviewActivity[],
-    fenceAt: string | undefined,
-  ): Verdict | undefined {
-    const ref = parsePrRef(hint.value)
-    if (!ref) return undefined
-    const hintKey = `${hint.kind}:${hint.value}`
-    const prior = registrations.get(persistKey)?.reviews[hintKey]
-    // A previous delivery attempt failed. Retry the durable outbox item before consulting the latest
-    // page; it must not disappear merely because GitHub is down or the item fell off a bounded page.
-    if (prior?.pending?.length) {
-      const omitted = prior.pendingOmitted ?? 0
-      return {
-        met: true,
-        steer: activitySteer(prior.pending, ref, omitted),
-        reason: reviewReason(ref, prior.pending, omitted),
-      }
-    }
-    // No actor filter: every review and comment on the PR is a wake candidate.
-    const newestFirst = [...activities].sort((a, b) => {
-      const at = Date.parse(b.at ?? "") - Date.parse(a.at ?? "")
-      return Number.isFinite(at) && at !== 0 ? at : b.id.localeCompare(a.id)
-    })
-    const priorSeen = new Set(prior?.seen ?? [])
-    // THE FIRST PARK OF THIS THREAD ON THIS PR replays whatever is already there, once (maintainer
-    // 2026-08-12, choosing this over merely showing it on the card). "Waiting on review" is a claim that
-    // review has not arrived, and a worker that never read the PR makes that claim wrongly: one parked on
-    // colinhacks/zod#6318 with two unaddressed reviews sitting on it, the old baseline recorded them as
-    // handled, and the watcher slept on exactly what it was watching for. The trade is knowing and
-    // accepted — a worker that DID answer its review gets one redundant wake, and the steer's backlog
-    // tail tells it so — because being asleep on real review costs incomparably more.
-    //
-    // Once per (thread, PR), never once per park: see the introduction ledger for why that distinction
-    // is the difference between a fix and a wake loop.
-    const firstSight = !prior && !introduced.has(introducedKey(slug, ref))
-    if (firstSight) markIntroduced(slug, ref)
-    let fresh: GithubReviewActivity[]
-    if (prior) {
-      fresh = newestFirst.filter((a) => !priorSeen.has(a.id))
-    } else if (firstSight) {
-      fresh = newestFirst
-    } else {
-      // A review may land between the final fence and this scheduler's first poll (or while the server
-      // is restarting before the baseline is persisted). The fence timestamp lets a brand-new grammar
-      // distinguish that real post-fence activity from all pre-existing review history. If timestamp
-      // telemetry is unavailable, baseline conservatively and wait for the next unseen id.
-      const fenceMs = Date.parse(fenceAt ?? "")
-      fresh = Number.isFinite(fenceMs)
-        ? newestFirst.filter((a) => {
-            const at = Date.parse(a.at ?? "")
-            return Number.isFinite(at) && at > fenceMs
-          })
-        : []
-    }
-    // Persist the cursor BEFORE a possible resume. Union with the prior tail so a temporarily-shorter
-    // API page cannot make an old id look new later; newest current ids win the bounded cap.
-    if (fresh.length === 0) {
-      saveReviewCursor(persistKey, hintKey, [...newestFirst.map((a) => a.id), ...(prior?.seen ?? [])])
-      return undefined
-    }
-    // Enumerate the WHOLE burst, newest first so the cap keeps what matters most, then chronologically
-    // for the steer — a conversation reads in the order it was written. Every id in `fresh` is about to
-    // be marked seen, so a steer that named only `fresh[0]` silently discarded the rest.
-    const named = fresh.slice(0, REVIEW_STEER_CAP)
-    const omitted = fresh.length - named.length
-    const chronological = [...named].reverse()
-    saveReviewCursor(persistKey, hintKey, [...newestFirst.map((a) => a.id), ...(prior?.seen ?? [])], chronological, omitted)
-    return {
-      met: true,
-      steer: activitySteer(chronological, ref, omitted, firstSight),
-      reason: `${reviewReason(ref, chronological, omitted)}${firstSight ? " — already on the PR at park" : ""}`,
-    }
-  }
-
   function normalizeReviewResult(
     result: GithubReviewActivity[] | GithubReviewFetchResult | undefined,
   ): GithubReviewFetchResult {
@@ -1587,133 +1171,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     const suppressed = prior.suppressed ? `; ${prior.suppressed} identical repeats were suppressed` : ""
     log(`waker: GitHub review check recovered for ${key} (${slug})${suppressed}`)
     reviewFailures.delete(key)
-  }
-
-  async function evalThread(slug: string, sessionId: string, fence: FenceView, nowMs: number, fenceAt?: string): Promise<void> {
-    const actionable = fence.hints.filter(isActionable)
-    if (actionable.length === 0) {
-      threads.delete(slug)
-      return
-    }
-    const fenceId = fenceIdentity(fence.hints, fenceAt)
-    const persistKey = firedKey(slug, fenceId)
-    let st = threads.get(slug)
-    if (!st || st.fenceId !== fenceId) {
-      // A new/changed awaiting rest: drop the previous rest's persisted marker + arming, start fresh.
-      if (st) {
-        const oldKey = firedKey(slug, st.fenceId)
-        forgetFired(oldKey)
-        forgetRegistration(oldKey)
-      }
-      st = { fenceId, armed: new Map(), fired: false, lastPollAt: 0, prCache: new Map(), reviewCache: new Map() }
-      const saved = registrations.get(persistKey)
-      for (const h of actionable) {
-        if (h.kind !== "timer") continue
-        const hintKey = `${h.kind}:${h.value}`
-        if (saved?.timers[hintKey] === h.value) st.armed.set(hintKey, true)
-      }
-      threads.set(slug, st)
-    }
-    if (fired.has(persistKey)) st.fired = true
-    const deliveryId = wakeDeliveryId(slug, sessionId, fenceId)
-    if (outbox.get(deliveryId)) st.fired = true
-    if (st.fired) return // already queued/resumed for this rest — wait for delivery or fence supersession
-
-    // Refresh PR statuses/review activity on the slow cadence (one fetch per distinct ref per kind).
-    // LEGACY ONLY. `pr-watch` stopped being actionable on 2026-08-14 — the registry pass (SOURCE 11)
-    // owns PR watching now — so nothing here can be a pr-watch hint any more, and both of these are
-    // about the `pr:`/`ci:` spellings that pre-date it.
-    const needsPr = false // legacy `pr:`/`ci:` conditions; no current grammar reaches here
-    const needsReview = actionable.some((h) => isPrWatchHint(h.kind))
-    if ((needsPr || needsReview) && (st.lastPollAt === 0 || nowMs - st.lastPollAt >= pollMs)) {
-      st.lastPollAt = nowMs
-      const refs = new Map<string, PrRef>()
-      const reviewRefs = new Map<string, PrRef>()
-      // Which refs a legacy `pr:`/`ci:` VERDICT depends on. A `pr-watch:` ref is fetched too — its
-      // check/merge status feeds the board's watched-PR rows and the queue rule that holds a thread out
-      // of the queue while CI runs — but that reading is PRESENTATION, so a failed fetch for one of those
-      // is silent. The card says "Checking…", the thread queues as usual, and nothing is lost. Logging it
-      // would put a line on every poll of every parked PR, forever, for a thing nothing waits on.
-      const verdictRefs = new Set<string>()
-      for (const h of actionable) {
-        const ref = parsePrRef(h.value)
-        if (!ref) continue
-        if (isPrWatchHint(h.kind)) reviewRefs.set(refKey(ref), ref)
-      }
-      await Promise.all([
-        ...[...refs].map(async ([k, ref]) => {
-          try {
-            const s = await fetchPr(ref)
-            if (s) {
-              st.prCache.set(k, s) // keep the last-known status on a transient failure
-              publishGithubStatus(k, s, nowMs)
-            } else if (verdictRefs.has(k)) {
-              log(`waker: gh check skipped for ${k} (${slug}) — gh unavailable / not authed / rate-limited`)
-            }
-          } catch (err) {
-            if (verdictRefs.has(k)) log(`waker: gh check errored for ${k} (${slug}): ${err instanceof Error ? err.message : String(err)}`)
-          }
-        }),
-        ...[...reviewRefs].map(async ([k, ref]) => {
-          try {
-            const result = normalizeReviewResult(await fetchGithubReview(ref))
-            if (result.status === "ok") {
-              st.reviewCache.set(k, result.activity)
-              recordReviewSuccess(k, slug)
-            } else if (result.status === "error") {
-              recordReviewFailure(k, slug, result, nowMs)
-            }
-            // `deferred` is the native fetcher's rate-budget guard. Keep the last-known cache and stay
-            // silent; this is intentional pacing, not a GitHub failure.
-          } catch (err) {
-            recordReviewFailure(k, slug, {
-              status: "error",
-              failure: { kind: "network", message: err instanceof Error ? err.message : String(err) },
-            }, nowMs)
-          }
-        }),
-      ])
-    }
-
-    for (const h of actionable) {
-      const key = `${h.kind}:${h.value}`
-      const reviewRef = isPrWatchHint(h.kind) ? parsePrRef(h.value) : undefined
-      const reviewActivity = reviewRef ? st.reviewCache.get(refKey(reviewRef)) : undefined
-      const pendingReview = registrations.get(persistKey)?.reviews[key]?.pending
-      const verdict = isPrWatchHint(h.kind)
-        ? reviewActivity || pendingReview
-          ? reviewVerdict(slug, persistKey, h, reviewActivity ?? [], fenceAt)
-          : undefined
-        : evalHint(h, nowMs, st.prCache, fence.body)
-      if (!verdict) continue // indeterminate this tick
-      if (!verdict.met) {
-        st.armed.set(key, true) // WITNESSED unmet → this hint is now eligible to fire on a later met
-        if (h.kind === "timer") armTimer(persistKey, key, h.value)
-        continue
-      }
-      // PR-watch hints are eligible once a persisted baseline detects an unseen human id. Timer/legacy
-      // conditions still require arming; for timers that arming was restored from durable registration.
-      if (!isPrWatchHint(h.kind) && !st.armed.get(key)) continue
-      const item = outbox.enqueue({
-        id: deliveryId,
-        slug,
-        sessionId,
-        fenceId,
-        hintKey: key,
-        message: verdict.steer,
-        reason: verdict.reason,
-      }, nowMs).delivery
-      st.fired = true
-      // "PR watcher armed": if the human parked this pr-watch card with a user snooze, new PR
-      // activity is exactly the thing it was hiding UNTIL — so clear the snooze here, the moment we
-      // enqueue the wake, and the card re-surfaces in the queue (the preset instant was only a safety
-      // timeout). A no-op when nothing was snoozed. Scoped to pr-watch: a human/timer park is a
-      // deliberate hold this activity signal has no business clearing.
-      if (isPrWatchHint(h.kind)) deps.storage.setSnoozedUntil(slug, null)
-      log(`waker: queued ${slug} — ${verdict.reason}`)
-      checkpoint("after-enqueue", item)
-      return // one durable wake per thread per rest
-    }
   }
 
   // ---- The limit auto-resume pass ------------------------------------------------------------------
@@ -2956,41 +2413,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   }
 
   async function runTick(): Promise<void> {
-    const nowMs = now()
-    const seen = new Set<string>()
-    const candidates: { row: SessionRow; fence: FenceView; fenceAt?: string }[] = []
-    for (const row of deps.storage.allSessions()) {
-      if (row.state === "archived" || row.archived === 1) continue // non-archived only
-      const tele = deps.tailer.get(row.slug)
-      if (!tele || tele.turn !== "idle") continue // only a thread genuinely AT REST is a waker candidate
-      const fence = tele.lastFence
-      if (!fence || fence.kind !== "awaiting" || !fence.hints.some(isActionable)) continue
-      seen.add(row.slug)
-      candidates.push({ row, fence, fenceAt: tele.lastActivityAt })
-    }
-    // Evaluate candidate threads together. The production review fetcher uses the resulting same-turn
-    // calls to coalesce every distinct PR into one bounded GraphQL batch and to deduplicate duplicate
-    // refs. Per-thread state remains isolated by slug; shared durable writes are synchronous.
-    const candidateResults = await Promise.allSettled(candidates.map(async ({ row, fence, fenceAt }) => {
-      try {
-        await evalThread(row.slug, row.session_id, fence, nowMs, fenceAt)
-      } catch (err) {
-        if (err instanceof InjectedSchedulerCrash) throw err
-        log(`waker: tick error for ${row.slug}: ${err instanceof Error ? err.message : String(err)}`)
-      }
-    }))
-    const crashed = candidateResults.find((result): result is PromiseRejectedResult => result.status === "rejected")
-    if (crashed) throw crashed.reason
-    // The awaiting fence vanished (superseded, archived, or no longer at rest): forget its arming +
-    // persisted marker so a future re-await arms fresh and can fire again.
-    for (const [slug, st] of [...threads]) {
-      if (!seen.has(slug)) {
-        const key = firedKey(slug, st.fenceId)
-        forgetFired(key)
-        forgetRegistration(key)
-        threads.delete(slug)
-      }
-    }
     try {
       await evalLimits(now())
     } catch (err) {

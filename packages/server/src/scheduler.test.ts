@@ -176,7 +176,6 @@ function harness(): Harness {
           return review.result
         },
         log: () => {},
-        pollMs: 0, // poll every tick in tests
         ...over,
       })
     },
@@ -196,29 +195,31 @@ function armTimer(h: Harness, slug: string, fireAtMs: number, prompt = "Re-poll 
   return id
 }
 
-// ---- THE SAFETY GUARD: no boot mass-fire ----
-
-test("boot-safety: a long-PAST timer fence never fires (only a witnessed crossing does)", async () => {
+// ---- THE SAFETY GUARD: a fence DECLARES a wait, it never ARMS one ----
+//
+// Every wait the waker can fire is a REGISTRATION — a `thread_timer` row, a `pr_watch` row, a live
+// background shell. A fence only NAMES one, so a thread writing the most fireable-looking lines in the
+// grammar and registering nothing must be woken by none of them. The limb that polled those hints was
+// hardwired off by the 2026-08-15 grammar cut and deleted on 2026-08-24; this is the test that fails if
+// any of it comes back.
+//
+// It is also the boot no-mass-resume guard, which is why it is worth three threads and a GitHub
+// assertion rather than one: the maintainer has ~14 real sessions and most of them are sitting on an
+// old fence, so a waker that acted on fence text would resume all of them at once on the next start.
+test("a fence arms NOTHING: an elapsed instant, a merged PR and a dead shell never wake a thread", async () => {
   const h = harness()
-  h.storage.upsertSession(row("t"))
-  h.tele.set("t", tele())
+  for (const slug of ["past", "merged", "shell"]) h.storage.upsertSession(row(slug))
+  h.tele.set("past", tele(awaiting([{ kind: "timer", value: iso(h.clock.ms - 6 * 3600_000) }])))
+  h.tele.set("merged", tele(awaiting([{ kind: "pr", value: "acme/app#391" }])))
+  h.tele.set("shell", tele(awaiting([{ kind: "shell", value: "a-shell-that-is-not-running" }])))
+  h.pr.result = { state: "MERGED", mergedAt: "2026-07-01T00:00:00Z", rollup: [] }
   const s = h.make()
   await s.tick()
   h.clock.ms += 60_000
   await s.tick()
   await s.tick()
-  assert.deepEqual(h.resumes, [], "a fence already elapsed at first sight must never resume")
-})
-
-test("boot-safety: an already-MERGED pr fence never fires on boot", async () => {
-  const h = harness()
-  h.storage.upsertSession(row("p"))
-  h.tele.set("p", tele(awaiting([{ kind: "pr", value: "acme/app#391" }])))
-  h.pr.result = { state: "MERGED", mergedAt: "2026-07-01T00:00:00Z", rollup: [] }
-  const s = h.make()
-  await s.tick()
-  await s.tick()
-  assert.deepEqual(h.resumes, [], "a PR already merged at first sight must never resume")
+  assert.deepEqual(h.resumes, [], "a wait nobody registered must never resume, however it is worded")
+  assert.deepEqual(h.pr.calls, [], "and no fence line is worth a GitHub poll")
 })
 
 // ---- single-fire on a witnessed transition ----
@@ -240,39 +241,21 @@ test("timer: fires exactly once on the witnessed crossing, with the prose in the
   assert.match(h.resumes[0].message, /Re-poll the rollout\./)
 })
 
-test("only-at-rest: an in-flight thread with a (stale) awaiting fence never fires", async () => {
-  const h = harness()
-  h.storage.upsertSession(row("t"))
-  h.tele.set("t", tele(awaiting([{ kind: "timer", value: iso(h.clock.ms + 1000) }]), "in-flight"))
-  const s = h.make()
-  await s.tick()
-  h.clock.ms += 10_000
-  await s.tick()
-  assert.equal(h.resumes.length, 0)
-})
-
-test("archived thread is skipped entirely", async () => {
+// A shelved thread is skipped by every source, and the row that armed the wake is left ARMED rather
+// than settled: an archived thread can be reopened, and the alarm is still the worker's outstanding
+// intent. (The `only-at-rest` half of this pair now lives with the sources it actually governs — see
+// "limit: a thread already MOVING again is left alone" and the snooze bump that is held until rest.)
+test("archived thread is skipped entirely, and its alarm survives the archival", async () => {
   const h = harness()
   h.storage.upsertSession(row("t", { state: "archived", archived: 1 }))
-  h.tele.set("t", tele(awaiting([{ kind: "timer", value: iso(h.clock.ms + 1000) }])))
+  const id = armTimer(h, "t", h.clock.ms + 1000)
+  h.tele.set("t", tele())
   const s = h.make()
   await s.tick()
   h.clock.ms += 10_000
   await s.tick()
   assert.equal(h.resumes.length, 0)
-})
-
-test("human/session hints are descriptive, not scheduler-actionable — no fire, no crash", async () => {
-  const h = harness()
-  h.storage.upsertSession(row("human"))
-  h.storage.upsertSession(row("session"))
-  h.tele.set("human", tele(awaiting([{ kind: "shell", value: "Alice must approve fork CI" }])))
-  h.tele.set("session", tele(awaiting([{ kind: "shell", value: "a-shell-that-is-not-running" }])))
-  const s = h.make()
-  await s.tick()
-  h.clock.ms += 10_000
-  await s.tick()
-  assert.equal(h.resumes.length, 0)
+  assert.equal(h.storage.getThreadTimer(id)?.state, "armed", "the alarm is held, not spent")
 })
 
 // ---- a SECOND timer, set after the first has rung, fires on its own ----
@@ -1079,7 +1062,6 @@ test("two scheduler instances on separate SQLite connections atomically claim on
     now: () => clock.ms,
     fetchPr: async () => undefined,
     fetchGithubReview: async () => undefined,
-    pollMs: 0,
     log: () => {},
   })
   const first = make(firstStorage)
@@ -1401,7 +1383,7 @@ test("limit: a limit wake and a timer wake for the same session get distinct del
   //
   // BOTH SOURCES MUST ACTUALLY FIRE or the uniqueness check below is vacuous — a set of one id is
   // always "distinct". This armed off an `awaiting timer:` fence hint until 2026-08-16, which had been
-  // inert since the 2026-08-15 grammar made isActionable return false, AND whose target sat 5min past a
+  // inert since the 2026-08-15 grammar cut hardwired fence hints off, AND whose target sat 5min past a
   // clock that only ever reached +61s. So it asserted uniqueness over the limit wake alone, under a name
   // promising a collision it could not exercise. A real timer row, due INSIDE the window the clock
   // crosses, is what makes the two sources collide — the same vehicle its snooze sibling uses.
