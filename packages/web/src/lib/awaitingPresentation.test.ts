@@ -6,6 +6,7 @@ import {
   AWAITING_PARK_BUTTON,
   awaitingParkAction,
   awaitingPresentationLine,
+  awaitingProseBlock,
   prWatchRefs,
   awaitingItemLabels,
   awaitingForLabel,
@@ -239,4 +240,15 @@ test("a long lede is cut on a word boundary, not mid-word", () => {
   assert.match(out, /…$/, "and says so")
   assert.doesNotMatch(out, /\s…$/, "no dangling space before the ellipsis")
   assert.ok(body.startsWith(out.slice(0, -1)), "the kept text is the worker's own, unaltered")
+})
+
+// The unified resting card's prose slot (2026-08-24): the fence body, machinery-stripped, or NULL —
+// because that card's heading and rows already state the wait, so an empty handoff wants no
+// placeholder sentence and no divider drawn above one.
+test("awaitingProseBlock: prose survives, machinery strips, emptiness is null", () => {
+  assert.equal(awaitingProseBlock("Waiting on the release run.\n\n- the macOS leg is flaky"), "Waiting on the release run.\n\n- the macOS leg is flaky")
+  assert.equal(awaitingProseBlock("watch: bzvtnt3ig\nfor: 40m"), null, "raw fence syntax never reaches the reader")
+  assert.equal(awaitingProseBlock("shells: [b1]\nNote: the suite is slow"), "Note: the suite is slow", "a prose line with a colon is not a key")
+  assert.equal(awaitingProseBlock(""), null)
+  assert.equal(awaitingProseBlock(undefined), null)
 })

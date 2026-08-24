@@ -127,6 +127,13 @@ export function awaitingPresentationLine(body: string): string {
   return prose ? prose : "Waiting for an external update."
 }
 
+/** The same prose for a surface that can honestly render NOTHING — the unified resting card, whose
+ *  heading and rows already state the wait, so an empty handoff wants no placeholder sentence and no
+ *  divider above one. Null exactly when the fence carries no prose (or only unparsed fence syntax). */
+export function awaitingProseBlock(body: string | undefined): string | null {
+  return body ? stripFenceSyntax(body) || null : null
+}
+
 /** RAW FENCE SYNTAX MUST NEVER REACH THE READER (maintainer 2026-08-16, with a screenshot of a card
  *  reading "watch: bvg44v4ij / for: 40m / reason: CI on #1227 is running…" — "why the fuck is the
  *  awaiting block looking like this?").

@@ -131,12 +131,19 @@ export function CardHead({
       {/* The title WRAPS rather than truncating: frizz's kinds are short sentences ("Waiting on your
           answer — in your external terminal"), and the half of one that survives a narrow queue card
           is not the half that carries the meaning. It takes the row's slack, which is what pushes the
-          aside and the glyph to the right edge. */}
-      <span className={`min-w-0 flex-1 text-[13px] font-medium leading-5 tracking-tight ${head}`}>{label}</span>
-      {/* `leading-5` matches the title's line box so a smaller aside still reads as sitting ON the
+          aside and the glyph to the right edge.
+
+          16px SEMIBOLD — a real title scale, not the 13px body-size the family wore until 2026-08-24.
+          The body-size title was the shadcn-anatomy call of 2026-07-29; the maintainer reversed it off
+          the round-5 awaiting mockups ("why is it so small and non-title-like?", then choosing the
+          16px cut "across all similar cards (Done etc)"), so the step up is a FAMILY rule, not one
+          card's. The glyph grows with it, 14 → 16, and --card-icon-offset was re-measured for the
+          new pair (styles.css). */}
+      <span className={`min-w-0 flex-1 text-[16px] font-semibold leading-6 tracking-tight ${head}`}>{label}</span>
+      {/* `leading-6` matches the title's line box so a smaller aside still reads as sitting ON the
           title's line rather than floating above it. */}
-      {aside && <span className="shrink-0 leading-5">{aside}</span>}
-      <Icon aria-hidden="true" size={14} className={`shrink-0 ${CARD_ICON_OFFSET} ${head}`} />
+      {aside && <span className="shrink-0 leading-6">{aside}</span>}
+      <Icon aria-hidden="true" size={16} className={`shrink-0 ${CARD_ICON_OFFSET} ${head}`} />
     </div>
   )
 }

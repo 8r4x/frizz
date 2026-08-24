@@ -30,10 +30,13 @@ import { Bot, ChevronRight, CircleCheck, CircleDashed, CircleX, Clock, GitMerge,
 import type { GithubWatchStatus, ThreadView, ThreadWatchView } from "@frizz/shared"
 import { isDirectSubAgent } from "@frizz/shared"
 import { githubRefUrl } from "../lib/githubRef.ts"
+import { awaitingProseBlock } from "../lib/awaitingPresentation.ts"
 import { compactElapsedSince, formatCompactElapsed } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
+import { useInnerHtml } from "../lib/innerHtml.ts"
+import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { pushBackgroundShellDrawer, pushSubAgentDrawer } from "../store.ts"
-import { CARD_BODY, CardActions, TranscriptCard } from "./TranscriptCard.tsx"
+import { BLOCK_RADIUS_INNER_BOTTOM, CARD_BODY, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 
 // Name what the thread is ACTUALLY waiting on. Three real cases, and the sentence has to be true in all
 // of them: "sub-agents" is wrong for a shell-only thread (a launched dev server is not a child whose
@@ -105,6 +108,12 @@ function hasUnrowedWork(thread: Pick<ThreadView, "subAgents" | "bgShells">): boo
 // different state on a different surface — it is genuinely awaiting a result, and calling it "background
 // shells" would name work it never launched — so it keeps the older title.
 //
+// THE AWAITING TITLE IS ONE WORD (maintainer 2026-08-24, off the round-5 mockups: "The title should
+// just say 'Awaiting'"). "Awaiting background work" was carrying the specifics the card now states
+// better below it — the worker's own prose and a row per thing — so the heading only has to name the
+// STATE. The shell-only title survives because that shape is not awaiting anything and its name was
+// ruled explicitly.
+//
 // The GLYPH follows the title. An hourglass is a WAIT, which is true of the sub-agent rest and false of
 // the shell one: a queued handoff behind a detached shell is not waiting on anything, and stamping the
 // wait mark on it would contradict the whole reason it is in the queue.
@@ -118,7 +127,7 @@ function hasUnrowedWork(thread: Pick<ThreadView, "subAgents" | "bgShells">): boo
 // keeps it honest in both directions: "Background shells running" never names work the thread did not
 // launch, and no new kind gets a heading of its own. The sentence beneath is where the specifics live.
 export function awaitingBackgroundLabel(thread: Pick<ThreadView, "subAgents" | "bgShells" | "watches">): string {
-  return shellsAlone(thread) ? "Background shells running" : "Awaiting background work"
+  return shellsAlone(thread) ? "Background shells running" : "Awaiting"
 }
 
 /** Background shells and nothing else — the one shape with a title of its own. An armed timer
@@ -526,14 +535,24 @@ export function showsRestingCard(
 
 export function AwaitingBackgroundCard({ thread, actions }: {
   // `id` joins the Pick because the rows OPEN things now: a shell's output drawer and a sub-agent's
-  // transcript are both addressed by the parent thread's slug.
-  thread: Pick<ThreadView, "id" | "subAgents" | "bgShells" | "watches">
+  // transcript are both addressed by the parent thread's slug. `lastFence` joined on 2026-08-24: the
+  // fence's prose is this card's opening stratum, so the card reads it directly off the thread.
+  thread: Pick<ThreadView, "id" | "subAgents" | "bgShells" | "watches" | "lastFence">
   // The queue card's event-Snooze. Only the QUEUE passes one, and the shapes that reach the queue are
   // the shell-only rest and — since 2026-08-13 — the PR park, whose own fence card no longer
   // offers one. So this is the control for both.
   actions?: ReactNode
 }) {
   const waiting = awaitsResults(thread)
+  // THE WORKER'S OWN HANDOFF, opening the card (maintainer 2026-08-24: "the rendered message at the
+  // top of the card, followed by a horizontal divider, followed by all of the awaited items"). Until
+  // then the fence's body rendered as a SEPARATE message above this card (ChatView's FenceCard dropped
+  // its chrome and left the prose free-standing), and the pair read as two objects about one wait —
+  // FenceCard now renders nothing when this card shows, so the prose lives here or nowhere. Null for a
+  // rest with no awaiting fence (a bare sub-agent rest, a shell-only rest) or a fence with no prose;
+  // the divider comes and goes with it.
+  const prose = awaitingProseBlock(thread.lastFence?.kind === "awaiting" ? thread.lastFence.body : undefined)
+  const proseInner = useInnerHtml(useMarkdownHtml(prose ?? ""))
   // Live-ticking, so a shell's "running · 4m" keeps counting while the board sends nothing (a quiet
   // child pushes no delta). One clock read for the whole card rather than one per row.
   const now = useNowMs()
@@ -564,7 +583,14 @@ export function AwaitingBackgroundCard({ thread, actions }: {
       // per-kind card the consolidation removed, exactly as a per-kind title did.
       icon={shellsAlone(thread) ? TerminalSquare : Hourglass}
       label={awaitingBackgroundLabel(thread)}
+      // The recessed footer band below sits flush against the card's bottom edge, so the shell's own
+      // bottom padding has to go when one renders — the band carries its own.
+      className={actions ? "pb-0" : ""}
     >
+      {/* THE WORKER'S PROSE — the fence's whole Markdown body, block-rendered, exactly as the old
+          free-standing message drew it (md-body inside card-md; QUEUE_WRAP so a long unbreakable token
+          wraps on a narrow queue card instead of bleeding past the edge). */}
+      {prose && <div className={`md-body ${QUEUE_WRAP}`} dangerouslySetInnerHTML={proseInner} />}
       {/* The sentence is BODY text (maintainer 2026-07-24): the self-return is a fact about the thread,
           not a caption for the button, so it reads as prose rather than as a label the Snooze control
           drags around with it — and it therefore stays on the surfaces that have no button.
@@ -610,6 +636,10 @@ export function AwaitingBackgroundCard({ thread, actions }: {
           mt-3 UNCONDITIONALLY — 12px, and it is the WHOLE gap rather than an addition: CardContent's own
           mt-1 collapses into it, which is why an earlier mt-2 measured 8px and put the first row closer
           to the card title than to the row beneath it (measured, sans and mono, dsf 3). */}
+      {/* THE DIVIDER — the horizontal rule between the worker's message and the machinery, full bleed
+          (maintainer 2026-08-24). It comes and goes with the prose: a card with rows alone (a bare
+          sub-agent rest) needs no seam, and a seam over nothing reads as a scratch. */}
+      {prose && groups.length > 0 && <div aria-hidden className="-mx-4 mt-3 border-t border-border" />}
       {groups.length > 0 && (
         <div className="mt-3 grid grid-cols-[auto_1fr_auto_auto] gap-y-px">
           {groups.map((g, i) => (
@@ -625,7 +655,15 @@ export function AwaitingBackgroundCard({ thread, actions }: {
           ))}
         </div>
       )}
-      {actions ? <CardActions>{actions}</CardActions> : null}
+      {/* THE FOOTER BAND — the queue's snooze, in a recessed full-width strip flush with the card's
+          bottom corners (the queue card's own footer idiom), so the control reads as chrome under the
+          content rather than as one more row of it. Only the queue passes actions, so the drawer and
+          the full-screen page render the card without the band — and with the shell's normal padding. */}
+      {actions ? (
+        <div className={`-mx-4 mt-3 flex flex-wrap items-center gap-x-2.5 gap-y-2 border-t border-border bg-fg/[0.03] px-4 py-2.5 ${BLOCK_RADIUS_INNER_BOTTOM}`}>
+          {actions}
+        </div>
+      ) : null}
     </TranscriptCard>
   )
 }

@@ -73,7 +73,7 @@ test("the card carries the snooze ONLY when a surface passes one", () => {
   const bare = render(thread([agent("running")], []))
   assert.doesNotMatch(bare, /Snooze/)
   // …while still saying the same thing, on the same card chrome, with the same kind header.
-  assert.match(bare, /Awaiting background work/)
+  assert.match(bare, /Awaiting/)
   assert.match(bare, /data-awaiting-background/)
   assert.match(bare, /data-wait-kind="agent"/)
 })
@@ -84,10 +84,10 @@ test("the card carries the snooze ONLY when a surface passes one", () => {
 test("the card's title names the shape: shells running vs awaiting a dispatched result", () => {
   const shellsOnly = text(thread([], [shell("running"), shell("running")]))
   assert.match(shellsOnly, /Background shells running/)
-  assert.doesNotMatch(shellsOnly, /Awaiting background work/)
+  assert.doesNotMatch(shellsOnly, /Awaiting/)
 
   const withChild = text(thread([agent("running")], [shell("running")]))
-  assert.match(withChild, /Awaiting background work/)
+  assert.match(withChild, /Awaiting/)
   assert.doesNotMatch(withChild, /Background shells running/)
 })
 
@@ -133,7 +133,7 @@ test("an armed timer gets a row: named by its prompt, counting down, non-interac
 // holds a Timers group too, and "Background shells running" would name only half the wait.
 test("a timer beside running shells takes the generic title", () => {
   const t = { ...thread([], [shell("running")]), watches: [shellWatch("bzvtnt3ig"), timerWatch()] } as Parameters<typeof AwaitingBackgroundCard>[0]["thread"]
-  assert.match(text(t), /Awaiting background work/)
+  assert.match(text(t), /Awaiting/)
   assert.doesNotMatch(text(t), /Background shells running/)
 })
 
@@ -205,4 +205,48 @@ test("the prose sentence yields to the rows entirely", () => {
   // …and survives for the one reachable gap: a declared wait whose rows all failed to resolve.
   const noRows = text(thread([agent("stale")], [shell("running")]))
   assert.match(noRows, /1 background shell is still running/)
+})
+
+// ---- THE UNIFIED CARD (2026-08-24) ---------------------------------------------------------------
+// Maintainer: "the card consist of the rendered message at the top of the card, followed by a
+// horizontal divider, followed by all of the awaited items. Then we could put the snooze button in a
+// footer." The fence's body used to render as a SEPARATE message above this card; now the card opens
+// on it, and FenceCard renders nothing when the card shows.
+//
+// THE PROSE STRATUM ITSELF IS NOT PINNED HERE: rendering it calls the markdown pipeline, whose
+// sanitizer needs a real DOM (lib/markdown.ts), and this file runs under node --test. What CAN be
+// pinned DOM-free is everything around it — the divider's coupling to the prose, the machinery
+// filter, the done-fence guard, the footer band — and the rendered prose is verified in the browser
+// against a real parked worker (scripts/seed-timer-park.mjs).
+test("no prose, no divider — and non-prose fences contribute nothing", () => {
+  // Rows alone (a bare sub-agent rest has no fence): no seam over nothing.
+  const bare = render({ ...thread([agent("running")], []) } as Parameters<typeof AwaitingBackgroundCard>[0]["thread"])
+  assert.doesNotMatch(bare, /-mx-4 mt-3 border-t border-border/)
+  // A fence whose body is only unparsed machinery lines renders no prose and no divider either —
+  // raw fence syntax must never reach the reader (awaitingProseBlock strips it to null).
+  const machinery = {
+    ...thread([], []),
+    watches: [timerWatch()],
+    lastFence: { kind: "awaiting", body: "watch: bzvtnt3ig", hints: [] },
+  } as Parameters<typeof AwaitingBackgroundCard>[0]["thread"]
+  assert.doesNotMatch(render(machinery), /bzvtnt3ig/)
+  assert.doesNotMatch(render(machinery), /-mx-4 mt-3 border-t border-border/)
+  // A done fence is not a wait — its body must not open this card.
+  const done = {
+    ...thread([agent("running")], []),
+    lastFence: { kind: "done", body: "All landed.", hints: [] },
+  } as Parameters<typeof AwaitingBackgroundCard>[0]["thread"]
+  assert.doesNotMatch(text(done), /All landed/)
+})
+
+test("the snooze renders in a recessed footer band, flush with the card's bottom", () => {
+  const t = { ...thread([agent("running")], []) } as Parameters<typeof AwaitingBackgroundCard>[0]["thread"]
+  const withAction = renderToStaticMarkup(
+    createElement(AwaitingBackgroundCard, { thread: t, actions: createElement("button", { type: "button" }, "Snooze") }),
+  )
+  assert.match(withAction, /-mx-4 mt-3 flex[^"]*border-t border-border bg-fg/, "the band runs edge to edge under a rule")
+  assert.match(withAction, /pb-0/, "the shell yields its bottom padding to the band")
+  // No actions => no band and the shell keeps its own padding (the drawer / full-screen shape).
+  const bare = render(t)
+  assert.doesNotMatch(bare, /pb-0/)
 })

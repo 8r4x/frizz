@@ -198,16 +198,18 @@ html[data-font="sans"] {
 .icon-label-nudge {
   translate: 0 var(--icon-label-nudge);
 }
-/* The transcript card's GUTTER glyph (TranscriptCard) — a 14px icon in its own grid column, optically
-   centred on the 13px/20px title beside it. Same font-dependence as --icon-label-nudge above and
-   measured the same way (svg.getBBox ink centre vs the title's cap block, all 15 cards on the card
-   gallery): under mono the ink lands dead on at 2px, while system-ui's cap block sits ~1.1px lower in
-   its font box and needs 3px. `translate`, not a margin, so the offset can never grow the title row. */
+/* The transcript card's GUTTER glyph (TranscriptCard) — a 16px icon in its own grid column, optically
+   centred on the 16px/24px semibold title beside it (the family title grew from 13px/14px on
+   2026-08-24; these were re-measured for the new pair). Same font-dependence as --icon-label-nudge
+   above and measured the same way (svg ink centre vs the title's cap band, all cards on the card
+   gallery, dominant residual zeroed): mono wanted 2px + 0.89 → 2.9px; system-ui's cap block sits
+   lower in its font box and wanted 3px + 1.36 → 4.4px. Residuals re-measured at ≤0.1px after.
+   `translate`, not a margin, so the offset can never grow the title row. */
 :root {
-  --card-icon-offset: 2px;
+  --card-icon-offset: 2.9px;
 }
 html[data-font="sans"] {
-  --card-icon-offset: 3px;
+  --card-icon-offset: 4.4px;
 }
 .card-icon-offset {
   translate: 0 var(--card-icon-offset);

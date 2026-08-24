@@ -3611,33 +3611,18 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   // carries the only control. The maintainer read the pair as a duplicate, and it is: the heading is the
   // only part that repeats (2026-08-13, with a screenshot of the two stacked).
   //
-  // So when this card has NOTHING the resting card does not already say — no park action to offer — and
-  // the resting card is actually showing, the chrome goes and the CONTENT stays: the worker's own prose
-  // and the PR links, rendered as the ordinary final message they are. A fence with a real park action
-  // still earned its card, because that control lived nowhere else — but no fence has one since the
-  // 2026-08-15 grammar deleted the two kinds that fed it (a `human:` gate, a future `timer: <instant>`),
-  // so awaitingParkAction is now always null and this branch is the only one that runs.
+  // So when the resting card is actually SHOWING, this fence renders NOTHING AT ALL — not chrome, not
+  // prose. Since 2026-08-24 the resting card is the UNIFIED card (maintainer: "the rendered message at
+  // the top of the card, followed by a horizontal divider, followed by all of the awaited items"): it
+  // reads the fence's body off the thread and opens on it, so anything drawn here — even the bare
+  // prose this branch used to leave standing — is the same handoff twice on one screen. The PR links
+  // ride the card's own github rows.
   //
-  // Guarded on `awaitingBackground` rather than assumed: a thread parked on a watcher with no live shell
-  // or sub-agent shows no resting card at all, and dropping the chrome there would leave the wait
-  // unstated.
-  const restingCardStatesIt = parkAction === null && fenceThread?.awaitingBackground === true
-  if (restingCardStatesIt) {
-    // The refs come too, UNLESS the watcher rows under the prompt box already list them — which they do
-    // whenever the fence armed real watches. Printing both put `colinhacks/zod#6412` twice on one card,
-    // which is the same duplication one level down.
-    const listedBelow = (fenceThread?.watches ?? []).some((w) => w.state === "armed")
-    return (
-      <div data-awaiting-fence className="flex flex-col">
-        <div className={`md-body ${wrap ? QUEUE_WRAP : ""}`} dangerouslySetInnerHTML={awaitingInner} />
-        {watched.length > 0 && !listedBelow && (
-          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5">
-            {watched.map((watch) => <WatchedRef key={watch.ref} watch={watch} />)}
-          </div>
-        )}
-      </div>
-    )
-  }
+  // Guarded on showsRestingCard, not on `awaitingBackground` alone: the card is suppressed while the
+  // rest is event-snoozed (and for any non-idle runtime), and the fence must keep stating the wait
+  // there or the transcript ends on nothing and reads as "the agent died".
+  const restingCardStatesIt = parkAction === null && fenceThread != null && showsRestingCard(fenceThread)
+  if (restingCardStatesIt) return null
   return (
     <TranscriptCard data-awaiting-fence icon={AwaitingIcon} label={parkTitle} aside={watched.length === 1 ? <WatchedRef watch={watched[0]} /> : undefined}>
       <div
