@@ -1614,7 +1614,7 @@ function txHarness() {
   return { slug, logDir, store, project, writeJsonl, cleanup }
 }
 function txRow(over: Partial<SessionRow>): SessionRow {
-  return { slug: "t", session_id: "sid", thread_name: "frizz-t", spawned_at: new Date().toISOString(), last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0, title: null, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null, ...over }
+  return { slug: "t", session_id: "sid", thread_name: "frizz-t", spawned_at: new Date().toISOString(), last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0, title: null, state: "open", meta: null, seen_at: null, transcript_id: null, ...over }
 }
 const USER_LINE = (text: string) => JSON.stringify({ type: "user", timestamp: "2026-07-10T18:00:00.000Z", message: { role: "user", content: text } })
 

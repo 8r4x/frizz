@@ -2,7 +2,7 @@ import { rpc } from "../api/rpc.ts"
 import { pushMarkdownDrawer, showToast } from "../store.ts"
 import { isLocalMarkdownFile } from "./markdownTargets.ts"
 
-// One delegated listener covers every sanitized markdown surface (chat, plans, the doc drawer, and
+// One delegated listener covers every sanitized markdown surface (chat, the doc drawer, and
 // drawers). It never follows file:// or an accidental same-origin pathname: only explicit data
 // attributes emitted by markdown.ts reach the server's canonical-path allowlist gate.
 export function installLocalFileLinkInterceptor(): () => void {

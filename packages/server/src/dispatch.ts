@@ -346,23 +346,18 @@ export function composePrompt(sessionId: string, prompt: string, kind: BackendKi
   return `${scratch}${handoff}\n\n\n${DISPATCH_TASK_BANNER_MARKER}${prompt}`
 }
 
-// The SYSTEM-level scratch-directory orientation (survives compaction, rebuilds on every resume): the
-// scratch line, plus a PLAN line when the thread is associated with a plan artifact. Passed as
-// extraSystemPrompt on dispatch, adopt, AND the followUp resume path.
+// The SYSTEM-level scratch-directory orientation (survives compaction, rebuilds on every resume).
+// Passed as extraSystemPrompt on dispatch, adopt, AND the followUp resume path.
 //
 // It names the POST-COMPACTION trigger deliberately. This text is one of the few things that reliably
 // reaches a worker after a resume, and a scratch directory nothing ever reads back is a folder of notes
 // nobody opens — the arming is what turns it into compaction insurance.
-export function scratchpadOrientation(sessionId: string, planPath?: string | null, kind: BackendKind = "claude"): string {
+export function scratchpadOrientation(sessionId: string, kind: BackendKind = "claude"): string {
   const children =
     kind === "codex"
       ? "native sub-agents share it, so give each its own file"
       : "name it in a sub-agent's prompt when you want its notes back, and give each child its own file"
-  const scratch =
-    `SCRATCH DIRECTORY: .frizz/threads/${sessionId}/ — yours, free-form, as many files as you like, and nothing is expected in it. A single direct task usually needs none; writing notes is never a substitute for doing the work. On a long effort write the doc you would want if you lost your context (${children}), then arm mcp__frizz__recurring_prompt with post_compaction: true and a prompt LINKING that file — frizz hands the link back when your context is compacted. Nothing in this directory is read automatically.`
-  const lines = [scratch]
-  if (planPath) lines.push(`PLAN: ${planPath} — the durable plan artifact this thread works from; read it FIRST.`)
-  return lines.join("\n")
+  return `SCRATCH DIRECTORY: .frizz/threads/${sessionId}/ — yours, free-form, as many files as you like, and nothing is expected in it. A single direct task usually needs none; writing notes is never a substitute for doing the work. On a long effort write the doc you would want if you lost your context (${children}), then arm mcp__frizz__recurring_prompt with post_compaction: true and a prompt LINKING that file — frizz hands the link back when your context is compacted. Nothing in this directory is read automatically.`
 }
 
 // A project can ship a repo-committed `FRIZZ.md` at its root to steer frizz workers with its OWN
@@ -397,18 +392,10 @@ export function frizzConfigBlock(projectDir: string): string {
   return `PROJECT FRIZZ CONFIG (from this repo's FRIZZ.md) — the project's own conventions for frizz workers. They OVERRIDE the frizz worker PROCESS defaults above (review depth, gates, git/PR conventions, the quality bar) wherever they conflict; follow them. They do NOT relax the frizz-mechanical contract — the signal fences, the scratchpad, sub-agent dispatch and the question handback still bind:\n\n${clipped}`
 }
 
-// A DispatchInput.planPath is honored only when it is a well-formed .frizz/plans/*.md path AND the file
-// exists; anything else is ignored (stored as null). Shape check forecloses traversal.
-const PLAN_PATH_RE = /^\.frizz\/plans\/[A-Za-z0-9][A-Za-z0-9._ -]*\.md$/
-export function validPlanPath(projectDir: string, planPath: string | undefined): string | null {
-  if (!planPath || !PLAN_PATH_RE.test(planPath)) return null
-  return existsSync(join(projectDir, planPath)) ? planPath : null
-}
-
 // Workers have NO coherent interactive-plan-mode semantics: plan mode stays read-only until an
 // INTERACTIVE ExitPlanMode approval, which a headless dashboard worker can't satisfy (no one is at
 // the keyboard) and which blocks all edits until then — a softlock. A worker "plans" by writing a
-// plan artifact (.frizz/plans/*.md) and asking via a ```question fence, never via interactive plan
+// durable plan file and asking via a ```question fence, never via interactive plan
 // mode. So a worker is NEVER spawned in plan mode: `plan` is coerced to the safe frizz default
 // (`auto`). Applied inside BOTH spawn builders so dispatch, adopt, AND resume are all covered. (The
 // dispatch UI still OFFERS "plan" in its permission-mode dropdown — dropping it in web/options.ts is
@@ -856,7 +843,6 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       // mutable global defaults happen to be when the drawer is opened later.
       const model = input.model ?? settings.model
       const effort = input.effort ?? settings.effort
-      const planPath = validPlanPath(deps.project.dir, input.planPath)
 
       // Session-first: provision the thread's scratch DIRECTORY (empty; the worker fills it or does
       // not) — NO .frizz/<slug>.md file. It keys on the frizz-minted sessionId, which stays the row's
@@ -878,7 +864,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           cleanupDispatchFiles(scratchRel, { argv: [], env: {}, prewrite: [] }, sessionId)
           throw new Error("Codex app-server is unavailable; cannot start this thread. Check that `codex` is installed and its app-server protocol matches the pinned revision (re-pin if you upgraded codex).")
         }
-        const extraSystemPrompt = [scratchpadOrientation(sessionId, planPath, kind), frizzConfigBlock(deps.project.dir)]
+        const extraSystemPrompt = [scratchpadOrientation(sessionId, kind), frizzConfigBlock(deps.project.dir)]
           .filter(Boolean).join("\n\n")
         try {
           const spawned = await bridge.spawnDispatch({
@@ -909,7 +895,6 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
             state: "open",
             meta: null,
             seen_at: null,
-            plan_path: planPath,
             transcript_id: null,
             model: model ?? null,
             effort: effort ?? null,
@@ -956,7 +941,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         }
         const appendSystemPrompt = [
           loadWorkerPrompt("claude"),
-          scratchpadOrientation(sessionId, planPath, kind),
+          scratchpadOrientation(sessionId, kind),
           frizzConfigBlock(deps.project.dir),
         ].filter(Boolean).join("\n\n")
         try {
@@ -986,7 +971,6 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
             state: "open",
             meta: null,
             seen_at: null,
-            plan_path: planPath,
             transcript_id: null,
             model: model ?? null,
             effort: effort ?? null,
@@ -1079,7 +1063,6 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         state: "open",
         meta: null,
         seen_at: null,
-        plan_path: null,
       })
       deps.storage.setBackend(slug, backend)
       if (backend === "codex") deps.storage.setAgentSession(slug, externalId)
@@ -1254,7 +1237,6 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         state: "open",
         meta: null,
         seen_at: null,
-        plan_path: null,
         transcript_id: null,
         // Adoption starts a NEW session using the dispatch defaults in force at that moment. Pin those
         // values now; a later settings change must not relabel this adopted conversation.

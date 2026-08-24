@@ -59,7 +59,7 @@ function fixture(runtimeTasks?: readonly ClaudeRuntimeTask[]) {
   storage.upsertSession({
     slug: SLUG, session_id: SESSION, thread_name: `frizz-${SLUG}`, spawned_at: new Date().toISOString(),
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
-    title: SLUG, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
+    title: SLUG, state: "open", meta: null, seen_at: null, transcript_id: null,
   })
   storage.setBackend(SLUG, "claude")
   storage.setClaudeRuntime(SLUG, "broker")
@@ -573,7 +573,7 @@ function strandedFixture() {
   storage.upsertSession({
     slug: SLUG, session_id: SESSION, thread_name: `frizz-${SLUG}`, spawned_at: "2026-07-01T00:00:00.000Z",
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
-    title: SLUG, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
+    title: SLUG, state: "open", meta: null, seen_at: null, transcript_id: null,
   })
   storage.setBackend(SLUG, "claude")
   storage.setClaudeRuntime(SLUG, "broker")

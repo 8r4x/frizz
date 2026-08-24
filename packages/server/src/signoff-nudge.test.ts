@@ -21,7 +21,7 @@ function nudger(tele: Partial<SessionTelemetry>, opts: { setting?: string } = {}
   storage.upsertSession({
     slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
-    title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
+    title: slug, state: "open", meta: null, seen_at: null, transcript_id: null,
   } as SessionRow)
   if (opts.setting) storage.setSetting("signoffNudge", opts.setting)
   const delivered: string[] = []
@@ -253,7 +253,7 @@ test("a Goal and the reminder both queue for one rest, and a fence supersedes wh
   storage.upsertSession({
     slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
-    title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
+    title: slug, state: "open", meta: null, seen_at: null, transcript_id: null,
   } as SessionRow)
   // An ordinary armed Goal — the stop hook and nothing else, which is what the footer panel arms when an
   // operator flips one switch.

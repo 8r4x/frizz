@@ -81,18 +81,14 @@ export const store = proxy({
   // The modal reads the durable new-thread profile live and carries its own selector for it, so
   // nothing about the dispatch tuple is captured here.
   showGithubPicker: false,
-  // When the New-thread modal was opened FROM a plan ("Implement this"), the plan's path — passed
-  // as dispatch.planPath so the worker is oriented to the plan. Null for an ordinary new thread. Cleared
-  // when the modal closes.
-  newThreadPlanPath: null as string | null,
   // Left-sidebar section collapse (true = collapsed). Only Active leads expanded — it is the live
-  // work and has no header to collapse from. Held, Done and Plans all start collapsed: each is a band
+  // work and has no header to collapse from. Held and Done start collapsed: each is a band
   // whose header count already says how much is parked there, so the rail opens on what is running.
   // Session-scoped UI state (deliberately not persisted).
   // `external` is the External band — the human's own terminals. Collapsed by default like
-  // Held/Done/Plans: nothing in it is frizz's work or waiting on the rail's reader, so the count is
+  // Held/Done: nothing in it is frizz's work or waiting on the rail's reader, so the count is
   // the glance.
-  sidebarCollapsed: { active: false, held: true, inactive: true, plans: true, external: true } as Record<"active" | "held" | "inactive" | "plans" | "external", boolean>,
+  sidebarCollapsed: { active: false, held: true, inactive: true, external: true } as Record<"active" | "held" | "inactive" | "external", boolean>,
   // The SIDE-DRAWER STACK — arbitrary depth. `thread` layers are full thread views (the Open-thread
   // sheet); `doc` layers are the frizz-document markdown; `markdown` layers are the built-in reader for
   // a `.md` FILE on disk, opened from any link to one; `subagent` and `shell` layers are read-only
@@ -104,12 +100,12 @@ export const store = proxy({
   // same entry so App can render its sheet without a board lookup after the operation finishes.
   drawers: [] as {
     id: number
-    kind: "thread" | "doc" | "subagent" | "shell" | "plan" | "markdown"
+    kind: "thread" | "doc" | "subagent" | "shell" | "markdown"
     slug: string
     routed?: boolean // URL/deep-link-created thread: visible on first paint, never an invisible animated backdrop
     subId?: string // subagent/shell: the launch tool_use id (the RPC handle + dedupe key)
-    label?: string // subagent: the dispatch description (header title) / plan: the plan title / markdown: the basename
-    path?: string // plan: the PlanView.path (.frizz/plans/*.md) the drawer renders + dispatches from / markdown: the absolute file path
+    label?: string // subagent: the dispatch description (header title) / markdown: the basename
+    path?: string // markdown: the absolute file path
     subagentType?: string // subagent: the model+effort cell tag
     startedAt?: string // subagent: ISO8601 dispatch time (drives the header's running elapsed)
     openedAt?: number // bumped when an existing logical layer is focused/reopened
@@ -140,9 +136,7 @@ export const store = proxy({
   toast: null as { id: number; text: string; spinner?: boolean; sticky?: boolean; duration?: number; link?: { label: string; slug: string } } | null,
 })
 
-// Open the New-thread modal, optionally seeded from a plan (the dispatch will carry planPath).
-export function openNewThread(planPath?: string): void {
-  store.newThreadPlanPath = planPath ?? null
+export function openNewThread(): void {
   store.showNewThread = true
 }
 
@@ -170,17 +164,17 @@ type Drawer = (typeof store.drawers)[number]
 // second request for that same chat (or document) must reuse the existing layer.
 function sameDrawer(a: Drawer, b: Pick<Drawer, "kind" | "slug" | "path" | "subId">): boolean {
   if (a.kind !== b.kind) return false
-  if (a.kind === "plan" || a.kind === "markdown") return a.path === b.path
+  if (a.kind === "markdown") return a.path === b.path
   if (a.kind === "subagent" || a.kind === "shell") return a.subId === b.subId
   return a.slug === b.slug
 }
 
 // The only layers a new drawer legitimately stacks OVER are its own thread's family: a sub-agent
 // transcript over its parent thread/doc, and a thread⇄doc pair sharing a slug. Everything else —
-// sibling threads, sibling sub-agents, plans — is a lateral move, not a drill-in.
+// sibling threads, sibling sub-agents — is a lateral move, not a drill-in.
 function stacksOver(below: Drawer, next: Pick<Drawer, "kind" | "slug">): boolean {
   // A `.md` reader is always a DRILL-IN: it is opened by clicking a link inside whatever is already
-  // showing (a chat message, a plan, another document), so replacing that layer would close the very
+  // showing (a chat message, another document), so replacing that layer would close the very
   // prose the link was read from. It stacks over anything, its own kind included — following a doc's
   // link to a sibling doc and pressing Esc to come back is the whole point of a reader.
   if (next.kind === "markdown") return true
@@ -192,7 +186,7 @@ function stacksOver(below: Drawer, next: Pick<Drawer, "kind" | "slug">): boolean
 
 function openOrRaiseDrawer(next: Omit<Drawer, "id" | "closing" | "openedAt">): void {
   // ONE-DRAWER POLICY (maintainer 2026-07-21): opening a layer REPLACES every live layer it doesn't
-  // logically stack over, so lateral moves (sidebar sibling thread/sub-agent/plan clicks) swap the
+  // logically stack over, so lateral moves (sidebar sibling thread/sub-agent clicks) swap the
   // open drawer instead of piling up; only drilling into the open thread's own child/doc stacks.
   const displaced = store.drawers.filter((d) => !d.closing && !sameDrawer(d, next) && !stacksOver(d, next)).map((d) => d.id)
   if (displaced.length) closeDrawersById(displaced)
@@ -233,7 +227,7 @@ export function pushBackgroundShellDrawer(slug: string, id: string, opts: { labe
 // card (see scrollToQueueCard below) — every affordance that asks to "show me this thread" obeys the
 // one rule, so nothing can stack a drawer on top of the identical panel. Otherwise routing is by
 // runtime: a thread with NO session ever spawned (runtime "none" — no transcript, the chat drawer
-// would be an empty placeholder) opens its frizz DOCUMENT drawer instead — for a Plans-section thread
+// would be an empty placeholder) opens its frizz DOCUMENT drawer instead — there
 // the doc IS the substance. Anything with a session (live or exited — exited transcripts are worth
 // seeing) opens the chat drawer. The doc drawer carries the adopt ("Start a session") affordance.
 export function openThread(slug: string): void {
@@ -327,18 +321,10 @@ function flashQueueCard(slug: string, root: HTMLElement): void {
   }, 1100))
 }
 
-// Open a plan artifact (.frizz/plans/*.md) as a doc-style drawer layer. `path` is the PlanView.path (the
-// planBody RPC handle + the dispatch's planPath); `title` is the plan's display title. Deduped on path
-// so a re-click doesn't stack duplicates. Uses the path as the entry `slug` too (a stable key for the
-// layer) — plan layers never resolve a thread, so the slug is only an identity handle here.
-export function pushPlanDrawer(path: string, title: string): void {
-  openOrRaiseDrawer({ kind: "plan", slug: path, path, label: title })
-}
-
 // Open a `.md` file that lives on disk in Frizz's OWN reader, rather than handing the path to the
 // desktop opener. Every link to one routes here (lib/local-file-links.ts): agent prose citing a repo
 // doc, an inline-code path that resolved to one, an attached `.md`. `path` is the absolute POSIX path
-// the server will re-gate; the basename is the header title. Deduped on path, like a plan.
+// the server will re-gate; the basename is the header title. Deduped on path.
 export function pushMarkdownDrawer(path: string): void {
   const base = path.split("/").filter(Boolean).pop() || path
   openOrRaiseDrawer({ kind: "markdown", slug: path, path, label: base })
@@ -438,7 +424,6 @@ export function resetProjectState() {
   store.showSettings = false
   store.showNewThread = false
   store.showGithubPicker = false
-  store.newThreadPlanPath = null
 }
 
 // STARTUP seed only (App fires an rpc.board() to paint before SSE connects). Unlike setBoard this must

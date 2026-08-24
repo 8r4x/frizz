@@ -21,8 +21,6 @@ function metaOf(b: BoardSnapshot): BoardMeta {
     // Normalize undefined→[] so metaS serialization is stable (an absent vs empty errorItems never
     // reads as a spurious meta change) and the structured repair list survives every delta.
     errorItems: b.errorItems ?? [],
-    // Same normalization for plan artifacts — the Plans section must survive every delta.
-    plans: b.plans ?? [],
   }
 }
 
@@ -96,7 +94,6 @@ export function applyBoardDelta(board: BoardSnapshot, delta: Pick<BoardDelta, "u
     board.errors = delta.meta.errors
     board.warnings = delta.meta.warnings
     board.errorItems = delta.meta.errorItems
-    board.plans = delta.meta.plans
   }
 }
 

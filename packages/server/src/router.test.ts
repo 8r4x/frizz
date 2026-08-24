@@ -132,7 +132,6 @@ function row(slug: string): SessionRow {
     state: "open",
     meta: null,
     seen_at: null,
-    plan_path: null,
     transcript_id: null,
     permission_mode: null,
   }
@@ -263,34 +262,6 @@ test("threadTerminalCommand offers the verified provider resume command in every
       h.router.threadTerminalCommand.handler({ input: { slug: "foreign-or-legacy" } }),
       /No Frizz-owned terminal session is available/,
     )
-  } finally {
-    h.storage.close()
-    rmSync(h.dir, { recursive: true, force: true })
-  }
-})
-
-test("planBody RPC returns only a securely resolved direct plan file", async () => {
-  const h = harness()
-  const plans = join(h.dir, ".frizz", "plans")
-  const outside = join(h.dir, "outside.md")
-  try {
-    mkdirSync(plans, { recursive: true })
-    writeFileSync(join(plans, "safe.md"), "# Safe plan\n")
-    writeFileSync(outside, "outside\n")
-    symlinkSync(outside, join(plans, "linked.md"))
-
-    assert.deepEqual(
-      await h.router.planBody.handler({ input: { path: ".frizz/plans/safe.md" } }),
-      { markdown: "# Safe plan\n" },
-    )
-    for (const path of [
-      ".frizz/plans/linked.md",
-      ".frizz/plans/../../outside.md",
-      ".frizz/plans/nested/safe.md",
-      "/absolute.md",
-    ]) {
-      assert.deepEqual(await h.router.planBody.handler({ input: { path } }), { markdown: "" }, path)
-    }
   } finally {
     h.storage.close()
     rmSync(h.dir, { recursive: true, force: true })
@@ -1541,7 +1512,7 @@ test("followUp on an EXTERNAL session registers it first, keeping its id, then d
       slug: input.sessionId, session_id: input.sessionId, thread_name: `frizz-${input.sessionId}`,
       spawned_at: "2026-08-24T00:00:00.000Z", last_read_at: null, unread: 0, exited: 0, archived: 0,
       rested_at: null, title_auto: 0, title: input.title ?? null, transcript_id: null, state: "open",
-      meta: null, seen_at: null, plan_path: null,
+      meta: null, seen_at: null,
     })
     // The real dispatcher stamps the transport too; without it the follow-up falls through to the
     // retired legacy path and throws instead of reaching the broker.

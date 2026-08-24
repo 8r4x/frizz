@@ -54,7 +54,7 @@ async function run(label, { fenceAt, ticks }) {
     storage.upsertSession({
       slug: label, session_id: `sid-${label}`, thread_name: `frizz-${label}`, spawned_at: fenceAt,
       last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0,
-      title: label, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
+      title: label, state: "open", meta: null, seen_at: null, transcript_id: null,
     })
     const fence = { kind: "awaiting", body: `pr-watch: ${PR}\nWatching for review.`, hints: [{ kind: "pr-watch", value: PR }] }
     let fetcher = ticks[0]

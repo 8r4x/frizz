@@ -1863,7 +1863,7 @@ function makeTailer(h: Harness, over: Partial<Parameters<typeof createTailer>[0]
 }
 
 function row(over: Partial<SessionRow> = {}): SessionRow {
-  const result = { slug: "t", session_id: "sid", thread_name: "frizz-t", spawned_at: "2026-07-01T00:00:00.000Z", last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0, title: null, state: null, meta: null, seen_at: null, plan_path: null, transcript_id: null, ...over }
+  const result = { slug: "t", session_id: "sid", thread_name: "frizz-t", spawned_at: "2026-07-01T00:00:00.000Z", last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0, title: null, state: null, meta: null, seen_at: null, transcript_id: null, ...over }
   if (over.slug !== undefined && over.thread_name === undefined) result.thread_name = `frizz-${result.slug}`
   return result
 }

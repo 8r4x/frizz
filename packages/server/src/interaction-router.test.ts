@@ -37,7 +37,6 @@ function session(): SessionRow {
     state: "open",
     meta: null,
     seen_at: null,
-    plan_path: null,
     transcript_id: null,
   }
 }

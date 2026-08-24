@@ -19,7 +19,7 @@ function observe(qc: QueryClient, slug: string): () => void {
 }
 
 function boardWith(threads: Array<Partial<ThreadView> & { id: string }>): BoardSnapshot {
-  return { threads: threads as ThreadView[], plans: [], errors: [] } as unknown as BoardSnapshot
+  return { threads: threads as ThreadView[], errors: [] } as unknown as BoardSnapshot
 }
 
 afterEach(() => {

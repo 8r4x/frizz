@@ -121,7 +121,6 @@ export interface SessionRow {
   recurring_compact_fired_at?: string | null
   meta: string | null // JSON blob for future annotations (unparsed here)
   seen_at: string | null // ISO8601 — interaction clearance: recorded when the human opens the thread
-  plan_path: string | null // project-relative .frizz/plans/*.md this thread was dispatched from
   // Which agent backend serves this session (Codex-support epic). Optional in the TS shape (older rows
   // + the many test-fixture literals predate it); the SQLite column carries a "claude" DEFAULT so every
   // existing row and all current behavior are unchanged. Phase 1 only ever writes "claude".
@@ -900,7 +899,6 @@ export function createStorage(dbPath: string): Storage {
     "bg_snooze_rested_at TEXT",
     "meta TEXT",
     "seen_at TEXT",
-    "plan_path TEXT",
     "transcript_id TEXT",
     "backend TEXT NOT NULL DEFAULT 'claude'",
     "agent_session_id TEXT",
@@ -1238,8 +1236,8 @@ export function createStorage(dbPath: string): Storage {
     return cachedBySlug.get(slug) ?? selOne.get(slug)
   }
   const upsertStmt = db.prepare(`
-    INSERT INTO session (slug, session_id, thread_name, spawned_at, last_read_at, unread, exited, title_auto, title_locked, title, state, snoozed_until, snooze_prompt, meta, seen_at, plan_path, transcript_id, model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff, permission_mode, permission_pending, control_error, runtime_generation, runtime_control, runtime_control_revision)
-    VALUES (@slug, @session_id, @thread_name, @spawned_at, @last_read_at, @unread, @exited, @title_auto, @title_locked, @title, @state, @snoozed_until, @snooze_prompt, @meta, @seen_at, @plan_path, @transcript_id, @model, @effort, @profile_pending_model, @profile_pending_effort, @profile_revision, @profile_handoff, @permission_mode, @permission_pending, @control_error, @runtime_generation, @runtime_control, @runtime_control_revision)
+    INSERT INTO session (slug, session_id, thread_name, spawned_at, last_read_at, unread, exited, title_auto, title_locked, title, state, snoozed_until, snooze_prompt, meta, seen_at, transcript_id, model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff, permission_mode, permission_pending, control_error, runtime_generation, runtime_control, runtime_control_revision)
+    VALUES (@slug, @session_id, @thread_name, @spawned_at, @last_read_at, @unread, @exited, @title_auto, @title_locked, @title, @state, @snoozed_until, @snooze_prompt, @meta, @seen_at, @transcript_id, @model, @effort, @profile_pending_model, @profile_pending_effort, @profile_revision, @profile_handoff, @permission_mode, @permission_pending, @control_error, @runtime_generation, @runtime_control, @runtime_control_revision)
     ON CONFLICT(slug) DO UPDATE SET
       session_id = excluded.session_id,
       thread_name  = excluded.thread_name,
@@ -1258,7 +1256,6 @@ export function createStorage(dbPath: string): Storage {
       -- Always moves WITH the instant: a spread row carries both, a re-dispatch clears both. An armed
       -- prompt outliving its deadline would be a wake nothing can ever fire.
       snooze_prompt = excluded.snooze_prompt,
-      plan_path = excluded.plan_path,
       model = excluded.model,
       effort = excluded.effort,
       profile_pending_model = excluded.profile_pending_model,
@@ -1284,7 +1281,7 @@ export function createStorage(dbPath: string): Storage {
     INSERT INTO session (
       slug, session_id, thread_name, spawned_at, last_read_at, unread, exited, archived, rested_at,
       title_auto, title_locked, title, transcript_id, state, snoozed_until, snooze_prompt,
-      meta, seen_at, plan_path, backend, agent_session_id,
+      meta, seen_at, backend, agent_session_id,
       model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff,
       permission_mode, permission_pending, control_error,
       runtime_generation, runtime_control, runtime_control_revision
@@ -1292,7 +1289,7 @@ export function createStorage(dbPath: string): Storage {
     VALUES (
       @slug, @session_id, @thread_name, @spawned_at, @last_read_at, @unread, @exited, @archived,
       @rested_at, @title_auto, @title_locked, @title, @transcript_id, @state, @snoozed_until, @snooze_prompt,
-      @meta, @seen_at, @plan_path,
+      @meta, @seen_at,
       @backend, @agent_session_id, @model, @effort, @profile_pending_model,
       @profile_pending_effort, @profile_revision, @profile_handoff, @permission_mode, @permission_pending,
       @control_error, @runtime_generation, @runtime_control,

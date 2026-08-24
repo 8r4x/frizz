@@ -110,11 +110,11 @@ test("Claude worker surfaces share the canonical per-session scratch DIRECTORY p
   const sessionId = "scratch-canonical"
   const canonical = `.frizz/threads/${sessionId}/`
   assert.match(composePrompt(sessionId, "task", "claude"), new RegExp(canonical.replaceAll("/", "\\/")))
-  assert.match(scratchpadOrientation(sessionId, null, "claude"), new RegExp(canonical.replaceAll("/", "\\/")))
+  assert.match(scratchpadOrientation(sessionId, "claude"), new RegExp(canonical.replaceAll("/", "\\/")))
   assert.match(SESSION_SEED, /\.frizz\/threads\//)
   // No surface may resurrect the canonical filename: nothing reserves a name in that directory now.
   assert.doesNotMatch(composePrompt(sessionId, "task", "claude"), /scratch\.md/)
-  assert.doesNotMatch(scratchpadOrientation(sessionId, null, "claude"), /scratch\.md/)
+  assert.doesNotMatch(scratchpadOrientation(sessionId, "claude"), /scratch\.md/)
   assert.doesNotMatch(SESSION_SEED, /scratch\.md/)
   assert.doesNotMatch(SESSION_SEED, /\.frizz\/scratch\//)
 })
@@ -170,7 +170,7 @@ test("frizzConfigBlock composes AFTER the worker contract (override position) in
   const dir = mkdtempSync(join(tmpdir(), "frizz-md-order-"))
   writeFileSync(join(dir, "FRIZZ.md"), "PROJECT-NORM-SENTINEL")
   const sessionId = "frizz-md-order"
-  const system = [loadWorkerPrompt("claude"), scratchpadOrientation(sessionId, null, "claude"), frizzConfigBlock(dir)]
+  const system = [loadWorkerPrompt("claude"), scratchpadOrientation(sessionId, "claude"), frizzConfigBlock(dir)]
     .filter(Boolean)
     .join("\n\n")
   assert.ok(system.indexOf("PROJECT-NORM-SENTINEL") > system.indexOf("Defer to the project's own norms"))
@@ -445,7 +445,9 @@ test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting pa
     // Unlanded code and the live code-change discussion remain INSTANCES of the heuristic.
     assert.match(c, /live code-change discussion/)
     assert.match(c, /PLANNING session whose plan file is FULLY written and PERSISTED/)
-    assert.match(c, /FULLY written and PERSISTED \(`\.frizz\/plans\/<topic>\.md`\)/)
+    // Frizz prescribes NO plan location (the plans feature was dropped 2026-08-24) — the contract must
+    // not resurrect one.
+    assert.doesNotMatch(c, /\.frizz\/plans/)
     assert.match(c, /artifact already lives outside the thread, so dismissing the thread loses nothing/)
     // 2026-08-16, TWO threads in one sitting fenced `done` on work that was still owed, and both read
     // the contract correctly to get there — so these are the wording defects, not model defects:
@@ -632,7 +634,7 @@ test("every scratch surface presents notes as optional and never a substitute fo
     assert.match(prompt, /never a substitute for doing the work/, `${kind} composePrompt must refuse the substitution`)
     assert.doesNotMatch(prompt, /CANONICAL/, `${kind} composePrompt must not re-promote a canonical doc`)
 
-    const orientation = scratchpadOrientation("sid", null, kind)
+    const orientation = scratchpadOrientation("sid", kind)
     assert.match(orientation, /nothing is expected in it/, `${kind} orientation must not present notes as mandatory`)
     assert.match(orientation, /never a substitute for doing the work/, `${kind} orientation must refuse the substitution`)
     assert.doesNotMatch(orientation, /CANONICAL/, `${kind} orientation must not re-promote a canonical doc`)
@@ -691,12 +693,12 @@ test("composePrompt round-trips through the BROKER's enqueue record with the sam
 // ---- scratchpadOrientation: the SYSTEM-level line is backend-aware ----
 
 test("scratchpadOrientation names the directory, the arming, and one file per sub-agent", () => {
-  const claude = scratchpadOrientation("sid", null, "claude")
+  const claude = scratchpadOrientation("sid", "claude")
   assert.match(claude, /SCRATCH DIRECTORY: \.frizz\/threads\/sid\//)
   assert.match(claude, /name it in a sub-agent's prompt when you want its notes back, and give each child its own file/)
-  assert.equal(scratchpadOrientation("sid", null), claude)
+  assert.equal(scratchpadOrientation("sid"), claude)
 
-  const codex = scratchpadOrientation("sid", null, "codex")
+  const codex = scratchpadOrientation("sid", "codex")
   assert.match(codex, /native sub-agents share it, so give each its own file/)
 
   for (const [kind, text] of [["claude", claude], ["codex", codex]] as const) {
@@ -707,9 +709,6 @@ test("scratchpadOrientation names the directory, the arming, and one file per su
     assert.doesNotMatch(text, /merge/i, `${kind} must not reintroduce the merge contract`)
     assert.doesNotMatch(text, /scratch\.md/, `${kind} must not reserve a filename`)
   }
-
-  // The plan line is agnostic and appended for both.
-  assert.match(scratchpadOrientation("sid", ".frizz/plans/x.md", "codex"), /PLAN: \.frizz\/plans\/x\.md/)
 })
 
 // ---- workerDispatchPermission: the Settings-driven launch mode for a NEW worker ----

@@ -1,6 +1,5 @@
 import * as RadixDialog from "@radix-ui/react-dialog"
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
-import { useSnapshot } from "valtio"
 import { useMutation, useQuery } from "@tanstack/react-query"
 import type { Backend, DispatchInput } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
@@ -22,13 +21,9 @@ import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.
 export function DispatchForm({
   autoFocus,
   onDispatched,
-  planPath,
 }: {
   autoFocus?: boolean
   onDispatched?: () => void
-  // When present, the dispatch carries this plan artifact path (.frizz/plans/*.md) so the worker is
-  // oriented to the plan and the thread is associated with it.
-  planPath?: string
 }) {
   // The one durable new-thread profile, shared with the GitHub picker's own selector.
   const { resolved, codexList, loadError: profileLoadError, saveProfile } = useDispatchProfile()
@@ -36,10 +31,9 @@ export function DispatchForm({
   // prop is set, so a hidden GithubTrigger must mean NO prop — not a null-rendering element.
   const githubTriggerVisible = useGithubTriggerVisible()
   const projectDir = useProjectDir()
-  // Queue and modal are the same semantic new-thread composer. A plan gets a distinct intent because
-  // dispatching it changes the worker's durable context.
-  const [prompt, setPrompt, clearPrompt] = useDraft(draftKey.dispatch(projectDir, planPath))
-  const promptKey = draftKey.dispatch(projectDir, planPath)
+  // Queue and modal are the same semantic new-thread composer.
+  const [prompt, setPrompt, clearPrompt] = useDraft(draftKey.dispatch(projectDir))
+  const promptKey = draftKey.dispatch(projectDir)
   const submittedDraftRef = useRef("")
   const [pendingDispatch, setPendingDispatch] = useState<string | null>(null)
 
@@ -126,7 +120,6 @@ export function DispatchForm({
       model: resolved.model,
       backend: resolved.backend,
       effort: resolved.effort as DispatchInput["effort"],
-      ...(planPath ? { planPath } : {}),
     }
     // Auth gate: block ONLY on a positive "signed-out" for this dispatch's backend. Loading/unknown/
     // authed all fall through (fail open) so a flaky or slow read never blocks a logged-in user.
@@ -227,13 +220,9 @@ export function DispatchForm({
 // The anywhere-modal behind the pill button: same form in a centered dialog. Esc closes (captured
 // here BEFORE the composer's own Escape-blurs handler can swallow it).
 export function NewThreadDialog({ onClose }: { onClose: () => void }) {
-  // Seeded from a plan? (store.newThreadPlanPath, set by "Implement this"). The dispatch then
-  // carries planPath; a quiet line names the plan the thread works from.
-  const planPath = useSnapshot(store).newThreadPlanPath
-  const planName = planPath ? planPath.split("/").pop() : null
   const contentRef = useRef<HTMLDivElement>(null)
   // Frizz opens this dialog by writing store state, not through RadixDialog.Trigger. Capture the real
-  // opener during the mount render so close can restore it explicitly (including plan-drawer openers).
+  // opener during the mount render so close can restore it explicitly.
   const openerRef = useRef<HTMLElement | null>(
     typeof document !== "undefined" && document.activeElement instanceof HTMLElement ? document.activeElement : null,
   )
@@ -269,8 +258,7 @@ export function NewThreadDialog({ onClose }: { onClose: () => void }) {
           className="fixed left-1/2 top-1/2 z-50 w-[640px] max-w-[86vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-black/50 outline-none max-[700px]:top-[calc(env(safe-area-inset-top)+56px)] max-[700px]:w-[calc(100vw-24px)] max-[700px]:max-w-none max-[700px]:translate-y-0"
         >
           <RadixDialog.Title className="mb-1 text-[14px] font-medium">New thread</RadixDialog.Title>
-          {planName && <p className="mb-3 text-[11.5px] text-muted/80">From plan <span className="font-mono-keep text-muted">{planName}</span></p>}
-          <DispatchForm autoFocus onDispatched={onClose} planPath={planPath ?? undefined} />
+          <DispatchForm autoFocus onDispatched={onClose} />
         </RadixDialog.Content>
       </RadixDialog.Portal>
     </RadixDialog.Root>

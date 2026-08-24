@@ -11,7 +11,7 @@ export type SidebarPresence = {
 // has had something to navigate; only a genuinely fresh project retains the centered first-task view.
 export function nextSidebarPresence(
   previous: SidebarPresence,
-  board: Pick<BoardSnapshot, "projectDir" | "threads" | "plans"> | null,
+  board: Pick<BoardSnapshot, "projectDir" | "threads"> | null,
 ): SidebarPresence {
   if (!board) return previous
   const projectChanged = previous.projectDir !== board.projectDir
@@ -20,9 +20,9 @@ export function nextSidebarPresence(
   // every meaningful sense. Now they have their own rail band — and the project where that band matters
   // MOST is exactly the one this predicate used to call fresh: a repo you have worked in from the
   // terminal and never dispatched a frizz thread in. Discounting them there hid the only surface that
-  // could show them. A truly empty board — no threads of any origin, no plans — still gets the centered
+  // could show them. A truly empty board — no threads of any origin — still gets the centered
   // first-task view.
-  const hasWorkspaceContent = board.threads.length > 0 || (board.plans?.length ?? 0) > 0
+  const hasWorkspaceContent = board.threads.length > 0
   return {
     projectDir: board.projectDir,
     hasBeenVisible: projectChanged ? hasWorkspaceContent : previous.hasBeenVisible || hasWorkspaceContent,

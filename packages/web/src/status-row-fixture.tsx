@@ -89,7 +89,7 @@ const identityMode = params.get("identity")
 // than passing props — which is also the only way to exercise the real read path.
 store.board = (identityMode === "loading"
   ? null
-  : { projectLabel: identityMode === "unavailable" ? "frizz" : "colinhacks/frizz", threads: [], plans: [] }) as never
+  : { projectLabel: identityMode === "unavailable" ? "frizz" : "colinhacks/frizz", threads: [] }) as never
 store.connection = (params.get("connection") ?? "open") as "open" | "connecting" | "closed"
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })

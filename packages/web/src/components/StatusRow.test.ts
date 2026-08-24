@@ -26,7 +26,7 @@ function render(
     })
     client.setQueryData(["authStatus"], { claude: "authed", codex: "authed", emails: {} })
   }
-  store.board = (label === null ? null : { projectLabel: label, threads: [], plans: [] }) as unknown as BoardSnapshot
+  store.board = (label === null ? null : { projectLabel: label, threads: [] }) as unknown as BoardSnapshot
   store.connection = options.connection ?? "open"
   store.socketBoardFallback = null
   return renderToStaticMarkup(
@@ -149,7 +149,7 @@ test("a provider with NO DATA renders nothing at all — and takes the divider w
     codex: { status: "unavailable", windows: [] },
   })
   client.setQueryData(["authStatus"], { claude: "authed", codex: "signed-out", emails: {} })
-  store.board = { projectLabel: "colinhacks/frizz", threads: [], plans: [] } as unknown as BoardSnapshot
+  store.board = { projectLabel: "colinhacks/frizz", threads: [] } as unknown as BoardSnapshot
   store.connection = "open"
   const one = renderToStaticMarkup(
     createElement(QueryClientProvider, { client }, createElement(StatusRow, null)),

@@ -6,7 +6,7 @@ import {
 import { homedir } from "node:os"
 import { join } from "node:path"
 import watcher from "@parcel/watcher"
-import type { BoardSnapshot, ThreadView, RuntimeState, PlanView, ThreadRecurringPrompt } from "@frizz/shared"
+import type { BoardSnapshot, ThreadView, RuntimeState, ThreadRecurringPrompt } from "@frizz/shared"
 import { BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isDirectSubAgent, type PermissionMode as PermissionModeValue } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import type { Project } from "./project.ts"
@@ -22,7 +22,6 @@ import { parseDeliveryLedger } from "./delivery-ledger.ts"
 import { effectivePermissionMode, fallbackTitle, resolveLegacyThreadFile } from "./dispatch.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
 import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
-import { listPlanFiles } from "./plan-files.ts"
 import { limitPauseIsStale, textResetInstant } from "./backend/usage-limit.ts"
 import { getSettings } from "./settings.ts"
 
@@ -1072,7 +1071,6 @@ function sessionThreadView(
     foreign: false,
     lastFence: tele?.lastFence,
     seenAt: row.seen_at ?? undefined,
-    planPath: row.plan_path ?? undefined,
     state,
     snoozedUntil,
     // Only meaningful while the snooze is still pending — a prompt without a live deadline is an
@@ -1206,29 +1204,13 @@ function foreignThreadView(sessionId: string, tele: SessionTelemetry, backend: "
   }
 }
 
-// Plan artifacts (.frizz/plans/*.md): title from the first markdown heading in the securely resolved
-// bytes (else the filename stem), mtime, and registered session slugs dispatched from it. Discovery and
-// reading share one stable no-follow resolver; indirect or raced files are omitted.
-function readPlans(projectDir: string, rows: readonly SessionRow[]): PlanView[] {
-  return listPlanFiles(projectDir).map((file) => {
-    let title = file.filename.replace(/\.md$/, "")
-    const head = file.contents.toString("utf8").split("\n").slice(0, 50)
-    const heading = head.find((line) => /^#{1,6}\s+\S/.test(line))
-    if (heading) title = heading.replace(/^#{1,6}\s+/, "").trim() || title
-    const threadIds = rows
-      .filter((row) => row.plan_path === file.relativePath && ThreadSlug.safeParse(row.slug).success)
-      .map((row) => row.slug)
-    return { path: file.relativePath, title, updatedAt: new Date(file.mtimeMs).toISOString(), threadIds }
-  })
-}
-
 export interface BoardManager {
   snapshot(): Promise<BoardSnapshot>
   // The seq the current snapshot corresponds to — the value a connect keyframe must advertise so the
   // client can adopt it and then apply deltas seq+1, seq+2 … (see the /events handler). Read
   // synchronously right after snapshot() so the two are consistent.
   currentSeq(): number
-  // Full: revalidates registered-file migration state and secure plan discovery.
+  // Full: revalidates registered-file migration state.
   rebuild(): Promise<BoardSnapshot>
   // Overlay-only: reuses file-backed caches; cheap + sync. Use for tailer/session changes.
   refresh(): BoardSnapshot
@@ -1315,10 +1297,9 @@ export function createBoard(
     notifyPrimed = true
   }
 
-  // File-backed migration/plan caches are recomputed only on a full rebuild (the recursive .frizz
+  // The file-backed migration cache is recomputed only on a full rebuild (the recursive .frizz
   // watcher catches changes). Overlay-only refreshes remain filesystem-free.
   let legacyTerminalCache = new Set<string>()
-  let plansCache: PlanView[] = []
 
   // Build exactly the session-backed threads recorded by Frizz. The registry is the provenance
   // boundary: historical rows remain valid after migration/restart, and both Claude and Codex use the
@@ -1404,10 +1385,10 @@ export function createBoard(
     return out
   }
 
-  // Assemble a snapshot from registered sessions + external sessions + plan artifacts. Unregistered
-  // legacy files are excluded before any legacy parser is invoked, so they cannot contribute a row,
-  // queue card, warning, or error. `.frizz/` presence is deliberately NOT reported: it gates only
-  // plan/scratchpad storage (probed locally where that matters), never whether this project has a board.
+  // Assemble a snapshot from registered sessions + external sessions. Unregistered legacy files are
+  // excluded before any legacy parser is invoked, so they cannot contribute a row, queue card,
+  // warning, or error. `.frizz/` presence is deliberately NOT reported: it gates only scratchpad
+  // storage (probed locally where that matters), never whether this project has a board.
   function assemble(): BoardSnapshot {
     // One clock sample owns every snooze decision in this snapshot: expiry clearing, visibility,
     // needs-you derivation, and timer selection cannot disagree at a deadline boundary.
@@ -1440,7 +1421,6 @@ export function createBoard(
       errors: [],
       warnings: [],
       errorItems: [],
-      plans: plansCache,
     }
   }
 
@@ -1481,11 +1461,6 @@ export function createBoard(
     snoozeTimer.unref?.()
   }
 
-  // Recompute the plans cache (full-read grade). Called on rebuild; empty when .frizz/ is absent.
-  function recomputePlans(): void {
-    plansCache = frizzDirExists(project.dir) ? readPlans(project.dir, storage.allSessions()) : []
-  }
-
   function recomputeLegacyTerminalState(): void {
     legacyTerminalCache = new Set(
       storage.allSessions()
@@ -1509,14 +1484,13 @@ export function createBoard(
     bus.publish({ type: "board-delta", seq: d.seq, bootId, upserts: d.upserts, removed: d.removed, ...(d.meta ? { meta: d.meta } : {}) })
   }
 
-  // FULL rebuild: recompute registered-file migration metadata + plans, then assemble.
+  // FULL rebuild: recompute registered-file migration metadata, then assemble.
   async function rebuildOnce(): Promise<BoardSnapshot> {
     if (stopped) throw new ProducerStoppedError("board")
     // One indexed expiry sweep per level-triggered reconcile keeps queue membership truthful even
     // with no browser mounted. Any transitions publish normal journal invalidations.
     storage.interactions.expireDue()
     recomputeLegacyTerminalState()
-    recomputePlans()
     cached = assemble()
     publish(cached)
     return cached
@@ -1639,7 +1613,7 @@ export function createBoard(
           pendingWatchSetup ?? Promise.resolve(),
           subscription?.unsubscribe() ?? Promise.resolve(),
         ])
-        // Rebuilds are registry/plan reads only, but still drain them so a replacement generation never
+        // Rebuilds are registry reads only, but still drain them so a replacement generation never
         // publishes a stale delta after shutdown begins.
         await Promise.allSettled([...activeRebuilds])
       })()

@@ -36,7 +36,6 @@ function sessionRow(slug: string, over: Partial<SessionRow> = {}): SessionRow {
     state: "open",
     meta: null,
     seen_at: null,
-    plan_path: null,
     backend: "claude",
     agent_session_id: null,
     ...over,

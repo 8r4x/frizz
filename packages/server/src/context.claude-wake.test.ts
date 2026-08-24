@@ -22,7 +22,6 @@ function bridge() {
 
 const row = {
   session_id: "sess-1",
-  plan_path: null,
   model: "claude-opus-4-6",
   effort: "high",
   permission_mode: "bypassPermissions",

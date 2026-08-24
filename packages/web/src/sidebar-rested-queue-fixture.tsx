@@ -138,8 +138,7 @@ const shellOnlyRested = {
 store.board = {
   projectDir: "/fixture/frizz",
   threads: [restedQueued, ownTurnRunning, cookingNotQueued, bareRestedQueued, shellOnlyRested],
-  plans: [],
-} as unknown as BoardSnapshot
+  } as unknown as BoardSnapshot
 store.drawers = []
 
 // The rail's composer and its pickers read the ordinary RPC surface; answer everything with the empty

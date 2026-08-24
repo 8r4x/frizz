@@ -15,7 +15,6 @@ import {
   buildClaudeResumeCommand,
   fallbackTitle,
   scratchpadOrientation,
-  validPlanPath,
   createDispatcher,
 } from "./dispatch.ts"
 import { createClaudeBackend } from "./backend/claude.ts"
@@ -127,7 +126,6 @@ test("storage: session roundtrip + markRead + exited", () => {
     state: "open",
     meta: null,
     seen_at: null,
-    plan_path: null,
     transcript_id: null,
   })
   let row = s.getSession("t")
@@ -157,7 +155,7 @@ test("storage: transcript_id cache round-trips, survives restart, resets on re-d
   s.upsertSession({
     slug: "t", session_id: "sid-1", thread_name: "frizz-t", spawned_at: "2026-07-01T00:00:00.000Z",
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0, title: null,
-    state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
+    state: "open", meta: null, seen_at: null, transcript_id: null,
   })
   // The tailer's discovery caches the drifted transcript's id.
   s.setTranscriptId("t", "forked-id")
@@ -274,24 +272,9 @@ test("composePrompt: scratch-directory orientation + task, and NOT the operator'
   assert.ok(out.endsWith("\n\nDo the thing.")) // the task is the tail, directly below the banner
 })
 
-test("scratchpadOrientation: scratch line always; PLAN line only when a plan is associated", () => {
+test("scratchpadOrientation: names the scratch directory", () => {
   const bare = scratchpadOrientation("sid-1")
   assert.ok(bare.includes("SCRATCH DIRECTORY: .frizz/threads/sid-1/"))
-  assert.ok(!bare.includes("PLAN:"))
-  const withPlan = scratchpadOrientation("sid-1", ".frizz/plans/p.md")
-  assert.ok(withPlan.includes("SCRATCH DIRECTORY: .frizz/threads/sid-1/"))
-  assert.ok(withPlan.includes("PLAN: .frizz/plans/p.md"))
-})
-
-test("validPlanPath: accepts an existing .frizz/plans/*.md; rejects bad shape / missing file / undefined", () => {
-  const dir = tmp("frizz-plan-")
-  mkdirSync(join(dir, ".frizz", "plans"), { recursive: true })
-  writeFileSync(join(dir, ".frizz", "plans", "ok.md"), "# ok")
-  assert.equal(validPlanPath(dir, ".frizz/plans/ok.md"), ".frizz/plans/ok.md")
-  assert.equal(validPlanPath(dir, ".frizz/plans/missing.md"), null) // well-formed but no file
-  assert.equal(validPlanPath(dir, "../secrets.md"), null) // wrong shape
-  assert.equal(validPlanPath(dir, ".frizz/plans/../../etc/passwd.md"), null) // traversal (has a '/')
-  assert.equal(validPlanPath(dir, undefined), null)
 })
 
 test("buildClaudeCommand: pins session-id, permission mode, optional model/effort, worker system prompt", () => {
@@ -406,30 +389,12 @@ test("dispatch: creates an EMPTY scratch dir (not a thread file), argv carries i
   assert.ok(!userPrompt.includes("You own"))
   assert.equal(h.spawned[0].env?.FRIZZ_THREAD, slug)
 
-  // The row is stored open with no plan association by default.
   const row = h.storage.getSession(slug)
   assert.equal(row?.session_id, sessionId)
   assert.equal(row?.state, "open")
-  assert.equal(row?.plan_path, null)
   assert.equal(row?.model, "opus", "the dispatch model is pinned on the session row")
   assert.equal(row?.effort, "high", "the dispatch effort is pinned on the session row")
   assert.equal(row?.permission_mode, "auto", "the concrete launch permission is pinned on the session row")
-})
-
-test("dispatch: a valid planPath is stored + named in the system prompt; invalid ones are ignored", async () => {
-  const h = dispatcherHarness()
-  mkdirSync(join(h.dir, ".frizz", "plans"), { recursive: true })
-  writeFileSync(join(h.dir, ".frizz", "plans", "my-plan.md"), "# My Plan\n")
-
-  const ok = await h.dispatcher.dispatch({ prompt: "go", planPath: ".frizz/plans/my-plan.md" })
-  assert.equal(h.storage.getSession(ok.slug)?.plan_path, ".frizz/plans/my-plan.md")
-  assert.ok(systemPromptOf(h.spawned[0].cmd).includes("PLAN: .frizz/plans/my-plan.md"))
-
-  // Missing file → ignored (stored null); traversal shape → ignored.
-  const gone = await h.dispatcher.dispatch({ prompt: "go2", planPath: ".frizz/plans/nope.md" })
-  assert.equal(h.storage.getSession(gone.slug)?.plan_path, null)
-  const bad = await h.dispatcher.dispatch({ prompt: "go3", planPath: "../etc/passwd" })
-  assert.equal(h.storage.getSession(bad.slug)?.plan_path, null)
 })
 
 test("adopt: requires the legacy file, provisions a scratch dir, orientation is context-not-contract", async () => {

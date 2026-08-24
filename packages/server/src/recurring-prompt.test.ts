@@ -63,7 +63,7 @@ function fixture() {
   storage.upsertSession({
     slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
-    title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
+    title: slug, state: "open", meta: null, seen_at: null, transcript_id: null,
   } as SessionRow)
   return {
     storage, slug,
@@ -137,7 +137,7 @@ test("storage: the worker path writes by slug alone, across a session change the
     f.storage.upsertSession({
       slug: f.slug, session_id: "sid-2", thread_name: `frizz-${f.slug}`, spawned_at: new Date().toISOString(),
       last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
-      title: f.slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
+      title: f.slug, state: "open", meta: null, seen_at: null, transcript_id: null,
     } as SessionRow)
 
     // The operator path, holding the OLD session id, correctly fails closed.
@@ -202,7 +202,7 @@ function scheduler(
   storage.upsertSession({
     slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
-    title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
+    title: slug, state: "open", meta: null, seen_at: null, transcript_id: null,
   } as SessionRow)
   // Frizz's built-in sign-off reminder (SOURCE 9) now fires on EVERY fenceless rest, independently of
   // the Goal — so it would add a second delivery to every count in this file. Silenced so these stay
@@ -365,7 +365,7 @@ function heartbeatScheduler(
   storage.upsertSession({
     slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
-    title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
+    title: slug, state: "open", meta: null, seen_at: null, transcript_id: null,
   } as SessionRow)
   storage.setSetting("signoffNudge", "off")
   storage.setRecurringPromptBySlug(slug, { prompt: "check the deploy", stopHook: false, heartbeat: true, postCompaction: false, intervalMs: opts.intervalMs ?? 3_600_000, armedAt: opts.armedAt ?? "2026-08-02T00:00:00.000Z" })
@@ -560,7 +560,7 @@ function compactScheduler(
   storage.upsertSession({
     slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
-    title: slug, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
+    title: slug, state: "open", meta: null, seen_at: null, transcript_id: null,
   } as SessionRow)
   storage.setSetting("signoffNudge", "off")
   storage.setRecurringPromptBySlug(slug, {

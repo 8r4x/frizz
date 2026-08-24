@@ -290,7 +290,7 @@ export function externalThreads(threads: readonly ThreadView[]): ThreadView[] {
 // Say "rested" or "in the queue" for a card's row. NEVER call it active merely because this key does.
 //
 // The rail's THREAD-derived sections, keyed on the session-first model (NOT frizz status). Every thread
-// row lands in exactly one of these; the Plans section is separate (from board.plans, not threads).
+// row lands in exactly one of these.
 //   • active           — the SECTION holding the Active AND Rested bands (partitionActive splits it):
 //                        open session work — running, needs-you, bare rest, done-fenced, OR owning a
 //                        live sub-agent/background shell/Monitor. Never dimmed as a band.
@@ -304,8 +304,7 @@ export function externalThreads(threads: readonly ThreadView[]): ThreadView[] {
 // A FOREIGN session row (a maintainer terminal — no registry row, so no state/needsYou) is dropped
 // entirely (never rows). Order within a section is interaction recency.
 export type SectionKey = "active" | "held" | "inactive"
-// Thread-derived buckets, in render order. The Plans section (board.plans) is interleaved by the
-// Sidebar after the thread buckets; it has no thread bucket here.
+// Thread-derived buckets, in render order.
 export const SECTION_ORDER: readonly SectionKey[] = ["active", "held", "inactive"]
 
 // A session process is "at rest" (off-turn) when the pane is idle or the session has exited — the gate

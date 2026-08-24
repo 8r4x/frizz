@@ -582,7 +582,7 @@ test("Update & Restart hands the durable owner to a fresh supervisor without cop
   storage.upsertSession({
     slug: "kept", session_id: "frizz-session", thread_name: "frizz-kept", spawned_at: new Date().toISOString(),
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0,
-    title: null, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
+    title: null, state: "open", meta: null, seen_at: null, transcript_id: null,
     backend: "codex", agent_session_id: "provider-rollout", control_error: "existing draft",
   })
   storage.setAgentSession("kept", "provider-rollout")

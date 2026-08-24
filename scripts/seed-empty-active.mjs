@@ -1,9 +1,9 @@
-// Seed a disposable adhoc stack with an EMPTY Active band and populated Done + Plans bands — the exact
-// state that renders the Sidebar's "No active threads" placeholder next to its Done/Plans neighbours,
+// Seed a disposable adhoc stack with an EMPTY Active band and a populated Done band — the exact
+// state that renders the Sidebar's "No active threads" placeholder next to its Done neighbour,
 // which is the only way to judge that placeholder's left inset optically.
 //
 // Every seeded session is ARCHIVED, so groups.ts sectionOf() files all of
-// them under "inactive" (Done) and Active stays empty. Plans come from the project's own .frizz/plans.
+// them under "inactive" (Done) and Active stays empty.
 //
 // Usage: node scripts/seed-empty-active.mjs --home=/abs/temp-home
 import { globSync, mkdirSync, writeFileSync } from "node:fs"

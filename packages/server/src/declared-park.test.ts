@@ -165,7 +165,7 @@ function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; restedAt
   storage.upsertSession({
     slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: "2026-08-15T11:00:00.000Z",
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: restedAt, title_auto: 0,
-    title: null, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
+    title: null, state: "open", meta: null, seen_at: null, transcript_id: null,
   } as SessionRow)
   const s = createScheduler({
     storage,
@@ -388,7 +388,7 @@ function loopHarness(body: string) {
   storage.upsertSession({
     slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: "2026-08-17T11:00:00.000Z",
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: new Date().toISOString(),
-    title_auto: 0, title: null, state: "open", meta: null, seen_at: null, plan_path: null,
+    title_auto: 0, title: null, state: "open", meta: null, seen_at: null,
     transcript_id: null,
   } as SessionRow)
   // The worker's own last word, advanced by `restAgain()` to model a wake that changes nothing.

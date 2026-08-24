@@ -110,7 +110,7 @@ async function harness(target?: string) {
   storage.upsertSession({
     slug: SLUG, session_id: SESSION, thread_name: `frizz-${SLUG}`, spawned_at: at,
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: at, title_auto: 1,
-    title: SLUG, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
+    title: SLUG, state: "open", meta: null, seen_at: null, transcript_id: null,
   } as SessionRow)
   const tailer = createTailer({
     project: { cwdSlug: "x" } as Project,
@@ -237,7 +237,7 @@ test("a poll publishes a reading the BOARD can actually read, and the queue rule
   storage.upsertSession({
     slug: SLUG, session_id: SESSION, thread_name: `frizz-${SLUG}`, spawned_at: at,
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: at, title_auto: 1,
-    title: SLUG, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
+    title: SLUG, state: "open", meta: null, seen_at: null, transcript_id: null,
   } as SessionRow)
   const tailer = createTailer({
     project: { cwdSlug: "x" } as Project,
@@ -325,7 +325,7 @@ async function prHarness() {
   storage.upsertSession({
     slug: SLUG, session_id: SESSION, thread_name: `frizz-${SLUG}`, spawned_at: at,
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: at, title_auto: 1,
-    title: SLUG, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
+    title: SLUG, state: "open", meta: null, seen_at: null, transcript_id: null,
   } as SessionRow)
   const tailer = createTailer({
     project: { cwdSlug: "x" } as Project,
@@ -604,7 +604,7 @@ test("a fence naming a timer that was never registered is corrected, off a real 
   storage.upsertSession({
     slug: SLUG, session_id: SESSION, thread_name: `frizz-${SLUG}`, spawned_at: at,
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: at, title_auto: 1,
-    title: SLUG, state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null,
+    title: SLUG, state: "open", meta: null, seen_at: null, transcript_id: null,
   } as SessionRow)
   const tailer = createTailer({
     project: { cwdSlug: "x" } as Project,

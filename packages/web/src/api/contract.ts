@@ -200,10 +200,6 @@ export interface Api {
   // Hard-delete: drop a stalled/exited phantom's registry row and tombstone its transcript id.
   // Refused for a genuinely live session — archive that one instead.
   forgetThread(input: { slug: string }): Promise<void>
-  // A plan artifact's markdown (.frizz/plans/*.md); `path` is a PlanView.path from the board snapshot.
-  planBody(input: { path: string }): Promise<{ markdown: string }>
-  // Hard-delete a plan artifact (.frizz/plans/*.md). Secure-resolver gated server-side; idempotent.
-  planDelete(input: { path: string }): Promise<void>
   // Server-authoritative, shell-safe provider resume command for a registered Frizz-owned session.
   // A live Frizz-owned runtime is deliberately unavailable: a second provider client is uncoordinated.
   threadTerminalCommand(input: { slug: string }): Promise<{ command: string | null; mode: "attach" | "resume" | "unavailable"; reason: string | null }>
@@ -334,8 +330,6 @@ export const PROCEDURES = {
   reloadThreadPlugins: "mutation",
   snoozeAwaitingBackground: "mutation",
   forgetThread: "mutation",
-  planBody: "query",
-  planDelete: "mutation",
   threadTerminalCommand: "query",
   openExternal: "mutation",
   openLocalFile: "mutation",

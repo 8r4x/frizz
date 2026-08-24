@@ -341,7 +341,7 @@ export function deliverClaudeBrokerWake(deps: {
   bridge: Pick<ClaudeAgentBrokerBridge, "followUp">
   slug: string
   cwd: string
-  row: { session_id: string; plan_path?: string | null; model?: string | null; effort?: string | null; permission_mode?: string | null }
+  row: { session_id: string; model?: string | null; effort?: string | null; permission_mode?: string | null }
   deliveryMessage: string
   /** Retire the live daemon first — see the bridge's followUp contract and needsFreshProcessForLimit. */
   freshProcess?: boolean
@@ -349,7 +349,7 @@ export function deliverClaudeBrokerWake(deps: {
   const { bridge, slug, cwd, row, deliveryMessage, freshProcess } = deps
   const appendSystemPrompt = [
     loadWorkerPrompt("claude"),
-    scratchpadOrientation(row.session_id, row.plan_path, "claude"),
+    scratchpadOrientation(row.session_id, "claude"),
     frizzConfigBlock(cwd),
   ].filter(Boolean).join("\n\n")
   return bridge.followUp({

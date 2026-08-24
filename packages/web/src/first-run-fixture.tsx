@@ -50,9 +50,9 @@ window.fetch = async (input, init) => {
   return nativeFetch(input, init)
 }
 
-// ZERO threads and ZERO plans is exactly the `nothingAtAll` predicate. A board with only done threads
+// ZERO threads is exactly the `nothingAtAll` predicate. A board with only done threads
 // is NOT a new user, so it must not be seeded here.
-store.board = { projectDir: "/fixture/first-run", projectLabel: "colinhacks/frizz", threads: [], plans: [] } as unknown as BoardSnapshot
+store.board = { projectDir: "/fixture/first-run", projectLabel: "colinhacks/frizz", threads: [] } as unknown as BoardSnapshot
 store.drawers = []
 
 createRoot(document.getElementById("root")!).render(

@@ -325,7 +325,6 @@ function sessionRow(slug: string, sessionId: string, backend = "claude"): Sessio
     state: null,
     meta: null,
     seen_at: null,
-    plan_path: null,
     transcript_id: null,
     backend,
   }

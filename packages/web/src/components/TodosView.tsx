@@ -502,7 +502,7 @@ export function TodosView() {
     forceExitRender((n) => n + 1)
   }, [])
 
-  // The thread LISTING moved out of this column into the left SIDEBAR (Active / Plans / Inactive
+  // The thread LISTING moved out of this column into the left SIDEBAR (Active / Inactive
   // sections — see Sidebar.tsx + groups.ts sectionThreads). The queue keeps only the cards + the
   // dispatch box. An empty queue over a populated board just shows the dispatch box (top-anchored).
   // Only a BRAND-NEW board — zero threads of ANY status (a board with only done/dismissed threads is
@@ -512,7 +512,7 @@ export function TodosView() {
   // whose only content is your own terminal sessions is not a blank slate, it is the one place that
   // band has something to say. Kept in lockstep with lib/sidebarPresence.ts, which decides whether the
   // rail mounts at all; the two disagreeing would centre the prompt beside a populated sidebar.
-  const nothingAtAll = (board?.threads.length ?? 0) === 0 && (board?.plans?.length ?? 0) === 0
+  const nothingAtAll = (board?.threads.length ?? 0) === 0
 
   return (
     // The queue column, top to bottom: queue cards (or the empty-inbox state) → rule → dispatch box.

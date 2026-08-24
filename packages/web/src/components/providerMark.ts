@@ -21,7 +21,7 @@ const PROVIDER_MARKS: Record<ProviderMarkDefinition["backend"], ProviderMarkDefi
   codex: { backend: "codex", label: "OpenAI Codex" },
 }
 
-// Board snapshots from an older server, plans, legacy rows, and future backends intentionally have
+// Board snapshots from an older server, legacy rows, and future backends intentionally have
 // no identity mark. Do not infer one from the current dispatch preference or model name.
 export function providerMarkForBackend(backend: string | null | undefined): ProviderMarkDefinition | undefined {
   return backend === "claude" || backend === "codex" ? PROVIDER_MARKS[backend] : undefined

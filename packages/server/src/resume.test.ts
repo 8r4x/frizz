@@ -148,7 +148,6 @@ function sessionRow(slug: string, over: Partial<SessionRow> = {}): SessionRow {
     state: "open",
     meta: null,
     seen_at: null,
-    plan_path: null,
     transcript_id: null,
     ...over,
   }

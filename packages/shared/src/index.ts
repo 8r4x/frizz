@@ -1508,16 +1508,6 @@ export const ThreadFence = z.object({
 })
 export type ThreadFence = z.infer<typeof ThreadFence>
 
-// A plan artifact: .frizz/plans/*.md — no schema, no validation; prompted into existence. A plan
-// with no live thread is backlog; a plan's threads are its history (associated via plan_path).
-export const PlanView = z.object({
-  path: z.string(), // project-relative, e.g. ".frizz/plans/standalone-ui.md"
-  title: z.string(), // first markdown heading, else the filename stem
-  updatedAt: z.string().optional(), // ISO8601 file mtime
-  threadIds: z.array(ThreadSlug).default([]), // threads dispatched from this plan
-})
-export type PlanView = z.infer<typeof PlanView>
-
 // ---- Subscription usage-limit pause (auto-resume) ------------------------------------------------
 // Which metered subscription window the provider says is exhausted. "session" is the 5-hour rolling
 // window (Claude's "You've hit your session limit"); "weekly" is the 7-day window; "unknown" is a
@@ -1553,8 +1543,8 @@ export const ThreadView = z.object({
   next: z.string().optional(),
   // DERIVED (board shell-out, from the body): the thread keeps a `## Plan` section, i.e. it carries a
   // plan document → the sidebar renders a quiet PLAN badge. NOT a status and NOT a frontmatter flag
-  // (that was deliberately rejected); orthogonal to the Plans section, which keys on status. Defaults
-  // false so an old snapshot / pre-restart server (which omits it) parses.
+  // (that was deliberately rejected). Defaults false so an old snapshot / pre-restart server (which
+  // omits it) parses.
   hasPlan: z.boolean().default(false),
   mechanism: BlockMechanism.nullable(), // set only when status=blocked
   humanBlocked: z.boolean(),
@@ -1702,8 +1692,6 @@ export const ThreadView = z.object({
   // ISO8601 read/seen telemetry (threadSeen RPC — recorded when the human opens the thread). Kept for
   // compatibility and analytics only; viewing never acknowledges or removes a queue handoff.
   seenAt: z.string().optional(),
-  // Project-relative plan artifact this thread was dispatched from (.frizz/plans/*.md), if any.
-  planPath: z.string().optional(),
   // Which agent backend runs this thread (Codex-support epic, Phase 3) — drives the subtle per-row
   // rail badge. Optional so a legacy/foreign/pre-restart row parses; absent OR "claude" ⇒ no badge
   // (Claude is the unmarked default), "codex" ⇒ the small Codex badge.
@@ -1799,7 +1787,7 @@ export const BoardSnapshot = z.object({
   // (No `.frizz/ exists` bit here on purpose. Threads are session-first — the ui.db registry IS the
   // board — so `.frizz/` presence says nothing about whether this project has one. Its only consumer
   // was a shell gate that dead-ended `.frizz`-less repos; the server still probes the directory
-  // locally where it genuinely matters, for plan/scratchpad storage.)
+  // locally where it genuinely matters, for scratchpad storage.)
   threads: z.array(ThreadView),
   errors: z.array(z.string()),
   warnings: z.array(z.string()),
@@ -1807,9 +1795,6 @@ export const BoardSnapshot = z.object({
   // snapshot that omits it still parses; the client treats absent as "no structured errors" and
   // falls back to rendering the plain `errors` strings.
   errorItems: z.array(BoardErrorItem).optional(),
-  // Plan artifacts (.frizz/plans/*.md) — the Plans rail section. Optional for the same pre-restart
-  // back-compat reason (absent ⇒ old server ⇒ no Plans section data).
-  plans: z.array(PlanView).optional(),
 })
 export type BoardSnapshot = z.infer<typeof BoardSnapshot>
 
@@ -2039,9 +2024,6 @@ export const DispatchInput = z.object({
   // `dispatch(input, { backend })`; the model picker sets it from the chosen model's family.
   backend: Backend.optional(),
   effort: Settings.shape.effort,
-  // Project-relative plan artifact this dispatch works from (.frizz/plans/*.md): stored as the
-  // thread's plan_path association and named to the worker in its system-prompt orientation.
-  planPath: z.string().optional(),
 })
 export type DispatchInput = z.infer<typeof DispatchInput>
 
@@ -3077,8 +3059,6 @@ export const BoardMeta = z.object({
   // meta so the repair affordance survives a delta (not just the connect keyframe). Optional for the
   // same pre-restart back-compat reason as on BoardSnapshot.
   errorItems: z.array(BoardErrorItem).optional(),
-  // Plan artifacts, diffed + shipped with the board meta so the Plans section survives deltas.
-  plans: z.array(PlanView).optional(),
 })
 export type BoardMeta = z.infer<typeof BoardMeta>
 

@@ -44,7 +44,6 @@ function row(over: Partial<SessionRow> = {}): SessionRow {
     state: null,
     meta: null,
     seen_at: null,
-    plan_path: null,
     transcript_id: null,
     ...over,
   }

@@ -85,7 +85,7 @@ export function projectDraftScope(projectDir: string | undefined): string {
   return encodeURIComponent(projectDir || "unresolved-project")
 }
 export const draftKey = {
-  dispatch: (projectDir: string | undefined, planPath?: string) => `dispatch:${projectDraftScope(projectDir)}:${encodeURIComponent(planPath ?? "new")}`,
+  dispatch: (projectDir: string | undefined) => `dispatch:${projectDraftScope(projectDir)}:new`,
   followUp: (projectDir: string | undefined, slug: string, sessionId?: string) => `followup:${projectDraftScope(projectDir)}:${encodeURIComponent(slug)}:${encodeURIComponent(sessionId ?? "unowned")}`,
   adopt: (projectDir: string | undefined, slug: string) => `adopt:${projectDraftScope(projectDir)}:${encodeURIComponent(slug)}`,
   answer: (projectDir: string | undefined, slug: string, sessionId: string | undefined, messageId: string, block: number) => `answer:${projectDraftScope(projectDir)}:${encodeURIComponent(slug)}:${encodeURIComponent(sessionId ?? "unowned")}:${encodeURIComponent(messageId)}:${block}`,

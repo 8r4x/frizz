@@ -236,7 +236,7 @@ export function App() {
   }, [projectLabel])
 
   // NOTE: there is deliberately NO "this repo has no .frizz/" branch here. Threads are session-first
-  // (the registry in ui.db IS the board); `.frizz/` only holds thread scratch dirs and plans, and dispatch
+  // (the registry in ui.db IS the board); `.frizz/` only holds thread scratch dirs, and dispatch
   // creates it on the way (writeScratchDir → ensureSafeDirectDirectory). Gating the shell on it
   // inverted the fresh-repo experience: a repo with an EMPTY `.frizz/` got the real first-run view,
   // while a repo without one got a dead end that said "dispatch a first thread" with no composer to
@@ -280,7 +280,7 @@ export function App() {
               tuned 52px by ~1530px, where the pair has margins to spare. Wide layouts are unchanged. */}
       <div className="flex min-h-screen justify-center gap-[clamp(28px,3.4vw,52px)] px-5 max-[800px]:flex-col max-[800px]:justify-start max-[800px]:gap-0 max-[800px]:px-3">
         {/* A genuinely fresh project keeps its centered first-task view. Once this project has had a
-            Frizz-owned thread or plan, the sidebar remains mounted through transient empty keyframes;
+            Frizz-owned thread, the sidebar remains mounted through transient empty keyframes;
             navigation must not vanish while the live board stream reconnects or catches up. */}
         {/* Each of the three standing surfaces catches its OWN render errors (see ErrorBoundary.tsx):
             a bad row in the sidebar must not take the workpane with it, and vice versa. */}
@@ -324,7 +324,7 @@ export function App() {
           standalone `/thread/<slug>/full` page can mount the identical thing. See DrawerStack.tsx. */}
       <DrawerStack />
       {snap.showSettings && <SettingsDrawer />}
-      {snap.showNewThread && <NewThreadDialog onClose={() => { store.showNewThread = false; store.newThreadPlanPath = null }} />}
+      {snap.showNewThread && <NewThreadDialog onClose={() => { store.showNewThread = false }} />}
       {snap.showGithubPicker && <GithubPickerModal onClose={closeGithubPicker} />}
       <CommandPalette />
     </div>

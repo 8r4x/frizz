@@ -2,11 +2,10 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { nextSidebarPresence } from "./lib/sidebarPresence.ts"
 
-function board(projectDir: string, options: { owned?: boolean; plans?: number } = {}) {
+function board(projectDir: string, options: { owned?: boolean } = {}) {
   return {
     projectDir,
     threads: options.owned === false ? [{ foreign: true }] : options.owned === true ? [{ foreign: false }] : [],
-    plans: Array.from({ length: options.plans ?? 0 }, () => ({})),
   }
 }
 
@@ -35,7 +34,7 @@ test("a board holding only external sessions mounts the rail; a board holding no
 })
 
 test("a different project still receives the intentional fresh-workspace shell", () => {
-  const populated = nextSidebarPresence({ projectDir: null, hasBeenVisible: false }, board("/work/old", { plans: 1 }))
+  const populated = nextSidebarPresence({ projectDir: null, hasBeenVisible: false }, board("/work/old", { owned: true }))
   const fresh = nextSidebarPresence(populated, board("/work/new"))
 
   assert.deepEqual(fresh, { projectDir: "/work/new", hasBeenVisible: false })

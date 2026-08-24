@@ -126,7 +126,6 @@ import { parsePrRef, readGithubStatusBook, GITHUB_STATUS_SETTING } from "./await
 import { getDispatchPreferences, setDispatchPreference } from "./dispatch-preferences.ts"
 import { isBrokerClaudeRow, type SessionRow, type Storage } from "./storage.ts"
 import type { SessionTelemetry } from "./tailer.ts"
-import { resolvePlanFile, deletePlanFile } from "./plan-files.ts"
 import { providerResumeCommand } from "./external-terminal.ts"
 import { backgroundShellLineCount, readBackgroundShellOutput } from "./background-shell-output.ts"
 import { projectRetiredBackgroundOps, retiredOpsFor } from "./transcript.ts"
@@ -1612,7 +1611,7 @@ export function createRouter(ctx: AppContext) {
           if (input.deliveryId && hasDelivery(ctx.storage, input.slug, input.deliveryId)) return
           const appendSystemPrompt = [
             loadWorkerPrompt("claude"),
-            scratchpadOrientation(row.session_id, row.plan_path, "claude"),
+            scratchpadOrientation(row.session_id, "claude"),
             frizzConfigBlock(ctx.project.dir),
           ].filter(Boolean).join("\n\n")
           // Is this thread MID-TURN right now? Sampled BEFORE the bridge call on purpose: a cold resume
@@ -2420,31 +2419,6 @@ export function createRouter(ctx: AppContext) {
         await stopAndForgetRegisteredRuntime(ctx.storage, row, cachedLivenessTerminator, ctx.codexAppServer, ctx.claudeBroker)
         ctx.tailer.forget(input.slug)
         ctx.board.refresh() // storage-only change — the removed row fans out as a delete delta on SSE
-      },
-    }),
-
-    // A plan artifact's markdown. The exact resolver used by board discovery requires direct,
-    // non-symlink parent directories and a stable no-follow direct `.md` child, so an RPC path cannot
-    // traverse, follow an indirect file, or win a check/read replacement race.
-    planBody: query({
-      input: z.object({ path: z.string() }),
-      output: z.object({ markdown: z.string() }),
-      handler: async ({ input }) => {
-        const file = resolvePlanFile(ctx.project.dir, input.path)
-        return { markdown: file?.contents.toString("utf8") ?? "" }
-      },
-    }),
-
-    // Hard-delete a plan artifact (.frizz/plans/*.md). Same secure resolver as planBody gates it, so a
-    // traversal / symlink / indirect target unlinks nothing; an already-gone plan is idempotent. A real
-    // filesystem failure re-throws out of deletePlanFile and surfaces as an RPC error. rebuild() (NOT the
-    // overlay-only refresh()) recomputes the plans cache so the removed plan drops immediately rather than
-    // only when the .frizz watcher's debounced rebuild later catches up.
-    planDelete: mutation({
-      input: z.object({ path: z.string() }),
-      handler: async ({ input }) => {
-        deletePlanFile(ctx.project.dir, input.path)
-        await ctx.board.rebuild()
       },
     }),
 

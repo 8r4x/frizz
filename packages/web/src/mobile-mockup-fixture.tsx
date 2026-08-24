@@ -56,7 +56,7 @@
 // iOS's 17/15/13/11.5 type scale with a 44pt touch floor rather than the desktop's 13px-everything.
 //
 // Screens, in `?screen=` order: home · board · board-held · thread · answer · actions · dispatch ·
-// snooze · settings · subagent · empty · plan · kit
+// snooze · settings · subagent · empty · kit
 import { createRoot } from "react-dom/client"
 import type { ReactNode } from "react"
 import {
@@ -1035,65 +1035,6 @@ function EmptyScreen() {
   )
 }
 
-// ══ 14 · plan ═══════════════════════════════════════════════════════════════════════════════════
-// A PLAN, READ ON A PHONE. Plans are the one artifact in Frizz that is genuinely long-form prose, and
-// the one thing a phone is unambiguously good at. So the plan drawer becomes a reading surface — the
-// app's own `.md-body` rhythm at the phone's measure — with the single verb it exists for docked at the
-// bottom, where a reader's thumb already is when they reach the end.
-
-function PlanScreen() {
-  return (
-    <Canvas>
-      <NavBar
-        back="Board"
-        title="Resolver rewrite"
-        subtitle="3 threads from this plan"
-        trailing={<NavAction label="Plan actions"><Ellipsis size={20} /></NavAction>}
-      />
-      <div className="min-h-0 flex-1 overflow-hidden px-4 pb-[96px] pt-4">
-        {/* The app's own markdown class, so the phone reads plans in exactly the rhythm the desktop
-            does — one prose scale for the product, not a second one invented here. */}
-        <div className="md-body" style={{ fontSize: 15 }}>
-          <h1 className="m-0 text-[22px] font-semibold leading-[28px] tracking-[-0.015em]">Resolver rewrite, stage 2</h1>
-          <p>
-            The resolver keys its cache on the raw id. Stage 1 normalized the ids at the boundary; this
-            stage moves the cache itself onto the normalized key and retires the compatibility shim.
-          </p>
-          <h2>What lands</h2>
-          <ul className="pl-[1.75em]">
-            <li className="list-none">
-              <span className="md-task md-task-checked" />
-              <span className="md-task-text">Normalize at the boundary</span>
-            </li>
-            <li className="list-none">
-              <span className="md-task md-task-in-progress" />
-              <span className="md-task-text">Key the cache on the normalized id</span>
-            </li>
-            <li className="list-none">
-              <span className="md-task" />
-              <span className="md-task-text">Retire the compatibility shim</span>
-            </li>
-          </ul>
-          <p>
-            The shim cannot go until the on-disk cache has migrated, which is a decision for whoever
-            picks this up: migrate lazily on read, or rebuild once at boot.
-          </p>
-          <h2>The key</h2>
-          <pre className="overflow-x-auto"><code>{`const key = normalizeId(raw)   // was: raw
-cache.set(key, resolved)`}</code></pre>
-          <p>
-            Everything downstream already reads through <code>resolveId</code>, so nothing else has to
-            change with it.
-          </p>
-        </div>
-      </div>
-      <div className="absolute inset-x-0 bottom-0 z-30 border-t border-border/70 bg-bg/85 px-4 pb-[30px] pt-2.5 backdrop-blur-xl">
-        <Button kind="accent" size="lg" full>Implement this plan</Button>
-      </div>
-    </Canvas>
-  )
-}
-
 // ══ 15 · kit ════════════════════════════════════════════════════════════════════════════════════
 // THE CONTROL VOCABULARY on one screen, so the pieces can be judged against each other rather than one
 // at a time inside a layout.
@@ -1204,7 +1145,6 @@ const SCREENS: { id: string; title: string; note: string; render: () => ReactNod
   { id: "settings", title: "9 · Settings", note: "Browser notifications, not push — this is a website.", render: () => <SettingsScreen /> },
   { id: "subagent", title: "10 · Sub-agent", note: "The drill-in, at the large detent over its parent — the desktop's stacked drawers.", render: () => <SubAgentScreen /> },
   { id: "empty", title: "11 · Empty board", note: "A project with nothing in it yet, and three ways to start.", render: () => <EmptyScreen /> },
-  { id: "plan", title: "12 · Plan", note: "The one genuinely long-form artifact in Frizz, read at the phone's measure.", render: () => <PlanScreen /> },
   { id: "kit", title: "13 · Controls", note: "The whole vocabulary on one screen.", render: () => <KitScreen /> },
 ]
 

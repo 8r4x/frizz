@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import {
   markDrawerClosing,
   pushDrawer,
-  pushPlanDrawer,
+  pushMarkdownDrawer,
   pushSubAgentDrawer,
   removeDrawerAfterExit,
   store,
@@ -55,7 +55,7 @@ test("a sub-agent opened without its parent on the stack replaces everything", (
   assert.deepEqual(shape(), [{ kind: "subagent", slug: "parent", subId: "tool-b" }])
 })
 
-test("a thread's own doc and sub-agent stack as one family; a plan replaces it all", () => {
+test("a thread's own doc and sub-agent stack as one family; a lateral sibling replaces it all", () => {
   resetStore()
   pushDrawer("thread", "same")
   pushDrawer("doc", "same")
@@ -66,8 +66,8 @@ test("a thread's own doc and sub-agent stack as one family; a plan replaces it a
     { kind: "subagent", slug: "same", subId: "tool-1" },
   ])
 
-  pushPlanDrawer(".frizz/plans/same.md", "Plan")
-  assert.deepEqual(shape(), [{ kind: "plan", slug: ".frizz/plans/same.md", subId: undefined }])
+  pushDrawer("thread", "sibling")
+  assert.deepEqual(shape(), [{ kind: "thread", slug: "sibling", subId: undefined }])
 })
 
 test("rapid open during exit cancels removal of the same layer", () => {
@@ -85,12 +85,12 @@ test("rapid open during exit cancels removal of the same layer", () => {
   assert.equal(store.drawers[0]?.closing, undefined)
 })
 
-test("reopening an already open plan or sub-agent reuses its entry", () => {
+test("reopening an already open markdown reader or sub-agent reuses its entry", () => {
   resetStore()
-  pushPlanDrawer(".frizz/plans/a.md", "A")
-  pushPlanDrawer(".frizz/plans/a.md", "A renamed")
+  pushMarkdownDrawer("/docs/a.md")
+  pushMarkdownDrawer("/docs/a.md")
   assert.equal(store.drawers.length, 1)
-  assert.equal(store.drawers[0]?.label, "A renamed")
+  assert.equal(store.drawers[0]?.label, "a.md")
 
   resetStore()
   pushDrawer("thread", "parent")

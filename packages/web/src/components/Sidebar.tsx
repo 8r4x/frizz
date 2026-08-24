@@ -1,9 +1,9 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
-import { Check, ChevronRight, CircleDashed, Clock, Ellipsis, FileText, Github, Hourglass, Loader2, RotateCcw, Timer } from "lucide-react"
-import type { BoardSnapshot, PlanView, ThreadView } from "@frizz/shared"
-import { store, openThread, scrollToQueueCard, queueCardTargetY, pushSubAgentDrawer, pushPlanDrawer, QUEUE_CARD_VIEWPORT_TOP } from "../store.ts"
+import { Check, ChevronRight, CircleDashed, Clock, Ellipsis, Github, Hourglass, Loader2, RotateCcw, Timer } from "lucide-react"
+import type { BoardSnapshot, ThreadView } from "@frizz/shared"
+import { store, openThread, scrollToQueueCard, queueCardTargetY, pushSubAgentDrawer, QUEUE_CARD_VIEWPORT_TOP } from "../store.ts"
 import { useBoard, asThreads } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
 import { sectionThreads, externalThreads, orderByInteraction, partitionActive, needsAction, displayTitle, titleIsProvisional, isHeld, parkedAwaitingHint, sessionIndicatorKind, offersRetry, futureSnoozedUntil, lastActiveLabelAt } from "../groups.ts"
@@ -35,8 +35,7 @@ import type { ReactElement, ReactNode } from "react"
 // horizontal scrollbar — overflow-x is clipped and unbreakable tokens break).
 //
 // ENTIRELY MOUSE-DRIVEN: no arrow-walk, no selection chevron. A session row CLICK opens the thread's
-// drawer (chat / doc via store.openThread); a plan row opens the plan drawer; a legacy row opens its
-// frizz doc.
+// drawer (chat / doc via store.openThread); a legacy row opens its frizz doc.
 //
 // Sections: FOUR bands top→bottom, in the names ARCHITECTURE.md § Board nomenclature fixes — RESTED
 // (everything at rest = the queue's own rows, a.k.a. the cue), ACTIVE (the rows currently spinning),
@@ -47,7 +46,7 @@ import type { ReactElement, ReactNode } from "react"
 // and stays spinning in Active undimmed; only external waiters drop into the dimmed band (groups.ts
 // isHeld).
 // Needs-you renders as the row INDICATOR + the queue; awaiting as the hint gloss.
-// Plans from board.plans; Done = explicitly completed. Legacy .frizz rows do not render at all.
+// Done = explicitly completed. Legacy .frizz rows do not render at all.
 //
 // Below those four, and outside the vocabulary entirely, sits EXTERNAL — the project's own
 // `claude`/`codex` terminals. They are not a fifth band of frizz's model, they are a separate listing
@@ -78,7 +77,6 @@ export function Sidebar() {
   // the label prints the agent's own last output — two clocks that disagree whenever a transcript is
   // touched without the agent speaking (a resume that writes a header, a copy, a restore).
   const externalSessions = orderByInteraction(externalThreads(all))
-  const plans = (board?.plans ?? []) as PlanView[]
   const collapsed = snap.sidebarCollapsed
   const activeThreads = sections.active
   const heldThreads = sections.held
@@ -236,7 +234,7 @@ export function Sidebar() {
           ) : (
             // pl-5 matches ThreadRow's own content inset (its status-indicator column), so the
             // placeholder starts exactly where the rows it stands in for would — and lands within a
-            // pixel of the Held/Done/Plans labels, which clear the same width for their chevron. A
+            // pixel of the Held/Done labels, which clear the same width for their chevron. A
             // bare px-1.5 left it hanging 14px out at the rail's raw edge, alone against everything.
             // "open", not "active": this stands in for the Active AND Rested bands together, and it
             // renders only when BOTH are empty. Saying "no active threads" over a hidden queue would be
@@ -250,7 +248,7 @@ export function Sidebar() {
           {heldThreads.length > 0 && (
             <section aria-label="Held">
               <hr className="my-3 border-border/50" />
-              {/* Same header component as Done/Plans so the three bands can never visually drift. */}
+              {/* Same header component as Done so the bands can never visually drift. */}
               <SectionHeader
                 label="Held"
                 count={heldThreads.length}
@@ -312,19 +310,6 @@ export function Sidebar() {
                 ))}
             </section>
           )}
-          {/* PLANS — collapsible, OMITTED (with its rule) when empty. Artifacts, not threads. */}
-          {plans.length > 0 && (
-            <div>
-              <hr className="my-3 border-border/50" />
-              <SectionHeader
-                label="Plans"
-                count={plans.length}
-                collapsed={collapsed.plans}
-                onToggle={() => (store.sidebarCollapsed.plans = !store.sidebarCollapsed.plans)}
-              />
-              {!collapsed.plans && plans.map((p) => <PlanRow key={p.path} plan={p} />)}
-            </div>
-          )}
         </div>
       </div>
     </aside>
@@ -332,7 +317,7 @@ export function Sidebar() {
 }
 
 // A section header: an optional collapse caret, the label, and the count. ONE source of truth for
-// every band header (Held, Done, Plans) so they can never visually drift apart again. Every band in
+// every band header (Held, Done) so they can never visually drift apart again. Every band in
 // the real rail is collapsible; omitting onToggle renders a static div with a caret-width spacer, so
 // a header without a toggle (the QA fixtures' Active/Held bands) still aligns with the rest.
 export function SectionHeader({ label, count, collapsed, onToggle }: { label: string; count: number; collapsed?: boolean; onToggle?: () => void }) {
@@ -624,33 +609,6 @@ function SubAgentRows({ t }: { t: ThreadView }) {
           title={s.subagentType ? `[${s.subagentType}] ${s.label}` : s.label}
         />
       ))}
-    </div>
-  )
-}
-
-// One PLAN row (from board.plans): a doc glyph + the plan title. A click opens the plan drawer (its
-// markdown + an "Implement this" affordance). Threads dispatched from the plan are its history —
-// the count rides the title tooltip.
-function PlanRow({ plan }: { plan: PlanView }) {
-  const n = plan.threadIds?.length ?? 0
-  return (
-    <div className="group relative flex min-w-0 items-start rounded-md transition-colors hover:bg-white/[0.04]">
-      <button
-        onClick={() => pushPlanDrawer(plan.path, plan.title)}
-        // pl-5, the SAME content inset as ThreadRow: a plan row is a sibling of the thread rows in
-        // this one rail, so its glyph column has to share their left edge. It has no scroll-marker
-        // rail of its own to reserve that width, which is how it drifted 14px out on px-1.5.
-        className="min-w-0 flex-1 flex items-start gap-2 py-1 pl-5 pr-1.5 text-left"
-        title={n ? `${n} thread${n === 1 ? "" : "s"} from this plan` : undefined}
-      >
-        <span className="w-4 h-[19px] shrink-0 flex items-center justify-center">
-          <FileText size={12} className="text-muted/60" />
-        </span>
-        <span className="min-w-0 flex-1 break-words text-[13px] leading-[19px] text-fg/90">
-          {plan.title}
-          {n > 0 && <span className="ml-1.5 tabular-nums text-[10.5px] text-muted/45">{n}</span>}
-        </span>
-      </button>
     </div>
   )
 }

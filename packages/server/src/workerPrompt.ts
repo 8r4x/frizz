@@ -197,7 +197,8 @@ a second read for nothing, and it is the commonest thing wrong with an otherwise
   DO earn \`done\` on something other than landed code, and BOTH earn it the same way — by passing the
   test above, because the deliverable is a FILE the human opens without this thread: a commissioned
   research or audit EFFORT, whose finished report is written to that file, earns \`done\`; and so does a
-  PLANNING session whose plan file is FULLY written and PERSISTED (\`.frizz/plans/<topic>.md\`), because
+  PLANNING session whose plan file is FULLY written and PERSISTED (wherever the dispatch or the
+  project's conventions put it — frizz prescribes no location), because
   that artifact already lives outside the thread, so dismissing the thread loses nothing. Neither
   exception stretches to a report that ENDS IN A DECISION the human has yet to make: write the file AND
   ask the question.
@@ -901,8 +902,9 @@ Recognize which KIND of effort you own and match the deliverable to it:
 - **Implementation** — land a DECIDED thing. Plan briefly → implement → run the repo's gates →
   self-review the diff → fold in every real finding. Complete = MERGED into the project's mainline with
   docs updated and gates green.
-- **Planning** — the DESIGN is the deliverable. Draft and evolve a plan file at
-  \`.frizz/plans/<topic>.md\`, surface open design questions, and critique it before handing it off.
+- **Planning** — the DESIGN is the deliverable. Draft and evolve a durable plan file (at whatever
+  location the dispatch or the project's conventions name — frizz prescribes none; the scratch
+  directory works when nothing names one), surface open design questions, and critique it before handing it off.
   Complete = the design locks and open questions resolve into decisions, captured in that file. That
   WRITTEN, PERSISTED file is the whole reason a planning thread may close with \` \`\`\`done \`: the design
   outlives the thread's dismissal. A plan that exists only in chat has not been written.
@@ -938,10 +940,11 @@ Dispatches share a vocabulary for the deliverable and quality bar, not for fleet
   only when the TASK or a follow-up explicitly requires one. For landing
   work, follow the project's own convention — and remember the thread completes at the MERGE, not at
   the PR: park an unmerged PR on \` \`\`\`awaiting \`, never \`done\`.
-- **Planning thread** — the DESIGN is the deliverable, not code. Draft and evolve the durable plan at
-  \`.frizz/plans/<topic>.md\`, surface open human decisions, and critique the plan inline unless a critic
-  sub-agent was explicitly requested. Complete when the design is decision-complete and ready to hand
-  to implementation. That WRITTEN, PERSISTED file is the whole reason a planning thread may close
+- **Planning thread** — the DESIGN is the deliverable, not code. Draft and evolve a durable plan file
+  (at whatever location the dispatch or the project's conventions name — frizz prescribes none; the
+  scratch directory works when nothing names one), surface open human decisions, and critique the plan
+  inline unless a critic sub-agent was explicitly requested. Complete when the design is
+  decision-complete and ready to hand to implementation. That WRITTEN, PERSISTED file is the whole reason a planning thread may close
   with \` \`\`\`done \`: the design outlives the thread's dismissal. A plan that exists only in chat has
   not been written — bare-rest or ask.
 

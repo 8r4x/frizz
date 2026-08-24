@@ -44,7 +44,7 @@ function row(over: Partial<SessionRow> = {}): SessionRow {
   return {
     slug: "t", session_id: "sid", thread_name: "frizz-t", spawned_at: "2026-07-01T00:00:00.000Z",
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0, title: null,
-    state: null, meta: null, seen_at: null, plan_path: null, transcript_id: null, ...over,
+    state: null, meta: null, seen_at: null, transcript_id: null, ...over,
   }
 }
 
@@ -338,6 +338,41 @@ test("tail-cache: an entry written before the project was renamed still hydrates
   h.storage.db.prepare("UPDATE tail_state SET state = ?").run(JSON.stringify(poisoned))
 
   assert.equal(boot(h, { sessionLogDir: newBucket })?.lastAssistant, "HYDRATED-FROM-CACHE", "the pre-rename entry must be used, not re-folded")
+})
+
+// …AND THE REBIND THE WIDENING PROMISES HAS TO ACTUALLY HAPPEN. The test above proves the entry is
+// USED; it never proved the state could go on READING, and it could not. `path` is in
+// UNRESTORED_TAIL_FIELDS — identity comes from the live row, never the cache — so hydrate kept the
+// derived (new-bucket, nonexistent) path while restoring the offset from the old-bucket entry. Then
+// `resolveTranscript` short-circuits on `offset > 0` ("already bound to a real transcript"), the
+// recovery that would have rebound it never runs, and `consume` reads a file that is not there. The
+// thread goes PERMANENTLY DEAF at the byte it was cached on.
+//
+// On the live board that was `i-want-a-way-to-run`: frozen at 2026-08-19 for five days while its
+// worker kept answering into a transcript 1.36 MB further on, including a follow-up the operator sent
+// and watched go nowhere (maintainer 2026-08-24: "it fucking frozen again"). Two mechanisms each
+// correct alone — a widening that accepts the entry ON THE PROMISE that path round-trips, and a
+// restore list that guarantees it does not.
+test("tail-cache: a hydrated pre-rename entry keeps READING the bucket the file is really in", () => {
+  const h = harness()
+  const oldBucket = join(h.dir, "-Users-me-projects-fray")
+  const newBucket = join(h.dir, "-Users-me-projects-frizz")
+  mkdirSync(oldBucket, { recursive: true })
+  mkdirSync(newBucket, { recursive: true })
+  h.storage.upsertSession(row())
+  const transcript = join(oldBucket, "sid.jsonl")
+  writeFileSync(transcript, [user(1, "go"), assistant(2, "the real answer")].map((l) => l + "\n").join(""))
+
+  assert.equal(boot(h, { sessionLogDir: newBucket })?.lastAssistant, "the real answer", "boot 1 finds it one bucket over")
+
+  // The worker answers again while frizz is down — the ordinary case for a thread that outlives a restart.
+  appendFileSync(transcript, assistant(3, "and the answer AFTER the restart") + "\n")
+
+  assert.equal(
+    boot(h, { sessionLogDir: newBucket })?.lastAssistant,
+    "and the answer AFTER the restart",
+    "boot 2 hydrates the cached prefix AND reads on from the file it was cached against",
+  )
 })
 
 test("tail-cache: a DIFFERENT session's file in another bucket is never mistaken for this one", () => {

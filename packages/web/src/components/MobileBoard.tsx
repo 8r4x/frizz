@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useSnapshot } from "valtio"
-import { Check, ChevronLeft, ChevronRight, Clock, Ellipsis, FileText, Hourglass, Plus, Settings as SettingsIcon } from "lucide-react"
+import { Check, ChevronLeft, ChevronRight, Clock, Ellipsis, Hourglass, Plus, Settings as SettingsIcon } from "lucide-react"
 import type { ThreadView } from "@frizz/shared"
-import { openThread, pushPlanDrawer, pushSubAgentDrawer, store, type ConnectionState } from "../store.ts"
+import { openThread, pushSubAgentDrawer, store, type ConnectionState } from "../store.ts"
 import { asThreads, useBoard } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
 import {
@@ -28,7 +28,6 @@ import { hintGloss } from "../lib/awaitingPresentation.ts"
 import { projectIdentity } from "./Sidebar.tsx"
 import { QuotaChips } from "./QuotaBar.tsx"
 import { StatusListView } from "./StatusListView.tsx"
-import type { PlanView } from "@frizz/shared"
 
 // THE PHONE'S BOARD — a nav bar, ONE list, a tab bar and a floating +.
 //
@@ -409,10 +408,9 @@ function TabButton({
 /**
  * WHAT THE ⋯ CARRIES, and why it is a sheet rather than a link straight to Settings.
  *
- * Two things fell off the phone when the desktop status bar did: the PLANS band (a plan is only
- * reachable from the rail, so on a phone it was reachable from nowhere at all) and the account-global
- * readings — connection, and the two quota chips. Neither belongs in a 390pt nav bar and both have to
- * live somewhere, so the ⋯ is that somewhere.
+ * The account-global readings fell off the phone when the desktop status bar did — connection, and
+ * the two quota chips. They don't belong in a 390pt nav bar and have to live somewhere, so the ⋯ is
+ * that somewhere.
  */
 const CONNECTION_WORD = {
   open: { cls: "bg-live", word: "connected" },
@@ -420,7 +418,7 @@ const CONNECTION_WORD = {
   closed: { cls: "bg-red-500", word: "disconnected" },
 } as const
 
-function MoreSheet({ plans, connection, onClose }: { plans: readonly PlanView[]; connection: ConnectionState; onClose: () => void }) {
+function MoreSheet({ connection, onClose }: { connection: ConnectionState; onClose: () => void }) {
   const conn = CONNECTION_WORD[connection]
   const [shown, setShown] = useState(false)
   useEffect(() => {
@@ -458,33 +456,6 @@ function MoreSheet({ plans, connection, onClose }: { plans: readonly PlanView[];
               <ChevronRight size={17} className="shrink-0 text-muted/45" />
             </button>
           </div>
-          {plans.length > 0 ? (
-            <>
-              <div className="px-4 pb-1.5 pt-4 text-[13px] font-medium text-muted">Plans</div>
-              <div className="border-y border-border/70 bg-panel/60">
-                {plans.map((plan, i) => (
-                  <div key={plan.path}>
-                    <button
-                      data-mobile-plan-row
-                      onClick={() => {
-                        pushPlanDrawer(plan.path, plan.title)
-                        onClose()
-                      }}
-                      className="flex min-h-[48px] w-full items-center gap-3 px-4 text-left active:bg-white/[0.04]"
-                    >
-                      <FileText size={16} className="shrink-0 text-muted/70" />
-                      <span className="min-w-0 flex-1 truncate text-[16px] leading-[21px] text-fg">{plan.title}</span>
-                      {plan.threadIds?.length ? (
-                        <span className="shrink-0 tabular-nums text-[12.5px] text-muted/55">{plan.threadIds.length}</span>
-                      ) : null}
-                      <ChevronRight size={17} className="shrink-0 text-muted/45" />
-                    </button>
-                    {i === plans.length - 1 ? null : <div className="ml-[52px] h-px bg-border/70" />}
-                  </div>
-                ))}
-              </div>
-            </>
-          ) : null}
         </div>
       </div>
     </div>
@@ -602,7 +573,7 @@ export function MobileBoard() {
       </button>
 
       {moreOpen ? (
-        <MoreSheet plans={(board?.plans ?? []) as PlanView[]} connection={snap.connection} onClose={() => setMoreOpen(false)} />
+        <MoreSheet connection={snap.connection} onClose={() => setMoreOpen(false)} />
       ) : null}
 
       <div className="fixed inset-x-0 bottom-0 z-30 border-t border-border/70 bg-bg/85 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl backdrop-saturate-150">

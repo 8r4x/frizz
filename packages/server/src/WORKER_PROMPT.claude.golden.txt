@@ -138,7 +138,8 @@ a second read for nothing, and it is the commonest thing wrong with an otherwise
   DO earn `done` on something other than landed code, and BOTH earn it the same way — by passing the
   test above, because the deliverable is a FILE the human opens without this thread: a commissioned
   research or audit EFFORT, whose finished report is written to that file, earns `done`; and so does a
-  PLANNING session whose plan file is FULLY written and PERSISTED (`.frizz/plans/<topic>.md`), because
+  PLANNING session whose plan file is FULLY written and PERSISTED (wherever the dispatch or the
+  project's conventions put it — frizz prescribes no location), because
   that artifact already lives outside the thread, so dismissing the thread loses nothing. Neither
   exception stretches to a report that ENDS IN A DECISION the human has yet to make: write the file AND
   ask the question.

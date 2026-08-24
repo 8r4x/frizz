@@ -7,8 +7,8 @@ import { innerPath, projectSlug } from "./base-path.ts"
 // button. This one delegated listener intercepts a plain left-click on any such anchor and opens the
 // thread IN THE DRAWER (openThread — dedupes/raises if already open) instead of letting the browser
 // navigate a new tab. A modified click (⌘/ctrl/shift/alt) is left alone so the same href still works
-// as a real deep-link opened in a new tab. Covers every sanitized markdown surface (chat, the doc drawer,
-// plans, drawers) since it delegates from document.
+// as a real deep-link opened in a new tab. Covers every sanitized markdown surface (chat, the doc
+// drawer, drawers) since it delegates from document.
 //
 // Matched against the INNER path, because markdown.ts now stamps this page's project prefix onto an
 // unprefixed in-app link (see prefixedAppRoute — the raw href had to become navigable in its own

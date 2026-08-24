@@ -132,7 +132,6 @@ export function createIntegrationHarness(): IntegrationHarness {
         state: "open",
         meta: null,
         seen_at: null,
-        plan_path: null,
         transcript_id: null,
       }
       storage.upsertSession(row)

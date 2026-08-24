@@ -24,7 +24,7 @@ function row(over: Partial<SessionRow> = {}): SessionRow {
   return {
     slug: "t", session_id: "s", thread_name: "frizz-t", spawned_at: T0, last_read_at: null,
     unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0, title: null,
-    state: "open", meta: null, seen_at: null, plan_path: null, transcript_id: null, ...over,
+    state: "open", meta: null, seen_at: null, transcript_id: null, ...over,
   }
 }
 function tele(over: Partial<SessionTelemetry> = {}): SessionTelemetry {
@@ -985,7 +985,7 @@ test("degradeIfAwaitingAnswer: an open question downgrades the spinner, and noth
 // of the queue whenever anything re-opened the turn; with the runtime degraded above, the gate is
 // satisfied by construction and the ask cards. Pinned here as a pair so neither half can drift back.
 test("deriveNeedsYou: a degraded ask-row cards — the pair is what puts it in the queue", () => {
-  const row = { slug: "t", session_id: "sid", thread_name: "frizz-t", spawned_at: "2026-08-24T00:00:00.000Z", last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0, title: null, state: null, meta: null, seen_at: null, plan_path: null, transcript_id: null } as never
+  const row = { slug: "t", session_id: "sid", thread_name: "frizz-t", spawned_at: "2026-08-24T00:00:00.000Z", last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0, title: null, state: null, meta: null, seen_at: null, transcript_id: null } as never
   const tele = { turn: "in-flight", pendingQuestion: true } as never
   const nowMs = Date.parse("2026-08-24T00:10:00.000Z")
   assert.equal(deriveNeedsYou(row, tele, "running", false, nowMs), false, "un-degraded, the rest-gate swallows the ask — the state the maintainer saw")
@@ -1266,7 +1266,7 @@ test("registered auto-titles stay in SQLite/transcript and never sync into a pla
 
 test("board provenance excludes legacy files, keeps a foreign transcript read-only, and survives restart", async () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-board-provenance-"))
-  mkdirSync(join(dir, ".frizz", "plans"), { recursive: true })
+  mkdirSync(join(dir, ".frizz"), { recursive: true })
   const reportedInvalidFiles = [
     "nubx-dashdash-A-conformance",
     "bun-1.4-lockfile-v2-research",
@@ -1283,9 +1283,6 @@ test("board provenance excludes legacy files, keeps a foreign transcript read-on
     join(dir, ".frizz", "migrated-ui-done.md"),
     "---\ntitle: Migrated UI thread\nstatus: done\n---\n",
   )
-  writeFileSync(join(dir, ".frizz", "plans", "Owned plan.md"), "# Owned plan\n")
-  writeFileSync(join(dir, "outside-plan.md"), "# Outside plan\n")
-  symlinkSync(join(dir, "outside-plan.md"), join(dir, ".frizz", "plans", "Linked plan.md"))
   const project: Project = {
     dir,
     id: "project-board-provenance",
@@ -1303,7 +1300,6 @@ test("board provenance excludes legacy files, keeps a foreign transcript read-on
     title: "Claude UI thread",
     title_auto: 0,
     state: null,
-    plan_path: ".frizz/plans/Owned plan.md",
   }))
   storage.upsertSession(row({
     slug: "ui-codex",
@@ -1365,9 +1361,6 @@ test("board provenance excludes legacy files, keeps a foreign transcript read-on
     assert.deepEqual(snapshot.errors, [])
     assert.deepEqual(snapshot.warnings, [])
     assert.deepEqual(snapshot.errorItems, [])
-    assert.deepEqual((snapshot.plans ?? []).map((plan) => ({ title: plan.title, threadIds: plan.threadIds })), [
-      { title: "Owned plan", threadIds: ["ui-claude"] },
-    ])
 
     // Finalized adoption writes the same durable session row as dispatch. Once that explicit boundary
     // exists, a formerly external legacy file is represented as an owned session—not as a legacy row.

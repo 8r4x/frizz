@@ -18,8 +18,8 @@ import { draftKey, draftStore, useDraft, useProjectDir } from "../lib/drafts.ts"
 // — the Goal / Status / Decisions / Next-step contract — as markdown. Content is agent-written and
 // thus only semi-trusted — rendered through the shared allowlist sanitizer (lib/markdown.ts).
 //
-// SESSION-LESS threads (runtime "none" — listing clicks route them here; the doc IS the substance,
-// especially for plans) get a COMPOSITE surface: the doc body above, and pinned at the bottom a
+// SESSION-LESS threads (runtime "none" — listing clicks route them here; the doc IS the
+// substance) get a COMPOSITE surface: the doc body above, and pinned at the bottom a
 // quiet no-session notice + the standard composer. Submitting ADOPTS a worker onto this thread
 // (rpc.adoptThread — spawns on the thread file) and immediately follows up with the user's message
 // as its first steer (rpc.followUp), then this drawer swaps IN PLACE into the chat drawer (same
