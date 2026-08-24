@@ -110,7 +110,6 @@ test("the items and the duration render as labels, and PRs are left to their own
     { kind: "timer" as const, value: "tmr_a1b2c3" },
     { kind: "pr" as const, value: "acme/app#391" },
     { kind: "for" as const, value: "40m" },
-    { kind: "reason" as const, value: "…" },
   ]
   // A PR is deliberately absent: it gets a real LINK of its own (prWatchRefs), and listing it here too
   // is the duplication this card has been trimmed for twice already.
@@ -132,15 +131,16 @@ test("the fence becomes one clause: the PR it watches, then what it counts", () 
     { kind: "agent" as const, value: "agent_7" },
     { kind: "pr" as const, value: "acme/app#391" },
     { kind: "shell" as const, value: "bvg44v4ij" },
-    { kind: "reason" as const, value: "the macOS leg is the flaky one" },
     { kind: "shell" as const, value: "k92hs01x2" },
   ]
   assert.equal(awaitingWaitClause(hints), "waiting on acme/app#391, 2 background shells and a sub-agent")
   // The order the worker wrote them in must not change a word of it — the clause keys on KIND.
   assert.equal(awaitingWaitClause([...hints].reverse()), awaitingWaitClause(hints))
-  // The reason is the ONE line frizz does not generate, so it is not in here: the popover puts it on
-  // its own line, where a human sentence cannot be mistaken for a derived one.
-  assert.doesNotMatch(awaitingWaitClause(hints) ?? "", /macOS/)
+  // The clause is DERIVED from the items and nothing else — the worker's own prose never joins it, and
+  // the popover puts the fence body on its own line where a human sentence cannot be mistaken for a
+  // generated one. A third assertion used to guard that against a `reason` hint riding in the same
+  // array; the kind was retired on 2026-08-24 and cannot be constructed, so the exact-string assertion
+  // above is now the whole of it.
 })
 
 test("a runtime id never reaches the popover — it is counted, not listed", () => {
@@ -162,13 +162,13 @@ test("a runtime id never reaches the popover — it is counted, not listed", () 
 })
 
 test("a fence naming nothing yields nothing, so the popover cannot invent a wait", () => {
-  assert.equal(awaitingWaitClause([{ kind: "for", value: "2h" }, { kind: "reason", value: "…" }]), null)
+  assert.equal(awaitingWaitClause([{ kind: "for", value: "2h" }]), null, "a duration describes a wait; it is not one")
   assert.equal(awaitingWaitClause([{ kind: "shell", value: "  " }]), null, "a blank value names nothing")
 })
 
 // The MOBILE row keeps one inline caption, because a phone has no hover to move it to.
 test("hintGloss is the phone's one line, and it is the PR ref", () => {
-  assert.equal(hintGloss([{ kind: "pr", value: "acme/app#391" }, { kind: "reason", value: "…" }]), "PR acme/app#391")
+  assert.equal(hintGloss([{ kind: "pr", value: "acme/app#391" }, { kind: "for", value: "2h" }]), "PR acme/app#391")
   assert.equal(hintGloss([{ kind: "shell", value: "bvg44v4ij" }]), null)
 })
 

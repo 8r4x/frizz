@@ -548,9 +548,8 @@ function liveActivityOf(
   return { shells, agents, timers: armedTimerIds, prs: registeredPrWatches }
 }
 
-/** The rest parked on a wait THIS TRIGGER CANNOT ADVANCE: an `awaiting` fence naming either a durable
- *  wake the scheduler itself will deliver (a parseable `pr-watch:`/`pr:`/`ci:` ref, a valid `timer:`)
- *  or a `human:` gate only the operator can open.
+/** The rest parked on a wait THIS TRIGGER CANNOT ADVANCE: an `awaiting` fence naming a durable wake the
+ *  scheduler itself will deliver — a registered PR (`prs:`) or an armed timer (`timers:`).
  *
  *  IT USED TO FIRE OVER THESE, on the reasoning that the stop hook is the one thing that rescues a
  *  thread parked behind something that will never report. That rescue is real, and it is kept below —
@@ -562,16 +561,20 @@ function liveActivityOf(
  *  until it escaped the loop the only way left to it: a ```done fence on a PR nobody had merged. The
  *  trigger corrupted the signal it exists to produce.
  *
- *  WHAT STILL GETS THE RESCUE: an `awaiting` fence with no hint at all, an unparseable PR ref, a
- *  malformed `timer:`, a bare `session:` — every park frizz has no way to fire. Those are the threads
- *  that genuinely wait forever, and this reads the SAME predicates the waker's own passes fire from, so
- *  the hold and the wake can never disagree about which is which.
+ *  WHAT STILL GETS THE RESCUE: an `awaiting` fence with no items at all, an unparseable PR ref, a timer
+ *  id matching no armed row — every park frizz has no way to fire. Those are the threads that genuinely
+ *  wait forever, and this reads the SAME predicates the waker's own passes fire from, so the hold and the
+ *  wake can never disagree about which is which.
  *
- *  A `pr-watch:` LINE IS THE ONE THAT NEEDS A SECOND FACT, since 2026-08-14: the fence no longer arms
- *  anything, so the line alone says nothing about whether a wake is coming. A REGISTERED watcher
- *  (`mcp__frizz__watch_pr`) will fire, so the Goal holds; a line with no registration behind it is a
- *  park frizz cannot honour, so it gets the rescue like any other unfireable hint. Without the first
- *  half this reintroduces the measured loop above verbatim. */
+ *  A PR ENTRY IS THE ONE THAT NEEDS A SECOND FACT, since 2026-08-14: the fence no longer arms anything,
+ *  so naming a PR says nothing about whether a wake is coming. A REGISTERED watcher
+ *  (`mcp__frizz__watch_pr`) will fire, so the Goal holds; a `prs:` entry with no registration behind it
+ *  is a park frizz cannot honour, so it gets the rescue like any other unfireable item. Without the first
+ *  half this reintroduces the measured loop above verbatim.
+ *
+ *  (The quoted incident keeps the spelling of its day: `pr-watch:` was the fence key until 2026-08-15,
+ *  and the singular `pr:` until the YAML cutover on 2026-08-24. Both are retired — see
+ *  RETIRED_AWAITING_KINDS — and neither parses now.) */
 function parkedOnAWaitItCannotAdvance(
   tele: Pick<SessionTelemetry, "lastFence" | "bgShells" | "subAgents">,
   registeredPrWatches: ReadonlySet<string>,
