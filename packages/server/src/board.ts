@@ -1097,7 +1097,7 @@ function sessionThreadView(
   }
 }
 
-// A NON-FRIZZ session: a transcript the tailer found in the project's agent log dir with no registry
+// An EXTERNAL session: a transcript the tailer found in the project's agent log dir with no registry
 // row behind it — the maintainer's own `claude`/`codex` terminal. Read-only by construction, and
 // deliberately THIN: everything a registered row derives from its row (lifecycle state, needs-you,
 // snooze, watches, delivery, permission/profile intent) has no source here, and inventing one would be
@@ -1338,7 +1338,7 @@ export function createBoard(
     return out
   }
 
-  // The project's NON-FRIZZ sessions: transcripts the tailer discovered with no registry row behind
+  // The project's EXTERNAL sessions: transcripts the tailer discovered with no registry row behind
   // them. They are their own rail band, never part of the registered set — see foreignThreadView for
   // why they cannot be sorted into frizz's own bands at all.
   //
@@ -1365,7 +1365,7 @@ export function createBoard(
     return out
   }
 
-  // Assemble a snapshot from registered sessions + non-frizz sessions + plan artifacts. Unregistered
+  // Assemble a snapshot from registered sessions + external sessions + plan artifacts. Unregistered
   // legacy files are excluded before any legacy parser is invoked, so they cannot contribute a row,
   // queue card, warning, or error. `.frizz/` presence is deliberately NOT reported: it gates only
   // plan/scratchpad storage (probed locally where that matters), never whether this project has a board.

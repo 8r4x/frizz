@@ -6,7 +6,6 @@ import { z } from "zod"
 import { query, mutation } from "@frizz/rpc/server"
 import {
   BoardSnapshot,
-  AdoptSessionInput,
   AdoptThreadInput,
   AdoptThreadResult,
   DispatchInput,
@@ -102,6 +101,7 @@ import { appendDelivery, cancelDelivery, deliveryItem, hasDelivery, retireOutsta
 import {
   readEarlierThreadTranscriptPage,
   readLatestThreadTranscriptPage,
+  readTranscript,
   readTranscriptFile,
   readCodexTranscriptFile,
   projectTranscriptPageAgentLifecycles,
@@ -649,6 +649,31 @@ export function createRouter(ctx: AppContext) {
 
   // Bind a mutation to the session the CALLER was looking at. A stale tab holding a replaced session
   // id fails closed rather than acting on whatever now owns the slug (merged from origin/main).
+  /** Register an EXTERNAL session on its first steer, so the follow-up that triggered it lands on a
+   *  real thread. A no-op for every ordinary send.
+   *
+   *  The three conditions are all necessary. There must be NO ROW (else this is an ordinary thread, or
+   *  a stale tab, and the ownership guard below owns that case). The slug must EQUAL the session id,
+   *  because that is the only shape an external row ever has — a promoted thread keeps the id it was
+   *  discovered under, so a request naming two different values did not come from this band. And the
+   *  tailer must still be listing it as external RIGHT NOW, which is what makes this un-forgeable:
+   *  the caller cannot talk frizz into adopting an arbitrary uuid, only a transcript the server can
+   *  see for itself in this project's own log directory. */
+  async function promoteExternalSession(slug: string, sessionId: string): Promise<boolean> {
+    if (slug !== sessionId) return false
+    if (ctx.storage.getSession(slug)) return false
+    if (!ctx.tailer.foreignIds().includes(slug)) return false
+    const tele = ctx.tailer.get(slug)
+    await ctx.dispatcher.adoptSession({
+      sessionId: slug,
+      backend: ctx.tailer.foreignBackend?.(slug) ?? "claude",
+      // The session's own name (Claude's ai-title) when it has one. Codex writes no title record, so
+      // that row keeps the short-id name the band showed — the same string, not a second guess.
+      ...(tele?.aiTitle ? { title: tele.aiTitle.slice(0, 200) } : {}),
+    })
+    return true
+  }
+
   function currentOwnedSession(slug: string, sessionId: string) {
     const row = ctx.storage.getSession(slug)
     if (!row || row.session_id !== sessionId) {
@@ -1431,15 +1456,6 @@ export function createRouter(ctx: AppContext) {
       handler: ({ input }) => ctx.dispatcher.adopt(input.slug, input.message),
     }),
 
-    // Take over one of the human's OWN terminals from the rail's Non-Frizz band. It creates the row
-    // and stops — the session is already at rest, so the human's next message resumes it through the
-    // ordinary follow-up path rather than a second spawn path built just for this.
-    adoptSession: mutation({
-      input: AdoptSessionInput,
-      output: AdoptThreadResult,
-      handler: ({ input }) => ctx.dispatcher.adoptSession(input),
-    }),
-
     followUp: mutation({
       input: FollowUpInput,
       handler: async ({ input }) => {
@@ -1456,6 +1472,15 @@ export function createRouter(ctx: AppContext) {
         //
         // The row is bound to the CALLER's session id (origin/main's staleness guard): a stale tab must
         // not deliver a follow-up into a thread that has since been re-dispatched.
+        // PROMOTION. Steering an EXTERNAL session — one of the human's own terminals, listed in the
+        // rail's External band — is what turns it into a frizz thread (maintainer 2026-08-24). It runs
+        // here, inside the follow-up, rather than behind a button of its own: one round trip, so the
+        // message and the row it belongs to can never end up on opposite sides of a failure.
+        //
+        // Below `currentOwnedSession` because that guard is what an ORDINARY follow-up needs and this
+        // is the case where it cannot yet pass — there is no row. `promoteExternalSession` returns
+        // false for every ordinary send, so the guard still runs first for everything else.
+        await promoteExternalSession(input.slug, input.sessionId)
         const row = currentOwnedSession(input.slug, input.sessionId)
         if (hasPendingPermissionChange(row)) {
           throw new Error("Wait for the current permission change to finish before sending a follow-up")
@@ -2595,9 +2620,15 @@ export function createRouter(ctx: AppContext) {
           throw new Error("Only a running broker-backed Claude thread can be renamed by the provider")
         }
         // What to name it FROM: the thread's own opening request, which is what the daemon seeds from.
-        // The live tail's last user text would name the session after whatever was said most recently,
-        // which for a long thread is a side conversation rather than the work.
-        const description = ctx.tailer.get(input.slug)?.lastAssistant?.trim() || row.title?.trim() || input.slug
+        // The live tail would name the session after whatever was said most recently, which for a long
+        // thread is a side conversation rather than the work — until 2026-08-24 this read the tail's
+        // `lastAssistant` (a ~200-char preview of the NEWEST reply), which is how issue #22's titles
+        // came out naming "the very last agent action". `displayText` is the opening prompt with
+        // frizz's dispatch envelope peeled off, so the titler summarizes the operator's task rather
+        // than boilerplate shared by every dispatched thread.
+        const opening = readTranscript(ctx.project, row.session_id).find((m) => m.role === "user")
+        const description =
+          opening?.displayText?.trim() || opening?.text?.trim() || row.title?.trim() || input.slug
         const title = await bridge.renameSession({ threadSlug: input.slug, sessionId: row.session_id, description })
         if (!title?.trim()) throw new Error("Claude did not return a title for this thread")
         ctx.storage.setTitle(input.slug, title.trim())

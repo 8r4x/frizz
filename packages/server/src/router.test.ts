@@ -2,11 +2,11 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, utimesSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { Hono } from "hono"
 import { mountRouter } from "@frizz/rpc/server"
-import type { BoardSnapshot, Settings, ThreadView } from "@frizz/shared"
+import { DISPATCH_TASK_BANNER_MARKER, type BoardSnapshot, type Settings, type ThreadView } from "@frizz/shared"
 import type { BoardManager } from "./board.ts"
 import { appendDelivery, parseDeliveryLedger } from "./delivery-ledger.ts"
 import { createClaudeBackend } from "./backend/claude.ts"
@@ -420,6 +420,51 @@ test("aiRenameThread RPC: only a running broker-backed Claude thread can be rena
   assert.equal(h.storage.getSession("codex-title")?.title, "codex-title")
   assert.equal(h.refreshes(), 0)
   h.storage.close()
+})
+
+// The provider titles a thread from its OPENING request, never from the newest reply: sourcing the
+// tail's `lastAssistant` named long threads after "the very last agent action" (issue #22). The
+// description must also be the operator's task alone — the dispatch envelope above the banner is
+// boilerplate shared by every dispatched thread, so the titler must not see it.
+test("aiRenameThread RPC: the title request carries the opening task, not the last assistant reply", async () => {
+  const cwdSlug = `-tmp-frizz-rename-test-${process.pid}-${Math.random().toString(36).slice(2, 8)}`
+  const logDir = join(homedir(), ".claude", "projects", cwdSlug)
+  mkdirSync(logDir, { recursive: true })
+  const lastAssistant = "Ran the focused tests; all green."
+  const tailWithRecentReply = {
+    ...noopTailer,
+    get: () => ({ lastAssistant }) as unknown as ReturnType<Tailer["get"]>,
+  } as Tailer
+  const h = harness(tailWithRecentReply)
+  try {
+    ;(h.ctx.project as { cwdSlug: string }).cwdSlug = cwdSlug
+    h.storage.upsertSession({ ...row("rename-src"), exited: 0 })
+    h.storage.setBackend("rename-src", "claude")
+    h.storage.setClaudeRuntime("rename-src", "broker")
+    const task = "Investigate the flaky resume test and fix it"
+    const envelope = `orientation the operator never wrote${DISPATCH_TASK_BANNER_MARKER}${task}`
+    writeFileSync(
+      join(logDir, "sid-rename-src.jsonl"),
+      [
+        JSON.stringify({ type: "user", timestamp: "2026-08-24T00:00:00.000Z", message: { role: "user", content: envelope } }),
+        JSON.stringify({ type: "assistant", timestamp: "2026-08-24T00:01:00.000Z", message: { id: "m1", role: "assistant", content: [{ type: "text", text: lastAssistant }] } }),
+      ].map((l) => l + "\n").join(""),
+    )
+    const described: string[] = []
+    ;(h.ctx as { claudeBroker?: unknown }).claudeBroker = {
+      renameSession: async (input: { description: string }) => {
+        described.push(input.description)
+        return "Fix the flaky resume test"
+      },
+    }
+    const result = await h.router.aiRenameThread.handler({ input: { slug: "rename-src" } })
+    assert.deepEqual(result, { title: "Fix the flaky resume test" })
+    assert.deepEqual(described, [task])
+    assert.equal(h.storage.getSession("rename-src")?.title, "Fix the flaky resume test")
+    h.storage.close()
+  } finally {
+    rmSync(logDir, { recursive: true, force: true })
+  }
 })
 
 test("setThreadPermission RPC: validates input and persists an exited thread override for next resume", async () => {
@@ -1525,6 +1570,105 @@ test("an unknown RPC procedure answers 404 NAMING it, so the next version skew d
       body: JSON.stringify({ slug: "never-dispatched", prompt: "go", enabled: true }),
     })
     assert.equal(real.status, 500, "a routed procedure reports ITS failure, not a routing miss")
+  } finally {
+    h.storage.close()
+  }
+})
+
+// ---- PROMOTION: steering an EXTERNAL session turns it into a frizz thread ----
+//
+// The External band's rows carry an ordinary composer, and sending the first message is the whole
+// ceremony (maintainer 2026-08-24). It runs inside followUp rather than behind a verb of its own so
+// that one round trip covers both halves — the message and the row it belongs to can never end up on
+// opposite sides of a failure.
+test("followUp on an EXTERNAL session registers it first, keeping its id, then delivers", async () => {
+  const EXTERNAL = "6543d3fb-e38e-461a-b10a-9c78261b67b2"
+  let listed = [EXTERNAL]
+  const h = harness({
+    ...noopTailer,
+    foreignIds: () => listed,
+    get: () => ({ turn: "idle", permPrompt: false, subAgents: [], bgShells: [], pendingQuestion: false, aiTitle: "Debug a flaky test" }),
+    foreignBackend: () => "claude",
+  } as unknown as Tailer)
+  const promoted: unknown[] = []
+  const delivered: string[] = []
+  ;(h.ctx as unknown as { dispatcher: Record<string, unknown> }).dispatcher.adoptSession = async (input: { sessionId: string; backend: string; title?: string }) => {
+    promoted.push(input)
+    // The real dispatcher writes the row; the fake writes the same one, because everything after the
+    // promotion in this handler reads the REGISTRY, not the return value.
+    h.storage.upsertSession({
+      slug: input.sessionId, session_id: input.sessionId, thread_name: `frizz-${input.sessionId}`,
+      spawned_at: "2026-08-24T00:00:00.000Z", last_read_at: null, unread: 0, exited: 0, archived: 0,
+      rested_at: null, title_auto: 0, title: input.title ?? null, transcript_id: null, state: "open",
+      meta: null, seen_at: null, plan_path: null,
+    })
+    // The real dispatcher stamps the transport too; without it the follow-up falls through to the
+    // retired legacy path and throws instead of reaching the broker.
+    h.storage.setBackend(input.sessionId, input.backend)
+    h.storage.setClaudeRuntime(input.sessionId, "broker")
+    listed = [] // the foreign scan stops listing it the moment a row owns the id
+    return { slug: input.sessionId, sessionId: input.sessionId }
+  }
+  ;(h.ctx as unknown as { claudeBroker: unknown }).claudeBroker = {
+    followUp: async ({ text }: { text: string }) => void delivered.push(text),
+  }
+
+  try {
+    // The client sends slug === sessionId, which is the only shape an external row ever has.
+    await h.router.followUp.handler({ input: { slug: EXTERNAL, sessionId: EXTERNAL, message: "carry on from here" } })
+    assert.deepEqual(promoted, [{ sessionId: EXTERNAL, backend: "claude", title: "Debug a flaky test" }])
+    assert.deepEqual(delivered, ["carry on from here"], "the message that triggered the promotion is still delivered")
+    // The id is unchanged, which is what lets the composer that sent this stay mounted.
+    assert.equal(h.storage.getSession(EXTERNAL)?.session_id, EXTERNAL)
+
+    // A SECOND message is an ordinary follow-up: the row exists, so nothing is promoted again.
+    await h.router.followUp.handler({ input: { slug: EXTERNAL, sessionId: EXTERNAL, message: "and again" } })
+    assert.equal(promoted.length, 1)
+    assert.deepEqual(delivered, ["carry on from here", "and again"])
+  } finally {
+    h.storage.close()
+  }
+})
+
+// The promotion is UN-FORGEABLE by construction: it adopts only a transcript the server can see for
+// itself in this project's own log directory, right now. Without that check a crafted request could
+// talk frizz into minting a row for any uuid at all.
+test("followUp refuses an unregistered slug the tailer does not currently list as external", async () => {
+  const h = harness()
+  const promoted: unknown[] = []
+  ;(h.ctx as unknown as { dispatcher: Record<string, unknown> }).dispatcher.adoptSession = async (input: unknown) => {
+    promoted.push(input)
+    return { slug: "x", sessionId: "x" }
+  }
+  try {
+    const UNKNOWN = "11111111-1111-4111-8111-111111111111"
+    await assert.rejects(
+      () => h.router.followUp.handler({ input: { slug: UNKNOWN, sessionId: UNKNOWN, message: "hi" } }),
+      /replaced/,
+      "an id nothing has seen is the ordinary stale-thread refusal, not a promotion",
+    )
+    assert.deepEqual(promoted, [])
+  } finally {
+    h.storage.close()
+  }
+})
+
+// A request naming two different values did not come from this band — a promoted thread keeps the id it
+// was discovered under, so slug and sessionId are equal for the whole life of an external row.
+test("followUp does not promote when the slug and session id disagree", async () => {
+  const EXTERNAL = "6543d3fb-e38e-461a-b10a-9c78261b67b2"
+  const h = harness({ ...noopTailer, foreignIds: () => [EXTERNAL] } as unknown as Tailer)
+  const promoted: unknown[] = []
+  ;(h.ctx as unknown as { dispatcher: Record<string, unknown> }).dispatcher.adoptSession = async (input: unknown) => {
+    promoted.push(input)
+    return { slug: "x", sessionId: "x" }
+  }
+  try {
+    await assert.rejects(
+      () => h.router.followUp.handler({ input: { slug: EXTERNAL, sessionId: "some-other-session", message: "hi" } }),
+      /replaced/,
+    )
+    assert.deepEqual(promoted, [])
   } finally {
     h.storage.close()
   }

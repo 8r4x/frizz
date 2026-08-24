@@ -728,8 +728,8 @@ export interface Dispatcher {
   // board): spawn a fresh worker pointed at the thread file. Frizz's contract makes this sound —
   // the doc, not the conversation, is the durable context; the worker reads it and continues.
   adopt(slug: string, message?: string): Promise<{ slug: string; sessionId: string }>
-  // Take over a NON-FRIZZ session — one of the human's own `claude`/`codex` terminals, listed in the
-  // rail's Non-Frizz band. Distinct from `adopt` above, which cold-starts a fresh worker on a thread
+  // Take over an EXTERNAL session — one of the human's own `claude`/`codex` terminals, listed in the
+  // rail's External band. Distinct from `adopt` above, which cold-starts a fresh worker on a thread
   // FILE: this one binds frizz to a conversation that already exists and continues it.
   adoptSession(input: { sessionId: string; backend: BackendKind; title?: string }): Promise<{ slug: string; sessionId: string }>
 }
@@ -1018,41 +1018,47 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       throw new Error(`unsupported backend for dispatch: ${String(kind)}`)
     },
 
-    // ---- take over one of the human's OWN terminals (the Non-Frizz band's verb) ----
+    // ---- PROMOTION: the human steered one of their own terminals, so it becomes a frizz thread ----
     //
-    // It creates a ROW and stops. No worker is started and no message is sent, which is the whole
-    // design: the session is at rest (the band lists nothing else), and a rested frizz thread is
-    // resumed by its next follow-up through the ordinary path — the same broker resume every other
-    // rested thread takes. Adoption that ALSO spawned would be a second, parallel resume path to keep
-    // correct forever, in exchange for saving the human one keystroke.
+    // There is no "adopt" button and no separate ceremony (maintainer 2026-08-24: "once the user steers
+    // an external thread, it should then be essentially promoted to operate as a regular thread"). The
+    // External band's rows carry an ordinary composer; sending the first message calls this, and by the
+    // time that message is delivered the row is registered and every other surface treats it as normal.
     //
-    // The two backends bind through different columns, and getting this wrong is silent: the tailer
-    // would keep the row's transcript unresolved and the board would show a thread with no history.
-    //   • CLAUDE mints nothing of its own — the transcript IS `<session_id>.jsonl`, so the row adopts
-    //     the foreign id AS its session_id and the tailer binds the same file it was already reading.
-    //   • CODEX mints its own rollout id, so frizz keeps a fresh session_id (the scratch-dir key that
-    //     every worker contract references) and pins the rollout on `agent_session_id`, exactly as a
-    //     codex dispatch does after discovery.
-    // Either way the id now belongs to a registry row, so the foreign scan stops surfacing it and the
-    // session leaves the Non-Frizz band on the next tick — there is no separate hand-off to forget.
+    // It creates a ROW and stops — no worker is started here. The session is at rest (the band lists
+    // nothing else), so the follow-up that triggered this resumes it through the SAME broker path every
+    // other rested thread takes. Spawning here too would be a second, parallel resume path to keep
+    // correct forever.
+    //
+    // THE ID DOES NOT CHANGE. The slug, the session id and the external transcript id are all the same
+    // value, and that is load-bearing rather than lazy: the promotion happens UNDER a composer that is
+    // already mounted, and every piece of optimistic client state around it — the queued bubble, the
+    // steer overlay, the per-slug send queue, the draft key — is keyed by slug. Minting a fresh readable
+    // slug would strand all of it on an id that no longer exists, mid-send. A session uuid satisfies the
+    // slug contract (lowercase hex + hyphens), and the row still DISPLAYS its real title, so the only
+    // cost is a uuid in the URL.
+    //
+    // Codex additionally pins the same id on `agent_session_id`, because that is the column its rollout
+    // is located by; claude needs nothing extra, since its transcript IS `<session_id>.jsonl`. Either
+    // way the id now belongs to a registry row, so the foreign scan stops surfacing it and the session
+    // leaves the External band on the next tick — there is no separate hand-off to forget.
     async adoptSession(input) {
       const parsed = AdoptSessionInput.safeParse(input)
       if (!parsed.success) throw new Error("that session cannot be adopted")
-      const { sessionId: foreignId, backend, title } = parsed.data
+      const { sessionId: externalId, backend, title } = parsed.data
       // The id must be genuinely UNOWNED. Checking the registry (rather than trusting the caller's
-      // claim that this row came from the foreign band) is what stops a crafted request from minting a
+      // claim that this came from the External band) is what stops a crafted request from minting a
       // second row over a thread frizz is already driving.
       for (const row of deps.storage.allSessions()) {
-        if (row.session_id === foreignId || row.agent_session_id === foreignId || row.transcript_id === foreignId) {
+        if (row.session_id === externalId || row.agent_session_id === externalId || row.transcript_id === externalId) {
           throw new Error("that session is already a frizz thread")
         }
       }
-      const displayTitle = title?.trim() || `Session ${foreignId.slice(0, 8)}`
-      const frizzDir = join(deps.project.dir, ".frizz")
-      const slug = resolveSlug(frizzDir, slugify(displayTitle), (s) => deps.storage.getSession(s) !== undefined)
-      const sessionId = backend === "codex" ? randomUUID() : foreignId
-      // The worker's scratch directory keys on the row's OWN session_id for both backends, matching
-      // dispatch — so an adopted claude thread's scratch dir is named for the transcript it inherited.
+      const displayTitle = title?.trim() || `Session ${externalId.slice(0, 8)}`
+      const slug = externalId
+      const sessionId = externalId
+      // The worker's scratch directory keys on the row's OWN session_id, matching dispatch — so a
+      // promoted thread's scratch dir is named for the transcript it inherited.
       writeScratchDir(deps.project.dir, sessionId)
       deps.storage.upsertSession({
         slug,
@@ -1076,7 +1082,11 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         plan_path: null,
       })
       deps.storage.setBackend(slug, backend)
-      if (backend === "codex") deps.storage.setAgentSession(slug, foreignId)
+      if (backend === "codex") deps.storage.setAgentSession(slug, externalId)
+      // The TRANSPORT, without which the follow-up that triggered this promotion has nowhere to go.
+      // Every claude thread is broker-backed — the legacy path throws "frizz has no other claude
+      // transport" — and a row that never went through dispatch does not get this stamped for free.
+      else deps.storage.setClaudeRuntime(slug, "broker")
       return { slug, sessionId }
     },
 

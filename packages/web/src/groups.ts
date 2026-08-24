@@ -257,15 +257,21 @@ export function queued(t: ThreadView): boolean {
   return t.kind === "session" && t.foreign !== true && t.needsYou === true && t.state !== "archived"
 }
 
-// NON-FRIZZ SESSIONS — agent sessions discovered in the project's transcript dir that frizz did NOT
-// originate (the maintainer's own terminals). They are NOT part of the four frizz bands and never can
-// be: a foreign session writes no ```awaiting fence and has no lifecycle row, so Held and Done have
-// nothing to derive from (see the server's foreignThreadView). So they get their own collapsible
-// section at the bottom of the rail instead — one the reader can ignore wholesale, which is the point.
+// EXTERNAL SESSIONS — agent sessions discovered in the project's transcript dir that frizz did NOT
+// originate (the human's own terminals). They are NOT part of the four frizz bands and never can be
+// while they stay external: such a session writes no ```awaiting fence and has no lifecycle row, so
+// Held and Done have nothing to derive from (see the server's foreignThreadView). So they get their
+// own collapsible section at the bottom of the rail — one the reader can ignore wholesale.
+//
+// ONE NAME, TWO SPELLINGS, on purpose. The WIRE field is `foreign`, which is what the tailer has
+// called an unregistered transcript since long before this band existed and what the server still
+// calls it. Everything the HUMAN sees says EXTERNAL (maintainer 2026-08-24), so the web says external
+// too and the boundary between the two vocabularies is exactly this predicate.
 //
 // The server emits only RESTED ones (maintainer 2026-08-19: a spinning terminal session is one you
-// already have open), so this is a plain partition rather than a second opinion about rest.
-export function foreignThreads(threads: readonly ThreadView[]): ThreadView[] {
+// already have open), so this is a plain partition rather than a second opinion about rest. A session
+// stops being external the moment you STEER it — the first message promotes it to an ordinary thread.
+export function externalThreads(threads: readonly ThreadView[]): ThreadView[] {
   return threads.filter((t) => t.kind === "session" && t.foreign === true)
 }
 

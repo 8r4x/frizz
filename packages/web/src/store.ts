@@ -89,9 +89,10 @@ export const store = proxy({
   // work and has no header to collapse from. Held, Done and Plans all start collapsed: each is a band
   // whose header count already says how much is parked there, so the rail opens on what is running.
   // Session-scoped UI state (deliberately not persisted).
-  // `foreign` is the Non-Frizz sessions band. Collapsed by default like Held/Done/Plans: nothing in it
-  // is frizz's work or waiting on the rail's reader, so the count is the glance.
-  sidebarCollapsed: { active: false, held: true, inactive: true, plans: true, foreign: true } as Record<"active" | "held" | "inactive" | "plans" | "foreign", boolean>,
+  // `external` is the External band — the human's own terminals. Collapsed by default like
+  // Held/Done/Plans: nothing in it is frizz's work or waiting on the rail's reader, so the count is
+  // the glance.
+  sidebarCollapsed: { active: false, held: true, inactive: true, plans: true, external: true } as Record<"active" | "held" | "inactive" | "plans" | "external", boolean>,
   // The SIDE-DRAWER STACK — arbitrary depth. `thread` layers are full thread views (the Open-thread
   // sheet); `doc` layers are the frizz-document markdown; `markdown` layers are the built-in reader for
   // a `.md` FILE on disk, opened from any link to one; `subagent` and `shell` layers are read-only

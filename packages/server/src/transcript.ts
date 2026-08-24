@@ -3652,7 +3652,7 @@ function sourceForThread(
   // Both agents mint a bare uuid, so the id itself cannot say which one wrote it and the binding has
   // to be PROBED. Claude first because its probe is a single stat of a known path; codex's walks the
   // global sessions tree (~10ms warm on a 1,586-rollout corpus, and this runs per VIEW, not per tick).
-  // Before the Non-Frizz band this returned "claude" unconditionally, which was right while the Claude
+  // Before the External band this returned "claude" unconditionally, which was right while the Claude
   // log dir was the only place a foreign thread could come from — a codex rollout would have rendered
   // as an empty conversation with nothing to say why.
   const claudePath = resolveTranscriptPath(project, slug)

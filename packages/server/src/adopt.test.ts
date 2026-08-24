@@ -564,51 +564,54 @@ test("no injected preflight (unit-test composition) leaves dispatch untouched", 
   assert.ok(h.storage.getSession(res.slug))
 })
 
-// ---- adoptSession: taking over one of the human's OWN terminals (the Non-Frizz band's verb) ----
+// ---- adoptSession: PROMOTING one of the human's OWN terminals on its first steer ----
 //
 // Distinct from adopt() above in both directions: it binds to a conversation that already exists
-// rather than cold-starting a worker on a thread file, and it deliberately spawns NOTHING. The band
-// only ever lists sessions at rest, and a rested frizz thread is resumed by its next follow-up — so
-// adoption that also spawned would be a second resume path to keep correct forever.
-test("adoptSession: a claude terminal keeps its transcript, and no worker is started", async () => {
+// rather than cold-starting a worker on a thread file, and it deliberately spawns NOTHING. The
+// External band only ever lists sessions at rest, and the follow-up that triggered the promotion is
+// what resumes it — so promoting AND spawning would be a second resume path to keep correct forever.
+test("adoptSession: a claude terminal keeps its id and its transcript, and no worker is started", async () => {
   const h = harness()
-  const FOREIGN = "6543d3fb-e38e-461a-b10a-9c78261b67b2"
-  const res = await h.dispatcher.adoptSession({ sessionId: FOREIGN, backend: "claude", title: "Debug Frizz thread startup issue" })
+  const EXTERNAL = "6543d3fb-e38e-461a-b10a-9c78261b67b2"
+  const res = await h.dispatcher.adoptSession({ sessionId: EXTERNAL, backend: "claude", title: "Debug Frizz thread startup issue" })
 
-  // THE BINDING THAT MATTERS: claude's transcript IS `<session_id>.jsonl`, so the row must adopt the
-  // foreign id as its own session_id or the tailer binds a file that does not exist and the adopted
-  // thread renders with no history at all.
-  assert.equal(res.sessionId, FOREIGN)
-  const row = h.storage.getSession(res.slug)
-  assert.equal(row?.session_id, FOREIGN)
+  // THE ID DOES NOT CHANGE — slug and session_id are both the id the session was discovered under.
+  // That is what lets promotion happen under a mounted composer: every piece of optimistic client
+  // state (the queued bubble, the steer overlay, the per-slug send queue, the draft key) is keyed by
+  // slug, and a fresh slug would strand all of it mid-send.
+  assert.equal(res.slug, EXTERNAL)
+  assert.equal(res.sessionId, EXTERNAL)
+  const row = h.storage.getSession(EXTERNAL)
+  assert.equal(row?.session_id, EXTERNAL)
   assert.equal(row?.backend, "claude")
-  assert.equal(row?.agent_session_id ?? null, null, "claude mints no id of its own")
-  assert.equal(row?.thread_name, `frizz-${res.slug}`)
+  assert.equal(row?.agent_session_id ?? null, null, "claude's transcript IS <session_id>.jsonl; nothing extra to pin")
+  assert.equal(row?.thread_name, `frizz-${EXTERNAL}`)
   // The name the human just read in the rail, kept — and NOT marked provisional, because it is a real
   // name (Claude's own ai-title) rather than the dispatch chop that placeholder exists for.
   assert.equal(row?.title, "Debug Frizz thread startup issue")
   assert.equal(row?.title_auto, 0)
-  assert.equal(res.slug, slugify("Debug Frizz thread startup issue"))
-  assert.equal(h.spawned.length, 0, "adoption starts no worker; the next follow-up resumes it")
+  assert.equal(h.spawned.length, 0, "promotion starts no worker; the follow-up that triggered it resumes")
 })
 
-test("adoptSession: a codex terminal pins its rollout on agent_session_id, not session_id", async () => {
+test("adoptSession: a codex terminal pins the SAME id on agent_session_id, where its rollout is found", async () => {
   const h = harness()
   const ROLLOUT = "01a01b81-bbf3-7841-b704-a7c4b95b7bd7"
   const res = await h.dispatcher.adoptSession({ sessionId: ROLLOUT, backend: "codex" })
 
-  // Codex mints its OWN rollout id, so frizz keeps a session_id of its own (the scratch-directory key
-  // every worker contract references) and pins the rollout where the tailer looks for it — the same
-  // split a codex dispatch makes after discovery.
-  assert.notEqual(res.sessionId, ROLLOUT)
-  const row = h.storage.getSession(res.slug)
+  // Codex locates a rollout by `agent_session_id`, so that column has to carry the id too. Unlike a
+  // codex DISPATCH — which mints a session_id before codex has told it the rollout id — promotion
+  // already knows the id, so both columns hold it and the thread's identity stays stable either way.
+  assert.equal(res.slug, ROLLOUT)
+  assert.equal(res.sessionId, ROLLOUT)
+  const row = h.storage.getSession(ROLLOUT)
   assert.equal(row?.agent_session_id, ROLLOUT)
+  assert.equal(row?.session_id, ROLLOUT)
   assert.equal(row?.backend, "codex")
   // Codex writes no title record, so there is no name to inherit — the short id stands.
   assert.equal(row?.title, `Session ${ROLLOUT.slice(0, 8)}`)
 })
 
-test("adoptSession: a session frizz already owns cannot be adopted again, through EITHER id column", async () => {
+test("adoptSession: a session frizz already owns cannot be promoted again, through EITHER id column", async () => {
   const h = harness()
   const CLAUDE_ID = "6543d3fb-e38e-461a-b10a-9c78261b67b2"
   const ROLLOUT = "01a01b81-bbf3-7841-b704-a7c4b95b7bd7"

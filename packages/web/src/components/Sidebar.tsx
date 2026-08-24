@@ -6,7 +6,7 @@ import type { BoardSnapshot, PlanView, ThreadView } from "@frizz/shared"
 import { store, openThread, scrollToQueueCard, queueCardTargetY, pushSubAgentDrawer, pushPlanDrawer, QUEUE_CARD_VIEWPORT_TOP } from "../store.ts"
 import { useBoard, asThreads } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
-import { sectionThreads, foreignThreads, orderByInteraction, partitionActive, needsAction, displayTitle, titleIsProvisional, isHeld, parkedAwaitingHint, sessionIndicatorKind, offersRetry, futureSnoozedUntil, lastActiveLabelAt } from "../groups.ts"
+import { sectionThreads, externalThreads, orderByInteraction, partitionActive, needsAction, displayTitle, titleIsProvisional, isHeld, parkedAwaitingHint, sessionIndicatorKind, offersRetry, futureSnoozedUntil, lastActiveLabelAt } from "../groups.ts"
 import { ageSpan, relativeAge } from "../lib/activityTime.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { BoxSpinner, STATUS_BOX } from "./BoxSpinner.tsx"
@@ -49,7 +49,7 @@ import type { ReactElement, ReactNode } from "react"
 // Needs-you renders as the row INDICATOR + the queue; awaiting as the hint gloss.
 // Plans from board.plans; Done = explicitly completed. Legacy .frizz rows do not render at all.
 //
-// Below those four, and outside the vocabulary entirely, sits NON-FRIZZ SESSIONS — the project's own
+// Below those four, and outside the vocabulary entirely, sits EXTERNAL — the project's own
 // `claude`/`codex` terminals. They are not a fifth band of frizz's model, they are a separate listing
 // of work frizz can read but does not drive, so nothing about the four names above applies to them.
 
@@ -69,14 +69,15 @@ export function Sidebar() {
   // already skipped (lib/steering.ts, lib/optimisticArchive.ts).
   const all = useOptimisticallyArchived(useOptimisticallySteered(asThreads(board?.threads ?? [])))
   const sections = sectionThreads(all, useSnapshot(prefs).queueOrder)
-  // Its own partition, deliberately NOT a SectionKey: sectionThreads drops foreign rows entirely, and
-  // that stays true — a non-frizz session must never be able to land in Active, Held or Done by
-  // accident. This band is the only place they render.
+  // Its own partition, deliberately NOT a SectionKey: sectionThreads drops external rows entirely, and
+  // that stays true — an external session must never be able to land in Active, Held or Done by
+  // accident. This band is the only place they render, and they leave it by being STEERED, not by
+  // being re-sorted.
   // Ordered by the SAME key the rest of the rail uses, so the rest-time column reads monotonically down
-  // the band. It cannot be left to discovery order: the tailer returns foreign ids by file MTIME, while
+  // the band. It cannot be left to discovery order: the tailer returns these ids by file MTIME, while
   // the label prints the agent's own last output — two clocks that disagree whenever a transcript is
   // touched without the agent speaking (a resume that writes a header, a copy, a restore).
-  const foreignSessions = orderByInteraction(foreignThreads(all))
+  const externalSessions = orderByInteraction(externalThreads(all))
   const plans = (board?.plans ?? []) as PlanView[]
   const collapsed = snap.sidebarCollapsed
   const activeThreads = sections.active
@@ -284,29 +285,29 @@ export function Sidebar() {
                 ))}
             </div>
           )}
-          {/* NON-FRIZZ SESSIONS — the project's own `claude`/`codex` terminals, which frizz reads but
+          {/* EXTERNAL — the project's own `claude`/`codex` terminals, which frizz reads but
               does not drive. LAST in the rail and collapsed by default: it is the only band that is not
               frizz's work at all, so it must never compete with the queue for the reader's eye. Only
               RESTED sessions are in it — the server drops a spinning one, because a session that is
               working is one the human already has open in its own window (maintainer 2026-08-19).
               Rows are read-only: ThreadActionBar swaps the composer for a plain "running in an external
               terminal" line, and there is no queue card, no verb and no Held/Done to fall into. */}
-          {foreignSessions.length > 0 && (
-            <section aria-label="Non-Frizz sessions">
+          {externalSessions.length > 0 && (
+            <section aria-label="External">
               <hr className="my-3 border-border/50" />
               <SectionHeader
-                label="Non-Frizz sessions"
-                count={foreignSessions.length}
-                collapsed={collapsed.foreign}
-                onToggle={() => (store.sidebarCollapsed.foreign = !store.sidebarCollapsed.foreign)}
+                label="External"
+                count={externalSessions.length}
+                collapsed={collapsed.external}
+                onToggle={() => (store.sidebarCollapsed.external = !store.sidebarCollapsed.external)}
               />
               {/* The rest-time column is ON here, unlike Held and Done. Every row in this band is by
                   definition at rest, so "how long ago" is the only thing that distinguishes them — it is
                   what tells you which terminal you wandered away from an hour ago and which one is from
                   last Tuesday. Held rows carry their own hint gloss and Done rows are over; neither has
                   that problem. */}
-              {!collapsed.foreign &&
-                foreignSessions.map((t) => (
+              {!collapsed.external &&
+                externalSessions.map((t) => (
                   <ThreadRow key={t.id} t={t} active={activeId === t.id} onQueueNavigate={navigateToQueueCard} restedAge />
                 ))}
             </section>
@@ -473,7 +474,7 @@ export const ThreadRow = memo(function ThreadRow({
               <TitleWithTrailers title={displayTitle(t)}>
                 {!legacy && <ProviderMark backend={t.backend} className="ml-1" />}
                 {/* MEASURED 2026-08-19, the first time this tag ever rendered (it was written for a
-                    foreign row and no foreign row reached the rail until the Non-Frizz band). Readings
+                    foreign row and no foreign row reached the rail until the External band). Readings
                     on the real rail at dsf 4, `scripts/ink-gaps.mjs` + the visual-review cap-band probe:
                       title's last word → provider mark   box 4px  → ink 4.15px
                       provider mark     → this tag        box 6px  → ink 6.00px   (a bordered pill's
