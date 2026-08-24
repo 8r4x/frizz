@@ -61,6 +61,8 @@ import {
   SetThreadPermissionResult,
   ThreadProfileOptionsInput,
   ThreadProfileOptionsResult,
+  ThreadSkillsInput,
+  ThreadSkillsResult,
   SetThreadProfileInput,
   SetThreadProfileResult,
   DispatchPreferences,
@@ -1569,17 +1571,26 @@ export function createRouter(ctx: AppContext) {
             model: row.model ?? undefined,
             effort: row.effort ?? undefined,
           })
-          // Codex gets a ledger entry too — as SERVER TRUTH for the queued bubble, not as a delivery
-          // guess: the bridge already dedups on deliveryId and its return IS the receipt, so the item
-          // opens `enqueued` and can never age into the amber "no receipt from the worker" warning (there is no
-          // terminal composer on an app-server thread). Without it the ONLY thing rendering a just-sent
-          // codex steer is the client's optimistic bubble, and mergeOptimistic's ghost floor retires
-          // that once the transcript advances 60s past it — measured against frizz's own delivery
-          // records, 8 of 75 codex sends took longer than that to appear in the rollout (steers at 71s,
-          // 212s and 4.6h), so the message could vanish from the drawer entirely. The tailer drops the
-          // item the moment the rollout materialises the message.
+          // Codex gets a ledger entry too — as SERVER TRUTH for the just-sent bubble, not as a delivery
+          // guess: the bridge already dedups on deliveryId and its return IS the receipt. Without it the
+          // ONLY thing rendering a just-sent codex steer is the client's optimistic bubble, and
+          // mergeOptimistic's ghost floor retires that once the transcript advances 60s past it —
+          // measured against frizz's own delivery records, 8 of 75 codex sends took longer than that to
+          // appear in the rollout (steers at 71s, 212s and 4.6h), so the message could vanish from the
+          // drawer entirely. The tailer drops the item the moment the rollout materialises the message.
+          //
+          // `delivered`, not `enqueued`: the receipt names the turn this message steered or STARTED, so
+          // by the time followUp returns the model is already working on it — codex has no queue for it
+          // to sit in. Rendering it gray for the rollout's whole materialization window (p50 3.3s,
+          // tails past an hour) is exactly the "still looks enqueued while the agent is answering it"
+          // report. `delivered` also never ages into the amber "no receipt" warning, which would be
+          // meaningless on a thread whose transport acknowledges every send.
           if (input.deliveryId) {
-            appendDelivery(ctx.storage, input.slug, { id: input.deliveryId, text: input.message, state: "enqueued" })
+            appendDelivery(ctx.storage, input.slug, { id: input.deliveryId, text: input.message, state: "delivered" })
+            // The ledger is not JSONL bytes, so nothing else pushes a transcript frame for it — emit one
+            // now so the bubble (and its un-grayed state) reaches subscribed tabs immediately instead of
+            // riding the next byte-driven refresh.
+            ctx.transcriptChange.emit([input.slug])
           }
           ctx.board.refresh()
           return
@@ -1605,6 +1616,13 @@ export function createRouter(ctx: AppContext) {
             scratchpadOrientation(row.session_id, row.plan_path, "claude"),
             frizzConfigBlock(ctx.project.dir),
           ].filter(Boolean).join("\n\n")
+          // Is this thread MID-TURN right now? Sampled BEFORE the bridge call on purpose: a cold resume
+          // takes seconds, and by the time it returns the turn this very message started reads as
+          // in-flight — which would gray the one send that is provably being read. The tailer's `turn`
+          // already folds in the runtime's own liveness. Unknown telemetry (a row not yet primed after a
+          // server boot) defaults to mid-turn — the conservative direction, since the gray bubble is
+          // honest for a queued send and merely late for a delivered one.
+          const midTurn = (ctx.tailer.get(input.slug)?.turn ?? "in-flight") === "in-flight"
           await bridge.followUp({
             threadSlug: input.slug,
             sessionId: row.session_id,
@@ -1638,10 +1656,22 @@ export function createRouter(ctx: AppContext) {
           // on the way to the SDK. But its RENDERING half applies here exactly as it does to codex:
           // until the JSONL carries the message, the only thing showing the human their own just-sent
           // steer is the client's optimistic bubble, and mergeOptimistic's ghost floor retires that once
-          // the transcript advances 60s past it. So open an entry — `enqueued`, because the SDK call
-          // returning IS the receipt, which also keeps it out of the amber "no receipt" state that
-          // would be meaningless on a thread whose transport acknowledges every send. The tailer drops it as soon as the
+          // the transcript advances 60s past it. So open an entry; the SDK call returning IS the
+          // receipt, which also keeps it out of the amber "no receipt" state that would be meaningless
+          // on a thread whose transport acknowledges every send. The tailer drops it as soon as the
           // record lands.
+          //
+          // WHICH state depends on whether anything was ahead of it. Mid-turn, the SDK genuinely queues
+          // the message until the next sampling boundary — that is what the gray bubble is FOR, so it
+          // opens `enqueued`. With no turn in flight (a rested thread, above all one whose hibernated
+          // daemon this send just cold-resumed) the message is what STARTS the next turn, and graying
+          // it renders the one send the agent is provably reading as "still enqueued" for the whole
+          // resume-and-first-record window (~3s on a small session, longer on a big one). It opens
+          // `delivered` and renders as an ordinary bubble — which also keeps the daemon-death retire
+          // sweeps from dropping it mid-cold-resume, a race that made a just-sent message vanish from
+          // the chat for the resume's whole duration (observed live: rendered at +0.2s, gone from
+          // +0.3s to +2.3s, back at +2.3s). A `freshProcess` restart is delivered by the same logic:
+          // the old process's turn died with it and this message opens the new one's first turn.
           // A restart RETIRED the process every earlier outstanding send was handed to, so those sends
           // are dead and their queued bubbles are now claims about a process that no longer exists.
           // Clear them here, BEFORE this restart's own entry is opened, so the continuation is the only
@@ -1659,7 +1689,15 @@ export function createRouter(ctx: AppContext) {
           // 94.4s without it, seconds with it, and the session takes ordinary follow-ups afterwards.
           if (input.interrupt) bridge.interruptTurn({ threadSlug: input.slug, sessionId: row.session_id })
           if (input.deliveryId) {
-            appendDelivery(ctx.storage, input.slug, { id: input.deliveryId, text: input.message, state: "enqueued" })
+            appendDelivery(ctx.storage, input.slug, {
+              id: input.deliveryId,
+              text: input.message,
+              state: midTurn && input.freshProcess !== true ? "enqueued" : "delivered",
+            })
+            // The ledger is not JSONL bytes, so nothing else pushes a transcript frame for it — emit one
+            // now so the bubble (gray or delivered) reaches subscribed tabs immediately instead of
+            // riding the next byte-driven refresh.
+            ctx.transcriptChange.emit([input.slug])
           }
           ctx.board.refresh()
           return
@@ -1879,6 +1917,34 @@ export function createRouter(ctx: AppContext) {
         const row = ctx.storage.getSession(input.slug)
         if (!row) throw new Error(`thread ${input.slug} is not editable`)
         return threadProfileOptions(row.backend)
+      },
+    }),
+
+    // The composer's `/` typeahead asks the thread's HARNESS for its skills — the broker daemon's
+    // `supportedCommands()` for Claude, the app-server's `skills/list` for Codex. Frizz owns no skill
+    // discovery of its own, on purpose: the harness already resolves plugins, project and global roots
+    // and enable state, and a frizz-side scan could only drift from what the session actually loaded.
+    // Unavailability (no live daemon, a legacy row, an old broker) THROWS with a reason; the web treats
+    // any failure as "no suggestions" rather than surfacing an error.
+    threadSkills: query({
+      input: ThreadSkillsInput,
+      output: ThreadSkillsResult,
+      handler: async ({ input }) => {
+        const row = ctx.storage.getSession(input.slug)
+        if (!row) throw new Error(`thread ${input.slug} has no session to ask for skills`)
+        let skills: Array<{ name: string; description: string }>
+        if (row.backend === "codex") {
+          if (!isAppServerCodexRow(row) || !ctx.codexAppServer) {
+            throw new Error("This Codex thread has no app-server session to ask for skills")
+          }
+          skills = await ctx.codexAppServer.listSkills(input.slug, row.session_id)
+        } else {
+          if (row.claude_runtime !== "broker" || !ctx.claudeBroker) {
+            throw new Error("This Claude thread has no broker session to ask for skills")
+          }
+          skills = await ctx.claudeBroker.listSkills({ threadSlug: input.slug, sessionId: row.session_id })
+        }
+        return { skills: skills.sort((a, b) => a.name.localeCompare(b.name)) }
       },
     }),
 

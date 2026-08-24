@@ -9,6 +9,7 @@ import { mountRouter } from "@frizz/rpc/server"
 import { DISPATCH_TASK_BANNER_MARKER, type BoardSnapshot, type Settings, type ThreadView } from "@frizz/shared"
 import type { BoardManager } from "./board.ts"
 import { appendDelivery, parseDeliveryLedger } from "./delivery-ledger.ts"
+import { Emitter } from "./bus.ts"
 import { createClaudeBackend } from "./backend/claude.ts"
 import {
   createRouter,
@@ -171,6 +172,9 @@ function harness(tailer: Tailer = noopTailer) {
     storage,
     board,
     tailer,
+    // followUp pushes a transcript frame the moment it opens a ledger entry (the ledger is not JSONL
+    // bytes, so nothing else would). Tests only need it to exist; assertions read the ledger itself.
+    transcriptChange: new Emitter<string[]>(),
     backendFor: () => backend,
     getSettings: () => settings,
     dispatcher: {
@@ -1672,4 +1676,60 @@ test("followUp does not promote when the slug and session id disagree", async ()
   } finally {
     h.storage.close()
   }
+})
+
+// ── The state a follow-up's ledger entry opens in ───────────────────────────────────────────────
+// `enqueued` is a claim that something is AHEAD of the message; `delivered` says the provider took it
+// straight into a turn. Rendering a delivered send gray is how a message "still looks enqueued while
+// the agent is answering it" — for codex, for the whole rollout-materialization window; for Claude,
+// for a cold resume's whole spin-up.
+test("a follow-up to an idle Claude thread opens the ledger entry delivered", async () => {
+  const { h, slug } = restartHarness() // its tailer reports turn "idle"
+  await h.router.followUp.handler({
+    input: { slug, sessionId: `sid-${slug}`, message: "new task", deliveryId: "d-idle" },
+  })
+  const after = parseDeliveryLedger(h.storage.getSession(slug)!.delivery_ledger)
+  assert.equal(after.find((i) => i.id === "d-idle")?.state, "delivered")
+  h.storage.close()
+})
+
+test("a follow-up to a mid-turn Claude thread opens the ledger entry enqueued", async () => {
+  const { h, slug } = interruptHarness() // its tailer reports turn "in-flight"
+  await h.router.followUp.handler({
+    input: { slug, sessionId: `sid-${slug}`, message: "while you work", deliveryId: "d-mid" },
+  })
+  const after = parseDeliveryLedger(h.storage.getSession(slug)!.delivery_ledger)
+  assert.equal(after.find((i) => i.id === "d-mid")?.state, "enqueued")
+  h.storage.close()
+})
+
+test("a freshProcess restart's own message opens delivered even mid-turn", async () => {
+  // The old process's turn dies with it; this message opens the new process's first turn.
+  const { h, slug } = interruptHarness()
+  await h.router.followUp.handler({
+    input: { slug, sessionId: `sid-${slug}`, message: "come back", deliveryId: "d-fresh", freshProcess: true },
+  })
+  const after = parseDeliveryLedger(h.storage.getSession(slug)!.delivery_ledger)
+  assert.equal(after.find((i) => i.id === "d-fresh")?.state, "delivered")
+  h.storage.close()
+})
+
+test("a codex follow-up opens the ledger entry delivered — its receipt names the turn", async () => {
+  const h = harness()
+  const slug = "codex-delivered"
+  h.storage.upsertSession(row(slug))
+  h.storage.setBackend(slug, "codex")
+  h.storage.setCodexRuntime(slug, "app-server")
+  ;(h.ctx as { codexAppServer?: unknown }).codexAppServer = {
+    binding: () => ({ state: "active", currentTurnId: null }),
+    turnLiveness: () => undefined,
+    resumeOwnedSession: async () => {},
+    followUp: async () => ({ turnId: "t-1", mode: "start", deduped: false }),
+  }
+  await h.router.followUp.handler({
+    input: { slug, sessionId: `sid-${slug}`, message: "go", deliveryId: "d-cdx" },
+  })
+  const after = parseDeliveryLedger(h.storage.getSession(slug)!.delivery_ledger)
+  assert.equal(after.find((i) => i.id === "d-cdx")?.state, "delivered")
+  h.storage.close()
 })

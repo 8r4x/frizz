@@ -634,3 +634,59 @@ test("an earlier page with no tombstones is returned untouched", () => {
   assert.equal(suppressCancelledDeliveries(messages, [item()]), messages)
   assert.equal(suppressCancelledDeliveries(messages, []), messages)
 })
+
+// ---- the delivered state: the receipt proved the message went straight into a turn ----
+// A codex followUp (its receipt names the turn it steered or started) and a Claude follow-up to a
+// thread with no turn in flight open the ledger item as `delivered`. It renders as an ORDINARY user
+// bubble — the agent is already working on it — while still guaranteeing the message cannot vanish
+// before the provider's own record reaches disk.
+test("a delivered item projects as an ordinary (un-grayed) bubble at the tail", () => {
+  const out = projectDeliveryLedger([msg({ text: "earlier", sourceId: "s:1" })], [item({ state: "delivered" })])
+  assert.equal(out.length, 2)
+  assert.equal(out[1].sourceId, "delivery:d-1")
+  assert.equal(out[1].queued, false)
+  assert.equal(out[1].deliveryState, "delivered")
+})
+
+test("a delivered item un-grays the JSONL's own enqueue bubble copy-on-write", () => {
+  // The SDK still writes enqueue → dequeue → user in that order on an idle submit, so the fold's gray
+  // bubble can render behind a receipt that already proved delivery. The projection must un-gray it —
+  // WITHOUT mutating the fold's retained object, whose queued flag the fold's own delivery match still
+  // resolves in place.
+  const existing = msg({ queued: true, sourceId: "s:9" })
+  const out = projectDeliveryLedger([existing], [item({ state: "delivered" })])
+  assert.equal(out.length, 1, "no second bubble")
+  assert.equal(out[0].queued, false)
+  assert.equal(out[0].deliveryId, "d-1")
+  assert.equal(out[0].deliveryState, "delivered")
+  assert.equal(existing.queued, true, "the fold's retained object is untouched")
+})
+
+test("an enqueue record never downgrades a delivered item", () => {
+  const out = correlateDeliveryRecord(
+    [item({ state: "delivered" })],
+    { type: "queue-operation", operation: "enqueue", content: "fix the bug", timestamp: iso(T0 + 500) },
+    iso(T0 + 500),
+  )
+  assert.equal(out[0].state, "delivered")
+})
+
+test("a delivered item is consumed by its record like any other", () => {
+  const out = correlateDeliveryRecord(
+    [item({ state: "delivered" })],
+    { type: "user", message: { content: "fix the bug" }, timestamp: iso(T0 + 500) },
+    iso(T0 + 500),
+  )
+  assert.deepEqual(out, [])
+})
+
+test("a delivered item never goes amber, and drops after the same hour as enqueued", () => {
+  const aged = ageDeliveries([item({ state: "delivered" })], T0 + PENDING_TIMEOUT_MS + 1000)
+  assert.equal(aged[0].state, "delivered", "no 'no receipt' warning for a message the model read")
+  assert.deepEqual(ageDeliveries([item({ state: "delivered" })], T0 + UNCONFIRMED_DROP_MS + 1000), [])
+})
+
+test("a delivered item survives parse round-trip", () => {
+  const round = parseDeliveryLedger(serializeDeliveryLedger([item({ state: "delivered" })]))
+  assert.equal(round[0]?.state, "delivered")
+})

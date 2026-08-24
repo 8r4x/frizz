@@ -11,9 +11,21 @@ import { decodeDeliveryMarkers, deliveryTag, stripDeliveryMarkers } from "./deli
 // instead:
 //
 //   followUp(deliveryId) ──▶ pending ──(enqueue record matches)──▶ enqueued ──(queued_command /
-//   user record matches)──▶ delivered (dropped from the ledger — the real transcript record takes over)
+//   user record matches)──▶ dropped from the ledger — the real transcript record takes over
 //   pending ──(no evidence for PENDING_TIMEOUT_MS)──▶ unconfirmed (kept, projected with a warning,
 //   dropped after UNCONFIRMED_DROP_MS — after which sending it again is the only recovery)
+//
+//   …and the state a send OPENS in depends on what the transport's receipt actually proved. `pending`
+//   and `enqueued` both mean "not yet read"; `delivered` means the provider took the message straight
+//   INTO A TURN — a codex followUp (its receipt names the turn it steered or started) and a Claude
+//   follow-up to a thread with no turn in flight (idle daemon, or a cold resume where this message IS
+//   what starts the turn). A delivered item renders as an ORDINARY user bubble, never the gray queued
+//   one: the agent is already working on it, and graying it is how a message reads as "still enqueued"
+//   for the whole seconds-to-minutes window before the provider's own record reaches disk (measured:
+//   codex rollout materialization p50 3.3s with tails past an hour; a Claude cold resume ~3s). It still
+//   leaves the ledger the same way everything else does — the correlator consumes it when its record
+//   lands — and it is deliberately NOT retired by the daemon-death/restart sweeps, which retire only
+//   claims about an unread message sitting in a dead process's queue.
 //
 // The ledger is persisted on the session row (`delivery_ledger`, a small JSON array), correlated by the
 // tailer as it folds new JSONL records, and PROJECTED into
@@ -57,7 +69,7 @@ export const MAX_CANCELLED_ITEMS = 12
 // Left alone the enqueue bubble therefore outlives the cancellation, and the FIFO backstop in transcript.ts eventually
 // UN-GRAYS it when a later message delivers — rendering a message the agent provably never read as a
 // message the human sent it. So frizz has to remember the cancellation itself.
-export type DeliveryState = "pending" | "enqueued" | "unconfirmed" | "cancelled"
+export type DeliveryState = "pending" | "enqueued" | "delivered" | "unconfirmed" | "cancelled"
 
 export interface DeliveryLedgerItem {
   id: string
@@ -114,7 +126,7 @@ function isItem(v: unknown): v is DeliveryLedgerItem {
   if (!v || typeof v !== "object") return false
   const i = v as Partial<DeliveryLedgerItem>
   return typeof i.id === "string" && typeof i.text === "string" && typeof i.at === "string" &&
-    typeof i.updatedAt === "string" && (["pending", "enqueued", "unconfirmed", "cancelled"] as const).includes(i.state as DeliveryState)
+    typeof i.updatedAt === "string" && (["pending", "enqueued", "delivered", "unconfirmed", "cancelled"] as const).includes(i.state as DeliveryState)
 }
 
 export function parseDeliveryLedger(json: string | null | undefined): DeliveryLedgerItem[] {
@@ -342,8 +354,12 @@ export function correlateDeliveryRecord(
   if (r.type === "queue-operation" && r.operation === "enqueue" && typeof r.content === "string") {
     const matched = accountFor(items, r.content, contemporaneous)
     if (matched.size === 0) return items
+    // Only ever an UPGRADE from "no receipt yet". A `delivered` item must not regress to enqueued when
+    // its own enqueue record folds in behind the receipt: on the SDK path an idle submit still writes
+    // enqueue → dequeue → user in that order, and the receipt already proved the message went straight
+    // into the turn.
     return items.map((item, index) =>
-      matched.has(index) && item.state !== "enqueued" ? { ...item, state: "enqueued", updatedAt: nowIso } : item,
+      matched.has(index) && (item.state === "pending" || item.state === "unconfirmed") ? { ...item, state: "enqueued", updatedAt: nowIso } : item,
     )
   }
 
@@ -602,6 +618,13 @@ export function ageDeliveries(items: DeliveryLedgerItem[], nowMs: number, observ
       changed = true // dropped
       continue
     }
+    // Same hour bound for `delivered` — its record is expected imminently, and the codex rollout tail
+    // has been observed past an hour, but a record that never lands must not leave a synthetic bubble
+    // forever. It never goes amber: `unconfirmed` warns about a send NOBODY read, and this one was read.
+    if (item.state === "delivered" && Number.isFinite(born) && nowMs - born > UNCONFIRMED_DROP_MS) {
+      changed = true // dropped
+      continue
+    }
     next.push(item)
   }
   return changed ? next : items
@@ -659,14 +682,16 @@ function dropCancelled(
   return { messages: dropped.size ? messages.filter((_, i) => !dropped.has(i)) : messages, live }
 }
 
-// Project the ledger into a rendered transcript: every not-yet-delivered follow-up renders as the gray
-// queued user bubble even when the JSONL carries no trace of it yet (reload-safe server truth replacing
-// the client-only optimistic bubble). Rules, per item:
+// Project the ledger into a rendered transcript: every follow-up whose record has not reached the JSONL
+// yet renders as a user bubble — gray queued styling while it is genuinely waiting to be read, ordinary
+// styling once the transport's receipt proved it went into a turn (state `delivered`) — reload-safe
+// server truth replacing the client-only optimistic bubble. Rules, per item:
 //  • a CANCELLED item is a tombstone — it renders nothing and REMOVES the JSONL bubble it left behind;
 //  • the JSONL's own queued (enqueue) bubble already renders it → tag that bubble with the deliveryId
-//    (the client's optimistic copy consumes by id) and don't double-render;
+//    (the client's optimistic copy consumes by id) and don't double-render — un-graying it first when
+//    the item says `delivered`;
 //  • a delivered copy already renders (correlation prune races a read by ≤1 tick) → skip entirely;
-//  • otherwise append a queued bubble at the tail, where a just-sent follow-up belongs.
+//  • otherwise append a bubble at the tail, where a just-sent follow-up belongs.
 export function projectDeliveryLedger(messages: TranscriptMessage[], items: DeliveryLedgerItem[]): TranscriptMessage[] {
   if (!items.length) return messages
   const cancelled = dropCancelled(messages, items)
@@ -693,8 +718,16 @@ export function projectDeliveryLedger(messages: TranscriptMessage[], items: Deli
       // is the text compare — the tag check costs nothing and covers any surface that keeps the raw.
       if (!decodeDeliveryMarkers(m.text).includes(tag) && canon(stripDeliveryMarkers(m.text)) !== text) continue
       if (m.queued) {
-        m.deliveryId = item.id
-        m.deliveryState = item.state
+        if (item.state === "delivered") {
+          // The provider took this send straight into a turn, but the fold has only seen its enqueue
+          // record so far (SDK order on an idle submit: enqueue → dequeue → user). Un-gray the fold's
+          // bubble COPY-ON-WRITE — the object is owned by the retained fold, and the fold's own
+          // delivery match must still find it queued and resolve it in place.
+          messages[i] = { ...m, queued: false, deliveryId: item.id, deliveryState: item.state }
+        } else {
+          m.deliveryId = item.id
+          m.deliveryState = item.state
+        }
       }
       claimed.add(i)
       handled = true // queued (tagged in place) or already delivered — either way, no projection
@@ -709,7 +742,9 @@ export function projectDeliveryLedger(messages: TranscriptMessage[], items: Deli
       tools: [],
       parts: [],
       at: item.at,
-      queued: true,
+      // A `delivered` send is already inside a turn — it renders as an ordinary user bubble. Only a
+      // send still waiting to be read wears the gray queued styling.
+      queued: item.state !== "delivered",
       deliveryId: item.id,
       deliveryState: item.state,
     })
