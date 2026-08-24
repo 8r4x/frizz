@@ -20,7 +20,7 @@ import { createRoot } from "react-dom/client"
 import { useMemo, type ReactNode } from "react"
 import { ChevronRight, CircleCheck, Clock, Hourglass, TerminalSquare } from "lucide-react"
 import {
-  BLOCK_RADIUS, BLOCK_RADIUS_INNER_BOTTOM, CARD_ACTION_EXPLAINER, CARD_PRIMARY_ACTION, CardHead,
+  BLOCK_RADIUS, BLOCK_RADIUS_INNER_BOTTOM, CARD_ACTION_EXPLAINER, CARD_PRIMARY_ACTION,
 } from "./components/TranscriptCard.tsx"
 import { mdToHtml } from "./lib/markdown.ts"
 import "./styles.css"
@@ -118,69 +118,20 @@ function Snooze() {
 
 const SHELL = `min-w-0 ${BLOCK_RADIUS} border border-border-strong bg-panel-2`
 
-// ══ Z4 · WHAT SHIPS TODAY (the control) ═══════════════════════════════════════════════════════════
-/** Two stacked blocks: the fence prose as an ordinary message, then the resting card with its own
- *  heading, table and snooze. The duplication the unified card removes is the seam between them. */
-function Z4({ scen }: { scen: Scenario }) {
-  return (
-    <div className="flex flex-col gap-4">
-      <Prose md={scen.prose} />
-      <div className={`${SHELL} p-4`}>
-        <CardHead icon={Hourglass} label="Awaiting background work" />
-        <div className="mt-3">
-          <WaitTable groups={scen.groups} />
-        </div>
-        <div className="mt-3 flex flex-wrap items-center justify-start gap-x-2.5 gap-y-2"><Snooze /></div>
-      </div>
-    </div>
-  )
-}
-
-// ══ A4 · UNIFIED — TITLE KEPT, INSET HAIRLINES ════════════════════════════════════════════════════
-/** The maintainer's composition inside the ordinary card anatomy: the family title row stays, the
- *  prose is the card's body, and the divider + footer rule are hairlines inset to the card's own
- *  padding. The quietest read; the footer is a row, not a band. */
-function A4({ scen }: { scen: Scenario }) {
-  return (
-    <div className={`${SHELL} p-4`}>
-      <CardHead icon={Hourglass} label="Awaiting background work" />
-      <div className="mt-1"><Prose md={scen.prose} /></div>
-      <div className="my-3 border-t border-border" />
-      <WaitTable groups={scen.groups} />
-      <div className="mt-3 border-t border-border pt-3 flex flex-wrap items-center gap-x-2.5 gap-y-2"><Snooze /></div>
-    </div>
-  )
-}
-
-// ══ B4 · UNIFIED — TITLE KEPT, FULL-BLEED DIVIDER, FOOTER BAND ════════════════════════════════════
-/** The same order with structural seams: the divider runs edge to edge, and the snooze lives in a
- *  recessed full-width footer band flush with the card's bottom corners — the queue card's own
- *  footer idiom, so the control reads as chrome rather than as one more row of content. */
-function B4({ scen }: { scen: Scenario }) {
+// ══ ROUND 5 · THE TITLE — "Awaiting", AT A REAL TITLE SCALE ═══════════════════════════════════════
+// Round 4 settled the composition (prose → full-bleed divider → items → recessed snooze footer) and
+// drew its title in the card family's shared style — 13px medium, deliberately BODY-size (the shadcn
+// anatomy of 2026-07-29). The maintainer's answer (2026-08-24): the title is "Awaiting", and that
+// style reads "small and non-title-like" here. So this round holds the composition fixed and walks
+// ONLY the title row: one word, at increasing scale. The glyph rides the title's own size.
+function Unified({ scen, titleClass, glyph }: { scen: Scenario; titleClass: string; glyph: number }) {
   return (
     <div className={`${SHELL} p-4 pb-0`}>
-      <CardHead icon={Hourglass} label="Awaiting background work" />
+      <div className="flex min-w-0 items-start gap-2">
+        <span className={`min-w-0 flex-1 ${titleClass}`}>Awaiting</span>
+        <Hourglass aria-hidden size={glyph} className="card-icon-offset shrink-0 text-fg" />
+      </div>
       <div className="mt-1"><Prose md={scen.prose} /></div>
-      <div className="-mx-4 my-3 border-t border-border" />
-      <WaitTable groups={scen.groups} />
-      <div className={`-mx-4 mt-3 flex flex-wrap items-center gap-x-2.5 gap-y-2 border-t border-border bg-fg/[0.03] px-4 py-2.5 ${BLOCK_RADIUS_INNER_BOTTOM}`}>
-        <Snooze />
-      </div>
-    </div>
-  )
-}
-
-// ══ C4 · UNIFIED — NO TITLE, PROSE LEADS ══════════════════════════════════════════════════════════
-/** The heading goes entirely: the worker's own words are the card's first line, with the hourglass as
- *  a corner mark on that first row. The queue row and the rule under the prompt box already say the
- *  thread rests, so "Awaiting background work" was a label over a message that says the same thing. */
-function C4({ scen }: { scen: Scenario }) {
-  return (
-    <div className={`${SHELL} p-4 pb-0`}>
-      <div className="flex items-start gap-2">
-        <div className="min-w-0 flex-1"><Prose md={scen.prose} /></div>
-        <Hourglass aria-hidden size={14} className="card-icon-offset shrink-0 text-fg" />
-      </div>
       <div className="-mx-4 my-3 border-t border-border" />
       <WaitTable groups={scen.groups} />
       <div className={`-mx-4 mt-3 flex flex-wrap items-center gap-x-2.5 gap-y-2 border-t border-border bg-fg/[0.03] px-4 py-2.5 ${BLOCK_RADIUS_INNER_BOTTOM}`}>
@@ -192,24 +143,23 @@ function C4({ scen }: { scen: Scenario }) {
 
 // ---- the sheet's own chrome ----------------------------------------------------------------------
 const VARIANTS: Array<{ id: string; title: string; note: string; render: (s: Scenario) => ReactNode }> = [
-  { id: "Z4", title: "What ships today (the control)", note: "Two stacked blocks: the fence's body as an ordinary message, then the resting card with its own heading, table and snooze. The seam between them is what the unified card removes.", render: (s) => <Z4 scen={s} /> },
-  { id: "A4", title: "Unified — title kept, inset hairlines", note: "The requested order inside the ordinary card anatomy: title row, prose as the card's body, an inset hairline, the table, and the snooze after a second hairline. Quietest; the footer reads as a row of the card rather than as chrome.", render: (s) => <A4 scen={s} /> },
-  { id: "B4", title: "Unified — full-bleed divider, recessed footer band", note: "The same order with structural seams: the divider runs edge to edge and the snooze sits in a flush recessed footer band (the queue card's own footer idiom). The control reads as chrome; the card reads as three strata.", render: (s) => <B4 scen={s} /> },
-  { id: "C4", title: "Unified — no title, the prose leads", note: "The heading goes: the worker's own words open the card, hourglass as a corner mark. Saves a line and avoids 'Awaiting background work' captioning a message that already says it; costs the family's kind-naming title row.", render: (s) => <C4 scen={s} /> },
+  { id: "A5", title: "13px medium — the family style (control)", note: "What every transcript card's title wears today: sentence case, body size, medium weight. Kept as the baseline to judge the others against.", render: (s) => <Unified scen={s} titleClass="text-[13px] font-medium leading-5 tracking-tight text-fg" glyph={14} /> },
+  { id: "B5", title: "14px semibold", note: "One step up in both size and weight. Still inside the card's own type rhythm; the title reads as a heading without shouting.", render: (s) => <Unified scen={s} titleClass="text-[14px] font-semibold leading-5 tracking-tight text-fg" glyph={14} /> },
+  { id: "C5", title: "15px semibold", note: "The sheet-heading scale. A clear step above the 13px prose beneath it; the glyph grows to 15 to keep the pair matched.", render: (s) => <Unified scen={s} titleClass="text-[15px] font-semibold leading-6 tracking-tight text-fg" glyph={15} /> },
+  { id: "D5", title: "16px semibold", note: "A real headline. The strongest hierarchy over the prose — and the furthest from the rest of the card family, which stays at 13px.", render: (s) => <Unified scen={s} titleClass="text-[16px] font-semibold leading-6 tracking-tight text-fg" glyph={16} /> },
 ]
 
 function Sheet() {
   return (
     <div className="mx-auto flex w-[min(1360px,calc(100%-48px))] flex-col gap-10 py-10">
       <header className="flex flex-col gap-1">
-        <h1 className="text-[15px] font-semibold text-fg">Awaiting card, round 4 — one card: prose, divider, awaited items, snooze footer</h1>
+        <h1 className="text-[15px] font-semibold text-fg">Awaiting card, round 5 — the title: “Awaiting”, at a real title scale</h1>
         <p className="max-w-[92ch] text-[12px] leading-5 text-muted/80">
-          The fence's free text (everything under the frontmatter) currently renders as a separate message above
-          the resting card. These fold the two into one object, per the 2026-08-24 direction. Left: the timer
-          park from the screenshot. Right: every wait kind at once. The drawer and full-screen page render the
-          same card without the footer (no snooze there).
+          The composition is round 4's: prose, full-bleed divider, awaited items, recessed snooze footer
+          (queue only). This round walks the TITLE alone — one word, four scales; the family's shared 13px
+          style is the control. Left: the timer park. Right: every wait kind at once.
           <code className="ml-1 text-muted/60">?font=mono</code>,
-          <code className="ml-1 text-muted/60">?only=B4</code>.
+          <code className="ml-1 text-muted/60">?only=C5</code>.
         </p>
       </header>
       {VARIANTS.map((v) => (
