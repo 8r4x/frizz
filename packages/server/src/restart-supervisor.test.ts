@@ -258,6 +258,43 @@ test("status reports a development build only when the launcher says so", async 
   }
 })
 
+// Only the registry launcher can name versions, so the fields ride the same launcher-only contract as
+// `updateAvailable`: absent for frizz-dev and legacy supervisors, and `updateVersion` absent until the
+// registry probe has actually observed something newer.
+test("status names the running and newer versions only when the launcher supplies them", async () => {
+  const current = await child("versioned")
+  const port = await freePort()
+  let observed: string | undefined
+  const proxy = new RestartSupervisorProxy({
+    port,
+    childPort: () => current.port,
+    restart: async () => ({ state: "ready" }),
+    version: "0.4.2",
+    updateVersion: () => observed,
+  })
+  const barePort = await freePort()
+  const bare = new RestartSupervisorProxy({
+    port: barePort,
+    childPort: () => current.port,
+    restart: async () => ({ state: "ready" }),
+  })
+  try {
+    await proxy.listen()
+    await bare.listen()
+    const before = (await get(port, SUPERVISOR_STATUS_PATH)).body
+    assert.match(before, /"version":"0\.4\.2"/)
+    assert.doesNotMatch(before, /"updateVersion"/, "no observed newer version yet")
+    observed = "0.5.0"
+    assert.match((await get(port, SUPERVISOR_STATUS_PATH)).body, /"updateVersion":"0\.5\.0"/)
+    const versionless = (await get(barePort, SUPERVISOR_STATUS_PATH)).body
+    assert.doesNotMatch(versionless, /"version"|"updateVersion"/, "frizz-dev/legacy stays byte-identical")
+  } finally {
+    await proxy.close().catch(() => undefined)
+    await bare.close().catch(() => undefined)
+    await current.close().catch(() => undefined)
+  }
+})
+
 test("update acknowledgement and status stay truthful while the old child remains ready", async () => {
   const current = await child("old-but-still-serving")
   const port = await freePort()

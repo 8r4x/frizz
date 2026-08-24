@@ -136,6 +136,10 @@ export interface DevSupervisorOptions {
   updateRestart?: () => Promise<RestartResult>
   /** Cheap CACHED "is a newer artifact actually available" read; see RestartSupervisorProxy. */
   updateAvailable?: () => boolean
+  /** The published package version this launcher runs. Registry launcher only; see RestartSupervisorProxy. */
+  version?: string
+  /** Cheap CACHED read of the newer registry version, when observed; see RestartSupervisorProxy. */
+  updateVersion?: () => string | undefined
   /** Launched from a source checkout (frizz-dev / `pnpm dev`)? See RestartSupervisorProxy. */
   dev?: boolean
   /** Restore the known-good artifact selection if its replacement cannot become ready. */
@@ -523,6 +527,8 @@ class Supervisor implements DevSupervisor {
       restart: () => this.restartFromBrowser(),
       updateRestart: this.updateRestart ? () => this.updateFromBrowser() : undefined,
       updateAvailable: opts.updateAvailable,
+      version: opts.version,
+      updateVersion: opts.updateVersion,
       dev: opts.dev,
       status: () => {
         if (this.browserRestart || this.restartRunning) return { state: "restarting" as const }

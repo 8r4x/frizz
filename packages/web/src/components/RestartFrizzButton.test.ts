@@ -15,6 +15,35 @@ test("Update Frizz presents one calm sentence whose highlight is that threads ar
   assert.match(html, /font-sans/)
 })
 
+// The registry launcher is the only one that can name versions, so the version line and the specific
+// "newer version" sentence appear exactly when it does — frizz-dev and legacy supervisors render the
+// same popover they always have (the versionless assertions above and below pin that).
+test("a registry launcher's update popover names both versions and says a newer one exists", () => {
+  const html = renderToStaticMarkup(createElement(UpdateRestartPopover, { open: true, update: true, version: "0.4.2", updateVersion: "0.5.0" }))
+  assert.match(html, /Update Frizz/)
+  // Identifiers, not prose: the line stays mono whatever the board font is set to.
+  assert.match(html, /font-mono[^"]*"[^>]*>0\.4\.2 → 0\.5\.0</)
+  assert.match(html, /A newer version of Frizz is available\. Your running threads will not be affected\./)
+  assert.doesNotMatch(html, /Install the latest version of Frizz/)
+  // Still a single body paragraph — the version line rides in the header, not as a second <p>.
+  assert.equal((html.match(/<p /g) ?? []).length, 1)
+})
+
+test("an up-to-date registry install still shows what version it is running", () => {
+  const html = renderToStaticMarkup(createElement(UpdateRestartPopover, { open: true, update: false, version: "0.4.2" }))
+  assert.match(html, /Restart Frizz\. Your running threads will not be affected\./)
+  assert.match(html, />0\.4\.2</)
+  assert.doesNotMatch(html, /→/)
+})
+
+test("a registry probe that has not answered keeps the generic update copy", () => {
+  // The launcher starts update-optimistic but versionless; claiming a number here would be a lie.
+  const html = renderToStaticMarkup(createElement(UpdateRestartPopover, { open: true, update: true, version: "0.4.2" }))
+  assert.match(html, /Install the latest version of Frizz\. Your running threads will not be affected\./)
+  assert.match(html, />0\.4\.2</)
+  assert.doesNotMatch(html, /→/)
+})
+
 test("Update and restart keeps its clockwise arrow treatment", () => {
   assert.equal(UPDATE_RESTART_ICON_ROTATION, "clockwise")
   const html = renderToStaticMarkup(createElement(UpdateRestartPopover, { open: true, update: true }))
@@ -31,6 +60,22 @@ test("Update and restart is one compact icon-only action with an accessible name
   assert.match(html, /lucide-refresh-cw/)
   assert.doesNotMatch(html, />\s*Update Frizz\s*</)
   assert.doesNotMatch(html, /cursor-wait/)
+})
+
+// The popover only opens on hover, so the button itself is the one passive surface that can say "an
+// update exists". The dot is gated on a CONFIRMED newer version: frizz-dev is permanently in update
+// mode (a source rebuild is always meaningful), and a badge that never goes out is no badge.
+test("the button wears an update dot only for a confirmed newer registry version", () => {
+  const badged = renderToStaticMarkup(createElement(RestartActionButton, { update: true, busy: false, updateVersion: "0.5.0", onClick: () => undefined }))
+  assert.match(badged, /bg-accent/)
+  for (const [name, props] of [
+    ["frizz-dev's version-less update mode", { update: true, busy: false }],
+    ["an up-to-date registry install", { update: false, busy: false }],
+    ["an update already in flight", { update: true, busy: true, updateVersion: "0.5.0" }],
+  ] as [string, { update: boolean; busy: boolean; updateVersion?: string }][]) {
+    const html = renderToStaticMarkup(createElement(RestartActionButton, { ...props, onClick: () => undefined }))
+    assert.doesNotMatch(html, /bg-accent/, name)
+  }
 })
 
 test("busy Update and restart keeps only the clockwise spinner inside the button", () => {

@@ -3,12 +3,20 @@ import { useSnapshot } from "valtio"
 import "./styles.css"
 import { store } from "./store.ts"
 
+// The board ships in two fonts (html[data-font], applied before first paint in index.html), and a
+// fixture that sets neither silently renders the MONO default — so make the choice explicit and
+// switchable: ?font=mono for the mono stack, sans otherwise (the setting most real windows run).
+const params = new URLSearchParams(window.location.search)
+document.documentElement.dataset.font = params.get("font") === "mono" ? "mono" : "sans"
+// ?versionless drops the registry launcher's version fields, i.e. the frizz-dev / legacy popover.
+const versions = params.has("versionless") ? {} : { version: "0.4.2", updateVersion: "0.5.0" }
+
 const nativeFetch = window.fetch.bind(window)
 window.fetch = async (input, init) => {
   const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
   const url = new URL(requestUrl, window.location.href)
   if (url.pathname === "/_frizz/control/status") {
-    return new Response(JSON.stringify({ protocol: 1, state: "ready", updateRestart: true }), {
+    return new Response(JSON.stringify({ protocol: 1, state: "ready", updateRestart: true, ...versions }), {
       headers: { "content-type": "application/json" },
     })
   }

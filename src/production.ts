@@ -386,9 +386,15 @@ async function runSupervisor(port: number, token: string): Promise<never> {
   // (`true`) so the button keeps its current appearance until the first probe lands — the operator
   // never sees it flip from Restart to Update a second after load.
   let updateAvailable = true;
+  // The newer version the last successful probe saw, so the status endpoint can NAME the update it is
+  // advertising. Deliberately not seeded optimistically like the boolean above: a number we have not
+  // observed would be a lie, so until the registry answers the client gets its generic update copy.
+  let updateVersion: string | undefined;
   const refreshUpdateAvailable = async (): Promise<void> => {
     try {
-      updateAvailable = (await planRegistryUpdate(PACKAGE_NAME, PACKAGE_VERSION, npmRegistryReleaseAdapter)) !== null;
+      const plan = await planRegistryUpdate(PACKAGE_NAME, PACKAGE_VERSION, npmRegistryReleaseAdapter);
+      updateAvailable = plan !== null;
+      updateVersion = plan?.latestVersion;
     } catch {
       // A registry we cannot reach is not evidence that we are current. Leave the last known answer.
     }
@@ -412,6 +418,8 @@ async function runSupervisor(port: number, token: string): Promise<never> {
     childEntry,
     childEnvironment: () => ({ FRIZZ_STABLE_WEB_DIST: webDist, FRIZZ_STABLE_ARTIFACT: `npm:${PACKAGE_NAME}@${PACKAGE_VERSION}`, FRIZZ_SCRIPTS_DIR: scriptsDir, FRIZZ_WORKER_PLUGIN_DIR: workerPluginDir }),
     updateAvailable: () => updateAvailable,
+    version: PACKAGE_VERSION,
+    updateVersion: () => updateVersion,
     // The terminal that owns the board says so when the board goes down and comes back. Everything
     // here is triggered from a browser tab or by a crash, so without this the foreground process is
     // the last place to learn what happened to it.
@@ -419,8 +427,9 @@ async function runSupervisor(port: number, token: string): Promise<never> {
     updateRestart: async () => {
       try {
         const plan = await planRegistryUpdate(PACKAGE_NAME, PACKAGE_VERSION, npmRegistryReleaseAdapter);
-        if (!plan) { updateAvailable = false; return { state: "failed" as const, message: `Frizz ${PACKAGE_VERSION} is already current` }; }
+        if (!plan) { updateAvailable = false; updateVersion = undefined; return { state: "failed" as const, message: `Frizz ${PACKAGE_VERSION} is already current` }; }
         plannedUpdate = plan;
+        updateVersion = plan.latestVersion;
         // npm only writes its own cache. The healthy supervisor is deliberately left up until the
         // server has drained its child and proxy immediately before durableReexec below.
         return { state: "ready" as const, message: `Frizz ${plan.latestVersion} will start in a new npm execution cache` };

@@ -9,7 +9,12 @@ import { STATUS_ROW_ACTION, STATUS_ROW_ICON } from "../lib/statusRow.ts"
 // Keep this exported contract covered by the focused component test when either icon or animation changes.
 export const UPDATE_RESTART_ICON_ROTATION = "clockwise"
 
+// The generic spelling, kept for the launchers that cannot name versions: frizz-dev (an update
+// rebuilds from source, so there is no version to name) and a registry launcher whose registry probe
+// has not answered yet. A registry launcher that HAS observed a newer version gets the specific
+// sentence below instead, which is what actually tells the operator they are behind.
 const updateCopy = "Install the latest version of Frizz. Your running threads will not be affected."
+const newerVersionCopy = "A newer version of Frizz is available. Your running threads will not be affected."
 const restartCopy = "Restart Frizz. Your running threads will not be affected."
 
 // The one anchor both panels that hang off this button use. Desktop: anchored to the button's LEFT
@@ -55,12 +60,21 @@ const PANEL_SURFACE = "rounded-xl bg-elevated p-3.5 shadow-xl shadow-black/45"
 export function UpdateRestartPopover({
   open,
   update,
+  version,
+  updateVersion,
 }: {
   open: boolean
   update: boolean
+  /** The running package version. Registry (`npx frizz`) launchers only — absent means no version line. */
+  version?: string
+  /** The newer registry version, once the launcher has observed one. */
+  updateVersion?: string
 }) {
   if (!open) return null
   const action = update ? "Update Frizz" : "Restart Frizz"
+  // Name the newer version only on the verb that installs it: in plain-restart mode the board is
+  // confirmed current, so `updateVersion` is never present there anyway.
+  const newer = update ? updateVersion : undefined
   return (
     <div
       id="update-restart-popover"
@@ -74,9 +88,15 @@ export function UpdateRestartPopover({
         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-fg/10 text-fg">
           <RefreshCw aria-hidden="true" size={14} strokeWidth={2.25} />
         </span>
-        <span className="text-[13px] font-semibold tracking-[-0.01em] text-fg">{action}</span>
+        <div className="flex min-w-0 flex-col">
+          <span className="text-[13px] font-semibold tracking-[-0.01em] text-fg">{action}</span>
+          {version && (
+            // Always mono, whatever the board font: version numbers are identifiers, not prose.
+            <span className="font-mono text-[11px] leading-snug text-muted">{newer ? `${version} → ${newer}` : version}</span>
+          )}
+        </div>
       </div>
-      <p className="relative mt-2.5 text-[12px] leading-relaxed text-muted">{update ? updateCopy : restartCopy}</p>
+      <p className="relative mt-2.5 text-[12px] leading-relaxed text-muted">{update ? (newer ? newerVersionCopy : updateCopy) : restartCopy}</p>
     </div>
   )
 }
@@ -133,12 +153,15 @@ export function RestartFailureNotice({
 export function RestartActionButton({
   update,
   busy,
+  updateVersion,
   onFocus,
   onBlur,
   onClick,
 }: {
   update: boolean
   busy: boolean
+  /** When present, a CONFIRMED newer registry version — the one case that earns the badge dot. */
+  updateVersion?: string
   onFocus?: () => void
   onBlur?: () => void
   onClick: () => void
@@ -150,12 +173,22 @@ export function RestartActionButton({
       aria-label={update ? "Update Frizz" : "Restart Frizz"}
       disabled={busy}
       aria-busy={busy || undefined}
-      className={STATUS_ROW_ACTION}
+      className={`relative ${STATUS_ROW_ACTION}`}
       onFocus={onFocus}
       onBlur={onBlur}
       onClick={onClick}
     >
       <RefreshCw size={STATUS_ROW_ICON} aria-hidden="true" className={busy ? "animate-spin" : undefined} />
+      {/* The popover only opens on hover, so without this mark an available update is invisible.
+          Gated on a NAMED newer version, never on `update` alone — frizz-dev is always in update mode
+          (a source rebuild is always meaningful), and a permanently lit badge is no badge at all. */}
+      {/* 4px at a 2px inset, both MEASURED (dsf-8 crop + geometry, 2026-08-24): RefreshCw's ink corner
+          sits at 4.75px inset, so a 5px dot at 2.5px touched the top-right arrowhead tip; this circle's
+          ink clears that tip by ~1.9px, and the 2px inset keeps the whole dot inside the focus ring's
+          rounded-md corner arc (an inset under ~1.76px pokes through it at 45°). */}
+      {update && !busy && updateVersion && (
+        <span aria-hidden="true" className="absolute right-[2px] top-[2px] h-[4px] w-[4px] rounded-full bg-accent" />
+      )}
     </button>
   )
 }
@@ -172,6 +205,7 @@ export function RestartFrizzButton() {
   const [dismissed, setDismissed] = useState<string | undefined>()
   const [available, setAvailable] = useState<boolean | null>(null)
   const [updateAvailable, setUpdateAvailable] = useState(false)
+  const [versions, setVersions] = useState<{ version?: string; updateVersion?: string }>({})
   const requested = useRef(false)
   const controlRef = useRef<HTMLDivElement>(null)
 
@@ -181,6 +215,7 @@ export function RestartFrizzButton() {
       if (!active) return
       setAvailable(canRestart(status))
       setUpdateAvailable(canUpdateRestart(status))
+      setVersions({ version: status?.version, updateVersion: status?.updateVersion })
     })
     return () => { active = false }
   }, [])
@@ -251,12 +286,13 @@ export function RestartFrizzButton() {
       <RestartActionButton
         update={updateAvailable}
         busy={busy}
+        updateVersion={versions.updateVersion}
         onFocus={() => setOpen(true)}
         onBlur={() => setOpen(false)}
         onClick={() => void updateAndRestart()}
       />
       {shownError && <RestartFailureNotice update={updateAvailable} message={shownError} onDismiss={() => setDismissed(shownError)} />}
-      <UpdateRestartPopover open={open && !shownError} update={updateAvailable} />
+      <UpdateRestartPopover open={open && !shownError} update={updateAvailable} version={versions.version} updateVersion={versions.updateVersion} />
     </div>
   )
 }

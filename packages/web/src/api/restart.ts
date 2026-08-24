@@ -19,6 +19,18 @@ export interface FrizzSupervisorStatus {
    */
   updateAvailable?: boolean
   /**
+   * The published package version this Frizz is running. Sent only by the registry launcher — a
+   * frizz-dev board runs mutable checkout source with no version a user could act on, so absence
+   * means "show no version at all".
+   */
+  version?: string
+  /**
+   * The NEWER registry version behind `updateAvailable`, once the launcher has actually observed
+   * one. Absent while the registry has not answered (the launcher starts update-optimistic) and on
+   * frizz-dev, so the popover only ever names a version it can deliver.
+   */
+  updateVersion?: string
+  /**
    * Is this Frizz a DEVELOPMENT build — launched from a source checkout by `frizz-dev` or `pnpm dev`,
    * rather than the published `frizz` bin? Sent only when true, so absent means "no".
    *

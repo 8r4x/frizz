@@ -76,6 +76,19 @@ export interface RestartSupervisorProxyOptions {
    */
   updateAvailable?: () => boolean
   /**
+   * The published package version this launcher is running. Sent only by the registry launcher —
+   * frizz-dev runs mutable checkout source, which has no version a user could act on, so it omits
+   * this and the client shows no version line at all.
+   */
+  version?: string
+  /**
+   * The NEWER registry version `updateAvailable` is reporting, when the launcher has actually
+   * observed one. Same contract as `updateAvailable`: a cheap CACHED read, refreshed off the status
+   * path. Undefined while the registry has not answered yet or nothing newer exists — the client
+   * falls back to its generic update copy rather than claiming a number it does not have.
+   */
+  updateVersion?: () => string | undefined
+  /**
    * Is this Frizz a DEVELOPMENT build — launched from a source checkout by `frizz-dev` (src/index.ts)
    * or `pnpm dev` (server/src/dev.ts), rather than the published `frizz` bin (src/production.ts)?
    *
@@ -299,8 +312,9 @@ export class RestartSupervisorProxy {
     })
   }
 
-  private status(): { state: RestartControlState; message?: string; artifactDigest?: string; updateRestart: boolean; updateAvailable?: boolean; dev?: boolean } {
+  private status(): { state: RestartControlState; message?: string; artifactDigest?: string; updateRestart: boolean; updateAvailable?: boolean; version?: string; updateVersion?: string; dev?: boolean } {
     const delegated = this.options.status?.()
+    const updateVersion = this.options.updateVersion?.()
     // The disposable child can quite correctly still report ready while the durable owner is building
     // a successor. The owner is the authority for that transition; never leak the old child's ready
     // state during it, or clients will send writes to a server that is about to disappear.
@@ -316,6 +330,10 @@ export class RestartSupervisorProxy {
       // Sent ONLY when the launcher can actually answer it, so an older client — and frizz-dev, which
       // has no notion of "already current" — keeps today's behaviour on its absence.
       ...(this.options.updateAvailable ? { updateAvailable: this.options.updateAvailable() === true } : {}),
+      // Version numbers ride the same launcher-only contract: absent for frizz-dev and legacy
+      // supervisors, so their clients render exactly what they render today.
+      ...(this.options.version ? { version: this.options.version } : {}),
+      ...(updateVersion ? { updateVersion } : {}),
       // Sent only when TRUE, so a published Frizz's payload is byte-identical to what it sends today
       // and an older client is unaffected. Absent therefore means "not a development build".
       ...(this.options.dev ? { dev: true } : {}),
