@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   cloudConfigPath,
   normalizeHostname,
+  promptForCloudConfig,
   readCloudConfig,
   resolveTunnelConfigPath,
   writeCloudConfig,
@@ -70,5 +71,17 @@ test("an explicit cloudflared config wins; otherwise it is found or reported mis
     assert.equal(resolveTunnelConfigPath({ ...base, config: "/somewhere/else.yml" }, home), "/somewhere/else.yml");
   } finally {
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("a --cloud launch with no terminal refuses rather than blocking on stdin forever", async () => {
+  // Update & Restart re-execs the launcher with --cloud and no TTY. A prompt there would hang on a
+  // stdin nobody can reach, and the board would never come back at all.
+  const descriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+  Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+  try {
+    await assert.rejects(promptForCloudConfig(), /needs a saved hostname/);
+  } finally {
+    if (descriptor) Object.defineProperty(process.stdin, "isTTY", descriptor);
   }
 });

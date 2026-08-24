@@ -67,6 +67,14 @@ export function normalizeHostname(raw: string): string {
  * the whole point is that the second run of `up` is a single word.
  */
 export async function promptForCloudConfig(): Promise<CloudConfig> {
+  // An Update & Restart re-execs this launcher with `--cloud` and no terminal attached. If the saved
+  // config were ever missing there, a prompt would block forever on a stdin nobody can type into — the
+  // board would simply never come back. Say what is wrong instead.
+  if (!process.stdin.isTTY) {
+    throw new Error(
+      "--cloud needs a saved hostname when there is no terminal to ask — run `frizz up` once interactively first",
+    );
+  }
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
     const hostname = normalizeHostname(await rl.question("Public hostname for this board (e.g. colin.frizz.sh): "));

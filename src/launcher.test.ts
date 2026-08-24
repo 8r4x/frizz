@@ -57,6 +57,7 @@ import {
   probeFrizz,
   JOIN_PROBE_TIMEOUT_MS,
   HEALTH_PROBE_TIMEOUT_MS,
+  durableReexecArgs,
   readPreferredPort,
   waitForWorkspace,
   requestFrizzStop,
@@ -2456,4 +2457,40 @@ test("boardAddress: a bare origin gains a slash, a grid or an offer does not", (
   assert.equal(boardAddress("http://127.0.0.1:9494/"), "http://127.0.0.1:9494/");
   // A slash here lands INSIDE the query, changing the directory the page is asked about.
   assert.equal(boardAddress("http://127.0.0.1:9494/?add=%2Ftmp%2Fx"), "http://127.0.0.1:9494/?add=%2Ftmp%2Fx");
+});
+
+test("an update carries the public origin across the re-exec", () => {
+  // The regression this pins broke a live board. It was launched with `up`, Update & Restart re-execed
+  // it with a bare `--port`, and the successor came back with its origin gate DISARMED — the public
+  // hostname answered Forbidden, and then 1033 once the tunnel went with it. Nothing said why: the new
+  // process had no idea it was ever meant to be public.
+  const base = { entry: "/artifact/src/index.js", port: 9494, root: "/repo" };
+
+  assert.deepEqual(durableReexecArgs({ ...base, cloud: false }), [
+    "/artifact/src/index.js",
+    "--port",
+    "9494",
+    "/repo",
+  ]);
+
+  // A cloud launch restores BOTH halves. `--public-origin` alone would arm the gate and leave the
+  // successor with no tunnel, which is the 1033 state wearing a different hat.
+  assert.deepEqual(durableReexecArgs({ ...base, cloud: true, publicOrigin: "https://colin.frizz.sh" }), [
+    "/artifact/src/index.js",
+    "--port",
+    "9494",
+    "--cloud",
+    "/repo",
+  ]);
+
+  // `--public-origin` without a saved cloud config is carried verbatim; the operator runs their own
+  // proxy there, so there is no tunnel for Frizz to own.
+  assert.deepEqual(durableReexecArgs({ ...base, cloud: false, publicOrigin: "https://board.example" }), [
+    "/artifact/src/index.js",
+    "--port",
+    "9494",
+    "--public-origin",
+    "https://board.example",
+    "/repo",
+  ]);
 });

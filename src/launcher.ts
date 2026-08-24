@@ -163,6 +163,40 @@ function looksLikeBindHost(value: string | undefined): boolean {
   }
 }
 
+/**
+ * The argv the durable launcher re-execs itself with on Update & Restart.
+ *
+ * Update & Restart replaces this launcher in place with the newly promoted artifact, and it rebuilds
+ * the command line from scratch — so anything not named here is SILENTLY LOST across an update. That
+ * bit a live board: it was launched with `up`, an update re-execed it as a plain `--port` launch, and
+ * the board came back with its origin gate disarmed and no tunnel. The public hostname answered
+ * "Forbidden", then "Cloudflare error 1033" once cloudflared went too, and nothing in the readout said
+ * why — the successor genuinely did not know it was ever meant to be public.
+ *
+ * `--cloud` is preferred over a bare `--public-origin` when the launch had a saved cloud config,
+ * because it restores BOTH halves: the successor arms the same origin AND owns a tunnel again. Passing
+ * only the origin would arm the gate and leave cloudflared parentless.
+ */
+export function durableReexecArgs(options: {
+  entry: string;
+  port: number;
+  root: string;
+  cloud: boolean;
+  publicOrigin?: string | undefined;
+}): string[] {
+  return [
+    options.entry,
+    "--port",
+    String(options.port),
+    ...(options.cloud
+      ? ["--cloud"]
+      : options.publicOrigin
+        ? ["--public-origin", options.publicOrigin]
+        : []),
+    options.root,
+  ];
+}
+
 export function parseCliArgs(argv: string[]): CliOptions {
   const args = new Set(argv);
   let rawPort: string | undefined;

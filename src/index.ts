@@ -45,6 +45,7 @@ import {
   helpText,
   liveWorkspaceOwner,
   networkUrls,
+  durableReexecArgs,
   parseCliArgs,
   persistLauncher,
   probeFrizz,
@@ -438,14 +439,23 @@ async function runSupervisor(
                     "Updating",
                     `reloading this launcher in place on ${artifact.digest.slice(0, 12)}`
                   );
+                  // The successor takes the tunnel over, so hand it back rather than leaving it. execve
+                  // keeps this pid and its children, so a cloudflared left running here would outlive
+                  // every handle to it — nothing in the new image knows it exists, and stopping the
+                  // board would strand it pointed at a port nobody serves.
+                  tunnel?.stop();
+                  tunnel = null;
                   process.execve!(
                     process.execPath,
                     [
                       process.execPath,
-                      join(artifact.runtimeDir, "src", "index.js"),
-                      "--port",
-                      String(port),
-                      workspace.root,
+                      ...durableReexecArgs({
+                        entry: join(artifact.runtimeDir, "src", "index.js"),
+                        port,
+                        root: workspace.root,
+                        cloud: Boolean(cloudConfig),
+                        publicOrigin: bind.publicOrigin,
+                      }),
                     ],
                     env
                   );
