@@ -1,9 +1,8 @@
-import { createHash } from "node:crypto"
 import { AWAITING_FOR_MAX_MS, GithubWatchStatus, isAwaitingItemKind, parseAwaitingDuration, type AwaitingHint, type AwaitingItemKind } from "@frizz/shared"
 
-// The PR-reference vocabulary shared by the PR-watching scheduler and the awaiting-confirmation RPC.
-// It lives here rather than in scheduler.ts so the router can validate a confirmation without pulling
-// in the whole waker; scheduler.ts re-exports parsePrRef/PrRef for its existing callers and tests.
+// The PR-reference vocabulary shared by the PR-watching scheduler and the board. It lives here rather
+// than in scheduler.ts so a reader can resolve a ref without pulling in the whole waker; scheduler.ts
+// re-exports parsePrRef/PrRef for its existing callers and tests.
 
 export interface PrRef {
   owner: string
@@ -24,24 +23,6 @@ export function parsePrRef(value: string): PrRef | undefined {
   if (!Number.isFinite(number) || number <= 0) return undefined
   return { owner: m[1], repo: m[2].replace(/\.git$/, ""), number }
 }
-
-// NOTHING IN AN AWAITING FENCE IS OPERATOR-ARMABLE ANY MORE, so this is now always false.
-//
-// It used to answer "can the human turn this hint into a durable park?" — true for a `timer:` naming a
-// real future instant, and for a `pr-watch:` naming a parseable PR. The 2026-08-15 grammar has neither
-// kind: a timer is a registered row the worker sets through its own tool, and a PR is a registered
-// watcher. The fence now only NAMES things that already exist, so there is nothing left for the operator
-// to arm from one, and the "Confirm snooze" affordance those two kinds fed disappears with them. The
-// human's lever is the ordinary Snooze button, which never depended on a fence.
-//
-// Kept as a predicate rather than deleted outright because the confirmation RPC and its storage
-// compare-and-swap are still wired; returning false makes that path inert (every confirmation is refused
-// as "no longer current") without ripping a whole RPC out from under a running server. Removing the
-// plumbing is mechanical follow-up.
-export function isActionableAwaitingHint(hint: AwaitingHint | undefined): hint is AwaitingHint {
-  return hint !== undefined && false
-}
-
 
 // ---- THE PARK, READ OUT OF A FENCE AND CHECKED ----------------------------------------------------
 // One reader for the 2026-08-15 grammar, used by BOTH the scheduler (which bumps) and the board (which
@@ -121,19 +102,6 @@ export function parkIsHonoured(park: AwaitingPark, live: LiveActivity): boolean 
 export function parkExpiresAt(park: AwaitingPark, fenceAtMs: number): number | null {
   if (park.forMs === null || !Number.isFinite(fenceAtMs)) return null
   return fenceAtMs + Math.min(park.forMs, AWAITING_FOR_MAX_MS)
-}
-
-// One exact final-message generation, identified by the fence instant plus the hint it proposed.
-// Confirmation binds THIS identity, so a later fence — or an edited hint at the same instant — no
-// longer matches and the operator is asked again rather than inheriting a stale approval.
-export function awaitingFenceIdentity(hint: AwaitingHint, fenceAt: string): string {
-  return createHash("sha256")
-    .update(fenceAt)
-    .update("\0")
-    .update(hint.kind)
-    .update("\0")
-    .update(hint.value)
-    .digest("hex")
 }
 
 // ---- THE WATCHED-PR STATUS BOOK -------------------------------------------------------------------

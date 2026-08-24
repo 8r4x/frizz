@@ -110,8 +110,7 @@ export function reopenArchivedThreadForFollowUp(
 
 /**
  * A follow-up UN-PARKS the thread: reprompting IS re-engagement, so it disables whatever snooze the row
- * was holding — the wall-clock park, any bump that park owed at its deadline, and an operator-confirmed
- * `awaiting timer:` wait (which writes the same park column).
+ * was holding — the wall-clock park and any bump that park owed at its deadline.
  *
  * This reverses the older rule that a follow-up preserved the park (maintainer 2026-08-03: "reprompting
  * a thread that snoozed should disable the snooze"). That rule read a snooze as a standing display
@@ -125,24 +124,22 @@ export function reopenArchivedThreadForFollowUp(
  * re-arming it is the same two clicks that armed it. `Wake now` remains the un-park verb for an operator
  * who wants the card back WITHOUT sending a turn.
  *
- * Cleared through `setSnoozedUntil(slug, null, null)` + `clearAwaitingWaitIfSession`, the same pair Wake
- * now uses: dropping only the instant would leave the row holding a confirmation and a bump it can no
- * longer fire. Unlike the un-archive above, a CAS miss on the fence clear does NOT abort the delivery —
- * the caller has already proved it owns this session, and refusing a steer over stale park bookkeeping
- * would be worse than the stale row itself.
+ * Cleared through `setSnoozedUntil(slug, null, null)`, the same call Wake now makes: the instant and the
+ * prompt it armed are ONE fact, so dropping the deadline drops the bump with it. Unlike the un-archive
+ * above this needs no CAS and aborts nothing — the caller has already proved it owns this session, and
+ * refusing a steer over stale park bookkeeping would be worse than the stale row itself.
  *
  * Deliberately NOT reached by the wakers scheduler, which resumes through `resumeThread` directly: a
  * snooze bump must not clear the very park it was fired from (the scheduler settles that itself, guarded
  * on the fence id it armed — see scheduler.ts SOURCE 3).
  */
 export function wakeParkedThreadForFollowUp(
-  deps: { storage: Pick<Storage, "setSnoozedUntil" | "clearAwaitingWaitIfSession">; board: Pick<BoardManager, "refresh"> },
-  row: Pick<SessionRow, "slug" | "session_id" | "runtime_generation" | "snoozed_until" | "snooze_prompt" | "awaiting_fence_id">,
+  deps: { storage: Pick<Storage, "setSnoozedUntil">; board: Pick<BoardManager, "refresh"> },
+  row: Pick<SessionRow, "slug" | "snoozed_until" | "snooze_prompt">,
 ): void {
   // Touch the row only when something is actually parked, so an ordinary steer emits no needless delta.
-  if (!row.snoozed_until && !row.snooze_prompt && !row.awaiting_fence_id) return
+  if (!row.snoozed_until && !row.snooze_prompt) return
   deps.storage.setSnoozedUntil(row.slug, null, null)
-  deps.storage.clearAwaitingWaitIfSession(row.slug, row.session_id, row.runtime_generation ?? 0)
   deps.board.refresh()
 }
 

@@ -2365,17 +2365,6 @@ export const ThreadPluginReloadResult = z.object({
 }).strict()
 export type ThreadPluginReloadResult = z.infer<typeof ThreadPluginReloadResult>
 
-// An ```awaiting fence is a PROPOSAL. Confirming binds ONE exact final-message generation — identified
-// by the fence instant plus the hint it proposed — to durable state, so a later fence or an edited hint
-// asks the operator again instead of inheriting a stale approval.
-export const ConfirmAwaitingInput = z.object({
-  slug: ThreadSlug,
-  sessionId: z.string().min(1),
-  fenceAt: z.string().datetime({ offset: true }),
-  hint: AwaitingHint,
-}).strict()
-export type ConfirmAwaitingInput = z.infer<typeof ConfirmAwaitingInput>
-
 // A human-authored display title for a registered session. Trimming happens at the RPC boundary so
 // storage never has to distinguish whitespace-only names from real intent; the web input mirrors the
 // same cap. This is metadata-only and therefore works identically for Claude and Codex sessions.

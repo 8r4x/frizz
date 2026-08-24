@@ -24,7 +24,6 @@ import type {
   UnqueueFollowUpResult,
   DeliverQueuedNowInput,
   DeliverQueuedNowResult,
-  ConfirmAwaitingInput,
   RenameThreadInput,
   AiRenameThreadResult,
   SetThreadPermissionInput,
@@ -198,9 +197,6 @@ export interface Api {
   // (the parent comes to a NEW rest). No deadline and no scheduler — the board re-surfaces it the moment
   // rested_at advances. `sessionId` binds the click to the session the tab was looking at.
   snoozeAwaitingBackground(input: { slug: string; sessionId: string }): Promise<void>
-  // An awaiting fence is only a PROPOSAL — confirming binds ONE exact final-message generation to
-  // durable state (the scheduled bump / the operator-confirmed wait).
-  confirmAwaiting(input: ConfirmAwaitingInput): Promise<void>
   // Hard-delete: drop a stalled/exited phantom's registry row and tombstone its transcript id.
   // Refused for a genuinely live session — archive that one instead.
   forgetThread(input: { slug: string }): Promise<void>
@@ -337,7 +333,6 @@ export const PROCEDURES = {
   listOwnThreadActivity: "mutation",
   reloadThreadPlugins: "mutation",
   snoozeAwaitingBackground: "mutation",
-  confirmAwaiting: "mutation",
   forgetThread: "mutation",
   planBody: "query",
   planDelete: "mutation",

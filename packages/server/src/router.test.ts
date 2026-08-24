@@ -636,69 +636,6 @@ test("followUp wakes a snoozed thread and disarms the bump it owed", async () =>
 // (A test for a deleted awaiting-hint kind was removed here on 2026-08-15. See the AwaitingHint doc
 // block in @frizz/shared for why `human:`, `timer: <instant>` and `pr-watch:` no longer exist.)
 
-
-// ── confirmAwaiting (ported from origin/main during the 2026-07-23 reconcile) ───────────────────────
-// A fence is a PROPOSAL; the operator confirms one exact generation. The RPC binds the tail's
-// lastActivityAt as the fence instant (local main's FenceView carries hints[] and no `.at`) and
-// canonicalizes the timer before it reaches the durable snooze column.
-function awaitingTailer(over: {
-  turn?: "idle" | "in-flight"
-  fence?: { kind: "done" | "awaiting"; hints: { kind: string; value: string }[] } | undefined
-  lastActivityAt?: string
-} = {}): Tailer {
-  const tele = {
-    turn: over.turn ?? "idle",
-    lastFence: "fence" in over ? over.fence : { kind: "awaiting", body: "", hints: [{ kind: "timer", value: "2099-07-14T08:45:00Z" }] },
-    lastActivityAt: over.lastActivityAt ?? "2026-07-23T19:30:00.000Z",
-  }
-  return { ...noopTailer, get: () => tele as never }
-}
-// (A test for a deleted awaiting-hint kind was removed here on 2026-08-15. See the AwaitingHint doc
-// block in @frizz/shared for why `human:`, `timer: <instant>` and `pr-watch:` no longer exist.)
-
-
-test("confirmAwaiting fails closed on a stale session id", async () => {
-  const h = harness(awaitingTailer())
-  h.storage.upsertSession(row("aw-stale"))
-  h.storage.setState("aw-stale", "open")
-  await assert.rejects(
-    h.router.confirmAwaiting.handler({
-      input: { slug: "aw-stale", sessionId: "wrong-sid", fenceAt: "2026-07-23T19:30:00.000Z", hint: { kind: "timer", value: "2099-07-14T08:45:00Z" } },
-    }),
-    /replaced/,
-  )
-  h.storage.close()
-})
-// (A test for a deleted awaiting-hint kind was removed here on 2026-08-15. See the AwaitingHint doc
-// block in @frizz/shared for why `human:`, `timer: <instant>` and `pr-watch:` no longer exist.)
-
-
-test("confirmAwaiting refuses a non-actionable hint (a human gate arms nothing)", async () => {
-  const h = harness(awaitingTailer({ fence: { kind: "awaiting", hints: [{ kind: "shell", value: "Alice to approve" }] } }))
-  h.storage.upsertSession(row("aw-human"))
-  h.storage.setState("aw-human", "open")
-  await assert.rejects(
-    h.router.confirmAwaiting.handler({
-      input: { slug: "aw-human", sessionId: "sid-aw-human", fenceAt: "2026-07-23T19:30:00.000Z", hint: { kind: "shell", value: "Alice to approve" } },
-    }),
-    /no longer current/,
-  )
-  h.storage.close()
-})
-
-test("confirmAwaiting refuses while the worker is mid-turn", async () => {
-  const h = harness(awaitingTailer({ turn: "in-flight" }))
-  h.storage.upsertSession(row("aw-busy"))
-  h.storage.setState("aw-busy", "open")
-  await assert.rejects(
-    h.router.confirmAwaiting.handler({
-      input: { slug: "aw-busy", sessionId: "sid-aw-busy", fenceAt: "2026-07-23T19:30:00.000Z", hint: { kind: "timer", value: "2099-07-14T08:45:00Z" } },
-    }),
-    /no longer current/,
-  )
-  h.storage.close()
-})
-
 test("setThreadPermission RPC safety: running and stale background entries are unresolved", () => {
   assert.equal(hasUnresolvedBackgroundOps({ subAgents: [{ state: "stale" }], bgShells: [{ state: "stale" }] }), true)
   assert.equal(hasUnresolvedBackgroundOps({ subAgents: [{ state: "running" }], bgShells: [] }), true)

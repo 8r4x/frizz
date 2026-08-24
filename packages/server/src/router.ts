@@ -33,7 +33,6 @@ import {
   type ThreadTimerView,
   ThreadPluginReloadResult,
   SetThreadSnoozeInput,
-  ConfirmAwaitingInput,
   GithubStatus,
   GithubListInput,
   GithubRefPreviewInput,
@@ -123,7 +122,7 @@ import { readAuthSnapshot } from "./backend/auth-status.ts"
 import { liveThreadsForBackend, runProviderLogout } from "./backend/account-actions.ts"
 import { threadProfileOptions, validateThreadProfile } from "./backend/thread-profiles.ts"
 import { adoptionRuntimeBinding, type AdoptionPaneLookup, type ExpectedAdoptionPane } from "./adoption-recovery.ts"
-import { awaitingFenceIdentity, isActionableAwaitingHint, parsePrRef, readGithubStatusBook, GITHUB_STATUS_SETTING } from "./awaiting.ts"
+import { parsePrRef, readGithubStatusBook, GITHUB_STATUS_SETTING } from "./awaiting.ts"
 import { getDispatchPreferences, setDispatchPreference } from "./dispatch-preferences.ts"
 import { isBrokerClaudeRow, type SessionRow, type Storage } from "./storage.ts"
 import type { SessionTelemetry } from "./tailer.ts"
@@ -2058,19 +2057,15 @@ export function createRouter(ctx: AppContext) {
     setThreadSnooze: mutation({
       input: SetThreadSnoozeInput,
       handler: async ({ input }) => {
-        const row = currentOwnedSession(input.slug, input.sessionId)
+        currentOwnedSession(input.slug, input.sessionId)
         const thread = (await ctx.board.snapshot()).threads.find((candidate) => candidate.id === input.slug)
         if (!thread || thread.kind !== "session" || thread.foreign) throw new Error(`thread ${input.slug} is not editable`)
         if (input.until !== null) {
           if (thread.state === "archived") throw new Error("Reopen this thread before snoozing it")
           if (Date.parse(input.until) <= Date.now()) throw new Error("Snooze time must be in the future")
         }
+        // `until: null` is Wake now: setSnoozedUntil clears the instant and the bump it owed together.
         ctx.storage.setSnoozedUntil(input.slug, input.until, input.prompt ?? null)
-        // "Wake now" is also the cancellation path for a confirmed wait: clearing only snoozed_until
-        // would leave the row still holding an operator confirmation it no longer wants.
-        if (input.until === null) {
-          ctx.storage.clearAwaitingWaitIfSession(input.slug, row.session_id, row.runtime_generation ?? 0)
-        }
         ctx.board.refresh()
       },
     }),
@@ -2396,51 +2391,6 @@ export function createRouter(ctx: AppContext) {
         if (!row.rested_at) throw new Error("This thread is not at rest; nothing to snooze")
         if (!ctx.storage.setBgSnoozeRestedAtIfCurrent(input.slug, row.session_id, row.runtime_generation ?? 0, row.rested_at)) {
           throw new Error("This thread changed before it could be snoozed")
-        }
-        ctx.board.refresh()
-      },
-    }),
-
-    // An awaiting fence is only a PROPOSAL. Confirming binds ONE exact final-message generation to
-    // durable state; stale cards, malformed refs, elapsed timers, and in-flight workers fail closed.
-    //
-    // UNREACHABLE, and deliberately left wired. `isActionableAwaitingHint` refuses everything since the
-    // 2026-08-15 grammar cut, so every call throws "no longer current"; the plumbing stays because a
-    // running server should not have an RPC ripped out from under a client tab mid-session. Its twin in
-    // scheduler.ts WAS removed (ccbe87e9) — this comment used to point at that file's `fenceIdentity()`,
-    // which no longer exists. The identity instant is the tail's last activity. And the timer is CANONICALIZED
-    // before it reaches snoozed_until: the fence grammar admits instants the durable snooze grammar
-    // rejects, and writing a raw hint here is the precise bug that made "Confirm snooze" fail on the
-    // worker contract's own documented form.
-    confirmAwaiting: mutation({
-      input: ConfirmAwaitingInput,
-      handler: async ({ input }) => {
-        const row = currentOwnedSession(input.slug, input.sessionId)
-        const tele = ctx.tailer.get(input.slug)
-        const fence = tele?.lastFence
-        if (row.state === "archived" || row.archived === 1) {
-          throw new Error("Reopen this thread before confirming its wait")
-        }
-        const fenceAt = tele?.lastActivityAt
-        const hint = fence?.hints.find((h) => h.kind === input.hint.kind && h.value === input.hint.value)
-        if (tele?.turn !== "idle" || fence?.kind !== "awaiting" || !isActionableAwaitingHint(hint)) {
-          throw new Error("This awaiting proposal is no longer current")
-        }
-        if (!fenceAt || !Number.isFinite(Date.parse(fenceAt)) || fenceAt !== input.fenceAt) {
-          throw new Error("This awaiting proposal changed before it could be confirmed")
-        }
-        // NO HINT CONVERTS TO A SNOOZE ANY MORE. This turned a worker's `timer: <instant>` into a real
-        // durable park; that kind is deleted (see the AwaitingHint doc block in @frizz/shared) and
-        // isActionableAwaitingHint now refuses everything, so this handler is unreachable in practice.
-        const snoozedUntil: string | null = null
-        if (snoozedUntil && Date.parse(snoozedUntil) <= Date.now()) {
-          throw new Error("This scheduled time has already passed")
-        }
-        const fenceId = awaitingFenceIdentity(input.hint, input.fenceAt)
-        if (!ctx.storage.confirmAwaitingWait(
-          input.slug, row.session_id, row.runtime_generation ?? 0, fenceId, new Date().toISOString(), snoozedUntil,
-        )) {
-          throw new Error("This awaiting proposal changed before it could be confirmed")
         }
         ctx.board.refresh()
       },
