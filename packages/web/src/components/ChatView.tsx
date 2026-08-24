@@ -227,6 +227,9 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   const messages = useMemo(() => q.data?.messages ?? [], [q.data])
   const liveTranscriptShells = useMemo(() => transcriptBackgroundShells(messages), [messages])
   const presentationMessages = useMemo(() => withoutLiveTranscriptBackgroundTools(messages), [messages])
+  // Cut over presentationMessages, not messages: the coalesced entries below carry a messageIndex into
+  // THIS list, and comparing the two index spaces is how a live fence gets marked settled.
+  const lastAgentIdx = useMemo(() => lastAssistantIndex(presentationMessages), [presentationMessages])
   // Presentation-only coalescing: provider batching must not mint one loader per pure tool turn.
   // Original indices ride beside the display message so sticky asks and paired answers continue to
   // address server truth, never the compacted array.
@@ -244,13 +247,10 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   // …and the rest hairlines that only restate their own surroundings drop out here — see
   // isRedundantRestDivider. It runs LAST, on the coalesced list, so "the next thing the reader sees"
   // means the next thing this surface will actually draw.
-  const activityMessages = useMemo(
-    () => withoutRedundantRestDividers(
-      running ? historicalToolActivityMessages(coalescedActivityMessages) : coalescedActivityMessages,
-      messageRendersNothing,
-    ),
-    [coalescedActivityMessages, running],
-  )
+  const activityMessages = useMemo(() => {
+    const entries = running ? historicalToolActivityMessages(coalescedActivityMessages) : coalescedActivityMessages
+    return withoutRedundantRestDividers(entries, rendersNothingIn(entries, lastAgentIdx))
+  }, [coalescedActivityMessages, running, lastAgentIdx])
   const showWorking = running
   // Question↔answer pairing for "Answers:" user messages, precomputed at the LIST level (the lookback
   // needs the whole list; Message renders per-message). null — a stable primitive — at every ordinary
@@ -468,6 +468,7 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
                     showSendButton
                     paired={paired[messageIndex]}
                     sticky={isSticky}
+                    staleAwaiting={lastAgentIdx >= 0 && messageIndex < lastAgentIdx}
                   />
                 )
                 return isSticky ? <StickyUserBand key={i}>{msg}</StickyUserBand> : msg
@@ -661,33 +662,24 @@ function VirtualizedThreadTranscript({
   const liveToolActivity = running ? liveToolActivityTail(coalescedActivityMessages) : undefined
   const liveActivityLabel = liveToolActivity ? toolActivityLabel(liveToolActivity, projectDir) : undefined
   const liveRuntimeStart = running ? liveRuntimeStartedAt(coalescedActivityMessages) : undefined
+  const lastAgentIdx = useMemo(() => lastAssistantIndex(messages), [messages])
   // Redundant rest hairlines dropped exactly as in the drawer's copy above.
-  const activityMessages = useMemo(
-    () => withoutRedundantRestDividers(
-      running ? historicalToolActivityMessages(coalescedActivityMessages) : coalescedActivityMessages,
-      messageRendersNothing,
-    ),
-    [coalescedActivityMessages, running],
-  )
+  const activityMessages = useMemo(() => {
+    const entries = running ? historicalToolActivityMessages(coalescedActivityMessages) : coalescedActivityMessages
+    return withoutRedundantRestDividers(entries, rendersNothingIn(entries, lastAgentIdx))
+  }, [coalescedActivityMessages, running, lastAgentIdx])
   const showWorking = running
   const messageRows = useMemo(() => {
     return buildVirtualTranscriptMessageRows(
       activityMessages.map((entry) => entry.message),
-      messageRendersNothing,
+      rendersNothingIn(activityMessages, lastAgentIdx),
       messageGap,
     ).map((row) => ({
       ...row,
       messageIndex: activityMessages[row.messageIndex].messageIndex,
     }))
-  }, [activityMessages])
+  }, [activityMessages, lastAgentIdx])
   const lastUserIdx = useMemo(() => lastAskIndex(messages), [messages])
-  // THE LAST THING THE AGENT SAID. Any ```awaiting fence above it describes a wait that has already
-  // resolved — the agent spoke again, so whatever it was stopped on came back — and renders as prose
-  // rather than as a live card. See FenceCard's `stale` branch.
-  const lastAgentIdx = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) if (messages[i].role === "assistant") return i
-    return -1
-  }, [messages])
   const hasRuntimeStatus = Boolean(
     (thread?.providerFault && !thread.foreign)
       || (thread?.limitPause && !thread.foreign)
@@ -1626,28 +1618,62 @@ export function messageGap(previous: ChatMessage, next: ChatMessage): number {
 }
 // Matches exactly when Message returns null (an empty/thinking-only assistant turn) — such a message
 // takes no slot, so the adjacency-spacer walk must SKIP it (else two spacers stack into a double gap).
-export function messageRendersNothing(m: ChatMessage): boolean {
+export function messageRendersNothing(m: ChatMessage, staleAwaiting?: boolean): boolean {
   if (m.kind === "event" || m.kind === "reasoning" || m.role === "user") return false
-  if (m.parts && m.parts.length > 0) return m.parts.every((p) => (p.kind === "tools" ? p.tools.length === 0 : blankText(m, p.text)))
-  return (m.tools?.length ?? 0) === 0 && blankText(m, m.text)
+  if (m.parts && m.parts.length > 0) return m.parts.every((p) => (p.kind === "tools" ? p.tools.length === 0 : blankText(m, p.text, staleAwaiting)))
+  return (m.tools?.length ?? 0) === 0 && blankText(m, m.text, staleAwaiting)
 }
-// Does this text draw NOTHING? Ordinarily that is "is it blank", but a REFUSED awaiting fence draws
-// nothing either (see renderText) — and the contract invites a worker to reply with the fence ALONE, so
-// a whole message can be one refused fence and no prose. Left un-stripped it reported as visible, which
-// spends an adjacency spacer on an empty slot and saves a rest divider with nothing under it.
-function blankText(m: ChatMessage, text: string): boolean {
-  if (!m.fenceRefused) return !text.trim()
-  // splitFenceBlocks already drops whitespace-only prose runs, so "every segment is a refused fence"
+// THE LAST THING THE AGENT SAID. Any ```awaiting fence above it states a wait that has already resolved —
+// the worker spoke again, so whatever it named came back or was given up on — and draws nothing at all
+// (see renderText). All three transcript surfaces cut at this index, so it lives in one place: when they
+// disagree, one of them either strands a live fence or keeps drawing a settled one.
+//
+// SAID, NOT "IS THE LAST ASSISTANT ROW". A `kind:"event"` line carries `role:"assistant"` but nothing the
+// agent uttered — it is frizz's own synthetic marker for a rest, a wake, a compaction or a sub-agent
+// completion. Counting one made the cut land AFTER the fence it was supposed to protect, and every rested
+// thread ends with exactly such a row ("Agent rested"), so EVERY live fence read as settled: the card and
+// its hourglass came off the one wait that was still open, and its body dropped to free-standing prose.
+// That is the "light gray lines" the maintainer kept reporting on threads whose wait had not resolved at
+// all (2026-08-20), and it survived being restyled twice because the tone was never the defect. Reasoning
+// is the model's OWN output and still counts: a worker that wakes and thinks has resumed.
+export function lastAssistantIndex(messages: readonly ChatMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) if (messages[i].role === "assistant" && messages[i].kind !== "event") return i
+  return -1
+}
+// Whether a message renders is therefore POSITIONAL, and the row builders take a plain
+// `(message) => boolean`. So the position is baked in here, over the very entries the builder is about to
+// walk: same cut as the renderer's own `staleAwaiting`, and keyed on the message OBJECT each entry holds
+// rather than on an index, because that is what the builder will hand back. It has to be the object from
+// THIS list — coalescing REPLACES a message when it absorbs a tool tail (appendToolTail), so identity is
+// stable only within one coalesced list, while the entry's `messageIndex` still points at the original.
+export function rendersNothingIn<T extends { message: ChatMessage; messageIndex: number }>(
+  entries: readonly T[],
+  lastAgentIdx: number,
+): (message: ChatMessage) => boolean {
+  const stale = new WeakSet<ChatMessage>()
+  if (lastAgentIdx >= 0) for (const entry of entries) if (entry.messageIndex < lastAgentIdx) stale.add(entry.message)
+  return (message) => messageRendersNothing(message, stale.has(message))
+}
+// Does this text draw NOTHING? Ordinarily that is "is it blank", but an ```awaiting fence that is not a
+// LIVE wait draws nothing either (see renderText) — and the contract invites a worker to reply with the
+// fence ALONE, so a whole message can be one such fence and no prose. Left un-stripped it reports as
+// visible, which spends an adjacency spacer on an empty slot and saves a rest divider with nothing under
+// it. That was already true of a REFUSED fence; it became true of a SETTLED one when the settled body
+// stopped rendering, and 99 of the 6,999 awaiting fences in this machine's transcripts are fence-only,
+// so the case is ordinary rather than theoretical.
+function blankText(m: ChatMessage, text: string, staleAwaiting?: boolean): boolean {
+  if (!m.fenceRefused && !staleAwaiting) return !text.trim()
+  // splitFenceBlocks already drops whitespace-only prose runs, so "every segment is an awaiting fence"
   // is the whole test. A ```done fence still draws its card and keeps the message visible.
   return splitFenceBlocks(text).every((s) => s.kind === "fence" && s.fenceKind === "awaiting")
 }
 // Would this message render anything under `textOnly` (tool bands dropped)? Mirrors messageRendersNothing
 // but counts ONLY text parts — the queue card uses it to decide whether a first/last agent message that
 // is pure batched tool calls (no prose) contributes a visible row, or folds entirely into the bar.
-export function messageHasRenderableText(m: ChatMessage): boolean {
+export function messageHasRenderableText(m: ChatMessage, staleAwaiting?: boolean): boolean {
   if (m.kind === "event" || m.kind === "reasoning" || m.role === "user") return false
-  if (m.parts && m.parts.length > 0) return m.parts.some((p) => p.kind === "text" && !blankText(m, p.text))
-  return typeof m.text === "string" && !blankText(m, m.text)
+  if (m.parts && m.parts.length > 0) return m.parts.some((p) => p.kind === "text" && !blankText(m, p.text, staleAwaiting))
+  return typeof m.text === "string" && !blankText(m, m.text, staleAwaiting)
 }
 
 // The leading gap for the shimmer that tails a live transcript. The shimmer is a quiet single-line row
@@ -3134,10 +3160,26 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
     // controller (which numbers ```question blocks over the flat text in the same order).
     for (const [fi, fseg] of splitFenceBlocks(text).entries()) {
       if (fseg.kind === "fence") {
-        // A REFUSED fence draws nothing at all (see TranscriptMessage.fenceRefused). Skipped here rather
-        // than returned as null from the card, so the block list never carries an empty slot and the
-        // spacer either side of it collapses with it.
-        if (m.fenceRefused && fseg.fenceKind === "awaiting") continue
+        // AN ```awaiting FENCE THAT IS NOT A LIVE WAIT DRAWS NOTHING AT ALL — not the card, and not its
+        // prose either. Skipped here rather than returned as null from the card, so the block list never
+        // carries an empty slot and the spacer either side of it collapses with it.
+        //
+        // REFUSED — frizz declined to arm the park (see TranscriptMessage.fenceRefused), so a card would
+        // assert a wait nothing is holding, and the body is a handoff the worker is about to write again
+        // in its re-fence.
+        //
+        // SETTLED — the worker has spoken since, so whatever the fence named came back or was given up on
+        // (maintainer 2026-08-17: "we should only render an awaiting card that is still being waited on at
+        // the bottom of a chat"; a thread that rested thirty times had painted thirty live-looking waits).
+        // The chrome came off then and the PROSE stayed, on the reasoning that it was the worker's handoff
+        // rather than chrome. Free-standing it reads as an orphan — a paragraph mid-transcript with nothing
+        // left to say what it was — and two passes at styling it only moved the complaint from "why is it
+        // grey" to "why is it here". So the whole block goes (maintainer 2026-08-24, choosing that over a
+        // past-tense card): by nature an awaiting card is never settled, and a wait that is over is not a
+        // card and not a message either.
+        //
+        // `done` is neither: a finished thread stays finished, and its card is the thread's own outcome.
+        if (fseg.fenceKind === "awaiting" && (m.fenceRefused || staleAwaiting)) continue
         push(
           <FenceCard
             key={`${keyBase}-f${fi}`}
@@ -3145,7 +3187,6 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
             body={fseg.body}
             hints={fseg.hints}
             wrap={dense}
-            stale={staleAwaiting}
           />,
         )
         continue
@@ -3466,7 +3507,7 @@ export function InlineVisualization({ file }: { file: string }) {
 // its thread's Archive lives in the stable lifecycle footer. `awaiting` → the SAME card shape: a
 // heading naming the wait ("PR watcher armed"), the body prose plus a plain-English action summary
 // for non-watcher waits (with legacy pr/ci/session support), then the park button + its explainer.
-export function FenceCard({ fenceKind, body, hints, wrap, stale }: { fenceKind: FenceKind; body: string; hints: AwaitingHint[]; wrap?: boolean; stale?: boolean }) {
+export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKind; body: string; hints: AwaitingHint[]; wrap?: boolean }) {
   const html = useMarkdownHtml(body)
   const doneInner = useInnerHtml(html)
   const awaitingHint = awaitingHintSentence(hints)
@@ -3542,46 +3583,6 @@ export function FenceCard({ fenceKind, body, hints, wrap, stale }: { fenceKind: 
   // read as the button's verb when it was really the card's identity (maintainer 2026-07-24) — and why
   // the heading is now a STATE rather than the imperative "Arm watcher" that replaced it (2026-07-29).
   // With no parkable hint there's no action to name, so it falls back to a plain "Awaiting".
-  // A WAIT THAT IS OVER IS NOT A CARD. An ```awaiting fence states a LIVE condition — "I am stopped on
-  // this shell, for 30m" — and once the agent has spoken again the condition is settled by construction:
-  // whatever it named either finished or was given up on. Left as a card it reads as still pending, so a
-  // thread that rested thirty times showed thirty live-looking waits, only the last of which was real
-  // (maintainer 2026-08-17: "we should only render an awaiting card that is still being waited on at the
-  // bottom of a chat").
-  //
-  // The BODY still renders — it is the worker's handoff prose, and dropping the whole block would delete
-  // what it said, not just the chrome. What goes is the card frame, the hourglass, the item table and the
-  // park button: everything that asserts the wait is still open or offers to act on it.
-  //
-  // `done` is never stale: a finished thread stays finished, and its card is the thread's own outcome.
-  if (stale === true && fenceKind === "awaiting") {
-    // THE BODY ONLY, NEVER THE `reason:`. `reason:` is a CARD FIELD — a sentence fragment written to sit
-    // under an "Awaiting" heading beside the item it describes. Rendered free-standing it is gibberish:
-    // the maintainer's own thread drew "the ecosystem sweep — 16 real framework trees installed cold at
-    // the shipped default grant — which is the userbase-weighted measurement the 99.5% bar actually
-    // needs" as an orphan lowercase paragraph between two unrelated blocks (2026-08-18: "why is this
-    // still rendering so insanely?").
-    //
-    // What survives is the fence's real prose — whatever the worker wrote BELOW the `---` delimiter,
-    // which is ordinary Markdown it meant to be read as prose. A fence that is pure frontmatter has no
-    // prose, so a settled one renders NOTHING: the wait is over, and it was never a message.
-    if (body.trim() === "") return null
-    // AND IT IS RENDERED AS THE ORDINARY PROSE IT IS — plain `md-body`, exactly what ProseHtml gives an
-    // unfenced paragraph: 14px, full-strength `fg`, block markdown so a handoff's bullet list keeps its
-    // markers (Tailwind's preflight resets `ul`, which is how three list items once came out as three
-    // flat unmarked lines — maintainer 2026-08-19: "renders as light gray labels?").
-    //
-    // NO MUTED TONE, AND NO CARD SCALE. The dimming is a leftover from when this body lived inside a card
-    // frame, and it survived the frame's removal riding a `card-md text-muted` wrapper (`.card-md
-    // .md-body` inherits colour, so the tone could not sit on the element itself). Free-standing it has
-    // nothing to be quiet relative to: the reader sees a bare 13px grey paragraph between two 14px white
-    // ones, with no chrome to explain the difference, and reads it as broken (maintainer 2026-08-20:
-    // "still seeing this fucking light gray lines"). A settled fence's body is the worker's handoff prose
-    // — the same words it would have written unfenced — so it reads like every other thing the worker
-    // said. What "settled" removes is the CLAIM that a wait is open: the frame, the hourglass, the item
-    // table, the park button. It was never a reason to whisper the message.
-    return <div className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={doneInner} />
-  }
   const parkAction = awaitingParkAction(hints)
   const parkTitle = parkAction?.title ?? AWAITING_FALLBACK_TITLE
   // A watch is active observation, not elapsed time. Keep the hourglass for actual timer/human holds

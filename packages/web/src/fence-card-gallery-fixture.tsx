@@ -69,7 +69,10 @@ const refusedMessageText = [
   "```",
 ].join("\n")
 
-const fences: { slug: string; label: string; kind: "done" | "awaiting"; body: string; hints: AwaitingHint[]; stale?: boolean }[] = [
+// No SETTLED entry: an ```awaiting fence whose wait is over draws nothing at all — not the card and not
+// its prose — so the transcript skips the block before it ever reaches FenceCard (see ChatView.renderText).
+// There is no such thing as a settled awaiting CARD to put in a gallery of cards.
+const fences: { slug: string; label: string; kind: "done" | "awaiting"; body: string; hints: AwaitingHint[] }[] = [
   {
     slug: "g-done",
     label: "```done",
@@ -129,18 +132,6 @@ const fences: { slug: string; label: string; kind: "done" | "awaiting"; body: st
     ],
   },
   { slug: "g-human", label: "```awaiting · human", kind: "awaiting", body: "The API shape needs approval.", hints: [{ kind: "shell", value: "Alice to approve the API shape" }] },
-  // A SETTLED wait: the worker has spoken since, so the card, the hourglass, the item band and the park
-  // button are all gone and only the handoff prose survives. It is arbitrary Markdown, so it renders as
-  // the blocks it is — the bullets below are the case that regressed when the card frame (and `md-body`
-  // with it) came off, and came out as three flat grey lines with no markers.
-  {
-    slug: "g-settled",
-    label: "```awaiting · settled (the wait is over)",
-    kind: "awaiting",
-    stale: true,
-    body: "Three waits: [#5910](https://github.com/colinhacks/zod/pull/5910)'s CI, [#5914](https://github.com/colinhacks/zod/pull/5914)'s CI, and the bisect deciding whether #5914 is salvageable at all.\n\n- Standing: #5913 green and ready to merge, #5910 pushed and pending, #5914 red on TypeScript latest.\n- Your #5912 question is still open — whether to finish it rather than close it.\n- When the bisect returns I'll bring one decision point covering all of them.",
-    hints: [{ kind: "pr", value: "colinhacks/zod#5910" }, { kind: "for", value: "3h" }],
-  },
   { slug: "g-legacy", label: "```awaiting · legacy ci (no action)", kind: "awaiting", body: "The legacy build is still running.", hints: [{ kind: "shell", value: "acme/app#7" }] },
 ]
 
@@ -234,7 +225,7 @@ function Fixture() {
         {fences.map((f) => (
           <Section key={f.slug} label={f.label}>
             <ThreadSlugContext.Provider value={f.slug}>
-              <FenceCard fenceKind={f.kind} body={f.body} hints={f.hints} stale={f.stale} />
+              <FenceCard fenceKind={f.kind} body={f.body} hints={f.hints} />
             </ThreadSlugContext.Provider>
           </Section>
         ))}

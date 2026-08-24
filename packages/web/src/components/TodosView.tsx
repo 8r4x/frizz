@@ -12,7 +12,7 @@ import { useLiveAnswering } from "../lib/answering.ts"
 import { hasQuestionBlock } from "../lib/questionBlocks.ts"
 import { collapseMiddleRuns, opensQueueSegment, queueCollapseSegments, segmentFolds, supersededAskIndices, survivesQueueCollapse } from "../lib/queueCollapse.ts"
 import { pairAllAnswers } from "../lib/answersMessage.ts"
-import { Message, PermPolicyDenialCard, PermPromptBanner, PendingAskCard, StickyUserBand, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText } from "./ChatView.tsx"
+import { Message, PermPolicyDenialCard, PermPromptBanner, PendingAskCard, StickyUserBand, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText, lastAssistantIndex } from "./ChatView.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_TOP, CARD_ACTION_EXPLAINER, CARD_PRIMARY_ACTION } from "./TranscriptCard.tsx"
 import { AwaitingBackgroundCard } from "./AwaitingBackgroundCard.tsx"
 import { agentCompletionCall } from "../lib/subAgentCompletion.ts"
@@ -775,6 +775,12 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   // Raw server order — each message renders its `parts` in block order (fidelity). Memoized so the
   // windowing/useLiveAnswering below line up on identity.
   const messages = useMemo(() => q.data?.messages ?? [], [q.data])
+  // THE LAST THING THE AGENT SAID, for the same reason the thread view computes it: any ```awaiting fence
+  // above it states a wait that has already resolved, and draws nothing at all. Hoisted to the top of the
+  // component because the collapse walk below needs it too, and a settled fence-only message renders
+  // nothing — so the walk has to skip it rather than spend a step on an empty slot.
+  const lastAgentIdx = useMemo(() => lastAssistantIndex(messages), [messages])
+  const isStaleAwaiting = (idx: number) => lastAgentIdx >= 0 && idx < lastAgentIdx
   // Question↔answer pairing for "Answers:" user messages, precomputed over the FULL list (the lookback
   // may need messages above the visible window). Indexed by GLOBAL message index — the same one the
   // Message key uses. null at ordinary indices keeps the memoized Message's props stable.
@@ -811,7 +817,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
       if (messages[i].boundary !== "rest") continue
       for (let g = i + 1; g < messages.length; g++) {
         const after = messages[g]
-        if (after.queued || after.boundary === "rest" || messageRendersNothing(after)) continue
+        if (after.queued || after.boundary === "rest" || messageRendersNothing(after, isStaleAwaiting(g))) continue
         return i + 1
       }
     }
@@ -863,7 +869,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   // The per-message facts the segment walk needs, evaluated here because they need the transcript schema
   // and this card's own render predicates. The walk itself is pure — see lib/queueCollapse.
   const collapseSteps = useMemo(() => messages.map((m, g) => {
-    if (!m || m.queued || messageRendersNothing(m)) return { skip: true }
+    if (!m || m.queued || messageRendersNothing(m, isStaleAwaiting(g))) return { skip: true }
     // THE REST DIVIDER: dropped by the render loop outright, expanded or not (see below) — the card's own
     // premise, so it may not anchor a run's opening or closing prose and may not count as a hidden step,
     // since expanding reveals nothing where it stood. It is still the CUT: `closes` ends the run whose
@@ -875,9 +881,9 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
     const completion = agentCompletionCall(m)
     const tools = completion ? 0 : m.tools.length
     return {
-      text: messageHasRenderableText(m),
+      text: messageHasRenderableText(m, isStaleAwaiting(g)),
       tools,
-      countable: messageHasRenderableText(m) || tools > 0 || completion !== undefined || m.kind !== undefined,
+      countable: messageHasRenderableText(m, isStaleAwaiting(g)) || tools > 0 || completion !== undefined || m.kind !== undefined,
       // A middle message that survives the collapse keeps its own row (see the render loop) — counting it
       // as a hidden step would promise the expansion a message it already shows.
       survives: survivesQueueCollapse(m, g, supersededAsks),
@@ -903,13 +909,6 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
     [collapseSteps, lastUserIdx],
   )
   const { kept, middle } = useMemo(() => collapseMiddleRuns(allSegments), [allSegments])
-  // THE LAST THING THE AGENT SAID, for the same reason the thread view computes it: any ```awaiting fence
-  // above it states a wait that has already resolved, and must not keep drawing as a live card.
-  const lastAgentIdx = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) if (messages[i].role === "assistant") return i
-    return -1
-  }, [messages])
-  const isStaleAwaiting = (idx: number) => lastAgentIdx >= 0 && idx < lastAgentIdx
   const segments = useMemo(() => kept.filter(segmentFolds), [kept])
   // Index → the segment folding it, for the render loop. Only folding segments are indexed: a run with
   // nothing worth hiding renders exactly as it did before.
@@ -1277,7 +1276,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
               const barEmitted = new Set<number>()
               coalescedVisible.forEach(({ message: m, messageIndex: globalIdx }, i) => {
                 if (m.queued) return
-                if (messageRendersNothing(m)) return
+                if (messageRendersNothing(m, isStaleAwaiting(globalIdx))) return
                 // "Agent rested" is the queue card's own PREMISE, not news: every card here is a rested
                 // thread, the row states how long ago it rested, and the window is already cut at the
                 // previous rest — so the rule can only ever restate the frame around it (maintainer
@@ -1379,7 +1378,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                   }
                   // A first/last message that is pure batched tool calls (no prose) contributes no row —
                   // its calls are already folded into the divider — so skip it and leave no dangling spacer.
-                  if (!messageHasRenderableText(m)) return
+                  if (!messageHasRenderableText(m, isStaleAwaiting(globalIdx))) return
                   if (prevTailIsMeta !== null) out.push(<VSpace key={`s${i}`} h={STEP} />)
                   const textKey = m.sourceId ?? `legacy-${globalIdx}`
                   out.push(
