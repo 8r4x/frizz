@@ -57,26 +57,26 @@ export interface AwaitingPark {
   items: AwaitingItem[]
   /** `for:` in ms, or null when it is missing or not a duration. NULL IS NOT A PARK. */
   forMs: number | null
-  reason: string
 }
 
-/** Read the structural fence. Unknown lines are already dropped by the tailer's parse, so everything
- *  arriving here is one of the six kinds. */
+/** Read the structural fence. Unknown keys are already dropped by the tailer's parse, so everything
+ *  arriving here is an item kind or `for:`.
+ *
+ *  It used to collect a `reason` too, and nothing ever read it — the field outlived the one caller by
+ *  long enough that `reason:` itself was retired underneath it (2026-08-24). Prose belongs to the fence
+ *  BODY and is read there; a park is items and a duration. */
 export function readAwaitingPark(hints: readonly AwaitingHint[]): AwaitingPark {
   const items: AwaitingItem[] = []
   let forMs: number | null = null
-  let reason = ""
   for (const h of hints) {
     const value = h.value.trim()
     if (isAwaitingItemKind(h.kind)) {
       if (value) items.push({ kind: h.kind, value })
     } else if (h.kind === "for") {
       forMs = parseAwaitingDuration(value)
-    } else if (h.kind === "reason" && !reason) {
-      reason = value
     }
   }
-  return { items, forMs, reason }
+  return { items, forMs }
 }
 
 /** What frizz can see running for one thread, in the shape the check needs. Every id a fence may name

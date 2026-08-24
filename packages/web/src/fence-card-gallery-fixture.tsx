@@ -93,18 +93,17 @@ const fences: { slug: string; label: string; kind: "done" | "awaiting"; body: st
       { kind: "for", value: "20m" },
     ],
   },
-  // THE STRUCTURAL FENCE, which is what a worker writes now: a reason for the human, the things it
-  // waits on, and a duration. The card renders the sentence as prose and the rest as a muted band — the
-  // raw `kind: value` lines must never reach the reader (maintainer 2026-08-16).
+  // THE STRUCTURAL FENCE, which is what a worker writes now: YAML frontmatter naming the things it waits
+  // on and a duration, then its prose below the `---`. The card renders the prose and the rest as a muted
+  // band — the raw fence syntax must never reach the reader (maintainer 2026-08-16).
   {
     slug: "g-structural",
     label: "```awaiting · the structural fence",
     kind: "awaiting",
-    body: "",
+    body: "Holding until the suite lands; I will fold the result in.",
     hints: [
       { kind: "shell", value: "bvg44v4ij" },
       { kind: "for", value: "40m" },
-      { kind: "reason", value: "CI on acme/app#1227 is running the upgraded fs-exfil fixture, the last open scenario before cutting the patch." },
     ],
   },
   // A worker still on the OLD contract writes a deleted kind, which the parser drops into the BODY. It
@@ -113,10 +112,12 @@ const fences: { slug: string; label: string; kind: "done" | "awaiting"; body: st
     slug: "g-stale-kind",
     label: "```awaiting · a stale `watch:` line",
     kind: "awaiting",
-    body: "watch: bvg44v4ij",
-    hints: [{ kind: "for", value: "40m" }, { kind: "reason", value: "CI on acme/app#1227 is running." }],
+    // BOTH in the body, which is the post-2026-08-24 shape: `reason:` is retired, so the worker's prose
+    // and the line frizz refused arrive in the same place, and the card has to tell them apart itself.
+    body: "watch: bvg44v4ij\nCI on acme/app#1227 is running.",
+    hints: [{ kind: "for", value: "40m" }],
   },
-  { slug: "g-timer", label: "```awaiting · timer", kind: "awaiting", body: "", hints: [{ kind: "timer", value: "tmr_a1b2c3" }, { kind: "for", value: "2h" }, { kind: "reason", value: "Re-checking the rollout at the checkpoint." }] },
+  { slug: "g-timer", label: "```awaiting · timer", kind: "awaiting", body: "Re-checking the rollout at the checkpoint.", hints: [{ kind: "timer", value: "tmr_a1b2c3" }, { kind: "for", value: "2h" }] },
   { slug: "g-pr", label: "```awaiting · prs", kind: "awaiting", body: "PR is open and CI is green. Watching for review.", hints: [{ kind: "pr", value: "acme/app#391" }] },
   // Several watches is a different SHAPE, not the same card with more data: one ref rides the title row
   // in the `aside` slot, so a fence carrying three gets a wrapped row of its own under the prose.
