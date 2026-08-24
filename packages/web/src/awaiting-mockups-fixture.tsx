@@ -19,7 +19,8 @@
 //      thing — the PR on GitHub, the shell's output drawer, the sub-agent.
 //
 // What round 1 never drew, and what this round is really about: SHELLS AND SUB-AGENTS ARE ROWS TOO. Today
-// they are a COUNT in a sentence and nothing more — and a `watch:` fence hint arms a `kind: "shell"`
+// they are a COUNT in a sentence and nothing more — and a declared shell (`watch:` then, `shells:` since
+// the 2026-08-24 YAML cutover) arms a `kind: "shell"`
 // watch (ThreadWatchKind) that this card renders NOWHERE. Both belong in the same table as the PRs.
 import { createRoot } from "react-dom/client"
 import type { ReactNode } from "react"
@@ -321,8 +322,9 @@ function F2({ rows }: { rows: Row[] }) {
 }
 
 // ══ G2 · DECLARED WAITS FIRST ═════════════════════════════════════════════════════════════════════
-/** The card's one real hierarchy, drawn: a thing the worker PARKED on (a `pr-watch:` or a `watch:`
- *  hint) is what the thread is waiting FOR; a dev server it happens to have left running is not. The
+/** The card's one real hierarchy, drawn: a thing the worker PARKED on (a `pr-watch:` or a `watch:` line
+ *  when this was drawn; `prs:` or `shells:` since the 2026-08-24 YAML cutover) is what the thread is
+ *  waiting FOR; a dev server it happens to have left running is not. The
  *  declared waits are full rows; the incidental work collapses to a tail. */
 function G2({ rows }: { rows: Row[] }) {
   // A SUB-AGENT IS ALWAYS A DECLARED WAIT: it returns and re-invokes the parent, so the thread is

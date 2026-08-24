@@ -117,12 +117,12 @@ const fences: { slug: string; label: string; kind: "done" | "awaiting"; body: st
     hints: [{ kind: "for", value: "40m" }, { kind: "reason", value: "CI on acme/app#1227 is running." }],
   },
   { slug: "g-timer", label: "```awaiting · timer", kind: "awaiting", body: "", hints: [{ kind: "timer", value: "tmr_a1b2c3" }, { kind: "for", value: "2h" }, { kind: "reason", value: "Re-checking the rollout at the checkpoint." }] },
-  { slug: "g-pr", label: "```awaiting · pr-watch", kind: "awaiting", body: "PR is open and CI is green. Watching for review.", hints: [{ kind: "pr", value: "acme/app#391" }] },
+  { slug: "g-pr", label: "```awaiting · prs", kind: "awaiting", body: "PR is open and CI is green. Watching for review.", hints: [{ kind: "pr", value: "acme/app#391" }] },
   // Several watches is a different SHAPE, not the same card with more data: one ref rides the title row
   // in the `aside` slot, so a fence carrying three gets a wrapped row of its own under the prose.
   {
     slug: "g-pr-many",
-    label: "```awaiting · pr-watch (several)",
+    label: "```awaiting · prs (several)",
     kind: "awaiting",
     body: "All three adoption PRs are open and green, in their maintainers' hands.",
     hints: [

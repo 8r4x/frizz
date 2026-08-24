@@ -55,7 +55,7 @@ import "./styles.css"
 //   ?variant=humanpast an ask the human already replied PAST (a later user turn), then more agent work.
 //                      Under "Load earlier messages" the old ask must still take chips; the card's own
 //                      "Send answers" action stands down until one is filled (nothing stands at the tail).
-//   ?variant=prwakes  THE SEGMENTED SHAPE: one ask, then three runs separated by two real pr-watch wakes
+//   ?variant=prwakes  THE SEGMENTED SHAPE: one ask, then three runs separated by two real PR-watcher wakes
 //                     (served `wakeSteer`, so the real FrizzWake renders). Each run must get its OWN
 //                     fold, each wake its own hairline BETWEEN the run it ended and the run it caused, and
 //                     the third run — one prose message over four calls — must fold on its wake alone.
@@ -640,7 +640,7 @@ const thread: ThreadViewModel = {
   bgShells: variant === "dispatches"
     ? [{ id: "sh-live-1", label: "Tailing the release log", state: "running", startedAt: new Date(Date.now() - 512_000).toISOString() }]
     : [],
-  // The board synthesizes one of these per parseable pr-watch hint on a standing fence (see
+  // The board synthesizes one of these per parseable `prs:` entry on a standing fence (see
   // board.githubWatchViews). The strip under the prompt box lists them beside sub-agents and shells.
   watches: variant === "prwakes" || variant === "bgshells" || variant === "dispatches"
     ? [{ id: "github:demo:colinhacks/zod#6382", kind: "github", target: "colinhacks/zod#6382", state: "armed", createdAt: new Date(Date.now() - 37 * 60_000).toISOString() }]

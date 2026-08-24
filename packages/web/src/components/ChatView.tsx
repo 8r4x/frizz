@@ -72,6 +72,7 @@ import { FRAMED_IMAGE, ImageFrame } from "./ImageFrame.tsx"
 // The resting card, shared with the queue (TodosView passes it the event-Snooze; these two surfaces
 // deliberately pass no action — see the module header).
 import { AwaitingBackgroundCard, showsRestingCard } from "./AwaitingBackgroundCard.tsx"
+import { SnoozeCard, showsSnoozeCard } from "./SnoozeCard.tsx"
 // Re-exported from their new homes so existing importers (TodosView, the fixtures) keep one
 // import path while the definitions live where both question producers can reach them.
 export { CARD_BODY, CARD_PRIMARY_BUTTON, CardActions, TranscriptCard } from "./TranscriptCard.tsx"
@@ -479,7 +480,7 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
             )}
             {/* Same rule as the virtualized path's runtime-status row: the Working… rung is a quiet meta
                 line that joins the tight run under a meta tail; every card rung keeps STEP. */}
-            {(thread?.providerFault || thread?.limitPause || frozenAsk || thread?.runtime === "perm-prompt" || showWorking || thread?.awaitingBackground) && (
+            {(thread?.providerFault || thread?.limitPause || frozenAsk || thread?.runtime === "perm-prompt" || showWorking || showsSnoozeCard(thread) || thread?.awaitingBackground) && (
               <VSpace h={
                 showWorking && !thread?.providerFault && !thread?.limitPause && !frozenAsk && thread?.runtime !== "perm-prompt"
                   ? workingIndicatorGap(activityMessages.map((entry) => entry.message))
@@ -506,6 +507,11 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
               <PermPromptBanner onTerminal={copyTerminalCommand} />
             ) : showWorking ? (
               <WorkingIndicator since={thread?.lastUserAt} startedAt={liveRuntimeStart} activityLabel={liveActivityLabel} run={liveToolRun} />
+            ) : showsSnoozeCard(thread) ? (
+              // The human parked THIS thread on a wall clock, and the park outranks the benign resting
+              // card below — once snoozed, "awaiting background work" is not what the bottom of the
+              // transcript should lead with. Loses to every harder state above, same as that card.
+              <SnoozeCard thread={thread!} />
             ) : showsRestingCard(thread) ? (
               // The rest itself, stated. Last in the chain because every branch above is a HARDER
               // reading of the same slot; this one is the benign case and never outranks them. The
@@ -686,6 +692,7 @@ function VirtualizedThreadTranscript({
       || (thread?.pendingInteraction ? undefined : thread?.pendingAsk)
       || thread?.runtime === "perm-prompt"
       || showWorking
+      || showsSnoozeCard(thread)
       || thread?.awaitingBackground,
   )
   // Which rung of the runtime-status ladder (rendered below, hardest reading first) wins. Only its
@@ -1249,6 +1256,9 @@ function VirtualizedThreadTranscript({
                   <PermPromptBanner onTerminal={copyTerminalCommand} />
                 ) : showWorking ? (
                   <WorkingIndicator since={thread?.lastUserAt} startedAt={liveRuntimeStart} activityLabel={liveActivityLabel} run={liveToolRun} />
+                ) : showsSnoozeCard(thread) ? (
+                  // See the non-virtualized chain above: the human's own park, above the resting card.
+                  <SnoozeCard thread={thread!} />
                 ) : showsRestingCard(thread) ? (
                   // See the non-virtualized chain above: last branch, benign case, no Snooze here.
                   <AwaitingBackgroundCard thread={thread!} />
@@ -3585,8 +3595,8 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   // With no parkable hint there's no action to name, so it falls back to a plain "Awaiting".
   const parkAction = awaitingParkAction(hints)
   const parkTitle = parkAction?.title ?? AWAITING_FALLBACK_TITLE
-  // A watch is active observation, not elapsed time. Keep the hourglass for actual timer/human holds
-  // and give pr-watch its own scanning mark; the scheduler-facing hint itself stays out of the prose.
+  // A watch is active observation, not elapsed time. Keep the hourglass for a hold on the clock and give
+  // a PR wait its own scanning mark; the scheduler-facing key itself stays out of the prose.
   const AwaitingIcon = hints.some((hint) => hint.kind === "pr") ? Radar : Hourglass
   // The PRs the watcher is actually on, as LINKS. The title states the wait and the body is the
   // worker's own prose, so without these the one thing the card is ABOUT — which PR? — was unreachable:
@@ -3596,7 +3606,7 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   // row of their own under the prose, because `aside` is shrink-0 and a six-PR fence would shove the
   // heading off a narrow queue card.
   const watched = prWatchRefs(hints)
-  // TWO CARDS SAYING "AWAITING" IS ONE TOO MANY. Since `pr-watch` stopped carrying a park action
+  // TWO CARDS SAYING "AWAITING" IS ONE TOO MANY. Since a PR wait stopped carrying a park action
   // (2026-08-13), this card falls back to a bare "Awaiting" heading — and directly beneath it the
   // resting card says "Awaiting background work", lists the watched PRs with their live check state, and
   // carries the only control. The maintainer read the pair as a duplicate, and it is: the heading is the
@@ -3605,7 +3615,9 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   // So when this card has NOTHING the resting card does not already say — no park action to offer — and
   // the resting card is actually showing, the chrome goes and the CONTENT stays: the worker's own prose
   // and the PR links, rendered as the ordinary final message they are. A fence with a real park action
-  // (a `human` gate, a future `timer`) still earns its card, because that control lives nowhere else.
+  // still earned its card, because that control lived nowhere else — but no fence has one since the
+  // 2026-08-15 grammar deleted the two kinds that fed it (a `human:` gate, a future `timer: <instant>`),
+  // so awaitingParkAction is now always null and this branch is the only one that runs.
   //
   // Guarded on `awaitingBackground` rather than assumed: a thread parked on a watcher with no live shell
   // or sub-agent shows no resting card at all, and dropping the chrome there would leave the wait
@@ -3638,7 +3650,7 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
         // by kind, a row per thing, with live state and a drill-in (AwaitingBackgroundCard) — and the
         // branch above drops its chrome precisely so the two do not both state the wait. This is the
         // FALLBACK: no resting card, so the fence is the only place the set is named at all, and without
-        // it `shell:`/`agent:`/`timer:` lines reach the card and fall straight through it.
+        // it the fence's `shells:`/`agents:`/`timers:` reach the card and fall straight through it.
         //
         // Muted and small: it is the machinery, under the prose that explains it. `gap-x-3` matches the
         // PR-ref row below so the two read as one band rather than two competing lists.
@@ -3664,7 +3676,7 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   )
 }
 
-// One watched PR reference. A worker writes the `pr-watch:` value by hand, so a ref that isn't
+// One watched PR reference. A worker writes each `prs:` entry by hand, so a ref that isn't
 // `owner/repo#N` still says WHAT is being watched — it degrades to muted text in the same position
 // rather than to a dead link or to nothing at all.
 function WatchedRef({ watch }: { watch: { ref: string; url: string | null } }) {
@@ -3677,8 +3689,10 @@ function WatchedRef({ watch }: { watch: { ref: string; url: string | null } }) {
 }
 
 // The awaiting card's HUMAN-IN-THE-LOOP park button, sitting under the prose with its effect spelled
-// out in muted text beside it. The worker's ```awaiting fence already auto-arms the durable wake (a
-// `timer` fires at its instant; a `pr-watch` watcher wakes on any new PR activity, bot or human) AND
+// out in muted text beside it. IT NO LONGER RENDERS: awaitingParkAction has returned null for every
+// fence since the 2026-08-15 grammar, and the paragraph below describes the world it was written for.
+// The worker's ```awaiting fence already auto-arms the durable wake (a `timer: <instant>` fired at its
+// instant; a `pr-watch:` watcher woke on any new PR activity, bot or human — both spellings retired) AND
 // already files the thread into the dimmed Held band — this button lets the human EXPLICITLY commit a
 // USER-OWNED snooze on top, so the park carries a concrete wake time and is durable across fence
 // changes. It NEVER suppresses the auto-armed wake: a user snooze is a board-presentation concern

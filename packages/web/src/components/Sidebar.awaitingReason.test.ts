@@ -15,7 +15,7 @@ import { TooltipProvider } from "./Tooltip.tsx"
 // That popover is ONE SENTENCE, not a stack of facts. Its first cut printed a fragment per hint kind,
 // which read as a machine dumping its record (same day: "that popover text looks fucking terrible"), so
 // the state and the fence's clause are joined the way every other tooltip on this rail already joins
-// them, and only the worker's own `reason:` gets a line of its own.
+// them, and only the worker's own handoff prose gets a line of its own.
 //
 // The two halves are one decision, and this file pins both. The popover half is asserted on the TIP
 // rather than on rendered markup, deliberately: a Radix tooltip renders nothing until it opens, so
@@ -114,9 +114,10 @@ test("a snooze stacks under the state, never inside the worker's paragraph", () 
   assert.equal(reason, SET, "…and the worker's sentence still owns the paragraph below")
 })
 
-// A fence written the CURRENT way — frontmatter, a `---`, then Markdown — carries its handoff in the
-// BODY, and `reason:` is the one-line form that shape replaced. The popover reads the body first, or it
-// would show the state and drop the worker's own words entirely.
+// A fence written the CURRENT way — YAML frontmatter, a `---`, then Markdown — carries its handoff in the
+// BODY. `reason:` is the one-line form that shape replaced, and it was retired outright at the 2026-08-24
+// YAML cutover; it reaches the popover only off a fence stored before then. The popover reads the body
+// first, or it would show the state and drop the worker's own words entirely.
 test("the popover takes the fence's Markdown body over its legacy reason line", () => {
   const t = thread([...WAIT, { kind: "reason", value: REASON }], {}, "The tap submission is queued behind their CI backlog.")
   assert.deepEqual((sessionIndicatorFor(t).tip ?? "").split("\n\n"), [

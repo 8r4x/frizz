@@ -3,7 +3,7 @@
 // wake renderer, so that renderer could not reach back into ChatView for this).
 //
 // It is the one rendering EVERY child-event now shares. A background shell coming to rest, a Monitor
-// timing out, a sub-agent finishing, a sub-agent reporting up mid-flight, and a pr-watch wake are the
+// timing out, a sub-agent finishing, a sub-agent reporting up mid-flight, and a PR-watcher wake are the
 // same class of event (something the worker is waiting on has reached a notable state, usually
 // re-invoking the agent), and they read the same way: a centred section break that stands out from the
 // tool cards around it, rather than one of them being a card indistinguishable from a hundred others

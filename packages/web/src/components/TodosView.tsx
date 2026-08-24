@@ -130,7 +130,7 @@ function resumeNativeAnchoring(): void {
 // re-surfaces on its own when a shell finishes and the worker acts on it. Distinct from the footer's
 // wall-clock Snooze (a fixed deadline); this one has no deadline and expires itself on the next rest.
 //
-// The shapes that reach here are the shell-only rest and — since 2026-08-13 — the pr-watch park, whose
+// The shapes that reach here are the shell-only rest and — since 2026-08-13 — the PR park, whose
 // own fence card no longer offers a Snooze (lib/awaitingPresentation). A rest on a live sub-agent is
 // excused from the queue outright.
 //

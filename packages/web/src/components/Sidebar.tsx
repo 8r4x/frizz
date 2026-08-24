@@ -427,7 +427,7 @@ export const ThreadRow = memo(function ThreadRow({
   // of NAMES you scan, and each caption added there made the next one harder to find.
   //
   // What frizz knows about the row still exists, one hover away: the indicator's popover composes it
-  // from the AWAITING BLOCK deterministically (awaitingWaitClause) plus the worker's own `reason:`, so
+  // from the AWAITING BLOCK deterministically (awaitingWaitClause) plus the worker's own handoff prose, so
   // the detail is available on demand and never spends a line of the rail. That is the same call that
   // hid the SNOOZED label (2026-08-03) and the worker's reason (2026-08-16), applied to the last of them.
   return (
@@ -681,7 +681,7 @@ function StatusChip({ status }: { status: string }) {
  *      the tap submission is queued behind their CI backlog
  *
  *  The STATE leads because it is what the glyph you pointed at is claiming; the fence's clause follows
- *  because it says what that glyph means on THIS row; the worker's `reason:` takes a PARAGRAPH of its
+ *  because it says what that glyph means on THIS row; the worker's own prose takes a PARAGRAPH of its
  *  own, because it is the one line frizz did not write. The blank line is load-bearing: the sentence
  *  above it wraps, and a reason set directly under a wrapped line reads as its third line — which is
  *  exactly how it looked when they were merely stacked. Nulls and blanks drop out, so a row with no
@@ -693,10 +693,10 @@ function popover(t: Pick<ThreadView, "lastFence">, state: string | null): string
   return [head, awaitingReason(t)].filter((line) => Boolean(line)).join("\n\n")
 }
 
-/** The worker's own prose for this row's POPOVER — the fence's Markdown body, else its legacy
- *  `reason:` line, as one sentence. awaitingProse owns both halves of that; see it for why reading only
- *  `reason:` silently dropped the handoff of every fence written in the current frontmatter shape.
- *  Null when the fence carries neither, which is an ordinary park. */
+/** The worker's own prose for this row's POPOVER — the fence's Markdown body, else the `reason:` line a
+ *  fence written before 2026-08-24 may still carry, as one sentence. awaitingProse owns both halves of
+ *  that; see it for why reading only `reason:` silently dropped the handoff of every fence written in the
+ *  current frontmatter shape. Null when the fence carries neither, which is an ordinary park. */
 export function awaitingReason(t: Pick<ThreadView, "lastFence">): string | null {
   if (t.lastFence?.kind !== "awaiting") return null
   return awaitingProse(t.lastFence)
@@ -774,9 +774,9 @@ export function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: s
   return { node: base.node, tip: stackParked(base.tip, parked) }
 }
 
-/** A snooze stacks under the row's STATE, never under the worker's `reason:`.
+/** A snooze stacks under the row's STATE, never under the worker's own prose.
  *
- *  The reason is a PARAGRAPH — see `popover`, which sets it off with a blank line precisely so a wrapped
+ *  That prose is a PARAGRAPH — see `popover`, which sets it off with a blank line precisely so a wrapped
  *  state sentence and a human one cannot be read as one run of lines. Appending the park to the end
  *  would land it inside that paragraph and undo exactly that. */
 function stackParked(tip: string | null, parked: string): string {
@@ -818,13 +818,15 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
   if (kind === "held") {
     const hourglass = <StatusBox><Hourglass size={9} className="text-muted/70" /></StatusBox>
     const github = <StatusBox><Github size={9} className="text-muted/70" /></StatusBox>
-    // A held row whose fence carries `pr-watch:` is held FOR A PR, and the rail says so with GitHub's
-    // mark instead of the hourglass. The hourglass means "parked on the clock", and for a watch the
-    // clock is only the backstop: the scheduler polls the PR and CLEARS the park the moment new
-    // activity lands (scheduler.ts, the clear-snooze-on-pr-watch-wake), so what actually wakes this row
-    // is GitHub. pr-watch never parks itself — parkedAwaitingHint excludes it so a watch stays a
-    // visible queue handoff — so the rows that reach here are the ones parked ANYWAY: one whose worker
-    // co-declared a `human:` gate beside the watch, and one the human snoozed on a wall clock. (Until
+    // A held row whose fence names a PR (`prs:` since the 2026-08-24 YAML cutover; `pr:` and `pr-watch:`
+    // before it, both retired) is held FOR A PR, and the rail says so with GitHub's mark instead of the
+    // hourglass. The hourglass means "parked on the clock", and for a watch the clock is only the
+    // backstop: the scheduler polls the PR and CLEARS the park the moment new activity lands
+    // (scheduler.ts, the clear-snooze-on-PR-wake), so what actually wakes this row is GitHub. A PR wait
+    // never parks itself — parkedAwaitingHint excludes it so a watch stays a visible queue handoff — so
+    // the rows that reach here are the ones parked ANYWAY: one the human snoozed on a wall clock, and,
+    // until the 2026-08-15 grammar deleted the kind, one whose worker co-declared a `human:` gate
+    // beside the watch. (Until
     // 2026-08-13 the commonest source was the awaiting card's own "PR watcher armed" Snooze; that
     // control is gone, and the resting card's event-snooze that replaced it drops the queue card
     // without parking the thread in Held.) All were previously indistinguishable from a plain timer park.
@@ -835,7 +837,7 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     // heldMark + single-line layout. They differ only in WHO resolves the park at the deadline, which
     // the tooltip wording marks as an `auto` variant of the same word rather than a separate idea:
     //   • a user snooze re-surfaces the CARD for you  → "Snoozed until <wake>"       (you act next)
-    //   • an ```awaiting timer:` park / blocked+timer status auto-resumes the agent → "Auto-snoozed until <wake>"
+    //   • an ```awaiting park naming a timer / blocked+timer status auto-resumes the agent → "Auto-snoozed until <wake>"
     // A user snooze that carries a PROMPT crosses that line by design — frizz resumes the agent with it —
     // so formatUserSnooze reads it as the auto variant and names the follow-up it will send.
     const snoozedUntil = futureSnoozedUntil(t)
@@ -878,11 +880,11 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
   // session you can still just type at.) Read it as WAITING
   // (maintainer 2026-07-10: a rested-not-done thread "should be blocked or waiting", never a stark
   // empty box and never a false check). We don't know the reason — the worker didn't fence — so: no
-  // hint gloss (vs an ```awaiting fence, which carries pr/ci hints AND dims + sinks the row). The
+  // hint gloss (vs an ```awaiting fence, which names what it waits on AND dims + sinks the row). The
   // honest fix is the worker emitting ` ```awaiting ` when it's blocked on a machine.
   // RESTED AND AWAITING lands here whenever the park is not Held — the fence declared a wait but frizz
   // could not honour it (an item that is not running, no `for:`), so the row stays in the queue wearing
-  // the ordinary at-rest mark. That row is exactly where the worker's `reason:` earns its place: the
+  // the ordinary at-rest mark. That row is exactly where the worker's own prose earns its place: the
   // glyph says "at rest" and the popover says what it thinks it is waiting for, which is the one thing
   // the rail cannot show and the operator most wants on hover (maintainer 2026-08-16).
   return {

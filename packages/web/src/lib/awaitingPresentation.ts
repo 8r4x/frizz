@@ -2,8 +2,9 @@ import { type AwaitingHint } from "@frizz/shared"
 import { githubRefUrl } from "./githubRef.ts"
 import { formatSnoozeWake } from "./snooze.ts"
 
-/** The awaiting card's TITLE when no hint is parkable (legacy pr/ci/session, or an elapsed/malformed
- *  timer) — the card still wants the heading its `done` sibling has, it just has nothing to offer. */
+/** The awaiting card's TITLE when no hint is parkable — which, since the 2026-08-15 grammar dropped the
+ *  last parkable kind, is EVERY awaiting fence (see awaitingParkAction). The card still wants the heading
+ *  its `done` sibling has, it just has nothing to offer. */
 export const AWAITING_FALLBACK_TITLE = "Awaiting"
 
 /** The verb every park button wears. It is deliberately ONE word for every kind: the card's TITLE
@@ -18,8 +19,7 @@ export const AWAITING_PARK_BUTTON = "Snooze"
  *  human's lever is the ordinary Snooze on the resting card, which never depended on a fence.
  *
  *  Kept as a function rather than deleted at every call site so the card keeps ONE shape; every caller
- *  already handles null (that is the pr-watch path, which has rendered without a button since
- *  2026-08-13). */
+ *  already handles null (that is the PR path, which has rendered without a button since 2026-08-13). */
 export function awaitingParkAction(
   _hints: readonly AwaitingHint[],
   _nowMs = Date.now(),
@@ -49,12 +49,17 @@ export function prWatchRefs(hints: readonly AwaitingHint[]): { ref: string; url:
   })
 }
 
-/** The one line of worker prose the card shows: the fence's `reason:`.
+/** The one line of worker prose the card shows: a pre-cutover fence's `reason:` line.
  *
  *  The fence used to carry a free-text BODY, and this function's job was to synthesize a sentence out of
  *  whichever hint kinds it recognized ("Wait for Alice", "Scheduled for tomorrow at 9"). The 2026-08-15
  *  grammar has one prose field and the worker writes it deliberately, so there is nothing left to
- *  synthesize — and nothing to get wrong. The ITEMS are rendered as rows, not as a sentence. */
+ *  synthesize — and nothing to get wrong. The ITEMS are rendered as rows, not as a sentence.
+ *
+ *  `reason:` ITSELF IS RETIRED (2026-08-24). It was the last prose in the frontmatter and the one thing
+ *  that made the frontmatter impossible to parse as YAML, so it moved below the `---` where a handoff has
+ *  no length limit. Nothing MINTS a `reason` hint any more — the kind survives on the wire, and this
+ *  reader with it, only so a fence stored before the cutover still cards with its own words. */
 export function awaitingHintSentence(hints: readonly AwaitingHint[], _nowMs = Date.now()): string | null {
   const reason = hints.find((hint) => hint.kind === "reason")?.value.trim()
   return reason ? reasonSentence(reason) : null
@@ -62,10 +67,11 @@ export function awaitingHintSentence(hints: readonly AwaitingHint[], _nowMs = Da
 
 /** THE WORKER'S OWN PROSE for a hover popover — the fence's Markdown BODY, else its legacy `reason:`.
  *
- *  An awaiting fence is FRONTMATTER, then Markdown (2026-08-17): structural lines, a `---` delimiter, and
- *  below it as much prose as the worker wants — OPTIONAL prose, since what frizz actually requires is a
- *  live item and a `for:`. `reason:` is the one-line form that shape replaced, kept valid so fences
- *  already written that way keep parsing. Reading only `reason:` therefore drops the handoff of every
+ *  An awaiting fence is FRONTMATTER, then Markdown (2026-08-17; the frontmatter itself became YAML on
+ *  2026-08-24): structural keys, a `---` delimiter, and below it as much prose as the worker wants —
+ *  OPTIONAL prose, since what frizz actually requires is a live item and a `for:`. `reason:` is the
+ *  one-line form that shape replaced, and it was retired outright at the YAML cutover; it survives here
+ *  only to read a fence stored before then. Reading only `reason:` therefore drops the handoff of every
  *  fence written the CURRENT way, which is what the rail popover did until this existed.
  *
  *  The FIRST PARAGRAPH only, and its internal line breaks flattened: a body may run to 500 characters of
@@ -92,7 +98,7 @@ function capForHover(prose: string): string {
 
 const HOVER_PROSE_MAX = 240
 
-/** THE WORKER'S `reason:`, PRESENTED AS A SENTENCE — capitalized, because everywhere frizz draws it, it
+/** THE WORKER'S OWN PROSE, PRESENTED AS A SENTENCE — capitalized, because everywhere frizz draws it, it
  *  stands alone: its own paragraph under the rail popover's sentence, its own line in the awaiting card.
  *
  *  Workers write it lowercase, and that is frizz's own doing — the shipped contract's example read
@@ -100,7 +106,9 @@ const HOVER_PROSE_MAX = 240
  *  ("At rest — waiting on acme/app#391" over "the tap submission is queued…", maintainer 2026-08-19:
  *  "why is that second sentence fucking lowercase?"). The example now models a sentence, but a worker's
  *  contract is FROZEN INTO ITS SYSTEM PROMPT AT DISPATCH: every session already running keeps writing
- *  the old shape, so the presentation has to carry it and always will.
+ *  the old shape, so the presentation has to carry it and always will. (`reason:` as a KEY is retired —
+ *  2026-08-24 — but the handoff it carried simply moved below the `---`, and it arrives just as lowercase
+ *  from a frozen contract, so this is unchanged by the cutover.)
  *
  *  It only ever touches the FIRST LETTER, and not when the first word is code — an identifier
  *  (`awaitingFragments`), a path (`packages/web`), a ref (`v2.1`, `#391`) or a lowercase-by-name tool
@@ -119,15 +127,19 @@ const LOWERCASE_BY_NAME = new Set(["npm", "npx", "pnpm", "nub", "nubx", "gh", "g
 
 // THE CARD'S PROSE, and under the structural grammar the BODY IS NOT PART OF IT.
 //
-// A fence is now six known line kinds and nothing else, so anything left in `body` is a line the parser
-// did NOT recognise — a worker still writing the deleted `watch:`, or a typo. Joining that into the
+// A fence's frontmatter is structure and nothing else, so anything left in `body` ABOVE the `---` is a
+// line the parser did NOT recognise — a worker still writing the deleted `watch:`, or a typo. (The live
+// keys are the plural YAML sequences of 2026-08-24: `shells:`/`agents:`/`timers:`/`prs:` plus `for:`.)
+// Joining that into the
 // card's sentence printed raw fence syntax at the human: "watch: bvg44v4ij — CI on #1227 is running…"
 // (maintainer 2026-08-16: "why the fuck is the awaiting block looking like this?"). It is not prose, it
 // is a malformed declaration — the worker gets BUMPED for it (scheduler SOURCE 12), which is where that
 // belongs, and the card says what it can rather than showing the machinery.
 //
-// `body` is still taken when there is no `reason:` at all: an OLD fence, written before the grammar had
-// one, put its whole handoff there, and those threads must not card as blank.
+// `body` is still taken when there is no `reason:` at all — which since 2026-08-17 is the ORDINARY case
+// rather than the legacy one: a worker's handoff belongs below the `---`, and `reason:` was retired at
+// the 2026-08-24 YAML cutover. A fence older than the delimiter put its whole handoff in the body too.
+// Neither shape may card as blank.
 export function awaitingPresentationLine(body: string, hint: string | null): string {
   if (hint) return hint
   const prose = body.trim()
@@ -203,7 +215,7 @@ function joinList(parts: readonly string[]): string {
  *  The desktop rail dropped its subtitle entirely (maintainer 2026-08-19) and moved every fence detail
  *  into the row's hover popover. A phone has no hover, so the mobile row keeps the one fragment worth a
  *  line without one: a PR ref names a THING rather than describing a wait, and it exists nowhere else on
- *  that row. Everything else the fence carries — the ids, the duration, the worker's `reason:` — stays
+ *  that row. Everything else the fence carries — the ids, the duration, the worker's own prose — stays
  *  off it, exactly as it does on the rail. */
 export function hintGloss(hints: readonly AwaitingHint[]): string | null {
   const pr = hints.find((h) => h.kind === "pr")

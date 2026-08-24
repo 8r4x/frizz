@@ -65,7 +65,7 @@ export function supersededAskIndices(messages: readonly CollapseMsgLike[]): Set<
 //   - A ```question. An ask the agent kept working past is a decision the human still owes; collapsing it
 //     left the card offering "Send answers" with no question in sight, and the same ask answerable one
 //     click away in the drawer. A SUPERSEDED copy is the exception — the newer one carries the decision.
-//   - A SCHEDULER WAKE (`wake: true` — a pr-watch delivery, a timer, a watcher, AND the Goal's own bump).
+//   - A SCHEDULER WAKE (`wake: true` — a PR-watcher delivery, a timer, a watcher, AND the Goal's own bump).
 //     It names WHAT RE-INVOKED THE AGENT, and NOTHING ELSE on the card represents it. Hiding it left a
 //     card that showed a park on a PR watcher and then, with nothing in between, more work — reading as
 //     a watcher wake that had never happened (maintainer 2026-08-12: "there's no indication of the PR

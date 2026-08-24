@@ -99,8 +99,9 @@ const threads: ThreadView[] = [
     awaitingBackground: true,
     bgShells: [{ id: "bzvtnt3ig", label: "brew audit", startedAt: ago(4 * MIN), state: "running" }],
     // A fence written the CURRENT way: frontmatter, a `---`, then Markdown. The prose lives in the BODY
-    // and there is no `reason:` line at all — the shape the popover has to read, and the one it dropped
-    // on the floor while it read only the hint.
+    // and there is no `reason:` line at all — a key retired outright on 2026-08-24, when the frontmatter
+    // became YAML and could no longer hold prose. This is the shape the popover has to read, and the one
+    // it dropped on the floor while it read only the hint.
     lastFence: {
       kind: "awaiting",
       body: [

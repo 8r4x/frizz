@@ -602,8 +602,11 @@ function PromptPanel({ thread, armed }: {
         <span className={`font-medium ${stopHook ? "text-fg" : "text-muted"}`}>Stop hook</span>
         {/* THE EXCEPTION CLAUSE IS THE TRIGGER'S ACTUAL CONTRACT, not decoration — and it is exactly two
             fences wide now. A rest that signed off with ```done is never bumped, and neither is one parked
-            on an ```awaiting naming a wait the scheduler itself owns — a `pr-watch:` PR, a `timer:`, a
-            named `human:` (scheduler.ts `restMessageIsSignedOff`). Both ARE the answer to the question the
+            on an ```awaiting naming a wait the scheduler itself owns — a `prs:` PR, a `timers:` row, a
+            `shells:` background shell (the plural YAML keys of 2026-08-24; the `pr-watch:`/`timer:`/`human:`
+            this clause was written against are all retired). scheduler.ts `restMessageIsSignedOff` in fact
+            takes ANY ```awaiting fence, honoured or not, so the caption says "parked on a wait" and names
+            no kind. Both ARE the answer to the question the
             stop hook asks.
 
             A ```question fence USED to be a third exception and no longer is (2026-08-16): the bump fires

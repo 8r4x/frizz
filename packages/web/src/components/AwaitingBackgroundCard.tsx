@@ -47,7 +47,7 @@ import { CARD_BODY, CardActions, TranscriptCard } from "./TranscriptCard.tsx"
 // sub-agent's own sub-agent, which `subAgents` also carries now so the rows can nest — was dispatched by
 // the child, not by this thread's worker. Counting them would make the sentence false.
 // PR WATCHERS ARE THE THIRD KIND (2026-08-13), and they are listed exactly like the other two rather
-// than getting a card of their own: the awaiting fence no longer offers a park action for `pr-watch`
+// than getting a card of their own: the awaiting fence no longer offers a park action for a PR wait
 // (lib/awaitingPresentation), so this card and its event-snooze are the one place a parked watcher is
 // stated in words and the one control for hiding it.
 export function prWatcherCount(thread: Pick<ThreadView, "watches">): number {
@@ -389,7 +389,9 @@ function GithubWatchRow({ watch }: { watch: ThreadWatchView }) {
 }
 
 // ---- THE DECLARED BACKGROUND SHELLS --------------------------------------------------------------
-// A shell reaches this card only when the WORKER NAMED IT in a `watch:` hint, which is the same rule the
+// A shell reaches this card only when the WORKER NAMED IT in the fence's `shells:` (a `watch:` line when
+// this was written; that spelling was retired 2026-08-15 and the singular `shell:` on 2026-08-24), which
+// is the same rule the
 // server already applies to decide the card exists at all: "a background SHELL is the case that must be
 // declared […] a dev server, a log tail and a test run are the same row here, and only the worker knows
 // which of them it is actually resting behind" (board.hasDeclaredWait). So the list here is
@@ -491,7 +493,7 @@ export function AwaitingBackgroundCard({ thread, actions }: {
   // transcript are both addressed by the parent thread's slug.
   thread: Pick<ThreadView, "id" | "subAgents" | "bgShells" | "watches">
   // The queue card's event-Snooze. Only the QUEUE passes one, and the shapes that reach the queue are
-  // the shell-only rest and — since 2026-08-13 — the pr-watch park, whose own fence card no longer
+  // the shell-only rest and — since 2026-08-13 — the PR park, whose own fence card no longer
   // offers one. So this is the control for both.
   actions?: ReactNode
 }) {

@@ -19,7 +19,7 @@ import { WakeDivider } from "./WakeDivider.tsx"
 // WakeDivider is the right home and needed no argument: a beat or a bump is exactly the class it
 // already serves — something outside the turn reached a notable state and re-invoked the agent — beside
 // a background shell resting, a Monitor timing out, a sub-agent finishing or reporting up, and a
-// pr-watch wake. It also gets the family's centred rule, petite-caps label, icon sizing and measured
+// PR-watcher wake. It also gets the family's centred rule, petite-caps label, icon sizing and measured
 // optical nudge for free, which is the whole reason that component exists.
 //
 // The label is the WHOLE notification: no disclosure, no prompt body. The delivered text is the armed

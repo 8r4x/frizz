@@ -804,13 +804,14 @@ test("sessionIndicatorKind: a declared wait draws the quiet dot in the ACTIVE ba
   assert.equal(sessionIndicatorKind(requeued), "background", "…while the dot keeps stating the live work")
 })
 
-// THE DOT NEEDS SOMETHING TO ACTUALLY BE MOVING. An ```awaiting fence naming a `pr:` earns
+// THE DOT NEEDS SOMETHING TO ACTUALLY BE MOVING. An ```awaiting fence naming a PR (`prs:`) earns
 // `awaitingBackground` too (it carries the resting card and that card's snooze), but unlike a shell its
 // subject can be ALREADY DONE:
 // a green PR is a handoff sitting on the human's merge, not work in flight, and it wore the same live
 // blue dot as a running dev server (maintainer 2026-08-19: "this task should not be listed as in the
-// actively running rail if it's only awaiting a PR with green CI"). The line kind is `pr:` — the
-// `pr-watch:` spelling was retired with the 2026-08-15 grammar (RETIRED_AWAITING_KINDS).
+// actively running rail if it's only awaiting a PR with green CI"). The frontmatter key is `prs:` since
+// the 2026-08-24 YAML cutover; the singular `pr:` it replaced and the older `pr-watch:` are both retired
+// (RETIRED_AWAITING_KINDS). The WIRE kind stays singular, which is why the fixtures build `kind: "pr"`.
 test("sessionIndicatorKind: a watched PR that has SETTLED reads at-rest; one still running keeps the dot", () => {
   const watching = (checks: "running" | "passing" | "failing" | "none", over: Partial<ThreadView> = {}) => thread({
     kind: "session", runtime: "turn-idle", awaitingBackground: true,

@@ -14,13 +14,13 @@
 //
 // The wake is recorded as an ordinary user turn (it is pasted into the worker's composer), so the chat
 // rendered it in the off-white right-justified bubble the human's messages wear — which claimed the
-// operator had typed a message the pr-watch watcher composed. This is the correction.
+// operator had typed a message the PR watcher composed. This is the correction.
 //
 // It is a WAKE DIVIDER, not a card (maintainer 2026-07-31, after a gallery of ten alternatives: "I hate
 // the design of the new comment notification card… it just feels wrong"). The diagnosis that picked
 // this shape: the transcript already had one idiom for this class of event, and this was the only
 // holdout. A background shell coming to rest, a Monitor timing out, a sub-agent finishing and a
-// sub-agent reporting up all render as WakeDivider — and a pr-watch wake is the same class, an external
+// sub-agent reporting up all render as WakeDivider — and a PR-watcher wake is the same class, an external
 // event the worker was waiting on that reached a notable state and re-invoked it. It alone still wore a
 // full TranscriptCard, which is what made it read as a different, louder kind of thing than it is.
 //

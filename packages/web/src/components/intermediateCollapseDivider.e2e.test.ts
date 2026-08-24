@@ -299,7 +299,7 @@ test("the collapsed intermediate run is a hairline divider that names its tool c
     const goalLadder = await page.$$eval("[data-wake-divider]", (ns) =>
       ns.map((n) => `${n.getAttribute("data-wake-divider")}: ${(n as HTMLElement).innerText.replace(/\s+/g, " ").trim()}`),
     )
-    // Three Goal-driven runs, so the same first/one-line/last shape as the pr-watch ladder above: the
+    // Three Goal-driven runs, so the same first/one-line/last shape as the PR-watcher ladder above: the
     // middle run and the Goal bump that opened it fold together, and the bump above the LAST run still
     // draws. The pre-`59627e8b` spelling — a fold and a bump per run — is what this used to assert.
     assert.deepEqual(

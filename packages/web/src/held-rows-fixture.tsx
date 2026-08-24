@@ -79,9 +79,10 @@ const limitThread = {
   limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", resumesAt: limitAt, autoResume: true },
 } as unknown as ThreadView
 
-// Row F — a `pr-watch:` thread the human parked with the "PR watcher armed" card's Snooze. A watch
-// never parks itself, so this (and a `human:` gate co-declared beside the watch) is how one reaches the
-// Held band — and until 2026-08-03 it sat here under the same hourglass as A and B, saying nothing
+// Row F — a PR-watching thread (`prs:`) the human parked with the "PR watcher armed" card's Snooze. A
+// watch never parks itself, so this is how one reaches the Held band — as did a `human:` gate co-declared
+// beside the watch, until the 2026-08-15 grammar deleted that kind along with the `pr-watch:` spelling
+// this row was named for. Until 2026-08-03 it sat here under the same hourglass as A and B, saying nothing
 // about the PR that is actually going to wake it. It now wears GitHub's mark, and its tooltip leads
 // with the ref: the snooze is only a safety timeout, and new PR activity clears it.
 const watchThread = {

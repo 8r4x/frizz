@@ -9,10 +9,11 @@ import "./styles.css"
 // sets in production:
 //   • the done card's white "Mark as done" button (completeThread; ?mode=executing → needsConfirmation
 //     → the End-session dialog path)
-//   • the awaiting card's "Snooze" park button, one per parkable kind — the kind picks the card TITLE
-//     and the muted explainer beside the button (timer → "Scheduled snooze" to the exact instant;
-//     pr-watch → "PR watcher armed"; human → "Awaiting human"). Each applies a user snooze via
-//     setThreadSnooze.
+//   • the awaiting card's "Snooze" park button, one per parkable kind — the kind picked the card TITLE
+//     and the muted explainer beside the button (`timer:` → "Scheduled snooze" to the exact instant;
+//     `pr-watch:` → "PR watcher armed"; `human:` → "Awaiting human"). Each applies a user snooze via
+//     setThreadSnooze. Those three spellings are retired and no fence is parkable any more
+//     (awaitingParkAction returns null), so this arm of the fixture now draws nothing.
 // RPC is mocked like completion-lifecycle-fixture so nothing real is hit.
 const mode = new URLSearchParams(window.location.search).get("mode") === "executing" ? "executing" : "resting"
 const nativeFetch = window.fetch.bind(window)

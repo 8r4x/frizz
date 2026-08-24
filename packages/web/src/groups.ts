@@ -367,8 +367,10 @@ function hasLiveOps(t: ThreadView): boolean {
 // it, and the human opts into hiding it via the RESTING card's event-snooze, which drops the card until
 // the thread comes to a new rest (2026-08-13 — that card is where a parked watcher is now stated and
 // controlled; the awaiting card no longer offers a park action for it). Admitting one here would
-// re-introduce exactly the auto-Held danger this split was built to remove. (The line is `pr:`; the
-// `pr-watch:` spelling it was written against is retired — see RETIRED_AWAITING_KINDS.)
+// re-introduce exactly the auto-Held danger this split was built to remove. (The key is `prs:` since the
+// 2026-08-24 YAML cutover; both spellings this paragraph was written against — the singular `pr:`, and the
+// `pr-watch:` before it — are retired, see RETIRED_AWAITING_KINDS. The WIRE kind stays singular, which is
+// why the code below still reads `hint.kind === "pr"`.)
 // NOTHING HERE PARKS A THREAD ANY MORE (2026-08-15). This returned the two hint kinds that dimmed a
 // thread into Held on the worker's word alone: `human:`, which NOTHING EVER FIRED, and a future
 // `timer: <instant>`, one of which was published 5h55m in the PAST — it parsed, armed nothing, and left
@@ -496,7 +498,8 @@ function restingOnBackgroundWork(t: ThreadView): boolean {
 // 2026-08-13 (it earns the resting card and that card's snooze), and it brought a shape a shell never
 // has: a wait whose subject has ALREADY FINISHED. A green PR is not background work in flight — it is a
 // handoff sitting on the human's merge, and the row wore the same live blue dot as a running dev server
-// (maintainer 2026-08-19, on an ```awaiting fence naming `pr:` whose card read "10 successful · no
+// (maintainer 2026-08-19, on an ```awaiting fence naming a PR — `pr:` in the grammar of that day, `prs:`
+// since 2026-08-24 — whose card read "10 successful · no
 // conflicts": "this task should not be listed as in the actively running rail if it's only awaiting a PR
 // with green CI").
 //

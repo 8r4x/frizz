@@ -7,15 +7,18 @@ import type { ThreadView } from "@frizz/shared"
 import { ThreadRow } from "./Sidebar.tsx"
 import { TooltipProvider } from "./Tooltip.tsx"
 
-// The HELD row's glyph when a `pr-watch:` fence is what the thread is actually waiting on. The rail's
+// The HELD row's glyph when a PR is what the thread is actually waiting on (`prs:` since the 2026-08-24
+// YAML cutover; `pr:` before it, and `pr-watch:` when this file was written). The rail's
 // park mark is the hourglass — "parked on the clock" — and for a watch the clock is only a backstop:
 // the scheduler polls the PR and clears the park the moment new activity lands, so GitHub is the real
 // wake. These pin that a watching row wears GitHub's mark and that every OTHER park keeps the
 // hourglass, since one glyph leaking into the other is exactly the confusion this fixed.
 //
-// pr-watch never parks ITSELF (groups.ts parkedAwaitingHint excludes it so a watch stays a visible
-// queue handoff), so the rows under test are the two that get parked anyway: one the human snoozed off
-// the "PR watcher armed" card, and one whose worker co-declared a `human:` gate beside the watch.
+// A PR wait never parks ITSELF (groups.ts parkedAwaitingHint excludes it so a watch stays a visible
+// queue handoff), so the rows under test are the ones that get parked anyway: one the human snoozed off
+// the "PR watcher armed" card, and ones whose worker co-declared a SECOND item beside the watch. That
+// second item used to be a `human:` gate; the 2026-08-15 grammar deleted the kind, so the fences below
+// name a real item instead and the rule they pin — GitHub's mark wins over the hourglass — is unchanged.
 
 const base = {
   kind: "session",
@@ -46,7 +49,7 @@ const HOURGLASS = /lucide-hourglass/
 const FAR_FUTURE = "2999-01-01T00:00:00.000Z"
 const watch = (value: string) => ({ kind: "pr" as const, value })
 
-test("a pr-watch thread the human snoozed off its card wears GitHub's mark, not the hourglass", () => {
+test("a PR-watching thread the human snoozed off its card wears GitHub's mark, not the hourglass", () => {
   const html = row({
     snoozedUntil: FAR_FUTURE,
     lastFence: { kind: "awaiting", body: "PR is open and CI is green.", hints: [watch("acme/app#391")] },
@@ -55,9 +58,11 @@ test("a pr-watch thread the human snoozed off its card wears GitHub's mark, not 
   assert.doesNotMatch(html, HOURGLASS, "…and never both marks at once")
 })
 
-test("a pr-watch fence with a co-declared human gate also wears GitHub's mark", () => {
-  // The worker contract tells a worker to pair `human:` with `pr-watch:` when a GitHub PR exists, and
-  // it is the `human:` hint that parks the thread — so this shape reaches Held with no snooze at all.
+test("a PR fence with a co-declared second item also wears GitHub's mark", () => {
+  // This was the `human:`-gate case: the contract of the day told a worker to pair `human:` with
+  // `pr-watch:` when a GitHub PR existed, and it was the `human:` hint that parked the thread. Both
+  // kinds are retired; what the case still pins is that a fence naming a PR AND something else reaches
+  // Held wearing GitHub's mark, with no snooze at all.
   const html = row({
     lastFence: {
       kind: "awaiting",
@@ -69,7 +74,7 @@ test("a pr-watch fence with a co-declared human gate also wears GitHub's mark", 
   assert.doesNotMatch(html, HOURGLASS)
 })
 
-test("a pr-watch fence with a co-declared timer backstop also wears GitHub's mark", () => {
+test("a PR fence with a co-declared timer backstop also wears GitHub's mark", () => {
   const html = row({
     lastFence: { kind: "awaiting", body: "Watching.", hints: [watch("acme/app#391"), { kind: "timer", value: FAR_FUTURE }] },
   } as Partial<ThreadView>)

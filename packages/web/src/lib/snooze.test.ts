@@ -97,7 +97,7 @@ test("wake formatting uses the local calendar and locale-aware times", () => {
     assert.equal(formatSnoozeWake(farDate, now.getTime()), "Jul 21 at 9:00 PM")
     assert.equal(formatSnoozedUntil(wednesday, now.getTime()), "Snoozed until Wednesday at 9:00 PM")
     assert.equal(formatSnoozedUntil("not-a-date", now.getTime()), null)
-    // A worker `timer:` park is the SAME concept as a human snooze — an `auto` variant that resolves
+    // A worker's timer park (`timers:`) is the SAME concept as a human snooze — an `auto` variant that resolves
     // itself by resuming the agent. Same wake phrase, "Auto-snoozed until" prefix.
     assert.equal(formatAutoSnoozedUntil(today, now.getTime()), "Auto-snoozed until today at 9:00 AM")
     assert.equal(formatAutoSnoozedUntil(wednesday, now.getTime()), "Auto-snoozed until Wednesday at 9:00 PM")
@@ -118,7 +118,7 @@ test("a snooze carrying a prompt reads as the AUTO variant and names the follow-
     assert.equal(formatUserSnooze(wednesday, undefined, now.getTime()), "Snoozed until Wednesday at 9:00 PM")
     assert.equal(formatUserSnooze(wednesday, "   ", now.getTime()), "Snoozed until Wednesday at 9:00 PM")
     // With one, frizz resolves the park by resuming the agent — the same thing "Auto-snoozed" already
-    // means for a worker `timer:` park, so it must not sprout a third vocabulary.
+    // means for a worker's timer park, so it must not sprout a third vocabulary.
     assert.equal(
       formatUserSnooze(wednesday, "Check CI", now.getTime()),
       "Auto-snoozed until Wednesday at 9:00 PM — then: Check CI",

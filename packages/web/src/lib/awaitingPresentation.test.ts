@@ -40,7 +40,7 @@ test("no fence offers a park action any more — the worker's own tools own the 
   }
 })
 
-test("the card's sentence is the worker's own `reason:`, and nothing else", () => {
+test("the card's sentence is a pre-cutover fence's own `reason:`, and nothing else", () => {
   const REASON = "waiting on the three-platform run before porting the v2 drivers"
   // The worker's words, verbatim but for the capital every surface that draws it standing alone needs
   // — see reasonSentence, which the rail popover shares.
@@ -80,7 +80,8 @@ test("prWatchRefs surfaces every watched PR as a link target, in fence order", (
 // reading "watch: bvg44v4ij / for: 40m / reason: CI on #1227 is running…" — "why the fuck is the
 // awaiting block looking like this? We had a bunch of special rendering here, did we not?").
 //
-// Under the structural grammar the fence is six known line kinds, so anything left in `body` is a line
+// A fence's frontmatter is structure and nothing else (the live keys are `shells:`/`agents:`/`timers:`/
+// `prs:` plus `for:`, plural YAML since 2026-08-24), so anything left in `body` above the `---` is a line
 // the parser did NOT recognise — a worker still writing the deleted `watch:`, or a typo. It is a
 // malformed declaration, not prose: the worker is bumped for it (scheduler SOURCE 12), and the card
 // shows what it can instead of showing the machinery.
@@ -91,8 +92,9 @@ test("the card's prose is the reason, and an unrecognized line never becomes pro
   assert.doesNotMatch(awaitingPresentationLine("watch: bvg44v4ij", REASON), /watch:/)
 })
 
-// …but an OLD fence, written before the grammar had a `reason:`, put its whole handoff in the body. Those
-// threads must not card as blank, so the body is still the fallback when there is nothing better.
+// …but a fence puts its handoff in the BODY — the fences written before the grammar had a `reason:` did,
+// and so does every fence written since the `---` delimiter landed on 2026-08-17 and `reason:` was retired
+// on 2026-08-24. Neither may card as blank, so the body is the fallback when there is nothing better.
 test("a fence with no reason still shows its body rather than carding blank", () => {
   assert.equal(awaitingPresentationLine("PR is open and CI is green.", null), "PR is open and CI is green.")
   assert.equal(awaitingPresentationLine("", null), "Waiting for an external update.")
@@ -196,9 +198,10 @@ test("a reason that opens on CODE is left exactly as written", () => {
 })
 
 
-// WHAT THE POPOVER READS, and why it is not `reason:`. An awaiting fence is FRONTMATTER, THEN MARKDOWN
-// (2026-08-17): structural lines, a `---`, and below it as much prose as the worker wants — optional
-// prose, since what frizz requires is a live item and a `for:`. Reading only `reason:` dropped the
+// WHAT THE POPOVER READS, and why it is not `reason:` — a key since retired outright (2026-08-24), when
+// the frontmatter became YAML and could no longer hold prose. An awaiting fence is FRONTMATTER, THEN
+// MARKDOWN (2026-08-17): structural keys, a `---`, and below it as much prose as the worker wants —
+// optional prose, since what frizz requires is a live item and a `for:`. Reading only `reason:` dropped the
 // handoff of every fence written that way, which is exactly what the rail popover did (maintainer
 // 2026-08-19: "the actual block content … was all below the triple hyphen, sort of like a front matter
 // with Markdown beneath it").

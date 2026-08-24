@@ -82,7 +82,7 @@ const thread = {
     { id: "agent-a", label: "Audit the parser for edge cases", subagentType: "frizz:opus-high", startedAt: ago(2), state: "running" },
     { id: "agent-b", label: "Write property tests for the tiers", subagentType: "frizz:sonnet-high", startedAt: ago(6), state: "running" },
   ],
-  // BOTH shells are always present; only ONE is declared (the `watch:` below). That pairing is the
+  // BOTH shells are always present; only ONE is declared (the fence's `shells:` below). That pairing is the
   // point — the card must list the declared one and say nothing about the dev server nobody tore down.
   bgShells: !wantShells ? [] : [
         { id: "toolu_vite", taskId: "b7k2m1xq0", label: "vite dev --host", startedAt: ago(18), state: "running" },

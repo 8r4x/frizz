@@ -1,6 +1,6 @@
 // `owner/repo#N` → the PR's own URL. Shared by every card that carries a GitHub reference: the wake
 // card's title-row ref (a burst's items normally have their own permalinks, but the ref must stay
-// clickable when GitHub returned none) and the awaiting card's `pr-watch` refs, which have no other
+// clickable when GitHub returned none) and the awaiting card's `prs:` refs, which have no other
 // link to offer at all. Null when the ref isn't the expected shape, in which case the card renders it
 // as plain text rather than a broken link.
 //
