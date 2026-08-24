@@ -36,7 +36,13 @@ async function hover(page: Awaited<ReturnType<typeof openFixture>>["page"], ref:
   // The live prose sits below the gallery, so it starts off-screen: without this the pointer is moved
   // to a viewport coordinate the anchor does not occupy and nothing opens. Scrolling also CLOSES any
   // card still open (the anchor rect is captured in viewport coordinates), so it must happen first.
-  await anchor.scrollIntoView()
+  // Scrolled through `page.evaluate` with the handle as an ARGUMENT rather than through the handle's
+  // own `anchor.scrollIntoView()`. That convenience method resolves the element in puppeteer's isolated
+  // world, and against this page it throws `Protocol error (Runtime.callFunctionOn): Argument should
+  // belong to the same JavaScript world as target object` — the anchor comes back from a main-world
+  // query, and puppeteer 25 stopped bridging the two for it. Passing the handle to an evaluate keeps
+  // both sides in one world, and does exactly the same thing to the page.
+  await page.evaluate((el) => { el.scrollIntoView() }, anchor)
   await new Promise((r) => setTimeout(r, 200))
   const box = await anchor.boundingBox()
   await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2)

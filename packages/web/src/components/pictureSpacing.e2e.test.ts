@@ -112,14 +112,24 @@ test("a picture takes its own gap on both sides, and the compact exceptions arou
     await page.goto(fixtureUrl("?case=cards"), { waitUntil: "domcontentloaded" })
     await page.waitForSelector('[data-frizz-msg="m4"]')
     await settled(page)
+    // The two picture BLOCKS are read as the message column's own children, not as `figure.frizz-bash`.
+    // That selector is what this test used to use, and it stopped matching without anything about the
+    // SPACING changing: `/local-image` is not served here, so `BlockImage` hits its `broken` branch and
+    // returns a bare line of path text INSTEAD of the ImageFrame — no `figure`, no `frizz-bash`. The
+    // header above has always said the bytes need not arrive, and the gap is still charged off the
+    // tool's `outputImage`; the probe was the only part that quietly depended on the frame surviving.
+    // Reading the blocks positionally keeps this measuring the rule rather than the chrome, and works
+    // whether or not the picture loads. (Measured 2026-08-24: the gaps were right the whole time — this
+    // file had simply not run since the fallback changed, because nothing set its env gate.)
     const stacked = await page.evaluate(() => {
       const scope = document.querySelector("[data-virtualized-transcript]")!
-      const cards = [...scope.querySelectorAll("figure.frizz-bash, .frizz-bash")]
-        .filter((el) => !el.parentElement?.closest(".frizz-bash"))
+      const pictures = scope.querySelector('[data-frizz-msg="m3"] > div > div')!
+      const blocks = [...pictures.children].filter((el) => el.getAttribute("aria-hidden") === null)
       const digest = scope.querySelector('[data-frizz-msg="m4"]')!
-      const lastPicture = cards[cards.length - 1]
+      const lastPicture = blocks[blocks.length - 1]
+      if (blocks.length < 2) throw new Error(`expected two picture blocks in m3, got ${blocks.length}`)
       return {
-        betweenPictures: Math.round((cards[cards.length - 1].getBoundingClientRect().top - cards[cards.length - 2].getBoundingClientRect().bottom) * 10) / 10,
+        betweenPictures: Math.round((lastPicture.getBoundingClientRect().top - blocks[blocks.length - 2].getBoundingClientRect().bottom) * 10) / 10,
         intoDigest: Math.round((digest.getBoundingClientRect().top - lastPicture.getBoundingClientRect().bottom) * 10) / 10,
       }
     })
@@ -153,9 +163,19 @@ test("a picture takes its own gap on both sides, and the compact exceptions arou
         const next = paragraphs.filter((p) => r(p).top >= r(frame).bottom - 1).sort((a, b) => r(a).top - r(b).top)[0]
         return next ? Math.round((r(next).top - r(frame).bottom) * 10) / 10 : null
       }
+      // The bare-path block, found positionally for the same reason as the stacked probe above: with
+      // `/local-image` unserved, `BlockImage` renders its `broken` fallback and there is no
+      // `.frizz-bash` frame to select. It is the message column's one child that is neither a prose
+      // body nor a spacer — which is exactly what "its own block in the transcript's rhythm" means, and
+      // is what this assertion is about. The Markdown frame is unaffected: that one is sanitized HTML
+      // carrying the frame classes, so it survives its `<img>` failing to load.
+      const column = document.querySelector('[data-frizz-msg="m3"]')!
+      const barePathBlock = [...column.children].find(
+        (el) => el.getAttribute("aria-hidden") === null && !el.classList.contains("md-body"),
+      ) ?? null
       return {
         markdown: below(document.querySelector(".md-image-frame")),
-        barePath: below(document.querySelector('[data-frizz-msg="m3"] > .frizz-bash')),
+        barePath: below(barePathBlock),
       }
     })
     near(embedded.markdown!, STEP, "prose under a Markdown picture")

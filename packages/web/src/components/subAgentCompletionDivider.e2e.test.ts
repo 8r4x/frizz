@@ -117,7 +117,16 @@ test("a finished sub-agent draws the shell's wake divider, and every sub-agent t
     for (const [label, selector] of surfaces) {
       assert.ok(await mouseClick(selector), `${label} must render a real, clickable button`)
       await page.waitForSelector('[aria-label="Close"]', { timeout: 5000 })
-      await new Promise((r) => setTimeout(r, 400))
+      // WAIT FOR THE CONTENT, not for 400ms. The drawer mounts before its transcript resolves, and a
+      // fixed sleep only holds on an idle machine: under any real load this read landed on an empty
+      // drawer and failed with "must open a resolved … drawer", which reads as a broken affordance
+      // rather than as a slow one. Measured 2026-08-24 — this file failed inside a full suite run and
+      // passed 2/2 alone. The assertion below is unchanged; it is now reached when there is something
+      // to assert about.
+      await page.waitForFunction(() => {
+        const text = document.body.innerText
+        return text.includes("Reading the tier table") || text.includes("Transcript unavailable")
+      }, { timeout: 5000 }).catch(() => {})
       const body = await page.$eval("body", (b) => (b as HTMLElement).innerText)
       assert.ok(
         body.includes("Reading the tier table") || body.includes("Transcript unavailable"),
@@ -144,8 +153,13 @@ test("a finished sub-agent draws the shell's wake divider, and every sub-agent t
       h.click()
       return h.parentElement!.innerText.replace(/\s+/g, " ").trim()
     })
-    await new Promise((r) => setTimeout(r, 400))
     assert.ok(reported, "the child's own upward SendMessage keeps its bordered card in the drawer")
+    // Same rule as above: the disclosure was just clicked open, so wait for the body it reveals rather
+    // than for a fixed 400ms.
+    await page.waitForFunction(() => {
+      const h = [...document.querySelectorAll<HTMLElement>(".frizz-bash-header")].find((n) => n.textContent?.startsWith("Reported"))
+      return /rounds half-away-from-zero, not half-even/.test(h?.parentElement?.innerText ?? "")
+    }, { timeout: 5000 }).catch(() => {})
     const openedBody = await page.evaluate(() => {
       const h = [...document.querySelectorAll<HTMLElement>(".frizz-bash-header")].find((n) => n.textContent?.startsWith("Reported"))
       return h!.parentElement!.innerText.replace(/\s+/g, " ").trim()

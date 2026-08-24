@@ -59,7 +59,14 @@ test("board rail and open drawer keep the profile menu above queue rows", {
     await page.goto(`${baseUrl}/drawer-composer-footer-fixture.html`, { waitUntil: "domcontentloaded" })
     await page.waitForSelector('button[aria-label="Thread model and effort"]')
 
-    await assertOpaqueMenu('button[aria-label="Thread model and effort"]', "model and effort", "Medium")
+    // The fixture opens on `› high`; the first radio in the grid is Medium, so a real click has to move
+    // the trigger to `› medium`. LOWERCASE, and that is the point rather than an oversight: the menu
+    // ITEM is titled `Medium`, while the trigger prints the recorded effort VERBATIM — see
+    // profileGridDisplayLabel ("a concrete effort is displayed verbatim when present, and no effort is
+    // ever inferred"), pinned at the unit level as `Sonnet › high`. This assertion asked for /Medium/
+    // and so had been failing against a trigger that is behaving exactly as designed; nothing noticed,
+    // because nothing set this file's env gate and the whole suite reported `skipped` (2026-08-24).
+    await assertOpaqueMenu('button[aria-label="Thread model and effort"]', "model and effort", "› medium")
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()

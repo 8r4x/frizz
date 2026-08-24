@@ -58,13 +58,24 @@ test("authed: GitHub trigger renders between attach and send", { skip: !baseUrl 
 // useGithubStatus now polls while the answer is NO and stops at the first yes. This drives the real
 // thing: a real browser, a real react-query interval, a real wall-clock minute. No reload.
 const POLL_WINDOW_MS = 90_000
+// The heal is waited for on a MUCH longer leash than the control sleeps. `GithubTrigger`'s
+// `refetchInterval` is 60s while the answer is NO, and react-query starts that timer only once the
+// first query settles — so the icon returns at 60s PLUS page load, plus the fetch, plus whatever the
+// machine is doing. A 90s ceiling leaves 30s of headroom for all of that, and it is not enough: this
+// test passed at 60s in one run and timed out at 91s in the next, on the same code (2026-08-24).
+//
+// A bigger ceiling costs nothing when the test passes, because the wait EXITS on the icon appearing —
+// the usual run is still ~62s. What it buys is that a failure here means the icon never came back,
+// which is the claim, rather than that the machine was busy. The CONTROL below keeps the 90s window,
+// because that one sleeps the whole thing and only needs to outlast a single poll.
+const HEAL_CEILING_MS = 180_000
 
-test("a NO heals itself: the trigger comes back with no reload once the answer turns yes", { skip: !baseUrl, timeout: POLL_WINDOW_MS + 30_000 }, async () => {
+test("a NO heals itself: the trigger comes back with no reload once the answer turns yes", { skip: !baseUrl, timeout: HEAL_CEILING_MS + 30_000 }, async () => {
   await page!.goto(`${baseUrl}/composer-icons-fixture.html?heals`, { waitUntil: "networkidle0" })
   await page!.waitForSelector('button[aria-label="Attach files"]')
   // The outage answer is in: the trigger is genuinely absent, so what follows cannot be a false pass.
   assert.equal((await rail(page!)).github, null, "the first (outage) answer must hide the trigger")
-  await page!.waitForSelector('button[aria-label^="Investigate"]', { timeout: POLL_WINDOW_MS })
+  await page!.waitForSelector('button[aria-label^="Investigate"]', { timeout: HEAL_CEILING_MS })
   const r = await rail(page!)
   assert.ok(r.github, "the trigger must return on its own once the answer turns yes")
   assert.ok(r.attach!.right <= r.github!.left && r.github!.right <= r.send!.left, "and it returns to its own slot in the rail")

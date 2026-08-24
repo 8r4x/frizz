@@ -230,21 +230,33 @@ test("the collapsed intermediate run is a hairline divider that names its tool c
     const ladder = await page.$$eval("[data-wake-divider]", (ns) =>
       ns.map((n) => `${n.getAttribute("data-wake-divider")}: ${(n as HTMLElement).innerText.replace(/\s+/g, " ").trim()}`),
     )
+    // FIRST RUN, ONE LINE, LAST RUN — three runs is already enough to trigger it. `59627e8b` made
+    // `collapseMiddleRuns` swallow everything between the first run and the last whole ("prose,
+    // intermediate rests, wake hairlines and all"), from three runs up, precisely so a thread that
+    // rested thirty times cannot paint thirty near-identical restatements. This fixture has three, so
+    // the middle run AND the wake that opened it go behind one `middle-runs-summary` counting ROUNDS.
+    //
+    // This assertion used to spell the pre-`59627e8b` ladder — a fold and a wake per run — and it has
+    // been wrong ever since without anyone seeing it: that commit reported "Full suite 3294 pass / 0
+    // fail" because this file, like every e2e here, gates on a `FRIZZ_*_E2E_URL` no runner set, so it
+    // reported `skipped` and counted as green (corrected 2026-08-24, when `nub run test:e2e` first ran
+    // the suite).
     assert.deepEqual(
       ladder.map((row) => row.replace(/ · \d+m ago$/, "")),
       [
         "intermediate-summary: 6 tool calls · Click to expand",
-        // THE FIRST PARK IS NOT NEWS. The watcher replays everything already sitting on the PR — eleven
-        // items in this fixture, a hundred on a long-lived PR — and that used to render one row each
-        // (maintainer 2026-08-13: "it's going to render like a hundred reviews, so let's hide all of
-        // that on the initial watcher registration"). One honest line, and the worker still gets the
-        // full list in the delivered steer.
-        "github: 11 items already on colinhacks/zod#6382",
-        "intermediate-summary: 7 tool calls · Click to expand",
+        // The middle run, whole. THE FIRST PARK IS INSIDE IT — the watcher replays everything already
+        // sitting on the PR, eleven items here and a hundred on a long-lived PR, and that used to
+        // render one row each (maintainer 2026-08-13: "it's going to render like a hundred reviews, so
+        // let's hide all of that on the initial watcher registration"). It collapsed to one honest
+        // line, and now that line collapses too; the worker still gets the full list in the steer.
+        "middle-runs-summary: 1 more round · 7 tool calls · Click to expand",
+        // …and the wake that opens the FINAL run still draws, because resumed work with nothing above
+        // it to explain the resumption has been reported here before.
         "github: New approval from @colinhacks on colinhacks/zod#6382",
         "intermediate-summary: 4 tool calls · Click to expand",
       ],
-      `each run folds on its own, between the wakes that bound it, got ${ladder.join(" | ")}`,
+      `first run, one line, last run — each with its own fold, got ${ladder.join(" | ")}`,
     )
     const prCard = await page.evaluate(() => document.body.innerText)
     // NOT ONE ROW PER ITEM, at any count. This is the assertion that would catch the list coming back.
@@ -255,10 +267,13 @@ test("the collapsed intermediate run is a hairline divider that names its tool c
     // is what marks it; it needs no second signal in a different alphabet.
     const escapes = await page.$$eval('[data-wake-divider="github"] [class*="font-variant-caps"]', (ns) => ns.length)
     assert.equal(escapes, 0, "nothing on the GitHub hairline opts out of the divider's own casing")
-    // Every run's closing message stays in full: the card reads down the page as the thread actually ran.
-    assert.match(prCard, /PR #6382 is open against main/, "run 1's rest")
-    assert.match(prCard, /Both review findings are addressed/, "run 2's rest")
-    assert.match(prCard, /#5178 is merged as/, "run 3's rest")
+    // The FIRST run's closing message and the LAST one stay in full — that pair is exactly what
+    // `collapseMiddleRuns` promises to keep, because the first is the answer to whatever the human last
+    // asked and the last is where the thread stands now. The middle run's restatement is what the fold
+    // is FOR, so asserting it visible (as this did) asserts the bug back.
+    assert.match(prCard, /PR #6382 is open against main/, "run 1's rest — the answer to the ask")
+    assert.match(prCard, /#5178 is merged as/, "the last run's rest — where the thread stands")
+    assert.doesNotMatch(prCard, /Both review findings are addressed/, "the middle run's restatement is inside the fold")
     // Expanding is still ONE-WAY and card-wide: one press restores every run's hidden log at once.
     await page.click(SEL)
     await page.waitForFunction((sel) => document.querySelectorAll(sel).length === 0, {}, SEL)
@@ -284,22 +299,27 @@ test("the collapsed intermediate run is a hairline divider that names its tool c
     const goalLadder = await page.$$eval("[data-wake-divider]", (ns) =>
       ns.map((n) => `${n.getAttribute("data-wake-divider")}: ${(n as HTMLElement).innerText.replace(/\s+/g, " ").trim()}`),
     )
+    // Three Goal-driven runs, so the same first/one-line/last shape as the pr-watch ladder above: the
+    // middle run and the Goal bump that opened it fold together, and the bump above the LAST run still
+    // draws. The pre-`59627e8b` spelling — a fold and a bump per run — is what this used to assert.
     assert.deepEqual(
       goalLadder,
       [
         "intermediate-summary: 4 tool calls · Click to expand",
-        "rest: Goal · at rest",
-        "intermediate-summary: 3 tool calls · Click to expand",
+        "middle-runs-summary: 1 more round · 3 tool calls · Click to expand",
         "rest: Goal · at rest",
         "intermediate-summary: 2 tool calls · Click to expand",
       ],
-      `each Goal-driven run folds on its own, under the hairline naming what resumed it, got ${goalLadder.join(" | ")}`,
+      `each Goal-driven run folds, under the hairline naming what resumed it, got ${goalLadder.join(" | ")}`,
     )
     const goalCard = await page.evaluate(() => document.body.innerText)
     // THE ROW THIS WHOLE CHANGE EXISTS FOR: the answer to the question, which the single-run fold ate.
     assert.match(goalCard, /You were right on both counts/, "the answer the agent rested on renders in full")
-    assert.match(goalCard, /All six real CI checks are green/, "…and so does every later rested message")
-    assert.match(goalCard, /That review predates my rewrite/)
+    // …and the LAST run's rest, which is where the thread stands. The one between them is inside the
+    // middle fold by design — this used to assert "every later rested message" survives, which is the
+    // invariant `59627e8b` deliberately traded away to stop a thirty-rest thread painting thirty times.
+    assert.match(goalCard, /That review predates my rewrite/, "the last run's rest")
+    assert.doesNotMatch(goalCard, /All six real CI checks are green/, "the middle run's restatement is folded")
     // The bump's own PARAGRAPH never renders — the hairline is the whole notification. Rendering it in
     // full is what the 2026-08-12 call was actually against, and it must not come back with the rule.
     assert.doesNotMatch(goalCard, /If further work towards the original task/, "the Goal's body stays out; only its hairline shows")

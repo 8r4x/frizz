@@ -346,8 +346,19 @@ test("a background shell card marks its liveness in the same slot as a dispatch 
     // must cross the threshold on its OWN timer, with no reload, no interaction and no data push. That
     // timer is the only part of the rule a pure unit test cannot reach.
     assert.equal(shells[4].markSlotIndex, -1, "the fresh call starts unmarked")
+    // The wait asserts the row EXISTS and carries the mark, in that order. It used to read
+    // `rows[4]?.querySelector(".frizz-tool-mark") !== null`, and optional chaining made an ABSENT row
+    // satisfy it: `undefined !== null` is true, so a poll that landed while the list was momentarily
+    // not there resolved the wait instantly, and the assertion below then read -1 off a row that had
+    // never been given the chance to mark itself. Under a machine loaded enough to matter — several
+    // browser e2e files in flight at once — that is what this test failed on, while passing 3/3 alone
+    // (2026-08-24). A guard that cannot tell "not ready" from "done" turns load into a wrong answer
+    // instead of an honest timeout, which is the one thing a wait must never do.
     await page.waitForFunction(
-      () => document.querySelectorAll("[data-shell-rows] .frizz-bash")[4]?.querySelector(".frizz-tool-mark") !== null,
+      () => {
+        const row = document.querySelectorAll("[data-shell-rows] .frizz-bash")[4]
+        return row !== undefined && row.querySelector(".frizz-tool-mark") !== null
+      },
       { timeout: 30_000, polling: 250 },
     )
     const late = await read("[data-shell-rows] .frizz-bash")

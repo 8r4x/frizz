@@ -97,7 +97,19 @@ test("hovering a stalled sidebar row reveals a Retry button that restarts the se
     await page.click(limitRetry)
     await page.waitForFunction(() => JSON.parse(sessionStorage.getItem("followUpCalls") ?? "[]").length === 2, { timeout: 5_000 })
     const allCalls = await page.evaluate(() => JSON.parse(sessionStorage.getItem("followUpCalls") ?? "[]"))
-    assert.deepEqual(stable(allCalls[1]), { slug: "limit-held", sessionId: "", message: "Continue exactly where you left off." })
+    // Field by field, exactly as the stalled row's call is read above — and for the same reason: the
+    // eager path stamps a fresh `deliveryId` UUID, so a whole-object deepEqual could never hold. This
+    // line called a `stable()` helper that dropped that field, and `a7b40082` rewrote the FIRST
+    // assertion into the spelling above while deleting the helper both of them shared. Nothing caught
+    // it, because nothing has run this file: every e2e here gates on a `FRIZZ_*_E2E_URL` that no runner
+    // set, so the whole suite reported `skipped` and counted as green. It has thrown
+    // `ReferenceError: stable is not defined` on its last assertion ever since (2026-08-24).
+    const [, limitCall] = allCalls
+    assert.equal(limitCall.slug, "limit-held")
+    assert.equal(limitCall.sessionId, "")
+    assert.equal(limitCall.message, "Continue exactly where you left off.")
+    assert.equal(typeof limitCall.deliveryId, "string", "the limit-held retry goes through the same eager path")
+    assert.ok(limitCall.deliveryId.length > 0, "…and carries its own ledger handle")
 
     assert.deepEqual(errors, [])
     assert.deepEqual(notFound.filter((path) => path !== "/favicon.ico"), [])
