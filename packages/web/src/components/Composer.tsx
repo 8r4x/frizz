@@ -56,6 +56,7 @@ export function Composer({
   busy,
   footer,
   leftAction,
+  slashSuggest,
   onInterruptSubmit,
 }: {
   value: string
@@ -78,6 +79,12 @@ export function Composer({
   // A small action rendered just LEFT of the send button (the dispatch composer's GitHub-picker icon).
   // Only surfaces that pass it get it; reply/queue composers omit it.
   leftAction?: React.ReactNode
+  // SKILLS TYPEAHEAD. When set, a draft that is exactly one `/`-led token opens a suggestion menu of
+  // the thread's invocable skills above the box (fetched lazily, once, on first trigger). The list is
+  // whatever the thread's own harness reports — the caller owns sourcing entirely; this component only
+  // renders and completes. Surfaces without a session to ask (the dispatch composer) omit it and the
+  // whole affordance is inert.
+  slashSuggest?: () => Promise<Array<{ name: string; description: string }>>
   // INTERRUPT AND SEND, bound to ⌘/Ctrl-Enter. Set only while the thread's worker is mid-turn AND its
   // runtime can be preempted; the caller owns that policy entirely.
   //
@@ -266,6 +273,51 @@ export function Composer({
     if (el && (!active || active.contains(el))) el.focus({ preventScroll: true })
   }, [busy])
 
+  // SKILLS TYPEAHEAD state. `skillItems` is the harness's list, fetched once on the first `/` trigger
+  // (null = not asked yet; [] = asked, nothing to offer — including a fetch that failed, which must
+  // read as "no suggestions", never as an error the operator has to dismiss). `dismissedFor` records
+  // the exact draft an Escape closed the menu over, so it stays closed until the draft CHANGES —
+  // without it the menu would reopen on the very next render.
+  const [skillItems, setSkillItems] = useState<Array<{ name: string; description: string }> | null>(null)
+  const [suggestSel, setSuggestSel] = useState(0)
+  const [dismissedFor, setDismissedFor] = useState<string | null>(null)
+  // Active while the draft is exactly one `/`-led token — the shape of a skill invocation still being
+  // typed. A space (arguments have begun) or a newline closes it.
+  const slashActive = Boolean(slashSuggest) && /^\/\S*$/.test(prose)
+  useEffect(() => {
+    if (!slashActive || skillItems !== null) return
+    let live = true
+    // Errors resolve to "asked, nothing to offer": the caller decides whether to retry on a later
+    // trigger by handing this component a fresh mount (drawer reopen) — a typeahead never toasts.
+    void slashSuggest!().then(
+      (items) => { if (live) setSkillItems(items) },
+      () => { if (live) setSkillItems([]) },
+    )
+    return () => { live = false }
+  }, [slashActive, skillItems, slashSuggest])
+  const suggestions = useMemo(() => {
+    if (!slashActive || !skillItems || dismissedFor === prose) return []
+    const query = prose.slice(1).toLowerCase()
+    // Prefix matches first (what completion usually wants), then substring matches — those are what
+    // surface a namespaced skill (`frizz:gh`) from its bare name.
+    const starts = skillItems.filter((s) => s.name.toLowerCase().startsWith(query))
+    const contains = skillItems.filter((s) => !s.name.toLowerCase().startsWith(query) && s.name.toLowerCase().includes(query))
+    return [...starts, ...contains]
+  }, [slashActive, skillItems, dismissedFor, prose])
+  const suggestOpen = suggestions.length > 0
+  // Reset the highlight whenever the draft changes: the filtered list under it just changed too.
+  useEffect(() => { setSuggestSel(0) }, [prose])
+  // Keep the highlighted row in view when arrowing through a list taller than the menu.
+  const suggestListRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    suggestListRef.current?.querySelector(`[data-suggest-index="${suggestSel}"]`)?.scrollIntoView({ block: "nearest" })
+  }, [suggestSel])
+  function acceptSuggestion(item: { name: string }) {
+    const next = `/${item.name} `
+    setProse(next)
+    requestAnimationFrame(() => taRef.current?.setSelectionRange(next.length, next.length))
+  }
+
   const hasContent = value.trim().length > 0
   // ONE rail slot. Reserving it must track what is actually rendered — the padding/offset classes below
   // key off `railAction`, and a truthy element that renders null would carve out an empty hole (the bug
@@ -284,6 +336,31 @@ export function Composer({
       shiftKey: e.shiftKey,
       isComposing: e.nativeEvent.isComposing,
       keyCode: e.keyCode,
+    }
+    // The open skills menu claims its keys FIRST — above all Enter (accept, not send) and Escape
+    // (close the menu, not blur; the blur branch below must not see this keypress). Modified Enter
+    // deliberately falls through: ⌘-Enter mid-name is the operator overriding the menu, not using it.
+    if (suggestOpen && !e.nativeEvent.isComposing) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault()
+        setSuggestSel((current) => {
+          const delta = e.key === "ArrowDown" ? 1 : -1
+          return (current + delta + suggestions.length) % suggestions.length
+        })
+        return
+      }
+      if ((e.key === "Enter" || e.key === "Tab") && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+        e.preventDefault()
+        e.stopPropagation()
+        acceptSuggestion(suggestions[suggestSel] ?? suggestions[0])
+        return
+      }
+      if (e.key === "Escape") {
+        e.preventDefault()
+        e.stopPropagation()
+        setDismissedFor(prose)
+        return
+      }
     }
     if (queueComposerHandlesOptionEnter(surface, e.key, e.altKey)) {
       // Option-Enter inserts a newline EXPLICITLY (Claude Code muscle memory). Merely exempting it
@@ -366,6 +443,34 @@ export function Composer({
       {dragging && (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-bg/80 text-[12px] text-muted">
           Drop file to attach
+        </div>
+      )}
+      {/* The skills menu, floated ABOVE the box (the composer lives at the bottom of its surface, so
+          up is the direction with room). Rows are text-only — a name and its one-line description —
+          which keeps this out of icon-ink territory entirely. Mousedown is prevented on every row for
+          the same reason as the send button: choosing a suggestion must never blur the textarea. */}
+      {suggestOpen && (
+        <div
+          ref={suggestListRef}
+          data-slash-menu
+          className="absolute bottom-full left-0 right-0 z-20 mb-1.5 max-h-56 overflow-y-auto rounded-lg border border-border bg-bg py-1 shadow-lg"
+        >
+          {suggestions.map((s, i) => (
+            <button
+              key={s.name}
+              type="button"
+              data-suggest-index={i}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => acceptSuggestion(s)}
+              onMouseEnter={() => setSuggestSel(i)}
+              // px-3.5 matches the textarea's own text inset, so the completed `/name` lands exactly
+              // under the row that offered it.
+              className={`flex w-full items-baseline gap-2 px-3.5 py-1.5 text-left ${i === suggestSel ? "bg-panel-2" : ""}`}
+            >
+              <span className="shrink-0 text-[12px] font-medium text-fg">/{s.name}</span>
+              {s.description && <span className="min-w-0 truncate text-[11px] text-muted">{s.description}</span>}
+            </button>
+          ))}
         </div>
       )}
       <textarea

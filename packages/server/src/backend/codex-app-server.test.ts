@@ -209,6 +209,18 @@ class FakeAppServerProcess extends EventEmitter implements CodexAppServerProcess
       if (this.interruptBehavior !== "accept-no-end") this.completeActiveTurn(params.threadId, params.turnId)
       return
     }
+    if (message.method === "skills/list") {
+      const params = message.params as { cwds?: string[] }
+      this.send({ id, result: { data: (params.cwds ?? []).map((cwd) => ({
+        cwd,
+        errors: [],
+        skills: [
+          { name: "frizz-stack", description: "Boot a disposable Frizz", enabled: true, path: `${cwd}/.agents/skills/frizz-stack/SKILL.md`, scope: "repo" },
+          { name: "switched-off", description: "Present on disk but disabled", enabled: false, path: `${cwd}/off/SKILL.md`, scope: "user" },
+        ],
+      })) } })
+      return
+    }
     this.send({ id, error: { code: -32601, message: "not implemented by fake" } })
   }
 }
@@ -992,6 +1004,17 @@ test("only locally witnessed turn ids may own provider requests and notification
   const scope = { projectId: "project-1", threadSlug: binding.threadSlug, sessionId: binding.sessionId }
   await waitFor(() => h.interactions.listPending(scope).length === 1, "owned turn request")
   h.close()
+})
+
+test("listSkills asks the app-server for the session cwd's skills and drops disabled ones", async () => {
+  const h = harness()
+  const binding = await h.bridge.startDisposableSession({ threadSlug: "skills-thread", sessionId: "skills-session", cwd: h.dir })
+  const skills = await h.bridge.listSkills(binding.threadSlug, binding.sessionId)
+  assert.deepEqual(skills, [{ name: "frizz-stack", description: "Boot a disposable Frizz" }])
+  const request = h.processes[0]!.clientRequests.find((message) => message.method === "skills/list")!
+  assert.deepEqual(request.params, { cwds: [h.dir] })
+  await assert.rejects(h.bridge.listSkills("unknown-thread", "unknown-session"), /bridge-owned session/)
+  await h.close()
 })
 
 test("steerTurn injects into the active turn; interruptTurn cancels it and is a no-op when idle", async () => {

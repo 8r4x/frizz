@@ -1560,6 +1560,18 @@ const ThreadResponse = z.object({
 const TurnResponse = z.object({ turn: z.object({ id: Opaque }).passthrough() }).strict()
 // turn/steer returns a FLAT { turnId }, unlike turn/start's nested { turn: { id } }.
 const TurnSteerResponse = z.object({ turnId: Opaque }).passthrough()
+// `skills/list` — the app-server's OWN skill discovery (system/user/repo roots, enable state), so frizz
+// never re-implements or drifts from it. Loose by design: only the fields the composer typeahead needs
+// are read, and an unknown extra field must not fail the listing.
+const SkillsListResponse = z.object({
+  data: z.array(z.object({
+    skills: z.array(z.object({
+      name: z.string(),
+      description: z.string().optional(),
+      enabled: z.boolean().optional(),
+    }).passthrough()).optional(),
+  }).passthrough()).optional(),
+}).passthrough()
 // `thread/resume` reports the thread's EFFECTIVE sandbox back as a tagged SandboxPolicy — the one
 // authoritative read of live server state frizz gets, and what keeps the binding's sandbox cache honest
 // whether the resume was cold (our override applied) or a live rejoin (our override was ignored).
@@ -2130,6 +2142,34 @@ export class CodexAppServerBridge {
         throw new Error("Codex accepted the interrupt but the turn has not ended; nothing was stopped")
       }
       return { interrupted: true }
+    } finally {
+      releaseOperation()
+    }
+  }
+
+  // The thread's invocable skills, asked of the app-server itself (`skills/list` scoped to the
+  // session's cwd). Read-only and cheap — the server caches its scan — so unlike interruptTurn it
+  // needs no binding state beyond the cwd, and a detached binding can still be listed for.
+  async listSkills(threadSlug: string, sessionId: string): Promise<Array<{ name: string; description: string }>> {
+    const releaseOperation = this.beginOperation()
+    try {
+      const connection = await this.ensureConnected()
+      const binding = this.bindingForScope(threadSlug, sessionId)
+      if (!binding) throw new Error("Codex app-server skill listing requires a bridge-owned session")
+      const response = SkillsListResponse.parse(await connection.request("skills/list", { cwds: [binding.cwd] }))
+      const skills: Array<{ name: string; description: string }> = []
+      const seen = new Set<string>()
+      for (const entry of response.data ?? []) {
+        for (const skill of entry.skills ?? []) {
+          // `enabled: false` is the server saying the skill exists but is switched off — not invocable.
+          if (skill.enabled === false) continue
+          if (skills.length >= 1024) return skills
+          if (seen.has(skill.name)) continue
+          seen.add(skill.name)
+          skills.push({ name: skill.name.slice(0, 512), description: (skill.description ?? "").slice(0, 1024) })
+        }
+      }
+      return skills
     } finally {
       releaseOperation()
     }

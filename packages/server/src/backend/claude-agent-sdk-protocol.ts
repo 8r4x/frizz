@@ -106,6 +106,20 @@ export const CLAUDE_BROKER_CAPABILITY_RELOAD_PLUGINS = "reload-plugins-v1"
 // rename that never happened.
 export const CLAUDE_BROKER_CAPABILITY_RENAME = "rename-v1"
 
+// Listing the session's invocable skills through the SDK's `supportedCommands()` — the harness's own
+// discovery, so frizz never re-implements skill resolution (plugins, project, global, enable state)
+// and never drifts from it. Read-only and cosmetic, but gated like the mutating verbs for the same
+// mechanical reason: an older surviving daemon ignores the unknown frame and the client would sit out
+// its deadline reporting "the session did not answer" instead of "this session is too old".
+export const CLAUDE_BROKER_CAPABILITY_LIST_SKILLS = "list-skills-v1"
+
+// One invocable skill, as the harness reports it. `name` is what `/name` invokes; `description` is the
+// skill's own frontmatter line, for the composer typeahead to render.
+export interface ClaudeSkillInfo {
+  name: string
+  description: string
+}
+
 // What a reload actually changed, bounded for the wire. Counts rather than full lists because the
 // operator is answering "did my edit land?", not auditing the closure — and `mcpServers` carries names
 // because a reload that CHANGES MCP tools is the one case with a real cost (the provider re-reads the

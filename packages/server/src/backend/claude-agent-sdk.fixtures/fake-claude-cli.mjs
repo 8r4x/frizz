@@ -512,7 +512,12 @@ function handleUserMessage(message) {
 
 function initializationPayload() {
   return {
-    commands: [{ name: "review", description: "Review changes", argumentHint: "<path>", aliases: ["inspect"] }],
+    // "review" is also named by the init frame's `skills` array below; "compact" is not — it stands in
+    // for a built-in command, which listSkills must filter out of the skill list.
+    commands: [
+      { name: "review", description: "Review changes", argumentHint: "<path>", aliases: ["inspect"] },
+      { name: "compact", description: "Compact the conversation", argumentHint: "", aliases: [] },
+    ],
     agents: [{ name: "Explore", description: "Explore the repository", model: "sonnet" }],
     output_style: "default",
     available_output_styles: ["default", "concise"],

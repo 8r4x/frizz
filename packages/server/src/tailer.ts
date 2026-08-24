@@ -1897,15 +1897,20 @@ export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
       break
     case "user-message":
       // A human/peer/notification turn re-opens the turn (the model is about to respond → in-flight)
-      // and supersedes any pending question / excusal fence (they only signal as the FINAL message).
+      // and supersedes the agent's own claims about itself — the excusal fence and the ALLDONE
+      // sentinel only signal as the FINAL message, and a re-invoked agent is neither done nor parked.
       // Only a GENUINE human turn bumps lastUserAt — a synthetic one (peer msg / notification /
       // tool-result echo) is machine motion the human didn't cause, so it never jumps the row.
       state.sawRecords = true
       state.turn = "in-flight"
-      state.lastAssistantHasQuestion = false
       state.lastAssistantAllDone = false
       state.lastFence = undefined
       if (!ev.synthetic) {
+        // …and the QUESTION is the human's to discharge, so it rides the same gate as the row-order
+        // key rather than clearing unconditionally. Codex's twin of the claude defect in applyRecord:
+        // a synthetic turn that nobody typed was answering the agent's question on the human's behalf,
+        // which put the row back in the Active rail with its ```question card still on screen.
+        state.lastAssistantHasQuestion = false
         if (typeof ev.at === "string") state.lastUserAt = ev.at
         // Keep the delivery-confirmation pair atomic. A genuine non-text user event may still bump
         // row activity, but its newer timestamp must never retain text from an older human turn.

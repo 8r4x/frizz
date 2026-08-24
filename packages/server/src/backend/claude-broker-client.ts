@@ -9,6 +9,7 @@ import type {
   ClaudePermissionDecision,
   ClaudePermissionRequest,
   ClaudePluginReload,
+  ClaudeSkillInfo,
   ClaudeQueryEvent,
 } from "./claude-agent-sdk-protocol.ts"
 
@@ -45,6 +46,8 @@ export interface ClaudeBrokerClient {
   reloadPlugins(): Promise<ClaudePluginReload>
   /** Re-title the live session through the provider (the SDK's `generateSessionTitle`). */
   renameSession(description: string): Promise<string | undefined>
+  /** The session's invocable skills, as the harness reports them (names + descriptions). */
+  listSkills(): Promise<ClaudeSkillInfo[]>
   setPermissionMode(mode: string): void
   connected(): boolean
   /**
@@ -89,6 +92,7 @@ export function connectClaudeBroker(
   const pendingStops = new Map<string, { settle: () => void; fail: (error: Error) => void; timer: NodeJS.Timeout }>()
   const pendingReloads = new Map<string, { settle: (r: ClaudePluginReload) => void; fail: (error: Error) => void; timer: NodeJS.Timeout }>()
   const pendingRenames = new Map<string, { settle: (t: string | undefined) => void; fail: (error: Error) => void; timer: NodeJS.Timeout }>()
+  const pendingSkills = new Map<string, { settle: (s: ClaudeSkillInfo[]) => void; fail: (error: Error) => void; timer: NodeJS.Timeout }>()
   let cancelSeq = 0
 
   // Buffering while DISCONNECTED is the feature — `connect` flushes `outbound` — but buffering while
@@ -152,6 +156,17 @@ export function connectClaudeBroker(
           clearTimeout(entry.timer)
           if (typeof frame.error === "string" && frame.error) entry.fail(new Error(frame.error))
           else entry.settle(frame.reloaded as ClaudePluginReload)
+          break
+        }
+        case "skills-result": {
+          const entry = pendingSkills.get(frame.requestId as string)
+          if (!entry) break
+          pendingSkills.delete(frame.requestId as string)
+          clearTimeout(entry.timer)
+          if (typeof frame.error === "string" && frame.error) entry.fail(new Error(frame.error))
+          // Keep only well-shaped rows: the daemon already bounds them, but a frame is still a frame.
+          else entry.settle((Array.isArray(frame.skills) ? frame.skills : [])
+            .filter((s: unknown): s is ClaudeSkillInfo => typeof (s as ClaudeSkillInfo)?.name === "string" && typeof (s as ClaudeSkillInfo)?.description === "string"))
           break
         }
       }
@@ -218,6 +233,19 @@ export function connectClaudeBroker(
       pendingReloads.set(requestId, { settle: resolve, fail: reject, timer })
       send({ t: "reload-plugins", requestId })
     }),
+    // The skill list is answered from the SDK's own memory (captured at initialize), so it shares the
+    // short cancel deadline rather than the reload one.
+    listSkills: () => new Promise<ClaudeSkillInfo[]>((resolve, reject) => {
+      if (closed) { reject(new Error("the broker connection is closed")); return }
+      const requestId = `skills-${++cancelSeq}`
+      const timer = setTimeout(() => {
+        pendingSkills.delete(requestId)
+        reject(new Error("the Claude session did not answer the skill listing"))
+      }, cancelTimeoutMs)
+      if (timer.unref) timer.unref()
+      pendingSkills.set(requestId, { settle: resolve, fail: reject, timer })
+      send({ t: "list-skills", requestId })
+    }),
     // Shares the reload deadline: a re-title is a provider round trip, not local bookkeeping.
     renameSession: (description: string) => new Promise<string | undefined>((resolve, reject) => {
       if (closed) { reject(new Error("the broker connection is closed")); return }
@@ -243,6 +271,8 @@ export function connectClaudeBroker(
       pendingReloads.clear()
       for (const [, entry] of pendingRenames) { clearTimeout(entry.timer); entry.fail(new Error("the broker connection closed before the rename was answered")) }
       pendingRenames.clear()
+      for (const [, entry] of pendingSkills) { clearTimeout(entry.timer); entry.fail(new Error("the broker connection closed before the skill listing was answered")) }
+      pendingSkills.clear()
       pendingStops.clear()
       sock?.destroy(); sock = null
     },

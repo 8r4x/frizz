@@ -1,6 +1,7 @@
-import { useState, type ReactElement, type ReactNode } from "react"
+import { useMemo, useState, type ReactElement, type ReactNode } from "react"
 import { useSnapshot } from "valtio"
-import type { Backend } from "@frizz/shared"
+import type { Backend, ThreadSkill } from "@frizz/shared"
+import { rpc } from "../api/rpc.ts"
 import { store } from "../store.ts"
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
 import { Composer } from "./Composer.tsx"
@@ -25,6 +26,25 @@ import { useEagerFollowUp, type EagerFollowUpCallbacks } from "../lib/eagerCompo
 // wrapper (`className`), the running-operations rows rendered under the box (`ops` — the drawer passes
 // BackgroundOpsStrip, the queue passes its ⤷ sub-agent lines plus a narrowed strip), and the send itself
 // (`submitOverride`). Everything else is identical by construction.
+// The skills typeahead's per-thread cache, shared by BOTH composer surfaces (the drawer and the queue
+// card render the same thread) so opening either only ever asks the harness once. A failure is NOT
+// cached: the common failure is "the session is not running yet", and the next `/` should ask again
+// once it is. Module scope on purpose — the cache outlives any one composer mount.
+const threadSkillsCache = new Map<string, Promise<ThreadSkill[]>>()
+function fetchThreadSkills(slug: string): Promise<ThreadSkill[]> {
+  const cached = threadSkillsCache.get(slug)
+  if (cached) return cached
+  const fetched = rpc.threadSkills({ slug }).then(
+    (result) => result.skills,
+    () => {
+      threadSkillsCache.delete(slug)
+      return []
+    },
+  )
+  threadSkillsCache.set(slug, fetched)
+  return fetched
+}
+
 export function ThreadComposerBox({
   slug,
   surface,
@@ -64,6 +84,7 @@ export function ThreadComposerBox({
   const controls = useThreadComposerControls(slug)
   const followUp = useEagerFollowUp(slug)
   const [signInFor, setSignInFor] = useState<Backend | null>(null)
+  const slashSuggest = useMemo(() => () => fetchThreadSkills(slug), [slug])
   const [logoutFor, setLogoutFor] = useState<Backend | null>(null)
 
   // INTERRUPT AND SEND is offered only when there is something to interrupt AND a runtime that can be
@@ -111,6 +132,7 @@ export function ThreadComposerBox({
         onChange={setMessage}
         onSubmit={() => send()}
         onInterruptSubmit={canInterrupt ? () => send(true) : undefined}
+        slashSuggest={slashSuggest}
         placeholder={placeholder}
         // NOT `|| followUp.pending`. The send is already committed locally (draft cleared, bubble
         // appended, and in the queue the card has already begun dissolving), so gating the textarea on

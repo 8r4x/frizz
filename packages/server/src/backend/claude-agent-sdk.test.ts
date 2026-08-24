@@ -166,6 +166,19 @@ test("real SDK + fake executable: init owns the requested session, input streams
   }
 })
 
+test("listSkills intersects the initialize command list with the init frame's skills array", { timeout: 10_000 }, async () => {
+  const harness = startHarness("basic")
+  try {
+    await withTimeout(harness.handle.ready(), "session init")
+    // The fixture's initialize response carries TWO commands ("review", "compact") and its init frame
+    // names only "review" as a skill: the built-in stand-in must not surface as a skill.
+    const skills = await withTimeout(harness.handle.listSkills(), "skill listing")
+    assert.deepEqual(skills, [{ name: "review", description: "Review changes" }])
+  } finally {
+    await harness.close()
+  }
+})
+
 test("stopTask reaches the provider control channel with the exact runtime task id", { timeout: 10_000 }, async () => {
   const harness = startHarness("basic")
   try {

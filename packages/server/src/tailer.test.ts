@@ -255,6 +255,19 @@ test("applyEvent: only a GENUINE user-message bumps lastUserAt; a synthetic one 
   assert.equal(s.lastActivityAt, "2026-07-01T00:00:05.000Z") // but activity clock did advance
 })
 
+// The codex twin of the claude defect: `synthetic` already knew the difference, and only the row-order
+// key was reading it. An open ```question is a claim on the HUMAN, so machine motion cannot discharge it
+// — otherwise the row leaves the queue and returns to the Active rail with its ask still on screen.
+test("applyEvent: a synthetic turn cannot answer the agent's question; a genuine one does", () => {
+  const s = newTailState("t", "s", "/x")
+  applyEvent(s, { kind: "assistant-text", at: "2026-07-01T00:00:01.000Z", text: "```question\nA or B?\n```", final: true })
+  assert.equal(s.lastAssistantHasQuestion, true)
+  applyEvent(s, { kind: "user-message", at: "2026-07-01T00:00:05.000Z", synthetic: true })
+  assert.equal(s.lastAssistantHasQuestion, true, "a peer message / notification answers nothing")
+  applyEvent(s, { kind: "user-message", at: "2026-07-01T00:00:09.000Z", text: "B", synthetic: false })
+  assert.equal(s.lastAssistantHasQuestion, false, "the human answered — the row leaves the queue")
+})
+
 test("applyEvent: a compaction is harness motion — it advances the clock but moves no turn, preview or fence", () => {
   const s = newTailState("t", "s", "/x")
   applyEvent(s, { kind: "turn-start", at: "2026-07-01T00:00:00.000Z" })

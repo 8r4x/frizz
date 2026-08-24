@@ -8,6 +8,8 @@ import {
   GITHUB_DISPATCH_UI_BOUNDARY,
   ATTACHMENT_IMAGE_EXTENSIONS,
   attachmentExtension,
+  isAllInjectedNoise,
+  isInjectedNoise,
   isInterruptMarker,
   isParkCorrection,
   isWakeDelivery,
@@ -50,15 +52,6 @@ export const MAX_MESSAGES = 300
 // exactly what the reader would have got for one click of "Load earlier messages".
 export const LATEST_WINDOW_ASK_REACH_ITEMS = 100
 export const LATEST_WINDOW_ASK_REACH_BYTES = 512 * 1024
-
-// A user-record that is actually harness plumbing: task-notifications from background children,
-// bare system-reminder wrappers, frizz orchestrator pulses. Matched on the LEADING tag so a human
-// message that merely quotes one of these somewhere inside still renders.
-const NOISE_PREFIXES = ["<task-notification>", "[SYSTEM NOTIFICATION", "<system-reminder>", "<frizz-", "[frizz]"]
-export function isInjectedNoise(text: string): boolean {
-  const t = text.trimStart()
-  return NOISE_PREFIXES.some((p) => t.startsWith(p))
-}
 
 // The runtime's own interrupt receipt — see isInterruptMarker (moved to @frizz/shared when the tailer
 // needed it too). Dropped from the chat here; read as "the turn is over" by the fold there.
@@ -284,14 +277,6 @@ function markFenceRefused(out: TranscriptMessage[]): void {
     if (parseSignalFence(m.text)?.kind === "awaiting") m.fenceRefused = true
     return
   }
-}
-
-// Is this whole record plumbing? The prefix check above answers that for ONE message, and the caller's
-// gate has to ask it of a record that may hold several — a coalesced record LED by a relay is plumbing
-// in its first segment and a real delivery in its second, and dropping it whole (the pre-split gate)
-// would silently swallow the delivery. Per segment, both parts land where they belong.
-function isAllInjectedNoise(text: string): boolean {
-  return splitWakeDeliveries(text).every(isInjectedNoise)
 }
 
 // Append a text block to a message's ordered parts, coalescing into a trailing text part (so several

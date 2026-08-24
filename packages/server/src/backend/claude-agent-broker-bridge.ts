@@ -8,8 +8,8 @@ import { randomUUID } from "node:crypto"
 import { adoptOrForkBroker, killBroker, lastKnownBrokerDaemon, liveBrokerRecord, liveBrokerRecords, claudeBrokerRecordPath, resolveClaudeExecutableAbsolute, takeBrokerRetirement, type BrokerRetirementMark, type BrokerRetirementReason } from "./claude-broker-host.ts"
 import { connectClaudeBroker, type ClaudeBrokerClient } from "./claude-broker-client.ts"
 import { describeClaudeBrokerExit, readClaudeBrokerExit, type ClaudeBrokerExitRecord } from "./claude-broker-diagnostics.ts"
-import type { ClaudeDiagnostic, ClaudePermissionDecision, ClaudePermissionRequest, ClaudePluginReload, ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
-import { CLAUDE_AGENT_SDK_MAX_INPUT_BYTES, CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_RELOAD_PLUGINS, CLAUDE_BROKER_CAPABILITY_RENAME, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, validateInputMessage } from "./claude-agent-sdk-protocol.ts"
+import type { ClaudeDiagnostic, ClaudePermissionDecision, ClaudePermissionRequest, ClaudePluginReload, ClaudeQueryEvent, ClaudeSkillInfo } from "./claude-agent-sdk-protocol.ts"
+import { CLAUDE_AGENT_SDK_MAX_INPUT_BYTES, CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_LIST_SKILLS, CLAUDE_BROKER_CAPABILITY_RELOAD_PLUGINS, CLAUDE_BROKER_CAPABILITY_RENAME, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, validateInputMessage } from "./claude-agent-sdk-protocol.ts"
 import type { BrokerRecord, ClaudeBrokerConfig } from "./claude-agent-broker.ts"
 import type { InteractionSessionScope, InteractionStore } from "../interaction-store.ts"
 import {
@@ -167,6 +167,12 @@ export interface ClaudeAgentBrokerBridge {
    * to be started first is just a start.
    */
   reloadPlugins(input: { threadSlug: string; sessionId: string }): Promise<ClaudePluginReload>
+  /**
+   * The session's invocable skills, as the harness itself reports them — the composer typeahead's
+   * data source. Requires a live daemon: the list is the SDK's own resolution of plugins, project and
+   * global skills, and frizz deliberately has no discovery of its own to fall back on.
+   */
+  listSkills(input: { threadSlug: string; sessionId: string }): Promise<ClaudeSkillInfo[]>
   /**
    * Re-title the LIVE session through the provider — the replacement for typing `/rename` at an
    * interactive `claude` prompt.
@@ -722,6 +728,22 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
         throw new Error("This thread's Claude session predates in-place plugin reload — its next turn will restart on a session that supports it")
       }
       return await held.client.reloadPlugins()
+    },
+
+    // Ask the LIVE session for its skills. Same capability discipline as the verbs above: an older
+    // surviving daemon ignores the unknown frame, and the client would time out reporting "did not
+    // answer" — which reads as a wedged agent rather than an out-of-date one.
+    async listSkills(input) {
+      const held = current(input.threadSlug, input.sessionId)
+      if (!held || !holdsLiveDaemon(held)) {
+        if (held) { held.client.close(); sessions.delete(input.threadSlug) }
+        throw new Error("This thread's Claude session is not running, so there is no skill list to ask it for")
+      }
+      const record = liveBrokerRecord(claudeBrokerRecordPath(deps.stateDir, held.sessionId))
+      if (!record?.capabilities?.includes(CLAUDE_BROKER_CAPABILITY_LIST_SKILLS)) {
+        throw new Error("This thread's Claude session predates skill listing — its next turn will restart on a session that supports it")
+      }
+      return await held.client.listSkills()
     },
 
     async warmUp() {

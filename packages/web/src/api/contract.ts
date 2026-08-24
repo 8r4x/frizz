@@ -30,6 +30,8 @@ import type {
   SetThreadPermissionInput,
   SetThreadPermissionResult,
   ThreadProfileOptionsInput,
+  ThreadSkillsInput,
+  ThreadSkillsResult,
   ThreadProfileOptionsResult,
   SetThreadProfileInput,
   SetThreadProfileResult,
@@ -140,6 +142,9 @@ export interface Api {
   deliverQueuedNow(input: DeliverQueuedNowInput): Promise<DeliverQueuedNowResult>
   setThreadPermission(input: SetThreadPermissionInput): Promise<SetThreadPermissionResult>
   threadProfileOptions(input: ThreadProfileOptionsInput): Promise<ThreadProfileOptionsResult>
+  // The composer's `/` typeahead: the thread's invocable skills, as its own harness reports them.
+  // Any failure (no live session, a legacy row) means "no suggestions", never a surfaced error.
+  threadSkills(input: ThreadSkillsInput): Promise<ThreadSkillsResult>
   setThreadProfile(input: SetThreadProfileInput): Promise<SetThreadProfileResult>
   markRead(input: { slug: string }): Promise<void>
   // Opening a thread records read/seen telemetry only. Queue membership is lifecycle-driven and is
@@ -310,6 +315,7 @@ export const PROCEDURES = {
   deliverQueuedNow: "mutation",
   setThreadPermission: "mutation",
   threadProfileOptions: "query",
+  threadSkills: "query",
   setThreadProfile: "mutation",
   markRead: "mutation",
   threadSeen: "mutation",

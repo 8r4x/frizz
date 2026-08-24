@@ -43,6 +43,7 @@ import {
   type ClaudePermissionMode,
   type ClaudePermissionRequest,
   type ClaudePluginReload,
+  type ClaudeSkillInfo,
   type ClaudeQueryEvent,
   type ClaudeSessionInitEvent,
   type ClaudeTaskEvent,
@@ -151,6 +152,13 @@ export interface ClaudeQueryHandle extends AsyncIterable<ClaudeQueryEvent> {
    * Returns what changed so the operator can see their edit landed.
    */
   reloadPlugins(): Promise<ClaudePluginReload>
+  /**
+   * The session's invocable skills, as the harness itself reports them — names from the init frame,
+   * descriptions from `supportedCommands()`. Frizz deliberately implements NO skill discovery of its
+   * own: the CLI already resolves plugins, project and global skill roots and their enable state, and
+   * a frizz-side re-implementation could only ever drift from it.
+   */
+  listSkills(): Promise<ClaudeSkillInfo[]>
   setPermissionMode(mode: ClaudePermissionMode): Promise<void>
   // Ask the provider to name the session from `description` and PERSIST the name as the `ai-title`
   // record frizz's tailer reads. See CLAUDE_TITLE_NEEDS_EXPLICIT_REQUEST below for why the broker has
@@ -328,6 +336,7 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
   private closing = false
   private closed = false
   private initialized = false
+  private initSkills: string[] = []
   private readonly sdkQuery: SdkQuery
   private readonly input: ClaudeInputQueue
   private readonly diagnostic?: (event: ClaudeDiagnostic) => void
@@ -463,6 +472,24 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
       ).filter(Boolean),
       errorCount: Number.isFinite(result?.error_count) ? Number(result.error_count) : 0,
     }
+  }
+
+  // The session's invocable skills: the initialize handshake already carries every slash entry WITH
+  // its description (mapped and bounded above in mapControlInitialization — the same data the SDK's
+  // `supportedCommands()` would re-serve from its cache), and the init frame's `skills` array is the
+  // harness's own verdict on which of those are skills rather than built-in commands. The intersection
+  // is exactly "what `/name` invokes a skill", with descriptions, and zero frizz-side discovery.
+  async listSkills(): Promise<ClaudeSkillInfo[]> {
+    const initialization = await this.initializationResult()
+    const skillNames = new Set(this.initSkills)
+    const skills: ClaudeSkillInfo[] = []
+    for (const command of initialization.commands) {
+      if (!command.name || !skillNames.has(command.name)) continue
+      // The wire cap for a typeahead row is tighter than the 4KB the initialize mapper allows a
+      // command description — the shared ThreadSkill schema rejects anything past 1024.
+      skills.push({ name: command.name, description: command.description.slice(0, 1024) })
+    }
+    return skills
   }
 
   // Unqueue a follow-up the operator has taken back.
@@ -609,6 +636,10 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
         // unattributed event is rejected.
         if (event.kind === "init") {
           if (event.sessionId !== this.sessionId) throw new ClaudeAgentSdkProtocolError("Claude session ownership mismatch")
+          // Latch the harness's own skill list from EVERY init (real claude re-emits init per turn, and
+          // a turn can discover new skills). `listSkills` intersects this with `supportedCommands()`,
+          // which also returns built-in commands — the init `skills` array is what tells them apart.
+          this.initSkills = event.skills
           // A per-turn re-init of the SAME session is a control marker, not a new session: it must not
           // re-resolve `ready` or re-arm the pre-init guard below. It IS still relayed, because it is the
           // only place the session's resolved model is named — and that alias is what picks this thread's

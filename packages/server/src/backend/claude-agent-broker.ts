@@ -8,10 +8,10 @@
 // Wire protocol — newline-delimited JSON frames:
 //   frizz -> broker:  {t:"input", message} | {t:"permission", requestId, decision} | {t:"interrupt"} | {t:"set-mode", mode}
 //                  | {t:"cancel-input", requestId, id} | {t:"stop-task", requestId, taskId}
-//                  | {t:"reload-plugins", requestId}
+//                  | {t:"reload-plugins", requestId} | {t:"rename", requestId, description} | {t:"list-skills", requestId}
 //   broker -> frizz:  {t:"hello", sessionId, generation} | {t:"event", event} | {t:"permission-request", requestId, request} | {t:"diagnostic", diagnostic}
 //                  | {t:"cancel-result", requestId, cancelled, error?} | {t:"stop-result", requestId, error?}
-//                  | {t:"reload-result", requestId, reloaded?, error?}
+//                  | {t:"reload-result", requestId, reloaded?, error?} | {t:"rename-result", requestId, title?, error?} | {t:"skills-result", requestId, skills?, error?}
 //
 // Control actions that make a user-visible promise are REQUEST/RESPONSE pairs: `cancel-input` carries
 // the CLI's verdict about whether a message will still run, and `stop-task` returns only after the SDK
@@ -27,7 +27,7 @@ import { fileURLToPath } from "node:url"
 import { createClaudeQueryFactory } from "./claude-agent-sdk.ts"
 import { inheritWorkerEnvironment } from "./worker-env.ts"
 import { createClaudeBrokerDiagnosticWriter, createClaudeBrokerExitWriter, type ClaudeBrokerExitReason } from "./claude-broker-diagnostics.ts"
-import { CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_RELOAD_PLUGINS, CLAUDE_BROKER_CAPABILITY_RENAME, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX } from "./claude-agent-sdk-protocol.ts"
+import { CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_LIST_SKILLS, CLAUDE_BROKER_CAPABILITY_RELOAD_PLUGINS, CLAUDE_BROKER_CAPABILITY_RENAME, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX } from "./claude-agent-sdk-protocol.ts"
 import type {
   ClaudeDiagnostic,
   ClaudeInputMessage,
@@ -81,7 +81,7 @@ export interface BrokerRecord { daemonPid: number; socketPath: string; sessionId
 // of a VALUE from here — rather than an `import type` — initializes this module inside the server
 // process, where the entry-point check is satisfied by the bundle's own path and the guard fires. That
 // took down the whole control plane on the artifact while dev source (separate files) stayed green.
-const BROKER_CAPABILITIES = [CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_RELOAD_PLUGINS, CLAUDE_BROKER_CAPABILITY_RENAME]
+const BROKER_CAPABILITIES = [CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_RELOAD_PLUGINS, CLAUDE_BROKER_CAPABILITY_RENAME, CLAUDE_BROKER_CAPABILITY_LIST_SKILLS]
 
 const IDLE_EXIT_MS = 6 * 60 * 60 * 1000
 const REACHABILITY_CHECK_MS = 30_000
@@ -364,6 +364,15 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
           void handle.reloadPlugins().then(
             (reloaded) => write(sock, { t: "reload-result", requestId, reloaded }),
             (error: unknown) => write(sock, { t: "reload-result", requestId, error: error instanceof Error ? error.message : String(error) }),
+          )
+        }
+        else if (msg.t === "list-skills") {
+          // Same request/response discipline as reload-plugins: the composer typeahead is blocked on
+          // this answer, and a silent drop reads as a wedged daemon rather than an unlistable session.
+          const requestId = msg.requestId as string
+          void handle.listSkills().then(
+            (skills) => write(sock, { t: "skills-result", requestId, skills }),
+            (error: unknown) => write(sock, { t: "skills-result", requestId, error: error instanceof Error ? error.message : String(error) }),
           )
         }
         else if (msg.t === "set-mode") void handle.setPermissionMode(msg.mode as never).catch(() => {})
