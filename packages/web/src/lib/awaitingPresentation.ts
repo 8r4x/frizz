@@ -1,4 +1,4 @@
-import { type AwaitingHint } from "@frizz/shared"
+import { RETIRED_AWAITING_KINDS, type AwaitingHint } from "@frizz/shared"
 import { githubRefUrl } from "./githubRef.ts"
 import { formatSnoozeWake } from "./snooze.ts"
 
@@ -49,22 +49,6 @@ export function prWatchRefs(hints: readonly AwaitingHint[]): { ref: string; url:
   })
 }
 
-/** The one line of worker prose the card shows: a pre-cutover fence's `reason:` line.
- *
- *  The fence used to carry a free-text BODY, and this function's job was to synthesize a sentence out of
- *  whichever hint kinds it recognized ("Wait for Alice", "Scheduled for tomorrow at 9"). The 2026-08-15
- *  grammar has one prose field and the worker writes it deliberately, so there is nothing left to
- *  synthesize — and nothing to get wrong. The ITEMS are rendered as rows, not as a sentence.
- *
- *  `reason:` ITSELF IS RETIRED (2026-08-24). It was the last prose in the frontmatter and the one thing
- *  that made the frontmatter impossible to parse as YAML, so it moved below the `---` where a handoff has
- *  no length limit. Nothing MINTS a `reason` hint any more — the kind survives on the wire, and this
- *  reader with it, only so a fence stored before the cutover still cards with its own words. */
-export function awaitingHintSentence(hints: readonly AwaitingHint[], _nowMs = Date.now()): string | null {
-  const reason = hints.find((hint) => hint.kind === "reason")?.value.trim()
-  return reason ? reasonSentence(reason) : null
-}
-
 /** THE WORKER'S OWN PROSE for a hover popover — the fence's Markdown BODY, else its legacy `reason:`.
  *
  *  An awaiting fence is FRONTMATTER, then Markdown (2026-08-17; the frontmatter itself became YAML on
@@ -80,11 +64,9 @@ export function awaitingHintSentence(hints: readonly AwaitingHint[], _nowMs = Da
  *
  *  Null when the fence carries neither, which is an ordinary park: a popover that invents prose is worse
  *  than one that just names the state. */
-export function awaitingProse(fence: { body?: string; hints: readonly AwaitingHint[] }): string | null {
+export function awaitingProse(fence: { body?: string }): string | null {
   const lede = (fence.body ?? "").split(/\n\s*\n/).map((para) => para.trim()).find(Boolean)
-  const reason = fence.hints.find((hint) => hint.kind === "reason")?.value.trim()
-  const prose = lede ?? reason
-  return prose ? reasonSentence(capForHover(prose.replace(/\s*\n\s*/g, " "))) : null
+  return lede ? reasonSentence(capForHover(lede.replace(/\s*\n\s*/g, " "))) : null
 }
 
 /** One paragraph is still a paragraph. Cut on a word boundary so a long lede reads as trimmed rather
@@ -140,10 +122,33 @@ const LOWERCASE_BY_NAME = new Set(["npm", "npx", "pnpm", "nub", "nubx", "gh", "g
 // rather than the legacy one: a worker's handoff belongs below the `---`, and `reason:` was retired at
 // the 2026-08-24 YAML cutover. A fence older than the delimiter put its whole handoff in the body too.
 // Neither shape may card as blank.
-export function awaitingPresentationLine(body: string, hint: string | null): string {
-  if (hint) return hint
-  const prose = body.trim()
+export function awaitingPresentationLine(body: string): string {
+  const prose = stripFenceSyntax(body)
   return prose ? prose : "Waiting for an external update."
+}
+
+/** RAW FENCE SYNTAX MUST NEVER REACH THE READER (maintainer 2026-08-16, with a screenshot of a card
+ *  reading "watch: bvg44v4ij / for: 40m / reason: CI on #1227 is running…" — "why the fuck is the
+ *  awaiting block looking like this?").
+ *
+ *  A line the parser refused lands in the BODY, which is exactly right for the WORKER — it has to see
+ *  what frizz ignored — and exactly wrong for the human, who is being shown machinery. Until 2026-08-24
+ *  the card dodged this by preferring the `reason:` hint over the body; `reason:` is retired, so the
+ *  filter has to be explicit.
+ *
+ *  It strips ONLY a line whose key is a key: a retired kind, or one of the live YAML keys. That
+ *  narrowness is the point — a handoff that opens "Note: the macOS leg is flaky" is prose, and a filter
+ *  keyed on "has a colon" would eat it. */
+const FENCE_SYNTAX_KEYS = new Set<string>([...RETIRED_AWAITING_KINDS, "shells", "agents", "timers", "prs", "for"])
+function stripFenceSyntax(body: string): string {
+  return body
+    .split("\n")
+    .filter((line) => {
+      const key = /^\s*([a-z][a-z-]*):/i.exec(line)?.[1]?.toLowerCase()
+      return !(key && FENCE_SYNTAX_KEYS.has(key))
+    })
+    .join("\n")
+    .trim()
 }
 
 /** What the fence says it is waiting ON, as short readable labels — the structure the card renders

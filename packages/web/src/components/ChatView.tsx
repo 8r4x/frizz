@@ -37,7 +37,7 @@ import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { lastAskIndex, messagePresentationText } from "../lib/messagePresentation.ts"
 import { snoozePresetInstant, formatSnoozeWake } from "../lib/snooze.ts"
-import { AWAITING_FALLBACK_TITLE, AWAITING_PARK_BUTTON, awaitingForLabel, awaitingHintSentence, awaitingItemLabels, awaitingParkAction, awaitingPresentationLine, prWatchRefs } from "../lib/awaitingPresentation.ts"
+import { AWAITING_FALLBACK_TITLE, AWAITING_PARK_BUTTON, awaitingForLabel, awaitingItemLabels, awaitingParkAction, awaitingPresentationLine, prWatchRefs } from "../lib/awaitingPresentation.ts"
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { prefs } from "../lib/prefs.ts"
 import { canAdoptThread } from "../lib/adoption.ts"
@@ -3520,8 +3520,7 @@ export function InlineVisualization({ file }: { file: string }) {
 export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKind; body: string; hints: AwaitingHint[]; wrap?: boolean }) {
   const html = useMarkdownHtml(body)
   const doneInner = useInnerHtml(html)
-  const awaitingHint = awaitingHintSentence(hints)
-  const awaitingLine = awaitingPresentationLine(body, awaitingHint)
+  const awaitingLine = awaitingPresentationLine(body)
   // BLOCK markdown, not inline. The fence's prose is arbitrary Markdown since frontmatter landed
   // (2026-08-17), and inline rendering flattened a worker's paragraphs and lists into one run — the shape
   // a handoff most often takes. `done` has rendered as blocks all along; this is the same treatment.

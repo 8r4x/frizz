@@ -4,7 +4,6 @@ import { SetThreadSnoozeInput } from "@frizz/shared"
 import {
   AWAITING_FALLBACK_TITLE,
   AWAITING_PARK_BUTTON,
-  awaitingHintSentence,
   awaitingParkAction,
   awaitingPresentationLine,
   prWatchRefs,
@@ -40,18 +39,15 @@ test("no fence offers a park action any more — the worker's own tools own the 
   }
 })
 
-test("the card's sentence is a pre-cutover fence's own `reason:`, and nothing else", () => {
-  const REASON = "waiting on the three-platform run before porting the v2 drivers"
-  // The worker's words, verbatim but for the capital every surface that draws it standing alone needs
-  // — see reasonSentence, which the rail popover shares.
-  assert.equal(
-    awaitingHintSentence([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "2h" }, { kind: "reason", value: REASON }]),
-    "Waiting on the three-platform run before porting the v2 drivers",
-  )
-  // No reason ⇒ nothing. A card that invents a sentence from ids is worse than one that shows the rows.
-  assert.equal(awaitingHintSentence([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "2h" }]), null)
-  assert.equal(awaitingHintSentence([{ kind: "reason", value: "   " }]), null, "whitespace is not a sentence")
-  assert.equal(awaitingHintSentence([]), null)
+// THE CARD'S SENTENCE IS THE FENCE'S BODY, and there is no longer any other source. `awaitingHintSentence`
+// read a `reason:` hint and lived here until 2026-08-24, when `reason:` was retired with the YAML cutover
+// — and because `lastFence` is re-derived from the transcript on every fold rather than persisted, even a
+// fence written years ago re-parses under the current grammar, so nothing can mint that hint any more. A
+// reader that cannot fire is not compatibility, it is a second answer to a question with one answer.
+test("the card's line is the fence body, and an empty fence still says something", () => {
+  assert.equal(awaitingPresentationLine("Waiting on the three-platform run."), "Waiting on the three-platform run.")
+  assert.equal(awaitingPresentationLine("   "), "Waiting for an external update.")
+  assert.equal(awaitingPresentationLine(""), "Waiting for an external update.")
 })
 
 test("prWatchRefs surfaces every watched PR as a link target, in fence order", () => {
@@ -85,19 +81,26 @@ test("prWatchRefs surfaces every watched PR as a link target, in fence order", (
 // the parser did NOT recognise — a worker still writing the deleted `watch:`, or a typo. It is a
 // malformed declaration, not prose: the worker is bumped for it (scheduler SOURCE 12), and the card
 // shows what it can instead of showing the machinery.
-test("the card's prose is the reason, and an unrecognized line never becomes prose", () => {
+test("an unrecognized fence line never becomes prose", () => {
   const REASON = "CI on acme/app#1227 is running the upgraded fixture."
-  // The exact shape from the screenshot: a stale `watch:` fell into the body beside a real reason.
-  assert.equal(awaitingPresentationLine("watch: bvg44v4ij", REASON), REASON)
-  assert.doesNotMatch(awaitingPresentationLine("watch: bvg44v4ij", REASON), /watch:/)
+  // The exact shape from the screenshot: a stale `watch:` fell into the body beside real prose. Until
+  // 2026-08-24 the card dodged it by preferring the `reason:` hint; `reason:` is retired, so the body is
+  // now the only source and the filter has to be explicit.
+  assert.equal(awaitingPresentationLine(`watch: bvg44v4ij\n${REASON}`), REASON)
+  assert.doesNotMatch(awaitingPresentationLine(`watch: bvg44v4ij\n${REASON}`), /watch:/)
+  // The retired SINGULAR keys and the live plural ones are both machinery, and neither may card.
+  assert.equal(awaitingPresentationLine("pr: acme/app#1\nreason: waiting on your merge"), "Waiting for an external update.")
+  assert.equal(awaitingPresentationLine("prs: [acme/app#1]\nfor: 2h"), "Waiting for an external update.")
+  // …but a handoff that merely CONTAINS a colon is prose, and eating it would be the opposite bug.
+  assert.equal(awaitingPresentationLine("Note: the macOS leg is the flaky one."), "Note: the macOS leg is the flaky one.")
 })
 
 // …but a fence puts its handoff in the BODY — the fences written before the grammar had a `reason:` did,
 // and so does every fence written since the `---` delimiter landed on 2026-08-17 and `reason:` was retired
 // on 2026-08-24. Neither may card as blank, so the body is the fallback when there is nothing better.
 test("a fence with no reason still shows its body rather than carding blank", () => {
-  assert.equal(awaitingPresentationLine("PR is open and CI is green.", null), "PR is open and CI is green.")
-  assert.equal(awaitingPresentationLine("", null), "Waiting for an external update.")
+  assert.equal(awaitingPresentationLine("PR is open and CI is green."), "PR is open and CI is green.")
+  assert.equal(awaitingPresentationLine(""), "Waiting for an external update.")
 })
 
 test("the items and the duration render as labels, and PRs are left to their own links", () => {
@@ -209,21 +212,13 @@ const HINTS = [{ kind: "shell" as const, value: "bzvtnt3ig" }, { kind: "for" as 
 
 test("the popover reads the fence's BODY — the prose below the delimiter", () => {
   const body = "The tap submission is queued behind their CI backlog."
-  assert.equal(awaitingProse({ body, hints: HINTS }), body)
-})
-
-test("…and falls back to the legacy `reason:` when a fence has no body", () => {
-  assert.equal(
-    awaitingProse({ body: "", hints: [...HINTS, { kind: "reason", value: "waiting on the release job" }] }),
-    "Waiting on the release job",
-    "set as a sentence, the same as a body",
-  )
+  assert.equal(awaitingProse({ body }), body)
 })
 
 test("the prose is OPTIONAL — a fence with neither says nothing rather than inventing a wait", () => {
-  assert.equal(awaitingProse({ body: "", hints: HINTS }), null)
-  assert.equal(awaitingProse({ hints: HINTS }), null, "and an absent body is not a crash")
-  assert.equal(awaitingProse({ body: "   \n\n  ", hints: HINTS }), null, "whitespace is not prose")
+  assert.equal(awaitingProse({ body: "" }), null)
+  assert.equal(awaitingProse({}), null, "and an absent body is not a crash")
+  assert.equal(awaitingProse({ body: "   \n\n  " }), null, "whitespace is not prose")
 })
 
 test("only the FIRST paragraph reaches a hover label, flattened onto one line", () => {
@@ -234,12 +229,12 @@ test("only the FIRST paragraph reaches a hover label, flattened onto one line", 
     "- the macOS leg is the one that has been flaky",
     "- if it goes red I will bisect rather than re-run",
   ].join("\n")
-  assert.equal(awaitingProse({ body, hints: HINTS }), "Waiting on the three-platform run before porting the v2 drivers.")
+  assert.equal(awaitingProse({ body }), "Waiting on the three-platform run before porting the v2 drivers.")
 })
 
 test("a long lede is cut on a word boundary, not mid-word", () => {
   const body = `The release job ${"keeps timing out on the arm64 leg and ".repeat(6)}so I am waiting`
-  const out = awaitingProse({ body, hints: HINTS }) ?? ""
+  const out = awaitingProse({ body }) ?? ""
   assert.ok(out.length <= 241, `capped, got ${out.length}`)
   assert.match(out, /…$/, "and says so")
   assert.doesNotMatch(out, /\s…$/, "no dangling space before the ellipsis")

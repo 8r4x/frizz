@@ -55,7 +55,7 @@ function markup(t: ThreadView) {
 const WAIT = [{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "2h" }]
 
 test("a parked awaiting thread reads as one sentence, with the worker's own line under it", () => {
-  const t = thread([...WAIT, { kind: "reason", value: REASON }])
+  const t = thread([...WAIT], {}, REASON)
   // The band the row is IN leads — that is what the glyph you pointed at is claiming — and what the
   // fence names finishes the sentence. The reason is the only line frizz did not write, so it is the
   // only one set off on its own: a PARAGRAPH, because the sentence above it wraps and a reason tucked
@@ -69,12 +69,12 @@ test("a parked awaiting thread reads as one sentence, with the worker's own line
 test("a fence frizz did not park on swaps the state word and nothing else", () => {
   // needsYou keeps the row in the queue (isHeld refuses it), which is the shape of a park the server
   // could not honour: the fence still says what it thinks it is waiting on, and the popover still says it.
-  const t = thread([...WAIT, { kind: "reason", value: REASON }], { needsYou: true } as Partial<ThreadView>)
+  const t = thread([...WAIT], { needsYou: true } as Partial<ThreadView>, REASON)
   assert.deepEqual((sessionIndicatorFor(t).tip ?? "").split("\n\n"), ["At rest — waiting on a background shell", SET])
 })
 
 test("…and NONE of it reaches the row, which is a title and nothing else", () => {
-  const html = markup(thread([{ kind: "pr", value: "acme/app#391" }, ...WAIT, { kind: "reason", value: REASON }]))
+  const html = markup(thread([{ kind: "pr", value: "acme/app#391" }, ...WAIT], {}, REASON))
   assert.match(html, /Ship the resolver/, "the title is what a row is")
   assert.doesNotMatch(html, new RegExp(REASON.slice(0, 30)), "no reason under it")
   assert.doesNotMatch(html, /acme\/app#391/, "no PR ref under it either — the popover has that now")
@@ -92,7 +92,7 @@ test("a fence with no reason leaves the popover saying only what it knows", () =
 })
 
 test("a watched PR leads the list, because it names a thing rather than a shape", () => {
-  const t = thread([{ kind: "pr", value: "acme/app#391" }, ...WAIT, { kind: "reason", value: REASON }])
+  const t = thread([{ kind: "pr", value: "acme/app#391" }, ...WAIT], {}, REASON)
   assert.deepEqual((sessionIndicatorFor(t).tip ?? "").split("\n\n"), [
     "Held — waiting on acme/app#391 and a background shell",
     SET,
@@ -104,22 +104,23 @@ test("a watched PR leads the list, because it names a thing rather than a shape"
 // landing inside it is the same running-together this shape exists to prevent.
 test("a snooze stacks under the state, never inside the worker's paragraph", () => {
   // A row with live background work is excused from Held (hasLiveOps), so it keeps its own glyph and the
-  // snooze has to be said in the popover — over a fence that still carries a reason.
-  const t = thread([...WAIT, { kind: "reason", value: REASON }], {
+  // snooze has to be said in the popover — over a fence that still carries the worker's own prose.
+  const t = thread([...WAIT], {
     awaitingBackground: true,
     snoozedUntil: new Date(Date.now() + 26 * 60 * 60 * 1000).toISOString(),
-  } as Partial<ThreadView>)
+  } as Partial<ThreadView>, REASON)
   const [state, reason] = (sessionIndicatorFor(t).tip ?? "").split("\n\n")
   assert.match(state ?? "", /^At rest — waiting on a background shell\nSnoozed until /, "the park is the state's second line")
   assert.equal(reason, SET, "…and the worker's sentence still owns the paragraph below")
 })
 
 // A fence written the CURRENT way — YAML frontmatter, a `---`, then Markdown — carries its handoff in the
-// BODY. `reason:` is the one-line form that shape replaced, and it was retired outright at the 2026-08-24
-// YAML cutover; it reaches the popover only off a fence stored before then. The popover reads the body
-// first, or it would show the state and drop the worker's own words entirely.
-test("the popover takes the fence's Markdown body over its legacy reason line", () => {
-  const t = thread([...WAIT, { kind: "reason", value: REASON }], {}, "The tap submission is queued behind their CI backlog.")
+// BODY, and since 2026-08-24 there is no other source: `reason:` was retired with the YAML cutover, and
+// `lastFence` is re-derived from the transcript on every fold rather than persisted, so no fence — however
+// old — can still arrive carrying that hint. The popover reads the body, or it shows the state and drops
+// the worker's own words entirely.
+test("the popover shows the fence's Markdown body", () => {
+  const t = thread([...WAIT], {}, "The tap submission is queued behind their CI backlog.")
   assert.deepEqual((sessionIndicatorFor(t).tip ?? "").split("\n\n"), [
     "Held — waiting on a background shell",
     "The tap submission is queued behind their CI backlog.",
@@ -127,8 +128,8 @@ test("the popover takes the fence's Markdown body over its legacy reason line", 
 })
 
 test("awaitingReason reads only an awaiting fence, and only a non-empty one", () => {
-  assert.equal(awaitingReason(thread([...WAIT, { kind: "reason", value: REASON }])), SET)
-  assert.equal(awaitingReason(thread([...WAIT, { kind: "reason", value: "   " }])), null, "whitespace is not a reason")
+  assert.equal(awaitingReason(thread([...WAIT], {}, REASON)), SET)
+  assert.equal(awaitingReason(thread([...WAIT], {}, "   ")), null, "whitespace is not a reason")
   assert.equal(awaitingReason(thread(WAIT)), null)
   assert.equal(awaitingReason({ lastFence: { kind: "done", body: "", hints: [] } } as unknown as ThreadView), null)
 })
