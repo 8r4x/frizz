@@ -79,6 +79,32 @@ export function formatFixedDuration(ms: number): string {
   return formatElapsedMinutes(mins)
 }
 
+// The snooze card's COUNTDOWN — time REMAINING until a wall-clock instant, ticking down live. Same
+// smhdw ladder and same at-most-TWO-units rule as formatRuntimeElapsed above, but it deliberately
+// departs from that formatter in two ways, both because this is a clock face rather than a duration
+// label:
+//   • the trailing sub-day unit is zero-PADDED and never dropped ("3h 05m", "12m 05s", never "3h") —
+//     a countdown that loses a unit or a digit as it crosses a boundary visibly jumps width mid-tick,
+//     and the steady two-unit shape is what reads as counting rather than as a restated duration;
+//   • seconds survive up to an hour (formatRuntimeElapsed drops them past a minute), because a ticking
+//     seconds digit is the whole difference between a countdown and a caption.
+// Above a day the trailing unit goes unpadded ("2d 3h", "1w 2d") — nothing ticks at that scale, so the
+// padding would read as a leading zero on prose.
+export function formatCountdown(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return "0s"
+  const pad = (value: number) => String(value).padStart(2, "0")
+  const seconds = Math.ceil(ms / 1_000)
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m ${pad(seconds % 60)}s`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ${pad(minutes % 60)}m`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return hours % 24 ? `${days}d ${hours % 24}h` : `${days}d`
+  const weeks = Math.floor(days / 7)
+  return days % 7 ? `${weeks}w ${days % 7}d` : `${weeks}w`
+}
+
 // Human-friendly elapsed since an ISO timestamp, measured against NOW: "just now", "12 min",
 // "1 hr 3 min". Empty when absent or unparseable. Distinct from formatFixedDuration, which formats an
 // already-COMPLETED span (a dispatch→completion elapsed, in ms). This was written twice verbatim — in
