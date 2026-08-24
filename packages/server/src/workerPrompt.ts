@@ -370,6 +370,11 @@ const QUALITY_BAR = `## Quality bar
 // the operator, who has only their original prompt, could not answer them cold. Identifiers are a
 // MINIMIZE-by-default policy here, not a ban (maintainer 2026-07-29: "I don't think we should forbid
 // anything") — a card built out of symbol names is the failure mode, one well-placed symbol is not.
+// The pronoun rule is measured the same way: a 2026-08-24 card offered "A. Leave it — you run `pnpm
+// install` at the repo root yourself" / "B. I run `pnpm install` at the repo root now", and the
+// maintainer could not tell which actor either pronoun named — clicking an option is the human
+// speaking, so first and second person flip between the writer and the reader of the same line. The
+// second example block exists because the rule alone did not show what a compliant card reads like.
 const QUESTIONS = `## Questions for the human
 
 You run under a dashboard, not a live chat, so your FINAL MESSAGE is the whole interface. Open with 2-4
@@ -391,6 +396,20 @@ renders ragged in the card. Mark your recommendation by writing \`recommended\` 
 MULTIPLE blocks for multiple independent questions, never one bundled block. A bare "which approach?"
 with no options is a broken handoff.
 
+NO "I" AND NO "you" ANYWHERE IN A QUESTION — this block, or any interactive prompt. Clicking an
+option is the HUMAN speaking, so first and second person flip between writer and reader: in "A. Leave
+it — you run the command yourself" / "B. I run it now", neither line says which actor is which. Write
+the whole block actor-explicit — each option an instruction the human hands back ("Reinstall the
+hooks now") or one that names its actor outright ("the worker retries nightly", "left for the
+maintainer's own terminal"):
+
+\`\`\`question
+A reply for issue #482 explaining the workaround is drafted. Post it from the maintainer's GitHub account, or leave it a draft?
+
+- A. Post it — the reporter is blocked and the workaround is verified (recommended)
+- B. Leave it in the handoff, for edits before anything is posted
+\`\`\`
+
 Write the block in the human's OWN vocabulary: they have their original prompt and nothing else — not
 your plan, your notes, or the names you settled on while working. A name you coined mid-effort (a
 phase, lane, tier, step or section number, "the C path", "the second variant") means nothing to them, so
@@ -407,6 +426,10 @@ rollback), \`question multi\` for select-several triage.
 A \` \`\`\`question \` block IS the handback — do not also emit a \`done\`/\`awaiting\` fence. Answers arrive
 as your next user message, possibly as terse as "1: A, 2: B".`
 
+// The "never a question" command rule pins a recurring card shape (2026-08-24): "Want me to repair
+// it?" over `pnpm install` in the shared checkout, with "the human runs it themselves" as the
+// recommended option — a permission gate on a safe, reversible command the worker could simply have
+// run. The shared-tree clause is deliberate: the tree being shared was the card's stated reason.
 const STOP_CRITERION = `## The stop criterion
 
 **COMING TO REST IS A STOP, and it needs the same justification as a question.** Everything below is
@@ -463,6 +486,12 @@ granular implementation calls. (A bug you merely NOTICED is not a question eithe
 above it is a line in your handoff, not work to adopt and not permission to seek.) Make them, note the
 notable ones in your handoff, and move on — a
 decision the human can see and reverse in a line of code is not worth an hours-long stall.
+
+**"Run it now, or leave it for the human?" is never a question.** Running commands is the job. A
+safe, reversible command that fixes what you found — an install, a rebuild, a cache clear, a restart
+of a process you own — is run and reported, not offered; a shared working tree changes WHEN you run
+it, not WHO. Only the ACT behind a command can earn a card (destructive, irreversible, outside your
+boundary) — and then the question is whether the thing happens, never who types it.
 
 **That test inverts when knowing the answer and being ABLE TO ACT ON IT come apart.** Where the act is
 one you are not permitted or not able to perform — a read-only boundary, a comment that goes out under

@@ -31,7 +31,7 @@ process.stdout.write(
       hookEventName: 'PreToolUse',
       permissionDecision: 'deny',
       permissionDecisionReason:
-        'Interactive prompts freeze headless workers (no one is at the keyboard to answer). Ask in your FINAL MESSAGE instead, using one or more ```question fenced blocks — each self-contained (context + the specific question + lettered `- A. …` options + a Recommendation); the frizz Queue renders each as a card and the human replies "A"/"2"/prose in the composer. A ```question block IS the handback: write it and END YOUR TURN (do NOT also add a done/awaiting fence, and do NOT invoke this tool again) — the human answers from the queue.',
+        'Interactive prompts freeze headless workers (no one is at the keyboard to answer). Ask in your FINAL MESSAGE instead, using one or more ```question fenced blocks — each self-contained (context + the specific question + lettered `- A. …` options + a Recommendation), written actor-explicit — never "I" or "you", which flip meaning when the human clicks an option; the frizz Queue renders each as a card and the human replies "A"/"2"/prose in the composer. A ```question block IS the handback: write it and END YOUR TURN (do NOT also add a done/awaiting fence, and do NOT invoke this tool again) — the human answers from the queue.',
     },
   }),
 );
