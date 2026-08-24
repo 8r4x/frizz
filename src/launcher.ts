@@ -465,6 +465,8 @@ Options:
   --host [address]       serve on a network address instead of loopback (bare --host means 0.0.0.0)
   --allowed-host <name>  with --host, also accept this DNS name as the board's address (repeatable)
   --public-origin <url>  serve behind a proxy/tunnel reachable at this exact origin
+  --cloud                what the up command sets: serve at the saved public hostname and run the
+                         tunnel as a supervised child
   --link                 print a fresh single-use access link for the already-running board
   --debug                stream the full event feed to the terminal instead of the compact readout
   --status               report this workspace's stable server and artifact
@@ -479,6 +481,7 @@ Environment:
 Commands:
   up                     start the server and its public tunnel together, so the board is reachable
                          remotely. Serves every project, same as the bare command. Asked once.
+                         Sugar for --cloud, which is the spelling to compose with other flags.
   build                  build a new immutable candidate from the configured Frizz source checkout
   promote <digest>       explicitly select a verified candidate for this workspace
   restart                restart the currently promoted artifact without building

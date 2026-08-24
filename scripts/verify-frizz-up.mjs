@@ -24,6 +24,17 @@ import { fileURLToPath } from "node:url";
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
 const PORT = Number(process.env.VERIFY_PORT ?? 47311);
+/**
+ * `up` and `--cloud` are two spellings of one launch — the subcommand sets `options.cloud` and nothing
+ * else. Run this script both ways (VERIFY_SPELLING=cloud) so the alias cannot quietly drift away from
+ * the flag it desugars to; the durable re-exec re-enters through the FLAG, so a divergence there would
+ * only ever show up after an update.
+ */
+const SPELLING = process.env.VERIFY_SPELLING ?? "up";
+const LAUNCH_ARGS =
+  SPELLING === "cloud"
+    ? ["--port", String(PORT), "--dev", "--no-app", "--cloud"]
+    : ["up", "--port", String(PORT), "--dev", "--no-app"];
 const HOSTNAME = "e2e.frizz.sh";
 const ORIGIN = `https://${HOSTNAME}`;
 
@@ -143,7 +154,7 @@ try {
     // --dev boots source rather than building an artifact (the shared tree does not always typecheck,
     // and an artifact build is not what this script is testing). --no-app keeps a browser window off
     // the maintainer's screen.
-    ["--no-env-file", join(repo, "src", "index.ts"), "up", "--port", String(PORT), "--dev", "--no-app"],
+    ["--no-env-file", join(repo, "src", "index.ts"), ...LAUNCH_ARGS],
     {
       cwd: workspace,
       env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, FRIZZ_WAKERS_OFF: "1" },
@@ -239,5 +250,5 @@ try {
 }
 
 const failed = checks.filter((c) => !c.ok);
-console.log(`\n${checks.length - failed.length}/${checks.length} checks passed`);
+console.log(`\n${checks.length - failed.length}/${checks.length} checks passed (spelling: ${SPELLING})`);
 process.exit(failed.length === 0 ? 0 : 1);

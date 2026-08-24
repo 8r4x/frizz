@@ -122,7 +122,7 @@ $ npx frizz --help
 Frizz production launcher
 
 Usage: npx frizz [options] [repository]
-       npx frizz up            serve this repo publicly, board + tunnel together
+       npx frizz up            start the server plus its public tunnel
 
 Runs the npm-resolved immutable Frizz package, then opens it in your default browser. Use frizz-dev
 only for a source checkout.
