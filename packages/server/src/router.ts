@@ -2338,9 +2338,11 @@ export function createRouter(ctx: AppContext) {
     // An awaiting fence is only a PROPOSAL. Confirming binds ONE exact final-message generation to
     // durable state; stale cards, malformed refs, elapsed timers, and in-flight workers fail closed.
     //
-    // Ported from origin/main onto local main's fence shape. Two adaptations matter: local main's
-    // FenceView carries `hints[]` and no instant of its own, so the identity instant is the tail's last
-    // activity — exactly what scheduler.ts's fenceIdentity() keys on. And the timer is CANONICALIZED
+    // UNREACHABLE, and deliberately left wired. `isActionableAwaitingHint` refuses everything since the
+    // 2026-08-15 grammar cut, so every call throws "no longer current"; the plumbing stays because a
+    // running server should not have an RPC ripped out from under a client tab mid-session. Its twin in
+    // scheduler.ts WAS removed (ccbe87e9) — this comment used to point at that file's `fenceIdentity()`,
+    // which no longer exists. The identity instant is the tail's last activity. And the timer is CANONICALIZED
     // before it reaches snoozed_until: the fence grammar admits instants the durable snooze grammar
     // rejects, and writing a raw hint here is the precise bug that made "Confirm snooze" fail on the
     // worker contract's own documented form.
