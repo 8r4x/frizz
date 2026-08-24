@@ -305,11 +305,17 @@ test("a fence using a RETIRED kind is bumped by name, with what replaced it", as
     // could not tell which of its lines frizz had dropped.
     assert.match(rows[0].message, /`pr-watch:` is GONE/)
     assert.match(rows[0].message, /mcp__frizz__watch_pr/, "…and what to do instead")
-    // AND THE WHOLE SUPPORTED SET, so the answer does not depend on the worker's frozen contract.
-    for (const kind of ["shell:", "agent:", "timer:", "pr:", "for:", "reason:"]) {
-      assert.ok(rows[0].message.includes(kind), `the supported set must name ${kind}`)
+    // AND THE WHOLE SUPPORTED SET, so the answer does not depend on the worker's frozen contract — which
+    // is the entire point of this correction, and never more so than right after the 2026-08-24 cutover,
+    // when every worker in flight has the retired SINGULAR keys frozen into its system prompt.
+    for (const key of ["shells:", "agents:", "timers:", "prs:", "for:"]) {
+      assert.ok(rows[0].message.includes(key), `the supported set must name ${key}`)
     }
     assert.match(rows[0].message, /REQUIRED — a DURATION, never an instant/)
+    // The frontmatter is YAML, so the correction has to say the two things that break it: prose above the
+    // delimiter, and the `reason:` key that used to carry it.
+    assert.match(rows[0].message, /NO prose above the `---`/)
+    assert.match(rows[0].message, /`reason:` is gone/)
   } finally { h.close() }
 })
 

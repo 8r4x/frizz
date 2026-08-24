@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { AWAITING_FOR_MAX_MS, GithubWatchStatus, isAwaitingItemKind, parseAwaitingDuration, type AwaitingHint, type AwaitingItemKind } from "@frizz/shared"
 
-// The PR-reference vocabulary shared by the pr-watch scheduler and the awaiting-confirmation RPC.
+// The PR-reference vocabulary shared by the PR-watching scheduler and the awaiting-confirmation RPC.
 // It lives here rather than in scheduler.ts so the router can validate a confirmation without pulling
 // in the whole waker; scheduler.ts re-exports parsePrRef/PrRef for its existing callers and tests.
 

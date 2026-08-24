@@ -543,10 +543,11 @@ export function fenceWatchViews(
 // to rest. A user-owned snooze temporarily suppresses every queue reason—including a concrete ask,
 // permission prompt, or crash—then the exact deadline restores the still-current reason. Truthful
 // external waits place ordinary rest in Held without writing lifecycle state.
-// A Claude follow-up frizz has delivered but the transcript has not yet reflected: it lives in the
-// delivery ledger as `pending` (injected, no JSONL evidence yet) or `enqueued` (positively receipted by
-// Claude Code's own queue). Both mean the human's message is handled and in flight. `unconfirmed` is
-// NOT fresh — frizz could not confirm that send, so it must stay visible for the human to re-drive.
+// A follow-up frizz has delivered but the transcript has not yet reflected: it lives in the delivery
+// ledger as `pending` (injected, no JSONL evidence yet), `enqueued` (positively receipted by Claude
+// Code's own queue) or `delivered` (the transport's receipt proved it went straight into a turn). All
+// three mean the human's message is handled and in flight. `unconfirmed` is NOT fresh — frizz could not
+// confirm that send, so it must stay visible for the human to re-drive.
 //
 // `processGone` is what keeps "in flight" honest, and it is the whole reason this reads a second
 // argument. Both live states are claims about a process HOLDING the message: `pending` says a process
@@ -560,7 +561,7 @@ export function fenceWatchViews(
 // sub-agent phantom deriveRuntime's `headlessLostWork` fixed, and the same lesson.
 function hasFreshDelivery(row: SessionRow, processGone: boolean): boolean {
   if (processGone) return false
-  return parseDeliveryLedger(row.delivery_ledger).some((d) => d.state === "pending" || d.state === "enqueued")
+  return parseDeliveryLedger(row.delivery_ledger).some((d) => d.state === "pending" || d.state === "enqueued" || d.state === "delivered")
 }
 
 export function deriveNeedsYou(

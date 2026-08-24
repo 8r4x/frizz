@@ -8,7 +8,7 @@
 // actions live in a stable footer), `awaiting` = a compact parked human/timer handoff. Distinct
 // from ```question blocks (their own machinery in questionBlocks.ts) — those never match here.
 
-import { insideFence, type AwaitingHint } from "@frizz/shared"
+import { insideFence, splitAwaitingFrontmatter, type AwaitingHint } from "@frizz/shared"
 
 export type FenceKind = "done" | "awaiting"
 
@@ -23,45 +23,18 @@ export type FenceSegment =
 // can't match the (done|awaiting) alternation, so question blocks are left entirely to questionBlocks.ts.
 const FENCE_BLOCK = /^```(done|awaiting)[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*$/gm
 
-// A structural line inside an ```awaiting body. The six kinds are the whole grammar (2026-08-15): four
-// that NAME a live thing frizz can look up, plus the duration the park may stand for and the one line of
-// prose written for a human.
-//
-// THIS LIST MUST MATCH THE TAILER'S. The server folds the same fence out of the transcript, and a kind
-// only one of them knows is a line that renders one way and parks another — which is how a worker ends
-// up looking parked on something frizz never armed. `AWAITING_HINT_RE` in server/src/tailer.ts is the
-// twin; keep them in step.
-const HINT_RE = /^(shell|agent|timer|pr|for|reason):\s*(\S.*)$/i
-
 // Split the body of a fence into its prose (hint lines removed) and its parsed hints. `done` fences
 // carry no hints — the whole body is prose.
-// Defensive caps matching the server's lastFence parser (tailer.ts): 8 hints, 200-char values — so a
-// pathological body can't render a divergent chip row between the sidebar gloss (server-parsed) and
-// the in-chat card (client-parsed).
-const HINT_MAX = 8
-const HINT_VALUE_MAX = 200
-
-// FRONTMATTER, THEN MARKDOWN — and this must match the TAILER's split exactly (parseSignalFence in
-// server/src/tailer.ts). The server decides whether a fence parks and the client decides how it reads; a
-// disagreement about where the structure ends is a fence that renders one way and behaves another.
 //
-// Structural lines first, a `---` line ends them, everything after is arbitrary prose. No delimiter ⇒ the
-// whole fence is frontmatter, which is how every fence written before 2026-08-17 parses.
+// ONE PARSER, IN @frizz/shared, AND THIS IS WHY. This file used to carry its own copy of the grammar with
+// a comment on it saying "THIS LIST MUST MATCH THE TAILER'S … keep them in step". The 2026-08-24 YAML
+// cutover moved the tailer and not this, so a correct current-grammar fence parked correctly on the
+// server and rendered `shells: [bzvtnt3ig]` as PROSE in the in-chat card — the raw frontmatter printed at
+// the human, which is the exact bug class that comment was written to prevent. A comment cannot keep two
+// implementations in step; having one implementation can.
 export function parseFenceBody(raw: string, kind: FenceKind): { body: string; hints: AwaitingHint[] } {
   if (kind === "done") return { body: raw.trim(), hints: [] }
-  const lines = raw.split("\n").map((l) => l.replace(/\r$/, ""))
-  const delimiter = lines.findIndex((l) => /^\s*---+\s*$/.test(l))
-  const frontmatter = delimiter === -1 ? lines : lines.slice(0, delimiter)
-  const after = delimiter === -1 ? [] : lines.slice(delimiter + 1)
-  const hints: AwaitingHint[] = []
-  const prose: string[] = []
-  for (const l of frontmatter) {
-    const m = l.match(HINT_RE)
-    if (m) hints.push({ kind: m[1].toLowerCase() as AwaitingHint["kind"], value: m[2].trim().slice(0, HINT_VALUE_MAX) })
-    else prose.push(l)
-  }
-  prose.push(...after)
-  return { body: prose.join("\n").trim(), hints: hints.slice(0, HINT_MAX) }
+  return splitAwaitingFrontmatter(raw)
 }
 
 // Split an assistant message's markdown into prose runs and signal-fence blocks, in document order.

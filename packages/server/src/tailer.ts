@@ -1,9 +1,8 @@
 import { statSync, openSync, readSync, closeSync, readdirSync, realpathSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs"
 import { execFileSync } from "node:child_process"
 import { basename, join } from "node:path"
-import { parse as parseYaml } from "yaml"
 import { homedir, tmpdir } from "node:os"
-import { insideFence, isAllInjectedNoise, isInterruptMarker, PermissionMode, saysAllDone } from "@frizz/shared"
+import { insideFence, isAllInjectedNoise, isInterruptMarker, PermissionMode, saysAllDone, splitAwaitingFrontmatter } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import { permMarkerPath, type Project } from "./project.ts"
 import { isBrokerClaudeRow, isHeadlessRow } from "./storage.ts"
@@ -782,113 +781,14 @@ export function parseSignalFence(text: string | undefined): FenceView | undefine
   // Prose after the last fence means it was quoted/explanatory, not a signal — no excusal.
   if (norm.slice(end).trim() !== "") return undefined
   if (kind === "done") return { kind, body: capFenceBody(raw.trim()), hints: [] }
-  // awaiting: peel `<kind>: <value>` hint lines out; the remaining lines are the prose body.
-  // FRONTMATTER, THEN MARKDOWN (2026-08-17). Structural lines come first; a `---` line ends them and
-  // everything after it is arbitrary prose, as much as the worker wants.
-  //
-  // `reason:` was one LINE, and workers were visibly straining against it — the fence that prompted this
-  // crammed a whole known-answer-control rationale, two conditions and a commitment into a single
-  // sentence. A handoff is prose; forcing it through a key/value slot made it worse prose. Frontmatter is
-  // the shape everyone already knows from Markdown, and `reason:` stays valid so the fences written in
-  // the last two days keep parsing.
-  //
-  // It also makes the STRUCTURE POSITION unambiguous, which is what lets a bad line be refused instead of
-  // silently swallowed: before the delimiter, a `word:` line is a CLAIM to be structural, so a retired or
-  // unknown kind there is an error the worker is told about (scheduler SOURCE 12). After it, the same
-  // characters are just prose. Previously the two were indistinguishable and a `pr-watch:` line quietly
-  // became body text.
-  const lines = raw.split("\n")
-  const delimiter = lines.findIndex((l) => /^\s*---+\s*$/.test(l))
-  // No delimiter ⇒ the whole fence is frontmatter, exactly as it parsed before this existed.
-  const frontmatter = delimiter === -1 ? lines : lines.slice(0, delimiter)
-  const prose = delimiter === -1 ? [] : lines.slice(delimiter + 1)
-  const rest: string[] = []
-  // A RETIRED or UNKNOWN key never reaches the YAML parser. Two reasons, and the second is the one that
-  // matters: a retired key would otherwise surface as an opaque "map keys must be unique" or a nested-
-  // mapping error, when the worker needs to be told BY NAME what replaced it (scheduler SOURCE 12 reads
-  // these back out of the body with retiredAwaitingKindsIn). Falling them through to the body is exactly
-  // what the line grammar did, so that machinery keeps working unchanged across the cutover.
-  const yamlLines: string[] = []
-  // `structural` tracks whether the line we are on belongs to the YAML document. A block sequence's items
-  // and any indented continuation belong to the KEY ABOVE THEM, so they follow that key's fate — which is
-  // what keeps a retired `pr:` with its list underneath from orphaning a bare sequence into the parser.
-  let structural = true
-  for (const line of frontmatter) {
-    const hm = line.match(AWAITING_HINT_RE)
-    const k = hm?.[1].toLowerCase()
-    if (hm && k) structural = AWAITING_YAML_KEYS.has(k)
-    // A LINE THAT IS NOT A KEY AND NOT A CONTINUATION IS PROSE, exactly as it was under the line grammar:
-    // a worker that omits the `---` and writes its handoff straight into the frontmatter must still park.
-    // Feeding that sentence to YAML would be a parse error and would cost it the whole fence.
-    else if (line.trim() !== "" && !/^\s/.test(line) && !/^\s*-\s/.test(line)) structural = false
-    ;(structural ? yamlLines : rest).push(line)
-  }
-  const parsed = parseAwaitingFrontmatter(yamlLines.join("\n"))
-  // A frontmatter frizz could not parse must never look like a park. `hints` is empty, so the fence names
-  // nothing and the scheduler bumps the worker with the whole grammar — the honest reading of "frizz
-  // cannot tell what you are waiting on". A tab indent is the likeliest way to get here; YAML refuses
-  // tabs outright. The unparsed lines go to the BODY rather than being dropped: the worker has to be able
-  // to see what it wrote, or the bump is about a fence it can no longer read.
-  if (!parsed.ok) rest.push(...yamlLines)
-  rest.push(...prose)
-  return { kind, body: capFenceBody(rest.join("\n").trim()), hints: parsed.hints.slice(0, HINT_MAX) }
-}
-
-// The YAML keys the frontmatter recognises: four PLURAL sequences of things frizz can look up, plus the
-// scalar `for:`. Anything else is not structure — see the retired/unknown fall-through above.
-const AWAITING_YAML_KEYS = new Set(["shells", "agents", "timers", "prs", "for"])
-
-/** Which singular hint kind each plural sequence key produces. The WIRE SHAPE is unchanged by the
- *  2026-08-24 cutover — every consumer still reads a flat `{kind, value}` list with singular kinds — so
- *  only the grammar the worker WRITES moved to YAML. */
-// `Record` is shadowed in this module by the JSONL record interface — spell the index type out.
-const AWAITING_SEQUENCE_KEYS: { [key: string]: "shell" | "agent" | "timer" | "pr" | undefined } = {
-  shells: "shell",
-  agents: "agent",
-  timers: "timer",
-  prs: "pr",
-}
-
-/** Parse the fence's YAML frontmatter into the flat hint list the rest of frizz reads.
- *
- *  DEFENSIVE BY CONTRACT: this runs on whatever an LLM wrote, so it never throws — a parse failure, a
- *  non-mapping document, a key holding the wrong type, or an empty sequence all yield NO hints for that
- *  key, which makes the fence name less than it claimed and gets the worker bumped rather than parked.
- *  Silently parking on a fence frizz could not read is the one outcome that must be impossible. */
-function parseAwaitingFrontmatter(text: string): { ok: boolean; hints: FenceView["hints"] } {
-  if (!text.trim()) return { ok: true, hints: [] }
-  let doc: unknown
-  try {
-    doc = parseYaml(text)
-  } catch {
-    return { ok: false, hints: [] } // not YAML at all — a tab indent, a stray bracket, an unclosed quote
-  }
-  // A frontmatter that parses to a scalar or a sequence is not a mapping of keys, so it names nothing —
-  // and the worker still needs to see it, hence `ok: false` rather than an empty success.
-  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return { ok: false, hints: [] }
-  const hints: FenceView["hints"] = []
-  const push = (kind: FenceView["hints"][number]["kind"], raw: unknown) => {
-    // A number or a boolean is a value a worker plausibly wrote unquoted; anything structural is not a
-    // name and cannot be looked up, so it is dropped rather than stringified into nonsense.
-    if (raw === null || raw === undefined || typeof raw === "object") return
-    const value = String(raw).trim()
-    if (!value) return
-    hints.push({ kind, value: value.length > HINT_VALUE_MAX ? value.slice(0, HINT_VALUE_MAX) : value })
-  }
-  for (const [rawKey, raw] of Object.entries(doc as { [key: string]: unknown })) {
-    // Case-insensitive, because the line grammar was and a worker that shouts `PRS:` means `prs:`. YAML
-    // itself is case-sensitive, so without this the key would parse and then silently match nothing.
-    const key = rawKey.toLowerCase()
-    const itemKind = AWAITING_SEQUENCE_KEYS[key]
-    if (itemKind) {
-      // A BARE SCALAR IS ACCEPTED where a sequence is expected — `prs: acme/app#1` is what a worker
-      // reaches for with one item, and refusing it would fail a fence that says exactly the right thing.
-      for (const entry of Array.isArray(raw) ? raw : [raw]) push(itemKind, entry)
-    } else if (key === "for") {
-      push("for", raw)
-    }
-  }
-  return { ok: true, hints }
+  // awaiting: YAML frontmatter, then Markdown. The split lives in @frizz/shared because the CLIENT parses
+  // the same fence to decide how it RENDERS while this decides whether the thread PARKS — and those were
+  // two implementations, each with a comment asking the next reader to keep them in step. The 2026-08-24
+  // YAML cutover moved one and not the other, and a correct fence promptly printed its own raw
+  // frontmatter at the human in the in-chat card. One function, called twice, is the only thing that
+  // actually prevents that. See `splitAwaitingFrontmatter` for the grammar and its failure modes.
+  const { body, hints } = splitAwaitingFrontmatter(raw)
+  return { kind, body: capFenceBody(body), hints }
 }
 
 // A user record is a REAL user interaction (a typed prompt / answer / steer / dispatch) rather than a

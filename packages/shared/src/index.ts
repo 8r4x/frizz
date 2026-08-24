@@ -1,3 +1,4 @@
+import { parse as parseYaml } from "yaml"
 import { z } from "zod"
 import { InteractionLifecycle, InteractionOpaqueId, InteractionRevision, InteractionThreadSlug } from "./interactions.ts"
 import { ThreadSlug } from "./thread-slug.ts"
@@ -409,6 +410,120 @@ export const RETIRED_AWAITING_REPLACEMENT: Record<RetiredAwaitingKind, string> =
 /** The four kinds that NAME A LIVE THING. Every one is checked against something frizz can look up — a
  *  runtime handle in this thread's telemetry, or a row in one of its registries — which is the whole
  *  point of the grammar. `for`/`reason` describe the park itself and name nothing. */
+/** THE ONE FENCE-FRONTMATTER PARSER, and it lives here because there used to be TWO.
+ *
+ *  The server folds a fence out of the transcript to decide whether the thread PARKS; the client parses
+ *  the same fence to decide how it RENDERS. Those were separate implementations with a comment on each
+ *  begging the next reader to keep them in step — and on 2026-08-24 the YAML cutover moved one and not
+ *  the other, so a correct fence parked correctly on the server and printed its own raw frontmatter at
+ *  the human in the in-chat card. That is the exact bug class the twin comments predicted, and the only
+ *  fix that ends it is a single function both sides call.
+ *
+ *  DEFENSIVE BY CONTRACT: it runs on whatever an LLM wrote, so it never throws. A parse failure, a
+ *  non-mapping document, a key holding the wrong type, or an empty sequence all yield NO hints — which
+ *  makes the fence name less than it claimed and gets the worker BUMPED rather than parked. Silently
+ *  parking on a fence frizz could not read is the one outcome that must be impossible.
+ */
+
+/** Any `key: value` line at the top level of the frontmatter. Deliberately WIDER than the grammar: its
+ *  job is to spot a line that CLAIMS to be structural, so an unrecognised key can be refused BY NAME.
+ *  Hyphens are in the class because the oldest retired kind is `pr-watch:`, and a regex that could not
+ *  see it let one pass as prose. */
+const AWAITING_KEY_RE = /^([a-z][a-z-]*):\s*(\S.*)?$/i
+
+/** The YAML keys the frontmatter recognises: four PLURAL sequences of things frizz can look up, plus the
+ *  scalar `for:`. Anything else is not structure and falls through to the body. */
+const AWAITING_YAML_KEYS = new Set(["shells", "agents", "timers", "prs", "for"])
+
+/** Which singular hint kind each plural sequence key produces. The WIRE SHAPE is unchanged by the
+ *  2026-08-24 cutover — every consumer still reads a flat `{kind, value}` list with SINGULAR kinds — so
+ *  only the grammar the worker WRITES moved to YAML. */
+const AWAITING_SEQUENCE_KEYS: { [key: string]: AwaitingItemKind | undefined } = {
+  shells: "shell",
+  agents: "agent",
+  timers: "timer",
+  prs: "pr",
+}
+
+/** Defensive caps, shared so the sidebar gloss and the in-chat card can never render a divergent row. */
+export const AWAITING_HINT_MAX = 8
+export const AWAITING_HINT_VALUE_MAX = 200
+
+/** Split an ```awaiting fence body into its hints and its prose.
+ *
+ *  FRONTMATTER, THEN MARKDOWN: structural lines first, a `---` line ends them, everything after is
+ *  arbitrary prose. No delimiter ⇒ the whole fence is frontmatter, which is how every fence written
+ *  before 2026-08-17 parses.
+ *
+ *  A RETIRED or UNKNOWN key never reaches the YAML parser, and that is not an optimisation. A retired key
+ *  would otherwise surface as an opaque "map keys must be unique" or a nested-mapping error, when the
+ *  worker needs to be told BY NAME what replaced it — the scheduler reads those lines back out of the
+ *  BODY with `retiredAwaitingKindsIn`, exactly as it did under the line grammar. */
+export function splitAwaitingFrontmatter(raw: string): { body: string; hints: AwaitingHint[] } {
+  const lines = raw.split("\n").map((l) => l.replace(/\r$/, ""))
+  const delimiter = lines.findIndex((l) => /^\s*---+\s*$/.test(l))
+  const frontmatter = delimiter === -1 ? lines : lines.slice(0, delimiter)
+  const after = delimiter === -1 ? [] : lines.slice(delimiter + 1)
+  const rest: string[] = []
+  const yamlLines: string[] = []
+  // `structural` tracks whether the line we are on belongs to the YAML document. A block sequence's items
+  // and any indented continuation belong to the KEY ABOVE THEM, so they follow that key's fate — which is
+  // what keeps a retired `pr:` with its list underneath from orphaning a bare sequence into the parser.
+  let structural = true
+  for (const line of frontmatter) {
+    const m = line.match(AWAITING_KEY_RE)
+    const key = m?.[1].toLowerCase()
+    if (m && key) structural = AWAITING_YAML_KEYS.has(key)
+    // A LINE THAT IS NOT A KEY AND NOT A CONTINUATION IS PROSE, exactly as it was under the line grammar:
+    // a worker that omits the `---` and writes its handoff straight into the frontmatter must still park.
+    // Feeding that sentence to YAML would be a parse error and would cost it the whole fence.
+    else if (line.trim() !== "" && !/^\s/.test(line) && !/^\s*-\s/.test(line)) structural = false
+    ;(structural ? yamlLines : rest).push(line)
+  }
+  const parsed = parseAwaitingYaml(yamlLines.join("\n"))
+  // Unparsed lines go to the BODY rather than being dropped: the worker has to be able to see what it
+  // wrote, or the correction it gets is about a fence it can no longer read.
+  if (!parsed.ok) rest.push(...yamlLines)
+  rest.push(...after)
+  return { body: rest.join("\n").trim(), hints: parsed.hints.slice(0, AWAITING_HINT_MAX) }
+}
+
+function parseAwaitingYaml(text: string): { ok: boolean; hints: AwaitingHint[] } {
+  if (!text.trim()) return { ok: true, hints: [] }
+  let doc: unknown
+  try {
+    doc = parseYaml(text)
+  } catch {
+    return { ok: false, hints: [] } // not YAML at all — a tab indent, a stray bracket, an unclosed quote
+  }
+  // A frontmatter that parses to a scalar or a sequence is not a mapping of keys, so it names nothing —
+  // and the worker still needs to see it, hence `ok: false` rather than an empty success.
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return { ok: false, hints: [] }
+  const hints: AwaitingHint[] = []
+  const push = (kind: AwaitingHint["kind"], raw: unknown) => {
+    // A number or a boolean is a value a worker plausibly wrote unquoted; anything structural is not a
+    // name and cannot be looked up, so it is dropped rather than stringified into nonsense.
+    if (raw === null || raw === undefined || typeof raw === "object") return
+    const value = String(raw).trim()
+    if (!value) return
+    hints.push({ kind, value: value.slice(0, AWAITING_HINT_VALUE_MAX) })
+  }
+  for (const [rawKey, raw] of Object.entries(doc as { [key: string]: unknown })) {
+    // Case-insensitive, because the line grammar was and a worker that shouts `PRS:` means `prs:`. YAML
+    // itself is case-sensitive, so without this the key would parse and then silently match nothing.
+    const key = rawKey.toLowerCase()
+    const itemKind = AWAITING_SEQUENCE_KEYS[key]
+    if (itemKind) {
+      // A BARE SCALAR IS ACCEPTED where a sequence is expected — `prs: acme/app#1` is what a worker
+      // reaches for with one item, and refusing it would fail a fence that says exactly the right thing.
+      for (const entry of Array.isArray(raw) ? raw : [raw]) push(itemKind, entry)
+    } else if (key === "for") {
+      push("for", raw)
+    }
+  }
+  return { ok: true, hints }
+}
+
 export const AWAITING_ITEM_KINDS = ["shell", "agent", "timer", "pr"] as const
 export type AwaitingItemKind = (typeof AWAITING_ITEM_KINDS)[number]
 export function isAwaitingItemKind(kind: string): kind is AwaitingItemKind {
@@ -1140,7 +1255,7 @@ export function parseLimitResumeWake(text: string): { window: LimitWindow } | nu
 
 /** What is being waited ON: one of the worker's own background shells, or a pull request. */
 // NEITHER KIND HAS A REGISTRY ROW BEHIND IT any more (2026-08-14). Both are derived from the worker's
-// own ```awaiting fence — `shell` from a `watch:` line, `github` from a `pr-watch:` one — so this strip
+// own ```awaiting fence — `shell` from its `shells:` list, `github` from its `prs:` list — so this strip
 // lists exactly what will wake the thread and cannot drift from it.
 //
 // `github` became a view kind first (2026-08-13). A PR wait lives in the worker's
@@ -1148,7 +1263,7 @@ export function parseLimitResumeWake(text: string): { window: LimitWindow } | nu
 // operator still wants to SEE it standing, in the same strip under the prompt box that lists sub-agents
 // and background shells: "showing the active watchers underneath the prompt box, similar to how
 // subagents work… now GitHub watchers can be included in the ranks of those" (maintainer 2026-08-13).
-// So the board SYNTHESIZES one row per parseable `pr-watch:` hint on the thread's standing fence. It is
+// So the board SYNTHESIZES one row per parseable `prs:` entry on the thread's standing fence. It is
 // derived state, not a registration: it appears when the worker parks, vanishes when it says anything
 // else, and carries no drop affordance, because there is no row to drop.
 export const ThreadWatchKind = z.enum(["shell", "github"])
@@ -1198,7 +1313,7 @@ export type GithubWatchStatus = z.infer<typeof GithubWatchStatus>
 
 /** One wait the thread has out, as the board states it.
  *
- *  A `github` row is DERIVED FROM THE FENCE — a `pr-watch:` line — and has no registration behind it. A
+ *  A `github` row is DERIVED FROM THE FENCE — a `prs:` entry — and has no registration behind it. A
  *  `shell` row is derived the same way, from a `watch:` line. Neither is a record: both live exactly as
  *  long as the fence that declares them, which is also exactly as long as the scheduler watches them.
  *  That coupling is the point — the strip lists what will actually wake the thread, and the two cannot
@@ -2439,6 +2554,30 @@ export function splitWakeDeliveries(text: string): string[] {
   return out
 }
 
+// ---- harness plumbing that arrives dressed as a user turn -----------------------------------------
+// A user record that is not the human speaking: a task-notification from a background child, a bare
+// system-reminder wrapper, a frizz orchestrator pulse. Matched on the LEADING tag so a human message
+// that merely QUOTES one of these somewhere inside still counts as the human.
+//
+// THIS IS THE SHARED CLASSIFIER, and it is shared for a reason. It used to live in transcript.ts alone,
+// so the chat DROPPED these records while the tailer's fold counted them as ordinary user turns — two
+// projections of one transcript disagreeing about whether the human had spoken. That is what let a
+// thread render an unanswered ```question card and the working shimmer AT THE SAME TIME, in the Active
+// rail rather than the queue (maintainer 2026-08-24: "this needs to be structurally impossible").
+// Anything that decides what the HUMAN owes must ask this question the same way the chat does.
+const NOISE_PREFIXES = ["<task-notification>", "[SYSTEM NOTIFICATION", "<system-reminder>", "<frizz-", "[frizz]"]
+export function isInjectedNoise(text: string): boolean {
+  const t = text.trimStart()
+  return NOISE_PREFIXES.some((p) => t.startsWith(p))
+}
+
+/** Is this whole record plumbing? The prefix check above answers that for ONE message, and a record may
+ *  hold several — a coalesced record LED by a relay is plumbing in its first segment and a real delivery
+ *  in its second, and dropping it whole would silently swallow the delivery. */
+export function isAllInjectedNoise(text: string): boolean {
+  return splitWakeDeliveries(text).every(isInjectedNoise)
+}
+
 // ---- THE agent-to-agent UPWARD message (a sub-agent reporting to its parent) ----------------------
 // Claude Code's own wrapper for a message that arrived through the agent-to-agent channel — what a
 // BACKGROUND CHILD produces by calling `SendMessage({to:"main"})`. It is delivered into the parent's
@@ -2468,7 +2607,7 @@ export function parseAgentMessage(text: string): { from: string; body: string } 
   return { from, body }
 }
 
-// ---- THE pr-watch WAKE STEER (scheduler ↔ chat card) ---------------------------------------------
+// ---- THE PR-WATCHER WAKE STEER (scheduler ↔ chat card) -------------------------------------------
 // FORMATTER AND PARSER LIVE TOGETHER, for the same reason the token and its stripper do. The scheduler
 // composes this string and pastes it into a worker's composer; the chat then has nothing BUT that
 // string to rebuild a first-party card from, because the structured activity lives in the scheduler's
@@ -3150,11 +3289,13 @@ export const TranscriptMessage = z.object({
   // by id instead of by exact text — the text-match path stays only for id-less legacy flows. Additive.
   deliveryId: z.string().optional(),
   // The ledger's own state for that send. "pending": injected, no JSONL evidence yet. "enqueued":
-  // Claude Code's queue holds it (positive receipt, undelivered). "unconfirmed": no evidence appeared
-  // within the timeout — the injection likely mutated/never landed; the client renders a quiet warning
-  // and the terminal is the recovery surface. Delivered sends never carry this (the ledger drops them;
-  // the real transcript record renders). Additive + optional.
-  deliveryState: z.enum(["pending", "enqueued", "unconfirmed"]).optional(),
+  // Claude Code's queue holds it (positive receipt, undelivered). "delivered": the transport's receipt
+  // proved the provider took it straight into a turn, but its transcript record has not reached disk
+  // yet — renders as an ordinary (un-grayed) user bubble. "unconfirmed": no evidence appeared within
+  // the timeout — the injection likely mutated/never landed; the client renders a quiet warning.
+  // Once the real transcript record lands the ledger drops the item and this field goes with it.
+  // Additive + optional.
+  deliveryState: z.enum(["pending", "enqueued", "delivered", "unconfirmed"]).optional(),
   // FRIZZ wrote this user turn, not the human: it is a scheduler wake delivery (isWakeDelivery). The
   // client renders it as a first-party card rather than the human's off-white right-justified bubble,
   // which was claiming the operator had typed a message the watcher composed. Additive + optional: an

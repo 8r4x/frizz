@@ -24,11 +24,12 @@ test("a done fence with surrounding prose", () => {
   ])
 })
 
-// THE SIX STRUCTURAL KINDS, and this parser has to agree with the server's (tailer.ts AWAITING_HINT_RE)
-// line for line: a kind only one of them knows renders one way and parks another, which is exactly how a
-// worker ends up LOOKING parked on something frizz never armed.
-test("an awaiting fence: the six structural lines parse, and prose stays prose", () => {
-  const text = "```awaiting\nWaiting on a named maintainer at a scheduled checkpoint.\nshell: bzvtnt3ig\npr: owner/repo#12\ntimer: tmr_a1b2c3\n```"
+// THE YAML KEYS, and this parser IS the server's — one `splitAwaitingFrontmatter` in @frizz/shared, called
+// by both. It was two implementations with a comment on each asking the reader to keep them in step, and
+// on 2026-08-24 the cutover moved one and not the other: a correct fence parked correctly and rendered its
+// own raw frontmatter at the human. These cases pin the shared behaviour from the CLIENT's side.
+test("an awaiting fence: the YAML frontmatter parses, and prose stays prose", () => {
+  const text = "```awaiting\nWaiting on a named maintainer at a scheduled checkpoint.\nshells: [bzvtnt3ig]\nprs: [owner/repo#12]\ntimers: [tmr_a1b2c3]\n```"
   assert.deepEqual(splitFenceBlocks(text), [
     {
       kind: "fence",
@@ -43,22 +44,28 @@ test("an awaiting fence: the six structural lines parse, and prose stays prose",
   ])
 })
 
-// CASE-INSENSITIVE on the six kinds, and a DELETED kind is prose — not a hint under another name.
-// `human:`, `ci:` and `session:` were removed with the grammar (2026-08-15); a worker still writing one
-// must have it fall to the body, where a human reads it, rather than silently minting a wait.
-test("awaiting hint kinds are case-insensitive, and a deleted kind is just prose", () => {
-  const { hints, body } = parseFenceBody("Shell: bzvtnt3ig\nTimer: tmr_a1b2c3\nFor: 2h\nReason: waiting on the suite\nprose tail", "awaiting")
+// CASE-INSENSITIVE on the keys, and a RETIRED key is prose — not a hint under another name. `human:`,
+// `ci:` and `session:` went with the 2026-08-15 grammar; the SINGULAR item keys and `reason:` went with
+// the 2026-08-24 YAML cutover. A worker still writing any of them must have it fall to the body, where a
+// human reads it, rather than silently minting a wait.
+test("awaiting keys are case-insensitive, and a retired key is just prose", () => {
+  const { hints, body } = parseFenceBody("Shells: [bzvtnt3ig]\nTimers: [tmr_a1b2c3]\nFor: 2h\nprose tail", "awaiting")
   assert.deepEqual(hints, [
     { kind: "shell", value: "bzvtnt3ig" },
     { kind: "timer", value: "tmr_a1b2c3" },
     { kind: "for", value: "2h" },
-    { kind: "reason", value: "waiting on the suite" },
   ])
   assert.equal(body, "prose tail")
 
   const legacy = parseFenceBody("human: Alice approves\nci: build 9\nsession: sub-123\nstill here", "awaiting")
   assert.deepEqual(legacy.hints, [], "a deleted kind mints no hint")
   assert.match(legacy.body, /Alice approves/, "…and stays readable in the body")
+
+  // The keys retired by the cutover behave identically — including `reason:`, whose prose is the whole
+  // reason the frontmatter could not be YAML until it left.
+  const singular = parseFenceBody("shell: bzvtnt3ig\npr: owner/repo#1\nreason: waiting on your merge: the revert", "awaiting")
+  assert.deepEqual(singular.hints, [], "a singular item key mints no hint after the cutover")
+  assert.match(singular.body, /waiting on your merge: the revert/, "…and its colon cannot break the parse")
 })
 
 test("a done fence never carries hints — hint-looking lines stay in the body", () => {
@@ -73,7 +80,7 @@ test("an awaiting fence with no hints → empty hints, whole body prose", () => 
 })
 
 test("multiple fences in order", () => {
-  const text = "```awaiting\nhold\ntimer: 10m\n```\nlater\n```done\nfinished\n```"
+  const text = "```awaiting\nhold\ntimers: [10m]\n```\nlater\n```done\nfinished\n```"
   assert.deepEqual(splitFenceBlocks(text), [
     { kind: "fence", fenceKind: "awaiting", body: "hold", hints: [{ kind: "timer", value: "10m" }] },
     { kind: "prose", text: "\nlater\n" },
@@ -101,7 +108,7 @@ test("unterminated fence degrades to plain prose (no fence segment)", () => {
 })
 
 test("CRLF line endings are handled", () => {
-  const segs = splitFenceBlocks("```awaiting\r\nhold on\r\nshell: bzvtnt3ig\r\n```")
+  const segs = splitFenceBlocks("```awaiting\r\nhold on\r\nshells: [bzvtnt3ig]\r\n```")
   assert.deepEqual(segs, [{ kind: "fence", fenceKind: "awaiting", body: "hold on", hints: [{ kind: "shell", value: "bzvtnt3ig" }] }])
 })
 
@@ -128,24 +135,24 @@ test("an empty done body is allowed (body may be '')", () => {
   assert.deepEqual(segs, [{ kind: "fence", fenceKind: "done", body: "", hints: [] }])
 })
 
-// THE CLIENT'S SPLIT MUST MATCH THE TAILER'S (parseSignalFence). The server decides whether a fence parks
-// and the client decides how it reads; a disagreement about where the structure ends is a fence that
-// renders one way and behaves another — the exact class of bug that had `pr-watch:` printing at the human
-// while frizz treated the fence as naming nothing.
+// THE CLIENT'S SPLIT IS THE TAILER'S — literally the same function since 2026-08-24. The server decides
+// whether a fence parks and the client decides how it reads, and a disagreement about where the structure
+// ends is a fence that renders one way and behaves another: the class of bug that had `pr-watch:` printing
+// at the human while frizz treated the fence as naming nothing, and that the cutover reproduced within the
+// hour by moving one parser and not the other.
 test("a `---` line ends the frontmatter here too, and the prose survives intact", () => {
-  const { hints, body } = parseFenceBody("shell: bb4sns0ye\nfor: 20m\n---\nKnown-answer control.\n\n- angular clean\n- puppeteer flagged", "awaiting")
+  const { hints, body } = parseFenceBody("shells: [bb4sns0ye]\nfor: 20m\n---\nKnown-answer control.\n\n- angular clean\n- puppeteer flagged", "awaiting")
   assert.deepEqual(hints, [{ kind: "shell", value: "bb4sns0ye" }, { kind: "for", value: "20m" }])
   assert.equal(body, "Known-answer control.\n\n- angular clean\n- puppeteer flagged")
 })
 
-test("no `---` parses exactly as it did before the delimiter existed", () => {
-  const { hints, body } = parseFenceBody("shell: bb4sns0ye\nfor: 20m\nreason: one line", "awaiting")
+test("no `---` means the whole fence is frontmatter, and a retired `reason:` falls to the body", () => {
+  const { hints, body } = parseFenceBody("shells: [bb4sns0ye]\nfor: 20m\nreason: one line", "awaiting")
   assert.deepEqual(hints, [
     { kind: "shell", value: "bb4sns0ye" },
     { kind: "for", value: "20m" },
-    { kind: "reason", value: "one line" },
   ])
-  assert.equal(body, "")
+  assert.equal(body, "reason: one line")
 })
 
 test("a structural line AFTER the delimiter is prose, so quoting the grammar cannot arm a wait", () => {

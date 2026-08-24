@@ -111,6 +111,9 @@ importers:
 
   packages/shared:
     dependencies:
+      yaml:
+        specifier: ^2.9
+        version: 2.9.0
       zod:
         specifier: ^3.24
         version: 3.25.76
