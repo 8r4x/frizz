@@ -19,7 +19,7 @@ thread in Active.
 | REST until the condition is met (the usual CI / PR / release wait) | a **sub-agent** that owns the wait |
 | KEEP WORKING alongside a process you launched (dev server, log tail) | `Bash` + `run_in_background: true` |
 | stream events into the turn you are actively working in | `Monitor` |
-| re-check at a named wall-clock instant, across a process exit | `timer:` awaiting fence |
+| re-check at a named wall-clock instant, across a process exit | `mcp__frizz__timer`, named in a `timers:` fence list |
 
 Never fake a wait with `echo waiting`, repeated foreground sleeps, or an `awaiting` fence for CI, bots,
 releases, or merge progression.
@@ -66,8 +66,9 @@ Give the child, literally, in the prompt:
 also inspect the workflow runs for the exact PR head, and treat `ACTION_REQUIRED` fork gates as pending,
 not passing.
 
-**PR review activity.** Do not build a watcher — emit `awaiting` with `pr-watch: owner/repo#N` and frizz
-polls it for you, waking on any new review, approval, or comment, bot or human.
+**PR review activity.** Do not build a watcher — register the PR with `mcp__frizz__watch_pr`, then name
+it in your `awaiting` fence's `prs:` list. Frizz polls it for you, waking on any new review, approval,
+or comment, bot or human. The registration creates the wait; the fence only declares it.
 
 **A release or deploy.** Poll the artifact that proves it, not the pipeline that promises it — the
 published version on the registry, the health endpoint, the deployed asset hash.

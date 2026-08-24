@@ -532,7 +532,11 @@ test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting pa
   // The fact a worker cannot discover on its own, and the one it most often gets wrong: its shells are
   // watched AUTOMATICALLY, and the fence line is how it comes to REST meanwhile — not a registration.
   assert.match(SESSION_SEED, /watched AUTOMATICALLY/)
-  assert.match(SESSION_SEED, /`watch: <id>` line/)
+  // The seed teaches the LIVE fence grammar (YAML frontmatter, plural list keys — 2026-08-24). Its
+  // predecessors each looped a real worker: the zod exclude-api thread parked on `pr-watch:` lines the
+  // 2026-08-15 grammar had retired, so every park named nothing and the Goal bumped it seconds later.
+  assert.match(SESSION_SEED, /`shells: \[<id>\]`/)
+  assert.doesNotMatch(SESSION_SEED, /pr-watch|`watch: <id>`|human:\//, "retired fence spellings must not come back")
   assert.match(SESSION_SEED, /because that artifact outlives the thread/)
   // The seed carries the two 2026-08-16 wrong-`done` cases in one clause each — a worker that never
   // scrolls the system prompt still gets the recommendation rule and the discovered-follow-up rule.

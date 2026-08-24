@@ -58,7 +58,7 @@ gh pr view N -R OWNER/REPO --comments     # review threads + conversation
 ```
 Read the changed files **in context**, not just the hunks — `gh pr diff` shows what changed, but correctness lives in the surrounding code.
 
-**Reading ONE review (what a `pr-watch` wake hands you)**
+**Reading ONE review (what a `watch_pr` wake hands you)**
 
 A wake permalink ending `#pullrequestreview-<id>` is a **review**, and a review's `body` is routinely
 **empty** — review apps (pullfrog, coderabbit) and humans doing an inline pass put every word in the
@@ -139,12 +139,13 @@ such as `push` and `pull_request` both contribute to the aggregate verdict.
   `TaskOutput` is deprecated. Do not fake waiting with `echo waiting` or sleep-only Bash calls.
 
 Both mechanisms are session-bound. If the next check deliberately belongs at a named wall-clock
-instant, park with a durable `timer:` fence. If a specific external human reviewer/approver is the
-only remaining gate, park with `human: <actor + exact action>`. For a GitHub PR, pair it with
-`pr-watch: OWNER/REPO#NUMBER`: frizz baselines current reviews/comments and wakes on ANY new
-activity after the fence — bot or human — durably across restarts. Otherwise optionally pair a timer for
-a scheduled recheck. The dashboard operator's own go/no-go remains a ` ```question ` block. `pr:` / `ci:` /
-`session:` awaiting hints are legacy compatibility only — do not emit them for new automated waits.
+instant, set a durable timer with `mcp__frizz__timer` and park with its id in your fence's `timers:`
+list. If a specific external human reviewer/approver is the only remaining gate, that is a
+` ```question ` — waiting on a person is never a park. For a GitHub PR, register it with
+`mcp__frizz__watch_pr` and name it in the fence's `prs:` list (`prs: [OWNER/REPO#NUMBER]`): frizz
+baselines current reviews/comments and wakes on ANY new activity after registration — bot or human —
+durably across restarts. The registration creates the wait; the fence only declares it. The dashboard
+operator's own go/no-go remains a ` ```question ` block.
 
 ## Fitting gh work into your thread type
 

@@ -273,7 +273,7 @@ const WATCH_PR = {
     "wait at all. This tool is the wait.\n\n" +
     "THE ```awaiting FENCE IS STILL WORTH WRITING, and it is a different job: it is how you come to REST " +
     "without frizz asking you for a handoff, and how the human sees what you are waiting for. Register " +
-    "the watcher with this tool, then name the same PR on a `pr-watch:` line in your fence.\n\n" +
+    "the watcher with this tool, then name the same PR in your fence's `prs:` list.\n\n" +
     "REGISTERING IS IDEMPOTENT per pull request: asking twice returns the SAME id and tells you it was " +
     "already armed, so re-registering after a compaction is safe and is the right instinct. Use `list` " +
     "when you want to know what you are holding without changing anything — it answers with each PR's " +
@@ -925,7 +925,7 @@ async function watchPr(args) {
     : `Watching ${ref} as ${id}. Frizz wakes you when CI passes or fails and on every later review or ` +
       "comment, and the registration survives your turn ending, a compaction and a frizz restart."
   return (
-    `${head}\n\nNAME IT IN YOUR \`\`\`awaiting FENCE TOO (\`pr-watch: ${ref}\`) — the watcher does the ` +
+    `${head}\n\nNAME IT IN YOUR \`\`\`awaiting FENCE TOO (\`prs: [${ref}]\`) — the watcher does the ` +
     `waking, the fence is what lets you come to rest and shows the human what you are waiting for.\n\n` +
     `DROP IT when it stops mattering (\`action: "drop", id: "${id}"\`).\n\n${armedPrWatchList(result)}`
   )

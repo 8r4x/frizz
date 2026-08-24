@@ -788,7 +788,8 @@ test("`watch_pr` registers, lists and drops against the CALLING thread", async (
     assert.match(added.result.content[0].text, /Watching acme\/app#391 as prw_abc123/)
     // It must TELL THE WORKER THE OTHER HALF. Registering is the wait; the fence is how it comes to rest
     // and shows the human — a worker that only registers sits in the queue being asked for a handoff.
-    assert.match(added.result.content[0].text, /pr-watch: acme\/app#391/)
+    // The spelling is the LIVE grammar's `prs:` list (YAML frontmatter, 2026-08-24), not a retired kind.
+    assert.match(added.result.content[0].text, /prs: \[acme\/app#391\]/)
 
     // `list` carries each PR's CHECK STATE, which is the reason a worker lists at all — "where do my PRs
     // stand" answered in one call rather than one `gh` round-trip per PR.
