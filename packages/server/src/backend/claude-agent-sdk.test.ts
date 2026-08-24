@@ -144,6 +144,14 @@ test("real SDK + fake executable: init owns the requested session, input streams
       awsSecretAccessKeyPresent: false,
       frizzSecretPresent: false,
       arbitrarySecretPresent: false,
+      // The lifted worker caps, from claudeWorkerEnv() — WORKER_MAX_WEB_SEARCHES /
+      // WORKER_MAX_SUBAGENTS / WORKER_MAX_CONCURRENT_SUBAGENTS in types.ts, against provider defaults
+      // of 200 / 200 / 20. Asserted by VALUE and inside this exhaustive deepEqual on purpose: the caps
+      // reach a worker through the environment and nothing else, so a silently dropped one is invisible
+      // until some long session starts refusing to spawn sub-agents hours in.
+      maxWebSearches: "10000",
+      maxSubagents: "10000",
+      maxConcurrentSubagents: "100",
     })
     assert.deepEqual(records.find((row) => row.kind === "user-input"), {
       kind: "user-input",
