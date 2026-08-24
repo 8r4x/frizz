@@ -778,8 +778,8 @@ test("Codex automatic titles follow runtime and never expose the raw initial-pro
 // Every part of that is decided SERVER-side and lands here as two flags — `needsYou: false` (excused
 // from the queue) and `awaitingBackground: true` (it is waiting on something named). This pins the
 // reading those two produce, because the same pair now arrives from two new server rules that never
-// existed when the reading was written: a declared `watch:` park, and a pr-watch park whose CI is
-// still running.
+// existed when the reading was written: a park on the thread's own shells/children, and one on a
+// registered PR watcher whose CI is still running.
 test("sessionIndicatorKind: a declared wait draws the quiet dot in the ACTIVE band, not a spinner", () => {
   const awaiting = thread({ kind: "session", runtime: "turn-idle", needsYou: false, awaitingBackground: true, bgShells: [shell()] })
   assert.equal(sessionIndicatorKind(awaiting), "background", "its own mark — not the spinner, not the at-rest ellipsis")
@@ -804,11 +804,13 @@ test("sessionIndicatorKind: a declared wait draws the quiet dot in the ACTIVE ba
   assert.equal(sessionIndicatorKind(requeued), "background", "…while the dot keeps stating the live work")
 })
 
-// THE DOT NEEDS SOMETHING TO ACTUALLY BE MOVING. A `pr-watch:` rest earns `awaitingBackground` too (it
-// carries the resting card and that card's snooze), but unlike a shell its subject can be ALREADY DONE:
+// THE DOT NEEDS SOMETHING TO ACTUALLY BE MOVING. An ```awaiting fence naming a `pr:` earns
+// `awaitingBackground` too (it carries the resting card and that card's snooze), but unlike a shell its
+// subject can be ALREADY DONE:
 // a green PR is a handoff sitting on the human's merge, not work in flight, and it wore the same live
 // blue dot as a running dev server (maintainer 2026-08-19: "this task should not be listed as in the
-// actively running rail if it's only awaiting a PR with green CI").
+// actively running rail if it's only awaiting a PR with green CI"). The line kind is `pr:` — the
+// `pr-watch:` spelling was retired with the 2026-08-15 grammar (RETIRED_AWAITING_KINDS).
 test("sessionIndicatorKind: a watched PR that has SETTLED reads at-rest; one still running keeps the dot", () => {
   const watching = (checks: "running" | "passing" | "failing" | "none", over: Partial<ThreadView> = {}) => thread({
     kind: "session", runtime: "turn-idle", awaitingBackground: true,
