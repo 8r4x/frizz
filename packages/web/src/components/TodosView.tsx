@@ -331,7 +331,7 @@ export function TodosView() {
   prevRenderRef.current = renderItems.map((i) => i.id)
 
   // Drive EVERY exiting card through the SAME board-independent exit, so all dismissal paths (Mark done,
-  // Snooze, an awaiting-confirm snooze, or steering the agent by sending a message) behave identically:
+  // Snooze, or steering the agent by sending a message) behave identically:
   // (1) ARM a board-departed card's fade on the next frame (one opaque frame must paint first, else there
   // is no transition), (2) FINALIZE — pin a neighbour, then un-mount — QUEUE_EXIT_MS after the card BEGAN
   // exiting. "Exiting" = optimistically dismissed (in `leaving`, the board may still list it) OR

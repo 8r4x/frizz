@@ -62,7 +62,6 @@ test("the names come off the shell/agent lines, and nothing else does", () => {
         { kind: "agent", value: "agent_7" },
         { kind: "timer", value: "tmr_abc123" },
         { kind: "for", value: "2h" },
-        { kind: "reason", value: "waiting on the suite" },
         { kind: "shell", value: "bash_2" },
       ],
     },
@@ -282,7 +281,7 @@ test("a fence with items but no `for:` is left to the sign-off nudge", async () 
 // It is now the most explicit of the three bumps, because it is the one where the worker has the most to
 // gain from being told: it does not need to fix an id, it needs to register something at all.
 test("an awaiting fence naming NOTHING is bumped, with how to register a real wait", async () => {
-  const h = parkHarness([{ kind: "for", value: "24h" }, { kind: "reason", value: "TypeScript legs still running; waiting on the checks and your merge" }])
+  const h = parkHarness([{ kind: "for", value: "24h" }], { body: "TypeScript legs still running; waiting on the checks and your merge" })
   try {
     await h.s.tick()
     const rows = h.queued()
@@ -302,7 +301,7 @@ test("an awaiting fence naming NOTHING is bumped, with how to register a real wa
 // One bump per rest per CAUSE. A fence that names nothing is a different piece of news from one whose
 // item died, so the ids must not collide — but neither may fire twice for the same rest.
 test("the nameless bump fires once per rest, and does not collide with the other two causes", async () => {
-  const h = parkHarness([{ kind: "for", value: "2h" }, { kind: "reason", value: "waiting" }])
+  const h = parkHarness([{ kind: "for", value: "2h" }], { body: "waiting" })
   try {
     for (let i = 0; i < 4; i++) await h.s.tick()
     assert.equal(h.queued().length, 1, "one rest, one nameless bump")
@@ -361,7 +360,7 @@ test("a correction prints the live ids inline, ready to copy into a fence", asyn
 // …and when there is genuinely nothing out, that is the answer rather than an empty list. This is the
 // commonest nameless fence: a worker "waiting" on nothing at all.
 test("a nameless fence with nothing running is told it is not awaiting at all", async () => {
-  const h = parkHarness([{ kind: "for", value: "24h" }, { kind: "reason", value: "waiting on the merge" }])
+  const h = parkHarness([{ kind: "for", value: "24h" }], { body: "waiting on the merge" })
   try {
     await h.s.tick()
     const msg = h.queued()[0].message
@@ -563,7 +562,7 @@ test("a park naming something that never existed still reads as a wrong fence", 
 // operator's text leads, verbatim" (Goal/heartbeat) and "the prompt VERBATIM" (snooze) — and frizz's own
 // corrections are in any case the only deliveries that discuss the fence.
 test("a park correction tells the worker what time it is and how long it has been gone", async () => {
-  const h = parkHarness([{ kind: "for", value: "24h" }, { kind: "reason", value: "waiting" }], {
+  const h = parkHarness([{ kind: "for", value: "24h" }], { body: "waiting",
     restedAt: new Date(Date.now() - 3 * 60 * 60_000 - 12 * 60_000).toISOString(),
   })
   try {

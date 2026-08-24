@@ -831,7 +831,7 @@ test("deriveNeedsYou: manual snooze suppresses every queue reason until its exac
 // (hasDeclaredBackgroundPark), so what this pins is that the assertions alone no longer buy anything.
 test("deriveNeedsYou: an awaiting fence alone never excuses a rest — only a checkable park does", () => {
   const now = Date.parse("2026-07-13T12:00:00.000Z")
-  const waiting = (kind: "shell" | "agent" | "timer" | "pr" | "for" | "reason", value: string) =>
+  const waiting = (kind: "shell" | "agent" | "timer" | "pr" | "for", value: string) =>
     tele({ lastFence: { kind: "awaiting", body: "", hints: [{ kind, value }] } })
   // Each of these NAMES something, but nothing in this thread's telemetry or registries backs it, so
   // none of them is a park and every one queues.
@@ -843,9 +843,15 @@ test("deriveNeedsYou: an awaiting fence alone never excuses a rest — only a ch
   ] as [Parameters<typeof waiting>[0], string][]) {
     assert.equal(deriveNeedsYou(row(), waiting(kind, value), "turn-idle", false, now), true, `${kind} naming nothing live must queue`)
   }
-  // A duration and a reason describe the park; on their own they name nothing to wait for.
+  // A duration describes the park; on its own it names nothing to wait for. (`reason:` used to sit
+  // beside it here and was retired with the 2026-08-24 YAML cutover — prose lives in the fence BODY now,
+  // and a body has never been a wait either, which the empty-hints case below covers.)
   assert.equal(deriveNeedsYou(row(), waiting("for", "2h"), "turn-idle", false, now), true, "a bare for: is not a wait")
-  assert.equal(deriveNeedsYou(row(), waiting("reason", "waiting on the build"), "turn-idle", false, now), true, "prose is not a wait")
+  assert.equal(
+    deriveNeedsYou(row(), tele({ lastFence: { kind: "awaiting", body: "waiting on the build", hints: [] } }), "turn-idle", false, now),
+    true,
+    "prose is not a wait",
+  )
   // An awaiting fence naming NOTHING is a worker claiming to wait with no way to be woken.
   assert.equal(deriveNeedsYou(row(), tele({ lastFence: { kind: "awaiting", body: "", hints: [] } }), "turn-idle", false, now), true)
 })

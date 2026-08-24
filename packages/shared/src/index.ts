@@ -352,7 +352,7 @@ export type PendingAsk = z.infer<typeof PendingAsk>
 //   prose bodies       narrowed to `reason:` so the fence is machine-checkable — then given back in full
 //                      below the `---` delimiter, where prose cannot be mistaken for structure.
 export const AwaitingHint = z.object({
-  kind: z.enum(["shell", "agent", "timer", "pr", "for", "reason"]),
+  kind: z.enum(["shell", "agent", "timer", "pr", "for"]),
   value: z.string(),
 })
 export type AwaitingHint = z.infer<typeof AwaitingHint>

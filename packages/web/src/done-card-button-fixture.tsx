@@ -60,7 +60,14 @@ const baseThread = (id: string, title: string, subAgents: ThreadView["subAgents"
   watches: [],
 })
 
-// A fixed future instant so the timer card renders a real "Confirm snooze" (isValidAwaitingTimer + future).
+// A fixed future instant, kept so the timer card renders with a plausible value.
+//
+// IT NO LONGER RENDERS A "Confirm snooze" BUTTON, and neither does anything else. That control was armed
+// by `isValidAwaitingTimer` — a symbol that has not existed since the 2026-08-15 grammar cut deleted the
+// `timer: <instant>` kind — and the RPC behind it (`confirmAwaiting`) was deleted outright in `8e954d71`
+// once it had spent nine days refusing every call it received. `awaitingParkAction` returns null for
+// every fence, so this card draws prose and rows and no action at all. The fixture is kept because that
+// IS the shape to look at; the sentence claiming a button was the only thing wrong with it.
 const timerIso = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString()
 
 const cards: { slug: string; label: string; fence: "done" | "awaiting"; body: string; hints: AwaitingHint[] }[] = [
