@@ -218,9 +218,19 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
 // rendering should align with the agent tool call component"). The geometry is asserted AGAINST the agent
 // rows rather than against literals, because "aligned" is a relationship: if either card's slot moves,
 // the two must move together or this fails.
+// The fixture starts the fresh call 15s in the FUTURE (`?freshAgeMs=-15000`) and
+// FOREGROUND_MARK_AFTER_MS is 2s, so the mark is due ~17s after the page loads. The wait below used to
+// allow 30s — 13s of slack over that 17s — and on a loaded machine the page load, the React mount and
+// the component's own `setTimeout` ate it: measured 2026-08-24 at load average 83, this timed out at
+// 30s inside an otherwise green 52/53 run. Deriving the budget from the two numbers it actually depends
+// on, with ~3x slack, is what stops it being re-guessed the next time the box is busy.
+const MARK_DUE_MS = 15_000 + 2_000
+const MARK_WAIT_MS = MARK_DUE_MS * 3
+
 test("a background shell card marks its liveness in the same slot as a dispatch card", {
   skip: !baseUrl,
-  timeout: 60_000,
+  // The wait above is the long pole, and it does not start until the rest of the assertions have run.
+  timeout: MARK_WAIT_MS + 60_000,
 }, async () => {
   const { default: puppeteer } = await import("puppeteer")
   const browser = await puppeteer.launch({
@@ -359,7 +369,7 @@ test("a background shell card marks its liveness in the same slot as a dispatch 
         const row = document.querySelectorAll("[data-shell-rows] .frizz-bash")[4]
         return row !== undefined && row.querySelector(".frizz-tool-mark") !== null
       },
-      { timeout: 30_000, polling: 250 },
+      { timeout: MARK_WAIT_MS, polling: 250 },
     )
     const late = await read("[data-shell-rows] .frizz-bash")
     assert.equal(late[4].markSlotIndex, 0, "a call that keeps running marks itself once it passes the threshold")
