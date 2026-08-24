@@ -13,6 +13,7 @@ import {
   findRolloutById,
   extractCodexFrizzTitle,
   scanForeignRollouts,
+  readCodexThreadNames,
 } from "./codex.ts"
 import { newTailState, applyEvent } from "../tailer.ts"
 import type { NormalizedEvent } from "./types.ts"
@@ -875,6 +876,35 @@ test("scanForeignRollouts: this project's own human-started rollouts, and nothin
     // The cap is honoured, and a home with no sessions tree at all is empty rather than a throw.
     assert.equal(scanForeignRollouts({ cwds: ["/work/app"], nowMs: NOW, freshMs: 24 * 3600_000, exclude: new Set(), max: 1 }, home).length, 1)
     assert.deepEqual(scanForeignRollouts({ cwds: ["/work/app"], nowMs: NOW, freshMs: 24 * 3600_000, exclude: new Set(), max: 20 }, join(home, "nope")), [])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+// Codex names its own threads in a SIDECAR, not in the rollout: `$CODEX_HOME/session_index.jsonl`.
+// Coverage is thin on a real machine (22 entries against 1,586 rollouts here), so every caller has to
+// treat a miss as ordinary — which is why the misses below are all silent rather than thrown.
+test("readCodexThreadNames: the sidecar index, last writer winning, degrading on anything malformed", () => {
+  const home = mkdtempSync(join(tmpdir(), "codexhome-names-"))
+  try {
+    // A missing index is the common case for a fresh install, and must be empty rather than an error.
+    assert.equal(readCodexThreadNames(home).size, 0)
+
+    writeFileSync(join(home, "session_index.jsonl"), [
+      JSON.stringify({ id: "aaa", thread_name: "Explain account status differences", updated_at: "2026-08-01T00:00:00Z" }),
+      "{ not json at all",
+      JSON.stringify({ id: "bbb", thread_name: "   ", updated_at: "2026-08-02T00:00:00Z" }), // blank name is no name
+      JSON.stringify({ id: "ccc" }), // no name at all
+      // The file is APPEND-ONLY, so a renamed thread appears twice and the later line is current.
+      JSON.stringify({ id: "aaa", thread_name: "Explain account status", updated_at: "2026-08-03T00:00:00Z" }),
+      "",
+    ].join("\n"))
+
+    const names = readCodexThreadNames(home)
+    assert.equal(names.get("aaa"), "Explain account status", "the newer line wins")
+    assert.equal(names.get("bbb"), undefined)
+    assert.equal(names.get("ccc"), undefined)
+    assert.equal(names.size, 1, "one malformed line must not cost the whole index")
   } finally {
     rmSync(home, { recursive: true, force: true })
   }

@@ -1,6 +1,6 @@
 import { join } from "node:path"
 import { homedir } from "node:os"
-import { readdirSync, statSync, openSync, readSync, closeSync } from "node:fs"
+import { readdirSync, statSync, readFileSync, openSync, readSync, closeSync } from "node:fs"
 import type { PermissionMode } from "@frizz/shared"
 import { applyEvent } from "../tailer.ts"
 import type { AgentBackend, BuiltCommand, FoldState, NormalizedEvent, ResumeOpts, SpawnOpts } from "./types.ts"
@@ -757,6 +757,48 @@ export function findRolloutsByIds(sessionIds: readonly string[], codexHome = def
       }
     }
     if (!wanted.size) break
+  }
+  return out
+}
+
+// ---- codex's OWN name for a thread ----
+//
+// A rollout carries NO title record — checked against every record type and every title-shaped key in
+// the newest 12 real rollouts (2026-08-24): `session_meta`, `turn_context`, `response_item`,
+// `event_msg`, `world_state`, `compacted`, and nothing among them names the thread. Codex keeps the
+// name in a SIDECAR instead: `$CODEX_HOME/session_index.jsonl`, one `{id, thread_name, updated_at}`
+// per line.
+//
+// COVERAGE IS THIN, and the caller must be ready for a miss rather than treating this as the answer:
+// on this machine it held 22 entries against 1,586 rollouts — 4 of the 319 written in the last 30
+// days. Codex's own picker behaves accordingly: driven 2026-08-24, it showed the first USER MESSAGE
+// for every unindexed session rather than a generated name. So this is the preferred title and the
+// first user turn is the fallback, which is the same order Claude Code's picker uses.
+const SESSION_INDEX_MAX_BYTES = 4 * 1024 * 1024
+/** id → the name codex gave that thread, for every entry in the sidecar index. Empty on any fs or
+ *  parse surprise — a missing name degrades to the first-user-turn fallback, never to an error. */
+export function readCodexThreadNames(codexHome = defaultCodexHome()): Map<string, string> {
+  const out = new Map<string, string>()
+  let raw: string
+  try {
+    const path = join(codexHome, "session_index.jsonl")
+    if (statSync(path).size > SESSION_INDEX_MAX_BYTES) return out
+    raw = readFileSync(path, "utf8")
+  } catch {
+    return out
+  }
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue
+    try {
+      const r = JSON.parse(line) as { id?: unknown; thread_name?: unknown }
+      // LAST WRITER WINS: the file is append-only, so a renamed thread appears twice and the newer
+      // line is the current name.
+      if (typeof r.id === "string" && typeof r.thread_name === "string" && r.thread_name.trim()) {
+        out.set(r.id, r.thread_name.trim())
+      }
+    } catch {
+      // one malformed line must not cost the whole index
+    }
   }
   return out
 }

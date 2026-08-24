@@ -19,7 +19,7 @@ import { frizzDirExists } from "./frizz.ts"
 import { githubStatusKey, parsePrRef, readAwaitingPark, readGithubStatusBook, GITHUB_STATUS_SETTING, type GithubStatusBook } from "./awaiting.ts"
 import { findByPath } from "./project-registry.ts"
 import { parseDeliveryLedger } from "./delivery-ledger.ts"
-import { effectivePermissionMode, resolveLegacyThreadFile } from "./dispatch.ts"
+import { effectivePermissionMode, fallbackTitle, resolveLegacyThreadFile } from "./dispatch.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
 import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 import { listPlanFiles } from "./plan-files.ts"
@@ -125,6 +125,26 @@ function deriveRuntime(
 // than minting a new RuntimeState — see session-transcript-drift (a distinct error enum is a follow-up).
 export function degradeIfNoTranscript(runtime: RuntimeState, noTranscript: boolean | undefined): RuntimeState {
   return noTranscript && runtime === "running" ? "exited" : runtime
+}
+
+// THE INVARIANT: a thread waiting on an answer is never reported as running. One rule, one place, and
+// every surface downstream reads the runtime it produces — so the two cannot disagree.
+//
+// They did. The chat draws its shimmer off `runtime === "running"|"spawning"` and its answerable
+// ```question card off the transcript; the rail bands on `needsYou`, which deriveNeedsYou refused to
+// grant anything not at rest. So one record that re-opened the turn — a task-notification, a wake
+// pulse, an echoed tool_result, none of which the chat even renders — put a thread in the ACTIVE rail,
+// shimmering "Thinking…", above a live question card with a Send answers button (maintainer 2026-08-24:
+// "this needs to be structurally impossible… it represents a complete failure of frizz").
+//
+// Fixing the derivations was necessary and not sufficient: a fix inside `pendingQuestion` leaves the
+// next signal free to re-open the same gap. Degrading the RUNTIME closes it structurally, because
+// `runtime` is the ONE value both surfaces read to decide whether anything is moving. Downgraded to
+// "turn-idle", not "exited": the process IS alive, and the agent may well still be mid-turn — this
+// says only that the row must not present as motion while it owes the human an answer. The agent's own
+// next message clears the ask and the spinner comes straight back.
+export function degradeIfAwaitingAnswer(runtime: RuntimeState, pendingQuestion: boolean | undefined): RuntimeState {
+  return pendingQuestion && (runtime === "running" || runtime === "spawning") ? "turn-idle" : runtime
 }
 
 // Display fields are ONE-LINERS in every surface that renders them — cap them at the server so a
@@ -325,7 +345,7 @@ function liveWaitHandles(tele: SessionTelemetry | undefined): Set<string> {
 
 /** Is this thread parked on its OWN BACKGROUND WORK, named in its fence and still live?
  *
- *  `pr-watch:` is deliberately NOT this. A PR wait is also a declaration and it also cards — but whether
+ *  A PR WAIT is deliberately NOT this. It is also a declaration and it also cards — but whether
  *  it parks depends on the PR's own state, which `hasDeclaredWait` handles. Own background work is the
  *  simple case: it reports on its own, and there is nothing for the human to do meanwhile. */
 export function hasDeclaredBackgroundPark(
@@ -346,7 +366,7 @@ export function hasDeclaredBackgroundPark(
 }
 
 /** Does the thread DECLARE a wait of any kind — its own background work, or a parked PR watcher? This is
- *  what the resting card states. It is wider than the queue excusal above by exactly `pr-watch`, which
+ *  what the resting card states. It is wider than the queue excusal above by exactly the PR wait, which
  *  cards but never parks. */
 export function hasDeclaredWait(tele: SessionTelemetry | undefined, nowMs: number): boolean {
   if (hasDeclaredBackgroundPark(tele, nowMs)) return true
@@ -367,7 +387,7 @@ export function hasDeclaredWait(tele: SessionTelemetry | undefined, nowMs: numbe
 
 // IS THE THREAD PARKED BEHIND CI THAT IS STILL RUNNING?
 //
-// A pr-watch thread is normally a VISIBLE queue handoff, and that is deliberate — a PR whose reviews may
+// A PR-watching thread is normally a VISIBLE queue handoff, and that is deliberate — a PR whose reviews may
 // never arrive must not silently vanish (2026-07-22). But CI running is a wait with a KNOWN TERMINAL
 // CONDITION, which review does not have, so it is the one case where hiding the card cannot lose
 // anything: the checks finish, and the thread comes straight back (maintainer 2026-08-14: "if there is a
@@ -419,7 +439,7 @@ function hasLiveOwnWork(tele: SessionTelemetry | undefined): boolean {
   )
 }
 
-/** A standing `pr-watch:` park the scheduler will actually fire — the same parse `githubWatchViews`
+/** A standing PR park the scheduler will actually fire — the same parse `githubWatchViews`
  *  renders and the waker's own poller arms from, so "there is a watcher" means one thing everywhere. */
 function hasParkedPrWatch(tele: SessionTelemetry | undefined): boolean {
   if (tele?.lastFence?.kind !== "awaiting") return false
@@ -443,7 +463,7 @@ function bgSnoozeArmed(row: Pick<SessionRow, "bg_snooze_rested_at" | "rested_at"
 // fences are agent-owned work; if the worker nevertheless comes to rest, the queue must surface that
 // rest.
 //
-// `pr-watch` is DELIBERATELY NOT here (maintainer 2026-07-22): the review/approval/comment watcher
+// A PR WAIT is DELIBERATELY NOT here (maintainer 2026-07-22): the review/approval/comment watcher
 // keeps its thread a VISIBLE queue handoff rather than parking it, so a PR whose reviews may never
 // arrive can't silently vanish. The scheduler still polls + bumps it on new activity (it keys on the
 // hint, not on this excusal); the human hides it on demand via the "PR watcher armed" card's Snooze
@@ -464,7 +484,7 @@ function hasParkedExternalWait(tele: SessionTelemetry | undefined, _nowMs: numbe
 // 2026-08-13: "showing the active watchers underneath the prompt box, similar to how subagents work").
 //
 // DERIVED FROM THE FENCE, and as of 2026-08-14 that is the ONLY source — the `thread_watch` registry is
-// retired. A `pr-watch:` line becomes a github row and a `watch:` line a shell row, read from exactly the
+// retired. A `prs:` entry becomes a github row and a `shells:` entry a shell row, read from exactly the
 // hints the scheduler's own passes act on. That coupling is the point: the strip lists precisely what
 // will wake the thread, and the two cannot drift into claiming different things.
 //
@@ -480,7 +500,7 @@ export function fenceWatchViews(
   github: GithubStatusBook = {},
   /** This thread's REGISTERED PR watchers — `{ target, createdAt }` per armed row. These get a row
    *  whether or not the fence mentions them: a registration is live work the thread has out, and the
-   *  strip's job is to list what will actually wake it. The fence's `pr-watch:` line is a separate
+   *  strip's job is to list what will actually wake it. The fence's `prs:` entry is a separate
    *  thing — it states a WAIT, and it is checked against this set elsewhere (heldByRunningChecks). */
   registered: readonly { target: string; createdAt: string }[] = [],
 ): ThreadView["watches"] {
@@ -505,7 +525,7 @@ export function fenceWatchViews(
   // activity when the fold has no fence instant.
   const createdAt = fenceAt ?? tele.lastAssistantAt ?? new Date().toISOString()
   for (const hint of tele.lastFence.hints) {
-    // A `pr-watch:` line adds NO row of its own: the registry above already listed every PR this thread
+    // A `prs:` entry adds NO row of its own: the registry above already listed every PR this thread
     // watches, and a line naming an unregistered PR describes a wait nothing will deliver. Listing it
     // would put a row on the strip that nothing behind it can ever fire.
     if (hint.kind !== "shell" && hint.kind !== "agent") continue
@@ -640,7 +660,7 @@ export function deriveNeedsYou(
   //
   // A DECLARED FENCE outranks the excusal (hence the `!tele?.lastFence` guard), because a fence is the
   // worker's own statement about why it stopped and it earns its own card: a ```done handoff still
-  // cards as done, and a non-parked ```awaiting — pr-watch above all — stays a VISIBLE queue handoff
+  // cards as done, and a non-parked ```awaiting — a PR wait above all — stays a VISIBLE queue handoff
   // even with work out (maintainer 2026-07-24), so a PR watcher can never vanish merely because the
   // worker happens to have something running. Such a thread is NOT in the running band either
   // (deriveAwaitingBackground drops any fenced thread, so the client reads it as a rested-band row),
@@ -728,18 +748,18 @@ export function deriveAwaitingBackground(
   // A signal fence — ```done OR ```awaiting — is the worker's OWN explicit statement about why it
   // stopped, and it renders its own card in the transcript body. That is strictly more specific than
   // "it has background work running", so it wins: show the fence card ALONE, never both. This is the
-  // pr-watch double-card fix (maintainer 2026-07-24): a pr-watch thread with a live sub-agent stays
-  // queued (deriveNeedsYou keeps it, since pr-watch is a visible handoff) but cards as its fence rather
+  // PR-wait double-card fix (maintainer 2026-07-24): a PR-watching thread with a live sub-agent stays
+  // queued (deriveNeedsYou keeps it, since a PR wait is a visible handoff) but cards as its fence rather
   // than as this banner. A parked human/timer fence never reached here anyway (it's Held, not queued).
   //
-  // A pr-watch PARK IS NOW THE EXCEPTION, and the exception is what makes it one card again rather than
+  // A PR PARK IS NOW THE EXCEPTION, and the exception is what makes it one card again rather than
   // two (maintainer 2026-08-13, choosing this): the awaiting card no longer offers a park action for
-  // `pr-watch` at all — see lib/awaitingPresentation.awaitingParkAction, where the branch that titled it
+  // a PR wait at all — see lib/awaitingPresentation.awaitingParkAction, where the branch that titled it
   // "PR watcher armed" and carried its Snooze is gone. The watcher itself is listed under the prompt box
   // with the sub-agents and shells, and THIS card carries the one snooze. Without this line the parked
   // thread would show a titleless fence card and no snooze anywhere.
   if (tele?.lastFence?.kind === "done") return false
-  // A DECLARED BACKGROUND PARK IS THE SAME EXCEPTION as the pr-watch one directly above, for the same
+  // A DECLARED BACKGROUND PARK IS THE SAME EXCEPTION as the PR one directly above, for the same
   // reason: its fence has no park action of its own (awaitingParkAction returns null for `watch:`), so
   // suppressing this card would leave the thread stating its wait nowhere and offering no snooze.
   if (
@@ -933,7 +953,7 @@ function sessionThreadView(
   // exactly the drift that once produced two cards disagreeing about one wait.
   github: GithubStatusBook = {},
 ): ThreadView {
-  // The PRs this thread has actually REGISTERED, by `owner/repo#N` — what a `pr-watch:` declaration is
+  // The PRs this thread has actually REGISTERED, by `owner/repo#N` — what a `prs:` declaration is
   // checked against. Read per thread because the registry is per thread, unlike the status book above.
   const armedPrWatches = storage.listPrWatches(row.slug, { armedOnly: true }).map((w) => ({
     target: `${w.owner}/${w.repo}#${w.number}`,
@@ -975,9 +995,15 @@ function sessionThreadView(
   // rollout send early (8 of 75 measured codex sends took over 60s to materialise; three took minutes
   // to hours). The broker arm is a direct pid probe and means what it says at rest.
   const deliveryProcessGone = isBrokerClaudeRow(row) && headlessStalled
-  const runtime = degradeIfNoTranscript(
-    deriveRuntime(row.slug, row, storage, tele?.turn, tele?.permPrompt ?? false, headlessStalled, headlessLostWork),
-    isHeadlessRow(row) && !isBrokerClaudeRow(row) ? false : tele?.noTranscript,
+  const runtime = degradeIfAwaitingAnswer(
+    degradeIfNoTranscript(
+      deriveRuntime(row.slug, row, storage, tele?.turn, tele?.permPrompt ?? false, headlessStalled, headlessLostWork),
+      isHeadlessRow(row) && !isBrokerClaudeRow(row) ? false : tele?.noTranscript,
+    ),
+    // OUTERMOST on purpose: a stalled/transcript-less worker is a HARDER reading than an open ask (it
+    // degrades to "exited", which this leaves alone), so the two never fight. Everything below — the
+    // row's own runtime, deriveNeedsYou's rest-gate, deriveAwaitingBackground — reads this one value.
+    tele?.pendingQuestion,
   )
   const state = effectiveSessionState(row, registeredLegacyTerminal)
   const archived = state === "archived"
@@ -1025,7 +1051,7 @@ function sessionThreadView(
     lastAssistantAt: tele?.lastAssistantAt,
     subAgents: stampStoppable(tele?.subAgents ?? [], row),
     bgShells: stampStoppableShells(tele?.bgShells ?? [], row),
-    // ONE SOURCE: the FENCE. Both kinds are derived from what the worker wrote — `pr-watch:` lines
+    // ONE SOURCE: the FENCE. Both kinds are derived from what the worker wrote — `prs:` entries
     // become the github rows, `watch:` lines the shell rows — so this strip lists exactly what will
     // actually wake the thread, and the two cannot drift into claiming different things. There is no
     // registry behind either any more (`thread_watch`, retired 2026-08-14).
@@ -1113,12 +1139,24 @@ function sessionThreadView(
 function foreignThreadView(sessionId: string, tele: SessionTelemetry, backend: "claude" | "codex"): ThreadView {
   return {
     id: sessionId,
-    // Claude's own `ai-title` when it has landed one, else a short id — never the frizz "Spinning up…"
-    // placeholder, which promises a title that is on its way. Nothing is on its way here, and for a
-    // CODEX row nothing ever will be: codex writes no title record at all, and the one frizz normally
-    // gets is a title its own dispatch ASKED for. So a foreign codex session is always the short id.
-    title: tele.aiTitle ?? `Session ${sessionId.slice(0, 8)}`,
+    // THE HARNESS'S OWN NAME FIRST, then the conversation's opening turn — which is exactly the order
+    // both agents' own resume pickers use, verified by driving each of them 2026-08-24.
+    //   • Claude records `ai-title` in the transcript, and does it reliably: 39 of 40 real terminal
+    //     transcripts on this machine carried one. The tailer folds it like any other record.
+    //   • Codex records nothing in the rollout. Its name lives in `session_index.jsonl`, which the
+    //     tailer reads and assigns onto the same field — but that sidecar covered only 4 of the 319
+    //     rollouts written here in 30 days, so the fallback is the common case for codex, not the
+    //     exception.
+    // The FIRST user turn is that fallback, chopped by the same `fallbackTitle` a dispatch uses before
+    // its worker names itself — so an external row reads like every other row rather than like a raw
+    // prompt. It must be the FIRST turn and not the newest: a session's name is what it was opened to
+    // do. The short id survives only for a transcript with no human turn in it at all.
+    // Never the frizz "Spinning up…" placeholder, which promises a title that is on its way; for a
+    // session frizz did not dispatch, nothing is on its way.
+    title: tele.aiTitle ?? (tele.firstUserText ? fallbackTitle(tele.firstUserText) : undefined) ?? `Session ${sessionId.slice(0, 8)}`,
     aiTitle: tele.aiTitle,
+    // A harness-given name is a real name; a chop of the opening prompt is a machine guess, and the
+    // rail dims a guess. Neither is provisional in the "spinning up" sense — see the title above.
     titleAuto: tele.aiTitle === undefined,
     status: "active", // synthesized: required by the shape, UNUSED for session rows (see sessionThreadView)
     hasPlan: false,

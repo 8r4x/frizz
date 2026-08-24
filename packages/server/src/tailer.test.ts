@@ -55,9 +55,12 @@ test("applyRecord: a system-origin user record (peer / task-notification) RE-INV
   assert.equal(s.lastAssistantHasQuestion, true)
   const restedUserAt = s.lastUserAt
   // A sub-agent <task-notification> lands as a user record with promptSource:"system". It RE-INVOKES
-  // the agent, so the turn flips to in-flight (the agent is resuming → shimmer, not idle) and the
-  // question is superseded — but it must NOT bump lastUserAt (that would reorder the row from motion
-  // the human didn't cause).
+  // the agent, so the turn flips to in-flight (the agent is resuming → shimmer, not idle) — but it must
+  // NOT bump lastUserAt (that would reorder the row from motion the human didn't cause), and it must not
+  // touch the QUESTION either. This assertion used to read `lastAssistantHasQuestion === false`,
+  // "superseded" — and that was the bug: nobody answered anything. The chat kept drawing the answerable
+  // card off the transcript while the board, having thrown the flag away, banded the row as ACTIVE and
+  // shimmered at it (maintainer 2026-08-24). Superseding is the HUMAN's to do.
   applyRecord(s, {
     type: "user",
     timestamp: "2026-07-01T00:00:05.000Z",
@@ -65,9 +68,13 @@ test("applyRecord: a system-origin user record (peer / task-notification) RE-INV
     message: { content: "<task-notification>…done</task-notification>" },
   })
   assert.equal(s.lastKind, "user") // in-flight: the agent is resuming
-  assert.equal(s.lastAssistantHasQuestion, false) // superseded; the next assistant record recomputes
+  assert.equal(s.lastAssistantHasQuestion, true, "the machinery cannot answer a question on the human's behalf")
   assert.equal(s.lastActivityAt, "2026-07-01T00:00:05.000Z") // transcript grew
   assert.equal(s.lastUserAt, restedUserAt) // ROW ORDER unchanged — a notification never jumps the row
+  // …and the HUMAN speaking does discharge it, which is what dequeues the row.
+  applyRecord(s, { type: "user", timestamp: "2026-07-01T00:00:09.000Z", message: { content: "B" } })
+  assert.equal(s.lastAssistantHasQuestion, false)
+  assert.equal(s.lastUserAt, "2026-07-01T00:00:09.000Z")
 })
 
 test("applyRecord: claude's post-compaction carry-over summary re-invokes but never reorders the row", () => {
@@ -1884,6 +1891,39 @@ test("tailer: a transcript abandoned on an interrupt receipt settles through the
   assert.equal(t.get("t")?.turn, "idle", "an abandoned interrupt is a stopped thread, not a permanent spinner")
 })
 
+// THE ASK SURVIVES THE MACHINERY, THROUGH THE TICK. The reported shape verbatim: the agent rests on a
+// ```question, then frizz's own plumbing lands one record the CHAT does not render — a background
+// child's <task-notification>. That record re-opens the turn, and it used to take the question with it,
+// so the board reported {pendingQuestion:false, runtime:"running"} for a thread whose chat was still
+// drawing an answerable card with a Send answers button (maintainer 2026-08-24).
+const ASK = JSON.stringify({ type: "assistant", timestamp: "2026-07-01T00:00:02.000Z", message: { stop_reason: "end_turn", content: [{ type: "text", text: "Verdict: duplicate.\n\n```question\nHow should PRD-8263 be dispatched?\n\n- A. Fix now (recommended)\n- B. File only\n```" }] } })
+const NOTIFICATION = JSON.stringify({ type: "user", promptSource: "system", timestamp: "2026-07-01T00:00:03.000Z", message: { role: "user", content: [{ type: "text", text: "<task-notification>\n<task-id>abc</task-id>\n<status>completed</status>\n</task-notification>" }] } })
+
+test("tailer: a record the chat never draws cannot answer the human's question", () => {
+  const h = harness()
+  h.storage.upsertSession(row())
+  fixture(h.logDir, "sid", [IN_FLIGHT, ASK])
+  h.clock.ms = Date.parse("2026-07-01T00:00:10.000Z")
+  const t = makeTailer(h)
+  t.tick()
+  assert.equal(t.get("t")?.turn, "idle")
+  assert.equal(t.get("t")?.pendingQuestion, true, "the agent asked and nobody has answered")
+
+  fixture(h.logDir, "sid", [IN_FLIGHT, ASK, NOTIFICATION]) // a child returns; frizz injects the receipt
+  h.clock.ms = Date.parse("2026-07-01T00:00:11.000Z")
+  t.tick()
+  assert.equal(t.get("t")?.turn, "in-flight", "the notification DOES re-invoke the agent — that part was never wrong")
+  assert.equal(t.get("t")?.pendingQuestion, true, "…and the question it never answered still stands")
+
+  // Only the human discharges it. (The agent's own next message replaces it — covered by the fence
+  // recompute on every assistant text.)
+  const ANSWER = JSON.stringify({ type: "user", timestamp: "2026-07-01T00:00:12.000Z", message: { role: "user", content: "A" } })
+  fixture(h.logDir, "sid", [IN_FLIGHT, ASK, NOTIFICATION, ANSWER])
+  h.clock.ms = Date.parse("2026-07-01T00:00:13.000Z")
+  t.tick()
+  assert.equal(t.get("t")?.pendingQuestion, false, "answered — the row leaves the queue")
+})
+
 // ---- PermissionRequest marker (structured perm-blocked signal; primary over the pane regex) ----
 
 // An in-flight turn: user "go" then an unresolved Bash tool_use. lastActivityAt = the tool_use at
@@ -2550,6 +2590,28 @@ test("tailer: a REGISTERED session_id's file is never foreign (registered rows w
   foreignFile(h.logDir, "foreign-2", [IN_FLIGHT], FRESH_MTIME)
   t.tick()
   assert.deepEqual(t.foreignIds(), ["foreign-2"], "the registered session_id is excluded; only the unregistered file is foreign")
+})
+
+// `firstUserText` is what NAMES an external session whose harness never named it, so it has to be the
+// turn the conversation opened on and it has to survive every later turn. `lastUserText` tracks the
+// newest turn for wake confirmation; if this drifted with it, a row's name would change every time the
+// human said something.
+test("tailer: firstUserText is the OPENING human turn and never drifts to a later one", () => {
+  const h = harness()
+  h.clock.ms = FCLOCK
+  const { t } = foreignTailer(h)
+  const user = (text: string) => JSON.stringify({ type: "user", timestamp: "2026-08-24T00:00:00.000Z", message: { role: "user", content: [{ type: "text", text }] } })
+  const assistant = JSON.stringify({ type: "assistant", timestamp: "2026-08-24T00:00:01.000Z", message: { role: "assistant", content: [{ type: "text", text: "ok" }], stop_reason: "end_turn" } })
+  foreignFile(h.logDir, "opener", [user("look at the flaky windows runner"), assistant, user("now try the linux one")], FRESH_MTIME)
+  // A tool_result is agent activity, not a human turn, so it can never become a session's name.
+  // Both fixtures exist before the first tick: foreign DISCOVERY re-scans only every fifth one.
+  foreignFile(h.logDir, "toolfirst", [
+    JSON.stringify({ type: "user", timestamp: "2026-08-24T00:00:00.000Z", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "output" }] } }),
+    user("the real question"),
+  ], FRESH_MTIME)
+  t.tick()
+  assert.equal(t.get("opener")?.firstUserText, "look at the flaky windows runner")
+  assert.equal(t.get("toolfirst")?.firstUserText, "the real question")
 })
 
 // The exclusion that a CODEX row depends on entirely. Frizz mints `session_id` itself, but codex mints

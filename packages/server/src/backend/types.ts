@@ -93,6 +93,9 @@ export interface NormalizedTail {
   aiTitle?: string
   lastUserAt?: string
   lastUserText?: string // latest genuine human message (used to confirm wake-token delivery)
+  // The FIRST genuine human turn. Read by the board to NAME an external session whose harness has not
+  // named it — see foreignThreadView. Optional everywhere: a transcript with no human turn has none.
+  firstUserText?: string
   lastFence?: FenceView // parsed by the shared fence grammar from the final message
   pendingQuestion: boolean
   // The final message carries the AWAITING sentinel — the worker's answer to a stop hook when
@@ -151,6 +154,12 @@ export interface FoldState {
   autoTitleSource?: "fallback" | "frizz" | "native"
   lastUserAt?: string // ISO8601 of the newest GENUINE (non-synthetic) human turn — the listing sort key
   lastUserText?: string // exact text of that genuine human turn when the backend records it
+  // The FIRST genuine human turn, kept forever — set once and never overwritten. It is what names an
+  // EXTERNAL session (one of the human's own terminals) when its harness has not named it: both
+  // Claude Code's and Codex's own resume pickers fall back to exactly this, verified by driving each
+  // picker 2026-08-24. Distinct from lastUserText, which tracks the NEWEST turn for wake confirmation
+  // and would drift off the topic the session started on.
+  firstUserText?: string
   lastFence?: FenceView // done/awaiting excusal fence on the final message (cleared by any user turn)
   lastAssistantHasQuestion: boolean // the final message carries an unanswered ```question fence
   // The final message answers a stop hook with AWAITING (scheduler.ts SOURCE 5). Folded and

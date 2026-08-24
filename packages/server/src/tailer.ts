@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process"
 import { basename, join } from "node:path"
 import { parse as parseYaml } from "yaml"
 import { homedir, tmpdir } from "node:os"
-import { insideFence, isInterruptMarker, PermissionMode, saysAllDone } from "@frizz/shared"
+import { insideFence, isAllInjectedNoise, isInterruptMarker, PermissionMode, saysAllDone } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import { permMarkerPath, type Project } from "./project.ts"
 import { isBrokerClaudeRow, isHeadlessRow } from "./storage.ts"
@@ -18,7 +18,7 @@ import { claudeBrokerDiagnosticLogPath } from "./backend/claude-broker-diagnosti
 import { claudeBrokerRecordPath, readBrokerRecord } from "./backend/claude-broker-host.ts"
 import { parseDeliveryLedger, correlateDeliveryRecord, ageDeliveries, serializeDeliveryLedger, type DeliveryLedgerItem } from "./delivery-ledger.ts"
 import { createCodexSubAgentTracker, type CodexSubAgentTracker } from "./codex-subagents.ts"
-import { defaultCodexHome, scanForeignRollouts } from "./backend/codex.ts"
+import { defaultCodexHome, readCodexThreadNames, scanForeignRollouts } from "./backend/codex.ts"
 import {
   isModelFacingCarrier, reportKind, blockTaskIds, parseReportBlock, relayedTaskIds,
   MAX_TRACKED_REPORTS, type QueuedReport,
@@ -900,6 +900,23 @@ export function isRealUserMessage(content: unknown): boolean {
   if (typeof content === "string") return true
   if (!Array.isArray(content)) return false
   return content.some((b) => !(b && typeof b === "object" && (b as { type?: string }).type === "tool_result"))
+}
+
+// Did the HUMAN produce this user record, or did the machinery? EVERY `type:"user"` record reaches the
+// fold — the human's prompt, a tool_result echoed back mid-turn, a peer's message, a task-notification,
+// a wake pulse, the runtime's own interrupt receipt — and only the first is a person taking a turn.
+//
+// This is the ONE question two derivations were answering two different ways. The chat asks it off
+// `isAllInjectedNoise` and renders a bubble only when the answer is yes; the fold asked nothing and read
+// EVERY user record as the human moving the conversation on, which erased the evidence that a thread was
+// waiting on an answer nobody had given (see the ```question note in applyRecord). Both now call the
+// same SHARED classifier, so a record the chat does not even draw can never again change what the board
+// says the human owes. The row-order key below wants exactly this predicate too — its own comment
+// demanded it, and it was enforcing only the two cases anyone had hit.
+function isHumanSpeaking(rec: Record, text: string, system: boolean, compactSummary: boolean): boolean {
+  if (system || compactSummary) return false // a peer/notification record, or claude's carry-over summary
+  if (!isRealUserMessage(rec.message?.content)) return false // a bare tool_result is agent activity
+  return !isAllInjectedNoise(text) && !isInterruptMarker(text)
 }
 
 /** The plain text of a user record's content — a bare string, or the text blocks of an array, joined.
@@ -1856,12 +1873,25 @@ export function applyRecord(state: TailState, rec: Record): void {
     // reading it as "about to respond" left an abandoned thread spinning on the board until the next
     // reboot (maintainer 2026-08-23, on a nub thread interrupted mid-tool and never resumed: "looks
     // frozen" — 23 hours in the Active band with an idle worker behind it).
-    state.interrupted = isInterruptMarker(lastTextBlock(rec.message?.content) ?? "") || undefined
+    const userText = lastTextBlock(rec.message?.content) ?? ""
+    state.interrupted = isInterruptMarker(userText) || undefined
     // A newer user record supersedes any pending chat question / excusal fence (they only signal as the
     // FINAL message); the NEXT assistant record recomputes them.
-    state.lastAssistantHasQuestion = false
+    //
+    // …EXCEPT the question, which is a HUMAN GATE and can only be discharged by the human. The other two
+    // are the agent's claims about ITSELF — re-invoked, it is no longer done and no longer parked, so any
+    // record that wakes it supersedes them honestly. An unanswered question is the opposite: it is an
+    // obligation on the reader, and nothing frizz injects on the agent's behalf pays it off. Clearing it
+    // on ANY user record meant a task-notification, a wake pulse or a bare tool_result — none of which
+    // the chat even renders — silently emptied the queue's evidence that the human was being waited on,
+    // while the same record flipped the turn in-flight. The thread then drew its ```question card AND the
+    // working shimmer, in the Active rail instead of the queue (maintainer 2026-08-24: "this needs to be
+    // structurally impossible"). isHumanSpeaking asks the question the CHAT asks, off the SHARED
+    // classifier, so the two projections cannot drift again.
     state.lastAssistantAllDone = false
     state.lastFence = undefined
+    const humanSpoke = isHumanSpeaking(rec, userText, systemUserRec, compactSummaryRec)
+    if (humanSpoke) state.lastAssistantHasQuestion = false
     // Any user record supersedes a usage-limit pause: the conversation has moved past the point where
     // it was cut off, whether by the human or by the "continue" the wake scheduler delivered. This is
     // precisely what makes the auto-resume one-shot — the delivered message erases the very fault that
@@ -1869,10 +1899,11 @@ export function applyRecord(state: TailState, rec: Record): void {
     // (with a NEW, later reset instant), so a re-fire can never tighten into a loop.
     state.limitFault = undefined
     // `lastUserAt` is the ROW-ORDER key — bump it ONLY for a genuine HUMAN interaction. A tool_result
-    // is agent activity (excluded by isRealUserMessage); a system record (peer/notification) is
-    // machine motion the human didn't cause — neither may jump the row to the top (the one part of the
-    // earlier over-fix that WAS a real bug).
-    if (!systemUserRec && !compactSummaryRec && typeof rec.timestamp === "string" && isRealUserMessage(rec.message?.content)) {
+    // is agent activity; a system record (peer/notification), an injected pulse and the runtime's own
+    // interrupt receipt are machine motion the human didn't cause — none of them may jump the row to the
+    // top (the one part of the earlier over-fix that WAS a real bug). Same predicate as the question
+    // gate above, deliberately: "did the human take a turn" has exactly one answer per record.
+    if (humanSpoke && typeof rec.timestamp === "string") {
       state.lastUserAt = rec.timestamp
       // SET ONCE. This is what names an external session whose harness never named it, so it has to be
       // the turn the conversation STARTED on, not the newest one.
@@ -3455,7 +3486,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   // file that ages out of the fresh set keeps its cached tail here but stops being reported.
   const foreignStates = new Map<string, TailState>()
   // The current fresh foreign set (mtime-desc, capped), refreshed on scan ticks and reused between.
-  let foreignFresh: { id: string; path: string; backend: "claude" | "codex" }[] = []
+  let foreignFresh: { id: string; path: string; backend: "claude" | "codex"; title?: string }[] = []
   let foreignScanTick = 0
   let timer: NodeJS.Timeout | null = null
   let stopped = false
@@ -3491,7 +3522,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   //
   // Both cwd spellings are offered because a rollout records the cwd the codex PROCESS had, which on
   // macOS resolves symlinks — a project frizz knows as `/tmp/x` writes `/private/tmp/x`.
-  function scanForeignCodex(nowMs: number): { id: string; path: string }[] {
+  function scanForeignCodex(nowMs: number): { id: string; path: string; title?: string }[] {
     if (!deps.project.dir) return []
     const cwds = new Set<string>([deps.project.dir])
     try {
@@ -3500,10 +3531,16 @@ export function createTailer(deps: TailerDeps): Tailer {
       // an unreadable project dir simply contributes no alias
     }
     try {
-      return scanForeignRollouts(
+      const home = deps.codexHome ?? defaultCodexHome()
+      const found = scanForeignRollouts(
         { cwds: [...cwds], nowMs, freshMs: FOREIGN_FRESH_MS, exclude: registeredIds(), max: FOREIGN_MAX },
-        deps.codexHome ?? defaultCodexHome(),
+        home,
       )
+      // Codex's OWN name for the thread, where it has one. Read only when the scan actually found
+      // something, so an ordinary tick on a project with no external codex sessions never opens the
+      // sidecar at all.
+      const names = found.length ? readCodexThreadNames(home) : undefined
+      return found.map((f) => ({ ...f, ...(names?.get(f.id) ? { title: names.get(f.id) } : {}) }))
     } catch {
       return []
     }
@@ -4420,6 +4457,11 @@ export function createTailer(deps: TailerDeps): Tailer {
         hydrateFromCache(state, null, f.id)
         foreignStates.set(f.id, state)
       }
+      // The HARNESS's own name for the thread, which claude records inside the transcript (`ai-title`,
+      // folded like any other record) and codex keeps in a sidecar the fold cannot see. Assigning it
+      // here puts both backends on the one field the board already reads. Re-applied every tick rather
+      // than only on creation, because codex writes the sidecar entry AFTER the rollout exists.
+      if (f.title && state.aiTitle !== f.title) state.aiTitle = f.title
       if (tailForeign(state, nowMs, transcriptDirty, resolveBackend(f.backend))) dirty = true
     }
 
@@ -4601,9 +4643,20 @@ export function createTailer(deps: TailerDeps): Tailer {
         ? registered
         : registered ? undefined : foreignStates.get(slug)
       if (!s) return undefined
-      // pendingQuestion is DERIVED: the turn is at rest AND the latest assistant message still carries
-      // an unanswered ```question fence (a user reply clears the flag and flips the turn in-flight).
-      const pendingQuestion = s.turn === "idle" && s.lastAssistantHasQuestion
+      // pendingQuestion: the latest assistant message carries a ```question fence and the HUMAN has not
+      // answered it. NO REST-GATE, and that is the point. It used to require `turn === "idle"` as well,
+      // copied from the `humanBlocked` net where the gate is genuinely needed — that signal is a thread
+      // FILE flag written mid-turn, ~150ms after dispatch, long before the ask text exists, so counting
+      // it early yields a card with no visible ask. This flag is derived from the ask TEXT ITSELF: by the
+      // time it is true the question is on disk and in the chat, so there is nothing to wait for.
+      //
+      // What the gate did instead was make the ask disappear the instant anything re-opened the turn —
+      // and the chat, which reads the transcript rather than the turn, went on drawing the answerable
+      // card. One thread showed its ```question card AND the working shimmer, in the Active rail instead
+      // of the queue (maintainer 2026-08-24: "this needs to be structurally impossible"). An unanswered
+      // question is a claim on the HUMAN; whether the agent happens to be mid-turn is a fact about the
+      // agent. The board reports both, and `boardRuntime` decides which one the row is allowed to draw.
+      const pendingQuestion = s.lastAssistantHasQuestion
       const nowMs = now()
       return { turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: s.lastAssistantAllDone, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, firstUserText: s.firstUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt }
     },

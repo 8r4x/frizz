@@ -4,7 +4,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { InteractionRequest } from "@frizz/shared"
-import { appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfNoTranscript, fenceWatchViews, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle } from "./board.ts"
+import { appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle } from "./board.ts"
 import { Bus } from "./bus.ts"
 import { createStorage } from "./storage.ts"
 import type { Project } from "./project.ts"
@@ -962,6 +962,36 @@ test("degradeIfNoTranscript: only a live-pane spinner (running) downgrades to th
   }
 })
 
+// ---- the ask outranks the spinner (2026-08-24) ----
+// THE INVARIANT, stated as a test: a row that owes the human an answer never reports motion. The chat
+// draws its shimmer off exactly this value, and the rail bands off the `needsYou` that deriveNeedsYou
+// grants only at rest — so one thread showed a live ```question card AND "Thinking…", in the Active
+// rail, because a single re-invoking record had re-opened the turn.
+
+test("degradeIfAwaitingAnswer: an open question downgrades the spinner, and nothing else", () => {
+  assert.equal(degradeIfAwaitingAnswer("running", true), "turn-idle")
+  assert.equal(degradeIfAwaitingAnswer("spawning", true), "turn-idle")
+  // "turn-idle", never "exited": the process is alive and may well still be mid-turn. This says only
+  // that the row must not PRESENT as motion while the human owes it an answer.
+  assert.equal(degradeIfAwaitingAnswer("running", false), "running")
+  assert.equal(degradeIfAwaitingAnswer("running", undefined), "running")
+  // A harder reading of the same row wins: a stalled/dead worker stays stalled even with an ask on it.
+  for (const r of ["none", "turn-idle", "perm-prompt", "exited"] as const) {
+    assert.equal(degradeIfAwaitingAnswer(r, true), r)
+  }
+})
+
+// The half deriveNeedsYou owns. Its rest-gate (`turn-idle`/`exited` only) is what kept an open ask out
+// of the queue whenever anything re-opened the turn; with the runtime degraded above, the gate is
+// satisfied by construction and the ask cards. Pinned here as a pair so neither half can drift back.
+test("deriveNeedsYou: a degraded ask-row cards — the pair is what puts it in the queue", () => {
+  const row = { slug: "t", session_id: "sid", thread_name: "frizz-t", spawned_at: "2026-08-24T00:00:00.000Z", last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0, title: null, state: null, meta: null, seen_at: null, plan_path: null, transcript_id: null } as never
+  const tele = { turn: "in-flight", pendingQuestion: true } as never
+  const nowMs = Date.parse("2026-08-24T00:10:00.000Z")
+  assert.equal(deriveNeedsYou(row, tele, "running", false, nowMs), false, "un-degraded, the rest-gate swallows the ask — the state the maintainer saw")
+  assert.equal(deriveNeedsYou(row, tele, degradeIfAwaitingAnswer("running", true), false, nowMs), true, "degraded, it cards")
+})
+
 // A broker claude thread whose agent never received its opening prompt writes ZERO transcript bytes,
 // which the tailer flags noTranscript (with captureStall) once DISCOVERY_GRACE_MS passes. The board used
 // to discard that flag for every headless row — a suppression whose stated reason is CODEX's alone
@@ -1315,7 +1345,7 @@ test("board provenance excludes legacy files, keeps a foreign transcript read-on
     let snapshot = await board.snapshot()
     assert.deepEqual(snapshot.threads.map((thread) => thread.id).sort(), ["foreign-terminal-origin", "migrated-ui-done", "ui-claude", "ui-codex"])
     // LEGACY provenance is still absolute: an unregistered `.frizz` file never becomes a row. A FOREIGN
-    // transcript now does — the Non-Frizz sessions band (2026-08-19) — but it arrives read-only and
+    // transcript now does — the External sessions band (2026-08-19) — but it arrives read-only and
     // carries none of the row-derived state it has no source for.
     assert.equal(snapshot.threads.some((thread) => thread.kind === "legacy"), false)
     const foreignRow = snapshot.threads.find((thread) => thread.id === "foreign-terminal-origin")
@@ -1380,12 +1410,58 @@ test("board provenance excludes legacy files, keeps a foreign transcript read-on
   }
 })
 
+// A row in this band must carry a NAME, not a uuid. Both harnesses name their own threads and both
+// fall back to the opening human turn when they have not — verified by driving each of their resume
+// pickers on 2026-08-24 — so frizz reads them in that same order.
+test("an external row is named by its harness, else by the turn the conversation opened on", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-board-external-title-"))
+  mkdirSync(join(dir, ".frizz"), { recursive: true })
+  const project: Project = { dir, id: "p", name: "f", label: "f", stateDir: dir, cwdSlug: "f" }
+  const storage = createStorage(join(dir, "ui.db"))
+  const telemetry = new Map<string, SessionTelemetry>([
+    // Claude records `ai-title`; codex's own name is read from its sidecar index and assigned onto the
+    // same field by the tailer. Either way the harness's name wins outright.
+    ["named-by-harness", tele({ aiTitle: "Debug a flaky test", firstUserText: "the sandbox tests keep flaking on CI, can you look" })],
+    // No name from the harness → the FIRST human turn, chopped exactly as a dispatch title is, so the
+    // row reads like every other row instead of like a raw prompt.
+    ["named-by-prompt", tele({ firstUserText: "please look at why the sandbox conformance suite keeps flaking on the windows runner" })],
+    // Nothing at all — a transcript with no human turn in it. Only here does a uuid show.
+    ["nameless", tele({})],
+  ])
+  const tailer = {
+    get: (slug: string) => telemetry.get(slug),
+    foreignIds: () => ["named-by-harness", "named-by-prompt", "nameless"],
+    subAgent: () => undefined, forget: () => {}, start: () => {}, stop: () => {}, tick: () => {},
+  } satisfies Tailer
+  const board = createBoard(project, storage, new Bus(), tailer, "external-title-boot")
+
+  try {
+    const rows = new Map((await board.snapshot()).threads.map((t) => [t.id, t]))
+    assert.equal(rows.get("named-by-harness")?.title, "Debug a flaky test")
+    assert.equal(rows.get("named-by-harness")?.aiTitle, "Debug a flaky test", "the harness's name is a real name, not a guess")
+    assert.equal(rows.get("named-by-harness")?.titleAuto, false)
+
+    // Six words of substance, the topic-free lead-in dropped, ellipsis for the rest — `fallbackTitle`.
+    assert.equal(rows.get("named-by-prompt")?.title, "look at why the sandbox conformance…")
+    assert.equal(rows.get("named-by-prompt")?.aiTitle, undefined)
+    assert.equal(rows.get("named-by-prompt")?.titleAuto, true, "a chop of the prompt IS a machine guess")
+
+    // NEVER the "Spinning up a thread…" placeholder: that promises a title on its way, and for a
+    // session frizz did not dispatch nothing is on its way.
+    assert.equal(rows.get("nameless")?.title, "Session nameless")
+  } finally {
+    await board.stop()
+    storage.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 // The band's ONE selection rule, and the reason it exists (maintainer 2026-08-19): "they should only
 // be showing the rested ones because if something is currently running, then presumably the user
 // already has that open in Claude Code." A spinning terminal session is one the human is watching in
 // the window it belongs to; listing it here would be noise, and clicking into it would invite two
 // drivers on one transcript.
-test("the Non-Frizz band lists only RESTED foreign sessions, and drops one the moment its turn starts", async () => {
+test("the External band lists only RESTED foreign sessions, and drops one the moment its turn starts", async () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-board-foreign-band-"))
   mkdirSync(join(dir, ".frizz"), { recursive: true })
   const project: Project = {
