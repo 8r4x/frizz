@@ -211,6 +211,30 @@ test("a park naming something that is NOT running bumps the worker, and says whi
   } finally { h.close() }
 })
 
+// A PR NAMED BUT NEVER REGISTERED IS BUMPED, BY NAME — and this is a DELIBERATE design choice, not a
+// gap. The maintainer was asked (2026-08-24) whether a `prs:` entry should simply arm the watcher itself,
+// making `mcp__frizz__watch_pr` optional, and chose to keep declaration and registration strictly
+// separate: "a fence naming an unregistered PR keeps getting bumped, and the worker learns to call the
+// tool first."
+//
+// That answer only holds while the bump actually happens, and nothing pinned it. `unaccountedItems`
+// checks a `pr` item against the thread's REGISTERED watchers (awaiting.ts LIVE_SET), so an unregistered
+// ref is unaccounted and the park is refused — the alternative, silently parking on a wait nothing can
+// deliver, is the exact failure this grammar exists to prevent.
+test("a PR named in the fence but never registered is refused, and the correction names it", async () => {
+  const h = parkHarness([
+    { kind: "pr", value: "acme/app#391" },
+    { kind: "for", value: "2h" },
+  ])
+  try {
+    await h.s.tick()
+    const rows = h.queued()
+    assert.equal(rows.length, 1, "a park on an unregistered PR is never silent")
+    assert.match(rows[0].message, /acme\/app#391/, "the worker is told WHICH ref frizz could not find")
+    assert.match(rows[0].message, /mcp__frizz__watch_pr/, "…and that registering it is the missing step")
+  } finally { h.close() }
+})
+
 test("a park whose every item is live is left alone", async () => {
   const h = parkHarness([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "2h" }], { shells: [LIVE_SHELL] })
   try {
@@ -456,7 +480,7 @@ test("a fence naming a timer that was never registered reaches the worker", asyn
   try {
     await h.s.tick()
     assert.equal(h.sent.length, 1)
-    assert.match(h.sent[0], /`timer: none` — NOT RUNNING/)
+    assert.match(h.sent[0], /`timers: \[none\]` — NOT RUNNING/)
   } finally { h.close() }
 })
 

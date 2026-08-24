@@ -625,7 +625,7 @@ test("a fence naming a timer that was never registered is corrected, off a real 
 
     await s.tick()
     assert.equal(delivered.length, 1, "three hours of silence is the bug; one correction is the fix")
-    assert.match(delivered[0], /`timer: none` — NOT RUNNING/, "and it says WHICH line is wrong")
+    assert.match(delivered[0], /`timers: \[none\]` — NOT RUNNING/, "and it says WHICH line is wrong, in the key the worker must write")
     assert.match(delivered[0], /nothing that could wake you/, "…and that a wait on nothing is not a wait")
   } finally { void s.stop(); tailer.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) }
 })

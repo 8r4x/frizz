@@ -894,6 +894,13 @@ export interface Scheduler {
   tick(): Promise<void> // exposed for tests + boot
 }
 
+/** The FENCE key a wire kind is written as. The wire kinds stayed SINGULAR through the 2026-08-24 YAML
+ *  cutover; the grammar the worker writes did not, so every message that quotes a fence line back at a
+ *  worker has to translate — printing `i.kind` raw teaches a spelling the parser now refuses. */
+const AWAITING_KEY_OF: Record<"shell" | "agent" | "timer" | "pr", string> = {
+  shell: "shells", agent: "agents", timer: "timers", pr: "prs",
+}
+
 export function createScheduler(deps: SchedulerDeps): Scheduler {
   const now = deps.now ?? Date.now
   const fetchPr = deps.fetchPr ?? defaultFetchPr
@@ -1570,8 +1577,24 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const finishedItem = (i: { value: string }) => finishedHandles.has(i.value)
       const status = park.items.map((i) => {
         const gone = dead.some((d) => d.kind === i.kind && d.value === i.value)
-        const note = !gone ? "still running" : finishedItem(i) ? "FINISHED — its result is waiting for you" : "NOT RUNNING (nothing by that name)"
-        return `- \`${i.kind}: ${i.value}\` — ${note}`
+        // AN UNREGISTERED PR GETS ITS OWN NOTE, because "nothing by that name" is true but useless for
+        // this one kind. A shell or a sub-agent is unaccounted because it FINISHED or the id is wrong;
+        // a PR is unaccounted because the worker never registered it — a different mistake with a
+        // different fix, and naming the fix here is the whole basis of the maintainer's 2026-08-24
+        // decision to keep declaring and registering separate ("the worker learns to call the tool
+        // first"). Without this line the correction sends it to `mcp__frizz__activity`, which will
+        // faithfully report that it has no PRs — true, and no help at all.
+        const note = !gone
+          ? "still running"
+          : finishedItem(i)
+          ? "FINISHED — its result is waiting for you"
+          : i.kind === "pr"
+          ? "NOT REGISTERED — register it with `mcp__frizz__watch_pr` first, then name it here"
+          : "NOT RUNNING (nothing by that name)"
+        // The PLURAL key, because that is what the worker has to write. `i.kind` is the internal wire
+        // kind and stayed singular through the 2026-08-24 YAML cutover; printing it raw taught a
+        // spelling the parser now refuses.
+        return `- \`${AWAITING_KEY_OF[i.kind]}: [${i.value}]\` — ${note}`
       })
       // When EVERY dead name simply finished, the news is not "your fence is wrong" — it is "the thing
       // you were waiting for is done". Different fact, different next action.
