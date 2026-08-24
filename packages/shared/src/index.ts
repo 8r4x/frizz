@@ -559,6 +559,25 @@ export type ThreadRecurringPrompt = z.infer<typeof ThreadRecurringPrompt>
 // that message is the thread's last word. Anything the thread says or receives afterwards reopens the
 // loop by itself.
 
+// Claude Code narrates its OWN control action into the transcript: every turn cut short leaves a bare
+// `[Request interrupted by user]` user record. Frizz cuts turns short as a feature — "send now" (⌘⏎ and
+// the queue's push-through button) interrupts the running turn so the worker reads the queue at once —
+// so the marker landed as a human bubble directly above the very message that caused it, saying nothing
+// the reader did not just do (maintainer 2026-08-14). The broker's own shutdown writes the same record,
+// which is worse: nobody typed anything at all.
+//
+// EXACT match on the trimmed text, deliberately not a prefix: all 306 of these records across the 3933
+// transcripts on this machine are one of these two strings ALONE in a single text block, so a human
+// message that opens by quoting the marker keeps its bubble.
+//
+// Lives HERE rather than in transcript.ts (its first caller) because the tailer needs it too — an
+// interrupt receipt is the one `user` record that means the turn is OVER, not starting — and
+// transcript.ts already imports from tailer.ts, so the other direction would close a cycle.
+const INTERRUPT_MARKERS = ["[Request interrupted by user]", "[Request interrupted by user for tool use]"]
+export function isInterruptMarker(text: string): boolean {
+  return INTERRUPT_MARKERS.includes(text.trim())
+}
+
 /** LEGACY. The sentinel that used to be the opt-out, superseded by the ```done fence on 2026-08-11.
  *
  * STILL HONOURED, and deliberately: workers dispatched before the change are running right now with

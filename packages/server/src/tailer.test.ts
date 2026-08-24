@@ -137,6 +137,46 @@ test("computeTurn: unknown stop_reason uses the 5s silence backstop", () => {
   assert.equal(computeTurn(s, Date.parse("2026-07-01T00:00:06.000Z")), "idle") // 6s: backstop fires
 })
 
+// THE INTERRUPT RECEIPT IS THE ONE `user` RECORD THAT ENDS A TURN. Claude narrates its own abort as a
+// bare `[Request interrupted by user]` user record, and "user record → the model is about to respond"
+// read that as a prompt: a thread stopped mid-tool and never resumed sat in the Active band spinning
+// for 23 hours behind an idle worker (maintainer 2026-08-23, on a nub thread: "looks frozen"). Nothing
+// timed it out either — the 5s backstop above only guards the ASSISTANT branch.
+test("computeTurn: an interrupt receipt with nothing after it settles the turn", () => {
+  const s = newTailState("t", "s", "/x")
+  applyRecord(s, { type: "assistant", timestamp: "2026-07-01T00:00:00.000Z", message: { stop_reason: "tool_use", content: [] } })
+  applyRecord(s, { type: "user", timestamp: "2026-07-01T00:00:01.000Z", message: { content: [{ type: "tool_result" }] } })
+  applyRecord(s, { type: "user", timestamp: "2026-07-01T00:00:02.000Z", message: { content: [{ type: "text", text: "[Request interrupted by user]" }] } })
+  assert.equal(s.lastKind, "user", "still a substantive record — it moves the clock and the row like any other")
+  assert.equal(s.interrupted, true)
+  // SEND NOW is the common case and it must not flash a rest: frizz interrupts the running turn so the
+  // worker reads the queue at once, and the real prompt lands milliseconds later.
+  assert.equal(computeTurn(s, Date.parse("2026-07-01T00:00:04.000Z")), "in-flight", "2s on: the pushed-through prompt is still arriving")
+  assert.equal(computeTurn(s, Date.parse("2026-07-01T00:00:08.000Z")), "idle", "6s of silence after an abort is a stopped thread, not a spinner")
+})
+
+test("computeTurn: the very next record after an interrupt re-opens the turn", () => {
+  const s = newTailState("t", "s", "/x")
+  applyRecord(s, { type: "user", timestamp: "2026-07-01T00:00:00.000Z", message: { content: [{ type: "text", text: "[Request interrupted by user for tool use]" }] } })
+  assert.equal(s.interrupted, true, "both markers count")
+  applyRecord(s, { type: "user", timestamp: "2026-07-01T00:00:01.000Z", message: { content: [{ type: "text", text: "actually, do this instead" }] } })
+  assert.equal(s.interrupted, undefined, "a real prompt clears it — the flag only ever describes the LAST record")
+  assert.equal(computeTurn(s, Date.parse("2026-07-01T00:01:00.000Z")), "in-flight")
+  applyRecord(s, { type: "user", timestamp: "2026-07-01T00:01:01.000Z", message: { content: [{ type: "text", text: "[Request interrupted by user]" }] } })
+  applyRecord(s, { type: "assistant", timestamp: "2026-07-01T00:01:02.000Z", message: { stop_reason: "tool_use", content: [] } })
+  assert.equal(s.interrupted, undefined, "…and so does the model speaking again")
+  assert.equal(computeTurn(s, Date.parse("2026-07-01T00:02:00.000Z")), "in-flight", "a live tool_use is never timed out")
+})
+
+// A human message that QUOTES the marker is a human message. Exact match on the trimmed text is what
+// keeps that true — the same rule that keeps its bubble in the chat (transcript.ts).
+test("computeTurn: a message that merely quotes the marker is an ordinary prompt", () => {
+  const s = newTailState("t", "s", "/x")
+  applyRecord(s, { type: "user", timestamp: "2026-07-01T00:00:00.000Z", message: { content: [{ type: "text", text: "[Request interrupted by user] — why does this keep showing up?" }] } })
+  assert.equal(s.interrupted, undefined)
+  assert.equal(computeTurn(s, Date.parse("2026-07-01T00:01:00.000Z")), "in-flight")
+})
+
 // ---- applyEvent: the backend-NEUTRAL fold over NormalizedEvents (the codex-facing seam) ----
 // applyEvent is what a codex backend drives its foldLine off (`for (ev of parseLine(line)) applyEvent`),
 // so these tests pin the same FoldState fields the tailer/board consume — with turn driven by explicit
@@ -1822,6 +1862,26 @@ test("tailer: primes an already-finished transcript WITHOUT a turn-done notify",
   assert.equal(tele?.lastAssistant, "all done")
   assert.equal(tele?.lastActivityAt, "2026-07-01T00:00:02.000Z")
   assert.equal(tele?.aiTitle, "x") // ai-title sidecar surfaces through telemetry
+})
+
+// THE FREEZE, THROUGH THE TICK. The shape that produced it verbatim: an unresolved tool_use, its
+// tool_result, then Claude's own abort receipt and nothing more, ever. The row spun in the Active band
+// for 23 hours behind an idle worker until the operator asked what was happening (2026-08-23). The
+// tick is where it has to settle — computeTurn alone is covered above, but `runtime: "running"` is
+// derived from the turn this loop publishes.
+const INTERRUPTED = JSON.stringify({ type: "user", timestamp: "2026-07-01T00:00:02.000Z", message: { role: "user", content: [{ type: "text", text: "[Request interrupted by user]" }] } })
+
+test("tailer: a transcript abandoned on an interrupt receipt settles through the tick", () => {
+  const h = harness()
+  h.storage.upsertSession(row())
+  fixture(h.logDir, "sid", [IN_FLIGHT, TOOL, INTERRUPTED])
+  h.clock.ms = Date.parse("2026-07-01T00:00:04.000Z") // 2s on — a "send now" prompt would still be landing
+  const t = makeTailer(h)
+  t.tick()
+  assert.equal(t.get("t")?.turn, "in-flight", "the push-through window is held open")
+  h.clock.ms = Date.parse("2026-07-01T00:00:20.000Z") // …and nothing ever came
+  t.tick()
+  assert.equal(t.get("t")?.turn, "idle", "an abandoned interrupt is a stopped thread, not a permanent spinner")
 })
 
 // ---- PermissionRequest marker (structured perm-blocked signal; primary over the pane regex) ----

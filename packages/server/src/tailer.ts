@@ -2,7 +2,7 @@ import { statSync, openSync, readSync, closeSync, readdirSync, realpathSync, mkd
 import { execFileSync } from "node:child_process"
 import { basename, join } from "node:path"
 import { homedir, tmpdir } from "node:os"
-import { insideFence, PermissionMode, saysAllDone } from "@frizz/shared"
+import { insideFence, isInterruptMarker, PermissionMode, saysAllDone } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import { permMarkerPath, type Project } from "./project.ts"
 import { isBrokerClaudeRow, isHeadlessRow } from "./storage.ts"
@@ -466,6 +466,11 @@ export interface TailState extends FoldState {
   // only Claude's computeTurn reads these two (+ the 5s unknown-stop-reason backstop).
   lastKind?: "assistant" | "user"
   lastStopReason?: string
+  // The last substantive record was the runtime's own `[Request interrupted by user]` receipt. It is a
+  // `type:"user"` record, so without this it reads as "a prompt landed, the model is about to respond"
+  // and pins the turn in-flight FOREVER when nothing follows it — the same trap the isMeta guard in
+  // applyRecord already documents, arriving through a different record. See computeTurn.
+  interrupted?: boolean
   // ---- provider event stream vs its own disk write (broker Claude rows only) ----
   // `runtimeEventsSeen` is the provider event count this session's fold has already caught up with;
   // `runtimeChase` counts consecutive nudge-driven ticks spent waiting for it to. Both live here
@@ -1664,6 +1669,10 @@ export function applyRecord(state: TailState, rec: Record): void {
   } else if (type === "assistant") {
     state.sawRecords = true
     state.lastKind = "assistant"
+    // The model spoke, so whatever was interrupted is history — the stop_reason below is the turn signal
+    // again. Cleared here and on any non-interrupt user record so the flag only ever describes the LAST
+    // substantive record, exactly like lastKind.
+    state.interrupted = undefined
     // The agent's OWN output timestamp = the rest-time key. For an at-rest thread the last assistant
     // record IS its final resting message; unlike lastActivityAt this never moves from a sub-agent's
     // completion notification (a promptSource:system USER record), so the queue never reshuffles on
@@ -1748,6 +1757,13 @@ export function applyRecord(state: TailState, rec: Record): void {
     // (shimmer), not idle. This is what shows motion while an agent resumes after a sub-agent returns.
     state.lastKind = "user"
     state.lastStopReason = undefined
+    // …with ONE exception, and it is the reason this flag exists: the runtime's own
+    // `[Request interrupted by user]` receipt is a user record that means the OPPOSITE of a prompt. The
+    // turn it names was cut short and the model will write nothing more until new input arrives, so
+    // reading it as "about to respond" left an abandoned thread spinning on the board until the next
+    // reboot (maintainer 2026-08-23, on a nub thread interrupted mid-tool and never resumed: "looks
+    // frozen" — 23 hours in the Active band with an idle worker behind it).
+    state.interrupted = isInterruptMarker(lastTextBlock(rec.message?.content) ?? "") || undefined
     // A newer user record supersedes any pending chat question / excusal fence (they only signal as the
     // FINAL message); the NEXT assistant record recomputes them.
     state.lastAssistantHasQuestion = false
@@ -1945,6 +1961,17 @@ export function computeTurn(state: TailState, nowMs: number): TurnState {
   // is still the newTailState "in-flight" the old fallthrough returned. For codex it makes the explicit
   // task_started/task_complete brackets authoritative (the fix: a folded `idle` survives the tick).
   if (state.lastKind === undefined) return state.turn
+  // An INTERRUPT is the one user record that ENDS a turn rather than opening one (see applyRecord).
+  // It gets the same 5s-silence treatment the unknown-stop-reason branch above uses, and for the same
+  // reason: frizz interrupts as a FEATURE — "send now" cuts the turn short so the worker reads the
+  // queue at once — and there the real prompt lands milliseconds later and re-opens the turn. Flipping
+  // idle the instant the receipt appears would flash a rest through every send-now, and a rest is not
+  // cosmetic here: it cards the row into the queue and can fire the sign-off nudge at a thread that
+  // never stopped. An interrupt with NOTHING after it for 5s is what it looks like — a stopped thread.
+  if (state.interrupted) {
+    const at = state.lastActivityAt ? Date.parse(state.lastActivityAt) : NaN
+    if (Number.isFinite(at) && nowMs - at > IDLE_BACKSTOP_MS) return "idle"
+  }
   // last substantive record was a user prompt/tool_result → in-flight (the model is about to respond)
   return "in-flight"
 }
