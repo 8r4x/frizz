@@ -247,7 +247,7 @@ export interface SubAgentView {
 export interface FenceView {
   kind: "done" | "awaiting"
   body: string
-  hints: { kind: "shell" | "agent" | "timer" | "pr" | "for" | "reason"; value: string }[]
+  hints: { kind: "shell" | "agent" | "timer" | "pr" | "for"; value: string }[]
 }
 
 // Per-session derived telemetry surfaced to the board overlay. Structurally a NormalizedTail (the
@@ -3684,8 +3684,12 @@ export function createTailer(deps: TailerDeps): Tailer {
   // re-fold from byte 0 on EVERY boot, forever, instead of once. The FILENAME is a strong identity
   // here: it is the pinned session id, and the sessionId / nativeSessionId / generation fences above
   // have already matched. `measureFence(entry.path, …)` below still validates the file that is actually
-  // there, and `path` round-trips through the encoded state, so accepting the entry also rebinds the
-  // state to the bucket the transcript really lives in — which is exactly what the recovery would do.
+  // there, and accepting the entry ALSO REBINDS the state to the bucket the transcript really lives in —
+  // which is exactly what the recovery would do.
+  //
+  // That last clause used to read "`path` round-trips through the encoded state", and it was false:
+  // `path` is in UNRESTORED_TAIL_FIELDS, so the hydration loop skips it. The rebind is now made
+  // explicitly at the end of hydrateFromCache; see the note there for the five-day freeze that cost.
   function samePinnedTranscript(cached: string, bound: string): boolean {
     return cached === bound || basename(cached) === basename(bound)
   }
@@ -3733,6 +3737,32 @@ export function createTailer(deps: TailerDeps): Tailer {
     for (const [key, value] of Object.entries(decoded)) {
       if (UNRESTORED_TAIL_FIELDS.has(key)) continue
       target[key] = value
+    }
+    // THE REBIND THE WIDENING PROMISES. `samePinnedTranscript` accepts an entry from ANOTHER BUCKET —
+    // a renamed checkout — and its note says accepting it "also rebinds the state to the bucket the
+    // transcript really lives in". It did not: `path` is in UNRESTORED_TAIL_FIELDS (identity comes from
+    // the live row, never the cache), so the loop above skips it and the state keeps the derived path,
+    // which for a stranded thread is a file that does not exist. `resolveTranscript` then short-circuits
+    // on the restored `offset > 0` — "already bound to a real transcript" — so the recovery that WOULD
+    // have rebound it never runs, and every later `consume` reads nothing. The thread goes permanently
+    // deaf at the byte it was cached on, with no error anywhere: `i-want-a-way-to-run` sat frozen at
+    // 2026-08-19 for five days while its worker went on answering 1.36 MB further down the same file,
+    // including a follow-up the operator sent and watched vanish (2026-08-24).
+    //
+    // Two mechanisms, each right on its own, fatal together. The rebind has to be made HERE, explicitly,
+    // because this is the only place that knows the widening fired.
+    if (entry.path !== state.path) {
+      // …unless the derived path has content of its own. Then there are two real files and the offset
+      // was measured against only one of them, so binding either is a guess — take the full re-fold
+      // instead, which is what this cache costs at worst.
+      let derivedSize = 0
+      try {
+        derivedSize = statSync(state.path).size
+      } catch {
+        derivedSize = 0
+      }
+      if (derivedSize > 0) return false
+      state.path = entry.path
     }
     cacheHydrated.add(key)
     return true

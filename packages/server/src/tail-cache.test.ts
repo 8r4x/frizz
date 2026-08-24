@@ -49,7 +49,8 @@ function row(over: Partial<SessionRow> = {}): SessionRow {
 }
 
 /** One boot: build a tailer over the harness, prime it, and return the thread's telemetry. */
-function boot(h: Harness, over: Partial<Parameters<typeof createTailer>[0]> = {}) {
+function boot(h: Harness, over: Partial<Parameters<typeof createTailer>[0]> & { slug?: string } = {}) {
+  const { slug = "t", ...opts } = over
   const t = createTailer({
     project: { cwdSlug: "x" } as Project,
     storage: h.storage,
@@ -58,10 +59,10 @@ function boot(h: Harness, over: Partial<Parameters<typeof createTailer>[0]> = {}
     now: () => Date.parse("2026-07-01T01:00:00.000Z"),
     paneDead: () => true,
     sessionLogDir: h.dir,
-    ...over,
+    ...opts,
   })
   t.start()
-  const telemetry = t.get("t")
+  const telemetry = t.get(slug)
   t.stop()
   return telemetry
 }
@@ -359,17 +360,20 @@ test("tail-cache: a hydrated pre-rename entry keeps READING the bucket the file 
   const newBucket = join(h.dir, "-Users-me-projects-frizz")
   mkdirSync(oldBucket, { recursive: true })
   mkdirSync(newBucket, { recursive: true })
-  h.storage.upsertSession(row())
-  const transcript = join(oldBucket, "sid.jsonl")
+  // Its OWN slug/session id. The pair above uses `t`/`sid`, and `assistant()`'s text is the only thing
+  // distinguishing two otherwise identical fixtures — sharing the identity made this case read the
+  // neighbour's cached prefix and pass or fail on test order.
+  h.storage.upsertSession(row({ slug: "reread", session_id: "reread-sid", thread_name: "frizz-reread" }))
+  const transcript = join(oldBucket, "reread-sid.jsonl")
   writeFileSync(transcript, [user(1, "go"), assistant(2, "the real answer")].map((l) => l + "\n").join(""))
 
-  assert.equal(boot(h, { sessionLogDir: newBucket })?.lastAssistant, "the real answer", "boot 1 finds it one bucket over")
+  assert.equal(boot(h, { sessionLogDir: newBucket, slug: "reread" })?.lastAssistant, "the real answer", "boot 1 finds it one bucket over")
 
   // The worker answers again while frizz is down — the ordinary case for a thread that outlives a restart.
   appendFileSync(transcript, assistant(3, "and the answer AFTER the restart") + "\n")
 
   assert.equal(
-    boot(h, { sessionLogDir: newBucket })?.lastAssistant,
+    boot(h, { sessionLogDir: newBucket, slug: "reread" })?.lastAssistant,
     "and the answer AFTER the restart",
     "boot 2 hydrates the cached prefix AND reads on from the file it was cached against",
   )
