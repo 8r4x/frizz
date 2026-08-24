@@ -364,12 +364,33 @@ export function hasDeclaredBackgroundPark(
   return true
 }
 
-/** Does the thread DECLARE a wait of any kind — its own background work, or a parked PR watcher? This is
- *  what the resting card states. It is wider than the queue excusal above by exactly the PR wait, which
- *  cards but never parks. */
-export function hasDeclaredWait(tele: SessionTelemetry | undefined, nowMs: number): boolean {
+/** Is the fence parked on a TIMER that is actually armed? The declaration alone is not the wait — a
+ *  `timers:` line naming a fired or cancelled row describes a wake that will never come, exactly the
+ *  shell-that-died case one branch up — so the hint is checked against the registry, which is the same
+ *  set the scheduler's own integrity pass reads (armedTimerIdsOf). */
+export function hasParkedTimerWatch(
+  tele: SessionTelemetry | undefined,
+  armedTimerIds: ReadonlySet<string>,
+): boolean {
+  if (tele?.lastFence?.kind !== "awaiting") return false
+  return tele.lastFence.hints.some((hint) => hint.kind === "timer" && armedTimerIds.has(hint.value.trim()))
+}
+
+/** Does the thread DECLARE a wait of any kind — its own background work, a parked PR watcher, or a
+ *  parked timer? This is what the resting card states. It is wider than the queue excusal above by
+ *  exactly the PR and timer waits, which card but never park. */
+export function hasDeclaredWait(
+  tele: SessionTelemetry | undefined,
+  nowMs: number,
+  armedTimerIds: ReadonlySet<string> = new Set(),
+): boolean {
   if (hasDeclaredBackgroundPark(tele, nowMs)) return true
   if (tele?.lastFence?.kind === "awaiting" && hasParkedPrWatch(tele)) return true
+  // A TIMER PARK CARDS LIKE A PR PARK (maintainer 2026-08-24: the resting card "enumerates all of the
+  // pull requests and the background shells … I don't understand why timer isn't represented in the same
+  // way"). Until this limb existed a timer-only park had no resting card at all, so the fence card fell
+  // back to reading its machinery at the human — "a timer   for 2h".
+  if (hasParkedTimerWatch(tele, armedTimerIds)) return true
   // A RUNNING SUB-AGENT NEEDS NO DECLARATION, and this is the line that keeps the change surgical. The
   // complaint was never about sub-agents — it was "the background work that it is theoretically waiting
   // on is just like a dev server that it never tore down" (maintainer 2026-08-14). A dispatched sub-agent
@@ -502,9 +523,27 @@ export function fenceWatchViews(
    *  strip's job is to list what will actually wake it. The fence's `prs:` entry is a separate
    *  thing — it states a WAIT, and it is checked against this set elsewhere (heldByRunningChecks). */
   registered: readonly { target: string; createdAt: string }[] = [],
+  /** This thread's ARMED TIMERS — the `thread_timer` rows a `timers:` fence entry is checked against.
+   *  Rows for the same reason the PR registrations above get them, fence or no fence: an armed timer
+   *  WILL fire and wake the thread, so it is live work the strip must list. */
+  armedTimers: readonly { id: string; prompt: string; fireAt: string; createdAt: string }[] = [],
 ): ThreadView["watches"] {
   const seen = new Set<string>()
   const out: ThreadView["watches"] = []
+  for (const t of armedTimers) {
+    if (seen.has(`timer:${t.id}`)) continue
+    seen.add(`timer:${t.id}`)
+    out.push({
+      id: `timer:${slug}:${t.id}`,
+      kind: "timer" as const,
+      target: t.id,
+      state: "armed" as const,
+      createdAt: t.createdAt,
+      // Always present, unlike the github half above: a timer that exists is fully known — there is no
+      // poller to wait for. The prompt is the row's NAME client-side (a `tmr_…` id names nothing).
+      timer: { fireAt: t.fireAt, prompt: t.prompt },
+    })
+  }
   for (const w of registered) {
     if (seen.has(`github:${w.target}`)) continue
     seen.add(`github:${w.target}`)
@@ -738,11 +777,12 @@ export function deriveAwaitingBackground(
   deliveryProcessGone = false,
   github: GithubStatusBook = {},
   registeredPrWatches: ReadonlySet<string> = new Set(),
+  armedTimerIds: ReadonlySet<string> = new Set(),
 ): boolean {
   // DECLARED, not inferred. This card used to appear whenever the thread had anything running, which is
   // how it came to announce a wait on a dev server nobody tore down. It now states what the worker said
   // it is waiting on, and says nothing when the worker said nothing.
-  if (runtime !== "turn-idle" || !hasDeclaredWait(tele, nowMs)) return false
+  if (runtime !== "turn-idle" || !hasDeclaredWait(tele, nowMs, armedTimerIds)) return false
   // Any hard human gate or completion signal outranks this reason → the thread cards as THAT, not here.
   if (hasActionableInteraction || tele?.pendingAsk || tele?.pendingQuestion) return false
   // A signal fence — ```done OR ```awaiting — is the worker's OWN explicit statement about why it
@@ -765,7 +805,10 @@ export function deriveAwaitingBackground(
   if (
     tele?.lastFence?.kind === "awaiting" &&
     !hasParkedPrWatch(tele) &&
-    !hasDeclaredBackgroundPark(tele, nowMs)
+    !hasDeclaredBackgroundPark(tele, nowMs) &&
+    // A TIMER PARK IS THE SAME EXCEPTION AGAIN (2026-08-24): its fence has no park action either, so
+    // suppressing this card left the wait stated nowhere but the fence's own machinery footer.
+    !hasParkedTimerWatch(tele, armedTimerIds)
   ) return false
   // Every OTHER excusal deriveNeedsYou applies still outranks the card (a user wall-clock snooze, a
   // limit pause, a delivered-but-unobserved follow-up); only the queue-owned event-snooze is dropped,
@@ -960,6 +1003,16 @@ function sessionThreadView(
     createdAt: new Date(w.created_at).toISOString(),
   }))
   const registeredPrWatches = new Set(armedPrWatches.map((w) => w.target))
+  // This thread's ARMED TIMERS — what a `timers:` declaration is checked against, and rows on the
+  // resting card's table beside the PRs and shells (maintainer 2026-08-24). Same per-thread read, same
+  // ms→ISO mapping as the worker's own tool (router.armedTimerViews).
+  const armedTimers = storage.listThreadTimers(row.slug, { armedOnly: true }).map((t) => ({
+    id: t.id,
+    prompt: t.prompt,
+    fireAt: new Date(t.fire_at).toISOString(),
+    createdAt: new Date(t.created_at).toISOString(),
+  }))
+  const armedTimerIds = new Set(armedTimers.map((t) => t.id))
   // A headless thread mid-turn with nobody driving it is a crash/stall, not a rest. For codex that is
   // an app-server that stopped advancing the rollout; for the broker it is a dead ownerless daemon (its
   // liveness is the daemon record, resolved live). Either way the (exited + in-flight) pair trips the
@@ -1009,7 +1062,7 @@ function sessionThreadView(
   const archived = state === "archived"
   const limitPause = resolveLimitPause(row, tele, nowMs)
   const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches)
-  const awaitingBackground = archived ? false : deriveAwaitingBackground(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, deliveryProcessGone, github, registeredPrWatches)
+  const awaitingBackground = archived ? false : deriveAwaitingBackground(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, deliveryProcessGone, github, registeredPrWatches, armedTimerIds)
   // A worker that exited with work still outstanding — a turn in flight, OR a sub-agent still reading
   // "running" (its parent is gone, so it cannot actually be live) — is a crash/stall, not a clean
   // handoff, so it cards as "stalled" not a bare "rest". Mirrors deriveNeedsYou's surfacing above.
@@ -1055,7 +1108,7 @@ function sessionThreadView(
     // become the github rows, `watch:` lines the shell rows — so this strip lists exactly what will
     // actually wake the thread, and the two cannot drift into claiming different things. There is no
     // registry behind either any more (`thread_watch`, retired 2026-08-14).
-    watches: fenceWatchViews(row.slug, tele, tele?.lastAssistantAt, github, armedPrWatches),
+    watches: fenceWatchViews(row.slug, tele, tele?.lastAssistantAt, github, armedPrWatches, armedTimers),
     pendingAsk: tele?.pendingAsk ? { questions: tele.pendingAsk.questions } : undefined,
     pendingQuestion: tele?.pendingQuestion ?? false,
     lastUserAt: tele?.lastUserAt,

@@ -1,0 +1,94 @@
+// Seed a disposable adhoc stack with a SIMULATED worker parked on TIMERS — the 2026-08-24 case: an
+// ```awaiting fence naming armed `thread_timer` rows and nothing else. This is the shape that used to
+// render the fence card's machinery footer ("a timer   for 2h"); it must now card as the resting
+// table with a "Timers" group, one row per armed timer, named by the timer's own prompt and counting
+// down to its fire instant (AwaitingBackgroundCard).
+//
+// Follows the frizz-stack recipe: a session row + a JSONL the REAL tailer reads, and timers armed
+// through the REAL RPC (`setOwnThreadTimer`) so the registry rows the board derives from are the
+// production ones — not a hand-built props fixture. The fence is written AFTER arming, because the
+// timer ids are server-minted and the fence must name them.
+//
+// Usage: nub scripts/seed-timer-park.mjs --home=/abs/temp-home --port=NNNN
+import { execFileSync, spawn } from "node:child_process"
+import { createHash } from "node:crypto"
+import { mkdirSync, writeFileSync, globSync } from "node:fs"
+import { join } from "node:path"
+import { createRpcClient } from "./lib/rpc-client.mjs"
+
+const flags = Object.fromEntries(
+  process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
+)
+const { home, port, cwd = "/Users/colinmcd94/Documents/projects/frizz" } = flags
+if (!home || !port) {
+  console.error("usage: nub scripts/seed-timer-park.mjs --home=/abs/temp-home --port=NNNN")
+  process.exit(1)
+}
+
+const db = globSync(join(home, ".frizz/projects/*/ui.db"))[0]
+if (!db) throw new Error(`no ui.db under ${home}/.frizz/projects — is the stack booted?`)
+const stateDir = join(db, "..")
+const jsonlDir = join(home, ".claude", "projects", cwd.replace(/[/.]/g, "-"))
+mkdirSync(jsonlDir, { recursive: true })
+mkdirSync(join(stateDir, "claude-broker"), { recursive: true })
+
+// A simulated worker is a BROKER row (`claude_runtime='broker'`), and the runtime probe needs a daemon
+// record whose pid answers `kill -0` — without both, deriveRuntime reads "exited" and no resting card
+// can render (see seed-resting-thread.mjs, which shipped that way once). Kill this exact pid at teardown.
+const daemon = spawn("sleep", ["7200"], { detached: true, stdio: "ignore" })
+daemon.unref()
+
+const ago = (mins) => new Date(Date.now() - mins * 60_000).toISOString().replace(/\.\d+Z$/, "Z")
+const ahead = (mins) => new Date(Date.now() + mins * 60_000).toISOString()
+
+const slug = "timer-park"
+const sessionId = `${slug}-0000-4000-8000-000000000000`.slice(0, 36)
+const at = ago(3)
+
+// The row FIRST: setOwnThreadTimer refuses a slug that is not registered.
+execFileSync("sqlite3", [
+  db,
+  `INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, backend, claude_runtime, model, effort, permission_mode, rested_at)
+   VALUES ('${slug}', '${sessionId}', 'frizz-${slug}', '${at}', 'timer park · release hold', 'claude', 'broker', 'opus', 'high', 'default', '${at}')`,
+])
+writeFileSync(
+  join(stateDir, "claude-broker", `${createHash("sha256").update(sessionId).digest("hex").slice(0, 16)}.json`),
+  JSON.stringify({ sessionId, daemonPid: daemon.pid, socketPath: join(stateDir, "claude-broker", `${slug}.sock`) }),
+)
+
+// Two REAL timers through the production RPC — the ids come back server-minted (`tmr_…`).
+const api = createRpcClient(`http://127.0.0.1:${port}/`)
+await api.waitForHealth()
+const t1 = await api.mutate("setOwnThreadTimer", { slug, prompt: "Re-check: tip quiet, frozen-lockfile install green, typecheck green", fireAt: ahead(34) })
+const t2 = await api.mutate("setOwnThreadTimer", { slug, prompt: "Poke the release workflow if no new run appeared", fireAt: ahead(52) })
+
+// The worker's rest, in the CURRENT fence grammar: YAML frontmatter naming the armed ids, then prose.
+const fence = [
+  "```awaiting",
+  `timers: [${t1.id}, ${t2.id}]`,
+  "for: 2h",
+  "---",
+  "Waiting for `main` to stabilize before cutting the 0.6.0 release that carries the #22 fix.",
+  "",
+  "- an hourly timer re-checks: tip quiet, frozen-lockfile install green, typecheck green",
+  "- once the release publishes, the approved comment goes on #22 with the version number, then the issue is closed",
+  "```",
+].join("\n")
+const records = [
+  {
+    parentUuid: null, isSidechain: false, type: "user",
+    message: { role: "user", content: "TASK:\nHold for the 0.6.0 release window." },
+    uuid: "00000000-0000-4000-8000-00000000t001".slice(-36), timestamp: ago(10), session_id: sessionId, cwd,
+  },
+  {
+    parentUuid: null, isSidechain: false, type: "assistant",
+    message: {
+      model: "claude-opus-5", id: `msg_${slug}`, type: "message", role: "assistant",
+      content: [{ type: "text", text: fence }],
+      stop_reason: "end_turn", usage: { input_tokens: 2, output_tokens: 60 },
+    },
+    uuid: "00000000-0000-4000-8000-00000000t002".slice(-36), timestamp: at, session_id: sessionId, cwd,
+  },
+]
+writeFileSync(join(jsonlDir, `${sessionId}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
+console.log(`seeded ${slug} with timers ${t1.id}, ${t2.id}`)

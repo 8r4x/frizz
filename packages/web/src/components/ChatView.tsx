@@ -3654,7 +3654,10 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
         // Muted and small: it is the machinery, under the prose that explains it. `gap-x-3` matches the
         // PR-ref row below so the two read as one band rather than two competing lists.
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[12px] text-muted">
-          {itemLabels.map((label) => <span key={label}>{label}</span>)}
+          {/* Index in the key: two timers both label as "a timer" (awaitingItemLabels counts ids as
+              noise), and a bare-label key then collides. The list is static per render, so the index
+              is a stable discriminator. */}
+          {itemLabels.map((label, i) => <span key={`${i}-${label}`}>{label}</span>)}
           {forLabel && <span className="text-muted/70">{forLabel}</span>}
         </div>
       )}

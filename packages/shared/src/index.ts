@@ -1351,7 +1351,7 @@ export function parsePrWatchExpiredWake(text: string): { ref: string } | null {
 // So the board SYNTHESIZES one row per parseable `prs:` entry on the thread's standing fence. It is
 // derived state, not a registration: it appears when the worker parks, vanishes when it says anything
 // else, and carries no drop affordance, because there is no row to drop.
-export const ThreadWatchKind = z.enum(["shell", "github"])
+export const ThreadWatchKind = z.enum(["shell", "github", "timer"])
 export type ThreadWatchKind = z.infer<typeof ThreadWatchKind>
 
 /** How a watched PR's checks stand right now, in the shape GitHub's own merge box states it: a rollup
@@ -1398,11 +1398,12 @@ export type GithubWatchStatus = z.infer<typeof GithubWatchStatus>
 
 /** One wait the thread has out, as the board states it.
  *
- *  A `github` row is DERIVED FROM THE FENCE — a `prs:` entry — and has no registration behind it. A
- *  `shell` row is derived the same way, from a `watch:` line. Neither is a record: both live exactly as
- *  long as the fence that declares them, which is also exactly as long as the scheduler watches them.
- *  That coupling is the point — the strip lists what will actually wake the thread, and the two cannot
- *  drift into claiming different things. */
+ *  A `shell` row is DERIVED FROM THE FENCE — a `shells:` entry checked against live telemetry — and has
+ *  no registration behind it: it lives exactly as long as the fence that declares it, which is also
+ *  exactly as long as the scheduler watches it. A `github` row mirrors a REGISTERED PR watcher and a
+ *  `timer` row an ARMED timer (`thread_timer`), fence or no fence — a registration is live work that
+ *  WILL wake the thread. Either way the coupling is the point: the strip lists precisely what will
+ *  actually wake the thread, and the two cannot drift into claiming different things. */
 export const ThreadWatchView = z.object({
   id: z.string(),
   kind: ThreadWatchKind,
@@ -1411,6 +1412,11 @@ export const ThreadWatchView = z.object({
   createdAt: z.string(),
   /** `github` rows only, and absent until the first successful poll. */
   github: GithubWatchStatus.optional(),
+  /** `timer` rows only: the armed timer's own registration, which is everything the row renders — the
+   *  worker's prompt is the row's NAME (a `tmr_…` id names nothing to a human) and the fire instant is
+   *  its status. Unlike `github` there is no polled half to be absent: a timer that exists is fully
+   *  known, so a timer row always carries this. */
+  timer: z.object({ fireAt: z.string(), prompt: z.string() }).strict().optional(),
 }).strict()
 export type ThreadWatchView = z.infer<typeof ThreadWatchView>
 

@@ -26,11 +26,11 @@
 // and the parent genuinely resumes; measured 15/15 times on a live worker thread, with idle windows as
 // short as 0.13s. This card is what makes that alternation legible.)
 import { Fragment, type ReactNode } from "react"
-import { Bot, ChevronRight, CircleCheck, CircleDashed, CircleX, GitMerge, GitPullRequestClosed, Hourglass, TerminalSquare } from "lucide-react"
+import { Bot, ChevronRight, CircleCheck, CircleDashed, CircleX, Clock, GitMerge, GitPullRequestClosed, Hourglass, TerminalSquare } from "lucide-react"
 import type { GithubWatchStatus, ThreadView, ThreadWatchView } from "@frizz/shared"
 import { isDirectSubAgent } from "@frizz/shared"
 import { githubRefUrl } from "../lib/githubRef.ts"
-import { compactElapsedSince } from "../lib/durationLabels.ts"
+import { compactElapsedSince, formatCompactElapsed } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { pushBackgroundShellDrawer, pushSubAgentDrawer } from "../store.ts"
 import { CARD_BODY, CardActions, TranscriptCard } from "./TranscriptCard.tsx"
@@ -121,10 +121,18 @@ export function awaitingBackgroundLabel(thread: Pick<ThreadView, "subAgents" | "
   return shellsAlone(thread) ? "Background shells running" : "Awaiting background work"
 }
 
-/** Background shells and nothing else — the one shape with a title of its own. */
+/** Background shells and nothing else — the one shape with a title of its own. An armed timer
+ *  disqualifies it the same way a PR watcher does: the card then holds a Timers group too, and a
+ *  kind-naming title over a mixed table names only half the wait. */
 function shellsAlone(thread: Pick<ThreadView, "subAgents" | "bgShells" | "watches">): boolean {
   const shells = (thread.bgShells ?? []).filter((s) => s.state === "running").length
-  return shells > 0 && !awaitsResults(thread) && prWatcherCount(thread) === 0
+  return shells > 0 && !awaitsResults(thread) && prWatcherCount(thread) === 0 && armedTimerWatches(thread).length === 0
+}
+
+/** The thread's armed timers, as the board's watch rows state them (kind "timer" since 2026-08-24 —
+ *  before that a timer park reached this card nowhere at all). */
+function armedTimerWatches(thread: Pick<ThreadView, "watches">): ThreadWatchView[] {
+  return (thread.watches ?? []).filter((w) => w.kind === "timer" && w.state === "armed")
 }
 
 // ---- ONE ROW PER WATCHED PR ----------------------------------------------------------------------
@@ -302,7 +310,7 @@ function WaitRow({ mark, name, status, onOpen, href, title, testKind, testId }: 
   onOpen?: () => void
   href?: string
   title?: string
-  testKind: "github" | "shell" | "agent"
+  testKind: "github" | "shell" | "agent" | "timer"
   testId: string
 }) {
   const open = href
@@ -438,6 +446,34 @@ function ShellWatchRow({ watch, thread, slug, now }: {
   )
 }
 
+// ---- THE ARMED TIMERS ----------------------------------------------------------------------------
+// The fourth kind (maintainer 2026-08-24: this card "enumerates all of the pull requests and the
+// background shells … I don't understand why timer isn't represented in the same way"). Until then a
+// timer park's one rendering was the fence card's machinery footer — "a timer   for 2h".
+//
+// The row's NAME is the timer's own prompt — the text the worker armed it with — because that is the
+// honest answer to "what happens when this fires"; the `tmr_…` id names nothing to a human and stays in
+// data attributes. NON-INTERACTIVE by ChildOpRow's settled policy: there is nothing to open — no output
+// drawer, no transcript, no external page — so it renders without a chevron, hover, or focus stop
+// rather than as a disabled control.
+function TimerRow({ watch, now }: { watch: ThreadWatchView; now: number }) {
+  const fireMs = Date.parse(watch.timer?.fireAt ?? "")
+  // "fires in 34m", counting down live off the card's shared clock. A due-but-undelivered timer (the
+  // scheduler's tick is seconds behind the instant) says "firing…" rather than a 0s countdown or a
+  // negative one — the same present-progressive the PR row uses for its own gap ("Checking…").
+  const status = !Number.isFinite(fireMs) ? "armed" : fireMs > now ? `fires in ${formatCompactElapsed(fireMs - now)}` : "firing…"
+  return (
+    <WaitRow
+      testKind="timer"
+      testId={watch.target}
+      mark={<Clock size={12} className={`${ON_CAP} text-muted/60`} />}
+      name={watch.timer?.prompt || watch.target}
+      title={watch.timer?.fireAt ? `One-off timer, set for ${watch.timer.fireAt}` : watch.target}
+      status={status}
+    />
+  )
+}
+
 // ---- THE LIVE SUB-AGENTS -------------------------------------------------------------------------
 // DIRECT children only. A descendant rides `subAgents` so other surfaces can nest the tree, but it was
 // dispatched by the child rather than by this thread's worker — and it has no retirement signal in this
@@ -504,14 +540,16 @@ export function AwaitingBackgroundCard({ thread, actions }: {
   const prs = (thread.watches ?? []).filter((w) => w.kind === "github" && w.state === "armed")
   const shells = declaredShellWatches(thread)
   const agents = liveAgents(thread)
+  const timers = armedTimerWatches(thread)
   // GROUPED BY KIND (maintainer 2026-08-15: "Definitely group them by kind"), and the order is the one
   // the ops strip already settled, for the same reason: a sub-agent and a shell are running RIGHT NOW,
-  // a watched PR is waiting on somebody else. Read most-alive first. An empty group renders nothing —
-  // never a heading over no rows.
+  // a watched PR is waiting on somebody else, and a timer is waiting on nothing but the clock. Read
+  // most-alive first. An empty group renders nothing — never a heading over no rows.
   const groups: Array<{ head: string; rows: ReactNode[] }> = [
     { head: "Sub-agents", rows: agents.map((a) => <AgentRow key={a.id ?? a.label} agent={a} slug={thread.id} now={now} />) },
     { head: "Background shells", rows: shells.map((w) => <ShellWatchRow key={w.id} watch={w} thread={thread} slug={thread.id} now={now} />) },
     { head: "Pull requests", rows: prs.map((w) => <GithubWatchRow key={w.id} watch={w} />) },
+    { head: "Timers", rows: timers.map((w) => <TimerRow key={w.id} watch={w} now={now} />) },
   ].filter((g) => g.rows.length > 0)
   return (
     // The SAME shell as every transcript card (TranscriptCard). This card stacks directly under an

@@ -657,6 +657,28 @@ test("deriveAwaitingBackground: true only when own-work rest is the SOLE reason 
 // FACT about the thread and drives all three surfaces; only the QUEUE honours the snooze, and it does so
 // through needsYou (groups.ts `queued`). Inheriting it here meant one queue click left the drawer showing
 // nothing at rest — the "reads as if the agent died" state this card exists to prevent.
+// A TIMER PARK CARDS LIKE A PR PARK (maintainer 2026-08-24: the resting card "enumerates all of the
+// pull requests and the background shells … I don't understand why timer isn't represented in the same
+// way"). Until this, a timer-only park had NO resting card at all, so the fence card fell back to
+// reading its machinery footer at the human — "a timer   for 2h".
+test("deriveAwaitingBackground: a timer park cards, checked against the armed registry", () => {
+  const timerPark = tele({ lastActivityAt: LATER, lastFence: { kind: "awaiting", body: "Holding for the hourly re-check.", hints: [{ kind: "timer", value: "tmr_1" }] } })
+  assert.equal(
+    deriveAwaitingBackground(row({ rested_at: T0 }), timerPark, "turn-idle", false, Date.parse(LATER), undefined, false, {}, new Set(), new Set(["tmr_1"])),
+    true,
+    "an armed timer park cards here, like a PR park",
+  )
+  // The declaration alone is not the wait: a fence naming a fired or cancelled timer describes a wake
+  // that will never come, so it must not conjure a card — same rule as the unparseable PR ref above.
+  assert.equal(
+    deriveAwaitingBackground(row({ rested_at: T0 }), timerPark, "turn-idle", false, Date.parse(LATER), undefined, false, {}, new Set(), new Set()),
+    false,
+    "a dead timer is not a wait",
+  )
+  // …and the thread still QUEUES — a timer park is a visible handoff, never an auto-park.
+  assert.equal(deriveNeedsYou(row({ rested_at: T0 }), timerPark, "turn-idle"), true, "the timer park still queues")
+})
+
 test("deriveAwaitingBackground: the event-snooze hides the QUEUE card, never the fact", () => {
   const child = tele({ subAgents: [{ label: "c", startedAt: T0, state: "running", id: "a1" }], lastActivityAt: LATER })
   const shell = tele({ bgShells: [{ label: "Poll CI to terminal", startedAt: T0, state: "running" }], lastActivityAt: LATER })
@@ -1658,6 +1680,33 @@ test("a pr-watch line with no registration behind it yields no row", () => {
 test("several registered PRs each get a row, and a repeat of one does not", () => {
   const views = fenceWatchViews("t", parked(), FENCE_AT, {}, [...registeredOf("acme/app#1", "acme/app#2"), { target: "acme/app#1", createdAt: FENCE_AT }])
   assert.deepEqual(views.map((w) => w.target), ["acme/app#1", "acme/app#2"])
+})
+
+// ---- timer rows (2026-08-24) ----
+// The third kind, and it follows the GITHUB half of the split above: an ARMED `thread_timer` row gets a
+// row whether or not the fence mentions it — a registration is live work that WILL wake the thread —
+// while a `timers:` line naming nothing armed yields no row, because it describes a wake that will
+// never come. The row carries the timer's own prompt and fire instant, because those are the whole
+// rendering: the id names nothing to a human (maintainer 2026-08-24, on the fence card printing
+// "a timer   for 2h": the resting card "enumerates all of the pull requests and the background shells …
+// I don't understand why timer isn't represented in the same way").
+const ARMED_TIMER = { id: "tmr_a1b2c3", prompt: "Re-check: tip quiet, install green", fireAt: "2026-08-13T05:00:00.000Z", createdAt: FENCE_AT }
+
+test("an armed timer gets a row carrying its prompt and fire instant, fence or no fence", () => {
+  assert.deepEqual(fenceWatchViews("t", parked({ kind: "timer", value: "tmr_a1b2c3" }), FENCE_AT, {}, [], [ARMED_TIMER]), [{
+    id: "timer:t:tmr_a1b2c3",
+    kind: "timer",
+    target: "tmr_a1b2c3",
+    state: "armed",
+    createdAt: FENCE_AT,
+    timer: { fireAt: "2026-08-13T05:00:00.000Z", prompt: "Re-check: tip quiet, install green" },
+  }])
+  // The row follows the REGISTRATION, exactly like a PR watcher's: no fence, same row.
+  assert.deepEqual(fenceWatchViews("t", tele(), FENCE_AT, {}, [], [ARMED_TIMER]).map((w) => w.target), ["tmr_a1b2c3"])
+})
+
+test("a timers: line with nothing armed behind it yields no row", () => {
+  assert.deepEqual(fenceWatchViews("t", parked({ kind: "timer", value: "tmr_dead" }), FENCE_AT, {}, [], []), [])
 })
 
 test("hints that are neither pr-watch nor watch never produce a row", () => {

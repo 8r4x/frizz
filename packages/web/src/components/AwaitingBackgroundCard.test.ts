@@ -24,6 +24,16 @@ const thread = (subAgents: unknown[], bgShells: unknown[]) =>
 // A DECLARED shell wait — what a worker's `watch: <handle>` fence hint becomes server-side.
 const shellWatch = (target: string) => ({ id: `shell:demo:${target}`, kind: "shell" as const, target, state: "armed" as const, createdAt: "2026-07-28T09:00:00.000Z" })
 const watcher = () => ({ id: "github:t:acme/app#1", kind: "github" as const, target: "acme/app#1", state: "armed" as const, createdAt: "2026-07-28T09:00:00.000Z" })
+// An ARMED TIMER — what a `thread_timer` registration becomes server-side (board.fenceWatchViews). The
+// fire instant is built off the real clock because the row renders a live countdown against Date.now.
+const timerWatch = (inMinutes = 34, prompt = "Re-check: tip quiet, install green") => ({
+  id: "timer:demo:tmr_a1",
+  kind: "timer" as const,
+  target: "tmr_a1",
+  state: "armed" as const,
+  createdAt: "2026-07-28T09:00:00.000Z",
+  timer: { fireAt: new Date(Date.now() + inMinutes * 60_000).toISOString(), prompt },
+})
 
 const render = (t: Parameters<typeof AwaitingBackgroundCard>[0]["thread"]) =>
   renderToStaticMarkup(createElement(AwaitingBackgroundCard, { thread: t }))
@@ -85,18 +95,46 @@ test("the card's title names the shape: shells running vs awaiting a dispatched 
 test("every kind the thread declared gets a row, under its own heading", () => {
   const t = {
     ...thread([agent("running")], [shell("running")]),
-    watches: [shellWatch("bzvtnt3ig"), watcher()],
+    watches: [shellWatch("bzvtnt3ig"), watcher(), timerWatch()],
   } as Parameters<typeof AwaitingBackgroundCard>[0]["thread"]
   const html = render(t)
   assert.match(html, /data-wait-kind="agent"/)
   assert.match(html, /data-wait-kind="shell"/)
   assert.match(html, /data-wait-kind="github"/)
+  assert.match(html, /data-wait-kind="timer"/)
   const body = text(t)
-  for (const head of ["Sub-agents", "Background shells", "Pull requests"]) assert.match(body, new RegExp(head))
+  for (const head of ["Sub-agents", "Background shells", "Pull requests", "Timers"]) assert.match(body, new RegExp(head))
   // MOST-ALIVE FIRST, the order the ops strip already settled: a sub-agent and a shell are running right
-  // now, a watched PR is waiting on somebody else.
+  // now, a watched PR is waiting on somebody else, and a timer is waiting on nothing but the clock.
   assert.ok(body.indexOf("Sub-agents") < body.indexOf("Background shells"))
   assert.ok(body.indexOf("Background shells") < body.indexOf("Pull requests"))
+  assert.ok(body.indexOf("Pull requests") < body.indexOf("Timers"))
+})
+
+// THE FOURTH KIND (maintainer 2026-08-24: this card "enumerates all of the pull requests and the
+// background shells … I don't understand why timer isn't represented in the same way"). The row's NAME
+// is the timer's own prompt — the id names nothing to a human — and its status counts down to the fire
+// instant. Non-interactive by the settled id-less policy: nothing to open, so no chevron and no control.
+test("an armed timer gets a row: named by its prompt, counting down, non-interactive", () => {
+  const t = { ...thread([], []), watches: [timerWatch()] } as Parameters<typeof AwaitingBackgroundCard>[0]["thread"]
+  const body = text(t)
+  assert.match(body, /Timers/)
+  assert.match(body, /Re-check: tip quiet, install green/)
+  assert.match(body, /fires in 3[34]m/)
+  const html = render(t)
+  assert.doesNotMatch(html, /lucide-chevron-right/, "nothing to open, so no chevron")
+  assert.doesNotMatch(html, /<a |<button/, "no dead link and no disabled control either")
+  // A DUE-BUT-UNDELIVERED timer (the scheduler's tick runs seconds behind the instant) says so in the
+  // present progressive rather than counting to zero or negative.
+  assert.match(text({ ...thread([], []), watches: [timerWatch(-1)] } as Parameters<typeof AwaitingBackgroundCard>[0]["thread"]), /firing…/)
+})
+
+// The kind-naming title is for background shells and NOTHING else: with a timer beside them the card
+// holds a Timers group too, and "Background shells running" would name only half the wait.
+test("a timer beside running shells takes the generic title", () => {
+  const t = { ...thread([], [shell("running")]), watches: [shellWatch("bzvtnt3ig"), timerWatch()] } as Parameters<typeof AwaitingBackgroundCard>[0]["thread"]
+  assert.match(text(t), /Awaiting background work/)
+  assert.doesNotMatch(text(t), /Background shells running/)
 })
 
 test("a heading never appears over an empty group", () => {
