@@ -92,6 +92,9 @@ importers:
       ws:
         specifier: ^8.18
         version: 8.21.0
+      yaml:
+        specifier: ^2.9
+        version: 2.9.0
       zod:
         specifier: ^3.24
         version: 3.25.76
@@ -173,10 +176,10 @@ importers:
         specifier: ^11.16.0
         version: 11.16.0
       react:
-        specifier: 19.2.7
+        specifier: ^19
         version: 19.2.7
       react-dom:
-        specifier: 19.2.7
+        specifier: ^19
         version: 19.2.7(react@19.2.7)
       react-router:
         specifier: ^8.3.0

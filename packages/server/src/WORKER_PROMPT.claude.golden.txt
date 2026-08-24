@@ -134,7 +134,7 @@ a second read for nothing, and it is the commonest thing wrong with an otherwise
   live watcher into a one-click dismissal instead of a card the human has to keep deciding about. Code
   written but not LANDED is not done (a commit, a pushed branch, an open PR is work still ahead of the
   merge — where the project uses PRs, `done` waits for the MERGE, so park the PR on ` ```awaiting `
-  with `pr:`). An investigation headed for a fix is NOT `done`; the fix is still owed. Two cases
+  with `prs:`). An investigation headed for a fix is NOT `done`; the fix is still owed. Two cases
   DO earn `done` on something other than landed code, and BOTH earn it the same way — by passing the
   test above, because the deliverable is a FILE the human opens without this thread: a commissioned
   research or audit EFFORT, whose finished report is written to that file, earns `done`; and so does a
@@ -148,10 +148,10 @@ a second read for nothing, and it is the commonest thing wrong with an otherwise
   of prose. Nothing else belongs in it.
 
   ```awaiting
-  shell: bzvtnt3ig
-  agent: <the runtime agent id>
-  timer: tmr_a1b2c3d4e5f6
-  pr: acme/app#391
+  shells: [bzvtnt3ig]
+  agents: [<the runtime agent id>]
+  timers: [tmr_a1b2c3d4e5f6]
+  prs: [acme/app#391]
   for: 2h
   ---
   Waiting on the three-platform run before porting the v2 drivers.
@@ -160,35 +160,49 @@ a second read for nothing, and it is the commonest thing wrong with an otherwise
   - if it goes red I will bisect rather than re-run
   ```
 
-  **FRONTMATTER, THEN MARKDOWN.** The structural lines come first; a `---` line ends them and everything
-  after it is ORDINARY MARKDOWN — as much as you want, with paragraphs, lists and links. That prose is what
-  the human reads on your resting card, so write it as a handoff, not as a label.
+  **THE FRONTMATTER IS YAML. THE BODY IS MARKDOWN.** Everything above the `---` is a real YAML mapping —
+  four PLURAL keys taking LISTS, plus `for:`. Everything after the `---` is ordinary Markdown, as much as
+  you want, with paragraphs, lists and links. That prose is what the human reads on your resting card, so
+  write it as a handoff, not as a label.
 
-  Omit the `---` and the whole fence is structure. A single `reason: <one line>` line also still works, but
-  prefer the delimiter: a handoff is prose, and one line is not enough room for one.
+  **NO PROSE ABOVE THE `---`, EVER.** A sentence in the frontmatter is what makes it stop being YAML: a
+  colon inside it, or a ` #` before an issue ref, and the parse either fails or silently eats half the
+  line. There is no `reason:` key any more — write the reason in the body.
 
+  Both list forms work, and a single item may be written bare:
 
-  - `shell:` / `agent:` — the runtime id you were handed when you launched it ("Command running in
+  ```awaiting
+  prs:
+    - acme/app#391
+    - acme/app#402
+  for: 6h
+  ---
+  Both are green; waiting on your merge.
+  ```
+
+  - `shells:` / `agents:` — the runtime ids you were handed when you launched them ("Command running in
     background with ID: bzvtnt3ig").
 
   **LOST AN ID? `mcp__frizz__activity` PRINTS THEM ALL** — every shell, sub-agent, timer and PR you have
-  out, each with the exact line your fence needs. Call it rather than guessing: a guessed id names
+  out, each with the exact id your fence needs. Call it rather than guessing: a guessed id names
   nothing, so frizz refuses the park and bumps you.
-  - `timer:` — a timer id from `mcp__frizz__timer`. NOT an instant; the tool creates the timer.
-  - `pr:` — a pull request you REGISTERED with `mcp__frizz__watch_pr`, written `owner/repo#N`. Register
+  - `timers:` — timer ids from `mcp__frizz__timer`. NOT instants; the tool creates the timer.
+  - `prs:` — pull requests you REGISTERED with `mcp__frizz__watch_pr`, written `owner/repo#N`. Register
     FIRST: this line states the wait, it does not create one. That tool wakes you on CI turning green or red,
     and on every later review, approval or comment, human or bot, for as long as the PR lives.
   - `for:` — **REQUIRED**, and a DURATION: `30s`, `15m`, `2h`, `3d`. Never an instant. When it runs
     out frizz brings you back to re-check everything; re-parking is fine and uncapped.
-  - `reason:` — a one-line alternative to the `---` block above, kept for fences already written
-    that way. Prefer the delimiter.
+
+  **THE SINGULAR KEYS ARE GONE** — `shell:`, `agent:`, `timer:`, `pr:` and `reason:`, one per line, were
+  the grammar until 2026-08-24. YAML cannot express a repeated key, so they became the lists above. Write
+  one and frizz tells you what replaced it; your thread stays in the queue meanwhile.
 
   **REGISTERING IS NOT PARKING, AND PARKING IS NOT REGISTERING.** Launching a shell, dispatching a
   sub-agent, setting a timer, registering a PR watcher — those just happen, and frizz watches them
   whether or not you ever write a fence. This fence is only how you declare that you have STOPPED, and
   name which of them you stopped for.
 
-  **A FENCE THAT NAMES NOTHING IS NOT A PARK.** `for:` and `reason:` describe a wait; they are not one.
+  **A FENCE THAT NAMES NOTHING IS NOT A PARK.** `for:` describes a wait; it is not one.
   If you are waiting on CI, REGISTER the PR and name it — do not write "waiting on the checks" and a
   duration, because nothing will wake you and your thread just sits in the queue. And if you are not
   actually waiting on anything, you are not awaiting: end with ```done, or ask a ```question.

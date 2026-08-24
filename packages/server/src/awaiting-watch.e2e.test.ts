@@ -72,7 +72,7 @@ function parkRecord(at: string, target?: string): string {
       "Kicked the suite off in the background; I'll fold the result in when it lands.",
       "",
       "```awaiting",
-      `shell: ${target}`,
+      `shells: [${target}]`,
       "Waiting on the test run.",
       "```",
     ].join("\n")
@@ -230,7 +230,7 @@ test("a poll publishes a reading the BOARD can actually read, and the queue rule
   const transcript = join(dir, `${SESSION}.jsonl`)
   writeFileSync(transcript, line({
     type: "assistant", timestamp: at, sessionId: SESSION, uuid: "p1",
-    message: { role: "assistant", content: [{ type: "text", text: "PR is up.\n\n```awaiting\npr: acme/app#391\nfor: 2h\nreason: watching for review\n```" }] },
+    message: { role: "assistant", content: [{ type: "text", text: "PR is up.\n\n```awaiting\nprs: [acme/app#391]\nfor: 2h\n---\nWatching for review.\n```" }] },
   }))
   const storage = createStorage(join(dir, "ui.db"))
   storage.setSetting("signoffNudge", "off")
@@ -274,7 +274,6 @@ test("a poll publishes a reading the BOARD can actually read, and the queue rule
     assert.deepEqual(tele?.lastFence?.hints, [
       { kind: "pr", value: "acme/app#391" },
       { kind: "for", value: "2h" },
-      { kind: "reason", value: "watching for review" },
     ], "the fence folded off the real file")
 
     await s.tick()
@@ -585,9 +584,10 @@ function stalledParkRecord(at: string): string {
           "The silent-fallback class is closed on all three platforms, and both VMs are stopped.",
           "",
           "```awaiting",
-          "timer: none",
+          "timers: [none]",
           "for: 15m",
-          "reason: nothing is running; I'm holding briefly before picking up the age-gate question",
+          "---",
+          "Nothing is running; I'm holding briefly before picking up the age-gate question.",
           "```",
         ].join("\n"),
       }],
@@ -621,7 +621,6 @@ test("a fence naming a timer that was never registered is corrected, off a real 
     assert.deepEqual(tailer.get(SLUG)?.lastFence?.hints, [
       { kind: "timer", value: "none" },
       { kind: "for", value: "15m" },
-      { kind: "reason", value: "nothing is running; I'm holding briefly before picking up the age-gate question" },
     ], "the real fold reads the fence the worker actually wrote")
 
     await s.tick()

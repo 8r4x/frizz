@@ -339,16 +339,22 @@ test("loadWorkerPrompt: the backend-AGNOSTIC core is present in BOTH contracts",
     assert.match(raw, /## Git discipline/)
     assert.match(raw, /## Quality bar/)
     assert.match(raw, /## The stop criterion/)
-    // THE CURRENT AWAITING GRAMMAR (2026-08-15): structural lines only. `human:` used to be pinned here;
-    // it is deleted, because it parked a thread in Held and nothing ever fired it. Waiting on a person is
-    // a ```question now, and this asserts the contract says so rather than merely omitting the old kind.
-    assert.match(c, /shell: bzvtnt3ig/)
+    // THE CURRENT AWAITING GRAMMAR (2026-08-24): YAML frontmatter, PLURAL keys taking LISTS. `human:` used
+    // to be pinned here; it is deleted, because it parked a thread in Held and nothing ever fired it.
+    // Waiting on a person is a ```question now, and this asserts the contract says so rather than merely
+    // omitting the old kind.
+    assert.match(c, /shells: \[bzvtnt3ig\]/)
     assert.match(c, /for: 2h/)
-    assert.match(c, /reason:/)
+    // `reason:` IS GONE, and its absence is the whole reason the frontmatter can be YAML: a handoff
+    // sentence carries colons and ` #`-refs, which break the parse or silently eat half the line. Pin the
+    // RETIREMENT rather than the absence of the string — the contract has to name the key to bury it.
+    assert.match(c, /There is no `reason:` key any more/)
+    assert.doesNotMatch(c, /- `reason:` —/, "it must never be listed as a usable key again")
+    assert.match(c, /NO PROSE ABOVE THE `---`, EVER/)
     assert.doesNotMatch(c, /human:/, "the human gate must not come back")
     // `timer:` NAMES A ROW NOW, never an instant. The instant grammar is deleted: one was written 5h55m
     // in the past, parsed, armed nothing, and stalled its thread for 5.5 hours (2026-08-15).
-    assert.match(c, /timer: tmr_/)
+    assert.match(c, /timers: \[tmr_/)
     assert.doesNotMatch(c, /timer: <ISO-8601 instant>/, "the instant grammar must not come back")
     // The legacy compatibility note is gone with the kinds it described; the contract states the six
     // structural lines and nothing else, so there is no "never emit these" footnote left to carry.
@@ -379,8 +385,11 @@ test("awaiting re-entry: every worker-contract surface requires a fresh fence af
     assert.match(c, /back to awaiting/)
     assert.match(c, /already parked/)
     assert.match(c, /emit a FRESH fence/)
-    // The six structural lines, in order, and nothing between them a worker could mistake for prose.
-    assert.match(c, /shell:[^\n]*agent:[^\n]*timer:[^\n]*pr:[^\n]*for:[^\n]*reason:/)
+    // The five YAML keys, in order, and nothing between them a worker could mistake for prose.
+    assert.match(c, /shells:[^\n]*agents:[^\n]*timers:[^\n]*prs:[^\n]*for:/)
+    // The cutover has to be STATED, not merely applied: every worker dispatched before it has the old
+    // grammar frozen in its system prompt, so the contract names the retired keys and what replaced them.
+    assert.match(c, /THE SINGULAR KEYS ARE GONE/)
     assert.match(c, /automatable[\s\S]{0,100}(?:arm|re-arm)/i)
   }
 })
@@ -408,9 +417,9 @@ test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting pa
     assert.match(c, /Code written but not LANDED is not done/)
     assert.match(c, /open PR is work still ahead of the merge/)
     assert.match(c, /`done` waits for the MERGE/)
-    // `pr:`, NOT the retired `pr-watch:` — the 2026-08-15 grammar dropped that spelling, so a fence
-    // written the old way parses as prose and the park names nothing (AWAITING_HINT_RE in tailer.ts).
-    assert.match(c, /park the PR on[\s\S]{0,40}`pr:`/)
+    // `prs:`, NOT the retired `pr:` or the older `pr-watch:` — a fence written either old way parses as
+    // prose and the park names nothing (AWAITING_HINT_RE + RETIRED_AWAITING_KINDS).
+    assert.match(c, /park the PR on[\s\S]{0,40}`prs:`/)
     // The git-discipline + implementation-thread surfaces must not contradict it by fencing on a PR.
     assert.match(c, /Opening the PR does NOT finish the thread — the MERGE does/)
     assert.doesNotMatch(c, /done ` fence naming the PR\/paths/)

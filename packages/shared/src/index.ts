@@ -292,28 +292,39 @@ export type PendingAsk = z.infer<typeof PendingAsk>
 // ```awaiting park (it is waiting on work that is actually running), or ```done. This is that middle one,
 // and it is PURE STRUCTURE — a list of things frizz can look up, a duration, and one line of prose.
 //
-//   shell:  <runtime task id>   a background shell it launched      → checked against live telemetry
-//   agent:  <runtime agent id>  a sub-agent it dispatched           → checked against live telemetry
-//   timer:  tmr_…               a timer it set                      → checked against thread_timer
-//   pr:     owner/repo#123      a PR watcher it registered          → checked against its PR registry
-//   for:    2h                  REQUIRED. How long the park may stand (parseAwaitingDuration).
-//   reason: <one sentence>      SUPERSEDED by the `---` body below, and still valid. What the human
-//                               reads is `awaitingProse`: the body's first paragraph if there is one,
-//                               else this line — set as a sentence either way, since both stand ALONE
-//                               on the rail row's hover popover under frizz's own sentence.
+//   shells: [<runtime task id>, …]   background shells it launched   → checked against live telemetry
+//   agents: [<runtime agent id>, …]  sub-agents it dispatched        → checked against live telemetry
+//   timers: [tmr_…, …]               timers it set                   → checked against thread_timer
+//   prs:    [owner/repo#123, …]      PR watchers it registered       → checked against its PR registry
+//   for:    2h                       REQUIRED. How long the park may stand (parseAwaitingDuration).
+//
+// THE FRONTMATTER IS REAL YAML (2026-08-24), parsed by the `yaml` package — the keys are PLURAL and take
+// SEQUENCES, block or flow. A bare scalar where a sequence is expected is accepted and normalised to a
+// one-element list, because that is the shape a worker most often reaches for and refusing it buys
+// nothing. Everything the human reads is prose below the `---`.
 //
 // …then, after a `---` line, as much arbitrary Markdown as the worker wants (2026-08-17). The structural
 // lines are FRONTMATTER; the delimiter is what makes "is this line structural?" answerable, which is what
 // lets a retired or unknown kind be refused by name instead of silently swallowed as prose.
 //
-// IT IS NOT YAML, AND MUST NOT BECOME YAML — repeated keys are the normal case here (three `shell:` lines
-// are three shells), the way git trailers and HTTP headers repeat. Measured against the real `yaml`
-// package 2026-08-17, on real fences: `reason: waiting on your merge: the propKeys revert` is a PARSE
-// ERROR (nested mappings), `reason: see #6422` silently becomes `{"reason":"see"}` because ` #` opens a
-// comment, and two `shell:` lines are a hard "map keys must be unique". A worker's handoff prose contains
-// colons and `#`-refs constantly, and `reason:` takes the REST OF THE LINE verbatim — which no YAML
-// parser will do. Arrays would fix the duplicate-key objection and buy nothing else, at the cost of
-// nested indentation being the thing most likely to go wrong.
+// IT IS YAML SINCE 2026-08-24, AND THE ONE THING THAT MADE IT IMPOSSIBLE BEFORE WAS `reason:`. This block
+// used to read "IT IS NOT YAML, AND MUST NOT BECOME YAML", on three measurements taken 2026-08-17 against
+// the real `yaml` package. All three still reproduce — and two of them are about PROSE, not structure:
+//
+//   `reason: waiting on your merge: the propKeys revert`  → parse error (nested mappings)
+//   `reason: see #6422`                                   → silently {"reason":"see"} (` #` opens a comment)
+//   two `shell:` lines                                    → parse error (map keys must be unique)
+//
+// A worker's prose carries colons and `#`-refs constantly, and no YAML parser will take the rest of a
+// line verbatim. So `reason:` is RETIRED (below) — the `---` body had already superseded it — and with it
+// gone the frontmatter is pure data. The duplicate-key objection is what the plural keys answer; the old
+// note conceded arrays would fix it and judged them not worth it, which was right while `reason:` was
+// still in the frontmatter and wrong once it left. Re-measured 2026-08-24: `prs: [owner/repo#123]` parses
+// correctly (no space before the `#`, so it is not a comment), as do block sequences and mixed kinds.
+//
+// TWO NEW FAILURE MODES COME WITH IT, and both are handled rather than hoped away: a TAB indent is a hard
+// parse error (so a parse failure must BUMP the worker with the error, never park it), and a key with
+// nothing under it yields `null` silently (so an empty sequence is refused, not read as a park).
 //
 // REGISTRATION IS ORTHOGONAL TO THIS FENCE (maintainer 2026-08-15). Dispatching a shell or a sub-agent,
 // setting a timer, registering a PR watcher — none of that is a fence, and none of it parks anything.
@@ -332,7 +343,11 @@ export type PendingAsk = z.infer<typeof PendingAsk>
 //                      precisely so this cannot be expressed (see parseAwaitingDuration).
 //   `pr-watch: ref`    free text the poller armed from. A PR is now a registered watcher with an id.
 //   `watch: id`        superseded: a shell is named directly by its runtime handle.
-//   `pr:`/`ci:`/`session:` legacy conditions nothing has fired for a long time.
+//   `ci:`/`session:`   legacy conditions nothing has fired for a long time.
+//   the SINGULAR keys  `shell:`/`agent:`/`timer:`/`pr:` — one line per item, repeated. YAML cannot express
+//                      a repeated key, so they became the plural sequence keys above (2026-08-24).
+//   `reason:`          the last prose in the frontmatter, and the reason it could not be YAML. It moves
+//                      below the `---`, where it always belonged and where it has no length limit.
 //   prose bodies       narrowed to `reason:` so the fence is machine-checkable — then given back in full
 //                      below the `---` delimiter, where prose cannot be mistaken for structure.
 export const AwaitingHint = z.object({
@@ -353,7 +368,7 @@ export type AwaitingHint = z.infer<typeof AwaitingHint>
  *  writes the same one again. Recognising them by name is what lets the bump say "you wrote `pr-watch:`,
  *  that kind is gone, here is what replaced it" (maintainer 2026-08-17: "BLOCK THEM with an error
  *  message… tell them what is now supported"). */
-export const RETIRED_AWAITING_KINDS = ["watch", "pr-watch", "human", "ci", "session"] as const
+export const RETIRED_AWAITING_KINDS = ["watch", "pr-watch", "human", "ci", "session", "shell", "agent", "timer", "pr", "reason"] as const
 export type RetiredAwaitingKind = (typeof RETIRED_AWAITING_KINDS)[number]
 
 const RETIRED_LINE_RE = new RegExp(`^\\s*(${RETIRED_AWAITING_KINDS.join("|")}):\\s*\\S`, "im")
@@ -375,11 +390,20 @@ export function retiredAwaitingKindsIn(body: string): RetiredAwaitingKind[] {
 
 /** What each retired kind became, so the bump can say it in one line rather than restating the grammar. */
 export const RETIRED_AWAITING_REPLACEMENT: Record<RetiredAwaitingKind, string> = {
-  "watch": "`shell: <the id your runtime gave you>` (or `agent: <id>`) — the same id, on the current line kind",
-  "pr-watch": "register the PR with `mcp__frizz__watch_pr`, then name it `pr: owner/repo#123`",
+  "watch": "`shells: [<the id your runtime gave you>]` (or `agents: [<id>]`) — the same id, in the current sequence",
+  "pr-watch": "register the PR with `mcp__frizz__watch_pr`, then name it `prs: [owner/repo#123]`",
   "human": "there is no human gate any more — if you need a person, ask a ```question instead of parking",
   "ci": "CI is not a wait of its own: register the PR with `mcp__frizz__watch_pr` and you are woken when its checks settle",
-  "session": "there is no cross-session wait — name the sub-agent you dispatched with `agent: <id>`",
+  "session": "there is no cross-session wait — name the sub-agent you dispatched with `agents: [<id>]`",
+  // THE 2026-08-24 CUTOVER. The frontmatter is YAML now, and YAML has no repeated keys — so the four
+  // one-per-line item kinds became plural sequences, and `reason:` (the prose that made YAML impossible)
+  // moved below the `---`. Every worker dispatched before the cut has the old grammar frozen into its
+  // system prompt and will keep writing these, which is exactly what these five lines are for.
+  "shell": "`shells: [<id>, <id>]` — one YAML sequence, not one line per shell",
+  "agent": "`agents: [<id>, <id>]` — one YAML sequence, not one line per sub-agent",
+  "timer": "`timers: [tmr_…]` — one YAML sequence, not one line per timer",
+  "pr": "`prs: [owner/repo#123]` — one YAML sequence, not one line per PR",
+  "reason": "put it below the `---` as ordinary Markdown — the frontmatter is YAML now and takes no prose",
 }
 
 /** The four kinds that NAME A LIVE THING. Every one is checked against something frizz can look up — a
@@ -1830,7 +1854,7 @@ export type AdoptThreadInput = z.infer<typeof AdoptThreadInput>
 export const AdoptThreadResult = z.object({ slug: ThreadSlug, sessionId: z.string().min(1) }).strict()
 export type AdoptThreadResult = z.infer<typeof AdoptThreadResult>
 
-// Take over one of the human's OWN terminals — a session listed in the rail's Non-Frizz band. The id
+// Take over one of the human's OWN terminals — a session listed in the rail's External band. The id
 // is the one the board row carries, which for a foreign thread IS its session id. `title` is the name
 // the row already displays, passed through so the adopted thread keeps the name the human just read
 // rather than being re-derived from a transcript the server would have to re-open.
@@ -2197,6 +2221,22 @@ export const ThreadProfileOptionsResult = z.object({
   options: z.array(ThreadProfileOption),
 })
 export type ThreadProfileOptionsResult = z.infer<typeof ThreadProfileOptionsResult>
+
+// The thread's invocable skills, for the composer's `/` typeahead. Always the HARNESS's own list —
+// Claude's `supportedCommands()` through the broker, Codex's `skills/list` through the app-server —
+// never a frizz-side scan of skill directories, which could only drift from what the session actually
+// loaded. `description` may be empty (Claude's init-frame names carry no descriptions for entries the
+// command list omits).
+export const ThreadSkill = z.object({
+  name: z.string().min(1).max(512),
+  description: z.string().max(1024),
+}).strict()
+export type ThreadSkill = z.infer<typeof ThreadSkill>
+
+export const ThreadSkillsInput = z.object({ slug: ThreadSlug }).strict()
+export type ThreadSkillsInput = z.infer<typeof ThreadSkillsInput>
+export const ThreadSkillsResult = z.object({ skills: z.array(ThreadSkill).max(1024) }).strict()
+export type ThreadSkillsResult = z.infer<typeof ThreadSkillsResult>
 
 export const SetThreadProfileInput = z.object({
   slug: ThreadSlug,

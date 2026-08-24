@@ -218,10 +218,10 @@ test("applyEvent: turn-end.finalText derives the fence when the backend brackets
   const s = newTailState("t", "s", "/x")
   applyEvent(s, { kind: "turn-start", at: "2026-07-01T00:00:00.000Z" })
   // No assistant-text{final} — the final message rides task_complete.last_agent_message instead.
-  applyEvent(s, { kind: "turn-end", at: "2026-07-01T00:00:02.000Z", finalText: "Need your call.\n\n```awaiting\npr: owner/repo#7\nshould I merge?\n```" })
+  applyEvent(s, { kind: "turn-end", at: "2026-07-01T00:00:02.000Z", finalText: "Need your call.\n\n```awaiting\nprs: [owner/repo#7]\nshould I merge?\n```" })
   assert.equal(s.turn, "idle")
   assert.deepEqual(s.lastFence, { kind: "awaiting", body: "should I merge?", hints: [{ kind: "pr", value: "owner/repo#7" }] })
-  assert.equal(s.lastAssistant, "Need your call. ```awaiting pr: owner/repo#7 should I merge? ```")
+  assert.equal(s.lastAssistant, "Need your call. ```awaiting prs: [owner/repo#7] should I merge? ```")
 })
 
 test("applyEvent: an idle turn ending on a ```question fence surfaces pendingQuestion", () => {
@@ -2361,31 +2361,70 @@ test("parseSignalFence: END-ANCHORED — a fence with prose after it is quoted/e
   assert.deepEqual(parseSignalFence("all done\n\n```done\nShipped.\n```\n  \n"), { kind: "done", body: "Shipped.", hints: [] })
 })
 
-test("parseSignalFence: an awaiting fence parses every hint kind in file order; the remaining lines are the body", () => {
-  const f = parseSignalFence("```awaiting\nshell: bzvtnt3ig\nagent: a247b4470c\ntimer: tmr_a1b2c3d4e5f6\npr: acme/app#391\nfor: 2h\nreason: waiting on the three-platform run\nWaiting on a named gate.\n```")
+test("parseSignalFence: an awaiting fence parses every sequence kind in file order; the remaining lines are the body", () => {
+  const f = parseSignalFence("```awaiting\nshells: [bzvtnt3ig]\nagents: [a247b4470c]\ntimers: [tmr_a1b2c3d4e5f6]\nprs: [acme/app#391]\nfor: 2h\nWaiting on a named gate.\n```")
   assert.equal(f?.kind, "awaiting")
   assert.equal(f?.body, "Waiting on a named gate.")
+  // The WIRE SHAPE did not move with the grammar: consumers still read a flat list of SINGULAR kinds.
   assert.deepEqual(f?.hints, [
     { kind: "shell", value: "bzvtnt3ig" },
     { kind: "agent", value: "a247b4470c" },
     { kind: "timer", value: "tmr_a1b2c3d4e5f6" },
     { kind: "pr", value: "acme/app#391" },
     { kind: "for", value: "2h" },
-    { kind: "reason", value: "waiting on the three-platform run" },
   ])
 })
 
-test("parseSignalFence: a `word:` line outside the hint vocabulary is PROSE, and so is a valueless one", () => {
-  // A stray colon-line must not mint a phantom hint that then glosses as leaked internals — which
-  // includes the words the 2026-08-15 grammar RETIRED (`pr-watch:`, `human:`, `ci:`, `session:`):
-  // they are ordinary prose now, exactly like `note:`.
-  const f = parseSignalFence("```awaiting\nnote: not a hint\npr-watch: acme/app#7\nhuman: Alice must approve\npr:\npr: 391\n```")
-  assert.deepEqual(f?.hints, [{ kind: "pr", value: "391" }])
-  assert.equal(f?.body, "note: not a hint\npr-watch: acme/app#7\nhuman: Alice must approve\npr:")
+// A SEQUENCE IS THE POINT OF THE 2026-08-24 CUTOVER: YAML has no repeated keys, so three shells that used
+// to be three `shell:` lines are one list. Block and flow both, and a bare scalar where a list is expected
+// — which is what a worker with exactly one item reaches for.
+test("parseSignalFence: a sequence takes many items, in block or flow form, and a lone scalar counts", () => {
+  const block = parseSignalFence("```awaiting\nprs:\n  - acme/app#1\n  - acme/app#2\nfor: 2h\n```")
+  assert.deepEqual(block?.hints, [
+    { kind: "pr", value: "acme/app#1" },
+    { kind: "pr", value: "acme/app#2" },
+    { kind: "for", value: "2h" },
+  ])
+  const flow = parseSignalFence("```awaiting\nshells: [a1, b2]\nfor: 2h\n```")
+  assert.deepEqual(flow?.hints, [
+    { kind: "shell", value: "a1" },
+    { kind: "shell", value: "b2" },
+    { kind: "for", value: "2h" },
+  ])
+  const scalar = parseSignalFence("```awaiting\nprs: acme/app#391\nfor: 2h\n```")
+  assert.deepEqual(scalar?.hints, [{ kind: "pr", value: "acme/app#391" }, { kind: "for", value: "2h" }])
 })
 
-test("parseSignalFence: hint kind is case-insensitive, lowercased on output; hints-only body is empty", () => {
-  const f = parseSignalFence("```awaiting\nSHELL: bzvtnt3ig\nTiMeR: tmr_a1b2c3d4e5f6\nPR: acme/app#391\nFor: 2h\n```")
+// A `#` IN A PR REF IS NOT A YAML COMMENT, and this is the single measurement the cutover turned on: a
+// comment needs whitespace before the `#`, and `owner/repo#123` has none. An unquoted ref survives.
+test("parseSignalFence: a PR ref keeps its `#`, which YAML would only eat after a space", () => {
+  const f = parseSignalFence("```awaiting\nprs: [colinhacks/zod#6440]\nfor: 24h\n```")
+  assert.deepEqual(f?.hints, [{ kind: "pr", value: "colinhacks/zod#6440" }, { kind: "for", value: "24h" }])
+})
+
+// FRONTMATTER FRIZZ CANNOT PARSE MUST NEVER LOOK LIKE A PARK. A tab is the likeliest way in — YAML refuses
+// tabs as indentation outright — and the fence then names nothing, so the scheduler bumps rather than
+// parking. The worker's own lines survive in the BODY, or the correction is about a fence it cannot see.
+test("parseSignalFence: unparseable YAML names nothing, and the lines survive in the body", () => {
+  const f = parseSignalFence("```awaiting\nprs:\n\t- acme/app#1\nfor: 2h\n```")
+  assert.deepEqual(f?.hints, [])
+  assert.match(f?.body ?? "", /acme\/app#1/, "the worker has to be able to read back what it wrote")
+})
+
+test("parseSignalFence: a `word:` line outside the vocabulary is PROSE — including every retired kind", () => {
+  // A stray colon-line must not mint a phantom hint that then glosses as leaked internals. Since the
+  // 2026-08-24 cutover the retired list includes the SINGULAR item keys (`pr:`, `shell:`, …) and
+  // `reason:`, alongside the older `pr-watch:`/`human:`/`ci:`/`session:`. All of them land in the body,
+  // which is where the scheduler reads them back to name what replaced each one.
+  const f = parseSignalFence("```awaiting\nnote: not a hint\npr-watch: acme/app#7\nhuman: Alice must approve\npr: 391\nreason: because\nprs: [acme/app#8]\n```")
+  assert.deepEqual(f?.hints, [{ kind: "pr", value: "acme/app#8" }])
+  assert.equal(f?.body, "note: not a hint\npr-watch: acme/app#7\nhuman: Alice must approve\npr: 391\nreason: because")
+})
+
+test("parseSignalFence: a key is case-insensitive, lowercased on output; a frontmatter-only body is empty", () => {
+  // YAML itself is case-SENSITIVE, so without the fold a shouted key would parse and then match nothing
+  // — a fence that reads correct to its author and names nothing to frizz.
+  const f = parseSignalFence("```awaiting\nSHELLS: [bzvtnt3ig]\nTiMeRs: [tmr_a1b2c3d4e5f6]\nPRS: [acme/app#391]\nFor: 2h\n```")
   assert.deepEqual(f?.hints, [
     { kind: "shell", value: "bzvtnt3ig" },
     { kind: "timer", value: "tmr_a1b2c3d4e5f6" },
@@ -2453,7 +2492,7 @@ test("applyRecord: an assistant record with no text block leaves the fence intac
 test("tailer: surfaces a signal fence through get()", () => {
   const h = harness()
   h.storage.upsertSession(row())
-  const FENCED = JSON.stringify({ type: "assistant", timestamp: "2026-07-01T00:00:02.000Z", message: { stop_reason: "end_turn", content: [{ type: "text", text: "```awaiting\npr: 391\nWaiting on CI.\n```" }] } })
+  const FENCED = JSON.stringify({ type: "assistant", timestamp: "2026-07-01T00:00:02.000Z", message: { stop_reason: "end_turn", content: [{ type: "text", text: "```awaiting\nprs: [391]\nWaiting on CI.\n```" }] } })
   fixture(h.logDir, "sid", [IN_FLIGHT, FENCED])
   const t = makeTailer(h)
   t.tick()
@@ -2516,7 +2555,7 @@ test("tailer: a REGISTERED session_id's file is never foreign (registered rows w
 // The exclusion that a CODEX row depends on entirely. Frizz mints `session_id` itself, but codex mints
 // its own rollout id and frizz pins it in `agent_session_id` — so for a codex thread that column is the
 // ONLY one naming the file on disk. Missing it, every codex thread frizz dispatched came back as its own
-// read-only foreign twin in the Non-Frizz band, which promises the opposite of a thread frizz drives.
+// read-only external twin in the External band, which promises the opposite of a thread frizz drives.
 test("tailer: a registered row's agent_session_id is excluded from foreign discovery too", () => {
   const h = harness()
   h.storage.upsertSession(row({ slug: "codex-thread", session_id: "frizz-minted-id" }))
@@ -3346,7 +3385,7 @@ test("tailer: cold ARCHIVED rows yield their prime slots until every visible row
 // commitment into a single sentence. A handoff is prose; forcing it through a key/value slot made it worse
 // prose. A `---` line now ends the structure and everything after it is ordinary Markdown.
 test("parseSignalFence: a `---` line ends the frontmatter and everything after it is prose", () => {
-  const fence = ["```awaiting", "shell: bb4sns0ye", "for: 20m", "---", "Known-answer control on the detector.", "", "- angular must report clean", "- puppeteer must be flagged", "```"].join("\n")
+  const fence = ["```awaiting", "shells: [bb4sns0ye]", "for: 20m", "---", "Known-answer control on the detector.", "", "- angular must report clean", "- puppeteer must be flagged", "```"].join("\n")
   const parsed = parseSignalFence(fence)
   assert.deepEqual(parsed?.hints, [{ kind: "shell", value: "bb4sns0ye" }, { kind: "for", value: "20m" }])
   // The prose survives INTACT — blank line and list markers included. Flattening it is what the old
@@ -3354,15 +3393,26 @@ test("parseSignalFence: a `---` line ends the frontmatter and everything after i
   assert.equal(parsed?.body, "Known-answer control on the detector.\n\n- angular must report clean\n- puppeteer must be flagged")
 })
 
-// Every fence written before the delimiter existed must keep parsing exactly as it did.
-test("parseSignalFence: with no `---`, the whole fence is frontmatter and `reason:` is still a hint", () => {
-  const parsed = parseSignalFence("```awaiting\nshell: bb4sns0ye\nfor: 20m\nreason: one line as before\n```")
+// With no `---` the whole fence is frontmatter — and `reason:` is now RETIRED there. It was the last prose
+// in the frontmatter and the one thing that made real YAML impossible (a colon or a ` #` in a handoff
+// sentence breaks the parse or eats half the line), so it moved below the delimiter where it always
+// belonged. A worker still writing it is told so rather than having the line silently swallowed.
+test("parseSignalFence: with no `---`, the whole fence is frontmatter and `reason:` falls to the body", () => {
+  const parsed = parseSignalFence("```awaiting\nshells: [bb4sns0ye]\nfor: 20m\nreason: one line as before\n```")
   assert.deepEqual(parsed?.hints, [
     { kind: "shell", value: "bb4sns0ye" },
     { kind: "for", value: "20m" },
-    { kind: "reason", value: "one line as before" },
   ])
-  assert.equal(parsed?.body, "")
+  assert.equal(parsed?.body, "reason: one line as before")
+})
+
+// The exact sentence the 2026-08-17 measurement recorded as unparseable YAML. It never reaches the parser
+// now — `reason:` is peeled off as retired before the frontmatter is handed to `yaml` — so the fence still
+// yields its real hints instead of collapsing into a parse error.
+test("parseSignalFence: a `reason:` carrying a colon cannot break the YAML parse", () => {
+  const parsed = parseSignalFence("```awaiting\nshells: [bb4sns0ye]\nfor: 20m\nreason: waiting on your merge: the propKeys revert\n```")
+  assert.deepEqual(parsed?.hints, [{ kind: "shell", value: "bb4sns0ye" }, { kind: "for", value: "20m" }])
+  assert.match(parsed?.body ?? "", /the propKeys revert/)
 })
 
 // THE DELIMITER IS WHAT MAKES A BAD LINE REFUSABLE. Before it, a `word:` line is a CLAIM to be structural,

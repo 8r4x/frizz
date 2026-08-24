@@ -594,9 +594,14 @@ test("foldLine: folding the whole 2-turn fixture lands idle with the LAST turn's
   assert.equal(state.model, "gpt-5.5", "turn_context pins the backend-observed model")
   assert.equal(state.effort, "high", "turn_context pins the backend-observed effort")
   assert.equal(state.permissionMode, "bypassPermissions", "turn_context pins the backend-observed sandbox")
-  // Turn 2's final message ends in ```awaiting / timer: 5m ``` → the excusal fence + parsed hint.
+  // Turn 2's final message ends in ```awaiting / `timer: 5m` — a REAL RECORDING, and it predates the
+  // 2026-08-24 YAML cutover, so it is exactly the shape an in-flight worker still writes. The fence is
+  // still recognised; its retired singular key names NOTHING and falls to the body, which is where the
+  // scheduler reads it back to tell the worker that `timers: [tmr_…]` replaced it. A park that cannot
+  // resolve must never look like one that can — the fixture is left as recorded rather than rewritten.
   assert.equal(state.lastFence?.kind, "awaiting")
-  assert.deepEqual(state.lastFence?.hints, [{ kind: "timer", value: "5m" }])
+  assert.deepEqual(state.lastFence?.hints, [])
+  assert.match(state.lastFence?.body ?? "", /timer: 5m/, "the offending line stays visible to SOURCE 12")
   // Preview reflects the final answer, not a commentary line.
   assert.match(state.lastAssistant ?? "", /1 line/)
   // The genuine human turns bumped the row-order key.

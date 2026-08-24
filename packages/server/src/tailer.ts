@@ -1,6 +1,7 @@
 import { statSync, openSync, readSync, closeSync, readdirSync, realpathSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs"
 import { execFileSync } from "node:child_process"
 import { basename, join } from "node:path"
+import { parse as parseYaml } from "yaml"
 import { homedir, tmpdir } from "node:os"
 import { insideFence, isInterruptMarker, PermissionMode, saysAllDone } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
@@ -439,6 +440,9 @@ const PENDING_SHELLS_MAX = 32
 // ordinary out-of-order writes between sibling records; a REPLAYED ack (see trackResumes) carries its
 // original timestamp and is stale by minutes to days, so nothing near this boundary is ambiguous.
 const RESUME_REPLAY_SLACK_MS = 60_000
+// How much of the opening human turn to keep. It is only ever chopped into a row title, and a whole
+// first message can be a 20KB paste — this bounds what the fold holds for every session on the board.
+const FIRST_USER_TEXT_MAX = 400
 
 // Mutable accumulator for one session's tail. Extends the backend-neutral FoldState (the running
 // derivation `applyRecord`/`applyEvent` fold into — turn, lastActivityAt, lastAssistant, aiTitle,
@@ -743,7 +747,11 @@ const SIGNAL_FENCE_RE = /^```(done|awaiting)[ \t]*\n([\s\S]*?)\n```[ \t]*$/gm
 // fence-based park inert in production while every unit test passed (they built `hints` by hand).
 // Caught only by folding a real transcript: awaiting-watch.e2e.test.ts. Keep an e2e fold in that file
 // for any kind you add. If two kinds ever share a prefix, the longer must LEAD the alternation.
-const AWAITING_HINT_RE = /^(shell|agent|timer|pr|for|reason):\s*(\S.*)$/i
+// ANY `key: value` line at the top level of the frontmatter. It is deliberately WIDER than the grammar:
+// its job is to spot a line that CLAIMS to be structural so an unrecognised key can be refused by name,
+// which is the whole point of having a delimiter (2026-08-17). Hyphens are in the class because the
+// oldest retired kind is `pr-watch:`, and a regex that could not see it let one pass as prose.
+const AWAITING_HINT_RE = /^([a-z][a-z-]*):\s*(\S.*)?$/i
 const FENCE_BODY_MAX = 500 // defensive: never let a worker's fence body fatten the snapshot
 const HINT_MAX = 8 // defensive cap on parsed hint lines
 const HINT_VALUE_MAX = 200 // defensive cap on a single hint value
@@ -794,22 +802,93 @@ export function parseSignalFence(text: string | undefined): FenceView | undefine
   // No delimiter ⇒ the whole fence is frontmatter, exactly as it parsed before this existed.
   const frontmatter = delimiter === -1 ? lines : lines.slice(0, delimiter)
   const prose = delimiter === -1 ? [] : lines.slice(delimiter + 1)
-  const hints: FenceView["hints"] = []
   const rest: string[] = []
+  // A RETIRED or UNKNOWN key never reaches the YAML parser. Two reasons, and the second is the one that
+  // matters: a retired key would otherwise surface as an opaque "map keys must be unique" or a nested-
+  // mapping error, when the worker needs to be told BY NAME what replaced it (scheduler SOURCE 12 reads
+  // these back out of the body with retiredAwaitingKindsIn). Falling them through to the body is exactly
+  // what the line grammar did, so that machinery keeps working unchanged across the cutover.
+  const yamlLines: string[] = []
+  // `structural` tracks whether the line we are on belongs to the YAML document. A block sequence's items
+  // and any indented continuation belong to the KEY ABOVE THEM, so they follow that key's fate — which is
+  // what keeps a retired `pr:` with its list underneath from orphaning a bare sequence into the parser.
+  let structural = true
   for (const line of frontmatter) {
     const hm = line.match(AWAITING_HINT_RE)
     const k = hm?.[1].toLowerCase()
-    // Only real hint kinds become hints; any other `word:` line falls to the body, where the scheduler
-    // can recognise a RETIRED kind and refuse it by name rather than letting it pass as prose.
-    if (hm && (k === "shell" || k === "agent" || k === "timer" || k === "pr" || k === "for" || k === "reason")) {
-      const value = hm[2].trim()
-      hints.push({ kind: k, value: value.length > HINT_VALUE_MAX ? value.slice(0, HINT_VALUE_MAX) : value })
-    } else {
-      rest.push(line)
+    if (hm && k) structural = AWAITING_YAML_KEYS.has(k)
+    // A LINE THAT IS NOT A KEY AND NOT A CONTINUATION IS PROSE, exactly as it was under the line grammar:
+    // a worker that omits the `---` and writes its handoff straight into the frontmatter must still park.
+    // Feeding that sentence to YAML would be a parse error and would cost it the whole fence.
+    else if (line.trim() !== "" && !/^\s/.test(line) && !/^\s*-\s/.test(line)) structural = false
+    ;(structural ? yamlLines : rest).push(line)
+  }
+  const parsed = parseAwaitingFrontmatter(yamlLines.join("\n"))
+  // A frontmatter frizz could not parse must never look like a park. `hints` is empty, so the fence names
+  // nothing and the scheduler bumps the worker with the whole grammar — the honest reading of "frizz
+  // cannot tell what you are waiting on". A tab indent is the likeliest way to get here; YAML refuses
+  // tabs outright. The unparsed lines go to the BODY rather than being dropped: the worker has to be able
+  // to see what it wrote, or the bump is about a fence it can no longer read.
+  if (!parsed.ok) rest.push(...yamlLines)
+  rest.push(...prose)
+  return { kind, body: capFenceBody(rest.join("\n").trim()), hints: parsed.hints.slice(0, HINT_MAX) }
+}
+
+// The YAML keys the frontmatter recognises: four PLURAL sequences of things frizz can look up, plus the
+// scalar `for:`. Anything else is not structure — see the retired/unknown fall-through above.
+const AWAITING_YAML_KEYS = new Set(["shells", "agents", "timers", "prs", "for"])
+
+/** Which singular hint kind each plural sequence key produces. The WIRE SHAPE is unchanged by the
+ *  2026-08-24 cutover — every consumer still reads a flat `{kind, value}` list with singular kinds — so
+ *  only the grammar the worker WRITES moved to YAML. */
+// `Record` is shadowed in this module by the JSONL record interface — spell the index type out.
+const AWAITING_SEQUENCE_KEYS: { [key: string]: "shell" | "agent" | "timer" | "pr" | undefined } = {
+  shells: "shell",
+  agents: "agent",
+  timers: "timer",
+  prs: "pr",
+}
+
+/** Parse the fence's YAML frontmatter into the flat hint list the rest of frizz reads.
+ *
+ *  DEFENSIVE BY CONTRACT: this runs on whatever an LLM wrote, so it never throws — a parse failure, a
+ *  non-mapping document, a key holding the wrong type, or an empty sequence all yield NO hints for that
+ *  key, which makes the fence name less than it claimed and gets the worker bumped rather than parked.
+ *  Silently parking on a fence frizz could not read is the one outcome that must be impossible. */
+function parseAwaitingFrontmatter(text: string): { ok: boolean; hints: FenceView["hints"] } {
+  if (!text.trim()) return { ok: true, hints: [] }
+  let doc: unknown
+  try {
+    doc = parseYaml(text)
+  } catch {
+    return { ok: false, hints: [] } // not YAML at all — a tab indent, a stray bracket, an unclosed quote
+  }
+  // A frontmatter that parses to a scalar or a sequence is not a mapping of keys, so it names nothing —
+  // and the worker still needs to see it, hence `ok: false` rather than an empty success.
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return { ok: false, hints: [] }
+  const hints: FenceView["hints"] = []
+  const push = (kind: FenceView["hints"][number]["kind"], raw: unknown) => {
+    // A number or a boolean is a value a worker plausibly wrote unquoted; anything structural is not a
+    // name and cannot be looked up, so it is dropped rather than stringified into nonsense.
+    if (raw === null || raw === undefined || typeof raw === "object") return
+    const value = String(raw).trim()
+    if (!value) return
+    hints.push({ kind, value: value.length > HINT_VALUE_MAX ? value.slice(0, HINT_VALUE_MAX) : value })
+  }
+  for (const [rawKey, raw] of Object.entries(doc as { [key: string]: unknown })) {
+    // Case-insensitive, because the line grammar was and a worker that shouts `PRS:` means `prs:`. YAML
+    // itself is case-sensitive, so without this the key would parse and then silently match nothing.
+    const key = rawKey.toLowerCase()
+    const itemKind = AWAITING_SEQUENCE_KEYS[key]
+    if (itemKind) {
+      // A BARE SCALAR IS ACCEPTED where a sequence is expected — `prs: acme/app#1` is what a worker
+      // reaches for with one item, and refusing it would fail a fence that says exactly the right thing.
+      for (const entry of Array.isArray(raw) ? raw : [raw]) push(itemKind, entry)
+    } else if (key === "for") {
+      push("for", raw)
     }
   }
-  rest.push(...prose)
-  return { kind, body: capFenceBody(rest.join("\n").trim()), hints: hints.slice(0, HINT_MAX) }
+  return { ok: true, hints }
 }
 
 // A user record is a REAL user interaction (a typed prompt / answer / steer / dispatch) rather than a
@@ -821,6 +900,20 @@ export function isRealUserMessage(content: unknown): boolean {
   if (typeof content === "string") return true
   if (!Array.isArray(content)) return false
   return content.some((b) => !(b && typeof b === "object" && (b as { type?: string }).type === "tool_result"))
+}
+
+/** The plain text of a user record's content — a bare string, or the text blocks of an array, joined.
+ *  Returns "" for a record carrying no text at all (an image-only or tool_result-only turn). */
+export function userMessageText(content: unknown): string {
+  if (typeof content === "string") return content
+  if (!Array.isArray(content)) return ""
+  const parts: string[] = []
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue
+    const b = block as { type?: string; text?: unknown }
+    if (b.type === "text" && typeof b.text === "string") parts.push(b.text)
+  }
+  return parts.join("\n")
 }
 
 // Flatten a tool_result's `content` (an array of {type:"text", text} blocks, or a bare string) into
@@ -1779,7 +1872,15 @@ export function applyRecord(state: TailState, rec: Record): void {
     // is agent activity (excluded by isRealUserMessage); a system record (peer/notification) is
     // machine motion the human didn't cause — neither may jump the row to the top (the one part of the
     // earlier over-fix that WAS a real bug).
-    if (!systemUserRec && !compactSummaryRec && typeof rec.timestamp === "string" && isRealUserMessage(rec.message?.content)) state.lastUserAt = rec.timestamp
+    if (!systemUserRec && !compactSummaryRec && typeof rec.timestamp === "string" && isRealUserMessage(rec.message?.content)) {
+      state.lastUserAt = rec.timestamp
+      // SET ONCE. This is what names an external session whose harness never named it, so it has to be
+      // the turn the conversation STARTED on, not the newest one.
+      if (state.firstUserText === undefined) {
+        const text = userMessageText(rec.message?.content).trim()
+        if (text) state.firstUserText = text.slice(0, FIRST_USER_TEXT_MAX)
+      }
+    }
     trackLaunchResults(state, rec) // resolve a background dispatch's transcript path from its launch result
     trackResumes(state, rec) // a SendMessage that RESTARTED a stopped child is a fresh launch — revive it
     trackStops(state, rec) // a manual TaskStop is a terminal signal — retire the op it killed
@@ -1878,6 +1979,9 @@ export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
         // Keep the delivery-confirmation pair atomic. A genuine non-text user event may still bump
         // row activity, but its newer timestamp must never retain text from an older human turn.
         state.lastUserText = typeof ev.text === "string" ? ev.text : undefined
+        if (state.firstUserText === undefined && typeof ev.text === "string" && ev.text.trim()) {
+          state.firstUserText = ev.text.trim().slice(0, FIRST_USER_TEXT_MAX)
+        }
       }
       break
     case "tool-call":
@@ -4501,7 +4605,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       // an unanswered ```question fence (a user reply clears the flag and flips the turn in-flight).
       const pendingQuestion = s.turn === "idle" && s.lastAssistantHasQuestion
       const nowMs = now()
-      return { turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: s.lastAssistantAllDone, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt }
+      return { turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: s.lastAssistantAllDone, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, firstUserText: s.firstUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt }
     },
     // The CURRENT fresh foreign session ids (mtime within FOREIGN_FRESH_MS, capped), mtime-desc. Kept
     // as the last scan's result — recomputed at most every FOREIGN_SCAN_EVERY ticks.

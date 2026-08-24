@@ -362,11 +362,22 @@ async function activity() {
     const when = i.until ? `  (fires ${i.until})` : i.since ? `  (since ${i.since})` : ""
     return `  ${i.kind}: ${i.id}${when}\n    ${i.label}`
   })
+  // A READY-TO-PASTE FENCE, not a description of one. The frontmatter is YAML since 2026-08-24 and its
+  // keys are PLURAL sequences, so an id printed on its own line is no longer something a worker can copy
+  // into a fence — it has to see the shape. This tool is where the contract sends a worker that has lost
+  // an id, so printing the retired one-line-per-item form would teach the very grammar frizz refuses.
+  const byKind = { shell: [], agent: [], timer: [], pr: [] }
+  for (const i of items) if (byKind[i.kind] && i.id) byKind[i.kind].push(i.id)
+  const block = Object.entries({ shells: byKind.shell, agents: byKind.agent, timers: byKind.timer, prs: byKind.pr })
+    .filter(([, ids]) => ids.length > 0)
+    .map(([key, ids]) => `  ${key}: [${ids.join(", ")}]`)
   return (
     `${items.length} thing${items.length === 1 ? "" : "s"} running on this thread:\n\n${lines.join("\n")}\n\n` +
-    "Name the ones you are ACTUALLY waiting on in your ```awaiting fence, one `<kind>: <id>` line each, " +
-    "plus a required `for:` duration and a one-line `reason:`. Do not name something you are not waiting " +
-    "on — a dev server you left running is not a wait."
+    "Name the ones you are ACTUALLY waiting on in your ```awaiting fence. The frontmatter is YAML — one " +
+    "PLURAL key per kind, taking a list — plus a required `for:` duration, and your handoff prose BELOW " +
+    "the `---` (there is no `reason:` key).\n\nEverything above, as a fence:\n\n```awaiting\n" +
+    `${block.join("\n")}\n  for: 2h\n  ---\n  <what you are waiting for, and what you will do when it lands>\n` +
+    "```\n\nDrop the lines you are not actually waiting on — a dev server you left running is not a wait."
   )
 }
 
