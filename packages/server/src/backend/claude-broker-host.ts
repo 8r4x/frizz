@@ -138,11 +138,32 @@ export function readBrokerRecord(recordPath: string): BrokerRecord | null {
   try { return JSON.parse(readFileSync(recordPath, "utf8")) as BrokerRecord } catch { return null }
 }
 
+/** Where a session's LAST daemon identity survives after its record is gone.
+ *
+ *  A record is deleted the moment anyone notices the daemon is dead, and by then nobody can say WHICH
+ *  daemon that was — which is the one thing the death report needs, because a session's diagnostic log
+ *  accumulates every generation and "the newest entry" is only the right answer when the daemon that
+ *  just died managed to write one. Preserving the identity on the way out is what lets the report tell a
+ *  cause this daemon recorded from a predecessor's, instead of quoting the predecessor's in the
+ *  confident voice of the current one (measured 2026-08-19: a 21:57:54 SIGKILL reported as
+ *  "exited (signal-SIGTERM) at 21:55:46"). Both deletion sites below write it, so no path loses it. */
+export function brokerLastKnownPath(recordPath: string): string { return `${recordPath}.last` }
+
+/** The identity of the last daemon frizz knew for this session, alive or dead. Outlives the record. */
+export function lastKnownBrokerDaemon(stateDir: string, sessionId: string): BrokerRecord | null {
+  return readBrokerRecord(brokerLastKnownPath(claudeBrokerRecordPath(stateDir, sessionId)))
+}
+
+/** Remember who this record named, then let it be deleted. Best-effort: forensics never block a teardown. */
+function rememberBrokerIdentity(recordPath: string, record: BrokerRecord): void {
+  try { writeFileSync(brokerLastKnownPath(recordPath), JSON.stringify(record)) } catch {}
+}
+
 /** A record whose daemon is still alive; prunes a stale record as a side effect. */
 export function liveBrokerRecord(recordPath: string): BrokerRecord | null {
   const record = readBrokerRecord(recordPath)
   if (record && pidAlive(record.daemonPid)) return record
-  if (record) { try { unlinkSync(recordPath) } catch {} }
+  if (record) { rememberBrokerIdentity(recordPath, record); try { unlinkSync(recordPath) } catch {} }
   return null
 }
 
@@ -247,7 +268,7 @@ export function killBroker(stateDir: string, sessionId: string, retireReason?: B
   const record = liveBrokerRecord(recordPath)
   if (retireReason) { if (record) markBrokerRetired(stateDir, sessionId, retireReason, record.generation) }
   else takeBrokerRetirement(stateDir, sessionId)
-  if (record) { try { process.kill(record.daemonPid, "SIGTERM") } catch {} }
+  if (record) { rememberBrokerIdentity(recordPath, record); try { process.kill(record.daemonPid, "SIGTERM") } catch {} }
   try { unlinkSync(recordPath) } catch {}
   return record !== null
 }

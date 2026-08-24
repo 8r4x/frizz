@@ -5,7 +5,7 @@
 // auto-allow, honoring the thread's permission mode — matching the retired argv path's
 // `--permission-mode auto`), and sends follow-up turns.
 import { randomUUID } from "node:crypto"
-import { adoptOrForkBroker, killBroker, liveBrokerRecord, liveBrokerRecords, claudeBrokerRecordPath, resolveClaudeExecutableAbsolute, takeBrokerRetirement, type BrokerRetirementMark, type BrokerRetirementReason } from "./claude-broker-host.ts"
+import { adoptOrForkBroker, killBroker, lastKnownBrokerDaemon, liveBrokerRecord, liveBrokerRecords, claudeBrokerRecordPath, resolveClaudeExecutableAbsolute, takeBrokerRetirement, type BrokerRetirementMark, type BrokerRetirementReason } from "./claude-broker-host.ts"
 import { connectClaudeBroker, type ClaudeBrokerClient } from "./claude-broker-client.ts"
 import { describeClaudeBrokerExit, readClaudeBrokerExit, type ClaudeBrokerExitRecord } from "./claude-broker-diagnostics.ts"
 import type { ClaudeDiagnostic, ClaudePermissionDecision, ClaudePermissionRequest, ClaudePluginReload, ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
@@ -399,10 +399,14 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
   // generation. A death is a one-time fact; re-announcing it on every later follow-up would turn an
   // attribution into noise.
   const reportedDeaths = new Set<string>()
-  const reportDeath = (slug: string, sessionId: string, retirement: BrokerRetirementMark | null): void => {
+  const reportDeath = (slug: string, sessionId: string, retirement: BrokerRetirementMark | null, lostGeneration: string): void => {
     if (!deps.onDiagnostic) return
+    // Ask the log about the daemon we actually lost, never merely about its newest entry — see
+    // readClaudeBrokerExit. A session log holds every generations death, so the newest one describes
+    // THIS death only when this daemon managed to write it, and the deaths worth investigating are the
+    // ones where it did not.
     let exit: ClaudeBrokerExitRecord | null = null
-    try { exit = readClaudeBrokerExit(deps.stateDir, sessionId) } catch { /* forensics degrade, never throw */ }
+    try { exit = readClaudeBrokerExit(deps.stateDir, sessionId, lostGeneration) } catch { /* forensics degrade, never throw */ }
     // A teardown FRIZZ PERFORMED is not a death to report. Three paths retire a daemon on purpose while
     // the conversation carries on — a launch-flag change (retireDaemon), a usage-limit resume
     // (freshProcess), and hibernation (thread-hibernation.ts) — and every one of them ends with exactly
@@ -480,6 +484,13 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
     // inheritance: whether Claude Code passes its own env down to an MCP subprocess is its business,
     // not a contract frizz should depend on.
     const mcpServers = withFrizzThreadSlug(we?.mcpServers, slug)
+    // WHICH daemon we are about to lose, resolved BEFORE adoptOrForkBroker — once it forks, both the
+    // record and the last-known breadcrumb name the NEW daemon and the question is unanswerable. The
+    // in-memory session is the freshest source but only while frizz has been up continuously, and a
+    // restart is exactly when a death goes unwatched; lastKnownBrokerDaemon is the copy that outlives
+    // both the restart and the record's deletion. Empty ⇒ we genuinely cannot say, and reportDeath
+    // declines to guess rather than quoting a predecessor.
+    const lostGeneration = sessions.get(slug)?.generation ?? lastKnownBrokerDaemon(deps.stateDir, sessionId)?.generation ?? ""
     const { record, reattached } = await adoptOrForkBroker({
       stateDir: deps.stateDir, cwd, sessionId, executablePath, permissionMode, env: deps.env,
       pluginDir: we?.pluginDir, mcpServers, allowedTools: we?.allowedTools, workerEnv,
@@ -496,7 +507,7 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
     // done its job either way and must not survive to explain some later death.
     if (!reattached) {
       const retirement = takeBrokerRetirement(deps.stateDir, sessionId)
-      if (fork.resume) reportDeath(slug, sessionId, retirement)
+      if (fork.resume) reportDeath(slug, sessionId, retirement, lostGeneration)
     }
     return bind(slug, sessionId, cwd, record)
   }
@@ -753,7 +764,15 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
     },
 
     daemonExit(sessionId) {
-      try { return readClaudeBrokerExit(deps.stateDir, sessionId) } catch { return null }
+      // Scoped to the daemon frizz last knew for this session — the live one if we hold it, else the one
+      // its on-disk record names. A session log accumulates every generation, so an unscoped read answers
+      // "the newest death here", which is a different question and is wrong exactly when this daemon left
+      // no record of its own. No identity ⇒ null, never a predecessor's cause (see readClaudeBrokerExit).
+      try {
+        const held = [...sessions.values()].find((s) => s.sessionId === sessionId)?.generation
+        const generation = held ?? lastKnownBrokerDaemon(deps.stateDir, sessionId)?.generation ?? ""
+        return readClaudeBrokerExit(deps.stateDir, sessionId, generation)
+      } catch { return null }
     },
 
     retireDaemon(input) {

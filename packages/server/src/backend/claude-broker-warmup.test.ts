@@ -15,7 +15,7 @@ import Database from "../sqlite.ts"
 import { createInteractionStore } from "../interaction-store.ts"
 import { createClaudeAgentBrokerBridge } from "./claude-agent-broker-bridge.ts"
 import { runClaudeBroker } from "./claude-agent-broker.ts"
-import { claudeBrokerRecordPath, liveBrokerRecords, readBrokerRecord } from "./claude-broker-host.ts"
+import { brokerLastKnownPath, claudeBrokerRecordPath, liveBrokerRecords, readBrokerRecord } from "./claude-broker-host.ts"
 import { claudeBrokerDiagnosticLogPath, readClaudeBrokerExit } from "./claude-broker-diagnostics.ts"
 
 const fakeCli = fileURLToPath(new URL("./claude-agent-sdk.fixtures/fake-claude-cli.mjs", import.meta.url))
@@ -171,13 +171,24 @@ test("a broker records WHY it exited — frizz asked for it", { timeout: 15_000 
   })
   try {
     await sleep(400)
-    assert.equal(readClaudeBrokerExit(dir, sessionId), null, "a living daemon has recorded no death")
+    assert.equal(readClaudeBrokerExit(dir, sessionId, broker.generation), null, "a living daemon has recorded no death")
     await broker.close()
-    const exit = readClaudeBrokerExit(dir, sessionId)
+    const exit = readClaudeBrokerExit(dir, sessionId, broker.generation)
     assert.ok(exit, "the daemon recorded its exit")
     assert.equal(exit.exit.reason, "frizz-requested")
     assert.equal(exit.daemonPid, process.pid)
-    assert.ok(exit.generation.length > 0, "the record names the generation that died")
+    assert.equal(exit.generation, broker.generation, "the record names the generation that died")
+    // The defect this argument exists for: the log is per SESSION, so it still holds this death after the
+    // next daemon starts. Asked about a DIFFERENT generation it must answer "nothing recorded", not hand
+    // back its predecessor's cause and timestamp dressed as the current one.
+    assert.equal(
+      readClaudeBrokerExit(dir, sessionId, randomUUID()), null,
+      "another generation's death is not this daemon's death",
+    )
+    assert.equal(
+      readClaudeBrokerExit(dir, sessionId, ""), null,
+      "an unidentified daemon gets no answer rather than a guess",
+    )
   } finally {
     try { rmSync(socketPath, { force: true }) } catch {}
     await rmEventually(dir)
@@ -248,8 +259,15 @@ test("a dead daemon that left no breadcrumb reads as an absent record, never a t
     const { mkdirSync } = await import("node:fs")
     mkdirSync(join(dir, "claude-broker"), { recursive: true })
     writeFileSync(path, `{"at":"2026-01-01T00:00:00.000Z","daemonPid":1,"generation":"g","exit":{"reason":"idle-timeout"}}\n{"at":"trunc`)
+    // The identity a real daemon leaves behind when its record is deleted. Without it the log is a pile
+    // of deaths nobody can attribute, and daemonExit correctly declines to guess — asserted just below.
+    writeFileSync(brokerLastKnownPath(claudeBrokerRecordPath(dir, sessionId)), JSON.stringify({ daemonPid: 1, generation: "g", sessionId, socketPath: "", createdAt: "2026-01-01T00:00:00.000Z" }))
     const exit = bridge.daemonExit(sessionId)
     assert.equal(exit?.exit.reason, "idle-timeout", "the last INTACT exit line wins over a torn tail")
+    // Same log, no surviving identity: the honest answer is "nothing recorded for that daemon", never
+    // generation g's cause handed to whoever asked.
+    rmSync(brokerLastKnownPath(claudeBrokerRecordPath(dir, sessionId)), { force: true })
+    assert.equal(bridge.daemonExit(sessionId), null, "an unattributable log is not an answer")
     assert.deepEqual(readdirSync(join(dir, "claude-broker")).filter((n) => n.endsWith(".json")), [], "a diagnostics log is not a record")
   } finally {
     bridge.close()

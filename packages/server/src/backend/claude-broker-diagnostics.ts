@@ -129,13 +129,26 @@ export function createClaudeBrokerExitWriter(
   }
 }
 
-/** The most recent exit this session's log records, or null when it has never named one.
+/** The exit this session's log records for a NAMED daemon, or null when it recorded none for that one.
  *
- *  The log is per SESSION, not per daemon, so a resumed thread's file can hold several deaths across
- *  generations — the newest is the one that just happened, and `generation` lets a caller confirm it
- *  describes the daemon it actually lost. Never gates anything: pure post-hoc attribution for what the
- *  bridge would otherwise see as an absent record and report as "the thread went quiet." */
-export function readClaudeBrokerExit(stateDir: string, sessionId: string): ClaudeBrokerExitRecord | null {
+ *  The log is per SESSION, not per daemon, so a resumed thread's file holds every death across every
+ *  generation it has had. "The newest record" is therefore NOT the same question as "how did the daemon
+ *  we just lost die" — they diverge exactly when the lost daemon wrote nothing (SIGKILL, OOM, a reboot),
+ *  which is the case an operator is most likely to be investigating. Reading the newest anyway attributed
+ *  the PREVIOUS generation's cause and timestamp to the current death: measured 2026-08-19, a 21:57:54
+ *  SIGKILL reported as "exited (signal-SIGTERM) at 21:55:46" — a wrong answer, in the confident voice of
+ *  a right one.
+ *
+ *  So `generation` is required, and a record that does not carry it is not an answer about this daemon.
+ *  Null then means "this daemon left no breadcrumb", which describeClaudeBrokerExit says in as many words
+ *  — the honest reading, and the one that sends nobody hunting a cause that belongs to a dead predecessor.
+ *  Never gates anything: pure post-hoc attribution for what the bridge would otherwise report as "the
+ *  thread went quiet."
+ *
+ *  An EMPTY generation means the caller could not identify the daemon it lost (a frizz restart with no
+ *  record left on disk). That is not a licence to guess: it returns null for the same reason. */
+export function readClaudeBrokerExit(stateDir: string, sessionId: string, generation: string): ClaudeBrokerExitRecord | null {
+  if (!generation) return null
   let newest: ClaudeBrokerExitRecord | null = null
   for (const path of [`${claudeBrokerDiagnosticLogPath(stateDir, sessionId)}.1`, claudeBrokerDiagnosticLogPath(stateDir, sessionId)]) {
     let text: string
@@ -145,6 +158,7 @@ export function readClaudeBrokerExit(stateDir: string, sessionId: string): Claud
       try {
         const parsed = JSON.parse(line) as Partial<ClaudeBrokerExitRecord>
         if (typeof parsed?.at !== "string" || typeof parsed.exit?.reason !== "string") continue
+        if (parsed.generation !== generation) continue
         newest = {
           at: parsed.at,
           daemonPid: typeof parsed.daemonPid === "number" ? parsed.daemonPid : 0,
