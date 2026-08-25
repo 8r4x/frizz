@@ -166,7 +166,21 @@ export async function establishCloudConfig(
   }
   const name = normalizeClaimName(answer);
   const identity = await loadOrCreateClaimIdentity(home);
-  const result = await claimName({ name, port, identity, ...(origin ? { origin } : {}) });
+  let result;
+  try {
+    result = await claimName({ name, port, identity, ...(origin ? { origin } : {}) });
+  } catch (error) {
+    // A FIRST claim that cannot reach the registrar leaves the operator with nothing — unlike a
+    // renewal, which falls back to its cached token. Point at the path that works without us rather
+    // than leaving them staring at a network error for a service they have never heard of.
+    if (error instanceof ClaimError && error.code === "unreachable") {
+      throw new ClaimError(
+        `${error.message}\n       You can still reach this board through a tunnel of your own — see docs/remote-access.md, then answer with its hostname instead of a name.`,
+        error.code,
+      );
+    }
+    throw error;
+  }
   writeTunnelToken(result.token, home);
   return { hostname: result.hostname, claim: name };
 }

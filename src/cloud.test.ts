@@ -219,3 +219,17 @@ test("a config naming neither a tunnel nor a claim reads as absent", () => {
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("a first claim that cannot reach the registrar points at the path that works without it", async () => {
+  // A renewal falls back to its cached token; a FIRST claim has nothing to fall back to, so the
+  // operator is left with a network error for a service they have never heard of.
+  const home = tempHome();
+  try {
+    await assert.rejects(
+      establishCloudConfig("colin", 9393, home, "http://127.0.0.1:1"),
+      /could not reach the Frizz registrar[\s\S]*tunnel of your own/,
+    );
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
