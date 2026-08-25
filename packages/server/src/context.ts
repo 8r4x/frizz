@@ -152,6 +152,14 @@ export interface AppContext {
   getSettings: () => Settings
   setSettings: (s: Settings) => Settings
   resetSettings: () => Settings
+  /**
+   * Every project this PROCESS has open, with its board — the launching project and each tenant
+   * activated since. Machine-wide reads (the rail's per-project queue counts) go through this rather
+   * than opening databases: a count is a board fact (`needsYou` needs the tailer's runtime view), so a
+   * project nobody has opened has no honest count, and this deliberately does not activate one to get
+   * it. Absent under a test context or a one-project server, which read as "only this project".
+   */
+  activeTenants?: () => ReadonlyArray<{ project: Project; board: BoardManager }>
   // GitHub detection (installed/inRepo/nameWithOwner) resolved ONCE at boot via initGithub() — stable
   // for the process lifetime. `authed` is NOT cached here; the githubStatus query re-checks it live so
   // a mid-session `gh auth login` reflects immediately. Undefined until initGithub() resolves (the
@@ -187,6 +195,8 @@ export interface ContextOptions {
    * which is right for a one-project server and is all a pre-singleton build ever passed.
    */
   serverLockPath?: string
+  /** See AppContext.activeTenants — supplied by the server, which owns the tenant map. */
+  activeTenants?: AppContext["activeTenants"]
   /** Internal deterministic construction/rollback seam. */
   startup?: {
     afterPhase?: (phase: ContextStartupPhase) => void
@@ -966,6 +976,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     getSettings: () => getSettings(storage, home),
     setSettings: (s) => setSettings(storage, s, home),
     resetSettings: () => resetSettings(storage, home),
+    activeTenants: opts.activeTenants,
     claudeBin: opts.claudeBin,
     codexBin: opts.codexBin,
     loginUtility: createLoginUtility({ claudeBin: opts.claudeBin, codexBin: opts.codexBin, cwd: project.dir }),

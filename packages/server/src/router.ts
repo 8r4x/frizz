@@ -132,7 +132,7 @@ import { projectRetiredBackgroundOps, retiredOpsFor } from "./transcript.ts"
 import { clearProjectIcon, customIconPath, ICON_SCAN_VERSION, listProjects, reorderProjects, setProjectIcon, type RegistryEntry } from "./project-registry.ts"
 import { basename, dirname } from "node:path"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
-import { ProjectCard, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS } from "@frizz/shared"
+import { ProjectCard, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread } from "@frizz/shared"
 import { imageDimensions } from "./image-header.ts"
 import { homedir } from "node:os"
 import { discoverProjectRoot, ensureProjectIdFile, existingProjectId, writeProjectIdFile } from "./project-root.ts"
@@ -2744,6 +2744,38 @@ export function createRouter(ctx: AppContext) {
       output: z.array(ProjectCard),
       handler: async () =>
         listProjects().map((entry) => projectCard(entry, entry.stale)),
+    }),
+
+    /**
+     * How many threads are in each project's queue, keyed by project id — the rail's badges.
+     *
+     * MACHINE-WIDE, answered from the boards this process has OPEN. A queue count is a board fact:
+     * `needsYou` is derived from the tailer's live view of each session, so a project nobody has
+     * opened since boot has no honest count, and it is left out rather than guessed at or opened for
+     * the purpose (activating a project to badge it is exactly the cost lazy activation exists to
+     * avoid — see tenants.ts). Absent ⇒ no badge; the project the operator is looking at is always
+     * present, and the client draws THAT one from its own live board anyway.
+     *
+     * Kept OFF `projectsList` on purpose: that list is one registry-file read, cheap enough to be the
+     * home page with forty projects, and this is a walk over live boards. The cached snapshot makes
+     * it cheap too — but cheap-and-polled is a different budget from cheap-and-once.
+     */
+    projectsQueueCounts: query({
+      output: z.record(z.string(), z.number().int().nonnegative()),
+      handler: async () => {
+        const counts: Record<string, number> = {}
+        const open = ctx.activeTenants?.() ?? [{ project: ctx.project, board: ctx.board }]
+        for (const { project, board } of open) {
+          try {
+            const { threads } = await board.snapshot()
+            counts[project.id] = threads.filter(queuedThread).length
+          } catch {
+            // A board that is stopping mid-walk (its project is being deactivated) is a project with
+            // no count this round, not a failed request for every other project.
+          }
+        }
+        return counts
+      },
     }),
 
     /**

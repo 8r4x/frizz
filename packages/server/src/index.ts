@@ -476,6 +476,10 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     )
   }
 
+  // What every context answers "which projects are open here" with — the map below, read lazily so
+  // the launching project's own context (built before the map is populated) sees the same live list.
+  const activeTenants: NonNullable<AppContext["activeTenants"]> = () =>
+    tenants.active().map(({ project: open, ctx: openCtx }) => ({ project: open, board: openCtx.board }))
   const tenants = createTenantMap<TenantSurfaces>({
     createContext: (contextOptions) => {
       if (contextOptions.project) assertNotServedElsewhere(contextOptions.project)
@@ -483,7 +487,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     },
     // serverLockPath is the LAUNCHING project's: it is the only `server.lock` this process publishes
     // (see "status publication"), so it is the only file a tenant's worker can read the port out of.
-    contextOptions: { claudeBin: opts.claudeBin, serverLockPath: serverLockPathFor(project) },
+    contextOptions: { claudeBin: opts.claudeBin, serverLockPath: serverLockPathFor(project), activeTenants },
     // Each project's app carries ITS OWN owner proof, so /health stays honest per project rather than
     // answering for whichever one happened to launch the server. The transports are per project for a
     // blunter reason: a socket is a live feed of ONE board, so sharing the launcher's would push its
@@ -768,6 +772,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
         claudeBin: opts.claudeBin,
         project,
         serverLockPath: serverLockPathFor(project),
+        activeTenants,
         startup: {
           afterPhase: (p) => {
             bootProgress(`context: ${p}`)

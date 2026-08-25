@@ -252,6 +252,10 @@ export interface Api {
   // The rail's manual order: the whole list of ids, because the client has just laid the squares out
   // and an index pair would have to be replayed against a server order that may already differ.
   projectsReorder(input: { ids: string[] }): Promise<ProjectCard[]>
+  // Queue size per OPEN project, keyed by project id — the rail's badges. A project this server has
+  // not opened since boot is absent (no honest count without its board), which the rail draws as no
+  // badge rather than as zero.
+  projectsQueueCounts(): Promise<Record<string, number>>
   // Opens the machine's native image picker ALREADY IN the project's directory, then stores what
   // comes back. The browser input cannot be aimed anywhere, which is the whole reason this exists.
   projectIconPick(input: { id: string }): Promise<DirectoryPickResult>
@@ -355,6 +359,7 @@ export const PROCEDURES = {
   projectPick: "mutation",
   projectAdd: "mutation",
   projectsReorder: "mutation",
+  projectsQueueCounts: "query",
   projectIconPick: "mutation",
   projectIconSet: "mutation",
   projectIconClear: "mutation",

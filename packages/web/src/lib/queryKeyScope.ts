@@ -27,9 +27,10 @@ import { projectSlug } from "./base-path.ts"
  * `projectsList` is the rail's own data — scoping it would refetch the whole list on every switch and
  * blank the rail mid-navigation, which is the flicker the client-side router exists to remove.
  * `threadLocate` deliberately searches every registered project server-side, so a per-project copy
- * would be several caches of one answer.
+ * would be several caches of one answer. `projectsQueueCounts` is the rail's badges — one answer for
+ * every project, read by a rail that outlives every switch.
  */
-const MACHINE_WIDE = new Set(["projectsList", "threadLocate"])
+const MACHINE_WIDE = new Set(["projectsList", "projectsQueueCounts", "threadLocate"])
 
 /** The `queryKeyHashFn` for this app's QueryClient. Nothing else should need to call it. */
 export function projectScopedQueryKeyHash(key: readonly unknown[]): string {

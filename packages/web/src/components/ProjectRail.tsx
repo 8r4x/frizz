@@ -3,9 +3,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type DragEvent as DragEvent_, type KeyboardEvent as KeyboardEvent_, type MouseEvent as MouseEvent_, type PointerEvent as PointerEvent_, type ReactNode } from "react"
 import { House, Plus } from "lucide-react"
 import { Link, useNavigate } from "react-router"
+import { useSnapshot } from "valtio"
 import type { ProjectCard } from "@frizz/shared"
 import { PROJECT_ICON_EXTENSIONS } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
+import { queued } from "../groups.ts"
+import { asThreads } from "../hooks.ts"
+import { store } from "../store.ts"
 import { projectHref, projectSlug } from "../lib/base-path.ts"
 import { dropIndex, edgeScrollVelocity, moveItem, shiftFor } from "../lib/railReorder.ts"
 import { Tooltip } from "./Tooltip.tsx"
@@ -173,6 +177,7 @@ const SQUARE = 40
 function RailLink({
   project,
   current,
+  count,
   index,
   drag,
   onPointerDown,
@@ -180,6 +185,8 @@ function RailLink({
 }: {
   project: ProjectCard
   current: boolean
+  /** Threads in this project's queue, or undefined when this server has not opened the project. */
+  count: number | undefined
   index: number
   drag: DragState | null
   onPointerDown: (event: PointerEvent_<HTMLAnchorElement>, index: number) => void
@@ -201,7 +208,11 @@ function RailLink({
     <Tooltip
       side="right"
       disabled={drag !== null}
-      label={project.stale ? `${project.name} — directory is missing` : project.name}
+      label={
+        project.stale
+          ? `${project.name} — directory is missing`
+          : count ? `${project.name} — ${count} in the queue` : project.name
+      }
     >
       <Link
         to={projectHref(project.slug)}
@@ -246,6 +257,32 @@ function RailLink({
         >
           <ProjectSquare project={project} size={SQUARE} />
         </span>
+        {count ? (
+          // THE QUEUE BADGE — how many threads in this project are waiting on the human. Discord's
+          // placement: on the square's bottom-right corner, overlapping it, with a cut-out border in the
+          // rail's own colour so it reads as sitting ON the square rather than beside it. Accent, and
+          // only accent, because yellow means exactly one thing in this product: this many want you
+          // (MobileBoard's tab badge draws the same count the same way). A SIBLING of the opacity
+          // wrapper, not a child: a non-current square is dimmed to 75%, and a signal must not dim with
+          // the surface it is reporting on. Positioned against the LINK (56px wide, the 40px square
+          // centred in it), so `right-[3px]` puts the badge 5px past the square's right edge and
+          // `-bottom-[5px]` 5px past its bottom — into the 8px gap, clear of the next square, and
+          // inside the band's bottom padding for the last one.
+          <span
+            aria-label={`${count} in the queue`}
+            data-rail-queue-count={count}
+            // Proportional figures, not tabular: a badge centres ONE number, it aligns no column, and a
+            // tabular "1" carries a fixed cell's worth of side-bearing that put the ink of "12" 1.02px
+            // left of the pill's centre. Measured 2026-08-24 at 10px/600 in the sans UI font.
+            className="pointer-events-none absolute -bottom-[5px] right-[3px] flex h-[16px] min-w-[16px] items-center justify-center rounded-full border-[1.5px] border-bg bg-accent px-[3.5px] text-[10px] font-semibold leading-none proportional-nums text-bg"
+          >
+            {/* The cap band, not the line box — the same fix the monogram above uses, for the same reason:
+                `items-center` centred the digits' LINE BOX and their ink rode 0.4–0.5px low in the sans
+                UI font (measured 2026-08-24). Trimming the box to baseline→cap height makes the box the
+                ink, so the browser centres it per font with nothing to re-measure when the setting flips. */}
+            <span style={{ textBox: "trim-both cap alphabetic" } as CSSProperties}>{count}</span>
+          </span>
+        ) : null}
       </Link>
     </Tooltip>
   )
@@ -370,6 +407,31 @@ function justDragged(): boolean {
   return Date.now() - lastDragEndedAt < 250
 }
 
+/**
+ * The rail's badges: each project's queue size, keyed by project id.
+ *
+ * TWO SOURCES, one per kind of project. The project on screen has a live board in the store — the
+ * same rows the sidebar's rested band is drawing a few hundred pixels to the right — so its badge is
+ * counted from that and can never lag the rail it sits beside. Every OTHER project is a poll of the
+ * server's cached snapshots (`projectsQueueCounts`, machine-wide, see lib/queryKeyScope.ts), because
+ * the live feed is one socket per project and a rail that opened a socket per square would be forty
+ * boards' worth of push for a number. Five seconds: a badge for a project you are not looking at is a
+ * "go there" cue, not a live readout. A project this server has not opened since boot has no board and
+ * therefore no count — it draws no badge, which is honest, rather than a zero, which is not.
+ */
+function useQueueCounts(currentSlug: string | undefined, projects: readonly ProjectCard[]): (project: ProjectCard) => number | undefined {
+  const polled = useQuery({
+    queryKey: ["projectsQueueCounts"],
+    queryFn: () => rpc.projectsQueueCounts(),
+    refetchInterval: 5_000,
+  })
+  // valtio tracks the property read, so this re-renders on board changes and nothing else.
+  const board = useSnapshot(store).board
+  const live = currentSlug !== undefined && board ? asThreads(board.threads).filter(queued).length : undefined
+  const currentId = currentSlug === undefined ? undefined : projects.find((project) => project.slug === currentSlug)?.id
+  return (project) => (project.id === currentId && live !== undefined ? live : polled.data?.[project.id])
+}
+
 export function ProjectRail() {
   const queryClient = useQueryClient()
   const { data } = useQuery({ queryKey: ["projectsList"], queryFn: () => rpc.projectsList() })
@@ -403,6 +465,7 @@ export function ProjectRail() {
   })
 
   const projects = optimistic ?? data ?? []
+  const countFor = useQueueCounts(current, projects)
 
   /**
    * Fade the band's bottom edge ONLY while something is actually below it.
@@ -552,7 +615,9 @@ export function ProjectRail() {
       <div
         ref={bandRef}
         data-overflowing={overflowing || undefined}
-        className="frizz-rail-scroll flex w-full min-h-0 flex-1 flex-col items-center gap-2 overflow-y-auto"
+        // `pb-1.5` absorbs the last square's queue badge (5px below its square): without it the badge
+        // extends the scroll height, which the bottom fade reads as "there is more" and dims the square.
+        className="frizz-rail-scroll flex w-full min-h-0 flex-1 flex-col items-center gap-2 overflow-y-auto pb-1.5"
       >
         {projects.map((project, index) => (
           <RailLink
@@ -560,6 +625,7 @@ export function ProjectRail() {
             project={project}
             index={index}
             current={project.slug === current}
+            count={countFor(project)}
             drag={drag}
             onPointerDown={startDrag}
             onKeyDown={onKeyDown}

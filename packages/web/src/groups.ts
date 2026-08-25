@@ -1,4 +1,4 @@
-import { isDirectSubAgent, type AwaitingHint, type ThreadView } from "@frizz/shared"
+import { isDirectSubAgent, queuedThread, type AwaitingHint, type ThreadView } from "@frizz/shared"
 import { canRetry } from "./lib/status.ts"
 
 // Shared listing logic: the queue definition (needsAction), the sidebar's status-keyed sections
@@ -253,8 +253,9 @@ export function orderQueue(threads: readonly ThreadView[], direction: QueueDirec
 // an empty queue, the accepted degrade.
 export function queued(t: ThreadView): boolean {
   // Foreign (terminal-originated) sessions never queue: their interaction surface is the terminal
-  // the human is already sitting in — frizz can't be "awaiting" them here.
-  return t.kind === "session" && t.foreign !== true && t.needsYou === true && t.state !== "archived"
+  // the human is already sitting in — frizz can't be "awaiting" them here. The predicate itself is
+  // shared with the server, which counts it per project for the rail's badges.
+  return queuedThread(t)
 }
 
 // EXTERNAL SESSIONS — agent sessions discovered in the project's transcript dir that frizz did NOT

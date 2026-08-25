@@ -1741,6 +1741,20 @@ export const ThreadView = z.object({
 })
 export type ThreadView = z.infer<typeof ThreadView>
 
+/**
+ * Whether a thread is IN THE QUEUE — the maintainer's "rested" band, the one with a card per row.
+ *
+ * ONE definition for both sides of the wire. `needsYou` is derived on the server (board.ts) and is
+ * the queue; the two guards around it are display facts the server also enforces (it clears
+ * `needsYou` on an archived row, and a foreign session never queues because its interaction surface
+ * is the terminal the human is already sitting in). The web's sidebar and queue read it through
+ * groups.ts `queued`; the server counts it per project for the rail's badges — and a badge that
+ * disagreed with the rail it sits beside would be worse than no badge.
+ */
+export function queuedThread(t: Pick<ThreadView, "kind" | "foreign" | "needsYou" | "state">): boolean {
+  return t.kind === "session" && t.foreign !== true && t.needsYou === true && t.state !== "archived"
+}
+
 // STRUCTURED board error — a machine-readable companion to the legacy `errors: string[]` so the
 // client can tell a REPAIRABLE error from an inert one and which file it names. `no-frontmatter` is
 // the one-click-repairable case (a thread .md written with no YAML frontmatter, invisible to the
