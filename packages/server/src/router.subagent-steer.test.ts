@@ -108,7 +108,13 @@ function harness(subAgent: (slug: string, id: string) => SubAgentInfo, opts: {
       },
     },
   } as unknown as AppContext
-  return { dir, ctx, storage, router: createRouter(ctx), steers, stops, dismissals, notices, codexTerminations }
+  // Every test ends in `finally { h.cleanup() }`. It exists as one helper rather than a per-test
+  // `rmSync` because the ORDER is load-bearing: the db has to be closed before the dir is removed, or
+  // Windows — which refuses to delete a file another handle still has open — fails the test on the
+  // teardown, after all of its assertions have already passed. POSIX unlinks an open file, so getting
+  // this wrong is invisible on macOS and Linux.
+  const cleanup = () => { storage.close(); rmSync(dir, { recursive: true, force: true }) }
+  return { cleanup, ctx, storage, router: createRouter(ctx), steers, stops, dismissals, notices, codexTerminations }
 }
 
 function row(slug: string, over: Partial<SessionRow> = {}): SessionRow {
@@ -158,7 +164,7 @@ test("subAgentSteer delivers into the CHILD, addressed by its dispatch tool_use 
       deliveryId: undefined,
     }])
   } finally {
-    rmSync(h.dir, { recursive: true, force: true })
+    h.cleanup()
   }
 })
 
@@ -172,7 +178,7 @@ test("subAgentSteer refuses a child that already settled — the case that would
     )
     assert.deepEqual(h.steers, [], "nothing crossed the bridge")
   } finally {
-    rmSync(h.dir, { recursive: true, force: true })
+    h.cleanup()
   }
 })
 
@@ -183,7 +189,7 @@ test("subAgentSteer refuses a STALE child: 'probably finished' has to be treated
     await assert.rejects(() => h.router.subAgentSteer.handler({ input: { slug: "t", id: "toolu_child", message: "hello" } }), /no longer running/)
     assert.deepEqual(h.steers, [])
   } finally {
-    rmSync(h.dir, { recursive: true, force: true })
+    h.cleanup()
   }
 })
 
@@ -197,7 +203,7 @@ test("subAgentSteer refuses a NESTED child — this session's CLI never issued t
     )
     assert.deepEqual(h.steers, [])
   } finally {
-    rmSync(h.dir, { recursive: true, force: true })
+    h.cleanup()
   }
 })
 
@@ -213,7 +219,7 @@ test("subAgentStop uses the provider task id and works for a nested child", asyn
       taskId: "agent-runtime-grandchild",
     }])
   } finally {
-    rmSync(h.dir, { recursive: true, force: true })
+    h.cleanup()
   }
 })
 
@@ -240,7 +246,7 @@ test("a stop ends the whole live subtree, deepest-first, with the target last", 
       "every descendant is stopped before the row itself",
     )
   } finally {
-    rmSync(h.dir, { recursive: true, force: true })
+    h.cleanup()
   }
 })
 
@@ -253,7 +259,7 @@ test("the × stops the subtree too, and reports the count that the vanished row 
     assert.deepEqual(h.stops.map((s) => s.taskId), ["agent-grand-a", "agent-grand-b", "agent-runtime-child"])
     assert.deepEqual(h.dismissals, [{ slug: "t", id: "toolu_child" }])
   } finally {
-    rmSync(h.dir, { recursive: true, force: true })
+    h.cleanup()
   }
 })
 
@@ -277,7 +283,7 @@ test("a descendant that cannot be stopped is stated, not swallowed — and never
       "one failure does not abandon the remaining descendants or the target",
     )
   } finally {
-    rmSync(h.dir, { recursive: true, force: true })
+    h.cleanup()
   }
 })
 
@@ -289,7 +295,7 @@ test("a childless stop is unchanged — no note, no count, one provider call", a
     assert.deepEqual(result, { stopped: true, descendantsStopped: 0, note: null })
     assert.deepEqual(h.stops.map((s) => s.taskId), ["agent-runtime-child"])
   } finally {
-    rmSync(h.dir, { recursive: true, force: true })
+    h.cleanup()
   }
 })
 
@@ -303,7 +309,7 @@ test("subAgentStop refuses runtimes without a real provider stop path", async ()
     )
     assert.deepEqual(codex.stops, [])
   } finally {
-    rmSync(codex.dir, { recursive: true, force: true })
+    codex.cleanup()
   }
 
   const noId = harness(() => ({ outputFile: "/tmp/child.jsonl", state: "running", direct: true }))
@@ -315,7 +321,7 @@ test("subAgentStop refuses runtimes without a real provider stop path", async ()
     )
     assert.deepEqual(noId.stops, [])
   } finally {
-    rmSync(noId.dir, { recursive: true, force: true })
+    noId.cleanup()
   }
 })
 
@@ -337,7 +343,7 @@ test("the × STOPS a broker-backed child for real, then retires the row", async 
     assert.deepEqual(h.stops, [{ threadSlug: "t", sessionId: "sid-t", taskId: "agent-runtime-child" }], "the provider control ran")
     assert.deepEqual(h.dismissals, [{ slug: "t", id: "toolu_child" }], "and only then did the row leave tracking")
   } finally {
-    rmSync(h.dir, { recursive: true, force: true })
+    h.cleanup()
   }
 })
 
@@ -351,7 +357,7 @@ test("a FAILED stop leaves the row on the board — hiding live work is the bug 
     )
     assert.deepEqual(h.dismissals, [], "a child that may still be running must keep its row")
   } finally {
-    rmSync(h.dir, { recursive: true, force: true })
+    h.cleanup()
   }
 })
 
@@ -369,7 +375,7 @@ test("a runtime with no stop path still clears the row, but SAYS the work may su
     assert.match(result.note ?? "", /needs the Claude session broker/)
     assert.deepEqual(cli.stops, [], "nothing was sent to a bridge that could not carry it")
   } finally {
-    rmSync(cli.dir, { recursive: true, force: true })
+    cli.cleanup()
   }
 
   // A background SHELL on a runtime with no control channel says so in the SHELL's own words. The
@@ -387,7 +393,7 @@ test("a runtime with no stop path still clears the row, but SAYS the work may su
     assert.match(result.note ?? "", /exposes no way to end one/)
     assert.deepEqual(shell.notices, [], "a refusal must never tell the worker its shell was killed")
   } finally {
-    rmSync(shell.dir, { recursive: true, force: true })
+    shell.cleanup()
   }
 })
 
@@ -425,7 +431,7 @@ test("the × STOPS a background shell for real, retires the row, and TELLS the w
     assert.match(h.notices[0]!.text, /Watching CI/)
     assert.match(h.notices[0]!.text, /do not wait on it/)
   } finally {
-    rmSync(h.dir, { recursive: true, force: true })
+    h.cleanup()
   }
 })
 
@@ -445,7 +451,7 @@ test("a shell that has been SILENT for hours is still stoppable — that is the 
     assert.equal(result.stopped, true, "the shell's own liveness governs, not the sub-agent staleness rule")
     assert.deepEqual(h.stops, [{ threadSlug: "t", sessionId: "sid-t", taskId: "bshell1" }])
   } finally {
-    rmSync(h.dir, { recursive: true, force: true })
+    h.cleanup()
   }
 })
 
@@ -466,7 +472,7 @@ test("a shell kill whose NOTICE cannot land is still a kill — and says the wor
     assert.match(result.note ?? "", /was not told/)
     assert.deepEqual(h.notices, [], "a dead daemon is never cold-started just to announce a kill")
   } finally {
-    rmSync(h.dir, { recursive: true, force: true })
+    h.cleanup()
   }
 })
 
@@ -477,7 +483,7 @@ test("stopping a SUB-AGENT sends no frizz notice — the provider already inject
     await h.router.stopBackgroundOp.handler({ input: { slug: "t", id: "toolu_child" } })
     assert.deepEqual(h.notices, [], "a second notice would tell the worker the same thing twice")
   } finally {
-    rmSync(h.dir, { recursive: true, force: true })
+    h.cleanup()
   }
 })
 
@@ -489,7 +495,7 @@ test("the × on an already-settled op is a quiet retire — no stop attempt, and
     assert.deepEqual(result, { stopped: false, dismissed: true, note: null, descendantsStopped: 0 }, "a finished op needs no warning banner")
     assert.deepEqual(h.stops, [])
   } finally {
-    rmSync(h.dir, { recursive: true, force: true })
+    h.cleanup()
   }
 })
 
@@ -503,7 +509,7 @@ test("subAgentSteer refuses a codex thread's child and says why", async () => {
     )
     assert.deepEqual(h.steers, [])
   } finally {
-    rmSync(h.dir, { recursive: true, force: true })
+    h.cleanup()
   }
 })
 
@@ -517,7 +523,7 @@ test("subAgentSteer refuses a non-broker claude row — a steer rides the broker
     )
     assert.deepEqual(h.steers, [])
   } finally {
-    rmSync(h.dir, { recursive: true, force: true })
+    h.cleanup()
   }
 })
 
@@ -531,7 +537,7 @@ test("subAgentTranscript reports steerability + the reason the drawer shows in p
     assert.equal(live.stoppable, true)
     assert.equal(live.stopNote, null)
   } finally {
-    rmSync(steerable.dir, { recursive: true, force: true })
+    steerable.cleanup()
   }
 
   const codex = harness(() => RUNNING_DIRECT)
@@ -543,7 +549,7 @@ test("subAgentTranscript reports steerability + the reason the drawer shows in p
     assert.equal(live.stoppable, false)
     assert.match(String(live.stopNote), /Codex does not expose per-sub-agent interruption/)
   } finally {
-    rmSync(codex.dir, { recursive: true, force: true })
+    codex.cleanup()
   }
 
   // A SETTLED child gets no note: its transcript already reads as finished, and a banner saying so
@@ -557,7 +563,7 @@ test("subAgentTranscript reports steerability + the reason the drawer shows in p
     assert.equal(done.stoppable, false)
     assert.equal(done.stopNote, null)
   } finally {
-    rmSync(settled.dir, { recursive: true, force: true })
+    settled.cleanup()
   }
 
   // An id frizz cannot place at all stays exactly as it was: "gone", empty, and no affordance.
@@ -567,7 +573,7 @@ test("subAgentTranscript reports steerability + the reason the drawer shows in p
     const missing = await gone.router.subAgentTranscript.handler({ input: { slug: "t", id: "toolu_child" } })
     assert.deepEqual(missing, { messages: [], state: "gone", steerable: false, steerNote: null, stoppable: false, stopNote: null })
   } finally {
-    rmSync(gone.dir, { recursive: true, force: true })
+    gone.cleanup()
   }
 })
 
@@ -601,7 +607,7 @@ test("the × on a CODEX shell terminates it by processId and injects the notice"
     assert.match(call.notice ?? "", /do not wait on it or poll it again/, "codex completion is POLLED — saying 'do not wait' alone would leave it polling")
     assert.deepEqual(h.stops, [], "the Claude control was never touched")
   } finally {
-    rmSync(h.dir, { recursive: true, force: true })
+    h.cleanup()
   }
 })
 
@@ -618,7 +624,7 @@ test("a codex exec the app-server says was already gone is not reported as a kil
     assert.equal(result.stopped, false)
     assert.equal(result.dismissed, true, "the phantom still clears")
   } finally {
-    rmSync(h.dir, { recursive: true, force: true })
+    h.cleanup()
   }
 })
 
@@ -633,7 +639,7 @@ test("a codex kill whose notice failed still counts as a kill, and says the work
     assert.equal(result.stopped, true, "the process is dead by then; a delivery problem must not read as a failed stop")
     assert.match(result.note ?? "", /could not be told/)
   } finally {
-    rmSync(h.dir, { recursive: true, force: true })
+    h.cleanup()
   }
 })
 
@@ -645,6 +651,6 @@ test("with no codex bridge the codex route never fires — the row just clears",
     assert.equal(result.stopped, false)
     assert.deepEqual(h.codexTerminations, [])
   } finally {
-    rmSync(h.dir, { recursive: true, force: true })
+    h.cleanup()
   }
 })

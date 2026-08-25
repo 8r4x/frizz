@@ -1095,6 +1095,7 @@ test("a rested broker thread whose daemon died holding live sub-agents surfaces 
   const ambiguous = staleAlive.refresh().threads.find((t) => t.id === "orphaned")!
   assert.equal(ambiguous.crashed, false, "a stale child of a LIVE worker is not evidence of a crash")
 
+  storage.close()
   rmSync(dir, { recursive: true, force: true })
 })
 
@@ -1120,6 +1121,7 @@ test("a rested broker thread whose daemon died with NO outstanding work stays an
   assert.equal(quiet.runtime, "turn-idle", "a finished thread whose daemon idled out is NOT a crash")
   assert.equal(quiet.crashed, false, "nothing was lost, so nothing to card")
 
+  storage.close()
   rmSync(dir, { recursive: true, force: true })
 })
 
@@ -1147,6 +1149,7 @@ test("a broker thread whose daemon died still holding a follow-up returns to the
   const dead = createBoard(project, storage, new Bus(), tailer, "ds-dead", { claudeBrokerDaemonAlive: () => false })
   assert.equal(dead.refresh().threads.find((t) => t.id === "stranded")!.needsYou, true, "a dead daemon holds nothing — the done card is owed to the human")
 
+  storage.close()
   rmSync(dir, { recursive: true, force: true })
 })
 
@@ -1175,6 +1178,7 @@ test("a broker claude thread with no transcript reads as stalled, while a codex 
 
   assert.equal(broker.runtime, "exited", "the broker thread surfaces the stall instead of spinning `running`")
   assert.notEqual(codex.runtime, "exited", "a codex app-server thread keeps its transient-rollout grace")
+  storage.close()
   rmSync(dir, { recursive: true, force: true })
 })
 

@@ -22,7 +22,9 @@ function ledger(over: Partial<SessionRow> = {}) {
   return {
     storage,
     items: () => parseDeliveryLedger(storage.getSession("t")?.delivery_ledger),
-    dispose: () => rmSync(dir, { recursive: true, force: true }),
+    // Close the db BEFORE removing the dir: Windows refuses to delete a file another handle still has
+    // open, so an unclosed storage turns cleanup into EPERM once every assertion has already passed.
+    dispose: () => { storage.close(); rmSync(dir, { recursive: true, force: true }) },
   }
 }
 

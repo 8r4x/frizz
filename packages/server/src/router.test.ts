@@ -284,6 +284,7 @@ test("archiveThread archives the row a dispatch actually creates, not just the l
     assert.equal(after?.state, "archived", "the state is what the board reads — setting `archived` alone is a no-op")
     assert.equal(after?.archived, 1, "and the legacy column stays in sync for pre-restart readers")
   } finally {
+    h.storage.close()
     rmSync(h.dir, { recursive: true, force: true })
   }
 })

@@ -49,7 +49,12 @@ function realRouter() {
   }
   const storage = createStorage(join(dir, "ui.db"))
   const ctx = { project, storage, board, tailer } as unknown as AppContext
-  return { router: createRouter(ctx), cleanup: () => rmSync(dir, { recursive: true, force: true }) }
+  // cleanup closes the db before removing the dir: Windows refuses to delete a file another handle
+  // still has open, so the reverse order is an EPERM after the assertions have already passed.
+  return {
+    router: createRouter(ctx),
+    cleanup: () => { storage.close(); rmSync(dir, { recursive: true, force: true }) },
+  }
 }
 
 test("every server procedure is callable from the browser client (and vice versa)", () => {

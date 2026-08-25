@@ -18,7 +18,7 @@ import { randomUUID } from "node:crypto"
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { createClaudeAgentBrokerBridge } from "./claude-agent-broker-bridge.ts"
-import { claudeBrokerRecordPath, readBrokerRecord } from "./claude-broker-host.ts"
+import { claudeBrokerRecordPath, liveBrokerRecords, readBrokerRecord } from "./claude-broker-host.ts"
 import { CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT } from "./claude-agent-sdk-protocol.ts"
 
 const fakeCli = fileURLToPath(new URL("./claude-agent-sdk.fixtures/fake-claude-cli.mjs", import.meta.url))
@@ -59,7 +59,19 @@ function harness(label: string, scenario = "hold-inputs") {
     const deadline = Date.now() + ms
     while (!cond()) { if (Date.now() > deadline) throw new Error("timeout"); await sleep(100) }
   }
-  return { dir, bridge, capturePath, waitFor }
+  // Teardown has to END the daemon, not just drop the socket. `bridge.close()` closes the CLIENT half
+  // only, and every test here forks a detached daemon whose CWD is this temp dir and whose record and
+  // capture files live inside it — so on Windows, which cannot delete a directory any process still
+  // holds open, the rm below is an EPERM while that daemon lives. Signal whatever the test actually
+  // forked (the one test that forks nothing sweeps an empty list); the fake CLI under it exits on its
+  // own the moment the daemon's stdin pipe closes.
+  const cleanup = async () => {
+    const daemons = liveBrokerRecords(dir)
+    bridge.close()
+    for (const record of daemons) { try { process.kill(record.daemonPid, "SIGTERM") } catch { /* already gone */ } }
+    await rmEventually(dir)
+  }
+  return { dir, bridge, capturePath, waitFor, cleanup }
 }
 
 test("a queued follow-up is cancelled end to end, and a delivered one honestly refuses", { timeout: 30_000 }, async () => {
@@ -86,8 +98,7 @@ test("a queued follow-up is cancelled end to end, and a delivered one honestly r
     // …as does a uuid the session never received at all.
     assert.equal(await h.bridge.cancelFollowUp({ threadSlug: slug, sessionId, deliveryId: randomUUID() }), false)
   } finally {
-    h.bridge.close()
-    await rmEventually(h.dir)
+    await h.cleanup()
   }
 })
 
@@ -109,8 +120,7 @@ test("a non-UUID deliveryId is refused rather than cancelling some other message
     )
     assert.deepEqual(capture(h.capturePath).filter((r) => r.kind === "cancel-async-message"), [], "nothing was addressed at the CLI")
   } finally {
-    h.bridge.close()
-    await rmEventually(h.dir)
+    await h.cleanup()
   }
 })
 
@@ -128,8 +138,7 @@ test("no live daemon is a refusal, never a cold resume", { timeout: 30_000 }, as
     )
     assert.equal(readBrokerRecord(claudeBrokerRecordPath(h.dir, sessionId)), null, "and nothing was forked")
   } finally {
-    h.bridge.close()
-    await rmEventually(h.dir)
+    await h.cleanup()
   }
 })
 
@@ -155,8 +164,7 @@ test("a daemon too old to understand the frame is refused instead of waited out"
     )
     assert.deepEqual(capture(h.capturePath).filter((r) => r.kind === "cancel-async-message"), [], "nothing reached the CLI")
   } finally {
-    h.bridge.close()
-    await rmEventually(h.dir)
+    await h.cleanup()
   }
 })
 
@@ -176,8 +184,7 @@ test("an unreadable answer is an ERROR, never a silent 'already delivered'", { t
       /unreadable answer/,
     )
   } finally {
-    h.bridge.close()
-    await rmEventually(h.dir)
+    await h.cleanup()
   }
 })
 
@@ -195,7 +202,6 @@ test("a provider-side failure surfaces as an error rather than a hang", { timeou
     // Well inside the client's 10s deadline: this is the daemon reporting, not the timeout firing.
     assert.ok(Date.now() - started < 5_000, "answered promptly instead of timing out")
   } finally {
-    h.bridge.close()
-    await rmEventually(h.dir)
+    await h.cleanup()
   }
 })

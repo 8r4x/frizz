@@ -359,8 +359,16 @@ test("bridge is the sole codex transport (always enabled) and negotiates exact i
     sourceCommit: "e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
   })
   assert.notEqual(h.calls[0]!.env, process.env, "the child receives a point-in-time environment snapshot")
+  // Looked up the way the OS does, because the snapshot is a PLAIN object: `process.env` is a
+  // case-insensitive proxy on Windows, where the variable is spelled `Path`, and copying it out through
+  // Object.entries (inheritWorkerEnvironment) keeps that spelling. The child inherits it either way —
+  // libuv's environment block and node's own win32 env dedupe are both case-insensitive — so pinning
+  // the upper-case key would pin a POSIX accident rather than the behaviour this asserts.
+  const snapshot = h.calls[0]!.env
+  const inherited = (key: string) =>
+    Object.entries(snapshot).find(([name]) => name.toLowerCase() === key.toLowerCase())?.[1]
   for (const key of ["HOME", "PATH", "CODEX_HOME", "OPENAI_API_KEY"] as const) {
-    assert.equal(h.calls[0]!.env[key], process.env[key], `${key} is preserved for first-party Codex auth/config`)
+    assert.equal(inherited(key), process.env[key], `${key} is preserved for first-party Codex auth/config`)
   }
   const initialize = h.processes[0]!.clientRequests.find((message) => message.method === "initialize")!
   assert.deepEqual((initialize.params as Message).capabilities, {
@@ -1861,20 +1869,24 @@ test("bridge close detaches persisted bindings and makes pending delivery rows n
 // used the Codex bridge before it kept `fray_session_id` — and the required-columns guard below turns
 // that into a hard "schema is missing required columns" on open. Ten of the sixteen project databases
 // on the maintainer's machine were in exactly that state: unopenable, with nothing saying why.
-test("bridge persistence adopts a pre-rebrand fray_session_id instead of refusing the database", () => {
+test("bridge persistence adopts a pre-rebrand fray_session_id instead of refusing the database", async () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-codex-app-server-rebrand-"))
   const dbPath = join(dir, "ui.db")
 
   // Build the schema the current code writes, then put the one column back to its old name.
   const seed = new Database(dbPath)
   const seedInteractions = createInteractionStore(seed)
-  new CodexAppServerBridge({
+  // `shutdown()`, not `close()`: close() returns the moment it has queued the drain, and the bridge's
+  // OWN handle on dbPath is not released until that drain reaches closeDatabase(). shutdown() awaits
+  // exactly that edge — which is what lets the rmSync below run on Windows, where a directory holding
+  // a file some handle still has open cannot be deleted at all.
+  await new CodexAppServerBridge({
     projectId: "project-1",
     projectDir: dir,
     dbPath,
     interactions: seedInteractions,
     spawn: () => new FakeAppServerProcess(),
-  }).close()
+  }).shutdown()
   seedInteractions.dispose()
   seed.close()
 
@@ -1896,7 +1908,7 @@ test("bridge persistence adopts a pre-rebrand fray_session_id instead of refusin
   )
   assert.ok(columns.has("frizz_session_id"), "the column was renamed, not re-added")
   assert.equal(columns.has("fray_session_id"), false, "and the old name is gone")
-  bridge.close()
+  await bridge.shutdown()
   interactions.dispose()
   db.close()
   rmSync(dir, { recursive: true, force: true })

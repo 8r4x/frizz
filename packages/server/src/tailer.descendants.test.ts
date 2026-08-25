@@ -129,6 +129,9 @@ function notifyDescendant(dir: string, agentId: string, toolUseId: string, at = 
   })}\n`)
 }
 
+// Order matters: the tailer and the db have to let go of the fixture before it is removed, because
+// Windows refuses to delete a file another handle still has open (POSIX unlinks it regardless, so the
+// wrong order is invisible on macOS and Linux and an EPERM on Windows).
 function cleanup(f: { tailer: { stop(): void }; storage: { close(): void }; dir: string }) {
   f.tailer.stop()
   f.storage.close()
@@ -586,7 +589,7 @@ function strandedFixture() {
   })
   tailer.tick()
   tailer.tick()
-  return { tailer, root, derived, subagents }
+  return { tailer, storage, root, derived, subagents }
 }
 
 test("descendants: a sub-agent tree stranded in the PRE-RENAME bucket still resolves through the drawer", () => {
@@ -610,6 +613,6 @@ test("descendants: a sub-agent tree stranded in the PRE-RENAME bucket still reso
     // file asserts, restated for the widened lookup.
     assert.equal(f.tailer.subAgent(SLUG, "toolu_nobody"), undefined, "an id no sidecar claims still resolves to nothing")
   } finally {
-    rmSync(f.root, { recursive: true, force: true })
+    cleanup({ ...f, dir: f.root })
   }
 })
