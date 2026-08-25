@@ -29,7 +29,7 @@ function binDir(): string {
 }
 
 test("windows: the resolver follows the .cmd stub to the real exe, never the #!/bin/sh sibling", (t) => {
-  if (process.platform !== "win32") t.skip("windows-only resolution path")
+  if (process.platform !== "win32") return t.skip("windows-only resolution path")
   const dir = binDir()
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const exeDir = join(dir, "node_modules", "@anthropic-ai", "claude-code", "bin")
@@ -43,7 +43,7 @@ test("windows: the resolver follows the .cmd stub to the real exe, never the #!/
 })
 
 test("windows: a real claude.exe on PATH wins outright, without reading any stub", (t) => {
-  if (process.platform !== "win32") t.skip("windows-only resolution path")
+  if (process.platform !== "win32") return t.skip("windows-only resolution path")
   const dir = binDir()
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   writeFileSync(join(dir, "claude.exe"), "MZ")
@@ -54,7 +54,7 @@ test("windows: a real claude.exe on PATH wins outright, without reading any stub
 })
 
 test("windows: a bin dir holding ONLY the shell script is not a resolution", (t) => {
-  if (process.platform !== "win32") t.skip("windows-only resolution path")
+  if (process.platform !== "win32") return t.skip("windows-only resolution path")
   const dir = binDir()
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   // This is the state that shipped broken: the bare name is present and nothing else is. Returning it
@@ -63,7 +63,7 @@ test("windows: a bin dir holding ONLY the shell script is not a resolution", (t)
 })
 
 test("posix: the bare name on PATH still resolves, and an absolute bin is passed through", (t) => {
-  if (process.platform === "win32") t.skip("posix resolution path")
+  if (process.platform === "win32") return t.skip("posix resolution path")
   const dir = binDir()
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   assert.equal(resolveClaudeExecutableAbsolute(undefined, { PATH: dir }), join(dir, "claude"))

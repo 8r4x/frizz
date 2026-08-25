@@ -10,6 +10,11 @@ const SCAN_CEILING_BYTES = 128 * 1024 * 1024
 // Cache entries are per output FILE and a machine accumulates them one per background shell ever run.
 // Bounded by insertion order: the oldest entry is the least likely to still be polled.
 const SCAN_CACHE_LIMIT = 512
+// Identity bytes held from the file's head. ino+birthtime alone cannot prove identity on Linux: ext4
+// reuses a freed inode immediately and the timestamp clock ticks coarsely (1–4ms), so an
+// unlink-and-recreate inside one tick can collide on BOTH. The head bytes settle it for any
+// replacement whose content differs, at the cost of one extra 64-byte pread per poll.
+const FINGERPRINT_BYTES = 64
 const ANSI_ESCAPE_RE = /\x1b(?:\][^\x07]*(?:\x07|\x1b\\)|\[[0-?]*[ -/]*[@-~])/g
 
 export interface BackgroundShellOutput {
@@ -50,7 +55,17 @@ export function readBackgroundShellOutput(path: string, maxBytes = OUTPUT_TAIL_B
 interface ScanState {
   // The FILE these totals describe. A rotated log (same path, new file) can be larger than the totals
   // it replaced, so a size comparison alone would silently keep counting on top of a stranger's bytes.
+  // The inode alone is not identity either: ext4 reuses a freed inode number immediately, so a
+  // replacement written right after an unlink routinely lands on the SAME ino (measured on Ubuntu
+  // 24.04, 2026-08-24 — the rotation test failed there 3 !== 5). Birth time disambiguates: an append
+  // never changes it, a new file gets a new one, and a filesystem without birth times reports a
+  // constant (0), which merely degrades to the old ino-only check.
   ino: number
+  birthtimeMs: number
+  // The first min(64, size-at-first-scan) bytes, latin1 — see FINGERPRINT_BYTES for why ino+birthtime
+  // are not enough. Empty when the file was empty at first scan, which is safe: there were no counted
+  // bytes for a replacement to inherit.
+  fingerprint: string
   bytes: number
   breaks: number
   // The delta boundary can fall between the \r and the \n of one CRLF. Without this the \n opens the
@@ -62,6 +77,19 @@ interface ScanState {
   overflowed: boolean
 }
 const scans = new Map<string, ScanState>()
+
+// Latin1 keeps the comparison byte-exact without utf8 replacement-character collisions.
+function readHead(fd: number, length: number): string {
+  if (length <= 0) return ""
+  const buffer = Buffer.alloc(length)
+  let read = 0
+  while (read < length) {
+    const count = readSync(fd, buffer, read, length - read, read)
+    if (count === 0) break
+    read += count
+  }
+  return buffer.subarray(0, read).toString("latin1")
+}
 
 // LINES OF OUTPUT this background shell has produced — the row's live counter, and the one reading that
 // separates "this watcher is alive and printing" from "this watcher is wedged". Undefined when the file
@@ -83,9 +111,21 @@ export function backgroundShellLineCount(path: string): number | undefined {
     let state = scans.get(path)
     // Truncated (shrunk) or rotated (a different file at the same path): the old totals describe bytes
     // that are gone, so start over rather than counting on top of them.
-    if (state && (state.bytes > size || state.ino !== stat.ino)) state = undefined
+    if (state && (state.bytes > size || state.ino !== stat.ino || state.birthtimeMs !== stat.birthtimeMs)) state = undefined
+    if (state && state.fingerprint !== readHead(fd, state.fingerprint.length)) state = undefined
     if (state?.overflowed) return undefined
-    if (!state) state = { ino: stat.ino, bytes: 0, breaks: 0, pendingCR: false, trailing: false, overflowed: false }
+    if (!state) {
+      state = {
+        ino: stat.ino,
+        birthtimeMs: stat.birthtimeMs,
+        fingerprint: readHead(fd, Math.min(FINGERPRINT_BYTES, size)),
+        bytes: 0,
+        breaks: 0,
+        pendingCR: false,
+        trailing: false,
+        overflowed: false,
+      }
+    }
     if (size - state.bytes > SCAN_CEILING_BYTES) {
       scans.set(path, { ...state, overflowed: true })
       return undefined

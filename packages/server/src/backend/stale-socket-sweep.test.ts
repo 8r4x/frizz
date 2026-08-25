@@ -13,7 +13,7 @@ import { existsSync, mkdtempSync } from "node:fs"
 import net from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { sweepStaleSockets } from "./stale-socket-sweep.ts"
+import { parseLsofSocketNames, sweepStaleSockets } from "./stale-socket-sweep.ts"
 
 const PREFIX = "frizz-swtest-"
 
@@ -68,6 +68,25 @@ test("the real sweep unlinks a killed daemon's socket and never touches a live o
   })
   assert.equal(accepted, 1)
   await new Promise<void>((resolve) => live.close(() => resolve()))
+})
+
+// Both lsof spellings of the name field, because they differ by platform and the difference was a real
+// bug: macOS prints the bare path, Linux appends ` type=STREAM` — which made every live socket miss the
+// referenced-set check, so the sweep PROBED live listeners (caught by the real-sweep test above on an
+// Ubuntu 24.04 run, 2026-08-24; a probe that connects is a client takeover for both daemon families).
+test("parseLsofSocketNames reads the bare macOS path and strips Linux's type suffix", () => {
+  const referenced = parseLsofSocketNames([
+    "p123",
+    "n/tmp/frizz-claude-a.sock", // macOS shape
+    "n/tmp/frizz-claude-b.sock type=STREAM", // Linux shape
+    "ntype=STREAM", // Linux's pathless endpoints carry no `/`, so they are not paths at all
+    "f7",
+    "",
+  ].join("\n"))
+  assert.ok(referenced.has("/tmp/frizz-claude-a.sock"))
+  assert.ok(referenced.has("/tmp/frizz-claude-b.sock"), "the Linux suffix is stripped")
+  assert.ok(referenced.has("/tmp/frizz-claude-b.sock type=STREAM"), "and the raw spelling is kept too (over-inclusion only ever SKIPS)")
+  assert.ok(!referenced.has("type=STREAM"))
 })
 
 // ---- fail-closed branches (injected seams) ---------------------------------------------------------

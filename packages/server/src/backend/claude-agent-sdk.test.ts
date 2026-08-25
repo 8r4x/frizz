@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url"
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import * as claudeRuntime from "@frizz/claude-agent-sdk-runtime"
+import { claudeWorkerEnv } from "./types.ts"
 import {
   CLAUDE_AGENT_SDK_FOUNDATION_FLAG,
   createClaudeDiagnosticRedactor,
@@ -84,13 +85,18 @@ test("real SDK + fake executable: init owns the requested session, input streams
   // The four *_Present flags below are now INHERITANCE-dependent (a worker gets the operator's
   // environment — see worker-env.ts), so a developer whose shell exports GITHUB_TOKEN would otherwise
   // flip this assertion. Clearing them through the override path keeps the baseline deterministic AND
-  // exercises buildEnvironment's delete branch.
+  // exercises buildEnvironment's delete branch. The worker caps are the same hazard inverted: in
+  // production the BRIDGE spreads claudeWorkerEnv() into the daemon env and the foundation inherits
+  // it, so a test process outside a frizz worker has no CLAUDE_CODE_MAX_* at all — until 2026-08-24
+  // this test read them from ambient env and only passed INSIDE a dispatched worker (first caught by
+  // a suite run on a plain Linux box). claudeWorkerEnv({}) is the bridge's spread at its defaults.
   const harness = startHarness("basic", {
     ANTHROPIC_BASE_URL: "https://api.example.test",
     GITHUB_TOKEN: undefined,
     OPENAI_API_KEY: undefined,
     AWS_SECRET_ACCESS_KEY: undefined,
     ARBITRARY_SECRET: undefined,
+    ...claudeWorkerEnv({}),
   })
   try {
     const control = await withTimeout(harness.handle.initializationResult(), "initialization result")

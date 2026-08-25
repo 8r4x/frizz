@@ -432,7 +432,12 @@ function readGitWorktreeProjectId(worktree: GitWorktree): string | undefined {
 }
 
 function syncGitConfigPath(path: string): void {
-  const fd = openSync(path, "r")
+  // Windows FlushFileBuffers demands a WRITE handle — fsync on an "r" fd throws EPERM there, which
+  // took every git-repo project registration down with "unable to persist git config --local
+  // frizz.id" (found by the first Windows suite run, 2026-08-24). POSIX fsyncs a read-only fd fine,
+  // and "r+" never writes, so the write-capable open is safe everywhere git itself just wrote the
+  // file. The content is already durable in git's own rename; this fsync is belt-and-suspenders.
+  const fd = openSync(path, process.platform === "win32" ? "r+" : "r")
   try {
     fsyncSync(fd)
   } finally {

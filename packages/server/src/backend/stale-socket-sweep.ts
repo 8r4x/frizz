@@ -49,6 +49,26 @@ export interface StaleSocketSweepDeps {
   unlink?: (path: string) => void
 }
 
+/**
+ * The paths in `lsof -U -F n` output, one `n`-prefixed line per endpoint. macOS prints the bare path
+ * (`n/tmp/x.sock`); Linux lsof (4.95 measured on Ubuntu 24.04, 2026-08-24) appends metadata after the
+ * path (`n/tmp/x.sock type=STREAM`), which made every live socket miss the equality check against its
+ * candidate path — so the sweep PROBED live listeners, and a probe that connects is itself the harm
+ * (both daemons treat a connection as client takeover). Both the raw and the suffix-stripped spelling
+ * are returned: over-including can only make the sweep SKIP a candidate, never unlink a live one.
+ */
+export function parseLsofSocketNames(stdout: string): Set<string> {
+  const referenced = new Set<string>()
+  for (const line of stdout.split("\n")) {
+    if (!line.startsWith("n/")) continue
+    const raw = line.slice(1)
+    referenced.add(raw)
+    const meta = raw.indexOf(" type=")
+    if (meta > 0) referenced.add(raw.slice(0, meta))
+  }
+  return referenced
+}
+
 const defaultListReferenced = (prefix: string, done: (referenced: Set<string> | null) => void): void => {
   execFile("lsof", ["-U", "-F", "n"], { timeout: 30_000, maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
     // lsof absent or silent: we have no evidence, so we touch nothing.
@@ -57,9 +77,7 @@ const defaultListReferenced = (prefix: string, done: (referenced: Set<string> | 
     // usable — but only if this family appears in it at all; otherwise the run may have died early and
     // a live socket could be missing from the list.
     if (error && !stdout.includes(prefix)) return done(null)
-    const referenced = new Set<string>()
-    for (const line of stdout.split("\n")) if (line.startsWith("n/")) referenced.add(line.slice(1))
-    done(referenced)
+    done(parseLsofSocketNames(stdout))
   }).unref?.()
 }
 
