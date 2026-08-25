@@ -211,7 +211,7 @@ trades the code for a session cookie, so the link itself stops working the momen
 <details>
 <summary><b>Can I run it on several repos at once?</b></summary>
 
-> Yes. One Frizz server serves every project on your machine — you don't start one per repo. Run `frizz` in any of them and switch projects from the board; each project's threads, settings and state stay separate.
+> Yes. One Frizz server serves every project on your machine — you don't start one per repo. Run `npx frizz` in any of them and switch projects from the board; each project's threads, settings and state stay separate.
 
 </details>
 
