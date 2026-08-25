@@ -42,10 +42,10 @@ $ npx frizz
   press ctrl-c to stop · run with --debug for the full event feed
 ```
 
-A browser tab opens on localhost — a dedicated workspace for this directory. **One tab per project!** One Frizz serves every project on the machine, each at its own `/project/<name>` URL, so running it in a second directory joins the server already running rather than starting another. Runs on macOS, Linux, and Windows.
+A browser tab opens at `http://127.0.0.1:9393/project/acme/`. Frizz always listens on port 9393 (19393 if something else holds it), and one server serves every project on the machine. Each directory you run it in becomes a **project** with its own board at `/project/<name>`, so running `npx frizz` in a second repo registers that project and opens its board in the server already running rather than starting another. Runs on macOS, Linux, and Windows.
 
 <p align="center">
-  <img src="assets/board.png" alt="Frizz running in a browser tab at 127.0.0.1:4921: a sidebar of threads on the left, and on the right a card where an agent is asking an answerable question with lettered options, above Snooze and Mark as done." width="100%">
+  <img src="assets/board.png" alt="The Frizz board: the project rail down the left, the composer and the queue of threads beside it, and on the right a card where an agent is asking an answerable question with lettered options, above Snooze and Mark as done." width="100%">
 </p>
 
 <br/>
@@ -55,14 +55,25 @@ A browser tab opens on localhost — a dedicated workspace for this directory. *
 Frizz is a browser tab, a queue, and the agent CLIs you already pay for. It brings no model of its own, automates none of your workflow, and keeps every opinion it does have in a text file you can edit.
 
 - 🗂️ **A task queue, not a sidebar.** Every agent that comes to rest needing you becomes a card. Work the queue top to bottom instead of polling ten terminals.
+- 📁 **Projects.** Every directory you run it in gets its own board, all on one server. The home page lists them, and the project rail switches between them with each queue's count on its icon.
 - 🔌 **Headless.** Every thread's agent runs in its own detached background process. Close the tab, quit the browser, ctrl-c the server, reboot — your threads are all still there when you come back, and Frizz reconnects to the ones still running rather than replaying them from disk.
 - 🤖 **Claude Code *and* Codex.** Pick the backend per thread and run both against the same repo at once. Frizz supports Claude Code and Codex subscriptions — the CLIs you already have installed and signed in.
 - 😴 **Snooze.** Not everything needs an answer now. Park a card for an hour, until tomorrow morning, or until a date you pick — optionally with a follow-up prompt attached, so the thread wakes up already working on what you told it to do next.
-- 🔄 **Heartbeats.** Give a thread a prompt that repeats — every time it comes to rest, on a clock you set in minutes, or both. Good for "keep going until CI is green" without you re-asking. A scheduled one reaches the agent even mid-turn, so it can nudge a thread that never stops. Switch it off whenever, or let the agent say it's finished.
+- 🎯 **Goals.** Give a thread a standing goal that Frizz re-sends as a prompt — every time it comes to rest, on a clock you set in minutes, or both. Good for "keep going until CI is green" without you re-asking. A scheduled one reaches the agent even mid-turn, so it can nudge a thread that never stops. Switch it off whenever, or let the agent say it's finished.
 - 🐙 **GitHub integration.** Browse your repo's issues and pull requests without leaving the composer, and turn a selection of them into threads. Workers can read issues, diffs, and CI on their own.
 - 👀 **Built-in CI and PR watchers.** A worker waiting on a build or a review doesn't hand the thread back to you to be told "keep going." It watches, and picks the work back up when the run goes green or a review lands.
 - 📝 **No magic.** A thread behaves like a Claude Code session you started yourself. Frizz adds no worktrees, no branches, no dev server, no build integration, no workflow engine to fight with.
 - 🔒 **Local only.** No cloud, no account, no telemetry. The server binds `127.0.0.1` by default and its state lives in your user directory, never in your checkout. To reach a board from a phone, put your own tunnel or proxy in front of it — see [Remote access](docs/remote-access.md).
+
+### Projects
+
+Every directory you run `npx frizz` in becomes a project with its own board, all served by the one Frizz on your machine. The home page at `http://127.0.0.1:9393/` lists them.
+
+<p align="center">
+  <img src="assets/projects.png" alt="The Frizz home page: a rail of project icons down the left, and four project cards — design-system, acme-web, acme-api, frizz — each with its home-relative path and when it was last opened, plus an Add a project card." width="100%">
+</p>
+
+The project rail keeps every project one click away, with each queue's count on its icon. It is off by default; switch it on under **Settings → Project sidebar**.
 
 ### The queue
 
@@ -104,12 +115,12 @@ Park a card for an hour, until tomorrow morning, or until a date you pick. Attac
   <img src="assets/snooze.png" alt="The snooze menu open on a queue card, offering 1 hour, tomorrow at 9am, 1 day, 3 days, 1 week, and a custom time and prompt." width="100%">
 </p>
 
-### Heartbeats
+### Goal
 
-Give a thread a prompt that repeats. Send it every time the agent comes to rest, on a clock you set in minutes, or both — a scheduled send reaches the agent even mid-turn, without cutting off work in progress.
+Give a thread a standing goal. Frizz sends it as a prompt every time the agent comes to rest, on a clock you set in minutes, or both — a scheduled send reaches the agent even mid-turn, without cutting off work in progress.
 
 <p align="center">
-  <img src="assets/recurring.png" alt="The recurring prompt panel: one prompt saying to keep going until the test suite is green, with both triggers switched on — every time it stops, and every 30 minutes." width="100%">
+  <img src="assets/goal.png" alt="The goal panel open on a thread card: a goal saying to keep going until the test suite is green, sent at every rest and every 30 minutes." width="100%">
 </p>
 
 <br/>
@@ -216,7 +227,7 @@ trades the code for a session cookie, so the link itself stops working the momen
 >
 > Frizz prints the addresses to use and warns you as it starts. Reaching it by IP or by the machine's own hostname (`http://pupper:9393/`, `http://pupper.local:9393/`) works as-is; any other name you have to say so — `--host --allowed-host frizz.home.arpa` — because an unlisted name is how DNS rebinding gets a browser to treat an attacker's page as same-origin with your board, and the machine's own name is the one nobody off your network can point elsewhere. `FRIZZ_HOST` and `FRIZZ_ALLOWED_HOSTS` do the same thing when the launch command lives in an image or a unit file.
 >
-> Understand what you're turning on. Frizz has no login: reaching the port *is* the authorization, and the board runs shell commands as you. Only do this on a network you trust, and prefer a tunnel (`ssh -L 9393:127.0.0.1:9393 you@box`, using the port Frizz printed, the same on both ends) if you just want your own board from your own laptop — that needs no flag at all.
+> Understand what you're turning on. Frizz has no login: reaching the port *is* the authorization, and the board runs shell commands as you. Only do this on a network you trust, and prefer a tunnel (`ssh -L 9393:127.0.0.1:9393 you@box`, Frizz's port, the same on both ends) if you just want your own board from your own laptop — that needs no flag at all.
 
 </details>
 
@@ -227,7 +238,7 @@ trades the code for a session cookie, so the link itself stops working the momen
 >
 > ```sh
 > npx frizz --public-origin https://frizz.example.com
-> cloudflared tunnel --url http://127.0.0.1:9393   # the port Frizz printed
+> cloudflared tunnel --url http://127.0.0.1:9393   # Frizz's port
 > ```
 >
 > Frizz stays bound to `127.0.0.1` — `--public-origin` is not `--host` and does not put anything on your LAN. The tunnel runs on the same machine and dials the loopback port, so the only way in is through the tunnel. That is also what makes this the *good* remote option rather than merely a working one: the tunnel terminates TLS, so the board is a real `https://` origin and therefore a secure context, which plain `--host` over a LAN IP is not. Copy buttons and desktop notifications work again, and it works on a phone.
@@ -262,13 +273,14 @@ Frizz has its own small vocabulary. Most of it names a feature, so this doubles 
 
 | Term | What it means |
 | --- | --- |
+| **Project** | A directory you ran Frizz in. Each has its own board at `/project/<name>`; one server holds all of them. |
 | **Thread** | One effort, start to finish. Not a chat tab and not a branch. The session *is* the thread — there's no sidecar document to keep in sync, and dispatching doesn't write a file into your repo. |
 | **Worker** | The agent driving a thread: a real Claude Code or Codex process, running as *you*, with your credentials and your CLI config. |
 | **Sub-agent** | A helper a worker dispatches for an independent prong of its own task. Frizz binds each one back to its parent, so the fan-out is visible under the parent's card. |
 | **Rested** | An agent that has ended its turn and is waiting on a human. A rested thread isn't idle, it's *your move*. |
 | **The queue** | The single list of threads that need you. A thread only earns a card when it genuinely wants a human. |
 | **Snooze** | Hide a card until later — an hour, tomorrow morning, or a date you pick — optionally with a follow-up prompt attached. |
-| **Heartbeat** | A prompt that repeats on its own — every time a thread rests, on a clock, or both — until you switch it off or the agent says it's done. |
+| **Goal** | A standing prompt a thread receives on its own — every time it rests, on a clock, or both — until you switch it off or the agent says it's done. |
 | **Scratchpad** | A thread's durable working memory, readable under its **Doc** tab. Where a worker keeps what a summary would otherwise lose: the approach, the alternatives it rejected, the decisions you made and reversed. |
 | **`FRIZZ.md`** | An optional file at your repo root whose contents are injected into every thread, for when you want agents to follow your repo's own norms. |
 
