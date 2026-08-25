@@ -23,13 +23,15 @@ async function launch() {
   return { browser, page, errors }
 }
 
-// Click the button whose visible text contains `needle`, within `scope`. Contains, not startsWith: a
-// recommended chip leads with its "Recommended" badge, which is part of the button's text content.
+// Click the control whose visible text contains `needle`, within `scope`. Contains, not startsWith: a
+// recommended chip leads with its "Recommended" badge, which is part of the row's text content. An
+// answer chip is a `[data-question-option]` ROW whose button is empty and stretched over the text
+// (QuestionBlockCard's Chip), so the row is what carries the text and its button is what takes the click.
 const clickByText = (scope: string, needle: string) => `(() => {
   const root = document.querySelector('${scope}') ?? document
-  const b = [...root.querySelectorAll('button')].find((x) => (x.textContent ?? '').includes(${JSON.stringify(needle)}))
-  if (!b) throw new Error('no button containing ' + ${JSON.stringify(needle)})
-  b.click()
+  const hit = [...root.querySelectorAll('[data-question-option], button')].find((x) => (x.textContent ?? '').includes(${JSON.stringify(needle)}))
+  if (!hit) throw new Error('no control containing ' + ${JSON.stringify(needle)})
+  ;(hit.matches('button') ? hit : hit.querySelector('button')).click()
   return true
 })()`
 

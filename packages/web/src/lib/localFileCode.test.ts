@@ -12,6 +12,14 @@ test("isPathCandidate accepts path-like inline code", () => {
     "../sibling/x.md",
     "packages/web/src/App.tsx:42:7", // an editor :line[:col] suffix is still a candidate (stripped server-side)
     "a/b", // any slash-bearing token is a candidate; the server decides if it's real
+    // A bare filename with an extension — how a worker names a file it wrote at the project root
+    // (`it's in \`cloudflare-ask.md\``). Resolved against the project dir server-side, like any
+    // other relative path.
+    "cloudflare-ask.md",
+    "package.json",
+    "App.tsx",
+    "pnpm-lock.yaml",
+    "notes@2026-08-25.md",
   ]) assert.equal(isPathCandidate(v), true, v)
 })
 
@@ -20,8 +28,12 @@ test("isPathCandidate rejects non-paths: commands, bare words, URLs, whitespace,
     "git status", // whitespace → a command, not a path
     "npm run build",
     "useState", // bare identifier, no slash
-    "package.json", // bare filename (no slash) — deliberately excluded from v1 to avoid statting every word
-    "README", // bare word
+    "README", // bare word, no extension
+    "1.5", // a version, not a file: the "extension" opens with a digit
+    "v1.2",
+    "e.g.", // an abbreviation ends on its dot, so there is no extension at all
+    "foo.", // nor here
+    ".env", // a dotfile has no stem before its one dot; the bare-filename rule needs both
     "https://example.com/x.png", // URL
     "file:///Users/me/x.png", // URL scheme
     "cursor://file/Users/me/x.png", // URL scheme

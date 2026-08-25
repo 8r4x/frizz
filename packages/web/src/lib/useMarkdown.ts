@@ -69,13 +69,12 @@ function useGithubHovercardRefs(html: string): void {
 }
 
 /** Inline-only prose → sanitized HTML, for hosts that are one line tall (see mdInlineToHtml). */
-export function useInlineMarkdownHtml(md: string, opts?: { inertInteractive?: boolean }): string {
+export function useInlineMarkdownHtml(md: string): string {
   const repo = useGithubRepoForLinks()
   const base = useLocalPathBase()
-  const inertInteractive = opts?.inertInteractive
   const html = useMemo(
-    () => mdInlineToHtml(md, { inertInteractive, baseDir: base.dir, homeDir: base.home }),
-    [md, inertInteractive, base.dir, base.home, repo],
+    () => mdInlineToHtml(md, { baseDir: base.dir, homeDir: base.home }),
+    [md, base.dir, base.home, repo],
   )
   useGithubHovercardRefs(html)
   return html

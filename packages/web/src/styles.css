@@ -865,12 +865,17 @@ a[href] {
   text-decoration: line-through;
   text-decoration-thickness: from-font;
 }
-.md-body a {
+/* Links and local-file actions wear ONE treatment on both prose surfaces — the block body and the
+   inline-only run (an answer chip, the recommendation caption). The inline run used to get a bare
+   underline with no colour, from the days it only ever held a link the sanitizer had flattened. */
+.md-body a,
+.md-inline a {
   color: var(--color-accent);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
-.md-body .local-file-action {
+.md-body .local-file-action,
+.md-inline .local-file-action {
   color: var(--color-accent);
   text-decoration: underline;
   text-underline-offset: 2px;
@@ -934,8 +939,14 @@ a[href] {
 .md-inline del {
   text-decoration: line-through;
 }
-.md-inline a {
-  text-decoration: underline;
+/* An answer chip's hit area is a stretched, empty button laid OVER its text (QuestionBlockCard's Chip
+   — the text cannot live inside the button, because a link inside a button is invalid HTML and Gecko
+   swallows the click). Positioning the three live things in the text paints them ABOVE that button, so
+   a click on a link, a local-file action or a resolved path follows the reference, and a click on any
+   other pixel of the row picks the option. */
+[data-question-option] :is(a, .local-file-action, .local-file-code) {
+  position: relative;
+  z-index: 1;
 }
 .md-body pre {
   background: var(--color-bg);

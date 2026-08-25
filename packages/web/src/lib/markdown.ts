@@ -285,16 +285,15 @@ export function mdToHtml(md: string, opts?: { baseDir?: string; homeDir?: string
 // For places that render a single short line inside their own element and must stay inline — answer
 // chips, the recommendation caption — where a worker's `code`/**bold**/_em_ must be honored rather than
 // shown as raw markdown, but a `<p>` wrapper would break the layout. Same allowlist sanitizer as the
-// block path (content is only semi-trusted).
-// `inertInteractive` — flatten links (and the local-file button the normal path would mint) to plain
-// spans. Set it when the result is dropped INSIDE an interactive host (an answer chip is itself a
-// `<button>`): a nested `<a>`/`<button>` there is invalid interactive-in-interactive HTML and a click
-// would both follow the link and trigger the host (open a file AND select the option). Emphasis/code
-// still render; only the interactivity is stripped.
-export function mdInlineToHtml(md: string, opts?: { inertInteractive?: boolean; baseDir?: string; homeDir?: string }): string {
+// block path (content is only semi-trusted), and the SAME augmentations: a link, a `#123` reference,
+// a bare URL and a local-file path all come out live here too. An answer chip used to ask for them
+// flattened (`inertInteractive`), because the chip was a `<button>` around its text and an anchor
+// inside one is invalid HTML; the chip now lays its hit area BESIDE the text instead
+// (components/QuestionBlockCard.tsx), so a file named in an option opens like one named in a paragraph.
+export function mdInlineToHtml(md: string, opts?: { baseDir?: string; homeDir?: string }): string {
   if (!md.trim()) return ""
-  const { inertInteractive = false, baseDir, homeDir } = opts ?? {}
-  return sanitize(markdown.parseInline(md, { async: false }) as string, { inertInteractive, baseDir, homeDir })
+  const { baseDir, homeDir } = opts ?? {}
+  return sanitize(markdown.parseInline(md, { async: false }) as string, { baseDir, homeDir })
 }
 
 export function stripFrontmatter(md: string): string {
@@ -340,17 +339,17 @@ const DROP_WITH_CONTENT = new Set([
 // built-in reader, and the PROJECT ROOT everywhere else, which is the base the server already uses for
 // a bare path in inline code. `homeDir` — the expansion of a leading `~`. Both come from the caller;
 // see lib/localPathBase.ts for where the non-reader surfaces get them.
-type WalkContext = { inertInteractive: boolean; block: boolean; baseDir?: string; homeDir?: string }
+type WalkContext = { block: boolean; baseDir?: string; homeDir?: string }
 
-function sanitize(dirty: string, { inertInteractive = false, block = false, baseDir, homeDir }: Partial<WalkContext> = {}): string {
+function sanitize(dirty: string, { block = false, baseDir, homeDir }: Partial<WalkContext> = {}): string {
   const tpl = document.createElement("template")
   tpl.innerHTML = dirty
-  walk(tpl.content, { inertInteractive, block, baseDir, homeDir })
+  walk(tpl.content, { block, baseDir, homeDir })
   return tpl.innerHTML
 }
 
 function walk(node: ParentNode, ctx: WalkContext) {
-  const { inertInteractive, block } = ctx
+  const { block } = ctx
   for (const el of Array.from(node.children)) {
     const tag = el.tagName.toLowerCase()
     if (!ALLOWED_TAGS.has(tag)) {
@@ -360,15 +359,6 @@ function walk(node: ParentNode, ctx: WalkContext) {
       // children (what DOMPurify does) costs only the bracketed token itself.
       if (DROP_WITH_CONTENT.has(tag)) el.remove()
       else unwrap(el, ctx)
-      continue
-    }
-    if (tag === "a" && inertInteractive) {
-      // Chip context (see mdInlineToHtml): flatten the anchor to a plain span so no interactive element
-      // (nor the local-file button the branch below would mint) lands inside the host `<button>`.
-      const span = document.createElement("span")
-      while (el.firstChild) span.append(el.firstChild)
-      el.replaceWith(span)
-      walk(span, ctx)
       continue
     }
     if (tag === "a" || tag === "img") rebaseRelative(el, tag === "a" ? "href" : "src", ctx)

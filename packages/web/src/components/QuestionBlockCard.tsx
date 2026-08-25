@@ -14,9 +14,10 @@
 // It lives in its own module rather than in ChatView so BOTH producers can reach it: the interaction
 // surface (InteractionCards.tsx) is imported BY ChatView, so a question card defined inside ChatView
 // could only have been shared through a module cycle.
-import { Fragment, useLayoutEffect, useMemo, useRef } from "react"
+import { Fragment, createElement, useId, useLayoutEffect, useMemo, useRef } from "react"
 import { AlertTriangle, Check, HelpCircle, ListChecks } from "lucide-react"
 import { useInnerHtml } from "../lib/innerHtml.ts"
+import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { useInlineMarkdownHtml, useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { parseQuestionBlock, type BlockAnswer, type ParsedQuestion, type QuestionKind } from "../lib/questionBlocks.ts"
@@ -67,10 +68,9 @@ export function QuestionBlockCard({
     [question, raw, questionKind, danger],
   )
   const html = useMarkdownHtml(parsed.contextMd)
-  const contextHtml = useInnerHtml(html)
-  const trailingInner = useInnerHtml(useMarkdownHtml(parsed.trailingMd ?? ""))
+  const trailingHtml = useMarkdownHtml(parsed.trailingMd ?? "")
   const recIdx = parsed.recommendedIdx
-  const recInner = useInnerHtml(useInlineMarkdownHtml(parsed.recommendation ?? ""))
+  const recHtml = useInlineMarkdownHtml(parsed.recommendation ?? "")
   const isMulti = parsed.kind === "multi"
   const isDanger = parsed.danger
   const chosen = interactive?.answer.chosen ?? null
@@ -101,7 +101,7 @@ export function QuestionBlockCard({
           colour by design (and outranks a utility class on the element itself). */}
       {html && (
         <div className="text-fg">
-          <div className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={contextHtml} />
+          <LinkedHtml className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} html={html} />
         </div>
       )}
       {(parsed.options.length > 0 || interactive) && (
@@ -206,26 +206,39 @@ export function QuestionBlockCard({
       {/* A "Note: …" footnote the worker wrote AFTER the options — rendered below the chips (muted) so
           the choices stay answerable instead of swallowing them (the old parser dropped the chips). */}
       {parsed.trailingMd && (
-        <div className={`mt-2 md-body text-[12px] text-muted/70${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={trailingInner} />
+        <LinkedHtml className={`mt-2 md-body text-[12px] text-muted/70${wrap ? ` ${QUEUE_WRAP}` : ""}`} html={trailingHtml} />
       )}
       {/* The caption fallback survives ONLY when the recommendation didn't match an option. */}
       {parsed.recommendation && recIdx === null && (
-        <div className="md-inline mt-1.5 text-[11px] text-muted/70" dangerouslySetInnerHTML={recInner} />
+        <LinkedHtml className="md-inline mt-1.5 text-[11px] text-muted/70" html={recHtml} />
       )}
     </TranscriptCard>
   )
 }
 
 
+// Sanitized markdown dropped into its element, PLUS the post-render pass that tags an inline-code file
+// reference the server confirms is real (lib/localFileCode.ts) — the decoration the transcript's own
+// prose gets (ChatView's ProseHtml). Every prose surface in this card goes through it: the context,
+// a group heading, each option, the footnote and the recommendation caption. A file a worker names in
+// a question — `it's in \`cloudflare-ask.md\`` — is exactly the file the human is being asked to read
+// before they answer, and until 2026-08-25 the card was the one place in the app it did not open.
+function LinkedHtml({ as = "div", className, html }: { as?: "div" | "span"; className: string; html: string }) {
+  const inner = useInnerHtml(html)
+  const ref = useRef<HTMLElement>(null)
+  useLocalFileCodeLinks(ref, html)
+  return createElement(as, { ref, className, dangerouslySetInnerHTML: inner })
+}
+
 // A group heading between options. Its own component only so the markdown parse and the
 // dangerouslySetInnerHTML prop can be memoized per heading — a hook can't be called inside the
 // options .map(), and an inline `{ __html }` literal there would rebuild the DOM on every render
 // (see useInnerHtml).
 function OptionHeading({ md, wrap }: { md: string; wrap?: boolean }) {
-  const inner = useInnerHtml(useInlineMarkdownHtml(md.split("\n").join(" ")))
+  const html = useInlineMarkdownHtml(md.split("\n").join(" "))
   return (
     <div className="mt-1 text-fg">
-      <div className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={inner} />
+      <LinkedHtml className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} html={html} />
     </div>
   )
 }
@@ -241,10 +254,22 @@ function nextOptionId(options: string[]): string {
 // recommendedIndex (rec-line → option index) now lives in ../lib/questionBlocks.ts alongside the rest
 // of the question parsing, so it's covered by the pure-logic unit tests.
 
-// A single answer choice: a left-aligned neutral button; when selected it takes the subtle accent
+// A single answer choice: a left-aligned neutral row; when selected it takes the subtle accent
 // border (focus-adjacent selection). A `multi` chip additionally carries a checkbox square (empty →
 // checked) so the "toggle several" affordance reads unmistakably as multi-select vs the single-select
 // chips' bare border highlight. Read-only (no interactive controller) → muted and non-clickable.
+//
+// THE HIT AREA IS A STRETCHED, EMPTY BUTTON LAID OVER THE ROW — not a button wrapped around the text.
+// The option text is worker-authored markdown, and it carries the same live things a paragraph does: a
+// link, a `#123` reference, a bare URL, a file path (maintainer 2026-08-25: "the link to that Markdown
+// file should be clickable … as well as URLs and PR/issue links inside questions — the usual set of
+// augmentations"). None of those may sit INSIDE a `<button>`: interactive-in-interactive is invalid
+// HTML, and Gecko retargets a click inside a button to the button, so the link would never open. So
+// the row is a plain `<div>`; the button is `absolute inset-0` beside the text, named by the text
+// through `aria-labelledby`; and styles.css positions each live element in the text ABOVE the button.
+// A click on a link follows it and selects nothing; a click on any other pixel of the row picks the
+// option. Tab reaches the button first and each link after it. Until this the chip asked the sanitizer
+// to flatten links to spans (`inertInteractive`), which is why a file named in an option never opened.
 function Chip({
   label,
   selected,
@@ -262,29 +287,32 @@ function Chip({
   recTitle?: string
   onClick: () => void
 }) {
-  // The option text is worker-authored markdown — render its inline emphasis/`code`/links (a chip is
-  // one line, so inline-only: no `<p>`/list block chrome). Raw `label` used to leak `**bold**`/backticks.
-  // inertInteractive: the chip is itself a <button>, so a link/local-file path in the option text must
-  // NOT become a nested interactive element (invalid HTML + a click that both opens the link and selects
-  // the option). Flatten links to spans; emphasis/code still render.
-  const labelInner = useInnerHtml(useInlineMarkdownHtml(label, { inertInteractive: true }))
+  // Inline-only: a chip is one line, so no `<p>`/list block chrome. Raw `label` used to leak
+  // `**bold**`/backticks.
+  const labelHtml = useInlineMarkdownHtml(label)
+  const labelId = useId()
   return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      onMouseDown={(e) => e.preventDefault()}
+    <div
+      data-question-option
       title={recTitle}
-      className={`text-left rounded-md border px-3 py-1.5 text-[12px] leading-snug outline-none transition-colors flex items-start gap-2 ${
+      className={`relative flex items-start gap-2 rounded-md border px-3 py-1.5 text-[12px] leading-snug transition-colors ${
         selected
           ? "border-accent bg-accent/10 text-fg"
           : disabled
-            ? "cursor-default border-border text-muted/80"
+            ? "border-border text-muted/80"
             // hover lands on `elevated`, one step above the card's own panel-2 fill — hovering to
             // panel-2 was invisible once every card standardized on that fill.
             : "border-border text-fg/90 hover:bg-elevated hover:border-border-strong"
       }`}
     >
+      <button
+        type="button"
+        disabled={disabled}
+        aria-labelledby={labelId}
+        onClick={onClick}
+        onMouseDown={(e) => e.preventDefault()}
+        className="absolute inset-0 rounded-md outline-none"
+      />
       {multi && (
         <span
           aria-hidden
@@ -298,7 +326,7 @@ function Chip({
       {/* The "Recommended" badge FLOATS to the top-right so the option text flows around it and reclaims
           the full width on the lines below — instead of a flex sibling that permanently narrows the text
           column. The badge must precede the label in source order for the float to take effect. */}
-      <span className="min-w-0 flex-1">
+      <span id={labelId} className="min-w-0 flex-1">
         {recommended && (
           // Optically centred on the option text's CAP BLOCK, not on its line box. Measured on the
           // rendered page: the pill's ink centre sat 1.88px (sans) / 1.80px (mono) BELOW the label's,
@@ -306,12 +334,14 @@ function Chip({
           // 1px low. Unlike the icon nudge this is font-INDEPENDENT — both sides scale with the same
           // font — so it is a constant, and 2px lands on a whole device pixel at 2× DPR. `translate`
           // (not a margin) so the float's exclusion area, and therefore the text wrap, is untouched.
-          <span className="float-right ml-2 mt-px -translate-y-[2px] rounded-full border border-border-strong px-1.5 py-px text-[9.5px] uppercase tracking-wide text-muted">
+          // `pointer-events-none`: the transform makes the badge a stacking context that paints above
+          // the stretched button, and a click on the badge must still pick the option.
+          <span className="pointer-events-none float-right ml-2 mt-px -translate-y-[2px] rounded-full border border-border-strong px-1.5 py-px text-[9.5px] uppercase tracking-wide text-muted">
             Recommended
           </span>
         )}
-        <span className="md-inline" dangerouslySetInnerHTML={labelInner} />
+        <LinkedHtml as="span" className="md-inline" html={labelHtml} />
       </span>
-    </button>
+    </div>
   )
 }
