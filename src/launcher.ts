@@ -478,7 +478,6 @@ verified immutable artifact, selecting or safely building one on first launch, t
 your default browser; source edits never restart the shared board.
 
 Options:
-  --app                  use the legacy dedicated app window instead of a browser tab
   --no-app               print the URL without opening a browser
   --foreground           accepted for compatibility; ${command} always runs in the foreground
   --dev                  explicitly use the unsafe source watcher and Vite/HMR, not an artifact

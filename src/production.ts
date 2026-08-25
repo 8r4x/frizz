@@ -9,6 +9,8 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { launchApp, launchBrowserTab } from "./browser.ts";
 import { loadOrCreateSessionKey } from "@frizz/server/access-codes";
+import { renderQrLines } from "@frizz/server/qr";
+import { SUPERVISOR_ACCESS_CODE_PATH } from "@frizz/server/restart-supervisor";
 import { installAccessPane, type AccessPane } from "./access-pane.ts";
 import {
   establishCloudConfig,
@@ -127,7 +129,6 @@ npm-resolved immutable Frizz package, then opens it in your default browser. Use
 for a source checkout.
 
 Options:
-  --app                  use the legacy dedicated app window instead of a browser tab
   --no-app               print the URL without opening a browser
   --port <port>          request a fixed port for a new workspace server
   --host [address]       serve on a network address instead of loopback (bare --host means 0.0.0.0)
@@ -218,6 +219,30 @@ const workspace: Workspace = (() => {
   } catch (error) { return fail(error); }
 })();
 process.chdir(workspace.root);
+if (options.link) {
+  // Mint from the RUNNING board rather than starting one — the same query frizz-dev answers
+  // (src/index.ts): the answer for a board running detached or in someone else's terminal, where
+  // the interactive QR pane cannot install.
+  const running = liveWorkspaceOwner(workspace.stateDir, workspaceLaunchTarget(workspace));
+  if (!running?.port) {
+    console.error("frizz: no board is running for this workspace");
+    process.exit(1);
+  }
+  const response = await fetch(`http://127.0.0.1:${running.port}${SUPERVISOR_ACCESS_CODE_PATH}`, {
+    method: "POST",
+    headers: { origin: `http://127.0.0.1:${running.port}` },
+  }).catch(() => undefined);
+  if (!response?.ok) {
+    const detail = response ? (await response.json().catch(() => undefined))?.error : undefined;
+    console.error(`frizz: ${detail ?? "could not mint an access link"}`);
+    process.exit(1);
+  }
+  const { url } = (await response.json()) as { url: string };
+  // The QR first: the whole point of a link is to reach a phone, and nobody types forty characters.
+  if (process.stdout.isTTY) for (const row of renderQrLines(url)) console.log(`  ${row}`);
+  console.log(process.stdout.isTTY ? `\n  ${url}` : url);
+  process.exit(0);
+}
 // Every launch leaves a complete record on disk, so a crash is never silent. The forked control-plane
 // child appends to this same file rather than writing to the terminal the readout is repainting.
 const logger: Logger = setAmbientLogger(

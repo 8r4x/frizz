@@ -461,7 +461,8 @@ test("CLI options default to immutable mode and make source/HMR explicit", () =>
   assert.match(helpText(), /always runs in the foreground/);
   assert.match(helpText(), /default browser/);
   assert.match(helpText(), /--debug\s+stream the full event feed/);
-  assert.match(helpText(), /--app\s+use the legacy dedicated app window/);
+  // --app still parses (above) but is legacy, so the help no longer advertises it.
+  assert.doesNotMatch(helpText(), /--app /);
   assert.match(
     helpText(),
     /--dev\s+explicitly use the unsafe source watcher and Vite\/HMR/

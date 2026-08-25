@@ -140,7 +140,6 @@ npm-resolved immutable Frizz package, then opens it in your default browser. Use
 for a source checkout.
 
 Options:
-  --app                  use the legacy dedicated app window instead of a browser tab
   --no-app               print the URL without opening a browser
   --port <port>          request a fixed port for a new workspace server
   --host [address]       serve on a network address instead of loopback (bare --host means 0.0.0.0)
