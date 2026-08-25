@@ -22,6 +22,7 @@ import {
   liveNativeRecord,
 } from "./codex-app-server-native.ts"
 import { stopCodexAppServerDaemon } from "./codex-app-server-host.ts"
+import { frizzIpcPath } from "./ipc-path.ts"
 
 interface Fixture {
   stateDir: string
@@ -40,7 +41,12 @@ async function fixture(): Promise<Fixture> {
   const root = mkdtempSync(join(tmpdir(), "frizz-native-host-"))
   const stateDir = join(root, "state")
   const projectId = randomUUID()
-  const socketPath = join(root, "listener.sock")
+  // Windows has no filesystem sockets — `listen()` on a `.sock` path there fails EACCES — so the
+  // fixture's endpoint is a named pipe, exactly as nativeListenSocketPath() derives in production.
+  // The POSIX spelling stays a file under `root` so cleanup() still takes it with the directory.
+  const socketPath = process.platform === "win32"
+    ? frizzIpcPath(`frizz-native-test-${randomUUID().replace(/-/gu, "").slice(0, 16)}`)
+    : join(root, "listener.sock")
   mkdirSync(join(stateDir, "codex-app-server-native"), { recursive: true })
 
   const http = createServer()

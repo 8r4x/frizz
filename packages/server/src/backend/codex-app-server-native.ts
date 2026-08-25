@@ -31,12 +31,14 @@
 // better than. What is genuinely lost is transcript content streamed during the gap.
 import { spawn } from "node:child_process"
 import { connect } from "node:net"
+import { Agent as HttpAgent } from "node:http"
 import { createHash, randomUUID } from "node:crypto"
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { PassThrough, Writable, type Readable } from "node:stream"
 import { StringDecoder } from "node:string_decoder"
 import { WebSocket } from "ws"
+import { frizzIpcPath } from "./ipc-path.ts"
 import { codexAppServerArgv } from "./codex-mcp.ts"
 import type { CodexAppServerProcess } from "./codex-app-server.ts"
 import type { CodexAppServerAttachment, CodexAppServerHost, CodexAppServerHostOptions } from "./codex-app-server-host.ts"
@@ -61,13 +63,14 @@ export function nativeRecordPath(stateDir: string, projectId: string): string {
 }
 
 /** Unix sockets have a hard ~104-byte path limit on macOS/BSD, so hash the identity into a short name
- *  under the OS temp dir — the same trick `codexAppServerSocketPath` uses for the daemon. Windows has
- *  no unix sockets and no /tmp, so it gets a named pipe, exactly as the claude broker and codex daemon
- *  hosts do; this function was the only one of the three that had been left POSIX-only. */
+ *  — the same trick `codexAppServerSocketPath` uses for the daemon — and let ipc-path.ts spell it for
+ *  the platform. Note that frizz does not SELECT this transport on Windows: `selectCodexHostKind`
+ *  returns "daemon" there, because the listener is a codex process and codex's own `--listen` is the
+ *  half that would have to bind the pipe. The win32 spelling still has to be right, because the
+ *  adapter below is exercised on Windows by its own tests. */
 export function nativeListenSocketPath(stateDir: string, projectId: string): string {
   const key = createHash("sha256").update(stateDir).update("\0").update(projectId).digest("hex").slice(0, 16)
-  if (process.platform === "win32") return `\\\\.\\pipe\\frizz-codex-native-${key}`
-  return join(process.env.TMPDIR ?? "/tmp", `frizz-codex-native-${key}.sock`)
+  return frizzIpcPath(`frizz-codex-native-${key}`)
 }
 
 function pidAlive(pid: number): boolean {
@@ -160,6 +163,37 @@ function socketAccepting(socketPath: string): Promise<boolean> {
 }
 
 /**
+ * Open a WebSocket to a local IPC endpoint — a unix socket on POSIX, a named pipe on Windows.
+ *
+ * `perMessageDeflate: false` is REQUIRED in both spellings, not a tuning knob. `ws` offers
+ * permessage-deflate by default and the listener's tungstenite rejects the whole upgrade over it with
+ * "Missing, duplicated or incorrect header sec-websocket-extensions".
+ *
+ * The two spellings differ because `ws` can only be pointed at a unix socket through a `ws+unix:`
+ * URL, and that URL cannot express `\\.\pipe\…`: the WHATWG parser rejects the backslashes outright
+ * ("Invalid URL"), and every escaping of them that does parse dials the wrong thing — forward slashes
+ * give `connect UNKNOWN //pipe/<name>`, percent-encoding gives `connect EPERM /`. Measured on Windows
+ * Server 2022 / node 26.7.0. `ws` also forces `socketPath: undefined` over anything the caller passes,
+ * so the option is not a way out either.
+ *
+ * What IS left is `agent`, which `ws` hands straight to `http.request` — so on win32 the endpoint is
+ * dialed by an agent that connects the pipe itself. Verified on the same box against a real
+ * `WebSocketServer` bound to a pipe, with a negative control (an agent pointed at a pipe that does not
+ * exist fails ENOENT rather than silently succeeding).
+ *
+ * POSIX deliberately keeps the `ws+unix:` URL byte-identical to what has always shipped: that path
+ * runs against real codex, whose tungstenite is stricter than a node `WebSocketServer`, and the two
+ * forms do not send the same `Host` header.
+ */
+function ipcWebSocket(endpoint: string): WebSocket {
+  if (process.platform !== "win32") return new WebSocket(`ws+unix://${endpoint}:/`, { perMessageDeflate: false })
+  class PipeAgent extends HttpAgent {
+    createConnection(): ReturnType<typeof connect> { return connect(endpoint) }
+  }
+  return new WebSocket("ws://localhost/", { agent: new PipeAgent(), perMessageDeflate: false })
+}
+
+/**
  * A `CodexAppServerProcess` backed by a WebSocket to the listener rather than by a child's stdio.
  *
  * The bridge speaks newline-delimited JSON in both directions, the listener speaks one JSON-RPC
@@ -170,10 +204,7 @@ function socketAccepting(socketPath: string): Promise<boolean> {
  */
 function attach(record: NativeListenerRecord, timeoutMs: number): Promise<CodexAppServerProcess> {
   return new Promise((resolve, reject) => {
-    // `perMessageDeflate: false` is REQUIRED, not a tuning knob. `ws` offers permessage-deflate by
-    // default and the listener's tungstenite rejects the whole upgrade over it with
-    // "Missing, duplicated or incorrect header sec-websocket-extensions".
-    const socket = new WebSocket(`ws+unix://${record.socketPath}:/`, { perMessageDeflate: false })
+    const socket = ipcWebSocket(record.socketPath)
     const stdout = new PassThrough()
     const stderr = new PassThrough()   // the listener has no stderr channel of its own over the socket
     const listeners = { exit: [] as (() => void)[], error: [] as ((error: Error) => void)[] }

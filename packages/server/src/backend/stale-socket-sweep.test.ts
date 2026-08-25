@@ -17,6 +17,12 @@ import { parseLsofSocketNames, sweepStaleSockets } from "./stale-socket-sweep.ts
 
 const PREFIX = "frizz-swtest-"
 
+// The sweep exists to collect unix-socket FILES. Windows daemons bind NAMED PIPES, which the kernel
+// reclaims with their last handle and which leave nothing on disk, so sweepStaleSockets() returns
+// immediately on win32 — including when its seams are injected. Every assertion below is about what
+// the sweep DOES, so on Windows there is nothing there to assert against.
+const POSIX_ONLY = process.platform === "win32" && "the sweep is a no-op on win32 — named pipes leave no files to collect"
+
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 async function until(predicate: () => boolean, timeoutMs = 15_000): Promise<boolean> {
@@ -108,7 +114,7 @@ function run(
   return out
 }
 
-test("a referenced path is never probed, and only a refused probe unlinks", () => {
+test("a referenced path is never probed, and only a refused probe unlinks", { skip: POSIX_ONLY }, () => {
   const live = `/sockets/${PREFIX}live.sock`
   const dead = `/sockets/${PREFIX}dead.sock`
   const lying = `/sockets/${PREFIX}lying.sock` // absent from lsof, but the probe connects
@@ -121,13 +127,13 @@ test("a referenced path is never probed, and only a refused probe unlinks", () =
   assert.deepEqual(out.unlinked, [dead], "a probe that CONNECTS means lsof was wrong; that path stays")
 })
 
-test("no lsof evidence sweeps nothing at all", () => {
+test("no lsof evidence sweeps nothing at all", { skip: POSIX_ONLY }, () => {
   const out = run([`${PREFIX}a.sock`, `${PREFIX}b.sock`], null)
   assert.deepEqual(out.probed, [])
   assert.deepEqual(out.unlinked, [])
 })
 
-test("only this family's .sock files are candidates, and `keep` is absolute", () => {
+test("only this family's .sock files are candidates, and `keep` is absolute", { skip: POSIX_ONLY }, () => {
   const keep = `/sockets/${PREFIX}mine.sock`
   const out = run(
     [`${PREFIX}mine.sock`, `${PREFIX}other.sock`, `${PREFIX}notasocket.json`, "frizz-codex-x.sock", "unrelated"],
@@ -138,7 +144,7 @@ test("only this family's .sock files are candidates, and `keep` is absolute", ()
   assert.deepEqual(out.unlinked, [`/sockets/${PREFIX}other.sock`])
 })
 
-test("an unreadable directory is not evidence of anything", () => {
+test("an unreadable directory is not evidence of anything", { skip: POSIX_ONLY }, () => {
   const out: Recorded = { probed: [], unlinked: [] }
   sweepStaleSockets({ dir: "/sockets", prefix: PREFIX }, {
     readdir: () => { throw new Error("ENOENT") },

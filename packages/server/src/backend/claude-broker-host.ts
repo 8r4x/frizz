@@ -8,6 +8,7 @@ import { delimiter, dirname, isAbsolute, join } from "node:path"
 import { resolveDetachedDaemonEntry } from "../detached-daemons.ts"
 import type { BrokerRecord, ClaudeBrokerConfig } from "./claude-agent-broker.ts"
 import { claudeBrokerDiagnosticLogPath } from "./claude-broker-diagnostics.ts"
+import { frizzIpcPath } from "./ipc-path.ts"
 
 // The Claude Agent SDK REQUIRES an absolute `pathToClaudeCodeExecutable` (validateExecutablePath rejects
 // a bare name), unlike an execvp of the CLI, which resolves "claude" on PATH itself. When the dispatch layer
@@ -62,11 +63,11 @@ export function resolveClaudeExecutableAbsolute(bin: string | undefined, env: No
   throw new Error(`Claude session broker: could not resolve '${candidate}' to an absolute executable path on PATH (the SDK requires one)`)
 }
 
-/** Short, collision-resistant socket path (unix sockets cap ~104 bytes on macOS/BSD). */
+/** Short, collision-resistant endpoint name — a unix socket on POSIX, a named pipe on Windows.
+ *  See ipc-path.ts for why the two spellings exist and what each one costs. */
 export function claudeBrokerSocketPath(stateDir: string, sessionId: string): string {
   const key = createHash("sha256").update(stateDir).update("\0").update(sessionId).digest("hex").slice(0, 16)
-  if (process.platform === "win32") return `\\\\.\\pipe\\frizz-claude-${key}`
-  return join(process.env.TMPDIR ?? "/tmp", `frizz-claude-${key}.sock`)
+  return frizzIpcPath(`frizz-claude-${key}`)
 }
 
 /** The discovery record lives under the project state dir (long paths are fine here). */

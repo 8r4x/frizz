@@ -15,6 +15,7 @@ import Database from "../sqlite.ts"
 import { createInteractionStore } from "../interaction-store.ts"
 import { createClaudeAgentBrokerBridge } from "./claude-agent-broker-bridge.ts"
 import { runClaudeBroker } from "./claude-agent-broker.ts"
+import { frizzIpcPath } from "./ipc-path.ts"
 import { brokerLastKnownPath, claudeBrokerRecordPath, liveBrokerRecords, readBrokerRecord } from "./claude-broker-host.ts"
 import { claudeBrokerDiagnosticLogPath, readClaudeBrokerExit } from "./claude-broker-diagnostics.ts"
 
@@ -163,7 +164,7 @@ test("a broker records WHY it exited — frizz asked for it", { timeout: 15_000 
   const dir = mkdtempSync(join(tmpdir(), "cbrk-exit-"))
   const exe = fakeExe(dir, "basic")
   const sessionId = randomUUID()
-  const socketPath = join(tmpdir(), `cbx-${createHash("sha256").update(randomUUID()).digest("hex").slice(0, 16)}.sock`)
+  const socketPath = frizzIpcPath(`cbx-${createHash("sha256").update(randomUUID()).digest("hex").slice(0, 16)}`)
   const broker = runClaudeBroker({
     socketPath, cwd: dir, sessionId, executablePath: exe, permissionMode: "default",
     env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" },
@@ -198,7 +199,17 @@ test("a broker records WHY it exited — frizz asked for it", { timeout: 15_000 
 // The most common broker death there is: frizz's own killBroker, an operator `kill`, an OS shutdown.
 // The signal handler exits IMMEDIATELY by design and never reaches shutdown(), so before this it left
 // no trace whatsoever.
-test("a SIGTERMed daemon records signal-SIGTERM, and the bridge reports it", { timeout: 30_000 }, async () => {
+//
+// POSIX ONLY, because the breadcrumb is written FROM the signal handler and Windows has no signals to
+// handle: `process.kill(pid, "SIGTERM")` there is a TerminateProcess, which ends the daemon without
+// running any handler. Measured on Windows Server 2022 / node 26.7.0 against a macOS control — a child
+// with a `SIGTERM` listener writes its mark and exits 0 on darwin, and on win32 writes nothing and
+// exits 1. So on Windows a killed broker's death is unattributed; the bridge still notices the dead pid
+// and cold-resumes the thread, it just cannot say what killed it.
+test("a SIGTERMed daemon records signal-SIGTERM, and the bridge reports it", {
+  timeout: 30_000,
+  skip: process.platform === "win32" && "no POSIX signals on win32 — a kill runs no handler, so there is no breadcrumb to write",
+}, async () => {
   const dir = mkdtempSync(join(tmpdir(), "cbrk-sig-"))
   const exe = fakeExe(dir, "permission")
   const env = { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" }

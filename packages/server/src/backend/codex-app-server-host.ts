@@ -20,7 +20,7 @@
 //
 // Shutdown is deliberately NOT such a caller, for either transport. Recycling frizz must leave the
 // app-server (and its in-flight turns) running, which is the whole point of the split above.
-import { spawn } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { createConnection, type Socket } from "node:net"
 import { createHash, randomUUID } from "node:crypto"
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs"
@@ -29,6 +29,7 @@ import { PassThrough, Writable, type Readable } from "node:stream"
 import { StringDecoder } from "node:string_decoder"
 import { resolveDetachedDaemonEntry } from "../detached-daemons.ts"
 import { stopNativeListener } from "./codex-app-server-native.ts"
+import { frizzIpcPath } from "./ipc-path.ts"
 import { codexAppServerArgv } from "./codex-mcp.ts"
 import type { FrizzMcp } from "./types.ts"
 import type { CodexAppServerProcess } from "./codex-app-server.ts"
@@ -94,12 +95,11 @@ function recordPath(stateDir: string, projectId: string): string {
 }
 
 /** Unix domain sockets have a hard ~104-byte path limit on macOS/BSD and a project state dir can be
- *  long, so hash the identity into a short name under the OS temp dir (same trick as the session
- *  broker). Windows named pipes have their own namespace and no length limit. */
+ *  long, so hash the identity into a short name (same trick as the session broker). ipc-path.ts turns
+ *  that name into the endpoint this platform can bind. */
 export function codexAppServerSocketPath(stateDir: string, projectId: string): string {
   const key = createHash("sha256").update(stateDir).update("\0").update(projectId).digest("hex").slice(0, 16)
-  if (process.platform === "win32") return `\\\\.\\pipe\\frizz-codex-${key}`
-  return join(process.env.TMPDIR ?? "/tmp", `frizz-codex-${key}.sock`)
+  return frizzIpcPath(`frizz-codex-${key}`)
 }
 
 function pidAlive(pid: number): boolean {
@@ -168,13 +168,46 @@ export function liveDaemonRecord(stateDir: string, projectId: string): CodexAppS
   return null
 }
 
+/**
+ * End a daemon AND the `codex app-server` underneath it.
+ *
+ * On POSIX that is one signal and nothing more: the daemon installs SIGTERM/SIGINT/SIGHUP handlers
+ * (codex-app-server-daemon.ts) that kill the app-server child, write the exit breadcrumb and exit.
+ *
+ * Windows has no deliverable signals. `process.kill(pid, "SIGTERM")` there is a straight
+ * TerminateProcess, so the handler NEVER runs, and the app-server — ~150 MB, still able to edit the
+ * filesystem — is orphaned with nobody left who could ever collect it: the daemon was forked
+ * `detached`, so it is in no job object of ours, and the orphan reaper both keys on FRIZZ_THREAD
+ * (which a per-PROJECT daemon does not carry) and explicitly PROTECTS any process named `codex`.
+ * There are no process groups to kill either — `process.kill(-pid, …)` is rejected outright with
+ * EINVAL. `taskkill /T` instead walks the live parent/child snapshot, so it reaches exactly the child
+ * the signal handler would have killed; `/F` because without it `/T` only sends the polite WM_CLOSE,
+ * which a console process with no window ignores. `taskkill.exe` is a real executable on PATH, so the
+ * CVE-2024-27980 ban on spawning `.bat`/`.cmd` without a shell does not apply and no shell — hence no
+ * interpolation of the pid — is involved.
+ *
+ * The cost on win32 is the breadcrumb: a force-killed daemon cannot write its `.exit` file, so an
+ * explicit teardown there is attributed only by the record's disappearance. It never gated anything.
+ */
+function endDaemonTree(pid: number, signal: NodeJS.Signals): void {
+  if (process.platform !== "win32") {
+    try { process.kill(pid, signal) } catch {}
+    return
+  }
+  const killed = spawnSync("taskkill", ["/pid", String(pid), "/t", "/f"], { stdio: "ignore", windowsHide: true })
+  // taskkill absent (a stripped PATH) or refusing: still end the daemon itself. An orphaned
+  // app-server is bad; a live daemon still holding the named pipe and serving a stale handshake to
+  // every connect is the wedge this whole stop path exists to break.
+  if (killed.error || killed.status !== 0) { try { process.kill(pid, signal) } catch {} }
+}
+
 /** Terminate the daemon AND its app-server. Only for an explicit teardown — never for a restart.
  *  Inert when there is no record, which is exactly the case for `directChildHost` and the in-process
  *  fallback: a test bridge can never kill a daemon it does not own, or its own in-process child. */
 export function killCodexAppServerDaemon(stateDir: string, projectId: string): void {
   const record = liveDaemonRecord(stateDir, projectId)
   if (!record) return
-  try { process.kill(record.daemonPid, "SIGTERM") } catch {}
+  endDaemonTree(record.daemonPid, "SIGTERM")
   try { unlinkSync(recordPath(stateDir, projectId)) } catch {}
 }
 
@@ -206,7 +239,7 @@ export async function stopCodexAppServerDaemon(stateDir: string, projectId: stri
   }
   // A daemon that ignored SIGTERM is worse than one that is merely stale: it still holds the socket.
   if (pidAlive(record.daemonPid)) {
-    try { process.kill(record.daemonPid, "SIGKILL") } catch {}
+    endDaemonTree(record.daemonPid, "SIGKILL")
     while (pidAlive(record.daemonPid) && Date.now() < deadline + 2_000) {
       await new Promise((resolve) => setTimeout(resolve, 25))
     }
@@ -403,6 +436,13 @@ function inProcessCodexAppServer(options: CodexAppServerHostOptions): CodexAppSe
     env: options.env,
     stdio: ["pipe", "pipe", "pipe"],
   })
+  // This is the LAST-RESORT transport, so the case where codex itself cannot be spawned is a live
+  // one, and on win32 the teardown of that never-started child THROWS: libuv's uv_process_kill
+  // returns UV_EINVAL for the INVALID_HANDLE_VALUE a failed CreateProcess leaves on the handle, and
+  // node rethrows it as `Error: kill EINVAL` (six of them in the 2026-08-24 Windows suite run). POSIX
+  // returns false and says nothing. Match POSIX: a teardown must never throw because codex is missing.
+  const kill = child.kill.bind(child)
+  child.kill = ((signal?: number | NodeJS.Signals) => { try { return kill(signal) } catch { return false } }) as typeof child.kill
   return { process: child as unknown as CodexAppServerProcess, generation: randomUUID(), reattached: false, daemonPid: process.pid, droppedWhileDetached: 0 }
 }
 

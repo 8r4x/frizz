@@ -10,7 +10,15 @@ import { CHILD_ARROW, CHILD_ARROW_CLASS, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITL
 // policy must be byte-identical everywhere, while the deliberate density differences stay put.
 
 const DENSITIES: ChildOpDensity[] = ["rail", "card", "sheet"]
-const TWELVE_MIN_AGO = new Date(Date.now() - 12 * 60_000).toISOString()
+// 12m30s, not 12m00s — the extra half minute is what makes this fixture deterministic.
+//
+// The row reads its clock from lib/liveClock.ts, whose `nowMs` is captured when THAT module loads and,
+// with no subscriber to tick it, never moves again. This module body runs later, so the row measures
+// `nowMs - (thisModuleLoad - 12min)` — twelve minutes MINUS however long the imports took. Exactly on
+// the boundary that floors to "11m" the moment the gap exceeds one millisecond, which is why the full
+// Windows suite failed five of these while the file passed on its own. Measured on macOS with a
+// staged gap: 0ms renders "12m", 5ms already renders "11m". Half a minute of headroom absorbs it.
+const TWELVE_MIN_AGO = new Date(Date.now() - 12 * 60_000 - 30_000).toISOString()
 
 function render(props: {
   kind?: ChildOpKind

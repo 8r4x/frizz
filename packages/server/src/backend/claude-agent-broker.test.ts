@@ -10,14 +10,17 @@ import { randomUUID, createHash } from "node:crypto"
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { runClaudeBroker } from "./claude-agent-broker.ts"
+import { frizzIpcPath } from "./ipc-path.ts"
 import { connectClaudeBroker, type ClaudeBrokerClient } from "./claude-broker-client.ts"
 import { CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX, type ClaudeDiagnostic, type ClaudePermissionRequest, type ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
 
 const fakeCli = fileURLToPath(new URL("./claude-agent-sdk.fixtures/fake-claude-cli.mjs", import.meta.url))
 
-// Short socket path (macOS unix sockets cap at ~104 bytes).
+// Short endpoint name (macOS unix sockets cap at ~104 bytes); frizzIpcPath spells it as a unix socket
+// on POSIX and a named pipe on Windows, which has no filesystem sockets at all — binding one there
+// fails `listen EACCES` and every test below then times out waiting for a broker that never listened.
 function shortSocket(): string {
-  return join(tmpdir(), `cbt-${createHash("sha256").update(randomUUID()).digest("hex").slice(0, 16)}.sock`)
+  return frizzIpcPath(`cbt-${createHash("sha256").update(randomUUID()).digest("hex").slice(0, 16)}`)
 }
 
 interface Captured { events: ClaudeQueryEvent[]; perms: { requestId: string; request: ClaudePermissionRequest }[]; hellos: string[]; diagnostics: ClaudeDiagnostic[] }
