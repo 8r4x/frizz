@@ -49,11 +49,14 @@ function Card({ project, home }: { project: ProjectCard; home: string | undefine
   return (
     // A relatively-positioned WRAPPER, not a bordered card of its own: the icon menu's trigger has to
     // sit OUTSIDE the <a> (a button nested in a link is invalid, and clicking it would navigate), so
-    // the link fills the wrapper and the trigger overlays a corner of it.
+    // the link fills the wrapper and the trigger is laid over the square from outside it.
+    // `group/card`: the hover lift is keyed to the WRAPPER so the card still lights when the pointer is
+    // on the icon trigger, which covers the square from outside the link — otherwise the row would go
+    // flat the moment you reached its own picture.
     <div className="group/card relative">
       <Link
         to={projectHref(project.slug)}
-        className={`${CARD_BASE} ${MOBILE_ROW} flex-row items-center gap-3 border-border bg-panel hover:border-border-strong hover:bg-panel-2 ${
+        className={`${CARD_BASE} ${MOBILE_ROW} flex-row items-center gap-3 border-border bg-panel group-hover/card:border-border-strong group-hover/card:bg-panel-2 ${
           project.stale ? "opacity-60" : ""
         }`}
       >
@@ -76,24 +79,35 @@ function Card({ project, home }: { project: ProjectCard; home: string | undefine
           <span className="truncate text-[11px] text-muted" title={project.path}>
             {shortPath(project.path, home)}
           </span>
-          {/* pr-6 keeps the longest of these clear of the icon button in the corner. */}
-          <span className="truncate pr-6 text-[11px] text-muted/70">
+          <span className="truncate text-[11px] text-muted/70">
             {project.stale ? "Directory is missing" : opened ? `Opened ${opened}` : "Never opened"}
           </span>
         </span>
       </Link>
-      {/* Revealed on hover over the card, and permanently for keyboard users once focused. */}
-      <div className="absolute bottom-2 right-2 opacity-0 transition-opacity focus-within:opacity-100 group-hover/card:opacity-100">
-        <ProjectIconMenu project={project}>
-          <button
-            type="button"
-            aria-label={`Icon for ${project.name}`}
-            className="flex h-6 w-6 items-center justify-center rounded-md text-muted outline-none hover:bg-elevated hover:text-fg focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-fg/60"
-          >
-            <ImagePlus size={13} />
-          </button>
-        </ProjectIconMenu>
-      </div>
+      {/* THE ICON IS THE CONTROL. The trigger is the square's own footprint — same size, same corner
+          radius, laid exactly over it. The offsets are the link's frame, which this sits outside of:
+          17 is its 1px border plus `px-4`, and the square is centred in the link, so `top-1/2` plus the
+          translate centres this on it. The phone row (MOBILE_ROW) drops the side and top borders and
+          keeps the bottom one, so there it is 16, and the centre moves up half the missing top border
+          — measured 2026-08-24: 1px left and 0.5px low without these. It draws nothing until the
+          pointer is over the square, when a scrim and an image glyph say "this changes the picture" —
+          the scrim at 75%, because at 60% a monogram's letters and a logo's strokes still showed
+          through and tangled with the glyph (measured at dsf 6, 2026-08-24). It stays lit while its
+          menu is open (Radix stamps `data-state` on the trigger) and for a keyboard user once focused.
+          It sat in the card's bottom-right corner until 2026-08-24, where nothing tied it to the
+          picture it changed (maintainer: hover the logo, or lack thereof, and the button should appear
+          there). Hovering the square now hits this, not the link, so the square is no longer part of
+          the click target — the rest of the row still is. */}
+      <ProjectIconMenu project={project}>
+        <button
+          type="button"
+          aria-label={`Change the icon for ${project.name}`}
+          style={{ width: CARD_ICON, height: CARD_ICON }}
+          className="absolute left-[17px] top-1/2 flex -translate-y-1/2 items-center justify-center rounded-[30%] bg-black/75 text-fg opacity-0 outline-none transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-fg/60 data-[state=open]:opacity-100 max-[700px]:left-4 max-[700px]:top-[calc(50%-0.5px)]"
+        >
+          <ImagePlus size={16} strokeWidth={1.75} />
+        </button>
+      </ProjectIconMenu>
     </div>
   )
 }

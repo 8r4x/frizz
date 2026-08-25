@@ -9,7 +9,7 @@ import { PROJECT_ICON_EXTENSIONS } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { queued } from "../groups.ts"
 import { asThreads } from "../hooks.ts"
-import { store } from "../store.ts"
+import { showToast, store } from "../store.ts"
 import { projectHref, projectSlug } from "../lib/base-path.ts"
 import { dropIndex, edgeScrollVelocity, moveItem, shiftFor } from "../lib/railReorder.ts"
 import { Tooltip } from "./Tooltip.tsx"
@@ -304,8 +304,10 @@ export function ProjectIconMenu({
 }) {
   const input = useRef<HTMLInputElement>(null)
   const queryClient = useQueryClient()
-  const [error, setError] = useState<string | null>(null)
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["projectsList"] })
+  // A toast, not an inline line: the trigger this wraps is a 38px overlay on the project's square
+  // (ProjectGrid), and a paragraph rendered beside it has nowhere to go.
+  const report = (cause: unknown) => showToast(cause instanceof Error ? cause.message : String(cause), { duration: 7000 })
   const set = useMutation({
     mutationFn: async (file: File) => {
       const bytes = new Uint8Array(await file.arrayBuffer())
@@ -317,12 +319,13 @@ export function ProjectIconMenu({
       }
       return rpc.projectIconSet({ id: project.id, name: file.name, data: btoa(binary) })
     },
-    onSuccess: () => { setError(null); void invalidate() },
-    onError: (cause) => setError(cause instanceof Error ? cause.message : String(cause)),
+    onSuccess: () => void invalidate(),
+    onError: report,
   })
   const clear = useMutation({
     mutationFn: () => rpc.projectIconClear({ id: project.id }),
-    onSuccess: () => { setError(null); void invalidate() },
+    onSuccess: () => void invalidate(),
+    onError: report,
   })
   /**
    * The NATIVE picker, opened standing in the project's own directory.
@@ -337,7 +340,6 @@ export function ProjectIconMenu({
     onSuccess: (result) => {
       if (result.kind === "cancelled") return
       if (result.kind === "unavailable") { input.current?.click(); return }
-      setError(null)
       void invalidate()
     },
     onError: () => input.current?.click(),
@@ -376,7 +378,6 @@ export function ProjectIconMenu({
           </RadixDropdown.Content>
         </RadixDropdown.Portal>
       </RadixDropdown.Root>
-      {error ? <p className="mt-1 text-[11px] text-red-400">{error}</p> : null}
     </>
   )
 }
