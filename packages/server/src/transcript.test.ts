@@ -8,6 +8,7 @@ import { relayMessage } from "./completion-relay.ts"
 import type { TranscriptMessage } from "@frizz/shared"
 import { DISPATCH_TASK_BANNER_MARKER, formatGithubWakeSteer, GITHUB_DISPATCH_UI_BOUNDARY, humanGapNote, PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_RETIRED_LEAD, parseRecurringPrompt, restPromptMessage, wakeDeliveryToken, type GithubWakeSteer } from "@frizz/shared"
 import {
+  coalescedQueuedKeys,
   createTranscriptFold,
   frizzDispatchDisplayText,
   githubDispatchDisplayText,
@@ -2092,6 +2093,42 @@ test("a coalesced record that drains only PART of the queue leaves the rest queu
   const users = msgs.filter((m) => m.role === "user")
   assert.deepEqual(users.map((m) => m.text), [a, b, c])
   assert.deepEqual(users.map((m) => m.queued), [false, false, true], "the undelivered tail stays queued")
+})
+
+test("the coalesced walk BACKTRACKS a consumed prefix that strands the remainder", () => {
+  // Greedy skip is not enough: with pending ["a", "a\nb"] and delivered "a\nb", consuming "a" first
+  // leaves "b", which nothing matches — the walk must retry "a" as a skip so "a\nb" can match whole.
+  assert.deepEqual(coalescedQueuedKeys("a\nb", ["a", "a\nb"]), ["a\nb"])
+  // …and the exact-join requirement still refuses a record the queue did not compose.
+  assert.deepEqual(coalescedQueuedKeys("a\nb\nc", ["a", "a\nb"]), [])
+  assert.deepEqual(coalescedQueuedKeys("", ["a"]), [])
+})
+
+test("a RETRACTED send mid-queue no longer breaks the coalesced reconstruction", () => {
+  // The maintainer's 2026-08-24 report (anti, `i-want-to-design-a-framework-2`): five sends queued, the
+  // 3rd and 4th unqueued to fix dictation typos — a retraction leaves only a CONTENTLESS dequeue, which
+  // the fold rightly ignores, so both enqueue bubbles stay registered mid-queue. The SDK then drained
+  // the rest as ONE record joining sends 1+2+5. The FIFO walk broke on the retracted 3rd, so all three
+  // delivered bubbles stayed gray AND the record rendered a fourth copy of the same words.
+  const a = "You can also develop new ideas for it"
+  const b = "You think this is strictly better than the prior art?"
+  const typoOne = "Convict's obviously doing well. HDB is defunct."
+  const typoTwo = "convex is obviously doing well. HDB is defunct."
+  const final = "convex is obviously doing well. edgedb is defunct."
+  const drain = JSON.stringify({ type: "queue-operation", timestamp: "2026-07-01T00:00:09.000Z", operation: "dequeue", content: "" })
+  const msgs = parseTranscript([
+    enqueueLine(a, "2026-07-01T00:00:01.000Z"), enqueueLine(b, "2026-07-01T00:00:02.000Z"),
+    enqueueLine(typoOne, "2026-07-01T00:00:03.000Z"), drain,
+    enqueueLine(typoTwo, "2026-07-01T00:00:04.000Z"), drain,
+    enqueueLine(final, "2026-07-01T00:00:05.000Z"),
+    drain, drain, drain,
+    userLine(`${a}\n${b}\n${final}`),
+  ].join("\n"))
+  const users = msgs.filter((m) => m.role === "user")
+  assert.deepEqual(users.map((m) => m.text), [a, b, typoOne, typoTwo, final], "no merged extra copy")
+  // The delivered three resolve; the retracted two are un-grayed by the FIFO backstop and are dropped
+  // from the rendered transcript by their cancellation tombstones (delivery-ledger dropCancelled).
+  assert.deepEqual(users.map((m) => m.queued), [false, false, false, false, false], "none may stay gray")
 })
 
 test("an unrelated user record never eats the queue as a coalesced delivery", () => {

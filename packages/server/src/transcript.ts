@@ -311,18 +311,41 @@ function pushToolPart(m: TranscriptMessage, call: TranscriptToolCall): void {
 // merged record rendered as a third copy of the same words. Reconstruction is exact and must consume the
 // ENTIRE delivered text, walking pending entries in FIFO (Map insertion) order — a partial drain leaves
 // the rest pending, which is correct. 2 such deliveries in the corpus, covering 5 queued messages.
+//
+// The walk may SKIP a pending entry, because not every entry is still in the queue when it drains: an
+// UNQUEUED send leaves only a contentless `dequeue` behind (see cancelDelivery — the CLI writes nothing
+// content-bearing), so its enqueue bubble is still registered here and sits in the middle of the FIFO
+// order. Breaking on it broke the whole reconstruction: the maintainer queued five sends, retracted the
+// 3rd and 4th to fix dictation typos, and the delivered record was sends 1+2+5 — the old walk matched
+// 1 and 2, hit the retracted 3rd, bailed, and all three delivered bubbles stayed gray while the record
+// rendered a fourth copy (2026-08-24, `i-want-to-design-a-framework-2`). Skipping keeps the match exact
+// — the ENTIRE text must still be a "\n"-join of a FIFO subsequence — and a skipped entry stays pending,
+// where its cancellation tombstone (or the FIFO backstop) accounts for it. Backtracking, not greedy: a
+// consumed prefix that strands the remainder must be retried as a skip, or key sets like ["a","a\nb"]
+// mis-resolve.
 export function coalescedQueuedKeys(deliveredText: string, pendingKeys: Iterable<string>): string[] {
-  const consumed: string[] = []
-  let cursor = 0
-  for (const key of pendingKeys) {
-    if (!deliveredText.startsWith(key, cursor)) break
-    cursor += key.length
-    consumed.push(key)
-    if (cursor === deliveredText.length) return consumed
-    if (!deliveredText.startsWith("\n", cursor)) break
-    cursor += 1
+  if (!deliveredText) return []
+  const keys = [...pendingKeys]
+  const dead = new Set<number>() // (cursor, index) pairs proven unwinnable, so repeats stay linear
+  const walk = (cursor: number, index: number): string[] | null => {
+    if (index >= keys.length) return null
+    const state = cursor * (keys.length + 1) + index
+    if (dead.has(state)) return null
+    const key = keys[index]
+    if (key && deliveredText.startsWith(key, cursor)) {
+      const next = cursor + key.length
+      if (next === deliveredText.length) return [key]
+      if (deliveredText.startsWith("\n", next)) {
+        const rest = walk(next + 1, index + 1)
+        if (rest) return [key, ...rest]
+      }
+    }
+    const skipped = walk(cursor, index + 1)
+    if (skipped) return skipped
+    dead.add(state)
+    return null
   }
-  return cursor === deliveredText.length && consumed.length > 0 ? consumed : []
+  return walk(0, 0) ?? []
 }
 
 // SHAPE 2 — a slash command is enqueued as the human TYPED it ("/effort", "/loop <prompt>") but delivered
