@@ -360,9 +360,10 @@ Worker and the run token is safe to hand out.
 
 ### Three consequences worth knowing before writing any of it
 
-- **No database in v1.** Cloudflare's own tunnel list is the registry: `GET /cfd_tunnel?name=<x>` answers
-  "is this taken". D1 earns its place at Stage 3 for revocation, subscription state and audit — not for
-  uniqueness.
+- **No relational database.** The registry is Workers KV, one small JSON row per name — see the
+  storage decision above. Uniqueness, ownership and the lease all read from that row; the built code
+  never queries Cloudflare to ask whether a name is taken. D1 earns its place at Stage 3 for
+  subscription state and audit, not for any of this.
 - **The Worker is off the data plane.** It runs during signup and never again. If it is down, every
   existing board keeps working and only new registrations fail. Protecting that property is worth more
   than any other choice in this document.
