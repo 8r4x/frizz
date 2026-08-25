@@ -38,6 +38,16 @@ wrangler secret put CF_ZONE_ID
 wrangler deploy
 ```
 
+Two things that will waste your time otherwise:
+
+- **The deploy exits 1 unless the token can read Workers Routes.** Wrangler reconciles routes *after*
+  uploading, so the Worker really is deployed and the failure is cosmetic — but any script treats it as
+  a failed deploy. Add **Zone → Workers Routes → Edit** to the token for a clean exit.
+- **Deleting a secret needs `--name`.** Plain `wrangler secret delete X --force` prints usage and
+  silently does nothing, so a temporary override outlives the test that set it. Use
+  `wrangler secret delete X --name frizz-registrar`, then `wrangler secret list --name frizz-registrar`
+  to confirm.
+
 Then point the CLI at it. The default is `https://registrar.frizz.sh`; override with `FRIZZ_REGISTRAR`
 to test against a deployment before it takes that name.
 

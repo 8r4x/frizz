@@ -172,7 +172,7 @@ try {
     check("the abandoned tunnel was torn down", cf.tunnels.has("tunnel-1") === false);
     check("exactly one tunnel remains", cf.tunnels.size === 1, `${cf.tunnels.size} tunnels`);
   } finally {
-    rmSync(otherHome, { recursive: true, force: true });
+    rmSync(otherHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
 
   // 5. A name that cannot be a hostname never reaches Cloudflare.
@@ -188,7 +188,7 @@ try {
 } finally {
   server.close();
   await once(server, "close").catch(() => {});
-  rmSync(home, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }
 
 const failed = checks.filter((c) => !c.ok);

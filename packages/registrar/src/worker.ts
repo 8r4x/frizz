@@ -176,10 +176,14 @@ export default {
    */
   async scheduled(_event: unknown, env: RegistrarEnv): Promise<void> {
     const deps = claimDeps(env)
+    // Counted BEFORE the sweep. KV's list is eventually consistent, so reading it straight after a
+    // batch of deletes still reports the rows just removed — the first live run logged "1/180 in use"
+    // having just emptied the namespace. Subtracting what was released is both accurate and cheap.
+    const before = (await deps.store.list()).length
     const result = await sweepExpiredClaims(deps)
     // The only regular look at how full the namespace is. Nothing else would notice it filling until
     // a claim failed, which is exactly the surprise the ceiling should never be.
-    const taken = (await deps.store.list()).length
+    const taken = before - result.released.length
     const ceiling = deps.maxNames ?? Infinity
     if (taken >= ceiling * 0.8) {
       console.warn(`namespace is ${taken}/${ceiling} full — upgrade the zone before it stops accepting names`)

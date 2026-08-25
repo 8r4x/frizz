@@ -285,14 +285,25 @@ try {
 } catch (error) {
   check("harness completed", false, error instanceof Error ? error.message : String(error));
 } finally {
-  if (launcher) launcher.kill("SIGKILL");
+  // SIGINT and WAIT, rather than SIGKILL outright. The launcher supervises the board in a separate
+  // process; killing the launcher without letting it shut down orphans that board, which then holds
+  // the port and makes the NEXT run join it instead of starting its own. That is what the port guard
+  // above kept catching, and this is the leak it was catching.
+  if (launcher) {
+    launcher.kill("SIGINT");
+    const exited = await Promise.race([
+      new Promise((resolve) => launcher.once("exit", () => resolve(true))),
+      new Promise((resolve) => setTimeout(() => resolve(false), 15_000)),
+    ]);
+    if (!exited) launcher.kill("SIGKILL");
+  }
   if (registrarServer) registrarServer.close();
   if (existsSync(pidLog)) {
     const pid = Number(readFileSync(pidLog, "utf8").trim());
     if (Number.isFinite(pid) && alive(pid)) process.kill(pid, "SIGKILL");
   }
-  rmSync(home, { recursive: true, force: true });
-  if (workspace) rmSync(workspace, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  if (workspace) rmSync(workspace, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }
 
 const failed = checks.filter((c) => !c.ok);
