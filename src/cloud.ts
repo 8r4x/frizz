@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { claimNameIsValid, normalizeClaimName } from "@frizz/shared";
 import { loadOrCreateClaimIdentity } from "./identity.ts";
-import { githubAccessToken, githubLogin } from "./github-identity.ts";
+import { githubCli, type GithubIdentity } from "./github-identity.ts";
 import { ClaimError, claimName } from "./registrar-client.ts";
 
 /**
@@ -166,6 +166,7 @@ export async function establishCloudConfig(
   port: number,
   home = homedir(),
   origin?: string,
+  github: GithubIdentity = githubCli,
 ): Promise<CloudConfig> {
   if (answer.includes(".")) {
     // A hostname: the operator owns the tunnel, so fall back to asking which one, as before.
@@ -189,12 +190,12 @@ export async function establishCloudConfig(
   const identity = await loadOrCreateClaimIdentity(home);
   // A name is bound to a GitHub account, so say WHICH one before binding it. Someone signed in as a
   // work account would otherwise find out only when they wanted the name somewhere else.
-  const github = await githubAccessToken();
-  const login = await githubLogin();
+  const token = await github.accessToken();
+  const login = await github.login();
   if (login) console.log(`  claiming ${name}.frizz.sh for GitHub user ${login}`);
   let result;
   try {
-    result = await claimName({ name, port, identity, github, ...(origin ? { origin } : {}) });
+    result = await claimName({ name, port, identity, github: token, ...(origin ? { origin } : {}) });
   } catch (error) {
     // A FIRST claim that cannot reach the registrar leaves the operator with nothing — unlike a
     // renewal, which falls back to its cached token. Point at the path that works without us rather

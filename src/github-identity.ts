@@ -69,3 +69,15 @@ export async function githubLogin(): Promise<string | null> {
     return null;
   }
 }
+
+/**
+ * The two questions a claim asks of GitHub, behind one seam. `githubCli` asks the `gh` CLI; a test
+ * hands in a stand-in, so claiming a name runs on a machine with no `gh` at all (the Windows suite has
+ * none) and never spends the operator's real token on a fake registrar.
+ */
+export interface GithubIdentity {
+  accessToken(): Promise<string>;
+  login(): Promise<string | null>;
+}
+
+export const githubCli: GithubIdentity = { accessToken: githubAccessToken, login: githubLogin };
