@@ -523,3 +523,40 @@ test("a RENEWAL needs no GitHub token, so a live name never depends on GitHub", 
   assert.equal(renewed.status, 200, "a renewal must survive GitHub being down")
   assert.ok("renewed" in renewed.body && renewed.body.renewed)
 })
+
+test("a full namespace says so, and says whose problem it is", async () => {
+  // Without this the cap is hit inside Cloudflare and surfaces as "provisioning failed", which tells
+  // the user nothing and points us at the wrong thing. One name costs one DNS record, and the zone
+  // caps at 200 on the free plan.
+  const cf = fakeCloudflare()
+  const st = fakeStore({
+    a: { pubkey: "p1", tunnelId: "t1", port: 1, claimedAt: NOW, renewedAt: NOW },
+    b: { pubkey: "p2", tunnelId: "t2", port: 1, claimedAt: NOW, renewedAt: NOW },
+  })
+  const identity = await generateClaimIdentity()
+  const full = await handleClaim(
+    await claimFor(identity, "third"),
+    deps({ api: cf.api, store: st.store, maxNames: 2 })
+  )
+  assert.equal(full.status, 503, "a full namespace is OUR unavailability, not the caller's mistake")
+  assert.deepEqual(full.body, {
+    error: "namespace-full",
+    message: "frizz.sh has no free names left — this is our limit to raise, not yours",
+  })
+  assert.deepEqual(cf.calls, [], "nothing was provisioned")
+})
+
+test("a RENEWAL is never refused for a full namespace", async () => {
+  // A renewal consumes no new record. Refusing one because the namespace filled after it was claimed
+  // would take a working board away from someone who did nothing wrong.
+  const cf = fakeCloudflare()
+  const identity = await generateClaimIdentity()
+  const request = await claimFor(identity, "mine")
+  const st = fakeStore({
+    mine: { pubkey: request.pubkey, tunnelId: "t1", port: 9393, claimedAt: NOW, renewedAt: NOW },
+    other: { pubkey: "p2", tunnelId: "t2", port: 1, claimedAt: NOW, renewedAt: NOW },
+  })
+  const renewed = await handleClaim(request, deps({ api: cf.api, store: st.store, maxNames: 1 }))
+  assert.equal(renewed.status, 200, "an existing name must keep renewing past the ceiling")
+  assert.ok("renewed" in renewed.body && renewed.body.renewed)
+})

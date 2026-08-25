@@ -76,6 +76,14 @@ export interface ClaimDeps {
   github?: GithubVerifier
   /** How old a GitHub account must be to claim. Blunts the throwaway-account version of squatting. */
   minAccountAgeMs?: number
+  /**
+   * How many names the namespace may hold.
+   *
+   * A zone caps at 200 DNS records on Cloudflare's free plan and 3,500 on Pro, and one name costs one
+   * record. Without a limit here the cap is hit inside Cloudflare instead, which surfaces as an opaque
+   * provisioning failure — the user cannot tell what went wrong and neither can we.
+   */
+  maxNames?: number
 }
 
 export type ClaimFailure =
@@ -88,10 +96,11 @@ export type ClaimFailure =
   | "github-rejected"
   | "github-too-new"
   | "one-name-per-account"
+  | "namespace-full"
 
 export type ClaimOutcome =
   | { status: 200; body: { hostname: string; token: string; leaseExpiresAt: number; renewed: boolean } }
-  | { status: 400 | 409 | 502; body: { error: ClaimFailure; message: string } }
+  | { status: 400 | 409 | 502 | 503; body: { error: ClaimFailure; message: string } }
 
 const MESSAGES: Record<ClaimFailure, string> = {
   "bad-version": "this Frizz is too old to claim a name — upgrade and try again",
@@ -111,9 +120,10 @@ const MESSAGES: Record<ClaimFailure, string> = {
   "github-rejected": "GitHub did not recognise that login — run `gh auth login` and try again",
   "github-too-new": "that GitHub account is too new to claim a name",
   "one-name-per-account": "that GitHub account already holds a name",
+  "namespace-full": "frizz.sh has no free names left — this is our limit to raise, not yours",
 }
 
-const reject = (error: ClaimFailure, status: 400 | 409 | 502 = 400): ClaimOutcome => ({
+const reject = (error: ClaimFailure, status: 400 | 409 | 502 | 503 = 400): ClaimOutcome => ({
   status,
   body: { error, message: MESSAGES[error] },
 })
@@ -168,6 +178,14 @@ export async function handleClaim(body: unknown, deps: ClaimDeps): Promise<Claim
       await deps.store.removeGithubOwner(who.id)
     }
     githubId = who.id
+  }
+
+  // CAPACITY, checked only for a NEW name — a renewal consumes nothing and must never be refused for
+  // being late to a full namespace. Counting here rather than letting Cloudflare refuse means the
+  // answer says what is actually wrong instead of "provisioning failed".
+  if (deps.maxNames !== undefined) {
+    const taken = (await deps.store.list()).length
+    if (taken >= deps.maxNames) return reject("namespace-full", 503)
   }
 
   // ONE LIVE NAME PER KEY. Without it a loop of generated keypairs takes the whole namespace, and the

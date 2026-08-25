@@ -69,11 +69,24 @@ export interface RegistrarEnv {
   FRIZZ_ZONE: string
   /** "0" turns the GitHub gate OFF. Anything else, including absent, leaves it ON. */
   REQUIRE_GITHUB?: string
+  /** Overrides the built-in name ceiling, so a plan upgrade needs no deploy. */
+  MAX_NAMES?: string
   CLAIMS: KvNamespace
 }
 
 /** A GitHub account younger than this cannot claim, which blunts throwaway-account squatting. */
 const MIN_GITHUB_ACCOUNT_AGE_MS = 30 * 24 * 60 * 60_000
+
+/**
+ * How many names the zone may hold.
+ *
+ * The free plan caps a zone at 200 DNS RECORDS and one name costs one, so the ceiling is shared with
+ * every infrastructure record — the apex, www, the registrar's own hostname. Stopping short of it
+ * leaves room for those to be added without a claim having already eaten the last slot.
+ *
+ * Raise this after upgrading the zone to Pro, which lifts the record cap to 3,500.
+ */
+const MAX_NAMES = 180
 
 /** KV holds one small JSON row per name: who owns it, which tunnel serves it, and its lease. */
 export function kvClaimStore(kv: KvNamespace): ClaimStore {
@@ -146,6 +159,7 @@ function claimDeps(env: RegistrarEnv) {
     zone: env.FRIZZ_ZONE,
     now: () => Date.now(),
     // ON unless explicitly disabled. A gate that defaults off is a gate that ships off by accident.
+    maxNames: env.MAX_NAMES ? Number(env.MAX_NAMES) : MAX_NAMES,
     ...(env.REQUIRE_GITHUB === "0"
       ? {}
       : { github: githubVerifier(), minAccountAgeMs: MIN_GITHUB_ACCOUNT_AGE_MS }),
@@ -161,12 +175,21 @@ export default {
    * The claim path releases a lapsed name on demand, but only when somebody asks for that exact name.
    */
   async scheduled(_event: unknown, env: RegistrarEnv): Promise<void> {
-    const result = await sweepExpiredClaims(claimDeps(env))
+    const deps = claimDeps(env)
+    const result = await sweepExpiredClaims(deps)
+    // The only regular look at how full the namespace is. Nothing else would notice it filling until
+    // a claim failed, which is exactly the surprise the ceiling should never be.
+    const taken = (await deps.store.list()).length
+    const ceiling = deps.maxNames ?? Infinity
+    if (taken >= ceiling * 0.8) {
+      console.warn(`namespace is ${taken}/${ceiling} full — upgrade the zone before it stops accepting names`)
+    }
     // Worker logs are the only place a sweep is visible, so say what happened even when it is nothing.
     console.log(
       `swept ${result.released.length} expired name(s)` +
         `${result.failed.length ? `, ${result.failed.length} failed: ${result.failed.join(", ")}` : ""}` +
-        `${result.remaining ? `, ${result.remaining} left for the next run` : ""}`
+        `${result.remaining ? `, ${result.remaining} left for the next run` : ""}` +
+        `; ${taken}/${ceiling} names in use`
     )
   },
 

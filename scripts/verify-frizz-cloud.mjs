@@ -138,6 +138,18 @@ const alive = (pid) => {
 };
 
 try {
+  // REFUSE TO RUN ON AN OCCUPIED PORT. Frizz is a singleton: a board left over from an earlier run
+  // would be JOINED rather than replaced, and a joining launch arms no public origin and prints no
+  // access link. The failure then reads as "publicOrigin was NOT armed", which sends whoever is
+  // debugging it into the launcher instead of at the stale process actually responsible.
+  await new Promise((resolve, reject) => {
+    const probe = createServer();
+    probe.once("error", () =>
+      reject(new Error(`port ${PORT} is already in use — a previous run's board is still there, and this one would join it instead of starting its own`)),
+    );
+    probe.listen(PORT, "127.0.0.1", () => probe.close(() => resolve(undefined)));
+  });
+
   // A saved cloud.json is what makes the second launch a single flag, so seed one and assert the
   // launcher reads it rather than prompting.
   mkdirSync(join(home, ".frizz"), { recursive: true });
