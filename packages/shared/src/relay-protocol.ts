@@ -82,9 +82,9 @@ export function encodeBody(bytes: Uint8Array): string {
   return btoa(binary)
 }
 
-export function decodeBody(value: string): Uint8Array {
+export function decodeBody(value: string): Uint8Array<ArrayBuffer> {
   const binary = atob(value)
-  const bytes = new Uint8Array(binary.length)
+  const bytes = new Uint8Array(new ArrayBuffer(binary.length))
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
   return bytes
 }
@@ -127,8 +127,13 @@ export interface RelayHandshake {
   sig: string
 }
 
-/** The exact bytes a handshake signs. Fixed order, and no field can contain the separator. */
-export function relayHandshakeInput(name: string, pubkey: string, issuedAt: number): Uint8Array {
+/**
+ * The exact bytes a handshake signs. Fixed order, and no field can contain the separator.
+ *
+ * Typed to a concrete ArrayBuffer because Web Crypto's `BufferSource` will not take the default
+ * `Uint8Array<ArrayBufferLike>` — that also admits a SharedArrayBuffer, which these APIs reject.
+ */
+export function relayHandshakeInput(name: string, pubkey: string, issuedAt: number): Uint8Array<ArrayBuffer> {
   return new TextEncoder().encode(
     ["frizz-relay", `v${RELAY_PROTOCOL_VERSION}`, name, pubkey, String(issuedAt)].join(":")
   )
