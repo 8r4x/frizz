@@ -82,7 +82,79 @@ export function splitQuestionBlocks(text: string): MessageSegment[] {
   }
   const rest = text.slice(lastIndex)
   if (rest.trim()) segments.push({ kind: "prose", text: rest })
+  return healOrphanedOptions(segments)
+}
+
+// ---- Orphaned-option self-heal ----
+//
+// The commonest way a worker's question markup goes wrong (pullfrog-app, 2026-08-25): the ```question
+// fence closes right after the question sentence and the lettered options follow OUTSIDE it as ordinary
+// markdown. Parsed literally that is a freetext-only card with an inert bullet list under it — the
+// options are all there, the human just cannot click them. The intent is unambiguous when the prose
+// immediately after the fence opens with a choice list that either STARTS at A/1 under an option-less
+// block, or CONTINUES the block's own trailing run (a fence closed mid-list), so the splitter adopts
+// that run into the block instead of bouncing the turn back to the worker to rewrite its markup.
+function healOrphanedOptions(segments: MessageSegment[]): MessageSegment[] {
+  for (let i = 0; i < segments.length - 1; i++) {
+    const q = segments[i]
+    const p = segments[i + 1]
+    if (q.kind !== "question" || p.kind !== "prose") continue
+    const parsed = parseQuestionBlock(q.text, q.questionKind, q.danger)
+    // Which list the prose may legally continue: none absorbed unless the block is option-less (the
+    // orphan list must OPEN at A/1) or its body ENDS with its option run (the orphan must continue it).
+    // A block whose run is followed by trailing prose or a recommendation line is complete — a list
+    // after it is genuinely the message's own.
+    let lastId: string | null = null
+    if (parsed.options.length > 0) {
+      if (parsed.trailingMd !== undefined || parsed.recommendation !== undefined) continue
+      const id = optionId(parsed.options[parsed.options.length - 1])
+      if (!/^([A-Z]|\d+)$/.test(id)) continue
+      lastId = id
+    }
+    const healed = takeOrphanRun(p.text, lastId)
+    if (healed === null) continue
+    segments[i] = { ...q, text: q.text.replace(/\s+$/, "") + "\n\n" + healed.run }
+    if (healed.rest.trim()) segments[i + 1] = { kind: "prose", text: healed.rest }
+    else segments.splice(i + 1, 1)
+  }
   return segments
+}
+
+// The leading option run of a prose block, if its first non-blank line is an option that legally
+// extends `lastId` (null = must open a fresh list at A/1). Walks with the fence parser's tolerances —
+// blank lines inside the run, a prose line (a group heading) only when the option after it CONTINUES
+// the sequence — and lets a trailing "Recommendation: …" line ride along, since parseQuestionBlock
+// knows what to do with one after a run. A fresh list needs ≥2 options (a lone "- A." after a fence is
+// too weak a signal to steal from prose); a continuation needs only 1. Null → the prose keeps it all.
+function takeOrphanRun(prose: string, lastId: string | null): { run: string; rest: string } | null {
+  const lines = prose.split("\n").map((l) => l.replace(/\r$/, ""))
+  let start = 0
+  while (start < lines.length && lines[start].trim() === "") start++
+  if (start >= lines.length || !OPTION_RE.test(lines[start])) return null
+  const firstId = lineId(lines[start])
+  if (lastId === null ? !isListOrigin(firstId) : !follows(lastId, firstId)) return null
+  let end = start
+  let prevId = firstId
+  for (let j = start + 1; j < lines.length; j++) {
+    const line = lines[j]
+    if (OPTION_RE.test(line)) {
+      if (!follows(prevId, lineId(line))) break
+      prevId = lineId(line)
+      end = j
+      continue
+    }
+    if (line.trim() === "") continue
+    if (REC_RE.test(line)) {
+      end = j
+      break
+    }
+    const next = lines.findIndex((l, k) => k > j && OPTION_RE.test(l))
+    if (next === -1 || !follows(prevId, lineId(lines[next]))) break
+  }
+  const absorbed = lines.slice(start, end + 1)
+  const optCount = absorbed.filter((l) => OPTION_RE.test(l)).length
+  if (optCount < (lastId === null ? 2 : 1)) return null
+  return { run: absorbed.join("\n"), rest: lines.slice(end + 1).join("\n") }
 }
 
 // Does this message text carry at least one live ```question block? The cheap membership test behind

@@ -510,3 +510,133 @@ test("hasQuestionBlock: true only for a real fence, and never for a QUOTED one",
   // An unterminated opener never parses, so it stays prose.
   assert.equal(hasQuestionBlock("```question\nGo?"), false)
 })
+
+// ---- orphaned-option self-heal (options written OUTSIDE the fence) ----
+
+test("heal: an option-less fence adopts the A-led list immediately after it (pullfrog-app 2026-08-25)", () => {
+  // The real failure shape: the worker closed the fence after the question sentence and wrote the
+  // options outside as ordinary markdown — a freetext-only card over an inert bullet list.
+  const text = [
+    "Context prose above.",
+    "",
+    "```question",
+    "Pullfrog runs stop for 85 active orgs on Sep 8. What should happen?",
+    "```",
+    "",
+    "- A. Send an opt-out notice, then auto-start (recommended: gets the conversion)",
+    "- B. Auto-charge with no further notice",
+    "- C. Keep confirmation mandatory, but soften the deadline",
+    "- D. Change nothing",
+  ].join("\n")
+  const segs = splitQuestionBlocks(text)
+  assert.equal(segs.length, 2)
+  assert.equal(segs[0].kind, "prose")
+  const q = segs[1]
+  assert.equal(q.kind, "question")
+  const parsed = parseQuestionBlock(q.text, "question")
+  assert.equal(parsed.options.length, 4)
+  assert.equal(parsed.contextMd, "Pullfrog runs stop for 85 active orgs on Sep 8. What should happen?")
+  assert.equal(parsed.recommendedIdx, 0)
+  assert.equal(parsed.recommendedNote, "gets the conversion")
+})
+
+test("heal: two option-less fences each adopt their own trailing list", () => {
+  const text = [
+    "```question",
+    "First question?",
+    "```",
+    "",
+    "- A. one",
+    "- B. two",
+    "",
+    "```question",
+    "Second question?",
+    "```",
+    "",
+    "- A. yes",
+    "- B. no",
+  ].join("\n")
+  const segs = splitQuestionBlocks(text)
+  assert.deepEqual(segs.map((s) => s.kind), ["question", "question"])
+  const p0 = parseQuestionBlock(segs[0].kind === "question" ? segs[0].text : "", "question")
+  const p1 = parseQuestionBlock(segs[1].kind === "question" ? segs[1].text : "", "question")
+  assert.deepEqual(p0.options, ["A. one", "B. two"])
+  assert.deepEqual(p1.options, ["A. yes", "B. no"])
+})
+
+test("heal: prose after the adopted run stays prose", () => {
+  const text = "```question\nWhich?\n```\n- A. one\n- B. two\n\nUnrelated closing prose."
+  const segs = splitQuestionBlocks(text)
+  assert.equal(segs.length, 2)
+  assert.equal(segs[1].kind === "prose" && segs[1].text.trim(), "Unrelated closing prose.")
+  const parsed = parseQuestionBlock(segs[0].kind === "question" ? segs[0].text : "", "question")
+  assert.deepEqual(parsed.options, ["A. one", "B. two"])
+})
+
+test("heal: a paragraph between the fence and the list blocks adoption", () => {
+  const text = "```question\nWhich?\n```\n\nSome unrelated paragraph.\n\n- A. one\n- B. two"
+  const segs = splitQuestionBlocks(text)
+  const parsed = parseQuestionBlock(segs[0].kind === "question" ? segs[0].text : "", "question")
+  assert.equal(parsed.options.length, 0)
+})
+
+test("heal: a list that does not open at A/1 is not adopted", () => {
+  const text = "```question\nWhich?\n```\n- C. three\n- D. four"
+  const segs = splitQuestionBlocks(text)
+  const parsed = parseQuestionBlock(segs[0].kind === "question" ? segs[0].text : "", "question")
+  assert.equal(parsed.options.length, 0)
+})
+
+test("heal: a lone orphan option is too weak a signal to steal", () => {
+  const text = "```question\nWhich?\n```\n- A. the only line"
+  const segs = splitQuestionBlocks(text)
+  const parsed = parseQuestionBlock(segs[0].kind === "question" ? segs[0].text : "", "question")
+  assert.equal(parsed.options.length, 0)
+})
+
+test("heal: a fence closed MID-list adopts the continuation", () => {
+  const text = "```question\nWhich?\n- A. one\n- B. two\n```\n- C. three\n- D. four"
+  const segs = splitQuestionBlocks(text)
+  assert.equal(segs.length, 1)
+  const parsed = parseQuestionBlock(segs[0].kind === "question" ? segs[0].text : "", "question")
+  assert.deepEqual(parsed.options, ["A. one", "B. two", "C. three", "D. four"])
+})
+
+test("heal: a complete block does not steal a fresh list that restarts at A", () => {
+  // The follow-on list opens at A, which does not continue B — it is the message's own list.
+  const text = "```question\nWhich?\n- A. one\n- B. two\n```\n\n- A. unrelated\n- B. also unrelated"
+  const segs = splitQuestionBlocks(text)
+  assert.equal(segs.length, 2)
+  const parsed = parseQuestionBlock(segs[0].kind === "question" ? segs[0].text : "", "question")
+  assert.deepEqual(parsed.options, ["A. one", "B. two"])
+})
+
+test("heal: a block whose run is followed by trailing prose is complete — nothing adopted", () => {
+  const text = "```question\nWhich?\n- A. one\n- B. two\n\nNote: a footnote.\n```\n- C. stray"
+  const segs = splitQuestionBlocks(text)
+  assert.equal(segs.length, 2)
+  const parsed = parseQuestionBlock(segs[0].kind === "question" ? segs[0].text : "", "question")
+  assert.deepEqual(parsed.options, ["A. one", "B. two"])
+})
+
+test("heal: an adopted run carries its Recommendation line along", () => {
+  const text = "```question\nWhich?\n```\n- A. one\n- B. two\nRecommendation: B\n\nAfterword."
+  const segs = splitQuestionBlocks(text)
+  assert.equal(segs.length, 2)
+  const parsed = parseQuestionBlock(segs[0].kind === "question" ? segs[0].text : "", "question")
+  assert.deepEqual(parsed.options, ["A. one", "B. two"])
+  assert.equal(parsed.recommendedIdx, 1)
+  assert.equal(segs[1].kind === "prose" && segs[1].text.trim(), "Afterword.")
+})
+
+test("heal: numbered orphan lists work too", () => {
+  const text = "```question\nHow many?\n```\n1. one\n2. two\n3. three"
+  const segs = splitQuestionBlocks(text)
+  const parsed = parseQuestionBlock(segs[0].kind === "question" ? segs[0].text : "", "question")
+  assert.deepEqual(parsed.options, ["1. one", "2. two", "3. three"])
+})
+
+test("heal: hasQuestionBlock and answerability agree on a healed message", () => {
+  const text = "```question\nWhich?\n```\n- A. one\n- B. two"
+  assert.equal(hasQuestionBlock(text), true)
+})
