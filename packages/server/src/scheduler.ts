@@ -878,6 +878,14 @@ export interface SchedulerDeps {
   // structured result so the scheduler can distinguish auth, timeout, network, API, and shape faults.
   fetchGithubReview?: (ref: PrRef) => Promise<GithubReviewActivity[] | GithubReviewFetchResult | undefined>
   log?: (msg: string) => void
+  // After `resume` has handed a wake to the worker's runtime: is the process that took it still there?
+  // The broker transport is a socket frame with no reply, and a cold resume that dies at startup takes
+  // the frame with it — so "resume returned" is SENT, not delivered. Answering "alive" or "dead" lets the
+  // scheduler hold the wake as sent and confirm or re-send it later; "unknown" (or no hook at all) keeps
+  // the old behaviour, delivered on return. See deliverDue and reconcileOutbox.
+  wakeRuntimeState?: (slug: string, sessionId: string) => "alive" | "dead" | "unknown"
+  // How long a sent wake waits for its transcript token before the runtime's survival alone confirms it.
+  confirmGraceMs?: number
   tickMs?: number // how often to check (timers resolve at this cadence)
   deliveryLeaseMs?: number
   retryBaseMs?: number
@@ -914,6 +922,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const retryBaseMs = Math.max(1, deps.retryBaseMs ?? 5_000)
   const retryMaxMs = Math.max(retryBaseMs, deps.retryMaxMs ?? 5 * 60_000)
   const maxDeliveryAttempts = Math.max(1, deps.maxDeliveryAttempts ?? 6)
+  // A `claude --resume` that is going to die does so within seconds (a missing session, a refused
+  // credential) to tens of seconds (an MCP server that will not boot); one that is alive a minute after
+  // taking the frame has read it, whether or not the transcript check can see the token yet.
+  const confirmGraceMs = Math.max(1, deps.confirmGraceMs ?? 60_000)
   const deliveryBatchSize = Math.max(0, deps.deliveryBatchSize ?? 50)
   const deliveryOwner = randomUUID()
   const outbox = createWakeDeliveryStore(deps.storage.db)
@@ -2309,6 +2321,41 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         continue
       }
       if (item.state !== "leased" || item.leaseUntil === null || item.leaseUntil > nowMs) continue
+      // A SENT wake whose confirmation window has closed without the token showing up (that case was
+      // `confirmed`, above). The runtime that took the frame decides: still alive, it read the wake and
+      // the transcript check is merely blind to it (a message the CLI has queued, a text the fold has
+      // not reached) — delivered. Dead, and the frame died with it — a lost wake, which goes round
+      // again exactly as a lease that expired before delivery does, under the same idle-only rule and
+      // the same attempt cap, and is SAID when the cap runs out rather than filed as done.
+      if (item.sentAt !== null) {
+        const runtime = deps.wakeRuntimeState?.(item.slug, item.sessionId) ?? "unknown"
+        if (runtime !== "dead") {
+          if (outbox.confirm(item.id, nowMs)) {
+            settleSnooze(item)
+            settleSchedulePrompt(item)
+            settleRestPrompt(item)
+            settleCompactPrompt(item)
+            settleTimer(item)
+            settleSignoffNudge(item)
+            log(`waker: delivered ${item.slug} — ${item.reason}${item.attempts > 1 ? ` (on attempt ${item.attempts})` : ""}`)
+          }
+          continue
+        }
+        if (context !== "current-idle") continue
+        const recovered = outbox.recoverExpired(
+          item.id, nowMs, nowMs + retryDelay(item.attempts), maxDeliveryAttempts,
+          "the worker's process died before it read this wake",
+        )
+        if (!recovered) continue
+        if (recovered.state === "exhausted") {
+          settleSnooze(item)
+          settleTimer(item)
+          log(`waker: delivery EXHAUSTED for ${item.slug} after ${recovered.attempts} attempts — ${recovered.lastError ?? "unknown error"}`)
+        } else {
+          log(`waker: wake LOST for ${item.slug} — ${item.reason}: the worker's process died before it read it; sending again (attempt ${item.attempts} of ${maxDeliveryAttempts} spent)`)
+        }
+        continue
+      }
       // An expired lease is an interrupted/uncertain attempt. Re-open it only while the exact session
       // generation is still idly awaiting the exact fence. Busy or not-yet-loaded telemetry is held:
       // retrying there could duplicate an input that crossed the transport just before process death.
@@ -2406,6 +2453,23 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         continue
       }
 
+      // SENT IS NOT DELIVERED, when the runtime can tell us which. Reproduced 2026-08-25
+      // (scripts/verify-prwatch-wake-cold-resume.mjs) against a real daemon: a thread parked on a PR
+      // watcher, its idle daemon long since hibernated, the wake cold-resumes a `claude` that dies at
+      // startup — and this branch used to file the wake as delivered the instant the socket write
+      // returned. The PR-watch cursor had already moved past the event, so nothing ever said it again;
+      // the worker sat 12h+ on a watcher that had "fired". Now the row stays leased as SENT and
+      // reconcileOutbox decides: the token in the transcript confirms it, a runtime still alive after
+      // the grace confirms it, a runtime that died with no token sends it round again.
+      const runtime = deps.wakeRuntimeState?.(item.slug, item.sessionId) ?? "unknown"
+      if (runtime !== "unknown") {
+        const sentAt = now()
+        if (outbox.markSent(item.id, deliveryOwner, sentAt, sentAt + confirmGraceMs)) {
+          log(`waker: sent ${item.slug} — ${item.reason}; confirming within ${Math.round(confirmGraceMs / 1000)}s`)
+          checkpoint("after-delivery", item)
+          continue
+        }
+      }
       // The happy path logs exactly one line, and it CONFIRMS something that already happened. A
       // pre-flight "delivering … (attempt 1)" reads like a retry counter — as if a previous try had
       // failed — on the first-and-only attempt every ordinary wake takes. Attempt counts belong on the

@@ -886,6 +886,15 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     // instant for a weekly limit, whose message text carries a clock but no date; readQuota memoizes,
     // so consulting it per tick costs a live request only every few minutes.
     readQuota,
+    // The only runtime that can answer is the broker: its daemon record is on disk while the daemon
+    // lives and is unlinked when it dies (liveBrokerRecords checks the pid), so "did the process that
+    // took this wake survive" is one directory read. Codex and any row whose session moved on answer
+    // "unknown", which keeps their wakes on the delivered-on-return path they always had.
+    wakeRuntimeState: (slug, sessionId) => {
+      const row = storage.getSession(slug)
+      if (!row || row.session_id !== sessionId || row.backend !== "claude" || row.claude_runtime !== "broker" || !claudeBroker) return "unknown"
+      return liveBrokerRecords(project.stateDir).some((r) => r.sessionId === sessionId) ? "alive" : "dead"
+    },
     resume: (slug, message, deliveryId) => {
       const deliveryMessage = `${message}\n\n${wakeDeliveryToken(deliveryId)}`
       const row = storage.getSession(slug)

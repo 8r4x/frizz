@@ -1624,3 +1624,116 @@ test("pr-watch: CI wakes on every terminal transition, both directions, and neve
   await poll("failing")
   assert.equal(h.resumes.length, 3, "and breaking again is news, from the SAME registration")
 })
+
+// ---- SENT IS NOT DELIVERED (2026-08-25) ----
+// A broker wake is a socket frame with no reply. Reproduced against a real daemon in
+// scripts/verify-prwatch-wake-cold-resume.mjs: a thread parked on a PR watcher, its idle daemon long
+// since hibernated, the wake cold-resumes a `claude` that dies at startup — and the outbox filed the
+// wake as delivered the instant `resume` returned, while the PR-watch cursor had already moved past
+// the event. The worker sat 12h+ on a watcher that had "fired". These pin the scheduler half: with a
+// runtime probe wired, a wake is SENT, and only the transcript token, the runtime's survival past the
+// grace, or a dead runtime's retry can move it on.
+function sentHarness(runtime: () => "alive" | "dead" | "unknown", over: Partial<Parameters<typeof createScheduler>[0]> = {}) {
+  const h = harness()
+  const { target } = dueTimer(h, "sent")
+  const s = h.make({ wakeRuntimeState: runtime, confirmGraceMs: 1_000, retryBaseMs: 100, retryMaxMs: 100, ...over })
+  const store = createWakeDeliveryStore(h.storage.db)
+  return { h, s, target, store, row: () => store.list()[0] }
+}
+
+test("sent-not-delivered: a wake whose process is still alive after the grace is delivered — and not before", async () => {
+  const { h, s, target, row } = sentHarness(() => "alive")
+  await s.tick()
+  h.clock.ms = target + 1
+  await s.tick()
+  assert.equal(h.resumes.length, 1)
+  assert.equal(row().state, "leased", "the socket write is SENT, not delivered")
+  assert.ok(row().sentAt !== null)
+  h.clock.ms += 500
+  await s.tick()
+  assert.equal(row().state, "leased", "still inside the confirmation window")
+  h.clock.ms += 600
+  await s.tick()
+  assert.equal(row().state, "delivered")
+  assert.equal(h.resumes.length, 1, "a confirmed wake is never re-sent")
+})
+
+test("sent-not-delivered: the transcript token confirms a wake before the grace, even if the process then died", async () => {
+  const { h, s, target, row } = sentHarness(() => "dead")
+  await s.tick()
+  h.clock.ms = target + 1
+  await s.tick()
+  assert.equal(row().state, "leased")
+  // The worker read it: its transcript carries the token the delivery appended.
+  h.tele.set("sent", { ...tele(), lastActivityAt: iso(h.clock.ms), lastUserText: `Wake sent.\n\n${wakeDeliveryToken(row().id)}` })
+  h.clock.ms += 100
+  await s.tick()
+  assert.equal(row().state, "delivered")
+  assert.equal(h.resumes.length, 1)
+})
+
+test("sent-not-delivered: a wake whose process died with no token goes round again, and lands once the process lives", async () => {
+  let alive = false
+  const logs: string[] = []
+  const { h, s, target, row } = sentHarness(() => (alive ? "alive" : "dead"), { log: (m) => logs.push(m) })
+  await s.tick()
+  h.clock.ms = target + 1
+  await s.tick()
+  assert.equal(h.resumes.length, 1)
+  assert.equal(row().state, "leased")
+  // The grace closes on a corpse: the frame died with it.
+  h.clock.ms += 1_100
+  await s.tick()
+  assert.equal(row().state, "pending", "a lost wake is re-opened, not filed")
+  assert.equal(row().attempts, 1)
+  assert.match(row().lastError ?? "", /process died before it read this wake/)
+  assert.ok(logs.some((m) => /wake LOST for sent/.test(m)), "the loss is SAID")
+  // The retry: a second send, on a process that this time survives.
+  alive = true
+  h.clock.ms += 200
+  await s.tick()
+  assert.equal(h.resumes.length, 2, "sent again")
+  assert.equal(row().attempts, 2)
+  h.clock.ms += 1_100
+  await s.tick()
+  assert.equal(row().state, "delivered")
+  assert.equal(row().attempts, 2)
+  assert.ok(logs.some((m) => /delivered sent — .*on attempt 2/.test(m)))
+})
+
+test("sent-not-delivered: a process that never survives exhausts the attempt cap out loud", async () => {
+  const logs: string[] = []
+  const { h, s, target, row } = sentHarness(() => "dead", { maxDeliveryAttempts: 2, log: (m) => logs.push(m) })
+  await s.tick()
+  h.clock.ms = target + 1
+  for (let i = 0; i < 6; i++) { await s.tick(); h.clock.ms += 1_200 }
+  assert.equal(row().state, "exhausted")
+  assert.equal(row().attempts, 2)
+  assert.equal(h.resumes.length, 2)
+  assert.ok(logs.some((m) => /delivery EXHAUSTED for sent after 2 attempts/.test(m)))
+})
+
+test("sent-not-delivered: a busy thread holds a lost wake rather than re-sending into a running turn", async () => {
+  const { h, s, target, row } = sentHarness(() => "dead")
+  await s.tick()
+  h.clock.ms = target + 1
+  await s.tick()
+  h.tele.set("sent", { ...tele(undefined, "in-flight"), lastActivityAt: iso(h.clock.ms) })
+  h.clock.ms += 1_100
+  await s.tick()
+  assert.equal(row().state, "leased", "held while the thread is busy")
+  assert.equal(h.resumes.length, 1)
+  h.tele.set("sent", { ...tele(), lastActivityAt: iso(h.clock.ms) })
+  await s.tick()
+  assert.equal(row().state, "pending", "released for retry once the thread is idle")
+})
+
+test("sent-not-delivered: without a runtime probe a wake is delivered on return, exactly as before", async () => {
+  const { h, s, target, row } = sentHarness(() => "unknown")
+  await s.tick()
+  h.clock.ms = target + 1
+  await s.tick()
+  assert.equal(h.resumes.length, 1)
+  assert.equal(row().state, "delivered")
+  assert.equal(row().sentAt, null)
+})

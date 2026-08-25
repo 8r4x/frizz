@@ -23,6 +23,9 @@ export interface WakeDelivery extends WakeDeliveryInput {
   updatedAt: number
   deliveredAt: number | null
   terminalAt: number | null
+  /** When the wake was last handed to the worker's runtime and is awaiting confirmation — see
+   *  `markSent`. Null while pending, and cleared by every fresh claim. */
+  sentAt: number | null
 }
 
 interface WakeDeliveryRow {
@@ -43,6 +46,7 @@ interface WakeDeliveryRow {
   updated_at: number
   delivered_at: number | null
   terminal_at: number | null
+  sent_at: number | null
 }
 
 export interface WakeDeliveryStore {
@@ -54,6 +58,11 @@ export interface WakeDeliveryStore {
   deferFailure(id: string, owner: string, now: number, retryAt: number, error: string): boolean
   recoverExpired(id: string, now: number, retryAt: number, maxAttempts: number, error: string): WakeDelivery | undefined
   acknowledge(id: string, owner: string, now: number): boolean
+  /** SENT, NOT DELIVERED. The transport accepted the wake (a socket frame with no reply), and whether the
+   *  worker ever reads it is decided later — by the token showing up in its transcript, or by its
+   *  process outliving `confirmUntil`. The row stays leased to the owner until then, so a dead process
+   *  can send it round again instead of filing a lost wake as done. */
+  markSent(id: string, owner: string, now: number, confirmUntil: number): boolean
   confirm(id: string, now: number): boolean
   supersede(id: string, now: number, reason: string): boolean
 }
@@ -79,6 +88,7 @@ function delivery(row: WakeDeliveryRow): WakeDelivery {
     updatedAt: row.updated_at,
     deliveredAt: row.delivered_at,
     terminalAt: row.terminal_at,
+    sentAt: row.sent_at ?? null,
   }
 }
 
@@ -102,11 +112,16 @@ export function createWakeDeliveryStore(db: Database): WakeDeliveryStore {
       updated_at      INTEGER NOT NULL,
       delivered_at   INTEGER,
       terminal_at    INTEGER,
+      sent_at        INTEGER,
       UNIQUE(thread_slug, session_id, fence_id)
     );
     CREATE INDEX IF NOT EXISTS wake_delivery_due
       ON wake_delivery(state, next_attempt_at, created_at);
   `)
+  // `sent_at` arrived 2026-08-25 (the "delivered but never read" wake); a DB from before it gains the
+  // column in place, and every older row reads as never-sent, which is the old behaviour exactly.
+  const columns = db.prepare("PRAGMA table_info(wake_delivery)").all() as { name: string }[]
+  if (!columns.some((c) => c.name === "sent_at")) db.exec("ALTER TABLE wake_delivery ADD COLUMN sent_at INTEGER")
 
   const byId = db.prepare<[string], WakeDeliveryRow>("SELECT * FROM wake_delivery WHERE id = ?")
   const all = db.prepare<[], WakeDeliveryRow>("SELECT * FROM wake_delivery ORDER BY created_at, id")
@@ -144,12 +159,17 @@ export function createWakeDeliveryStore(db: Database): WakeDeliveryStore {
   const claimStmt = db.prepare(`
     UPDATE wake_delivery SET
       state = 'leased', attempts = attempts + 1, lease_owner = @owner, lease_until = @leaseUntil,
-      last_error = NULL, updated_at = @now
+      last_error = NULL, sent_at = NULL, updated_at = @now
     WHERE id = @id AND state = 'pending' AND next_attempt_at <= @now AND attempts < @maxAttempts
   `)
   const deferFailureStmt = db.prepare(`
     UPDATE wake_delivery SET
       lease_until = @retryAt, last_error = @error, updated_at = @now
+    WHERE id = @id AND state = 'leased' AND lease_owner = @owner
+  `)
+  const markSentStmt = db.prepare(`
+    UPDATE wake_delivery SET
+      sent_at = @now, lease_until = @confirmUntil, last_error = NULL, updated_at = @now
     WHERE id = @id AND state = 'leased' AND lease_owner = @owner
   `)
   const recoverExpiredStmt = db.prepare(`
@@ -230,6 +250,7 @@ export function createWakeDeliveryStore(db: Database): WakeDeliveryStore {
       return row ? delivery(row) : undefined
     },
     acknowledge: (id, owner, now) => acknowledgeStmt.run({ id, owner, now }).changes === 1,
+    markSent: (id, owner, now, confirmUntil) => markSentStmt.run({ id, owner, now, confirmUntil }).changes === 1,
     confirm: (id, now) => confirmStmt.run({ id, now }).changes === 1,
     supersede: (id, now, reason) => supersedeStmt.run({ id, now, reason: reason.slice(0, 500) }).changes === 1,
   }
