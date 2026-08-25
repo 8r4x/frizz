@@ -127,11 +127,17 @@ function linkToken(text: string, href: string, title: string): Tokens.Link {
   return { type: "link", raw: text, href, title, text, tokens: [textToken(text)] }
 }
 
-/** The pieces one text token splits into, or null when it holds no reference. */
-function splitRefs(source: string): Token[] | null {
-  if (!repo) return null
-  let pieces: Token[] | null = null
-  let consumed = 0
+/** One reference found in a plain string: where it sits and the link it should become. */
+export type GithubRefMatch = { start: number; text: string; href: string; title: string }
+
+/**
+ * Every GitHub-style reference in a plain string — the same grammar the markdown path links, exposed
+ * for surfaces that render text WITHOUT markdown (the user bubble, lib/plainLinks.ts). Empty when the
+ * project is not a github.com repo, the same one predictable switch the token path has.
+ */
+export function scanGithubRefs(source: string): GithubRefMatch[] {
+  if (!repo) return []
+  const matches: GithubRefMatch[] = []
   REF.lastIndex = 0
   for (let match = REF.exec(source); match; match = REF.exec(source)) {
     const [whole, boundary, commitRepo, commitHash, issueRepo, issueNumber, bareHash] = match
@@ -143,14 +149,22 @@ function splitRefs(source: string): Token[] | null {
     const title = issueNumber
       ? `${issueRepo ?? repo}#${issueNumber}`
       : `${commitRepo ?? repo}@${hash}`
-    const raw = whole.slice(boundary.length)
-    const start = match.index + boundary.length
-    pieces ??= []
-    if (start > consumed) pieces.push(textToken(source.slice(consumed, start)))
-    pieces.push(linkToken(raw, href, title))
-    consumed = start + raw.length
+    matches.push({ start: match.index + boundary.length, text: whole.slice(boundary.length), href, title })
   }
-  if (!pieces) return null
+  return matches
+}
+
+/** The pieces one text token splits into, or null when it holds no reference. */
+function splitRefs(source: string): Token[] | null {
+  const matches = scanGithubRefs(source)
+  if (matches.length === 0) return null
+  const pieces: Token[] = []
+  let consumed = 0
+  for (const { start, text, href, title } of matches) {
+    if (start > consumed) pieces.push(textToken(source.slice(consumed, start)))
+    pieces.push(linkToken(text, href, title))
+    consumed = start + text.length
+  }
   if (consumed < source.length) pieces.push(textToken(source.slice(consumed)))
   return pieces
 }

@@ -25,6 +25,7 @@ import { splitFenceBlocks, type FenceKind } from "../lib/fenceBlocks.ts"
 import { parseAnswersCard, pairAllAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
 import { FrizzWake } from "./FrizzWake.tsx"
 import { RecurringPromptLine } from "./RecurringPromptLine.tsx"
+import { LinkifiedText } from "./LinkifiedText.tsx"
 import { WakeDivider } from "./WakeDivider.tsx"
 import { useLiveAnswering, type LiveAnswering } from "../lib/answering.ts"
 import { useIsMobile } from "../lib/mobile.ts"
@@ -2999,7 +3000,10 @@ function UserBubble({ text, rawText, queued, sticky, deliveryUnconfirmed, delive
           // every other focus ring in the app is drawn.
           className={`relative ${BLOCK_RADIUS} rounded-br-sm bg-user-bubble px-3.5 py-3 text-[14px] whitespace-pre-wrap [overflow-wrap:anywhere] text-bg ${queued ? "opacity-50" : ""} ${unqueueable ? "cursor-pointer transition-opacity group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg" : ""} ${unqueuePending ? "!opacity-30" : ""} ${sticky ? `transition-[max-height] duration-200 ease-out ${scrollable ? "overflow-y-auto" : "overflow-hidden"}` : ""}`}
         >
-          {prose}
+          {/* Verbatim bytes, but link-shaped runs (a pasted URL, `#123`, a commit hash) render as the
+              anchors they would be in agent prose — see LinkifiedText. The anchors stop their own
+              click/keydown propagation, so a link inside a QUEUED bubble opens instead of unqueueing. */}
+          <LinkifiedText text={prose} />
           {/* Fade the last ~2.5rem of text into the bubble colour — keeps the box fully rounded + opaque
               (no hard cut, no ellipsis). Only while collapsed AND actually overflowing. */}
           {collapsed && overflows && (
@@ -3359,7 +3363,7 @@ function AnswersCard({ answers, queued, sourceId }: { answers: PairedAnswer[]; q
                       quiet: a darker inset panel with a soft left rule to still mark it as the reply. The
                       12px is the family's CHIP scale (the question card's options), not its 13px body. */}
                   <span className="min-w-0 flex-1 whitespace-pre-wrap [overflow-wrap:anywhere] rounded-md border border-border-strong border-l-2 border-l-accent/40 bg-bg/50 px-2.5 py-1.5 text-[12px] leading-snug text-fg">
-                    {a.answer}
+                    <LinkifiedText text={a.answer} />
                   </span>
                 </div>
               </div>
