@@ -5,7 +5,7 @@
 // in _live_appserver_restart_repro.mts.
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { mkdtempSync, writeFileSync, chmodSync, existsSync, unlinkSync } from "node:fs"
+import { mkdtempSync, writeFileSync, existsSync, unlinkSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
@@ -25,13 +25,32 @@ import {
   CODEX_APP_SERVER_SUPPORTED_VERSION,
   CodexAppServerBridge,
 } from "./codex-app-server.ts"
+import { codexAppServerArgv } from "./codex-mcp.ts"
 import { captureLogRecords } from "../logging.ts"
+
+// How a scripted fake gets to BE `codex` for these tests, on every platform.
+//
+// It used to be an extensionless `#!/usr/bin/env node` file handed over as `codexBin`. Windows has no
+// shebang: `spawn()` there reaches CreateProcess, which can only start a real PE, so every one of
+// these tests died on `spawn …\fake-codex ENOENT` (Windows suite, 2026-08-24) and the six that then
+// tore down the failed fallback child died on `kill EINVAL` behind it. A `.cmd` shim is no escape —
+// node has refused to spawn `.bat`/`.cmd` without `shell: true` since CVE-2024-27980, and the
+// production spawn has no shell — so the fixture has to be started by an interpreter that is itself a
+// real executable.
+//
+// So `codexBin` is node, and the script is written at the path production's FIRST argument already
+// names: `codexAppServerArgv()` opens with codex's `app-server` subcommand, and every host here
+// spawns with `cwd` = the harness dir, so `node app-server -c … --stdio` runs <dir>/app-server with
+// the remaining argv untouched. The name is derived rather than typed, so if the subcommand ever
+// moves the fixture moves with it. One shape on all three platforms — POSIX runs the very path
+// Windows runs, instead of a `win32` branch nobody here can execute.
+const FAKE_BIN = process.execPath
+const FAKE_SCRIPT_NAME = codexAppServerArgv([])[0]
 
 // A stand-in for `codex app-server --stdio`: answers `initialize`, echoes a marker for `ping`, and
 // can be told to emit an unsolicited notification after a delay (the "a turn completed while nobody
 // was attached" case).
-const FAKE_APP_SERVER = `#!/usr/bin/env node
-let buf = ""
+const FAKE_APP_SERVER = `let buf = ""
 process.stdin.on("data", (c) => {
   buf += c
   for (;;) {
@@ -64,11 +83,11 @@ process.stdin.on("data", (c) => {
 process.stdin.resume()
 `
 
+/** Writes the scripted app-server where `node <cwd>/app-server` will find it, and answers with the
+ *  `codexBin` production should then be pointed at — node itself. See FAKE_BIN above. */
 function fakeAppServerBin(dir: string): string {
-  const path = join(dir, "fake-codex")
-  writeFileSync(path, FAKE_APP_SERVER)
-  chmodSync(path, 0o755)
-  return path
+  writeFileSync(join(dir, FAKE_SCRIPT_NAME), FAKE_APP_SERVER)
+  return FAKE_BIN
 }
 
 interface Harness {
@@ -294,8 +313,7 @@ test("codex daemon: a daemon that cannot start falls back to an in-process app-s
 
 /** Like FAKE_APP_SERVER, but reports whatever version its sibling `codex-version` file held AT BOOT —
  *  which is exactly how a real `codex` binary behaves when it is upgraded on disk. */
-const VERSIONED_FAKE_APP_SERVER = `#!/usr/bin/env node
-// Read from a sibling file at BOOT, not from the environment: the bridge hands the app-server only
+const VERSIONED_FAKE_APP_SERVER = `// Read from a sibling file at BOOT, not from the environment: the bridge hands the app-server only
 // its audited env allowlist, so an env-carried seam would silently vanish on the bridge's own path.
 const path = require("node:path")
 const version = require("node:fs").readFileSync(path.join(path.dirname(process.argv[1]), "codex-version"), "utf8").trim()
@@ -326,9 +344,8 @@ process.stdin.resume()
 
 function versionedHarness(initialVersion: string) {
   const stateDir = mkdtempSync(join(tmpdir(), "frizz-codex-skew-test-"))
-  const codexBin = join(stateDir, "fake-codex")
-  writeFileSync(codexBin, VERSIONED_FAKE_APP_SERVER)
-  chmodSync(codexBin, 0o755)
+  writeFileSync(join(stateDir, FAKE_SCRIPT_NAME), VERSIONED_FAKE_APP_SERVER)
+  const codexBin = FAKE_BIN
   const versionFile = join(stateDir, "codex-version")
   writeFileSync(versionFile, initialVersion)
   return {

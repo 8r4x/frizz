@@ -194,7 +194,7 @@ function endDaemonTree(pid: number, signal: NodeJS.Signals): void {
     try { process.kill(pid, signal) } catch {}
     return
   }
-  const killed = spawnSync("taskkill", ["/pid", String(pid), "/t", "/f"], { stdio: "ignore", windowsHide: true })
+  const killed = spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true })
   // taskkill absent (a stripped PATH) or refusing: still end the daemon itself. An orphaned
   // app-server is bad; a live daemon still holding the named pipe and serving a stale handshake to
   // every connect is the wedge this whole stop path exists to break.
