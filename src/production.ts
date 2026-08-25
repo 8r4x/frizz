@@ -8,8 +8,9 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { launchApp, launchBrowserTab } from "./browser.ts";
-import { loadOrCreateSessionKey } from "@frizz/server/access-codes";
+import { fileSessionDirectory, loadOrCreateSessionKey } from "@frizz/server/access-codes";
 import { renderQrLines } from "@frizz/server/qr";
+import { listSessions, signOutSession } from "./sessions-cli.ts";
 import { SUPERVISOR_ACCESS_CODE_PATH } from "@frizz/server/restart-supervisor";
 import { installAccessPane, type AccessPane } from "./access-pane.ts";
 import {
@@ -221,6 +222,17 @@ const workspace: Workspace = (() => {
   } catch (error) { return fail(error); }
 })();
 process.chdir(workspace.root);
+if (options.sessions || options.signOut !== undefined) {
+  // Reads and writes the RUNNING board's session directory, so there is nothing useful to say when
+  // no board is up — starting one here would create an empty directory and answer a different question.
+  const running = liveWorkspaceOwner(workspace.stateDir, workspaceLaunchTarget(workspace));
+  if (!running?.port) {
+    console.error("frizz: no board is running for this workspace");
+    process.exit(1);
+  }
+  if (options.signOut !== undefined) await signOutSession(running.port, options.signOut);
+  await listSessions(running.port);
+}
 if (options.link) {
   // Mint from the RUNNING board rather than starting one — the same query frizz-dev answers
   // (src/index.ts): the answer for a board running detached or in someone else's terminal, where
@@ -479,7 +491,10 @@ async function runSupervisor(port: number, token: string): Promise<never> {
       // A spent code repaints the open QR pane as stale, so nobody photographs a dead link.
       onCodeConsumed: () => accessPane?.markConsumed(),
     // Persisted beside the project's other state, so a restart does not sign every device out.
-    ...(bind.publicOrigin ? { sessionKey: loadOrCreateSessionKey(workspace.stateDir) } : {}),
+    ...(bind.publicOrigin ? {
+          sessionKey: loadOrCreateSessionKey(workspace.stateDir),
+          sessionDirectory: fileSessionDirectory(workspace.stateDir),
+        } : {}),
     cwd: workspace.root,
     stateDir: workspace.stateDir,
     launchTarget: target,
@@ -578,6 +593,11 @@ async function runSupervisor(port: number, token: string): Promise<never> {
     close: () => supervisor.close(),
     force: () => supervisor.forceStop(),
     release: () => owner.release(),
+    // Acknowledge the first signal on the spot; the drain that follows is bounded but not instant.
+    onStop: () => {
+      logger.info("launcher", "stop signal received; draining the control plane");
+      readout?.notice("progress", "Stopping", "draining the control plane — press ctrl-c again to force");
+    },
     exit: (code) => {
       logger.info("launcher", `stopped with code ${code}`);
       // Before the farewell, or the operator's shell is left in raw mode echoing nothing.

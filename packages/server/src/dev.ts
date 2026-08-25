@@ -60,6 +60,7 @@ if (process.env.FRIZZ_DEV_CHILD === "1") {
     close: () => supervisor.close(),
     force: () => supervisor.forceStop(),
     release: () => { launchOwner.release() },
+    onStop: () => console.log("[frizz] stopping: draining the control plane — press ctrl-c again to force"),
     exit: (code) => process.exit(code),
     error: (line) => console.error(line),
   })

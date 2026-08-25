@@ -194,6 +194,74 @@ test("a second supervisor signal escalates once instead of waiting out the drain
   assert.equal(releases, 1)
 })
 
+// The first Ctrl-C used to print nothing until the drain finished, so a slow drain and a lost
+// keypress looked identical from the terminal. The acknowledgement runs once, before close() — and
+// never again for the repeats that a process group and a forwarding wrapper deliver.
+test("the first supervisor signal is acknowledged once, before the close starts", async () => {
+  const order: string[] = []
+  let resolveClose!: () => void
+  const closing = new Promise<void>((resolve) => { resolveClose = resolve })
+  let clock = 0
+  const stop = createSupervisorShutdownHandler({
+    close: () => { order.push("close"); return closing },
+    onStop: () => { order.push("acknowledged") },
+    release: () => {},
+    exit: () => {},
+    now: () => clock,
+  })
+  stop()
+  stop()
+  clock += SUPERVISOR_ESCALATE_GRACE_MS
+  stop()
+  assert.deepEqual(order, ["acknowledged", "close"])
+  resolveClose()
+  await closing
+})
+
+// Each step of the drain is bounded, and the deadline is what makes that a promise: a close() that
+// never settles is forced exactly as a second signal would force it, instead of holding the terminal.
+test("a drain that outlives its deadline is forced without a second signal", async () => {
+  const exits: number[] = []
+  const errors: string[] = []
+  let forces = 0
+  let releases = 0
+  let armed: { callback: () => void; delayMs: number } | undefined
+  const stop = createSupervisorShutdownHandler({
+    close: () => new Promise<void>(() => {}),
+    force: () => { forces++ },
+    release: () => { releases++ },
+    exit: (code) => { exits.push(code) },
+    error: (line) => { errors.push(line) },
+    drainDeadlineMs: 1_234,
+    scheduleForce: (callback, delayMs) => { armed = { callback, delayMs }; return {} },
+  })
+  stop()
+  assert.equal(armed?.delayMs, 1_234)
+  assert.deepEqual(exits, [], "the deadline is armed, not fired, by the signal")
+  armed!.callback()
+  assert.equal(forces, 1)
+  assert.equal(releases, 1)
+  assert.deepEqual(exits, [1])
+  assert.ok(errors.some((line) => line.includes("graceful stop did not finish in 1234ms")))
+  // A deadline that fires after the drain already decided must not re-decide.
+  armed!.callback()
+  assert.equal(forces, 1)
+  assert.deepEqual(exits, [1])
+})
+
+// The default deadline is a real timer, and it must not be what keeps a finished process alive.
+test("the drain deadline timer is unref'd", () => {
+  let unrefs = 0
+  const stop = createSupervisorShutdownHandler({
+    close: () => new Promise<void>(() => {}),
+    release: () => {},
+    exit: () => {},
+    scheduleForce: () => ({ unref: () => { unrefs++ } }),
+  })
+  stop()
+  assert.equal(unrefs, 1)
+})
+
 test("dev launcher syntax-checks package JSON and JSONC tsconfig before replacing a healthy child", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-dev-config-"))
   try {

@@ -20,6 +20,7 @@ import {
   writeProjectStatus,
   type ProjectLaunchTarget,
 } from "./project-launch.ts"
+import type { SessionDirectory } from "./access-codes.ts"
 import { RestartSupervisorProxy, type RestartResult } from "./restart-supervisor.ts"
 import { log as frizzLog } from "./logging.ts"
 
@@ -109,6 +110,8 @@ export interface DevSupervisorOptions {
   onCodeConsumed?: () => void
   /** Persisted session-signing key, so devices stay signed in across restarts. */
   sessionKey?: Buffer
+  /** Forwarded to the proxy so a sign-out survives a restart. See RestartSupervisorProxyOptions. */
+  sessionDirectory?: SessionDirectory
   launchTarget: ProjectLaunchTarget
   launchOwnerToken: string
   cwd?: string
@@ -179,6 +182,21 @@ export interface SupervisorShutdownHandlerOptions {
   /** Reclaim the control-plane child by force when the operator refuses to wait for the drain. */
   force?: () => void
   /**
+   * Runs once, synchronously, when the FIRST signal starts the drain — before close() is called.
+   * The launcher acknowledges the stop on the terminal here. Without it a Ctrl-C printed nothing
+   * until the whole drain had finished, and a slow drain was indistinguishable from a dead key.
+   */
+  onStop?: () => void
+  /**
+   * How long the graceful drain may run before the supervisor gives up on it by itself. Every step
+   * of close() is meant to be bounded (a child gets CHILD_STOP_TIMEOUT_MS, the proxy destroys its
+   * connections), so this is the guarantee behind those bounds: a drain that does not finish is
+   * forced, exactly as a second signal would force it, rather than holding the operator's terminal.
+   */
+  drainDeadlineMs?: number
+  /** Deterministic test seam over setTimeout for the drain deadline. */
+  scheduleForce?: (callback: () => void, delayMs: number) => { unref?: () => unknown }
+  /**
    * How long after the first signal a repeat is still treated as the SAME stop rather than as an
    * impatient operator. One Ctrl-C is delivered to every process in the foreground group, and a shell
    * or npm-script wrapper forwards it again within the same tick — escalating on that would turn every
@@ -191,6 +209,13 @@ export interface SupervisorShutdownHandlerOptions {
 
 /** A human cannot withdraw their patience in under half a second; a forwarded signal always does. */
 export const SUPERVISOR_ESCALATE_GRACE_MS = 500
+
+/**
+ * The drain's own bound: the child's stop timeout plus room for the proxy to close. A drain still
+ * running past this has wedged somewhere no per-step bound covers, and the operator gets the terminal
+ * back without having to find the second Ctrl-C.
+ */
+export const SUPERVISOR_DRAIN_DEADLINE_MS = CHILD_STOP_TIMEOUT_MS + 5_000
 
 /**
  * Idempotent, permanently-installed signal/control handler for the durable supervisor owner.
@@ -209,6 +234,8 @@ function stripPrefix(line: string): string {
 export function createSupervisorShutdownHandler(options: SupervisorShutdownHandlerOptions): () => void {
   const now = options.now ?? (() => Date.now())
   const escalateAfterMs = options.escalateAfterMs ?? SUPERVISOR_ESCALATE_GRACE_MS
+  const drainDeadlineMs = options.drainDeadlineMs ?? SUPERVISOR_DRAIN_DEADLINE_MS
+  const scheduleForce = options.scheduleForce ?? ((callback, delayMs) => setTimeout(callback, delayMs))
   let startedAt = 0
   let stopping = false
   let decided = false
@@ -224,21 +251,29 @@ export function createSupervisorShutdownHandler(options: SupervisorShutdownHandl
     }
     options.exit(code)
   }
+  const abandon = (reason: string) => {
+    options.error?.(`[frizz] ${reason} — abandoning the graceful drain`)
+    try {
+      options.force?.()
+    } catch (error) {
+      options.error?.(`[frizz] forced supervisor stop failed: ${error instanceof Error ? error.message : error}`)
+    }
+    decide(1)
+  }
   return () => {
     if (stopping) {
       // Same stop, delivered twice (process group + a forwarding wrapper) — not an impatient operator.
       if (decided || now() - startedAt < escalateAfterMs) return
-      options.error?.("[frizz] second stop signal — abandoning the graceful drain")
-      try {
-        options.force?.()
-      } catch (error) {
-        options.error?.(`[frizz] forced supervisor stop failed: ${error instanceof Error ? error.message : error}`)
-      }
-      decide(1)
+      abandon("second stop signal")
       return
     }
     stopping = true
     startedAt = now()
+    options.onStop?.()
+    // unref'd: the deadline must never be what keeps a finished process alive.
+    scheduleForce(() => {
+      if (!decided) abandon(`graceful stop did not finish in ${drainDeadlineMs}ms`)
+    }, drainDeadlineMs).unref?.()
     void options.close().then(
       () => decide(0),
       (error) => {
@@ -520,6 +555,7 @@ class Supervisor implements DevSupervisor {
       publicOrigin: opts.publicOrigin,
       onCodeConsumed: opts.onCodeConsumed,
       sessionKey: opts.sessionKey,
+      sessionDirectory: opts.sessionDirectory,
       childPort: () => this.childPort,
       restart: () => this.restartFromBrowser(),
       updateRestart: this.updateRestart ? () => this.updateFromBrowser() : undefined,

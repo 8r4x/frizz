@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { bindHostIsExposed } from "@frizz/server/local-origin";
-import { loadOrCreateSessionKey } from "@frizz/server/access-codes";
+import { fileSessionDirectory, loadOrCreateSessionKey } from "@frizz/server/access-codes";
 import {
   establishCloudConfig,
   promptForCloudName,
@@ -14,6 +14,7 @@ import {
   type CloudTransport,
 } from "./cloud.ts";
 import { renderQrLines } from "@frizz/server/qr";
+import { listSessions, signOutSession } from "./sessions-cli.ts";
 import { SUPERVISOR_ACCESS_CODE_PATH } from "@frizz/server/restart-supervisor";
 import { installAccessPane, type AccessPane } from "./access-pane.ts";
 import { readFileSync } from "node:fs";
@@ -484,7 +485,10 @@ async function runSupervisor(
       // A spent code repaints the open QR pane as stale, so nobody photographs a dead link.
       onCodeConsumed: () => accessPane?.markConsumed(),
       // Persisted beside the project's other state so a restart does not sign every device out.
-      ...(bind.publicOrigin ? { sessionKey: loadOrCreateSessionKey(workspace.stateDir) } : {}),
+      ...(bind.publicOrigin ? {
+          sessionKey: loadOrCreateSessionKey(workspace.stateDir),
+          sessionDirectory: fileSessionDirectory(workspace.stateDir),
+        } : {}),
       cwd: workspace.root,
       env: supervisorEnv,
       stateDir: workspace.stateDir,
@@ -566,9 +570,16 @@ async function runSupervisor(
     release: () => {
       launchOwner.release();
     },
+    // The first signal answers on the spot. A drain can take seconds (the child gets a bounded stop,
+    // then the proxy closes), and until 2026-08-25 nothing printed during it — so an operator whose
+    // Ctrl-C had been received saw exactly what one whose Ctrl-C had been lost saw, and mashed the key.
+    // The log line stamps when the stop actually arrived, which is the one fact a later report needs.
+    onStop: () => {
+      logger.info("launcher", "stop signal received; draining the control plane");
+      activityReadout?.notice("progress", "Stopping", "draining the control plane — press ctrl-c again to force");
+    },
     exit: (code) => {
-      // Ctrl-C printed nothing at all before this. Say the board stopped, and where the complete
-      // record of the run it just ended can be read.
+      // Say the board stopped, and where the complete record of the run it just ended can be read.
       logger.info("launcher", `stopped with code ${code}`);
       // Before the farewell, or the operator's shell is left in raw mode echoing nothing.
       accessPane?.dispose();
@@ -996,7 +1007,18 @@ try {
     process.exit(0);
   }
 
-  if (options.link) {
+  if (options.sessions || options.signOut !== undefined) {
+  // Reads and writes the RUNNING board's session directory, so there is nothing useful to say when
+  // no board is up — starting one here would create an empty directory and answer a different question.
+  const running = liveWorkspaceOwner(workspace.stateDir, workspaceLaunchTarget(workspace));
+  if (!running?.port) {
+    console.error("frizz: no board is running for this workspace");
+    process.exit(1);
+  }
+  if (options.signOut !== undefined) await signOutSession(running.port, options.signOut);
+  await listSessions(running.port);
+}
+if (options.link) {
     // Mint from the RUNNING board rather than starting one. This is the answer for a board running
     // detached or in someone else's terminal, where the interactive QR pane cannot install — without
     // it, "I need another code" means restarting the server, which is absurd.
