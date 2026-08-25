@@ -6,6 +6,7 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import type { ProviderQuota, QuotaWindow } from "@frizz/shared"
+import { resolveClaudeExecutableAbsolute } from "./claude-broker-host.ts"
 
 const execFileAsync = promisify(execFile)
 
@@ -242,7 +243,11 @@ async function acquireLock(path: string): Promise<() => Promise<void>> {
 
 async function runClaudeUsage(claudeBin: string): Promise<string> {
   const { stdout } = await execFileAsync(
-    claudeBin,
+    // Never a bare name: on Windows `execFile("claude")` is ENOENT and `execFile("claude.cmd")` is
+    // EINVAL (node refuses .cmd/.bat without a shell since CVE-2024-27980), so this reader could
+    // never reach the CLI there and every quota refresh threw. See auth-status.ts for the measurement.
+    // A resolver throw is a refresh failure like any other — the callers' stale-serving catch owns it.
+    resolveClaudeExecutableAbsolute(claudeBin),
     ["-p", "/usage", "--safe-mode", "--output-format", "json", "--no-session-persistence", "--tools", ""],
     { encoding: "utf8", timeout: CLI_TIMEOUT_MS, maxBuffer: 2 * 1024 * 1024 },
   )

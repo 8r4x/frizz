@@ -70,6 +70,28 @@ test("posix: the bare name on PATH still resolves, and an absolute bin is passed
   assert.equal(resolveClaudeExecutableAbsolute("/opt/claude/bin/claude", { PATH: dir }), "/opt/claude/bin/claude")
 })
 
+// This is the one that made the whole SERVER refuse to boot on Windows, not merely a dispatch.
+// Windows environment names are case-insensitive and it spells this one `Path`; only `process.env`
+// emulates that, so the plain object the bridge copies out of it has no `PATH` key at all and the
+// resolver scanned an empty search path. Measured on Windows Server 2022 / node 26.7.0: with
+// `process.env` it resolved claude 2.1.241; with `{...process.env}` it threw. The startup path raises
+// that throw during context creation, so nothing on Windows started.
+//
+// Asserted on EVERY platform deliberately: the spelling is what is under test, not the OS, and a
+// win32-only gate would leave the regression unpinned on the machines that actually run this suite.
+test("the search path is found under any spelling of its name, not just PATH", (t) => {
+  const dir = binDir()
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const expected = process.platform === "win32" ? join(dir, "claude.exe") : join(dir, "claude")
+  if (process.platform === "win32") writeFileSync(join(dir, "claude.exe"), "MZ")
+  for (const spelling of ["PATH", "Path", "path"]) {
+    assert.equal(
+      resolveClaudeExecutableAbsolute(undefined, { [spelling]: dir }), expected,
+      `a search path spelled ${spelling} must still resolve`,
+    )
+  }
+})
+
 test("an unresolvable name fails loudly rather than handing the SDK a bare name", () => {
   const empty = mkdtempSync(join(tmpdir(), "frizz-claude-empty-"))
   try {

@@ -6,6 +6,7 @@ import { promisify } from "node:util"
 import type { AccountEmails, AuthSnapshot, ProviderAuth } from "@frizz/shared"
 import { tokenFromCredentialsJson } from "./claude-quota.ts"
 import { defaultCodexHome } from "./codex.ts"
+import { resolveClaudeExecutableAbsolute } from "./claude-broker-host.ts"
 
 const execFileAsync = promisify(execFile)
 
@@ -164,8 +165,15 @@ export async function readClaudeAuthStatusCli(opts?: {
   cwd?: string
   timeoutMs?: number
 }): Promise<ProviderAuth> {
-  const bin = opts?.claudeBin ?? "claude"
   try {
+    // Resolved INSIDE the try, and through the broker's resolver rather than by handing `execFile` a
+    // bare name: on Windows a bare name never reaches an npm-installed CLI. Measured there against
+    // claude 2.1.241 with a control — `execFile("claude")` is ENOENT (the file on PATH is a POSIX sh
+    // script), and `execFile("claude.cmd")` is EINVAL, because node has refused .cmd/.bat without a
+    // shell since CVE-2024-27980. So this reader could only ever return "unknown" on Windows. The
+    // resolver follows the .cmd stub to the real claude.exe. It THROWS when nothing resolves, which
+    // is why it sits inside the try: a machine with no CLI must still fail open as it always did.
+    const bin = resolveClaudeExecutableAbsolute(opts?.claudeBin)
     const { stdout } = await execFileAsync(bin, ["auth", "status", "--json"], {
       encoding: "utf8",
       timeout: opts?.timeoutMs ?? 5000,

@@ -41,11 +41,27 @@ function windowsShimTarget(shimPath: string): string | undefined {
   try { accessSync(full, fsConstants.F_OK); return full } catch { return undefined }
 }
 
+/** The search path, under whatever name this environment spells it.
+ *
+ *  `env.PATH` is not enough and the difference is Windows-fatal. Windows environment names are
+ *  case-insensitive and it spells this one `Path`; only `process.env` emulates that, so a plain object
+ *  copied out of it — which is exactly what the bridge hands this resolver — has no `PATH` key at all.
+ *  Measured on Windows Server 2022 / node 26.7.0: `Object.keys(process.env)` contains `Path`,
+ *  `{...process.env}.PATH` is `undefined`, and this function resolved claude 2.1.241 from `process.env`
+ *  while THROWING on a plain copy of the same environment. That throw is raised during context
+ *  creation, so it did not merely break dispatch — the whole server refused to boot on Windows. */
+function searchPath(env: NodeJS.ProcessEnv): string {
+  const direct = env.PATH ?? env.Path ?? env.path
+  if (direct !== undefined) return direct
+  for (const [key, value] of Object.entries(env)) if (key.toLowerCase() === "path") return value ?? ""
+  return ""
+}
+
 export function resolveClaudeExecutableAbsolute(bin: string | undefined, env: NodeJS.ProcessEnv = process.env): string {
   const candidate = bin && bin.length > 0 ? bin : "claude"
   if (isAbsolute(candidate)) return candidate
   const windows = process.platform === "win32"
-  for (const dir of (env.PATH ?? "").split(delimiter)) {
+  for (const dir of searchPath(env).split(delimiter)) {
     if (!dir) continue
     if (windows) {
       // A real executable wins outright (a standalone install, or a future npm layout that ships one).
