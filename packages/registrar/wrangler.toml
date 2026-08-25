@@ -6,6 +6,11 @@ compatibility_date = "2026-08-24"
 # already running keeps working whether or not this Worker is up, and protecting that property is
 # worth more than any other choice in this package.
 
+# Daily sweep of lapsed leases. Without it the 200-record and 1,000-tunnel caps fill with names
+# nobody uses any more, and new signups stop for a reason nothing points at.
+[triggers]
+crons = ["17 4 * * *"]
+
 [vars]
 FRIZZ_ZONE = "frizz.sh"
 

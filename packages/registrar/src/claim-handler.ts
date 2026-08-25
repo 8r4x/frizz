@@ -28,6 +28,8 @@ export interface ClaimStore {
   read(name: string): Promise<ClaimRecord | null>
   write(name: string, record: ClaimRecord): Promise<void>
   remove(name: string): Promise<void>
+  /** Every claimed name. Used by the sweeper; the claim path never needs it. */
+  list(): Promise<string[]>
 }
 
 export interface CloudflareApi {
@@ -89,9 +91,10 @@ export async function handleClaim(body: unknown, deps: ClaimDeps): Promise<Claim
   const existing = await deps.store.read(name)
 
   if (existing && existing.pubkey !== pubkey) {
-    // A lapsed lease returns the name to the pool. Checking it HERE rather than in a sweeper is what
-    // makes the pool self-healing: a name frees up the moment someone else wants it, so the registry
-    // never depends on a cron job having run.
+    // A lapsed lease returns the name to the pool on demand, so a name frees up the moment someone
+    // else wants it rather than when a cron happens to run. That is NOT a substitute for the sweeper
+    // below: this branch only fires when somebody asks for this exact name, so a name nobody wants
+    // would hold its DNS record and tunnel forever, against caps of 200 and 1,000.
     if (!claimLeaseExpired(existing.renewedAt, now)) return reject("name-taken", 409)
     await releaseQuietly(deps, name, hostname, existing.tunnelId)
   } else if (existing) {
@@ -182,4 +185,52 @@ async function releaseQuietly(deps: ClaimDeps, name: string, hostname: string, t
     deps.api.deleteTunnel(tunnelId),
     deps.store.remove(name),
   ])
+}
+
+/**
+ * Return every lapsed name to the pool.
+ *
+ * The on-demand release in handleClaim only fires when someone asks for that exact name, so without
+ * this a name nobody ever wants again keeps its DNS record and its tunnel indefinitely. Those are the
+ * two capped resources — 200 records in the zone, 1,000 tunnels in the account — so leaving them held
+ * by abandoned names is what would eventually stop new signups, quietly and with no obvious cause.
+ *
+ * Bounded per run: a sweep that tried to release everything at once could exceed a scheduled Worker's
+ * CPU budget and be killed part-way, which is survivable (the next run continues) but pointless. The
+ * remaining count comes back so the caller can say what is still owed rather than implying it is done.
+ */
+export async function sweepExpiredClaims(
+  deps: ClaimDeps,
+  limit = 50
+): Promise<{ released: string[]; failed: string[]; remaining: number }> {
+  const now = deps.now()
+  const names = await deps.store.list()
+  const released: string[] = []
+  const failed: string[] = []
+  let expired = 0
+
+  for (const name of names) {
+    const record = await deps.store.read(name)
+    if (!record || !claimLeaseExpired(record.renewedAt, now)) continue
+    expired++
+    if (released.length + failed.length >= limit) continue
+    const hostname = `${name}.${deps.zone}`
+    try {
+      await release(deps, name, hostname, record.tunnelId)
+      released.push(name)
+    } catch {
+      // Kept in the registry deliberately. A name whose Cloudflare resources could not be removed
+      // must not lose its row too, or the tunnel becomes an orphan nothing knows how to find.
+      failed.push(name)
+    }
+  }
+
+  return { released, failed, remaining: Math.max(0, expired - released.length - failed.length) }
+}
+
+/** Tear a name down, reporting failure. The claim path uses the quiet variant below. */
+async function release(deps: ClaimDeps, name: string, hostname: string, tunnelId: string): Promise<void> {
+  await deps.api.deleteDnsRecord(hostname)
+  await deps.api.deleteTunnel(tunnelId)
+  await deps.store.remove(name)
 }

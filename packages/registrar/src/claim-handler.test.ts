@@ -1,13 +1,15 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { CLAIM_LEASE_MS, generateClaimIdentity, signClaim } from "@frizz/shared"
-import { handleClaim, type ClaimDeps, type ClaimRecord } from "./claim-handler.ts"
+import { handleClaim, sweepExpiredClaims, type ClaimDeps, type ClaimRecord } from "./claim-handler.ts"
 
 const NOW = 1_800_000_000_000
 const ZONE = "frizz.sh"
 
 /** A Cloudflare that records what it was asked to do, and can be told to fail any single step. */
-function fakeCloudflare(failAt?: "createTunnel" | "setTunnelIngress" | "upsertDnsRecord" | "tunnelToken") {
+function fakeCloudflare(
+  failAt?: "createTunnel" | "setTunnelIngress" | "upsertDnsRecord" | "tunnelToken" | "deleteTunnel"
+) {
   const calls: string[] = []
   const tunnels = new Map<string, string>()
   const dns = new Map<string, string>()
@@ -40,6 +42,7 @@ function fakeCloudflare(failAt?: "createTunnel" | "setTunnelIngress" | "upsertDn
       },
       async deleteTunnel(id: string) {
         calls.push(`deleteTunnel:${id}`)
+        if (failAt === "deleteTunnel") throw new Error("deleteTunnel failed")
         tunnels.delete(id)
       },
       async deleteDnsRecord(hostname: string) {
@@ -63,6 +66,9 @@ function fakeStore(seed: Record<string, ClaimRecord> = {}) {
       },
       async remove(name: string) {
         rows.delete(name)
+      },
+      async list() {
+        return [...rows.keys()]
       },
     },
   }
@@ -246,4 +252,67 @@ test("a renewal whose token cannot be re-read fails without disturbing the recor
 
   assert.equal(result.status, 502)
   assert.equal(st.rows.get("colin")?.renewedAt, NOW, "the lease was not advanced by a failed renewal")
+})
+
+
+test("the sweeper returns lapsed names to the pool, and leaves live ones alone", async () => {
+  // The gap this closes: handleClaim only releases a lapsed name when somebody asks for THAT name, so
+  // a name nobody wants again would hold its DNS record and tunnel forever — against caps of 200 and
+  // 1,000, which is what would eventually stop new signups with nothing pointing at the cause.
+  const cf = fakeCloudflare()
+  const later = NOW + CLAIM_LEASE_MS + 1
+  const st = fakeStore({
+    // Renewed just now, so its lease is nowhere near the horizon.
+    live: { pubkey: "a", tunnelId: "t-live", port: 1, claimedAt: NOW, renewedAt: later },
+    lapsed: { pubkey: "b", tunnelId: "t-lapsed", port: 1, claimedAt: NOW, renewedAt: NOW },
+  })
+  const result = await sweepExpiredClaims(
+    deps({ api: cf.api, store: st.store, now: () => later })
+  )
+
+  assert.deepEqual(result.released, ["lapsed"])
+  assert.deepEqual(result.failed, [])
+  assert.equal(result.remaining, 0)
+  assert.deepEqual(cf.calls, ["deleteDnsRecord:lapsed.frizz.sh", "deleteTunnel:t-lapsed"])
+  assert.equal(st.rows.has("lapsed"), false)
+  assert.equal(st.rows.has("live"), true, "a live name must survive the sweep")
+})
+
+test("a sweep with nothing to do touches nothing", async () => {
+  const cf = fakeCloudflare()
+  const st = fakeStore({ live: { pubkey: "a", tunnelId: "t1", port: 1, claimedAt: NOW, renewedAt: NOW } })
+  const result = await sweepExpiredClaims(deps({ api: cf.api, store: st.store }))
+  assert.deepEqual(result, { released: [], failed: [], remaining: 0 })
+  assert.deepEqual(cf.calls, [])
+  assert.equal(st.rows.size, 1)
+})
+
+test("a name whose Cloudflare teardown fails KEEPS its registry row", async () => {
+  // Dropping the row would orphan the tunnel: it would still exist, still consume the cap, and
+  // nothing would know its id any more. Better to keep the row and retry on the next sweep.
+  const cf = fakeCloudflare("deleteTunnel")
+  const st = fakeStore({ lapsed: { pubkey: "b", tunnelId: "t1", port: 1, claimedAt: NOW, renewedAt: NOW } })
+  const later = NOW + CLAIM_LEASE_MS + 1
+  const result = await sweepExpiredClaims(deps({ api: cf.api, store: st.store, now: () => later }))
+
+  assert.deepEqual(result.released, [])
+  assert.deepEqual(result.failed, ["lapsed"])
+  assert.equal(st.rows.has("lapsed"), true, "the row survives so the tunnel is not orphaned")
+})
+
+test("a sweep is bounded, and says how much it did not get to", async () => {
+  // A scheduled Worker has a CPU budget. Reporting the remainder keeps a partial sweep from reading
+  // as a complete one.
+  const cf = fakeCloudflare()
+  const seed: Record<string, ClaimRecord> = {}
+  for (let i = 0; i < 5; i++) {
+    seed[`name${i}`] = { pubkey: "x", tunnelId: `t${i}`, port: 1, claimedAt: NOW, renewedAt: NOW }
+  }
+  const st = fakeStore(seed)
+  const later = NOW + CLAIM_LEASE_MS + 1
+  const result = await sweepExpiredClaims(deps({ api: cf.api, store: st.store, now: () => later }), 2)
+
+  assert.equal(result.released.length, 2)
+  assert.equal(result.remaining, 3)
+  assert.equal(st.rows.size, 3, "the rest wait for the next run")
 })
