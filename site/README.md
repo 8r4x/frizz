@@ -9,7 +9,7 @@ The one-page site at [frizz.sh](https://frizz.sh). Static: no framework, no buil
 | `img/` | Screenshots captured from a sandboxed `scripts/adhoc-stack.mjs` instance (seeded threads, no real data), downscaled to ~2x. The picker shot lists `colinhacks/zod` because this repo had one open issue at capture time. |
 | `og.html` | Source for `img/og.png`, the 1200×630 social card. Not deployed (`.vercelignore`). |
 | `fonts/` | JetBrains Mono 2.304 woff2, under the OFL in `fonts/OFL.txt`. |
-| `docs/` | The remote-access guides, at `/docs`. One file per route, sharing `site.css` and the same `.doc` column as the homepage. |
+| `docs/` | The remote-access guides, at `/docs`. They mirror [`docs/remote-access.md`](../docs/remote-access.md), which `src/cloud.ts` names in its error messages — change one and change the other. One file per route, sharing `site.css` and the same `.doc` column as the homepage. |
 
 ## Why `/docs` and not `docs.frizz.sh`
 

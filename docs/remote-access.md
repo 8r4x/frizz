@@ -1,5 +1,7 @@
 # Remote access
 
+> Published as pages at [frizz.sh/docs](https://frizz.sh/docs), built from `site/docs/`. This file stays because `src/cloud.ts` names it in two error messages and the README links it — change one and change the other, or a reader gets a different answer depending on where they looked.
+
 Frizz binds `127.0.0.1` and has no login of its own. To reach a board from a phone or another machine, put something in front of it that does the authenticating, then tell Frizz which origin that something serves.
 
 ```sh
