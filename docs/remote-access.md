@@ -19,7 +19,7 @@ Press `L` in the board's terminal for the same thing without leaving it.
 
 ## A name on frizz.sh
 
-The shortest path, and the only one that needs no domain of your own. Pick a name and Frizz claims it, creates the tunnel, and runs it:
+The shortest path, and the only one that needs nothing of your own — no domain, no port forwarding, and no extra binary to install. Pick a name and Frizz claims it and serves it:
 
 ```sh
 $ npx frizz --cloud
@@ -27,16 +27,18 @@ Name for this board — a word claims <name>.frizz.sh, or paste a hostname you a
   claiming ada.frizz.sh for GitHub user ada
 ```
 
-Requires the [GitHub CLI](https://cli.github.com) signed in, and `cloudflared` on your PATH. Frizz asks `gh` for a token, the registrar exchanges it for your account id and discards it, and the name is bound to that account. Renewals afterwards need neither — your machine's key proves ownership, so the name keeps working whether or not GitHub does.
+Requires the [GitHub CLI](https://cli.github.com) signed in. Frizz asks `gh` for a token, the registrar exchanges it for your account id and discards it, and the name is bound to that account. Renewals afterwards need neither — your machine's key proves ownership, so the name keeps working whether or not GitHub does.
 
 Every launch renews the lease. A name nobody has run for **30 days** is released and can be claimed by someone else.
+
+Your board stays on loopback and **dials out** to `frizz.sh`, which is what removes the inbound port, the tunnel binary and the DNS record all at once — a laptop behind any NAT works with no configuration. The connection comes back by itself after a sleep or a network change, so a board is reachable again when the machine is.
 
 ### What you are agreeing to
 
 - **One name per GitHub account.** Accounts less than 30 days old cannot claim.
 - **The name is a lease, not property.** It lapses after 30 days unused, and Frizz can reclaim any name at any time — that is the only enforcement there is, so it has to exist.
 - **No warranty.** This is a free convenience on a domain someone else owns. Anything you cannot afford to lose access to belongs on a domain you control; every other section here shows how.
-- **Your traffic is not ours.** It goes from your machine to Cloudflare's edge to whoever is visiting. The registrar runs at signup and never again, and Frizz has no way to see what passes over your board.
+- **Your traffic passes through us.** A name on `frizz.sh` is served by a relay we run: every request and every keystroke goes through it. That is the trade a shared domain makes. Frizz's own access gate still runs on your machine, so a visitor meets it whether or not the relay is honest — but if you would rather no third party carried the bytes, use a domain you control.
 
 Want your own domain instead? Everything below works without us.
 

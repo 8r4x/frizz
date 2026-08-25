@@ -1,7 +1,8 @@
 # Registrar
 
-The Worker that hands out `<name>.frizz.sh`. It creates a Cloudflare Tunnel and a DNS record for a
-claimed name, and returns a per-tunnel run token to the machine that asked.
+The Worker that hands out `<name>.frizz.sh`. It records who owns a name; the [relay](../relay) serves
+it. One wildcard DNS record covers every name, so a claim creates no infrastructure at all — which is
+what removed the 200-name ceiling the original tunnel design could never get past.
 
 It runs during signup and never again. **It is not on the data plane** — a board that is already
 running keeps working whether or not this Worker is up, and nothing in Frizz has to reach it to stay
@@ -9,19 +10,24 @@ reachable. Protect that property above anything else here.
 
 ## How a name is owned
 
-There are no accounts. A name belongs to whoever holds an Ed25519 private key, kept at
-`~/.frizz/identity.key` on the claiming machine. Every claim is signed; the signature covers the
-public key, so a request cannot be re-attributed by swapping it. Ownership moves between machines the
-way an SSH key does: copy the file.
+A name belongs to whoever holds an Ed25519 private key, kept at `~/.frizz/identity.key` on the
+claiming machine. Every claim is signed; the signature covers the public key, so a request cannot be
+re-attributed by swapping it. Ownership moves between machines the way an SSH key does: copy the file.
 
-A name is a **30-day lease**. The CLI renews it on every launch, which is also how it collects that
-run's token. An unrenewed name is released — on demand when someone else asks for it, and by a daily
-sweep for names nobody wants.
+**Claiming also needs a GitHub account, and that is the only thing standing between this and a
+squatter.** The CLI asks `gh` for a token; the registrar spends it on `api.github.com/user`, keeps the
+numeric id and discards the token. One name per account, and an account younger than 30 days cannot
+claim. Nothing afterwards touches GitHub — the keypair alone renews the lease, so a name keeps working
+whether or not GitHub does. Set `REQUIRE_GITHUB=0` to lift the gate on a test deployment; never on the
+one anybody can reach.
+
+A name is a **30-day lease**, renewed on every launch. An unrenewed name is released — on demand when
+someone else asks for it, and by a daily sweep for names nobody wants.
 
 ## Deploying
 
-Needs a Cloudflare API token with **Cloudflare Tunnel: Edit**, **Zone DNS: Edit** on the zone, and
-**Workers Scripts: Edit**.
+Relay mode — the default — creates no Cloudflare resources, so it needs no API token. The secrets
+below are read only when `CLOUD_MODE=tunnel` puts the old per-name tunnel path back.
 
 ```sh
 cd packages/registrar
@@ -29,17 +35,16 @@ cd packages/registrar
 # 1. the registry: one small JSON row per claimed name
 wrangler kv namespace create CLAIMS      # paste the id into wrangler.toml
 
-# 2. the credentials — never in the committed config
-wrangler secret put CF_API_TOKEN
-wrangler secret put CF_ACCOUNT_ID
-wrangler secret put CF_ZONE_ID
-
-# 3. ship it
+# 2. ship it
 wrangler deploy
 ```
 
-Two things that will waste your time otherwise:
+Three things that will waste your time otherwise:
 
+- **A WORKERS ROUTE BEATS A CUSTOM DOMAIN.** The relay owns `*.frizz.sh/*`, which swallowed
+  `registrar.frizz.sh` the day it shipped and took signup down — the wildcard answered "No Frizz board
+  has claimed this name." to every claim. `wrangler.toml` therefore declares BOTH the custom domain and
+  a more specific `registrar.frizz.sh/*` route; the route is what wins. Do not remove either.
 - **The deploy exits 1 unless the token can read Workers Routes.** Wrangler reconciles routes *after*
   uploading, so the Worker really is deployed and the failure is cosmetic — but any script treats it as
   a failed deploy. Add **Zone → Workers Routes → Edit** to the token for a clean exit.
@@ -57,18 +62,15 @@ FRIZZ_REGISTRAR=https://frizz-registrar.<subdomain>.workers.dev frizz --cloud
 
 ## The limits that shape this
 
-One claimed name costs one DNS record and one tunnel, and both are capped:
+A relay-served name costs one KV row and nothing else, so the ceiling is nominal: `MAX_NAMES_RELAY` is
+100,000, and `MAX_NAMES` overrides it without a deploy.
 
-| Resource | Limit |
-| --- | --- |
-| DNS records per zone, free plan | 200 for a zone created after 2024-09-01 |
-| DNS records per zone, Pro | 3,500 |
-| Tunnels per account | 1,000 |
-
-So the runway is 200 names free, then 1,000 on Pro, then an Enterprise conversation. Everything in
-`claim-handler.ts` that looks like fussy cleanup exists because of those numbers: a leaked tunnel per
-failed claim, or a name that is never released, is a countdown to new signups stopping for a reason
-nothing points at.
+That is the whole point of the relay, and it is worth knowing what it replaced. A name used to cost one
+DNS record and one tunnel, and both are capped — 200 records on a free zone created after 2024-09-01,
+3,500 on Pro, 1,000 tunnels per account. `CLOUD_MODE=tunnel` still walks that path, and everything in
+`claim-handler.ts` that looks like fussy cleanup is from it: with a per-name tunnel, a leak on a failed
+claim or a name that is never released is a countdown to new signups stopping for a reason nothing
+points at.
 
 ## Verifying
 
@@ -79,8 +81,7 @@ nub --test packages/registrar/src/          # the handler, the Worker, the Cloud
 nub scripts/verify-claim-e2e.mjs            # CLI client → real socket → real handler
 ```
 
-**`cloudflare.ts` has never been run against the live API.** Its request shapes come from
-documentation rather than from a response anyone has seen, and its tests cover only its logic — a fake
-answers whatever the test asks it to, so an assertion about a URL asserts a belief back to itself. The
-first real deploy is what retires that, and the likeliest surprises are the token endpoint returning a
-bare string and whether the DNS upsert wants `PUT` or `PATCH`.
+`cloudflare.ts` was exercised against the live API on 2026-08-24, before the relay made it optional.
+Two of its shapes came back different from the documentation, and both are commented where they bite:
+a tunnel delete needs `?cascade=true` (`cloudflare.ts`), and an orphaned tunnel makes a name
+permanently unclaimable with error 1013 unless `create()` reclaims it first (`claim-handler.ts`).
