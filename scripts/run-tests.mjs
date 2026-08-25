@@ -33,6 +33,8 @@ const GLOBS = [
   "src/**/*.test.ts",
   "packages/shared/src/**/*.test.ts",
   "packages/server/src/**/*.test.ts",
+  "packages/registrar/src/**/*.test.ts",
+  "packages/relay/src/**/*.test.ts",
   "packages/web/src/**/*.test.ts",
 ];
 
