@@ -430,6 +430,20 @@ test("an enqueue bubble carrying the human-gap note is still tagged in place, no
   assert.equal(existing.deliveryState, "enqueued")
 })
 
+// The ghost-styling variant of the same miss: a follow-up landing on an IDLE thread opens `delivered`
+// (the turn it starts is already evaluating it), and the projection un-grays the fold's enqueue bubble
+// through the SAME text compare. With the note breaking the match, the gray bubble survived — pinned
+// under a thinking shimmer that was visibly working the very message it claimed was still queued.
+test("a delivered item un-grays the fold's bubble even when it carries the gap note", () => {
+  const note = humanGapNote(T0, iso(T0 - 5 * 3_600_000))
+  const existing = msg({ queued: true, sourceId: "s:9", text: `fix the bug\n\n${note}` })
+  const out = projectDeliveryLedger([existing], [item({ state: "delivered" })])
+  assert.equal(out.length, 1, "no second bubble")
+  assert.equal(out[0].queued, false, "the fold's bubble is un-grayed")
+  assert.equal(out[0].deliveryId, "d-1")
+  assert.equal(existing.queued, true, "copy-on-write — the fold's retained object is untouched")
+})
+
 test("a cancelled send's orphan bubble is suppressed even when it carries the gap note", () => {
   const note = humanGapNote(T0, iso(T0 - 5 * 3_600_000))
   const messages = [msg({ text: `retracted\n\n${note}`, sourceId: "s:2", at: iso(T0 + 1000) })]
