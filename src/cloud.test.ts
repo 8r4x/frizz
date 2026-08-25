@@ -242,22 +242,18 @@ test("a first claim that cannot reach the registrar points at the path that work
   }
 });
 
-test("until the registrar ships, a bare name is refused up front rather than at a dead end", async () => {
-  // The whole gate is one constant. Without it every user who types a name walks into a connection
-  // error for a service that does not exist yet.
+test("the offer can be withdrawn by one constant, and a hostname never depended on it", async () => {
+  // REGISTRAR_IS_LIVE is the whole gate. It is true now that the Worker is deployed; setting it back
+  // to false must refuse a bare name up front rather than letting people hit a connection error.
   const home = tempHome();
-  const saved = process.env.FRIZZ_REGISTRAR;
-  delete process.env.FRIZZ_REGISTRAR;
   try {
-    assert.equal(REGISTRAR_IS_LIVE, false, "flip this when the Worker is deployed");
-    await assert.rejects(establishCloudConfig("colin", 9393, home), /not available yet[\s\S]*hostname rather than a bare name/);
-    // A hostname still works, because that path never needed us.
+    assert.equal(REGISTRAR_IS_LIVE, true, "the registrar is deployed at registrar.frizz.sh");
+    // The bring-your-own path is unaffected either way, which is what makes the gate safe to flip.
     assert.deepEqual(await establishCloudConfig("board.example.com", 9393, home), {
       hostname: "board.example.com",
       tunnel: "board",
     });
   } finally {
-    if (saved !== undefined) process.env.FRIZZ_REGISTRAR = saved;
     rmSync(home, { recursive: true, force: true });
   }
 });

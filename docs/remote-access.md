@@ -17,6 +17,29 @@ Press `L` in the board's terminal for the same thing without leaving it.
 
 > Anything that reaches the board can run shell commands as you. Whatever sits in front of the origin **is** the access control — Frizz's single-use links gate the first visit, not the network.
 
+## A name on frizz.sh
+
+The shortest path, and the only one that needs no domain of your own. Pick a name and Frizz claims it, creates the tunnel, and runs it:
+
+```sh
+$ frizz --cloud
+Name for this board — a word claims <name>.frizz.sh, or paste a hostname you already run a tunnel for: ada
+  claiming ada.frizz.sh for GitHub user ada
+```
+
+Requires the [GitHub CLI](https://cli.github.com) signed in, and `cloudflared` on your PATH. Frizz asks `gh` for a token, the registrar exchanges it for your account id and discards it, and the name is bound to that account. Renewals afterwards need neither — your machine's key proves ownership, so the name keeps working whether or not GitHub does.
+
+Every launch renews the lease. A name nobody has run for **30 days** is released and can be claimed by someone else.
+
+### What you are agreeing to
+
+- **One name per GitHub account.** Accounts less than 30 days old cannot claim.
+- **The name is a lease, not property.** It lapses after 30 days unused, and Frizz can reclaim any name at any time — that is the only enforcement there is, so it has to exist.
+- **No warranty.** This is a free convenience on a domain someone else owns. Anything you cannot afford to lose access to belongs on a domain you control; every other section here shows how.
+- **Your traffic is not ours.** It goes from your machine to Cloudflare's edge to whoever is visiting. The registrar runs at signup and never again, and Frizz has no way to see what passes over your board.
+
+Want your own domain instead? Everything below works without us.
+
 ## SSH port forwarding
 
 The simplest option, and the only one that needs no flag at all. The forwarded port is loopback on both ends, so Frizz treats it as local:

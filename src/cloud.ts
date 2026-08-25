@@ -51,14 +51,14 @@ export interface CloudConfig {
 /**
  * Is there a registrar to claim names from yet?
  *
- * FLIP THIS TO `true` WHEN THE WORKER IS DEPLOYED — it is the whole gate, and the only line that has
- * to change. Until then a bare name has nothing to talk to, and offering the option anyway means every
- * user who tries it walks into a connection error for a service they have never heard of.
+ * Yes since 2026-08-24: the Worker is deployed at registrar.frizz.sh and the whole loop is verified
+ * against real Cloudflare and real GitHub. Set this back to `false` to withdraw the offer — it is the
+ * whole gate, and a bare name then refuses up front instead of failing at a connection error.
  *
- * Setting `FRIZZ_REGISTRAR` bypasses this, which is how the deployment gets tested before it takes
- * the default hostname.
+ * Setting `FRIZZ_REGISTRAR` points the CLI at a different registrar, which is how a deployment gets
+ * tested before it takes the default hostname.
  */
-export const REGISTRAR_IS_LIVE = false;
+export const REGISTRAR_IS_LIVE = true;
 
 /** A claimed name runs a remotely-managed tunnel; a hand-made one runs by name from a config file. */
 export function isClaimedConfig(config: CloudConfig): boolean {
