@@ -326,3 +326,47 @@ test("the visitor's Host, Origin and session cookie reach the board — the gate
     assert.notEqual(t.handshake["sec-websocket-key"], "someone-elses-key");
   } finally { session.close(); await t.close(); }
 });
+
+test("a message too large for one relay frame is split below the wire limit", async () => {
+  // THE ASSERTION THE E2E CANNOT MAKE. A Cloudflare WebSocket message caps at 1 MiB and a board's own
+  // frames go to 4 MiB, so an unsplit one is dropped in transit and the visitor's board quietly stops
+  // updating. `wrangler dev` does not enforce that cap, so only this can catch it.
+  const big = "B".repeat(2 * 1024 * 1024);
+  const t = await terminal((ws) => ws.send(big));
+  const out = collect();
+  const session = serveRelayWebSocket(
+    { t: "ws-open", id: "w1", url: "https://ada.frizz.sh/terminal", headers: [] },
+    { origin: t.origin, publicOrigin: "https://ada.frizz.sh", send: out.send },
+  );
+  try {
+    await until(out.frames, (f) => f.t === "ws-ack", "the ack");
+    session.message("go");
+    await until(out.frames, (f) => f.t === "ws-msg" && !f.more, "the final chunk");
+    const parts = out.frames.filter((f) => f.t === "ws-msg") as Array<Extract<RelayUpFrame, { t: "ws-msg" }>>;
+    assert.ok(parts.length > 1, "a 2 MiB message was not split at all");
+    for (const part of parts.slice(0, -1)) assert.equal(part.more, true, "a non-final chunk did not say more follows");
+    assert.equal(parts[parts.length - 1]!.more, undefined, "the final chunk claimed more follows");
+    // Serialized, because the frame is what crosses the wire — not the string inside it.
+    const largest = Math.max(...parts.map((p) => Buffer.byteLength(JSON.stringify(p), "utf8")));
+    assert.ok(largest < 1_048_576, `a frame of ${largest} bytes exceeds the 1 MiB message cap`);
+    assert.equal(parts.map((p) => p.data).join(""), big, "the chunks do not rebuild the original");
+  } finally { session.close(); await t.close(); }
+});
+
+test("a chunked message from the relay is rebuilt before it reaches the local socket", async () => {
+  const t = await terminal();
+  const out = collect();
+  const session = serveRelayWebSocket(
+    { t: "ws-open", id: "w1", url: "https://ada.frizz.sh/terminal", headers: [] },
+    { origin: t.origin, publicOrigin: "https://ada.frizz.sh", send: out.send },
+  );
+  try {
+    await until(out.frames, (f) => f.t === "ws-ack", "the ack");
+    session.message("one ", true);
+    session.message("two ", true);
+    session.message("three");
+    const deadline = Date.now() + 5_000;
+    while (t.seen.length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5));
+    assert.deepEqual(t.seen, ["one two three"], "the pieces reached the board separately");
+  } finally { session.close(); await t.close(); }
+});

@@ -166,7 +166,7 @@ export function connectRelay(options: RelayConnectionOptions): RelayConnection {
         return;
       }
       if (frame.t === "ws-msg") {
-        nested.get(frame.id)?.message(frame.data);
+        nested.get(frame.id)?.message(frame.data, frame.more);
         return;
       }
       if (frame.t === "ws-close") {

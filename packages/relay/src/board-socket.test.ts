@@ -296,3 +296,61 @@ test("hop-by-hop headers never reach the board on a terminal either", () => {
   const frame = parseFrame(board.sent[0]!) as { headers: Array<[string, string]> }
   assert.deepEqual(frame.headers, [["x-keep", "1"]])
 })
+
+test("a board message that arrives in pieces reaches the visitor as ONE message", async () => {
+  // The visitor's browser must never see a board frame in halves: it is JSON, and half of it is not
+  // parseable. Reassembly is what makes chunking invisible to both ends.
+  const board = fakeSocket()
+  const relay = new BoardSocket()
+  relay.attach(board.socket)
+  const visitor = fakeVisitor()
+
+  const opening = relay.openWebSocket({ url: "https://ada.frizz.sh/ws", headers: [] }, visitor.socket)
+  const id = board.lastId()
+  relay.handleFrame(serializeFrame({ t: "ws-ack", id, ok: true }))
+  await opening
+
+  relay.handleFrame(serializeFrame({ t: "ws-msg", id, data: '{"a":', more: true }))
+  relay.handleFrame(serializeFrame({ t: "ws-msg", id, data: "1}" }))
+  assert.deepEqual(visitor.received, ['{"a":1}'])
+})
+
+test("a large visitor message is split on its way down to the board", () => {
+  const board = fakeSocket()
+  const relay = new BoardSocket()
+  relay.attach(board.socket)
+  void relay.openWebSocket({ url: "https://ada.frizz.sh/ws", headers: [] }, fakeVisitor().socket)
+  const id = board.lastId()
+  relay.handleFrame(serializeFrame({ t: "ws-ack", id, ok: true }))
+
+  const big = "V".repeat(200_000)
+  board.sent.length = 0
+  relay.sendWebSocketMessage(id, big)
+  const parts = board.sent.map((raw) => parseFrame(raw) as { t: string; data: string; more?: boolean })
+  assert.ok(parts.length > 1, "a 200,000-character message was not split")
+  assert.equal(parts[parts.length - 1]!.more, undefined)
+  assert.equal(parts.map((p) => p.data).join(""), big)
+})
+
+test("a peer that never finishes a message is dropped rather than buffered forever", async () => {
+  // Unbounded reassembly is a way to exhaust the Durable Object's memory from outside it. Past the
+  // ceiling the partial message goes, and the visitor gets nothing rather than the relay getting large.
+  const board = fakeSocket()
+  const relay = new BoardSocket()
+  relay.attach(board.socket)
+  const visitor = fakeVisitor()
+
+  const opening = relay.openWebSocket({ url: "https://ada.frizz.sh/ws", headers: [] }, visitor.socket)
+  const id = board.lastId()
+  relay.handleFrame(serializeFrame({ t: "ws-ack", id, ok: true }))
+  await opening
+
+  const chunk = "X".repeat(1024 * 1024)
+  for (let i = 0; i < 12; i++) relay.handleFrame(serializeFrame({ t: "ws-msg", id, data: chunk, more: true }))
+  relay.handleFrame(serializeFrame({ t: "ws-msg", id, data: "end" }))
+  assert.deepEqual(visitor.received, [], "an overflowed run was delivered anyway")
+
+  // And the NEXT message is unaffected: poisoning ends with the run, not with the session.
+  relay.handleFrame(serializeFrame({ t: "ws-msg", id, data: "after" }))
+  assert.deepEqual(visitor.received, ["after"])
+})

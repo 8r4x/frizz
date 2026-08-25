@@ -1,9 +1,11 @@
 import {
+  chunkWsMessage,
   decodeBody,
   encodeBody,
   parseFrame,
   serializeFrame,
   stripHopByHop,
+  WsMessageAssembler,
   type RelayDownFrame,
   type RelayUpFrame,
 } from "@frizz/shared"
@@ -59,6 +61,8 @@ export class BoardSocket {
   private socket: SocketLike | null = null
   private readonly pending = new Map<string, Pending>()
   private readonly nested = new Map<string, NestedSocket>()
+  /** Rebuilds board messages that were too large for one frame. See RELAY_MAX_WS_CHUNK. */
+  private readonly inbound = new WsMessageAssembler()
   private readonly timers = new Map<string, unknown>()
   private counter = 0
   private readonly options: Required<Pick<BoardSocketOptions, "requestTimeoutMs" | "now">> &
@@ -109,6 +113,7 @@ export class BoardSocket {
     // once, instead of leaving a dead pane that looks live until someone types into it.
     for (const [id, session] of [...this.nested]) {
       this.nested.delete(id)
+      this.inbound.forget(id)
       session.settle?.(false)
       try {
         session.visitor.close(1001, reason)
@@ -218,14 +223,24 @@ export class BoardSocket {
     })
   }
 
-  /** The visitor sent something. Forward it down to the board. */
+  /** The visitor sent something. Forward it down to the board, in pieces if it is large. */
   sendWebSocketMessage(id: string, data: string, binary = false): void {
-    this.send({ t: "ws-msg", id, data, ...(binary ? { binary: true } : {}) })
+    const parts = chunkWsMessage(data)
+    parts.forEach((part, index) =>
+      this.send({
+        t: "ws-msg",
+        id,
+        data: part,
+        ...(binary ? { binary: true } : {}),
+        ...(index < parts.length - 1 ? { more: true } : {}),
+      })
+    )
   }
 
   /** The visitor's side closed. Tell the board so it can close its local end too. */
   closeWebSocket(id: string, code?: number): void {
     this.nested.delete(id)
+    this.inbound.forget(id)
     this.send({ t: "ws-close", id, ...(code !== undefined ? { code } : {}) })
   }
 
@@ -271,8 +286,10 @@ export class BoardSocket {
       case "ws-msg": {
         const session = this.nested.get(frame.id)
         if (!session) return
+        const whole = this.inbound.push(frame.id, frame.data, frame.more)
+        if (whole === null) return
         try {
-          session.visitor.send(frame.data)
+          session.visitor.send(whole)
         } catch {
           this.nested.delete(frame.id)
         }
@@ -282,6 +299,7 @@ export class BoardSocket {
         const session = this.nested.get(frame.id)
         if (!session) return
         this.nested.delete(frame.id)
+        this.inbound.forget(frame.id)
         session.settle?.(false)
         try {
           session.visitor.close(frame.code ?? 1000)

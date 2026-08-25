@@ -3,11 +3,13 @@ import { request as httpRequest } from "node:http";
 // cookie are exactly what the board's upgrade gate reads. `ws` is already in the published bundle.
 import { WebSocket as WsWebSocket } from "ws";
 import {
+  chunkWsMessage,
   decodeBody,
   encodeBody,
   RELAY_MAX_FRAME_BODY,
   serializeFrame,
   stripHopByHop,
+  WsMessageAssembler,
   type RelayDownFrame,
   type RelayUpFrame,
 } from "@frizz/shared";
@@ -230,7 +232,13 @@ export function serveRelayWebSocket(
     options.send({ t: "ws-ack", id: frame.id, ok: true });
   });
   socket.addEventListener("message", (event: { data: unknown }) => {
-    if (typeof event.data === "string") options.send({ t: "ws-msg", id: frame.id, data: event.data });
+    if (typeof event.data !== "string") return;
+    // CHUNKED, because a board frame may be four times what one relay message may carry. Sending it
+    // whole would have it dropped in transit and the visitor's board would quietly stop updating.
+    const parts = chunkWsMessage(event.data);
+    parts.forEach((data, index) =>
+      options.send({ t: "ws-msg", id: frame.id, data, ...(index < parts.length - 1 ? { more: true } : {}) }),
+    );
   });
   const gone = () => {
     // If it never opened, the ack is a REFUSAL. Sending ok:true first and closing immediately after
@@ -245,10 +253,13 @@ export function serveRelayWebSocket(
   socket.addEventListener("close", gone);
   socket.addEventListener("error", gone);
 
+  const inbound = new WsMessageAssembler();
   return {
-    message: (data: string) => {
+    message: (data: string, more?: boolean) => {
+      const whole = inbound.push(frame.id, data, more);
+      if (whole === null) return;
       try {
-        socket.send(data);
+        socket.send(whole);
       } catch {
         // The local terminal went away between frames; its close event will tell the relay.
       }
@@ -271,7 +282,8 @@ export interface WebSocketLike {
 }
 
 export interface NestedSession {
-  message: (data: string) => void;
+  /** `more` marks a continuation; the session reassembles before writing to the local socket. */
+  message: (data: string, more?: boolean) => void;
   close: () => void;
   failed?: string;
 }

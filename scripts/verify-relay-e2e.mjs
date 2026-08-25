@@ -155,7 +155,13 @@ try {
     if (!req.url?.startsWith("/terminal")) { socket.destroy(); return; }
     handshake = req.headers;
     wss.handleUpgrade(req, socket, head, (ws) => {
-      ws.on("message", (raw) => ws.send(`pty:${String(raw)}`));
+      ws.on("message", (raw) => {
+        const text = String(raw);
+        // A board's own frames go to 4 MiB, four times what one relay message may carry. Answering a
+        // request for one is how this harness proves a big snapshot is chunked rather than dropped.
+        if (text.startsWith("big:")) { ws.send("B".repeat(Number(text.slice(4)))); return; }
+        ws.send(`pty:${text}`);
+      });
     });
   });
   boardServer.listen(BOARD_PORT, "127.0.0.1");
@@ -210,6 +216,26 @@ try {
   );
   check("and the board is addressed by its PUBLIC host, which is what arms the access gate", handshake.host === `ada.localhost:${DEV_PORT}`, `host=${handshake.host}`);
   typed.close?.();
+
+  // A SINGLE MESSAGE LARGER THAN CLOUDFLARE CARRIES, reassembled from chunks.
+  //
+  // WHAT THIS DOES NOT PROVE, measured rather than assumed: `wrangler dev` does NOT enforce the 1 MiB
+  // WebSocket message cap, so an UNCHUNKED build passes this check too. It covers the reassembly and
+  // nothing else. The assertion that the chunks are actually small enough for the real edge is a unit
+  // test — `a message too large for one relay frame is split below the wire limit`.
+  const BIG = 2 * 1024 * 1024;
+  const big = await new Promise((resolve) => {
+    const visitor = new WsClient(`ws://ada.localhost:${DEV_PORT}/terminal`);
+    const timer = setTimeout(() => resolve({ error: "the big message never arrived" }), 60_000);
+    visitor.on("open", () => visitor.send(`big:${BIG}`));
+    visitor.on("message", (raw) => {
+      clearTimeout(timer);
+      resolve({ length: String(raw).length, close: () => visitor.close() });
+    });
+    visitor.on("error", () => { clearTimeout(timer); resolve({ error: "the upgrade was refused" }); });
+  });
+  check("a 2 MiB board frame is reassembled whole from its chunks", big.length === BIG, big.error ?? `${big.length} of ${BIG} chars`);
+  big.close?.();
 
   // A path the board has no terminal on must FAIL the upgrade rather than accept a silent socket.
   const refused = await new Promise((resolve) => {
