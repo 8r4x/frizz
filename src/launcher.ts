@@ -81,6 +81,10 @@ export interface CliOptions {
   publicOrigin?: string;
   /** `--link`: ask the ALREADY-RUNNING board for a fresh single-use access link, then exit. */
   link: boolean;
+  /** `--sessions`: list the devices holding a session on the already-running board, then exit. */
+  sessions: boolean;
+  /** `--sign-out <id|all>`: revoke one device's session, or every one of them. */
+  signOut?: string;
   /** `--cloud`: serve at the saved public hostname and run the tunnel as a supervised child. */
   cloud: boolean;
 }
@@ -202,6 +206,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let rawPort: string | undefined;
   let rawHost: string | undefined;
   let rawPublicOrigin: string | undefined;
+  let rawSignOut: string | undefined;
   const rawAllowedHosts: string[] = [];
   const consumed = new Set<number>();
   for (let index = 0; index < argv.length; index++) {
@@ -255,6 +260,20 @@ export function parseCliArgs(argv: string[]): CliOptions {
       rawPublicOrigin = arg.slice("--public-origin=".length);
       continue;
     }
+    if (arg === "--sign-out") {
+      const value = argv[index + 1];
+      if (value === undefined || value.startsWith("-"))
+        throw new Error("--sign-out requires a device id, or `all` to sign out every device");
+      index++;
+      consumed.add(index);
+      rawSignOut = value;
+      continue;
+    }
+    if (arg.startsWith("--sign-out=")) {
+      rawSignOut = arg.slice("--sign-out=".length);
+      if (!rawSignOut) throw new Error("--sign-out requires a device id, or `all` to sign out every device");
+      continue;
+    }
     if (arg.startsWith("-")) continue;
     // The one command. `frizz up` serves at the saved public hostname and runs its tunnel; --cloud
     // survives as an alias for anyone who saved the flag spelling.
@@ -288,6 +307,8 @@ export function parseCliArgs(argv: string[]): CliOptions {
     "--stop",
     "--status",
     "--link",
+    "--sessions",
+    "--sign-out",
     "--cloud",
     "--help",
     "-h",
@@ -306,7 +327,11 @@ export function parseCliArgs(argv: string[]): CliOptions {
       index++;
       continue;
     }
-    if (arg.startsWith("--port=") || arg.startsWith("--host=") || arg.startsWith("--allowed-host=") || arg.startsWith("--public-origin=")) continue;
+    if (arg === "--sign-out") {
+      index++;
+      continue;
+    }
+    if (arg.startsWith("--port=") || arg.startsWith("--host=") || arg.startsWith("--allowed-host=") || arg.startsWith("--public-origin=") || arg.startsWith("--sign-out=")) continue;
     if (!known.has(arg)) throw new Error(`unknown option: ${arg}`);
   }
   if (args.has("--detach"))
@@ -320,6 +345,8 @@ export function parseCliArgs(argv: string[]): CliOptions {
     foreground: true,
     stop: args.has("--stop"),
     link: args.has("--link"),
+    sessions: args.has("--sessions"),
+    ...(rawSignOut !== undefined ? { signOut: rawSignOut } : {}),
     cloud: upCommand || args.has("--cloud"),
     status: args.has("--status"),
     help: args.has("--help") || args.has("-h"),
@@ -490,6 +517,8 @@ Options:
   --public-origin <url>  serve behind a proxy/tunnel reachable at this exact origin
   --cloud                alias of up, for saved commands
   --link                 print a fresh single-use access link for the already-running board
+  --sessions             list the devices holding a session on the already-running board
+  --sign-out <id|all>    revoke one device's session, or every one of them
   --debug                stream the full event feed to the terminal instead of the compact readout
   --status               report this workspace's stable server and artifact
   --stop                 stop this workspace's UI supervisor (agents keep running)

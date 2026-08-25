@@ -106,6 +106,23 @@ npx frizz --public-origin https://whatever-that-proxy-serves
 
 Frizz checks that a request's `Host` matches the origin it was given, so the value has to be the exact origin a browser sees — scheme included, no trailing slash.
 
+## Signing a device out
+
+Redeeming a link signs a device in for a year, so a phone you no longer have is a phone that can still reach your shell. Every device that redeemed a link is listed, and each can be signed out on its own:
+
+```sh
+$ npx frizz --sessions
+  4-DY69Dr  Safari on iPhone   2d ago
+  q7mJx_uZ  Chrome on macOS    just now
+
+$ npx frizz --sign-out 4-DY69Dr
+Signed out 4-DY69Dr.
+```
+
+`--sign-out all` signs out every device at once. Both run against the board already running on this machine, and both are refused unless they arrive on loopback — so a stolen session cannot sign you out and keep the board to itself. Over SSH counts as loopback, which is how a headless box is managed.
+
+The sign-out is written to disk beside the signing key, so it survives the restarts a board performs on every artifact update.
+
 ## Headless machines
 
 A machine nobody watches still mints links on demand — sign in over SSH and ask the running board for one:

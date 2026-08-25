@@ -1,10 +1,17 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { randomBytes } from "node:crypto"
+import { createHmac, randomBytes } from "node:crypto"
 import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { AccessStore, DEFAULT_CODE_TTL_MS, loadOrCreateSessionKey, secretsMatch } from "./access-codes.ts"
+import {
+  AccessStore,
+  DEFAULT_CODE_TTL_MS,
+  describeDevice,
+  fileSessionDirectory,
+  loadOrCreateSessionKey,
+  secretsMatch,
+} from "./access-codes.ts"
 
 /** A clock the test drives, so expiry is exercised without sleeping through it. */
 function clock(start = 1_000_000) {
@@ -157,4 +164,107 @@ test("secret comparison is length-safe and constant-time", () => {
   assert.equal(secretsMatch("abc", "abd"), false)
   assert.equal(secretsMatch("abc", "abcd"), false, "different lengths must not throw")
   assert.equal(secretsMatch("", ""), true)
+})
+
+test("a redeemed session can be signed out on its own, without touching the others", () => {
+  // The point of the whole id: losing a phone must not sign out the laptop. Before this, the only
+  // revocation was rotating the key, which kicks every device the operator owns.
+  const store = new AccessStore()
+  const phone = store.redeem(store.issue().code, "iPhone")
+  const laptop = store.redeem(store.issue().code, "Chrome on macOS")
+  assert.ok(phone.ok && laptop.ok)
+  assert.equal(store.verifySession(phone.session), true)
+
+  assert.equal(store.sessions.revoke(phone.id), true)
+  assert.equal(store.verifySession(phone.session), false, "the signed-out phone still works")
+  assert.equal(store.verifySession(laptop.session), true, "signing out the phone kicked the laptop")
+})
+
+test("signing out a device twice, or one that never existed, is reported rather than silently ignored", () => {
+  const store = new AccessStore()
+  const only = store.redeem(store.issue().code, "iPhone")
+  assert.ok(only.ok)
+  assert.equal(store.sessions.revoke(only.id), true)
+  assert.equal(store.sessions.revoke(only.id), false, "a second sign-out claimed to do something")
+  assert.equal(store.sessions.revoke("no-such-id"), false)
+})
+
+test("sign out everywhere reports how many devices it actually kicked", () => {
+  const store = new AccessStore()
+  const a = store.redeem(store.issue().code, "iPhone")
+  const b = store.redeem(store.issue().code, "Firefox on Linux")
+  assert.ok(a.ok && b.ok)
+  assert.equal(store.sessions.revokeAll(), 2)
+  assert.equal(store.sessions.revokeAll(), 0, "already-revoked devices were counted again")
+  assert.equal(store.verifySession(a.session), false)
+  assert.equal(store.verifySession(b.session), false)
+})
+
+test("the device list names what redeemed each link, newest first", () => {
+  const store = new AccessStore()
+  store.redeem(store.issue().code, "iPhone")
+  store.redeem(store.issue().code, "Chrome on macOS")
+  const listed = store.sessions.list()
+  assert.deepEqual(listed.map((r) => r.label), ["Chrome on macOS", "iPhone"])
+})
+
+test("a session id cannot be swapped for another device's — the signature covers it", () => {
+  // Otherwise revoking a phone would be undone by editing one field of the cookie.
+  const store = new AccessStore()
+  const phone = store.redeem(store.issue().code, "iPhone")
+  const laptop = store.redeem(store.issue().code, "macOS")
+  assert.ok(phone.ok && laptop.ok)
+  store.sessions.revoke(phone.id);
+  // Graft the laptop's (live) id into the phone's cookie.
+  const [exp, , nonce, sig] = phone.session.split(".")
+  assert.equal(store.verifySession(`${exp}.${laptop.id}.${nonce}.${sig}`), false)
+})
+
+test("a session minted before ids existed still works, so upgrading signs nobody out", () => {
+  // Legacy payload is `<expiry>.<nonce>`; it has no id, so it cannot be revoked individually — but it
+  // must not be rejected outright, or every device is kicked by the upgrade that added this feature.
+  const key = Buffer.alloc(32, 7)
+  const store = new AccessStore({ signingKey: key })
+  const expiry = Date.now() + 60_000
+  const payload = `${expiry}.legacy-nonce`
+  const sig = createHmac("sha256", key).update(payload).digest("base64url")
+  assert.equal(store.verifySession(`${payload}.${sig}`), true)
+})
+
+test("a device label is coarse on purpose, and never invents one", () => {
+  assert.equal(describeDevice("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) AppleWebKit/605.1.15 Safari/604.1"), "Safari on iPhone")
+  assert.equal(describeDevice("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120 Safari/537.36"), "Chrome on macOS")
+  assert.equal(describeDevice("Mozilla/5.0 (Windows NT 10.0) Edg/120"), "Edge on Windows")
+  assert.equal(describeDevice(undefined), "unknown device")
+  assert.equal(describeDevice("   "), "unknown device")
+})
+
+test("a sign-out survives a restart, because a forgotten one is not a sign-out", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-sessions-"))
+  try {
+    const key = Buffer.alloc(32, 3)
+    const first = new AccessStore({ signingKey: key, sessions: fileSessionDirectory(dir) })
+    const phone = first.redeem(first.issue().code, "iPhone")
+    assert.ok(phone.ok)
+    assert.equal(first.sessions.revoke(phone.id), true)
+
+    // A whole new board, same state directory and same key — which is exactly what a restart is.
+    const second = new AccessStore({ signingKey: key, sessions: fileSessionDirectory(dir) })
+    assert.equal(second.verifySession(phone.session), false, "the restart forgot the sign-out")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("an unreadable session directory leaves the board running rather than taking it down", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-sessions-bad-"))
+  try {
+    writeFileSync(join(dir, "sessions.json"), "{ this is not json")
+    const store = new AccessStore({ sessions: fileSessionDirectory(dir) })
+    const ok = store.redeem(store.issue().code, "iPhone")
+    assert.ok(ok.ok)
+    assert.equal(store.verifySession(ok.session), true)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

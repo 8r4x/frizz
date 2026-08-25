@@ -420,6 +420,7 @@ test("CLI options default to immutable mode and make source/HMR explicit", () =>
     port: undefined,
     host: undefined,
     link: false,
+    sessions: false,
     allowedHosts: [],
   });
   assert.deepEqual(parseCliArgs(["--no-app", "--foreground", "--port=5123"]), {
@@ -435,6 +436,7 @@ test("CLI options default to immutable mode and make source/HMR explicit", () =>
     port: 5123,
     host: undefined,
     link: false,
+    sessions: false,
     allowedHosts: [],
   });
   assert.equal(parseCliArgs(["--dev"]).dev, true);
@@ -2545,4 +2547,25 @@ test("an update carries the public origin across the re-exec", () => {
     "--public-origin",
     "https://board.example",
   ]);
+});
+
+test("--sessions and --sign-out are parsed, in both the spaced and the = spelling", () => {
+  assert.equal(parseCliArgs(["--sessions"]).sessions, true);
+  assert.equal(parseCliArgs(["--sign-out", "abc123"]).signOut, "abc123");
+  assert.equal(parseCliArgs(["--sign-out=abc123"]).signOut, "abc123");
+  assert.equal(parseCliArgs(["--sign-out", "all"]).signOut, "all");
+  // Absent rather than empty, so a caller can tell "not asked for" from "asked for nothing".
+  assert.equal(parseCliArgs([]).signOut, undefined);
+});
+
+test("--sign-out without a device id is refused rather than signing everything out", () => {
+  // The dangerous default. Treating a bare --sign-out as "all" would make a typo sign out every device.
+  assert.throws(() => parseCliArgs(["--sign-out"]), /requires a device id/);
+  assert.throws(() => parseCliArgs(["--sign-out", "--debug"]), /requires a device id/);
+  assert.throws(() => parseCliArgs(["--sign-out="]), /requires a device id/);
+});
+
+test("a device id is not mistaken for a repository path", () => {
+  // The positional guard throws on any bare argument, so the value has to be consumed by the flag.
+  assert.doesNotThrow(() => parseCliArgs(["--sign-out", "q7mJx_uZ"]));
 });

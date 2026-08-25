@@ -3,7 +3,13 @@
 // crash.  This intentionally contains no source-watch logic: stable and legacy launchers can share it.
 import { request as requestHttp, createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http"
 import { connect } from "node:net"
-import { AccessStore, secretsMatch, type AccessCode } from "./access-codes.ts"
+import {
+  AccessStore,
+  describeDevice,
+  secretsMatch,
+  type AccessCode,
+  type SessionDirectory,
+} from "./access-codes.ts"
 import {
   allowedLocalCorsOrigin,
   authoritySendsFetchMetadata,
@@ -24,6 +30,8 @@ export const SUPERVISOR_RESTART_PATH = `${SUPERVISOR_CONTROL_PREFIX}/restart`
 export const SUPERVISOR_UPDATE_RESTART_PATH = `${SUPERVISOR_CONTROL_PREFIX}/update-restart`
 export const SUPERVISOR_STATUS_PATH = `${SUPERVISOR_CONTROL_PREFIX}/status`
 export const SUPERVISOR_ACCESS_CODE_PATH = `${SUPERVISOR_CONTROL_PREFIX}/access-code`
+/** List the devices holding a session, and sign one (or all) of them out. */
+export const SUPERVISOR_SESSIONS_PATH = `${SUPERVISOR_CONTROL_PREFIX}/sessions`
 export const SUPERVISOR_CONTROL_PROTOCOL = 1
 
 export type RestartControlState = "ready" | "restarting" | "failed"
@@ -54,6 +62,11 @@ export interface RestartSupervisorProxyOptions {
    * nominally year-long cookie last only until the next artifact update.
    */
   sessionKey?: Buffer
+  /**
+   * Where sign-outs are remembered. Supply a PERSISTED one, or a signed-out device comes back on the
+   * next restart — and a board restarts on every artifact update and every ordinary ctrl-C.
+   */
+  sessionDirectory?: SessionDirectory
   /** The current disposable child. Undefined means it is starting, stopped, or failed. */
   childPort: () => number | undefined
   /** Must coalesce work itself or return the same in-flight promise for repeat requests. */
@@ -177,6 +190,7 @@ function isControlRequest(req: IncomingMessage): boolean {
     || url.pathname === SUPERVISOR_UPDATE_RESTART_PATH
     || url.pathname === SUPERVISOR_STATUS_PATH
     || url.pathname === SUPERVISOR_ACCESS_CODE_PATH
+    || url.pathname === SUPERVISOR_SESSIONS_PATH
 }
 
 // `/_frizz/local-image` AND `/_frizz/<project>/local-image` — the client builds it from `apiBase()`,
@@ -191,6 +205,30 @@ function isLocalImageRequest(req: IncomingMessage): boolean {
 // Anchored on the reserved namespace, so only Frizz's own route matches — never some project file
 // that happens to end in the same segment.
 const LOCAL_IMAGE_PATH = new RegExp(`^${FRIZZ_ROUTE_PREFIX}(?:/[^/]+)?/local-image$`)
+
+/**
+ * Read a small JSON control body.
+ *
+ * Capped, because this endpoint is reachable before any session check and an unbounded read is a way
+ * to spend the board's memory from outside it. A malformed body is `null` rather than a throw: the
+ * caller answers 400 with something an operator can act on.
+ */
+async function readJsonBody(req: IncomingMessage, limit = 64 * 1024): Promise<Record<string, unknown> | null> {
+  const chunks: Buffer[] = []
+  let size = 0
+  for await (const chunk of req) {
+    size += (chunk as Buffer).byteLength
+    if (size > limit) return null
+    chunks.push(chunk as Buffer)
+  }
+  if (chunks.length === 0) return {}
+  try {
+    const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null
+  } catch {
+    return null
+  }
+}
 
 export class RestartSupervisorProxy {
   private server: Server | null = null
@@ -221,6 +259,7 @@ export class RestartSupervisorProxy {
       ? new AccessStore({
           onConsumed: () => options.onCodeConsumed?.(),
           ...(options.sessionKey ? { signingKey: options.sessionKey } : {}),
+          ...(options.sessionDirectory ? { sessions: options.sessionDirectory } : {}),
         })
       : null
     this.policy = {
@@ -406,6 +445,47 @@ export class RestartSupervisorProxy {
       responseJson(res, 200, { url, expiresAt: link.expiresAt })
       return
     }
+    if (pathname === SUPERVISOR_SESSIONS_PATH) {
+      // LOOPBACK ONLY, for the same reason minting is: a stolen session must not be able to sign the
+      // real owner out and keep the board to itself. Being at the machine — or on it over ssh, which
+      // is how a headless box mints a link — is the proof this needs.
+      if (this.arrivedPublicly(req)) {
+        res.writeHead(403)
+        res.end("Forbidden")
+        return
+      }
+      if (!this.access) {
+        responseJson(res, 409, { error: "this board has no public origin, so nothing is signed in" })
+        return
+      }
+      if (req.method === "GET") {
+        responseJson(res, 200, { sessions: this.access.sessions.list() })
+        return
+      }
+      if (req.method !== "POST") {
+        res.writeHead(405, { allow: "GET, POST" })
+        res.end()
+        return
+      }
+      const body = await readJsonBody(req)
+      const id = typeof body?.id === "string" ? body.id : undefined
+      if (body?.all === true) {
+        responseJson(res, 200, { signedOut: this.access.sessions.revokeAll() })
+        return
+      }
+      if (!id) {
+        responseJson(res, 400, { error: "name a device id, or pass all: true" })
+        return
+      }
+      // Reporting the miss matters: an operator who mistypes an id must not be told the lost phone is
+      // signed out when nothing happened.
+      if (!this.access.sessions.revoke(id)) {
+        responseJson(res, 404, { error: `no signed-in device has the id ${id}` })
+        return
+      }
+      responseJson(res, 200, { signedOut: 1 })
+      return
+    }
     if (pathname === SUPERVISOR_STATUS_PATH && req.method === "GET") {
       responseJson(res, 200, { protocol: SUPERVISOR_CONTROL_PROTOCOL, ...this.status() })
       return
@@ -505,7 +585,9 @@ export class RestartSupervisorProxy {
     const code = url.searchParams.get(ACCESS_CODE_PARAM)
     if (code === null) return false
 
-    const redeemed = this.access?.redeem(code)
+    // The User-Agent is the only thing a board ever records about a visitor's browser, and it exists
+    // so `frizz --sessions` can say "iPhone" instead of an opaque id nobody can match to a device.
+    const redeemed = this.access?.redeem(code, describeDevice(req.headers["user-agent"]))
     if (!redeemed?.ok) {
       // Say WHICH failure. "This link was already used" and "no such link" send a person to very
       // different next actions, and the store keeps consumed codes precisely so we can tell them apart.

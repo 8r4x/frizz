@@ -65,6 +65,16 @@
 
         <p>The shortest path is <a href="/docs/frizz-sh">a name on frizz.sh</a>: it needs no domain, no port forwarding, and no extra binary. Everything else here works without us.</p>
 
+        <h2>Signing a device out</h2>
+        <p>Redeeming a link signs a device in for a year, so a phone you no longer have is a phone that can still reach your shell. Every device that redeemed a link is listed, and each can be signed out on its own:</p>
+        <pre class="term"><code><span class="prompt">$</span> npx frizz --sessions
+  4-DY69Dr  Safari on iPhone   2d ago
+  q7mJx_uZ  Chrome on macOS    just now
+
+<span class="prompt">$</span> npx frizz --sign-out 4-DY69Dr
+Signed out 4-DY69Dr.</code></pre>
+        <p><code>--sign-out all</code> signs out every device at once. Both run against the board already running on this machine, and both are refused unless they arrive on loopback — so a stolen session cannot sign you out and keep the board to itself. Over SSH counts as loopback, which is how a headless box is managed.</p>
+
         <h2>Headless machines</h2>
         <p>A machine nobody can watch cannot show a QR code. Mint a single-use code over SSH instead:</p>
         <pre class="term"><code><span class="prompt">$</span> ssh you@your-machine 'npx frizz --link'</code></pre>
