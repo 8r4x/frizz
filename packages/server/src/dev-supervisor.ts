@@ -105,8 +105,6 @@ export interface DevSupervisorOptions {
   allowedHosts?: readonly string[]
   /** Serialized origin of a proxy/tunnel fronting the public port (`--public-origin`). */
   publicOrigin?: string
-  /** Standing secret for HEADLESS boxes only (FRIZZ_PUBLIC_TOKEN). Interactive launches use codes. */
-  publicToken?: string
   /** Fired when an access code is redeemed, so the launcher can repaint a spent QR. */
   onCodeConsumed?: () => void
   /** Persisted session-signing key, so devices stay signed in across restarts. */
@@ -520,7 +518,6 @@ class Supervisor implements DevSupervisor {
       host: opts.host,
       allowedHosts: opts.allowedHosts,
       publicOrigin: opts.publicOrigin,
-      publicToken: opts.publicToken,
       onCodeConsumed: opts.onCodeConsumed,
       sessionKey: opts.sessionKey,
       childPort: () => this.childPort,

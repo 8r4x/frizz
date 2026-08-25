@@ -179,6 +179,18 @@ export async function promptForCloudName(): Promise<string> {
   }
 }
 
+/** The cloudflared tunnel that serves an operator-owned hostname; the first label is only a guess. */
+export async function promptForTunnelName(hostname: string, fallback: string): Promise<string> {
+  if (!process.stdin.isTTY) return fallback;
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = (await rl.question(`Name of the cloudflared tunnel serving ${hostname} [${fallback}]: `)).trim();
+    return answer || fallback;
+  } finally {
+    rl.close();
+  }
+}
+
 /**
  * Turn what they typed into a usable config, claiming a name if that is what they asked for.
  *
@@ -193,9 +205,12 @@ export async function establishCloudConfig(
   github: GithubIdentity = githubCli,
 ): Promise<CloudConfig> {
   if (answer.includes(".")) {
-    // A hostname: the operator owns the tunnel, so fall back to asking which one, as before.
+    // A hostname: the operator owns the tunnel, so ASK which one. Deriving it from the hostname's
+    // first label looked clever and was wrong for any tunnel not named after its host — the doc's own
+    // example (`my-board` serving `board.example.com`) ran `cloudflared tunnel run board` and died.
     const hostname = normalizeHostname(answer);
-    return { hostname, tunnel: hostname.split(".")[0]! };
+    const tunnel = await promptForTunnelName(hostname, hostname.split(".")[0]!);
+    return { hostname, tunnel };
   }
 
   if (!REGISTRAR_IS_LIVE && !origin && !process.env.FRIZZ_REGISTRAR) {

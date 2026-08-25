@@ -198,6 +198,7 @@ export function durableReexecArgs(options: {
 
 export function parseCliArgs(argv: string[]): CliOptions {
   const args = new Set(argv);
+  let upCommand = false;
   let rawPort: string | undefined;
   let rawHost: string | undefined;
   let rawPublicOrigin: string | undefined;
@@ -255,12 +256,13 @@ export function parseCliArgs(argv: string[]): CliOptions {
       continue;
     }
     if (arg.startsWith("-")) continue;
-    // A retired command names its replacement. `up` was sugar for `--cloud`, and anyone who has it in
-    // muscle memory or in a script is owed better than being told they passed a repository path.
-    if (arg === "up")
-      throw new Error(
-        "the up command was removed — there is one way to launch Frizz, so use --cloud instead: it serves at the saved hostname and runs its tunnel"
-      );
+    // The one command. `frizz up` serves at the saved public hostname and runs its tunnel; --cloud
+    // survives as an alias for anyone who saved the flag spelling.
+    if (arg === "up") {
+      upCommand = true;
+      consumed.add(index);
+      continue;
+    }
     // ONE SERVER SERVES EVERY PROJECT, so "which repository" is not a question a launch has. The
     // positional was a leftover from one-server-per-repo and it kept the wrong mental model alive:
     // `frizz /some/repo` reads as "serve that repo", when the server it starts serves all of them.
@@ -275,6 +277,8 @@ export function parseCliArgs(argv: string[]): CliOptions {
     if (!Number.isInteger(port) || port < 1 || port > 65535)
       throw new Error(`invalid --port value: ${rawPort}`);
   }
+  if ((upCommand || args.has("--cloud")) && rawPublicOrigin !== undefined)
+    throw new Error("choose either up (the saved public hostname) or --public-origin, not both");
   const host = rawHost === undefined ? undefined : normalizeBindHost(rawHost);
   const known = new Set([
     "--app",
@@ -316,7 +320,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     foreground: true,
     stop: args.has("--stop"),
     link: args.has("--link"),
-    cloud: args.has("--cloud"),
+    cloud: upCommand || args.has("--cloud"),
     status: args.has("--status"),
     help: args.has("--help") || args.has("-h"),
     dev: args.has("--dev"),
@@ -371,8 +375,6 @@ export interface BindSelection {
   hostname?: string;
   /** Serialized origin of a proxy/tunnel fronting the board, or undefined when none was declared. */
   publicOrigin?: string;
-  /** Bearer secret guarding that origin. Always present when publicOrigin is — see resolveBindSelection. */
-  publicToken?: string;
 }
 
 /**
@@ -404,18 +406,15 @@ export function resolveBindSelection(
   // the whole point of naming one is reaching the board from anywhere WITHOUT also putting it on the LAN.
   const publicOriginRaw = options.publicOrigin ?? env.FRIZZ_PUBLIC_ORIGIN?.trim();
   const publicOrigin = publicOriginRaw ? normalizePublicOrigin(publicOriginRaw) : undefined;
-  // A public origin is NEVER ungated, but the gate is now single-use access codes minted on demand
-  // rather than one standing secret — see packages/server/src/access-codes.ts for why that split
-  // matters. FRIZZ_PUBLIC_TOKEN remains ONLY for headless boxes where nobody can press a key to mint
-  // a code; when it is absent the board is still gated, just by codes instead.
-  const publicToken = publicOrigin ? env.FRIZZ_PUBLIC_TOKEN?.trim() || undefined : undefined;
+  // A public origin is NEVER ungated: single-use access codes minted on demand, traded for a signed
+  // session — see packages/server/src/access-codes.ts. The standing FRIZZ_PUBLIC_TOKEN escape hatch
+  // is gone; a headless box mints a code over ssh with `frizz --link` instead.
   return {
     host,
     exposed,
     allowedHosts,
     ...(ownNames.length > 0 ? { hostname: ownNames[0] } : {}),
     ...(publicOrigin ? { publicOrigin } : {}),
-    ...(publicToken ? { publicToken } : {}),
   };
 }
 
@@ -470,7 +469,11 @@ export function networkUrls(
 export function helpText(command = "frizz-dev"): string {
   return `Frizz source launcher
 
-Usage: ${command} [options]
+Usage: ${command} [up] [options]
+
+Commands:
+  up                     serve at the saved public hostname and run its tunnel; asked once,
+                         then remembered
 
 Run it in the directory you want to work in. One server serves EVERY project on this machine,
 each at its own /project/<name> URL, so a second run joins the one already going. Frizz serves a
@@ -485,8 +488,7 @@ Options:
   --host [address]       serve on a network address instead of loopback (bare --host means 0.0.0.0)
   --allowed-host <name>  with --host, also accept this DNS name as the board's address (repeatable)
   --public-origin <url>  serve behind a proxy/tunnel reachable at this exact origin
-  --cloud                serve at the saved hostname and run its Cloudflare tunnel as a child
-                         process; asked once, then remembered
+  --cloud                alias of up, for saved commands
   --link                 print a fresh single-use access link for the already-running board
   --debug                stream the full event feed to the terminal instead of the compact readout
   --status               report this workspace's stable server and artifact

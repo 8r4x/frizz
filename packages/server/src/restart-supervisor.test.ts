@@ -581,14 +581,16 @@ test("--public-origin: a tunnelled request is accepted and reaches the child wit
   const proxy = new RestartSupervisorProxy({
     port,
     publicOrigin: "https://frizz.example.com",
-    // This test is about HEADER STRIPPING, not auth, so it carries the headless standing token to get
-    // past the gate. A public origin with no credential is 401 — see the bearer-gate test below.
-    publicToken: "headless-standing-token",
     childPort: () => current.port,
     restart: async () => ({ state: "ready" }),
   })
   try {
     await proxy.listen()
+    // This test is about HEADER STRIPPING, not auth, so it redeems a real code for the session cookie
+    // that gets past the gate. A public origin with no credential is 401 — see the bearer-gate test below.
+    const minted = proxy.issueAccessCode()!
+    const exchanged = await proxied(port, `/?frizz_code=${minted.code}`, { host: "frizz.example.com", origin: "https://frizz.example.com" })
+    const session = String(exchanged.headers?.["set-cookie"]).split(";")[0]!
     // Exactly what cloudflared sends: the browser's Host and Origin verbatim, plus its own forwarding.
     // `x-forwarded-host` is Tailscale Serve's addition rather than cloudflared's — both are supported
     // fronts, so the accepted shape covers the union rather than one vendor's subset.
@@ -599,7 +601,7 @@ test("--public-origin: a tunnelled request is accepted and reaches the child wit
       "x-forwarded-proto": "https",
       "x-forwarded-host": "frizz.example.com",
       "sec-fetch-site": "same-origin",
-      cookie: "frizz_public=headless-standing-token",
+      cookie: session,
     }
     assert.equal((await proxied(port, "/_frizz/rpc/x", tunnelled, "POST")).status, 200)
     const forwarded = seen.at(-1)!
@@ -662,16 +664,16 @@ async function upgradeStatus(port: number, headers: Record<string, string>): Pro
   }
 }
 
-test("--public-origin without a secret is not a reachable state: the bearer gate covers page and socket", async () => {
-  // Frizz has no accounts, so on a tunnelled board possession of this secret IS the authorization.
-  // What must hold: loopback is never challenged, the public origin always is, and the board socket
-  // is gated too — a shell reachable over ws:// without the secret would make the page gate theatre.
+test("--public-origin without a session is not a reachable state: the gate covers page and socket", async () => {
+  // Frizz has no accounts, so on a tunnelled board a session minted from a single-use code IS the
+  // authorization. What must hold: loopback is never challenged, the public origin always is, and the
+  // board socket is gated too — a shell reachable over ws:// without a session would make the page
+  // gate theatre.
   const current = await child("only")
   const port = await freePort()
   const proxy = new RestartSupervisorProxy({
     port,
     publicOrigin: "https://colin.frizz.sh",
-    publicToken: "s3cret-token-value",
     childPort: () => current.port,
     restart: async () => ({ state: "ready" }),
   })
@@ -679,30 +681,32 @@ test("--public-origin without a secret is not a reachable state: the bearer gate
     await proxy.listen()
     const publicHeaders = { host: "colin.frizz.sh", origin: "https://colin.frizz.sh" }
 
-    // No secret at all: refused, and the page must not advertise what lives here.
+    // No session at all: refused, and the page must not advertise what lives here.
     const bare = await proxied(port, "/", publicHeaders)
     assert.equal(bare.status, 401)
     assert.ok(!/frizz|board|agent/i.test(bare.body), `401 page leaked product identity: ${bare.body.slice(0, 120)}`)
 
-    // The cookie the exchange sets is accepted.
-    const withCookie = await proxied(port, "/", { ...publicHeaders, cookie: "frizz_public=s3cret-token-value" })
-    assert.equal(withCookie.status, 200)
-
-    // The one-time link is traded for that cookie and bounced to a URL without the secret in it, so
-    // it never lands in history, a Referer, or a screenshot.
-    const exchange = await proxied(port, "/thread/abc?frizz_token=s3cret-token-value", publicHeaders)
+    // The one-time link is traded for a session cookie and bounced to a URL without the secret in it,
+    // so it never lands in history, a Referer, or a screenshot.
+    const minted = proxy.issueAccessCode()!
+    const exchange = await proxied(port, `/thread/abc?frizz_code=${minted.code}`, publicHeaders)
     assert.equal(exchange.status, 302)
     assert.equal(exchange.headers?.location, "/thread/abc")
-    assert.match(String(exchange.headers?.["set-cookie"]), /frizz_public=s3cret-token-value/)
+    assert.match(String(exchange.headers?.["set-cookie"]), /frizz_session=/)
     assert.match(String(exchange.headers?.["set-cookie"]), /HttpOnly/)
+    const session = String(exchange.headers?.["set-cookie"]).split(";")[0]!
 
-    // A wrong secret of the SAME LENGTH is the case a sloppy compare would leak a prefix on.
-    assert.equal((await proxied(port, "/", { ...publicHeaders, cookie: "frizz_public=s3cret-token-valuX" })).status, 401)
-    assert.equal((await proxied(port, "/", { ...publicHeaders, cookie: "frizz_public=short" })).status, 401)
+    // The cookie the exchange set is accepted.
+    assert.equal((await proxied(port, "/", { ...publicHeaders, cookie: session })).status, 200)
+
+    // A tampered session of the SAME LENGTH is refused — the signature, not the shape, is the proof.
+    const flipped = session.slice(0, -1) + (session.endsWith("a") ? "b" : "a")
+    assert.equal((await proxied(port, "/", { ...publicHeaders, cookie: flipped })).status, 401)
+    assert.equal((await proxied(port, "/", { ...publicHeaders, cookie: "frizz_session=short" })).status, 401)
 
     // The board socket and every terminal ride this gate too.
     assert.equal(await upgradeStatus(port, publicHeaders), "401")
-    assert.equal(await upgrade(port, { ...publicHeaders, cookie: "frizz_public=s3cret-token-value" }), "forwarded")
+    assert.equal(await upgrade(port, { ...publicHeaders, cookie: session }), "forwarded")
 
     // Loopback is NEVER challenged — the operator's own tab on the box keeps working untouched.
     const loopback = { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}` }

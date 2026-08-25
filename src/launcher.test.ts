@@ -455,8 +455,11 @@ test("CLI options default to immutable mode and make source/HMR explicit", () =>
   assert.throws(() => parseCliArgs(["--detach"]), /always runs in the foreground/);
   assert.throws(() => parseCliArgs(["--app", "--no-app"]), /either/);
   assert.throws(() => parseCliArgs(["one", "two"]), /takes no repository path/);
-  // A retired command names its replacement rather than being swept into the generic refusal.
-  assert.throws(() => parseCliArgs(["up"]), /the up command was removed .* use --cloud instead/);
+  // `up` is the cloud launch; --cloud survives as an alias, and the two origins cannot both be named.
+  assert.equal(parseCliArgs(["up"]).cloud, true)
+  assert.equal(parseCliArgs(["--cloud"]).cloud, true)
+  assert.throws(() => parseCliArgs(["up", "--public-origin", "https://x.dev"]), /not both/)
+  assert.throws(() => parseCliArgs(["--cloud", "--public-origin", "https://x.dev"]), /not both/);
   assert.throws(() => parseCliArgs(["--mystery"]), /unknown option/);
   assert.match(helpText(), /always runs in the foreground/);
   assert.match(helpText(), /default browser/);

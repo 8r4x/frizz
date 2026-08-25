@@ -132,7 +132,11 @@ $ npx frizz --help
 
 Frizz production launcher
 
-Usage: npx frizz [options]
+Usage: npx frizz [up] [options]
+
+Commands:
+  up                     serve at the saved public hostname and run its tunnel; asked once,
+                         then remembered
 
 Run it in the directory you want to work in. One server serves EVERY project on this machine,
 each at its own /project/<name> URL, so a second run joins the one already going. Runs the
@@ -145,8 +149,7 @@ Options:
   --host [address]       serve on a network address instead of loopback (bare --host means 0.0.0.0)
   --allowed-host <name>  with --host, also accept this DNS name as the board's address (repeatable)
   --public-origin <url>  serve behind a proxy/tunnel reachable at this exact origin
-  --cloud                serve at the saved hostname and run its Cloudflare tunnel as a child
-                         process; asked once, then remembered
+  --cloud                alias of up, for saved commands
   --link                 print a fresh single-use access link for the running board
   --debug                stream the full event feed to the terminal instead of the compact readout
   -h, --help             show this help
@@ -155,7 +158,6 @@ Environment:
   FRIZZ_HOST              same as --host
   FRIZZ_ALLOWED_HOSTS     same as --allowed-host, comma separated
   FRIZZ_PUBLIC_ORIGIN     same as --public-origin
-  FRIZZ_PUBLIC_TOKEN      standing secret for HEADLESS boxes that cannot show a QR
 
 --host puts a board that can run shell commands as you on the network, and Frizz has no login: anyone
 who reaches the port controls it. Only do this on a network you trust. An IP address and this

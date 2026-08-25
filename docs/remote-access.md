@@ -22,7 +22,7 @@ Press `L` in the board's terminal for the same thing without leaving it.
 The shortest path, and the only one that needs nothing of your own — no domain, no port forwarding, and no extra binary to install. Pick a name and Frizz claims it and serves it:
 
 ```sh
-$ npx frizz --cloud
+$ npx frizz up
 Name for this board — a word claims <name>.frizz.sh, or paste a hostname you already run a tunnel for: ada
   claiming ada.frizz.sh for GitHub user ada
 ```
@@ -89,7 +89,7 @@ ingress:
 Run the two halves yourself, or let Frizz own the tunnel as a child process:
 
 ```sh
-npx frizz --cloud     # asks once for the hostname and tunnel name, then remembers both
+npx frizz up     # asks once for the hostname and tunnel name, then remembers both
 ```
 
 Running it under Frizz is worth preferring, because the two halves then share a lifetime. A tunnel that outlives its board serves Cloudflare error 1033 to anyone who visits; a board that outlives its tunnel is unreachable with nothing to say why.
@@ -106,10 +106,10 @@ Frizz checks that a request's `Host` matches the origin it was given, so the val
 
 ## Headless machines
 
-A machine nobody can watch cannot show a QR code, so a standing secret replaces the single-use link:
+A machine nobody watches still mints links on demand — sign in over SSH and ask the running board for one:
 
 ```sh
-FRIZZ_PUBLIC_TOKEN=<secret> npx frizz --public-origin https://board.example.com
+ssh you@box npx frizz --link
 ```
 
-This is deliberately weaker than a session: the secret does not expire and does not rotate. Prefer an access link anywhere a person can read a terminal.
+The link prints as a QR and a URL, is single-use, and expires in five minutes.

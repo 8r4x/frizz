@@ -47,12 +47,6 @@ export interface RestartSupervisorProxyOptions {
   /**
    * Shared secret every request arriving AS `publicOrigin` must carry. Loopback is never gated.
    *
-   * Frizz has no accounts, and a tunnelled board is a shell on the operator's machine reachable from
-   * the internet — so the launcher generates one of these whenever a public origin is declared and
-   * there is nothing else in front. It is a bearer secret, not a login: possession is the whole proof.
-   * That is a deliberate floor, not the destination — a real session layer is the next step.
-   */
-  publicToken?: string
   /** Fired when an access code is redeemed, so a launcher can repaint a now-spent QR. */
   onCodeConsumed?: () => void
   /**
@@ -138,9 +132,7 @@ function proxyHeaders(
   return headers
 }
 
-export const PUBLIC_TOKEN_PARAM = "frizz_token"
 export const ACCESS_CODE_PARAM = "frizz_code"
-const PUBLIC_TOKEN_COOKIE = "frizz_public"
 const SESSION_COOKIE = "frizz_session"
 /** Loopback spellings the token gate must never challenge — the operator's own tab on the box. */
 const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1"])
@@ -501,51 +493,29 @@ export class RestartSupervisorProxy {
    */
   private sessionAccepted(req: IncomingMessage): boolean {
     if (!this.access) return true
-    if (this.options.publicToken && this.legacyTokenAccepted(req)) return true
     return this.access.verifySession(readCookie(req.headers.cookie, SESSION_COOKIE))
   }
 
   /**
-   * The standing `FRIZZ_PUBLIC_TOKEN`, for headless boxes where nobody can press a key to mint a code.
-   * Deliberately kept as a separate, opt-in path rather than folded into sessions: it has the weaker
-   * properties (never rotates, every copy stays valid) and the readout says so.
-   */
-  private legacyTokenAccepted(req: IncomingMessage): boolean {
-    const expected = this.options.publicToken
-    if (!expected) return false
-    const url = new URL(req.url ?? "/", "http://frizz.invalid")
-    const supplied = url.searchParams.get(PUBLIC_TOKEN_PARAM) ?? readCookie(req.headers.cookie, PUBLIC_TOKEN_COOKIE)
-    return !!supplied && secretsMatch(supplied, expected)
-  }
-
-  /**
-   * Trade `?frizz_code=…` (or the legacy `?frizz_token=…`) for a cookie, then bounce to the same URL
+   * Trade `?frizz_code=…` for a cookie, then bounce to the same URL
    * without the secret, so it never lands in history, a Referer header, or a screenshot.
    */
   private exchangeCode(req: IncomingMessage, res: ServerResponse): boolean {
     const url = new URL(req.url ?? "/", "http://frizz.invalid")
     const code = url.searchParams.get(ACCESS_CODE_PARAM)
-    const legacy = url.searchParams.get(PUBLIC_TOKEN_PARAM)
-    if (code === null && legacy === null) return false
+    if (code === null) return false
 
-    let cookie: string
-    if (code !== null) {
-      const redeemed = this.access?.redeem(code)
-      if (!redeemed?.ok) {
-        // Say WHICH failure. "This link was already used" and "no such link" send a person to very
-        // different next actions, and the store keeps consumed codes precisely so we can tell them apart.
-        res.writeHead(401, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" })
-        res.end(unauthorizedPage(redeemed?.reason))
-        return true
-      }
-      cookie = `${SESSION_COOKIE}=${redeemed.session}`
-    } else {
-      if (!this.legacyTokenAccepted(req)) return false
-      cookie = `${PUBLIC_TOKEN_COOKIE}=${this.options.publicToken}`
+    const redeemed = this.access?.redeem(code)
+    if (!redeemed?.ok) {
+      // Say WHICH failure. "This link was already used" and "no such link" send a person to very
+      // different next actions, and the store keeps consumed codes precisely so we can tell them apart.
+      res.writeHead(401, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" })
+      res.end(unauthorizedPage(redeemed?.reason))
+      return true
     }
+    const cookie = `${SESSION_COOKIE}=${redeemed.session}`
 
     url.searchParams.delete(ACCESS_CODE_PARAM)
-    url.searchParams.delete(PUBLIC_TOKEN_PARAM)
     const target = `${url.pathname}${url.search}${url.hash}` || "/"
     // Secure + SameSite=Lax: the origin is https through the tunnel, and Lax still permits the
     // top-level navigation that lands here while refusing cross-site writes.

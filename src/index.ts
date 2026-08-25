@@ -481,7 +481,8 @@ async function runSupervisor(
       host: bind.host,
       allowedHosts: bind.allowedHosts,
       ...(bind.publicOrigin ? { publicOrigin: bind.publicOrigin } : {}),
-      ...(bind.publicToken ? { publicToken: bind.publicToken } : {}),
+      // A spent code repaints the open QR pane as stale, so nobody photographs a dead link.
+      onCodeConsumed: () => accessPane?.markConsumed(),
       // Persisted beside the project's other state so a restart does not sign every device out.
       ...(bind.publicOrigin ? { sessionKey: loadOrCreateSessionKey(workspace.stateDir) } : {}),
       cwd: workspace.root,
