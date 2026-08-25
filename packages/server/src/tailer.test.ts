@@ -3440,7 +3440,13 @@ test("tailer: cold ARCHIVED rows yield their prime slots until every visible row
   h.storage.setState(slug, "open")
   fixture(h.logDir, "visible-sid", [IN_FLIGHT, TOOL, DONE, TITLE])
 
-  const t = makeTailer(h)
+  // PIN THE PRIME BUDGET. What is under test is the SCHEDULING rule — a cold visible row takes its
+  // slot ahead of sixty archived ones — and PRIME_BUDGET_MS is real wall time spent against
+  // performance.now(). On a loaded machine priming the first row alone can exceed it, and then the
+  // visible row is deferred and this reads "in-flight", failing for a reason that has nothing to do
+  // with the scheduler. Seen twice on the Windows box under full-suite load, green standalone; latent
+  // on every platform. A frozen monotonic clock takes the budget out of the assertion entirely.
+  const t = makeTailer(h, { monotonicNow: () => 0 })
   h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z") // clear of the fold's unknown-stop_reason guess
   t.tick() // ONE tick
 

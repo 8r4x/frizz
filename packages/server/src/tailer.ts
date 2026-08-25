@@ -2131,6 +2131,12 @@ export interface TailerDeps {
   // to subscribed clients (replacing the client's 1.5s poll). Optional: unset = no transcript push.
   onTranscriptChange?: (slugs: string[]) => void
   now?: () => number // injectable clock (tests)
+  // Injectable MONOTONIC clock, distinct from `now` because it measures ELAPSED work rather than
+  // naming an instant — it is what PRIME_BUDGET_MS is spent against. Defaults to `performance.now`.
+  // A test that asserts WHICH rows a tick primes has to pin this: the budget is real wall time, so on
+  // a loaded machine it can pre-empt the very scheduling decision under test and the assertion fails
+  // for a reason that has nothing to do with the scheduler.
+  monotonicNow?: () => number
   paneDead?: (slug: string) => boolean // injectable liveness (tests)
   // Injectable broker-daemon liveness (tests); defaults to defaultBrokerDaemonAlive, which reads the
   // session's discovery record and probes its pid. A fixture that omits it gets `() => true` when the
@@ -2400,6 +2406,7 @@ function rowIsArchived(row: SessionRow): boolean {
 
 export function createTailer(deps: TailerDeps): Tailer {
   const now = deps.now ?? Date.now
+  const monotonicNow = deps.monotonicNow ?? (() => performance.now())
   // A row's liveness comes from its runtime (broker daemon / app-server), never from a screen. A
   // PRE-CUTOVER row has no transport left, so the default answers "dead" — the seam stays injectable
   // for fixtures.
@@ -4076,7 +4083,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     let primed = 0
     // Newly-primed rows this tick, and whether the bound cut the pass short (see MAX_PRIME_ROWS_PER_TICK).
     let primedRows = 0
-    const tickStartedMs = performance.now()
+    const tickStartedMs = monotonicNow()
     primeIncomplete = false
     for (const row of rows) {
       if (primeProgress && primed % PRIME_PROGRESS_EVERY === 0) primeProgress(primed, rows.length)
@@ -4150,7 +4157,7 @@ export function createTailer(deps: TailerDeps): Tailer {
           // starvation. The visible row still primes on this same tick; it just is not necessarily first.
           (coldVisibleRow && primedRows > 0 && rowIsArchived(row)) ||
           primedRows >= MAX_PRIME_ROWS_PER_TICK ||
-          (primedRows > 0 && performance.now() - tickStartedMs > PRIME_BUDGET_MS)
+          (primedRows > 0 && monotonicNow() - tickStartedMs > PRIME_BUDGET_MS)
         ) {
           primeIncomplete = true
           continue
@@ -4465,11 +4472,11 @@ export function createTailer(deps: TailerDeps): Tailer {
   // one row-block per second.
   let primeIncomplete = false
   function tickWithBudget(): void {
-    const started = performance.now()
+    const started = monotonicNow()
     try {
       tick()
     } finally {
-      const elapsed = performance.now() - started
+      const elapsed = monotonicNow() - started
       lastTickMs = elapsed
       lastTickEndedAtMs = now()
       if (elapsed > POLL_MS) {
