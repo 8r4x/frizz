@@ -1,0 +1,35 @@
+name = "frizz-relay"
+main = "src/worker.ts"
+compatibility_date = "2026-08-24"
+
+# THE WILDCARD IS THE WHOLE POINT. One record in front of every board, rather than one record per
+# user — which is what the tunnel design could never get past, because a CNAME points at exactly one
+# target and every board's tunnel lives on a different machine.
+#
+# Universal SSL covers `*.frizz.sh` one level deep and no further, which is why the Worker refuses a
+# hostname with a dot left in its label.
+[[routes]]
+pattern = "*.frizz.sh"
+custom_domain = false
+zone_name = "frizz.sh"
+
+[vars]
+FRIZZ_ZONE = "frizz.sh"
+
+# One Durable Object per claimed name: the only place in Workers where a visitor's request and that
+# board's live socket can reliably meet. SQLite-backed, which is what makes it available without a
+# paid plan.
+[[durable_objects.bindings]]
+name = "BOARD"
+class_name = "Board"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Board"]
+
+# The registrar's registry, READ-ONLY here. The relay never writes it — it only needs to know which
+# public key owns a name, so that a board's handshake can be checked against something it cannot
+# forge. Same namespace id as packages/registrar/wrangler.toml.
+[[kv_namespaces]]
+binding = "CLAIMS"
+id = "aa4a9c11473d4511a556e3e3a6857058"
