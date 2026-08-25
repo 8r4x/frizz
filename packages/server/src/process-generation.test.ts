@@ -51,10 +51,18 @@ function skipUnobservable(t: TestContext): boolean {
 test("an external process's marker is stable across observations and distinct per process", { timeout: 30_000 }, async (t) => {
   if (skipUnobservable(t)) return
   const first = spawnIdle()
-  // Darwin resolves birth only to the second, so two children born inside one second legitimately
-  // share a marker — that is exactly what its `weak` confidence admits. Cross the boundary so this
-  // still proves the marker TRACKS birth here rather than being a per-machine constant.
-  if (process.platform === "darwin") await delay(1_100)
+  // Two children born inside one tick of the platform's birth clock legitimately share a marker, so
+  // cross that boundary before spawning the second — otherwise this asserts the clock's resolution
+  // rather than the property it is for, which is that the marker TRACKS birth instead of being a
+  // per-machine constant. Each figure is measured, not assumed:
+  //   darwin — `ps -o lstart=` resolves to the SECOND, which is what its `weak` confidence admits.
+  //   linux  — `/proc/<pid>/stat` field 20 is in clock ticks and `getconf CLK_TCK` is 100, i.e. 10ms.
+  //            Measured on Ubuntu with node 26.7.0: six children spawned back to back produced only
+  //            THREE distinct tick values, so neighbouring pairs shared a marker.
+  //   win32  — FILETIME is 100ns and four back-to-back children came out 5.6-6.4ms apart with
+  //            sub-millisecond digits, so no wait is needed at all.
+  const BIRTH_CLOCK_TICK_MS: Partial<Record<NodeJS.Platform, number>> = { darwin: 1_100, linux: 30 }
+  await delay(BIRTH_CLOCK_TICK_MS[process.platform] ?? 0)
   const second = spawnIdle()
   try {
     const once1 = await settled(first.pid!)
