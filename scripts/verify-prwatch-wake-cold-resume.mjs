@@ -137,9 +137,13 @@ async function thread(slug, ref) {
   // A real dispatch: daemon + child, one turn answered.
   await bridge.spawnDispatch({ threadSlug: slug, sessionId: session, cwd: root, prompt: `start ${slug}`, permissionMode: "auto" })
   check(`${slug}: the dispatch prompt reached the claude child`, await waitFor(() => inputsWith(`start ${slug}`).length === 1, 10_000, "dispatch input"))
-  // The worker rests; the hibernator retires the idle daemon (the real call, the real reason).
+  // The worker rests; the hibernator retires the idle daemon (the real call, the real reason). Wait for
+  // the PROCESS to be gone, not just its record: the record is unlinked on the way out, and a wake that
+  // lands in that gap reconnects to a daemon that is still draining instead of cold-resuming.
+  const daemonPid = recordOf(session)?.daemonPid
+  const pidAlive = (pid) => { try { process.kill(pid, 0); return true } catch { return false } }
   check(`${slug}: the idle daemon is retired, as the hibernator would`, bridge.retireDaemon({ threadSlug: slug, sessionId: session, reason: "hibernate" }))
-  check(`${slug}: …and its record is gone`, await waitFor(() => !recordOf(session), 5_000, "daemon record removal"))
+  check(`${slug}: …and its record and process are gone`, await waitFor(() => !recordOf(session) && !(daemonPid && pidAlive(daemonPid)), 10_000, "daemon exit"))
   // The watcher, registered the way the tool registers it, with CI still running.
   const watchId = `prw_${slug}`
   const [owner, rest] = ref.split("/"); const [repo, number] = rest.split("#")
