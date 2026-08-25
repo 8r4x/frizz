@@ -149,3 +149,150 @@ test("a late or unknown frame is ignored rather than throwing", () => {
     assert.doesNotThrow(() => relay.handleFrame(raw))
   }
 })
+
+/** A visitor's end of a terminal, recording what the relay pushed at it. */
+function fakeVisitor() {
+  const received: string[] = []
+  let closed: number | undefined
+  return {
+    received,
+    get closed() { return closed },
+    socket: { send: (d: string) => void received.push(d), close: (code?: number) => { closed = code } } as SocketLike,
+  }
+}
+
+test("a terminal is opened on the board and acknowledged before the visitor is upgraded", async () => {
+  const board = fakeSocket()
+  const relay = new BoardSocket()
+  relay.attach(board.socket)
+  const visitor = fakeVisitor()
+
+  const opening = relay.openWebSocket({ url: "https://ada.frizz.sh/terminal", headers: [["x-keep", "1"]] }, visitor.socket)
+  const sent = parseFrame(board.sent[0]!) as { t: string; url: string }
+  assert.equal(sent.t, "ws-open")
+  assert.equal(sent.url, "https://ada.frizz.sh/terminal")
+
+  relay.handleFrame(serializeFrame({ t: "ws-ack", id: board.lastId(), ok: true }))
+  assert.equal(await opening, board.lastId())
+})
+
+test("a terminal the board refuses resolves to null, so the upgrade can fail honestly", async () => {
+  const board = fakeSocket()
+  const relay = new BoardSocket()
+  relay.attach(board.socket)
+  const visitor = fakeVisitor()
+
+  const opening = relay.openWebSocket({ url: "https://ada.frizz.sh/terminal", headers: [] }, visitor.socket)
+  relay.handleFrame(serializeFrame({ t: "ws-ack", id: board.lastId(), ok: false }))
+  assert.equal(await opening, null)
+})
+
+test("a terminal on a board that is not connected is refused rather than left hanging", async () => {
+  const relay = new BoardSocket()
+  const visitor = fakeVisitor()
+  assert.equal(await relay.openWebSocket({ url: "https://ada.frizz.sh/terminal", headers: [] }, visitor.socket), null)
+})
+
+test("the board's output reaches the visitor, and the visitor's input reaches the board", async () => {
+  const board = fakeSocket()
+  const relay = new BoardSocket()
+  relay.attach(board.socket)
+  const visitor = fakeVisitor()
+
+  const opening = relay.openWebSocket({ url: "https://ada.frizz.sh/terminal", headers: [] }, visitor.socket)
+  const id = board.lastId()
+  relay.handleFrame(serializeFrame({ t: "ws-ack", id, ok: true }))
+  await opening
+
+  relay.handleFrame(serializeFrame({ t: "ws-msg", id, data: "hello from the pty" }))
+  assert.deepEqual(visitor.received, ["hello from the pty"])
+
+  relay.sendWebSocketMessage(id, "ls -la")
+  const up = parseFrame(board.sent[board.sent.length - 1]!) as { t: string; data: string }
+  assert.equal(up.t, "ws-msg")
+  assert.equal(up.data, "ls -la")
+})
+
+test("a terminal that ends on the board closes the visitor's pane", async () => {
+  const board = fakeSocket()
+  const relay = new BoardSocket()
+  relay.attach(board.socket)
+  const visitor = fakeVisitor()
+
+  const opening = relay.openWebSocket({ url: "https://ada.frizz.sh/terminal", headers: [] }, visitor.socket)
+  const id = board.lastId()
+  relay.handleFrame(serializeFrame({ t: "ws-ack", id, ok: true }))
+  await opening
+
+  relay.handleFrame(serializeFrame({ t: "ws-close", id, code: 1000 }))
+  assert.equal(visitor.closed, 1000)
+  // And a later message for a closed session is ignored rather than throwing.
+  relay.handleFrame(serializeFrame({ t: "ws-msg", id, data: "late" }))
+  assert.deepEqual(visitor.received, [])
+})
+
+test("a board that disconnects closes every terminal riding on it", async () => {
+  // A pane that looks live but types into nothing is the worst outcome here: the visitor cannot tell
+  // the board went away, and the relay has no way to answer them later.
+  const board = fakeSocket()
+  const relay = new BoardSocket()
+  relay.attach(board.socket)
+  const visitor = fakeVisitor()
+
+  const opening = relay.openWebSocket({ url: "https://ada.frizz.sh/terminal", headers: [] }, visitor.socket)
+  relay.handleFrame(serializeFrame({ t: "ws-ack", id: board.lastId(), ok: true }))
+  await opening
+
+  relay.detach(board.socket)
+  assert.equal(visitor.closed, 1001)
+})
+
+test("a terminal opened while the board is going away resolves rather than hanging forever", async () => {
+  const board = fakeSocket()
+  const relay = new BoardSocket()
+  relay.attach(board.socket)
+  const visitor = fakeVisitor()
+
+  const opening = relay.openWebSocket({ url: "https://ada.frizz.sh/terminal", headers: [] }, visitor.socket)
+  relay.detach(board.socket)
+  assert.equal(await opening, null)
+})
+
+test("the visitor closing tells the board, so a pty is not left running for nobody", () => {
+  const board = fakeSocket()
+  const relay = new BoardSocket()
+  relay.attach(board.socket)
+  const visitor = fakeVisitor()
+
+  void relay.openWebSocket({ url: "https://ada.frizz.sh/terminal", headers: [] }, visitor.socket)
+  const id = board.lastId()
+  relay.handleFrame(serializeFrame({ t: "ws-ack", id, ok: true }))
+  relay.closeWebSocket(id, 1000)
+  const frame = parseFrame(board.sent[board.sent.length - 1]!) as { t: string; code: number }
+  assert.equal(frame.t, "ws-close")
+  assert.equal(frame.code, 1000)
+})
+
+test("a terminal the board never answers for is given up on rather than held open", async () => {
+  const fire: Array<() => void> = []
+  const board = fakeSocket()
+  const relay = new BoardSocket({ requestTimeoutMs: 10, setTimer: (fn) => { fire.push(fn); return fire.length }, clearTimer: () => {} })
+  relay.attach(board.socket)
+  const visitor = fakeVisitor()
+
+  const opening = relay.openWebSocket({ url: "https://ada.frizz.sh/terminal", headers: [] }, visitor.socket)
+  for (const fn of fire) fn()
+  assert.equal(await opening, null)
+})
+
+test("hop-by-hop headers never reach the board on a terminal either", () => {
+  const board = fakeSocket()
+  const relay = new BoardSocket()
+  relay.attach(board.socket)
+  void relay.openWebSocket(
+    { url: "https://ada.frizz.sh/terminal", headers: [["connection", "Upgrade"], ["upgrade", "websocket"], ["x-keep", "1"]] },
+    fakeVisitor().socket,
+  )
+  const frame = parseFrame(board.sent[0]!) as { headers: Array<[string, string]> }
+  assert.deepEqual(frame.headers, [["x-keep", "1"]])
+})

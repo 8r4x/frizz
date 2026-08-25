@@ -52,10 +52,12 @@
     "@frizz/server": "workspace:*",
     "@frizz/shared": "workspace:*",
     "@types/node": "^24",
+    "@types/ws": "^8.5",
     "esbuild": "^0.25.0",
     "jsqr": "^1.4.0",
     "puppeteer": "^25.3.0",
-    "typescript": "^5.7"
+    "typescript": "^5.7",
+    "ws": "^8.18"
   },
   "pnpm": {
     "overrides": {

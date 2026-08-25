@@ -7,7 +7,7 @@ import {
   type RelayHandshake,
   type RelayUpFrame,
 } from "@frizz/shared";
-import { serveRelayRequest } from "./relay-agent.ts";
+import { serveRelayRequest, serveRelayWebSocket, type NestedSession } from "./relay-agent.ts";
 
 /**
  * The board's connection to the relay: dial out, prove who we are, then serve whatever arrives.
@@ -94,6 +94,8 @@ export function connectRelay(options: RelayConnectionOptions): RelayConnection {
     options.socketFactory ?? ((url: string) => new WebSocket(url) as unknown as RelaySocket);
 
   let socket: RelaySocket | null = null;
+  /** Local terminals, one per visitor session the relay has opened. */
+  const nested = new Map<string, NestedSession>();
   let attempt = 0;
   let stopped = false;
   let retryHandle: unknown;
@@ -150,12 +152,36 @@ export function connectRelay(options: RelayConnectionOptions): RelayConnection {
           publicOrigin: options.publicOrigin,
           send,
         });
+        return;
+      }
+      if (frame.t === "ws-open") {
+        nested.set(
+          frame.id,
+          serveRelayWebSocket(frame, {
+            origin: options.boardOrigin,
+            publicOrigin: options.publicOrigin,
+            send,
+          }),
+        );
+        return;
+      }
+      if (frame.t === "ws-msg") {
+        nested.get(frame.id)?.message(frame.data);
+        return;
+      }
+      if (frame.t === "ws-close") {
+        nested.get(frame.id)?.close();
+        nested.delete(frame.id);
       }
     });
 
     const dropped = () => {
       if (socket !== next) return; // a socket we already replaced
       socket = null;
+      // The relay is gone, so every terminal riding on it is too. Closing the local ends stops a pty
+      // from being held open by a session nothing can reach any more.
+      for (const session of nested.values()) session.close();
+      nested.clear();
       options.onStatus?.("disconnected");
       scheduleRetry("the relay connection closed");
     };
@@ -174,6 +200,8 @@ export function connectRelay(options: RelayConnectionOptions): RelayConnection {
       } catch {
         // Already gone.
       }
+      for (const session of nested.values()) session.close();
+      nested.clear();
       socket = null;
     },
     get connected() {

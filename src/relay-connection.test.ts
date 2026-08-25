@@ -43,8 +43,13 @@ function harness(overrides: Partial<Parameters<typeof connectRelay>[0]> = {}) {
         backoff: () => 1,
         ...overrides,
       });
-      // connectRelay signs asynchronously before the socket exists.
-      for (let i = 0; i < 50 && sockets.length === 0; i++) await new Promise((r) => setImmediate(r));
+      // connectRelay signs asynchronously before the socket exists. Ed25519 keygen and signing are
+      // real work, so a fixed number of microtask ticks is not enough under a loaded runner — wait on
+      // the condition against a clock instead, or the socket is simply missing and the test reads as a
+      // bug in the connection loop.
+      const deadline = Date.now() + 5_000;
+      while (sockets.length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 1));
+      if (sockets.length === 0) throw new Error("connectRelay never opened a socket");
       return conn;
     },
   };

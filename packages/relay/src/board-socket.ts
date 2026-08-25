@@ -25,6 +25,13 @@ export interface SocketLike {
   close(code?: number, reason?: string): void
 }
 
+/** A visitor's WebSocket, waiting on or linked to one the board opened locally. */
+interface NestedSocket {
+  visitor: SocketLike
+  /** Resolves once the board says whether it could open its end. */
+  settle?: (ok: boolean) => void
+}
+
 interface Pending {
   /** Head resolved; the body may still be streaming. */
   settle: (response: { status: number; headers: Array<[string, string]>; body: Uint8Array | null }) => void
@@ -51,6 +58,7 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
 export class BoardSocket {
   private socket: SocketLike | null = null
   private readonly pending = new Map<string, Pending>()
+  private readonly nested = new Map<string, NestedSocket>()
   private readonly timers = new Map<string, unknown>()
   private counter = 0
   private readonly options: Required<Pick<BoardSocketOptions, "requestTimeoutMs" | "now">> &
@@ -96,6 +104,17 @@ export class BoardSocket {
       this.pending.delete(id)
       this.clear(id)
       entry.fail(reason)
+    }
+    // A terminal is useless once the board it was typing into has gone. Closing tells the browser at
+    // once, instead of leaving a dead pane that looks live until someone types into it.
+    for (const [id, session] of [...this.nested]) {
+      this.nested.delete(id)
+      session.settle?.(false)
+      try {
+        session.visitor.close(1001, reason)
+      } catch {
+        // Already gone.
+      }
     }
   }
 
@@ -166,6 +185,50 @@ export class BoardSocket {
     })
   }
 
+  /**
+   * Ask the board to open a nested WebSocket — a terminal — and link it to this visitor.
+   *
+   * Resolves to the session id, or null when the board refuses or is not there — so the caller can
+   * answer the upgrade with a normal error instead of a socket that accepts and then goes silent. The
+   * id is what labels every later message from this visitor.
+   */
+  async openWebSocket(
+    input: { url: string; headers: Array<[string, string]> },
+    visitor: SocketLike
+  ): Promise<string | null> {
+    if (!this.socket) return null
+    const id = `w${++this.counter}`
+    return new Promise<string | null>((resolve) => {
+      const done = (ok: boolean) => resolve(ok ? id : null)
+      this.nested.set(id, { visitor, settle: done })
+      const sent = this.send({ t: "ws-open", id, url: input.url, headers: stripHopByHop(input.headers) })
+      if (!sent) {
+        this.nested.delete(id)
+        resolve(null)
+        return
+      }
+      if (this.options.setTimer) {
+        this.options.setTimer(() => {
+          const session = this.nested.get(id)
+          if (!session?.settle) return // already answered
+          this.nested.delete(id)
+          session.settle(false)
+        }, this.options.requestTimeoutMs)
+      }
+    })
+  }
+
+  /** The visitor sent something. Forward it down to the board. */
+  sendWebSocketMessage(id: string, data: string, binary = false): void {
+    this.send({ t: "ws-msg", id, data, ...(binary ? { binary: true } : {}) })
+  }
+
+  /** The visitor's side closed. Tell the board so it can close its local end too. */
+  closeWebSocket(id: string, code?: number): void {
+    this.nested.delete(id)
+    this.send({ t: "ws-close", id, ...(code !== undefined ? { code } : {}) })
+  }
+
   /** A frame arrived from the board. Unknown ids are ignored — a late answer is not an error. */
   handleFrame(raw: string): void {
     const frame = parseFrame(raw) as RelayUpFrame | null
@@ -194,6 +257,37 @@ export class BoardSocket {
         if (!entry) return
         this.pending.delete(frame.id)
         entry.stream?.end()
+        return
+      }
+      case "ws-ack": {
+        const session = this.nested.get(frame.id)
+        if (!session) return
+        const settle = session.settle
+        delete session.settle
+        if (!frame.ok) this.nested.delete(frame.id)
+        settle?.(frame.ok)
+        return
+      }
+      case "ws-msg": {
+        const session = this.nested.get(frame.id)
+        if (!session) return
+        try {
+          session.visitor.send(frame.data)
+        } catch {
+          this.nested.delete(frame.id)
+        }
+        return
+      }
+      case "ws-close": {
+        const session = this.nested.get(frame.id)
+        if (!session) return
+        this.nested.delete(frame.id)
+        session.settle?.(false)
+        try {
+          session.visitor.close(frame.code ?? 1000)
+        } catch {
+          // Already gone.
+        }
         return
       }
       default:

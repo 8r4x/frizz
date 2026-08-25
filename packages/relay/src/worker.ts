@@ -127,6 +127,38 @@ export class Board {
       return new Response(null, { status: 101, webSocket: pair[0]! })
     }
 
+    // A visitor's WebSocket — a terminal. The board opens its own end locally and the two are linked
+    // frame by frame. Without this a relayed board renders and streams but cannot be worked in, which
+    // is most of what Frizz is for.
+    if (request.headers.get("upgrade") === "websocket") {
+      if (!this.relay.connected) return new Response("This Frizz board is not running right now.", { status: 502 })
+      const pair = new WebSocketPair()
+      const visitor = pair[1]!
+      visitor.accept()
+      const adapter = {
+        send: (data: string) => visitor.send(data),
+        close: (code?: number, reason?: string) => visitor.close(code, reason),
+      }
+      const id = await this.relay.openWebSocket({ url: url.toString(), headers: [...request.headers] }, adapter)
+      if (!id) {
+        // Refuse the upgrade outright rather than accepting a socket that will never carry anything.
+        // A terminal pane that opens and stays silent is far harder to diagnose than one that fails.
+        try {
+          visitor.close(1011, "the board did not open a terminal")
+        } catch {
+          // Already gone.
+        }
+        return new Response("The board did not open a terminal.", { status: 502 })
+      }
+      visitor.addEventListener("message", (event) => {
+        if (typeof event.data === "string") this.relay.sendWebSocketMessage(id, event.data)
+      })
+      const shut = () => this.relay.closeWebSocket(id)
+      visitor.addEventListener("close", shut)
+      visitor.addEventListener("error", shut)
+      return new Response(null, { status: 101, webSocket: pair[0]! })
+    }
+
     if (!this.relay.connected) {
       // The name exists but nothing is serving it. Said plainly, because "this board is offline" is a
       // different problem from "no such board" and the visitor can act on one of them.

@@ -3,7 +3,7 @@ import test from "node:test";
 import { createServer, type Server } from "node:http";
 import { once } from "node:events";
 import { decodeBody, encodeBody, RELAY_MAX_FRAME_BODY, type RelayUpFrame } from "@frizz/shared";
-import { serveRelayRequest } from "./relay-agent.ts";
+import { serveRelayRequest, serveRelayWebSocket } from "./relay-agent.ts";
 
 /** A stand-in board, so the agent is driven against a REAL local server rather than a mock. */
 async function board(handler: (req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) => void) {
@@ -163,4 +163,130 @@ test("hop-by-hop headers are not replayed onto the local connection", async () =
     assert.ok(seen.includes("x-keep"));
     assert.ok(!seen.includes("transfer-encoding"), "a hop-by-hop header was replayed");
   } finally { await b.close(); }
+});
+
+/**
+ * A stand-in terminal: a REAL WebSocket server, because the whole point of this half is that it speaks
+ * to one. A fake socket here would prove the frame bookkeeping and nothing about the upgrade itself.
+ */
+async function terminal(onMessage?: (socket: import("ws").WebSocket, data: string) => void, accept = true) {
+  const { WebSocketServer } = await import("ws");
+  const server: Server = createServer((_, res) => { res.writeHead(426); res.end(); });
+  const wss = new WebSocketServer({ noServer: true });
+  const seen: string[] = [];
+  server.on("upgrade", (req, socket, head) => {
+    if (!accept) { socket.destroy(); return; }
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      ws.on("message", (raw) => {
+        const data = String(raw);
+        seen.push(data);
+        onMessage?.(ws, data);
+      });
+    });
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const { port } = server.address() as { port: number };
+  return {
+    origin: `http://127.0.0.1:${port}`,
+    seen,
+    async close() { wss.close(); server.close(); await once(server, "close"); },
+  };
+}
+
+/** Wait for a frame the predicate accepts, so a test never races the socket's own timing. */
+async function until(frames: RelayUpFrame[], match: (f: RelayUpFrame) => boolean, label: string) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const found = frames.find(match);
+    if (found) return found;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  throw new Error(`timed out waiting for ${label}`);
+}
+
+test("a terminal opens locally and is acknowledged, so the visitor's pane goes live", async () => {
+  const t = await terminal();
+  const out = collect();
+  const session = serveRelayWebSocket(
+    { t: "ws-open", id: "w1", url: "https://ada.frizz.sh/terminal?id=abc", headers: [["x-keep", "1"]] },
+    { origin: t.origin, publicOrigin: "https://ada.frizz.sh", send: out.send },
+  );
+  try {
+    const ack = (await until(out.frames, (f) => f.t === "ws-ack", "the ack")) as Extract<RelayUpFrame, { t: "ws-ack" }>;
+    assert.equal(ack.ok, true);
+    assert.equal(ack.id, "w1");
+  } finally { session.close(); await t.close(); }
+});
+
+test("what the visitor types reaches the local terminal, and its output comes back", async () => {
+  // The round trip IS the feature. A terminal that only carries one direction is not a terminal.
+  const t = await terminal((ws, data) => ws.send(`echo:${data}`));
+  const out = collect();
+  const session = serveRelayWebSocket(
+    { t: "ws-open", id: "w1", url: "https://ada.frizz.sh/terminal", headers: [] },
+    { origin: t.origin, publicOrigin: "https://ada.frizz.sh", send: out.send },
+  );
+  try {
+    await until(out.frames, (f) => f.t === "ws-ack", "the ack");
+    session.message("ls -la");
+    const back = (await until(out.frames, (f) => f.t === "ws-msg", "the reply")) as Extract<RelayUpFrame, { t: "ws-msg" }>;
+    assert.equal(back.data, "echo:ls -la");
+    assert.deepEqual(t.seen, ["ls -la"]);
+  } finally { session.close(); await t.close(); }
+});
+
+test("a URL for the public host is dialled on LOOPBACK — the visitor's hostname is not a route to anywhere", async () => {
+  // The frame carries the visitor's own URL. Connecting to it verbatim would leave the board trying to
+  // reach frizz.sh, which either fails or, far worse, loops back through the relay.
+  const t = await terminal();
+  const out = collect();
+  const dialled: string[] = [];
+  const session = serveRelayWebSocket(
+    { t: "ws-open", id: "w1", url: "https://ada.frizz.sh/terminal?id=abc", headers: [] },
+    {
+      origin: t.origin,
+      publicOrigin: "https://ada.frizz.sh",
+      send: out.send,
+      connect: (url) => { dialled.push(url); return new WebSocket(url) as never; },
+    },
+  );
+  try {
+    await until(out.frames, (f) => f.t === "ws-ack", "the ack");
+    const url = new URL(dialled[0]!);
+    assert.equal(url.protocol, "ws:");
+    assert.equal(url.host, new URL(t.origin).host);
+    assert.equal(url.pathname, "/terminal");
+    assert.equal(url.search, "?id=abc");
+  } finally { session.close(); await t.close(); }
+});
+
+test("a terminal the board CANNOT open is refused, not left silently open", async () => {
+  // ok:false is what lets the relay answer the upgrade with an error. Acknowledging and then dying
+  // leaves a pane that looks live until someone types into it — far harder to diagnose.
+  const t = await terminal(undefined, false);
+  const out = collect();
+  const session = serveRelayWebSocket(
+    { t: "ws-open", id: "w1", url: "https://ada.frizz.sh/terminal", headers: [] },
+    { origin: t.origin, publicOrigin: "https://ada.frizz.sh", send: out.send },
+  );
+  try {
+    const ack = (await until(out.frames, (f) => f.t === "ws-ack", "the refusal")) as Extract<RelayUpFrame, { t: "ws-ack" }>;
+    assert.equal(ack.ok, false);
+  } finally { session.close(); await t.close(); }
+});
+
+test("a local terminal that ends tells the relay, so the visitor's pane closes with it", async () => {
+  const t = await terminal((ws) => ws.close());
+  const out = collect();
+  const session = serveRelayWebSocket(
+    { t: "ws-open", id: "w1", url: "https://ada.frizz.sh/terminal", headers: [] },
+    { origin: t.origin, publicOrigin: "https://ada.frizz.sh", send: out.send },
+  );
+  try {
+    await until(out.frames, (f) => f.t === "ws-ack", "the ack");
+    session.message("exit");
+    const close = await until(out.frames, (f) => f.t === "ws-close", "the close");
+    assert.equal(close.id, "w1");
+  } finally { session.close(); await t.close(); }
 });

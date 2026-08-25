@@ -19,6 +19,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { WebSocketServer } from "ws";
 import { exportClaimPublicKey, generateClaimIdentity } from "@frizz/shared";
 import { connectRelay } from "../src/relay-connection.ts";
 
@@ -145,6 +146,16 @@ try {
     res.writeHead(200, { "content-type": "text/plain", "content-length": "13", "x-board": "yes" });
     res.end("BOARD-REACHED");
   });
+  // A REAL terminal on the board, because a relayed board you cannot type into is not Frizz. This is
+  // the seam nothing else exercises: the visitor's socket lives in workerd, this one is on loopback,
+  // and every keystroke is a frame carried between two different runtimes.
+  const wss = new WebSocketServer({ noServer: true });
+  boardServer.on("upgrade", (req, socket, head) => {
+    if (!req.url?.startsWith("/terminal")) { socket.destroy(); return; }
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      ws.on("message", (raw) => ws.send(`pty:${String(raw)}`));
+    });
+  });
   boardServer.listen(BOARD_PORT, "127.0.0.1");
   await once(boardServer, "listening");
 
@@ -170,8 +181,35 @@ try {
   const body = await stream.text();
   check("both events arrived over the relay", /data: one[\s\S]*data: two/.test(body), JSON.stringify(body.slice(0, 40)));
 
+  // A TERMINAL, end to end: visitor → workerd → Durable Object → the board's socket → a real ws server.
+  const typed = await new Promise((resolve) => {
+    const visitor = new WebSocket(`ws://ada.localhost:${DEV_PORT}/terminal?id=abc`);
+    const timer = setTimeout(() => resolve({ error: "the terminal never answered" }), 20_000);
+    visitor.addEventListener("open", () => visitor.send("ls -la"));
+    visitor.addEventListener("message", (event) => {
+      clearTimeout(timer);
+      resolve({ data: String(event.data), close: () => visitor.close() });
+    });
+    visitor.addEventListener("error", () => {
+      clearTimeout(timer);
+      resolve({ error: "the upgrade was refused" });
+    });
+  });
+  check("a terminal opens THROUGH the relay and echoes what was typed", typed.data === "pty:ls -la", typed.error ?? JSON.stringify(typed.data));
+  typed.close?.();
+
+  // A path the board has no terminal on must FAIL the upgrade rather than accept a silent socket.
+  const refused = await new Promise((resolve) => {
+    const visitor = new WebSocket(`ws://ada.localhost:${DEV_PORT}/nope`);
+    const timer = setTimeout(() => resolve("hung"), 20_000);
+    visitor.addEventListener("open", () => { clearTimeout(timer); resolve("accepted"); visitor.close(); });
+    visitor.addEventListener("error", () => { clearTimeout(timer); resolve("refused"); });
+  });
+  check("a terminal the board cannot open is refused, not silently accepted", refused === "refused", refused);
+
   // A board that goes away must stop being served, rather than hanging visitors.
   connection.stop();
+  boardServer.closeAllConnections?.();
   boardServer.close();
   boardServer = null;
   const gone = await wait("the relay to notice the board left", async () => {

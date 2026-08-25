@@ -158,5 +158,82 @@ export function serveRelayRequest(frame: Extract<RelayDownFrame, { t: "req" }>, 
   });
 }
 
+/**
+ * Open the board's end of a visitor's terminal and link the two.
+ *
+ * The board's terminals are WebSockets, so without this a relayed board can be read but not worked in.
+ * The visitor's socket lives in the relay; this one is local; every message is carried between them as
+ * a frame. Returns a handle the caller drives when frames arrive for this session.
+ */
+export function serveRelayWebSocket(
+  frame: Extract<RelayDownFrame, { t: "ws-open" }>,
+  options: { origin: string; publicOrigin: string; send: (frame: RelayUpFrame) => void; connect?: (url: string) => WebSocketLike },
+): NestedSession {
+  const target = new URL(frame.url);
+  const local = new URL(options.origin);
+  target.protocol = local.protocol === "https:" ? "wss:" : "ws:";
+  target.host = local.host;
+
+  const open = options.connect ?? ((url: string) => new WebSocket(url) as unknown as WebSocketLike);
+  let socket: WebSocketLike;
+  try {
+    socket = open(target.toString());
+  } catch (error) {
+    options.send({ t: "ws-ack", id: frame.id, ok: false });
+    return { message: () => {}, close: () => {}, failed: error instanceof Error ? error.message : String(error) };
+  }
+
+  let acked = false;
+  socket.addEventListener("open", () => {
+    acked = true;
+    options.send({ t: "ws-ack", id: frame.id, ok: true });
+  });
+  socket.addEventListener("message", (event: { data: unknown }) => {
+    if (typeof event.data === "string") options.send({ t: "ws-msg", id: frame.id, data: event.data });
+  });
+  const gone = () => {
+    // If it never opened, the ack is a REFUSAL. Sending ok:true first and closing immediately after
+    // would leave the visitor with a terminal that opened and then died for no stated reason.
+    if (!acked) {
+      acked = true;
+      options.send({ t: "ws-ack", id: frame.id, ok: false });
+      return;
+    }
+    options.send({ t: "ws-close", id: frame.id });
+  };
+  socket.addEventListener("close", gone);
+  socket.addEventListener("error", gone);
+
+  return {
+    message: (data: string) => {
+      try {
+        socket.send(data);
+      } catch {
+        // The local terminal went away between frames; its close event will tell the relay.
+      }
+    },
+    close: () => {
+      try {
+        socket.close();
+      } catch {
+        // Already gone.
+      }
+    },
+  };
+}
+
+/** The bits of a WebSocket the agent uses. Node's global satisfies it. */
+export interface WebSocketLike {
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+  addEventListener(type: string, listener: (event: never) => void): void;
+}
+
+export interface NestedSession {
+  message: (data: string) => void;
+  close: () => void;
+  failed?: string;
+}
+
 /** Serialize a frame for the socket. Exported so the connection loop and tests agree on encoding. */
 export const encodeFrame = (frame: RelayUpFrame): string => serializeFrame(frame);
