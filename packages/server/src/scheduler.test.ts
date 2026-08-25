@@ -1737,3 +1737,36 @@ test("sent-not-delivered: without a runtime probe a wake is delivered on return,
   assert.equal(row().state, "delivered")
   assert.equal(row().sentAt, null)
 })
+
+// ---- A STATUS POLL THAT CANNOT READ THE PR IS SAID (2026-08-25) ----
+// `defaultFetchPr` returned undefined for every `gh` failure until this date, so a PR the server could
+// not read (signed out, SSO, no such repo, no `gh` on the PATH) was indistinguishable from a quiet one.
+// It now throws gh's own reason, and the poll logs it once per distinct failure, counts the repeats,
+// and says when it recovers — the review check's rule, applied to its twin.
+test("pr-watch: a failing status fetch is logged once with its reason, repeats are counted, recovery is said", async () => {
+  const h = harness()
+  const logs: string[] = []
+  h.watch("s", "acme/app#7")
+  h.storage.upsertSession(row("s"))
+  h.tele.set("s", { ...tele(), lastActivityAt: iso(h.clock.ms) })
+  h.review.result = []
+  let fail = true
+  const s = h.make({
+    log: (m) => logs.push(m),
+    fetchPr: async () => { if (fail) throw new Error("Could not resolve to a Repository with the name 'acme/app'. (repository)"); return { state: "OPEN", mergedAt: null, rollup: [], head: "abc" } },
+  })
+  const failures = () => logs.filter((m) => m.includes("PR status check failed for acme/app#7"))
+  await s.tick()
+  assert.equal(failures().length, 1)
+  assert.match(failures()[0], /Could not resolve to a Repository/)
+  assert.match(failures()[0], /CI and merge wakes cannot fire/)
+  for (let i = 0; i < 3; i++) { h.clock.ms += 61_000; await s.tick() }
+  assert.equal(failures().length, 1, "identical repeats are suppressed")
+  fail = false
+  h.clock.ms += 61_000
+  await s.tick()
+  const recovered = logs.find((m) => m.includes("PR status check recovered for acme/app#7"))
+  assert.ok(recovered, "recovery is said")
+  assert.match(recovered!, /3 identical repeats were suppressed/)
+  assert.equal(h.resumes.length, 0, "a PR with nothing to report still wakes nobody")
+})

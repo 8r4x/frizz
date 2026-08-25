@@ -16,13 +16,14 @@ import { join } from "node:path"
 import type { BoardSnapshot, Settings } from "@frizz/shared"
 import { PR_WATCH_MAX_ARMED } from "@frizz/shared"
 import type { BoardManager } from "./board.ts"
+import type { PrRef, PrProbe } from "./scheduler.ts"
 import { createRouter } from "./router.ts"
 import { createStorage, type SessionRow } from "./storage.ts"
 import type { AppContext } from "./context.ts"
 import type { Project } from "./project.ts"
 import type { Tailer } from "./tailer.ts"
 
-function harness() {
+function harness(opts: { probe?: (ref: PrRef) => PrProbe } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-pr-watch-rpc-"))
   const project: Project = { dir, id: "prw", name: "test", label: "test", stateDir: dir, cwdSlug: "test" }
   const storage = createStorage(join(dir, "ui.db"))
@@ -43,6 +44,9 @@ function harness() {
   const ctx = {
     project, storage, board, tailer,
     getSettings: () => ({ permissionMode: "auto" }) as unknown as Settings,
+    // The registration probe answers "readable" unless a test says otherwise — every ref below is
+    // fictional, and the real probe would ask GitHub about it.
+    probePr: async (ref: PrRef) => opts.probe?.(ref) ?? { ok: true as const },
   } as unknown as AppContext
   return {
     storage,
@@ -204,5 +208,34 @@ test("forgetting a thread takes its watchers with it", async () => {
     h.storage.forgetSession("t")
     assert.deepEqual(h.storage.listPrWatches("t"), [])
     assert.deepEqual(h.storage.armedPrWatches(), [])
+  } finally { h.close() }
+})
+
+// ---- A PR THE SERVER CANNOT READ IS REFUSED AT REGISTRATION (2026-08-25) ----
+// The poll runs the server's own `gh`; a PR it cannot see failed every minute in silence while the
+// worker rested believing it was covered. Same rule as an unparseable ref, and it is checked AFTER the
+// idempotent short-circuit so a re-registration during a GitHub blip still answers.
+test("addOwnPrWatch: a PR the server's gh cannot read is refused with the reason, and nothing is armed", async () => {
+  const h = harness({ probe: () => ({ ok: false, reason: "Could not resolve to a Repository with the name 'acme/app'. (repository)" }) })
+  try {
+    h.storage.upsertSession(row("t"))
+    await assert.rejects(
+      () => h.router.addOwnPrWatch.handler({ input: { slug: "t", target: "acme/app#391", for: "2h" } }),
+      (err: Error) => /`acme\/app#391` cannot be watched/.test(err.message) && /Could not resolve to a Repository/.test(err.message) && /gh auth status/.test(err.message),
+    )
+    assert.equal(h.storage.listPrWatches("t", { armedOnly: true }).length, 0)
+  } finally { h.close() }
+})
+
+test("addOwnPrWatch: an already-armed PR answers idempotently even when the probe would now refuse it", async () => {
+  let readable = true
+  const h = harness({ probe: () => (readable ? { ok: true } : { ok: false, reason: "HTTP 502" }) })
+  try {
+    h.storage.upsertSession(row("t"))
+    const first = await h.router.addOwnPrWatch.handler({ input: { slug: "t", target: "acme/app#391", for: "2h" } })
+    readable = false
+    const again = await h.router.addOwnPrWatch.handler({ input: { slug: "t", target: "acme/app#391", for: "2h" } })
+    assert.equal(again.alreadyArmed, true)
+    assert.equal(again.id, first.id)
   } finally { h.close() }
 })

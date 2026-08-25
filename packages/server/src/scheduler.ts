@@ -814,6 +814,44 @@ function timerIdOf(fenceId: string): string {
 // Default gh-backed PR fetcher. Uses the USER'S `gh` (their auth) via execFile — NO shell. Any failure
 // (gh missing → ENOENT, not authed / rate-limited → nonzero exit, malformed JSON) resolves to undefined
 // so the tick logs + skips and NEVER crashes. Timeout-bounded so a hung gh can't wedge the scheduler.
+/** The first line gh printed on stderr, or the process-level reason — what a worker or an operator can
+ *  act on. `gh` names the cause in one line ("Could not resolve to a Repository…", "authentication
+ *  required", "HTTP 404"); everything after it is stack and hint. */
+export function conciseGhError(err: unknown): string {
+  const code = (err as NodeJS.ErrnoException)?.code
+  if (code === "ENOENT") return "the `gh` CLI is not installed on the PATH of the process Frizz runs as"
+  if ((err as { killed?: unknown })?.killed || code === "ETIMEDOUT") return "`gh` did not answer within 15s"
+  const stderr = typeof (err as { stderr?: unknown })?.stderr === "string" ? (err as { stderr: string }).stderr : ""
+  const line = stderr.trim().split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0)
+  if (line) return line.slice(0, 300)
+  const message = err instanceof Error ? err.message : String(err)
+  return message.trim().split(/\r?\n/, 1)[0]?.slice(0, 300) || "unknown error"
+}
+
+export type PrProbe = { ok: true } | { ok: false; reason: string }
+
+/** CAN FRIZZ READ THIS PR AT ALL — asked at registration, so a watcher that could never fire is refused
+ *  on the spot rather than armed. Reported 2026-08-25: a worker parked 12h+ on a watcher, and among the
+ *  ways that happens is a PR the server's own `gh` cannot see (signed out on github.com, an SSO-gated
+ *  org, a repo that does not exist, no `gh` on the daemon's PATH) — every poll failed, silently, and the
+ *  worker rested believing it was covered. One `gh pr view`, the same call the poll makes. */
+export async function probePrReadable(ref: PrRef): Promise<PrProbe> {
+  try {
+    await execFileAsync(
+      "gh",
+      ["pr", "view", String(ref.number), "--repo", `${ref.owner}/${ref.repo}`, "--json", "state"],
+      { timeout: 15_000, maxBuffer: 1_000_000, env: { ...process.env, GH_PAGER: "cat", GH_PROMPT_DISABLED: "1" } },
+    )
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, reason: conciseGhError(err) }
+  }
+}
+
+// THROWS on a failed `gh`, so the poll can SAY why — it returned undefined for everything until
+// 2026-08-25, which made a PR the server could not read (signed out, SSO, no such repo, no `gh` on the
+// PATH) indistinguishable from a PR with nothing to report: no log line, no wake, ever. `undefined` is
+// kept for the one honest case, a response frizz cannot interpret (below).
 async function defaultFetchPr(ref: PrRef): Promise<PrStatus | undefined> {
   try {
     const { stdout } = await execFileAsync(
@@ -846,8 +884,8 @@ async function defaultFetchPr(ref: PrRef): Promise<PrStatus | undefined> {
       reviewDecision: typeof j.reviewDecision === "string" ? j.reviewDecision : undefined,
       workflowRuns: workflowRuns as WorkflowRun[],
     }
-  } catch {
-    return undefined
+  } catch (err) {
+    throw new Error(conciseGhError(err))
   }
 }
 
@@ -1185,6 +1223,27 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     const suppressed = prior?.suppressed ? ` (${prior.suppressed} identical repeats suppressed)` : ""
     log(`waker: GitHub review check failed for ${key} (${slug}) [${result.failure.kind}] — ${result.failure.message}${suppressed}`)
     reviewFailures.set(key, { signature, loggedAt: at, suppressed: 0 })
+  }
+
+  // The status poll's twin of the pair above: one line per distinct `gh` failure per PR, repeats
+  // counted, recovery said. Without it (before 2026-08-25) the poll swallowed every failure and a PR
+  // the server could not read looked exactly like a quiet one.
+  const statusFailures = new Map<string, { signature: string; loggedAt: number; suppressed: number }>()
+  function recordStatusFailure(key: string, message: string, at: number): void {
+    const prior = statusFailures.get(key)
+    if (prior?.signature === message && at - prior.loggedAt < 15 * 60_000) {
+      prior.suppressed++
+      return
+    }
+    const suppressed = prior?.suppressed ? ` (${prior.suppressed} identical repeats suppressed)` : ""
+    log(`waker: PR status check failed for ${key} — ${message}${suppressed}; CI and merge wakes cannot fire until \`gh\` can read it`)
+    statusFailures.set(key, { signature: message, loggedAt: at, suppressed: 0 })
+  }
+  function recordStatusSuccess(key: string): void {
+    const prior = statusFailures.get(key)
+    if (!prior) return
+    statusFailures.delete(key)
+    log(`waker: PR status check recovered for ${key}${prior.suppressed ? `; ${prior.suppressed} identical repeats were suppressed` : ""}`)
   }
 
   function recordReviewSuccess(key: string, slug: string): void {
@@ -1824,9 +1883,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         if (pr) {
           status.set(key, githubWatchStatus(pr, new Date(nowMs).toISOString()))
           publishGithubStatus(key, pr, nowMs)
+          recordStatusSuccess(key)
         }
       } catch (err) {
-        log(`waker: pr-watch status fetch failed for ${key}: ${err instanceof Error ? err.message : String(err)}`)
+        // Once per distinct failure, then a count — the same rule the review check uses, because a
+        // status poll that cannot read the PR fails identically every 60s for as long as the cause
+        // stands, and a log that repeats it 1,440 times a day is one nobody reads.
+        recordStatusFailure(key, err instanceof Error ? err.message : String(err), nowMs)
       }
       try {
         const result = normalizeReviewResult(await fetchGithubReview(ref))

@@ -18,7 +18,7 @@ import { refreshClaudeQuotaInBackground } from "./backend/claude-quota.ts"
 import { createBoard, type BoardManager } from "./board.ts"
 import { createTailer, defaultLogDir, type Tailer } from "./tailer.ts"
 import { createDispatcher, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock, claudeMcpConfig, resolveFrizzMcp, workerPluginDir, type Dispatcher, type FrizzMcpTarget } from "./dispatch.ts"
-import { createScheduler, type Scheduler } from "./scheduler.ts"
+import { createScheduler, type Scheduler, probePrReadable, type PrRef, type PrProbe } from "./scheduler.ts"
 import {
 resumeThread,
 } from "./resume.ts"
@@ -151,6 +151,10 @@ export interface AppContext {
   // Durable timer scheduler (plus legacy pr/ci compatibility): resumes a rested `awaiting` session
   // on a witnessed transition. Human gates are descriptive. Started alongside the tailer; boot-safe.
   scheduler: Scheduler
+  // Can the server's own `gh` read this PR? Asked by addOwnPrWatch before it arms a watcher, so a PR
+  // the poll could never read is refused with the reason instead of armed in silence. Production wires
+  // `probePrReadable` (one `gh pr view`); a test context injects its own answer.
+  probePr: (ref: PrRef) => Promise<PrProbe>
   // Per-thread permission changes. Idle standalone TUIs are reopened on the same persisted
   // conversation with backend-native launch flags; busy/ambiguous states fail explicitly.
   // Proves an injected Claude follow-up was actually SUBMITTED, and re-presses Enter when the TUI
@@ -993,6 +997,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     tailer,
     dispatcher,
     scheduler,
+    probePr: probePrReadable,
     stopSubscriptions,
     backendFor,
     getSettings: () => getSettings(storage, home),

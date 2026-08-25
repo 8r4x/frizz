@@ -294,8 +294,9 @@ const WATCH_PR = {
         type: "string",
         description:
           "Required for `add`. The pull request, as `owner/repo#123` or a GitHub PR URL. A ref that " +
-          "cannot be parsed is REFUSED rather than stored — a watcher that can never fire is worse than " +
-          "no watcher, because you would come to rest believing you were covered.",
+          "cannot be parsed, or a PR the server's own `gh` cannot read, is REFUSED rather than stored — " +
+          "a watcher that can never fire is worse than no watcher, because you would come to rest " +
+          "believing you were covered. A refusal names the reason; a transient one is worth one retry.",
       },
       for: {
         type: "string",

@@ -2324,6 +2324,19 @@ export function createRouter(ctx: AppContext) {
         if (forMs === null) {
           throw new Error(`\`for: ${input.for}\` is not a duration — give one like \`30m\`, \`2h\` or \`3d\` (max 24h)`)
         }
+        // REFUSED IF THE SERVER CANNOT READ IT — the same rule as an unparseable ref, for the same
+        // reason: the poll runs the server's own `gh`, and a PR it cannot see (signed out, an SSO-gated
+        // org, no such repo, no `gh` on its PATH) is a watcher that fails every minute in silence while
+        // the worker rests believing it is covered (a user's board, 2026-08-25: 12h+). Checked after the
+        // idempotent short-circuit above, so a re-registration during a GitHub blip still answers.
+        const probe = await ctx.probePr(ref)
+        if (!probe.ok) {
+          throw new Error(
+            `\`${target}\` cannot be watched — the server's \`gh\` could not read it: ${probe.reason}. ` +
+            "Frizz polls with the `gh` of the process it runs as, not yours: check `gh auth status` there and that the repo is " +
+            "reachable, then register again. If GitHub itself was briefly down, registering again in a minute is enough.",
+          )
+        }
         const now = Date.now()
         const id = `prw_${randomUUID().replace(/-/g, "").slice(0, 12)}`
         ctx.storage.armPrWatch({ id, slug: input.slug, owner: ref.owner, repo: ref.repo, number: ref.number, createdAtMs: now, expiresAtMs: now + forMs })
