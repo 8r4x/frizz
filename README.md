@@ -292,7 +292,7 @@ $ node scripts/sync-portable-monitors.mjs --check
 $ node --test monitors/*.test.mjs
 ```
 
-Everything else runs locally. Install with `pnpm install`, typecheck with `pnpm typecheck`, and run the full suite with `pnpm test` — that suite drives real agent CLIs and a real browser, which is why CI does not gate on it. Say in the PR what you ran.
+Everything else runs locally. Install with `pnpm install`, typecheck with `pnpm typecheck`, and run the full suite with `pnpm test` — that suite drives real agent CLIs and a real browser, which is why CI does not gate on it. Say in the PR what you ran. The suite needs a newer Node than the runtime does: early 22.x point releases (22.15 measured) fail `receipt-bus.test.ts` on a since-fixed test-runner defect, so run it on current 22.x or ≥ 23.4.
 
 <br/>
 
