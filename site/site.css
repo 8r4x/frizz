@@ -1,6 +1,6 @@
 /* frizz.sh — reads like a rendered markdown document in the board's own skin: the same dark tokens as
-   packages/web/src/styles.css, JetBrains Mono (first in the app's --font-mono stack) for headings and
-   code, the system sans for reading text. Heading rules and code chips mirror GitHub's markdown. */
+   packages/web/src/styles.css and JetBrains Mono throughout (first in the app's --font-mono stack; the
+   board is mono-forward by default). Heading rules and code chips mirror GitHub's markdown. */
 
 @font-face { font-family: "JetBrains Mono"; font-weight: 400; font-style: normal; font-display: swap; src: url("/fonts/JetBrainsMono-Regular.woff2") format("woff2"); }
 @font-face { font-family: "JetBrains Mono"; font-weight: 500; font-style: normal; font-display: swap; src: url("/fonts/JetBrainsMono-Medium.woff2") format("woff2"); }
@@ -19,7 +19,7 @@
   --radius: 12px;
   --mono: "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Mono", Consolas, Menlo, monospace;
   --sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --measure: 760px;
+  --measure: 740px;
   --wide: 1120px;
   --gutter: 24px;
 }
@@ -30,7 +30,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  font: 16px/1.6 var(--sans);
+  font: 15px/1.65 var(--mono);
   -webkit-font-smoothing: antialiased;
 }
 a { color: inherit; text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 3px; }
@@ -68,11 +68,11 @@ main { padding: 0 var(--gutter) 40px; }
 #fff-path { transition: stroke-dashoffset 1.7s cubic-bezier(0.55, 0, 0.2, 1) 0.12s; }
 h1, h2, h3 { font-family: var(--mono); font-weight: 500; line-height: 1.25; margin: 0; }
 h1 { font-size: 40px; letter-spacing: -0.03em; margin-bottom: 8px; }
-.lede { font-size: 19px; color: var(--fg-2); margin-bottom: 20px; }
+.lede { font-size: 17px; color: var(--fg-2); margin-bottom: 20px; }
 /* GitHub-markdown H2: a hairline under the heading, generous space above. */
-h2 { font-size: 22px; letter-spacing: -0.01em; padding-bottom: 8px; border-bottom: 1px solid var(--border); margin: 44px 0 14px; }
+h2 { font-size: 22px; letter-spacing: -0.01em; padding-bottom: 8px; border-bottom: 1px solid var(--border); margin: 72px 0 16px; }
 h3 { font-size: 17px; margin-bottom: 8px; }
-.doc ul { margin: 0 0 1em; padding-left: 1.4em; }
+.doc ul { margin: 0 0 1.4em; padding-left: 1.4em; }
 .doc li { margin: 0.3em 0; }
 .doc li::marker { color: var(--muted); }
 
@@ -93,7 +93,7 @@ h3 { font-size: 17px; margin-bottom: 8px; }
 .row { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 48px; align-items: center; }
 .row:nth-child(even) { grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); }
 .row:nth-child(even) .row-text { order: 2; }
-.row-text p { color: var(--fg-2); margin: 0; }
+.row-text p { color: var(--fg-2); margin: 0; font-size: 14px; line-height: 1.6; }
 
 .foot {
   max-width: var(--measure); margin: 0 auto; padding: 28px var(--gutter) 48px;

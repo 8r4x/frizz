@@ -48,7 +48,6 @@
         <p class="lede">An opinionated agent console for extreme productivity.</p>
         <p>Frizz runs many Claude Code and Codex agents at once from one browser tab. Every agent that needs you becomes a card in one queue.</p>
         <pre class="term"><code><span class="prompt">$</span> npx frizz</code></pre>
-        <p>Node 22.13 or newer, and the Claude Code or Codex CLI signed in. Runs on macOS, Linux, and Windows.</p>
 
         <figure class="shot">
           <img src="/img/board.png" width="1760" height="1100" alt="The Frizz board: a composer and a queue of threads on the left; on the right, a card where an agent asks a question with lettered options, above Snooze and Mark as done." />
@@ -74,11 +73,11 @@
         </div>
         <div class="row">
           <div class="row-text">
-            <h3>Heartbeats</h3>
-            <p>Give a thread a prompt that repeats: every time it rests, on a clock you set, or both. Good for "keep going until CI is green" without asking again.</p>
+            <h3>Goal</h3>
+            <p>Give a thread a standing goal. Frizz sends it as a prompt every time the thread rests, on a clock you set, or both, until you switch it off or the agent says it is done.</p>
           </div>
           <figure class="shot">
-            <img src="/img/recurring.png" width="1600" height="450" loading="lazy" alt="The goal panel: a prompt saying to keep going until the test suite is green, with the stop hook and a 30-minute heartbeat switched on." />
+            <img src="/img/goal.png" width="1600" height="840" loading="lazy" alt="The goal panel open on a thread card: a goal saying to keep going until the test suite is green, sent at every rest and every 30 minutes." />
           </figure>
         </div>
         <div class="row">
@@ -113,7 +112,6 @@
         <ul>
           <li><a href="https://github.com/colinhacks/frizz#readme">README</a> — the full tour, CLI flags, and FAQ.</li>
           <li><a href="https://github.com/colinhacks/frizz/blob/main/ARCHITECTURE.md">Architecture</a> — invariants and design decisions.</li>
-          <li><a href="https://github.com/colinhacks/frizz/blob/main/docs/remote-access.md">Remote access</a> — reaching a board from a phone or another machine.</li>
         </ul>
       </article>
     </main>
