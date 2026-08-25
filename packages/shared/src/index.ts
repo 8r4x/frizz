@@ -617,40 +617,28 @@ export const RecurringPromptText = z.string().trim().min(1).max(RECURRING_PROMPT
 // IT IS DELIBERATELY LOPSIDED (maintainer 2026-08-14: "should bias the agent strongly towards continuing
 // with its work if there is incomplete work, unless there is a pressing or imminent decision that is
 // needed from the human"). It lands on a thread that has already stopped, so the only outcome worth
-// buying is the one where it starts again — hence it sends the worker straight back to the work and
-// NAMES the endings a worker mistakes for one, because the ordinary failure is not a worker that refuses
-// to continue, it is one that mistook a milestone for the finish.
+// buying is the one where it starts again — hence it sends the worker straight back to the work.
 //
-// ONE SENTENCE (maintainer 2026-08-16: "the default stop hook prompt should be one sentence long"). It
-// was four, and the three that went carried an ask-the-human clause, an enumeration of the endings, and a
-// decide-it-yourself clause. The ask clause is the one whose premise the same change deleted: the stop
-// hook now fires over an unanswered question fence unconditionally, so a default prompt that invited the
-// worker to stop and ask would be teaching it the one exit this trigger no longer honours. What is left
-// is the whole instruction — resume, and decide the rest — and everything the longer text spelled out is
-// already in the worker contract at length.
+// MAINTAINER-AUTHORED, VERBATIM (2026-08-24: "when did this get so fcking wordy?" … "Use my suggestion
+// verbatim"). The text below is the maintainer's own wording, byte for byte — do not grow it back. It
+// had grown twice: `0092d21c` added the decide-don't-ask clause and an enumeration of the endings a
+// worker mistakes for one, `b2d7dc58` cut it to one sentence on the maintainer's instruction, and
+// `b7cb8723` grew it again to 92 words carrying two ceiling guards. Those guards were real — traced
+// 2026-08-17 on `investigate-nubjs-nub-642`, dispatched to TRIAGE issue #642, which produced the
+// analysis, waited 36 hours on an unanswered question, and then — bumped by this prompt at every rest,
+// with no ceiling on "keep going" — decided the question itself and shipped seven commits. But the
+// guards no longer need to live HERE: the worker contract states the ceiling at length (discovered work
+// is a finding to report, a triage/review/plan is finished when its write-up is), and the fence-less-rest
+// nudge (`SIGNOFF_NUDGE_MESSAGE`, pinned in `signoff-nudge.test.ts`) repeats it. So this string went
+// back to the instruction alone.
 //
 // NO BACKTICKED FENCE NAMES IN HERE. This text is rendered as markdown wherever the operator sees it,
 // and a lone ``` opens a code block that swallows the rest of the card.
 //
 // Nothing here teaches the ```done exit, because the trailer already does (`OPT_OUT_NOTE`), on every
 // delivery, whatever the operator has typed over this text.
-// THE TASK IS ALSO THE CEILING, and leaving that out was a real failure rather than a wording nicety.
-// Traced 2026-08-17 on `investigate-nubjs-nub-642`, dispatched to TRIAGE issue #642 — "recommend what to
-// do about it… state the smallest correct fix, the files it touches and the risk". An analysis job. It
-// produced the analysis, asked the maintainer one design question, and rested. The maintainer did not
-// answer for 36 hours. This prompt then fired at every rest, and the worker — told that a written-up plan
-// is not an ending and that unanswered calls are its own to make — decided the question itself and built
-// the thing: seven commits, a moved global bin dir, shell-profile writing, a docs change, 34 background
-// verification runs. Nothing woke it but its own completions; frizz sent it no wake at all.
-//
-// So the prompt now carries the two clauses whose absence made that reading correct: work found OUTSIDE
-// the task is a finding to report rather than work to adopt, and a triage/review/plan is FINISHED when
-// its write-up is. Without them "keep going" has no upper bound — every codebase always has more to do,
-// so a worker that may not stop until nothing is left can only ever stop by widening what it was asked.
-//
-// STILL ONE SENTENCE (maintainer 2026-08-16: "the default stop hook prompt should be one sentence long").
 export const DEFAULT_RECURRING_PROMPT =
-  "Keep going on the task you were given and ONLY that task: resume any part of it that is unfinished, unverified or deferred rather than writing up — a milestone, a green test run and a long turn are none of them endings — decide the reversible calls inside it yourself instead of stopping to ask, treat anything you discover outside it as a finding to REPORT rather than work to adopt, and remember that a triage, a review or a plan you were asked for is FINISHED when its write-up is."
+  "If additional work remains on the original task, keep going. Make decisions autonomously."
 export const RecurringIntervalSeconds = z
   .number()
   .int()
@@ -3114,6 +3102,7 @@ export type BoardDelta = Extract<ServerEvent, { type: "board-delta" }>
 
 // Pure delta engine + client apply/decision helpers (kept in a sibling module, re-exported here so
 // `@frizz/shared` stays the single entry point).
+export * from "./claim.ts"
 export * from "./code-fences.ts"
 export * from "./delta.ts"
 export * from "./drainable-worker.ts"

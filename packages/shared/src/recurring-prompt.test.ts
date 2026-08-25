@@ -12,36 +12,23 @@ import { ALLDONE_SENTINEL, DEFAULT_RECURRING_PROMPT, SetOwnThreadRecurringPrompt
 // that is needed from the human"). It used to read as two equal branches — keep going, or ask — which is
 // not what a delivery that lands on an ALREADY-STOPPED thread is for.
 //
-// ONE SENTENCE (maintainer 2026-08-16). It ran to four, and the ask-the-human clause is the one whose
-// premise the same change deleted: the stop hook now fires over an unanswered question fence
-// unconditionally, so inviting the worker to stop and ask would teach it the one exit this trigger no
-// longer honours. What is left says resume, and decide the rest.
-test("the default Goal is one sentence that sends a stopped thread back to the work", () => {
-  assert.match(DEFAULT_RECURRING_PROMPT, /^Keep going/, "continuing leads; it is not one branch of two")
-  assert.match(DEFAULT_RECURRING_PROMPT, /unfinished, unverified or deferred/, "and it says what counts as left over")
-  // AND THE CEILING, which is the half that was missing. Without it "keep going" has no upper bound —
-  // there is always more to do in any repo — so a worker that may not stop until nothing is left can only
-  // stop by widening its own remit. `investigate-nubjs-nub-642` was dispatched to TRIAGE an issue and
-  // shipped seven commits; the prompt itself is where the licence came from.
-  assert.match(DEFAULT_RECURRING_PROMPT, /ONLY that task/, "the task it was given is the whole remit")
-  assert.match(DEFAULT_RECURRING_PROMPT, /finding to REPORT rather than work to adopt/i)
-  assert.match(DEFAULT_RECURRING_PROMPT, /is FINISHED when its write-up is/, "an analysis job ends with the analysis")
-  // The endings a worker mistakes for one. Naming them is the whole difference between "keep going" and a
-  // thread that stops at the first green test run believing it is finished.
-  assert.match(DEFAULT_RECURRING_PROMPT, /are none of them endings/)
-  // DECIDE, rather than ask. The clause that used to point at a question fence is gone with the hold that
-  // made asking a way to stop the bump.
-  // Scoped to INSIDE the task now. Deciding freely is still the instruction; deciding your way into a
-  // bigger job is what `investigate-nubjs-nub-642` did when the clause had no boundary on it.
-  assert.match(DEFAULT_RECURRING_PROMPT, /decide the reversible calls inside it yourself/)
+// MAINTAINER-AUTHORED, VERBATIM (2026-08-24: "when did this get so fcking wordy?"). The text had grown
+// to 92 words of guards; the maintainer replaced it with their own wording and said "Use my suggestion
+// verbatim", so the pin is byte equality — any drift is someone editing the maintainer's own words. The
+// guards it dropped (the task is the ceiling, a write-up is an ending) live in the worker contract and
+// the fence-less-rest nudge; see the comment on DEFAULT_RECURRING_PROMPT for the history and the
+// incident that put them here.
+test("the default Goal is the maintainer's own wording, byte for byte", () => {
+  assert.equal(
+    DEFAULT_RECURRING_PROMPT,
+    "If additional work remains on the original task, keep going. Make decisions autonomously.",
+  )
+  // Two standing constraints on ANY future wording, asserted so an edit that breaks them fails with the
+  // reason rather than only the byte pin: no question-fence invitation (the stop hook fires over an
+  // unanswered question fence unconditionally, so pointing at one teaches an exit this trigger does not
+  // honour), and no backticked fence names (this text renders as markdown in the panel and the
+  // transcript, where a lone ``` opens a code block that swallows everything after it).
   assert.doesNotMatch(DEFAULT_RECURRING_PROMPT, /question fence/)
-  // ONE SENTENCE, counted rather than asserted by eye: exactly one terminal full stop, at the very end.
-  // Em dashes and commas are free; a second sentence is not.
-  assert.equal(DEFAULT_RECURRING_PROMPT.match(/\.(\s|$)/g)?.length, 1, "one sentence, one terminator")
-  assert.ok(DEFAULT_RECURRING_PROMPT.trimEnd().endsWith("."))
-  // NO BACKTICKED FENCE NAMES. This text renders as markdown in the panel and in the transcript, where a
-  // lone ``` opens a code block that swallows everything after it. The trailer can afford them; this
-  // cannot, because the operator edits it.
   assert.doesNotMatch(DEFAULT_RECURRING_PROMPT, /```/)
   // …and it teaches no stopping protocol of its own: `restPromptMessage` appends the ```done exit to
   // every delivery, whatever the operator has typed over this.
