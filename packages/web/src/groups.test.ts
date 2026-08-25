@@ -742,6 +742,26 @@ test("titleIsProvisional / displayTitle: 'Spinning up' shows briefly, then falls
   assert.equal(titleIsProvisional(thread({ title: "legacy" })), false)
 })
 
+test("displayTitle: an EXTERNAL row shows the name the server resolved, whichever harness wrote the transcript", () => {
+  // The server (foreignThreadView) names a terminal session the way its own resume picker does — the
+  // harness's title, else a chop of the opening human turn — and marks the chop `titleAuto`. The codex
+  // dispatch rule ("no title signal ⇒ Untitled thread") must not fire on it: that rule guards a raw
+  // prompt frizz seeded, and an external row has no such prompt (2026-08-24: every external codex row
+  // read "Untitled thread" while every external claude row was named).
+  const stale = new Date(Date.now() - 20_000).toISOString()
+  const codexChop = thread({ id: "0199-uuid", backend: "codex", foreign: true, runtime: "turn-idle", titleAuto: true, title: "Which skills are available to you?…", spawnedAt: stale })
+  assert.equal(displayTitle(codexChop), "Which skills are available to you?…")
+  // The harness's own name arrives as the title with titleAuto false, and shows verbatim.
+  const codexNamed = thread({ id: "0199-uuid", backend: "codex", foreign: true, runtime: "turn-idle", titleAuto: false, title: "Fix queue focus", aiTitle: "Fix queue focus" })
+  assert.equal(displayTitle(codexNamed), "Fix queue focus")
+  // Claude's chop already passed through the generic fallback; pin that it still does.
+  const claudeChop = thread({ id: "0199-uuid", backend: "claude", foreign: true, runtime: "turn-idle", titleAuto: true, title: "is frizz down? threads aren't starting…" })
+  assert.equal(displayTitle(claudeChop), "is frizz down? threads aren't starting…")
+  // A transcript with no human turn keeps the server's short id, never a placeholder.
+  const noTurn = thread({ id: "0199-uuid", backend: "codex", foreign: true, runtime: "turn-idle", titleAuto: true, title: "Session 0199-uui" })
+  assert.equal(displayTitle(noTurn), "Session 0199-uui")
+})
+
 test("Codex automatic titles follow runtime and never expose the raw initial-prompt fallback", () => {
   const rawPrompt = "Please inspect this entire raw initial prompt and fix everything"
   const fresh = new Date().toISOString()

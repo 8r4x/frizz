@@ -7,7 +7,15 @@ import { canRetry } from "./lib/status.ts"
 // The title to SHOW for a thread: prefer trustworthy backend title telemetry once it exists, else the
 // provenance-aware stored title. One place so every render site (sidebar, palette, header) agrees.
 // The narrow Pick accepts a valtio readonly snapshot as readily as a plain ThreadView.
-export function displayTitle(t: Pick<ThreadView, "title" | "aiTitle" | "id" | "titleAuto" | "titleLocked" | "spawnedAt" | "backend" | "runtime">): string {
+export function displayTitle(t: Pick<ThreadView, "title" | "aiTitle" | "id" | "titleAuto" | "titleLocked" | "spawnedAt" | "backend" | "runtime" | "foreign">): string {
+  // An EXTERNAL row is already named. The server resolves it in foreignThreadView — the harness's own
+  // name, else a chop of the opening human turn, else a short id — which is the order both agents'
+  // resume pickers use, and it stores the result in `title`. Every rule below is about a row frizz
+  // DISPATCHED: a placeholder for a name that is on its way, a raw prompt frizz seeded and must never
+  // show. Neither describes a terminal session, and the codex rule in particular replaced every
+  // external codex row's resolved name with "Untitled thread" the day the server learned to name them
+  // (maintainer 2026-08-24: "for my externals all the codexes show up as 'untitled thread'").
+  if (t.foreign === true && t.title.trim()) return t.title.trim()
   // A machine-guessed dispatch title (titleAuto) with no aiTitle yet is NOT a real name — show the
   // "Spinning up…" placeholder while the session is genuinely just spinning up (maintainer 2026-07-10:
   // "do not try to guess at the thread title"). But that's BOUNDED (see titleIsProvisional): a session
