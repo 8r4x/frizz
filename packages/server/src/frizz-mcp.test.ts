@@ -550,7 +550,17 @@ test("`timer` resolves in_seconds/at into one exact instant and POSTs the callin
     assert.equal(seen.at(-1)!.body.slug, "owning-thread")
     assert.equal(seen.at(-1)!.body.prompt, "re-check the deploy")
     const fired = Date.parse(seen.at(-1)!.body.fireAt)
-    assert.ok(fired >= before + 600_000 && fired <= Date.now() + 600_000, `fireAt ${seen.at(-1)!.body.fireAt} must be ~10 min out`)
+    // The window carries a tolerance because the MCP server is a SEPARATE PROCESS, and two processes'
+    // `Date.now()` are not mutually ordered. Measured on Windows Server 2022 / node 26.7.0: the server
+    // stamped its instant 5ms BEHIND a `before` this process had already captured, so a window with no
+    // low-side slack failed every run there. The assertion's point is the magnitude — that `in_seconds`
+    // is read as seconds from now, not milliseconds, minutes, or an epoch — and a second of slack on a
+    // ten-minute delay still catches every one of those.
+    const SKEW_MS = 1_000
+    assert.ok(
+      fired >= before + 600_000 - SKEW_MS && fired <= Date.now() + 600_000 + SKEW_MS,
+      `fireAt ${seen.at(-1)!.body.fireAt} must be ~10 min out`,
+    )
     // The reply has to carry the id (there is no other way to cancel) and say that it fires once.
     assert.match(set.result.content[0].text, /tmr_abc/)
     assert.match(set.result.content[0].text, /ONCE/)
