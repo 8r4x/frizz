@@ -16,6 +16,15 @@ export interface LocalMarkdownTarget {
 
 const WINDOWS_ABSOLUTE_PATH = /^[a-zA-Z]:[\\/]/
 
+// Editor deep-link schemes that all share VS Code's URL grammar: `<scheme>://file/<path>[:line[:col]]`.
+// Agents under user-level "link every file" instructions write these (`[plan.md](cursor://file/<abs>)`)
+// because in a terminal that is the only clickable form. Left as an anchor, the OS resolves the scheme
+// and the named editor opens no matter what the "Local file links" setting says — and a `.md` file
+// never reaches Frizz's own reader. Classify the path the link names instead, so it routes exactly
+// like a plain path link. The path may carry its own leading slash (`cursor://file//Users/…`) or lean
+// on the route's (`cursor://file/Users/…`); both forms occur in the wild and both editors accept both.
+const EDITOR_FILE_URL = /^(?:cursor|vscode|vscode-insiders|windsurf):\/\/file\/(.*)$/i
+
 function decodePath(value: string): string {
   try {
     return decodeURIComponent(value)
@@ -58,6 +67,18 @@ export function localMarkdownTarget(raw: string | null | undefined): LocalMarkdo
 
   if (decodedHref.startsWith("/") && !decodedHref.startsWith("//") && !isFrizzRoute(decodedHref)) {
     const path = decodedHref
+    return { display: path, posixPath: path }
+  }
+
+  const editor = EDITOR_FILE_URL.exec(href)
+  if (editor) {
+    // Strip a query/fragment tail (`?windowId=_blank`) before decoding, as resolveRelativeLocalPath
+    // does — a filesystem path has neither. The editor cursor suffix (`:12:3`) stays: the reader and
+    // the server's opener both strip it themselves, the same as for a bare `README.md:12` path.
+    const rest = decodePath(editor[1].replace(/[?#].*$/u, "")).replace(/^\/+/, "")
+    if (!rest) return null
+    if (WINDOWS_ABSOLUTE_PATH.test(rest)) return { display: rest }
+    const path = `/${rest}`
     return { display: path, posixPath: path }
   }
 

@@ -56,6 +56,14 @@ createRoot(document.getElementById("root")!).render(
           "The write-up is in [`HANDOFF.md`](.frizz/threads/6d56ea2f/HANDOFF.md).",
           "",
           "The rules are in [`CLAUDE.md`](~/.claude/CLAUDE.md).",
+          "",
+          // The THIRD destination a worker writes: an editor deep link (`cursor://file/…`), the shape
+          // user-level "link every file" instructions prescribe for terminal rendering. It used to
+          // survive as a raw anchor the OS resolved — always Cursor, whatever the opener setting said.
+          // One `.md` and one not, so BOTH routes are asserted for the scheme form too.
+          "The plan survives in [`plan.md`](cursor://file/fixture/plan.md).",
+          "",
+          "The raw capture is [`trace.json`](vscode://file//fixture/trace.json).",
         ].join("\n"), { baseDir: BASE_DIR, homeDir: HOME_DIR }),
       }}
     />

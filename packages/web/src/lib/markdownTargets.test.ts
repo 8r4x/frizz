@@ -29,6 +29,41 @@ test("only server-supported local image extensions become proxy URLs", () => {
   assert.equal(localImageUrlForTarget(localMarkdownTarget("C:\\Users\\me\\shot.png")!), null)
 })
 
+test("editor deep links resolve to the local path they name", () => {
+  // Both slash forms of the VS Code URL grammar, every recognized scheme, and a percent-escaped path.
+  assert.deepEqual(
+    localMarkdownTarget("cursor://file/Users/me/plan.md"),
+    { display: "/Users/me/plan.md", posixPath: "/Users/me/plan.md" },
+  )
+  assert.deepEqual(
+    localMarkdownTarget("vscode://file//Users/me/visual%20review/shot.png"),
+    { display: "/Users/me/visual review/shot.png", posixPath: "/Users/me/visual review/shot.png" },
+  )
+  assert.deepEqual(
+    localMarkdownTarget("vscode-insiders://file/tmp/a.ts"),
+    { display: "/tmp/a.ts", posixPath: "/tmp/a.ts" },
+  )
+  assert.deepEqual(
+    localMarkdownTarget("windsurf://file/tmp/a.ts"),
+    { display: "/tmp/a.ts", posixPath: "/tmp/a.ts" },
+  )
+  // The editor cursor suffix survives (the reader and the server's opener strip it themselves), and a
+  // query tail does not.
+  assert.deepEqual(
+    localMarkdownTarget("cursor://file/repo/AGENTS.md:42:7"),
+    { display: "/repo/AGENTS.md:42:7", posixPath: "/repo/AGENTS.md:42:7" },
+  )
+  assert.deepEqual(
+    localMarkdownTarget("vscode://file/tmp/a.ts?windowId=_blank"),
+    { display: "/tmp/a.ts", posixPath: "/tmp/a.ts" },
+  )
+  // A Windows path stays a visible chip with no proxyable POSIX path, and an empty path is nothing.
+  assert.deepEqual(localMarkdownTarget("vscode://file/c:/Users/me/shot.png"), { display: "c:/Users/me/shot.png" })
+  assert.equal(localMarkdownTarget("cursor://file/"), null)
+  // Unrecognized schemes stay ordinary links.
+  assert.equal(localMarkdownTarget("zed://file/tmp/a.ts"), null)
+})
+
 test("Windows and remote file targets are visibly local but cannot become proxy reads", () => {
   assert.deepEqual(localMarkdownTarget("C:\\Users\\me\\shot.png"), { display: "C:\\Users\\me\\shot.png" })
   assert.deepEqual(localMarkdownTarget("C:%5CUsers%5Cme%5Cshot.png"), { display: "C:\\Users\\me\\shot.png" })

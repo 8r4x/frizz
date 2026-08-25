@@ -58,6 +58,10 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
         "/fixture/contract.pdf",
         "/fixture/.frizz/threads/6d56ea2f/HANDOFF.md",
         "/fixture/home/.claude/CLAUDE.md",
+        // The editor deep links: a `cursor://file/…` anchor used to be handed to the OS, which opened
+        // Cursor no matter what "Local file links" said. Both slash forms arrive as the path they name.
+        "/fixture/plan.md",
+        "/fixture/trace.json",
       ],
       anchors: [],
       imageSrc: "/_frizz/local-image?path=%2Ffixture%2Fshot.png",
@@ -76,15 +80,20 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
     // And the rebased one routes by the SAME rule — the click handler never learns which syntax the
     // author used, only that the path it holds ends in `.md`.
     await page.click('button[data-local-path="/fixture/.frizz/threads/6d56ea2f/HANDOFF.md"]')
+    // And the editor-scheme pair routes by the same rule: the click handler never learns the author
+    // wrote a `cursor://`/`vscode://` destination, only the path it named.
+    await page.click('button[data-local-path="/fixture/plan.md"]')
+    await page.click('button[data-local-path="/fixture/trace.json"]')
     const routed = await page.evaluate(() => ({
       opened: (window as unknown as { __localFileFixtureOpened?: string[] }).__localFileFixtureOpened ?? [],
       drawers: (window as unknown as { __localFileFixtureDrawers: () => unknown[] }).__localFileFixtureDrawers(),
     }))
     assert.deepEqual(routed, {
-      opened: ["/fixture/contract.pdf"],
+      opened: ["/fixture/contract.pdf", "/fixture/trace.json"],
       drawers: [
         { kind: "markdown", path: "/fixture/report.md" },
         { kind: "markdown", path: "/fixture/.frizz/threads/6d56ea2f/HANDOFF.md" },
+        { kind: "markdown", path: "/fixture/plan.md" },
       ],
     })
 
@@ -103,10 +112,11 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
       drawers: (window as unknown as { __localFileFixtureDrawers: () => unknown[] }).__localFileFixtureDrawers(),
       expanded: document.querySelector(".frizz-diff-header")?.getAttribute("data-expanded"),
     }))
-    assert.deepEqual(fromHeaders.opened, ["/fixture/contract.pdf", "/fixture/src/app.ts"])
+    assert.deepEqual(fromHeaders.opened, ["/fixture/contract.pdf", "/fixture/trace.json", "/fixture/src/app.ts"])
     assert.deepEqual(fromHeaders.drawers, [
       { kind: "markdown", path: "/fixture/report.md" },
       { kind: "markdown", path: "/fixture/.frizz/threads/6d56ea2f/HANDOFF.md" },
+      { kind: "markdown", path: "/fixture/plan.md" },
       { kind: "markdown", path: "/fixture/notes.md" },
     ])
     assert.equal(fromHeaders.expanded, expandedBefore)
