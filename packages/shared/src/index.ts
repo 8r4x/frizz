@@ -3122,6 +3122,7 @@ export * from "./delta.ts"
 export * from "./drainable-worker.ts"
 export * from "./interactions.ts"
 export * from "./receipt-bus.ts"
+export * from "./relay-protocol.ts"
 export * from "./thread-slug.ts"
 
 // ---- Rendered conversation (parsed mechanically from the session JSONL — no AI) ----
