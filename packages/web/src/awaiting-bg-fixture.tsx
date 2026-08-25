@@ -1,6 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
 import type { BoardSnapshot, ThreadView as ThreadViewModel, TranscriptMessage } from "@frizz/shared"
+import type { GithubRefCard } from "@frizz/shared"
+import { GithubHovercards } from "./components/GithubHovercards.tsx"
 import { TodosView } from "./components/TodosView.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
@@ -133,9 +135,33 @@ store.board = { projectDir: "/fixture/frizz", threads: [thread] } as BoardSnapsh
 
 const transcriptPage = { messages, transcriptKey: "fixture-key", hasEarlier: false, historyLoaded: false }
 
+// THE HOVERCARD BATCH, answered locally. Since 2026-08-25 every PR row carries `data-gh-ref`, so the
+// app-wide hovercard layer opens the PR's card on it exactly as on a `#123` in prose. Only the answer is
+// stubbed: the request is still harvested, batched and parsed by lib/githubHovercards.ts, so a row that
+// stops stamping the attribute shows up here as a hover that opens nothing.
+const HOVER_CARDS: GithubRefCard[] = [
+  {
+    ref: "acme/app#391", kind: "pr", repo: "acme/app", url: "https://github.com/acme/app/pull/391",
+    title: "resolver: key the cache on the normalized id", body: "The lookup collided on two ids that normalize to one.",
+    state: "OPEN", at: ago(240), authorLogin: "colinhacks", labels: [{ name: "bug", color: "d73a4a" }], comments: 2,
+    additions: 41, deletions: 9, fetchedAt: Date.now(),
+  },
+  {
+    ref: "colinhacks/zod#5928", kind: "pr", repo: "colinhacks/zod", url: "https://github.com/colinhacks/zod/pull/5928",
+    title: "Add z.templateLiteral() recursion guard", body: "", state: "OPEN", at: ago(600), authorLogin: "colinhacks",
+    labels: [], comments: 0, additions: 12, deletions: 3, fetchedAt: Date.now(),
+  },
+]
+
 const originalFetch = window.fetch
 window.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : (input as Request).url ?? input.toString(), location.origin)
+  if (url.pathname.endsWith("/rpc/githubRefPreview")) {
+    const refs: string[] = JSON.parse(url.searchParams.get("input") ?? "{}").refs ?? []
+    const cards = HOVER_CARDS.filter((card) => refs.includes(card.ref)).map((card) => ({ ...card, fetchedAt: Date.now() }))
+    const missing = refs.filter((ref) => !cards.some((card) => card.ref === ref))
+    return new Response(JSON.stringify({ result: { cards, missing } }), { headers: { "content-type": "application/json" } })
+  }
   if (url.pathname === "/_frizz/rpc/threadTranscript" || url.pathname === "/_frizz/rpc/threadTranscriptEarlier") {
     return new Response(JSON.stringify({ result: transcriptPage }), { headers: { "content-type": "application/json" } })
   }
@@ -162,6 +188,7 @@ createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={new QueryClient()}>
     <TooltipProvider>
       <Fixture />
+      <GithubHovercards />
     </TooltipProvider>
   </QueryClientProvider>,
 )

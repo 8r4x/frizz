@@ -25,11 +25,12 @@
 // on afterwards is CORRECT, not a bug — a child's <task-notification> lands as a re-invoking user record
 // and the parent genuinely resumes; measured 15/15 times on a live worker thread, with idle windows as
 // short as 0.13s. This card is what makes that alternation legible.)
-import { Fragment, type ReactNode } from "react"
+import { Fragment, useEffect, type ReactNode } from "react"
 import { Bot, ChevronRight, CircleCheck, CircleDashed, CircleX, Clock, GitMerge, GitPullRequestClosed, Hourglass, TerminalSquare } from "lucide-react"
 import type { GithubWatchStatus, ThreadView, ThreadWatchView } from "@frizz/shared"
 import { isDirectSubAgent } from "@frizz/shared"
 import { githubRefUrl } from "../lib/githubRef.ts"
+import { noteGithubRefs } from "../lib/githubHovercards.ts"
 import { awaitingProseBlock } from "../lib/awaitingPresentation.ts"
 import { compactElapsedSince, formatCompactElapsed } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
@@ -312,12 +313,17 @@ function Chevron() {
   return <ChevronRight size={13} aria-hidden className={`${ON_CAP} ml-[3px] -mr-[4px] text-muted/35 transition-colors group-hover:text-muted/70`} />
 }
 
-function WaitRow({ mark, name, status, onOpen, href, title, testKind, testId }: {
+function WaitRow({ mark, name, status, onOpen, href, ghRef, title, testKind, testId }: {
   mark: ReactNode
   name: string
   status: ReactNode
   onOpen?: () => void
   href?: string
+  /** The `owner/repo#N` key of a GitHub row, stamped as `data-gh-ref` so the app-wide hovercard layer
+   *  (GithubHovercards, delegated off the document) opens the PR's card on it exactly as it does on a
+   *  `#123` in prose. The anchor STRETCHES over the whole row, so the whole row summons the card — which
+   *  is right, because the whole row is the link. */
+  ghRef?: string
   title?: string
   testKind: "github" | "shell" | "agent" | "timer"
   testId: string
@@ -329,6 +335,7 @@ function WaitRow({ mark, name, status, onOpen, href, title, testKind, testId }: 
         target="_blank"
         rel="noreferrer noopener"
         title={title}
+        data-gh-ref={ghRef}
         // The QUEUE card and the drawer both act on their own pointer-down; a row press must not reach
         // them, exactly as the ops strip's rows already stop it.
         onMouseDown={(e) => e.stopPropagation()}
@@ -368,6 +375,12 @@ function WaitRow({ mark, name, status, onOpen, href, title, testKind, testId }: 
 function GithubWatchRow({ watch }: { watch: ThreadWatchView }) {
   const status = watch.github
   const url = githubRefUrl(watch.target)
+  // Queue the hovercard fetch at render time, the same contract prose keeps (useGithubHovercardRefs):
+  // the delegated pointerover asks again just in time, but pre-noting means the first hover is never
+  // blank. Only a ref that resolved to a URL — the card is keyed by the same `owner/repo#N`.
+  useEffect(() => {
+    if (url) noteGithubRefs([watch.target])
+  }, [url, watch.target])
   return (
     <WaitRow
       testKind="github"
@@ -375,6 +388,7 @@ function GithubWatchRow({ watch }: { watch: ThreadWatchView }) {
       mark={<ChecksGlyph status={status} />}
       name={watch.target}
       href={url ?? undefined}
+      ghRef={url ? watch.target : undefined}
       title={url ? `Open ${watch.target} on GitHub` : watch.target}
       status={
         <>

@@ -38,6 +38,7 @@ import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { lastAskIndex, messagePresentationText } from "../lib/messagePresentation.ts"
 import { snoozePresetInstant, formatSnoozeWake } from "../lib/snooze.ts"
+import { noteGithubRefs } from "../lib/githubHovercards.ts"
 import { AWAITING_FALLBACK_TITLE, AWAITING_PARK_BUTTON, awaitingForLabel, awaitingItemLabels, awaitingParkAction, awaitingPresentationLine, prWatchRefs } from "../lib/awaitingPresentation.ts"
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { prefs } from "../lib/prefs.ts"
@@ -3670,10 +3671,18 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
 // One watched PR reference. A worker writes each `prs:` entry by hand, so a ref that isn't
 // `owner/repo#N` still says WHAT is being watched — it degrades to muted text in the same position
 // rather than to a dead link or to nothing at all.
+//
+// A valid ref carries `data-gh-ref`, so the app-wide hovercard layer (GithubHovercards) opens the PR's
+// card on it exactly as on a `#123` in prose — the fence line is the only place the ref exists, and
+// the card is what tells the reader which PR that is without leaving. Pre-noted at render, as prose
+// is, so the first hover is never blank.
 function WatchedRef({ watch }: { watch: { ref: string; url: string | null } }) {
+  useEffect(() => {
+    if (watch.url) noteGithubRefs([watch.ref])
+  }, [watch.url, watch.ref])
   if (!watch.url) return <span className="text-[12px] text-muted">{watch.ref}</span>
   return (
-    <a href={watch.url} target="_blank" rel="noreferrer noopener" className={`${CARD_LINK} text-[12px]`}>
+    <a href={watch.url} target="_blank" rel="noreferrer noopener" data-gh-ref={watch.ref} className={`${CARD_LINK} text-[12px]`}>
       {watch.ref}
     </a>
   )
