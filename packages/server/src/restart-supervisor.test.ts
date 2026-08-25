@@ -362,6 +362,8 @@ test("the proxy refuses a foreign Origin instead of laundering it into the child
     }
     // A Host naming somebody else is refused too, which is what stops DNS rebinding.
     assert.equal((await proxied(port, "/_frizz/rpc/x", { host: `frizz.evil:${port}` }, "POST")).status, 403)
+    // ...and wordlessly: a loopback-only board has no operator arriving by name, only probes.
+    assert.equal((await proxied(port, "/", { host: `frizz.evil:${port}` })).body, "Forbidden")
     assert.equal((await proxied(port, "/_frizz/rpc/x", { host, "x-forwarded-host": "evil.example" }, "POST")).status, 403)
   } finally {
     await proxy.close().catch(() => undefined)
@@ -389,6 +391,15 @@ test("--host: a non-loopback bind accepts IP-literal authorities, and loopback s
     // Exposure widens WHICH authority is legitimate, never the Origin-must-match-Host rule itself.
     assert.equal((await proxied(port, "/_frizz/rpc/x", { host: `192.168.1.5:${port}`, origin: "http://evil.example" }, "POST")).status, 403)
     assert.equal((await proxied(port, "/_frizz/rpc/x", { host: `evil.example:${port}` }, "POST")).status, 403)
+    // Opening the board by an unlisted name is refused WITH the flag that would allow it — a bare
+    // "Forbidden" sent the operator back to the IP and a guess ("it seems to filter by hostname?").
+    const byName = await proxied(port, "/", { host: `pupper:${port}` })
+    assert.equal(byName.status, 403)
+    assert.match(byName.headers?.["content-type"] ?? "", /text\/html/)
+    assert.match(byName.body, /--allowed-host pupper/)
+    assert.match(byName.body, /FRIZZ_ALLOWED_HOSTS=pupper/)
+    // The name is echoed only when it parsed as a host — a port alias is a trick, not a typo.
+    assert.equal((await proxied(port, "/", { host: `pupper:${port + 1}` })).body, "Forbidden")
   } finally {
     await proxy.close().catch(() => undefined)
     await current.close().catch(() => undefined)

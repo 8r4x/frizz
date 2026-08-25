@@ -12,6 +12,7 @@ import {
   normalizePublicOrigin,
   parseLocalHost,
   parseLocalHttpOrigin,
+  unlistedHostName,
 } from "./local-origin.ts"
 
 const PORT = 49_177
@@ -170,6 +171,24 @@ test("an exposed policy admits IP literals and nothing else by default", () => {
   // Every canonicalization trick the loopback parser rejects is still rejected while exposed.
   for (const host of [`192.168.1.5:${PORT + 1}`, `user@192.168.1.5:${PORT}`, `192.168.1.5:${PORT}/x`, `3232235781:${PORT}`]) {
     assert.equal(parseLocalHost(host, PORT, EXPOSED), null, host)
+  }
+})
+
+test("a refused Host is named back only when an unlisted DNS name is all that is wrong with it", () => {
+  // The operator who opened an exposed board by the machine's name gets told which flag to add.
+  assert.equal(unlistedHostName(`pupper:${PORT}`, PORT, EXPOSED), "pupper")
+  assert.equal(unlistedHostName(`Pupper.LAN:${PORT}`, PORT, { exposed: true, allowedHosts: ["frizz.local"] }), "pupper.lan")
+  // Nothing to explain once the name is accepted, by listing or by wildcard.
+  assert.equal(unlistedHostName(`pupper:${PORT}`, PORT, { exposed: true, allowedHosts: ["pupper"] }), null)
+  assert.equal(unlistedHostName(`pupper:${PORT}`, PORT, { exposed: true, allowedHosts: ["*"] }), null)
+  // A loopback-only board never explains: the port is unreachable from off-machine, so a foreign
+  // name there is a probe, not an operator.
+  assert.equal(unlistedHostName(`pupper:${PORT}`, PORT), null)
+  assert.equal(unlistedHostName(`pupper:${PORT}`, PORT, { exposed: false, allowedHosts: [] }), null)
+  // An IP literal is already accepted while exposed, and every other malformation stays wordless.
+  assert.equal(unlistedHostName(`192.168.1.5:${PORT}`, PORT, EXPOSED), null)
+  for (const host of [`pupper:${PORT + 1}`, `user@pupper:${PORT}`, `pupper:${PORT}/x`, "pupper", undefined, `a,b:${PORT}`]) {
+    assert.equal(unlistedHostName(host, PORT, EXPOSED), null, String(host))
   }
 })
 

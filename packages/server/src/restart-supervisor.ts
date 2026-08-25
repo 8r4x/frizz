@@ -12,6 +12,7 @@ import {
   isTrustedLocalHttpRequest,
   LOOPBACK_BIND_HOST,
   parseLocalHost,
+  unlistedHostName,
   rejectWebSocketUpgrade,
   type LocalAuthorityPolicy,
 } from "./local-origin.ts"
@@ -165,6 +166,17 @@ function unauthorizedPage(reason?: "unknown" | "expired" | "already-used"): stri
       ? "That link expired. Generate a fresh one."
       : "This address needs a current access link.";
   return `<!doctype html><meta charset="utf-8"><title>Unauthorized</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:3rem;font:16px system-ui;color:#e7e7e7;background:#171717}main{max-width:30rem;padding:1.5rem;border:1px solid #444;border-radius:.75rem;background:#222}</style><main><h1>Unauthorized</h1>${detail ? `<p>${detail}</p>` : ""}</main>`
+}
+
+/**
+ * The refusal an operator sees after opening an exposed board by a name `--allowed-host` does not
+ * list. Unlike unauthorizedPage this SAYS what Frizz is: the board is already open to this network by
+ * IP with no gate at all, so naming the flag costs nothing and saves the guess. The name is escaped
+ * even though the Host parser already refuses every character that could break markup.
+ */
+function unlistedHostPage(name: string): string {
+  const shown = name.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!)
+  return `<!doctype html><meta charset="utf-8"><title>Not served by this name</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:3rem;font:16px system-ui;color:#e7e7e7;background:#171717}main{max-width:34rem;padding:1.5rem;border:1px solid #444;border-radius:.75rem;background:#222}code{font:14px ui-monospace,monospace;padding:.1em .3em;border-radius:.3em;background:#333;white-space:nowrap}</style><main><h1>Not served by this name</h1><p>Frizz does not answer to <code>${shown}</code>. A name a browser has to resolve is how DNS rebinding makes another site's page count as this board, so an exposed board accepts only the names its operator lists.</p><p>Open the board by its IP address, or relaunch with <code>--allowed-host ${shown}</code> (or <code>FRIZZ_ALLOWED_HOSTS=${shown}</code>) to accept this one.</p></main>`
 }
 
 function isControlRequest(req: IncomingMessage): boolean {
@@ -560,6 +572,12 @@ export class RestartSupervisorProxy {
       return
     }
     if (!this.authorityAccepted(req)) {
+      const name = unlistedHostName(req.headers.host, this.options.port, this.policy)
+      if (name) {
+        res.writeHead(403, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" })
+        res.end(req.method === "HEAD" ? undefined : unlistedHostPage(name))
+        return
+      }
       res.writeHead(403, { "content-type": "text/plain; charset=UTF-8" })
       res.end("Forbidden")
       return

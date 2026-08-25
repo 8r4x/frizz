@@ -185,6 +185,27 @@ export function parseLocalHost(
   return { hostname, port: expectedPort, authority: url.host.toLowerCase(), scheme: "http" }
 }
 
+/**
+ * The DNS name a refused Host was asking for, when that name is the ONLY thing wrong with it.
+ *
+ * `--host` puts the board on the LAN, the operator opens it by the machine's name, and what came back
+ * was a bare 403 — nothing said the name is refused on purpose or that `--allowed-host` exists, so
+ * they fell back to the IP and guessed ("it seems to filter by hostname?", reported 2026-08-24). This
+ * is what lets the refusal say so. Narrow on purpose: null unless the board is exposed and the Host is
+ * well formed, on this server's port, and a name that merely is not listed. A loopback-only board, an
+ * IP literal, a port alias or any other malformation keeps the wordless refusal — none of those is an
+ * operator typing a hostname, and the explanation would only tell a probe what lives here.
+ */
+export function unlistedHostName(
+  value: HeaderValue,
+  expectedPort: number,
+  policy?: LocalAuthorityPolicy,
+): string | null {
+  if (!policy?.exposed || parseLocalHost(value, expectedPort, policy)) return null
+  const asIfAllowed = parseLocalHost(value, expectedPort, { ...policy, allowedHosts: ["*"] })
+  return asIfAllowed && isIP(asIfAllowed.hostname) === 0 ? asIfAllowed.hostname : null
+}
+
 function hasForwardedAuthority(headers: LocalRequestHeaders): boolean {
   return FORWARDED_HEADERS.some((name) => headers[name] !== undefined)
 }
