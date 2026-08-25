@@ -17,6 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { pathToFileURL } from "node:url";
 import { basename, dirname, join, resolve } from "node:path";
 import { createServer } from "node:net";
 import { test } from "node:test";
@@ -612,6 +613,13 @@ async function availableLoopbackPort(): Promise<number> {
   });
 }
 
+// An absolute path is not an ESM specifier on Windows. `import "C:\\…"` is read as the scheme `c:`
+// and the loader refuses it with ERR_UNSUPPORTED_ESM_URL_SCHEME; a `file://` URL is the only spelling
+// that works there, and it works on POSIX too, so there is one form rather than a branch.
+function moduleSpecifier(path: string): string {
+  return pathToFileURL(path).href;
+}
+
 async function waitForArtifactHealth(
   port: number,
   child: ReturnType<typeof spawnChild>,
@@ -729,8 +737,8 @@ test("a real Nub/esbuild artifact boots its WebSocket-capable server and loads i
       // host's Node-API version. It is still smoked here, because "the artifact can open a database"
       // is the property this test is for — only the thing that provides it changed.
       import { DatabaseSync } from "node:sqlite";
-      import pty from ${JSON.stringify(join(artifact.runtimeDir, "node_modules", "node-pty", "lib", "index.js"))};
-      import watcher from ${JSON.stringify(join(artifact.runtimeDir, "node_modules", "@parcel", "watcher", "index.js"))};
+      import pty from ${JSON.stringify(moduleSpecifier(join(artifact.runtimeDir, "node_modules", "node-pty", "lib", "index.js")))};
+      import watcher from ${JSON.stringify(moduleSpecifier(join(artifact.runtimeDir, "node_modules", "@parcel", "watcher", "index.js")))};
       import { mkdtempSync, rmSync } from "node:fs";
       import { tmpdir } from "node:os";
       import { join } from "node:path";
@@ -738,8 +746,16 @@ test("a real Nub/esbuild artifact boots its WebSocket-capable server and loads i
       const child = pty.spawn(process.execPath, ["-e", "process.exit(0)"], { name: "xterm-color", cols: 80, rows: 24, cwd: process.cwd(), env: process.env });
       await new Promise((resolve, reject) => child.onExit(({ exitCode }) => exitCode === 0 ? resolve() : reject(new Error("node-pty exited " + exitCode))));
       const dir = mkdtempSync(join(tmpdir(), "frizz-watch-")); const sub = await watcher.subscribe(dir, () => {}); await sub.unsubscribe(); rmSync(dir, { recursive: true, force: true });
+      // EXIT EXPLICITLY. On Windows node-pty leaves live handles behind (4 of them, measured on
+      // Windows Server 2022 / node 26.7.0), so a script that has spawned a pty never returns to the
+      // shell on its own — this smoke used to fall off the end here and hang forever, and with no
+      // timeout on the execFileSync below that wedged the whole suite rather than failing it. The
+      // script's job is "the artifact can LOAD and USE these natives", not "node exits cleanly".
+      process.exit(0);
     `;
-    execFileSync(process.execPath, ["--input-type=module", "-e", nativeSmoke], { encoding: "utf8" });
+    // Timed, because a hang here is not a hang worth waiting out: without this the run above stalled
+    // the suite indefinitely instead of reporting a failure anyone could read.
+    execFileSync(process.execPath, ["--input-type=module", "-e", nativeSmoke], { encoding: "utf8", timeout: 60_000 });
   } finally {
     if (child) await stopArtifactChild(child);
     releaseOwner?.();
