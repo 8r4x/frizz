@@ -6,9 +6,9 @@ import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { Hono } from "hono"
 import { mountRouter } from "@frizz/rpc/server"
-import { DISPATCH_TASK_BANNER_MARKER, type BoardSnapshot, type Settings, type ThreadView } from "@frizz/shared"
+import { DISPATCH_TASK_BANNER_MARKER, type BoardSnapshot, type Settings, type ThreadView, type TranscriptMessage } from "@frizz/shared"
 import type { BoardManager } from "./board.ts"
-import { appendDelivery, parseDeliveryLedger } from "./delivery-ledger.ts"
+import { appendDelivery, parseDeliveryLedger, projectDeliveryLedger } from "./delivery-ledger.ts"
 import { Emitter } from "./bus.ts"
 import { createClaudeBackend } from "./backend/claude.ts"
 import {
@@ -1233,7 +1233,27 @@ test("interrupt and send preempts the turn, and only AFTER the message is queued
   })
   assert.deepEqual(order, ["followUp", "interruptTurn"], "queued first, preempted second")
   const after = parseDeliveryLedger(h.storage.getSession(slug)!.delivery_ledger)
-  assert.ok(after.some((i) => i.id === "d-int" && i.state === "enqueued"), "and it is ledgered like any other send")
+  // Mid-turn, and still `delivered` — the landed interrupt IS the receipt. This used to open
+  // `enqueued` "like any other send", which rendered the one message the operator paid a turn abort
+  // to be read NOW as a gray bubble pinned under the working indicator answering it, for the whole
+  // window before the delivery record reached disk (maintainer 2026-08-24: "I hate that there is
+  // always a delay after I force push a message").
+  assert.ok(after.some((i) => i.id === "d-int" && i.state === "delivered"), "and the preempted send is not still waiting")
+  h.storage.close()
+})
+
+// The interrupt preempts the TURN, not one message, and the queue behind it is FIFO — so the sends
+// already waiting are read by that same next turn. Leaving them gray while the message that triggered
+// the interrupt goes solid would say the opposite of what happens.
+test("interrupt and send frees the sends already queued ahead of it too", async () => {
+  const { h, slug } = interruptHarness()
+  await h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: "first", deliveryId: "d-first" } })
+  assert.equal(parseDeliveryLedger(h.storage.getSession(slug)!.delivery_ledger)[0].state, "enqueued", "waiting, as it should be")
+  await h.router.followUp.handler({
+    input: { slug, sessionId: `sid-${slug}`, message: "and now this", deliveryId: "d-second", interrupt: true },
+  })
+  const after = parseDeliveryLedger(h.storage.getSession(slug)!.delivery_ledger)
+  assert.deepEqual(after.map((i) => i.state), ["delivered", "delivered"])
   h.storage.close()
 })
 
@@ -1253,6 +1273,45 @@ test("push-it-now interrupts the turn and delivers no second copy of the message
   const result = await h.router.deliverQueuedNow.handler({ input: { slug, sessionId: `sid-${slug}` } })
   assert.deepEqual(result, { interrupted: true })
   assert.deepEqual(order, ["interruptTurn"], "no followUp — the words are already queued")
+  h.storage.close()
+})
+
+// What the ↑ is FOR. The words were already queued, so the only observable outcome of the click is that
+// they stop reading as "still waiting" — and that has to be server truth, or it dies on the next
+// transcript push and does not survive a reload or reach a second tab.
+test("push-it-now stops the queue it freed from rendering as queued", async () => {
+  const { h, slug } = interruptHarness()
+  await h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: "waiting", deliveryId: "d-wait" } })
+  assert.equal(parseDeliveryLedger(h.storage.getSession(slug)!.delivery_ledger)[0].state, "enqueued")
+  await h.router.deliverQueuedNow.handler({ input: { slug, sessionId: `sid-${slug}` } })
+  assert.equal(parseDeliveryLedger(h.storage.getSession(slug)!.delivery_ledger)[0].state, "delivered")
+  h.storage.close()
+})
+
+// The JOIN, because a ledger state nobody renders differently would be a no-op: the SAME flip, put back
+// through the projection that owns the transcript, un-grays the fold's own gray bubble for that send.
+// This is the whole observable effect of the gesture — everything above it is bookkeeping.
+test("push-it-now un-grays the bubble the operator was looking at", async () => {
+  const { h, slug } = interruptHarness()
+  await h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: "read this now", deliveryId: "d-join" } })
+  const fold = (): TranscriptMessage[] => [{ sourceId: "fold-1", role: "user", text: "read this now", tools: [], parts: [], queued: true }]
+  const before = projectDeliveryLedger(fold(), parseDeliveryLedger(h.storage.getSession(slug)!.delivery_ledger))
+  assert.equal(before[0].queued, true, "gray while it waits behind the turn")
+  await h.router.deliverQueuedNow.handler({ input: { slug, sessionId: `sid-${slug}` } })
+  const after = projectDeliveryLedger(fold(), parseDeliveryLedger(h.storage.getSession(slug)!.delivery_ledger))
+  assert.equal(after[0].queued, false, "solid the moment the turn in front of it is preempted")
+  assert.equal(after.length, 1, "and no second copy of it")
+  h.storage.close()
+})
+
+// A refusal must change nothing: the send is still sitting in a queue nobody preempted, and un-graying
+// it there would claim a turn abort that never happened.
+test("push-it-now leaves the queue alone when there was nothing to interrupt", async () => {
+  const { h, slug } = interruptHarness()
+  await h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: "waiting", deliveryId: "d-wait" } })
+  ;(h.ctx as { claudeBroker?: unknown }).claudeBroker = { interruptTurn: () => false }
+  await h.router.deliverQueuedNow.handler({ input: { slug, sessionId: `sid-${slug}` } })
+  assert.equal(parseDeliveryLedger(h.storage.getSession(slug)!.delivery_ledger)[0].state, "enqueued")
   h.storage.close()
 })
 

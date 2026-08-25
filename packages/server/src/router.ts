@@ -98,7 +98,7 @@ import { appServerTurnStalled, resolveRecurringPrompt } from "./board.ts"
 import { runThreadUpdate } from "./frizz.ts"
 import { repairThreadFile } from "./repair.ts"
 import { reopenArchivedThreadForFollowUp, resumeThread, wakeParkedThreadForFollowUp } from "./resume.ts"
-import { appendDelivery, cancelDelivery, deliveryItem, hasDelivery, retireOutstandingDeliveries } from "./delivery-ledger.ts"
+import { appendDelivery, cancelDelivery, deliverOutstandingDeliveries, deliveryItem, hasDelivery, retireOutstandingDeliveries } from "./delivery-ledger.ts"
 import {
   readEarlierThreadTranscriptPage,
   readLatestThreadTranscriptPage,
@@ -1685,18 +1685,23 @@ export function createRouter(ctx: AppContext) {
           //
           // Measured live (_live_broker_interrupt_send.mts) against a real 90s tool call in flight:
           // 94.4s without it, seconds with it, and the session takes ordinary follow-ups afterwards.
-          if (input.interrupt) bridge.interruptTurn({ threadSlug: input.slug, sessionId: row.session_id })
+          const preempted = input.interrupt === true && bridge.interruptTurn({ threadSlug: input.slug, sessionId: row.session_id })
           if (input.deliveryId) {
             appendDelivery(ctx.storage, input.slug, {
               id: input.deliveryId,
               text: input.message,
               state: midTurn && input.freshProcess !== true ? "enqueued" : "delivered",
             })
-            // The ledger is not JSONL bytes, so nothing else pushes a transcript frame for it — emit one
-            // now so the bubble (gray or delivered) reaches subscribed tabs immediately instead of
-            // riding the next byte-driven refresh.
-            ctx.transcriptChange.emit([input.slug])
           }
+          // A landed interrupt frees the WHOLE queue — the next turn opens on it — so nothing outstanding
+          // is still waiting to be read, this send included. Flipping it here rather than in the `state`
+          // above is what covers the sends already queued AHEAD of this one, which the same interrupt
+          // also delivers.
+          if (preempted) deliverOutstandingDeliveries(ctx.storage, input.slug)
+          // The ledger is not JSONL bytes, so nothing else pushes a transcript frame for it — emit one
+          // now so the bubble (gray or delivered) reaches subscribed tabs immediately instead of
+          // riding the next byte-driven refresh.
+          if (input.deliveryId || preempted) ctx.transcriptChange.emit([input.slug])
           ctx.board.refresh()
           return
         }
@@ -1828,6 +1833,10 @@ export function createRouter(ctx: AppContext) {
         if (!bridge.interruptTurn({ threadSlug: input.slug, sessionId: row.session_id })) {
           return { interrupted: false, reason: "Nothing to interrupt — this thread has no turn running" }
         }
+        // The next turn opens on the queue, so those messages are read rather than waiting — say so now
+        // instead of leaving them gray until their delivery records reach disk, which is the entire wait
+        // this button exists to end. The ledger is not JSONL bytes, so the frame has to be emitted here.
+        if (deliverOutstandingDeliveries(ctx.storage, input.slug)) ctx.transcriptChange.emit([input.slug])
         return { interrupted: true }
       },
     }),

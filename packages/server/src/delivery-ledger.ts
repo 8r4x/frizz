@@ -241,6 +241,40 @@ export function retireOutstandingDeliveries(storage: Storage, slug: string): num
   return items.length - next.length
 }
 
+/**
+ * Mark every still-outstanding send on a session DELIVERED, and report how many moved. Returns 0 when
+ * there was nothing outstanding.
+ *
+ * The receipt is a LANDED INTERRUPT — the operator forcing the queue through, from ⌘⏎ or from the ↑ on
+ * a queued bubble. The SDK's interrupt aborts the turn WITHOUT discarding queued input, so the next
+ * turn opens on exactly what is queued: these sends are read, not waiting, which is what `delivered`
+ * says (see the state machine above). Without it the whole point of the gesture is invisible — the
+ * bubbles stay gray, pinned below the working indicator that is already answering them, for the entire
+ * window before their delivery records reach disk.
+ *
+ * EVERY outstanding item moves, not just the one the operator pointed at: the queue is FIFO and the
+ * interrupt preempts the TURN standing in front of all of them.
+ *
+ * The one send this can misreport is one handed to a daemon too old to know the interrupt frame, which
+ * ignores it and reads the message at the ordinary time (see the bridge's interruptTurn). It renders
+ * as delivered a little early; the maintainer took that trade over the wait.
+ */
+export function deliverOutstandingDeliveries(storage: Storage, slug: string): number {
+  const row = storage.getSession(slug)
+  if (!row) return 0
+  const items = parseDeliveryLedger(row.delivery_ledger)
+  const at = new Date().toISOString()
+  let moved = 0
+  const next = items.map((item) => {
+    if (item.state !== "pending" && item.state !== "enqueued") return item
+    moved++
+    return { ...item, state: "delivered" as const, updatedAt: at }
+  })
+  if (!moved) return 0
+  storage.setDeliveryLedger(slug, serializeDeliveryLedger(next))
+  return moved
+}
+
 /** The ledger row for one send, or null when nothing outstanding carries that id. */
 export function deliveryItem(storage: Storage, slug: string, id: string): DeliveryLedgerItem | null {
   const row = storage.getSession(slug)

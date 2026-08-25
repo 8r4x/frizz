@@ -53,10 +53,11 @@ export function useDeliverQueuedNow(slug: string | null): {
     void rpc.deliverQueuedNow({ slug, sessionId }).then(
       (result) => {
         setPending(false)
-        // Nothing optimistic on success: the bubble stays exactly where it is until the transcript
-        // carries the message, because "the agent has it" is the tailer's fact to report, not this
-        // click's to claim. A refusal is spoken, since the operator asked for something and did not
-        // get it.
+        // Nothing optimistic here, and nothing needed: the server moves the queue's delivery-ledger
+        // entries to `delivered` under the same landed interrupt and pushes a transcript frame, so the
+        // bubbles un-gray on this round trip rather than on the tailer. Keeping the claim server-side
+        // is what makes it survive a reload and reach every other open tab. A refusal is spoken, since
+        // the operator asked for something and did not get it.
         if (!result.interrupted) showToast(result.reason ?? "That message could not be pushed through")
       },
       (error: unknown) => {
