@@ -174,7 +174,9 @@ async function terminal(onMessage?: (socket: import("ws").WebSocket, data: strin
   const server: Server = createServer((_, res) => { res.writeHead(426); res.end(); });
   const wss = new WebSocketServer({ noServer: true });
   const seen: string[] = [];
+  let handshake: Record<string, string | string[] | undefined> = {};
   server.on("upgrade", (req, socket, head) => {
+    handshake = req.headers;
     if (!accept) { socket.destroy(); return; }
     wss.handleUpgrade(req, socket, head, (ws) => {
       ws.on("message", (raw) => {
@@ -190,6 +192,7 @@ async function terminal(onMessage?: (socket: import("ws").WebSocket, data: strin
   return {
     origin: `http://127.0.0.1:${port}`,
     seen,
+    get handshake() { return handshake; },
     async close() { wss.close(); server.close(); await once(server, "close"); },
   };
 }
@@ -288,5 +291,38 @@ test("a local terminal that ends tells the relay, so the visitor's pane closes w
     session.message("exit");
     const close = await until(out.frames, (f) => f.t === "ws-close", "the close");
     assert.equal(close.id, "w1");
+  } finally { session.close(); await t.close(); }
+});
+
+test("the visitor's Host, Origin and session cookie reach the board — the gate reads all three", async () => {
+  // WITHOUT THIS A RELAYED TERMINAL IS EITHER BROKEN OR WIDE OPEN. The board decides an upgrade
+  // arrived publicly from its Host, requires an Origin that agrees with it, and proves the visitor
+  // redeemed an access code from the cookie. Sending none is refused; sending the Host alone would
+  // read as loopback and hand a shell to anyone who found the name.
+  const t = await terminal();
+  const out = collect();
+  const session = serveRelayWebSocket(
+    {
+      t: "ws-open",
+      id: "w1",
+      url: "https://ada.frizz.sh/terminal",
+      headers: [
+        ["host", "ada.frizz.sh"],
+        ["origin", "https://ada.frizz.sh"],
+        ["cookie", "frizz_session=abc123"],
+        ["sec-websocket-key", "someone-elses-key"],
+        ["connection", "Upgrade"],
+      ],
+    },
+    { origin: t.origin, publicOrigin: "https://ada.frizz.sh", send: out.send },
+  );
+  try {
+    await until(out.frames, (f) => f.t === "ws-ack", "the ack");
+    assert.equal(t.handshake.host, "ada.frizz.sh");
+    assert.equal(t.handshake.origin, "https://ada.frizz.sh");
+    assert.equal(t.handshake.cookie, "frizz_session=abc123");
+    // The handshake is OURS, not a replay of the visitor's — a borrowed key is answered with an
+    // accept value computed for somebody else, which a strict client rejects.
+    assert.notEqual(t.handshake["sec-websocket-key"], "someone-elses-key");
   } finally { session.close(); await t.close(); }
 });

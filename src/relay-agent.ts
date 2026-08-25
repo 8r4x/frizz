@@ -1,4 +1,7 @@
 import { request as httpRequest } from "node:http";
+// The WHATWG `WebSocket` global cannot set request headers, and the visitor's Host, Origin and session
+// cookie are exactly what the board's upgrade gate reads. `ws` is already in the published bundle.
+import { WebSocket as WsWebSocket } from "ws";
 import {
   decodeBody,
   encodeBody,
@@ -159,25 +162,63 @@ export function serveRelayRequest(frame: Extract<RelayDownFrame, { t: "req" }>, 
 }
 
 /**
+ * Headers a WebSocket CLIENT owns and a relay must never replay.
+ *
+ * These describe the handshake being made now, not the one the visitor made with the relay. Replaying
+ * the visitor's `Sec-WebSocket-Key` would answer the local handshake with an accept value computed for
+ * somebody else's key, which a strict client rejects.
+ */
+const HANDSHAKE_HEADERS: ReadonlySet<string> = new Set([
+  "sec-websocket-key",
+  "sec-websocket-version",
+  "sec-websocket-accept",
+  "sec-websocket-extensions",
+]);
+
+/**
  * Open the board's end of a visitor's terminal and link the two.
  *
  * The board's terminals are WebSockets, so without this a relayed board can be read but not worked in.
  * The visitor's socket lives in the relay; this one is local; every message is carried between them as
  * a frame. Returns a handle the caller drives when frames arrive for this session.
+ *
+ * THE VISITOR'S HEADERS ARE THE WHOLE POINT OF THIS FUNCTION'S SHAPE, and getting them wrong fails in
+ * both directions. Frizz gates an upgrade on three of them together: the `Host` decides whether the
+ * request arrived publicly and so whether the access gate applies at all, the `Origin` has to agree
+ * with it, and the session cookie is what proves the visitor redeemed an access code. Forward none of
+ * them and the board destroys the socket, because a browser always sends an Origin and this would not.
+ * Forward the Host alone and it is far worse: the board would judge the request LOCAL and hand a shell
+ * to anyone who found the name.
  */
 export function serveRelayWebSocket(
   frame: Extract<RelayDownFrame, { t: "ws-open" }>,
-  options: { origin: string; publicOrigin: string; send: (frame: RelayUpFrame) => void; connect?: (url: string) => WebSocketLike },
+  options: {
+    origin: string
+    publicOrigin: string
+    send: (frame: RelayUpFrame) => void
+    connect?: (url: string, headers: Record<string, string>) => WebSocketLike
+  },
 ): NestedSession {
   const target = new URL(frame.url);
   const local = new URL(options.origin);
+  const publicUrl = new URL(options.publicOrigin);
   target.protocol = local.protocol === "https:" ? "wss:" : "ws:";
   target.host = local.host;
 
-  const open = options.connect ?? ((url: string) => new WebSocket(url) as unknown as WebSocketLike);
+  const headers: Record<string, string> = {};
+  for (const [name, value] of stripHopByHop(frame.headers)) {
+    if (!HANDSHAKE_HEADERS.has(name.toLowerCase())) headers[name] = value;
+  }
+  // Present the upgrade as the visitor's, not as loopback. See the note above: this single line is
+  // what puts the board's access gate in front of a relayed terminal.
+  headers.host = publicUrl.host;
+
+  const open =
+    options.connect ??
+    ((url: string, h: Record<string, string>) => new WsWebSocket(url, { headers: h }) as unknown as WebSocketLike);
   let socket: WebSocketLike;
   try {
-    socket = open(target.toString());
+    socket = open(target.toString(), headers);
   } catch (error) {
     options.send({ t: "ws-ack", id: frame.id, ok: false });
     return { message: () => {}, close: () => {}, failed: error instanceof Error ? error.message : String(error) };

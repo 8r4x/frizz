@@ -53,7 +53,8 @@ Two things that will waste your time otherwise:
 
 ```sh
 nub --test packages/relay/src/board-socket.test.ts packages/relay/src/worker.test.ts
-nub scripts/verify-relay-e2e.mjs
+nub scripts/verify-relay-e2e.mjs     # the frames, on real workerd
+nub scripts/verify-relay-gate.mjs    # a relayed terminal against the REAL access gate
 ```
 
 The unit tests drive the Durable Object's state machine against fakes, which proves each half and
@@ -61,7 +62,14 @@ nothing about the seam between them — and there are three seams here that all 
 the e2e harness runs the real Worker under `wrangler dev`, a real board on loopback, and a real agent
 connecting them, including a terminal typed through both runtimes.
 
-It uses `localhost` as the zone rather than `frizz.sh`, so `ada.localhost` is a valid board name and
+The two harnesses answer different questions, and the second exists because the first cannot. A board
+in `verify-relay-e2e.mjs` is a toy that accepts every upgrade, so a relay forwarding NO visitor identity
+passes there and would fail against the real thing. `verify-relay-gate.mjs` puts the real
+`RestartSupervisorProxy` in the path and asks the only two questions worth asking about a terminal on
+the public internet: an unauthenticated one is REFUSED and never reaches the board, and a visitor
+holding a redeemed session gets through.
+
+The first harness uses `localhost` as the zone rather than `frizz.sh`, so `ada.localhost` is a valid board name and
 resolves to loopback without touching DNS. Two traps it exists to remember: `wrangler dev` synthesizes
 the request URL FROM THE ROUTE PATTERN, so the production config makes every request arrive as
 `frizz.sh` — the harness writes a routeless config of its own. And `fetch` silently drops a `Host`
