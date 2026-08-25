@@ -16,7 +16,8 @@
  * scripts/verify-access-codes.mjs. Nothing is exposed to the internet and no Cloudflare state is touched.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { request as httpRequest } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
+import { once } from "node:events";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -27,6 +28,16 @@ const PORT = Number(process.env.VERIFY_PORT ?? 47311);
 // There is ONE way to launch: the bare command with flags. `up` was a second spelling of this and is
 // gone; `--cloud` is what it always set, and what the durable re-exec re-enters through.
 const LAUNCH_ARGS = ["--port", String(PORT), "--dev", "--no-app", "--cloud"];
+
+/**
+ * Which of the two hostname shapes to drive. Both end in a running cloudflared, but by DIFFERENT
+ * command lines, and getting that wrong means the tunnel never connects while the board looks healthy.
+ *
+ *   byo   (default) a tunnel the operator made: `run <name>`, ingress from a local config file
+ *   claim            a name from the registrar:  `run --token <token>`, ingress held by Cloudflare
+ */
+const MODE = process.env.VERIFY_MODE === "claim" ? "claim" : "byo";
+const RUN_TOKEN = "run-token-from-the-registrar";
 const HOSTNAME = "e2e.frizz.sh";
 const ORIGIN = `https://${HOSTNAME}`;
 
@@ -41,6 +52,8 @@ const argvLog = join(home, "cloudflared.argv");
 const pidLog = join(home, "cloudflared.pid");
 let launcher = null;
 let workspace = null;
+let registrarServer = null;
+let registrarOrigin = null;
 
 /** cloudflared's stand-in: records how it was invoked, then waits to be killed like the real one. */
 function installFakeCloudflared() {
@@ -125,13 +138,32 @@ const alive = (pid) => {
 };
 
 try {
-  // A saved cloud.json is what makes the second run of `up` a single word, so seed one and assert the
+  // A saved cloud.json is what makes the second launch a single flag, so seed one and assert the
   // launcher reads it rather than prompting.
   mkdirSync(join(home, ".frizz"), { recursive: true });
   writeFileSync(
     join(home, ".frizz", "cloud.json"),
-    `${JSON.stringify({ hostname: HOSTNAME, tunnel: "frizz-e2e" }, null, 2)}\n`,
+    `${JSON.stringify(
+      MODE === "claim" ? { hostname: HOSTNAME, claim: "e2e" } : { hostname: HOSTNAME, tunnel: "frizz-e2e" },
+      null,
+      2,
+    )}\n`,
   );
+
+  // A claimed name renews on every launch, which is where it gets this run's token. Stand up a
+  // registrar that answers so the launcher takes the live path rather than the offline fallback.
+  if (MODE === "claim") {
+    registrarServer = createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ hostname: HOSTNAME, token: RUN_TOKEN, leaseExpiresAt: 0, renewed: true }));
+      });
+    });
+    registrarServer.listen(0, "127.0.0.1");
+    await once(registrarServer, "listening");
+    registrarOrigin = `http://127.0.0.1:${registrarServer.address().port}`;
+  }
 
   const bin = installFakeCloudflared();
   // A THROWAWAY workspace, not the frizz repo. Frizz is a singleton: launching `up` against the repo
@@ -149,7 +181,13 @@ try {
     ["--no-env-file", join(repo, "src", "index.ts"), ...LAUNCH_ARGS],
     {
       cwd: workspace,
-      env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, FRIZZ_WAKERS_OFF: "1" },
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: `${bin}:${process.env.PATH}`,
+        FRIZZ_WAKERS_OFF: "1",
+        ...(registrarOrigin ? { FRIZZ_REGISTRAR: registrarOrigin } : {}),
+      },
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
@@ -212,9 +250,12 @@ try {
   // 6. The tunnel was spawned as a child, with the tunnel name from cloud.json.
   const argv = existsSync(argvLog) ? readFileSync(argvLog, "utf8").trim() : "";
   check("the launch spawned cloudflared itself", argv.length > 0, argv);
+  // The two shapes take DIFFERENT command lines. A claimed name has no local config and no tunnel
+  // name to say — the token is its whole identity.
   check(
-    "it runs the tunnel named in cloud.json",
-    /(^|\s)run\s+frizz-e2e$/.test(argv) && argv.startsWith("tunnel "),
+    MODE === "claim" ? "it runs the claimed tunnel from its token" : "it runs the tunnel named in cloud.json",
+    argv.startsWith("tunnel ") &&
+      (MODE === "claim" ? argv.endsWith(`run --token ${RUN_TOKEN}`) : /(^|\s)run\s+frizz-e2e$/.test(argv)),
     argv,
   );
 
@@ -233,6 +274,7 @@ try {
   check("harness completed", false, error instanceof Error ? error.message : String(error));
 } finally {
   if (launcher) launcher.kill("SIGKILL");
+  if (registrarServer) registrarServer.close();
   if (existsSync(pidLog)) {
     const pid = Number(readFileSync(pidLog, "utf8").trim());
     if (Number.isFinite(pid) && alive(pid)) process.kill(pid, "SIGKILL");
@@ -242,5 +284,5 @@ try {
 }
 
 const failed = checks.filter((c) => !c.ok);
-console.log(`\n${checks.length - failed.length}/${checks.length} checks passed`);
+console.log(`\n${checks.length - failed.length}/${checks.length} checks passed (mode: ${MODE})`);
 process.exit(failed.length === 0 ? 0 : 1);

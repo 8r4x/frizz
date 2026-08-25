@@ -1,0 +1,22 @@
+name = "frizz-registrar"
+main = "src/worker.ts"
+compatibility_date = "2026-08-24"
+
+# The registrar runs during signup and never again — it is NOT on the data plane. A board that is
+# already running keeps working whether or not this Worker is up, and protecting that property is
+# worth more than any other choice in this package.
+
+[vars]
+FRIZZ_ZONE = "frizz.sh"
+
+# Set with `wrangler secret put`, never here — this file is committed.
+#   wrangler secret put CF_API_TOKEN    # Tunnel:Edit + Zone DNS:Edit, and nothing else
+#   wrangler secret put CF_ACCOUNT_ID
+#   wrangler secret put CF_ZONE_ID
+
+# One small JSON row per claimed name: owner public key, tunnel id, port, and the lease timestamps.
+# Create it first and paste the id back here:
+#   wrangler kv namespace create CLAIMS
+[[kv_namespaces]]
+binding = "CLAIMS"
+id = "REPLACE_WITH_THE_ID_FROM_wrangler_kv_namespace_create"

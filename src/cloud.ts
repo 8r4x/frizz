@@ -3,6 +3,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { claimNameIsValid, normalizeClaimName } from "@frizz/shared";
+import { loadOrCreateClaimIdentity } from "./identity.ts";
+import { ClaimError, claimName } from "./registrar-client.ts";
 
 /**
  * `frizz up` — one command for "start the server and reach it from anywhere".
@@ -18,18 +21,35 @@ import { dirname, join } from "node:path";
  * Deliberately does NOT ask about the port. There is a default, and `FRIZZ_PORT` overrides it for the
  * few people who care — a prompt for it would be a question almost nobody has an answer to.
  *
- * NOTE: this runs a tunnel the operator ALREADY OWNS. It does not create one, and it cannot: creating a
- * tunnel and its DNS record needs a zone-scoped Cloudflare token, which can never live on a user's
- * machine. Self-service is Stage 2 in plans/hosted-frizz-service.md.
+ * Two ways to have a hostname, told apart by whether the answer contains a dot:
+ *
+ *   colin              -> CLAIM `colin.frizz.sh` from the registrar, which creates the tunnel for you
+ *   board.example.com  -> a tunnel you made yourself, which Frizz only runs
+ *
+ * The claimed path exists because creating a tunnel and its DNS record needs a zone-scoped Cloudflare
+ * token, and that token can never live on a user's machine. The registrar holds it and hands back a
+ * per-tunnel run token, which runs exactly one tunnel and can reach nothing else in the zone.
  */
 
 export interface CloudConfig {
   /** The public hostname, e.g. `colin.frizz.sh`. Stored without a scheme; it is always https. */
   hostname: string;
-  /** The cloudflared tunnel name to run. */
-  tunnel: string;
+  /**
+   * The cloudflared tunnel name to run, for a tunnel the operator made themselves.
+   *
+   * Absent on a CLAIMED name, where the tunnel is remotely managed and runs from a token instead —
+   * there is no local tunnel name to say, and no config file to point at.
+   */
+  tunnel?: string;
   /** Optional explicit cloudflared config path; defaults beside the others in ~/.cloudflared. */
   config?: string;
+  /** The claimed label, e.g. `colin`. Its presence is what marks this as a registrar-issued name. */
+  claim?: string;
+}
+
+/** A claimed name runs a remotely-managed tunnel; a hand-made one runs by name from a config file. */
+export function isClaimedConfig(config: CloudConfig): boolean {
+  return typeof config.claim === "string" && config.claim.length > 0;
 }
 
 export function cloudConfigPath(home = homedir()): string {
@@ -39,12 +59,48 @@ export function cloudConfigPath(home = homedir()): string {
 export function readCloudConfig(home = homedir()): CloudConfig | null {
   try {
     const parsed = JSON.parse(readFileSync(cloudConfigPath(home), "utf8")) as Partial<CloudConfig>;
-    if (typeof parsed.hostname !== "string" || typeof parsed.tunnel !== "string") return null;
-    if (!parsed.hostname || !parsed.tunnel) return null;
-    return { hostname: parsed.hostname, tunnel: parsed.tunnel, ...(parsed.config ? { config: parsed.config } : {}) };
+    if (typeof parsed.hostname !== "string" || !parsed.hostname) return null;
+    // Exactly one of the two shapes must be present. A config naming NEITHER a tunnel nor a claim
+    // describes a hostname nothing can serve, which is worse than having no config at all — the
+    // launcher would arm the origin gate for an address with no tunnel behind it.
+    const claimed = typeof parsed.claim === "string" && parsed.claim.length > 0;
+    const named = typeof parsed.tunnel === "string" && parsed.tunnel.length > 0;
+    if (!claimed && !named) return null;
+    return {
+      hostname: parsed.hostname,
+      ...(named ? { tunnel: parsed.tunnel } : {}),
+      ...(claimed ? { claim: parsed.claim } : {}),
+      ...(parsed.config ? { config: parsed.config } : {}),
+    };
   } catch {
     return null;
   }
+}
+
+/**
+ * Where the per-tunnel run token is cached.
+ *
+ * SEPARATE FROM cloud.json, which is ordinary config and world-readable on machines that already have
+ * one. This file is a credential, so it gets 0600 — and keeping the two apart means an existing
+ * config file cannot silently become a secret when a user claims a name.
+ */
+export function tunnelTokenPath(home = homedir()): string {
+  return join(home, ".frizz", "tunnel-token");
+}
+
+export function readTunnelToken(home = homedir()): string | null {
+  try {
+    const token = readFileSync(tunnelTokenPath(home), "utf8").trim();
+    return token.length > 0 ? token : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeTunnelToken(token: string, home = homedir()): void {
+  const path = tunnelTokenPath(home);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${token}\n`, { mode: 0o600 });
 }
 
 export function writeCloudConfig(config: CloudConfig, home = homedir()): void {
@@ -63,28 +119,85 @@ export function normalizeHostname(raw: string): string {
 }
 
 /**
- * Ask once, remember forever. Asked only when there is no saved config and no explicit hostname —
- * the whole point is that the second run of `up` is a single word.
+ * Ask once, remember forever. Asked only when there is no saved config — the whole point is that the
+ * second launch is a single flag.
+ *
+ * One question, not two. A bare label claims a name on frizz.sh; anything with a dot in it is a
+ * hostname the operator already has a tunnel for. Asking "do you want to claim or bring your own"
+ * first would be a fork most people cannot answer before they know what the options mean.
  */
-export async function promptForCloudConfig(): Promise<CloudConfig> {
-  // An Update & Restart re-execs this launcher with `--cloud` and no terminal attached. If the saved
-  // config were ever missing there, a prompt would block forever on a stdin nobody can type into — the
-  // board would simply never come back. Say what is wrong instead.
+export async function promptForCloudName(): Promise<string> {
   if (!process.stdin.isTTY) {
     throw new Error(
-      "--cloud needs a saved hostname when there is no terminal to ask — run `frizz up` once interactively first",
+      "--cloud needs a saved name when there is no terminal to ask — run it once interactively first",
     );
   }
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
-    const hostname = normalizeHostname(await rl.question("Public hostname for this board (e.g. colin.frizz.sh): "));
-    // The tunnel usually shares the hostname's first label, which is what `cloudflared tunnel create`
-    // encourages — offer that rather than making them look it up.
-    const suggested = hostname.split(".")[0]!;
-    const answer = (await rl.question(`cloudflared tunnel name [${suggested}]: `)).trim();
-    return { hostname, tunnel: answer || suggested };
+    return (
+      await rl.question("Name for this board — a word claims <name>.frizz.sh, or paste a hostname you already run a tunnel for: ")
+    ).trim();
   } finally {
     rl.close();
+  }
+}
+
+/**
+ * Turn what they typed into a usable config, claiming a name if that is what they asked for.
+ *
+ * The run token is written HERE rather than returned, because the caller's job is to start a board and
+ * every path out of this function has to leave the same thing on disk for the next launch to find.
+ */
+export async function establishCloudConfig(
+  answer: string,
+  port: number,
+  home = homedir(),
+  origin?: string,
+): Promise<CloudConfig> {
+  if (answer.includes(".")) {
+    // A hostname: the operator owns the tunnel, so fall back to asking which one, as before.
+    const hostname = normalizeHostname(answer);
+    return { hostname, tunnel: hostname.split(".")[0]! };
+  }
+
+  if (!claimNameIsValid(answer)) {
+    // Surface the specific reason — reserved, too short, bad character — rather than a generic refusal.
+    normalizeClaimName(answer);
+  }
+  const name = normalizeClaimName(answer);
+  const identity = await loadOrCreateClaimIdentity(home);
+  const result = await claimName({ name, port, identity, ...(origin ? { origin } : {}) });
+  writeTunnelToken(result.token, home);
+  return { hostname: result.hostname, claim: name };
+}
+
+/**
+ * The run token for this launch: renewed if the registrar answers, cached if it does not.
+ *
+ * Renewing on every launch is what keeps a lease alive, so it costs nothing extra to do it here. The
+ * fallback is the important half — the registrar is NOT on the data plane, and a board that could not
+ * start because a signup service was down would quietly make it one.
+ */
+export async function resolveRunToken(
+  config: CloudConfig,
+  port: number,
+  home = homedir(),
+  onWarning?: (message: string) => void,
+  origin?: string,
+): Promise<string | null> {
+  if (!isClaimedConfig(config)) return null;
+  const cached = readTunnelToken(home);
+  try {
+    const identity = await loadOrCreateClaimIdentity(home);
+    const result = await claimName({ name: config.claim!, port, identity, ...(origin ? { origin } : {}) });
+    writeTunnelToken(result.token, home);
+    return result.token;
+  } catch (error) {
+    if (cached && error instanceof ClaimError && error.code === "unreachable") {
+      onWarning?.(`could not reach the Frizz registrar to renew ${config.hostname}; using the token from last time`);
+      return cached;
+    }
+    throw error;
   }
 }
 
@@ -112,15 +225,21 @@ export function startTunnel(
   onExit: (code: number | null) => void,
   onError: (message: string) => void,
   home = homedir(),
+  runToken?: string,
 ): TunnelHandle {
-  const configPath = resolveTunnelConfigPath(config, home);
-  const args = [
-    "tunnel",
-    ...(configPath ? ["--config", configPath] : []),
-    "--no-autoupdate",
-    "run",
-    config.tunnel,
-  ];
+  // A claimed name runs a REMOTELY-MANAGED tunnel: its ingress lives in Cloudflare, so there is
+  // nothing local to configure and the token is the whole identity. A hand-made tunnel keeps the
+  // original form — a name, and a config file holding its ingress rules.
+  const configPath = runToken ? null : resolveTunnelConfigPath(config, home);
+  const args = runToken
+    ? ["tunnel", "--no-autoupdate", "run", "--token", runToken]
+    : [
+        "tunnel",
+        ...(configPath ? ["--config", configPath] : []),
+        "--no-autoupdate",
+        "run",
+        config.tunnel!,
+      ];
   const child = spawn("cloudflared", args, { stdio: ["ignore", "pipe", "pipe"] });
   // ENOENT arrives as an 'error' event, and an unhandled one on a ChildProcess THROWS — so without
   // this, `frizz up` on a machine without cloudflared crashed with a stack trace instead of saying

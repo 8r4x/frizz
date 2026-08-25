@@ -1,7 +1,16 @@
 #!/usr/bin/env node
 import { bindHostIsExposed } from "@frizz/server/local-origin";
 import { loadOrCreateSessionKey } from "@frizz/server/access-codes";
-import { promptForCloudConfig, readCloudConfig, startTunnel, writeCloudConfig, type TunnelHandle } from "./cloud.ts";
+import {
+  establishCloudConfig,
+  promptForCloudName,
+  readCloudConfig,
+  readTunnelToken,
+  resolveRunToken,
+  startTunnel,
+  writeCloudConfig,
+  type TunnelHandle,
+} from "./cloud.ts";
 import { renderQrLines } from "@frizz/server/qr";
 import { SUPERVISOR_ACCESS_CODE_PATH } from "@frizz/server/restart-supervisor";
 import { installAccessPane, type AccessPane } from "./access-pane.ts";
@@ -457,11 +466,13 @@ async function runSupervisor(
         watch: true,
       };
   try {
+    // First run only. Asking here rather than at import keeps the question off every other launch.
+    let justClaimed = false;
     if (options.cloud && !cloudConfig) {
-      // First run only. Asking here rather than at import keeps the question off every other launch.
-      cloudConfig = await promptForCloudConfig();
+      cloudConfig = await establishCloudConfig(await promptForCloudName(), port);
       writeCloudConfig(cloudConfig);
       bind.publicOrigin = `https://${cloudConfig.hostname}`;
+      justClaimed = true;
     }
     supervisor = await startDevSupervisor({
       port,
@@ -492,6 +503,14 @@ async function runSupervisor(
     // The supervisor is listening now, so a code minted here is immediately redeemable.
     activeAccessLink = bind.publicOrigin ? supervisor.issueAccessLink() : null;
     if (cloudConfig) {
+      // A claimed name renews its lease on every launch, which is also how it gets this run's token.
+      // Skipped when the claim just happened, since that call already wrote one.
+      const runToken = justClaimed
+        ? readTunnelToken()
+        : await resolveRunToken(cloudConfig, port, homedir(), (message) => {
+            logger.warn("tunnel", message);
+            console.error(`frizz: ${message}`);
+          });
       // The tunnel is a CHILD of this launcher, so the two halves share a lifetime and cannot drift
       // apart. A tunnel that dies while the board lives is the "Cloudflare error" state; a board that
       // dies while the tunnel lives is the 530. Both were reachable when these were separate commands.
@@ -505,8 +524,13 @@ async function runSupervisor(
           logger.error("tunnel", message);
           console.error(`frizz: ${message}`);
         },
+        homedir(),
+        runToken ?? undefined,
       );
-      logger.info("tunnel", `running cloudflared tunnel ${cloudConfig.tunnel} for ${cloudConfig.hostname}`);
+      logger.info(
+        "tunnel",
+        `running cloudflared for ${cloudConfig.hostname}${cloudConfig.tunnel ? ` (tunnel ${cloudConfig.tunnel})` : ""}`
+      );
     }
     // "Press L for a fresh link" — the only way to reissue without restarting the board. Returns null
     // when stdout is not a terminal, which leaves the plain records path completely untouched.
