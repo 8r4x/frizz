@@ -53,6 +53,14 @@ import type { ReactElement, ReactNode } from "react"
 // of work frizz can read but does not drive, so nothing about the four names above applies to them.
 
 
+/**
+ * The column's track, in ONE place: App reserves an empty aside with these exact classes while the
+ * board is still loading for a project this browser has seen populated (lib/sidebarPresence.ts), so
+ * the workpane sits where it will end up instead of jumping when the real sidebar mounts.
+ */
+export const SIDEBAR_COLUMN_CLASS =
+  "sticky top-0 self-start h-screen w-[clamp(272px,34vw,680px)] shrink-0 flex flex-col justify-center max-[800px]:static max-[800px]:h-auto max-[800px]:w-full max-[800px]:justify-start max-[800px]:pt-16"
+
 export function Sidebar() {
   const snap = useSnapshot(store)
   const board = useBoard()
@@ -180,7 +188,7 @@ export function Sidebar() {
     // 34vw is smallest and the workpane is squeezed hardest — 320px claimed ~39% of an 820px viewport
     // for nav and left the queue with the remainder. 272px still holds the dispatch composer's profile
     // chip and its icon buttons on one line, and hands the difference back to the queue.
-    <aside className="sticky top-0 self-start h-screen w-[clamp(272px,34vw,680px)] shrink-0 flex flex-col justify-center max-[800px]:static max-[800px]:h-auto max-[800px]:w-full max-[800px]:justify-start max-[800px]:pt-16">
+    <aside className={SIDEBAR_COLUMN_CLASS}>
       {/* The content column FILLS the aside track (no narrow inner cap). Its cap reserves 16px top AND
           bottom (symmetric, so the column stays centred), and below it the column grows and then
           scrolls INTERNALLY. The reserve used to be 44px a side, holding open the band the FIXED

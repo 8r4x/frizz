@@ -28,3 +28,33 @@ export function nextSidebarPresence(
     hasBeenVisible: projectChanged ? hasWorkspaceContent : previous.hasBeenVisible || hasWorkspaceContent,
   }
 }
+
+/**
+ * The last answer per project, so a reload can RESERVE the sidebar's column before the board arrives.
+ *
+ * `hasBeenVisible` is derived from the board, and the board is a socket push that lands a beat after
+ * React's first render. Until then App painted the workpane centered ALONE, then mounted the sidebar
+ * and shoved the workpane 269px right on every reload of a populated project (measured 2026-08-25,
+ * 1440px viewport: workpane left 360 → 629). Same cure as the font and the project rail: remember the
+ * server's last answer in this browser, and let the first frame use it. Keyed by the project the
+ * page names (`projectSlug()`, "" for the unprefixed launching project — the same scope
+ * lib/queryKeyScope.ts uses), because it is a per-PROJECT fact on a one-origin app. A project never
+ * loaded in this browser gets the fresh-workspace shell, which is what it would have got anyway.
+ */
+const MIRROR_PREFIX = "frizz-sidebar-seen:"
+
+export function readSidebarMirror(slug: string | undefined): boolean {
+  try {
+    return localStorage.getItem(MIRROR_PREFIX + (slug ?? "")) === "1"
+  } catch {
+    return false
+  }
+}
+
+export function writeSidebarMirror(slug: string | undefined, seen: boolean): void {
+  try {
+    localStorage.setItem(MIRROR_PREFIX + (slug ?? ""), seen ? "1" : "0")
+  } catch {
+    // storage unavailable — the next load starts from the fresh-workspace shell, as before
+  }
+}

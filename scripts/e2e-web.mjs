@@ -38,7 +38,7 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.dirname(here);
 
-// NOT EVERY e2e FILE BELONGS HERE. Three of them drive the REAL APP at `/` — a running Frizz with a
+// NOT EVERY e2e FILE BELONGS HERE. Five of them drive the REAL APP at `/` — a running Frizz with a
 // board, a project and a seeded thread behind it — rather than a fixture page, and a plain vite serves
 // them an app with no server to talk to. Each documents its own `adhoc-stack.mjs` invocation in its
 // header; two also want a thread slug this script has no way to invent.
@@ -50,6 +50,7 @@ const root = path.dirname(here);
 const NEEDS_REAL_STACK = [
   "packages/web/src/lib/projectSwitch.e2e.test.ts",
   "packages/web/src/lib/projectRail.e2e.test.ts",
+  "packages/web/src/App.firstPaint.e2e.test.ts",
   "packages/web/src/components/overlayAccessibility.e2e.test.ts",
   "packages/web/src/components/ui/Menu.e2e.test.ts",
 ];

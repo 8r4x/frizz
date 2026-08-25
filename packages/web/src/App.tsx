@@ -7,9 +7,10 @@ import { useBoard } from "./hooks.ts"
 import { closeDrawerAnimated } from "./lib/overlays.ts"
 import { takeScrollAfterUnlock } from "./lib/pageScrollLock.ts"
 import { startRouter } from "./lib/router.ts"
-import { nextSidebarPresence, type SidebarPresence } from "./lib/sidebarPresence.ts"
+import { nextSidebarPresence, readSidebarMirror, writeSidebarMirror, type SidebarPresence } from "./lib/sidebarPresence.ts"
+import { projectSlug } from "./lib/base-path.ts"
 import { rpc } from "./api/rpc.ts"
-import { Sidebar } from "./components/Sidebar.tsx"
+import { SIDEBAR_COLUMN_CLASS, Sidebar } from "./components/Sidebar.tsx"
 import { MobileBoard } from "./components/MobileBoard.tsx"
 import { useIsMobile } from "./lib/mobile.ts"
 import { DrawerStack } from "./components/DrawerStack.tsx"
@@ -223,6 +224,14 @@ export function App() {
 
   sidebarPresence.current = nextSidebarPresence(sidebarPresence.current, board)
   const showSidebar = board !== null && sidebarPresence.current.hasBeenVisible
+  // Before the first board lands, hold the sidebar's column open if this project had one last time —
+  // the workpane then renders in its final place on the first frame instead of centering alone and
+  // jumping when the sidebar mounts. Written back on every board so the mirror tracks the answer.
+  const reserveSidebar = board === null && readSidebarMirror(projectSlug())
+  const hasBeenVisible = sidebarPresence.current.hasBeenVisible
+  useEffect(() => {
+    if (board !== null) writeSidebarMirror(projectSlug(), hasBeenVisible)
+  }, [board, hasBeenVisible])
   // Window title carries the project identity. In the INSTALLED APP window (display-mode:
   // standalone) Chrome prefixes the title bar with the app name itself ("Frizz - <title>"), so the
   // page title must NOT repeat the wordmark — just the repo label ("Frizz - nubjs/nub"). In an
@@ -289,6 +298,7 @@ export function App() {
             <Sidebar />
           </ErrorBoundary>
         )}
+        {reserveSidebar && <aside aria-hidden className={SIDEBAR_COLUMN_CLASS} data-sidebar-reserved />}
         <main
           id="workpane"
           // min-h-screen where content is vertically CENTERED: the boot loader and the empty queue's

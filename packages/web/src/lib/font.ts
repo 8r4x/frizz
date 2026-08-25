@@ -14,9 +14,14 @@ const SANS_STACK =
 
 // Reflects Settings.font onto <html data-font> so styles.css can swap the type family app-wide.
 // Applying it at the document root (not from a React component) keeps it live even while the
-// Settings drawer that changed it is closed/unmounted. Anything other than "sans" is mono.
+// Settings drawer that changed it is closed/unmounted. Anything other than "mono" is sans — the same
+// reading index.html's pre-paint guard takes of the localStorage mirror, and the server's default
+// (settings.ts). The two used to disagree: this side read "anything other than sans is mono", and
+// initFont applied it to an EMPTY cache before React mounted, so every load painted its first frames
+// in mono and flipped to sans when settingsGet answered — a document-wide reflow, on top of the guard
+// that existed to prevent exactly that (measured 2026-08-25: sans at 4ms, mono at 72ms, sans at 158ms).
 function apply(font: Settings["font"] | undefined) {
-  const v = font === "sans" ? "sans" : "mono"
+  const v = font === "mono" ? "mono" : "sans"
   document.documentElement.dataset.font = v
   // Pin the family as an INLINE style on <body> so it survives Vite HMR stylesheet swaps. When
   // styles.css is replaced, its data-font rule vanishes for a frame → the body would flash mono↔sans
@@ -35,7 +40,10 @@ function apply(font: Settings["font"] | undefined) {
 // seed from an initial fetch, then re-apply whenever the ["settingsGet"] cache entry changes (e.g.
 // the drawer saves a new font). App.tsx runs the same query, so the cache is the shared source.
 export function initFont(qc: QueryClient) {
-  apply(qc.getQueryData<Settings>(["settingsGet"])?.font)
+  // Only a KNOWN font is applied. Before settings arrive the document keeps what index.html set from
+  // the mirror; applying a fallback here would override that guard with a guess for one round trip.
+  const cached = qc.getQueryData<Settings>(["settingsGet"])
+  if (cached) apply(cached.font)
   rpc.settingsGet().then((s) => apply(s.font)).catch(() => {})
   qc.getQueryCache().subscribe(() => {
     const s = qc.getQueryData<Settings>(["settingsGet"])
