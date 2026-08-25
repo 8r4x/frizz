@@ -1,0 +1,34 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <clipPath id="tile">
+      <rect x="16" y="16" width="480" height="480" rx="116"/>
+    </clipPath>
+    <linearGradient id="background" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#191a20"/>
+      <stop offset="1" stop-color="#0d0e10"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#e8b923" stop-opacity="0.14"/>
+      <stop offset="1" stop-color="#e8b923" stop-opacity="0"/>
+    </radialGradient>
+    <!-- Radial, and centred: a linear gradient reverses under a half turn, which
+         would leave a rotationally symmetric mark rendering asymmetric. -->
+    <radialGradient id="ink" gradientUnits="userSpaceOnUse" cx="256" cy="256" r="250">
+      <stop offset="0" stop-color="#ffdf7f"/>
+      <stop offset="0.62" stop-color="#eabe2c"/>
+      <stop offset="1" stop-color="#cf9412"/>
+    </radialGradient>
+  </defs>
+
+  <rect id="icon-background" x="16" y="16" width="480" height="480" rx="116" fill="url(#background)"/>
+  <rect id="icon-border" x="16.5" y="16.5" width="479" height="479" rx="115.5" fill="none" stroke="#2b2e35"/>
+  <circle id="icon-glow" cx="256" cy="256" r="205" fill="url(#glow)"/>
+
+  <!-- One continuous stroke: a cursive f with exactly two self-crossings, one
+       per loop, and exact 180-degree rotational symmetry. The second half of the
+       path is the first half's anchors rotated and reversed, so the symmetry
+       lives in the data. Do not edit one side without mirroring the other. -->
+  <g id="icon-mark" clip-path="url(#tile)">
+    <path d="M76.10 230.28C104.73 240.14 138.99 247.18 170.07 248.49C180.58 248.94 222.02 250.15 247.67 243.19C268.08 237.65 289.71 227.12 303.31 192.46C315.44 161.57 317.37 120.89 311.45 101.43C310.60 98.61 295.80 50.75 270.45 80.21C253.54 99.88 246.08 146.38 246.15 168.62C246.22 192.24 255.17 247.61 256.00 256.00C256.83 264.39 265.78 319.76 265.85 343.38C265.92 365.62 258.46 412.12 241.55 431.79C216.20 461.25 201.40 413.39 200.55 410.57C194.63 391.11 196.56 350.43 208.69 319.54C222.29 284.88 243.92 274.35 264.33 268.81C289.98 261.85 331.42 263.06 341.93 263.51C373.01 264.82 407.27 271.86 435.90 281.72" fill="none" stroke="url(#ink)" stroke-width="20.73" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

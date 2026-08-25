@@ -51,3 +51,6 @@ package.json.publish-backup
 !.env.example
 *.pem
 !packages/**/test/**/*.pem
+
+# vercel CLI link state for site/ (the frizz.sh one-pager)
+.vercel/
