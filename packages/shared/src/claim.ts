@@ -11,7 +11,7 @@
  * without dragging in zod, yaml and 3,600 lines of unrelated types.
  */
 
-export const CLAIM_PROTOCOL_VERSION = 1
+export const CLAIM_PROTOCOL_VERSION = 2
 
 /**
  * How far a claim's own timestamp may sit from the verifier's clock, in either direction.
@@ -77,6 +77,18 @@ export interface ClaimPayload {
   pubkey: string
   /** Milliseconds since the epoch, from the CLAIMING machine's clock. */
   issuedAt: number
+  /**
+   * A GitHub access token, proving the claimant is a real account.
+   *
+   * SIGNED but NEVER STORED. The registrar exchanges it for a user id, records the id as the name's
+   * owner, and discards the token — it is a rate limit on identity, not a login, and Frizz keeps no
+   * session with GitHub at all. Renewals carry no token: the keypair alone proves ownership after the
+   * first claim, so a name does not depend on GitHub being reachable to stay alive.
+   *
+   * Signing it matters because it is the only field an intermediary could swap to attribute someone
+   * else's name to their own account.
+   */
+  github?: string
 }
 
 export interface ClaimRequest extends ClaimPayload {
@@ -93,6 +105,7 @@ export type ClaimRejection =
   | "bad-signature"
   | "expired"
   | "from-the-future"
+  | "bad-github"
 
 export type ClaimVerdict = { ok: true; payload: ClaimPayload } | { ok: false; reason: ClaimRejection }
 
@@ -175,6 +188,9 @@ export function claimSigningInput(payload: ClaimPayload): Bytes {
     String(payload.port),
     payload.pubkey,
     String(payload.issuedAt),
+    // Last, and always present even when empty, so a claim WITH a token can never produce the same
+    // bytes as one without. GitHub tokens are `[A-Za-z0-9_]` only, so they cannot forge a separator.
+    payload.github ?? "",
   ].join(":")
   return new TextEncoder().encode(canonical)
 }
@@ -217,6 +233,9 @@ export async function signClaim(
 ): Promise<ClaimRequest> {
   const pubkey = await exportClaimPublicKey(identity.publicKey)
   const full: ClaimPayload = { ...payload, name: normalizeClaimName(payload.name), pubkey }
+  if (payload.github !== undefined && !/^[A-Za-z0-9_]+$/.test(payload.github)) {
+    throw new Error("that does not look like a GitHub access token")
+  }
   const signature = await crypto.subtle.sign({ name: "Ed25519" }, identity.privateKey, claimSigningInput(full))
   return { v: CLAIM_PROTOCOL_VERSION, ...full, sig: toBase64Url(signature) }
 }
@@ -269,11 +288,15 @@ export async function verifyClaim(request: unknown, now: number): Promise<ClaimV
   const signature = fromBase64Url(candidate.sig)
   if (!signature || signature.byteLength !== 64) return { ok: false, reason: "bad-signature" }
 
+  if (candidate.github !== undefined && typeof candidate.github !== "string") {
+    return { ok: false, reason: "bad-github" }
+  }
   const payload: ClaimPayload = {
     name,
     port: candidate.port,
     pubkey: candidate.pubkey,
     issuedAt: candidate.issuedAt,
+    ...(candidate.github !== undefined ? { github: candidate.github } : {}),
   }
   const verified = await crypto.subtle.verify(
     { name: "Ed25519" },

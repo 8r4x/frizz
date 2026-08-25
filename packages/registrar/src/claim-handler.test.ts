@@ -66,10 +66,12 @@ function fakeCloudflare(
 function fakeStore(seed: Record<string, ClaimRecord> = {}) {
   const rows = new Map<string, ClaimRecord>(Object.entries(seed))
   const owners = new Map<string, string>()
+  const githubOwners = new Map<number, string>()
   for (const [name, record] of rows) owners.set(record.pubkey, name)
   return {
     rows,
     owners,
+    githubOwners,
     store: {
       async read(name: string) {
         return rows.get(name) ?? null
@@ -91,6 +93,15 @@ function fakeStore(seed: Record<string, ClaimRecord> = {}) {
       },
       async removeOwner(pubkey: string) {
         owners.delete(pubkey)
+      },
+      async readGithubOwner(id: number) {
+        return githubOwners.get(id) ?? null
+      },
+      async writeGithubOwner(id: number, name: string) {
+        githubOwners.set(id, name)
+      },
+      async removeGithubOwner(id: number) {
+        githubOwners.delete(id)
       },
     },
   }
@@ -420,4 +431,95 @@ test("a key whose name lapsed may claim again", async () => {
     deps({ api: cf.api, store: st.store, now: () => later })
   )
   assert.equal(again.status, 200, "a stale owner index must not lock someone out")
+})
+
+
+/** A GitHub that recognises the tokens it was told about. */
+function fakeGithub(accounts: Record<string, { id: number; login: string; createdAt: number }>) {
+  return async (token: string) => accounts[token] ?? null
+}
+
+const ACCOUNT = { id: 4242, login: "colin", createdAt: NOW - 365 * 24 * 60 * 60_000 }
+
+test("with the gate on, a claim without a GitHub token is refused before provisioning", async () => {
+  // Reading a username locally proves nothing — the CLI could send any string. The token is what lets
+  // the registrar check with GitHub, which is the only thing that makes this a limit at all.
+  const cf = fakeCloudflare()
+  const st = fakeStore()
+  const identity = await generateClaimIdentity()
+  const d = deps({ api: cf.api, store: st.store, github: fakeGithub({ "gho_ok": ACCOUNT }) })
+
+  const bare = await handleClaim(await claimFor(identity), d)
+  assert.equal(bare.status, 400)
+  assert.equal("error" in bare.body && bare.body.error, "github-required")
+  assert.deepEqual(cf.calls, [], "nothing was provisioned")
+
+  const wrong = await handleClaim(
+    await signClaim({ name: "colin", port: 9393, issuedAt: NOW, github: "gho_nope" }, identity),
+    d
+  )
+  assert.equal("error" in wrong.body && wrong.body.error, "github-rejected")
+
+  const good = await handleClaim(
+    await signClaim({ name: "colin", port: 9393, issuedAt: NOW, github: "gho_ok" }, identity),
+    d
+  )
+  assert.equal(good.status, 200)
+  assert.equal(st.rows.get("colin")?.githubId, 4242)
+})
+
+test("one name per GITHUB ACCOUNT — the limit a fresh keypair cannot walk around", async () => {
+  // one-name-per-key alone is defeated by generating a second key. Tying it to an account that costs
+  // something to obtain is the point of the whole gate.
+  const cf = fakeCloudflare()
+  const st = fakeStore()
+  const d = deps({ api: cf.api, store: st.store, github: fakeGithub({ "gho_ok": ACCOUNT }) })
+
+  const first = await generateClaimIdentity()
+  assert.equal(
+    (await handleClaim(await signClaim({ name: "one", port: 9393, issuedAt: NOW, github: "gho_ok" }, first), d)).status,
+    200
+  )
+
+  // A BRAND NEW keypair, same GitHub account: the per-key check cannot see it, the per-account one can.
+  const second = await generateClaimIdentity()
+  const blocked = await handleClaim(
+    await signClaim({ name: "two", port: 9393, issuedAt: NOW, github: "gho_ok" }, second),
+    d
+  )
+  assert.equal(blocked.status, 409)
+  assert.equal("error" in blocked.body && blocked.body.error, "one-name-per-account")
+  assert.equal(cf.tunnels.size, 1)
+})
+
+test("a brand-new GitHub account cannot claim", async () => {
+  const st = fakeStore()
+  const identity = await generateClaimIdentity()
+  const fresh = { id: 99, login: "throwaway", createdAt: NOW - 60_000 }
+  const result = await handleClaim(
+    await signClaim({ name: "colin", port: 9393, issuedAt: NOW, github: "gho_new" }, identity),
+    deps({
+      store: st.store,
+      github: fakeGithub({ "gho_new": fresh }),
+      minAccountAgeMs: 30 * 24 * 60 * 60_000,
+    })
+  )
+  assert.equal("error" in result.body && result.body.error, "github-too-new")
+  assert.equal(st.rows.size, 0)
+})
+
+test("a RENEWAL needs no GitHub token, so a live name never depends on GitHub", async () => {
+  // The registrar is off the data plane; the gate must not put GitHub on the renewal path either, or
+  // a GitHub outage would start expiring people's names.
+  const cf = fakeCloudflare()
+  const st = fakeStore()
+  const identity = await generateClaimIdentity()
+  const d = deps({ api: cf.api, store: st.store, github: fakeGithub({ "gho_ok": ACCOUNT }) })
+  await handleClaim(await signClaim({ name: "colin", port: 9393, issuedAt: NOW, github: "gho_ok" }, identity), d)
+
+  // GitHub is now unreachable — every token is refused.
+  const offline = deps({ api: cf.api, store: st.store, github: async () => null })
+  const renewed = await handleClaim(await claimFor(identity), offline)
+  assert.equal(renewed.status, 200, "a renewal must survive GitHub being down")
+  assert.ok("renewed" in renewed.body && renewed.body.renewed)
 })

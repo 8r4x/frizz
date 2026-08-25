@@ -33,6 +33,11 @@ export interface ClaimResult {
  */
 const ADVICE: Record<string, string> = {
   "name-taken": "that name is already taken — try another",
+  "github-required": "claiming a name needs a signed-in GitHub CLI — run `gh auth login` and try again",
+  "github-rejected": "GitHub did not recognise that login — run `gh auth login` and try again",
+  "github-too-new": "that GitHub account is too new to claim a name",
+  "one-name-per-account": "that GitHub account already holds a name — release it first",
+  "one-name-per-key": "this machine already holds a name — release it first",
   expired: "this machine's clock is behind the registrar; fix the clock and try again",
   "from-the-future": "this machine's clock is ahead of the registrar; fix the clock and try again",
   "bad-version": "this version of Frizz is too old to claim a name — upgrade and try again",
@@ -52,6 +57,13 @@ export interface ClaimOptions {
   name: string;
   port: number;
   identity: CryptoKeyPair;
+  /**
+   * A GitHub access token, on a FIRST claim only.
+   *
+   * Renewals deliberately omit it: the keypair already proves ownership, so a live name never depends
+   * on GitHub being reachable.
+   */
+  github?: string;
   origin?: string;
   now?: () => number;
   fetchImpl?: typeof fetch;
@@ -67,7 +79,12 @@ export interface ClaimOptions {
 export async function claimName(options: ClaimOptions): Promise<ClaimResult> {
   const origin = (options.origin ?? registrarOrigin()).replace(/\/$/, "");
   const request = await signClaim(
-    { name: options.name, port: options.port, issuedAt: (options.now ?? Date.now)() },
+    {
+      name: options.name,
+      port: options.port,
+      issuedAt: (options.now ?? Date.now)(),
+      ...(options.github ? { github: options.github } : {}),
+    },
     options.identity,
   );
 

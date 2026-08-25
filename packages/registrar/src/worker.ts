@@ -1,4 +1,10 @@
-import { handleClaim, sweepExpiredClaims, type ClaimRecord, type ClaimStore } from "./claim-handler.ts"
+import {
+  handleClaim,
+  sweepExpiredClaims,
+  type ClaimRecord,
+  type ClaimStore,
+  type GithubIdentity,
+} from "./claim-handler.ts"
 import { createCloudflareApi } from "./cloudflare.ts"
 
 /**
@@ -26,6 +32,34 @@ export interface KvNamespace {
   }>
 }
 
+/**
+ * Ask GitHub who a token belongs to, then forget the token.
+ *
+ * Only the numeric id is kept. A login can be renamed and reused by someone else, so binding a name
+ * to one would let the limit be laundered through a rename.
+ */
+export function githubVerifier(): (token: string) => Promise<GithubIdentity | null> {
+  return async (token) => {
+    try {
+      const response = await fetch("https://api.github.com/user", {
+        headers: {
+          authorization: `Bearer ${token}`,
+          accept: "application/vnd.github+json",
+          // GitHub rejects an API request with no user agent.
+          "user-agent": "frizz-registrar",
+        },
+      })
+      if (!response.ok) return null
+      const user = (await response.json()) as { id?: unknown; login?: unknown; created_at?: unknown }
+      if (typeof user.id !== "number" || typeof user.login !== "string") return null
+      const createdAt = typeof user.created_at === "string" ? Date.parse(user.created_at) : Number.NaN
+      return { id: user.id, login: user.login, createdAt: Number.isNaN(createdAt) ? 0 : createdAt }
+    } catch {
+      return null
+    }
+  }
+}
+
 export interface RegistrarEnv {
   /** Zone-scoped Cloudflare token. NEVER leaves this Worker. */
   CF_API_TOKEN: string
@@ -33,8 +67,13 @@ export interface RegistrarEnv {
   CF_ZONE_ID: string
   /** The apex names hang off, e.g. `frizz.sh`. */
   FRIZZ_ZONE: string
+  /** "0" turns the GitHub gate OFF. Anything else, including absent, leaves it ON. */
+  REQUIRE_GITHUB?: string
   CLAIMS: KvNamespace
 }
+
+/** A GitHub account younger than this cannot claim, which blunts throwaway-account squatting. */
+const MIN_GITHUB_ACCOUNT_AGE_MS = 30 * 24 * 60 * 60_000
 
 /** KV holds one small JSON row per name: who owns it, which tunnel serves it, and its lease. */
 export function kvClaimStore(kv: KvNamespace): ClaimStore {
@@ -56,6 +95,15 @@ export function kvClaimStore(kv: KvNamespace): ClaimStore {
     },
     async remove(name) {
       await kv.delete(`claim:${name}`)
+    },
+    async readGithubOwner(githubId) {
+      return kv.get(`gh:${githubId}`)
+    },
+    async writeGithubOwner(githubId, name) {
+      await kv.put(`gh:${githubId}`, name)
+    },
+    async removeGithubOwner(githubId) {
+      await kv.delete(`gh:${githubId}`)
     },
     async readOwner(pubkey) {
       return kv.get(`owner:${pubkey}`)
@@ -97,6 +145,10 @@ function claimDeps(env: RegistrarEnv) {
     store: kvClaimStore(env.CLAIMS),
     zone: env.FRIZZ_ZONE,
     now: () => Date.now(),
+    // ON unless explicitly disabled. A gate that defaults off is a gate that ships off by accident.
+    ...(env.REQUIRE_GITHUB === "0"
+      ? {}
+      : { github: githubVerifier(), minAccountAgeMs: MIN_GITHUB_ACCOUNT_AGE_MS }),
   }
 }
 

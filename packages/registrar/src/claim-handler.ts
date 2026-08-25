@@ -22,6 +22,8 @@ export interface ClaimRecord {
   port: number
   claimedAt: number
   renewedAt: number
+  /** The GitHub user id this name was claimed under. Numeric, so a rename does not free the limit. */
+  githubId?: number
 }
 
 export interface ClaimStore {
@@ -34,6 +36,22 @@ export interface ClaimStore {
   readOwner(pubkey: string): Promise<string | null>
   writeOwner(pubkey: string, name: string): Promise<void>
   removeOwner(pubkey: string): Promise<void>
+  /** The name this GitHub account already holds. The limit a keypair cannot forge its way around. */
+  readGithubOwner(githubId: number): Promise<string | null>
+  writeGithubOwner(githubId: number, name: string): Promise<void>
+  removeGithubOwner(githubId: number): Promise<void>
+}
+
+/** Who a GitHub token belongs to. Resolved once per claim, then thrown away. */
+export interface GithubIdentity {
+  id: number
+  login: string
+  /** Account creation time, so brand-new throwaways can be held off. */
+  createdAt: number
+}
+
+export interface GithubVerifier {
+  (token: string): Promise<GithubIdentity | null>
 }
 
 export interface CloudflareApi {
@@ -54,6 +72,10 @@ export interface ClaimDeps {
   /** The zone names hang off, e.g. `frizz.sh`. */
   zone: string
   now: () => number
+  /** Absent means identity is not enforced — only ever right before there is a gate to enforce. */
+  github?: GithubVerifier
+  /** How old a GitHub account must be to claim. Blunts the throwaway-account version of squatting. */
+  minAccountAgeMs?: number
 }
 
 export type ClaimFailure =
@@ -62,6 +84,10 @@ export type ClaimFailure =
   | "malformed"
   | "provisioning-failed"
   | "one-name-per-key"
+  | "github-required"
+  | "github-rejected"
+  | "github-too-new"
+  | "one-name-per-account"
 
 export type ClaimOutcome =
   | { status: 200; body: { hostname: string; token: string; leaseExpiresAt: number; renewed: boolean } }
@@ -73,6 +99,7 @@ const MESSAGES: Record<ClaimFailure, string> = {
   "bad-port": "the port must be between 1 and 65535",
   "bad-pubkey": "the identity key was unreadable",
   "bad-signature": "the claim was not signed by the key it names",
+  "bad-github": "the GitHub credential in that claim was not a string",
   expired: "the claim is too old — check this machine's clock and try again",
   "from-the-future": "the claim is dated ahead of the server — check this machine's clock",
   "name-taken": "that name belongs to someone else",
@@ -80,6 +107,10 @@ const MESSAGES: Record<ClaimFailure, string> = {
   "provisioning-failed": "the name could not be provisioned; nothing was left behind",
   "one-name-per-key":
     "this machine already holds a name — release it first, or claim from a different Frizz identity",
+  "github-required": "claiming a name needs a signed-in GitHub CLI — run `gh auth login` and try again",
+  "github-rejected": "GitHub did not recognise that login — run `gh auth login` and try again",
+  "github-too-new": "that GitHub account is too new to claim a name",
+  "one-name-per-account": "that GitHub account already holds a name",
 }
 
 const reject = (error: ClaimFailure, status: 400 | 409 | 502 = 400): ClaimOutcome => ({
@@ -111,11 +142,32 @@ export async function handleClaim(body: unknown, deps: ClaimDeps): Promise<Claim
     if (!claimLeaseExpired(existing.renewedAt, now)) return reject("name-taken", 409)
     // If the old tunnel will not die, do NOT proceed: creating its replacement would fail on the
     // duplicate name anyway, and we would have dropped the registry row on the way there.
-    if (!(await releaseQuietly(deps, name, hostname, existing.tunnelId, existing.pubkey))) {
+    if (!(await releaseQuietly(deps, name, hostname, existing.tunnelId, existing.pubkey, existing.githubId))) {
       return reject("provisioning-failed", 502)
     }
   } else if (existing) {
     return renew(existing, { name, hostname, port, pubkey }, deps, now)
+  }
+
+  // IDENTITY, and only here — a renewal is proved by the keypair alone, so a live name never depends
+  // on GitHub being reachable. A first claim is the one moment where cost can be imposed.
+  let githubId: number | undefined
+  if (deps.github) {
+    if (!verdict.payload.github) return reject("github-required")
+    const who = await deps.github(verdict.payload.github)
+    if (!who) return reject("github-rejected")
+    if (deps.minAccountAgeMs && now - who.createdAt < deps.minAccountAgeMs) {
+      return reject("github-too-new")
+    }
+    const heldByAccount = await deps.store.readGithubOwner(who.id)
+    if (heldByAccount && heldByAccount !== name) {
+      const other = await deps.store.read(heldByAccount)
+      if (other && other.githubId === who.id && !claimLeaseExpired(other.renewedAt, now)) {
+        return reject("one-name-per-account", 409)
+      }
+      await deps.store.removeGithubOwner(who.id)
+    }
+    githubId = who.id
   }
 
   // ONE LIVE NAME PER KEY. Without it a loop of generated keypairs takes the whole namespace, and the
@@ -132,7 +184,7 @@ export async function handleClaim(body: unknown, deps: ClaimDeps): Promise<Claim
     await deps.store.removeOwner(pubkey)
   }
 
-  return create({ name, hostname, port, pubkey }, deps, now)
+  return create({ name, hostname, port, pubkey, githubId }, deps, now)
 }
 
 interface ClaimTarget {
@@ -140,6 +192,7 @@ interface ClaimTarget {
   hostname: string
   port: number
   pubkey: string
+  githubId?: number | undefined
 }
 
 async function renew(
@@ -190,12 +243,14 @@ async function create(target: ClaimTarget, deps: ClaimDeps, now: number): Promis
       port: target.port,
       claimedAt: now,
       renewedAt: now,
+      ...(target.githubId !== undefined ? { githubId: target.githubId } : {}),
     })
     await deps.store.writeOwner(target.pubkey, target.name)
+    if (target.githubId !== undefined) await deps.store.writeGithubOwner(target.githubId, target.name)
   } catch {
     // UNWIND, or the account leaks a tunnel on every failed claim. Tunnels are capped at 1,000 per
     // account, so a leak here is not untidiness — it is a countdown to the product stopping.
-    await releaseQuietly(deps, target.name, target.hostname, tunnel.id, target.pubkey)
+    await releaseQuietly(deps, target.name, target.hostname, tunnel.id, target.pubkey, target.githubId)
     return reject("provisioning-failed", 502)
   }
 
@@ -224,14 +279,19 @@ async function releaseQuietly(
   name: string,
   hostname: string,
   tunnelId: string,
-  pubkey: string
+  pubkey: string,
+  githubId?: number | undefined
 ): Promise<boolean> {
   const [, tunnel] = await Promise.allSettled([
     deps.api.deleteDnsRecord(hostname),
     deps.api.deleteTunnel(tunnelId),
   ])
   if (tunnel.status !== "fulfilled") return false
-  await Promise.allSettled([deps.store.remove(name), deps.store.removeOwner(pubkey)])
+  await Promise.allSettled([
+    deps.store.remove(name),
+    deps.store.removeOwner(pubkey),
+    ...(githubId !== undefined ? [deps.store.removeGithubOwner(githubId)] : []),
+  ])
   return true
 }
 
@@ -264,7 +324,7 @@ export async function sweepExpiredClaims(
     if (released.length + failed.length >= limit) continue
     const hostname = `${name}.${deps.zone}`
     try {
-      await release(deps, name, hostname, record.tunnelId, record.pubkey)
+      await release(deps, name, hostname, record.tunnelId, record.pubkey, record.githubId)
       released.push(name)
     } catch {
       // Kept in the registry deliberately. A name whose Cloudflare resources could not be removed
@@ -282,10 +342,12 @@ async function release(
   name: string,
   hostname: string,
   tunnelId: string,
-  pubkey: string
+  pubkey: string,
+  githubId?: number | undefined
 ): Promise<void> {
   await deps.api.deleteDnsRecord(hostname)
   await deps.api.deleteTunnel(tunnelId)
   await deps.store.remove(name)
   await deps.store.removeOwner(pubkey)
+  if (githubId !== undefined) await deps.store.removeGithubOwner(githubId)
 }

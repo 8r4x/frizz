@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { claimNameIsValid, normalizeClaimName } from "@frizz/shared";
 import { loadOrCreateClaimIdentity } from "./identity.ts";
+import { githubAccessToken, githubLogin } from "./github-identity.ts";
 import { ClaimError, claimName } from "./registrar-client.ts";
 
 /**
@@ -186,9 +187,14 @@ export async function establishCloudConfig(
   }
   const name = normalizeClaimName(answer);
   const identity = await loadOrCreateClaimIdentity(home);
+  // A name is bound to a GitHub account, so say WHICH one before binding it. Someone signed in as a
+  // work account would otherwise find out only when they wanted the name somewhere else.
+  const github = await githubAccessToken();
+  const login = await githubLogin();
+  if (login) console.log(`  claiming ${name}.frizz.sh for GitHub user ${login}`);
   let result;
   try {
-    result = await claimName({ name, port, identity, ...(origin ? { origin } : {}) });
+    result = await claimName({ name, port, identity, github, ...(origin ? { origin } : {}) });
   } catch (error) {
     // A FIRST claim that cannot reach the registrar leaves the operator with nothing — unlike a
     // renewal, which falls back to its cached token. Point at the path that works without us rather
