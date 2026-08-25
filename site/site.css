@@ -82,6 +82,16 @@ h3 { font-size: 17px; margin-bottom: 8px; }
   font-size: 15px; line-height: 1.5; overflow-x: auto; white-space: pre;
 }
 .term .prompt { color: var(--accent); }
+/* The install row: the command block and its copy button share one height; the button reads as a
+   quiet control, and its label is the receipt ("Copied"). */
+.install { display: flex; align-items: stretch; gap: 10px; margin: 4px 0 16px; }
+.install .term { flex: 1; margin: 0; }
+.copy {
+  font: 500 13px/1 var(--mono); color: var(--fg-2);
+  background: var(--panel); border: 1px solid var(--border-strong); border-radius: 8px;
+  padding: 0 16px; cursor: pointer; min-width: 84px;
+}
+.copy:hover { background: var(--elevated); color: var(--fg); }
 
 .shot { margin: 0; background: var(--panel); border: 1px solid var(--border-strong); border-radius: var(--radius); overflow: hidden; }
 .shot img { display: block; width: 100%; height: auto; }

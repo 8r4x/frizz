@@ -15,8 +15,11 @@
     <meta property="og:image:height" content="630" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:creator" content="@colinhacks" />
+    <!-- The app's own icons, copied from packages/web/public. -->
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="apple-touch-icon" href="/img/fff-tile.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="theme-color" content="#0d0e10" />
     <meta name="color-scheme" content="dark" />
     <link rel="preload" href="/fonts/JetBrainsMono-Medium.woff2" as="font" type="font/woff2" crossorigin />
@@ -47,7 +50,10 @@
         <h1>Frizz</h1>
         <p class="lede">An opinionated agent console for extreme productivity.</p>
         <p>Frizz runs many Claude Code and Codex agents at once from one browser tab. Every agent that needs you becomes a card in one queue.</p>
-        <pre class="term"><code><span class="prompt">$</span> npx frizz</code></pre>
+        <div class="install">
+          <pre class="term"><code><span class="prompt">$</span> npx frizz</code></pre>
+          <button class="copy" type="button" data-copy="npx frizz" aria-label="Copy the install command">Copy</button>
+        </div>
 
         <figure class="shot">
           <img src="/img/board.png" width="1760" height="1100" alt="The Frizz board: the project rail down the left, the composer and the queue of threads beside it, and on the right a card where an agent asks a question with lettered options, above Snooze and Mark as done." />
@@ -146,6 +152,18 @@
         path.getBoundingClientRect();
         path.style.transition = "";
         path.style.strokeDashoffset = "0";
+      }
+      // Copy the install command; the label is the receipt.
+      for (const button of document.querySelectorAll("button[data-copy]")) {
+        button.addEventListener("click", async () => {
+          try {
+            await navigator.clipboard.writeText(button.dataset.copy);
+            button.textContent = "Copied";
+            setTimeout(() => { button.textContent = "Copy"; }, 1500);
+          } catch {
+            button.textContent = "Select it";
+          }
+        });
       }
     </script>
   </body>
