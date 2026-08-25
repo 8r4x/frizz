@@ -58,3 +58,10 @@ git config core.hooksPath scripts/githooks
 
 **Keep that value RELATIVE, and re-check it whenever the checkout moves.** Git accepts an absolute `core.hooksPath`, and this machine had one — `/Users/colinmcd94/Documents/projects/fray/scripts/githooks`, left from before the directory was renamed to `.../frizz`. Git does not warn when `core.hooksPath` names a directory that does not exist; it simply runs no hooks. Measured 2026-08-11 with a control pair: pointed at a real dir, a failing hook blocks the commit (exit 1); pointed at a missing dir, the identical commit succeeds (exit 0). So the backstop above was silently OFF for every agent commit between the rename and 2026-08-11 — the one guard against a tree-collapsing commit, gone exactly while nobody could tell. `git config core.hooksPath` must print `scripts/githooks`; if it prints an absolute path, reset it.
 
+# Come to rest in as few words as the answer needs
+
+The resting message is read in a queue, cold, hours later. Make it maximally concise: the verdict, then only what the reader cannot get anywhere else. Length is not thoroughness — a long handoff buries the one line that mattered, and the maintainer has to read twice to find it.
+
+Cut, every time: preambles and sign-offs ("Great question", "I've now completed", "Let me know if"), narration of your own process, restating the request back, hedging on something you verified, and any adjective doing no work ("comprehensive", "robust", "thorough"). Never restate the fenced card in the prose above it — see `FRIZZ.md`; they are two surfaces, and a sentence that reads the same in both belongs in one.
+
+No agent speak. Write what happened in plain words a colleague would use. If a sentence could be deleted without the reader losing a fact or a decision, delete it.
