@@ -83,10 +83,39 @@ function xdg(env: NodeJS.ProcessEnv, name: string): string | undefined {
   return value && (value.startsWith("/") || /^[A-Za-z]:[\\/]/u.test(value)) ? value : undefined
 }
 
+/**
+ * Is `child` at or below `parent`? Windows-only question, compared with both separators and without
+ * case, because the caller may be a POSIX host simulating win32 — where `path.join` normalizes
+ * nothing and `C:\Users\x` and `c:/users/x` are the same directory to Windows itself.
+ */
+function insideHome(child: string, home: string): boolean {
+  const norm = (value: string) => value.replace(/[\\/]+$/u, "").replaceAll("\\", "/").toLowerCase()
+  const parent = norm(home)
+  const inner = norm(child)
+  return inner === parent || inner.startsWith(`${parent}/`)
+}
+
 function windowsRoots(env: NodeJS.ProcessEnv, home: string): Omit<FrizzPaths, "legacy"> {
   // Never Roaming: a multi-gigabyte artifact cache must not follow a user between machines, which is
   // exactly what %APPDATA% would do to it.
-  const local = env.LOCALAPPDATA || join(env.USERPROFILE || home, "AppData", "Local")
+  //
+  // %LOCALAPPDATA% DESCRIBES THE PROCESS'S OWN HOME, so it is authoritative only when it actually
+  // sits under the home being resolved. Trusting it unconditionally made `frizzPaths({ home })` —
+  // the one mechanism every sandbox has (`projectStateDir(id, home)`, `registryPath(home)`,
+  // `machineSettingsPath(home)`, `serverAddressPath(home)`) — collapse onto the live machine's single
+  // `%LOCALAPPDATA%\Frizz` tree on win32, whatever home it was handed: a test run wrote the real
+  // account's `settings.json` and registry (caught by the first Windows suite run, 2026-08-24). It is
+  // the same leak that let a test retire `~/.frizz/server.lock` under a live server on 2026-08-08,
+  // and darwin/xdg never had it because they derive every root from `home` already.
+  //
+  // The test is CONTAINMENT rather than "was home passed explicitly", because production reads these
+  // paths both ways — `frizzRoots()` with no home and `registryPath(home = homedir())` with one — and
+  // a rule that answered differently for the two would split one machine's state across two trees.
+  // %USERPROFILE% is gone from the fallback for the same reason and costs nothing: `homedir()` already
+  // returns it on win32, so `home` IS %USERPROFILE% unless a caller deliberately named another root.
+  const local = env.LOCALAPPDATA && insideHome(env.LOCALAPPDATA, home)
+    ? env.LOCALAPPDATA
+    : join(home, "AppData", "Local")
   const base = join(local, "Frizz")
   return {
     data: join(base, "Data"),

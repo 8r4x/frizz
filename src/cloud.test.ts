@@ -151,7 +151,12 @@ test("a claimed name stores the token at 0600, apart from the world-readable con
     const config = await establishCloudConfig("colin", 9393, home, server.origin);
     assert.deepEqual(config, { hostname: "colin.frizz.sh", claim: "colin" });
     assert.equal(readTunnelToken(home), "run-token");
-    assert.equal(statSync(tunnelTokenPath(home)).mode & 0o777, 0o600, "a run token is a credential");
+    // The mode bits only — the claim, the token round trip and the config separation below are asserted
+    // on every platform. Windows has no POSIX permission bits (NTFS access is an ACL, `fs.chmod` sets
+    // only the read-only flag, node reports 0666), so the 0o600 cloud.ts writes with is inert there.
+    if (process.platform !== "win32") {
+      assert.equal(statSync(tunnelTokenPath(home)).mode & 0o777, 0o600, "a run token is a credential");
+    }
     // The config file is NOT where the secret goes — it predates this feature and is world-readable
     // on machines that already have one. The launcher writes it, so write it the same way here.
     writeCloudConfig(config, home);

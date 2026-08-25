@@ -1,7 +1,7 @@
 import { createRequire } from "node:module"
 import { chmodSync, copyFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { delimiter, dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { test } from "node:test"
 import assert from "node:assert/strict"
@@ -12,6 +12,7 @@ import {
   createClaudeDiagnosticRedactor,
   createClaudeQueryFactory,
   claudeAgentSdkFoundationEnabled,
+  sanitizeProviderChildEnvironment,
   mapAssistant,
   mapTask,
   type ClaudeQueryHandle,
@@ -169,6 +170,28 @@ test("real SDK + fake executable: init owns the requested session, input streams
     })
   } finally {
     await harness.close()
+  }
+})
+
+// The same guarantee as the `nodeOptionsPresent: false` / shim-free PATH assertions above, but stated
+// against a WINDOWS-SHAPED environment, which no POSIX host can produce for the fixture. Windows spells
+// its search path `Path` and matches variable names without case; the plain object buildEnvironment()
+// copies out of process.env does NOT emulate that, so a case-sensitive `delete env.NODE_OPTIONS` /
+// `env.PATH` filter no-opped there and left nub's `node` shim first on the child's PATH — where it
+// rebuilds NODE_OPTIONS for the bare `node` the SDK spawns a script provider with (2026-08-24).
+test("host runtime injection is stripped whatever case the OS spells its variables in", () => {
+  const shim = join(tmpdir(), "nub-node-shim-4242-deadbeef")
+  const real = join(tmpdir(), "real-bin")
+  for (const [pathKey, optionsKey] of [["PATH", "NODE_OPTIONS"], ["Path", "Node_Options"]] as const) {
+    const sanitized = sanitizeProviderChildEnvironment({
+      [pathKey]: [shim, real].join(delimiter),
+      [optionsKey]: "--require /nub/preload.cjs",
+      HOME: "/home/x",
+    })
+    assert.equal(sanitized[optionsKey], undefined, `${optionsKey} must never reach a provider child`)
+    assert.equal(sanitized[pathKey], real, `${pathKey} must lose the nub node shim, and keep its own spelling`)
+    assert.deepEqual(Object.keys(sanitized).sort(), [pathKey, "HOME"].sort(), "no second, differently-cased PATH")
+    assert.equal(sanitized.HOME, "/home/x", "nothing else is touched")
   }
 })
 

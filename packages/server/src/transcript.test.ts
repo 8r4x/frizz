@@ -1006,7 +1006,8 @@ test("SendUserFile → an image is copied into the servable cache (sentImages) +
     assert.equal(call.name, "SendUserFile")
     assert.equal(call.caption, "the fix")
     assert.equal(call.sentImages?.length, 1)
-    assert.match(call.sentImages![0], /frizz-tool-images-[0-9a-f]{16}\/[0-9a-f]{32}\.png$/) // servable cache copy, not the source
+    // Separator-agnostic: the copy is placed with path.join, so win32 spells it with a backslash.
+    assert.match(call.sentImages![0], /frizz-tool-images-[0-9a-f]{16}[\\/][0-9a-f]{32}\.png$/) // servable cache copy, not the source
     assert.equal(call.sentFiles, undefined)
     assert.ok(readFileSync(call.sentImages![0]).length >= 12) // the copy exists on disk
   } finally {

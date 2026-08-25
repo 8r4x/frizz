@@ -418,7 +418,8 @@ test("/_frizz/attach accepts the safe tier, rejects office/extensionless/oversiz
   const pdf = await attach({ name: "My Report v2.pdf", data: b64("%PDF-1.4 hello") })
   assert.equal(pdf.status, 200)
   const pdfPath = (await pdf.json() as { path: string }).path
-  assert.match(pdfPath, /\/attachments\/\d+-[0-9a-f]{8}-My-Report-v2\.pdf$/)
+  // Separator-agnostic: the path is built with path.join, so it comes back `\attachments\…` on win32.
+  assert.match(pdfPath, /[\\/]attachments[\\/]\d+-[0-9a-f]{8}-My-Report-v2\.pdf$/)
   assert.ok(existsSync(pdfPath))
   assert.equal(readFileSync(pdfPath, "utf8"), "%PDF-1.4 hello")
 

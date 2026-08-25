@@ -104,7 +104,13 @@ test("the session key is persisted at 0600 and reloaded, not regenerated", () =>
   const second = loadOrCreateSessionKey(dir)
   assert.deepEqual(second, first, "a second start must reuse the key, or every restart signs out")
   assert.equal(first.byteLength, 32)
-  assert.equal(statSync(join(dir, "session-key")).mode & 0o777, 0o600, "a world-readable key is a forgeable session")
+  // The mode bits only — everything above this line is asserted on every platform. Windows has no
+  // POSIX permission bits: NTFS access is an ACL, `fs.chmod` there sets nothing but the read-only
+  // flag, and node reports 0666 for any writable file. The key is still written with mode 0o600, which
+  // is simply inert there; restricting it would take an icacls ACL, which frizz does not attempt.
+  if (process.platform !== "win32") {
+    assert.equal(statSync(join(dir, "session-key")).mode & 0o777, 0o600, "a world-readable key is a forgeable session")
+  }
   rmSync(dir, { recursive: true, force: true })
 })
 

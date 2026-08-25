@@ -1690,14 +1690,30 @@ function buildEnvironment(overrides: Readonly<Record<string, string | undefined>
 // The SDK strips NODE_OPTIONS before it spawns Claude, but Nub's temporary `node` shim can
 // reconstruct its loader flags when a provider executable uses `#!/usr/bin/env node`. Provider
 // children must not receive either form of host runtime injection.
-function sanitizeProviderChildEnvironment(environment: Record<string, string | undefined>): Record<string, string | undefined> {
+//
+// MATCHED WITHOUT CASE, because Windows environment variables are case-INSENSITIVE and it spells the
+// search path `Path`. Only `process.env` itself emulates that; the plain object buildEnvironment()
+// copies out of it does not, so `sanitized.PATH` read `undefined` on win32 and the shim filter below
+// silently did nothing — leaving nub's shim first on the child's PATH, where it rebuilds NODE_OPTIONS
+// for anything spawned as a bare `node`. That is exactly how the Agent SDK launches a script provider
+// executable (`executable: "node"`, resolved through PATH), and it is what the fake-CLI fixture saw as
+// `nodeOptionsPresent: true` on the first Windows suite run (2026-08-24).
+export function sanitizeProviderChildEnvironment(environment: Record<string, string | undefined>): Record<string, string | undefined> {
   const sanitized = { ...environment }
-  delete sanitized.NODE_OPTIONS
-  if (sanitized.PATH !== undefined) {
-    sanitized.PATH = sanitized.PATH
-      .split(delimiter)
-      .filter((entry) => !NUB_NODE_SHIM_PATH_SEGMENT.test(entry))
-      .join(delimiter)
+  for (const key of Object.keys(sanitized)) {
+    if (/^NODE_OPTIONS$/i.test(key)) {
+      delete sanitized[key]
+      continue
+    }
+    // Rewritten under the key the OS actually gave us: adding a second "PATH" beside a "Path" would
+    // hand the child two search paths and let the wrong one win.
+    const value = sanitized[key]
+    if (/^PATH$/i.test(key) && value !== undefined) {
+      sanitized[key] = value
+        .split(delimiter)
+        .filter((entry) => !NUB_NODE_SHIM_PATH_SEGMENT.test(entry))
+        .join(delimiter)
+    }
   }
   return sanitized
 }

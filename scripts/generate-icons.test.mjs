@@ -159,7 +159,10 @@ test("symlinked bundles and resources are rejected, including a staged no-follow
 
   for (const relativeDirectory of ["Contents", join("Contents", "MacOS"), join("Contents", "Resources")]) {
     const directory = join(app.appPath, relativeDirectory)
-    const holding = join(fixture.root, `holding-${relativeDirectory.replaceAll("/", "-")}`)
+    // Flatten on EITHER separator: join() spells these `Contents\MacOS` on win32, and a `/`-only
+    // replace left the backslash in the holding NAME, so the rename aimed at a `holding-Contents`
+    // directory that was never created and died with ENOENT.
+    const holding = join(fixture.root, `holding-${relativeDirectory.replaceAll(/[\\/]/g, "-")}`)
     renameSync(directory, holding)
     symlinkSync(holding, directory)
     assert.throws(() => inspectOwnedFrizzShim(app.appPath, {
@@ -304,13 +307,19 @@ test("successful transaction preserves plist bytes and modes while updating ever
   for (const app of fixture.apps) {
     assert.deepEqual(readFileSync(app.plistPath), app.originalPlist)
     assert.deepEqual(readFileSync(app.iconPath), fixture.candidate)
-    assert.equal(lstatSync(app.iconPath).mode & 0o777, 0o600)
+    // Mode bits only: Windows has no POSIX permissions (NTFS access is an ACL, node reports 0666), so
+    // the 0o600 the transaction writes with is inert there. The plist bytes and icon bytes above — the
+    // properties this test is named for — are still asserted on every platform.
+    if (process.platform !== "win32") assert.equal(lstatSync(app.iconPath).mode & 0o777, 0o600)
   }
   assert.deepEqual(readdirSync(fixture.appsDir).filter((name) => name.startsWith(".frizz-icon-")), [])
 })
 
 test("maskable transforms are singular and safe-circle validation rejects overflow", () => {
-  const source = readFileSync(join(dirname(new URL(import.meta.url).pathname), "../packages/web/public/favicon.svg"), "utf8")
+  // Hand fs the URL and let it convert. `new URL(…).pathname` carries the leading slash a Windows drive
+  // path does not have (`/C:/…`), which readFileSync then resolves against the current drive and opens
+  // as `C:\C:\…`; it also leaves percent-escapes in place, so a checkout path with a space breaks too.
+  const source = readFileSync(new URL("../packages/web/public/favicon.svg", import.meta.url), "utf8")
   const result = buildMaskableSvg(source)
   assert.match(result.svg, /icon-mark" transform="translate\(56\.31999999999999 56\.31999999999999\) scale\(0\.78\)"/)
   const background = source.match(/<rect id="icon-background"[^>]*\/>/)[0]

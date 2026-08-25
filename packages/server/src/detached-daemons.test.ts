@@ -62,6 +62,10 @@ test("no shipped module resolves a sibling .ts at runtime — that path does not
   // two repos (2026-07-23). Until that path is safe to run from an artifact, failing fast is the
   // better bug. Anything else that reaches for this pattern still fails below.
   const EXEMPT = new Set(["packages/server/src/dev-supervisor.ts"])
+  // Both the exemption and the failure message are spelled with `/`, on every platform: `path.slice()`
+  // yields `packages\\server\\src\\dev-supervisor.ts` on win32, which no POSIX-spelled EXEMPT entry can
+  // match — the exemption silently lapsed there and the one knowing offender failed the suite.
+  const relative = (path: string) => path.slice(workspaceRoot.length + 1).replaceAll("\\", "/")
   const offenders: string[] = []
   const sibling = /new URL\(\s*["'`]\.\/[^"'`]*\.ts["'`]\s*,\s*import\.meta\.url/
 
@@ -71,12 +75,12 @@ test("no shipped module resolves a sibling .ts at runtime — that path does not
       if (entry.isDirectory()) { walk(path); continue }
       // Test files never ship, and the fixtures deliberately contain odd source.
       if (!entry.name.endsWith(".ts") || entry.name.includes(".test.")) continue
-      if (EXEMPT.has(path.slice(workspaceRoot.length + 1))) continue
+      if (EXEMPT.has(relative(path))) continue
       readFileSync(path, "utf8").split("\n").forEach((line, index) => {
         // Prose is exempt: the ban is on CODE, and detached-daemons.ts documents the very pattern
         // it bans. A line-comment check is enough — nobody hides a spawn inside a block comment.
         const code = line.replace(/\/\/.*$/, "").replace(/^\s*\*.*$/, "")
-        if (sibling.test(code)) offenders.push(`${path.slice(workspaceRoot.length + 1)}:${index + 1}`)
+        if (sibling.test(code)) offenders.push(`${relative(path)}:${index + 1}`)
       })
     }
   }

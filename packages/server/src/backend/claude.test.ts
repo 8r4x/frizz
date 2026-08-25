@@ -1,5 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { join } from "node:path"
 import { createClaudeBackend, parseClaudeLine } from "./claude.ts"
 import { newTailState, computeTurn } from "../tailer.ts"
 import { buildClaudeCommand, buildClaudeResumeCommand, claudeWorkerEnvironment, loadWorkerPrompt, WORKER_MAX_CONCURRENT_SUBAGENTS, WORKER_MAX_SUBAGENTS, WORKER_MAX_WEB_SEARCHES, workerPluginDir } from "../dispatch.ts"
@@ -218,7 +219,8 @@ test("createClaudeBackend: an ultracode dispatch spawns as xhigh + the ultracode
 })
 
 test("createClaudeBackend: transcriptPath is <logDir>/<sessionId>.jsonl", () => {
-  assert.equal(createClaudeBackend({ logDir: "/logs" }).transcriptPath("abc-123"), "/logs/abc-123.jsonl")
+  // Spelled with join(), not "/logs/abc-123.jsonl": the backend joins, so the separator is the HOST's.
+  assert.equal(createClaudeBackend({ logDir: "/logs" }).transcriptPath("abc-123"), join("/logs", "abc-123.jsonl"))
 })
 
 test("createClaudeBackend: foldLine folds a Claude record into the tail state; a bad line is a no-op", () => {

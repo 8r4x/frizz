@@ -112,6 +112,15 @@ async function withTmpAsync(fn: (dir: string) => Promise<void>): Promise<void> {
 
 // ---- Claude CLI preflight (`claude auth status --json`) — stubbed executable, no real CLI ----
 
+// EVERY case that spawns the stub is POSIX-only, and there is no portable substitute: the stub is a
+// `#!/bin/sh` script, a shebang means nothing on Windows, and Node has refused to spawn a `.bat`/`.cmd`
+// without `shell: true` since the CVE-2024-27980 fix — so `execFile`ing a fake `claude` there cannot
+// run at all and every verdict collapses to the fail-open "unknown". Two of these cases EXPECT
+// "unknown", so on Windows they passed while proving nothing; skipping is the honest reading. What the
+// classifier does with the output is pinned separately by parseClaudeAuthStatusJson, which is pure and
+// runs everywhere, and the missing-binary case below spawns for real on every platform.
+const posixOnlyStub = { skip: process.platform === "win32" ? "the CLI stub is a POSIX shell script" : false }
+
 function withStub(script: string, fn: (bin: string) => Promise<void>): Promise<void> {
   return withTmpAsync(async (dir) => {
     const bin = join(dir, "claude-stub")
@@ -120,27 +129,27 @@ function withStub(script: string, fn: (bin: string) => Promise<void>): Promise<v
   })
 }
 
-test("auth-status CLI: exit 0 with loggedIn true → authed", () =>
+test("auth-status CLI: exit 0 with loggedIn true → authed", posixOnlyStub, () =>
   withStub(`echo '{"loggedIn": true, "authMethod": "oauth"}'`, async (bin) => {
     assert.equal(await readClaudeAuthStatusCli({ claudeBin: bin }), "authed")
   }))
 
-test("auth-status CLI: exit 0 with unparseable output → authed (exit code is the login signal)", () =>
+test("auth-status CLI: exit 0 with unparseable output → authed (exit code is the login signal)", posixOnlyStub, () =>
   withStub(`echo 'Logged in as someone'`, async (bin) => {
     assert.equal(await readClaudeAuthStatusCli({ claudeBin: bin }), "authed")
   }))
 
-test("auth-status CLI: nonzero exit with positive loggedIn false → signed-out", () =>
+test("auth-status CLI: nonzero exit with positive loggedIn false → signed-out", posixOnlyStub, () =>
   withStub(`echo '{"loggedIn": false}'; exit 1`, async (bin) => {
     assert.equal(await readClaudeAuthStatusCli({ claudeBin: bin }), "signed-out")
   }))
 
-test("auth-status CLI: loggedIn false printed amid human noise → signed-out", () =>
+test("auth-status CLI: loggedIn false printed amid human noise → signed-out", posixOnlyStub, () =>
   withStub(`echo 'Not logged in.'; echo '{"loggedIn": false}'; exit 1`, async (bin) => {
     assert.equal(await readClaudeAuthStatusCli({ claudeBin: bin }), "signed-out")
   }))
 
-test("auth-status CLI: nonzero exit WITHOUT parseable loggedIn → unknown (fail open)", () =>
+test("auth-status CLI: nonzero exit WITHOUT parseable loggedIn → unknown (fail open)", posixOnlyStub, () =>
   withStub(`echo 'config corrupted'; exit 1`, async (bin) => {
     assert.equal(await readClaudeAuthStatusCli({ claudeBin: bin }), "unknown")
   }))
@@ -149,7 +158,7 @@ test("auth-status CLI: missing binary → unknown (fail open)", async () => {
   assert.equal(await readClaudeAuthStatusCli({ claudeBin: "/nonexistent/claude-definitely-absent" }), "unknown")
 })
 
-test("auth-status CLI: hang beyond the timeout → unknown (fail open)", () =>
+test("auth-status CLI: hang beyond the timeout → unknown (fail open)", posixOnlyStub, () =>
   withStub(`sleep 30`, async (bin) => {
     assert.equal(await readClaudeAuthStatusCli({ claudeBin: bin, timeoutMs: 200 }), "unknown")
   }))
@@ -173,12 +182,16 @@ test("readAuthSnapshot: CLI overrides a local signed-out; local verdict stands w
     await withTmpAsync(async (dir) => {
       process.env.CLAUDE_CONFIG_DIR = dir // empty → local reader: signed-out
       process.env.FRIZZ_KEYCHAIN_DISABLED = "1"
-      await withStub(`echo '{"loggedIn": true}'`, async (bin) => {
-        assert.equal((await readAuthSnapshot({ claudeBin: bin })).claude, "authed")
-      })
-      await withStub(`echo '{"loggedIn": false}'; exit 1`, async (bin) => {
-        assert.equal((await readAuthSnapshot({ claudeBin: bin })).claude, "signed-out")
-      })
+      // The two stub arms only (see posixOnlyStub) — the CLI-unavailable arm below is the one that
+      // needs no child process, and it is asserted on every platform.
+      if (process.platform !== "win32") {
+        await withStub(`echo '{"loggedIn": true}'`, async (bin) => {
+          assert.equal((await readAuthSnapshot({ claudeBin: bin })).claude, "authed")
+        })
+        await withStub(`echo '{"loggedIn": false}'; exit 1`, async (bin) => {
+          assert.equal((await readAuthSnapshot({ claudeBin: bin })).claude, "signed-out")
+        })
+      }
       // CLI unavailable → the positive local signed-out stands (never silently unknown).
       assert.equal((await readAuthSnapshot({ claudeBin: "/nonexistent/claude-absent" })).claude, "signed-out")
     })
@@ -220,14 +233,17 @@ test("readClaudePreflightAuth: a positive local signed-out is confirmed against 
     await withTmpAsync(async (dir) => {
       process.env.CLAUDE_CONFIG_DIR = dir // empty → local reader: signed-out
       process.env.FRIZZ_KEYCHAIN_DISABLED = "1"
-      // A credential the file/keychain reader cannot see must not block a dispatch.
-      await withStub(`echo '{"loggedIn": true}'`, async (bin) => {
-        assert.equal(await readClaudePreflightAuth({ claudeBin: bin }), "authed")
-      })
-      // Genuinely signed out — this is the ONE verdict dispatch blocks on.
-      await withStub(`echo '{"loggedIn": false}'; exit 1`, async (bin) => {
-        assert.equal(await readClaudePreflightAuth({ claudeBin: bin }), "signed-out")
-      })
+      // The two stub arms only (see posixOnlyStub); the inconclusive-CLI arm below runs everywhere.
+      if (process.platform !== "win32") {
+        // A credential the file/keychain reader cannot see must not block a dispatch.
+        await withStub(`echo '{"loggedIn": true}'`, async (bin) => {
+          assert.equal(await readClaudePreflightAuth({ claudeBin: bin }), "authed")
+        })
+        // Genuinely signed out — this is the ONE verdict dispatch blocks on.
+        await withStub(`echo '{"loggedIn": false}'; exit 1`, async (bin) => {
+          assert.equal(await readClaudePreflightAuth({ claudeBin: bin }), "signed-out")
+        })
+      }
       // Preflight-specific: an inconclusive CLI stays "unknown" so dispatch fails OPEN. (readAuthSnapshot
       // deliberately differs here — a gate that cannot confirm should keep offering sign-in.)
       assert.equal(await readClaudePreflightAuth({ claudeBin: "/nonexistent/claude-absent" }), "unknown")

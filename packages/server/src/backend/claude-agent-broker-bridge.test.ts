@@ -323,7 +323,16 @@ test("a cold resume after an INTENTIONAL retirement reports no death — and the
       await sleep(100)
     }
     assert.equal(crashes[0].slug, slug, "the report names the thread")
-    assert.match(crashes[0].message ?? "", /signal-SIGTERM/, "…and carries the dead daemon's own recorded cause")
+    // The CAUSE, not the report, is what differs by platform. Windows has no signals: `process.kill(pid,
+    // "SIGTERM")` is TerminateProcess, which stops the daemon dead with no chance to run its exit
+    // handler, so there is no breadcrumb to carry and claude-broker-diagnostics falls back to its
+    // "killed outright" wording — literally the case that message was written for. Both spellings are
+    // asserted, so neither platform silently reports nothing.
+    assert.match(
+      crashes[0].message ?? "",
+      process.platform === "win32" ? /left no exit record/ : /signal-SIGTERM/,
+      "…and carries the dead daemon's own recorded cause",
+    )
   } finally {
     bridge.releaseSession(slug, sessionId, "session-deleted")
     bridge.close()

@@ -16,7 +16,12 @@ import {
 
 /** A node-pty layout whose spawn-helper carries `mode`, plus the chmod calls the repair makes. */
 function ptyInstall(mode: number, platform: NodeJS.Platform = "darwin") {
-  const helper = `/pkg/node_modules/node-pty/prebuilds/${platform}-arm64/spawn-helper`;
+  // Built with join(), exactly as the repair builds it. The TARGET platform is injected (these cases
+  // are about a darwin/linux install), but the separator is the HOST's: spelled as a `/` literal, the
+  // stub's `unexpected stat of …` threw on win32, the repair swallowed it, and the test read as "no
+  // chmod was made" rather than "the harness and the code disagree about how to spell a path".
+  const pkg = "/pkg/node_modules/node-pty/package.json";
+  const helper = join(dirname(pkg), "prebuilds", `${platform}-arm64`, "spawn-helper");
   const chmods: Array<[string, number]> = [];
   return {
     helper,
@@ -24,7 +29,7 @@ function ptyInstall(mode: number, platform: NodeJS.Platform = "darwin") {
     options: {
       platform,
       arch: "arm64",
-      resolvePty: () => "/pkg/node_modules/node-pty/package.json",
+      resolvePty: () => pkg,
       stat: (path: string) => {
         if (path !== helper) throw new Error(`unexpected stat of ${path}`);
         return { mode };

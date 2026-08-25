@@ -22,7 +22,12 @@ test("the identity is minted once and reused, or a name changes owner every laun
   }
 });
 
-test("the key file is 0600 — a readable identity is a name anyone on the box can take", async () => {
+// Whole-test gate, because the mode bits ARE this test — every other property of the identity file is
+// pinned by the cases around it. Windows has no POSIX permission bits: NTFS access is an ACL, `fs.chmod`
+// sets only the read-only flag, and node reports 0666 for any writable file. The 0o600 the writer asks
+// for is inert there; making the file unreadable to other accounts would take an icacls ACL, which
+// frizz does not attempt.
+test("the key file is 0600 — a readable identity is a name anyone on the box can take", { skip: process.platform === "win32" ? "no POSIX mode bits on win32" : false }, async () => {
   const home = sandbox();
   try {
     await loadOrCreateClaimIdentity(home);

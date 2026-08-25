@@ -23,6 +23,13 @@ const SELF = fileURLToPath(import.meta.url)
 // web source must be arrow-free in the code it actually renders.
 const TOKENS = join(SRC, "lib", "childOps.ts")
 
+// A source file's path RELATIVE to src/, always with `/` separators. The assertions below name files
+// the way the imports do; `path.slice()` alone yields `lib\\dismissChildOp.ts` on win32, which no
+// hand-written expectation matches.
+function relative(path: string): string {
+  return path.slice(SRC.length).replaceAll("\\", "/")
+}
+
 function sourceFiles(dir: string): string[] {
   const out: string[] = []
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -45,7 +52,7 @@ test("no web source outside lib/childOps.ts spells a child arrow — every surfa
   const offenders = sourceFiles(SRC)
     .filter((path) => path !== SELF && path !== TOKENS)
     .filter((path) => ARROWS.some((arrow) => code(readFileSync(path, "utf8")).includes(arrow)))
-    .map((path) => path.slice(SRC.length))
+    .map(relative)
   assert.deepEqual(
     offenders,
     [],
@@ -56,7 +63,7 @@ test("no web source outside lib/childOps.ts spells a child arrow — every surfa
 test("the banned U+21B3 arrow appears nowhere at all, not even in a comment", () => {
   const offenders = sourceFiles(SRC)
     .filter((path) => path !== SELF && readFileSync(path, "utf8").includes(WRONG_ARROW))
-    .map((path) => path.slice(SRC.length))
+    .map(relative)
   assert.deepEqual(offenders, [], `U+21B3 ↳ must not appear in web sources — the child arrow is U+2937 ⤷: ${offenders.join(", ")}`)
 })
 
@@ -91,7 +98,7 @@ test("every child-operation surface offers the dismiss ×, through the one share
   }
   const callers = sourceFiles(SRC).filter((path) => /\brpc\.stopBackgroundOp\(/.test(readFileSync(path, "utf8")))
   assert.deepEqual(
-    callers.map((path) => path.slice(SRC.length)),
+    callers.map(relative),
     ["lib/dismissChildOp.ts"],
     "stopBackgroundOp has exactly one caller — the shared dismisser",
   )

@@ -1,9 +1,14 @@
 import assert from "node:assert/strict"
 import { readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import test from "node:test"
 
-const SRC = new URL("..", import.meta.url).pathname
+// fileURLToPath, never `.pathname`: a file URL's pathname keeps the leading slash a Windows drive path
+// does not have (`/C:/…`), which readdirSync then resolves against the current drive as `C:\C:\…` and
+// fails with ENOENT. It also decodes percent-escapes, so a checkout under a directory with a space in
+// it works on every platform.
+const SRC = fileURLToPath(new URL("..", import.meta.url))
 
 function sourceFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
