@@ -55,9 +55,9 @@ test("a project's own settings stay its own", () => {
   try {
     const alpha = box.open("alpha")
     const beta = box.open("beta")
-    setSettings(alpha, { ...defaultSettings(), permissionMode: "bypassPermissions", model: "opus" }, box.home)
-    assert.equal(getSettings(alpha, box.home).permissionMode, "bypassPermissions")
-    assert.equal(getSettings(beta, box.home).permissionMode, "auto", "permissions are per project")
+    setSettings(alpha, { ...defaultSettings(), permissionMode: "auto", model: "opus" }, box.home)
+    assert.equal(getSettings(alpha, box.home).permissionMode, "auto")
+    assert.equal(getSettings(beta, box.home).permissionMode, "bypassPermissions", "permissions are per project")
     assert.equal(getSettings(beta, box.home).model, undefined)
   } finally {
     box.done()

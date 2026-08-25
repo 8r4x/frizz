@@ -34,7 +34,7 @@ export const PERMISSION_OPTIONS: SelectOption[] = PERMISSION_MODES.filter((m) =>
 }))
 
 // The permission modes Settings offers as the launch mode for NEW Claude workers. Deliberately just
-// two: `auto` (the shipped default) and `bypassPermissions` (claude's --dangerously-skip-permissions).
+// two: `bypassPermissions` (claude's --dangerously-skip-permissions, the shipped default since 0.7.2) and `auto`.
 // The restrictive modes are absent for the same reason dispatch's floor rejects them — an unattended
 // headless worker cannot answer a prompt, so `default`/`acceptEdits`/`plan` stall the thread on a modal
 // nobody is watching. Bypass is strictly MORE permissive than auto, so it is the one deviation that

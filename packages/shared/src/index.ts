@@ -1903,8 +1903,8 @@ export const LocalFileOpener = z.enum(["system", "cursor", "vscode", "finder", "
 export type LocalFileOpener = z.infer<typeof LocalFileOpener>
 
 export const Settings = z.object({
-  // The mode NEW Claude workers launch in. Settings surfaces exactly two of them — `auto` (the shipped
-  // default) and `bypassPermissions` (--dangerously-skip-permissions) — because those are the only two
+  // The mode NEW Claude workers launch in. Settings surfaces exactly two of them — `bypassPermissions`
+  // (--dangerously-skip-permissions, the shipped default since 0.7.2) and `auto` — because those are the only two
   // an unattended worker can actually run in; the server's workerDispatchPermission enforces that same
   // floor, so a restrictive value left here by an older build cannot reach a spawn.
   permissionMode: PermissionMode,

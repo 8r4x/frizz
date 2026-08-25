@@ -36,7 +36,7 @@ test("dispatch preferences infer an old Settings record's Codex backend from the
     {
       backend: "codex",
       claude: { permissionMode: "auto" },
-      codex: { model: "gpt-new-from-cache", effort: "xhigh", permissionMode: "default" },
+      codex: { model: "gpt-new-from-cache", effort: "xhigh", permissionMode: "bypassPermissions" },
     },
   )
 })
@@ -56,7 +56,7 @@ test("dispatch preferences persist provider-specific selections across a databas
   storage = createStorage(path)
   assert.deepEqual(getDispatchPreferences(storage, settings), {
     backend: "claude",
-    claude: { model: "sonnet", effort: "max", permissionMode: "auto" },
+    claude: { model: "sonnet", effort: "max", permissionMode: "bypassPermissions" },
     codex: { model: "gpt-5.5", effort: "xhigh", permissionMode: "default" },
   })
   storage.close()
@@ -73,7 +73,7 @@ test("a profile cell persists model and effort in one provider-scoped mutation",
   })
   assert.equal(next.backend, "codex")
   assert.deepEqual(next.codex, { model: "gpt-5.6-sol", effort: "ultra", permissionMode: "default" })
-  assert.deepEqual(next.claude, { permissionMode: "auto" })
+  assert.deepEqual(next.claude, { permissionMode: "bypassPermissions" })
   storage.close()
 })
 
