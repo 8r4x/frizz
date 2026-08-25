@@ -5,6 +5,7 @@ import { Copy, Check, Loader2 } from "lucide-react"
 import type { AccountLogoutResult, AuthSnapshot, Backend } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
+import { copyTextToClipboard } from "../lib/clipboard.ts"
 import { SIGN_IN_COMMAND, PROVIDER_LABEL } from "../lib/signIn.ts"
 
 // LAZY: TerminalPane pulls in @xterm/xterm, a browser-only module that must not be evaluated when
@@ -87,8 +88,7 @@ export function SignInModal({
 
   async function copyCommand() {
     try {
-      if (!navigator.clipboard?.writeText) throw new Error("clipboard unavailable")
-      await navigator.clipboard.writeText(command)
+      await copyTextToClipboard(command)
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1500)
     } catch {

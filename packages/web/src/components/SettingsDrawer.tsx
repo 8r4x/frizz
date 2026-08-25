@@ -5,6 +5,7 @@ import { Check, Copy, HelpCircle } from "lucide-react"
 import { type Settings } from "@frizz/shared"
 import { isRetryableRpcError, rpc } from "../api/rpc.ts"
 import { store } from "../store.ts"
+import { copyTextToClipboard } from "../lib/clipboard.ts"
 import { prefs } from "../lib/prefs.ts"
 import { registerSettingsClose } from "../lib/overlays.ts"
 import { SHEET_CLOSE_MS, SHEET_PANEL_CLASS, SHEET_SCRIM_CLASS, prefersReducedMotion } from "../lib/sheet.ts"
@@ -646,7 +647,7 @@ function CopyableAddress({ url, hint }: { url: string; hint: string }) {
   const [copied, setCopied] = useState(false)
   async function copy() {
     try {
-      await navigator.clipboard.writeText(url)
+      await copyTextToClipboard(url)
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1500)
     } catch {

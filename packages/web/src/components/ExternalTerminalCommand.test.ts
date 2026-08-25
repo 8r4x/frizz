@@ -9,7 +9,7 @@ test("copy command button acknowledges only on real success and renders both ico
   // The check is driven from a completed clipboard write, NEVER shown optimistically before it lands —
   // otherwise the user pastes into the race before the command is on the clipboard. WARM path: begin()
   // lives inside the writeText success branch. COLD fallback: begin() rides the async mutation's onSuccess.
-  assert.match(source, /writeText\(resolved\.command\)\.then\(\s*\(\) => \{\s*feedback\.current\?\.begin\(\)/)
+  assert.match(source, /copyTextToClipboard\(resolved\.command\)\.then\(\s*\(\) => \{\s*feedback\.current\?\.begin\(\)/)
   assert.match(source, /copyAsync\(\{ onSuccess: \(\) => feedback\.current\?\.begin\(\) \}\)/)
   assert.match(source, /copied\s*\? <Check[\s\S]*: <TerminalSquare/)
   assert.match(source, /useEffect\(\(\) => \(\) => feedback\.current\?\.dispose\(\), \[\]\)/)
@@ -38,7 +38,16 @@ test("the click writes a PREFETCHED command synchronously (no RPC inside the cli
   assert.match(source, /onFocus=\{prefetch\}/)
   assert.match(source, /queryClient\.prefetchQuery\(\{\s*queryKey: terminalCommandKey\(slug\)/)
   assert.match(source, /const resolved = queryClient\.getQueryData<ResolvedTerminalCommand>\(terminalCommandKey\(slug\)\)/)
-  assert.match(source, /if \(resolved && navigator\.clipboard\?\.writeText\) \{/)
+  assert.match(source, /if \(resolved\) \{/)
+})
+
+test("no path refuses the copy on an insecure origin", () => {
+  // `navigator.clipboard` is undefined on plain http off localhost — the LAN `--host` case, where a
+  // phone reads the board. Every write goes through copyTextToClipboard, whose execCommand fallback
+  // still lands the copy there; the old "copy the command from a secure Frizz page" refusal is gone.
+  assert.match(source, /import \{ copyTextToClipboard \} from "\.\.\/lib\/clipboard\.ts"/)
+  assert.doesNotMatch(source, /secure Frizz page/)
+  assert.doesNotMatch(source, /navigator\.clipboard\.writeText/)
 })
 
 test("the confirmation check is the app foreground (white), not the live green", () => {

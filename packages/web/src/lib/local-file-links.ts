@@ -1,5 +1,6 @@
 import { rpc } from "../api/rpc.ts"
 import { pushMarkdownDrawer, showToast } from "../store.ts"
+import { copyTextToClipboard } from "./clipboard.ts"
 import { isLocalMarkdownFile } from "./markdownTargets.ts"
 
 // One delegated listener covers every sanitized markdown surface (chat, the doc drawer, and
@@ -80,7 +81,7 @@ async function open(path: string, image: boolean) {
   try {
     const result = await rpc.openLocalFile({ path, ...(image ? { image: true } : {}) })
     if (result.action === "copy") {
-      await navigator.clipboard.writeText(result.path)
+      await copyTextToClipboard(result.path)
       showToast("Copied local path")
     }
   } catch (error) {

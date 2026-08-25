@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query"
 import { ExternalLink } from "lucide-react"
 import { showToast } from "../store.ts"
 import { rpc } from "../api/rpc.ts"
+import { copyTextToClipboard } from "../lib/clipboard.ts"
 import { useInnerHtml } from "../lib/innerHtml.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
@@ -32,7 +33,7 @@ function OpenAction({ path }: { path: string }) {
       .openLocalFile({ path })
       .then(async (result) => {
         if (result.action !== "copy") return
-        await navigator.clipboard.writeText(result.path)
+        await copyTextToClipboard(result.path)
         showToast("Copied local path")
       })
       .catch((error) => showToast(`Could not open local file: ${(error as Error).message.slice(0, 100)}`))

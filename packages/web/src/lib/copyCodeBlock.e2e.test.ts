@@ -119,3 +119,61 @@ test("a fenced code block copies its own source, minus the renderer's trailing n
     await browser.close()
   }
 })
+
+// The SAME shipped path with `navigator.clipboard` GONE — not a contrived state: the async clipboard
+// API exists only in a secure context, and a Frizz served over `--host` to a LAN address is plain
+// http, where every copy affordance used to refuse with "copy the code from a secure Frizz page". The
+// fallback selects the text in an off-screen textarea and execCommand("copy")s it, so this shadows the
+// API exactly the way an insecure origin removes it, clicks the shipped button inside a real trusted
+// gesture, and reads the REAL clipboard back through the un-shadowed API afterwards.
+test("the copy still lands when navigator.clipboard is unavailable (insecure origin)", {
+  skip: !baseUrl,
+  timeout: 60_000,
+}, async () => {
+  const { default: puppeteer } = await import("puppeteer")
+  const browser = await puppeteer.launch({ headless: "new", args: ["--no-sandbox", "--force-color-profile=srgb"] })
+  const pageErrors: string[] = []
+  try {
+    const page = await browser.newPage()
+    const cdp = await browser.target().createCDPSession()
+    await cdp.send("Browser.grantPermissions", {
+      origin: baseUrl!,
+      permissions: ["clipboardReadWrite", "clipboardSanitizedWrite"],
+    })
+    page.on("pageerror", (error) => pageErrors.push(String(error)))
+    page.on("console", (m) => {
+      if (m.type() === "error" && !/favicon\.ico|404 \(Not Found\)/.test(m.text())) pageErrors.push(m.text())
+    })
+    await page.setViewport({ width: 1400, height: 1100, deviceScaleFactor: 1 })
+    await page.goto(`${baseUrl}/syntax-highlighting-fixture.html`, { waitUntil: "networkidle2" })
+    await page.waitForSelector(".md-code-copy")
+
+    // Shadow the accessor the way an insecure origin removes it. An own configurable property, so
+    // `delete` below restores the prototype getter for the read-back.
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true })
+    })
+    assert.equal(await page.evaluate(() => navigator.clipboard === undefined), true)
+
+    const source = await page.$eval("#thread .md-code pre code", (code) => code.textContent ?? "")
+    await page.hover("#thread .md-code")
+    await page.click("#thread .md-code-copy")
+    // The check appears ONLY after a copy the handler believes landed — with writeText gone, that can
+    // only be the execCommand path reporting success.
+    await page.waitForFunction(() => document.querySelector("#thread .md-code-copy")!.classList.contains("is-copied"))
+
+    const clipboard = await page.evaluate(() => {
+      delete (navigator as { clipboard?: unknown }).clipboard
+      return navigator.clipboard.readText()
+    })
+    assert.equal(clipboard, source.replace(/\n$/, ""))
+
+    // The off-screen textarea is a transient instrument: it must not survive the copy, and the page
+    // selection must not end up sitting in a box the user cannot see.
+    assert.equal(await page.evaluate(() => document.querySelectorAll("textarea").length), 0)
+
+    assert.deepEqual(pageErrors, [])
+  } finally {
+    await browser.close()
+  }
+})

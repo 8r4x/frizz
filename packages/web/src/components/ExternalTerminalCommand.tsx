@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Check, TerminalSquare } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 import { rpc } from "../api/rpc.ts"
+import { copyTextToClipboard } from "../lib/clipboard.ts"
 import { createCopyCommandFeedback } from "../lib/copyCommandFeedback.ts"
 import { showToast } from "../store.ts"
 import { Tooltip } from "./Tooltip.tsx"
@@ -44,7 +45,9 @@ function resolveTerminalCommand(slug: string): Promise<ResolvedTerminalCommand> 
 // the window blurs). So write via the async ClipboardItem form: `clipboard.write` is invoked SYNCHRONOUSLY
 // within the gesture and fed a promise, and the browser keeps activation alive while it resolves. A
 // rejecting item-promise rejects `write` with the SAME error, so the "no resumable session yet" reason
-// still reaches the toast. Older engines without async-ClipboardItem support fall back to fetch-then-writeText.
+// still reaches the toast. Older engines without async-ClipboardItem support — and INSECURE origins,
+// where the whole async clipboard API is undefined — fall back to fetch-then-copyTextToClipboard,
+// whose execCommand path is what makes the copy work on a plain-http LAN address at all.
 async function copyResumeCommandAsync(slug: string): Promise<TerminalMode> {
   const resolved = resolveTerminalCommand(slug)
   if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
@@ -55,8 +58,7 @@ async function copyResumeCommandAsync(slug: string): Promise<TerminalMode> {
     return (await resolved).mode
   }
   const { command, mode } = await resolved
-  if (!navigator.clipboard?.writeText) throw new Error("Clipboard access is unavailable; copy the command from a secure Frizz page")
-  await navigator.clipboard.writeText(command)
+  await copyTextToClipboard(command)
   return mode
 }
 
@@ -115,12 +117,12 @@ export function CopyTerminalCommandButton({ slug }: { slug: string }) {
   // SYNCHRONOUSLY inside the gesture — no RPC in the clipboard's activation window. That is what makes the
   // copy reliable in a live queue card (an async write otherwise lost that window to a focus/activation
   // blip) and what makes the check appear at once instead of a round-trip late. The check still lands only
-  // once writeText actually resolves — honest, but effectively instant since the value is already in hand;
-  // a genuine failure toasts and leaves no check. COLD cache: the activation-safe async path, unchanged.
+  // once the clipboard write actually resolves — honest, but effectively instant since the value is in
+  // hand; a genuine failure toasts and leaves no check. COLD cache: the activation-safe async path, unchanged.
   function handleCopy() {
     const resolved = queryClient.getQueryData<ResolvedTerminalCommand>(terminalCommandKey(slug))
-    if (resolved && navigator.clipboard?.writeText) {
-      void navigator.clipboard.writeText(resolved.command).then(
+    if (resolved) {
+      void copyTextToClipboard(resolved.command).then(
         () => {
           feedback.current?.begin()
           showToast(COPIED_TOAST[resolved.mode])

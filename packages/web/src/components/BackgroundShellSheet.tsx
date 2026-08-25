@@ -4,6 +4,7 @@ import { Copy, TerminalSquare } from "lucide-react"
 import { showToast } from "../store.ts"
 import { rpc } from "../api/rpc.ts"
 import { useBackgroundShellOutput } from "../hooks.ts"
+import { copyTextToClipboard } from "../lib/clipboard.ts"
 import { elapsedSince } from "../lib/durationLabels.ts"
 import { Sheet } from "./ui/Sheet.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
@@ -78,7 +79,7 @@ export function BackgroundShellSheet({
   async function copyCommand() {
     if (!command) return
     try {
-      await navigator.clipboard.writeText(command)
+      await copyTextToClipboard(command)
       showToast("Command copied")
     } catch {
       showToast("Could not copy command")

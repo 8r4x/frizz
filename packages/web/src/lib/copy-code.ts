@@ -1,4 +1,5 @@
 import { showToast } from "../store.ts"
+import { copyTextToClipboard } from "./clipboard.ts"
 import { COPY_COMMAND_FEEDBACK_MS } from "./copyCommandFeedback.ts"
 import { CODE_BLOCK_CLASS, CODE_COPIED_CLASS, CODE_COPY_CLASS, COPY_CODE_LABEL } from "./syntaxHighlight.ts"
 
@@ -34,12 +35,8 @@ async function copy(button: HTMLElement) {
   // with a trailing newline RUNS instead of waiting to be read.
   const text = (code.textContent ?? "").replace(/\n$/, "")
   if (!text) return
-  if (!navigator.clipboard?.writeText) {
-    showToast("Clipboard access is unavailable; copy the code from a secure Frizz page", { duration: 7000 })
-    return
-  }
   try {
-    await navigator.clipboard.writeText(text)
+    await copyTextToClipboard(text)
   } catch (error) {
     showToast(`Could not copy code: ${(error as Error).message.slice(0, 100)}`, { duration: 7000 })
     return
