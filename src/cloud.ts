@@ -46,6 +46,17 @@ export interface CloudConfig {
   config?: string;
   /** The claimed label, e.g. `colin`. Its presence is what marks this as a registrar-issued name. */
   claim?: string;
+  /**
+   * How the name is served.
+   *
+   * `relay` — the board opens a socket to the relay and serves through it. No tunnel, no cloudflared,
+   * nothing per-name in DNS. This is what a claim gets now.
+   * `tunnel` — the older path, where the registrar provisioned a Cloudflare tunnel per name.
+   *
+   * Absent on an existing config means tunnel, so an upgrade does not silently change how a board that
+   * already works is served.
+   */
+  serve?: "relay" | "tunnel";
 }
 
 /**
@@ -63,6 +74,17 @@ export const REGISTRAR_IS_LIVE = true;
 /** A claimed name runs a remotely-managed tunnel; a hand-made one runs by name from a config file. */
 export function isClaimedConfig(config: CloudConfig): boolean {
   return typeof config.claim === "string" && config.claim.length > 0;
+}
+
+/**
+ * Is this board served through the relay rather than a tunnel of its own?
+ *
+ * A config written before the relay existed has no `serve`, and must keep being served the way it
+ * already works — an upgrade that silently changed a working board's transport would be the worst
+ * kind of surprise.
+ */
+export function isRelayConfig(config: CloudConfig): boolean {
+  return isClaimedConfig(config) && config.serve === "relay";
 }
 
 export function cloudConfigPath(home = homedir()): string {
@@ -83,6 +105,7 @@ export function readCloudConfig(home = homedir()): CloudConfig | null {
       hostname: parsed.hostname,
       ...(named ? { tunnel: parsed.tunnel } : {}),
       ...(claimed ? { claim: parsed.claim } : {}),
+      ...(parsed.serve === "relay" || parsed.serve === "tunnel" ? { serve: parsed.serve } : {}),
       ...(parsed.config ? { config: parsed.config } : {}),
     };
   } catch {
@@ -208,8 +231,12 @@ export async function establishCloudConfig(
     }
     throw error;
   }
-  writeTunnelToken(result.token, home);
-  return { hostname: result.hostname, claim: name };
+  if (result.token) {
+    writeTunnelToken(result.token, home);
+    return { hostname: result.hostname, claim: name, serve: "tunnel" };
+  }
+  // No run token means the registrar is in relay mode and the board serves itself over a socket.
+  return { hostname: result.hostname, claim: name, serve: "relay" };
 }
 
 /**
@@ -231,6 +258,8 @@ export async function resolveRunToken(
   try {
     const identity = await loadOrCreateClaimIdentity(home);
     const result = await claimName({ name: config.claim!, port, identity, ...(origin ? { origin } : {}) });
+    // A relay-served name renews its lease here and returns no token — there is no tunnel to run.
+    if (!result.token) return null;
     writeTunnelToken(result.token, home);
     return result.token;
   } catch (error) {

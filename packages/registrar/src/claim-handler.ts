@@ -67,7 +67,15 @@ export interface CloudflareApi {
 }
 
 export interface ClaimDeps {
-  api: CloudflareApi
+  /**
+   * Cloudflare, for the TUNNEL path only.
+   *
+   * Absent means RELAY mode, which is the default now: a claim records the name and nothing else. The
+   * relay serves every name off one wildcard record, so there is no tunnel to create and no DNS record
+   * to write — which is exactly what removed the 200-name ceiling. Kept as an option for one release
+   * so the tunnel path can be turned back on without a rebuild.
+   */
+  api?: CloudflareApi
   store: ClaimStore
   /** The zone names hang off, e.g. `frizz.sh`. */
   zone: string
@@ -99,7 +107,8 @@ export type ClaimFailure =
   | "namespace-full"
 
 export type ClaimOutcome =
-  | { status: 200; body: { hostname: string; token: string; leaseExpiresAt: number; renewed: boolean } }
+  /** `token` is present only in tunnel mode; a relay board proves itself with its keypair instead. */
+  | { status: 200; body: { hostname: string; token?: string; leaseExpiresAt: number; renewed: boolean } }
   | { status: 400 | 409 | 502 | 503; body: { error: ClaimFailure; message: string } }
 
 const MESSAGES: Record<ClaimFailure, string> = {
@@ -219,14 +228,23 @@ async function renew(
   deps: ClaimDeps,
   now: number
 ): Promise<ClaimOutcome> {
+  // Relay mode: the lease is the only thing a renewal touches.
+  if (!deps.api) {
+    await deps.store.write(target.name, { ...existing, port: target.port, renewedAt: now })
+    return {
+      status: 200,
+      body: { hostname: target.hostname, leaseExpiresAt: now + CLAIM_LEASE_MS, renewed: true },
+    }
+  }
+  const api = deps.api
   try {
     // The board may have moved port since the last launch, so ingress is re-asserted every time
     // rather than only when it looks changed — one idempotent call is cheaper than a stale tunnel
     // pointing at a port nothing serves.
     if (existing.port !== target.port) {
-      await deps.api.setTunnelIngress(existing.tunnelId, target.hostname, `http://localhost:${target.port}`)
+      await api.setTunnelIngress(existing.tunnelId, target.hostname, `http://localhost:${target.port}`)
     }
-    const token = await deps.api.tunnelToken(existing.tunnelId)
+    const token = await api.tunnelToken(existing.tunnelId)
     await deps.store.write(target.name, { ...existing, port: target.port, renewedAt: now })
     return {
       status: 200,
@@ -238,6 +256,24 @@ async function renew(
 }
 
 async function create(target: ClaimTarget, deps: ClaimDeps, now: number): Promise<ClaimOutcome> {
+  // Relay mode: record the name and stop. No tunnel, no DNS record, nothing per-user to leak or cap.
+  if (!deps.api) {
+    await deps.store.write(target.name, {
+      pubkey: target.pubkey,
+      tunnelId: "",
+      port: target.port,
+      claimedAt: now,
+      renewedAt: now,
+      ...(target.githubId !== undefined ? { githubId: target.githubId } : {}),
+    })
+    await deps.store.writeOwner(target.pubkey, target.name)
+    if (target.githubId !== undefined) await deps.store.writeGithubOwner(target.githubId, target.name)
+    return {
+      status: 200,
+      body: { hostname: target.hostname, leaseExpiresAt: now + CLAIM_LEASE_MS, renewed: false },
+    }
+  }
+  const api = deps.api
   const tunnelName = tunnelNameForClaim(target.name)
   let tunnel: { id: string; token: string }
   try {
@@ -245,16 +281,16 @@ async function create(target: ClaimTarget, deps: ClaimDeps, now: number): Promis
     // that outlived its registry row would make its name permanently unclaimable — every future
     // attempt failing on a collision with something nothing knows how to find. Reaching here means
     // the registry believes the name is free, so any tunnel still wearing it is by definition unowned.
-    const orphan = await deps.api.findTunnel(tunnelName)
-    if (orphan) await deps.api.deleteTunnel(orphan.id)
-    tunnel = await deps.api.createTunnel(tunnelName)
+    const orphan = await api.findTunnel(tunnelName)
+    if (orphan) await api.deleteTunnel(orphan.id)
+    tunnel = await api.createTunnel(tunnelName)
   } catch {
     return reject("provisioning-failed", 502)
   }
 
   try {
-    await deps.api.setTunnelIngress(tunnel.id, target.hostname, `http://localhost:${target.port}`)
-    await deps.api.upsertDnsRecord(target.hostname, `${tunnel.id}.cfargotunnel.com`)
+    await api.setTunnelIngress(tunnel.id, target.hostname, `http://localhost:${target.port}`)
+    await api.upsertDnsRecord(target.hostname, `${tunnel.id}.cfargotunnel.com`)
     await deps.store.write(target.name, {
       pubkey: target.pubkey,
       tunnelId: tunnel.id,
@@ -300,6 +336,15 @@ async function releaseQuietly(
   pubkey: string,
   githubId?: number | undefined
 ): Promise<boolean> {
+  if (!deps.api) {
+    // Relay mode owns no Cloudflare resources for a name, so releasing it is only forgetting it.
+    await Promise.allSettled([
+      deps.store.remove(name),
+      deps.store.removeOwner(pubkey),
+      ...(githubId !== undefined ? [deps.store.removeGithubOwner(githubId)] : []),
+    ])
+    return true
+  }
   const [, tunnel] = await Promise.allSettled([
     deps.api.deleteDnsRecord(hostname),
     deps.api.deleteTunnel(tunnelId),
@@ -363,8 +408,10 @@ async function release(
   pubkey: string,
   githubId?: number | undefined
 ): Promise<void> {
-  await deps.api.deleteDnsRecord(hostname)
-  await deps.api.deleteTunnel(tunnelId)
+  if (deps.api) {
+    await deps.api.deleteDnsRecord(hostname)
+    await deps.api.deleteTunnel(tunnelId)
+  }
   await deps.store.remove(name)
   await deps.store.removeOwner(pubkey)
   if (githubId !== undefined) await deps.store.removeGithubOwner(githubId)

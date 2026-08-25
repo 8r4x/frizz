@@ -11,6 +11,7 @@ import {
   normalizeHostname,
   promptForCloudName,
   readCloudConfig,
+  isRelayConfig,
   readTunnelToken,
   REGISTRAR_IS_LIVE,
   resolveRunToken,
@@ -27,7 +28,9 @@ import {
 const fakeGithub = { accessToken: async () => "gho_testtoken", login: async () => "tester" };
 
 /** A registrar that answers every claim, so the CLI side can be driven without one deployed. */
-async function claimServer() {
+async function claimServer(
+  reply: unknown = { hostname: "colin.frizz.sh", token: "run-token", leaseExpiresAt: 0, renewed: false },
+) {
   const claims: Array<Record<string, unknown>> = [];
   const server: Server = createServer((req, res) => {
     let body = "";
@@ -36,9 +39,7 @@ async function claimServer() {
     req.on("end", () => {
       claims.push(JSON.parse(body));
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({ hostname: "colin.frizz.sh", token: "run-token", leaseExpiresAt: 0, renewed: false })
-      );
+      res.end(JSON.stringify(reply));
     });
   });
   server.listen(0, "127.0.0.1");
@@ -161,7 +162,7 @@ test("a claimed name stores the token at 0600, apart from the world-readable con
   const server = await claimServer();
   try {
     const config = await establishCloudConfig("colin", 9393, home, server.origin, fakeGithub);
-    assert.deepEqual(config, { hostname: "colin.frizz.sh", claim: "colin" });
+    assert.deepEqual(config, { hostname: "colin.frizz.sh", claim: "colin", serve: "tunnel" });
     assert.equal(readTunnelToken(home), "run-token");
     // The first claim is the one that carries the GitHub token, and it is the injected one — not
     // whatever `gh` on this machine would have said.
@@ -278,9 +279,33 @@ test("naming a registrar explicitly bypasses the gate, which is how the deploy g
   const server = await claimServer();
   try {
     const config = await establishCloudConfig("colin", 9393, home, server.origin, fakeGithub);
-    assert.deepEqual(config, { hostname: "colin.frizz.sh", claim: "colin" });
+    assert.deepEqual(config, { hostname: "colin.frizz.sh", claim: "colin", serve: "tunnel" });
   } finally {
     await server.close();
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+
+test("a registrar that returns NO token means the name is served by the relay", async () => {
+  // Relay mode is the default now: the board opens a socket to the relay and proves itself with its
+  // keypair, so there is no tunnel to run and nothing to cache.
+  const home = tempHome();
+  const server = await claimServer({ hostname: "colin.frizz.sh", leaseExpiresAt: 0, renewed: false });
+  try {
+    const config = await establishCloudConfig("colin", 9393, home, server.origin);
+    assert.deepEqual(config, { hostname: "colin.frizz.sh", claim: "colin", serve: "relay" });
+    assert.equal(readTunnelToken(home), null, "a relay board must cache no run token");
+    assert.equal(isRelayConfig(config), true);
+  } finally {
+    await server.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("a config written before the relay existed keeps being served the way it works", async () => {
+  // An upgrade that silently changed a working board's transport is the worst kind of surprise.
+  assert.equal(isRelayConfig({ hostname: "colin.frizz.sh", claim: "colin" }), false);
+  assert.equal(isRelayConfig({ hostname: "colin.frizz.sh", claim: "colin", serve: "tunnel" }), false);
+  assert.equal(isRelayConfig({ hostname: "b.example.com", tunnel: "b" }), false, "a hand-made tunnel is not relayed");
 });

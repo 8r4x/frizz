@@ -142,7 +142,8 @@ test("a registrar that is DOWN is distinguished from one that refused", async ()
 test("a 200 that is not a claim result is refused rather than half-used", async () => {
   // A captive portal or a misconfigured proxy answers 200 with HTML. Treating that as success would
   // hand cloudflared an empty token and fail somewhere far less obvious.
-  for (const body of [{}, { hostname: "colin.frizz.sh" }, { token: "t" }, "not an object"]) {
+  // `{ hostname }` alone is NOT malformed any more: a relay-served name comes back without a token.
+  for (const body of [{}, { token: "t" }, "not an object", { hostname: 42 }]) {
     const server = await registrar(() => ({ status: 200, body }));
     try {
       const identity = await generateClaimIdentity();

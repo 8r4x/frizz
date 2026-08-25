@@ -18,8 +18,13 @@ export function registrarOrigin(env: NodeJS.ProcessEnv = process.env): string {
 
 export interface ClaimResult {
   hostname: string;
-  /** The per-tunnel run token. Runs exactly one tunnel and can reach nothing else in the zone. */
-  token: string;
+  /**
+   * The per-tunnel run token, in TUNNEL mode only.
+   *
+   * Absent means the registrar is in relay mode: the board serves through the relay over a socket it
+   * opens itself, proving ownership with its keypair, so there is no tunnel and nothing to run.
+   */
+  token?: string;
   leaseExpiresAt: number;
   /** False the first time a name is claimed, true for every renewal afterwards. */
   renewed: boolean;
@@ -113,7 +118,7 @@ export async function claimName(options: ClaimOptions): Promise<ClaimResult> {
     throw new ClaimError(ADVICE[code] ?? body?.message ?? `the registrar refused the claim (${code})`, code);
   }
 
-  if (typeof body?.hostname !== "string" || typeof body.token !== "string") {
+  if (typeof body?.hostname !== "string") {
     throw new ClaimError(
       `the registrar at ${origin} answered something this version does not understand (protocol v${CLAIM_PROTOCOL_VERSION})`,
       "malformed-response",
@@ -122,7 +127,7 @@ export async function claimName(options: ClaimOptions): Promise<ClaimResult> {
 
   return {
     hostname: body.hostname,
-    token: body.token,
+    ...(typeof body.token === "string" && body.token ? { token: body.token } : {}),
     leaseExpiresAt: typeof body.leaseExpiresAt === "number" ? body.leaseExpiresAt : 0,
     renewed: body.renewed === true,
   };

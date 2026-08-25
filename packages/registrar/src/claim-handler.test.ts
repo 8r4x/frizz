@@ -560,3 +560,46 @@ test("a RENEWAL is never refused for a full namespace", async () => {
   assert.equal(renewed.status, 200, "an existing name must keep renewing past the ceiling")
   assert.ok("renewed" in renewed.body && renewed.body.renewed)
 })
+
+
+test("RELAY MODE records the name and touches no Cloudflare at all", async () => {
+  // The default now. The relay serves every name off one wildcard record, so there is no tunnel to
+  // create and no DNS record to write — which is exactly what removed the 200-name ceiling.
+  const cf = fakeCloudflare()
+  const st = fakeStore()
+  const identity = await generateClaimIdentity()
+  const relay = { store: st.store, zone: ZONE, now: () => NOW } as ClaimDeps
+
+  const claimed = await handleClaim(await claimFor(identity), relay)
+  assert.equal(claimed.status, 200)
+  assert.ok("hostname" in claimed.body && claimed.body.hostname === "colin.frizz.sh")
+  assert.equal((claimed.body as { token?: string }).token, undefined, "a relay board needs no run token")
+  assert.deepEqual(cf.calls, [], "relay mode must not call Cloudflare")
+  assert.equal(st.rows.get("colin")?.tunnelId, "", "there is no tunnel to record")
+
+  // Renewal is the lease and nothing else.
+  const again = await handleClaim(await claimFor(identity, "colin", 9393, NOW + 1000), {
+    ...relay,
+    now: () => NOW + 1000,
+  })
+  assert.ok("renewed" in again.body && again.body.renewed)
+  assert.equal(st.rows.get("colin")?.renewedAt, NOW + 1000)
+})
+
+test("releasing a relay name is only forgetting it", async () => {
+  const cf = fakeCloudflare()
+  const owner = await generateClaimIdentity()
+  const request = await claimFor(owner, "colin")
+  const st = fakeStore({
+    colin: { pubkey: request.pubkey, tunnelId: "", port: 1, claimedAt: NOW, renewedAt: NOW },
+  })
+  const later = NOW + CLAIM_LEASE_MS + 1
+  const newcomer = await generateClaimIdentity()
+  const taken = await handleClaim(await claimFor(newcomer, "colin", 9393, later), {
+    store: st.store, zone: ZONE, now: () => later,
+  } as ClaimDeps)
+
+  assert.equal(taken.status, 200, "a lapsed relay name must still be reclaimable")
+  assert.deepEqual(cf.calls, [], "nothing to tear down in Cloudflare")
+  assert.equal(st.rows.get("colin")?.pubkey, (await claimFor(newcomer)).pubkey)
+})

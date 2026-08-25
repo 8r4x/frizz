@@ -71,6 +71,8 @@ export interface RegistrarEnv {
   REQUIRE_GITHUB?: string
   /** Overrides the built-in name ceiling, so a plan upgrade needs no deploy. */
   MAX_NAMES?: string
+  /** "tunnel" restores per-name Cloudflare tunnels. Anything else, including absent, means relay. */
+  CLOUD_MODE?: string
   CLAIMS: KvNamespace
 }
 
@@ -87,6 +89,12 @@ const MIN_GITHUB_ACCOUNT_AGE_MS = 30 * 24 * 60 * 60_000
  * Raise this after upgrading the zone to Pro, which lifts the record cap to 3,500.
  */
 const MAX_NAMES = 180
+
+/**
+ * Relay mode has no per-name DNS record, so the zone's 200-record cap no longer bounds the namespace.
+ * The ceiling stays only as a blunt guard against a runaway, at a level no real launch would reach.
+ */
+const MAX_NAMES_RELAY = 100_000
 
 /** KV holds one small JSON row per name: who owns it, which tunnel serves it, and its lease. */
 export function kvClaimStore(kv: KvNamespace): ClaimStore {
@@ -150,16 +158,23 @@ const json = (status: number, body: unknown): Response =>
 
 function claimDeps(env: RegistrarEnv) {
   return {
-    api: createCloudflareApi({
-      token: env.CF_API_TOKEN,
-      accountId: env.CF_ACCOUNT_ID,
-      zoneId: env.CF_ZONE_ID,
-    }),
+    // RELAY by default: a claim records the name and nothing else, because the relay serves every
+    // name off one wildcard record. `CLOUD_MODE=tunnel` restores per-name tunnel provisioning for one
+    // release, so the old path can be turned back on without a rebuild.
+    ...(env.CLOUD_MODE === "tunnel"
+      ? {
+          api: createCloudflareApi({
+            token: env.CF_API_TOKEN,
+            accountId: env.CF_ACCOUNT_ID,
+            zoneId: env.CF_ZONE_ID,
+          }),
+        }
+      : {}),
     store: kvClaimStore(env.CLAIMS),
     zone: env.FRIZZ_ZONE,
     now: () => Date.now(),
     // ON unless explicitly disabled. A gate that defaults off is a gate that ships off by accident.
-    maxNames: env.MAX_NAMES ? Number(env.MAX_NAMES) : MAX_NAMES,
+    maxNames: env.MAX_NAMES ? Number(env.MAX_NAMES) : env.CLOUD_MODE === "tunnel" ? MAX_NAMES : MAX_NAMES_RELAY,
     ...(env.REQUIRE_GITHUB === "0"
       ? {}
       : { github: githubVerifier(), minAccountAgeMs: MIN_GITHUB_ACCOUNT_AGE_MS }),
