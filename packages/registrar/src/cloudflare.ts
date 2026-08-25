@@ -3,10 +3,10 @@ import type { CloudflareApi } from "./claim-handler.ts"
 /**
  * The real Cloudflare REST calls, and the ONLY place the zone token is used.
  *
- * NOT YET EXERCISED AGAINST THE LIVE API — there is no token on the machine this was written on, so
- * every request shape here comes from the documentation rather than from a response anyone has seen.
- * The decision logic in claim-handler.ts is tested against fakes; this file is the part that still has
- * to be proven against Cloudflare itself before anyone relies on it.
+ * EXERCISED AGAINST THE LIVE API on 2026-08-24: create, ingress, DNS create and update, token re-read,
+ * and both deletes all ran against the real `frizz.sh` zone. The tests below cover this file's logic
+ * against a fake, which cannot prove a request SHAPE — a fake answers whatever it is asked. Only the
+ * live run does that, so re-run one after changing any URL or body here.
  */
 
 const API = "https://api.cloudflare.com/client/v4"
@@ -68,6 +68,14 @@ export function createCloudflareApi(config: CloudflareConfig): CloudflareApi {
       return { id: tunnel.id, token: tunnel.token }
     },
 
+    async findTunnel(name) {
+      const tunnels = await call<Array<{ id: string }>>(
+        config,
+        `/accounts/${config.accountId}/cfd_tunnel?is_deleted=false&name=${encodeURIComponent(name)}`
+      )
+      return tunnels[0] ?? null
+    },
+
     async tunnelToken(id) {
       return call<string>(config, `/accounts/${config.accountId}/cfd_tunnel/${id}/token`)
     },
@@ -96,7 +104,9 @@ export function createCloudflareApi(config: CloudflareConfig): CloudflareApi {
     },
 
     async deleteTunnel(id) {
-      await call(config, `/accounts/${config.accountId}/cfd_tunnel/${id}`, { method: "DELETE" })
+      // `cascade` drops the tunnel's connections too. Without it Cloudflare refuses to delete a tunnel
+      // that still has one, which is exactly the tunnel a takeover or a sweep needs to remove.
+      await call(config, `/accounts/${config.accountId}/cfd_tunnel/${id}?cascade=true`, { method: "DELETE" })
     },
 
     async deleteDnsRecord(hostname) {

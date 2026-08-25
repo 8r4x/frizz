@@ -7,10 +7,9 @@
  * on a wire format instead of on a function signature. So the client here is the real client, the
  * request really is serialized and sent, and the handler answering it is the real handler.
  *
- * The one thing still faked is Cloudflare itself, deliberately: provisioning a tunnel needs a zone
- * token, and this must be runnable by anyone, on any machine, without one. What the fake cannot tell
- * us is whether packages/registrar/src/cloudflare.ts speaks the real API correctly — that file says so
- * at the top and is the piece still owed a live run.
+ * Cloudflare itself stays faked, deliberately: provisioning a real tunnel needs a zone token, and this
+ * must be runnable by anyone, on any machine, without one. Whether cloudflare.ts speaks the real API
+ * correctly is a different question, answered by running it against the real zone — done 2026-08-24.
  */
 import { createServer } from "node:http";
 import { once } from "node:events";
@@ -42,6 +41,10 @@ function fakeCloudflare() {
         tunnels.set(id, name);
         return { id, token: `run-token-${id}` };
       },
+      async findTunnel(name) {
+        for (const [id, tunnelName] of tunnels) if (tunnelName === name) return { id };
+        return null;
+      },
       async tunnelToken(id) {
         return `run-token-${id}`;
       },
@@ -61,9 +64,23 @@ function fakeCloudflare() {
 
 function memoryStore() {
   const rows = new Map();
+  const owners = new Map();
   return {
     rows,
+    owners,
     store: {
+      async readOwner(pubkey) {
+        return owners.get(pubkey) ?? null;
+      },
+      async writeOwner(pubkey, name) {
+        owners.set(pubkey, name);
+      },
+      async removeOwner(pubkey) {
+        owners.delete(pubkey);
+      },
+      async list() {
+        return [...rows.keys()];
+      },
       async read(name) {
         return rows.get(name) ?? null;
       },

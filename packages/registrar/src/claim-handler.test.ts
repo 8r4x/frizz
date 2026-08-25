@@ -23,8 +23,18 @@ function fakeCloudflare(
     tunnels,
     dns,
     api: {
+      async findTunnel(name: string) {
+        calls.push(`findTunnel:${name}`)
+        for (const [id, tunnelName] of tunnels) if (tunnelName === name) return { id }
+        return null
+      },
       async createTunnel(name: string) {
         maybeFail(`createTunnel:${name}`)
+        // Cloudflare refuses a duplicate tunnel name with error 1013, so the fake must too — the
+        // orphan-reclaim path exists precisely because of that refusal.
+        for (const existing of tunnels.values()) {
+          if (existing === name) throw new Error("1013 You already have a tunnel with this name")
+        }
         const id = `tunnel-${nextId++}`
         tunnels.set(id, name)
         return { id, token: `run-token-for-${id}` }
@@ -55,8 +65,11 @@ function fakeCloudflare(
 
 function fakeStore(seed: Record<string, ClaimRecord> = {}) {
   const rows = new Map<string, ClaimRecord>(Object.entries(seed))
+  const owners = new Map<string, string>()
+  for (const [name, record] of rows) owners.set(record.pubkey, name)
   return {
     rows,
+    owners,
     store: {
       async read(name: string) {
         return rows.get(name) ?? null
@@ -69,6 +82,15 @@ function fakeStore(seed: Record<string, ClaimRecord> = {}) {
       },
       async list() {
         return [...rows.keys()]
+      },
+      async readOwner(pubkey: string) {
+        return owners.get(pubkey) ?? null
+      },
+      async writeOwner(pubkey: string, name: string) {
+        owners.set(pubkey, name)
+      },
+      async removeOwner(pubkey: string) {
+        owners.delete(pubkey)
       },
     },
   }
@@ -101,6 +123,7 @@ test("a first claim provisions the tunnel, the ingress and the DNS record, and r
   assert.equal(result.body.leaseExpiresAt, NOW + CLAIM_LEASE_MS)
 
   assert.deepEqual(cf.calls, [
+    "findTunnel:u-colin",
     "createTunnel:u-colin",
     "setTunnelIngress:tunnel-1:colin.frizz.sh:http://localhost:9393",
     "upsertDnsRecord:colin.frizz.sh:tunnel-1.cfargotunnel.com",
@@ -315,4 +338,86 @@ test("a sweep is bounded, and says how much it did not get to", async () => {
   assert.equal(result.released.length, 2)
   assert.equal(result.remaining, 3)
   assert.equal(st.rows.size, 3, "the rest wait for the next run")
+})
+
+
+test("a tunnel that outlived its registry row is RECLAIMED, not left to poison the name", async () => {
+  // Cloudflare refuses a duplicate tunnel name (error 1013). So a tunnel that survived while its
+  // registry row went would make its name permanently unclaimable — every future attempt colliding
+  // with something nothing knows how to find. Reaching create means the registry says the name is
+  // free, so a tunnel still wearing it is by definition unowned.
+  const cf = fakeCloudflare()
+  const st = fakeStore()
+  const identity = await generateClaimIdentity()
+
+  await handleClaim(await claimFor(identity), deps({ api: cf.api, store: st.store }))
+  st.rows.clear() // the row is lost; the tunnel is not
+  cf.calls.length = 0
+
+  const again = await handleClaim(await claimFor(identity), deps({ api: cf.api, store: st.store }))
+  assert.equal(again.status, 200, "the name must still be claimable")
+  assert.ok(cf.calls.includes("deleteTunnel:tunnel-1"), `orphan not reclaimed: ${cf.calls.join(", ")}`)
+  assert.equal(cf.tunnels.size, 1, "exactly one tunnel wears the name")
+})
+
+test("a name is NOT forgotten while its tunnel refuses to die", async () => {
+  // Removing the row first is what creates the orphan above. Keeping it leaves the name merely taken,
+  // which the next lapse or sweep can still resolve.
+  const cf = fakeCloudflare()
+  const st = fakeStore()
+  const owner = await generateClaimIdentity()
+  await handleClaim(await claimFor(owner), deps({ api: cf.api, store: st.store }))
+
+  const stubborn = { ...cf.api, deleteTunnel: async () => { throw new Error("still connected") } }
+  const later = NOW + CLAIM_LEASE_MS + 1
+  const newcomer = await generateClaimIdentity()
+  const result = await handleClaim(
+    await claimFor(newcomer, "colin", 9393, later),
+    deps({ api: stubborn, store: st.store, now: () => later })
+  )
+
+  assert.equal(result.status, 502, "the takeover must fail rather than strand the name")
+  assert.equal(st.rows.has("colin"), true, "the registry still knows who to blame")
+  assert.equal(st.rows.get("colin")?.pubkey, (await claimFor(owner)).pubkey)
+})
+
+
+test("one key holds ONE name — a loop of claims cannot take the namespace", async () => {
+  // The zone caps at 200 records, so without this a `for` loop over generated keypairs is a complete
+  // denial of the product. It is a speed bump, not a wall: keys are free, so a determined squatter
+  // just makes more. It closes the version that happens by accident.
+  const cf = fakeCloudflare()
+  const st = fakeStore()
+  const identity = await generateClaimIdentity()
+  const d = deps({ api: cf.api, store: st.store })
+
+  assert.equal((await handleClaim(await claimFor(identity, "first"), d)).status, 200)
+
+  const second = await handleClaim(await claimFor(identity, "second"), d)
+  assert.equal(second.status, 409)
+  assert.deepEqual(second.body, {
+    error: "one-name-per-key",
+    message: "this machine already holds a name — release it first, or claim from a different Frizz identity",
+  })
+  assert.equal(cf.tunnels.size, 1, "the second name provisioned nothing")
+
+  // Renewing the name it DOES hold is unaffected — that is the call every launch makes.
+  assert.equal((await handleClaim(await claimFor(identity, "first"), d)).status, 200)
+})
+
+test("a key whose name lapsed may claim again", async () => {
+  // The index must not outlive the name. Otherwise letting a lease go would lock the owner out of the
+  // service permanently, which is a worse failure than the squatting this guards against.
+  const cf = fakeCloudflare()
+  const st = fakeStore()
+  const identity = await generateClaimIdentity()
+  await handleClaim(await claimFor(identity, "first"), deps({ api: cf.api, store: st.store }))
+
+  const later = NOW + CLAIM_LEASE_MS + 1
+  st.rows.delete("first") // the sweeper released it; the owner index is what might be left behind
+  const again = await handleClaim(
+    await claimFor(identity, "second", 9393, later),
+    deps({ api: cf.api, store: st.store, now: () => later })
+  )
+  assert.equal(again.status, 200, "a stale owner index must not lock someone out")
 })

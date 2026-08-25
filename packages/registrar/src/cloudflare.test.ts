@@ -11,9 +11,9 @@ import { createCloudflareApi } from "./cloudflare.ts"
  * sent. All of that is real, and all of it would otherwise be discovered in production.
  *
  * They CANNOT prove the request shapes are what Cloudflare actually accepts. The fake answers whatever
- * this file asks it to, so a test asserting the URL is only asserting my own belief back to me. That
- * is why cloudflare.ts still carries its "not yet exercised against the live API" header: only a real
- * token retires it.
+ * this file asks it to, so a test asserting a URL only asserts a belief back to itself. A live run
+ * against the real zone is what proves those, and one was done on 2026-08-24 — re-run it after
+ * changing any URL or body here.
  */
 
 const CONFIG = { token: "zone-token", accountId: "acct-1", zoneId: "zone-1" }
@@ -191,5 +191,36 @@ test("a response that is not JSON at all fails cleanly", async () => {
     await assert.rejects(createCloudflareApi(CONFIG).tunnelToken("t1"), /failed/)
   } finally {
     globalThis.fetch = original
+  }
+})
+
+
+test("a tunnel is deleted with cascade, or Cloudflare refuses one that still has connections", async () => {
+  // The tunnel a takeover or a sweep needs to remove is exactly the one most likely to still have a
+  // live connection, so without cascade the delete fails precisely when it matters.
+  const fetcher = withFetch([success(null)])
+  try {
+    await createCloudflareApi(CONFIG).deleteTunnel("t1")
+    assert.match(fetcher.calls[0]!.url, /cfd_tunnel\/t1\?cascade=true$/)
+    assert.equal(fetcher.calls[0]!.method, "DELETE")
+  } finally {
+    fetcher.restore()
+  }
+})
+
+test("findTunnel asks by name and reports absence as null", async () => {
+  const found = withFetch([success([{ id: "t9" }])])
+  try {
+    assert.deepEqual(await createCloudflareApi(CONFIG).findTunnel("u-colin"), { id: "t9" })
+    assert.match(found.calls[0]!.url, /cfd_tunnel\?is_deleted=false&name=u-colin$/)
+  } finally {
+    found.restore()
+  }
+
+  const missing = withFetch([success([])])
+  try {
+    assert.equal(await createCloudflareApi(CONFIG).findTunnel("u-nobody"), null)
+  } finally {
+    missing.restore()
   }
 })

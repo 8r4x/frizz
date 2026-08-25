@@ -57,6 +57,15 @@ export function kvClaimStore(kv: KvNamespace): ClaimStore {
     async remove(name) {
       await kv.delete(`claim:${name}`)
     },
+    async readOwner(pubkey) {
+      return kv.get(`owner:${pubkey}`)
+    },
+    async writeOwner(pubkey, name) {
+      await kv.put(`owner:${pubkey}`, name)
+    },
+    async removeOwner(pubkey) {
+      await kv.delete(`owner:${pubkey}`)
+    },
     async list() {
       // KV pages its listing, and a page boundary is invisible from one call. Following the cursor is
       // what stops the sweeper from silently only ever seeing the first 1,000 names.

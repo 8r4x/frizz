@@ -54,6 +54,7 @@ export const RESERVED_CLAIM_NAMES: ReadonlySet<string> = new Set([
   "ns",
   "ns1",
   "ns2",
+  "registrar",
   "root",
   "smtp",
   "ssl",

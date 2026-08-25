@@ -30,10 +30,16 @@ export interface ClaimStore {
   remove(name: string): Promise<void>
   /** Every claimed name. Used by the sweeper; the claim path never needs it. */
   list(): Promise<string[]>
+  /** The name this key already holds, if any. One key, one name. */
+  readOwner(pubkey: string): Promise<string | null>
+  writeOwner(pubkey: string, name: string): Promise<void>
+  removeOwner(pubkey: string): Promise<void>
 }
 
 export interface CloudflareApi {
   createTunnel(name: string): Promise<{ id: string; token: string }>
+  /** The tunnel with this name, if the account already has one. Used to reclaim an orphan. */
+  findTunnel(name: string): Promise<{ id: string } | null>
   /** Re-read an existing tunnel's run token, so a renewal need not destroy and recreate the tunnel. */
   tunnelToken(id: string): Promise<string>
   setTunnelIngress(id: string, hostname: string, service: string): Promise<void>
@@ -50,7 +56,12 @@ export interface ClaimDeps {
   now: () => number
 }
 
-export type ClaimFailure = ClaimRejection | "name-taken" | "malformed" | "provisioning-failed"
+export type ClaimFailure =
+  | ClaimRejection
+  | "name-taken"
+  | "malformed"
+  | "provisioning-failed"
+  | "one-name-per-key"
 
 export type ClaimOutcome =
   | { status: 200; body: { hostname: string; token: string; leaseExpiresAt: number; renewed: boolean } }
@@ -67,6 +78,8 @@ const MESSAGES: Record<ClaimFailure, string> = {
   "name-taken": "that name belongs to someone else",
   malformed: "the request body was not a claim",
   "provisioning-failed": "the name could not be provisioned; nothing was left behind",
+  "one-name-per-key":
+    "this machine already holds a name — release it first, or claim from a different Frizz identity",
 }
 
 const reject = (error: ClaimFailure, status: 400 | 409 | 502 = 400): ClaimOutcome => ({
@@ -96,9 +109,27 @@ export async function handleClaim(body: unknown, deps: ClaimDeps): Promise<Claim
     // below: this branch only fires when somebody asks for this exact name, so a name nobody wants
     // would hold its DNS record and tunnel forever, against caps of 200 and 1,000.
     if (!claimLeaseExpired(existing.renewedAt, now)) return reject("name-taken", 409)
-    await releaseQuietly(deps, name, hostname, existing.tunnelId)
+    // If the old tunnel will not die, do NOT proceed: creating its replacement would fail on the
+    // duplicate name anyway, and we would have dropped the registry row on the way there.
+    if (!(await releaseQuietly(deps, name, hostname, existing.tunnelId, existing.pubkey))) {
+      return reject("provisioning-failed", 502)
+    }
   } else if (existing) {
     return renew(existing, { name, hostname, port, pubkey }, deps, now)
+  }
+
+  // ONE LIVE NAME PER KEY. Without it a loop of generated keypairs takes the whole namespace, and the
+  // zone caps at 200 records. This is a speed bump rather than a wall — keys are free, so a determined
+  // squatter just makes more — and the real answer is tying a claim to an identity that costs
+  // something to obtain. It closes the trivial version, which is the one that happens by accident.
+  const held = await deps.store.readOwner(pubkey)
+  if (held && held !== name) {
+    const other = await deps.store.read(held)
+    if (other && other.pubkey === pubkey && !claimLeaseExpired(other.renewedAt, now)) {
+      return reject("one-name-per-key", 409)
+    }
+    // The index outlived the name it pointed at, so it is stale rather than binding.
+    await deps.store.removeOwner(pubkey)
   }
 
   return create({ name, hostname, port, pubkey }, deps, now)
@@ -139,6 +170,12 @@ async function create(target: ClaimTarget, deps: ClaimDeps, now: number): Promis
   const tunnelName = tunnelNameForClaim(target.name)
   let tunnel: { id: string; token: string }
   try {
+    // RECLAIM AN ORPHAN FIRST. Cloudflare refuses a duplicate tunnel name (error 1013), so a tunnel
+    // that outlived its registry row would make its name permanently unclaimable — every future
+    // attempt failing on a collision with something nothing knows how to find. Reaching here means
+    // the registry believes the name is free, so any tunnel still wearing it is by definition unowned.
+    const orphan = await deps.api.findTunnel(tunnelName)
+    if (orphan) await deps.api.deleteTunnel(orphan.id)
     tunnel = await deps.api.createTunnel(tunnelName)
   } catch {
     return reject("provisioning-failed", 502)
@@ -154,10 +191,11 @@ async function create(target: ClaimTarget, deps: ClaimDeps, now: number): Promis
       claimedAt: now,
       renewedAt: now,
     })
+    await deps.store.writeOwner(target.pubkey, target.name)
   } catch {
     // UNWIND, or the account leaks a tunnel on every failed claim. Tunnels are capped at 1,000 per
     // account, so a leak here is not untidiness — it is a countdown to the product stopping.
-    await releaseQuietly(deps, target.name, target.hostname, tunnel.id)
+    await releaseQuietly(deps, target.name, target.hostname, tunnel.id, target.pubkey)
     return reject("provisioning-failed", 502)
   }
 
@@ -173,18 +211,28 @@ async function create(target: ClaimTarget, deps: ClaimDeps, now: number): Promis
 }
 
 /**
- * Tear a name down, ignoring failures.
+ * Tear a name down without throwing, reporting whether the TUNNEL actually went.
  *
- * Every caller is already handling a failure or reclaiming a lapsed name, and neither has anything
- * better to do if cleanup also fails. Each step is attempted independently so one dead resource does
- * not strand the other two.
+ * The registry row is removed only once its tunnel is gone, and that ordering is the whole point.
+ * Forgetting a name whose tunnel survives strands it permanently: the registry says the name is free,
+ * but Cloudflare refuses to create a second tunnel with that name (error 1013), so nobody can ever
+ * claim it again and nothing left knows which tunnel to blame. Keeping the row instead leaves the name
+ * merely taken, which the next lapse or sweep can still resolve.
  */
-async function releaseQuietly(deps: ClaimDeps, name: string, hostname: string, tunnelId: string): Promise<void> {
-  await Promise.allSettled([
+async function releaseQuietly(
+  deps: ClaimDeps,
+  name: string,
+  hostname: string,
+  tunnelId: string,
+  pubkey: string
+): Promise<boolean> {
+  const [, tunnel] = await Promise.allSettled([
     deps.api.deleteDnsRecord(hostname),
     deps.api.deleteTunnel(tunnelId),
-    deps.store.remove(name),
   ])
+  if (tunnel.status !== "fulfilled") return false
+  await Promise.allSettled([deps.store.remove(name), deps.store.removeOwner(pubkey)])
+  return true
 }
 
 /**
@@ -216,7 +264,7 @@ export async function sweepExpiredClaims(
     if (released.length + failed.length >= limit) continue
     const hostname = `${name}.${deps.zone}`
     try {
-      await release(deps, name, hostname, record.tunnelId)
+      await release(deps, name, hostname, record.tunnelId, record.pubkey)
       released.push(name)
     } catch {
       // Kept in the registry deliberately. A name whose Cloudflare resources could not be removed
@@ -229,8 +277,15 @@ export async function sweepExpiredClaims(
 }
 
 /** Tear a name down, reporting failure. The claim path uses the quiet variant below. */
-async function release(deps: ClaimDeps, name: string, hostname: string, tunnelId: string): Promise<void> {
+async function release(
+  deps: ClaimDeps,
+  name: string,
+  hostname: string,
+  tunnelId: string,
+  pubkey: string
+): Promise<void> {
   await deps.api.deleteDnsRecord(hostname)
   await deps.api.deleteTunnel(tunnelId)
   await deps.store.remove(name)
+  await deps.store.removeOwner(pubkey)
 }

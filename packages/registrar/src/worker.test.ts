@@ -91,6 +91,17 @@ test("an unparseable KV row reads as absent, so one bad row cannot strand a name
   assert.equal(await store.read("colin"), null)
 })
 
+test("the owner index round-trips under its own prefix", async () => {
+  const kv = fakeKv()
+  const store = kvClaimStore(kv)
+  await store.writeOwner("pubkey-a", "colin")
+  assert.equal(await store.readOwner("pubkey-a"), "colin")
+  // It must not show up as a claimed NAME, or the sweeper would try to release a public key.
+  assert.deepEqual(await store.list(), [])
+  await store.removeOwner("pubkey-a")
+  assert.equal(await store.readOwner("pubkey-a"), null)
+})
+
 test("listing strips the key prefix and ignores anything that is not a claim", async () => {
   // The sweeper works from this list, so a prefix left on a name would build a hostname like
   // `claim:colin.frizz.sh` and delete nothing that exists.

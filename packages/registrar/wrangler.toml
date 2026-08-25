@@ -8,6 +8,12 @@ compatibility_date = "2026-08-24"
 
 # Daily sweep of lapsed leases. Without it the 200-record and 1,000-tunnel caps fill with names
 # nobody uses any more, and new signups stop for a reason nothing points at.
+# A custom domain rather than a workers.dev subdomain: the CLI's DEFAULT_REGISTRAR points here, and a
+# name we control is one we can move to different infrastructure later without shipping a new CLI.
+[[routes]]
+pattern = "registrar.frizz.sh"
+custom_domain = true
+
 [triggers]
 crons = ["17 4 * * *"]
 
@@ -20,8 +26,7 @@ FRIZZ_ZONE = "frizz.sh"
 #   wrangler secret put CF_ZONE_ID
 
 # One small JSON row per claimed name: owner public key, tunnel id, port, and the lease timestamps.
-# Create it first and paste the id back here:
-#   wrangler kv namespace create CLAIMS
+# Recreate with `wrangler kv namespace create CLAIMS` and paste the new id here.
 [[kv_namespaces]]
 binding = "CLAIMS"
-id = "REPLACE_WITH_THE_ID_FROM_wrangler_kv_namespace_create"
+id = "aa4a9c11473d4511a556e3e3a6857058"
