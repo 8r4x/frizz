@@ -12,6 +12,7 @@ import {
   promptForCloudName,
   readCloudConfig,
   readTunnelToken,
+  REGISTRAR_IS_LIVE,
   resolveRunToken,
   resolveTunnelConfigPath,
   startTunnel,
@@ -132,10 +133,12 @@ test("a bare word claims a name; anything with a dot keeps the bring-your-own pa
 test("a name that cannot be claimed says WHY, before any network call", async () => {
   const home = tempHome();
   try {
-    // No registrar is running, so reaching one would surface as a connection error rather than these.
-    await assert.rejects(establishCloudConfig("www", 9393, home), /reserved/);
-    await assert.rejects(establishCloudConfig("ab", 9393, home), /3-63 characters/);
-    await assert.rejects(establishCloudConfig("has space", 9393, home), /letters, digits and hyphens/);
+    // An unreachable origin is named explicitly, which both bypasses the availability gate and proves
+    // these refusals happen locally: reaching the network would surface as a connection error instead.
+    const dead = "http://127.0.0.1:1";
+    await assert.rejects(establishCloudConfig("www", 9393, home, dead), /reserved/);
+    await assert.rejects(establishCloudConfig("ab", 9393, home, dead), /3-63 characters/);
+    await assert.rejects(establishCloudConfig("has space", 9393, home, dead), /letters, digits and hyphens/);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -230,6 +233,38 @@ test("a first claim that cannot reach the registrar points at the path that work
       /could not reach the Frizz registrar[\s\S]*tunnel of your own/,
     );
   } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("until the registrar ships, a bare name is refused up front rather than at a dead end", async () => {
+  // The whole gate is one constant. Without it every user who types a name walks into a connection
+  // error for a service that does not exist yet.
+  const home = tempHome();
+  const saved = process.env.FRIZZ_REGISTRAR;
+  delete process.env.FRIZZ_REGISTRAR;
+  try {
+    assert.equal(REGISTRAR_IS_LIVE, false, "flip this when the Worker is deployed");
+    await assert.rejects(establishCloudConfig("colin", 9393, home), /not available yet[\s\S]*hostname rather than a bare name/);
+    // A hostname still works, because that path never needed us.
+    assert.deepEqual(await establishCloudConfig("board.example.com", 9393, home), {
+      hostname: "board.example.com",
+      tunnel: "board",
+    });
+  } finally {
+    if (saved !== undefined) process.env.FRIZZ_REGISTRAR = saved;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("naming a registrar explicitly bypasses the gate, which is how the deploy gets tested", async () => {
+  const home = tempHome();
+  const server = await claimServer();
+  try {
+    const config = await establishCloudConfig("colin", 9393, home, server.origin);
+    assert.deepEqual(config, { hostname: "colin.frizz.sh", claim: "colin" });
+  } finally {
+    await server.close();
     rmSync(home, { recursive: true, force: true });
   }
 });

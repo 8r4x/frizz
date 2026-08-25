@@ -47,6 +47,18 @@ export interface CloudConfig {
   claim?: string;
 }
 
+/**
+ * Is there a registrar to claim names from yet?
+ *
+ * FLIP THIS TO `true` WHEN THE WORKER IS DEPLOYED — it is the whole gate, and the only line that has
+ * to change. Until then a bare name has nothing to talk to, and offering the option anyway means every
+ * user who tries it walks into a connection error for a service they have never heard of.
+ *
+ * Setting `FRIZZ_REGISTRAR` bypasses this, which is how the deployment gets tested before it takes
+ * the default hostname.
+ */
+export const REGISTRAR_IS_LIVE = false;
+
 /** A claimed name runs a remotely-managed tunnel; a hand-made one runs by name from a config file. */
 export function isClaimedConfig(config: CloudConfig): boolean {
   return typeof config.claim === "string" && config.claim.length > 0;
@@ -158,6 +170,14 @@ export async function establishCloudConfig(
     // A hostname: the operator owns the tunnel, so fall back to asking which one, as before.
     const hostname = normalizeHostname(answer);
     return { hostname, tunnel: hostname.split(".")[0]! };
+  }
+
+  if (!REGISTRAR_IS_LIVE && !origin && !process.env.FRIZZ_REGISTRAR) {
+    throw new Error(
+      "claiming a name on frizz.sh is not available yet.\n" +
+        "       Reach this board through a tunnel of your own instead — see docs/remote-access.md — and\n" +
+        "       answer with its hostname rather than a bare name.",
+    );
   }
 
   if (!claimNameIsValid(answer)) {
