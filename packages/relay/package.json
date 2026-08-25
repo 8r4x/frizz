@@ -1,0 +1,9 @@
+{
+  "name": "@frizz/relay",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/worker.ts" },
+  "dependencies": { "@frizz/shared": "workspace:*" },
+  "devDependencies": { "typescript": "^5.7" }
+}
