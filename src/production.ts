@@ -8,6 +8,19 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { launchApp, launchBrowserTab } from "./browser.ts";
+import { loadOrCreateSessionKey } from "@frizz/server/access-codes";
+import { installAccessPane, type AccessPane } from "./access-pane.ts";
+import {
+  establishCloudConfig,
+  promptForCloudName,
+  readCloudConfig,
+  readTunnelToken,
+  resolveRunToken,
+  startTunnel,
+  writeCloudConfig,
+  type CloudConfig,
+  type TunnelHandle,
+} from "./cloud.ts";
 import { Readout, renderSupervisorActivity, tildePath } from "./readout.ts";
 import {
   appendCrashRecord,
@@ -143,6 +156,23 @@ trades the code for a session cookie, so the link itself stops working the momen
   process.exit(0);
 }
 if (options.dev || rawArgs.includes("--prod")) fail("--dev and --prod are not available from the registry launcher");
+
+/**
+ * `--cloud` resolves a saved hostname into `publicOrigin`, exactly as `--public-origin` would.
+ *
+ * This launcher went a whole release without it: the flag was in the help text above and in the docs,
+ * and the published binary did nothing with it. Everything remote-access — access codes, the QR, the
+ * persisted session key, the tunnel child — existed only in frizz-dev, so the feature was advertised
+ * to every npm user and available to none of them.
+ */
+let cloudConfig: CloudConfig | null = options.cloud ? readCloudConfig() : null;
+if (cloudConfig) options.publicOrigin = `https://${cloudConfig.hostname}`;
+let tunnel: TunnelHandle | null = null;
+let accessPane: AccessPane | null = null;
+/** The single-use link this launch minted, read by the readout below. */
+let activeAccessLink: { url: string } | null = null;
+/** True when this run performed the first claim, whose reply already wrote a run token. */
+let justClaimed = false;
 
 const bind = (() => {
   try { return resolveBindSelection(options, process.env); } catch (error) { return fail(error); }
@@ -325,7 +355,7 @@ async function openOrPrint(port: number, reused: boolean, path = ""): Promise<vo
     console.log(`${reused ? "reusing" : "started"} Frizz ${PACKAGE_VERSION} for ${workspace.root}`);
     console.log(url);
     for (const address of network) console.log(address);
-    if (publicOrigin) console.log(`${publicOrigin}/${bind.publicToken ? `?frizz_token=${bind.publicToken}` : ""}`);
+    if (publicOrigin) console.log(activeAccessLink?.url ?? `${publicOrigin}/`);
     for (const warning of warnings) console.log(warning);
     return;
   }
@@ -334,7 +364,7 @@ async function openOrPrint(port: number, reused: boolean, path = ""): Promise<vo
     [
       { label: "Local", value: boardAddress(url), accent: true },
       ...network.map((address) => ({ label: "Network", value: `${address}/`, accent: true })),
-      ...(publicOrigin ? [{ label: "Public", value: `${publicOrigin}/${bind.publicToken ? `?frizz_token=${bind.publicToken}` : ""}`, accent: true }] : []),
+      ...(publicOrigin ? [{ label: "Public", value: activeAccessLink?.url ?? `${publicOrigin}/`, accent: true }] : []),
       { label: "Project", value: `${workspace.name} — ${tildePath(workspace.root, home)}` },
       ...(logger.file ? [{ label: "Logs", value: tildePath(logger.file, home) }] : []),
     ],
@@ -404,12 +434,22 @@ async function runSupervisor(port: number, token: string): Promise<never> {
   const updateAvailablePoll = setInterval(() => void refreshUpdateAvailable(), 30 * 60 * 1000);
   updateAvailablePoll.unref();
 
+  if (options.cloud && !cloudConfig) {
+    // First run only. Asking here rather than at import keeps the question off every other launch.
+    cloudConfig = await establishCloudConfig(await promptForCloudName(), port);
+    writeCloudConfig(cloudConfig);
+    bind.publicOrigin = `https://${cloudConfig.hostname}`;
+    justClaimed = true;
+  }
+
   const supervisor = await startDevSupervisor({
     port,
     host: bind.host,
     allowedHosts: bind.allowedHosts,
       ...(bind.publicOrigin ? { publicOrigin: bind.publicOrigin } : {}),
       ...(bind.publicToken ? { publicToken: bind.publicToken } : {}),
+    // Persisted beside the project's other state, so a restart does not sign every device out.
+    ...(bind.publicOrigin ? { sessionKey: loadOrCreateSessionKey(workspace.stateDir) } : {}),
     cwd: workspace.root,
     stateDir: workspace.stateDir,
     launchTarget: target,
@@ -453,12 +493,51 @@ async function runSupervisor(port: number, token: string): Promise<never> {
       process.exit(0);
     },
   });
+  // The first single-use link, minted now that the board can redeem it. The old `?frizz_token=` this
+  // replaced was a STANDING secret: it never expired and never rotated, so anything that saw it once
+  // — a screenshot, scrollback, a chat log — kept working forever.
+  activeAccessLink = bind.publicOrigin ? supervisor.issueAccessLink() : null;
+
+  if (cloudConfig) {
+    // The tunnel is a CHILD of this launcher, so the two halves share a lifetime. A tunnel outliving
+    // its board serves Cloudflare 1033; a board outliving its tunnel is unreachable with nothing to
+    // say why. Both were reachable when these were separate commands.
+    const runToken = justClaimed
+      ? readTunnelToken()
+      : await resolveRunToken(cloudConfig, port, homedir(), (message) => {
+          logger.warn("tunnel", message);
+          console.error(`frizz: ${message}`);
+        });
+    tunnel = startTunnel(
+      cloudConfig,
+      (code) => {
+        if (code === 0 || code === null) return;
+        logger.error("tunnel", `cloudflared exited with code ${code}; the public hostname is now unreachable`);
+      },
+      (message) => {
+        logger.error("tunnel", message);
+        console.error(`frizz: ${message}`);
+      },
+      homedir(),
+      runToken ?? undefined,
+    );
+    logger.info("tunnel", `running cloudflared for ${cloudConfig.hostname}`);
+  }
+
+  // "Press L for a fresh link" — the only way to reissue without restarting. Null when stdout is not
+  // a terminal, which leaves the plain records path untouched.
+  if (bind.publicOrigin) accessPane = installAccessPane({ issue: () => supervisor.issueAccessLink() });
+
   const stop = createSupervisorShutdownHandler({
     close: () => supervisor.close(),
     force: () => supervisor.forceStop(),
     release: () => owner.release(),
     exit: (code) => {
       logger.info("launcher", `stopped with code ${code}`);
+      // Before the farewell, or the operator's shell is left in raw mode echoing nothing.
+      accessPane?.dispose();
+      // Down with the board: a surviving cloudflared keeps the hostname resolving to a 530.
+      tunnel?.stop();
       const suffix = logger.file ? `\n  log: ${tildePath(logger.file, homedir())}` : "";
       process.stdout.write(
         code === 0
