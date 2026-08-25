@@ -8,11 +8,19 @@ compatibility_date = "2026-08-24"
 
 # Daily sweep of lapsed leases. Without it the 200-record and 1,000-tunnel caps fill with names
 # nobody uses any more, and new signups stop for a reason nothing points at.
-# A custom domain rather than a workers.dev subdomain: the CLI's DEFAULT_REGISTRAR points here, and a
-# name we control is one we can move to different infrastructure later without shipping a new CLI.
+# AN EXPLICIT ROUTE, NOT JUST A CUSTOM DOMAIN.
+#
+# The relay owns `*.frizz.sh/*`, and a WORKERS ROUTE BEATS A CUSTOM DOMAIN — so once the relay shipped,
+# the wildcard swallowed registrar.frizz.sh and signup started answering "No Frizz board has claimed
+# this name." A more specific route wins over the wildcard and puts this back. Both are declared: the
+# custom domain provisions the hostname, the route decides who serves it.
 [[routes]]
 pattern = "registrar.frizz.sh"
 custom_domain = true
+
+[[routes]]
+pattern = "registrar.frizz.sh/*"
+zone_name = "frizz.sh"
 
 [triggers]
 crons = ["17 4 * * *"]

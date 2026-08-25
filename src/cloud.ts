@@ -7,6 +7,7 @@ import { claimNameIsValid, normalizeClaimName } from "@frizz/shared";
 import { loadOrCreateClaimIdentity } from "./identity.ts";
 import { githubCli, type GithubIdentity } from "./github-identity.ts";
 import { ClaimError, claimName } from "./registrar-client.ts";
+import { connectRelay } from "./relay-connection.ts";
 
 /**
  * `frizz up` — one command for "start the server and reach it from anywhere".
@@ -281,6 +282,43 @@ export function resolveTunnelConfigPath(config: CloudConfig, home = homedir()): 
 export interface TunnelHandle {
   child: ChildProcess;
   stop: () => void;
+}
+
+/** Whatever is currently making the board reachable — a tunnel child, or a socket to the relay. */
+export interface CloudTransport {
+  stop: () => void;
+}
+
+/**
+ * Open the board's connection to the relay.
+ *
+ * There is no child process here and nothing to install: the board dials out and holds one socket. A
+ * board behind any NAT works with no configuration, because nothing ever dials IN.
+ */
+export async function startRelay(
+  config: CloudConfig,
+  port: number,
+  home = homedir(),
+  onStatus?: (message: string) => void,
+): Promise<CloudTransport> {
+  const identity = await loadOrCreateClaimIdentity(home);
+  const origin = `https://${config.hostname}`;
+  return connectRelay({
+    name: config.claim!,
+    identity,
+    // The board's own hostname IS the relay: one wildcard record puts it in front of every name.
+    relayOrigin: origin,
+    boardOrigin: `http://127.0.0.1:${port}`,
+    publicOrigin: origin,
+    ...(onStatus
+      ? {
+          onStatus: (status, detail) => {
+            if (status === "connected") onStatus(`connected to the Frizz relay for ${config.hostname}`);
+            else if (status === "retrying") onStatus(`relay: ${detail ?? "reconnecting"}`);
+          },
+        }
+      : {}),
+  });
 }
 
 /**

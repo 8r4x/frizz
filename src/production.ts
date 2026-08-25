@@ -13,13 +13,15 @@ import { installAccessPane, type AccessPane } from "./access-pane.ts";
 import {
   establishCloudConfig,
   promptForCloudName,
+  isRelayConfig,
   readCloudConfig,
   readTunnelToken,
   resolveRunToken,
+  startRelay,
   startTunnel,
   writeCloudConfig,
   type CloudConfig,
-  type TunnelHandle,
+  type CloudTransport,
 } from "./cloud.ts";
 import { Readout, renderSupervisorActivity, tildePath } from "./readout.ts";
 import {
@@ -167,7 +169,7 @@ if (options.dev || rawArgs.includes("--prod")) fail("--dev and --prod are not av
  */
 let cloudConfig: CloudConfig | null = options.cloud ? readCloudConfig() : null;
 if (cloudConfig) options.publicOrigin = `https://${cloudConfig.hostname}`;
-let tunnel: TunnelHandle | null = null;
+let tunnel: CloudTransport | null = null;
 let accessPane: AccessPane | null = null;
 /** The single-use link this launch minted, read by the readout below. */
 let activeAccessLink: { url: string } | null = null;
@@ -499,29 +501,45 @@ async function runSupervisor(port: number, token: string): Promise<never> {
   activeAccessLink = bind.publicOrigin ? supervisor.issueAccessLink() : null;
 
   if (cloudConfig) {
-    // The tunnel is a CHILD of this launcher, so the two halves share a lifetime. A tunnel outliving
-    // its board serves Cloudflare 1033; a board outliving its tunnel is unreachable with nothing to
-    // say why. Both were reachable when these were separate commands.
-    const runToken = justClaimed
-      ? readTunnelToken()
-      : await resolveRunToken(cloudConfig, port, homedir(), (message) => {
-          logger.warn("tunnel", message);
+      // A claimed name is served by the RELAY: the board dials out and holds one socket, so there is
+      // no tunnel to run and nothing for the operator to install. The tunnel branch below is the older
+      // path, kept for configs written before the relay existed.
+      if (isRelayConfig(cloudConfig)) {
+        // Renew the lease first. A relay name gets no run token back, but the call is what keeps the
+        // claim alive — skip it and the name lapses after 30 days while the board is still serving it.
+        if (!justClaimed) {
+          await resolveRunToken(cloudConfig, port, homedir(), (message) => {
+            logger.warn("relay", message);
+            console.error(`frizz: ${message}`);
+          });
+        }
+        tunnel = await startRelay(cloudConfig, port, homedir(), (message) => logger.info("relay", message));
+        logger.info("relay", `serving ${cloudConfig.hostname} through the Frizz relay`);
+      } else {
+      // The tunnel is a CHILD of this launcher, so the two halves share a lifetime. A tunnel outliving
+      // its board serves Cloudflare 1033; a board outliving its tunnel is unreachable with nothing to
+      // say why. Both were reachable when these were separate commands.
+      const runToken = justClaimed
+        ? readTunnelToken()
+        : await resolveRunToken(cloudConfig, port, homedir(), (message) => {
+            logger.warn("tunnel", message);
+            console.error(`frizz: ${message}`);
+          });
+      tunnel = startTunnel(
+        cloudConfig,
+        (code) => {
+          if (code === 0 || code === null) return;
+          logger.error("tunnel", `cloudflared exited with code ${code}; the public hostname is now unreachable`);
+        },
+        (message) => {
+          logger.error("tunnel", message);
           console.error(`frizz: ${message}`);
-        });
-    tunnel = startTunnel(
-      cloudConfig,
-      (code) => {
-        if (code === 0 || code === null) return;
-        logger.error("tunnel", `cloudflared exited with code ${code}; the public hostname is now unreachable`);
-      },
-      (message) => {
-        logger.error("tunnel", message);
-        console.error(`frizz: ${message}`);
-      },
-      homedir(),
-      runToken ?? undefined,
-    );
-    logger.info("tunnel", `running cloudflared for ${cloudConfig.hostname}`);
+        },
+        homedir(),
+        runToken ?? undefined,
+      );
+      logger.info("tunnel", `running cloudflared for ${cloudConfig.hostname}`);
+      }
   }
 
   // "Press L for a fresh link" — the only way to reissue without restarting. Null when stdout is not

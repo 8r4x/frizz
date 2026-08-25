@@ -4,12 +4,14 @@ import { loadOrCreateSessionKey } from "@frizz/server/access-codes";
 import {
   establishCloudConfig,
   promptForCloudName,
+  isRelayConfig,
   readCloudConfig,
   readTunnelToken,
   resolveRunToken,
+  startRelay,
   startTunnel,
   writeCloudConfig,
-  type TunnelHandle,
+  type CloudTransport,
 } from "./cloud.ts";
 import { renderQrLines } from "@frizz/server/qr";
 import { SUPERVISOR_ACCESS_CODE_PATH } from "@frizz/server/restart-supervisor";
@@ -268,7 +270,7 @@ let activeAccessLink: { code: string; url: string; expiresAt: number } | null = 
 let accessPane: AccessPane | null = null;
 
 /** The tunnel this launch supervises, so shutdown can take it down with the board. */
-let tunnel: TunnelHandle | null = null;
+let tunnel: CloudTransport | null = null;
 
 /**
  * `--cloud` resolves to a saved hostname, asking once if there is none. It sets publicOrigin exactly
@@ -503,34 +505,50 @@ async function runSupervisor(
     // The supervisor is listening now, so a code minted here is immediately redeemable.
     activeAccessLink = bind.publicOrigin ? supervisor.issueAccessLink() : null;
     if (cloudConfig) {
-      // A claimed name renews its lease on every launch, which is also how it gets this run's token.
-      // Skipped when the claim just happened, since that call already wrote one.
-      const runToken = justClaimed
-        ? readTunnelToken()
-        : await resolveRunToken(cloudConfig, port, homedir(), (message) => {
-            logger.warn("tunnel", message);
+      // A claimed name is served by the RELAY: the board dials out and holds one socket, so there is
+      // no tunnel to run and nothing for the operator to install. The tunnel branch below is the older
+      // path, kept for configs written before the relay existed.
+      if (isRelayConfig(cloudConfig)) {
+        // Renew the lease first. A relay name gets no run token back, but the call is what keeps the
+        // claim alive — skip it and the name lapses after 30 days while the board is still serving it.
+        if (!justClaimed) {
+          await resolveRunToken(cloudConfig, port, homedir(), (message) => {
+            logger.warn("relay", message);
             console.error(`frizz: ${message}`);
           });
-      // The tunnel is a CHILD of this launcher, so the two halves share a lifetime and cannot drift
-      // apart. A tunnel that dies while the board lives is the "Cloudflare error" state; a board that
-      // dies while the tunnel lives is the 530. Both were reachable when these were separate commands.
-      tunnel = startTunnel(
-        cloudConfig,
-        (code) => {
-          if (code === 0 || code === null) return;
-          logger.error("tunnel", `cloudflared exited with code ${code}; the public hostname is now unreachable`);
-        },
-        (message) => {
-          logger.error("tunnel", message);
-          console.error(`frizz: ${message}`);
-        },
-        homedir(),
-        runToken ?? undefined,
-      );
-      logger.info(
-        "tunnel",
-        `running cloudflared for ${cloudConfig.hostname}${cloudConfig.tunnel ? ` (tunnel ${cloudConfig.tunnel})` : ""}`
-      );
+        }
+        tunnel = await startRelay(cloudConfig, port, homedir(), (message) => logger.info("relay", message));
+        logger.info("relay", `serving ${cloudConfig.hostname} through the Frizz relay`);
+      } else {
+        // A claimed name renews its lease on every launch, which is also how it gets this run's token.
+        // Skipped when the claim just happened, since that call already wrote one.
+        const runToken = justClaimed
+          ? readTunnelToken()
+          : await resolveRunToken(cloudConfig, port, homedir(), (message) => {
+              logger.warn("tunnel", message);
+              console.error(`frizz: ${message}`);
+            });
+        // The tunnel is a CHILD of this launcher, so the two halves share a lifetime and cannot drift
+        // apart. A tunnel that dies while the board lives is the "Cloudflare error" state; a board that
+        // dies while the tunnel lives is the 530. Both were reachable when these were separate commands.
+        tunnel = startTunnel(
+          cloudConfig,
+          (code) => {
+            if (code === 0 || code === null) return;
+            logger.error("tunnel", `cloudflared exited with code ${code}; the public hostname is now unreachable`);
+          },
+          (message) => {
+            logger.error("tunnel", message);
+            console.error(`frizz: ${message}`);
+          },
+          homedir(),
+          runToken ?? undefined,
+        );
+        logger.info(
+          "tunnel",
+          `running cloudflared for ${cloudConfig.hostname}${cloudConfig.tunnel ? ` (tunnel ${cloudConfig.tunnel})` : ""}`
+        );
+      }
     }
     // "Press L for a fresh link" — the only way to reissue without restarting the board. Returns null
     // when stdout is not a terminal, which leaves the plain records path completely untouched.
