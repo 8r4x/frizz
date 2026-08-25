@@ -49,7 +49,7 @@
 
         <p>Press <code>L</code> in the board&#8217;s terminal for the same thing without leaving it.</p>
 
-        <blockquote class="callout"><p>Anything that reaches the board can run shell commands as you. Whatever sits in front of the origin <strong>is</strong> the access control — Frizz&#8217;s single-use links gate the first visit, not the network.</p></blockquote>
+        <blockquote class="callout"><p>Anything that gets <em>past</em> this gate can run shell commands as you. The gate is standing, not a formality: every request and every socket has to carry the session, so a device that has not redeemed a link is refused no matter what sits in front. What a tunnel or proxy adds is TLS and a hostname — the authentication is Frizz&#8217;s.</p></blockquote>
 
         <h2>Pick a route</h2>
         <table>

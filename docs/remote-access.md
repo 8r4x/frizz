@@ -17,7 +17,7 @@ npx frizz --link          # a fresh link for a board that is already running
 
 Press `L` in the board's terminal for the same thing without leaving it.
 
-> Anything that reaches the board can run shell commands as you. Whatever sits in front of the origin **is** the access control — Frizz's single-use links gate the first visit, not the network.
+> Anything that gets *past* this gate can run shell commands as you. The gate is standing, not a formality: every request and every socket has to carry the session, so a device that has not redeemed a link is refused no matter what sits in front. What a tunnel or proxy adds is TLS and a hostname — the authentication is Frizz's.
 
 ## A name on frizz.sh
 
