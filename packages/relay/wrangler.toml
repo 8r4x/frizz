@@ -9,7 +9,11 @@ compatibility_date = "2026-08-24"
 # Universal SSL covers `*.frizz.sh` one level deep and no further, which is why the Worker refuses a
 # hostname with a dot left in its label.
 [[routes]]
-pattern = "*.frizz.sh"
+# The trailing /* is NOT optional. A pattern without it matches ONLY the root path, so every other
+# request falls through to the zone's origin — which for a wildcard record is a placeholder address
+# nothing listens on, and Cloudflare answers 522. The board's own root loaded fine and everything
+# else timed out, which is a confusing way to find this out.
+pattern = "*.frizz.sh/*"
 custom_domain = false
 zone_name = "frizz.sh"
 

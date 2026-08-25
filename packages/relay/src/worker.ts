@@ -109,15 +109,19 @@ export class Board {
       const pair = new WebSocketPair()
       const server = pair[1]!
       server.accept()
-      this.relay.attach({
-        send: (data) => server.send(data),
-        close: (code, reason) => server.close(code, reason),
-      })
+      // ONE adapter object, attached and detached. BoardSocket compares by identity so a stale socket
+      // closing late cannot tear down its replacement — handing detach a freshly built object with the
+      // same methods therefore matches nothing, and the board stays "connected" forever after it has
+      // gone. Every visitor then waits out the full request timeout instead of being told it is down.
+      const adapter = {
+        send: (data: string) => server.send(data),
+        close: (code?: number, reason?: string) => server.close(code, reason),
+      }
+      this.relay.attach(adapter)
       server.addEventListener("message", (event) => {
         if (typeof event.data === "string") this.relay.handleFrame(event.data)
       })
-      const drop = () =>
-        this.relay.detach({ send: (d) => server.send(d), close: (c, r) => server.close(c, r) })
+      const drop = () => this.relay.detach(adapter)
       server.addEventListener("close", drop)
       server.addEventListener("error", drop)
       return new Response(null, { status: 101, webSocket: pair[0]! })
@@ -172,7 +176,14 @@ export default {
   async fetch(request: Request, env: RelayEnv): Promise<Response> {
     const url = new URL(request.url)
     const name = boardNameFor(url.hostname, env.FRIZZ_ZONE)
-    if (!name) return new Response("Not found", { status: 404 })
+    if (!name) {
+      // Name the host it refused. A bare "Not found" here is indistinguishable from an unclaimed name
+      // and from a routing mistake, which is exactly the confusion worth spending a line to avoid.
+      return new Response(`${url.hostname} is not a board name under ${env.FRIZZ_ZONE}.`, {
+        status: 404,
+        headers: { "content-type": "text/plain; charset=utf-8" },
+      })
+    }
 
     const owner = await ownerPubkeyFor(env, name)
     if (!owner) {
