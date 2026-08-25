@@ -480,7 +480,12 @@ Unchanged from the original sketch, and it needs no database:
 | Publish the name | `POST /zones/{id}/dns_records` → proxied CNAME `<name>.frizz.sh` → `<id>.cfargotunnel.com` |
 | Return | the per-tunnel run token, and nothing else |
 
-The pubkey has to live somewhere to verify renewals. Put it in the tunnel's own name or metadata rather than standing up D1 for one column — the tunnel record is already per-user, already ours, and already the thing being leased.
+The pubkey has to live somewhere to verify renewals, and so does the lease timestamp. **Workers KV**, one small JSON row per name — decided 2026-08-24 while building it, over two alternatives:
+
+- *Tunnel metadata.* Unverified: the create API's support for arbitrary metadata could not be confirmed from the docs, and a design cannot rest on a field nobody has seen accepted.
+- *A DNS TXT record per owner.* Doubles the record count against a **200-record cap**. That is the one resource this design cannot spend twice.
+
+KV is not the D1 that "no database" was written to avoid — it is a binding, free at this scale, and the lease needs a timestamp Cloudflare's tunnel object does not carry.
 
 ### Why the token split is the whole security argument
 
