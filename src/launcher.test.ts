@@ -518,21 +518,24 @@ test("--allowed-host: repeatable, comma-splittable, lowercased and deduped", () 
 });
 
 test("resolveBindSelection: flags beat the environment, and exposure is derived not declared", () => {
-  assert.deepEqual(resolveBindSelection({ host: undefined, allowedHosts: [] }, {}), {
+  assert.deepEqual(resolveBindSelection({ host: undefined, allowedHosts: [] }, {}, "pupper"), {
     host: "127.0.0.1",
     exposed: false,
     allowedHosts: [],
   });
+  // Exposed, the machine's own names ride along after the operator's, so http://pupper:9393/ works
+  // with no second flag — and the readout gets the name a person will actually type.
   assert.deepEqual(
-    resolveBindSelection({ host: undefined, allowedHosts: [] }, { FRIZZ_HOST: "0.0.0.0", FRIZZ_ALLOWED_HOSTS: "a, B" }),
-    { host: "0.0.0.0", exposed: true, allowedHosts: ["a", "b"] }
+    resolveBindSelection({ host: undefined, allowedHosts: [] }, { FRIZZ_HOST: "0.0.0.0", FRIZZ_ALLOWED_HOSTS: "a, B" }, "pupper"),
+    { host: "0.0.0.0", exposed: true, allowedHosts: ["a", "b", "pupper", "pupper.local"], hostname: "pupper" }
   );
   assert.equal(
-    resolveBindSelection({ host: "10.1.2.3", allowedHosts: [] }, { FRIZZ_HOST: "0.0.0.0" }).host,
+    resolveBindSelection({ host: "10.1.2.3", allowedHosts: [] }, { FRIZZ_HOST: "0.0.0.0" }, "pupper").host,
     "10.1.2.3"
   );
-  // ::1 and localhost are still loopback: asking for them must not print a network warning.
-  assert.equal(resolveBindSelection({ host: "::1", allowedHosts: [] }, {}).exposed, false);
+  // ::1 and localhost are still loopback: asking for them must not print a network warning, and a
+  // loopback policy stays exactly the historical one — no machine name, no hostname to print.
+  assert.deepEqual(resolveBindSelection({ host: "::1", allowedHosts: [] }, {}, "pupper"), { host: "::1", exposed: false, allowedHosts: [] });
   assert.throws(() => resolveBindSelection({ host: undefined, allowedHosts: [] }, { FRIZZ_HOST: "nope" }), /invalid --host/);
 });
 
@@ -554,6 +557,9 @@ test("networkUrls: nothing for loopback, real interfaces for a wildcard bind", (
   ]);
   // A specific address is its own answer — do not enumerate interfaces it is not bound to.
   assert.deepEqual(networkUrls(5173, "10.1.2.3", interfaces), ["http://10.1.2.3:5173"]);
+  // The machine's own name leads when exposed, and is never printed for a loopback bind.
+  assert.deepEqual(networkUrls(5173, "0.0.0.0", interfaces, "pupper"), ["http://pupper:5173", "http://192.168.1.5:5173"]);
+  assert.deepEqual(networkUrls(5173, "127.0.0.1", interfaces, "pupper"), []);
 });
 
 test("workspace identity canonicalizes a symlink and survives spaces", () => {

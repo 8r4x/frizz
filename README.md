@@ -148,8 +148,9 @@ Environment:
   FRIZZ_PUBLIC_TOKEN      standing secret for HEADLESS boxes that cannot show a QR
 
 --host puts a board that can run shell commands as you on the network, and Frizz has no login: anyone
-who reaches the port controls it. Only do this on a network you trust. An IP address works as-is; to
-reach the board by DNS name you must list that name with --allowed-host ("*" allows any).
+who reaches the port controls it. Only do this on a network you trust. An IP address and this
+machine's own hostname work as-is; any other DNS name must be listed with --allowed-host ("*"
+allows any).
 
 --public-origin serves the board through a tunnel or reverse proxy without putting it on the LAN
 at all — Frizz stays on loopback and the tunnel dials it. It prints a SINGLE-USE access link, and
@@ -213,7 +214,7 @@ trades the code for a session cookie, so the link itself stops working the momen
 > npx frizz --host 192.168.1.5  # one interface
 > ```
 >
-> Frizz prints the addresses to use and warns you as it starts. Reaching it by IP works as-is; reach it by name and you have to say so — `--host --allowed-host frizz.local` — because an unlisted name is how DNS rebinding gets a browser to treat an attacker's page as same-origin with your board. `FRIZZ_HOST` and `FRIZZ_ALLOWED_HOSTS` do the same thing when the launch command lives in an image or a unit file.
+> Frizz prints the addresses to use and warns you as it starts. Reaching it by IP or by the machine's own hostname (`http://pupper:9393/`, `http://pupper.local:9393/`) works as-is; any other name you have to say so — `--host --allowed-host frizz.home.arpa` — because an unlisted name is how DNS rebinding gets a browser to treat an attacker's page as same-origin with your board, and the machine's own name is the one nobody off your network can point elsewhere. `FRIZZ_HOST` and `FRIZZ_ALLOWED_HOSTS` do the same thing when the launch command lives in an image or a unit file.
 >
 > Understand what you're turning on. Frizz has no login: reaching the port *is* the authorization, and the board runs shell commands as you. Only do this on a network you trust, and prefer a tunnel (`ssh -L 9393:127.0.0.1:9393 you@box`, using the port Frizz printed, the same on both ends) if you just want your own board from your own laptop — that needs no flag at all.
 

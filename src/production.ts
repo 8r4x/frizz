@@ -131,8 +131,9 @@ Environment:
   FRIZZ_PUBLIC_TOKEN      standing secret for HEADLESS boxes that cannot show a QR
 
 --host puts a board that can run shell commands as you on the network, and Frizz has no login: anyone
-who reaches the port controls it. Only do this on a network you trust. An IP address works as-is; to
-reach the board by DNS name you must list that name with --allowed-host ("*" allows any).
+who reaches the port controls it. Only do this on a network you trust. An IP address and this
+machine's own hostname work as-is; any other DNS name must be listed with --allowed-host ("*"
+allows any).
 
 --public-origin serves the board through a tunnel or reverse proxy without putting it on the LAN
 at all — Frizz stays on loopback and the tunnel dials it. It prints a SINGLE-USE access link, and
@@ -311,7 +312,7 @@ async function openOrPrint(port: number, reused: boolean, path = ""): Promise<vo
     readout?.settle("browser", "done", url);
   }
   // A reuse did not choose this server's bind address or its proxy origin, so it must not claim either.
-  const network = reused ? [] : networkUrls(port, bind.host);
+  const network = reused ? [] : networkUrls(port, bind.host, undefined, bind.hostname);
   const publicOrigin = reused ? undefined : bind.publicOrigin;
   // A reused server was started by someone else's invocation, so these flags did nothing. Say so.
   const networkFlagsIgnored = reused && (bind.publicOrigin !== undefined || bindHostIsExposed(bind.host));

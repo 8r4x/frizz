@@ -7,6 +7,7 @@ import {
   bindHostIsExposed,
   isTrustedLocalHttpRequest,
   isTrustedLocalWebSocketRequest,
+  machineHostNames,
   normalizeAllowedHosts,
   normalizeBindHost,
   normalizePublicOrigin,
@@ -172,6 +173,23 @@ test("an exposed policy admits IP literals and nothing else by default", () => {
   for (const host of [`192.168.1.5:${PORT + 1}`, `user@192.168.1.5:${PORT}`, `192.168.1.5:${PORT}/x`, `3232235781:${PORT}`]) {
     assert.equal(parseLocalHost(host, PORT, EXPOSED), null, host)
   }
+})
+
+test("the machine's own names: the hostname as given, its first label, and that label under .local", () => {
+  assert.deepEqual(machineHostNames("pupper"), ["pupper", "pupper.local"])
+  assert.deepEqual(machineHostNames("Colins-MacBook-Pro.local"), ["colins-macbook-pro.local", "colins-macbook-pro"])
+  assert.deepEqual(machineHostNames("pupper.home.arpa."), ["pupper.home.arpa", "pupper", "pupper.local"])
+  // Nothing to add for a box that calls itself localhost, and an IP is already accepted while exposed.
+  assert.deepEqual(machineHostNames("localhost"), [])
+  assert.deepEqual(machineHostNames("localhost.localdomain"), ["localhost.localdomain"])
+  assert.deepEqual(machineHostNames("192.168.1.5"), [])
+  assert.deepEqual(machineHostNames(""), [])
+  // They are ordinary allowed hosts: exact matches, never a suffix rule.
+  const policy = { exposed: true, allowedHosts: machineHostNames("pupper") }
+  assert.equal(parseLocalHost(`pupper:${PORT}`, PORT, policy)?.hostname, "pupper")
+  assert.equal(parseLocalHost(`PUPPER.local:${PORT}`, PORT, policy)?.hostname, "pupper.local")
+  assert.equal(parseLocalHost(`pupper.evil.com:${PORT}`, PORT, policy), null)
+  assert.equal(parseLocalHost(`notpupper:${PORT}`, PORT, policy), null)
 })
 
 test("a refused Host is named back only when an unlisted DNS name is all that is wrong with it", () => {

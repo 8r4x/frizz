@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { homedir, networkInterfaces } from "node:os";
+import { homedir, hostname as osHostname, networkInterfaces } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
@@ -25,6 +25,7 @@ import {
   ALL_INTERFACES_BIND_HOST,
   bindHostIsExposed,
   LOOPBACK_BIND_HOST,
+  machineHostNames,
   normalizeAllowedHosts,
   normalizeBindHost,
   normalizePublicOrigin,
@@ -366,6 +367,8 @@ export interface BindSelection {
   exposed: boolean;
   /** DNS names accepted as this server's browser authority while exposed. */
   allowedHosts: string[];
+  /** This machine's own name, accepted without a flag while exposed and printed as a network address. */
+  hostname?: string;
   /** Serialized origin of a proxy/tunnel fronting the board, or undefined when none was declared. */
   publicOrigin?: string;
   /** Bearer secret guarding that origin. Always present when publicOrigin is — see resolveBindSelection. */
@@ -378,16 +381,24 @@ export interface BindSelection {
  * The environment variables exist because the people who want this run Frizz from a container or a
  * remote box where the launch command is baked into an image or a systemd unit and adding a flag is
  * the awkward part.
+ *
+ * An exposed bind also lists the machine's own names (see machineHostNames) so that `--host` and then
+ * `http://pupper:9393/` works without a second flag; on loopback they are left out, because the port
+ * is unreachable by any name and the policy must stay exactly the historical one.
  */
 export function resolveBindSelection(
   options: Pick<CliOptions, "host" | "allowedHosts" | "publicOrigin">,
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  machineName: string = osHostname()
 ): BindSelection {
   const fromEnv = env.FRIZZ_HOST?.trim();
   const host = options.host ?? (fromEnv ? normalizeBindHost(fromEnv) : LOOPBACK_BIND_HOST);
+  const exposed = bindHostIsExposed(host);
+  const ownNames = exposed ? machineHostNames(machineName) : [];
   const allowedHosts = normalizeAllowedHosts([
     ...options.allowedHosts,
     ...(env.FRIZZ_ALLOWED_HOSTS ? [env.FRIZZ_ALLOWED_HOSTS] : []),
+    ...ownNames,
   ]);
   // Deliberately independent of `host`: a tunnel runs on this machine and dials the loopback port, so
   // the whole point of naming one is reaching the board from anywhere WITHOUT also putting it on the LAN.
@@ -400,8 +411,9 @@ export function resolveBindSelection(
   const publicToken = publicOrigin ? env.FRIZZ_PUBLIC_TOKEN?.trim() || undefined : undefined;
   return {
     host,
-    exposed: bindHostIsExposed(host),
+    exposed,
     allowedHosts,
+    ...(ownNames.length > 0 ? { hostname: ownNames[0] } : {}),
     ...(publicOrigin ? { publicOrigin } : {}),
     ...(publicToken ? { publicToken } : {}),
   };
@@ -424,16 +436,19 @@ export function boardAddress(url: string): string {
  *
  * A wildcard bind is the common case and reports nothing useful by itself, so enumerate the real
  * interfaces the way every dev server does. Loopback and link-local IPv6 are dropped: the first is
- * already printed as the local URL and the second needs a zone id no one will type.
+ * already printed as the local URL and the second needs a zone id no one will type. The machine's own
+ * name comes first when there is one: it is the address a person will actually type, and printing it
+ * is what tells them it works.
  */
 export function networkUrls(
   port: number,
   host: string,
-  interfaces: () => NodeJS.Dict<import("node:os").NetworkInterfaceInfo[]> = networkInterfaces
+  interfaces: () => NodeJS.Dict<import("node:os").NetworkInterfaceInfo[]> = networkInterfaces,
+  hostname?: string
 ): string[] {
   if (!bindHostIsExposed(host)) return [];
+  const urls: string[] = hostname ? [`http://${hostname}:${port}`] : [];
   const wildcard = host === ALL_INTERFACES_BIND_HOST || host === "::";
-  const urls: string[] = [];
   const push = (address: string, family: string) => {
     if (address.startsWith("fe80:")) return;
     urls.push(family === "IPv6" ? `http://[${address}]:${port}` : `http://${address}:${port}`);
@@ -490,8 +505,9 @@ Commands:
   restart                restart the currently promoted artifact without building
 
 --host puts a board that can run shell commands as you on the network, and Frizz has no login:
-anyone who reaches the port controls it. Only do this on a network you trust. An IP address works
-as-is; to reach the board by DNS name you must list that name with --allowed-host ("*" allows any).
+anyone who reaches the port controls it. Only do this on a network you trust. An IP address and
+this machine's own hostname work as-is; any other DNS name must be listed with --allowed-host
+("*" allows any).
 
 --public-origin serves the board through a tunnel or reverse proxy without putting it on the LAN
 at all — Frizz stays on loopback and the tunnel dials it. It prints a SINGLE-USE access link, and

@@ -847,7 +847,7 @@ async function openOrPrint(
   }
 
   // A reuse did not choose this server's bind address or its proxy origin, so it must not claim either.
-  const network = reused ? [] : networkUrls(port, bind.host);
+  const network = reused ? [] : networkUrls(port, bind.host, undefined, bind.hostname);
   const publicOrigin = reused ? undefined : bind.publicOrigin;
   // A reused server was started by someone else's invocation, so these flags did nothing. Say so.
   const networkFlagsIgnored = reused && (bind.publicOrigin !== undefined || bindHostIsExposed(bind.host));

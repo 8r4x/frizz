@@ -49,7 +49,8 @@ export interface ParsedLocalAuthority {
  * newly enables is DNS rebinding, where an attacker's DOMAIN is made to resolve to this machine so a
  * victim's browser treats an attacker page as same-origin with Frizz. That requires a NAME. An IP
  * literal cannot be rebound — the browser never asks a resolver — so every IP literal is accepted and
- * every DNS name must be named explicitly.
+ * every DNS name must be named explicitly, except the ones this machine is itself known by (see
+ * machineHostNames), which the launcher lists on the operator's behalf.
  */
 export interface LocalAuthorityPolicy {
   /** True once the bind address is not loopback, which is the only thing that widens the rule. */
@@ -334,6 +335,28 @@ export function normalizePublicOrigin(value: string): string {
   if (url.pathname !== "/" || url.search || url.hash) throw invalid("an origin is a scheme and host only, with no path")
   if (!url.hostname) throw invalid("no hostname")
   return url.origin
+}
+
+/**
+ * The names this machine is itself known by, which an exposed board accepts without being told.
+ *
+ * `--host` and then `http://pupper:9393/` is what a person expects to work, and until 2026-08-24 it
+ * did not: the machine's own hostname was refused like any other DNS name, and the operator fell back
+ * to the IP and guessed. It is safe to accept because the rebinding threat needs a name the ATTACKER
+ * controls, and nobody outside this network controls these: a single-label hostname and an mDNS
+ * `.local` name are answered by the LAN's own resolver, never by public DNS, and whoever runs that
+ * resolver is already on the network the board is open to by IP. What stays out, deliberately: any
+ * SUFFIX of the hostname (`pupper.evil.com` is the attacker's name), and any name that merely
+ * resolves to one of our interfaces (that is exactly the state a rebinding attack creates).
+ *
+ * From `os.hostname()`, which is `pupper` on a typical Linux box and `Colins-MacBook-Pro.local` on a
+ * Mac: the name as given, its first label, and that label under `.local` — deduped, lowercased.
+ */
+export function machineHostNames(hostname: string): string[] {
+  const full = hostname.trim().toLowerCase().replace(/\.$/, "")
+  if (!full || full === "localhost" || isIP(full) !== 0) return []
+  const short = full.split(".")[0]!
+  return [...new Set([full, short, `${short}.local`])].filter((name) => name !== "localhost" && name !== "localhost.local")
 }
 
 /** Parse `--allowed-host a --allowed-host b` / `FRIZZ_ALLOWED_HOSTS=a,b` into a deduped lowercase list. */
