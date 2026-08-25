@@ -1,0 +1,2 @@
+# wrangler keeps local build and dev state here; none of it belongs in the repo.
+.wrangler/
