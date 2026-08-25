@@ -70,7 +70,11 @@ test("canonical self generation is tagged and stable", () => {
   const first = currentProcessGeneration()
   const second = currentProcessGeneration()
   assert.deepEqual(second, first)
-  assert.match(first.processStart, /^(?:linux|ps-utc|opaque):/u)
+  // The whole tagged set, spelled out on purpose rather than imported: this is the pin that catches
+  // a marker leaving observeProcessGeneration's matching guard behind. Add a platform tag HERE and
+  // in that guard together, or the new marker is classified as v1 prose and every comparison it
+  // makes silently degrades to `unavailable`.
+  assert.match(first.processStart, /^(?:linux|ps-utc|win32|opaque):/u)
 })
 
 test("property: one exact project admits at most one live owner", (t) => {

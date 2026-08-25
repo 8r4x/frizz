@@ -1635,6 +1635,12 @@ test("workspace status compares a stored generation with a real disposable proce
       observed = defaultProcessPlatformAdapter.observe(child.pid);
     }
     if (!observed.processStart || observed.confidence === "unavailable") {
+      // linux, darwin and win32 all read an external process's birth, so a skip on one of them is a
+      // regression in that branch rather than a platform limit — fail instead of going quiet.
+      assert.ok(
+        !["darwin", "linux", "win32"].includes(process.platform),
+        `${process.platform} must observe an external process generation`
+      );
       t.skip("this platform cannot observe an external process generation");
       return;
     }
