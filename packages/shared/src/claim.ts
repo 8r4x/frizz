@@ -1,0 +1,320 @@
+/**
+ * The claim protocol for `<name>.frizz.sh`.
+ *
+ * A name is owned by whoever holds a private key — there is no account, no email and no password, so
+ * this module is the entire ownership model. The CLI signs a claim; the registration Worker verifies
+ * it and, if the name is free or already belongs to that key, provisions the tunnel and DNS record.
+ *
+ * DEPENDENCY-FREE ON PURPOSE. Both halves run this code, and they run in different places: the CLI on
+ * Node, the Worker on workerd. Web Crypto's Ed25519 is the one primitive both have, so nothing here
+ * imports from `node:` or from the rest of `@frizz/shared` — a Worker can import this single file
+ * without dragging in zod, yaml and 3,600 lines of unrelated types.
+ */
+
+export const CLAIM_PROTOCOL_VERSION = 1
+
+/**
+ * How far a claim's own timestamp may sit from the verifier's clock, in either direction.
+ *
+ * This is a REPLAY WINDOW, not a security boundary: inside it a captured request can be replayed. That
+ * is tolerable because every operation the protocol supports is idempotent for the key that signed it
+ * — claiming a name you already hold, or renewing it, changes nothing. The one case it does not cover
+ * is a port change being replayed back to an older port, which costs a re-claim and nothing else.
+ * Closing it properly needs a server-side nonce set, which is storage this design deliberately avoids.
+ */
+export const CLAIM_MAX_AGE_MS = 5 * 60_000
+
+/** A lease runs 30 days; every launch renews it. An unrenewed name returns to the pool. */
+export const CLAIM_LEASE_MS = 30 * 24 * 60 * 60_000
+
+/**
+ * Names Frizz keeps for itself.
+ *
+ * `_acme-challenge` is the one that actually matters — handing it out would let someone obtain a
+ * certificate for a name in the zone. The rest are the ordinary infrastructure labels that would be
+ * confusing or phishable in someone else's hands.
+ */
+export const RESERVED_CLAIM_NAMES: ReadonlySet<string> = new Set([
+  "_acme-challenge",
+  "acme",
+  "admin",
+  "api",
+  "app",
+  "billing",
+  "blog",
+  "board",
+  "cdn",
+  "dashboard",
+  "docs",
+  "ftp",
+  "help",
+  "localhost",
+  "login",
+  "mail",
+  "ns",
+  "ns1",
+  "ns2",
+  "root",
+  "smtp",
+  "ssl",
+  "staging",
+  "status",
+  "support",
+  "test",
+  "www",
+])
+
+export const CLAIM_NAME_MIN_LENGTH = 3
+export const CLAIM_NAME_MAX_LENGTH = 63
+
+export interface ClaimPayload {
+  /** The label to the left of `.frizz.sh`. */
+  name: string
+  /** Which local port the tunnel's ingress should point at. */
+  port: number
+  /** base64url of the raw 32-byte Ed25519 public key that owns this name. */
+  pubkey: string
+  /** Milliseconds since the epoch, from the CLAIMING machine's clock. */
+  issuedAt: number
+}
+
+export interface ClaimRequest extends ClaimPayload {
+  v: number
+  /** base64url of the 64-byte signature over `claimSigningInput`. */
+  sig: string
+}
+
+export type ClaimRejection =
+  | "bad-version"
+  | "bad-name"
+  | "bad-port"
+  | "bad-pubkey"
+  | "bad-signature"
+  | "expired"
+  | "from-the-future"
+
+export type ClaimVerdict = { ok: true; payload: ClaimPayload } | { ok: false; reason: ClaimRejection }
+
+const BASE64URL = /^[A-Za-z0-9_-]+$/
+
+/**
+ * Web Crypto takes a `BufferSource`, which since TypeScript 5.7 means `Uint8Array<ArrayBuffer>` and
+ * NOT the default `Uint8Array<ArrayBufferLike>` — the latter also admits a SharedArrayBuffer, which
+ * these APIs reject. Naming the concrete backing store here keeps that detail out of every call site.
+ */
+type Bytes = Uint8Array<ArrayBuffer>
+
+function toBase64Url(bytes: ArrayBuffer | Uint8Array): string {
+  const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
+  let binary = ""
+  for (const byte of view) binary += String.fromCharCode(byte)
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
+}
+
+function fromBase64Url(value: string): Bytes | null {
+  if (!BASE64URL.test(value)) return null
+  const padded = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=")
+  try {
+    const binary = atob(padded)
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+    return bytes
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Normalize what a person typed into the DNS label it has to become, or explain why it cannot be one.
+ *
+ * Deliberately strict rather than forgiving: this string becomes a public hostname and a tunnel name,
+ * so "close enough" spellings that differ only in case or a trailing dot must not be able to claim two
+ * different names that read identically.
+ */
+export function normalizeClaimName(raw: string): string {
+  const name = raw.trim().toLowerCase().replace(/\.$/, "")
+  // Reserved FIRST, so the set stays authoritative no matter what the syntax rules below happen to
+  // allow. Several entries (`_acme-challenge`) are already unreachable through the charset rule; that
+  // is belt and braces, and it means loosening the charset later cannot quietly release one of them.
+  if (RESERVED_CLAIM_NAMES.has(name)) throw new Error(`${name} is reserved`)
+  if (name.length < CLAIM_NAME_MIN_LENGTH || name.length > CLAIM_NAME_MAX_LENGTH) {
+    throw new Error(
+      `a name must be ${CLAIM_NAME_MIN_LENGTH}-${CLAIM_NAME_MAX_LENGTH} characters (got ${name.length || 0})`
+    )
+  }
+  if (!/^[a-z0-9-]+$/.test(name)) throw new Error("a name may use only letters, digits and hyphens")
+  if (name.startsWith("-") || name.endsWith("-")) throw new Error("a name may not start or end with a hyphen")
+  // Two hyphens in positions 3-4 is the IDN "punycode" prefix form; a name shaped like one would be
+  // interpreted as an encoded internationalized label by resolvers rather than read literally.
+  if (name.slice(2, 4) === "--") throw new Error("a name may not have two hyphens in the third and fourth positions")
+  return name
+}
+
+export function claimNameIsValid(raw: string): boolean {
+  try {
+    normalizeClaimName(raw)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The exact bytes a claim signs.
+ *
+ * A fixed-order string rather than JSON, because two runtimes serializing "the same" object can order
+ * keys differently and the signature would stop verifying for reasons nobody could see. Every field is
+ * already constrained to exclude the separator, so the encoding cannot be made ambiguous by its input.
+ */
+export function claimSigningInput(payload: ClaimPayload): Bytes {
+  const canonical = [
+    "frizz-claim",
+    `v${CLAIM_PROTOCOL_VERSION}`,
+    payload.name,
+    String(payload.port),
+    payload.pubkey,
+    String(payload.issuedAt),
+  ].join(":")
+  return new TextEncoder().encode(canonical)
+}
+
+export async function generateClaimIdentity(): Promise<CryptoKeyPair> {
+  return (await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"])) as CryptoKeyPair
+}
+
+/** base64url of the raw 32-byte public key — the string that IS the owner's identity. */
+export async function exportClaimPublicKey(key: CryptoKey): Promise<string> {
+  return toBase64Url(await crypto.subtle.exportKey("raw", key))
+}
+
+export async function importClaimPublicKey(pubkey: string): Promise<CryptoKey | null> {
+  const bytes = fromBase64Url(pubkey)
+  if (!bytes || bytes.byteLength !== 32) return null
+  try {
+    return await crypto.subtle.importKey("raw", bytes, { name: "Ed25519" }, true, ["verify"])
+  } catch {
+    return null
+  }
+}
+
+/** PKCS#8 bytes, which is what the CLI writes to `~/.frizz/identity.key` at mode 0600. */
+export async function exportClaimPrivateKey(key: CryptoKey): Promise<Bytes> {
+  return new Uint8Array(await crypto.subtle.exportKey("pkcs8", key))
+}
+
+export async function importClaimPrivateKey(pkcs8: Bytes): Promise<CryptoKey | null> {
+  try {
+    return await crypto.subtle.importKey("pkcs8", pkcs8, { name: "Ed25519" }, true, ["sign"])
+  } catch {
+    return null
+  }
+}
+
+export async function signClaim(
+  payload: Omit<ClaimPayload, "pubkey">,
+  identity: CryptoKeyPair
+): Promise<ClaimRequest> {
+  const pubkey = await exportClaimPublicKey(identity.publicKey)
+  const full: ClaimPayload = { ...payload, name: normalizeClaimName(payload.name), pubkey }
+  const signature = await crypto.subtle.sign({ name: "Ed25519" }, identity.privateKey, claimSigningInput(full))
+  return { v: CLAIM_PROTOCOL_VERSION, ...full, sig: toBase64Url(signature) }
+}
+
+/**
+ * Verify a claim, in the order that gives the most useful answer.
+ *
+ * Cheap structural checks first, signature last — not for speed, but because a request that fails the
+ * signature check after failing validation would be reported as "bad signature", which sends whoever
+ * is debugging it looking at their key instead of at the malformed field they actually sent.
+ *
+ * A valid signature proves POSSESSION OF THE KEY, and nothing about who owns the name. The caller
+ * still has to compare `payload.pubkey` against the key already on record for that name; this function
+ * cannot do it, because it holds no registry.
+ */
+export async function verifyClaim(request: unknown, now: number): Promise<ClaimVerdict> {
+  if (typeof request !== "object" || request === null) return { ok: false, reason: "bad-version" }
+  const candidate = request as Partial<ClaimRequest>
+  if (candidate.v !== CLAIM_PROTOCOL_VERSION) return { ok: false, reason: "bad-version" }
+
+  if (typeof candidate.name !== "string" || !claimNameIsValid(candidate.name)) {
+    return { ok: false, reason: "bad-name" }
+  }
+  // The name must arrive ALREADY normalized. Accepting a spelling that merely normalizes to a valid
+  // name would let two different signed requests describe one hostname.
+  const name = normalizeClaimName(candidate.name)
+  if (name !== candidate.name) return { ok: false, reason: "bad-name" }
+
+  if (
+    typeof candidate.port !== "number" ||
+    !Number.isInteger(candidate.port) ||
+    candidate.port < 1 ||
+    candidate.port > 65535
+  ) {
+    return { ok: false, reason: "bad-port" }
+  }
+  if (typeof candidate.issuedAt !== "number" || !Number.isFinite(candidate.issuedAt)) {
+    return { ok: false, reason: "expired" }
+  }
+  if (typeof candidate.pubkey !== "string" || typeof candidate.sig !== "string") {
+    return { ok: false, reason: "bad-pubkey" }
+  }
+
+  const age = now - candidate.issuedAt
+  if (age > CLAIM_MAX_AGE_MS) return { ok: false, reason: "expired" }
+  if (age < -CLAIM_MAX_AGE_MS) return { ok: false, reason: "from-the-future" }
+
+  const key = await importClaimPublicKey(candidate.pubkey)
+  if (!key) return { ok: false, reason: "bad-pubkey" }
+  const signature = fromBase64Url(candidate.sig)
+  if (!signature || signature.byteLength !== 64) return { ok: false, reason: "bad-signature" }
+
+  const payload: ClaimPayload = {
+    name,
+    port: candidate.port,
+    pubkey: candidate.pubkey,
+    issuedAt: candidate.issuedAt,
+  }
+  const verified = await crypto.subtle.verify(
+    { name: "Ed25519" },
+    key,
+    signature,
+    claimSigningInput(payload)
+  )
+  return verified ? { ok: true, payload } : { ok: false, reason: "bad-signature" }
+}
+
+/** The tunnel name a claim maps to. Prefixed so a user's name can never collide with one of ours. */
+export function tunnelNameForClaim(name: string): string {
+  return `u-${normalizeClaimName(name)}`
+}
+
+/**
+ * Rebuild a whole keypair from the private half alone.
+ *
+ * An Ed25519 private key already contains its public key, so the on-disk identity is just the 48-byte
+ * PKCS#8 blob — there is no second file to keep in step, and no way for the two halves to disagree.
+ * Recovering the public key goes through JWK because Web Crypto will not export `raw` from a private
+ * key, but a private key's JWK carries the public `x` coordinate.
+ */
+export async function claimIdentityFromPrivateKey(pkcs8: Bytes): Promise<CryptoKeyPair | null> {
+  const privateKey = await importClaimPrivateKey(pkcs8)
+  if (!privateKey) return null
+  try {
+    const jwk = await crypto.subtle.exportKey("jwk", privateKey)
+    const publicKey = await crypto.subtle.importKey(
+      "jwk",
+      { kty: jwk.kty, crv: jwk.crv, x: jwk.x },
+      { name: "Ed25519" },
+      true,
+      ["verify"]
+    )
+    return { privateKey, publicKey }
+  } catch {
+    return null
+  }
+}
+
+/** Has a lease lapsed? Used by the sweeper that returns abandoned names to the pool. */
+export function claimLeaseExpired(lastRenewedAt: number, now: number): boolean {
+  return now - lastRenewedAt > CLAIM_LEASE_MS
+}
