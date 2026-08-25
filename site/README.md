@@ -6,7 +6,7 @@ The one-page site at [frizz.sh](https://frizz.sh). Static: no framework, no buil
 | --- | --- |
 | `index.html` | The page. The cursive `fff` mark is inlined from `assets/logo-concepts/final/fff.svg` so the stroke can draw itself on load. |
 | `site.css` | The board's own tokens from `packages/web/src/styles.css`, JetBrains Mono for display and code, the system sans for body text. |
-| `img/` | Copies of the README screenshots in `assets/` — a copy, not a symlink, because the deploy uploads files. Re-copy when a screenshot changes. |
+| `img/` | Screenshots captured from a sandboxed `scripts/adhoc-stack.mjs` instance (seeded threads, no real data), downscaled to ~2x. The picker shot lists `colinhacks/zod` because this repo had one open issue at capture time. |
 | `og.html` | Source for `img/og.png`, the 1200×630 social card. Not deployed (`.vercelignore`). |
 | `fonts/` | JetBrains Mono 2.304 woff2, under the OFL in `fonts/OFL.txt`. |
 
