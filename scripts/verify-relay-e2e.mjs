@@ -19,7 +19,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { WebSocketServer } from "ws";
+import { WebSocket as WsClient, WebSocketServer } from "ws";
 import { exportClaimPublicKey, generateClaimIdentity } from "@frizz/shared";
 import { connectRelay } from "../src/relay-connection.ts";
 
@@ -150,8 +150,10 @@ try {
   // the seam nothing else exercises: the visitor's socket lives in workerd, this one is on loopback,
   // and every keystroke is a frame carried between two different runtimes.
   const wss = new WebSocketServer({ noServer: true });
+  let handshake = {};
   boardServer.on("upgrade", (req, socket, head) => {
     if (!req.url?.startsWith("/terminal")) { socket.destroy(); return; }
+    handshake = req.headers;
     wss.handleUpgrade(req, socket, head, (ws) => {
       ws.on("message", (raw) => ws.send(`pty:${String(raw)}`));
     });
@@ -183,19 +185,30 @@ try {
 
   // A TERMINAL, end to end: visitor → workerd → Durable Object → the board's socket → a real ws server.
   const typed = await new Promise((resolve) => {
-    const visitor = new WebSocket(`ws://ada.localhost:${DEV_PORT}/terminal?id=abc`);
-    const timer = setTimeout(() => resolve({ error: "the terminal never answered" }), 20_000);
-    visitor.addEventListener("open", () => visitor.send("ls -la"));
-    visitor.addEventListener("message", (event) => {
-      clearTimeout(timer);
-      resolve({ data: String(event.data), close: () => visitor.close() });
+    // `ws` rather than the global, so the visitor can carry the identity a browser would. This is the
+    // link nothing else covers: whether workerd puts Origin and Cookie into the frame at all. If it
+    // drops them, the board's access gate never sees a visitor and a real terminal is refused.
+    const visitor = new WsClient(`ws://ada.localhost:${DEV_PORT}/terminal?id=abc`, {
+      headers: { origin: `http://ada.localhost:${DEV_PORT}`, cookie: "frizz_session=probe-value" },
     });
-    visitor.addEventListener("error", () => {
+    const timer = setTimeout(() => resolve({ error: "the terminal never answered" }), 20_000);
+    visitor.on("open", () => visitor.send("ls -la"));
+    visitor.on("message", (raw) => {
+      clearTimeout(timer);
+      resolve({ data: String(raw), close: () => visitor.close() });
+    });
+    visitor.on("error", () => {
       clearTimeout(timer);
       resolve({ error: "the upgrade was refused" });
     });
   });
   check("a terminal opens THROUGH the relay and echoes what was typed", typed.data === "pty:ls -la", typed.error ?? JSON.stringify(typed.data));
+  check(
+    "the visitor's Origin and session cookie survive workerd and reach the board",
+    handshake.origin === `http://ada.localhost:${DEV_PORT}` && handshake.cookie === "frizz_session=probe-value",
+    `origin=${handshake.origin} cookie=${handshake.cookie}`,
+  );
+  check("and the board is addressed by its PUBLIC host, which is what arms the access gate", handshake.host === `ada.localhost:${DEV_PORT}`, `host=${handshake.host}`);
   typed.close?.();
 
   // A path the board has no terminal on must FAIL the upgrade rather than accept a silent socket.
