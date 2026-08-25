@@ -1,15 +1,36 @@
 # Hosted Frizz: `<name>.frizz.sh` as a paid service
 
-Status: **NOT BUILDING** (decided 2026-08-24). No code was written for it. Owner effort: frizz worker thread (remote-access).
+Status: **BUILDING.** Owner effort: frizz worker thread (remote-access). The design to build is [Stage 2, revised](#stage-2-revised-leased-names-keypair-ownership-no-accounts) at the bottom of this file, not the original Stage 2 sketch above it.
 
-The analysis below stands — the Stage 2 mechanism is sound, and it is recorded so nobody has to derive it again. What killed the product is not the mechanism:
+A "NOT BUILDING" verdict sat here on 2026-08-24 and was reversed the same day. It is worth recording why, because three of its four reasons were wrong on facts that were never checked:
 
-- **It contradicts what Frizz is.** "Local only. No cloud, no account, no telemetry" is a headline feature. Hosted subdomains need accounts, a registry, revocation and an operated service.
-- **It buys an abuse surface with no control.** Every board is shell access. Reports about `<someone>.frizz.sh` arrive at the registrant, who can see nothing and fix nothing — the design deliberately keeps us off the data path.
-- **The terms question was never resolved.** Creating tunnels on behalf of other people is what §2.2.1(j) covers, and settling it needs a conversation with Cloudflare.
-- **The value was thin.** It saves a user four `cloudflared` commands against a domain they already own.
+| The objection | What is actually true |
+| --- | --- |
+| No control over abuse | We hold the zone token, so any name dies in ONE API call. We lose visibility into traffic, which is the privacy property we want — not control over the name. |
+| It contradicts "local only, no cloud, no account" | Loopback stays the default and the feature is opt-in. The revised design also has no accounts at all — ownership is a keypair, not a login. |
+| §2.2.1(j) blocks it | (j) is the residual risk, not the operative clause. The operative one is §2.2.1(a) — selling access to the Services, or signing up a third party. Neither happens: users never get a Cloudflare account, dashboard, or API. |
+| The value is thin | It is the difference between "reachable from your phone" and "read a guide, buy a domain, run four commands". |
 
-What replaces it: [docs/remote-access.md](../docs/remote-access.md), a guide per method. The primitive both paths always depended on — `--public-origin` plus single-use access links — shipped and is unaffected.
+The one thing that stands: this must ship as a FEATURE OF FRIZZ, never as a standalone tunnel or proxy product. That is the exact line Cloudflare draws in its SSL-for-SaaS terms — provisioning for end customers inside an integrated application is fine; reselling, standalone service, or handing over dashboard/API access is not.
+
+## There is no alternative mechanism inside Cloudflare — this is forced
+
+Both intuitive alternatives are closed, so the tunnels MUST live in our account. Verified 2026-08-24:
+
+- **A user's own tunnel, in their own Cloudflare account, under our name.** Impossible. The `<id>.cfargotunnel.com` target only resolves for DNS records in the SAME account; a cross-account CNAME returns [error 1014](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-1xxx-errors/error-1014).
+- **Delegating `alice.frizz.sh` to the user as its own zone (NS delegation).** [Subdomain setup is Enterprise-only.](https://developers.cloudflare.com/dns/zone-setups/subdomain-setup/)
+
+So the choice is not between mechanisms. It is: tunnels in our account (below), our own relay (§ Building the tunnel ourselves), or the user brings their own domain (docs/remote-access.md). Only the first delivers `<name>.frizz.sh` with no setup.
+
+## The ceiling, which decides the plan more than anything else
+
+| Limit | Value | Source |
+| --- | --- | --- |
+| DNS records per zone, free | **200** for a zone created after 2024-09-01 — which `frizz.sh` is | [DNS features and plans](https://developers.cloudflare.com/dns/reference/all-features/) |
+| DNS records per zone, Pro/Business | 3,500 | same |
+| Tunnels per account | **1,000**, Enterprise to raise | [Account limits](https://developers.cloudflare.com/cloudflare-one/account-limits/) |
+
+One user costs one DNS record and one tunnel. So the runway is **200 names free → 1,000 on Pro (~$25/mo, capped by tunnels, not records) → an Enterprise conversation**. That cap is a feature of the plan: the Cloudflare conversation about terms happens naturally at the point where you are also asking for a limit increase, rather than as a cold legal question up front.
 
 ## Why
 
@@ -39,10 +60,11 @@ These are the facts the design rests on. Each was checked, not recalled.
 | Cloudflare Access free tier is **50 seats, then $7/user/mo** | [Access pricing](https://www.cloudflare.com/sase/products/access/) |
 | The Zero Trust reselling clause covers **Access, Gateway, RBI, email security, CASB, DLP** — **NOT Tunnel** | [Zero Trust service-specific terms](https://www.cloudflare.com/service-specific-terms-zero-trust-services/), product list read verbatim |
 | The **general** agreement is the real constraint, and it is broader | [Self-Serve Subscription Agreement](https://www.cloudflare.com/terms/) §2.2.1(a) "rent, lease, loan, export, or sell access to the Services to any third party, or sign up for the Services on behalf of a third party"; §2.2.1(j) "use the Services to provide a virtual private network or other similar proxy services" |
+| The zone is capped at **200 DNS records** — it was created after 2024-09-01, and the account move re-created it | [DNS features and plans](https://developers.cloudflare.com/dns/reference/all-features/); 3,500 on Pro/Business |
 | Non-Enterprise accounts cap at **1,000 tunnels** | [Cloudflare One account limits](https://developers.cloudflare.com/cloudflare-one/account-limits/) — also 100 edge connections per tunnel |
 | **Cloudflare for SaaS** is the sanctioned "extend Cloudflare to your end customers" product | [docs](https://developers.cloudflare.com/cloudflare-for-platforms/cloudflare-for-saas/); Shopify, Webflow, Kinsta, Render ship on it |
 | DO **WebSocket hibernation applies to INCOMING connections** (`ctx.acceptWebSocket()`) | [Durable Objects WebSocket docs](https://developers.cloudflare.com/durable-objects/best-practices/websockets/) — the agent dials in, so this is the right direction |
-| `frizz.sh` is active in the **personal** account | zone `2dc5dbf9a1e0f4acf5641c8cae508591`, account `3eef35e2fc9f974f5b2dfaad9f021bbe` |
+| `frizz.sh` moved to its own account on 2026-08-15 | zone `94acd4da90ceb813886c897e7f82a961`, account `dde3ec1f6b1f0a397ea82a9ed322f5ce`. The pre-move zone `2dc5dbf9…` in personal account `3eef35e2…` is DEAD — a token scoped to it authorizes nothing. |
 | Frizz has **no authentication of any kind** today | reaching the port is the authorization; `EXPOSED_WARNING` says so |
 | cloudflared's origin-facing contract | port-less `Host`, `x-forwarded-for`, `x-forwarded-proto: https`, `cf-*`; app reads carry no Origin + `sec-fetch-site: same-origin` |
 
@@ -417,3 +439,59 @@ route is ever revisited — but it solves the cert, not the reachability.
 
 The conclusion that matters: the tunnel is not a compromise forced by laziness. For a laptop it is the
 only mechanism that works at all, and it already has the property that motivated the question.
+
+---
+
+## Stage 2, revised: leased names, keypair ownership, no accounts
+
+This supersedes the "Stage 2, concretely" sketch above. The Cloudflare API calls are unchanged — they are forced, per the section at the top. What changes is everything around them: who owns a name, how long they own it, and what we have to store.
+
+### Ownership is a keypair, not an account
+
+The CLI generates an Ed25519 keypair on first use and writes it to `~/.frizz/identity.key` (0600). That key IS the account. No email, no password, no OAuth, no user table.
+
+```
+POST /claim                       →  { name, port, pubkey, sig }
+```
+
+The Worker verifies the signature over the request body, then issues. Re-registering from a second machine means copying the key file — the same mental model as an SSH key, and the same failure mode: lose the key, lose the name. A recovery address is an opt-in Stage 3 field, not a signup step.
+
+This is what lets the feature keep Frizz's "no account" promise while still having an owner for every name.
+
+### Names are leases, not property
+
+A claim is good for 30 days. Every launch renews it with a signed heartbeat; a name nobody has run in 30 days has its tunnel and DNS record deleted and returns to the pool.
+
+Three problems solved by one rule:
+
+- **Squatting.** A name costs continuous use, not a one-time claim.
+- **The 200/1,000 ceiling.** The registry self-trims, so the cap counts ACTIVE users rather than everyone who ever tried it.
+- **Abandoned liability.** A name pointing at a laptop that no longer exists stops being ours to answer for.
+
+### What the Worker actually does
+
+Unchanged from the original sketch, and it needs no database:
+
+| Step | Call |
+| --- | --- |
+| Is the name taken? | `GET /accounts/{id}/cfd_tunnel?name=u-<name>` — Cloudflare's own list IS the registry |
+| Create | `POST /accounts/{id}/cfd_tunnel` `{name, config_src:"cloudflare"}` → id + run token |
+| Point it at the board | `PUT /accounts/{id}/cfd_tunnel/{id}/configurations` → ingress `http://localhost:<port>` |
+| Publish the name | `POST /zones/{id}/dns_records` → proxied CNAME `<name>.frizz.sh` → `<id>.cfargotunnel.com` |
+| Return | the per-tunnel run token, and nothing else |
+
+The pubkey has to live somewhere to verify renewals. Put it in the tunnel's own name or metadata rather than standing up D1 for one column — the tunnel record is already per-user, already ours, and already the thing being leased.
+
+### Why the token split is the whole security argument
+
+The zone token never leaves the Worker. What reaches a user's machine is a per-tunnel run token, which can run exactly one tunnel and cannot enumerate the zone, create records, or reach another user's tunnel. That asymmetry is why handing it out is safe.
+
+### Revocation
+
+We hold the zone token, so any name is one `DELETE` away — record and tunnel both. Traffic stays invisible to us by design; the name does not. A short AUP has to say the name is ours and can be reclaimed, because that is the only enforcement we have and the only one we need.
+
+### What is genuinely NOT solved
+
+- **The board behind the name is still shell access**, gated by Frizz's single-use links. A leaked link is a leaked shell. This is the same exposure as the self-hosted path, but now under a name we handed out.
+- **The 1,000-tunnel cap** arrives before any Enterprise conversation is scheduled. Plan the conversation for ~700.
+- **Port at claim time** assumes the board keeps that port. Re-claiming on a port change is one more signed call; the CLI should just do it rather than making it a user-visible step.
