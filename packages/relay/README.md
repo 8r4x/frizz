@@ -53,8 +53,9 @@ Two things that will waste your time otherwise:
 
 ```sh
 nub --test packages/relay/src/board-socket.test.ts packages/relay/src/worker.test.ts
-nub scripts/verify-relay-e2e.mjs     # the frames, on real workerd
-nub scripts/verify-relay-gate.mjs    # a relayed terminal against the REAL access gate
+nub scripts/verify-relay-e2e.mjs        # the frames, on real workerd
+nub scripts/verify-relay-gate.mjs       # a relayed terminal against the REAL access gate
+nub scripts/verify-relay-terminal.mjs   # a REAL pty, through the real terminal server
 ```
 
 The unit tests drive the Durable Object's state machine against fakes, which proves each half and
@@ -62,12 +63,18 @@ nothing about the seam between them — and there are three seams here that all 
 the e2e harness runs the real Worker under `wrangler dev`, a real board on loopback, and a real agent
 connecting them, including a terminal typed through both runtimes.
 
-The two harnesses answer different questions, and the second exists because the first cannot. A board
-in `verify-relay-e2e.mjs` is a toy that accepts every upgrade, so a relay forwarding NO visitor identity
-passes there and would fail against the real thing. `verify-relay-gate.mjs` puts the real
-`RestartSupervisorProxy` in the path and asks the only two questions worth asking about a terminal on
-the public internet: an unauthenticated one is REFUSED and never reaches the board, and a visitor
-holding a redeemed session gets through.
+The three harnesses answer different questions, and each later one exists because the earlier cannot.
+A board in `verify-relay-e2e.mjs` is a toy that accepts every upgrade, so a relay forwarding NO visitor
+identity passes there and would fail against the real thing. `verify-relay-gate.mjs` puts the real
+`RestartSupervisorProxy` in the path: an unauthenticated terminal is REFUSED and never reaches the
+board, and a visitor holding a redeemed session gets through. `verify-relay-terminal.mjs` then replaces
+the toy entirely, driving the real terminal server with a real pty behind the injected login source.
+
+**Two measured facts worth not re-deriving.** `wrangler dev` does NOT enforce Cloudflare's 1 MiB
+WebSocket message cap, so an UNCHUNKED build passes the end-to-end reassembly check — the assertion
+that catches it is the unit test on serialized frame size. And `node-pty` delivers in 1 KiB chunks, so
+a terminal alone can never approach that cap; the message that can is a board snapshot, which is why
+`ws-msg` chunks at all.
 
 The first harness uses `localhost` as the zone rather than `frizz.sh`, so `ada.localhost` is a valid board name and
 resolves to loopback without touching DNS. Two traps it exists to remember: `wrangler dev` synthesizes
