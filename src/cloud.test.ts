@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
+import { execFileSync } from "node:child_process";
 import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +20,22 @@ import {
   tunnelTokenPath,
   writeCloudConfig,
 } from "./cloud.ts";
+
+// Claiming a NAME binds it to a GitHub account, so those tests run `gh auth token` for real (see
+// establishCloudConfig → githubAccessToken). A machine without a signed-in `gh` cannot exercise that
+// path at all, and a hard failure there says nothing about the code — it says the environment is
+// incomplete, which is what a skip is for. Same shape as codex-protocol-conformance.test.ts, which
+// skips when codex is not installed. Measured on a fresh Windows Server 2022 box and a fresh Ubuntu
+// box: these four failed identically on both with `GithubIdentityError` while passing on a machine
+// that has `gh`. Every test that does NOT claim a name still runs everywhere.
+function githubCliUsable(): boolean {
+  try {
+    return execFileSync("gh", ["auth", "token"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 20_000 }).trim() !== "";
+  } catch {
+    return false;
+  }
+}
+const needsGh = githubCliUsable() ? false : "no signed-in GitHub CLI; claiming a name cannot be exercised";
 
 /** A registrar that answers every claim, so the CLI side can be driven without one deployed. */
 async function claimServer() {
@@ -144,7 +161,7 @@ test("a name that cannot be claimed says WHY, before any network call", async ()
   }
 });
 
-test("a claimed name stores the token at 0600, apart from the world-readable config", async () => {
+test("a claimed name stores the token at 0600, apart from the world-readable config", { skip: needsGh }, async () => {
   const home = tempHome();
   const server = await claimServer();
   try {
@@ -167,7 +184,7 @@ test("a claimed name stores the token at 0600, apart from the world-readable con
   }
 });
 
-test("a launch renews the lease, and falls back to the cached token when the registrar is down", async () => {
+test("a launch renews the lease, and falls back to the cached token when the registrar is down", { skip: needsGh }, async () => {
   // The registrar is not on the data plane. A board that could not start because a signup service was
   // down would quietly make it one.
   const home = tempHome();
@@ -228,7 +245,7 @@ test("a config naming neither a tunnel nor a claim reads as absent", () => {
   }
 });
 
-test("a first claim that cannot reach the registrar points at the path that works without it", async () => {
+test("a first claim that cannot reach the registrar points at the path that works without it", { skip: needsGh }, async () => {
   // A renewal falls back to its cached token; a FIRST claim has nothing to fall back to, so the
   // operator is left with a network error for a service they have never heard of.
   const home = tempHome();
@@ -258,7 +275,7 @@ test("the offer can be withdrawn by one constant, and a hostname never depended 
   }
 });
 
-test("naming a registrar explicitly bypasses the gate, which is how the deploy gets tested", async () => {
+test("naming a registrar explicitly bypasses the gate, which is how the deploy gets tested", { skip: needsGh }, async () => {
   const home = tempHome();
   const server = await claimServer();
   try {
