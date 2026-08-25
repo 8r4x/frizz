@@ -8,11 +8,11 @@ const tooltipSource = readFileSync(new URL("./Tooltip.tsx", import.meta.url), "u
 test("settings maps each contextual explanation to a help control", () => {
   // `subagentInstructions` is gone: the settings preamble was retired in favour of FRIZZ.md, so there
   // is exactly one operator-authored surface for project conventions.
-  for (const key of ["permissionMode", "font", "compact", "notifications"]) {
+  for (const key of ["permissionMode", "font", "density", "notifications"]) {
     assert.match(source, new RegExp(`\\b${key}:`), `missing settings help mapping: ${key}`)
   }
-  assert.match(source, /label="Claude permissions" help=\{SETTINGS_HELP\.permissionMode\}/)
-  assert.match(source, /label="Compact mode" help=\{SETTINGS_HELP\.compact\}/)
+  assert.match(source, /label="Permissions" help=\{SETTINGS_HELP\.permissionMode\}/)
+  assert.match(source, /label="Density" help=\{SETTINGS_HELP\.density\}/)
   assert.match(source, /label="Desktop notifications" help=\{SETTINGS_HELP\.notifications\}/)
   // The redundant "GitHub picker prompts" group label is gone; each field carries its own label.
   assert.doesNotMatch(source, /label="GitHub picker prompts"/)
@@ -70,6 +70,33 @@ test("notification recovery aligns with its control and keeps recovery instructi
   assert.doesNotMatch(denied, /pl-6/)
   assert.match(denied, /Notifications are blocked for this site/)
   assert.match(denied, /Paste this into a new tab, set Notifications/)
+})
+
+// The drawer opens on what every operator looks at — the interface — and anything that belongs to one
+// runtime sits under a band naming it. Until 2026-08-24 the Claude permission picker was the FIRST
+// field in the form, so the drawer led with one vendor's CLI (maintainer: "weird that the very first
+// setting in the settings panel is Claude-specific").
+test("the form leads with interface preferences and keeps the Claude field under its own band", () => {
+  const form = source.slice(source.indexOf('className="flex-1 overflow-y-auto p-5'), source.indexOf("function SaveStatus"))
+  const fields = [...form.matchAll(/<SettingsField label="([^"]+)"/g)].map((m) => m[1])
+  assert.equal(fields[0], "Font")
+  assert.ok(!fields.includes("Permissions"), "the Claude field is not loose in the general list")
+  // The band precedes its field, and the field's label no longer repeats the band's name.
+  const claude = source.slice(source.indexOf("function ClaudeSection"), source.indexOf("function PromptsSection"))
+  assert.ok(claude.indexOf('<DividerLabel label="Claude" />') < claude.indexOf('<SettingsField label="Permissions"'))
+  assert.doesNotMatch(source, /label="Claude permissions"/)
+  // The band comes after the general fields and before Prompts.
+  assert.ok(form.indexOf("<ClaudeSection") > form.lastIndexOf("<SettingsField"))
+  assert.ok(form.indexOf("<ClaudeSection") < form.indexOf("<PromptsSection"))
+})
+
+// "Compact mode" Off|On told the operator what Off was NOT. A density pair names both states.
+test("diff density is a Comfortable|Compact pair, densest on the right, compact by default", () => {
+  const toggle = source.slice(source.indexOf("function DensityToggle"), source.indexOf("function StickyMessageControl"))
+  assert.match(toggle, /\{ v: false, label: "Comfortable" \},\s*\{ v: true, label: "Compact" \}/)
+  assert.match(toggle, /prefs\.compactDiffs = o\.v/)
+  assert.doesNotMatch(source, /label="Compact mode"/)
+  assert.doesNotMatch(source, /function CompactToggle/)
 })
 
 test("Prompts uses one centered divider without a duplicate section rule", () => {

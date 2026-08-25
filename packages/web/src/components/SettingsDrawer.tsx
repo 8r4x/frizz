@@ -21,7 +21,7 @@ export const SETTINGS_HELP = {
   permissionMode: "The permission mode new Claude Code threads launch with. Auto runs safe actions and asks you to approve the risky ones in the thread. Bypass launches the worker with --dangerously-skip-permissions: it never asks, so nothing waits on you and nothing is checked either. Takes effect on the next thread you dispatch; to change a thread that already exists, use the picker beside its model in the prompt box. Codex threads always run with full workspace access and are unaffected.",
   font: "Changes the interface reading font for this browser.",
   localFileOpener: "Chooses how vetted local artifact links open. Markdown files open in Frizz's own reader (which carries an Open action that uses this setting), and image clicks always use the OS default viewer.",
-  compact: "Collapses long diffs by default in this browser. This takes effect immediately.",
+  density: "How much of a diff shows before you ask for it, in this browser. Compact collapses every diff to its header row (click one to open it); Comfortable shows them in full. Applies immediately.",
   stickyUserMessage: "Keeps your most recent message stuck to the top of a thread while the reply scrolls underneath. It stays collapsed to a small card (hover to expand it) so a long message never blocks much of the view. Applies immediately in this browser.",
   queueOrder: "Orders the Needs-you queue and the sidebar's rested threads by when each was last active. Oldest first (FIFO, default) surfaces the longest-waiting item first so you cycle through everything; Newest first (LIFO) keeps the most recently active on top. Applies immediately in this browser.",
   notifications: "Shows a desktop notification when work needs attention while this window is hidden.",
@@ -199,23 +199,11 @@ export function SettingsDrawer() {
           <div className="p-4 text-[13px] text-muted">Loading…</div>
         ) : (
           <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-6">
-            {/* The launch permission mode for NEW Claude workers. Only the two modes a headless worker
-                can actually run in are offered (see CLAUDE_DISPATCH_PERMISSION_OPTIONS); the server's
-                workerDispatchPermission enforces the same floor, so a restrictive value left in an old
-                DB can never reach a spawn. A stored mode outside the two reads as the "Auto" floor —
-                which is exactly what would be dispatched — rather than rendering the select blank. */}
-            <SettingsField label="Claude permissions" help={SETTINGS_HELP.permissionMode}>
-              <Select
-                variant="bordered"
-                value={draft.permissionMode === "bypassPermissions" ? "bypassPermissions" : "auto"}
-                onValueChange={(v) => update({ ...draft, permissionMode: v as Settings["permissionMode"] })}
-                options={CLAUDE_DISPATCH_PERMISSION_OPTIONS}
-                indicatorPosition="right"
-                ariaLabel="Claude permission mode"
-              />
-              {draft.permissionMode === "bypassPermissions" && <BypassHint />}
-            </SettingsField>
-
+            {/* ORDER: the preferences that shape the interface every operator looks at come first, and
+                anything that belongs to ONE runtime sits under a band that names it. The Claude
+                permission picker led the form until 2026-08-24, so the first thing the drawer said was
+                about one vendor's CLI (maintainer: "weird that the very first setting in the settings
+                panel is Claude-specific"). */}
             <SettingsField label="Font" help={SETTINGS_HELP.font}>
               <FontToggle value={draft.font ?? "mono"} onChange={(font) => update({ ...draft, font })} />
             </SettingsField>
@@ -253,8 +241,8 @@ export function SettingsDrawer() {
 
             {/* A client-only VIEW preference (localStorage, not server Settings): it never travels to
                 the server at all, so it's wired straight to the prefs proxy rather than the draft. */}
-            <SettingsField label="Compact mode" help={SETTINGS_HELP.compact}>
-              <CompactToggle />
+            <SettingsField label="Density" help={SETTINGS_HELP.density}>
+              <DensityToggle />
             </SettingsField>
 
             {/* Also a client-only VIEW preference (localStorage): applies immediately, wired to prefs. */}
@@ -273,6 +261,8 @@ export function SettingsDrawer() {
               <OnOffToggle value={draft.notifications} onChange={toggleNotifications} />
               {draft.notifications && <PermHint perm={perm} />}
             </SettingsField>
+
+            <ClaudeSection draft={draft} setDraft={update} />
 
             <PromptsSection draft={draft} setDraft={update} />
           </div>
@@ -330,6 +320,37 @@ const GH_PROMPT_TOKENS: { token: string; gloss: string }[] = [
   { token: "labels", gloss: "labels" },
   { token: "body", gloss: "description" },
 ]
+
+// "Claude" — what applies to Claude Code workers and nothing else. One band, one field: the launch
+// permission mode for NEW Claude workers. Only the two modes a headless worker can actually run in are
+// offered (see CLAUDE_DISPATCH_PERMISSION_OPTIONS); the server's workerDispatchPermission enforces the
+// same floor, so a restrictive value left in an old DB can never reach a spawn. A stored mode outside
+// the two reads as the "Auto" floor — which is exactly what would be dispatched — rather than
+// rendering the select blank. The band carries the vendor's name so the field itself does not have to.
+function ClaudeSection({
+  draft,
+  setDraft,
+}: {
+  draft: Settings
+  setDraft: (s: Settings) => void
+}) {
+  return (
+    <div className="flex flex-col gap-6">
+      <DividerLabel label="Claude" />
+      <SettingsField label="Permissions" help={SETTINGS_HELP.permissionMode}>
+        <Select
+          variant="bordered"
+          value={draft.permissionMode === "bypassPermissions" ? "bypassPermissions" : "auto"}
+          onValueChange={(v) => setDraft({ ...draft, permissionMode: v as Settings["permissionMode"] })}
+          options={CLAUDE_DISPATCH_PERMISSION_OPTIONS}
+          indicatorPosition="right"
+          ariaLabel="Claude permission mode"
+        />
+        {draft.permissionMode === "bypassPermissions" && <BypassHint />}
+      </SettingsField>
+    </div>
+  )
+}
 
 // "Prompts" — the user-editable prompt text, which is now exactly one box: the GitHub-picker triage
 // template. It PREFILLS with the shipped default (fetched from the server, the single source of truth)
@@ -536,11 +557,32 @@ function OnOffToggle({ value, onChange }: { value: boolean; onChange: (v: boolea
   )
 }
 
-// Compact-diff preference: client-only (localStorage prefs proxy), applies live — diff blocks across
-// the app collapse/expand the instant it flips, with no server round-trip at all.
-function CompactToggle() {
+// Diff density: client-only (localStorage prefs proxy), applies live — diff blocks across the app
+// collapse/expand the instant it flips, with no server round-trip at all. The pair is named for what
+// each one FEELS like rather than Off/On, in the Comfortable|Compact vocabulary Gmail and Trello settled
+// (a boolean called "compact mode" told you what Off was not). Left to right is increasing density,
+// so Compact — the default — holds the right-hand slot, where On sits on the boolean pairs.
+function DensityToggle() {
   const { compactDiffs } = useSnapshot(prefs)
-  return <OnOffToggle value={compactDiffs} onChange={(v) => (prefs.compactDiffs = v)} />
+  const opts: { v: boolean; label: string }[] = [
+    { v: false, label: "Comfortable" },
+    { v: true, label: "Compact" },
+  ]
+  return (
+    <div className="inline-flex w-fit rounded-md border border-border bg-bg p-0.5">
+      {opts.map((o) => (
+        <button
+          key={o.label}
+          onClick={() => (prefs.compactDiffs = o.v)}
+          className={`rounded px-3 py-1 text-[12px] transition-colors ${
+            compactDiffs === o.v ? "bg-fg text-bg" : "text-muted hover:text-fg"
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  )
 }
 
 // Sticky most-recent-message preference: client-only (localStorage prefs proxy), applies live to every
