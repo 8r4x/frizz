@@ -4121,7 +4121,18 @@ export function readThreadTranscript(
     const found = discoverTranscriptId(logDirOf(project), row.session_id, { exclude })
     return projectDeliveryLedger(found ? readTranscript(project, found) : msgs, ledger)
   }
-  if (FOREIGN_SESSION_ID_RE.test(slug)) return readTranscript(project, slug)
+  // A FOREIGN slug binds the same way the paged reader binds it (sourceForThread): the Claude log dir
+  // if the file is there, else the codex rollout tree. This producer feeds the /ws push, and until
+  // 2026-08-24 it read the Claude path unconditionally — so an external CODEX row rendered its page
+  // over HTTP, then the socket's keyframe arrived as [] and blanked it to "No conversation yet." until
+  // the client's 7s watchdog refetched the page (reproduced on a disposable stack: messages at 138ms,
+  // empty at 749ms, back at 7058ms; a Claude row never flashed). One binding for both readers means
+  // the two cannot disagree about which file a foreign thread is.
+  if (FOREIGN_SESSION_ID_RE.test(slug)) {
+    const source = sourceForThread(project, storage, slug, backendFor)
+    if (!source) return []
+    return source.backend === "codex" ? readCodexTranscriptFile(source.path, slug) : readTranscript(project, slug)
+  }
   return []
 }
 

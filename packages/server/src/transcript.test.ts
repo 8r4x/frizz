@@ -26,6 +26,7 @@ import {
   readThreadTranscript,
 } from "./transcript.ts"
 import { createStorage, type SessionRow } from "./storage.ts"
+import { createCodexBackend } from "./backend/codex.ts"
 import type { Project } from "./project.ts"
 
 // Build a minimal assistant JSONL record carrying one tool_use block.
@@ -1631,6 +1632,34 @@ test("readThreadTranscript: honors a cached transcript_id over the pinned sessio
     assert.equal(msgs[0].text, "render me from the drifted file")
   } finally {
     h.cleanup()
+  }
+})
+
+test("readThreadTranscript: a FOREIGN codex rollout renders through the codex reader, exactly like the paged reader", () => {
+  // The /ws producer and the HTTP page reader must bind a foreign slug to the SAME file. Until
+  // 2026-08-24 this reader tried only the Claude log dir, so an external codex row's socket keyframe
+  // was [] and blanked the page the HTTP reader had just rendered ("No conversation yet." for ~7s).
+  const h = txHarness()
+  const codexHome = mkdtempSync(join(tmpdir(), "frizz-tx-codex-"))
+  try {
+    const fixture = readFileSync(join(import.meta.dirname, "backend/codex.fixtures/tui-single-turn.jsonl"), "utf8")
+    const id = "019f4e0c-8ab2-7bc3-8b19-fc108b2d3114" // the fixture's own session id; the filename must end with it
+    const day = join(codexHome, "sessions", "2026", "08", "24")
+    mkdirSync(day, { recursive: true })
+    writeFileSync(join(day, `rollout-2026-08-24T12-00-00-${id}.jsonl`), fixture)
+    const backendFor = () => createCodexBackend({ codexHome })
+    const msgs = readThreadTranscript(h.project, h.store, id, backendFor)
+    assert.ok(msgs.length > 0, "a foreign codex id resolves to its rollout, not to a missing Claude file")
+    const paged = readLatestThreadTranscriptPage(h.project, h.store, id, backendFor)
+    assert.deepEqual(msgs.map((m) => m.sourceId), paged.messages.map((m) => m.sourceId), "the push and the page render the same messages")
+    // A foreign CLAUDE id still binds to the log dir first.
+    h.writeJsonl("0199aaaa-0000-4000-8000-000000000001", [USER_LINE("a terminal claude session")])
+    const claude = readThreadTranscript(h.project, h.store, "0199aaaa-0000-4000-8000-000000000001", backendFor)
+    assert.equal(claude.length, 1)
+    assert.equal(claude[0].text, "a terminal claude session")
+  } finally {
+    h.cleanup()
+    rmSync(codexHome, { recursive: true, force: true })
   }
 })
 
