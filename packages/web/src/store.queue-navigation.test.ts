@@ -45,7 +45,7 @@ test("sidebar queue navigation lands immediately at the card reading line", () =
     } as unknown as Window
 
     assert.equal(scrollToQueueCard("queued-thread"), true)
-    assert.deepEqual(scrolls, [{ top: 406, left: 0, behavior: "auto" }])
+    assert.deepEqual(scrolls, [{ top: 378, left: 0, behavior: "auto" }])
     // The leading removal is the animation RESTART (see test 4), then the ring, then its teardown.
     assert.deepEqual(flashes, ["-data-queue-flash", "+data-queue-flash", "-data-queue-flash"])
   } finally {
@@ -81,15 +81,15 @@ test("sidebar queue navigation uses an absolute reading-line target after a narr
       scrollY: 5941,
       scrollTo: (options: ScrollToOptions) => {
         scrolls.push(options)
-        top = 12
+        top = 40
       },
       clearTimeout: () => {},
       setTimeout: () => 0,
     } as unknown as Window
 
     assert.equal(scrollToQueueCard("queued-thread"), true)
-    assert.deepEqual(scrolls, [{ top: 1249, left: 0, behavior: "auto" }])
-    assert.equal(top, 12)
+    assert.deepEqual(scrolls, [{ top: 1221, left: 0, behavior: "auto" }])
+    assert.equal(top, 40)
   } finally {
     globals.window = previous.window
     globals.document = previous.document
@@ -131,9 +131,9 @@ test("a queued row clicked under an open drawer dismisses every layer and parks 
 
     assert.equal(scrollToQueueCard("queued-thread"), true)
     assert.deepEqual(store.drawers, [], "every open layer goes, not just the topmost")
-    // 1740 (the lock's offset) + 400 (the card's box) - 12 (the reading line). Off window.scrollY it
-    // would have been 388 — short by exactly how far the reader had scrolled.
-    assert.equal(takeScrollAfterUnlock(), 2128)
+    // 1740 (the lock's offset) + 400 (the card's box) - 40 (the landing). Off window.scrollY it
+    // would have been 360 — short by exactly how far the reader had scrolled.
+    assert.equal(takeScrollAfterUnlock(), 2100)
   } finally {
     store.drawers = drawersBefore
     globals.window = previous.window
@@ -142,11 +142,12 @@ test("a queued row clicked under an open drawer dismisses every layer and parks 
   }
 })
 
-// The arrival ring belongs to the BORDERED CARD ROOT. The outer `[data-queue-card]` slot also wraps the
-// inter-card hairline rule and its my-10 margins, so ringing the slot drew the card AND ~80px of gutter
-// plus the rule below it as one highlighted box (maintainer, 2026-07-21: "the ordered area also includes
-// the horizontal rule beneath the card").
-test("the queue arrival ring lands on the bordered card root, never the slot that wraps the inter-card rule", () => {
+// The arrival ring belongs to the BORDERED CARD ROOT, never the outer `[data-queue-card]` slot. The slot
+// is the fade wrapper, not the bordered box — and while it still wrapped the inter-card hairline rule and
+// its 40px margins (until 2026-08-25), ringing it drew the card AND ~80px of gutter plus the rule below it
+// as one highlighted box (maintainer, 2026-07-21: "the ordered area also includes the horizontal rule
+// beneath the card").
+test("the queue arrival ring lands on the bordered card root, never the fade slot around it", () => {
   const globals = globalThis as typeof globalThis & {
     window?: Window
     document?: Document
@@ -183,7 +184,7 @@ test("the queue arrival ring lands on the bordered card root, never the slot tha
 
     assert.equal(scrollToQueueCard("queued-thread"), true)
     assert.deepEqual(rootRinged, [false, true], "restart-clear, then the ring")
-    assert.deepEqual(slotRinged, [], "the slot must never carry the ring — it wraps the inter-card rule")
+    assert.deepEqual(slotRinged, [], "the slot must never carry the ring — it is the fade wrapper, not the bordered box")
 
     // …and the scheduled teardown clears the ring from the same element it was set on.
     for (const fn of removals) fn()
@@ -212,12 +213,12 @@ test("re-clicking a queued row inside the flash window replays the ring and resc
 
   try {
     const root = {
-      getBoundingClientRect: () => ({ top: 12 }),
+      getBoundingClientRect: () => ({ top: 40 }),
       setAttribute: () => events.push("set"),
       removeAttribute: () => events.push("clear"),
     }
     const slot = {
-      getBoundingClientRect: () => ({ top: 12 }),
+      getBoundingClientRect: () => ({ top: 40 }),
       querySelector: () => root,
       setAttribute: () => assert.fail("the slot must never carry the ring"),
       removeAttribute: () => {},

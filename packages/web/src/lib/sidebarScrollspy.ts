@@ -18,9 +18,9 @@ export const SIDEBAR_SPY_COVERAGE = 0.5
 // holds the rail — which is also what makes a click-to-card landing stick, since that lands the target
 // whole at the top of the screen.
 //
-// Geometry is the CARD ROOT, not the queue slot: the slot carries ~80px of inter-card gutter, and
-// crediting a card for empty space would let a card that is visually gone still count as "wholly on
-// screen".
+// Geometry is the CARD ROOT, not the queue slot: the slot spans the root's bottom scroll-reserve
+// margin (and until 2026-08-25 carried ~80px of inter-card gutter too), and crediting a card for empty
+// space would let a card that is visually gone still count as "wholly on screen".
 export function activeSidebarSection(
   sections: readonly SidebarSectionGeometry[],
   viewportHeight: number,

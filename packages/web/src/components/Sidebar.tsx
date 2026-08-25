@@ -100,8 +100,9 @@ export function Sidebar() {
       .map((element) => {
         const id = element.dataset.queueCard
         if (!id) return null
-        // The BORDERED ROOT, not the slot: the slot also spans the ~80px inter-card gutter and its
-        // hairline rule, and the reading rule below is decided by how much of a CARD is on screen.
+        // The BORDERED ROOT, not the slot: the slot is the fade wrapper and also spans the root's
+        // bottom scroll-reserve margin, and the reading rule below is decided by how much of a CARD is
+        // on screen.
         const card = element.querySelector<HTMLElement>("[data-queue-card-root]") ?? element
         const { top, bottom } = card.getBoundingClientRect()
         return { id, top, bottom } satisfies SidebarSectionGeometry

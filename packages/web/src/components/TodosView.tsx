@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useSnapshot } from "valtio"
 import { ChevronsUpDown, Hourglass, Inbox } from "lucide-react"
 import type { ThreadView, BoardSnapshot, TranscriptMessage } from "@frizz/shared"
@@ -527,11 +527,21 @@ export function TodosView() {
       <BoardErrorsBanner board={board} />
 
       {renderItems.length > 0 && (
-        <div className="flex flex-col [&>*:last-child_hr]:hidden">
-          {renderItems.map((item) => (
-            <CardSlot key={item.id} slug={item.id} leaving={isLeaving(item.id)}>
-              <QueueCard thread={item} leaving={isLeaving(item.id)} onResolve={resolve} onUnresolve={unresolve} />
-            </CardSlot>
+        <div className="flex flex-col">
+          {renderItems.map((item, i) => (
+            <Fragment key={item.id}>
+              <CardSlot slug={item.id} leaving={isLeaving(item.id)}>
+                <QueueCard thread={item} leaving={isLeaving(item.id)} onResolve={resolve} onUnresolve={unresolve} />
+              </CardSlot>
+              {/* The inter-card hairline rule, a SIBLING of the slots rather than a child of the card
+                  above it: the rule separates two cards, so it belongs between them in the markup, and a
+                  slot that measures as "the card" (the sidebar's reading rail, the scroll landing) must
+                  not carry 80px of gutter (maintainer 2026-08-25: "it breaks the semantics of the HTML").
+                  Each rule follows its card — none after the last — so it unmounts with that card, and
+                  the `+ hr` rule in styles.css fades it alongside. The 40px on each side is also the
+                  scroll landing's QUEUE_CARD_VIEWPORT_TOP: keep the two in step. */}
+              {i < renderItems.length - 1 && <hr className="my-10 border-0 border-t border-border/60" />}
+            </Fragment>
           ))}
         </div>
       )}
@@ -631,7 +641,8 @@ function RepairButton({ file }: { file: string }) {
 // to top, or hold a neighbour in place). The `.frizz-card-slot` rules in styles.css carry the
 // fade/scale/blur. `data-queue-card=<slug>` is the anchor a sidebar row uses to jump to its queue card
 // instead of opening a drawer (scrollToQueueCard in store.ts), and the unmount anchors use it too;
-// `data-queue-leaving` drives the fade CSS.
+// `data-queue-leaving` drives the fade CSS. The slot is the CARD alone — the hairline rule between two
+// cards is the list's own child, between the slots.
 function CardSlot({ leaving, slug, children }: { leaving: boolean; slug: string; children: ReactNode }) {
   return (
     // min-w-0 at EVERY level: grid items and flex children default to min-width:auto, so one wide
@@ -645,9 +656,6 @@ function CardSlot({ leaving, slug, children }: { leaving: boolean; slug: string;
         {/* .frizz-card-body carries the fade's blur/scale (transform-origin: centre — it recedes uniformly). */}
         <div className="frizz-card-body min-w-0">
           {children}
-          {/* Generous inter-card space with a hairline rule; removed with the card on exit. The
-              list container hides the LAST card's rule. */}
-          <hr className="my-10 border-0 border-t border-border/60" />
         </div>
       </div>
     </div>

@@ -12,11 +12,17 @@ import { setLocalPathBase } from "./lib/localPathBase.ts"
 
 // Where a scroll-to-card lands a card's outer border below the viewport top (px). Exported because the
 // sidebar's reading rail watches for that same landing to know a click-to-card has arrived.
-export const QUEUE_CARD_VIEWPORT_TOP = 12
+// 40px is the queue's own rhythm: the hairline rule between two cards carries `my-10` (40px) on each
+// side, so a landed card sits under the viewport edge with exactly the space it has under its
+// predecessor's rule. It was 12px until 2026-08-25, which read as the card being pressed against the
+// top of the window (maintainer: "we should leave the full 40 px").
+export const QUEUE_CARD_VIEWPORT_TOP = 40
 
-// The BORDERED CARD ROOT inside a queue slot. The outer `[data-queue-card]` slot also wraps the
-// inter-card hairline rule and its my-10 margins, so anything visual — the scroll landing, the
-// arrival ring — must target this root or it silently addresses ~80px of empty gutter plus the rule.
+// The BORDERED CARD ROOT inside a queue slot. The outer `[data-queue-card]` slot is the fade wrapper:
+// it also spans the root's own bottom scroll-reserve margin, and it is not the element that draws the
+// border, so anything visual — the scroll landing, the arrival ring — targets this root. (Until
+// 2026-08-25 the slot also wrapped the inter-card hairline rule and its 40px margins; the rule is a
+// sibling of the slots now, see TodosView's queue list.)
 // Falls back to the slot itself for a slot that renders no root (fixtures, future card shapes).
 function queueCardRoot(slug: string): HTMLElement | null {
   if (typeof document === "undefined") return null
@@ -301,8 +307,9 @@ export function scrollToQueueCard(slug: string): boolean {
 const queueFlashTimers = new Map<string, number>()
 
 // The arrival ring. It goes on the bordered card ROOT, never the outer `[data-queue-card]` slot: the
-// slot also wraps the inter-card hairline rule and its my-10 margins, so ringing it drew the card AND
-// ~80px of gutter plus that rule as one highlighted box (maintainer, 2026-07-21).
+// slot is the fade wrapper, not the bordered box — and while it still wrapped the inter-card hairline
+// rule and its margins, ringing it drew the card AND ~80px of gutter plus that rule as one highlighted
+// box (maintainer, 2026-07-21).
 // An ATTRIBUTE rather than a class, because the root's className is REACT-OWNED (it flips on the card's
 // `resolving` state) — a re-render rewrites className wholesale and would silently wipe an imperatively
 // added class mid-flash. React never touches an attribute absent from its props.
