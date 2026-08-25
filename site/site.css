@@ -122,3 +122,25 @@ h3 { font-size: 17px; margin-bottom: 8px; }
   .row, .row:nth-child(even) { grid-template-columns: 1fr; gap: 16px; }
   .row:nth-child(even) .row-text { order: 0; }
 }
+
+/* Docs pages. The landing page is one document; these are the same document several times over, so
+   they borrow .doc wholesale and add only what a guide needs that a homepage never did. */
+.crumb { font-size: 13px; color: var(--muted); margin-bottom: 20px; }
+.crumb a { color: var(--muted); text-decoration: none; }
+.crumb .arrow { margin-right: 4px; }
+.crumb a:hover { color: var(--fg); }
+.lede { color: var(--fg-2); font-size: 16px; margin-top: 0; }
+/* A callout is the one place a guide raises its voice, so it gets the accent rule and nothing else —
+   no icon, no tinted panel, nothing that would read as a different kind of component. The margin is
+   reset because a blockquote's UA default is 40px on each side, which would indent it past the
+   measure and lose the rule against the text it belongs to. */
+.callout {
+  margin: 20px 0; padding: 2px 0 2px 18px;
+  border-left: 2px solid var(--accent); color: var(--fg-2);
+}
+.callout p { margin: 0; }
+.doc table { width: 100%; border-collapse: collapse; margin: 4px 0 28px; font-size: 14px; }
+.doc th, .doc td { text-align: left; padding: 9px 28px 9px 0; border-bottom: 1px solid var(--border); vertical-align: top; }
+.doc th { color: var(--muted); font-weight: 500; }
+.doc tbody tr:last-child td { border-bottom: none; }
+.doc td:last-child, .doc th:last-child { padding-right: 0; color: var(--fg-2); }

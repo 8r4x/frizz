@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Remote access — Frizz</title>
+    <meta name="description" content="How to reach a Frizz board from a phone or another machine: a name on frizz.sh, Cloudflare Tunnel, Tailscale, SSH forwarding, or any reverse proxy." />
+    <link rel="canonical" href="https://frizz.sh/docs" />
+    <meta property="og:type" content="article" />
+    <meta property="og:title" content="Remote access — Frizz" />
+    <meta property="og:description" content="How to reach a Frizz board from a phone or another machine: a name on frizz.sh, Cloudflare Tunnel, Tailscale, SSH forwarding, or any reverse proxy." />
+    <meta property="og:url" content="https://frizz.sh/docs" />
+    <meta property="og:image" content="https://frizz.sh/img/og.png?v=44cbd08b" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:creator" content="@colinhacks" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="theme-color" content="#0d0e10" />
+    <meta name="color-scheme" content="dark" />
+    <link rel="preload" href="/fonts/JetBrainsMono-Medium.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="/site.css" />
+  </head>
+  <body>
+    <header class="top">
+      <a class="wordmark" href="/" aria-label="Frizz">
+        <img src="/img/fff-tile.png?v=8f6d4752" alt="" width="22" height="22" />
+        <span>Frizz</span>
+      </a>
+      <nav class="top-nav" aria-label="Links">
+        <a href="/docs">Docs</a>
+        <a class="ext" href="https://github.com/colinhacks/frizz">GitHub</a>
+        <a class="ext" href="https://www.npmjs.com/package/frizz">npm</a>
+      </nav>
+    </header>
+    <main id="top">
+      <article class="doc">
+        <h1>Remote access</h1>
+        <p class="lede">Frizz binds <code>127.0.0.1</code> and has no login of its own. To reach a board from a phone or another machine, put something in front of it that does the authenticating, then tell Frizz which origin that something serves.</p>
+
+        <pre class="term"><code><span class="prompt">$</span> npx frizz --public-origin https://board.example.com</code></pre>
+
+        <p>Naming the origin does two things. Frizz accepts requests arriving as that exact origin, and it prints a <strong>single-use access link</strong> — as a QR code, so a phone can scan it off the terminal. Scanning trades the code for a session cookie, so the link itself stops working the moment it is used.</p>
+
+        <pre class="term"><code><span class="prompt">$</span> npx frizz --link</code></pre>
+
+        <p>Press <code>L</code> in the board&#8217;s terminal for the same thing without leaving it.</p>
+
+        <blockquote class="callout"><p>Anything that reaches the board can run shell commands as you. Whatever sits in front of the origin <strong>is</strong> the access control — Frizz&#8217;s single-use links gate the first visit, not the network.</p></blockquote>
+
+        <h2>Pick a route</h2>
+        <table>
+          <thead><tr><th>Route</th><th>Needs</th><th>Reach</th></tr></thead>
+          <tbody>
+            <tr><td><a href="/docs/frizz-sh">A name on frizz.sh</a></td><td>A GitHub account</td><td>Anywhere</td></tr>
+            <tr><td><a href="/docs/cloudflare-tunnel">Cloudflare Tunnel</a></td><td>A domain on Cloudflare</td><td>Anywhere</td></tr>
+            <tr><td><a href="/docs/tailscale">Tailscale</a></td><td>A tailnet</td><td>Your devices</td></tr>
+            <tr><td><a href="/docs/ssh">SSH port forwarding</a></td><td>SSH access</td><td>One session</td></tr>
+            <tr><td><a href="/docs/reverse-proxy">Any reverse proxy</a></td><td>A domain and a server</td><td>Anywhere</td></tr>
+          </tbody>
+        </table>
+
+        <p>The shortest path is <a href="/docs/frizz-sh">a name on frizz.sh</a>: it needs no domain, no port forwarding, and no extra binary. Everything else here works without us.</p>
+
+        <h2>Headless machines</h2>
+        <p>A machine nobody can watch cannot show a QR code. Mint a single-use code over SSH instead:</p>
+        <pre class="term"><code><span class="prompt">$</span> ssh you@your-machine 'npx frizz --link'</code></pre>
+        <p>There is no standing secret. Access codes and the sessions they mint are the only gate, which means a leaked link expires the moment it is used rather than staying valid forever.</p>
+      </article>
+    </main>
+    <footer class="foot">
+      <span>MIT</span>
+      <a href="https://github.com/colinhacks/frizz">GitHub</a>
+      <a href="https://www.npmjs.com/package/frizz">npm</a>
+      <span class="spacer"></span>
+      <span>by <a href="https://x.com/colinhacks">@colinhacks</a></span>
+    </footer>
+  </body>
+</html>
