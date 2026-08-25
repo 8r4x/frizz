@@ -23,14 +23,14 @@
   ],
   "redirects": [
     {
-      "source": "/:path*",
+      "source": "/(.*)",
       "has": [
         {
           "type": "host",
           "value": "www.frizz.sh"
         }
       ],
-      "destination": "https://frizz.sh/:path*",
+      "destination": "https://frizz.sh/$1",
       "permanent": true
     }
   ]
