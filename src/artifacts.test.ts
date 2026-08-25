@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { createServer } from "node:net";
 import { test } from "node:test";
 import {
@@ -65,7 +65,10 @@ function fixtureDigest(manifest: Record<string, unknown>): string {
 
 function legacyFixtureDigest(manifest: Record<string, unknown>): string {
   return hash(JSON.stringify({
-    source: manifest.sourceDir && resolve(manifest.sourceDir as string).split("/").pop(),
+    // `basename`, exactly as legacyArtifactDigest computes it — NOT `resolve().split("/")`, which
+    // agrees on POSIX and then silently returns the WHOLE path on Windows, where `resolve` answers
+    // in backslashes and the split finds no separator at all.
+    source: manifest.sourceDir && basename(manifest.sourceDir as string),
     sourceRevision: manifest.sourceRevision,
     sourceFingerprint: manifest.sourceFingerprint,
     nodeVersion: manifest.nodeVersion,

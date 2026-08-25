@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { isAbsolute, join } from "node:path"
 import { defaultPluginStageRoot, defaultStablePluginRoot, ensureSymlink, stageStablePluginDir } from "./stable-plugin-path.ts"
 
 const tmp = (prefix: string) => mkdtempSync(join(tmpdir(), prefix))
@@ -49,9 +49,14 @@ test("ensureSymlink resolves an existing RELATIVE link against its own directory
   mkdirSync(target)
   const link = join(dir, "current")
   symlinkSync("./target", link)
+  // Read it BACK rather than pinning the literal: Windows stores a reparse point in its own
+  // separator, so the link created from "./target" reads as ".\target" there. Comparing against
+  // what the link actually holds is what "left exactly as it was" means on either platform.
+  const before = readlinkSync(link)
+  assert.ok(!isAbsolute(before), "the fixture link is relative — that is the whole case under test")
 
   assert.equal(ensureSymlink(link, target), "unchanged", "./target IS this target — do not churn it")
-  assert.equal(readlinkSync(link), "./target", "and the existing relative link is left exactly as it was")
+  assert.equal(readlinkSync(link), before, "and the existing relative link is left exactly as it was")
 })
 
 // Silently deleting a real directory someone else put at the stable path is data loss, not recovery.

@@ -156,6 +156,19 @@ function digestFile(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
+/**
+ * A manifest path, in the ONE separator a manifest is allowed to speak.
+ *
+ * `relative()` answers in the host's separator, so a Windows build recorded `cc-worker\bin\frizz`
+ * where every reader spells that key `cc-worker/bin/frizz` — including the closure list every
+ * artifact is verified against (`WORKER_PLUGIN_REQUIRED_FILES`, worker-plugin-closure.ts), which is
+ * a plain object lookup and cannot normalize for itself. The result was a Windows artifact that
+ * built cleanly and then failed its own manifest validation the instant it was published, with no
+ * way to succeed. `/` also keeps the manifest — and therefore the digest keyed on it — the same
+ * document on every host; the readers all rejoin these with `join()`, which takes `/` anywhere.
+ */
+const manifestKey = (root: string, file: string): string => relative(root, file).replaceAll("\\", "/");
+
 function collectFiles(
   root: string,
   path = root,
@@ -166,10 +179,38 @@ function collectFiles(
     const stat = lstatSync(file);
     if (stat.isDirectory()) collectFiles(root, file, entries);
     else if (stat.isSymbolicLink())
-      entries[relative(root, file)] = `link:${readlinkSync(file)}`;
-    else if (stat.isFile()) entries[relative(root, file)] = digestFile(file);
+      entries[manifestKey(root, file)] = `link:${manifestLinkTarget(file)}`;
+    else if (stat.isFile()) entries[manifestKey(root, file)] = digestFile(file);
   }
   return entries;
+}
+
+/**
+ * A recorded symlink target, normalized the same way and for the same reason.
+ *
+ * The artifact's one internal link — `runtime/node_modules` into the dependency cell — is written
+ * from `relative()`, so on Windows it is stored and read back with backslashes. Normalizing here
+ * only works if the VERIFIER normalizes too, so both sides call this; see readFrizzArtifact.
+ */
+function manifestLinkTarget(file: string): string {
+  return readlinkSync(file).replaceAll("\\", "/");
+}
+
+/**
+ * Did this rename fail because the destination directory is ALREADY PUBLISHED — i.e. we lost the
+ * race to an identical builder — rather than for a reason that must surface?
+ *
+ * Every platform spells that one condition differently, and Windows does not spell it as a name
+ * collision at all: Linux says EEXIST, macOS says ENOTEMPTY, and Windows says EPERM, because
+ * `MoveFileEx` refuses to replace an existing DIRECTORY under any flag and reports the refusal as
+ * "operation not permitted". Accepting a bare EPERM would swallow a genuine permission fault, so
+ * the winner's completed `manifest.json` has to be there as the witness — which it always is, since
+ * a published directory is a renamed COMPLETE staging tree, never a partial one.
+ */
+function renameLostPublishRace(error: unknown, destination: string): boolean {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  if (code === "EEXIST" || code === "ENOTEMPTY") return true;
+  return code === "EPERM" && existsSync(join(destination, "manifest.json"));
 }
 
 function stableFileMap(files: Record<string, string>): Record<string, string> {
@@ -787,7 +828,7 @@ function readFrizzDependencyCell(digest: string, root: string): FrizzDependencyC
   for (const [file, expected] of Object.entries(manifest.files)) {
     const path = join(dir, file);
     const valid = expected.startsWith("link:")
-      ? (() => { try { return lstatSync(path).isSymbolicLink() && `link:${readlinkSync(path)}` === expected; } catch { return false; } })()
+      ? (() => { try { return lstatSync(path).isSymbolicLink() && `link:${manifestLinkTarget(path)}` === expected; } catch { return false; } })()
       : existsSync(path) && digestFile(path) === expected;
     if (!valid) throw new Error(`Frizz dependency cell ${digest} has a changed or missing file: ${file}`);
   }
@@ -883,8 +924,9 @@ function ensureFrizzDependencyCell(source: string, root: string): FrizzDependenc
     const destination = join(cells, digest);
     try { renameSync(staging, destination); }
     catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "EEXIST" && code !== "ENOTEMPTY") throw error;
+      // Losing a concurrent race is fine — the winner staged identical content under the same
+      // content identity. Anything else is a real staging failure and must surface.
+      if (!renameLostPublishRace(error, destination)) throw error;
       rmSync(staging, { recursive: true, force: true });
     }
     return readFrizzDependencyCell(digest, root);
@@ -906,9 +948,7 @@ export function publishFrizzArtifactStaging(
   } catch (error) {
     // Another identical builder may publish between our existence check and rename. Its complete
     // immutable directory is the winner; validate it rather than reporting a spurious failure.
-    // macOS reports the same destination-won directory race as ENOTEMPTY.
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "EEXIST" && code !== "ENOTEMPTY") throw error;
+    if (!renameLostPublishRace(error, dir)) throw error;
     rmSync(staging, { recursive: true, force: true });
   }
   return readFrizzArtifact(digest, root);
@@ -1067,7 +1107,7 @@ export function readFrizzArtifact(
           try {
             return (
               lstatSync(path).isSymbolicLink() &&
-              `link:${readlinkSync(path)}` === expected
+              `link:${manifestLinkTarget(path)}` === expected
             );
           } catch {
             return false;
@@ -1086,7 +1126,7 @@ export function readFrizzArtifact(
           try {
             return (
               lstatSync(path).isSymbolicLink() &&
-              `link:${readlinkSync(path)}` === expected
+              `link:${manifestLinkTarget(path)}` === expected
             );
           } catch {
             return false;

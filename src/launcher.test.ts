@@ -16,7 +16,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
@@ -2082,6 +2082,32 @@ test("global first-id lock rejects a reused PID generation instead of blocking o
   }
 });
 
+// ---- installer shim shape (scripts/install-global-cli.mjs) -------------------------------------
+//
+// The installed shim's NAME and BODY are both per-platform, because a `#!` line is not a command on
+// Windows: cmd.exe resolves a bare `frizz-dev` on PATH only through %PATHEXT%, and honours no
+// shebang, so the installer writes `frizz-dev.cmd` there and a `#!/bin/sh` file everywhere else.
+// These helpers pin the shape actually written on the running platform — asserting the POSIX one
+// everywhere is what let an unrunnable shim pass as installed.
+const windowsShim = process.platform === "win32";
+const shimName = windowsShim ? "frizz-dev.cmd" : "frizz-dev";
+// The shim embeds a REAL absolute path, so the separator is the platform's own. Build the pattern
+// from `sep` rather than loosening it to `.`: a shim aimed at `src.index.ts` must still fail.
+const shimEntry = new RegExp(`\\${sep}src\\${sep}index\\.ts`);
+/** Same shape, no ownership marker — a foreign command that happens to sit at the shim's path. */
+const foreignShim = (line: string) =>
+  windowsShim ? `@echo off\r\n${line}\r\n` : `#!/bin/sh\n${line}\n`;
+/** A marker-bearing shim of `version` aimed at `entry` — i.e. one this installer wrote, once. */
+const ownedShim = (version: string, entry: string) =>
+  windowsShim
+    ? `@echo off\r\nrem # frizz-dev-source-launcher:${version}\r\nsetlocal\r\nset "FRIZZ_SOURCE_COMMAND=frizz-dev"\r\nnub --no-env-file "${entry}" %*\r\nexit /b %ERRORLEVEL%\r\n`
+    : `#!/bin/sh\n# frizz-dev-source-launcher:${version}\nexec env FRIZZ_SOURCE_COMMAND='frizz-dev' nub --no-env-file '${entry}' "$@"\n`;
+/** Node refuses to spawn a `.bat`/`.cmd` without a shell (CVE-2024-27980), so Windows needs one. */
+const runShim = (shim: string, shimArgs: string[]) =>
+  windowsShim
+    ? execFileSync(`"${shim}"`, shimArgs, { encoding: "utf8", shell: true })
+    : execFileSync(shim, shimArgs, { encoding: "utf8" });
+
 test("installer manages only an executable source-backed immutable frizz-dev shim idempotently", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-global-bin-"));
   const script = join(import.meta.dirname, "..", "scripts", "install-global-cli.mjs");
@@ -2089,18 +2115,20 @@ test("installer manages only an executable source-backed immutable frizz-dev shi
     execFileSync(process.execPath, [script, `--bin-dir=${dir}`], {
       encoding: "utf8",
     });
-    const shim = join(dir, "frizz-dev");
+    const shim = join(dir, shimName);
     const body = readFileSync(shim, "utf8");
     assert.match(body, /frizz-dev-source-launcher:v5/);
     // Only nub's disk-read `.env*` vars are dropped; a shell-exported key still reaches the worker.
     assert.match(body, /nub --no-env-file/);
-    assert.match(body, /FRIZZ_SOURCE_COMMAND='frizz-dev'/);
-    assert.match(body, /\/src\/index\.ts/);
-    assert.match(body, /\bnub\b/);
+    // `setlocal` is batch's `env VAR=…`: the variable dies with the shim instead of leaking into
+    // the console that ran it.
     assert.match(
-      execFileSync(shim, ["--help"], { encoding: "utf8" }),
-      /Frizz source launcher/
+      body,
+      windowsShim ? /setlocal\r\nset "FRIZZ_SOURCE_COMMAND=frizz-dev"/ : /FRIZZ_SOURCE_COMMAND='frizz-dev'/
     );
+    assert.match(body, shimEntry);
+    assert.match(body, /\bnub\b/);
+    assert.match(runShim(shim, ["--help"]), /Frizz source launcher/);
     assert.match(
       execFileSync(process.execPath, [script, "--help"], { encoding: "utf8" }),
       /frizz-dev:install/
@@ -2141,7 +2169,7 @@ test("installer manages only an executable source-backed immutable frizz-dev shi
       }
     );
 
-    writeFileSync(shim, "#!/bin/sh\necho unrelated\n");
+    writeFileSync(shim, foreignShim("echo unrelated"));
     assert.throws(
       () =>
         execFileSync(process.execPath, [script, `--bin-dir=${dir}`], {
@@ -2178,18 +2206,15 @@ test("installer upgrades its OWN current-marker shim when the checkout path move
   // reporting "is not the Frizz source launcher" about a file whose first comment line is that marker.
   const dir = mkdtempSync(join(tmpdir(), "frizz-global-bin-moved-"));
   const script = join(import.meta.dirname, "..", "scripts", "install-global-cli.mjs");
-  const shim = join(dir, "frizz-dev");
+  const shim = join(dir, shimName);
+  const movedFrom = join(sep === "\\" ? "C:\\old" : "/old", "checkout", "packages", "cli", "src", "index.ts");
   try {
-    writeFileSync(
-      shim,
-      "#!/bin/sh\n# frizz-dev-source-launcher:v5\nexec env FRIZZ_SOURCE_COMMAND='frizz-dev' nub --no-env-file '/old/checkout/packages/cli/src/index.ts' \"$@\"\n",
-      { mode: 0o755 }
-    );
+    writeFileSync(shim, ownedShim("v5", movedFrom), { mode: 0o755 });
     // No --force: the marker makes it ours to replace.
     execFileSync(process.execPath, [script, `--bin-dir=${dir}`], { encoding: "utf8" });
     const body = readFileSync(shim, "utf8");
-    assert.match(body, /\/src\/index\.ts/);
-    assert.doesNotMatch(body, /old\/checkout/);
+    assert.match(body, shimEntry);
+    assert.doesNotMatch(body, new RegExp(`old\\${sep}checkout`));
     execFileSync(process.execPath, [script, "--uninstall", `--bin-dir=${dir}`], { encoding: "utf8" });
     assert.equal(existsSync(shim), false, "uninstall removes a shim we own");
   } finally {
@@ -2200,11 +2225,11 @@ test("installer upgrades its OWN current-marker shim when the checkout path move
 test("installer rejects marker-bearing stale or altered shims", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-global-bin-stale-"));
   const script = join(import.meta.dirname, "..", "scripts", "install-global-cli.mjs");
-  const shim = join(dir, "frizz-dev");
+  const shim = join(dir, shimName);
   try {
     writeFileSync(
       shim,
-      "#!/bin/sh\n# frizz-dev-source-launcher:v3\nexec env FRIZZ_SOURCE_COMMAND='frizz-dev' nub '/missing/deleted-index.ts' \"$@\"\n",
+      ownedShim("v3", join(sep === "\\" ? "C:\\missing" : "/missing", "deleted-index.ts")),
       { mode: 0o755 }
     );
     assert.throws(
@@ -2230,7 +2255,7 @@ test("installer rejects marker-bearing stale or altered shims", () => {
     execFileSync(process.execPath, [script, "--force", `--bin-dir=${dir}`], {
       encoding: "utf8",
     });
-    assert.match(readFileSync(shim, "utf8"), /\/src\/index\.ts/);
+    assert.match(readFileSync(shim, "utf8"), shimEntry);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -2239,9 +2264,9 @@ test("installer rejects marker-bearing stale or altered shims", () => {
 test("forced install replaces a symlink itself without changing its target", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-global-bin-symlink-"));
   const script = join(import.meta.dirname, "..", "scripts", "install-global-cli.mjs");
-  const shim = join(dir, "frizz-dev");
+  const shim = join(dir, shimName);
   const protectedTarget = join(dir, "protected-command");
-  const protectedBody = "#!/bin/sh\necho protected\n";
+  const protectedBody = foreignShim("echo protected");
   try {
     writeFileSync(protectedTarget, protectedBody, { mode: 0o755 });
     symlinkSync(protectedTarget, shim);
@@ -2268,19 +2293,34 @@ test("concurrent installer processes publish only complete shims and clean up te
   const dir = mkdtempSync(join(tmpdir(), "frizz-global-bin-atomic-"));
   const script = join(import.meta.dirname, "..", "scripts", "install-global-cli.mjs");
   try {
+    // Capture stderr rather than discarding it: `stdio: "ignore"` made a real Windows failure here
+    // report only "installer exited with null" — the signal, which is null for every ordinary exit —
+    // while the errno that would have named the cause went to nowhere.
     const children = Array.from({ length: 8 }, () =>
       spawnChild(process.execPath, [script, `--bin-dir=${dir}`], {
-        stdio: "ignore",
+        stdio: ["ignore", "ignore", "pipe"],
       })
     );
+    const stderr = children.map((child) => {
+      let text = "";
+      child.stderr?.setEncoding("utf8");
+      child.stderr?.on("data", (chunk) => {
+        text += chunk;
+      });
+      return () => text;
+    });
     const results = await Promise.all(children.map((child) => once(child, "exit")));
-    for (const [code, signal] of results) {
-      assert.equal(code, 0, `installer exited with ${String(signal)}`);
-    }
-    const shim = readFileSync(join(dir, "frizz-dev"), "utf8");
+    results.forEach(([code, signal], index) => {
+      assert.equal(
+        code,
+        0,
+        `installer exited with code ${String(code)} signal ${String(signal)}: ${stderr[index]!().trim() || "<no stderr>"}`
+      );
+    });
+    const shim = readFileSync(join(dir, shimName), "utf8");
     assert.match(shim, /frizz-dev-source-launcher:v5/);
-    assert.match(shim, /\/src\/index\.ts/);
-    assert.deepEqual(readdirSync(dir), ["frizz-dev"]);
+    assert.match(shim, shimEntry);
+    assert.deepEqual(readdirSync(dir), [shimName]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
