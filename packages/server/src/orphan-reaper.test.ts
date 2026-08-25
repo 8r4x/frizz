@@ -148,7 +148,7 @@ test("enumerateProcs joins argv pass with env pass, slug from the ENV segment on
     "200 Google Chrome for Testing --remote-debugging-port=0 FRIZZ_THREAD=alpha",
     "400 tmux -L frizz-repo-x new-session -d -e FRIZZ_THREAD=argvslug HOME=/x FRIZZ_THREAD=envslug",
   ].join("\n")
-  const procs = enumerateProcs(fakePs(base, env))
+  const procs = enumerateProcs(fakePs(base, env), { platform: "darwin" })
   const byPid = new Map(procs.map((p) => [p.pid, p]))
   assert.equal(byPid.get(100)!.slug, "alpha")
   assert.equal(byPid.get(200)!.slug, "alpha")
@@ -163,7 +163,7 @@ test("enumerateProcs: a FRIZZ_THREAD literal in a ROOT's argv never overrides it
   // into its argv. Ownership must come from ENV, or the root's real slug would be lost from `live`.
   const base = ["  100 1 10:00 claude --session-id A pasted:FRIZZ_THREAD=other-slug"].join("\n")
   const env = ["100 claude --session-id A pasted:FRIZZ_THREAD=other-slug FRIZZ_THREAD=realroot"].join("\n")
-  const procs = enumerateProcs(fakePs(base, env))
+  const procs = enumerateProcs(fakePs(base, env), { platform: "darwin" })
   assert.equal(procs[0]!.slug, "realroot")
 })
 
@@ -176,7 +176,7 @@ test("enumerateProcs: reads the slug across a multiline env value and re-merges 
     "500 not-a-real-record continues the KEY value",
     "-----END----- FRIZZ_THREAD=realslug",
   ].join("\n")
-  const procs = enumerateProcs(fakePs(base, env))
+  const procs = enumerateProcs(fakePs(base, env), { platform: "darwin" })
   assert.equal(procs[0]!.slug, "realslug")
 })
 
@@ -200,7 +200,7 @@ test("enumerateProcs: a pid narrower than ps's right-aligned pid column still ge
     "48311 node scripts/adhoc-stack.mjs --port=48311 HOME=/tmp/sandbox FRIZZ_THREAD=live-worker",
     "65816 Google Chrome for Testing --headless FRIZZ_THREAD=live-worker",
   ].join("\n")
-  const procs = enumerateProcs(fakePs(base, env))
+  const procs = enumerateProcs(fakePs(base, env), { platform: "darwin" })
   const byPid = new Map(procs.map((p) => [p.pid, p]))
   assert.equal(byPid.get(1154)!.slug, "live-worker") // the padded record is a record, not a merge artifact
   assert.equal(byPid.get(48311)!.slug, "live-worker")
@@ -214,7 +214,7 @@ test("enumerateProcs: a pid narrower than ps's right-aligned pid column still ge
 test("enumerateProcs: a pid whose pass-2 argv does not match pass-1 (reuse) yields no slug (fail-safe)", () => {
   const base = ["  100 1 10:00 node real-argv"].join("\n")
   const env = ["100 node DIFFERENT-argv FRIZZ_THREAD=whatever"].join("\n") // marker mismatch
-  const procs = enumerateProcs(fakePs(base, env))
+  const procs = enumerateProcs(fakePs(base, env), { platform: "darwin" })
   assert.equal(procs[0]!.slug, null)
 })
 
@@ -223,9 +223,87 @@ test("enumerateProcs fails closed when the env pass throws", () => {
     if (args.includes("-Eww")) throw new Error("boom")
     return "  100 1 10:00 node x"
   }
-  const procs = enumerateProcs(exec)
+  const procs = enumerateProcs(exec, { platform: "darwin" })
   assert.equal(procs.length, 1)
   assert.equal(procs[0]!.slug, null) // no slug → never reaped
+})
+
+// ---- Linux: one ps pass + /proc/<pid>/environ (procps rejects `-E` with "unsupported SysV option",
+// which is why the env read cannot be a second ps pass there) -----------------------------------------
+
+/** Serves pass 1 only; a second ps call is the regression (the `-Eww` pass Linux rejects). */
+function linuxPs(base: string): Exec {
+  let calls = 0
+  return (file, args) => {
+    assert.equal(file, "ps")
+    assert.deepEqual(args, ["-Aww", "-o", "pid=,ppid=,etime=,command="])
+    assert.equal(++calls, 1, "the linux path must never run a second (env) ps pass")
+    return base
+  }
+}
+
+function environ(entries: Record<number, string[]>): (pid: number) => string | null {
+  return (pid) => (entries[pid] ? `${entries[pid]!.join("\0")}\0` : null)
+}
+
+test("enumerateProcs (linux): slug from an exact environ entry; a literal inside another value never spoofs", () => {
+  const base = [
+    "  100        1 10:00 claude --session-id A",
+    "  200      100 09:00 node chrome-devtools-mcp",
+    "  300        1 08:00 node bystander.js",
+  ].join("\n")
+  const procs = enumerateProcs(
+    linuxPs(base),
+    {
+      platform: "linux",
+      readEnv: environ({
+        100: ["HOME=/home/x", "FRIZZ_THREAD=alpha"],
+        // the pasted `FRIZZ_THREAD=spoofed` lives INSIDE another variable's value → not an entry
+        200: ["TASK_TEXT=note FRIZZ_THREAD=spoofed here", "FRIZZ_THREAD=alpha"],
+        300: ["TASK_TEXT=note FRIZZ_THREAD=spoofed here"],
+      }),
+    },
+  )
+  const byPid = new Map(procs.map((p) => [p.pid, p]))
+  assert.equal(byPid.get(100)!.slug, "alpha")
+  assert.equal(byPid.get(200)!.slug, "alpha")
+  assert.equal(byPid.get(300)!.slug, null)
+  assert.equal(byPid.get(200)!.ageMs, 9 * 60_000)
+})
+
+test("enumerateProcs (linux): an unreadable environ (gone, or another user's) leaves the slug null", () => {
+  const base = ["  100 1 10:00 node x"].join("\n")
+  const procs = enumerateProcs(linuxPs(base), { platform: "linux", readEnv: () => null })
+  assert.equal(procs.length, 1)
+  assert.equal(procs[0]!.slug, null) // no slug → never reaped
+})
+
+test("sweepOrphansOnce (linux) end-to-end: reaps dead-slug aux, spares live + self", () => {
+  const base = [
+    "  100     1 10:00 claude --session-id A",
+    "  101   100 10:00 node chrome-devtools-mcp",
+    "  200     1 10:00 chrome --headless",
+    "  999     1 10:00 node server.js",
+  ].join("\n")
+  const killed: number[] = []
+  const res = sweepOrphansOnce({
+    exec: linuxPs(base),
+    platform: "linux",
+    readEnv: environ({
+      100: ["FRIZZ_THREAD=alpha"],
+      101: ["FRIZZ_THREAD=alpha"],
+      200: ["FRIZZ_THREAD=beta"],
+      999: ["FRIZZ_THREAD=beta"], // self → protected even under a dead slug
+    }),
+    kill: (pid) => killed.push(pid),
+    selfPid: 999,
+    minAgeMs: 120_000,
+    runawayReport: false, // the runaway pass is a second exec call; linuxPs pins exactly one
+  })
+  assert.deepEqual(killed, [200])
+  assert.equal(res.reaped, 1)
+  assert.deepEqual(res.deadSlugs, ["beta"])
+  assert.deepEqual(res.liveSlugs, ["alpha"])
 })
 
 test("sweepOrphansOnce end-to-end with fakes: reaps dead-slug Chrome, spares live + self", () => {
@@ -246,6 +324,7 @@ test("sweepOrphansOnce end-to-end with fakes: reaps dead-slug Chrome, spares liv
   const killed: number[] = []
   const res = sweepOrphansOnce({
     exec: fakePs(base, env),
+    platform: "darwin",
     kill: (pid) => killed.push(pid),
     selfPid: 999,
     minAgeMs: 120_000,
@@ -271,7 +350,7 @@ test("sweepOrphansOnce: a live root whose argv holds a stray FRIZZ_THREAD litera
     "101 node chrome-devtools-mcp FRIZZ_THREAD=realthread",
   ].join("\n")
   const killed: number[] = []
-  const res = sweepOrphansOnce({ exec: fakePs(base, env), kill: (p) => killed.push(p), selfPid: 999, minAgeMs: 120_000 })
+  const res = sweepOrphansOnce({ exec: fakePs(base, env), platform: "darwin", kill: (p) => killed.push(p), selfPid: 999, minAgeMs: 120_000 })
   assert.deepEqual(killed, [], "no aux reaped — realthread is live via its root")
   assert.deepEqual(res.liveSlugs, ["realthread"])
 })

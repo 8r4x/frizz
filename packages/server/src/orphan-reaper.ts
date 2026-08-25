@@ -26,6 +26,7 @@
 // enumeration failure fails CLOSED (reap nothing). An age guard skips just-spawned processes.
 
 import { execFileSync } from "node:child_process"
+import { readFileSync } from "node:fs"
 import { dirname } from "node:path"
 import { claudeBrokerSocketPath } from "./backend/claude-broker-host.ts"
 import { sweepStaleSockets } from "./backend/stale-socket-sweep.ts"
@@ -196,15 +197,35 @@ export type Exec = (file: string, args: string[]) => string
 const defaultExec: Exec = (file, args) =>
   execFileSync(file, args, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 10_000 })
 
+/** Reads one process's raw environment block, or null when unreadable (gone, or another user's). */
+export type ReadEnv = (pid: number) => string | null
+
+// Linux exposes the env as a NUL-delimited file; permissions make it same-user-only, matching what
+// `ps -E` can read on macOS. EACCES/ENOENT → null → the row keeps a null slug (never reaped).
+const defaultReadEnv: ReadEnv = (pid) => {
+  try {
+    return readFileSync(`/proc/${pid}/environ`, "utf8")
+  } catch {
+    return null
+  }
+}
+
 /**
- * Two `ps` passes joined by pid: pass 1 (`-o command=`, argv only) for pid/ppid/etime/command; pass 2
- * (`-Eww`, env appended) to read the FRIZZ_THREAD slug FROM THE ENV SEGMENT ONLY (the pass-1 argv
- * is stripped off first). Reading the slug from env — never argv — is what stops a literal
+ * Pass 1 (`ps -Aww -o …`, argv only) enumerates pid/ppid/etime/command — `-A` is the spelling both
+ * platforms document for "every process" (macOS ps treats it as `-ax`; verified identical output
+ * there 2026-08-24, and procps only tolerates the BSD `-ax` form as a compatibility special case).
+ *
+ * The slug is then read FROM THE ENVIRONMENT ONLY, per platform. On Linux, `/proc/<pid>/environ` —
+ * NUL-delimited, so only an exact `FRIZZ_THREAD=<slug>` entry matches and none of the pass-2 record
+ * parsing below applies. procps has no `-E`: on a Linux install the old unconditional pass 2 failed
+ * every sweep with `error: unsupported SysV option` into the server log (reported 2026-08-24), so the
+ * reaper silently reaped nothing there. On macOS, pass 2 is `ps -Eww` (env appended after argv) with
+ * the pass-1 argv prefix stripped off first. Reading the slug from env — never argv — is what stops a literal
  * `FRIZZ_THREAD=x` inside a process's argv (pasted task text, an `env FRIZZ_THREAD=x …` invocation,
  * a grep) from spoofing ownership and mis-attributing a live thread's slug.
  *
- * Deliberately TWO passes, not one `-Eww` pass storing the whole line: a process's full environment
- * (which `ps -E` appends) contains its secrets — API keys, tokens, private keys. The retained
+ * On macOS, deliberately TWO passes, not one `-Eww` pass storing the whole line: a process's full
+ * environment (which `ps -E` appends) contains its secrets — API keys, tokens, private keys. The retained
  * `command` is argv-only, and the env-bearing text never escapes this function beyond the slug regex,
  * so secrets can't leak into a log or error. The cost is a negligible pid-reuse race (a pid reassigned
  * between the two sub-ms `ps` calls fails the `${pid} ${argv}` marker match → no slug → not reaped, so
@@ -226,10 +247,15 @@ const defaultExec: Exec = (file, args) =>
  * dangerous on a ROOT row (its whole thread reads dead), and any future change here has to be judged
  * against the second case, not the first.
  */
-export function enumerateProcs(exec: Exec = defaultExec): ProcRow[] {
+export interface EnumerateOpts {
+  platform?: NodeJS.Platform
+  readEnv?: ReadEnv
+}
+
+export function enumerateProcs(exec: Exec = defaultExec, opts: EnumerateOpts = {}): ProcRow[] {
   // `-ww` (both passes) disables ps's column truncation so pass-1 argv is the FULL argv — required
-  // for the prefix strip below to leave a clean env segment.
-  const base = exec("ps", ["-axww", "-o", "pid=,ppid=,etime=,command="])
+  // on macOS for the prefix strip below to leave a clean env segment.
+  const base = exec("ps", ["-Aww", "-o", "pid=,ppid=,etime=,command="])
   const rows: ProcRow[] = []
   const byPid = new Map<number, ProcRow>()
   const pids: number[] = []
@@ -246,7 +272,29 @@ export function enumerateProcs(exec: Exec = defaultExec): ProcRow[] {
   }
   if (!pids.length) return rows
 
-  // Pass 2: `-Eww -o pid=,command=` appends the full ENVIRONMENT after argv. Two subtleties:
+  if ((opts.platform ?? process.platform) === "linux") {
+    // Only an exact NUL-delimited `FRIZZ_THREAD=<slug>` entry counts — a `FRIZZ_THREAD=x` literal
+    // INSIDE another variable's value (pasted task text) is part of a longer entry and never matches.
+    // A pid reused between pass 1 and this read would attribute the NEW process's slug to the old
+    // row, but Linux allocates pids sequentially up to pid_max, so a wrap inside this sub-ms gap is
+    // not a real hazard (the macOS argv-marker check below exists because `ps -E` output forces a
+    // re-parse anyway, not because the race is live there either).
+    const readEnv = opts.readEnv ?? defaultReadEnv
+    for (const row of rows) {
+      const environ = readEnv(row.pid)
+      if (environ === null) continue
+      for (const entry of environ.split("\0")) {
+        const m = entry.match(/^FRIZZ_THREAD=([A-Za-z0-9._-]+)$/)
+        if (m) {
+          row.slug = m[1]!
+          break
+        }
+      }
+    }
+    return rows
+  }
+
+  // Pass 2 (macOS): `-Eww -o pid=,command=` appends the full ENVIRONMENT after argv. Two subtleties:
   //  (a) the slug MUST come from the env, not argv — a process whose argv contains a literal
   //      `FRIZZ_THREAD=x` (pasted task text, a grep, an `env FRIZZ_THREAD=x …` invocation) would spoof
   //      ownership. So strip the known pass-1 argv prefix and read the slug only from what follows.
@@ -316,6 +364,9 @@ export function reapSubtrees(
 
 export interface SweepDeps {
   exec?: Exec
+  /** Platform + env-reader overrides for enumerateProcs (tests pin the OS-specific paths). */
+  platform?: NodeJS.Platform
+  readEnv?: ReadEnv
   kill?: (pid: number) => void
   selfPid?: number
   minAgeMs?: number
@@ -435,7 +486,7 @@ export function sweepOrphansOnce(deps: SweepDeps = {}): SweepResult {
   const minAgeMs = deps.minAgeMs ?? ORPHAN_MIN_AGE_MS
   let rows: ProcRow[]
   try {
-    rows = enumerateProcs(exec)
+    rows = enumerateProcs(exec, { platform: deps.platform, readEnv: deps.readEnv })
   } catch {
     return { reaped: 0, deadSlugs: [], liveSlugs: [] }
   }

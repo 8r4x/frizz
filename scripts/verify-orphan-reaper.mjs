@@ -1,7 +1,9 @@
 // Real-subsystem harness for the orphan reaper (the real-subsystem-harness skill). Unit tests drive the pure logic
-// with a FAKE ps; this drives the REAL `ps -axo` + `ps -Eww` env read and a REAL SIGKILL against
-// REAL processes, with a NEGATIVE CONTROL (a live-slug root + its aux that MUST survive). Mocks
-// prove nothing about whether macOS ps actually surfaces FRIZZ_THREAD from the environment.
+// with a FAKE ps; this drives the REAL enumeration (`ps -Aww`, then the platform env read: `ps -Eww`
+// on macOS, `/proc/<pid>/environ` on Linux) and a REAL SIGKILL against REAL processes, with a
+// NEGATIVE CONTROL (a live-slug root + its aux that MUST survive). Mocks prove nothing about whether
+// the OS actually surfaces FRIZZ_THREAD from the environment — run it on both platforms (verified on
+// macOS and Ubuntu 24.04/procps 4.0.4, 17/17 each, 2026-08-24).
 //
 //   run: nub scripts/verify-orphan-reaper.mjs   (from ui/)   → PASS/FAIL lines; exit 1 on any fail.
 //
@@ -72,12 +74,12 @@ try {
   const spoofAuxPid = spawnTagged(process.execPath, idleArgs, SPOOF)
   await wait(700) // let them register in the process table
 
-  // 1) REAL enumeration: ps -axo joined with ps -Eww env read
+  // 1) REAL enumeration: ps -Aww joined with the platform env read (-Eww / /proc environ)
   const rows = enumerateProcs()
   const find = (pid) => rows.find((r) => r.pid === pid)
-  ok(find(rootPid)?.slug === LIVE, "real ps -Eww surfaces FRIZZ_THREAD env for the root")
-  ok(find(liveAuxPid)?.slug === LIVE, "real ps -Eww surfaces the live-aux slug")
-  ok(find(orphanPid)?.slug === DEAD, "real ps -Eww surfaces the orphan slug")
+  ok(find(rootPid)?.slug === LIVE, "real env read surfaces FRIZZ_THREAD for the root")
+  ok(find(liveAuxPid)?.slug === LIVE, "real env read surfaces the live-aux slug")
+  ok(find(orphanPid)?.slug === DEAD, "real env read surfaces the orphan slug")
   ok(!!find(rootPid) && isSessionRoot(find(rootPid).command), "a binary named `claude` classified a session root")
   ok(!!find(orphanPid) && !isSessionRoot(find(orphanPid).command), "plain node classified aux, not a session root")
   // CRITICAL: the spoof root's slug must read from ENV (SPOOF), NOT the argv decoy literal
