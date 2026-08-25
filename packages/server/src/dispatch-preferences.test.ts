@@ -1,11 +1,36 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync } from "node:fs"
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createStorage } from "./storage.ts"
 import { defaultSettings } from "./settings.ts"
-import { defaultDispatchPreferences, getDispatchPreferences, setDispatchPreference } from "./dispatch-preferences.ts"
+import {
+  defaultDispatchPreferences,
+  getDispatchPreferences,
+  machineDispatchPreferencesPath,
+  readMachineDispatchPreferences,
+  setDispatchPreference,
+} from "./dispatch-preferences.ts"
+
+// One sandbox HOME with as many project databases as a test wants: the record under test is
+// machine-level, so the interesting cases are all "two projects, one home".
+function sandbox(): { home: string; open: (name: string) => ReturnType<typeof createStorage>; done: () => void } {
+  const home = mkdtempSync(join(tmpdir(), "frizz-dispatch-preferences-"))
+  const opened: ReturnType<typeof createStorage>[] = []
+  return {
+    home,
+    open: (name) => {
+      const storage = createStorage(join(home, `${name}.db`))
+      opened.push(storage)
+      return storage
+    },
+    done: () => {
+      for (const storage of opened) storage.close()
+      rmSync(home, { recursive: true, force: true })
+    },
+  }
+}
 
 test("dispatch preferences migrate the selected Settings runtime without contaminating the other provider", () => {
   const settings = {
@@ -42,30 +67,81 @@ test("dispatch preferences infer an old Settings record's Codex backend from the
 })
 
 test("dispatch preferences persist provider-specific selections across a database restart", () => {
-  const path = join(mkdtempSync(join(tmpdir(), "frizz-dispatch-preferences-")), "ui.db")
+  const box = sandbox()
+  const path = join(box.home, "restart.db")
   const settings = defaultSettings()
   let storage = createStorage(path)
 
-  setDispatchPreference(storage, settings, { field: "model", backend: "claude", value: "sonnet" })
-  setDispatchPreference(storage, settings, { field: "effort", backend: "claude", value: "max" })
-  setDispatchPreference(storage, settings, { field: "model", backend: "codex", value: "gpt-5.5" })
-  setDispatchPreference(storage, settings, { field: "effort", backend: "codex", value: "xhigh" })
-  setDispatchPreference(storage, settings, { field: "backend", value: "claude" })
+  setDispatchPreference(storage, settings, box.home, { field: "model", backend: "claude", value: "sonnet" })
+  setDispatchPreference(storage, settings, box.home, { field: "effort", backend: "claude", value: "max" })
+  setDispatchPreference(storage, settings, box.home, { field: "model", backend: "codex", value: "gpt-5.5" })
+  setDispatchPreference(storage, settings, box.home, { field: "effort", backend: "codex", value: "xhigh" })
+  setDispatchPreference(storage, settings, box.home, { field: "backend", value: "claude" })
   storage.close()
 
   storage = createStorage(path)
-  assert.deepEqual(getDispatchPreferences(storage, settings), {
+  assert.deepEqual(getDispatchPreferences(storage, settings, box.home), {
     backend: "claude",
     claude: { model: "sonnet", effort: "max", permissionMode: "bypassPermissions" },
     codex: { model: "gpt-5.5", effort: "xhigh", permissionMode: "default" },
   })
   storage.close()
+  box.done()
+})
+
+test("a selection made in one project is the profile every other project opens on", () => {
+  const box = sandbox()
+  const settings = defaultSettings()
+  const alpha = box.open("alpha")
+  const beta = box.open("beta")
+  try {
+    setDispatchPreference(alpha, settings, box.home, { field: "profile", backend: "claude", model: "haiku", effort: "low" })
+    assert.ok(existsSync(machineDispatchPreferencesPath(box.home)), "the record is a file beside settings.json")
+    assert.deepEqual(getDispatchPreferences(beta, settings, box.home).claude, {
+      model: "haiku",
+      effort: "low",
+      permissionMode: "bypassPermissions",
+    })
+    // …and the other direction: beta's change is what alpha sees next, not alpha's own last write.
+    setDispatchPreference(beta, settings, box.home, { field: "effort", backend: "claude", value: "xhigh" })
+    assert.equal(getDispatchPreferences(alpha, settings, box.home).claude.effort, "xhigh")
+  } finally {
+    box.done()
+  }
+})
+
+test("a project that stored a profile before the machine file existed keeps it until the next selection", () => {
+  const box = sandbox()
+  const settings = defaultSettings()
+  const alpha = box.open("alpha")
+  const beta = box.open("beta")
+  try {
+    // The pre-2026-08-25 shape: a per-project row and no machine file.
+    alpha.setSetting("dispatch-preferences.v1", {
+      backend: "codex",
+      claude: { permissionMode: "auto" },
+      codex: { model: "gpt-5.5", effort: "high", permissionMode: "default" },
+    })
+    assert.equal(readMachineDispatchPreferences(box.home), undefined)
+    assert.equal(getDispatchPreferences(alpha, settings, box.home).codex.model, "gpt-5.5", "the row is the fallback")
+    assert.equal(getDispatchPreferences(beta, settings, box.home).backend, "claude", "a project with no row gets the default")
+
+    // The next selection, wherever it is made, promotes the record to the machine…
+    setDispatchPreference(alpha, settings, box.home, { field: "effort", backend: "codex", value: "xhigh" })
+    assert.equal(readMachineDispatchPreferences(box.home)?.codex.effort, "xhigh")
+    assert.equal(getDispatchPreferences(beta, settings, box.home).codex.model, "gpt-5.5", "…so beta now sees alpha's profile")
+    // …and the row is mirrored, so an older server reading this database sees the same choice.
+    assert.deepEqual(alpha.getSetting("dispatch-preferences.v1"), readMachineDispatchPreferences(box.home))
+  } finally {
+    box.done()
+  }
 })
 
 test("a profile cell persists model and effort in one provider-scoped mutation", () => {
-  const storage = createStorage(join(mkdtempSync(join(tmpdir(), "frizz-dispatch-profile-")), "ui.db"))
+  const box = sandbox()
+  const storage = box.open("profile")
   const settings = defaultSettings()
-  const next = setDispatchPreference(storage, settings, {
+  const next = setDispatchPreference(storage, settings, box.home, {
     field: "profile",
     backend: "codex",
     model: "gpt-5.6-sol",
@@ -74,18 +150,34 @@ test("a profile cell persists model and effort in one provider-scoped mutation",
   assert.equal(next.backend, "codex")
   assert.deepEqual(next.codex, { model: "gpt-5.6-sol", effort: "ultra", permissionMode: "default" })
   assert.deepEqual(next.claude, { permissionMode: "bypassPermissions" })
-  storage.close()
+  box.done()
 })
 
 test("an invalid saved record degrades in memory and never silently persists a fallback", () => {
-  const storage = createStorage(join(mkdtempSync(join(tmpdir(), "frizz-dispatch-preferences-invalid-")), "ui.db"))
+  const box = sandbox()
+  const storage = box.open("invalid")
   storage.setSetting("dispatch-preferences.v1", { backend: "codex", codex: { model: "" } })
   const settings = defaultSettings()
-  assert.deepEqual(getDispatchPreferences(storage, settings), defaultDispatchPreferences(settings))
+  assert.deepEqual(getDispatchPreferences(storage, settings, box.home), defaultDispatchPreferences(settings))
   assert.deepEqual(
     storage.getSetting("dispatch-preferences.v1"),
     { backend: "codex", codex: { model: "" } },
     "read-time validation must not rewrite user storage",
   )
-  storage.close()
+  box.done()
+})
+
+test("an unreadable machine file degrades to the project's row rather than throwing", () => {
+  const box = sandbox()
+  const settings = defaultSettings()
+  const alpha = box.open("alpha")
+  try {
+    setDispatchPreference(alpha, settings, box.home, { field: "model", backend: "claude", value: "sonnet" })
+    writeFileSync(machineDispatchPreferencesPath(box.home), "{ not json")
+    assert.equal(readMachineDispatchPreferences(box.home), undefined)
+    assert.equal(getDispatchPreferences(alpha, settings, box.home).claude.model, "sonnet")
+    assert.equal(existsSync(machineDispatchPreferencesPath(box.home)), true, "a read never rewrites the file")
+  } finally {
+    box.done()
+  }
 })

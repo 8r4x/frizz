@@ -123,7 +123,6 @@ import { liveThreadsForBackend, runProviderLogout } from "./backend/account-acti
 import { threadProfileOptions, validateThreadProfile } from "./backend/thread-profiles.ts"
 import { adoptionRuntimeBinding, type AdoptionPaneLookup, type ExpectedAdoptionPane } from "./adoption-recovery.ts"
 import { parsePrRef, readGithubStatusBook, GITHUB_STATUS_SETTING } from "./awaiting.ts"
-import { getDispatchPreferences, setDispatchPreference } from "./dispatch-preferences.ts"
 import { isBrokerClaudeRow, type SessionRow, type Storage } from "./storage.ts"
 import type { SessionTelemetry } from "./tailer.ts"
 import { providerResumeCommand } from "./external-terminal.ts"
@@ -2945,13 +2944,13 @@ export function createRouter(ctx: AppContext) {
 
     dispatchPreferencesGet: query({
       output: DispatchPreferences,
-      handler: async () => getDispatchPreferences(ctx.storage, ctx.getSettings(), readCodexModels()),
+      handler: async () => ctx.getDispatchPreferences(readCodexModels()),
     }),
 
     dispatchPreferenceSet: mutation({
       input: SetDispatchPreferenceInput,
       output: DispatchPreferences,
-      handler: async ({ input }) => setDispatchPreference(ctx.storage, ctx.getSettings(), input, readCodexModels()),
+      handler: async ({ input }) => ctx.setDispatchPreference(input, readCodexModels()),
     }),
 
     // The shipped GitHub batch-dispatch prompt template (single source of truth: server/github.ts).

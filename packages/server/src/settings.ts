@@ -57,19 +57,26 @@ function pickPresent(partial: Partial<Settings>): Partial<MachineSettings> {
 
 /** open(wx) → fsync → rename, as everywhere else here: a reader never sees a half file. */
 export function writeMachineSettings(next: MachineSettings, home: string): void {
-  const path = machineSettingsPath(home)
+  writeMachineFile(machineSettingsPath(home), next)
+}
+
+/**
+ * The one writer for every machine-level preference file (this one and dispatch-preferences.ts).
+ * A preference is not state: failing to persist a font, or a model choice, must never fail the save
+ * that carried it, so this swallows the write error and leaves whatever was there before.
+ */
+export function writeMachineFile(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true })
   const temp = `${path}.${process.pid}.tmp`
   let fd: number | undefined
   try {
     fd = openSync(temp, "w", 0o600)
-    writeFileSync(fd, `${JSON.stringify(next, null, 2)}\n`, "utf8")
+    writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`, "utf8")
     fsyncSync(fd)
     closeSync(fd)
     fd = undefined
     renameSync(temp, path)
   } catch {
-    // Machine settings are a preference, not state. Failing to persist a font must not fail the save.
     if (fd !== undefined) try { closeSync(fd) } catch { /* already gone */ }
     try { rmSync(temp, { force: true }) } catch { /* already gone */ }
   }

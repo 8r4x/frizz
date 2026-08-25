@@ -1964,7 +1964,9 @@ export const Settings = z.object({
 })
 export type Settings = z.infer<typeof Settings>
 
-// The new-thread composer's durable, workspace-scoped choices. Keep one profile per runtime so
+// The new-thread composer's durable choices — MACHINE-wide, one record for every project the server
+// serves (server/dispatch-preferences.ts), because the profile belongs to the operator, not to a
+// repository. Keep one profile per runtime so
 // moving between Claude and Codex never overwrites the other runtime's model, effort, or permission
 // selection. Fields stay optional for the first-run/default case: a displayed fallback is not stored
 // as user intent until the human actually chooses it.

@@ -28,9 +28,12 @@ import { projectSlug } from "./base-path.ts"
  * blank the rail mid-navigation, which is the flicker the client-side router exists to remove.
  * `threadLocate` deliberately searches every registered project server-side, so a per-project copy
  * would be several caches of one answer. `projectsQueueCounts` is the rail's badges — one answer for
- * every project, read by a rail that outlives every switch.
+ * every project, read by a rail that outlives every switch. `dispatchPreferencesGet` is the prompt
+ * box's model + effort profile, which the server keeps in one machine-level file
+ * (server/dispatch-preferences.ts): scoping it would let a switch briefly paint the profile this
+ * project last saw instead of the one just chosen in another.
  */
-const MACHINE_WIDE = new Set(["projectsList", "projectsQueueCounts", "threadLocate"])
+const MACHINE_WIDE = new Set(["projectsList", "projectsQueueCounts", "threadLocate", "dispatchPreferencesGet"])
 
 /** The `queryKeyHashFn` for this app's QueryClient. Nothing else should need to call it. */
 export function projectScopedQueryKeyHash(key: readonly unknown[]): string {

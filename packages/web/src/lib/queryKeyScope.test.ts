@@ -61,6 +61,12 @@ test("machine-wide keys stay shared, or the rail refetches itself on every switc
   withPathname("/project/beta", () => {
     assert.deepEqual(qc.getQueryData(["threadLocate", "fix-auth"]), { project: "beta" }, "threadLocate searches every project by design")
   })
+  // The prompt box's model + effort profile is one machine-level record on the server, and the
+  // composer writes it optimistically — so the value chosen on alpha is what beta must paint at once.
+  withPathname("/project/alpha", () => qc.setQueryData(["dispatchPreferencesGet"], { backend: "claude" }))
+  withPathname("/project/beta", () => {
+    assert.deepEqual(qc.getQueryData(["dispatchPreferencesGet"]), { backend: "claude" }, "the dispatch profile belongs to the machine")
+  })
 })
 
 test("the unprefixed launching project is a scope of its own, not the absence of one", () => {

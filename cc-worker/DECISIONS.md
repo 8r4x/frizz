@@ -1100,3 +1100,14 @@ each, newest first, dotfiles excluded (frizz's own `.scratchpad-state.json` is n
 binaries named rather than inlined, with per-file and total caps that say when they truncated. It is
 gated on the directory being NON-EMPTY rather than merely present, since dispatch now creates it empty
 and "exists" stopped meaning "the worker wrote something".
+
+## 2026-08-25: the prompt box's model + effort profile is the MACHINE's, not the project's
+
+Maintainer: *"Changing the model and effort in a prompt box. That should be remembered, that new setting, but it should also be applied globally across all projects."* It was remembered — `DispatchPreferences` has been durable since the composer grew the selector — but in the per-project SQLite `settings` row, so one server serving N projects showed N different profiles, and a choice made in one project was invisible in the next.
+
+- **The record now lives in `<data>/dispatch-preferences.json`, beside `settings.json`**, read and written through `server/dispatch-preferences.ts` the same way `font` is: machine file → this project's stored row → the Settings-derived default. The context exposes `getDispatchPreferences`/`setDispatchPreference` closures over `home`, so the router never learns where the file is.
+- **No migration.** A project that chose a profile before the file existed keeps showing it from its row; the next selection, made anywhere, writes the file and is what every project opens on from then on. Every write still mirrors into the row, so an older server reading that database sees the same choice.
+- **The whole record moved, including the per-runtime `permissionMode` inside it.** That field is vestigial — no `SetDispatchPreferenceInput` variant can set it and the composer's resolver never reads it (dispatch permission is decided server-side from Settings) — so nothing per-project was given up. Settings' own `permissionMode` stays per project, as before.
+- **The web cache treats `["dispatchPreferencesGet"]` as machine-wide** (`lib/queryKeyScope.ts`), so the composer's optimistic write on one project is what a client-side switch paints on the next, rather than that project's last-seen copy for the beat before a refetch.
+
+Verified on a real two-project stack (launcher + tenant on one server): a profile chosen through the tenant's RPC is what the launcher reads, and back; a per-project `settingsSet` on the launcher stayed invisible to the tenant, which is the control that the two prefixes reach different projects.

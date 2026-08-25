@@ -1,10 +1,18 @@
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
-import { PermissionMode, wakeDeliveryToken, type Settings } from "@frizz/shared"
+import {
+  PermissionMode,
+  wakeDeliveryToken,
+  type CodexModel,
+  type DispatchPreferences,
+  type SetDispatchPreferenceInput,
+  type Settings,
+} from "@frizz/shared"
 import { Bus, Emitter } from "./bus.ts"
 import { resolveProject, permRequestDir, type Project } from "./project.ts"
 import { createStorage, isBrokerClaudeRow, isHeadlessRow, type Storage } from "./storage.ts"
 import { getSettings, setSettings, resetSettings } from "./settings.ts"
+import { getDispatchPreferences, setDispatchPreference } from "./dispatch-preferences.ts"
 import { readQuota } from "./quota.ts"
 import { refreshClaudeQuotaInBackground } from "./backend/claude-quota.ts"
 import { createBoard, type BoardManager } from "./board.ts"
@@ -152,6 +160,11 @@ export interface AppContext {
   getSettings: () => Settings
   setSettings: (s: Settings) => Settings
   resetSettings: () => Settings
+  // The prompt box's model + effort profile. Machine-level like `font` — one record for every project
+  // this server serves (dispatch-preferences.ts) — which is why these close over `home` here rather
+  // than the router reaching for it.
+  getDispatchPreferences: (codexModels?: readonly CodexModel[]) => DispatchPreferences
+  setDispatchPreference: (update: SetDispatchPreferenceInput, codexModels?: readonly CodexModel[]) => DispatchPreferences
   /**
    * Every project this PROCESS has open, with its board — the launching project and each tenant
    * activated since. Machine-wide reads (the rail's per-project queue counts) go through this rather
@@ -976,6 +989,9 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     getSettings: () => getSettings(storage, home),
     setSettings: (s) => setSettings(storage, s, home),
     resetSettings: () => resetSettings(storage, home),
+    getDispatchPreferences: (codexModels) => getDispatchPreferences(storage, getSettings(storage, home), home, codexModels),
+    setDispatchPreference: (update, codexModels) =>
+      setDispatchPreference(storage, getSettings(storage, home), home, update, codexModels),
     activeTenants: opts.activeTenants,
     claudeBin: opts.claudeBin,
     codexBin: opts.codexBin,
