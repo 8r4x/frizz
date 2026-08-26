@@ -49,9 +49,7 @@ import {
   helpText,
   expectedOwnerHealth,
   liveWorkspaceOwner,
-  networkUrls,
   parseCliArgs,
-  resolveBindSelection,
   resolveLaunchIntent,
   prepareBeforeGlobalLaunchLock,
   probeFrizz,
@@ -410,7 +408,6 @@ test("CLI options default to immutable mode and make source/HMR explicit", () =>
   assert.deepEqual(parseCliArgs([]), {
     noApp: false,
     appMode: false,
-    cloud: false,
     foreground: true,
     stop: false,
     status: false,
@@ -418,15 +415,12 @@ test("CLI options default to immutable mode and make source/HMR explicit", () =>
     dev: false,
     debug: false,
     port: undefined,
-    host: undefined,
     link: false,
     sessions: false,
-    allowedHosts: [],
   });
   assert.deepEqual(parseCliArgs(["--no-app", "--foreground", "--port=5123"]), {
     noApp: true,
     appMode: false,
-    cloud: false,
     foreground: true,
     stop: false,
     status: false,
@@ -434,10 +428,8 @@ test("CLI options default to immutable mode and make source/HMR explicit", () =>
     dev: false,
     debug: false,
     port: 5123,
-    host: undefined,
     link: false,
     sessions: false,
-    allowedHosts: [],
   });
   assert.equal(parseCliArgs(["--dev"]).dev, true);
   // --debug swaps the compact readout for the full event feed; it is orthogonal to --dev.
@@ -457,11 +449,11 @@ test("CLI options default to immutable mode and make source/HMR explicit", () =>
   assert.throws(() => parseCliArgs(["--detach"]), /always runs in the foreground/);
   assert.throws(() => parseCliArgs(["--app", "--no-app"]), /either/);
   assert.throws(() => parseCliArgs(["one", "two"]), /takes no repository path/);
-  // `up` is the cloud launch; --cloud survives as an alias, and the two origins cannot both be named.
-  assert.equal(parseCliArgs(["up"]).cloud, true)
-  assert.equal(parseCliArgs(["--cloud"]).cloud, true)
-  assert.throws(() => parseCliArgs(["up", "--public-origin", "https://x.dev"]), /not both/)
-  assert.throws(() => parseCliArgs(["--cloud", "--public-origin", "https://x.dev"]), /not both/);
+  // The network flags are retired for the R pane. They name the replacement rather than reading as a
+  // typo, because they lived in scripts and shell history.
+  for (const argv of [["up"], ["--cloud"], ["--host"], ["--host=0.0.0.0"], ["--allowed-host", "x"], ["--public-origin", "https://x.dev"]]) {
+    assert.throws(() => parseCliArgs(argv), /was retired .* press R in its terminal/, argv.join(" "));
+  }
   assert.throws(() => parseCliArgs(["--mystery"]), /unknown option/);
   assert.match(helpText(), /always runs in the foreground/);
   assert.match(helpText(), /default browser/);
@@ -472,8 +464,8 @@ test("CLI options default to immutable mode and make source/HMR explicit", () =>
     helpText(),
     /--dev\s+explicitly use the unsafe source watcher and Vite\/HMR/
   );
-  assert.match(helpText(), /--host \[address\]/);
-  assert.match(helpText(), /Only do this on a network you trust/);
+  assert.doesNotMatch(helpText(), /--host|--public-origin|--cloud|FRIZZ_HOST/);
+  assert.match(helpText(), /press R in the terminal running it/);
   // The command name is a parameter, so no description may hard-code one. `--foreground` did, and
   // read as advice about a different binary whenever the launcher was invoked under another name.
   assert.doesNotMatch(helpText("frizzctl"), /frizz-dev/);
@@ -490,82 +482,6 @@ test("help stays readable: one description column, and nothing wider than a term
     if (entry) columns.add(entry[0].length - 1);
   }
   assert.equal(columns.size, 1, `options, environment and commands must share one column, saw ${[...columns]}`);
-});
-
-test("--host: a bare flag means every interface, and a value must be an address", () => {
-  assert.equal(parseCliArgs([]).host, undefined);
-  assert.equal(parseCliArgs(["--host"]).host, "0.0.0.0");
-  assert.equal(parseCliArgs(["--host", "0.0.0.0"]).host, "0.0.0.0");
-  assert.equal(parseCliArgs(["--host=0.0.0.0"]).host, "0.0.0.0");
-  assert.equal(parseCliArgs(["--host", "192.168.1.5"]).host, "192.168.1.5");
-  assert.equal(parseCliArgs(["--host", "::"]).host, "::");
-  assert.equal(parseCliArgs(["--host=[::1]"]).host, "::1");
-  // "localhost" is a spelling of the default, not a name to resolve.
-  assert.equal(parseCliArgs(["--host", "localhost"]).host, "127.0.0.1");
-  // A DNS name is refused rather than resolved: listen() would silently pick one A record and the
-  // operator would have no way to see which interface they had just exposed.
-  assert.throws(() => parseCliArgs(["--host=example.com"]), /invalid --host address/);
-  // `--host` takes an OPTIONAL value, so the token after it is only the host when it really is an
-  // address. A bare `--host` still means every interface, and anything else is now an error rather
-  // than a repository path being quietly swallowed.
-  assert.equal(parseCliArgs(["--host", "--no-app"]).host, "0.0.0.0");
-  assert.equal(parseCliArgs(["--host"]).host, "0.0.0.0");
-  assert.equal(parseCliArgs(["--host", "10.0.0.4"]).host, "10.0.0.4");
-  assert.throws(() => parseCliArgs(["--host", "/tmp/some repo"]), /takes no repository path/);
-});
-
-test("--allowed-host: repeatable, comma-splittable, lowercased and deduped", () => {
-  assert.deepEqual(parseCliArgs([]).allowedHosts, []);
-  assert.deepEqual(
-    parseCliArgs(["--allowed-host", "Frizz.local", "--allowed-host=box,frizz.local"]).allowedHosts,
-    ["frizz.local", "box"]
-  );
-  assert.throws(() => parseCliArgs(["--allowed-host"]), /requires a value/);
-});
-
-test("resolveBindSelection: flags beat the environment, and exposure is derived not declared", () => {
-  assert.deepEqual(resolveBindSelection({ host: undefined, allowedHosts: [] }, {}, "pupper"), {
-    host: "127.0.0.1",
-    exposed: false,
-    allowedHosts: [],
-  });
-  // Exposed, the machine's own names ride along after the operator's, so http://pupper:9393/ works
-  // with no second flag — and the readout gets the name a person will actually type.
-  assert.deepEqual(
-    resolveBindSelection({ host: undefined, allowedHosts: [] }, { FRIZZ_HOST: "0.0.0.0", FRIZZ_ALLOWED_HOSTS: "a, B" }, "pupper"),
-    { host: "0.0.0.0", exposed: true, allowedHosts: ["a", "b", "pupper", "pupper.local"], hostname: "pupper" }
-  );
-  assert.equal(
-    resolveBindSelection({ host: "10.1.2.3", allowedHosts: [] }, { FRIZZ_HOST: "0.0.0.0" }, "pupper").host,
-    "10.1.2.3"
-  );
-  // ::1 and localhost are still loopback: asking for them must not print a network warning, and a
-  // loopback policy stays exactly the historical one — no machine name, no hostname to print.
-  assert.deepEqual(resolveBindSelection({ host: "::1", allowedHosts: [] }, {}, "pupper"), { host: "::1", exposed: false, allowedHosts: [] });
-  assert.throws(() => resolveBindSelection({ host: undefined, allowedHosts: [] }, { FRIZZ_HOST: "nope" }), /invalid --host/);
-});
-
-test("networkUrls: nothing for loopback, real interfaces for a wildcard bind", () => {
-  const interfaces = () => ({
-    lo0: [{ address: "127.0.0.1", family: "IPv4", internal: true } as never],
-    en0: [
-      { address: "192.168.1.5", family: "IPv4", internal: false } as never,
-      { address: "fe80::1", family: "IPv6", internal: false } as never,
-      { address: "2001:db8::5", family: "IPv6", internal: false } as never,
-    ],
-  });
-  assert.deepEqual(networkUrls(5173, "127.0.0.1", interfaces), []);
-  assert.deepEqual(networkUrls(5173, "0.0.0.0", interfaces), ["http://192.168.1.5:5173"]);
-  // `::` reaches v4 and v6 alike; link-local needs a zone id nobody will type, so it is dropped.
-  assert.deepEqual(networkUrls(5173, "::", interfaces), [
-    "http://192.168.1.5:5173",
-    "http://[2001:db8::5]:5173",
-  ]);
-  // A specific address is its own answer — do not enumerate interfaces it is not bound to.
-  assert.deepEqual(networkUrls(5173, "10.1.2.3", interfaces), ["http://10.1.2.3:5173"]);
-  // The machine's own name leads when exposed, and is never printed for a loopback bind.
-  assert.deepEqual(networkUrls(5173, "0.0.0.0", interfaces, "pupper"), ["http://pupper:5173", "http://192.168.1.5:5173"]);
-  assert.deepEqual(networkUrls(5173, "127.0.0.1", interfaces, "pupper"), []);
 });
 
 test("workspace identity canonicalizes a symlink and survives spaces", () => {
@@ -2515,38 +2431,8 @@ test("boardAddress: a bare origin gains a slash, a grid or an offer does not", (
   assert.equal(boardAddress("http://127.0.0.1:9494/?add=%2Ftmp%2Fx"), "http://127.0.0.1:9494/?add=%2Ftmp%2Fx");
 });
 
-test("an update carries the public origin across the re-exec", () => {
-  // The regression this pins broke a live board. It was launched with `up`, Update & Restart re-execed
-  // it with a bare `--port`, and the successor came back with its origin gate DISARMED — the public
-  // hostname answered Forbidden, and then 1033 once the tunnel went with it. Nothing said why: the new
-  // process had no idea it was ever meant to be public.
-  const base = { entry: "/artifact/src/index.js", port: 9494 };
-
-  // No workspace argument: an internal launch reads its pinned project from the environment.
-  assert.deepEqual(durableReexecArgs({ ...base, cloud: false }), [
-    "/artifact/src/index.js",
-    "--port",
-    "9494",
-  ]);
-
-  // A cloud launch restores BOTH halves. `--public-origin` alone would arm the gate and leave the
-  // successor with no tunnel, which is the 1033 state wearing a different hat.
-  assert.deepEqual(durableReexecArgs({ ...base, cloud: true, publicOrigin: "https://colin.frizz.sh" }), [
-    "/artifact/src/index.js",
-    "--port",
-    "9494",
-    "--cloud",
-  ]);
-
-  // `--public-origin` without a saved cloud config is carried verbatim; the operator runs their own
-  // proxy there, so there is no tunnel for Frizz to own.
-  assert.deepEqual(durableReexecArgs({ ...base, cloud: false, publicOrigin: "https://board.example" }), [
-    "/artifact/src/index.js",
-    "--port",
-    "9494",
-    "--public-origin",
-    "https://board.example",
-  ]);
+test("an update re-execs with the port alone; how the board is reached lives in the saved setup", () => {
+  assert.deepEqual(durableReexecArgs({ entry: "/opt/frizz/src/index.js", port: 9393 }), ["/opt/frizz/src/index.js", "--port", "9393"]);
 });
 
 test("--sessions and --sign-out are parsed, in both the spaced and the = spelling", () => {

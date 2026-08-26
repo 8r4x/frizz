@@ -63,7 +63,7 @@ Frizz is a browser tab, a queue, and the agent CLIs you already pay for. It brin
 - 🐙 **GitHub integration.** Browse your repo's issues and pull requests without leaving the composer, and turn a selection of them into threads. Workers can read issues, diffs, and CI on their own.
 - 👀 **Built-in CI and PR watchers.** A worker waiting on a build or a review doesn't hand the thread back to you to be told "keep going." It watches, and picks the work back up when the run goes green or a review lands.
 - 📝 **No magic.** A thread behaves like a Claude Code session you started yourself. Frizz adds no worktrees, no branches, no dev server, no build integration, no workflow engine to fight with.
-- 🔒 **Local only.** No cloud, no account, no telemetry. The server binds `127.0.0.1` by default and its state lives in your user directory, never in your checkout. To reach a board from a phone, put your own tunnel or proxy in front of it — see [Remote access](docs/remote-access.md).
+- 🔒 **Local only.** No cloud, no account, no telemetry. The server binds `127.0.0.1` by default and its state lives in your user directory, never in your checkout. To reach a board from a phone, press R in its terminal — see [Remote access](docs/remote-access.md).
 
 ### Projects
 
@@ -132,11 +132,7 @@ $ npx frizz --help
 
 Frizz production launcher
 
-Usage: npx frizz [up] [options]
-
-Commands:
-  up                     serve at the saved public hostname and run its tunnel; asked once,
-                         then remembered
+Usage: npx frizz [options]
 
 Run it in the directory you want to work in. One server serves EVERY project on this machine,
 each at its own /project/<name> URL, so a second run joins the one already going. Runs the
@@ -146,28 +142,15 @@ for a source checkout.
 Options:
   --no-app               print the URL without opening a browser
   --port <port>          request a fixed port for a new workspace server
-  --host [address]       serve on a network address instead of loopback (bare --host means 0.0.0.0)
-  --allowed-host <name>  with --host, also accept this DNS name as the board's address (repeatable)
-  --public-origin <url>  serve behind a proxy/tunnel reachable at this exact origin
-  --cloud                alias of up, for saved commands
   --link                 print a fresh single-use access link for the running board
   --debug                stream the full event feed to the terminal instead of the compact readout
   -h, --help             show this help
 
-Environment:
-  FRIZZ_HOST              same as --host
-  FRIZZ_ALLOWED_HOSTS     same as --allowed-host, comma separated
-  FRIZZ_PUBLIC_ORIGIN     same as --public-origin
 
---host puts a board that can run shell commands as you on the network, and Frizz has no login: anyone
-who reaches the port controls it. Only do this on a network you trust. An IP address and this
-machine's own hostname work as-is; any other DNS name must be listed with --allowed-host ("*"
-allows any).
-
---public-origin serves the board through a tunnel or reverse proxy without putting it on the LAN
-at all — Frizz stays on loopback and the tunnel dials it. It prints a SINGLE-USE access link, and
-shows it as a QR so you can scan it from a phone; press L for a fresh one at any time. Scanning it
-trades the code for a session cookie, so the link itself stops working the moment it is used.
+To reach the board from a phone or another machine, press R in the terminal running it: a short
+walkthrough sets up a frizz.sh name, a Cloudflare Tunnel, Tailscale, or a proxy of your own, and
+remembers the choice, so a plain launch serves it from then on. The board stays on loopback and
+shows a single-use sign-in link as a QR; press L for a fresh one, or run --link from another shell.
 ```
 
 <br/>
@@ -184,7 +167,7 @@ trades the code for a session cookie, so the link itself stops working the momen
 <details>
 <summary><b>Does anything leave my machine?</b></summary>
 
-> Nothing from Frizz. There's no account, no telemetry, and the server binds to `127.0.0.1` unless you ask for otherwise with `--host`. The agents themselves talk to their providers, and `gh` talks to GitHub, but Frizz is a local process looking at local files.
+> Nothing from Frizz. There's no account, no telemetry, and the server binds to `127.0.0.1`; reaching it from another device is something you switch on yourself (press R in its terminal). The agents themselves talk to their providers, and `gh` talks to GitHub, but Frizz is a local process looking at local files.
 
 </details>
 
@@ -219,36 +202,18 @@ trades the code for a session cookie, so the link itself stops working the momen
 <details>
 <summary><b>Can I reach it from another machine?</b></summary>
 
-> Yes, with `--host` — the flag every dev server has, and it means the same thing here:
+> Yes. Press **R** in the terminal running Frizz. A short walkthrough sets up one of four ways to reach the board — a name on frizz.sh, a Cloudflare Tunnel you own, Tailscale, or any proxy you run — checks what each needs, prints the commands, and remembers your choice. From then on a plain `npx frizz` serves it; pick **Off** in the same place to go back to loopback only.
 >
-> ```sh
-> npx frizz --host              # every interface, i.e. 0.0.0.0
-> npx frizz --host 192.168.1.5  # one interface
-> ```
->
-> Frizz prints the addresses to use and warns you as it starts. Reaching it by IP or by the machine's own hostname (`http://pupper:9393/`, `http://pupper.local:9393/`) works as-is; any other name you have to say so — `--host --allowed-host frizz.home.arpa` — because an unlisted name is how DNS rebinding gets a browser to treat an attacker's page as same-origin with your board, and the machine's own name is the one nobody off your network can point elsewhere. `FRIZZ_HOST` and `FRIZZ_ALLOWED_HOSTS` do the same thing when the launch command lives in an image or a unit file.
->
-> Understand what you're turning on. Frizz has no login: reaching the port *is* the authorization, and the board runs shell commands as you. Only do this on a network you trust, and prefer a tunnel (`ssh -L 9393:127.0.0.1:9393 you@box`, Frizz's port, the same on both ends) if you just want your own board from your own laptop — that needs no flag at all.
+> The board stays bound to `127.0.0.1` in every case. Something in front of it — the frizz.sh relay, the tunnel, Tailscale, your proxy — carries the traffic, and Frizz gates the first visit with a single-use sign-in link shown as a QR. Press **L** for a fresh link any time, or `npx frizz --link` from another shell (over SSH, for a headless box). See [Remote access](docs/remote-access.md) for what each option needs.
 
 </details>
 
 <details>
 <summary><b>Can I reach it from anywhere, not just my LAN?</b></summary>
 
-> Yes — put it behind a tunnel and tell Frizz the address the tunnel answers on, with `--public-origin`:
+> Same answer: press **R** and pick a frizz.sh name, a Cloudflare Tunnel, or Tailscale. Each is reachable from anywhere the transport is — a frizz.sh name and a Cloudflare Tunnel from the open internet, Tailscale from your own devices.
 >
-> ```sh
-> npx frizz --public-origin https://frizz.example.com
-> cloudflared tunnel --url http://127.0.0.1:9393   # Frizz's port
-> ```
->
-> Frizz stays bound to `127.0.0.1` — `--public-origin` is not `--host` and does not put anything on your LAN. The tunnel runs on the same machine and dials the loopback port, so the only way in is through the tunnel. That is also what makes this the *good* remote option rather than merely a working one: the tunnel terminates TLS, so the board is a real `https://` origin and therefore a secure context, which plain `--host` over a LAN IP is not. Copy buttons and desktop notifications work again, and it works on a phone.
->
-> The address you pass must be the exact origin your browser shows — scheme and host, no path. Frizz accepts that one origin, and accepts `X-Forwarded-*` only on requests that actually arrived as it.
->
-> Frizz prints a **single-use** access link and renders it as a QR in your terminal, so you can scan it from a phone without typing forty characters. Scanning trades the code for a session cookie and the link immediately stops working; press **L** any time for a fresh one. A code expires in five minutes, and a spent one says so rather than failing silently.
-
-**Even so: Frizz has no accounts, so that link — and anything you put in front of the tunnel — *is* your access control.** A bare tunnel publishes a shell-capable board to the open internet for anyone who has the URL. Require authentication at the proxy — with Cloudflare, that means a [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) application over the hostname, with a policy allowing only your own email, created *before* the hostname resolves. Tailscale Serve is the same idea with device identity instead of SSO. Frizz prints this warning on every launch that names a public origin, and it is not boilerplate.
+> Frizz has no accounts, so the single-use sign-in link **is** the door: a phone that scans it gets a session; nobody else gets in. Sessions are per device and can be listed and revoked with `npx frizz --sessions` and `npx frizz --sign-out`.
 
 </details>
 

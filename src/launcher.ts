@@ -70,23 +70,13 @@ export interface CliOptions {
   /** Stream the full event feed to the terminal instead of the compact readout. */
   debug: boolean;
   port?: number;
-  /**
-   * Bind address for the public port. Absent means Frizz's loopback default; a bare `--host` means
-   * every interface. Only ever an IP literal — see normalizeBindHost.
-   */
-  host?: string;
-  /** `--allowed-host` values: DNS names a browser may use once the port is off loopback. */
-  allowedHosts: string[];
-  /** `--public-origin`: the serialized origin of a reverse proxy or tunnel fronting this board. */
-  publicOrigin?: string;
   /** `--link`: ask the ALREADY-RUNNING board for a fresh single-use access link, then exit. */
   link: boolean;
   /** `--sessions`: list the devices holding a session on the already-running board, then exit. */
   sessions: boolean;
   /** `--sign-out <id|all>`: revoke one device's session, or every one of them. */
   signOut?: string;
-  /** `--cloud`: serve at the saved public hostname and run the tunnel as a supervised child. */
-  cloud: boolean;
+
 }
 
 export interface Workspace {
@@ -149,24 +139,6 @@ export const LAUNCH_HARD_TIMEOUT_MS = 10 * 60_000;
 export const FIRST_ARTIFACT_LAUNCH_LOCK_TIMEOUT_MS = 120_000;
 
 /**
- * Does the token after a bare `--host` belong to it?
- *
- * `--host` takes an optional value, and the launcher also takes a positional repository path, so
- * `frizz-dev --host ~/code/app` is genuinely ambiguous to a naive "next token wins" parser — it would
- * bind nothing and lose the repo. Every legal value here is an IP literal, so recognising one settles
- * it without a guess: anything else is the operator's repository and `--host` stands for every interface.
- */
-function looksLikeBindHost(value: string | undefined): boolean {
-  if (value === undefined || value.startsWith("-")) return false;
-  try {
-    normalizeBindHost(value);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
  * The argv the durable launcher re-execs itself with on Update & Restart.
  *
  * Update & Restart replaces this launcher in place with the newly promoted artifact, and it rebuilds
@@ -176,42 +148,39 @@ function looksLikeBindHost(value: string | undefined): boolean {
  * "Forbidden", then "Cloudflare error 1033" once cloudflared went too, and nothing in the readout said
  * why — the successor genuinely did not know it was ever meant to be public.
  *
- * `--cloud` is preferred over a bare `--public-origin` when the launch had a saved cloud config,
- * because it restores BOTH halves: the successor arms the same origin AND owns a tunnel again. Passing
- * only the origin would arm the gate and leave cloudflared parentless.
+ * How the board is reached travels in the saved setup (~/.frizz/cloud.json), which the successor
+ * reads for itself — so nothing about it needs to survive in argv any more.
  */
-export function durableReexecArgs(options: {
-  entry: string;
-  port: number;
-  cloud: boolean;
-  publicOrigin?: string | undefined;
-}): string[] {
+export function durableReexecArgs(options: { entry: string; port: number }): string[] {
   // No workspace argument: an internal launch reads its pinned project out of the environment
   // (`projectLaunchTargetFromEnvironment`), and never consults a path at all.
   return [
     options.entry,
     "--port",
     String(options.port),
-    ...(options.cloud
-      ? ["--cloud"]
-      : options.publicOrigin
-        ? ["--public-origin", options.publicOrigin]
-        : []),
   ];
+}
+
+/** Flags that decided how a board was reached. Retired 2026-08-25 for the R pane; see retiredFlagMessage. */
+const RETIRED_NETWORK_FLAGS = ["--host", "--allowed-host", "--public-origin", "--cloud"];
+
+function retiredFlagMessage(flag: string): string {
+  return `${flag} was retired — how a board is reached is set up from the running board now: press R in its terminal to pick a frizz.sh name, a Cloudflare Tunnel, Tailscale or a proxy of your own. The choice is remembered, so a plain launch serves it.`;
 }
 
 export function parseCliArgs(argv: string[]): CliOptions {
   const args = new Set(argv);
-  let upCommand = false;
   let rawPort: string | undefined;
-  let rawHost: string | undefined;
-  let rawPublicOrigin: string | undefined;
   let rawSignOut: string | undefined;
-  const rawAllowedHosts: string[] = [];
   const consumed = new Set<number>();
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index]!;
     if (consumed.has(index)) continue;
+    // The network flags are gone: how a board is reached is set up from the running board (press R)
+    // and remembered, so a saved command never has to carry it. Name the replacement rather than
+    // failing as an unknown option — these lived in scripts and shell history.
+    const retired = arg === "up" ? "up" : RETIRED_NETWORK_FLAGS.find((flag) => arg === flag || arg.startsWith(`${flag}=`));
+    if (retired) throw new Error(retiredFlagMessage(retired));
     if (arg === "--port") {
       rawPort = argv[++index];
       if (rawPort === undefined || rawPort.startsWith("-"))
@@ -221,43 +190,6 @@ export function parseCliArgs(argv: string[]): CliOptions {
     }
     if (arg.startsWith("--port=")) {
       rawPort = arg.slice("--port=".length);
-      continue;
-    }
-    if (arg === "--host") {
-      if (looksLikeBindHost(argv[index + 1])) {
-        rawHost = argv[++index];
-        consumed.add(index);
-      } else {
-        rawHost = ALL_INTERFACES_BIND_HOST;
-      }
-      continue;
-    }
-    if (arg.startsWith("--host=")) {
-      rawHost = arg.slice("--host=".length);
-      continue;
-    }
-    if (arg === "--allowed-host") {
-      const value = argv[++index];
-      if (value === undefined || value.startsWith("-"))
-        throw new Error("--allowed-host requires a value");
-      consumed.add(index);
-      rawAllowedHosts.push(value);
-      continue;
-    }
-    if (arg.startsWith("--allowed-host=")) {
-      rawAllowedHosts.push(arg.slice("--allowed-host=".length));
-      continue;
-    }
-    if (arg === "--public-origin") {
-      const value = argv[++index];
-      if (value === undefined || value.startsWith("-"))
-        throw new Error("--public-origin requires a value");
-      consumed.add(index);
-      rawPublicOrigin = value;
-      continue;
-    }
-    if (arg.startsWith("--public-origin=")) {
-      rawPublicOrigin = arg.slice("--public-origin=".length);
       continue;
     }
     if (arg === "--sign-out") {
@@ -275,13 +207,6 @@ export function parseCliArgs(argv: string[]): CliOptions {
       continue;
     }
     if (arg.startsWith("-")) continue;
-    // The one command. `frizz up` serves at the saved public hostname and runs its tunnel; --cloud
-    // survives as an alias for anyone who saved the flag spelling.
-    if (arg === "up") {
-      upCommand = true;
-      consumed.add(index);
-      continue;
-    }
     // ONE SERVER SERVES EVERY PROJECT, so "which repository" is not a question a launch has. The
     // positional was a leftover from one-server-per-repo and it kept the wrong mental model alive:
     // `frizz /some/repo` reads as "serve that repo", when the server it starts serves all of them.
@@ -296,9 +221,6 @@ export function parseCliArgs(argv: string[]): CliOptions {
     if (!Number.isInteger(port) || port < 1 || port > 65535)
       throw new Error(`invalid --port value: ${rawPort}`);
   }
-  if ((upCommand || args.has("--cloud")) && rawPublicOrigin !== undefined)
-    throw new Error("choose either up (the saved public hostname) or --public-origin, not both");
-  const host = rawHost === undefined ? undefined : normalizeBindHost(rawHost);
   const known = new Set([
     "--app",
     "--no-app",
@@ -309,15 +231,11 @@ export function parseCliArgs(argv: string[]): CliOptions {
     "--link",
     "--sessions",
     "--sign-out",
-    "--cloud",
     "--help",
     "-h",
     "--dev",
     "--prod",
     "--port",
-    "--host",
-    "--allowed-host",
-    "--public-origin",
     "--debug",
   ]);
   for (let index = 0; index < argv.length; index++) {
@@ -331,7 +249,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
       index++;
       continue;
     }
-    if (arg.startsWith("--port=") || arg.startsWith("--host=") || arg.startsWith("--allowed-host=") || arg.startsWith("--public-origin=") || arg.startsWith("--sign-out=")) continue;
+    if (arg.startsWith("--port=") || arg.startsWith("--sign-out=")) continue;
     if (!known.has(arg)) throw new Error(`unknown option: ${arg}`);
   }
   if (args.has("--detach"))
@@ -347,101 +265,11 @@ export function parseCliArgs(argv: string[]): CliOptions {
     link: args.has("--link"),
     sessions: args.has("--sessions"),
     ...(rawSignOut !== undefined ? { signOut: rawSignOut } : {}),
-    cloud: upCommand || args.has("--cloud"),
     status: args.has("--status"),
     help: args.has("--help") || args.has("-h"),
     dev: args.has("--dev"),
     debug: args.has("--debug"),
     port,
-    host,
-    allowedHosts: normalizeAllowedHosts(rawAllowedHosts),
-    ...(rawPublicOrigin === undefined ? {} : { publicOrigin: normalizePublicOrigin(rawPublicOrigin) }),
-  };
-}
-
-/**
- * Printed whenever `--host` actually puts the board on a network.
- *
- * Frizz has no login: reaching the port IS the authorization, and the board runs shell commands as the
- * operator. Saying "exposed" alone would understate that by a lot.
- */
-export const EXPOSED_WARNING =
-  "Anyone who can reach this address can run commands on this machine as you. Frizz has no login — only do this on a network you trust.";
-
-/**
- * Printed whenever `--public-origin` puts the board behind a proxy the operator named.
- *
- * A tunnel usually terminates on the public internet, which is a different and much larger blast
- * radius than a LAN. Frizz still has no login of its own, so the authenticator in front is not an
- * optional hardening step — it is the entire access control, and saying so is the point of this line.
- */
-/**
- * Printed when a network flag was supplied to an invocation that JOINED an already-running Frizz.
- *
- * Frizz is a singleton: one server per machine serving every project. So `--host` / `--public-origin`
- * only take effect on the invocation that actually STARTS it, and on every later one they are silently
- * dropped. Silently is the problem — these are the two flags that decide who can reach a board that
- * runs shell commands, and an operator who believes a tunnel is armed when it is not is worse off than
- * one who got an error. Measured 2026-08-15: a second launch with --public-origin joined the running
- * server on 9494 and reported nothing.
- */
-export const REUSED_NETWORK_FLAGS_WARNING =
-  "This joined the Frizz already running on this machine, so --host/--public-origin were ignored. Stop it first (frizz --stop) and relaunch with the flag to change how the board is reached.";
-
-export const PUBLIC_ORIGIN_WARNING =
-  "Frizz has no login of its own, so whatever sits in front of this origin IS the access control. Require authentication there (Cloudflare Access, Tailscale) — an unauthenticated tunnel lets anyone with the URL run commands on this machine as you.";
-
-export interface BindSelection {
-  /** Address the public port binds. Always a literal address `listen()` accepts. */
-  host: string;
-  /** True when that address is reachable from another machine. */
-  exposed: boolean;
-  /** DNS names accepted as this server's browser authority while exposed. */
-  allowedHosts: string[];
-  /** This machine's own name, accepted without a flag while exposed and printed as a network address. */
-  hostname?: string;
-  /** Serialized origin of a proxy/tunnel fronting the board, or undefined when none was declared. */
-  publicOrigin?: string;
-}
-
-/**
- * Merge `--host` / `--allowed-host` with `FRIZZ_HOST` / `FRIZZ_ALLOWED_HOSTS`, flags winning.
- *
- * The environment variables exist because the people who want this run Frizz from a container or a
- * remote box where the launch command is baked into an image or a systemd unit and adding a flag is
- * the awkward part.
- *
- * An exposed bind also lists the machine's own names (see machineHostNames) so that `--host` and then
- * `http://pupper:9393/` works without a second flag; on loopback they are left out, because the port
- * is unreachable by any name and the policy must stay exactly the historical one.
- */
-export function resolveBindSelection(
-  options: Pick<CliOptions, "host" | "allowedHosts" | "publicOrigin">,
-  env: NodeJS.ProcessEnv = process.env,
-  machineName: string = osHostname()
-): BindSelection {
-  const fromEnv = env.FRIZZ_HOST?.trim();
-  const host = options.host ?? (fromEnv ? normalizeBindHost(fromEnv) : LOOPBACK_BIND_HOST);
-  const exposed = bindHostIsExposed(host);
-  const ownNames = exposed ? machineHostNames(machineName) : [];
-  const allowedHosts = normalizeAllowedHosts([
-    ...options.allowedHosts,
-    ...(env.FRIZZ_ALLOWED_HOSTS ? [env.FRIZZ_ALLOWED_HOSTS] : []),
-    ...ownNames,
-  ]);
-  // Deliberately independent of `host`: a tunnel runs on this machine and dials the loopback port, so
-  // the whole point of naming one is reaching the board from anywhere WITHOUT also putting it on the LAN.
-  const publicOriginRaw = options.publicOrigin ?? env.FRIZZ_PUBLIC_ORIGIN?.trim();
-  const publicOrigin = publicOriginRaw ? normalizePublicOrigin(publicOriginRaw) : undefined;
-  // A public origin is NEVER ungated: single-use access codes minted on demand, traded for a signed
-  // session — see packages/server/src/access-codes.ts. The standing FRIZZ_PUBLIC_TOKEN escape hatch
-  // is gone; a headless box mints a code over ssh with `frizz --link` instead.
-  return {
-    host,
-    exposed,
-    allowedHosts,
-    ...(ownNames.length > 0 ? { hostname: ownNames[0] } : {}),
-    ...(publicOrigin ? { publicOrigin } : {}),
   };
 }
 
@@ -457,50 +285,10 @@ export function boardAddress(url: string): string {
   return url.includes("?") || url.endsWith("/") ? url : `${url}/`;
 }
 
-/**
- * The addresses another machine can use to reach an exposed board, for the readout.
- *
- * A wildcard bind is the common case and reports nothing useful by itself, so enumerate the real
- * interfaces the way every dev server does. Loopback and link-local IPv6 are dropped: the first is
- * already printed as the local URL and the second needs a zone id no one will type. The machine's own
- * name comes first when there is one: it is the address a person will actually type, and printing it
- * is what tells them it works.
- */
-export function networkUrls(
-  port: number,
-  host: string,
-  interfaces: () => NodeJS.Dict<import("node:os").NetworkInterfaceInfo[]> = networkInterfaces,
-  hostname?: string
-): string[] {
-  if (!bindHostIsExposed(host)) return [];
-  const urls: string[] = hostname ? [`http://${hostname}:${port}`] : [];
-  const wildcard = host === ALL_INTERFACES_BIND_HOST || host === "::";
-  const push = (address: string, family: string) => {
-    if (address.startsWith("fe80:")) return;
-    urls.push(family === "IPv6" ? `http://[${address}]:${port}` : `http://${address}:${port}`);
-  };
-  if (!wildcard) {
-    push(host, host.includes(":") ? "IPv6" : "IPv4");
-    return urls;
-  }
-  for (const entries of Object.values(interfaces())) {
-    for (const entry of entries ?? []) {
-      if (entry.internal) continue;
-      if (host === ALL_INTERFACES_BIND_HOST && entry.family !== "IPv4") continue;
-      push(entry.address, entry.family);
-    }
-  }
-  return urls;
-}
-
 export function helpText(command = "frizz-dev"): string {
   return `Frizz source launcher
 
-Usage: ${command} [up] [options]
-
-Commands:
-  up                     serve at the saved public hostname and run its tunnel; asked once,
-                         then remembered
+Usage: ${command} [options]
 
 Run it in the directory you want to work in. One server serves EVERY project on this machine,
 each at its own /project/<name> URL, so a second run joins the one already going. Frizz serves a
@@ -512,10 +300,6 @@ Options:
   --foreground           accepted for compatibility; ${command} always runs in the foreground
   --dev                  explicitly use the unsafe source watcher and Vite/HMR, not an artifact
   --port <port>          request a fixed port for a new workspace server
-  --host [address]       serve on a network address instead of loopback (bare --host means 0.0.0.0)
-  --allowed-host <name>  with --host, also accept this DNS name as the board's address (repeatable)
-  --public-origin <url>  serve behind a proxy/tunnel reachable at this exact origin
-  --cloud                alias of up, for saved commands
   --link                 print a fresh single-use access link for the already-running board
   --sessions             list the devices holding a session on the already-running board
   --sign-out <id|all>    revoke one device's session, or every one of them
@@ -524,25 +308,16 @@ Options:
   --stop                 stop this workspace's UI supervisor (agents keep running)
   -h, --help             show this help
 
-Environment:
-  FRIZZ_HOST             same as --host
-  FRIZZ_ALLOWED_HOSTS    same as --allowed-host, comma separated
-  FRIZZ_PUBLIC_ORIGIN    same as --public-origin
 
 Commands:
   build                  build a new immutable candidate from the configured Frizz source checkout
   promote <digest>       explicitly select a verified candidate for this workspace
   restart                restart the currently promoted artifact without building
 
---host puts a board that can run shell commands as you on the network, and Frizz has no login:
-anyone who reaches the port controls it. Only do this on a network you trust. An IP address and
-this machine's own hostname work as-is; any other DNS name must be listed with --allowed-host
-("*" allows any).
-
---public-origin serves the board through a tunnel or reverse proxy without putting it on the LAN
-at all — Frizz stays on loopback and the tunnel dials it. It prints a SINGLE-USE access link, and
-shows it as a QR so you can scan it from a phone; press L for a fresh one at any time. Scanning it
-trades the code for a session cookie, so the link itself stops working the moment it is used.
+To reach the board from a phone or another machine, press R in the terminal running it: a short
+walkthrough sets up a frizz.sh name, a Cloudflare Tunnel, Tailscale, or a proxy of your own, and
+remembers the choice, so a plain launch serves it from then on. The board stays on loopback and
+shows a single-use sign-in link as a QR; press L for a fresh one, or run --link from another shell.
 
 An immutable artifact is the default. --dev is the only explicit unsafe source watcher/HMR mode.
 `;

@@ -18,6 +18,7 @@ import {
   isRelayConfig,
   readCloudConfig,
   readTunnelToken,
+  reconcileCloudConfig,
   resolveRunToken,
   startRelay,
   startTunnel,
@@ -121,9 +122,17 @@ export function createRemoteController(options: RemoteControllerOptions): Remote
     async serveSaved() {
       const saved = readCloudConfig(home);
       if (!saved) return;
-      await startTransport(saved, false);
-      config = saved;
-      options.host.setPublicOrigin(originOf(saved));
+      // A saved name inside the zone that is not yet a relay claim is claimed now (see
+      // reconcileCloudConfig); that counts as a fresh claim, so the lease is not renewed twice.
+      const reconciled = await reconcileCloudConfig(saved, options.port, home, (message) => {
+        options.log.warn("cloud", message);
+        options.say(message);
+      });
+      const justClaimed = reconciled !== saved;
+      if (justClaimed) writeCloudConfig(reconciled, home);
+      await startTransport(reconciled, justClaimed);
+      config = reconciled;
+      options.host.setPublicOrigin(originOf(reconciled));
     },
     async apply(next, applyOptions = {}) {
       stopTransport();

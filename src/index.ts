@@ -3,21 +3,16 @@ import { bindHostIsExposed } from "@frizz/server/local-origin";
 import { fileSessionDirectory, loadOrCreateSessionKey } from "@frizz/server/access-codes";
 import {
   establishCloudConfig,
-  promptForCloudName,
-  isRelayConfig,
-  readCloudConfig,
-  reconcileCloudConfig,
-  readTunnelToken,
-  resolveRunToken,
-  startRelay,
-  startTunnel,
-  writeCloudConfig,
-  type CloudTransport,
 } from "./cloud.ts";
 import { renderQrLines } from "@frizz/server/qr";
 import { listSessions, signOutSession } from "./sessions-cli.ts";
 import { SUPERVISOR_ACCESS_CODE_PATH } from "@frizz/server/restart-supervisor";
-import { installAccessPane, type AccessPane } from "./access-pane.ts";
+import { createAccessPane, type AccessPane } from "./access-pane.ts";
+import { installPaneHost, type PaneHost } from "./pane-host.ts";
+import { createRemoteController, type RemoteController } from "./remote-controller.ts";
+import { probeCloudflared, probeGithub, probeTailscale } from "./remote-detect.ts";
+import { createRemotePane } from "./remote-pane.ts";
+import { LOOPBACK_BIND_HOST } from "@frizz/server/local-origin";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -50,14 +45,10 @@ import {
   boardAddress,
   canBindPort,
   resolveLaunchIntent,
-  EXPOSED_WARNING,
-  PUBLIC_ORIGIN_WARNING,
-  REUSED_NETWORK_FLAGS_WARNING,
   expectedOwnerHealth,
   FIRST_ARTIFACT_LAUNCH_LOCK_TIMEOUT_MS,
   helpText,
   liveWorkspaceOwner,
-  networkUrls,
   durableReexecArgs,
   parseCliArgs,
   persistLauncher,
@@ -66,7 +57,6 @@ import {
   prepareBeforeGlobalLaunchLock,
   readPreferredPort,
   requestFrizzStop,
-  resolveBindSelection,
   resolveWorkspace,
   sourceLabel,
   sourceWorkspaceDir,
@@ -268,27 +258,11 @@ const launchTarget = workspaceLaunchTarget(workspace);
  * in another function entirely, and threading one nullable string through that call chain buys nothing.
  */
 let activeAccessLink: { code: string; url: string; expiresAt: number } | null = null;
-/** The keypress listener, held so shutdown can put the terminal back the way it found it. */
+/** The keyboard: L for a link, R for the remote-access walkthrough. Held so shutdown can restore the shell. */
+let paneHost: PaneHost | null = null;
 let accessPane: AccessPane | null = null;
-
-/** The tunnel this launch supervises, so shutdown can take it down with the board. */
-let tunnel: CloudTransport | null = null;
-
-/**
- * `--cloud` resolves to a saved hostname, asking once if there is none. It sets publicOrigin exactly
- * as `--public-origin` would, so everything downstream — the gate, the codes, the QR — is unchanged;
- * the only difference is that the operator did not have to know any of it.
- */
-let cloudConfig = options.cloud ? readCloudConfig() : null;
-if (cloudConfig) options.publicOrigin = `https://${cloudConfig.hostname}`;
-
-const bind = (() => {
-  try {
-    return resolveBindSelection(options, process.env);
-  } catch (error) {
-    return fail(error);
-  }
-})();
+/** How this board is reached from outside — the saved setup, the transport, the origin. Built once the supervisor listens. */
+let remote: RemoteController | null = null;
 
 // The supervisor validates every generation by forking this same source entry with a private marker.
 // That disposable child boots only the HTTP/Vite control plane; it must never recursively supervise.
@@ -445,8 +419,7 @@ async function runSupervisor(
                   // keeps this pid and its children, so a cloudflared left running here would outlive
                   // every handle to it — nothing in the new image knows it exists, and stopping the
                   // board would strand it pointed at a port nobody serves.
-                  tunnel?.stop();
-                  tunnel = null;
+                  remote?.stop();
                   process.execve!(
                     process.execPath,
                     [
@@ -454,8 +427,6 @@ async function runSupervisor(
                       ...durableReexecArgs({
                         entry: join(artifact.runtimeDir, "src", "index.js"),
                         port,
-                        cloud: Boolean(cloudConfig),
-                        publicOrigin: bind.publicOrigin,
                       }),
                     ],
                     env
@@ -471,37 +442,17 @@ async function runSupervisor(
       };
   try {
     // First run only. Asking here rather than at import keeps the question off every other launch.
-    let justClaimed = false;
-    if (options.cloud && !cloudConfig) {
-      cloudConfig = await establishCloudConfig(await promptForCloudName(), port);
-      writeCloudConfig(cloudConfig);
-      bind.publicOrigin = `https://${cloudConfig.hostname}`;
-      justClaimed = true;
-    } else if (cloudConfig) {
-      // A saved config can be older than the way its name is served. Claiming is part of `up`, never
-      // a step of the operator's — see reconcileCloudConfig.
-      const reconciled = await reconcileCloudConfig(cloudConfig, port, homedir(), (message) => {
-        logger.info("relay", message);
-        console.log(`  ${message}`);
-      });
-      if (reconciled !== cloudConfig) {
-        cloudConfig = reconciled;
-        writeCloudConfig(cloudConfig);
-        justClaimed = true;
-      }
-    }
     supervisor = await startDevSupervisor({
       port,
-      host: bind.host,
-      allowedHosts: bind.allowedHosts,
-      ...(bind.publicOrigin ? { publicOrigin: bind.publicOrigin } : {}),
+      host: LOOPBACK_BIND_HOST,
+      allowedHosts: [],
       // A spent code repaints the open QR pane as stale, so nobody photographs a dead link.
       onCodeConsumed: () => accessPane?.markConsumed(),
       // Persisted beside the project's other state so a restart does not sign every device out.
-      ...(bind.publicOrigin ? {
-          sessionKey: loadOrCreateSessionKey(workspace.stateDir),
-          sessionDirectory: fileSessionDirectory(workspace.stateDir),
-        } : {}),
+      // Always, not only when public: the origin can be switched on later (press R), and a phone signed
+      // in through one name stays signed in through the next.
+      sessionKey: loadOrCreateSessionKey(workspace.stateDir),
+      sessionDirectory: fileSessionDirectory(workspace.stateDir),
       cwd: workspace.root,
       env: supervisorEnv,
       stateDir: workspace.stateDir,
@@ -521,57 +472,29 @@ async function runSupervisor(
       onActivity: (event) => renderSupervisorActivity(activityReadout, event),
     });
     // The supervisor is listening now, so a code minted here is immediately redeemable.
-    activeAccessLink = bind.publicOrigin ? supervisor.issueAccessLink() : null;
-    if (cloudConfig) {
-      // A claimed name is served by the RELAY: the board dials out and holds one socket, so there is
-      // no tunnel to run and nothing for the operator to install. The tunnel branch below is the older
-      // path, kept for configs written before the relay existed.
-      if (isRelayConfig(cloudConfig)) {
-        // Renew the lease first. A relay name gets no run token back, but the call is what keeps the
-        // claim alive — skip it and the name lapses after 30 days while the board is still serving it.
-        if (!justClaimed) {
-          await resolveRunToken(cloudConfig, port, homedir(), (message) => {
-            logger.warn("relay", message);
-            console.error(`frizz: ${message}`);
-          });
-        }
-        tunnel = await startRelay(cloudConfig, port, homedir(), (message) => logger.info("relay", message));
-        logger.info("relay", `serving ${cloudConfig.hostname} through the Frizz relay`);
-      } else {
-        // A claimed name renews its lease on every launch, which is also how it gets this run's token.
-        // Skipped when the claim just happened, since that call already wrote one.
-        const runToken = justClaimed
-          ? readTunnelToken()
-          : await resolveRunToken(cloudConfig, port, homedir(), (message) => {
-              logger.warn("tunnel", message);
-              console.error(`frizz: ${message}`);
-            });
-        // The tunnel is a CHILD of this launcher, so the two halves share a lifetime and cannot drift
-        // apart. A tunnel that dies while the board lives is the "Cloudflare error" state; a board that
-        // dies while the tunnel lives is the 530. Both were reachable when these were separate commands.
-        tunnel = startTunnel(
-          cloudConfig,
-          (code) => {
-            if (code === 0 || code === null) return;
-            logger.error("tunnel", `cloudflared exited with code ${code}; the public hostname is now unreachable`);
-          },
-          (message) => {
-            logger.error("tunnel", message);
-            console.error(`frizz: ${message}`);
-          },
-          homedir(),
-          runToken ?? undefined,
-        );
-        logger.info(
-          "tunnel",
-          `running cloudflared for ${cloudConfig.hostname}${cloudConfig.tunnel ? ` (tunnel ${cloudConfig.tunnel})` : ""}`
-        );
-      }
+    remote = createRemoteController({ host: supervisor, port, log: logger, say: (message) => console.error(`frizz: ${message}`) });
+    try {
+      await remote.serveSaved();
+    } catch (error) {
+      // A saved setup that cannot come up must not take the board down with it: the board still serves
+      // loopback, the readout says so, and R offers the setup again.
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error("remote", message);
+      console.error(`frizz: the saved remote setup could not start: ${message}`);
     }
-    // "Press L for a fresh link" — the only way to reissue without restarting the board. Returns null
-    // when stdout is not a terminal, which leaves the plain records path completely untouched.
-    if (bind.publicOrigin) {
-      accessPane = installAccessPane({ issue: () => supervisor.issueAccessLink() });
+    activeAccessLink = remote.origin() ? supervisor.issueAccessLink() : null;
+    {
+      accessPane = createAccessPane({ issue: () => supervisor.issueAccessLink() });
+      const remotePane = createRemotePane({
+        port,
+        current: () => remote?.current() ?? null,
+        apply: (next, applyOptions) => remote!.apply(next, applyOptions),
+        claim: (name) => establishCloudConfig(name, port),
+        issueLink: () => supervisor.issueAccessLink(),
+        probes: { github: probeGithub, cloudflared: probeCloudflared, tailscale: probeTailscale },
+        onChanged: (config) => logger.info("remote", config ? `reached at https://${config.hostname}` : "loopback only"),
+      });
+      paneHost = installPaneHost({ bindings: { l: accessPane, L: accessPane, r: remotePane, R: remotePane } });
     }
   } catch (error) {
     launchOwner.release();
@@ -595,9 +518,9 @@ async function runSupervisor(
       // Say the board stopped, and where the complete record of the run it just ended can be read.
       logger.info("launcher", `stopped with code ${code}`);
       // Before the farewell, or the operator's shell is left in raw mode echoing nothing.
-      accessPane?.dispose();
+      paneHost?.dispose();
       // Down with the board: leaving cloudflared running would keep the hostname resolving to a 530.
-      tunnel?.stop();
+      remote?.stop();
       printFarewell(code);
       process.exit(code);
     },
@@ -890,24 +813,14 @@ async function openOrPrint(
   }
 
   // A reuse did not choose this server's bind address or its proxy origin, so it must not claim either.
-  const network = reused ? [] : networkUrls(port, bind.host, undefined, bind.hostname);
-  const publicOrigin = reused ? undefined : bind.publicOrigin;
-  // A reused server was started by someone else's invocation, so these flags did nothing. Say so.
-  const networkFlagsIgnored = reused && (bind.publicOrigin !== undefined || bindHostIsExposed(bind.host));
-  // Mint the first single-use link now, so the readout can show something scannable. Codes expire in
-  // minutes by design; the QR pane (below) is how you get a fresh one without restarting the board.
+  const publicOrigin = reused ? undefined : remote?.origin();
   const accessLink = publicOrigin && !reused ? activeAccessLink : null;
-  const warnings = [
-    ...(network.length > 0 ? [EXPOSED_WARNING] : []),
-    ...(publicOrigin ? [PUBLIC_ORIGIN_WARNING] : []),
-    ...(networkFlagsIgnored ? [REUSED_NETWORK_FLAGS_WARNING] : []),
-  ];
+  const warnings: string[] = [];
   if (!readout) {
     // `--status`, internal launches and pipes keep the plain, parseable records.
     console.log(`${reused ? "reusing" : "started"} Frizz for ${workspace.root}`);
     console.log(`source: ${sourceLabel()}`);
     console.log(url);
-    for (const address of network) console.log(address);
     if (publicOrigin) console.log(accessLink?.url ?? `${publicOrigin}/`);
     for (const warning of warnings) console.log(warning);
     return;
@@ -915,7 +828,6 @@ async function openOrPrint(
   readout.ready(
     [
       { label: "Local", value: boardAddress(url), accent: true },
-      ...network.map((address) => ({ label: "Network", value: `${address}/`, accent: true })),
       ...(publicOrigin ? [{ label: "Public", value: accessLink?.url ?? `${publicOrigin}/`, accent: true }] : []),
       { label: "Project", value: `${workspace.name} — ${tildePath(workspace.root, home)}` },
       { label: "Source", value: tildePath(sourceLabel(), home) },
@@ -927,9 +839,9 @@ async function openOrPrint(
         `reopened the server already running for this project · run ${sourceCommand} --stop to stop it`
       : options.debug
         ? undefined
-        : accessPane
-          ? `press L for a fresh access link · ctrl-c to stop · --debug for the full event feed`
-          : `press ctrl-c to stop · run with --debug for the full event feed`,
+        : publicOrigin
+          ? `press L for a fresh sign-in link · R to change how this board is reached · ctrl-c to stop`
+          : `press R to reach this board from a phone or another machine · ctrl-c to stop`,
     {
       ...(reused ? { status: `already running on port ${port}` } : {}),
       ...(warnings.length > 0 ? { warning: warnings.join(" ") } : {}),
@@ -1058,32 +970,6 @@ if (options.link) {
 
   let before = await existingHealth();
 
-  // A JOINING LAUNCH MUST NOT SILENTLY DISCARD NETWORK FLAGS.
-  //
-  // Frizz is a singleton, so a second launch joins the running board rather than starting one. That is
-  // right for the common case — running `frizz-dev` again to reopen the tab should not restart anything.
-  // But it silently dropped --host/--public-origin, so a launch that looked successful left the board
-  // reachable on entirely different terms than the flags asked for. That produced a real "Forbidden"
-  // more than once, and the warning printed after the fact was too late to be useful.
-  //
-  // So: refuse, loudly, and ONLY when flags would actually be lost. Taking over automatically was the
-  // other candidate and is deliberately rejected — "stop whatever is running" is a destructive default
-  // on a machine where several terminals and agents share one board, and it cost a live board once
-  // already while being tested.
-  if (before.port && interactiveLaunch && !command) {
-    const ignored = [
-      ...(bind.publicOrigin ? ["--public-origin"] : []),
-      ...(bindHostIsExposed(bind.host) ? ["--host"] : []),
-    ];
-    if (ignored.length > 0) {
-      console.error(
-        `frizz: a board is already running on port ${before.port}, so ${ignored.join(" and ")} would be ignored.\n` +
-          `       Stop it first, then run it again:\n\n` +
-          `         ${sourceCommand} --stop\n`
-      );
-      process.exit(1);
-    }
-  }
 
   if (command === "restart") {
     if (!before.port) throw new Error("Frizz is not running for this workspace");
@@ -1275,7 +1161,7 @@ if (options.link) {
     const allocation = await allocatePort(
       options.port,
       readPreferredPort(workspace.stateDir),
-      { host: bind.host, base: DEFAULT_DEV_PORT }
+      { host: LOOPBACK_BIND_HOST, base: DEFAULT_DEV_PORT }
     );
     const port = allocation.port;
     portReservation = allocation.release;

@@ -240,7 +240,7 @@ export function normalizeHostname(raw: string): string {
 export async function promptForCloudName(): Promise<string> {
   if (!process.stdin.isTTY) {
     throw new Error(
-      "--cloud needs a saved name when there is no terminal to ask — run it once interactively first",
+      "needs a saved name when there is no terminal to ask — press R in a running board once, interactively",
     );
   }
   const rl = createInterface({ input: process.stdin, output: process.stdout });
