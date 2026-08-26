@@ -17,6 +17,7 @@ import { localImageUrl } from "../lib/markdownTargets.ts"
 import { apiBase } from "../lib/base-path.ts"
 import { queueDestination } from "../lib/router.ts"
 import { DiffBlock, PathLink } from "./DiffBlock.tsx"
+import { LinkedHtml } from "./LinkedHtml.tsx"
 import { CodeBody } from "./CodeBody.tsx"
 import { resolveFileLanguage } from "../lib/syntaxHighlight.ts"
 import { TodoBlock } from "./TodoBlock.tsx"
@@ -3524,7 +3525,6 @@ export function InlineVisualization({ file }: { file: string }) {
 // for non-watcher waits (with legacy pr/ci/session support), then the park button + its explainer.
 export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKind; body: string; hints: AwaitingHint[]; wrap?: boolean }) {
   const html = useMarkdownHtml(body)
-  const doneInner = useInnerHtml(html)
   const awaitingLine = awaitingPresentationLine(body)
   // BLOCK markdown, not inline. The fence's prose is arbitrary Markdown since frontmatter landed
   // (2026-08-17), and inline rendering flattened a worker's paragraphs and lists into one run — the shape
@@ -3536,7 +3536,7 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   // that read as a run of labels (maintainer 2026-08-19: "renders as light gray labels?"). `md-body` is
   // the block sheet; inside a card `.card-md` pulls it to the card's own 13px and lets the colour inherit,
   // which is why no CARD_BODY rides alongside it.
-  const awaitingInner = useInnerHtml(useMarkdownHtml(awaitingLine))
+  const awaitingHtml = useMarkdownHtml(awaitingLine)
   // WHAT IT IS WAITING ON, as structure rather than as the raw `kind: value` lines the fence is made of.
   // The reason above is the sentence; this is the SET, and it is the part a human scans to answer "will
   // anything actually wake this?" — the question the card exists for.
@@ -3574,7 +3574,7 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
       // NEUTRAL tone — the green splash stood out as the only saturated color in the UI (maintainer
       // 2026-07-10). The Check + "Done" label carries the meaning; no color needed.
       <TranscriptCard icon={Check} label="Done">
-        {html && <div className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={doneInner} />}
+        {html && <LinkedHtml className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} html={html} />}
         {/* A white "Mark as done" button, deliberately redundant with the stable lifecycle footer — the
             same completion mutation, styled as the primary (light-on-dark) verb. Only shown when the
             thread can actually take the action. */}
@@ -3630,10 +3630,7 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   if (restingCardStatesIt) return null
   return (
     <TranscriptCard data-awaiting-fence icon={AwaitingIcon} label={parkTitle} aside={watched.length === 1 ? <WatchedRef watch={watched[0]} /> : undefined}>
-      <div
-        className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`}
-        dangerouslySetInnerHTML={awaitingInner}
-      />
+      <LinkedHtml className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} html={awaitingHtml} />
       {(itemLabels.length > 0 || forLabel) && (
         // ONLY ON THIS BRANCH. When the resting card is showing it owns this entirely — a table grouped
         // by kind, a row per thing, with live state and a drill-in (AwaitingBackgroundCard) — and the

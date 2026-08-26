@@ -113,8 +113,12 @@ export function localImageUrlForTarget(target: LocalMarkdownTarget): string | nu
 // Must match the server's `MARKDOWN_FILE_EXT`. A local path with this extension is rendered by Frizz's
 // own reader drawer instead of being handed to the desktop opener — the one local file kind the app
 // knows how to show. The strip mirrors an editor cursor suffix (`README.md:12`) the way
-// resolveOpenableFile does, so a line-anchored reference still reads as Markdown.
-const MARKDOWN_FILE_PATH = /\.(?:md|markdown)$/i
+// resolveOpenableFile does, so a line-anchored reference still reads as Markdown. `.mdx` counts: an MDX
+// doc is Markdown prose first (its imports and JSX render as inert text), and until 2026-08-25 it was
+// the one Markdown flavour that slipped past the reader to the OS opener — which on a Mac whose
+// Markdown handler is Cursor meant a blog post in `content/blog/*.mdx` opened an editor, whatever
+// the "Local file links" setting said.
+const MARKDOWN_FILE_PATH = /\.(?:md|mdx|markdown)$/i
 
 export function isLocalMarkdownFile(path: string): boolean {
   return MARKDOWN_FILE_PATH.test(path.trim().replace(/:\d+(?::\d+)?$/, ""))

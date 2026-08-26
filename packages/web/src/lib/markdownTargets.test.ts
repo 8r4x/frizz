@@ -92,9 +92,9 @@ test("malformed URL encoding cannot throw or become an app navigation", () => {
 })
 
 test("a local Markdown file is recognized by extension, editor suffix and all", () => {
-  for (const path of ["/repo/README.md", "/repo/docs/a.MARKDOWN", "~/.claude/CLAUDE.md", "/repo/AGENTS.md:42", "/repo/AGENTS.md:42:7"])
+  for (const path of ["/repo/README.md", "/repo/docs/a.MARKDOWN", "~/.claude/CLAUDE.md", "/repo/AGENTS.md:42", "/repo/AGENTS.md:42:7", "/repo/content/blog/post.mdx"])
     assert.equal(isLocalMarkdownFile(path), true, path)
-  for (const path of ["/repo/notes.txt", "/repo/app.mdx", "/repo/md", "/repo/a.md.bak", "/repo/docs"])
+  for (const path of ["/repo/notes.txt", "/repo/md", "/repo/a.md.bak", "/repo/docs", "/repo/a.mdxx"])
     assert.equal(isLocalMarkdownFile(path), false, path)
 })
 

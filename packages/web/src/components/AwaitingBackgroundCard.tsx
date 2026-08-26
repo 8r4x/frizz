@@ -34,9 +34,9 @@ import { noteGithubRefs } from "../lib/githubHovercards.ts"
 import { awaitingProseBlock } from "../lib/awaitingPresentation.ts"
 import { compactElapsedSince, formatCompactElapsed } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
-import { useInnerHtml } from "../lib/innerHtml.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { pushBackgroundShellDrawer, pushSubAgentDrawer } from "../store.ts"
+import { LinkedHtml } from "./LinkedHtml.tsx"
 import { BLOCK_RADIUS_INNER_BOTTOM, CARD_BODY, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 
 // Name what the thread is ACTUALLY waiting on. Three real cases, and the sentence has to be true in all
@@ -566,7 +566,7 @@ export function AwaitingBackgroundCard({ thread, actions }: {
   // rest with no awaiting fence (a bare sub-agent rest, a shell-only rest) or a fence with no prose;
   // the divider comes and goes with it.
   const prose = awaitingProseBlock(thread.lastFence?.kind === "awaiting" ? thread.lastFence.body : undefined)
-  const proseInner = useInnerHtml(useMarkdownHtml(prose ?? ""))
+  const proseHtml = useMarkdownHtml(prose ?? "")
   // Live-ticking, so a shell's "running · 4m" keeps counting while the board sends nothing (a quiet
   // child pushes no delta). One clock read for the whole card rather than one per row.
   const now = useNowMs()
@@ -604,7 +604,7 @@ export function AwaitingBackgroundCard({ thread, actions }: {
       {/* THE WORKER'S PROSE — the fence's whole Markdown body, block-rendered, exactly as the old
           free-standing message drew it (md-body inside card-md; QUEUE_WRAP so a long unbreakable token
           wraps on a narrow queue card instead of bleeding past the edge). */}
-      {prose && <div className={`md-body ${QUEUE_WRAP}`} dangerouslySetInnerHTML={proseInner} />}
+      {prose && <LinkedHtml className={`md-body ${QUEUE_WRAP}`} html={proseHtml} />}
       {/* The sentence is BODY text (maintainer 2026-07-24): the self-return is a fact about the thread,
           not a caption for the button, so it reads as prose rather than as a label the Snooze control
           drags around with it — and it therefore stays on the surfaces that have no button.

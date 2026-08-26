@@ -61,8 +61,9 @@ export function resolveOpenableFile(
 // desktop opener, so its bytes are the only ones this gate lets into the page. Both the requested path
 // and its canonical real path must carry the extension: a normal `.md` symlink (a skill file linked out
 // of `.agents/`) still reads, while a symlink whose target is some other file cannot ride a `.md` href
-// into the reader.
-export const MARKDOWN_FILE_EXT = /\.(?:md|markdown)$/i
+// into the reader. `.mdx` is Markdown here too — see the web's `MARKDOWN_FILE_PATH`, which this must
+// match.
+export const MARKDOWN_FILE_EXT = /\.(?:md|mdx|markdown)$/i
 
 // Ceiling on one click's read. A rendered document is prose a person is about to read, not a data
 // channel — past a megabyte the renderer is the wrong tool and the browser pays for the whole string.

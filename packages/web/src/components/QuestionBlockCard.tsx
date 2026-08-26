@@ -14,13 +14,12 @@
 // It lives in its own module rather than in ChatView so BOTH producers can reach it: the interaction
 // surface (InteractionCards.tsx) is imported BY ChatView, so a question card defined inside ChatView
 // could only have been shared through a module cycle.
-import { Fragment, createElement, useId, useLayoutEffect, useMemo, useRef } from "react"
+import { Fragment, useId, useLayoutEffect, useMemo, useRef } from "react"
 import { AlertTriangle, Check, HelpCircle, ListChecks } from "lucide-react"
-import { useInnerHtml } from "../lib/innerHtml.ts"
-import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { useInlineMarkdownHtml, useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { parseQuestionBlock, type BlockAnswer, type ParsedQuestion, type QuestionKind } from "../lib/questionBlocks.ts"
+import { LinkedHtml } from "./LinkedHtml.tsx"
 import { QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 
 export interface BlockInteractive {
@@ -216,19 +215,6 @@ export function QuestionBlockCard({
   )
 }
 
-
-// Sanitized markdown dropped into its element, PLUS the post-render pass that tags an inline-code file
-// reference the server confirms is real (lib/localFileCode.ts) — the decoration the transcript's own
-// prose gets (ChatView's ProseHtml). Every prose surface in this card goes through it: the context,
-// a group heading, each option, the footnote and the recommendation caption. A file a worker names in
-// a question — `it's in \`cloudflare-ask.md\`` — is exactly the file the human is being asked to read
-// before they answer, and until 2026-08-25 the card was the one place in the app it did not open.
-function LinkedHtml({ as = "div", className, html }: { as?: "div" | "span"; className: string; html: string }) {
-  const inner = useInnerHtml(html)
-  const ref = useRef<HTMLElement>(null)
-  useLocalFileCodeLinks(ref, html)
-  return createElement(as, { ref, className, dangerouslySetInnerHTML: inner })
-}
 
 // A group heading between options. Its own component only so the markdown parse and the
 // dangerouslySetInnerHTML prop can be memoized per heading — a hook can't be called inside the

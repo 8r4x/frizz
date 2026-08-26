@@ -92,6 +92,7 @@ test("the Markdown reader admits only Markdown, only inside the roots, and only 
   const outside = realpathSync(mkdtempSync(join(tmpdir(), "frizz-local-md-outside-")))
   writeFileSync(join(root, "README.md"), "# Title\n\nBody.\n")
   writeFileSync(join(root, "notes.txt"), "not markdown")
+  writeFileSync(join(root, "post.mdx"), "import X from './x'\n\n# Post\n")
   writeFileSync(join(outside, "secret.md"), "no")
   // A `.md` name whose canonical target is something else: the extension is on the href, not the file.
   writeFileSync(join(root, "real.conf"), "PASSWORD=hunter2")
@@ -105,6 +106,7 @@ test("the Markdown reader admits only Markdown, only inside the roots, and only 
     truncated: false,
   })
   assert.equal(readLocalMarkdown(join(root, "linked.md"), [root]).path, join(root, "README.md"))
+  assert.equal(readLocalMarkdown(join(root, "post.mdx"), [root]).markdown, "import X from './x'\n\n# Post\n")
   assert.throws(() => readLocalMarkdown(join(root, "notes.txt"), [root]), /not a Markdown file/)
   assert.throws(() => readLocalMarkdown(join(root, "decoy.md"), [root]), /not a Markdown file/)
   assert.throws(() => readLocalMarkdown(join(outside, "secret.md"), [root]), /trusted roots/)

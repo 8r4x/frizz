@@ -7,6 +7,7 @@ import { copyTextToClipboard } from "../lib/clipboard.ts"
 import { useInnerHtml } from "../lib/innerHtml.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
+import { splitFrontmatter } from "../lib/frontmatter.ts"
 import { localFileDir } from "../lib/markdownTargets.ts"
 import { Sheet } from "./ui/Sheet.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
@@ -52,13 +53,35 @@ function OpenAction({ path }: { path: string }) {
   )
 }
 
+// The document's frontmatter, one muted line per entry with the key set in mono — the way a file
+// listing shows metadata, not the way a heading shows a title. Values are left as written: this is a
+// glance at what the file declares, not a YAML parser.
+function Frontmatter({ lines }: { lines: string[] }) {
+  return (
+    <div className="mb-4 rounded-md border border-border/60 bg-panel-2/40 px-3 py-2 text-[12px] leading-5 text-muted">
+      {lines.map((line, i) => {
+        const cut = line.indexOf(":")
+        const key = cut > 0 ? line.slice(0, cut) : null
+        return (
+          <div key={i} className="break-words">
+            {key ? <><span className="font-mono-keep text-fg/60">{key}</span>{line.slice(cut)}</> : line}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 export function MarkdownDrawer({ id, path, title, depth, widthDepth }: { id: number; path: string; title: string; depth: number; widthDepth: number }) {
   const body = useQuery({ queryKey: ["localMarkdown", path], queryFn: () => rpc.localMarkdown({ path }) })
   // Base the relative links on the CANONICAL path the server resolved, not the one that was clicked:
   // a link through a symlinked directory would otherwise rebase its neighbours onto a directory the
   // gate never admitted, and every one of them would 404.
   const resolved = body.data?.path ?? path
-  const html = useMarkdownHtml(body.data?.markdown ?? "", { baseDir: localFileDir(resolved), asDocument: true })
+  // Frontmatter is shown as metadata, not rendered as prose — see lib/frontmatter.ts for the heading
+  // it became otherwise. It opens every MDX blog post and every skill file, so this is the common case.
+  const { front, body: source } = splitFrontmatter(body.data?.markdown ?? "")
+  const html = useMarkdownHtml(source, { baseDir: localFileDir(resolved), asDocument: true })
   const inner = useInnerHtml(html)
   const ref = useRef<HTMLDivElement>(null)
   useLocalFileCodeLinks(ref, html)
@@ -81,6 +104,7 @@ export function MarkdownDrawer({ id, path, title, depth, widthDepth }: { id: num
               <div className="text-[13px] text-red-400/90">Couldn’t read this file: {(body.error as Error).message}</div>
             ) : html ? (
               <>
+                {front && <Frontmatter lines={front} />}
                 <div ref={ref} className="md-body" dangerouslySetInnerHTML={inner} />
                 {body.data?.truncated && (
                   <p className="mt-4 border-t border-border/60 pt-3 text-[12px] text-muted">
