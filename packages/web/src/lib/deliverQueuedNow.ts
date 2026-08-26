@@ -6,11 +6,10 @@ import { showToast, store, threadBySlug } from "../store.ts"
 // PUSH IT THROUGH NOW.
 //
 // A follow-up sent to a working agent waits in the provider's queue until the current turn ends —
-// measured p50 13.8s, p90 49s, p99 2.5m, and the tail is a real 90s tool call. The composer used to
-// offer paying for that wait up front (⌘⏎ sent AND interrupted), but that forced the decision at the
-// moment of typing, before the operator knew how long the worker was going to take — and since
-// 2026-08-26 ⌘⏎ is simply the same queued send as Enter. This is the ONE place preemption is offered:
-// AFTERWARDS, from the surface that is on screen for the whole wait, the queued bubble.
+// measured p50 13.8s, p90 49s, p99 2.5m, and the tail is a real 90s tool call. The operator can already
+// pay for that wait up front (⌘⏎ sends AND interrupts), but that forces the decision at the moment of
+// typing, before they know how long the worker is going to take. This is the same capability offered
+// AFTERWARDS, from the one surface that is on screen for the whole wait: the queued bubble.
 //
 // There is nothing to send here — the words are already queued. All that is left is the interrupt, and
 // the SDK's interrupt aborts a turn WITHOUT discarding queued input, so the next turn opens on exactly
@@ -22,7 +21,7 @@ import { showToast, store, threadBySlug } from "../store.ts"
 // Which surfaces can offer this at all: the same broker-backed-Claude boundary as unqueue (a codex
 // steer goes straight into the running turn, so there is no queue to jump), plus a turn that is
 // actually RUNNING — with the worker at rest there is nothing to interrupt and the button would be a
-// dead click.
+// dead click. Mirrors `canInterrupt` in ThreadComposerBox, which gates ⌘⏎ on the same two facts.
 export function useDeliverQueuedNowSupported(slug: string | null): boolean {
   // useSyncExternalStore over a SCALAR, not useSnapshot — the same reason useUnqueueSupported does it:
   // this runs in every user bubble in the transcript, and a snapshot proxy would re-render all of them
