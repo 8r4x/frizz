@@ -28,7 +28,7 @@
 import { Fragment, useEffect, type ReactNode } from "react"
 import { Bot, ChevronRight, CircleCheck, CircleDashed, CircleX, Clock, GitMerge, GitPullRequestClosed, Hourglass, TerminalSquare } from "lucide-react"
 import type { GithubWatchStatus, ThreadView, ThreadWatchView } from "@frizz/shared"
-import { isDirectSubAgent } from "@frizz/shared"
+import { awaitingFenceTitle, isDirectSubAgent } from "@frizz/shared"
 import { githubRefUrl } from "../lib/githubRef.ts"
 import { noteGithubRefs } from "../lib/githubHovercards.ts"
 import { awaitingProseBlock } from "../lib/awaitingPresentation.ts"
@@ -127,7 +127,17 @@ function hasUnrowedWork(thread: Pick<ThreadView, "subAgents" | "bgShells">): boo
 // background shells and nothing else (2026-08-04) — and every other shape takes the generic one. That
 // keeps it honest in both directions: "Background shells running" never names work the thread did not
 // launch, and no new kind gets a heading of its own. The sentence beneath is where the specifics live.
-export function awaitingBackgroundLabel(thread: Pick<ThreadView, "subAgents" | "bgShells" | "watches">): string {
+//
+// THE WORKER MAY NAME IT ITSELF (maintainer 2026-08-26: "let's let the agent specify its own title for
+// these awaiting cards"). A `title:` in the fence frontmatter wins over both derived headings, because
+// only the worker knows what this particular wait IS — "Awaiting" is true of every park and specific to
+// none. It is capped at parse time (AWAITING_TITLE_MAX) so a worker cannot write a paragraph into a
+// heading: the card already carries its full prose one line below.
+export function awaitingBackgroundLabel(
+  thread: Pick<ThreadView, "subAgents" | "bgShells" | "watches" | "lastFence">,
+): string {
+  const declared = thread.lastFence?.kind === "awaiting" ? awaitingFenceTitle(thread.lastFence.hints) : null
+  if (declared) return declared
   return shellsAlone(thread) ? "Background shells running" : "Awaiting"
 }
 
@@ -596,7 +606,12 @@ export function AwaitingBackgroundCard({ thread, actions }: {
       // watcher genuinely IS waiting on something to come back. A per-kind glyph would rebuild the
       // per-kind card the consolidation removed, exactly as a per-kind title did.
       icon={shellsAlone(thread) ? TerminalSquare : Hourglass}
-      label={awaitingBackgroundLabel(thread)}
+      // WRAPPED AT ANY CHARACTER, because this heading can now be WORKER-AUTHORED. Every other card in
+      // the family carries a code-authored label, so the header's wrap-don't-truncate rule never had to
+      // survive an unbreakable token; a `title:` naming a branch, a URL or a base64 id is one. Measured
+      // at the queue card's narrowest (368px content box, sans): a 40-character single token bled 135.64px
+      // PAST the card's right edge without this, and wraps inside it with it.
+      label={<span className="[overflow-wrap:anywhere]">{awaitingBackgroundLabel(thread)}</span>}
       // The recessed footer band below sits flush against the card's bottom edge, so the shell's own
       // bottom padding has to go when one renders — the band carries its own.
       className={actions ? "pb-0" : ""}

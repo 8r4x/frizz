@@ -1734,6 +1734,42 @@ test("a timers: line with nothing armed behind it yields no row", () => {
   assert.deepEqual(fenceWatchViews("t", parked({ kind: "timer", value: "tmr_dead" }), FENCE_AT, {}, [], []), [])
 })
 
+// ---- a `shells:` entry rows, an `agents:` entry does NOT (2026-08-26) ----
+// The two look symmetrical in the fence and are not symmetrical here, because a row emitted by this loop
+// is a SHELL row by construction. A sub-agent already has a row on every surface that draws one — the
+// resting card's own live-agent group and the strip under the prompt box, both read straight off
+// `subAgents` and neither needing a declaration — so an agent hint listed the same child a SECOND time
+// under "Background shells", named by its raw `toolu_…` id because no shell exists behind it to resolve
+// a name from (maintainer 2026-08-26: "why are these background shells showing up in the awaiting block
+// but not underneath the prompt box"). Introduced by the `watch:` → `shells:`/`agents:` cutover
+// (5e0baf54), which widened the filter to both new kinds while the push stayed one kind.
+const LIVE_SHELL = { label: "gh run watch 1842", startedAt: FENCE_AT, state: "running" as const, id: "toolu_shell", taskId: "bzvtnt3ig" }
+const LIVE_AGENT = { label: "Auditing token overhead", startedAt: FENCE_AT, state: "running" as const, id: "toolu_agent" }
+
+test("a shells: entry naming a live shell gets a shell row", () => {
+  const parkedOnShell = tele({
+    lastFence: { kind: "awaiting", body: "", hints: [{ kind: "shell", value: "bzvtnt3ig" }] } as SessionTelemetry["lastFence"],
+    lastAssistantAt: FENCE_AT,
+    bgShells: [LIVE_SHELL],
+  })
+  assert.deepEqual(fenceWatchViews("t", parkedOnShell, FENCE_AT, {}, []), [{
+    id: "shell:t:bzvtnt3ig",
+    kind: "shell",
+    target: "bzvtnt3ig",
+    state: "armed",
+    createdAt: FENCE_AT,
+  }])
+})
+
+test("an agents: entry naming a live sub-agent gets no row of its own", () => {
+  const parkedOnAgent = tele({
+    lastFence: { kind: "awaiting", body: "", hints: [{ kind: "agent", value: "toolu_agent" }] } as SessionTelemetry["lastFence"],
+    lastAssistantAt: FENCE_AT,
+    subAgents: [LIVE_AGENT],
+  })
+  assert.deepEqual(fenceWatchViews("t", parkedOnAgent, FENCE_AT, {}, []), [], "the sub-agent is not a background shell")
+})
+
 test("hints that are neither pr-watch nor watch never produce a row", () => {
   assert.deepEqual(fenceWatchViews("t", parked(
     { kind: "shell", value: "Alice must approve" },

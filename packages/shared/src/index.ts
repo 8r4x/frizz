@@ -298,6 +298,7 @@ export type PendingAsk = z.infer<typeof PendingAsk>
 //   timers: [tmr_…, …]               timers it set                   → checked against thread_timer
 //   prs:    [owner/repo#123, …]      PR watchers it registered       → checked against its PR registry
 //   for:    2h                       REQUIRED. How long the park may stand (parseAwaitingDuration).
+//   title:  Waiting on the CI run    OPTIONAL. The resting card's heading, in the worker's own words.
 //
 // THE FRONTMATTER IS REAL YAML (2026-08-24), parsed by the `yaml` package — the keys are PLURAL and take
 // SEQUENCES, block or flow. A bare scalar where a sequence is expected is accepted and normalised to a
@@ -352,7 +353,7 @@ export type PendingAsk = z.infer<typeof PendingAsk>
 //   prose bodies       narrowed to `reason:` so the fence is machine-checkable — then given back in full
 //                      below the `---` delimiter, where prose cannot be mistaken for structure.
 export const AwaitingHint = z.object({
-  kind: z.enum(["shell", "agent", "timer", "pr", "for"]),
+  kind: z.enum(["shell", "agent", "timer", "pr", "for", "title"]),
   value: z.string(),
 })
 export type AwaitingHint = z.infer<typeof AwaitingHint>
@@ -432,8 +433,8 @@ export const RETIRED_AWAITING_REPLACEMENT: Record<RetiredAwaitingKind, string> =
 const AWAITING_KEY_RE = /^([a-z][a-z-]*):\s*(\S.*)?$/i
 
 /** The YAML keys the frontmatter recognises: four PLURAL sequences of things frizz can look up, plus the
- *  scalar `for:`. Anything else is not structure and falls through to the body. */
-const AWAITING_YAML_KEYS = new Set(["shells", "agents", "timers", "prs", "for"])
+ *  two scalars `for:` and `title:`. Anything else is not structure and falls through to the body. */
+const AWAITING_YAML_KEYS = new Set(["shells", "agents", "timers", "prs", "for", "title"])
 
 /** Which singular hint kind each plural sequence key produces. The WIRE SHAPE is unchanged by the
  *  2026-08-24 cutover — every consumer still reads a flat `{kind, value}` list with SINGULAR kinds — so
@@ -448,6 +449,38 @@ const AWAITING_SEQUENCE_KEYS: { [key: string]: AwaitingItemKind | undefined } = 
 /** Defensive caps, shared so the sidebar gloss and the in-chat card can never render a divergent row. */
 export const AWAITING_HINT_MAX = 8
 export const AWAITING_HINT_VALUE_MAX = 200
+
+/** `title:` — the resting card's heading in the WORKER'S OWN WORDS, replacing the derived one
+ *  ("Awaiting" / "Background shells running", see awaitingBackgroundLabel).
+ *
+ *  IT IS A HEADING, NOT A SENTENCE, and the cap is what keeps it one. The card already carries the
+ *  worker's full prose below it and a row per awaited thing under that, so a title that restates either
+ *  is the doubling this card has been trimmed for twice.
+ *
+ *  40 IS MEASURED, NOT CHOSEN. The heading renders at 16px/600 in whichever font the reader has set, and
+ *  it WRAPS rather than truncating — so the cap has to fit the NARROWEST card on ONE line or a long park
+ *  grows a two-line heading. Measured in a real browser on the queue card at its 368px content box
+ *  (awaiting-bg-fixture, 500px viewport): MONO is the binding font at 8.40px per character against sans's
+ *  7.21px, and in mono even an all-wide-glyph 40 ("WmWm…") draws 351.88px and still fits. 44 does not —
+ *  a 43-character heading measured 369.47px in mono and wrapped to two line boxes.
+ *
+ *  Longer is TRIMMED on a word boundary rather than refused: a worker that overruns still meant something
+ *  specific, and "Waiting on the three-platform CI run…" says more than falling back to "Awaiting".
+ *
+ *  Sentence case, like every other piece of copy in the app (CLAUDE.md), and the trim never invents
+ *  capitalisation. */
+export const AWAITING_TITLE_MAX = 40
+
+/** The title as it will RENDER: collapsed to one line, cap-trimmed on a word boundary. Applied at PARSE
+ *  time so the stored hint is already what the card draws — every consumer then agrees by construction,
+ *  and nothing downstream has to re-trim. */
+export function trimAwaitingTitle(raw: string): string {
+  const flat = raw.replace(/\s+/g, " ").trim()
+  if (flat.length <= AWAITING_TITLE_MAX) return flat
+  const cut = flat.slice(0, AWAITING_TITLE_MAX)
+  const space = cut.lastIndexOf(" ")
+  return `${(space > AWAITING_TITLE_MAX / 2 ? cut.slice(0, space) : cut).replace(/[.,;:–—-]$/, "").trimEnd()}…`
+}
 
 /** Split an ```awaiting fence body into its hints and its prose.
  *
@@ -519,9 +552,27 @@ function parseAwaitingYaml(text: string): { ok: boolean; hints: AwaitingHint[] }
       for (const entry of Array.isArray(raw) ? raw : [raw]) push(itemKind, entry)
     } else if (key === "for") {
       push("for", raw)
+    } else if (key === "title") {
+      // Capped HERE rather than at the card, so the hint on the wire is already the string that renders
+      // and no consumer can draw a longer one. `push` slices at AWAITING_HINT_VALUE_MAX after this, which
+      // a trimmed title is always well inside.
+      if (typeof raw === "string" || typeof raw === "number") push("title", trimAwaitingTitle(String(raw)))
     }
   }
   return { ok: true, hints }
+}
+
+/** The heading this fence asked for, already trimmed — null when it named none, which is every fence
+ *  written before 2026-08-26 and most written after. The LAST one wins: YAML cannot hold a repeated key,
+ *  so this can only be reached by a hand-built hint list, and the last write is the ordinary reading. */
+export function awaitingFenceTitle(hints: readonly AwaitingHint[] | undefined): string | null {
+  let title: string | null = null
+  for (const h of hints ?? []) {
+    if (h.kind !== "title") continue
+    const value = trimAwaitingTitle(h.value)
+    if (value) title = value
+  }
+  return title
 }
 
 export const AWAITING_ITEM_KINDS = ["shell", "agent", "timer", "pr"] as const

@@ -91,6 +91,31 @@ test("the card's title names the shape: shells running vs awaiting a dispatched 
   assert.doesNotMatch(withChild, /Background shells running/)
 })
 
+// …AND THE WORKER MAY OVERRIDE BOTH (maintainer 2026-08-26: "let's let the agent specify its own title
+// for these awaiting cards"). "Awaiting" is true of every park on the board and specific to none, and the
+// worker is the only party that knows what THIS wait is. Capped at parse time, so the card renders the
+// hint verbatim and cannot draw a heading longer than the grammar allows.
+const titled = (value: string) => ({ kind: "awaiting" as const, body: "", hints: [{ kind: "title" as const, value }] })
+
+test("a title: in the fence replaces the derived heading, on either shape", () => {
+  const declared = { ...thread([agent("running")], []), lastFence: titled("Three-platform CI run") } as Parameters<typeof AwaitingBackgroundCard>[0]["thread"]
+  assert.match(text(declared), /Three-platform CI run/)
+  assert.doesNotMatch(text(declared), /Awaiting/)
+  // The shell-only shape has a kind-naming heading of its own, and a declared title beats that too.
+  const shells = { ...thread([], [shell("running")]), lastFence: titled("Nightly bench, arm 3 of 3") } as Parameters<typeof AwaitingBackgroundCard>[0]["thread"]
+  assert.match(text(shells), /Nightly bench, arm 3 of 3/)
+  assert.doesNotMatch(text(shells), /Background shells running/)
+})
+
+test("an empty or absent title falls back to the derived heading", () => {
+  const blank = { ...thread([agent("running")], []), lastFence: titled("   ") } as Parameters<typeof AwaitingBackgroundCard>[0]["thread"]
+  assert.match(text(blank), /Awaiting/)
+  // A DONE fence's hints are never a heading — only a standing awaiting park may name this card.
+  const done = { ...thread([agent("running")], []), lastFence: { kind: "done" as const, body: "", hints: [{ kind: "title" as const, value: "Landed" }] } } as Parameters<typeof AwaitingBackgroundCard>[0]["thread"]
+  assert.match(text(done), /Awaiting/)
+  assert.doesNotMatch(text(done), /Landed/)
+})
+
 // ---- ONE ROW PER THING, GROUPED BY KIND ----------------------------------------------------------
 test("every kind the thread declared gets a row, under its own heading", () => {
   const t = {

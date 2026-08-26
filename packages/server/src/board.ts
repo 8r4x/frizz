@@ -577,7 +577,16 @@ export function fenceWatchViews(
     // A `prs:` entry adds NO row of its own: the registry above already listed every PR this thread
     // watches, and a line naming an unregistered PR describes a wait nothing will deliver. Listing it
     // would put a row on the strip that nothing behind it can ever fire.
-    if (hint.kind !== "shell" && hint.kind !== "agent") continue
+    // AN `agents:` ENTRY ADDS NO ROW EITHER, for the same reason a `prs:` one does not: the sub-agent it
+    // names is already a row on every surface that draws this card (AwaitingBackgroundCard's own live-agent
+    // group, BackgroundOpsStrip under the prompt box), read straight off `subAgents` and needing no
+    // declaration to appear — see hasDeclaredWait. A row here is a SHELL row by construction, so an agent
+    // hint listed the same sub-agent a second time under "Background shells", named by its raw `toolu_…`
+    // id because resolveShell can find no shell behind it (maintainer 2026-08-26: "why are these
+    // background shells showing up in the awaiting block but not underneath the prompt box"). It came in
+    // with the `watch:` → `shells:`/`agents:` cutover (5e0baf54), which widened the filter to both new
+    // kinds while the push below still emitted one kind.
+    if (hint.kind !== "shell") continue
     const target = hint.value.trim()
     // A name matching nothing live is not a wait — the same rule, applied to the shells the thread owns.
     if (!target || seen.has(`shell:${target}`) || !liveWaitHandles(tele).has(target)) continue

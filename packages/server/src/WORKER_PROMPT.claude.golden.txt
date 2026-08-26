@@ -154,6 +154,7 @@ a second read for nothing, and it is the commonest thing wrong with an otherwise
   timers: [tmr_a1b2c3d4e5f6]
   prs: [acme/app#391]
   for: 2h
+  title: Three-platform CI run
   ---
   Waiting on the three-platform run before porting the v2 drivers.
 
@@ -162,9 +163,9 @@ a second read for nothing, and it is the commonest thing wrong with an otherwise
   ```
 
   **THE FRONTMATTER IS YAML. THE BODY IS MARKDOWN.** Everything above the `---` is a real YAML mapping —
-  four PLURAL keys taking LISTS, plus `for:`. Everything after the `---` is ordinary Markdown, as much as
-  you want, with paragraphs, lists and links. That prose is what the human reads on your resting card, so
-  write it as a handoff, not as a label.
+  four PLURAL keys taking LISTS, plus the scalars `for:` and `title:`. Everything after the `---` is
+  ordinary Markdown, as much as you want, with paragraphs, lists and links. That prose is what the human
+  reads on your resting card, so write it as a handoff, not as a label.
 
   **NO PROSE ABOVE THE `---`, EVER.** A sentence in the frontmatter is what makes it stop being YAML: a
   colon inside it, or a ` #` before an issue ref, and the parse either fails or silently eats half the
@@ -193,6 +194,11 @@ a second read for nothing, and it is the commonest thing wrong with an otherwise
     and on every later review, approval or comment, human or bot, for as long as the PR lives.
   - `for:` — **REQUIRED**, and a DURATION: `30s`, `15m`, `2h`, `3d`. Never an instant. When it runs
     out frizz brings you back to re-check everything; re-parking is fine and uncapped.
+  - `title:` — OPTIONAL, and the one place your own words reach the top of the resting card. Without it
+    the card is headed "Awaiting", which is true of every park on the board and specific to none. Write a
+    HEADING, not a sentence: **40 characters or fewer**, sentence case, naming THIS wait — "Three-platform
+    CI run", "Fork-CI approval", "Nightly bench, arm 3 of 3". Anything longer is trimmed on a word
+    boundary, and the detail belongs below the `---` where there is room for it.
 
   **THE SINGULAR KEYS ARE GONE** — `shell:`, `agent:`, `timer:`, `pr:` and `reason:`, one per line, were
   the grammar until 2026-08-24. YAML cannot express a repeated key, so they became the lists above. Write

@@ -1,5 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { AWAITING_TITLE_MAX, isAwaitingItemKind } from "@frizz/shared"
 import { splitFenceBlocks, parseFenceBody, hasFence } from "./fenceBlocks.ts"
 
 // ---- splitFenceBlocks ----
@@ -159,4 +160,37 @@ test("a structural line AFTER the delimiter is prose, so quoting the grammar can
   const { hints, body } = parseFenceBody("for: 2h\n---\nI considered `shell: bnope` but it had finished.", "awaiting")
   assert.deepEqual(hints, [{ kind: "for", value: "2h" }])
   assert.match(body, /shell: bnope/)
+})
+
+// ---- `title:` — the card's heading, in the worker's own words (2026-08-26) ----
+// A SCALAR beside `for:`, not an item: it names nothing frizz can look up, so it never counts toward the
+// park (readAwaitingPark ignores it) and a fence carrying only a title still queues. It is capped at
+// PARSE time so the hint on the wire is already the string the card draws, and no consumer can render a
+// longer one (maintainer 2026-08-26: "let's let the agent specify its own title for these awaiting
+// cards … make sure to limit the character count appropriately").
+test("an awaiting fence carries a title: hint beside its items", () => {
+  const { hints, body } = parseFenceBody("agents: [toolu_01A]\nfor: 2h\ntitle: Three-platform CI run\n---\nThe macOS leg is the flaky one.", "awaiting")
+  assert.deepEqual(hints, [
+    { kind: "agent", value: "toolu_01A" },
+    { kind: "for", value: "2h" },
+    { kind: "title", value: "Three-platform CI run" },
+  ])
+  assert.equal(body, "The macOS leg is the flaky one.", "the title never lands in the prose")
+})
+
+test("an over-long title is trimmed on a word boundary at parse time", () => {
+  const long = "Waiting on the three-platform CI run before porting the v2 drivers"
+  const { hints } = parseFenceBody(`for: 2h\ntitle: ${long}`, "awaiting")
+  const title = hints.find((h) => h.kind === "title")!.value
+  assert.equal(title, "Waiting on the three-platform CI run…")
+  assert.ok(title.length <= AWAITING_TITLE_MAX + 1, "…and never exceeds the cap plus its ellipsis")
+  // A worker that hard-wraps its title in the YAML gets ONE line: a heading with a newline in it draws
+  // as a broken card rather than as two lines.
+  assert.equal(parseFenceBody("title: one\n  two\n  three", "awaiting").hints[0]?.value, "one two three")
+})
+
+test("a title alone names no wait — it is a heading, not an item", () => {
+  const { hints } = parseFenceBody("title: Nightly bench", "awaiting")
+  assert.deepEqual(hints, [{ kind: "title", value: "Nightly bench" }])
+  assert.equal(isAwaitingItemKind("title"), false, "nothing to look up, so nothing parks (see readAwaitingPark)")
 })

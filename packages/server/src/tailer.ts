@@ -2,6 +2,7 @@ import { statSync, openSync, readSync, closeSync, readdirSync, realpathSync, mkd
 import { execFileSync } from "node:child_process"
 import { basename, join } from "node:path"
 import { homedir, tmpdir } from "node:os"
+import type { AwaitingHint } from "@frizz/shared"
 import { insideFence, isAllInjectedNoise, isInterruptMarker, PermissionMode, saysAllDone, splitAwaitingFrontmatter } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import { permMarkerPath, type Project } from "./project.ts"
@@ -247,7 +248,7 @@ export interface SubAgentView {
 export interface FenceView {
   kind: "done" | "awaiting"
   body: string
-  hints: { kind: "shell" | "agent" | "timer" | "pr" | "for"; value: string }[]
+  hints: AwaitingHint[]
 }
 
 // Per-session derived telemetry surfaced to the board overlay. Structurally a NormalizedTail (the

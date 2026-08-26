@@ -46,6 +46,14 @@ const wantWatch = wantAll || watchMode !== null
 // Shells are the DEFAULT shape; ?agents=1 swaps them for sub-agents, and ?watch=1 for a lone watcher.
 const wantShells = wantAll || (!wantAgents && watchMode !== "1" && watchMode !== "one")
 const shellOnly = wantShells && !wantAgents
+// ?title=<text> — the WORKER'S OWN HEADING (2026-08-26), which replaces the derived "Awaiting" /
+// "Background shells running". Bare `?title` seeds a near-full-length one, which is the case worth
+// looking at: AWAITING_TITLE_MAX is measured so a heading at the cap still draws on ONE line at this
+// card's narrowest (368px content box, i.e. a 500px viewport here) in BOTH fonts — check it at
+// `?font=mono`, which is the wider of the two per character and therefore the binding one. The fence
+// also carries the prose the card opens with, so the heading and the handoff can be judged together.
+const titleParam = params.get("title")
+const declaredTitle = titleParam === "" ? "Nightly bench, arm 3 of 3 — macOS red" : titleParam
 
 const tail = shellOnly
   ? "Left the dev server and the CI poller running; I'll pick this back up when they report."
@@ -70,7 +78,9 @@ const thread = {
   agents: [],
   errors: [],
   warnings: [],
-  runtime: "idle",
+  // `turn-idle` — the state showsRestingCard actually gates on. A plain "idle" renders the queue card
+  // with NO resting card at all, which is what this fixture exists to show.
+  runtime: "turn-idle",
   sessionId: "aaaaaaaa-bbbb-cccc-dddd-000000000001",
   unread: false,
   archived: false,
@@ -128,6 +138,15 @@ const thread = {
       ]
     : []),
   ],
+  // The standing fence. Only seeded with ?title, because a fence body renders as the card's opening
+  // prose and the default fixture is deliberately the no-prose shape.
+  ...(declaredTitle === null ? {} : {
+    lastFence: {
+      kind: "awaiting",
+      body: tail,
+      hints: [{ kind: "title", value: declaredTitle }, { kind: "for", value: "2h" }],
+    },
+  }),
   lastActivityAt: ago(1),
 } as unknown as ThreadViewModel
 
