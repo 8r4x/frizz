@@ -9,7 +9,8 @@ function splitEffort(value: string, separator: "/" | "-"): { model: string; effo
 }
 
 // The provider records one opaque dispatch cell, not separate profile fields:
-//   Claude: frizz:opus-high / frizz:frizz-opus-high
+//   Claude: frizz:high (effort-only, since 2026-08-26 — the model rides the Agent tool's own
+//           parameter and is not in the cell), and the older frizz:opus-high / frizz:frizz-opus-high
 //   Codex:  explorer gpt-5.6-terra/high
 // Preserve an agent role when one exists, but present the model/effort with the same separators the
 // normal prompt-box selector uses. Unknown/custom cells remain verbatim rather than being guessed.
