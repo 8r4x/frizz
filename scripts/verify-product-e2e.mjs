@@ -31,10 +31,16 @@
  *
  * `gh` reads the macOS keychain and cannot follow a redirected HOME, so the token is captured from the
  * real one and passed as GH_TOKEN — which is what a CI runner would do anyway.
+ *
+ * KNOWN FLAKE, 2026-08-26, and it is NOT this harness: a board with a saved setup sometimes comes up
+ * loopback-only. When it does, `serveSaved()` neither throws nor acts — nothing is printed, and the
+ * cloud.json is still on disk and still correct afterwards (this harness checks both on failure). That
+ * points at the `home` the remote controller resolves in the launched process rather than at the config.
+ * Re-run; when the setup takes, every check below passes.
  */
 import { execFileSync } from "node:child_process";
 import { spawn as spawnPty } from "node-pty";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocket as WsClient } from "ws";
@@ -121,7 +127,17 @@ try {
       if (!up) await new Promise((r) => setTimeout(r, 2000));
     }
     if (!up) {
-      throw new Error(`the board never came up on its saved name. Readout tail:\n${plain().split("\n").filter((l) => l.trim()).slice(-25).join("\n")}`);
+      // GREP THE WHOLE STREAM, not its tail. The readout is a TUI that repaints over itself, so an
+      // error printed during boot is scrolled out of the visible frame while still sitting in the bytes.
+      const said = plain().split("\n").map((l) => l.trim()).filter((l) => l.startsWith("frizz:"));
+      // Is the seeded config still there, and still what we wrote? A boot path that rewrites it would
+      // look exactly like one that ignored it.
+      let onDisk = "(missing)";
+      try { onDisk = readFileSync(join(home, ".frizz", "cloud.json"), "utf8").replace(/\s+/g, " "); } catch { /* missing */ }
+      console.log(`  cloud.json after boot: ${onDisk}`);
+      throw new Error(
+        `the board never came up on its saved name.\n  frizz said: ${said.length ? said.join("\n  frizz said: ") : "(nothing)"}\n  tail:\n${plain().split("\n").filter((l) => l.trim()).slice(-8).join("\n")}`,
+      );
     }
   }
   check("a saved frizz.sh name is served on a plain launch", true, ORIGIN);
@@ -171,6 +187,28 @@ try {
 
   const uninvited = await fetch(ORIGIN, { redirect: "manual" });
   check("a visitor without the cookie is still refused", uninvited.status === 401, `HTTP ${uninvited.status}`);
+
+  // SIGN-OUT, against a board on the public internet. Locally this is 14/14, but the whole point of the
+  // feature is revoking a device you no longer hold — which is a device reaching the board from away.
+  const cli = (...args) => {
+    try {
+      return execFileSync(process.execPath, [CLI, ...args], { cwd: project, env, encoding: "utf8" });
+    } catch (error) {
+      return `${error.stdout ?? ""}${error.stderr ?? ""}`;
+    }
+  };
+  const listed = cli("--sessions");
+  const deviceId = (listed.match(/^\s*(\S+)\s+\S/m) ?? [])[1];
+  check("--sessions names the device that redeemed over the internet", !!deviceId, listed.trim().split("\n")[0] ?? listed.slice(0, 90));
+
+  if (deviceId) {
+    const out = cli("--sign-out", deviceId);
+    check("--sign-out reports it signed that device out", /Signed out/.test(out), out.trim().slice(0, 80));
+    const after = await fetch(ORIGIN, { headers: { cookie }, redirect: "manual" });
+    check("the signed-out device is locked out THROUGH the relay", after.status === 401, `HTTP ${after.status}`);
+    const afterWs = await socket({ cookie, origin: ORIGIN });
+    check("and its WebSocket is refused too", afterWs.verdict === "refused", afterWs.verdict);
+  }
 } catch (error) {
   check("harness completed", false, error instanceof Error ? error.message : String(error));
 } finally {
