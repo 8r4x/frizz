@@ -156,7 +156,7 @@ const HOVER_CARDS: GithubRefCard[] = [
 const originalFetch = window.fetch
 window.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : (input as Request).url ?? input.toString(), location.origin)
-  if (url.pathname.endsWith("/rpc/githubRefPreview")) {
+  if (url.pathname === "/_frizz/rpc/githubRefPreview") {
     const refs: string[] = JSON.parse(url.searchParams.get("input") ?? "{}").refs ?? []
     const cards = HOVER_CARDS.filter((card) => refs.includes(card.ref)).map((card) => ({ ...card, fetchedAt: Date.now() }))
     const missing = refs.filter((ref) => !cards.some((card) => card.ref === ref))
