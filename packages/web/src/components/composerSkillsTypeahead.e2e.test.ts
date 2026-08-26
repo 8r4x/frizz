@@ -5,8 +5,12 @@ import test, { after, before } from "node:test"
 // of the thread's invocable skills; these tests pin the whole keyboard contract against the real
 // <Composer> in a real browser: lazy single fetch, prefix-then-substring filtering, ArrowDown/Enter
 // completion, Tab completion, Escape dismissing WITHOUT blurring (and staying dismissed until the
-// draft changes), and — the seam that matters most — Enter sending the draft the moment the menu is
-// NOT showing, exactly as before the feature existed.
+// draft changes), and — the seam that matters most — the ⌘/Ctrl-Enter send still reaching the worker
+// the moment the menu is NOT showing, exactly as before the feature existed.
+//
+// A BARE Enter and the SEND CHORD are two different keys here (maintainer 2026-08-26,
+// `lib/composerKeyboard.ts`): ⌘/Ctrl-Enter is the app-wide send, a plain Enter is a newline, and while
+// the menu is open the menu claims the unmodified Enter as its accept key.
 //
 // Skipped unless a Vite URL serving the fixtures is provided (same pattern as the other *.e2e.test.ts
 // here): start `vite` in packages/web and set FRIZZ_SKILLS_TYPEAHEAD_E2E_URL to its origin.
@@ -46,6 +50,14 @@ const menuRows = (): Promise<string[]> => page!.evaluate((sel) =>
 const menuVisible = (): Promise<boolean> => page!.evaluate((sel) => Boolean(document.querySelector(sel)), MENU)
 const boxValue = (): Promise<string> => page!.$eval(BOX, (el) => (el as HTMLTextAreaElement).value)
 
+// The app-wide send chord. Held as Meta because <Composer> accepts metaKey OR ctrlKey, and puppeteer
+// sets the modifier on the CDP event regardless of the host OS.
+async function pressSendChord() {
+  await page!.keyboard.down("Meta")
+  await page!.keyboard.press("Enter")
+  await page!.keyboard.up("Meta")
+}
+
 async function open() {
   errors = []
   await page!.goto(`${baseUrl}/skills-typeahead-fixture.html`, { waitUntil: "networkidle2" })
@@ -81,12 +93,27 @@ test("ArrowDown+Enter completes the highlighted skill instead of sending, and th
   await page!.waitForSelector(MENU)
   await page!.keyboard.press("ArrowDown")
   await page!.keyboard.press("Enter")
+  // The exact value also proves the accept swallowed the key: no newline, no send.
   assert.equal(await boxValue(), "/frizz:gh ", "Enter with the menu open completes, with a trailing space for arguments")
   assert.deepEqual((await hooks()).submitted, [], "…and must NOT send the draft")
 
   await page!.type(BOX, "check the PR")
-  await page!.keyboard.press("Enter")
-  assert.deepEqual((await hooks()).submitted, ["/frizz:gh check the PR"], "Enter with the menu closed sends as always")
+  await pressSendChord()
+  assert.deepEqual((await hooks()).submitted, ["/frizz:gh check the PR"], "⌘-Enter with the menu closed sends as always")
+  assert.deepEqual(errors, [], `no page errors: ${errors.join(" | ")}`)
+})
+
+test("⌘-Enter overrides the open menu and sends the draft as typed", {
+  skip: !baseUrl,
+  timeout: 150_000,
+}, async () => {
+  await open()
+  await page!.type(BOX, "/fr")
+  await page!.waitForSelector(MENU)
+  // The menu claims only the UNMODIFIED Enter. A send chord mid-name is the operator overriding the
+  // suggestion, so the draft goes out uncompleted rather than turning into `/frizz-stack`.
+  await pressSendChord()
+  assert.deepEqual((await hooks()).submitted, ["/fr"], "the send chord is not the menu's accept key")
   assert.deepEqual(errors, [], `no page errors: ${errors.join(" | ")}`)
 })
 

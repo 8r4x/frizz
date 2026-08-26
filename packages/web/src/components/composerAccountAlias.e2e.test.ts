@@ -13,6 +13,10 @@ import test, { after, before } from "node:test"
 // ONE headless Chrome is shared across the whole file (via before/after) — a fresh browser per test is
 // wasteful and, on a loaded machine, times out. Each test wipes sessionStorage + reloads so the draft
 // cache never bleeds between cases.
+//
+// SENDING IS ⌘/Ctrl-Enter, not a bare Enter (maintainer 2026-08-26, `lib/composerKeyboard.ts`): every
+// prompt box reads as a form field, and a plain Enter is always a newline. These tests pressed a bare
+// Enter and so never submitted anything — the modal simply never opened.
 const baseUrl = process.env.FRIZZ_COMPOSER_ALIAS_E2E_URL
 
 const SLUG = "alias-thread"
@@ -56,10 +60,18 @@ async function open(surface: "queue" | "drawer", box: string) {
   await page!.waitForSelector(box)
 }
 
+// The app-wide send chord. Held as Meta because <Composer> accepts metaKey OR ctrlKey, and puppeteer
+// sets the modifier on the CDP event regardless of the host OS.
+async function pressSendChord() {
+  await page!.keyboard.down("Meta")
+  await page!.keyboard.press("Enter")
+  await page!.keyboard.up("Meta")
+}
+
 async function typeAndSend(selector: string, text: string) {
   await page!.click(selector)
   await page!.type(selector, text)
-  await page!.keyboard.press("Enter")
+  await pressSendChord()
   await new Promise((r) => setTimeout(r, 350))
 }
 
@@ -130,7 +142,7 @@ test("the intercepted alias leaves the cue card mounted; an ordinary reply still
   // unmounts after the exit budget. Either state proves the optimistic dissolve fired.
   await page!.click(QUEUE)
   await page!.type(QUEUE, "rotate in place")
-  await page!.keyboard.press("Enter")
+  await pressSendChord()
   await new Promise((r) => setTimeout(r, 120))
   const mid = await page!.evaluate((slug) => document.querySelector(`[data-queue-card-root="${slug}"]`)?.getAttribute("data-queue-leaving") ?? "unmounted", SLUG)
   await new Promise((r) => setTimeout(r, 500))

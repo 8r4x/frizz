@@ -178,7 +178,7 @@ export function App() {
   //   Esc — overlays first (palette/modal/settings), then the drawer stack topmost-first. That chain
   //   belongs to <DrawerStack> (the standalone /full page needs the identical unwinding), so only the
   //   chords are handled here.
-  //   Enter submits in a composer; Shift/Option-Enter newline (Composer's own handler)
+  //   ⌘/Ctrl-Enter submits in a composer; every other Enter newlines (Composer's own handler)
   // (The xstate focus machine — nav selection, arrow-walk, chevron, step-in/out, focus registry — was
   // DELETED when the sidebar went mouse-only: the queue is always visible, clicking a row opens its
   // drawer, and a composer's Esc simply blurs it. No virtual focus, no zombie states.)

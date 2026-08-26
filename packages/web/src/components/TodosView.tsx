@@ -197,8 +197,8 @@ function AwaitingBackgroundBanner({ thread, onSnooze, onSnoozeFailed }: {
   )
 }
 
-// Keyboard: a card's inputs are ordinary DOM focus — click in to type, Esc blurs, Enter submits (the
-// composer's own handlers). The old focus-machine step-in/arrow-walk was deleted with the mouse-only
+// Keyboard: a card's inputs are ordinary DOM focus — click in to type, Esc blurs, ⌘/Ctrl-Enter submits
+// (the composer's own handlers). The old focus-machine step-in/arrow-walk was deleted with the mouse-only
 // sidebar. The header buttons are mouse-driven (always visible atop each card).
 export function TodosView() {
   const board = useBoard()

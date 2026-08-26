@@ -11,9 +11,10 @@ import { localImageUrl } from "../lib/markdownTargets.ts"
 
 // The shared prompt composer (the pattern the user called "perfect"): ONE rounded bordered box
 // holding a borderless auto-growing textarea plus a small round accent send button hovering INSIDE
-// at the bottom-right. Grows with content up to maxHeight, then scrolls. Plain Enter submits;
-// modifier-Enter uses the browser's native newline behavior, with a no-op fallback for Chromium's
-// macOS Option-Enter quirk. Queue retains its separately-owned Option-Enter handling. Escape BLURS
+// at the bottom-right. Grows with content up to maxHeight, then scrolls. ⌘/Ctrl-Enter submits
+// (2026-08-26); every other Enter — plain, Shift, Option — keeps the browser's native newline, with a
+// no-op fallback for Chromium's macOS Option-Enter quirk. Queue retains its separately-owned
+// Option-Enter handling. Escape BLURS
 // (climbs out — the next Esc, at rest, unwinds a drawer via
 // App's window handler). Keyboard handling is entirely LOCAL: the focus machine that used to
 // arbitrate boundary keys was deleted with the mouse-only sidebar. `surface` remains only as a
