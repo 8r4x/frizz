@@ -6,10 +6,11 @@
 //      foreground agent blocks the worker's turn; a human interjection orphans it).
 //   2) STRIP `name`/`team_name` — setting either strands a nested dispatch (its result routes
 //      wrong and never returns cleanly), so scrub both silently.
-//   3) AUTO-APPEND a repo-neutral ORCHESTRATION EPILOGUE so helpers return a useful handoff,
-//      know how to reach their dispatcher mid-flight, do NOT fan out a layer of their own unless
-//      their prompt asked for it, and collect a helper correctly when it did — without imposing
-//      build, test, git, compilation, or process-lifecycle policy on arbitrary repos.
+//   3) AUTO-APPEND a short ORCHESTRATION EPILOGUE carrying only what a helper cannot discover on
+//      its own: that its final message is the return value, the `SendMessage({to: "main"})` upward
+//      channel, the own-file rule for the scratch directory, no fan-out of its own unless asked, and
+//      how a helper it DID dispatch is collected. It carries no handoff format and no build, test,
+//      git or process policy — the maintainer had the handoff-format doctrine cut on 2026-08-26.
 //
 // WHY NESTING IS DEFAULT-OFF (2026-08-04, maintainer's call): the epilogue used to speak about a
 // helper's own helper only in the conditional ("if you dispatch a helper of your own…"), which reads
@@ -45,10 +46,10 @@ import { readFileSync } from 'node:fs';
 const EPILOGUE = `
 
 ---
-[ORCHESTRATION EPILOGUE — auto-appended by the frizz worker dispatch hook] You are a helper sub-agent for a frizz worker. Your final message is the handoff: report your outcome/status; what you did; changed files, artifacts, and commit SHA when applicable; verification or evidence and its result; caveats or unresolved work; and the next action when one remains. A bare "done" or progress-only message is not a complete handoff.
+[ORCHESTRATION EPILOGUE — auto-appended by the frizz worker dispatch hook] You are a helper sub-agent for a frizz worker. Your final message is the handoff your dispatcher reads: say what you did, what you verified, and what remains.
 The worker has a scratch directory (it will name the path if it wants your notes on disk). Write your OWN file there — never edit or delete a file another agent wrote, and never treat one shared document as yours to rewrite. Writing your own file there is Frizz coordination state, not a project deliverable or source edit, so it remains allowed when a delegated task limits your deliverable paths with phrases such as "write only <path>" or "do not modify the repo"; never classify it as unauthorized or roll it back. Other project files, including repository-root files, remain governed by your delegated authority; their location alone neither permits nor forbids editing. Do not edit other \`.frizz/\` state unless your prompt explicitly asks you to.
 You have an upward channel while you work: \`SendMessage({to: "main", summary: "<5-10 words>", message: "…"})\` delivers to your dispatcher. Use it when the dispatcher acting before you finish could change the outcome—for example, when you hit an unresolved blocker, complete a milestone another task needs, or discover that your instructions should change. Do not use it for routine progress updates.
-Do the work yourself: do NOT dispatch sub-agents of your own unless your dispatch prompt explicitly tells you to. You are already one prong of someone else's fan-out, and another layer below you buys little — it splits the context you were handed, buries the real work one level further from whoever reads the tree, and leaves you collecting a handoff instead of doing the task. A slice that feels large is still yours to work through in your own turn.
+Do the work yourself: do NOT dispatch sub-agents of your own unless your dispatch prompt explicitly tells you to. You are already one prong of someone else's fan-out; a slice that feels large is still yours to work through in your own turn.
 If your prompt DOES ask you to dispatch a helper, its completion is delivered to you automatically. Never hand-roll a wait loop over a helper's transcript or \`.output\` path to decide whether it finished: that path is a SYMLINK, so \`stat\` without \`-L\` reports the link's own size (the length of its target path, ~150 bytes) and its frozen creation mtime, and the \`"type":"result"\` record is not reliably written — so a helper that is working hard reads as tiny, stale, and dead, and you will discard live work and redo it. Judge a helper only by its completion notification or the text it returns. Give it a \`description\` naming its narrower slice rather than restating your own, so the dispatch tree stays readable.`;
 
 /** @param {unknown} obj @returns {never} */

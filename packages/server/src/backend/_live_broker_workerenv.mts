@@ -1,6 +1,6 @@
 // LIVE worker-ENVIRONMENT gate for the broker cutover: proves a broker worker dispatched through the
 // REAL server (createContext → dispatch broker branch → daemon with the wired workerEnv) actually has
-// the frizz plugin environment — specifically that it can DISPATCH a frizz:<model>-<effort> sub-agent
+// the frizz plugin environment — specifically that it can DISPATCH a frizz:<effort> sub-agent
 // profile (which requires the cc-worker plugin to have loaded through the SDK) and that the frizz MCP is
 // mounted. Run:  FRIZZ_CLAUDE_BROKER_BRIDGE=1 nub \
 //   packages/server/src/backend/_live_broker_workerenv.mts
@@ -30,19 +30,19 @@ try {
   const { slug, sessionId } = await ctx.dispatcher.dispatch({
     prompt:
       `Do BOTH of these, then stop:\n` +
-      `1. Use the Agent tool with subagent_type exactly "frizz:haiku" to dispatch a sub-agent whose prompt is: ` +
+      `1. Use the Agent tool with subagent_type exactly "frizz:low" to dispatch a sub-agent whose prompt is: ` +
       `"Use the Write tool to create the file ${subFile} containing the word DONE, then stop." ` +
-      `If subagent_type "frizz:haiku" is unavailable, instead write the file ${reportFile} containing "NO_FRIZZ_AGENT".\n` +
+      `If subagent_type "frizz:low" is unavailable, instead write the file ${reportFile} containing "NO_FRIZZ_AGENT".\n` +
       `2. Write the file ${reportFile} listing whether you can see tools named mcp__frizz__spawn_thread and mcp__chrome-devtools (one per line, "yes" or "no").`,
   }, { backend: "claude" })
   ok("dispatched a broker thread", !!slug && !!sessionId)
   daemonPid = readBrokerRecord(claudeBrokerRecordPath(project.stateDir, sessionId))?.daemonPid
 
-  // Wait for the sub-agent's marker file (frizz:haiku ran) or the report file (worker finished/failed).
+  // Wait for the sub-agent's marker file (frizz:low ran) or the report file (worker finished/failed).
   const deadline = Date.now() + 180_000
   while (!existsSync(subFile) && Date.now() < deadline) await sleep(1_000)
 
-  ok("broker worker dispatched a frizz:haiku SUB-AGENT that ran (SUB_OK.txt written)", existsSync(subFile),
+  ok("broker worker dispatched a frizz:low SUB-AGENT that ran (SUB_OK.txt written)", existsSync(subFile),
     existsSync(subFile) ? readFileSync(subFile, "utf8").trim() : (existsSync(reportFile) ? `report=${readFileSync(reportFile, "utf8").trim().slice(0, 120)}` : "neither file appeared"))
 
   // Give the parent a moment to also write the tools report, then inspect it.

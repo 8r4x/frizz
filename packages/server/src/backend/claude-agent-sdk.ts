@@ -99,7 +99,7 @@ export interface ClaudeQueryStartOptions {
   model?: string
   effort?: string
   // The frizz WORKER ENVIRONMENT — the SDK equivalents of the argv path's --plugin-dir / --mcp-config /
-  // --allowedTools. Without these a broker session is a bare SDK worker: no frizz:<model>-<effort>
+  // --allowedTools. Without these a broker session is a bare SDK worker: no frizz:<effort>
   // sub-agent profiles, no frizz MCP (spawn_thread), and none of the cc-worker hooks
   // (deny-ask/deny-plan/agent-bind). `pluginDir` loads the local cc-worker plugin
   // (agents + hooks); `mcpServers` mounts the stdio MCP servers; `allowedTools` pre-approves them so a

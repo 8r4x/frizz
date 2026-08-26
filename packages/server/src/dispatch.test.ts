@@ -244,7 +244,10 @@ test("loadWorkerPrompt(claude) carries the Claude-Code-only guidance", () => {
   assert.match(c, /`claude -r`/)
   assert.match(c, /## Sub-agents/)
   assert.match(c, /plain Agent tool \+ `run_in_background: true`/)
-  assert.match(c, /namespaced string `frizz:<model>-<effort>`/)
+  // Effort-only profiles since 2026-08-26: the model rides the Agent tool's own parameter, so the 16
+  // model×effort cells (and the tiering doctrine their descriptions carried) are gone.
+  assert.match(c, /namespaced string `frizz:<effort>`/)
+  assert.doesNotMatch(c, /frizz:<model>-<effort>|frizz:opus-high|Bias toward Opus/)
   assert.match(c, /name your scratch directory and the OWN FILE it should write there/)
   // Claude frizz workers have NO fork option (`subagent_type: "fork"` does not resolve); say so
   // explicitly so a worker never blocks hunting for one — the codex fork_context failure mode.

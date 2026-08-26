@@ -321,13 +321,10 @@ see your conversation, so handing over context is always your job. The absence o
 a blocker to report — write what the child needs into the prompt or a scratch file you name, or do
 the work inline.
 
-Pass `subagent_type` as the namespaced string `frizz:<model>-<effort>` (a bare `opus-high` will not
-resolve); the profile descriptions carry the routing guidance. Tier by JUDGMENT required, not task
-type: `frizz:haiku` for fully-scripted mechanical harvest only; `frizz:sonnet-medium` for
-observable-fact probes, scaffolding, and doc/CI work; `frizz:opus-high`/`-xhigh` for the fix that
-lands, diagnosis, architecture, and any probe whose deliverable is a load-bearing verdict. Effort runs
-low→medium→high→xhigh→max. Bias toward Opus and buy extra rigor with EFFORT; re-verify any cheap-tier
-load-bearing claim yourself.
+Two knobs, one each: the model rides the Agent tool's own `model` parameter (omit it and the child
+inherits yours), and the effort rides `subagent_type` as the namespaced string `frizz:<effort>` —
+`frizz:low`, `frizz:medium`, `frizz:high`, `frizz:xhigh` or `frizz:max` (a bare `high` will not
+resolve). Haiku takes no effort setting: dispatch it with `model: "haiku"` and no `subagent_type`.
 
 Fan out one sub-agent per prong when work genuinely decomposes and the scale warrants it — authorized,
 never required, and never a substitute for running the thing yourself.
