@@ -142,6 +142,8 @@ for a source checkout.
 Options:
   --no-app               print the URL without opening a browser
   --port <port>          request a fixed port for a new workspace server
+  --sandbox              a disposable Frizz to try things in: throwaway home and project, its
+                         own port, deleted when this terminal closes
   --link                 print a fresh single-use access link for the running board
   --debug                stream the full event feed to the terminal instead of the compact readout
   -h, --help             show this help

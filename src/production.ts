@@ -37,7 +37,9 @@ import {
   boardAddress,
   expectedOwnerHealth,
   liveWorkspaceOwner,
+  cleanupSandbox,
   parseCliArgs,
+  prepareSandbox,
   probeFrizz,
   readPreferredPort,
   resolveLaunchIntent,
@@ -122,6 +124,8 @@ for a source checkout.
 Options:
   --no-app               print the URL without opening a browser
   --port <port>          request a fixed port for a new workspace server
+  --sandbox              a disposable Frizz to try things in: throwaway home and project, its
+                         own port, deleted when this terminal closes
   --link                 print a fresh single-use access link for the running board
   --debug                stream the full event feed to the terminal instead of the compact readout
   -h, --help             show this help
@@ -135,6 +139,11 @@ shows a single-use sign-in link as a QR; press L for a fresh one, or run --link 
   process.exit(0);
 }
 if (options.dev || rawArgs.includes("--prod")) fail("--dev and --prod are not available from the registry launcher");
+
+// Before ANYTHING reads the home directory: the sandbox swaps $HOME for a throwaway, so every piece
+// of state after this line — registry, lock, logs, session key, cloud.json — is a disposable copy.
+const sandbox = options.sandbox ? prepareSandbox() : null;
+if (sandbox) process.on("exit", () => cleanupSandbox(sandbox.home));
 
 /** How this board is reached from outside — the saved setup, the transport, the origin. Built once the supervisor listens. */
 let remote: RemoteController | null = null;
@@ -345,6 +354,7 @@ async function openOrPrint(port: number, reused: boolean, path = ""): Promise<vo
   // A reuse did not choose this server's bind address or its proxy origin, so it must not claim either.
   const publicOrigin = reused ? undefined : remote?.origin();
   const warnings: string[] = [];
+  if (sandbox) warnings.push(`Sandbox: everything here is throwaway (${sandbox.home}) and is deleted when this terminal closes.`);
   if (!readout) {
     console.log(`${reused ? "reusing" : "started"} Frizz ${PACKAGE_VERSION} for ${workspace.root}`);
     console.log(url);

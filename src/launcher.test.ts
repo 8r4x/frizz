@@ -64,6 +64,8 @@ import {
   supervisorNeedsAttention,
   workspaceLaunchTarget,
   type Workspace,
+  cleanupSandbox,
+  prepareSandbox,
 } from "./launcher.ts";
 import { DEFAULT_PORT, DEFAULT_DEV_PORT } from "@frizz/shared";
 import { registerProject } from "@frizz/server/project-registry";
@@ -416,6 +418,7 @@ test("CLI options default to immutable mode and make source/HMR explicit", () =>
     debug: false,
     port: undefined,
     link: false,
+    sandbox: false,
     sessions: false,
   });
   assert.deepEqual(parseCliArgs(["--no-app", "--foreground", "--port=5123"]), {
@@ -429,6 +432,7 @@ test("CLI options default to immutable mode and make source/HMR explicit", () =>
     debug: false,
     port: 5123,
     link: false,
+    sandbox: false,
     sessions: false,
   });
   assert.equal(parseCliArgs(["--dev"]).dev, true);
@@ -2454,4 +2458,29 @@ test("--sign-out without a device id is refused rather than signing everything o
 test("a device id is not mistaken for a repository path", () => {
   // The positional guard throws on any bare argument, so the value has to be consumed by the flag.
   assert.doesNotThrow(() => parseCliArgs(["--sign-out", "q7mJx_uZ"]));
+});
+
+test("--sandbox parses, refuses the running-board queries, and prepares a disposable home", () => {
+  assert.equal(parseCliArgs(["--sandbox"]).sandbox, true);
+  assert.equal(parseCliArgs([]).sandbox, false);
+  // The query flags ask the RUNNING board; a sandbox is a fresh one by definition.
+  for (const query of [["--link"], ["--status"], ["--sessions"], ["--sign-out", "abc"]]) {
+    assert.throws(() => parseCliArgs(["--sandbox", ...query]), /asks the running board/);
+  }
+
+  const cwd = process.cwd();
+  const env: NodeJS.ProcessEnv = {};
+  const sandbox = prepareSandbox(env);
+  try {
+    assert.equal(env.HOME, sandbox.home);
+    assert.equal(env.USERPROFILE, sandbox.home);
+    assert.equal(process.cwd(), realpathSync(sandbox.project));
+    // The throwaway project is a repository, so the launcher adopts it on sight.
+    assert.ok(existsSync(join(sandbox.project, ".git")));
+    assert.ok(sandbox.home.startsWith(realpathSync(tmpdir())) || sandbox.home.startsWith(tmpdir()));
+  } finally {
+    process.chdir(cwd);
+    cleanupSandbox(sandbox.home);
+  }
+  assert.equal(existsSync(sandbox.home), false);
 });

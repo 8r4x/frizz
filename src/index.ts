@@ -50,7 +50,9 @@ import {
   helpText,
   liveWorkspaceOwner,
   durableReexecArgs,
+  cleanupSandbox,
   parseCliArgs,
+  prepareSandbox,
   persistLauncher,
   probeFrizz,
   JOIN_PROBE_TIMEOUT_MS,
@@ -135,6 +137,11 @@ if (options.help) {
 }
 if (argv.includes("--prod"))
   fail("--prod is not available from the source-backed development launcher");
+
+// Before ANYTHING reads the home directory: the sandbox swaps $HOME for a throwaway, so every piece
+// of state after this line — registry, lock, logs, session key, cloud.json — is a disposable copy.
+const sandbox = options.sandbox ? prepareSandbox() : null;
+if (sandbox) process.on("exit", () => cleanupSandbox(sandbox.home));
 
 const internalLaunch =
   process.env.FRIZZ_DIRECT_SUPERVISOR === "1" ||
@@ -816,6 +823,7 @@ async function openOrPrint(
   const publicOrigin = reused ? undefined : remote?.origin();
   const accessLink = publicOrigin && !reused ? activeAccessLink : null;
   const warnings: string[] = [];
+  if (sandbox) warnings.push(`Sandbox: everything here is throwaway (${sandbox.home}) and is deleted when this terminal closes.`);
   if (!readout) {
     // `--status`, internal launches and pipes keep the plain, parseable records.
     console.log(`${reused ? "reusing" : "started"} Frizz for ${workspace.root}`);

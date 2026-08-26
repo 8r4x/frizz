@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { homedir, hostname as osHostname, networkInterfaces } from "node:os";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, hostname as osHostname, networkInterfaces, tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
@@ -70,6 +70,8 @@ export interface CliOptions {
   /** Stream the full event feed to the terminal instead of the compact readout. */
   debug: boolean;
   port?: number;
+  /** `--sandbox`: a disposable Frizz — throwaway home and project, own port, deleted on exit. */
+  sandbox: boolean;
   /** `--link`: ask the ALREADY-RUNNING board for a fresh single-use access link, then exit. */
   link: boolean;
   /** `--sessions`: list the devices holding a session on the already-running board, then exit. */
@@ -229,6 +231,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     "--stop",
     "--status",
     "--link",
+    "--sandbox",
     "--sessions",
     "--sign-out",
     "--help",
@@ -256,6 +259,14 @@ export function parseCliArgs(argv: string[]): CliOptions {
     throw new Error("--detach is no longer available; frizz-dev always runs in the foreground");
   if (args.has("--app") && args.has("--no-app"))
     throw new Error("choose either --app or --no-app");
+  // A sandbox is a FRESH board by definition, so the flags that query the running one have nothing
+  // to ask. Refusing beats querying a board that cannot exist and reporting it missing.
+  if (args.has("--sandbox")) {
+    for (const query of ["--stop", "--status", "--link", "--sessions", "--sign-out"]) {
+      if (args.has(query) || argv.some((arg) => arg.startsWith(`${query}=`)))
+        throw new Error(`${query} asks the running board, and --sandbox starts a fresh disposable one — run ${query} without --sandbox`);
+    }
+  }
   return {
     noApp: args.has("--no-app"),
     appMode: args.has("--app"),
@@ -263,6 +274,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     foreground: true,
     stop: args.has("--stop"),
     link: args.has("--link"),
+    sandbox: args.has("--sandbox"),
     sessions: args.has("--sessions"),
     ...(rawSignOut !== undefined ? { signOut: rawSignOut } : {}),
     status: args.has("--status"),
@@ -285,6 +297,40 @@ export function boardAddress(url: string): string {
   return url.includes("?") || url.endsWith("/") ? url : `${url}/`;
 }
 
+/**
+ * Everything a sandbox launch needs, made before anything reads the home directory: a throwaway HOME
+ * (so the registry, the lock, the session key and the saved remote setup are all disposable copies), a
+ * throwaway repository to be the project, and the cwd moved into it. The caller deletes the home on
+ * exit; the state root, logs and the minted project id all live under it.
+ */
+export function prepareSandbox(env: NodeJS.ProcessEnv = process.env): { home: string; project: string } {
+  const home = mkdtempSync(join(tmpdir(), "frizz-sandbox-"));
+  // POSIX homedir() reads $HOME and Windows reads USERPROFILE, both at call time — this is the whole lever.
+  env.HOME = home;
+  env.USERPROFILE = home;
+  const project = join(home, "sandbox");
+  mkdirSync(project, { recursive: true });
+  writeFileSync(join(project, "README.md"), "# frizz sandbox\n\nA throwaway project; everything here is deleted when the sandbox exits.\n");
+  try {
+    // A repository is adopted on sight (resolveLaunchIntent), so a git repo is the cheapest way to be
+    // a project without touching any real registry.
+    execFileSync("git", ["init", "-q"], { cwd: project, stdio: "ignore" });
+  } catch {
+    throw new Error("--sandbox mints a throwaway git repository and git is not available — install git, or play in a repo of your own with a temp HOME");
+  }
+  process.chdir(project);
+  return { home, project };
+}
+
+/** Best-effort: a sandbox that fails to delete leaves only a temp dir the OS will reap. */
+export function cleanupSandbox(home: string): void {
+  try {
+    rmSync(home, { recursive: true, force: true });
+  } catch {
+    // Shutdown path; the temp dir is the OS's problem now.
+  }
+}
+
 export function helpText(command = "frizz-dev"): string {
   return `Frizz source launcher
 
@@ -300,6 +346,8 @@ Options:
   --foreground           accepted for compatibility; ${command} always runs in the foreground
   --dev                  explicitly use the unsafe source watcher and Vite/HMR, not an artifact
   --port <port>          request a fixed port for a new workspace server
+  --sandbox              a disposable Frizz to try things in: throwaway home and project, its
+                         own port, deleted when this terminal closes
   --link                 print a fresh single-use access link for the already-running board
   --sessions             list the devices holding a session on the already-running board
   --sign-out <id|all>    revoke one device's session, or every one of them
