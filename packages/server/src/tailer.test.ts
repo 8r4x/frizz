@@ -6,6 +6,7 @@ import { dirname, join } from "node:path"
 import { createStorage, type Storage, type SessionRow } from "./storage.ts"
 import { Bus } from "./bus.ts"
 import type { ServerEvent } from "@frizz/shared"
+import { AwaitingHint } from "@frizz/shared"
 import { permMarkerPath, type Project } from "./project.ts"
 import { parseLine, applyRecord, applyEvent, computeTurn, newTailState, createTailer, defaultBrokerDaemonAlive, hasQuestionBlock, isClaudeAuthErrorText, isRealUserMessage, parseSignalFence, markerDecision, unwrapShellCommand, FOREIGN_FRESH_MS } from "./tailer.ts"
 import { claudeBrokerRecordPath } from "./backend/claude-broker-host.ts"
@@ -3472,6 +3473,25 @@ test("parseSignalFence: a `---` line ends the frontmatter and everything after i
   // The prose survives INTACT — blank line and list markers included. Flattening it is what the old
   // one-line `reason:` did.
   assert.equal(parsed?.body, "Known-answer control on the detector.\n\n- angular must report clean\n- puppeteer must be flagged")
+})
+
+// `title:` — the resting card's heading in the worker's own words (2026-08-26). It rides the frontmatter
+// as an ordinary scalar beside `for:`, which is what puts it on `FenceView.hints` and therefore on the
+// ThreadView the card reads. It is capped HERE, at the parse, so the hint on the wire is already the
+// string the card draws and no surface can render a longer one.
+test("parseSignalFence: a title: rides the frontmatter, trimmed to the cap", () => {
+  const parsed = parseSignalFence("```awaiting\nagents: [toolu_01A]\nfor: 2h\ntitle: Three-platform CI run\n---\nThe macOS leg is the flaky one.\n```")
+  assert.deepEqual(parsed?.hints, [
+    { kind: "agent", value: "toolu_01A" },
+    { kind: "for", value: "2h" },
+    { kind: "title", value: "Three-platform CI run" },
+  ])
+  assert.equal(parsed?.body, "The macOS leg is the flaky one.", "a title is structure, never prose")
+  // Over the cap ⇒ trimmed on a word boundary, at the parse rather than at the card.
+  const long = parseSignalFence("```awaiting\nfor: 2h\ntitle: Waiting on the three-platform CI run before porting the v2 drivers\n```")
+  assert.deepEqual(long?.hints.find((h) => h.kind === "title"), { kind: "title", value: "Waiting on the three-platform CI run…" })
+  // …and the wire schema takes the kind, which is what carries it to the client at all.
+  assert.deepEqual(AwaitingHint.parse({ kind: "title", value: "Three-platform CI run" }), { kind: "title", value: "Three-platform CI run" })
 })
 
 // With no `---` the whole fence is frontmatter — and `reason:` is now RETIRED there. It was the last prose
