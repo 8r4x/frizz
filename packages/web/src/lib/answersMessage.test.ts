@@ -236,3 +236,36 @@ test("the buried form pairs from its OWN quoted questions, ignoring the lookback
   assert.equal(paired?.[1].question, "Newer ask — ship it?")
   assert.equal(paired?.[1].answer, "A. Yes")
 })
+
+// The clock note frizz appends to a late human reply (humanGapNote) lives in the worker's record and so
+// in `text`; the server projects it away into `displayText`. The pairing must read the projection, or
+// the note rides into the card as a continuation line of the last answer — which is exactly what the
+// maintainer saw (2026-08-25) under their chosen option.
+const GAP_NOTE = "\n\n⏱ Frizz: the message above arrived 4h9m after your last one. It is now 2026-08-25 16:39."
+const userWithNote = (text: string): MsgLike => ({ role: "user", text: text + GAP_NOTE, displayText: text })
+
+test("an answers turn carrying frizz's clock note pairs from displayText — the note never reaches the card", () => {
+  const ask = "Auto-charging means the run gate must accept a subscription the customer never clicked through. How wide should that opening be?\n- A. Wide\n- B. Same column, but the gate honours it only for rows stamped before a hard cutoff date"
+  const msgs = [qmsg(ask), userWithNote("Answers:\n1. B. Same column, but the gate honours it only for rows stamped before a hard cutoff date")]
+  const paired = pairAnswersMessage(msgs, 1)
+  assert.equal(paired?.length, 1)
+  assert.equal(paired?.[0].answer, "B. Same column, but the gate honours it only for rows stamped before a hard cutoff date")
+  assert.equal(paired?.[0].question, "Auto-charging means the run gate must accept a subscription the customer never clicked through. How wide should that opening be?")
+  // Negative control: the raw record DOES carry the note, and reading it would have leaked it.
+  assert.match(msgs[1].text, /It is now 2026-08-25 16:39\.$/)
+  assert.equal(parseAnswersMessage(msgs[1].text)?.[0].answer.includes("It is now"), true)
+})
+
+test("the buried form and the legacy bare-chip form read displayText the same way", () => {
+  const buried = pairAnswersMessage([userWithNote('Answers to earlier questions:\n1. “Ship it?” → A. Yes')], 0)
+  assert.deepEqual(buried, [{ n: 1, answer: "A. Yes", question: "Ship it?" }])
+  // A bare chip click is recovered by BYTE-IDENTITY with an option label; with the note on the raw
+  // text it matched nothing and the answer fell back to a plain bubble.
+  const chip = pairAnswersMessage([qmsg("Pick?\n- A. x\n- B. y"), userWithNote("B. y")], 1)
+  assert.deepEqual(chip, [{ n: 1, answer: "B. y", question: "Pick?" }])
+})
+
+test("a user turn with no projection still reads its raw text", () => {
+  const paired = pairAnswersMessage([qmsg("Pick?\n- A. x"), user("Answers:\n1. A. x")], 1)
+  assert.equal(paired?.[0].answer, "A. x")
+})

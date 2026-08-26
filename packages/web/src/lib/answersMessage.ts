@@ -119,13 +119,27 @@ export function parseAnswersCard(text: string): PairedAnswer[] | null {
   return parseBuriedAnswersMessage(text) ?? parseAnswersMessage(text)
 }
 
-// The minimal structural slice of a transcript message the pairing needs — role/kind/text only, so the
-// function stays pure and testable without the shared schema (TranscriptMessage satisfies it).
+// The minimal structural slice of a transcript message the pairing needs — role/kind/text plus the
+// server's display projection — so the function stays pure and testable without the shared schema
+// (TranscriptMessage satisfies it).
 export interface MsgLike {
   role: string
   kind?: string
   text: string
+  displayText?: string
 }
+
+// THE HUMAN'S TURN IS READ THROUGH ITS DISPLAY PROJECTION, never the raw record. The raw `text` of an
+// answers turn is not only what the human typed: frizz appends its own machine-facing tail to the copy
+// the worker receives — the clock note (`⏱ Frizz: the message above arrived 4h9m after your last one…`)
+// on any reply landing after a long gap — and the transcript is read from the WORKER's record, so that
+// tail is part of `text`. The server strips it into `displayText` (see transcript.ts userDisplayText),
+// and the plain bubble renders that. This pairing used to read `text` instead, so the numbered parser
+// took the note as a continuation line of the LAST answer and the Answers card printed it under the
+// human's chosen option, in their own card (reported 2026-08-25: "the freaking time stamps are still
+// showing up in my question answers"). The ask blocks of the ASSISTANT turn keep reading `text` — an
+// assistant record never carries a projection, and that is the text the human answered.
+const answersText = (m: MsgLike): string => m.displayText ?? m.text
 
 // The ```question blocks of the NEAREST EARLIER ask, looking backward from `index` with the same skip
 // discipline as useLiveAnswering: kind:"event"/"reasoning" punctuation and text-less (tool-only) turns
@@ -181,11 +195,12 @@ export function pairAnswersMessage(messages: readonly MsgLike[], index: number):
   if (!msg || msg.role !== "user" || msg.kind === "event") return null
   // The buried form already quotes each question — take it verbatim and skip the lookback entirely
   // (its rows can answer several different messages, which the numbered correlation below can't model).
-  const buried = parseBuriedAnswersMessage(msg.text)
+  const text = answersText(msg)
+  const buried = parseBuriedAnswersMessage(text)
   if (buried) return buried
-  const answers = parseAnswersMessage(msg.text)
+  const answers = parseAnswersMessage(text)
   const blocks = nearestAskBlocks(messages, index)
-  if (!answers) return blocks ? pairBareChipAnswer(msg.text, blocks) : null
+  if (!answers) return blocks ? pairBareChipAnswer(text, blocks) : null
   if (!blocks) return answers
   // Sanity: numbers must be strictly increasing and within the block range (sendAnswers guarantees
   // both; hand-typed text that violates them gets the safe numbered fallback).
