@@ -32,7 +32,6 @@
         <span>Frizz</span>
       </a>
       <nav class="top-nav" aria-label="Links">
-        <a href="/docs">Docs</a>
         <a class="ext" href="https://github.com/colinhacks/frizz">GitHub</a>
         <a class="ext" href="https://www.npmjs.com/package/frizz">npm</a>
       </nav>
@@ -122,6 +121,29 @@
           <li>Not a model. Frizz drives the CLIs you already have signed in, on your subscription.</li>
           <li>Not a cloud. No account, no telemetry; the server binds to localhost.</li>
           <li>Not a workflow. No worktrees, branches, or build steps behind your back.</li>
+        </ul>
+
+        <h2 id="remote-access">Remote access</h2>
+        <p>Frizz binds <code>127.0.0.1</code>. To reach a board from a phone or another machine, press <strong>R</strong> in the terminal running it and pick how:</p>
+
+        <pre class="term"><code>  Reach this board from anywhere
+
+  <span class="prompt">❯</span> frizz.sh name
+    Cloudflare Tunnel
+    Tailscale
+    Something else
+    Off                 (current)</code></pre>
+
+        <p>The walkthrough checks what each one needs before it accepts your answer, and the choice is remembered, so a plain <code>npx frizz</code> serves it from then on.</p>
+
+        <p>Whichever you pick, <strong>Frizz does the authenticating</strong> — a tunnel or proxy only adds TLS and a hostname. Every request and every socket has to carry a session, and a device that has not redeemed a single-use sign-in link is refused no matter what sits in front. Press <code>L</code> for a fresh link. <code>npx frizz --sessions</code> lists the devices holding one; <code>--sign-out</code> revokes a device you no longer have.</p>
+
+        <ul>
+          <li><a href="/docs/frizz-sh">A name on frizz.sh</a> — needs a GitHub account, nothing else.</li>
+          <li><a href="/docs/cloudflare-tunnel">Cloudflare Tunnel</a> — a domain you own on Cloudflare.</li>
+          <li><a href="/docs/tailscale">Tailscale</a> — your tailnet, reachable by your devices only.</li>
+          <li><a href="/docs/ssh">SSH port forwarding</a> — one session, nothing exposed.</li>
+          <li><a href="/docs/reverse-proxy">Any reverse proxy</a> — Caddy, nginx, or whatever you run.</li>
         </ul>
 
         <h2>Docs</h2>

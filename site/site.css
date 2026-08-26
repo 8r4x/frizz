@@ -38,7 +38,9 @@ a:hover { text-decoration-color: var(--accent); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
 code, pre { font-family: var(--mono); }
 p code, li code { font-size: 0.875em; background: var(--panel); border: 1px solid var(--border); border-radius: 5px; padding: 0.08em 0.36em; white-space: nowrap; }
-p { margin: 0 0 1em; }
+/* ONE base rhythm. 1em resolved to 15px here while lists and code blocks used 16, which read
+   as jitter rather than as a decision. */
+p { margin: 0 0 20px; }
 
 /* Top bar. */
 .top {
@@ -67,24 +69,35 @@ main { padding: 0 var(--gutter) 40px; }
 /* JS sets the dash to the path length and lets the transition unroll it — a single stroke, drawn once. */
 #fff-path { transition: stroke-dashoffset 1.7s cubic-bezier(0.55, 0, 0.2, 1) 0.12s; }
 h1, h2, h3 { font-family: var(--mono); font-weight: 500; line-height: 1.25; margin: 0; }
-h1 { font-size: 40px; letter-spacing: -0.03em; margin-bottom: 8px; }
+h1 { font-size: 40px; letter-spacing: -0.03em; margin-bottom: 20px; }
 .lede { font-size: 17px; color: var(--fg-2); margin-bottom: 20px; }
 /* GitHub-markdown H2: a hairline under the heading, generous space above. */
-h2 { font-size: 22px; letter-spacing: -0.01em; padding-bottom: 8px; border-bottom: 1px solid var(--border); margin: 72px 0 16px; }
-h3 { font-size: 17px; margin-bottom: 8px; }
-.doc ul { margin: 0 0 1.4em; padding-left: 1.4em; }
+/*
+ * ONE SCALE, and the ratios are the point.
+ *
+ * A heading belongs to what FOLLOWS it, so the space above is larger than the space below — but only
+ * about twice, not nine times. It was 8px under a 40px h1 and 72px above every h2, which read as a
+ * tagline glued to the title and a chasm before each section. The h2 already carries a rule; the rule
+ * is what separates sections, and the margin only has to give it air. GitHub's markdown, which the
+ * rest of this file mirrors, uses 24px there.
+ *
+ * h3 had NO margin-top at all, so a sub-heading sat directly against the paragraph above it.
+ */
+h2 { font-size: 22px; letter-spacing: -0.01em; padding-bottom: 8px; border-bottom: 1px solid var(--border); margin: 44px 0 20px; }
+h3 { font-size: 17px; margin: 28px 0 8px; }
+.doc ul { margin: 0 0 20px; padding-left: 1.4em; }
 .doc li { margin: 0.3em 0; }
 .doc li::marker { color: var(--muted); }
 
 .term {
-  margin: 4px 0 16px; padding: 14px 18px;
+  margin: 0 0 20px; padding: 14px 18px;
   background: var(--panel); border: 1px solid var(--border-strong); border-radius: 8px;
   font-size: 15px; line-height: 1.5; overflow-x: auto; white-space: pre;
 }
 .term .prompt { color: var(--accent); }
 /* The install row: the command block and its copy button share one height; the button reads as a
    quiet control, and its label is the receipt ("Copied"). */
-.install { display: flex; align-items: stretch; gap: 10px; margin: 4px 0 16px; }
+.install { display: flex; align-items: stretch; gap: 10px; margin: 0 0 20px; }
 .install .term { flex: 1; margin: 0; }
 .copy {
   font: 500 13px/1 var(--mono); color: var(--fg-2);
@@ -135,11 +148,11 @@ h3 { font-size: 17px; margin-bottom: 8px; }
    reset because a blockquote's UA default is 40px on each side, which would indent it past the
    measure and lose the rule against the text it belongs to. */
 .callout {
-  margin: 20px 0; padding: 2px 0 2px 18px;
+  margin: 0 0 20px; padding: 2px 0 2px 18px;
   border-left: 2px solid var(--accent); color: var(--fg-2);
 }
 .callout p { margin: 0; }
-.doc table { width: 100%; border-collapse: collapse; margin: 4px 0 28px; font-size: 14px; }
+.doc table { width: 100%; border-collapse: collapse; margin: 0 0 20px; font-size: 14px; }
 .doc th, .doc td { text-align: left; padding: 9px 28px 9px 0; border-bottom: 1px solid var(--border); vertical-align: top; }
 .doc th { color: var(--muted); font-weight: 500; }
 .doc tbody tr:last-child td { border-bottom: none; }

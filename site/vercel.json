@@ -23,6 +23,11 @@
   ],
   "redirects": [
     {
+      "source": "/docs",
+      "destination": "/#remote-access",
+      "permanent": false
+    },
+    {
       "source": "/(.*)",
       "has": [
         {
