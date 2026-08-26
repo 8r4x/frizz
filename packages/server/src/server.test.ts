@@ -22,7 +22,6 @@ import { createCodexBackend } from "./backend/codex.ts"
 import type { CodexAppServerBridge } from "./backend/codex-app-server.ts"
 import type { ClaudeAgentBrokerBridge } from "./backend/claude-agent-broker-bridge.ts"
 import type { AgentBackend } from "./backend/types.ts"
-import { chromeDevtoolsMcpMount } from "./backend/types.ts"
 import type { PaneIdentity } from "./adoption-recovery.ts"
 
 function tmp(prefix: string) {
@@ -285,13 +284,12 @@ test("buildClaudeCommand: pins session-id, permission mode, optional model/effor
     claudeBin: "sleep",
     workerPrompt: "", // disabled for the argv-shape assertion
   })
-  // Every dispatch mounts chrome-devtools (+ its equals-form pre-approval) — see claudeMcpFlags. What
-  // it mounts is frizz's LAZY PROXY, not the upstream server; chromeDevtoolsMcpSpec() is the one
-  // builder both backends render, so this asserts the argv POSITION of the flags rather than restating
-  // the spec (which backend/browser-mcp.test.ts pins on its own).
-  const CDT_CFG = JSON.stringify({ mcpServers: { "chrome-devtools": chromeDevtoolsMcpMount() } })
-  const CDT_FLAGS = ["--mcp-config", CDT_CFG, "--allowedTools=mcp__chrome-devtools", "--disallowedTools=AskUserQuestion"]
-  assert.deepEqual(base, ["sleep", "--session-id", "uuid-1", "--permission-mode", "acceptEdits", ...CDT_FLAGS, "hello"])
+  // NO --mcp-config / --allowedTools here: these dispatches carry no frizz-MCP descriptor, and frizz
+  // mounts nothing else (the always-on chrome-devtools mount was removed 2026-08-26 — dispatch.ts).
+  // Empty flags would be worse than absent ones, so claudeMcpFlags emits neither; dispatch.test.ts
+  // pins that, and this pins the argv POSITION the flags occupy when a descriptor IS supplied.
+  const TAIL_FLAGS = ["--disallowedTools=AskUserQuestion"]
+  assert.deepEqual(base, ["sleep", "--session-id", "uuid-1", "--permission-mode", "acceptEdits", ...TAIL_FLAGS, "hello"])
 
   const full = buildClaudeCommand({
     sessionId: "uuid-2",
@@ -315,18 +313,18 @@ test("buildClaudeCommand: pins session-id, permission mode, optional model/effor
     "--effort",
     "high",
   ])
-  // After the fixed head come the always-mounted MCP flags, then the system-prompt file flag.
-  assert.deepEqual(full.slice(9, 9 + CDT_FLAGS.length), CDT_FLAGS)
-  assert.equal(full[9 + CDT_FLAGS.length], "--append-system-prompt-file")
+  // After the fixed head comes the disallowed-tools flag, then the system-prompt file flag.
+  assert.deepEqual(full.slice(9, 9 + TAIL_FLAGS.length), TAIL_FLAGS)
+  assert.equal(full[9 + TAIL_FLAGS.length], "--append-system-prompt-file")
   assert.equal(systemPromptOf(full), "WORKER_NORMS")
   assert.equal(full[full.length - 1], "go")
 
   // A worker is NEVER spawned in interactive plan mode (no coherent headless semantics + softlock):
   // `plan` is coerced to the safe default `auto` in the argv, on both dispatch and resume.
   const planned = buildClaudeCommand({ sessionId: "u", permissionMode: "plan", prompt: "p", workerPrompt: "" })
-  assert.deepEqual(planned, ["claude", "--session-id", "u", "--permission-mode", "auto", ...CDT_FLAGS, "p"])
+  assert.deepEqual(planned, ["claude", "--session-id", "u", "--permission-mode", "auto", ...TAIL_FLAGS, "p"])
   const rplan = buildClaudeResumeCommand({ sessionId: "s", permissionMode: "plan", message: "m", workerPrompt: "" })
-  assert.deepEqual(rplan, ["claude", "--permission-mode", "auto", ...CDT_FLAGS, "-r", "s", "m"])
+  assert.deepEqual(rplan, ["claude", "--permission-mode", "auto", ...TAIL_FLAGS, "-r", "s", "m"])
 
   // Default (no injection): the shipped WORKER_PROMPT.md rides --append-system-prompt-file.
   const dflt = buildClaudeCommand({ sessionId: "u", permissionMode: "auto", prompt: "p" })
@@ -336,8 +334,7 @@ test("buildClaudeCommand: pins session-id, permission mode, optional model/effor
 
 test("buildClaudeResumeCommand: -r <sessionId> with the follow-up + worker system prompt", () => {
   const cmd = buildClaudeResumeCommand({ sessionId: "sid", permissionMode: "acceptEdits", message: "more", workerPrompt: "" })
-  const RESUME_CDT_CFG = JSON.stringify({ mcpServers: { "chrome-devtools": chromeDevtoolsMcpMount() } })
-  assert.deepEqual(cmd, ["claude", "--permission-mode", "acceptEdits", "--mcp-config", RESUME_CDT_CFG, "--allowedTools=mcp__chrome-devtools", "--disallowedTools=AskUserQuestion", "-r", "sid", "more"])
+  assert.deepEqual(cmd, ["claude", "--permission-mode", "acceptEdits", "--disallowedTools=AskUserQuestion", "-r", "sid", "more"])
   // Resume re-carries the worker norms (system prompt is rebuilt per invocation) via the file flag.
   const dflt = buildClaudeResumeCommand({ sessionId: "sid", permissionMode: "auto", message: "m" })
   assert.ok(dflt.includes("--append-system-prompt-file"))

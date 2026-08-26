@@ -12,7 +12,9 @@
 // Narrowing it is the same hazard pointed the other way: a file the list still names but the tree no
 // longer holds fails NOTHING until `prepack` runs, so the break surfaces at the release. Reverting
 // the Stop hook left `stop-fence.mjs` and `transcript-usage.mjs` here after both were deleted, and
-// the tree could not be packed until this list caught up. When a listed file goes, it goes here too.
+// the tree could not be packed until this list caught up. When a listed file goes, it goes here too —
+// as `bin/browser-mcp.mjs` + `bin/browser-mcp-tools.json` did on 2026-08-26 with the browser mount
+// they served (packages/server/src/backend/types.ts).
 //
 // `scripts/*.mjs` imports this .ts directly, as publish-manifest.mjs already does with its own half.
 import { existsSync } from "node:fs";
@@ -28,13 +30,6 @@ export const WORKER_PLUGIN_REQUIRED_FILES = [
   "cc-worker/hooks/agent-bind.mjs",
   "cc-worker/bin/frizz",
   "cc-worker/bin/frizz-update",
-  // The lazy browser-MCP proxy + the tool-schema snapshot it answers `tools/list` from. Both are
-  // required because losing either is a SILENT downgrade, not a failure: with no proxy the mount
-  // degrades back to `npx -y chrome-devtools-mcp` (the 159 MB-per-worker shape this replaced), and
-  // with no snapshot the first worker on a machine pays a live install+boot inside its client's MCP
-  // startup window. See packages/server/src/backend/types.ts.
-  "cc-worker/bin/browser-mcp.mjs",
-  "cc-worker/bin/browser-mcp-tools.json",
   "board/config.mjs",
   "board/agent-bindings.mjs",
   "board/index.mjs",

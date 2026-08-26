@@ -234,10 +234,9 @@ export function queryCodexRateLimits(
     let child: ReturnType<typeof spawn>
     try {
       // DELIBERATELY BARE — no codexAppServerArgv here. This is a short-lived read of the quota
-      // endpoint, not a worker: mounting frizz's MCP servers would make every quota poll fork a
-      // browser-MCP and a frizz-MCP process for tools nothing in this path can call. (Cheaper than it
-      // was — the browser mount is a lazy proxy now, not an `npx chrome-devtools-mcp` launch — but a
-      // poll that spawns two node processes it never speaks to is still the wrong shape.)
+      // endpoint, not a worker: mounting frizz's MCP server would make every quota poll fork a
+      // frizz-MCP process for tools nothing in this path can call, and drag in whatever servers the
+      // operator's own codex config mounts alongside it.
       child = spawn(codexBin, ["app-server"], {
         stdio: ["pipe", "pipe", "ignore"],
         env: { ...process.env, CODEX_HOME: codexHome },

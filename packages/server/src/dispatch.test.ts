@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 import { DISPATCH_TASK_BANNER_MARKER } from "@frizz/shared"
 import { buildClaudeCommand, loadWorkerPrompt, composePrompt, monitorScriptsDir, resolveWorkerPluginDir, scratchpadOrientation, workerPluginDir, frizzConfigBlock, workerDispatchPermission, WORKER_DISPATCH_PERMISSION } from "./dispatch.ts"
 import { parseTranscript } from "./transcript.ts"
-import { CHROME_DEVTOOLS_MCP, FRIZZ_MCP, chromeDevtoolsMcpMount } from "./backend/types.ts"
+import { FRIZZ_MCP } from "./backend/types.ts"
 
 // ---- Backend-aware worker contract (worker-contract-backend-aware) ----
 // loadWorkerPrompt(kind) delegates to buildWorkerPrompt in workerPrompt.ts (a single compiled-in TS
@@ -42,7 +42,7 @@ test("Claude dispatch supplies the discovered worker plugin via --plugin-dir", (
   assert.deepEqual(argv.slice(argv.indexOf("--plugin-dir"), argv.indexOf("--plugin-dir") + 2), ["--plugin-dir", plugin])
 })
 
-test("Claude dispatch mounts chrome-devtools + the unified frizz MCP server and pre-approves both", () => {
+test("Claude dispatch mounts the unified frizz MCP server, alone, and pre-approves it", () => {
   const argv = buildClaudeCommand({
     sessionId: "mcp-dispatch",
     permissionMode: "auto",
@@ -53,9 +53,10 @@ test("Claude dispatch mounts chrome-devtools + the unified frizz MCP server and 
   const cfgRaw = argv[argv.indexOf("--mcp-config") + 1]
   assert.ok(cfgRaw, "argv must carry an inline --mcp-config")
   const cfg = JSON.parse(cfgRaw)
-  // Chrome DevTools rides EVERY dispatch (runtime-gate browser QA, parity with the codex `-c`
-  // injection — both render the canonical chromeDevtoolsMcpSpec()).
-  assert.deepEqual(cfg.mcpServers[CHROME_DEVTOOLS_MCP.name], chromeDevtoolsMcpMount())
+  // `frizz` is the ONLY server frizz injects. A `chrome-devtools` mount rode every dispatch until
+  // 2026-08-26; it cost ~6,400 prefix tokens of tool schema on a worker that mostly never opened a
+  // page, and a browser is the project's to bring (a `.mcp.json`, or `claude mcp add --scope user`).
+  assert.deepEqual(Object.keys(cfg.mcpServers), [FRIZZ_MCP.name])
   assert.deepEqual(cfg.mcpServers[FRIZZ_MCP.name], {
     command: process.execPath, // absolute node path, not bare "node" (worker PATH-independence)
     args: ["/abs/plugin/bin/frizz-mcp.mjs"],
@@ -69,7 +70,9 @@ test("Claude dispatch mounts chrome-devtools + the unified frizz MCP server and 
   // EQUALS-form token: --allowedTools is variadic, so a space-separated value could swallow a
   // following positional (the prompt) — the equals form binds exactly one token. BOTH rules are
   // SERVER-level, so a tool added to either server needs no allow-list edit.
-  assert.ok(argv.includes("--allowedTools=mcp__chrome-devtools,mcp__frizz"))
+  assert.ok(argv.includes("--allowedTools=mcp__frizz"))
+  // Nothing in the argv reaches for a browser, on any flag.
+  assert.ok(!argv.some((a) => a.includes("chrome-devtools")), "frizz must inject no browser")
   // The prompt stays the trailing positional (flags never displace it).
   assert.equal(argv[argv.length - 1], "test")
 })
@@ -99,11 +102,14 @@ test("Claude dispatch stamps the singleton's lock path and the worker's OWN proj
   })
 })
 
-test("Claude dispatch still mounts + pre-approves chrome-devtools when no frizz-MCP descriptor is supplied", () => {
+test("Claude dispatch mounts NOTHING when no frizz-MCP descriptor resolved — no empty flags", () => {
   const argv = buildClaudeCommand({ sessionId: "no-mcp", permissionMode: "auto", prompt: "test", workerPrompt: "" })
-  const cfg = JSON.parse(argv[argv.indexOf("--mcp-config") + 1])
-  assert.deepEqual(Object.keys(cfg.mcpServers), [CHROME_DEVTOOLS_MCP.name])
-  assert.ok(argv.includes("--allowedTools=mcp__chrome-devtools"))
+  // With the browser mount gone this is a real state, and the flags must be ABSENT rather than empty:
+  // `--allowedTools=` hands the CLI one rule that is the empty string, which is not the same as no
+  // rule at all. The worker still sees whatever the project's own `.mcp.json` configured — frizz adds
+  // to the discovered servers, it does not replace them (no `--strict-mcp-config`).
+  assert.ok(!argv.includes("--mcp-config"))
+  assert.ok(!argv.some((a) => a.startsWith("--allowedTools")))
 })
 
 test("Claude worker surfaces share the canonical per-session scratch DIRECTORY path", () => {

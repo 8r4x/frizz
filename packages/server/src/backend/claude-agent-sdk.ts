@@ -100,8 +100,8 @@ export interface ClaudeQueryStartOptions {
   effort?: string
   // The frizz WORKER ENVIRONMENT — the SDK equivalents of the argv path's --plugin-dir / --mcp-config /
   // --allowedTools. Without these a broker session is a bare SDK worker: no frizz:<model>-<effort>
-  // sub-agent profiles, no frizz MCP (spawn_thread), no chrome-devtools (the browser gate), and none of
-  // the cc-worker hooks (deny-ask/deny-plan/agent-bind). `pluginDir` loads the local cc-worker plugin
+  // sub-agent profiles, no frizz MCP (spawn_thread), and none of the cc-worker hooks
+  // (deny-ask/deny-plan/agent-bind). `pluginDir` loads the local cc-worker plugin
   // (agents + hooks); `mcpServers` mounts the stdio MCP servers; `allowedTools` pre-approves them so a
   // headless worker never blocks on a tool it has nobody to approve.
   pluginDir?: string
@@ -908,11 +908,14 @@ function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptio
       // `user,project,local` reported it applied.
       settingSources: options.settingSources ?? ["user", "project", "local"],
       // The frizz worker environment (see ClaudeQueryStartOptions): load the local cc-worker plugin so a
-      // broker session gets the frizz sub-agent profiles + hooks, mount the MCP servers (frizz +
-      // chrome-devtools), and pre-approve them.
+      // broker session gets the frizz sub-agent profiles + hooks, mount the frizz MCP server, and
+      // pre-approve it. EMPTY is skipped, not passed: since frizz stopped mounting a browser (2026-08-26)
+      // a resolved-nothing worker env is a real state, and `{}`/`[]` are truthy — handing the SDK an
+      // empty allowlist is not the same as handing it none. The project's own `.mcp.json` servers are
+      // loaded by settingSources, independently of this.
       ...(options.pluginDir ? { plugins: [{ type: "local" as const, path: options.pluginDir }] } : {}),
-      ...(options.mcpServers ? { mcpServers: options.mcpServers } : {}),
-      ...(options.allowedTools ? { allowedTools: options.allowedTools } : {}),
+      ...(options.mcpServers && Object.keys(options.mcpServers).length > 0 ? { mcpServers: options.mcpServers } : {}),
+      ...(options.allowedTools?.length ? { allowedTools: options.allowedTools } : {}),
       ...(options.disallowedTools?.length ? { disallowedTools: [...options.disallowedTools] } : {}),
       persistSession: options.persistSession ?? false,
       // Keep Claude's default (preset) system prompt and APPEND the frizz worker contract, the SDK

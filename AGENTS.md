@@ -31,7 +31,8 @@ stack rules:
   the multi-project/tenant case, and seed real state through its own RPC surface.
 - **`headless-browser`** — take the shot without putting a window on the maintainer's screen
   (`scripts/shot.mjs` is the DEFAULT; Chrome DevTools MCP second, and only because this repo forces it
-  headless), which states and widths to capture, browser process hygiene (one owned instance per task;
+  headless through its own `.mcp.json` — Frizz mounts no browser into the workers it dispatches),
+  which states and widths to capture, browser process hygiene (one owned instance per task;
   never a global close or a broad `pkill`), and how to embed evidence so Frizz renders it inline.
 - **`real-subsystem-harness`** — for behavior no browser can reach: the broker socket, a pty, spawn/exec
   paths, migrations, a detached daemon's environment. Real resource, real function, negative control.

@@ -71,8 +71,11 @@ for (let i=0;i<40;i++){ await sleep(3000)
 ```
 
 For a worker-environment change, dispatch a prompt that uses the real surface — a `frizz:haiku` sub-agent,
-the frizz MCP (`mcp__frizz__spawn_thread`), chrome-devtools — and assert the sub-agent's marker token routes
-back. A plain "write a file" proves almost nothing.
+the frizz MCP (`mcp__frizz__spawn_thread`), the cc-worker hooks — and assert the sub-agent's marker token
+routes back. A plain "write a file" proves almost nothing. Frizz mounts **no browser** into a worker (since
+2026-08-26 the only server it injects is `frizz`), so a dispatched worker has chrome-devtools tools only
+when the project it runs in brings them — this repo does, through its own `.mcp.json`; a throwaway repo
+does not. If your change is about the worker environment, assert which of the two you expect.
 
 ### 2b. A HAPPY-PATH PROMPT IS NOT A TEST — drive the ugly shapes
 
@@ -105,7 +108,8 @@ record. A thread that dies quietly is the failure mode; a wrong answer is a much
 ### 3. Screenshot in a real browser tab
 
 The `chrome-devtools` MCP is the reliable path here (`scripts/shot.mjs`'s puppeteer Chrome tends to hang in
-a worker env). `new_page` the proxy url → `wait_for` the thread text → `take_screenshot`. **Write the shot
+a worker env). It is YOUR tool, from this repo's `.mcp.json` — not something Frizz put in the worker you
+dispatched. `new_page` the proxy url → `wait_for` the thread text → `take_screenshot`. **Write the shot
 under a chrome workspace root** (e.g. the frizz repo dir), NOT `/tmp` (access denied); then move it to a
 trusted embed root (`~/Screenshots`, the project dir, or `os.tmpdir()`) for the handoff and clean the repo.
 The board only renders threads when the project has a `.frizz/` dir — `mkdir -p $REPO/.frizz/threads` if it's

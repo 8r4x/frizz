@@ -9,10 +9,12 @@ import { fileURLToPath } from "node:url"
 // artifact path wins.
 //
 // This lives in its own leaf module (node builtins only) rather than in dispatch.ts, where it was born
-// and from which it is still re-exported: backend/types.ts needs it to resolve `bin/browser-mcp.mjs`
-// for BOTH backends, and dispatch.ts imports backend/types.ts, so keeping it there would be a cycle.
-// The ancestor walk is unaffected by the move — this file sits in the same directory dispatch.ts does,
-// so the default `import.meta.url` starts from the same place.
+// and from which it is still re-exported. The cycle that split it out is gone: backend/types.ts needed
+// it to resolve `bin/browser-mcp.mjs` for the always-mounted browser, and dispatch.ts imports
+// backend/types.ts. The browser mount was removed 2026-08-26 and dispatch.ts is now the only importer,
+// so the leaf could fold back — it stays because the split costs nothing and every caller reaches for
+// the dispatch.ts re-export. The ancestor walk is unaffected either way: this file sits in the same
+// directory dispatch.ts does, so the default `import.meta.url` starts from the same place.
 export function resolveWorkerPluginDir(
   moduleUrl = import.meta.url,
   env: NodeJS.ProcessEnv = process.env

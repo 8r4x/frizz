@@ -2,6 +2,7 @@
   "enabledPlugins": {
     "chrome-devtools-mcp@claude-plugins-official": false
   },
+  "enabledMcpjsonServers": ["chrome-devtools"],
   "hooks": {
     "SessionStart": [
       {
