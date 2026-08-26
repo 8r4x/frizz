@@ -31,8 +31,14 @@ window.fetch = async (input, init) => {
   return nativeFetch(input, init)
 }
 
-const { RestartFrizzButton } = await import("./components/RestartFrizzButton.tsx")
+const { RestartActionButton, RestartFailureNotice, RestartFrizzButton } = await import("./components/RestartFrizzButton.tsx")
 const { RestartOverlay } = await import("./components/RestartOverlay.tsx")
+
+// ?failure renders the supervisor's failure card on the same anchor the popover uses. It cannot be
+// reached by clicking here — the card is raised by a status POLL reporting "failed", which this
+// fixture's stubbed control plane never does — and it is the panel whose arrow has to clear the same
+// corner arc, so it needs to be measurable beside the popover rather than only in a broken instance.
+const failureMessage = params.get("failure") || "Frizz worker plugin closure is missing cc-worker/bin/browser-mcp.mjs"
 
 function Fixture() {
   const snap = useSnapshot(store)
@@ -45,7 +51,18 @@ function Fixture() {
         <button type="button" data-testid="decoy" className="mb-4 rounded border border-border px-2 py-1">decoy</button>
         {/* Left-aligned, so the panel opens rightward off a `w-fit` wrapper exactly as it does off the
             status row above the prompt box, which is where this button really lives. */}
-        <div className="w-fit"><RestartFrizzButton /></div>
+        <div className="w-fit">
+          {params.has("failure")
+            ? (
+                // The real control's own shape: the card hangs off the SAME relative wrapper as the
+                // button, whose `-mx-1.5` ink trim is what `-left-1.5` on the panel backs out of.
+                <div className="relative">
+                  <RestartActionButton update busy={false} updateVersion="0.5.0" onClick={() => undefined} />
+                  <RestartFailureNotice update message={failureMessage} onDismiss={() => undefined} />
+                </div>
+              )
+            : <RestartFrizzButton />}
+        </div>
       </div>
     </main>
   )

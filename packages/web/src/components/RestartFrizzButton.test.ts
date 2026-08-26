@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
-import { RestartActionButton, RestartFailureNotice, UPDATE_RESTART_ICON_ROTATION, UpdateRestartPopover } from "./RestartFrizzButton.tsx"
+import { PANEL_ARROW_GEOMETRY, RestartActionButton, RestartFailureNotice, UPDATE_RESTART_ICON_ROTATION, UpdateRestartPopover } from "./RestartFrizzButton.tsx"
 
 test("Update Frizz presents one calm sentence whose highlight is that threads are untouched", () => {
   const html = renderToStaticMarkup(createElement(UpdateRestartPopover, { open: true, update: true }))
@@ -135,4 +135,58 @@ test("a failure can be dismissed, and a legacy restart names itself correctly", 
   assert.match(html, /Restart failed/)
   assert.doesNotMatch(html, /Update failed/)
   assert.match(html, /aria-label="Dismiss"/)
+})
+
+/**
+ * The arrow is the one piece of this control whose correctness is pure arithmetic, and it was wrong
+ * for as long as it existed: `left-1.5` put the tent's left foot 4.51px from the card's edge, 7.5px
+ * INSIDE its own 12px corner arc, so the leg grew out of the curve instead of off a flat border and
+ * the corner read as bent. Pin the RELATIONSHIPS rather than the class literals — a future re-guess
+ * that lands somewhere plausible-looking still has to satisfy these three.
+ */
+test("the panel arrow clears the card's corner arc, sits on its top border, and points at the mark", () => {
+  const g = PANEL_ARROW_GEOMETRY
+  const half = (g.square * Math.SQRT2) / 2
+  // The apex is the square's own centre, measured from the panel's border-box left edge: an absolute
+  // offset starts at the padding edge, so the border adds back in.
+  const apex = g.border + g.left + g.square / 2
+
+  // 1. The base sits on a FLAT run of border — both feet are `half` either side of the apex.
+  //    Browser-measured at 14.51px against a 12px arc (scripts/shot.mjs, dsf 8, 2026-08-26).
+  const foot = apex - half
+  assert.ok(foot > g.radius, `arrow foot lands ${foot}px in, inside the ${g.radius}px corner arc`)
+
+  // 2. The square's CENTRE is on the panel's border-box top, so its opaque fill covers the top border
+  //    between the feet. One px lower and that border paints across the base as a spur at each foot.
+  assert.equal(g.top + g.border + g.square / 2, 0)
+
+  // 3. The apex is on the mark the card hangs off — the button's glyph centre. This is what the
+  //    panel's own negative left offset is for; it aligns the card's edge with nothing.
+  assert.equal(g.panelLeft + g.border + g.left + g.square / 2, g.markCentre)
+})
+
+test("both panels hang one identical arrow off one shared constant, differing only in tone", () => {
+  const arrow = (html: string) => html.match(/<span aria-hidden="true" class="([^"]*)"/)?.[1] ?? ""
+  const popover = arrow(renderToStaticMarkup(createElement(UpdateRestartPopover, { open: true, update: true })))
+  const failure = arrow(
+    renderToStaticMarkup(createElement(RestartFailureNotice, { update: true, message: "boom", onDismiss: () => undefined })),
+  )
+  assert.ok(popover.length > 0 && failure.length > 0)
+  assert.equal(popover.replace(" border-border-strong", ""), failure.replace(" border-red-500/45", ""))
+
+  // The utilities the numbers above claim to describe. Three chevrons in this app once drifted into
+  // two offsets and two tones by being placed one call site at a time; this is the same guard.
+  const g = PANEL_ARROW_GEOMETRY
+  assert.ok(popover.includes(`-top-[${-g.top}px]`), popover)
+  assert.ok(popover.includes(`left-${g.left / 4}`), popover)
+  assert.ok(popover.includes(`h-${g.square / 4} w-${g.square / 4}`) && popover.includes("rotate-45"), popover)
+})
+
+test("the panel's left offset is the arrow's, not an edge alignment", () => {
+  const g = PANEL_ARROW_GEOMETRY
+  const panel = (html: string) => html.match(/<div id="update-restart-popover"[^>]*class="([^"]*)"/)?.[1] ?? ""
+  const html = renderToStaticMarkup(createElement(UpdateRestartPopover, { open: true, update: true }))
+  assert.ok(panel(html).includes(`sm:-left-[${-g.panelLeft}px]`), panel(html))
+  // rounded-xl IS the radius the arithmetic above clears; a smaller card corner would free the arrow.
+  assert.ok(panel(html).includes("rounded-xl"), panel(html))
 })

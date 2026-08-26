@@ -29,13 +29,53 @@ const restartCopy = "Restart Frizz. Your running threads will not be affected."
 // The `fixed left-3 right-3 top-12` full-width strip below `sm:` (640px) is unreachable and kept only
 // as a floor: this button renders only on the desktop shell, which the phone shell replaces at 700px.
 //
-// `-left-1.5` (not `left-0`) because this wrapper is no longer the width of the 24px button: the ink
-// trim on STATUS_ROW_ACTION (lib/statusRow.ts) collapses that square onto its 12px glyph, so the
-// wrapper's own left edge now sits 6px INSIDE the target. Backing the panel out by that same 6px puts
-// it exactly where it was before the trim, which is what keeps both panels' `left-1.5` arrows centred
-// on the mark. Moving the arrows instead would have hung their rotated corner outside the panel.
+// `sm:-left-[17px]` is DERIVED from the arrow, not chosen: PANEL_ARROW below carries the arithmetic
+// and the readings. It is not the offset that lines the panel's own edge up with anything — the panel
+// hangs 11px further left than the button's box, which is what it costs to put the arrow's base on a
+// straight run of border while its apex stays on the mark.
 const ANCHORED_PANEL =
-  "fixed left-3 right-3 top-12 z-50 w-auto text-left font-sans sm:absolute sm:right-auto sm:-left-1.5 sm:top-[calc(100%+0.65rem)]"
+  "fixed left-3 right-3 top-12 z-50 w-auto text-left font-sans sm:absolute sm:right-auto sm:-left-[17px] sm:top-[calc(100%+0.65rem)]"
+
+// ONE arrow for both panels; only the border tone differs. Every number is measured, and the two that
+// look arbitrary are the two the old spelling (`-top-1.5 left-1.5`) got wrong — it drew the left foot
+// 4.51px from the panel's edge, 7.5px INSIDE the card's own 12px corner arc, so the tent grew straight
+// out of the curve with no flat border to its left and the corner read as bent (maintainer, 2026-08-26).
+//
+// `left-4`: a 12px square rotated 45° spans 16.97px, so its feet sit 8.49px either side of the apex.
+//   An absolute offset is measured from the PADDING edge, 1px inside the border, so the left foot lands
+//   1 + 16 - 8.49 = 14.51px from the panel's left edge and clears the `rounded-xl` 12px arc by 2.5px.
+// `-top-[7px]`: 1px border + 6px half-square puts the square's CENTRE on the panel's border-box top, so
+//   the base diagonal lies along the top border and the arrow's own fill covers it. `-top-1.5` sat that
+//   centre 1px lower, leaving 1px of border painted across the base as a notch at each foot.
+// `sm:-left-[17px]` follows: the apex is at panelLeft + 1 + 16 + 6, and the mark it points at is the
+//   button's 12px glyph centre, 6px into the wrapper that STATUS_ROW_ACTION's `-mx-1.5` ink trim
+//   (lib/statusRow.ts) leaves behind — so panelLeft = 6 - 23 = -17.
+//
+// RE-DERIVE, don't re-guess, if the corner radius, the arrow size, the panel border or that ink trim
+// moves. `nub scripts/shot.mjs http://localhost:<vite>/restart-frizz-button-fixture.html?failure
+// out.png --clip=.rotate-45 --pad=18 --dsf=8` is the crop that shows the join.
+const PANEL_ARROW = "absolute -top-[7px] left-4 h-3 w-3 rotate-45 border-l border-t bg-elevated"
+
+/**
+ * The same geometry as numbers, in CSS px, so the focused test can check the ARITHMETIC above rather
+ * than the literals it happens to compile to. Keep the two in step — the test asserts both.
+ */
+export const PANEL_ARROW_GEOMETRY = {
+  /** `h-3 w-3`: the square `rotate-45` turns into the tent. */
+  square: 12,
+  /** The panel's own border. An absolute offset is measured from the padding edge, just inside it. */
+  border: 1,
+  /** `rounded-xl` on PANEL_SURFACE — the arc the base has to clear. */
+  radius: 12,
+  /** `left-4` on PANEL_ARROW. */
+  left: 16,
+  /** `-top-[7px]` on PANEL_ARROW. */
+  top: -7,
+  /** `sm:-left-[17px]` on ANCHORED_PANEL. */
+  panelLeft: -17,
+  /** The mark: the button's glyph centre, 6px into the wrapper STATUS_ROW_ACTION's ink trim leaves. */
+  markCentre: 6,
+} as const
 
 // Width is per-panel and each panel applies EXACTLY ONE of these — never both. Tailwind resolves a
 // same-property collision by CSS source order, not class order, so stacking two `sm:w-*` utilities on
@@ -80,10 +120,10 @@ export function UpdateRestartPopover({
       id="update-restart-popover"
       role="tooltip"
       aria-label={action}
-      // The arrow tracks the anchored edge, centred on the 24px target.
+      // The arrow's apex tracks the button's glyph; PANEL_ARROW owns the geometry.
       className={`${ANCHORED_PANEL} ${POPOVER_WIDTH} ${PANEL_SURFACE} border border-border-strong`}
     >
-      <span aria-hidden="true" className="absolute -top-1.5 left-1.5 h-3 w-3 rotate-45 border-l border-t border-border-strong bg-elevated" />
+      <span aria-hidden="true" className={`${PANEL_ARROW} border-border-strong`} />
       <div className="relative flex items-center gap-2.5">
         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-fg/10 text-fg">
           <RefreshCw aria-hidden="true" size={14} strokeWidth={2.25} />
@@ -124,7 +164,7 @@ export function RestartFailureNotice({
 }) {
   return (
     <div role="alert" className={`${ANCHORED_PANEL} ${NOTICE_WIDTH} ${PANEL_SURFACE} border border-red-500/45`}>
-      <span aria-hidden="true" className="absolute -top-1.5 left-1.5 h-3 w-3 rotate-45 border-l border-t border-red-500/45 bg-elevated" />
+      <span aria-hidden="true" className={`${PANEL_ARROW} border-red-500/45`} />
       <div className="relative flex items-center gap-2.5">
         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-red-500/15 text-red-300">
           <AlertTriangle aria-hidden="true" size={14} strokeWidth={2.25} />
