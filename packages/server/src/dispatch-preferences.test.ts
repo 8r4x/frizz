@@ -5,10 +5,10 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createStorage } from "./storage.ts"
 import { defaultSettings } from "./settings.ts"
+import { machineConfigPath } from "./machine-config.ts"
 import {
   defaultDispatchPreferences,
   getDispatchPreferences,
-  machineDispatchPreferencesPath,
   readMachineDispatchPreferences,
   setDispatchPreference,
 } from "./dispatch-preferences.ts"
@@ -96,7 +96,7 @@ test("a selection made in one project is the profile every other project opens o
   const beta = box.open("beta")
   try {
     setDispatchPreference(alpha, settings, box.home, { field: "profile", backend: "claude", model: "haiku", effort: "low" })
-    assert.ok(existsSync(machineDispatchPreferencesPath(box.home)), "the record is a file beside settings.json")
+    assert.ok(existsSync(machineConfigPath(box.home)), "the record lives in the machine config store")
     assert.deepEqual(getDispatchPreferences(beta, settings, box.home).claude, {
       model: "haiku",
       effort: "low",
@@ -116,7 +116,7 @@ test("a project that stored a profile before the machine file existed keeps it u
   const alpha = box.open("alpha")
   const beta = box.open("beta")
   try {
-    // The pre-2026-08-25 shape: a per-project row and no machine file.
+    // The pre-2026-08-25 shape: a per-project row and no machine record.
     alpha.setSetting("dispatch-preferences.v1", {
       backend: "codex",
       claude: { permissionMode: "auto" },
@@ -167,16 +167,16 @@ test("an invalid saved record degrades in memory and never silently persists a f
   box.done()
 })
 
-test("an unreadable machine file degrades to the project's row rather than throwing", () => {
+test("an unreadable machine store degrades to the project's row rather than throwing", () => {
   const box = sandbox()
   const settings = defaultSettings()
   const alpha = box.open("alpha")
   try {
     setDispatchPreference(alpha, settings, box.home, { field: "model", backend: "claude", value: "sonnet" })
-    writeFileSync(machineDispatchPreferencesPath(box.home), "{ not json")
+    writeFileSync(machineConfigPath(box.home), "{ not json")
     assert.equal(readMachineDispatchPreferences(box.home), undefined)
     assert.equal(getDispatchPreferences(alpha, settings, box.home).claude.model, "sonnet")
-    assert.equal(existsSync(machineDispatchPreferencesPath(box.home)), true, "a read never rewrites the file")
+    assert.equal(existsSync(machineConfigPath(box.home)), true, "a read never rewrites the file")
   } finally {
     box.done()
   }

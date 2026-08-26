@@ -103,7 +103,7 @@ test("Windows uses Local, never Roaming — a multi-gigabyte cache must not foll
 
 // A SANDBOX HAS TO STAY SANDBOXED ON WIN32 TOO, and %LOCALAPPDATA% is what used to break that:
 // `frizzPaths({ home })` is the ONE mechanism every sandbox here has (projectStateDir, registryPath,
-// machineSettingsPath, serverAddressPath, stablePluginPath), and on Windows all of them collapsed onto
+// machineConfigPath, serverAddressPath, stablePluginPath), and on Windows all of them collapsed onto
 // the live account's single `%LOCALAPPDATA%\Frizz` tree whatever home they were handed — a suite run
 // rewrote the operator's own settings.json and registry (first Windows suite run, 2026-08-24). The
 // variable describes the PROCESS's home, so it is honored only when it sits under the home in hand.

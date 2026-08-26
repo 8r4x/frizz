@@ -1,7 +1,8 @@
-import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { readFileSync, rmSync } from "node:fs"
+import { join } from "node:path"
 import { Settings } from "@frizz/shared"
 import { frizzPaths } from "./frizz-paths.ts"
+import { deleteMachineConfig, readMachineConfig, writeMachineConfig } from "./machine-config.ts"
 import type { Storage } from "./storage.ts"
 
 const SETTINGS_KEY = "settings"
@@ -15,19 +16,24 @@ const SETTINGS_KEY = "settings"
  * font flashing on load. `notifications` tracks an OS permission and `localFileOpener` names which
  * editor is installed; neither was ever a property of a repository.
  *
- * There is no migration. Resolution falls back through the project blob (see getSettings), so an
- * existing project keeps its values until the user next saves, and that save is what promotes them.
+ * They live as the `settings` record of the machine config store (machine-config.ts). Before that
+ * store existed (2026-08-25) they were a file of their own, `<data>/settings.json`; it is read as a
+ * fallback and never written again, so an existing install keeps its font until the next save
+ * promotes it. Below that, resolution falls back through the project blob (see getSettings) — the
+ * same shape, one level down, and the reason neither step needed a migration.
  *
  * `home` is REQUIRED and deliberately not defaulted to homedir(). These were pure storage functions
- * before this file learned about a machine-level file; defaulting it silently turned every existing
+ * before this file learned about a machine-level record; defaulting it silently turned every existing
  * caller — the test suite included — into one that reads and WRITES the real ~/.frizz. That is not
  * hypothetical: the first run of this change wrote `notifications: false` into the maintainer's own
  * settings, which would have quietly turned their desktop notifications off.
  */
 const MACHINE_KEYS = ["font", "notifications", "localFileOpener", "projectRail"] as const
 type MachineSettings = Pick<Settings, (typeof MACHINE_KEYS)[number]>
+const MachineSettingsRecord = Settings.partial()
 
-export function machineSettingsPath(home: string): string {
+/** The pre-store file. Read-only since 2026-08-25; `resetSettings` is the only thing that removes it. */
+export function legacyMachineSettingsPath(home: string): string {
   return join(frizzPaths({ home }).data, "settings.json")
 }
 
@@ -35,18 +41,19 @@ function pickMachine(settings: Settings): MachineSettings {
   return Object.fromEntries(MACHINE_KEYS.map((key) => [key, settings[key]])) as MachineSettings
 }
 
-/** Whatever of the machine settings is readable. A miss is a fallback, never an error. */
+/** Whatever of the machine settings is readable: the store's record, else the legacy file. A miss is a fallback, never an error. */
 export function readMachineSettings(home: string): Partial<MachineSettings> {
+  const stored = readMachineConfig(home, SETTINGS_KEY, MachineSettingsRecord)
+  if (stored) return pickPresent(stored)
   let raw: unknown
   try {
-    raw = JSON.parse(readFileSync(machineSettingsPath(home), "utf8"))
+    raw = JSON.parse(readFileSync(legacyMachineSettingsPath(home), "utf8"))
   } catch {
     return {}
   }
   if (!raw || typeof raw !== "object") return {}
-  const parsed = Settings.partial().safeParse(raw)
-  if (!parsed.success) return {}
-  return pickPresent(parsed.data)
+  const parsed = MachineSettingsRecord.safeParse(raw)
+  return parsed.success ? pickPresent(parsed.data) : {}
 }
 
 function pickPresent(partial: Partial<Settings>): Partial<MachineSettings> {
@@ -55,33 +62,9 @@ function pickPresent(partial: Partial<Settings>): Partial<MachineSettings> {
   return out
 }
 
-/** open(wx) → fsync → rename, as everywhere else here: a reader never sees a half file. */
 export function writeMachineSettings(next: MachineSettings, home: string): void {
-  writeMachineFile(machineSettingsPath(home), next)
+  writeMachineConfig(home, SETTINGS_KEY, next)
 }
-
-/**
- * The one writer for every machine-level preference file (this one and dispatch-preferences.ts).
- * A preference is not state: failing to persist a font, or a model choice, must never fail the save
- * that carried it, so this swallows the write error and leaves whatever was there before.
- */
-export function writeMachineFile(path: string, value: unknown): void {
-  mkdirSync(dirname(path), { recursive: true })
-  const temp = `${path}.${process.pid}.tmp`
-  let fd: number | undefined
-  try {
-    fd = openSync(temp, "w", 0o600)
-    writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`, "utf8")
-    fsyncSync(fd)
-    closeSync(fd)
-    fd = undefined
-    renameSync(temp, path)
-  } catch {
-    if (fd !== undefined) try { closeSync(fd) } catch { /* already gone */ }
-    try { rmSync(temp, { force: true }) } catch { /* already gone */ }
-  }
-}
-
 
 export const defaultSettings = (): Settings => ({
   // `bypassPermissions` = claude's --dangerously-skip-permissions: a headless worker never stops on an
@@ -122,11 +105,14 @@ export function setSettings(storage: Storage, next: Settings, home: string): Set
 }
 
 // Clear the stored blob so getSettings falls back to defaults (incl. the shipped default prompt).
-// A reset means DEFAULTS, so the machine file goes too — leaving it would resurrect the old font.
+// A reset means DEFAULTS, so the machine record goes too — and the legacy file with it, or the
+// fallback would resurrect the old font. Other records in the store (the prompt box's profile) are
+// not settings and stay.
 export function resetSettings(storage: Storage, home: string): Settings {
   storage.deleteSetting(SETTINGS_KEY)
+  deleteMachineConfig(home, SETTINGS_KEY)
   try {
-    rmSync(machineSettingsPath(home), { force: true })
+    rmSync(legacyMachineSettingsPath(home), { force: true })
   } catch {
     // Nothing to reset, or unreadable — either way defaults are what the caller gets.
   }

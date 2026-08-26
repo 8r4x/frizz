@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs"
-import { join } from "node:path"
 import {
   DispatchPreferences,
   type Backend,
@@ -8,36 +6,25 @@ import {
   type SetDispatchPreferenceInput,
   type Settings,
 } from "@frizz/shared"
-import { frizzPaths } from "./frizz-paths.ts"
-import { writeMachineFile } from "./settings.ts"
+import { readMachineConfig, writeMachineConfig } from "./machine-config.ts"
 import type { Storage } from "./storage.ts"
 
 // The prompt box's model + effort profile is a property of the OPERATOR, not of a repository: the
 // person who picks Opus/xhigh in one project expects the next project's prompt box to open on the same
 // profile (maintainer 2026-08-25: "it should also be applied globally across all projects"). One
-// server serves every project, so the record lives in one machine-level file beside settings.json,
-// exactly the way `font` does (see settings.ts for why that file exists and why `home` is required).
+// server serves every project, so the record is the `dispatchPreferences` entry of the machine config
+// store (machine-config.ts), beside the machine's settings.
 //
 // The per-project SQLite row under KEY is where the record lived until 2026-08-25. It stays as a READ
-// fallback rather than being migrated: a project that chose a profile before the file existed keeps
-// showing it, and the next selection — written to the file — is what makes it the machine's. Every
+// fallback rather than being migrated: a project that chose a profile before the store existed keeps
+// showing it, and the next selection — written to the store — is what makes it the machine's. Every
 // write still mirrors into the row, so an older server reading this database sees the same choice.
 const KEY = "dispatch-preferences.v1"
-
-export function machineDispatchPreferencesPath(home: string): string {
-  return join(frizzPaths({ home }).data, "dispatch-preferences.json")
-}
+export const MACHINE_KEY = "dispatchPreferences"
 
 /** The machine's record, or undefined when there is none or it does not parse. Never throws. */
 export function readMachineDispatchPreferences(home: string): DispatchPreferences | undefined {
-  let raw: unknown
-  try {
-    raw = JSON.parse(readFileSync(machineDispatchPreferencesPath(home), "utf8"))
-  } catch {
-    return undefined
-  }
-  const parsed = DispatchPreferences.safeParse(raw)
-  return parsed.success ? parsed.data : undefined
+  return readMachineConfig(home, MACHINE_KEY, DispatchPreferences)
 }
 
 function permissionFor(backend: Backend, mode: PermissionMode): PermissionMode {
@@ -71,7 +58,7 @@ export function defaultDispatchPreferences(
   }
 }
 
-// machine file → this project's stored row → the Settings-derived default. Read-time validation
+// machine record → this project's stored row → the Settings-derived default. Read-time validation
 // never rewrites either store: an invalid record degrades in memory only.
 export function getDispatchPreferences(
   storage: Storage,
@@ -115,7 +102,7 @@ export function setDispatchPreference(
     }
   }
   const validated = DispatchPreferences.parse(next)
-  writeMachineFile(machineDispatchPreferencesPath(home), validated)
+  writeMachineConfig(home, MACHINE_KEY, validated)
   storage.setSetting(KEY, validated)
   return validated
 }

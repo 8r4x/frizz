@@ -102,7 +102,7 @@ function windowsRoots(env: NodeJS.ProcessEnv, home: string): Omit<FrizzPaths, "l
   // %LOCALAPPDATA% DESCRIBES THE PROCESS'S OWN HOME, so it is authoritative only when it actually
   // sits under the home being resolved. Trusting it unconditionally made `frizzPaths({ home })` —
   // the one mechanism every sandbox has (`projectStateDir(id, home)`, `registryPath(home)`,
-  // `machineSettingsPath(home)`, `serverAddressPath(home)`) — collapse onto the live machine's single
+  // `machineConfigPath(home)`, `serverAddressPath(home)`) — collapse onto the live machine's single
   // `%LOCALAPPDATA%\Frizz` tree on win32, whatever home it was handed: a test run wrote the real
   // account's `settings.json` and registry (caught by the first Windows suite run, 2026-08-24). It is
   // the same leak that let a test retire `~/.frizz/server.lock` under a live server on 2026-08-08,
