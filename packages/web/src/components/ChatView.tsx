@@ -483,7 +483,11 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
             )}
             {/* Same rule as the virtualized path's runtime-status row: the Working… rung is a quiet meta
                 line that joins the tight run under a meta tail; every card rung keeps STEP. */}
-            {(thread?.providerFault || thread?.limitPause || frozenAsk || thread?.runtime === "perm-prompt" || showWorking || showsSnoozeCard(thread) || thread?.awaitingBackground) && (
+            {/* showsRestingCard, NOT the raw awaitingBackground flag: the chain below renders the resting
+                card through that predicate, and gating the slot on the bare flag opened it for a
+                bg-snoozed thread — every branch then rendered null and the slot was an empty gap at the
+                transcript's end (the gate-vs-renderer mismatch of 2026-08-25, one surface over). */}
+            {(thread?.providerFault || thread?.limitPause || frozenAsk || thread?.runtime === "perm-prompt" || showWorking || showsSnoozeCard(thread) || showsRestingCard(thread)) && (
               <VSpace h={
                 showWorking && !thread?.providerFault && !thread?.limitPause && !frozenAsk && thread?.runtime !== "perm-prompt"
                   ? workingIndicatorGap(activityMessages.map((entry) => entry.message))
@@ -696,7 +700,9 @@ function VirtualizedThreadTranscript({
       || thread?.runtime === "perm-prompt"
       || showWorking
       || showsSnoozeCard(thread)
-      || thread?.awaitingBackground,
+      // showsRestingCard, not the raw flag — see the non-virtualized gate; on the bare flag a bg-snoozed
+      // thread grew an empty runtime-status ROW here (null in a padded div) at the transcript's end.
+      || showsRestingCard(thread),
   )
   // Which rung of the runtime-status ladder (rendered below, hardest reading first) wins. Only its
   // Working… rung is a quiet meta row rather than a card, and only that rung joins the tight run —
