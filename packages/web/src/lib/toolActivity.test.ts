@@ -169,6 +169,71 @@ test("a call whose result is a picture keeps its card and splits the run", () =>
   ])
 })
 
+// The maintainer's 2026-08-26 screenshot: Claude batched [thinking, thinking, ToolSearch, Agent] into
+// ONE provider message, so the ToolSearch could not fold into the run above and sat as its own
+// `Ran 1 tool call` directly under the previous one-call digest — and live it HAD folded, then split
+// retroactively when the Agent block landed in the same message.
+test("ordinary calls batched ahead of a dispatch in one message fold into the run above", () => {
+  const skill = tool("Skill", { detail: "claude-api", status: "completed" })
+  const lead: ChatMessage = {
+    sourceId: "lead",
+    role: "assistant",
+    text: "First I load the Claude API reference.",
+    tools: [skill],
+    parts: [
+      { kind: "text", text: "First I load the Claude API reference." },
+      { kind: "tools", tools: [skill] },
+    ],
+  }
+  const toolSearch = tool("ToolSearch", { detail: "select:SendMessage", status: "completed" })
+  const dispatch = tool("Agent", { agentId: "call-1", prompt: "Audit the token overhead", detail: "Auditing Frizz token overhead", status: "pending" })
+  const mixed = toolMessage("mixed", [toolSearch, dispatch], "2026-07-30T12:00:03.000Z")
+
+  const compact = coalesceToolActivityMessages([lead, mixed])
+  assert.deepEqual(compact.map((entry) => entry.message.sourceId), ["lead", "mixed"])
+  assert.deepEqual(
+    compact[0].message.tools.map((call) => call.name),
+    ["Skill", "ToolSearch"],
+    "the leading ordinary call joins the run above instead of minting a second one-call digest",
+  )
+  assert.equal(compact[0].message.at, "2026-07-30T12:00:03.000Z")
+  assert.deepEqual(compact[1].message.tools, [dispatch], "only the dispatch card keeps the mixed row")
+  assert.deepEqual(compact[1].message.parts, [{ kind: "tools", tools: [dispatch] }])
+  assert.equal(compact[1].messageIndex, 1)
+
+  // …and a trailing ordinary call AFTER the card is the next run, absorbing later pure batches.
+  const after = tool("Read", { detail: "src/a.ts", status: "completed" })
+  const sandwich = coalesceToolActivityMessages([
+    lead,
+    toolMessage("mixed2", [toolSearch, dispatch, after], "2026-07-30T12:00:03.000Z"),
+    toolMessage("later", [tool("Grep", { status: "completed" })], "2026-07-30T12:00:04.000Z"),
+  ])
+  assert.deepEqual(sandwich.map((entry) => entry.message.tools.map((call) => call.name)), [
+    ["Skill", "ToolSearch"],
+    ["Agent", "Read", "Grep"],
+  ])
+
+  // With no run above there is nothing to join — the leading call keeps its own digest ahead of the card.
+  const opening = coalesceToolActivityMessages([mixed])
+  assert.equal(opening.length, 1)
+  assert.deepEqual(opening[0].message.tools.map((call) => call.name), ["ToolSearch", "Agent"])
+
+  // Prose ahead of the tools bounds the run exactly as it always did: nothing moves up past it.
+  const prosed: ChatMessage = {
+    sourceId: "prosed",
+    role: "assistant",
+    text: "Now the audit.",
+    tools: [toolSearch, dispatch],
+    parts: [
+      { kind: "text", text: "Now the audit." },
+      { kind: "tools", tools: [toolSearch, dispatch] },
+    ],
+  }
+  const bounded = coalesceToolActivityMessages([lead, prosed])
+  assert.deepEqual(bounded[0].message.tools.map((call) => call.name), ["Skill"])
+  assert.deepEqual(bounded[1].message.tools.map((call) => call.name), ["ToolSearch", "Agent"])
+})
+
 test("a prose tool tail absorbs ordinary calls, and a background launch is what ends it", () => {
   const first = tool("Bash", { desc: "Starting the focused build", status: "completed" })
   const lead: ChatMessage = {

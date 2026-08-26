@@ -150,10 +150,11 @@ function transparentAssistantMessage(message: ChatMessage): boolean {
 // A prose-bearing message may END with tools: the prose closes the previous activity run and its tool
 // tail starts the next one. Subsequent pure-tool provider messages belong to that tail until another
 // visible block arrives. Dedicated tool cards are themselves visible blocks and therefore do not
-// qualify as a mergeable tail.
+// qualify as a mergeable tail — but calls batched AFTER one in the same part are the next run and do.
 function messageToolTail(message: ChatMessage): TranscriptToolCall[] | null {
   if (message.role !== "assistant" || message.kind || message.queued) return null
-  if (!message.parts?.length) return pureToolMessage(message)
+  // Without parts the text renders ahead of the tools, so the trailing run is still the tail.
+  if (!message.parts?.length) return trailingOrdinaryRun(message.tools)
   for (let i = message.parts.length - 1; i >= 0; i--) {
     const part = message.parts[i]
     if (part.kind === "text") {
@@ -161,9 +162,64 @@ function messageToolTail(message: ChatMessage): TranscriptToolCall[] | null {
       continue
     }
     if (part.tools.length === 0) continue
-    return part.tools.every((tool) => !isToolActivityException(tool)) ? part.tools : null
+    return trailingOrdinaryRun(part.tools)
   }
   return null
+}
+
+// The ordinary calls at the END of a batch, stopping at the newest exception card. The server folds
+// consecutive tool blocks into one part (appendToolPart), so a dispatch and the calls issued beside it
+// share a part — all-or-nothing here left everything after the card unable to seed a run.
+function trailingOrdinaryRun(tools: readonly TranscriptToolCall[]): TranscriptToolCall[] | null {
+  const tail: TranscriptToolCall[] = []
+  for (let i = tools.length - 1; i >= 0; i--) {
+    if (isToolActivityException(tools[i])) break
+    tail.unshift(tools[i])
+  }
+  return tail.length > 0 ? tail : null
+}
+
+// The mirror of messageToolTail: a message's LEADING ordinary calls, up to the first visible block —
+// prose or a dedicated card. A provider can batch an ordinary call and a dispatch into ONE assistant
+// message ([ToolSearch, Agent] between thinking blocks), and all-or-nothing folding left that leading
+// call stranded as its own `Ran 1 tool call` digest directly under the previous run's — two successive
+// one-call digests where the reader sees one unbroken run (maintainer 2026-08-26: "seeing 2 successive
+// uncollapsed tool calls"). Worse, LIVE it did merge — the batch's exception had not landed yet, so the
+// message was still pure — and then split retroactively when the dispatch block arrived. Returns null
+// when there is nothing to strip, or when no visible block bounds the prefix (that message is pure and
+// the whole-message fold owns it).
+function messageToolPrefix(message: ChatMessage): TranscriptToolCall[] | null {
+  if (message.role !== "assistant" || message.kind || message.queued) return null
+  const prefix: TranscriptToolCall[] = []
+  // Returns true when it hits the bounding exception call.
+  const scan = (tools: TranscriptToolCall[]): boolean => {
+    for (const tool of tools) {
+      if (isToolActivityException(tool)) return true
+      prefix.push(tool)
+    }
+    return false
+  }
+  if (!message.parts?.length) {
+    // Without parts the text renders ahead of the tools, so any prose disqualifies the whole prefix.
+    if (message.text.trim()) return null
+    return scan(message.tools) && prefix.length > 0 ? prefix : null
+  }
+  for (const part of message.parts) {
+    if (part.kind === "text") {
+      if (!part.text.trim()) continue
+      return prefix.length > 0 ? prefix : null
+    }
+    if (scan(part.tools)) return prefix.length > 0 ? prefix : null
+  }
+  return null
+}
+
+function withoutToolPrefix(message: ChatMessage, prefix: readonly TranscriptToolCall[]): ChatMessage {
+  const drop = new Set(prefix)
+  const parts = message.parts
+    ?.map((part) => (part.kind === "text" ? part : { kind: "tools" as const, tools: part.tools.filter((tool) => !drop.has(tool)) }))
+    .filter((part) => part.kind === "text" || part.tools.length > 0)
+  return { ...message, tools: message.tools.filter((tool) => !drop.has(tool)), parts }
 }
 
 function appendToolTail(message: ChatMessage, tools: TranscriptToolCall[], at?: string): ChatMessage {
@@ -203,7 +259,8 @@ function appendToolTail(message: ChatMessage, tools: TranscriptToolCall[], at?: 
  * Providers split a long tool run into several assistant messages and sometimes insert empty assistant
  * records between calls. Neither is visible, so neither can mint another loader/digest. A prose-bearing
  * message's final tools part starts a fresh run after that prose. A dedicated block tool (sub-agent,
- * send, etc.) ends it. The first source id remains stable as the run grows, while `at` advances to the
+ * send, etc.) ends it — but ordinary calls batched AHEAD of it in the same message still belong to the
+ * run above (messageToolPrefix). The first source id remains stable as the run grows, while `at` advances to the
  * latest batch so a pending card's clock still starts from the call it represents. `runStartedAt` keeps
  * the instant `at` is walking away from — the one the runtime slot's own clock counts from.
  */
@@ -228,10 +285,18 @@ export function coalesceToolActivityMessages(messages: readonly ChatMessage[]): 
       activityTail.message = appendToolTail(activityTail.message, tools, message.at)
       return
     }
-    const entry: ToolActivityMessage = { message, messageIndex }
+    // A message the whole-message fold rejected can still OPEN with ordinary calls — the reader sees
+    // them as the run above continuing, so they move up into it and only the visible block that bounded
+    // them (and whatever follows) keeps this row.
+    const prefix = activityTail ? messageToolPrefix(message) : null
+    const entryMessage = prefix ? withoutToolPrefix(message, prefix) : message
+    if (prefix && activityTail) {
+      activityTail.message = appendToolTail(activityTail.message, prefix, message.at)
+    }
+    const entry: ToolActivityMessage = { message: entryMessage, messageIndex }
     out.push(entry)
-    if (messageToolTail(message)) {
-      entry.runStartedAt = message.at
+    if (messageToolTail(entryMessage)) {
+      entry.runStartedAt = entryMessage.at
       activityTail = entry
     } else {
       activityTail = null
@@ -329,26 +394,18 @@ function withoutLiveToolTail(message: ChatMessage): ChatMessage {
   if (!tail) return message
 
   // `message.tools` is the flattened provider view while `parts` preserves exact render order.
-  // Remove the whole live run from both. A settled run is still LIVE HISTORY while the turn is running:
-  // revealing its digest during the inter-call gap makes the row jump to `Ran N` + a generic shimmer,
-  // only to disappear again when the next call lands. Deliberately NOT keyed on status, unlike the label
-  // (liveToolActivityTail) — the label switching to `Thinking…` in that gap is a word changing inside one
-  // span, whereas revealing the digest here moves rows.
-  const tools = message.tools.length >= tail.length
-    ? message.tools.slice(0, message.tools.length - tail.length)
-    : message.tools.filter((tool) => !tail.includes(tool))
-  let removedTail = false
+  // Remove the whole live run from both, by call identity — the tail can be the trailing slice of a
+  // part it shares with a dispatch card, so a whole-part match would miss it. A settled run is still
+  // LIVE HISTORY while the turn is running: revealing its digest during the inter-call gap makes the
+  // row jump to `Ran N` + a generic shimmer, only to disappear again when the next call lands.
+  // Deliberately NOT keyed on status, unlike the label (liveToolActivityTail) — the label switching to
+  // `Thinking…` in that gap is a word changing inside one span, whereas revealing the digest here
+  // moves rows.
+  const drop = new Set(tail)
   const parts = message.parts
-    ? message.parts.reduceRight<NonNullable<ChatMessage["parts"]>>((out, part) => {
-        if (!removedTail && part.kind === "tools" && part.tools === tail) {
-          removedTail = true
-          return out
-        }
-        out.unshift(part)
-        return out
-      }, [])
-    : message.parts
-  return { ...message, tools, parts }
+    ?.map((part) => (part.kind === "text" ? part : { kind: "tools" as const, tools: part.tools.filter((tool) => !drop.has(tool)) }))
+    .filter((part) => part.kind === "text" || part.tools.length > 0)
+  return { ...message, tools: message.tools.filter((tool) => !drop.has(tool)), parts }
 }
 
 /**
