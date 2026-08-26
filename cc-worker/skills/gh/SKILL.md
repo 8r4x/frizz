@@ -1,7 +1,7 @@
 ---
 name: gh
-description: The gh-CLI playbook for a frizz worker signed into GitHub (invoke as frizz:gh). Load this whenever your effort touches GitHub — reading or triaging an issue or PR, reviewing a diff, checking CI/release status, or searching issues/PRs — to use `gh` eagerly and correctly: the read-vs-write boundary (never comment/label/close/merge unless the human asks), optional toon use for large JSON, concrete read recipes, and active Monitor/background-Bash CI/PR watches. Only meaningful when you are signed in (`gh auth status --active` exit 0); the session-seed hook injects a pointer here when you are.
-version: 0.1.1
+description: The gh-CLI playbook for a frizz worker signed into GitHub (invoke as frizz:gh). Load this whenever your effort touches GitHub — reading or triaging an issue or PR, reviewing a diff, checking CI/release status, or searching issues/PRs — to use `gh` eagerly and correctly: the read-vs-write boundary (never comment/label/close/merge unless the human asks), concrete read recipes, and active Monitor/background-Bash CI/PR watches. Only meaningful when you are signed in (`gh auth status --active` exit 0); the session-seed hook injects a pointer here when you are.
+version: 0.1.2
 metadata:
   internal: true
 ---
@@ -10,7 +10,7 @@ metadata:
 
 You are a **frizz worker** and you are **signed into the `gh` CLI in a GitHub repo** (the session-seed hook confirmed `gh auth status --active` before pointing you here). `gh` is the fastest path to issue / PR / CI / release context — reach for it before guessing, and prefer it over scraping the web UI or reasoning from memory.
 
-This skill is the full playbook the injected `⟦gh available⟧` block summarizes: the **read-vs-write boundary**, optional **toon** use for large JSON, concrete **read recipes**, and how to keep a **CI/PR watch** active until the next actionable event.
+This skill is the full playbook the injected `⟦gh available⟧` block summarizes: the **read-vs-write boundary**, concrete **read recipes**, and how to keep a **CI/PR watch** active until the next actionable event.
 
 ## The one hard rule — READ freely, WRITE only when asked
 
@@ -22,20 +22,6 @@ This skill is the full playbook the injected `⟦gh available⟧` block summariz
 - When the human HAS asked you to write, do exactly the scoped thing and report the resulting URL — nothing extra.
 
 There is no server-side enforcement of this; the boundary is yours to hold.
-
-## toon — pipe LARGE, FLAT gh JSON through the shim
-
-`toon` (Token-Oriented Object Notation) losslessly re-encodes JSON ~30–40% smaller for LLM context. Use it only when a `gh … --json` result you're reading into YOUR context is **large and flat** (a list page: `gh issue list`, `gh pr list`, `gh search`, `gh api` list endpoints) and `command -v toon` succeeds. It is optional: do not install it or assume a home-directory-specific location.
-
-```bash
-if command -v toon >/dev/null 2>&1; then
-  gh issue list -R OWNER/REPO --json number,title,url,updatedAt --limit 50 | toon
-else
-  gh issue list -R OWNER/REPO --json number,title,url,updatedAt --limit 50
-fi
-```
-
-**Skip toon** for tiny payloads (a handful of fields, one item) and for **deeply-nested** JSON (`reactionGroups`, review threads, nested files) — nesting defeats tabularization, so the savings collapse to noise and you add a parse tax for yourself. A single `gh pr view N --json …` is small — read it raw.
 
 ## Read recipes
 
@@ -52,7 +38,7 @@ gh issue list -R OWNER/REPO --search "sort:reactions-desc is:open" --json number
 **PRs + diffs**
 ```bash
 gh pr view N -R OWNER/REPO --json title,body,state,labels,files,additions,deletions,url
-gh pr diff N -R OWNER/REPO                # the unified diff — pipe through toon only if HUGE and you just need shape
+gh pr diff N -R OWNER/REPO                # the unified diff
 gh pr checks N -R OWNER/REPO              # CI check rollup for the PR
 gh pr view N -R OWNER/REPO --comments     # review threads + conversation
 ```
@@ -97,7 +83,7 @@ Use search to find duplicates, related work, and prior art before you conclude s
 **Raw API** for anything the porcelain doesn't cover:
 ```bash
 gh api repos/OWNER/REPO/commits/SHA/check-runs --jq '.check_runs[] | {name, conclusion}'
-gh api "repos/OWNER/REPO/issues?state=open&labels=bug&per_page=50" | { command -v toon >/dev/null 2>&1 && toon || cat; }
+gh api "repos/OWNER/REPO/issues?state=open&labels=bug&per_page=50" --jq '.[] | {number, title, html_url}'
 ```
 
 ## Keep GitHub automation active

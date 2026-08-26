@@ -280,9 +280,11 @@ if (mode === 'session-start') {
 }
 
 // ── mode: precompact ─────────────────────────────────────────────────────────────────────────────
-// PLAIN STDOUT — joined with the other PreCompact hooks' stdout into the summarizer's
-// `Additional Instructions:`. Worded as an ordinary editorial note: precompact-instructions.mjs
-// records that a summarizer REFUSES instructions that read like prompt-hijacking.
+// PLAIN STDOUT — handed to the summarizer as its `Additional Instructions:`. cc's usual
+// `hookSpecificOutput` JSON would be read as literal instructions instead. Worded as an ordinary
+// editorial note: a summarizer REFUSES instructions that read like prompt-hijacking (DECISIONS.md).
+// This is the ONLY PreCompact hook the plugin registers — `precompact-instructions.mjs`, which also
+// steered the summarizer, was deleted on 2026-08-26 as too opinionated.
 if (mode === 'precompact') {
   const files = listScratch();
   if (files.length === 0) process.exit(0);

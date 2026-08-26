@@ -85,7 +85,6 @@ const ghBlock =
   '• READ freely: `gh issue view N -R OWNER/REPO --comments`, `gh pr view N`, `gh pr diff N`, `gh pr checks N`, `gh run list`/`gh run view`, `gh api repos/OWNER/REPO/…`. Prefer `--json <fields>` over scraping human text.\n' +
   '• SEARCH across the repo (and GitHub) with `gh search issues`/`gh search prs` when hunting related work, duplicates, or prior art.\n' +
   '• READ-ONLY BOUNDARY: never comment, label, assign, close, review, approve, or merge — no mutation of any kind — UNLESS the human explicitly asks in this session. Default to producing your findings/review as your final message, not as a GitHub post.\n' +
-  '• TOON: pipe LARGE, FLAT `gh … --json` output through `toon` when `command -v toon` finds it. Skip it when unavailable, for tiny payloads, or for deeply-nested output — the savings are noise and nesting defeats tabularization.\n' +
   'Load the `frizz:gh` skill for the full playbook (recipes + explicit project-local monitor selection + native Monitor/background-Bash CI/PR watches).';
 
 let ghAuthed = false;
