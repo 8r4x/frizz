@@ -39,6 +39,8 @@ export interface RemotePaneOptions {
   };
   /** Told after a successful change, so the readout can say what the board is now reached at. */
   onChanged?: (config: CloudConfig | null) => void;
+  /** Running under --sandbox: everything is throwaway EXCEPT a claim, which the frizz.sh screen must say. */
+  sandbox?: boolean;
   output?: NodeJS.WriteStream;
 }
 
@@ -184,6 +186,9 @@ export function createRemotePane(options: RemotePaneOptions): Pane {
         ...wrap(
           "Claims <name>.frizz.sh for your GitHub account. The board dials out to frizz.sh — no port, no DNS record, no tunnel binary. One name per account; a name nobody runs for 30 days is released.",
         ),
+        ...(options.sandbox
+          ? ["", ...wrap("This is a sandbox, but a claim is real: it binds this machine's one name to your account, and your real board keeps it. Only the setup saved here is thrown away.")]
+          : []),
         "",
         gh,
       ];

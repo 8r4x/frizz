@@ -522,6 +522,7 @@ async function runSupervisor(port: number, token: string): Promise<never> {
     issueLink: () => supervisor.issueAccessLink(),
     probes: { github: probeGithub, cloudflared: probeCloudflared, tailscale: probeTailscale },
     onChanged: (config) => logger.info("remote", config ? `reached at https://${config.hostname}` : "loopback only"),
+    sandbox: sandbox !== null,
   });
   paneHost = installPaneHost({ bindings: { l: accessPane, L: accessPane, r: remotePane, R: remotePane } });
 

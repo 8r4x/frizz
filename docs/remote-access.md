@@ -22,6 +22,16 @@ npx frizz --sessions      # the devices holding a session
 npx frizz --sign-out all  # revoke them
 ```
 
+## Try it without touching your board
+
+A second Frizz that shares nothing with the one you run: a throwaway home and project, its own port, deleted when you press ctrl-c.
+
+```sh
+npx frizz --sandbox
+```
+
+Press **R** in it and walk through any setup. Credentials come along (`gh`, cloudflared's certificate and tunnel files, the agent CLIs, and on macOS the login keychain), so every screen sees what the real board sees; the saved setup, the registry and the session key are throwaway copies. One thing is not throwaway: **a frizz.sh claim is real** — it binds this machine's one name to your account, and your real board keeps it.
+
 ## A name on frizz.sh
 
 The shortest path, and the only one that needs nothing of your own — no domain, no port forwarding, and no extra binary to install. Pick a name and Frizz claims it and serves it:

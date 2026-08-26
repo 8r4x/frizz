@@ -119,3 +119,17 @@ test("escape leaves a form for the menu, and leaves the menu for the readout", (
   assert.equal(pane.key("\x1b"), "keep");
   assert.equal(pane.key("\x1b"), "close");
 });
+
+test("under --sandbox the frizz.sh screen says a claim is real, and the others say nothing", async () => {
+  const { pane, out } = build({ sandbox: true });
+  pane.open();
+  pane.key("1");
+  pane.key("\r");
+  await settle();
+  assert.match(out.text(), /This is a sandbox, but a claim is real/);
+  pane.key("\x1b");
+  out.reset();
+  pane.key("4");
+  pane.key("\r");
+  assert.doesNotMatch(out.text(), /claim is real/);
+});
