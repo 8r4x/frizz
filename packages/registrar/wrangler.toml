@@ -2,6 +2,11 @@ name = "frizz-registrar"
 main = "src/worker.ts"
 compatibility_date = "2026-08-24"
 
+# The Frizz account, not the personal one. Without this a non-interactive `wrangler deploy` fails with
+# "More than one account available but unable to select one" — a machine with several accounts cannot
+# guess, and CI has nobody to ask. An account id is not a secret; the API token is, and that stays out.
+account_id = "dde3ec1f6b1f0a397ea82a9ed322f5ce"
+
 # The registrar runs during signup and never again — it is NOT on the data plane. A board that is
 # already running keeps working whether or not this Worker is up, and protecting that property is
 # worth more than any other choice in this package.

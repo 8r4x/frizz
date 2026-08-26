@@ -2,6 +2,11 @@ name = "frizz-relay"
 main = "src/worker.ts"
 compatibility_date = "2026-08-24"
 
+# The Frizz account, not the personal one. Without this a non-interactive `wrangler deploy` fails with
+# "More than one account available but unable to select one" — a machine with several accounts cannot
+# guess, and CI has nobody to ask. An account id is not a secret; the API token is, and that stays out.
+account_id = "dde3ec1f6b1f0a397ea82a9ed322f5ce"
+
 # THE WILDCARD IS THE WHOLE POINT. One record in front of every board, rather than one record per
 # user — which is what the tunnel design could never get past, because a CNAME points at exactly one
 # target and every board's tunnel lives on a different machine.
