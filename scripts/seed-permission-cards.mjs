@@ -11,7 +11,7 @@
 import { execFileSync } from "node:child_process"
 import { globSync, mkdirSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
-import Database from "better-sqlite3"
+import Database from "../packages/server/src/sqlite.ts"
 import { buildClaudePermissionInteraction } from "../packages/server/src/backend/claude-permission-interactions.ts"
 import { createInteractionStore } from "../packages/server/src/interaction-store.ts"
 
