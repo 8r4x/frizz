@@ -858,3 +858,20 @@ test("sessionIndicatorKind: a watched PR that has SETTLED reads at-rest; one sti
   // A settled watcher beside a live shell still has motion behind it — the shell's.
   assert.equal(sessionIndicatorKind(watching("passing", { needsYou: true, bgShells: [shell()] })), "background")
 })
+
+// AN ARMED TIMER IS MOTION THE SAME WAY RUNNING CI IS: a wake with a known terminal instant that frizz
+// itself delivers. Timer watch rows landed 2026-08-24 (f50f9e60) after the dot's predicate was last
+// touched, so a timer park wore the bare-rest ellipsis — the mark Sidebar reserves for "NOTHING it
+// launched still running" — including the snoozed shape 60383a56 put in the Active band.
+test("sessionIndicatorKind: an armed timer park keeps the dot", () => {
+  const timerRow = {
+    id: "timer:t:tmr_1", kind: "timer" as const, target: "tmr_1", state: "armed" as const,
+    createdAt: "2026-08-24T00:00:00.000Z", timer: { fireAt: "2026-09-02T16:00:00.000Z", prompt: "re-check the deploy" },
+  }
+  const snoozedPark = thread({ kind: "session", runtime: "turn-idle", awaitingBackground: true, needsYou: false, watches: [timerRow] })
+  assert.equal(sessionIndicatorKind(snoozedPark), "background", "an armed wake is motion, not bare rest")
+  assert.deepEqual(partitionActive([snoozedPark]).running.map((t) => t.id), [snoozedPark.id], "and the snoozed shape bands ACTIVE")
+  // Queued (unsnoozed), the mark still states the armed wake — exactly as a queued shell rest keeps its
+  // dot while the BAND moves to the queue's own.
+  assert.equal(sessionIndicatorKind(thread({ kind: "session", runtime: "turn-idle", awaitingBackground: true, needsYou: true, watches: [timerRow] })), "background")
+})

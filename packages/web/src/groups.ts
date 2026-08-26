@@ -527,6 +527,12 @@ function restingOnBackgroundWork(t: ThreadView): boolean {
 function restingOnLiveBackgroundWork(t: ThreadView): boolean {
   if (!restingOnBackgroundWork(t)) return false
   if ((t.bgShells ?? []).some((s) => s.state === "running")) return true
+  // AN ARMED TIMER IS MOTION THE SAME WAY RUNNING CI IS: a wake with a known terminal instant that
+  // frizz itself delivers. Timer watch rows landed 2026-08-24 (f50f9e60), after this predicate was last
+  // touched, so a timer park wore the bare-rest ellipsis — the mark reserved for "NOTHING it launched
+  // still running". Only ARMED rows count: the board only synthesizes armed timer rows today, but a
+  // fired or cancelled one, should it ever reach here, is settled — not motion — like a green PR below.
+  if ((t.watches ?? []).some((w) => w.kind === "timer" && w.state === "armed")) return true
   return (t.watches ?? []).some(
     (w) => w.kind === "github" && w.state === "armed" && w.github?.checks === "running" && w.github.state === "open",
   )

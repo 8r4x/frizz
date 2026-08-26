@@ -487,7 +487,7 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
                 card through that predicate, and gating the slot on the bare flag opened it for a
                 bg-snoozed thread — every branch then rendered null and the slot was an empty gap at the
                 transcript's end (the gate-vs-renderer mismatch of 2026-08-25, one surface over). */}
-            {(thread?.providerFault || thread?.limitPause || frozenAsk || thread?.runtime === "perm-prompt" || showWorking || showsSnoozeCard(thread) || showsRestingCard(thread)) && (
+            {((thread?.providerFault && !thread.foreign) || (thread?.limitPause && !thread.foreign) || frozenAsk || thread?.runtime === "perm-prompt" || showWorking || showsSnoozeCard(thread) || showsRestingCard(thread)) && (
               <VSpace h={
                 showWorking && !thread?.providerFault && !thread?.limitPause && !frozenAsk && thread?.runtime !== "perm-prompt"
                   ? workingIndicatorGap(activityMessages.map((entry) => entry.message))
