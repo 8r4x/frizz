@@ -208,7 +208,7 @@ export function SnoozeButton({ thread, onSnoozed }: { thread: ThreadView; onSnoo
             }}
             onKeyDown={(event) => {
               // Enter (or ⌘/Ctrl-Enter) submits from inside the textarea; Shift/Option-Enter make the
-              // newline — the three Enter keys every box shares (2026-08-26).
+              // newline — the Enter keys every box shares (2026-08-26).
               if (shouldSubmitStagedEnter({
                 key: event.key,
                 altKey: event.altKey,

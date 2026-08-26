@@ -122,12 +122,12 @@ export async function withDeliveryRetry(
   }
 }
 
-function deliverFollowUp(slug: string, message: string, deliveryId: string, freshProcess?: boolean, interrupt?: boolean): Promise<void> {
+function deliverFollowUp(slug: string, message: string, deliveryId: string, freshProcess?: boolean): Promise<void> {
   return withDeliveryRetry(
     // Resolve the session id per ATTEMPT from the live board rather than once up front: a thread
     // re-dispatched mid-retry must bind to its CURRENT session, and the guarded followUp is what turns
     // a stale id into a clean refusal instead of a misdelivery.
-    () => rpc.followUp({ slug, sessionId: threadBySlug(store.board, slug)?.sessionId ?? "", message, deliveryId, freshProcess, interrupt }) as Promise<void>,
+    () => rpc.followUp({ slug, sessionId: threadBySlug(store.board, slug)?.sessionId ?? "", message, deliveryId, freshProcess }) as Promise<void>,
     () => markSteered(slug),
   )
 }
@@ -148,7 +148,7 @@ export function sendEagerFollowUp(
   queryClient: QueryClient,
   slug: string,
   text: string,
-  callbacks: EagerFollowUpCallbacks & { failureToast?: (message: string) => string; freshProcess?: boolean; interrupt?: boolean } = {},
+  callbacks: EagerFollowUpCallbacks & { failureToast?: (message: string) => string; freshProcess?: boolean } = {},
 ): boolean {
   const message = text.trim()
   if (!message) return false
@@ -165,7 +165,7 @@ export function sendEagerFollowUp(
     // Resolve the session id at SEND time from the live board (not render time), so a re-dispatch
     // between mount and send still binds the guarded followUp to the current session. Contention
     // refusals are retried in place — the composer only gets the message back once they are exhausted.
-    request: () => enqueueThreadSend(slug, () => deliverFollowUp(slug, message, deliveryId, callbacks.freshProcess, callbacks.interrupt)),
+    request: () => enqueueThreadSend(slug, () => deliverFollowUp(slug, message, deliveryId, callbacks.freshProcess)),
     success: () => callbacks.onSuccess?.(),
     failure: (error) => {
       removeQueuedMessage(queryClient, slug, message, deliveryId)
@@ -180,7 +180,7 @@ export function sendEagerFollowUp(
 }
 
 export function useEagerFollowUp(slug: string): {
-  submit: (text: string, callbacks?: EagerFollowUpCallbacks & { interrupt?: boolean }) => boolean
+  submit: (text: string, callbacks?: EagerFollowUpCallbacks) => boolean
   pending: boolean
 } {
   const queryClient = useQueryClient()
@@ -190,7 +190,7 @@ export function useEagerFollowUp(slug: string): {
   // second the operator wanted to keep typing.
   const [pending, setPending] = useState(0)
 
-  const submit = useCallback((text: string, callbacks: EagerFollowUpCallbacks & { interrupt?: boolean } = {}) =>
+  const submit = useCallback((text: string, callbacks: EagerFollowUpCallbacks = {}) =>
     sendEagerFollowUp(queryClient, slug, text, {
       ...callbacks,
       // The counter rides the same three edges the send already has, so an empty (rejected) submit

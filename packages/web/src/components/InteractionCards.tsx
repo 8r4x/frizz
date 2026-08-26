@@ -517,7 +517,7 @@ function InteractionApprovalCard({
 
       <form
         onSubmit={onSubmit}
-        // The three Enter keys every box shares (2026-08-26): Enter or ⌘/Ctrl-Enter submits the
+        // The Enter keys every box shares (2026-08-26): Enter or ⌘/Ctrl-Enter submits the
         // primary decision from any field — the multiline box included, where Shift/Option-Enter
         // make the newline — replacing the one-line input's implicit form submission (which would
         // otherwise double up with this). Enter on a button still activates the button.

@@ -199,7 +199,7 @@ export function QuestionBlockCard({
                   return
                 }
                 // Enter (or ⌘/Ctrl-Enter) sends the staged answers; Shift/Option-Enter write a
-                // NEWLINE (the browser default) — the three Enter keys every box shares since
+                // NEWLINE (the browser default) — the Enter keys every box shares since
                 // 2026-08-26. See shouldSubmitStagedEnter.
                 if (shouldSubmitStagedEnter({
                   key: e.key,

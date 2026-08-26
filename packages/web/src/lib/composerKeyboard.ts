@@ -13,19 +13,17 @@ export type ComposerKeyboardEvent = {
   keyCode?: number
 }
 
-// THREE ENTER KEYS, the same in every box (maintainer 2026-08-26: "an option for a new line, an
-// option for a regular enqueued message, an option for a forced sent message"):
+// TWO ENTER KEYS, the same in every box (maintainer 2026-08-26, matching Claude Code's own input):
 //
-//   Enter               → the ordinary send (queued behind the worker's current turn if it has one)
-//   Shift-Enter         → a newline (Option-Enter too — the browser default, repaired on macOS Chrome)
-//   ⌘/Ctrl-Enter        → the FORCED send: interrupt-and-send where a worker is mid-turn, otherwise
-//                         just a send
+//   Enter, ⌘/Ctrl-Enter   → the send (queued behind the worker's current turn if it has one).
+//                           ⌘-Enter is the SAME send, not a forced one — "Command Enter inside of
+//                           Frizz should just be the regular queue send".
+//   Shift/Option-Enter    → a newline (the browser default; Option-Enter is repaired on macOS Chrome)
 //
-// Ctrl is ⌘'s Windows/Linux twin throughout the app (⌘K / Ctrl-K, ⌘I / Ctrl-I), so it is the forced
-// chord there and never a newline. The staged-answer box and the typed interaction form send on both
-// Enter and the forced chord — a question card exists while the worker waits, so there is nothing to
-// interrupt and "send now" and "send" are the same act.
-function isEnter(event: ComposerKeyboardEvent): boolean {
+// There is no keyboard interrupt-and-send. Preempting a running turn is offered where the waiting
+// message actually is — the ↑ on the queued bubble (lib/deliverQueuedNow.ts) — exactly as Claude
+// Code has Enter queue and Esc interrupt, and no chord that does both.
+function isSendEnter(event: ComposerKeyboardEvent): boolean {
   return event.key === "Enter"
     && !event.altKey
     && !event.shiftKey
@@ -34,32 +32,20 @@ function isEnter(event: ComposerKeyboardEvent): boolean {
 }
 
 /**
- * Submit only an unmodified, non-IME Enter when the composer can actually send. Shift-Enter and
- * Option-Enter fall through to the textarea's browser default and insert a newline; ⌘/Ctrl-Enter is
- * the forced send (see shouldInterruptSubmitComposerEnter).
+ * Submit a non-IME Enter or ⌘/Ctrl-Enter when the composer can actually send. Shift-Enter and
+ * Option-Enter fall through to the textarea's browser default and insert a newline.
  */
 export function shouldSubmitComposerEnter(event: ComposerKeyboardEvent, canSubmit: boolean): boolean {
-  return canSubmit && isEnter(event) && !event.metaKey && !event.ctrlKey
-}
-
-/**
- * FORCED SEND — ⌘/Ctrl-Enter in a thread composer. The caller decides what "forced" means: with a
- * worker mid-turn it is interrupt-and-send (the message is read now instead of when the current
- * command finishes); with nothing to interrupt it is an ordinary send, so the chord never goes dead.
- * `canSubmit` is the same gate as the ordinary send.
- */
-export function shouldInterruptSubmitComposerEnter(event: ComposerKeyboardEvent, canSubmit: boolean): boolean {
-  return canSubmit && isEnter(event) && (event.metaKey || event.ctrlKey)
+  return canSubmit && isSendEnter(event)
 }
 
 /**
  * The staged-answer counterpart, for the free-text box inside a ```question card, the card around
- * it, and the typed interaction form. Enter AND ⌘/Ctrl-Enter send (nothing there can be
- * interrupted, so the two are one act); Shift/Option-Enter stay newlines. The caller owns the
- * "anything staged to send" gate.
+ * it, and the typed interaction form: the same keys, with the caller owning the "anything staged
+ * to send" gate instead of a composer's content gate.
  */
 export function shouldSubmitStagedEnter(event: ComposerKeyboardEvent): boolean {
-  return isEnter(event)
+  return isSendEnter(event)
 }
 
 /**
