@@ -17,6 +17,7 @@ import type {
   ThreadView,
 } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
+import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import {
   failClosedAmbiguousInteraction,
   interactionRecordKey,
@@ -514,7 +515,35 @@ function InteractionApprovalCard({
         </h3>
       </div>
 
-      <form onSubmit={onSubmit} className="min-w-0 px-4 py-3.5" noValidate>
+      <form
+        onSubmit={onSubmit}
+        // The app-wide send convention (2026-08-26): ⌘/Ctrl-Enter submits the primary decision from
+        // any field, and a plain Enter never submits — so the implicit form submission a one-line
+        // input fires on Enter is suppressed. Enter on a button still activates the button (a click,
+        // not an implicit submission), so keyboard approval stays one keystroke.
+        onKeyDown={(event) => {
+          if (shouldSubmitStagedEnter({
+            key: event.key,
+            altKey: event.altKey,
+            ctrlKey: event.ctrlKey,
+            metaKey: event.metaKey,
+            shiftKey: event.shiftKey,
+            isComposing: event.nativeEvent.isComposing,
+            keyCode: event.nativeEvent.keyCode,
+          })) {
+            event.preventDefault()
+            if (delivery.actionsEnabled && primaryFormDecision) submitDecision(primaryFormDecision)
+            return
+          }
+          if (event.key === "Enter" && !event.metaKey && !event.ctrlKey
+            && event.target instanceof HTMLInputElement
+            && event.target.type !== "button" && event.target.type !== "submit") {
+            event.preventDefault()
+          }
+        }}
+        className="min-w-0 px-4 py-3.5"
+        noValidate
+      >
         <fieldset disabled={!delivery.actionsEnabled} className="min-w-0 border-0 p-0">
           <legend className="sr-only">Interaction request</legend>
         <InteractionPayloadBody

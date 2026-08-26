@@ -79,6 +79,10 @@ export function QuestionBlockCard({
   // so it can SHRINK when text is deleted, then lock to the content height so the box grows line-by-line
   // as the answer is typed. Runs on every freetext change (incl. an external clear via a chip-click).
   const taRef = useRef<HTMLTextAreaElement>(null)
+  // The options grid is the card's keyboard rest: a chip click parks focus here (see the chip's
+  // onClick) so the app-wide ⌘/Ctrl-Enter send works immediately after picking an option, without
+  // the free-text box having to hold focus. tabIndex=-1: reachable by script, skipped by Tab.
+  const gridRef = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
     const ta = taRef.current
     if (!ta) return
@@ -107,7 +111,30 @@ export function QuestionBlockCard({
         // Options stack in a SINGLE full-width column (maintainer 2026-07-10: a 2-col grid read as
         // ragged, uneven columns with dead whitespace once option text got long). One chip per row;
         // the free-text row keeps col-span-full so the "something else…" answer gets the whole line.
-        <div className="mt-2 grid grid-cols-1 gap-1.5">
+        <div
+          ref={gridRef}
+          tabIndex={-1}
+          // ⌘/Ctrl-Enter sends the staged answers from anywhere inside the options grid — above all
+          // right after a chip click, which focuses the grid. The free-text box below handles the
+          // same chord itself and stops propagation, so this can never double-fire.
+          onKeyDown={(e) => {
+            if (!interactive) return
+            if (shouldSubmitStagedEnter({
+              key: e.key,
+              altKey: e.altKey,
+              ctrlKey: e.ctrlKey,
+              metaKey: e.metaKey,
+              shiftKey: e.shiftKey,
+              isComposing: e.nativeEvent.isComposing,
+              keyCode: e.nativeEvent.keyCode,
+            })) {
+              e.preventDefault()
+              e.stopPropagation()
+              interactive.onSubmit()
+            }
+          }}
+          className="mt-2 grid grid-cols-1 gap-1.5 outline-none"
+        >
           {parsed.options.map((opt, i) => (
             <Fragment key={i}>
               {/* A group heading the worker wrote between choices ("Melee family:" over D–F). It rides
@@ -129,15 +156,17 @@ export function QuestionBlockCard({
               disabled={!interactive}
               onClick={() => {
                 interactive?.onChip(i, opt)
-                // SINGLE only: choosing a chip takes the selection WITH the focus — if the free-text
-                // input still holds DOM focus (its mousedown is prevented, so clicking won't blur it),
-                // its accent focus border would sit next to the chip's, so blur it. MULTI keeps both
-                // live at once (chips + a color note coexist), so leave the input focused there.
-                // Scoped to THIS block's own answer box by ref, not by a data- tag: the queue card now
-                // also renders a free-form composer alongside an open ask, and a tag match would blur
-                // the caret out of that unrelated box whenever a chip is clicked.
-                if (isMulti) return
-                if (taRef.current && document.activeElement === taRef.current) taRef.current.blur()
+                // Park keyboard focus on the options grid, so the ⌘/Ctrl-Enter send lands right after
+                // the click (the grid's own onKeyDown above). MULTI with the note box focused is the
+                // one exception: chips and a color note coexist there, so the caret stays put — and
+                // that box handles the send chord itself anyway. For SINGLE this also blurs the
+                // free-text input (its mousedown is prevented, so clicking a chip won't blur it),
+                // whose accent focus border would otherwise sit next to the chip's. Scoped to THIS
+                // block's own elements by ref, not by a data- tag: the queue card also renders a
+                // free-form composer alongside an open ask, and a tag match would steal the caret
+                // out of that unrelated box whenever a chip is clicked.
+                if (isMulti && taRef.current && document.activeElement === taRef.current) return
+                gridRef.current?.focus()
               }}
             />
             </Fragment>
@@ -167,8 +196,8 @@ export function QuestionBlockCard({
                   e.currentTarget.blur()
                   return
                 }
-                // Enter writes a NEWLINE here (the browser default — this box is a staged form field,
-                // not a composer); ⌘/Ctrl-Enter is the send. See shouldSubmitStagedEnter.
+                // Enter writes a NEWLINE here (the browser default); ⌘/Ctrl-Enter is the send —
+                // the app-wide convention since 2026-08-26. See shouldSubmitStagedEnter.
                 if (shouldSubmitStagedEnter({
                   key: e.key,
                   altKey: e.altKey,

@@ -9,6 +9,7 @@ import { rpc } from "../api/rpc.ts"
 import { useBoard, asThreads, useTranscript } from "../hooks.ts"
 import { orderQueue, queued, displayTitle, lastActiveLabelAt } from "../groups.ts"
 import { useLiveAnswering } from "../lib/answering.ts"
+import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { hasQuestionBlock } from "../lib/questionBlocks.ts"
 import { collapseMiddleRuns, opensQueueSegment, queueCollapseSegments, segmentFolds, supersededAskIndices, survivesQueueCollapse } from "../lib/queueCollapse.ts"
 import { pairAllAnswers } from "../lib/answersMessage.ts"
@@ -1145,6 +1146,26 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
       data-queue-card-root={thread.id}
       data-queue-leaving={leaving}
       style={bottomScrollReserve ? { marginBottom: bottomScrollReserve } : undefined}
+      // ⌘/Ctrl-Enter from ANYWHERE on this card sends the staged answers, provided at least one
+      // block is answered — the card-level twin of the Send answers button below. Every input that
+      // owns the chord itself (a question block's grid/free-text box, the composer with content)
+      // stops propagation before it reaches here, so this only catches the chord at rest — focus on
+      // the empty composer, on a fence button, or anywhere else inside the card.
+      onKeyDown={(e) => {
+        if (!anyAnswered) return
+        if (shouldSubmitStagedEnter({
+          key: e.key,
+          altKey: e.altKey,
+          ctrlKey: e.ctrlKey,
+          metaKey: e.metaKey,
+          shiftKey: e.shiftKey,
+          isComposing: e.nativeEvent.isComposing,
+          keyCode: e.nativeEvent.keyCode,
+        })) {
+          e.preventDefault()
+          sendAnswers()
+        }
+      }}
       className={`flex flex-col min-w-0 max-w-full ${BLOCK_RADIUS} border border-border-strong bg-panel shadow-lg shadow-black/25 transition-opacity ${resolving ? "opacity-40" : ""}`}
     >
       {/* Sticky-header CONTAINING BLOCK, deliberately EXCLUDING the footer: position:sticky is clamped
