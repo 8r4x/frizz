@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, hostname as osHostname, networkInterfaces, tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -303,8 +303,9 @@ export function boardAddress(url: string): string {
  * throwaway repository to be the project, and the cwd moved into it. The caller deletes the home on
  * exit; the state root, logs and the minted project id all live under it.
  */
-export function prepareSandbox(env: NodeJS.ProcessEnv = process.env): { home: string; project: string } {
+export function prepareSandbox(env: NodeJS.ProcessEnv = process.env, realHome: string = homedir()): { home: string; project: string } {
   const home = mkdtempSync(join(tmpdir(), "frizz-sandbox-"));
+  shareCredentials(realHome, home);
   // POSIX homedir() reads $HOME and Windows reads USERPROFILE, both at call time — this is the whole lever.
   env.HOME = home;
   env.USERPROFILE = home;
@@ -320,6 +321,61 @@ export function prepareSandbox(env: NodeJS.ProcessEnv = process.env): { home: st
   }
   process.chdir(project);
   return { home, project };
+}
+
+/**
+ * What a sandbox SHARES with the real home: credentials, never state.
+ *
+ * The cloud screens read credentials out of $HOME too — `gh` its config dir, cloudflared its cert and
+ * tunnel credentials, the agents their sessions — and a sandbox with none of them would say "not
+ * signed in" on every screen. So those are linked in. The one that MATTERS is the claim identity key:
+ * the registrar knows a name's holder by that key alone, so a name claimed with a throwaway key would
+ * be "taken" against the real board for the length of a lease. Linking the real key makes a sandbox
+ * claim the machine's claim, which the real board then renews as its own.
+ *
+ * cloudflared's files are linked one by one into a real directory, not as the directory itself: Frizz
+ * writes frizz.yml there, and that write must land in the sandbox, not over the real one. Everything
+ * here is best-effort — a missing file is simply not linked, and a platform that refuses symlinks gets
+ * a sandbox without shared credentials rather than no sandbox.
+ */
+function shareCredentials(realHome: string, home: string): void {
+  const link = (from: string, to: string) => {
+    try {
+      symlinkSync(from, to);
+    } catch {
+      // Best-effort, see above.
+    }
+  };
+  // The claim identity: through a link even before it exists, so a first claim from the sandbox mints
+  // the REAL machine key rather than a throwaway one.
+  mkdirSync(join(realHome, ".frizz"), { recursive: true });
+  mkdirSync(join(home, ".frizz"), { recursive: true });
+  link(join(realHome, ".frizz", "identity.key"), join(home, ".frizz", "identity.key"));
+  // gh keeps hosts.yml under its config dir; the dir itself is the unit gh reads and refreshes.
+  if (existsSync(join(realHome, ".config", "gh"))) {
+    mkdirSync(join(home, ".config"), { recursive: true });
+    link(join(realHome, ".config", "gh"), join(home, ".config", "gh"));
+  }
+  const cloudflared = join(realHome, ".cloudflared");
+  if (existsSync(cloudflared)) {
+    mkdirSync(join(home, ".cloudflared"), { recursive: true });
+    for (const entry of readdirSync(cloudflared)) {
+      if (entry === "cert.pem" || entry.endsWith(".json")) link(join(cloudflared, entry), join(home, ".cloudflared", entry));
+    }
+  }
+  // The agent CLIs, so a sandbox can dispatch a real worker — the same sharing scripts/adhoc-stack.mjs
+  // does with --creds.
+  for (const entry of [".claude", ".claude.json", ".codex"]) {
+    if (existsSync(join(realHome, entry))) link(join(realHome, entry), join(home, entry));
+  }
+  // macOS keeps the login keychain UNDER the home directory, and that is where gh and Claude keep their
+  // tokens — so a redirected HOME hides every credential above even with the config dirs linked.
+  // Measured: gh answers 401 through a linked ~/.config/gh alone, and the login through this link.
+  // Only the keychain: ~/Library/Application Support/Frizz is state and must stay throwaway.
+  if (process.platform === "darwin" && existsSync(join(realHome, "Library", "Keychains"))) {
+    mkdirSync(join(home, "Library"), { recursive: true });
+    link(join(realHome, "Library", "Keychains"), join(home, "Library", "Keychains"));
+  }
 }
 
 /** Best-effort: a sandbox that fails to delete leaves only a temp dir the OS will reap. */
@@ -347,7 +403,8 @@ Options:
   --dev                  explicitly use the unsafe source watcher and Vite/HMR, not an artifact
   --port <port>          request a fixed port for a new workspace server
   --sandbox              a disposable Frizz to try things in: throwaway home and project, its
-                         own port, deleted when this terminal closes
+                         own port, deleted when this terminal closes; credentials (gh,
+                         cloudflared, Claude, Codex, the machine's frizz.sh key) are shared
   --link                 print a fresh single-use access link for the already-running board
   --sessions             list the devices holding a session on the already-running board
   --sign-out <id|all>    revoke one device's session, or every one of them

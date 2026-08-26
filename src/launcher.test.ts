@@ -2484,3 +2484,38 @@ test("--sandbox parses, refuses the running-board queries, and prepares a dispos
   }
   assert.equal(existsSync(sandbox.home), false);
 });
+
+test("--sandbox shares credentials with the real home, but no state", () => {
+  // A fake "real" home with the files the cloud screens read.
+  const real = mkdtempSync(join(tmpdir(), "frizz-realhome-"));
+  mkdirSync(join(real, ".config", "gh"), { recursive: true });
+  writeFileSync(join(real, ".config", "gh", "hosts.yml"), "github.com:\n  user: ada\n");
+  mkdirSync(join(real, ".cloudflared"), { recursive: true });
+  writeFileSync(join(real, ".cloudflared", "cert.pem"), "cert");
+  writeFileSync(join(real, ".cloudflared", "0000-tunnel.json"), "{}");
+  writeFileSync(join(real, ".cloudflared", "frizz.yml"), "tunnel: real\n");
+  mkdirSync(join(real, ".frizz"), { recursive: true });
+  writeFileSync(join(real, ".frizz", "cloud.json"), JSON.stringify({ hostname: "real.example.com", serve: "external" }));
+  writeFileSync(join(real, ".frizz", "identity.key"), "real-key");
+
+  const cwd = process.cwd();
+  const env: NodeJS.ProcessEnv = {};
+  const sandbox = prepareSandbox(env, real);
+  try {
+    // Credentials come through, live.
+    assert.equal(readFileSync(join(sandbox.home, ".config", "gh", "hosts.yml"), "utf8"), "github.com:\n  user: ada\n");
+    assert.equal(readFileSync(join(sandbox.home, ".cloudflared", "cert.pem"), "utf8"), "cert");
+    assert.equal(readFileSync(join(sandbox.home, ".cloudflared", "0000-tunnel.json"), "utf8"), "{}");
+    assert.equal(readFileSync(join(sandbox.home, ".frizz", "identity.key"), "utf8"), "real-key");
+    // State does not: the real remote setup and the real tunnel config stay where they are, and a
+    // frizz.yml written in the sandbox lands in the sandbox.
+    assert.equal(existsSync(join(sandbox.home, ".frizz", "cloud.json")), false);
+    assert.equal(existsSync(join(sandbox.home, ".cloudflared", "frizz.yml")), false);
+    writeFileSync(join(sandbox.home, ".cloudflared", "frizz.yml"), "tunnel: sandbox\n");
+    assert.equal(readFileSync(join(real, ".cloudflared", "frizz.yml"), "utf8"), "tunnel: real\n");
+  } finally {
+    process.chdir(cwd);
+    cleanupSandbox(sandbox.home);
+    rmSync(real, { recursive: true, force: true });
+  }
+});
