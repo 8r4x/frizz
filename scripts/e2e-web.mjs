@@ -145,6 +145,9 @@ if (!url) {
   vite = spawn("nubx", ["vite", "--port", String(port), "--strictPort", "--host", "127.0.0.1"], {
     cwd: path.join(root, "packages", "web"),
     stdio: ["ignore", "pipe", "pipe"],
+    // No watcher, no HMR (see vite.config.ts): a concurrent agent editing the tree mid-run must not
+    // reload a fixture page in the middle of a test.
+    env: { ...process.env, FRIZZ_E2E_STATIC_VITE: "1" },
   });
   const viteLog = [];
   vite.stdout.on("data", (d) => viteLog.push(String(d)));
