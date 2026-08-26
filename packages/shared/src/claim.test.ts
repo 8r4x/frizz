@@ -194,3 +194,33 @@ test("a lease lapses exactly at its horizon", () => {
   assert.equal(claimLeaseExpired(NOW, NOW + CLAIM_LEASE_MS), false)
   assert.equal(claimLeaseExpired(NOW, NOW + CLAIM_LEASE_MS + 1), true)
 })
+
+test("a reserved name is told it is RESERVED, not that it is a bad hostname", async () => {
+  // `docs` is a perfectly good hostname. Telling someone it "is not usable as a hostname" is false,
+  // and it leaves them permuting a name that was never going to be available. Caught against the live
+  // registrar on 2026-08-26.
+  const verdict = await verifyClaim(
+    { v: CLAIM_PROTOCOL_VERSION, name: "docs", port: 9393, pubkey: "AAAA", issuedAt: Date.now(), sig: "AAAA", github: "x" },
+    Date.now(),
+  )
+  assert.equal(verdict.ok, false)
+  assert.equal(verdict.ok === false && verdict.reason, "reserved")
+})
+
+test("reserved beats syntax even when the spelling needs normalizing", async () => {
+  const verdict = await verifyClaim(
+    { v: CLAIM_PROTOCOL_VERSION, name: "  ADMIN  ", port: 9393, pubkey: "AAAA", issuedAt: Date.now(), sig: "AAAA", github: "x" },
+    Date.now(),
+  )
+  assert.equal(verdict.ok === false && verdict.reason, "reserved")
+})
+
+test("a genuinely malformed name is still bad-name, not reserved", async () => {
+  for (const name of ["Not A Valid Name!", "-leading", "trailing-", "a"]) {
+    const verdict = await verifyClaim(
+      { v: CLAIM_PROTOCOL_VERSION, name, port: 9393, pubkey: "AAAA", issuedAt: Date.now(), sig: "AAAA", github: "x" },
+      Date.now(),
+    )
+    assert.equal(verdict.ok === false && verdict.reason, "bad-name", `${name} was misclassified`)
+  }
+})

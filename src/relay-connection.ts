@@ -65,6 +65,14 @@ const b64url = (bytes: ArrayBuffer): string => {
  * The jitter matters more than the curve: when the relay restarts, every board on it is disconnected
  * in the same instant, and without jitter they would all return in the same instant too.
  */
+/**
+ * How long a connection must hold before it counts as a success worth resetting the backoff for.
+ *
+ * Shorter than the shortest useful session and far longer than an immediate rejection, so a relay that
+ * accepts and hangs up is treated as the failure it is.
+ */
+const SETTLED_MS = 10_000
+
 export function defaultBackoff(attempt: number, random: () => number = Math.random): number {
   const base = Math.min(30_000, 500 * 2 ** Math.min(attempt, 6));
   return Math.round(base / 2 + random() * (base / 2));
@@ -133,8 +141,15 @@ export function connectRelay(options: RelayConnectionOptions): RelayConnection {
     const next = makeSocket(url);
     socket = next;
 
+    let settled: unknown;
     next.addEventListener("open", () => {
-      attempt = 0;
+      // THE COUNTER RESETS ON A CONNECTION THAT LASTS, not on one that merely opens.
+      //
+      // Resetting here made the backoff unreachable whenever the relay accepted a socket and dropped
+      // it immediately: every attempt "succeeded", so every retry waited backoff(0) — measured at ~2
+      // reconnects per second, indefinitely, against our own edge. A board that cannot stay connected
+      // must back off like one that cannot connect at all.
+      settled = setTimer(() => { attempt = 0; }, SETTLED_MS);
       options.onStatus?.("connected");
     });
 
@@ -177,6 +192,7 @@ export function connectRelay(options: RelayConnectionOptions): RelayConnection {
 
     const dropped = () => {
       if (socket !== next) return; // a socket we already replaced
+      if (settled !== undefined) { clearTimer(settled); settled = undefined; }
       socket = null;
       // The relay is gone, so every terminal riding on it is too. Closing the local ends stops a pty
       // from being held open by a session nothing can reach any more.

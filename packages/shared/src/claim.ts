@@ -100,6 +100,8 @@ export interface ClaimRequest extends ClaimPayload {
 export type ClaimRejection =
   | "bad-version"
   | "bad-name"
+  /** A perfectly good hostname that this service keeps for itself. Distinct from bad-name on purpose. */
+  | "reserved"
   | "bad-port"
   | "bad-pubkey"
   | "bad-signature"
@@ -162,6 +164,16 @@ export function normalizeClaimName(raw: string): string {
   // interpreted as an encoded internationalized label by resolvers rather than read literally.
   if (name.slice(2, 4) === "--") throw new Error("a name may not have two hyphens in the third and fourth positions")
   return name
+}
+
+/**
+ * Just enough normalization to compare against the reserved list.
+ *
+ * NOT normalizeClaimName, which THROWS for a reserved name — using it here would defeat the whole
+ * point of telling the two apart.
+ */
+function normalizeForReservedCheck(raw: string): string {
+  return raw.trim().toLowerCase()
 }
 
 export function claimNameIsValid(raw: string): boolean {
@@ -256,9 +268,14 @@ export async function verifyClaim(request: unknown, now: number): Promise<ClaimV
   const candidate = request as Partial<ClaimRequest>
   if (candidate.v !== CLAIM_PROTOCOL_VERSION) return { ok: false, reason: "bad-version" }
 
-  if (typeof candidate.name !== "string" || !claimNameIsValid(candidate.name)) {
-    return { ok: false, reason: "bad-name" }
+  if (typeof candidate.name !== "string") return { ok: false, reason: "bad-name" }
+  // RESERVED IS NOT MALFORMED, and collapsing the two told anyone who tried `docs` or `admin` that
+  // their name "is not usable as a hostname" — which is false, and leaves them permuting a name that
+  // was never going to be available. Checked first, because normalizeClaimName rejects both.
+  if (RESERVED_CLAIM_NAMES.has(normalizeForReservedCheck(candidate.name))) {
+    return { ok: false, reason: "reserved" }
   }
+  if (!claimNameIsValid(candidate.name)) return { ok: false, reason: "bad-name" }
   // The name must arrive ALREADY normalized. Accepting a spelling that merely normalizes to a valid
   // name would let two different signed requests describe one hostname.
   const name = normalizeClaimName(candidate.name)

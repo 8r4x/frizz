@@ -114,6 +114,7 @@ export type ClaimOutcome =
 const MESSAGES: Record<ClaimFailure, string> = {
   "bad-version": "this Frizz is too old to claim a name — upgrade and try again",
   "bad-name": "that name is not usable as a hostname",
+  reserved: "that name is reserved — pick another",
   "bad-port": "the port must be between 1 and 65535",
   "bad-pubkey": "the identity key was unreadable",
   "bad-signature": "the claim was not signed by the key it names",

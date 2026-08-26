@@ -96,9 +96,11 @@ test("a dropped connection comes back by itself", async () => {
     h.sockets[0]!.fire("close");
     assert.ok(h.status.some((s) => s.startsWith("disconnected")));
     assert.ok(h.status.some((s) => s.startsWith("retrying")));
-    assert.equal(h.timers.length, 1, "no retry was scheduled");
+    // Two timers are armed by now: the settle timer that `open` schedules (which resets the backoff
+    // only once a connection has LASTED) and the retry. The retry is the later of the two.
+    assert.equal(h.timers.length, 2, "the settle timer and the retry were not both scheduled");
 
-    h.timers[0]!();
+    h.timers[h.timers.length - 1]!();
     for (let i = 0; i < 50 && h.sockets.length < 2; i++) await new Promise((r) => setImmediate(r));
     assert.equal(h.sockets.length, 2, "it did not dial again");
   } finally { conn.stop(); }
@@ -144,4 +146,47 @@ test("the handshake is signed over name, key and time together", async () => {
   const c = await signRelayHandshake("eve", identity, 1000);
   assert.notEqual(a.sig, b.sig, "the timestamp is not covered");
   assert.notEqual(a.sig, c.sig, "the name is not covered");
+});
+
+test("a socket that opens and is dropped at once still backs off", async () => {
+  // MEASURED AGAINST THE LIVE RELAY, 2026-08-26: the board reconnected roughly twice a second,
+  // forever, because every attempt reached "open" before dying and the counter reset there. A board
+  // that cannot STAY connected has to back off like one that cannot connect at all.
+  const identity = await generateClaimIdentity();
+  const delays: number[] = [];
+  const h = harness({ backoff: (attempt) => { delays.push(attempt); return 1; } });
+  const conn = await h.start(identity);
+  try {
+    for (let i = 0; i < 4; i++) {
+      const socket = h.sockets[h.sockets.length - 1]!;
+      socket.fire("open");
+      socket.fire("close");
+      // Run the reconnect timer, but never the settle timer — the connection never lasted.
+      h.timers.pop()?.();
+      await new Promise((r) => setTimeout(r, 1));
+    }
+    assert.deepEqual(delays, [0, 1, 2, 3], `the backoff never climbed: ${JSON.stringify(delays)}`);
+  } finally { conn.stop(); }
+});
+
+test("a connection that HOLDS resets the backoff, so a long-lived board starts fresh next time", async () => {
+  const identity = await generateClaimIdentity();
+  const delays: number[] = [];
+  const h = harness({ backoff: (attempt) => { delays.push(attempt); return 1; } });
+  const conn = await h.start(identity);
+  try {
+    h.sockets[0]!.fire("open");
+    h.sockets[0]!.fire("close");
+    h.timers.pop()?.();
+    await new Promise((r) => setTimeout(r, 1));
+
+    // This one stays up: fire the settle timer before it drops.
+    h.sockets[1]!.fire("open");
+    const settle = h.timers.pop();
+    settle?.();
+    h.sockets[1]!.fire("close");
+    h.timers.pop()?.();
+    await new Promise((r) => setTimeout(r, 1));
+    assert.deepEqual(delays, [0, 0], `a connection that lasted did not reset the backoff: ${JSON.stringify(delays)}`);
+  } finally { conn.stop(); }
 });
