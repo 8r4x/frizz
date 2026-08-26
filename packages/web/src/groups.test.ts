@@ -580,7 +580,11 @@ test("isHeld: an awaiting fence the server honoured is Held; anything it did not
   // Honoured ⇒ the server cleared needsYou, and the fence says the rest.
   assert.equal(isHeld(thread({ runtime: "turn-idle", lastFence: awaitingShell })), true)
   assert.equal(isHeld(thread({ runtime: "exited", lastFence: awaitingShell })), true)
-  assert.equal(isHeld(thread({ runtime: "turn-idle", lastFence: awaitingPrWatch })), true, "a PR park is a park like any other now")
+  // The FENCE alone, with no awaitingBackground behind it — a shape the server stopped emitting for a
+  // PR park when it started flagging one (2026-08-13). A real PR park carries the flag and is NOT Held,
+  // because a wait whose reviews may never arrive must stay visible: see parkedAwaitingHint, and the
+  // prPark case in the armed-timer test below, which pins the shape board.ts actually sends.
+  assert.equal(isHeld(thread({ runtime: "turn-idle", lastFence: awaitingPrWatch })), true, "the client trusts the excusal, whatever the fence names")
   // NOT honoured ⇒ the server left it in the queue, and needsYou is what says so. The fence being
   // present changes nothing: an unverifiable declaration is not a park.
   assert.equal(isHeld(thread({ runtime: "turn-idle", needsYou: true, lastFence: awaitingShell })), false, "queued means not held, fence or no fence")
