@@ -49,6 +49,28 @@ const menuRows = (): Promise<string[]> => page!.evaluate((sel) =>
   [...document.querySelectorAll(`${sel} button`)].map((row) => row.querySelector("span")!.textContent!), MENU)
 const menuVisible = (): Promise<boolean> => page!.evaluate((sel) => Boolean(document.querySelector(sel)), MENU)
 const boxValue = (): Promise<string> => page!.$eval(BOX, (el) => (el as HTMLTextAreaElement).value)
+// Accepting a suggestion restores the caret in a requestAnimationFrame — the same idiom the
+// Option-Enter newline path uses, because a controlled re-render has to commit before the offset means
+// anything. A human cannot type inside that ~16ms; puppeteer's `type()` dispatches CDP events with no
+// frame pacing and does, which lands the first characters at the OLD offset and scrambles the draft
+// ("/frizz:gh heck the PRc"). Measured at roughly one run in four, on this file's own base. So wait for
+// the caret the product actually reaches rather than racing it — this asserts the post-accept state, it
+// does not paper over it.
+const waitForCaretAtEnd = (): Promise<unknown> => page!.waitForFunction((sel) => {
+  const el = document.querySelector(sel) as HTMLTextAreaElement | null
+  return Boolean(el) && el!.selectionStart === el!.value.length && el!.selectionEnd === el!.value.length
+}, {}, BOX)
+// Each row's SOURCE cell, as the operator reads it: the visible label, and the cell's own box so the
+// column's uniformity can be asserted rather than eyeballed. The invisible sizers under the label are
+// excluded by `:not([aria-hidden])` — they exist only to reserve the width.
+type SourceCell = { label: string; left: number; right: number }
+const menuSources = (): Promise<Array<SourceCell | null>> => page!.evaluate((sel) =>
+  [...document.querySelectorAll(`${sel} button`)].map((row) => {
+    const cell = row.querySelector("span.grid > span:not([aria-hidden])")
+    if (!cell) return null
+    const box = cell.getBoundingClientRect()
+    return { label: cell.textContent ?? "", left: Math.round(box.left), right: Math.round(box.right) }
+  }), MENU)
 
 // The app-wide send chord. Held as Meta because <Composer> accepts metaKey OR ctrlKey, and puppeteer
 // sets the modifier on the CDP event regardless of the host OS.
@@ -72,7 +94,7 @@ test("typing `/` opens the menu once fetched, filters as the name grows, and a s
   await open()
   await page!.type(BOX, "/")
   await page!.waitForSelector(MENU)
-  assert.equal((await menuRows()).length, 5, "a bare slash offers the whole list")
+  assert.equal((await menuRows()).length, 7, "a bare slash offers the whole list")
 
   await page!.type(BOX, "fr")
   // Prefix matches lead; the namespaced `frizz:gh` is still reachable this way.
@@ -81,6 +103,28 @@ test("typing `/` opens the menu once fetched, filters as the name grows, and a s
   await page!.type(BOX, "izz-stack now")
   assert.equal(await menuVisible(), false, "arguments have begun — the menu must be gone")
   assert.equal((await hooks()).fetches, 1, "the list is fetched exactly once")
+  assert.deepEqual(errors, [], `no page errors: ${errors.join(" | ")}`)
+})
+
+// Where a skill came FROM, which the harness reports and frizz normalizes to one vocabulary. The
+// column has to be ONE width across every row — including the row whose source is unknown — or an
+// unlabelled row's description truncates ~50px further right than its neighbours' and the list reads
+// ragged. The width is reserved by invisible sizers so the browser measures it in whichever of this
+// app's two fonts is set, rather than by a constant that could only be right in one.
+test("each suggestion names its source, in one column that every row shares", {
+  skip: !baseUrl,
+  timeout: 150_000,
+}, async () => {
+  await open()
+  await page!.type(BOX, "/")
+  await page!.waitForSelector(MENU)
+  const cells = await menuSources()
+  assert.deepEqual(cells.map((cell) => cell?.label), ["project", "plugin", "project", "global", "built-in", "global", ""],
+    "the harness's own scopes, in frizz's vocabulary — and an empty cell where it reported none")
+  const lefts = new Set(cells.map((cell) => cell!.left))
+  const rights = new Set(cells.map((cell) => cell!.right))
+  assert.equal(lefts.size, 1, `every source cell starts at one x: ${[...lefts].join(", ")}`)
+  assert.equal(rights.size, 1, `every source cell ends at one x: ${[...rights].join(", ")}`)
   assert.deepEqual(errors, [], `no page errors: ${errors.join(" | ")}`)
 })
 
@@ -97,6 +141,7 @@ test("ArrowDown+Enter completes the highlighted skill instead of sending, and th
   assert.equal(await boxValue(), "/frizz:gh ", "Enter with the menu open completes, with a trailing space for arguments")
   assert.deepEqual((await hooks()).submitted, [], "…and must NOT send the draft")
 
+  await waitForCaretAtEnd()
   await page!.type(BOX, "check the PR")
   await pressSendChord()
   assert.deepEqual((await hooks()).submitted, ["/frizz:gh check the PR"], "⌘-Enter with the menu closed sends as always")

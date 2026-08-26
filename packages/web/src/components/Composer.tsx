@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { ArrowUp, FileText, Loader2, Paperclip, X } from "lucide-react"
-import { ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, isAllowedAttachmentName } from "@frizz/shared"
+import { ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, isAllowedAttachmentName, type ThreadSkill } from "@frizz/shared"
 import { showToast } from "../store.ts"
 import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
 import { shouldInterruptSubmitComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
@@ -44,6 +44,18 @@ async function uploadAttachment(file: File, name: string): Promise<string | null
   return json.path ?? null
 }
 
+// Where a `/` suggestion came FROM, in this repo's own vocabulary rather than either harness's. Claude
+// says `projectSettings`/`userSettings`, codex says `repo`/`user`; the server normalizes both to the
+// shared enum and this names them the way the docs and the maintainer do — a skill in the checkout is
+// "project", one in the home directory is "global" (see CLAUDE.md § project-local skills). Rendered in
+// petite caps: a metadata tag the eye can skip, not more description to read.
+const SKILL_SOURCE_LABEL: Record<NonNullable<ThreadSkill["source"]>, string> = {
+  project: "project",
+  user: "global",
+  builtin: "built-in",
+  plugin: "plugin",
+}
+
 export function Composer({
   value,
   onChange,
@@ -85,7 +97,7 @@ export function Composer({
   // whatever the thread's own harness reports — the caller owns sourcing entirely; this component only
   // renders and completes. Surfaces without a session to ask (the dispatch composer) omit it and the
   // whole affordance is inert.
-  slashSuggest?: () => Promise<Array<{ name: string; description: string }>>
+  slashSuggest?: () => Promise<ThreadSkill[]>
   // INTERRUPT AND SEND — what the FORCED chord (⌘/Ctrl-Enter) does while the thread's worker is
   // mid-turn AND its runtime can be preempted; the caller owns that policy entirely. When it is not
   // set, the same chord is an ordinary send, so ⌘-Enter never goes dead (three Enter keys everywhere:
@@ -281,7 +293,7 @@ export function Composer({
   // read as "no suggestions", never as an error the operator has to dismiss). `dismissedFor` records
   // the exact draft an Escape closed the menu over, so it stays closed until the draft CHANGES —
   // without it the menu would reopen on the very next render.
-  const [skillItems, setSkillItems] = useState<Array<{ name: string; description: string }> | null>(null)
+  const [skillItems, setSkillItems] = useState<ThreadSkill[] | null>(null)
   const [suggestSel, setSuggestSel] = useState(0)
   const [dismissedFor, setDismissedFor] = useState<string | null>(null)
   // Active while the draft is exactly one `/`-led token — the shape of a skill invocation still being
@@ -308,6 +320,14 @@ export function Composer({
     return [...starts, ...contains]
   }, [slashActive, skillItems, dismissedFor, prose])
   const suggestOpen = suggestions.length > 0
+  // The DISTINCT source labels in the list on screen, which every row then reserves room for (see the
+  // sizer in the menu below). Empty when no visible suggestion reports a source — a harness that says
+  // nothing must not cost the descriptions a column of width.
+  const suggestSourceLabels = useMemo(() => {
+    const labels = new Set<string>()
+    for (const s of suggestions) if (s.source) labels.add(SKILL_SOURCE_LABEL[s.source])
+    return [...labels]
+  }, [suggestions])
   // Reset the highlight whenever the draft changes: the filtered list under it just changed too.
   useEffect(() => { setSuggestSel(0) }, [prose])
   // Keep the highlighted row in view when arrowing through a list taller than the menu.
@@ -474,6 +494,24 @@ export function Composer({
             >
               <span className="shrink-0 text-[12px] font-medium text-fg">/{s.name}</span>
               {s.description && <span className="min-w-0 truncate text-[11px] text-muted">{s.description}</span>}
+              {/* The source column. One WIDTH for every row, including the rows with no source to
+                  show — otherwise an unlabelled row's description truncates 50px further right than
+                  its neighbours' and the list reads ragged. The width is reserved by stacking every
+                  label in the list invisibly under the real one, so the BROWSER measures it: a
+                  hand-fitted px constant would be right in one of this app's two fonts and wrong in
+                  the other (AGENTS.md). Measured ink gap from the truncated description ahead of it:
+                  13.16px against 8.87px between a name and its own description — the tag reads as a
+                  separate column, which is what it is. */}
+              {suggestSourceLabels.length > 0 && (
+                <span className="ml-auto grid shrink-0 text-[10px]">
+                  {suggestSourceLabels.map((label) => (
+                    <span key={label} aria-hidden className="petite-caps invisible col-start-1 row-start-1">{label}</span>
+                  ))}
+                  <span className="petite-caps col-start-1 row-start-1 text-right text-muted/70">
+                    {s.source ? SKILL_SOURCE_LABEL[s.source] : ""}
+                  </span>
+                </span>
+              )}
             </button>
           ))}
         </div>

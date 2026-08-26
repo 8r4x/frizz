@@ -51,6 +51,7 @@ import {
 } from "./claude-agent-sdk-protocol.ts"
 import { inheritWorkerEnvironment } from "./worker-env.ts"
 import { redactCredentialSyntax } from "../credential-redaction.ts"
+import type { ThreadSkillSource } from "@frizz/shared"
 
 export const CLAUDE_AGENT_SDK_FOUNDATION_FLAG = "FRIZZ_CLAUDE_AGENT_SDK_FOUNDATION"
 export const CLAUDE_AGENT_SDK_CLIENT_APP = "frizz/claude-agent-sdk-foundation"
@@ -458,6 +459,11 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
     await this.ready()
     this.assertOpen()
     const result = await this.awaitOpenControl(this.sdkQuery.reloadPlugins())
+    // A reload is the one moment a skill's source can change under a live session — a plugin appears,
+    // a project skill is added — so the memoized source map is dropped here and re-fetched on the next
+    // listing. Dropped AFTER the reload lands: an in-flight fetch racing a reload would otherwise be
+    // re-cached stale.
+    this.skillSourcesPromise = null
     // Everything crossing back is bounded: this is provider-shaped data heading for a toast, and the
     // server must not relay an unbounded array of names it never sized.
     return {
@@ -479,17 +485,68 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
   // `supportedCommands()` would re-serve from its cache), and the init frame's `skills` array is the
   // harness's own verdict on which of those are skills rather than built-in commands. The intersection
   // is exactly "what `/name` invokes a skill", with descriptions, and zero frizz-side discovery.
+  //
+  // Where each one CAME FROM is a second question, and claude answers it in exactly one place:
+  // `getContextUsage().skills.skillFrontmatter[].source`. Not in `SlashCommand`, which carries only
+  // {name, description, argumentHint, aliases}. The tempting free alternative — the CLI appends the
+  // source to the description as a parenthetical, " (user)" / " (project)" — was measured and rejected:
+  // it names only those two of the four roots, and the same regex false-positives on descriptions that
+  // legitimately end in a parenthetical (`/deep-research` ends "(dynamic workflow)", `/clear`
+  // "(resumable with /resume)", `/fast` "(Opus 4.8)"). A wrong label is worse than none.
   async listSkills(): Promise<ClaudeSkillInfo[]> {
     const initialization = await this.initializationResult()
+    const sources = await this.skillSources()
     const skillNames = new Set(this.initSkills)
     const skills: ClaudeSkillInfo[] = []
     for (const command of initialization.commands) {
       if (!command.name || !skillNames.has(command.name)) continue
+      const source = sources.get(command.name)
       // The wire cap for a typeahead row is tighter than the 4KB the initialize mapper allows a
       // command description — the shared ThreadSkill schema rejects anything past 1024.
-      skills.push({ name: command.name, description: command.description.slice(0, 1024) })
+      skills.push({ name: command.name, description: withoutRedundantSource(command.description, source).slice(0, 1024), source })
     }
     return skills
+  }
+
+  // The name→source map behind listSkills, fetched ONCE per session and memoized on the promise.
+  //
+  // `getContextUsage()` is a real control round trip that re-counts tokens every time — measured at
+  // 1222ms then 1105ms against claude 2.1.246, so the CLI does not cache it either. Paying that on
+  // every `/` would be felt; paying it once, lazily, on the first `/` a thread ever opens is not, and
+  // the web caches the finished listing per slug on top of that. Deliberately NOT prefetched at init:
+  // most threads never open the menu, and taxing every session start for a menu nobody asked for is
+  // the wrong trade.
+  //
+  // A failure resolves to an EMPTY map rather than rejecting: the source is decoration, and losing it
+  // must never cost the operator the listing itself.
+  private skillSourcesPromise: Promise<Map<string, ThreadSkillSource>> | null = null
+  private skillSources(): Promise<Map<string, ThreadSkillSource>> {
+    this.skillSourcesPromise ??= this.fetchSkillSources().catch(() => new Map<string, ThreadSkillSource>())
+    return this.skillSourcesPromise
+  }
+
+  private async fetchSkillSources(): Promise<Map<string, ThreadSkillSource>> {
+    this.assertOpen()
+    // Deliberately NOT gated on ready(), unlike the mutating verbs above. listSkills has always
+    // answered from the initialize handshake alone, and real claude emits the session's first init
+    // FRAME only once a turn starts — so awaiting ready here would newly block a listing that used to
+    // succeed, on a session that has not run yet. get_context_usage rides the same control channel as
+    // initialize, so it needs no more than an open one.
+    const usage = await this.awaitOpenControl(this.sdkQuery.getContextUsage())
+    const rows = boundedArray(usage?.skills?.skillFrontmatter, "contextUsage.skills.skillFrontmatter", 1024)
+    const sources = new Map<string, ThreadSkillSource>()
+    for (const [index, entry] of rows.entries()) {
+      // Per-row DEGRADE, not throw: one malformed entry costs its own label, never the whole map. The
+      // rest of this adapter is strict because a bad frame there means a corrupt session; here it means
+      // one typeahead row renders without a tag.
+      try {
+        const row = objectValue(entry, `contextUsage.skills.skillFrontmatter[${index}]`)
+        const name = safeText(row.name, `contextUsage.skills.skillFrontmatter[${index}].name`, 512)
+        const source = claudeSkillSource(safeText(row.source, `contextUsage.skills.skillFrontmatter[${index}].source`, 64))
+        if (name && source) sources.set(name, source)
+      } catch { continue }
+    }
+    return sources
   }
 
   // Unqueue a follow-up the operator has taken back.
@@ -1601,6 +1658,36 @@ function mapModelContextWindows(raw: unknown): Record<string, number> | undefine
     count += 1
   }
   return count === 0 ? undefined : out
+}
+
+// Claude appends its own source to a skill's description as a trailing parenthetical — measured on
+// 2.1.246, ` (user)` on 24 of 77 commands and ` (project)` on 6. Once frizz renders the source as its
+// own column that suffix is not just redundant but CONTRADICTORY, because the column says "global"
+// where the sentence says "(user)".
+//
+// Dropped only when the suffix and the source frizz is about to render are the SAME claim — the
+// parenthetical must match the very root `getContextUsage` reported for that skill. That is what makes
+// this safe where a bare regex is not: `/deep-research` ends "(dynamic workflow)" and `/fast` ends
+// "(Opus 4.8)", and neither is a source, so neither can match. The one measured case where the two
+// disagree — a plugin skill whose description still ends "(user)" — keeps its text untouched, which is
+// the right answer for a claim frizz cannot confirm.
+const CLAUDE_SOURCE_SUFFIX: Partial<Record<ThreadSkillSource, string>> = { user: " (user)", project: " (project)" }
+function withoutRedundantSource(description: string, source: ThreadSkillSource | undefined): string {
+  const suffix = source && CLAUDE_SOURCE_SUFFIX[source]
+  if (!suffix || !description.endsWith(suffix)) return description
+  return description.slice(0, -suffix.length).trimEnd()
+}
+
+// Claude's skill-source vocabulary → frizz's. Measured against claude 2.1.246 / SDK 0.3.207, where
+// `getContextUsage().skills.skillFrontmatter[].source` reported exactly these four across 48 skills.
+// Anything else answers undefined, so a CLI that grows a fifth root leaves the row unlabelled rather
+// than mislabelled — which is the whole point of the source being optional on the wire.
+function claudeSkillSource(source: string): ThreadSkillSource | undefined {
+  if (source === "projectSettings") return "project"
+  if (source === "userSettings") return "user"
+  if (source === "built-in") return "builtin"
+  if (source === "plugin") return "plugin"
+  return undefined
 }
 
 function mapControlInitialization(raw: SDKControlInitializeResponse): ClaudeControlInitialization {

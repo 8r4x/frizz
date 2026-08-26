@@ -145,6 +145,28 @@ function handleHostControl(message) {
     respond(message.request_id, {})
     return
   }
+  // The ONLY place real claude reports where a skill was resolved from — `SlashCommand` carries no
+  // source at all. Shaped like 2.1.246's answer: "projectSettings" is a root frizz maps, the invented
+  // root proves an unmapped one leaves its row unlabelled rather than mislabelled, and "compact" is a
+  // frontmatter entry that is NOT a skill, so it must never reach the listing.
+  if (request.subtype === "get_context_usage") {
+    record({ kind: "context-usage" })
+    if (scenario === "context-usage-failure") return respondError(message.request_id, "context usage unavailable")
+    respond(message.request_id, {
+      skills: {
+        totalSkills: 3,
+        includedSkills: 3,
+        tokens: 120,
+        skillFrontmatter: [
+          { name: "review", source: "projectSettings", tokens: 40 },
+          { name: "explore", source: "someFutureRoot", tokens: 40 },
+          { name: "compact", source: "built-in", tokens: 40 },
+        ],
+      },
+      isAutoCompactEnabled: false,
+    })
+    return
+  }
   if (request.subtype === "stop_task") {
     record({ kind: "stop-task", taskId: request.task_id })
     if (scenario === "stop-failure") return respondError(message.request_id, "task could not be stopped")
@@ -515,11 +537,15 @@ function handleUserMessage(message) {
 
 function initializationPayload() {
   return {
-    // "review" is also named by the init frame's `skills` array below; "compact" is not — it stands in
-    // for a built-in command, which listSkills must filter out of the skill list.
+    // "review" and "explore" are also named by the init frame's `skills` array below; "compact" is
+    // not — it stands in for a built-in command, which listSkills must filter out of the skill list.
     commands: [
-      { name: "review", description: "Review changes", argumentHint: "<path>", aliases: ["inspect"] },
+      // Real claude appends its own root to a skill description as a trailing parenthetical. "review"
+      // carries the one that MATCHES its reported source and must lose it; "explore" carries one that
+      // does not describe any source at all and must keep it.
+      { name: "review", description: "Review changes (project)", argumentHint: "<path>", aliases: ["inspect"] },
       { name: "compact", description: "Compact the conversation", argumentHint: "", aliases: [] },
+      { name: "explore", description: "Explore the repository (dynamic workflow)", argumentHint: "", aliases: [] },
     ],
     agents: [{ name: "Explore", description: "Explore the repository", model: "sonnet" }],
     output_style: "default",
@@ -549,9 +575,9 @@ function emitSystemInit() {
     mcp_servers: [{ name: "example-mcp", status: "connected" }],
     model: "claude-sonnet-test",
     permissionMode: optionValue("--permission-mode") ?? "default",
-    slash_commands: ["review"],
+    slash_commands: ["review", "explore"],
     output_style: "default",
-    skills: ["review"],
+    skills: ["review", "explore"],
     plugins: [{ name: "fake-plugin", path: "/tmp/fake-plugin" }],
     capabilities: scenario === "controls-no-receipt" ? [] : ["interrupt_receipt_v1", "future_unknown_capability"],
     uuid: "20000000-0000-4000-8000-000000000001",

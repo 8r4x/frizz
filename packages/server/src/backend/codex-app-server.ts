@@ -15,6 +15,7 @@ import {
   type InteractionRecord,
   type InteractionRequest as InteractionRequestType,
   type ResolveInteractionInput,
+  type ThreadSkillSource,
 } from "@frizz/shared"
 import {
   InteractionStoreError,
@@ -1570,9 +1571,24 @@ const SkillsListResponse = z.object({
       name: z.string(),
       description: z.string().optional(),
       enabled: z.boolean().optional(),
+      // The root the app-server resolved this skill from — measured against codex-cli 0.146.0 as
+      // `repo` (`<cwd>/.agents/skills/…`), `user` (`~/.agents/skills/…`) and `system`
+      // (`~/.codex/skills/.system/…`). Kept as a free string, not an enum: an unmapped value must
+      // leave the row unlabelled, never fail the listing (see codexSkillSource).
+      scope: z.string().optional(),
     }).passthrough()).optional(),
   }).passthrough()).optional(),
 }).passthrough()
+
+// Codex's scope vocabulary → frizz's. `system` is the app-server's own bundled set, which is the same
+// thing Claude calls `built-in`. Anything unrecognized answers undefined, so a newer codex that grows
+// a fourth root renders an unlabelled row rather than a wrong one.
+function codexSkillSource(scope: string | undefined): ThreadSkillSource | undefined {
+  if (scope === "repo") return "project"
+  if (scope === "user") return "user"
+  if (scope === "system") return "builtin"
+  return undefined
+}
 // `thread/resume` reports the thread's EFFECTIVE sandbox back as a tagged SandboxPolicy — the one
 // authoritative read of live server state frizz gets, and what keeps the binding's sandbox cache honest
 // whether the resume was cold (our override applied) or a live rejoin (our override was ignored).
@@ -2151,14 +2167,17 @@ export class CodexAppServerBridge {
   // The thread's invocable skills, asked of the app-server itself (`skills/list` scoped to the
   // session's cwd). Read-only and cheap — the server caches its scan — so unlike interruptTurn it
   // needs no binding state beyond the cwd, and a detached binding can still be listed for.
-  async listSkills(threadSlug: string, sessionId: string): Promise<Array<{ name: string; description: string }>> {
+  async listSkills(
+    threadSlug: string,
+    sessionId: string,
+  ): Promise<Array<{ name: string; description: string; source: ThreadSkillSource | undefined }>> {
     const releaseOperation = this.beginOperation()
     try {
       const connection = await this.ensureConnected()
       const binding = this.bindingForScope(threadSlug, sessionId)
       if (!binding) throw new Error("Codex app-server skill listing requires a bridge-owned session")
       const response = SkillsListResponse.parse(await connection.request("skills/list", { cwds: [binding.cwd] }))
-      const skills: Array<{ name: string; description: string }> = []
+      const skills: Array<{ name: string; description: string; source: ThreadSkillSource | undefined }> = []
       const seen = new Set<string>()
       for (const entry of response.data ?? []) {
         for (const skill of entry.skills ?? []) {
@@ -2167,7 +2186,11 @@ export class CodexAppServerBridge {
           if (skills.length >= 1024) return skills
           if (seen.has(skill.name)) continue
           seen.add(skill.name)
-          skills.push({ name: skill.name.slice(0, 512), description: (skill.description ?? "").slice(0, 1024) })
+          skills.push({
+            name: skill.name.slice(0, 512),
+            description: (skill.description ?? "").slice(0, 1024),
+            source: codexSkillSource(skill.scope),
+          })
         }
       }
       return skills

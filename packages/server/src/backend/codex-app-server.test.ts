@@ -216,6 +216,9 @@ class FakeAppServerProcess extends EventEmitter implements CodexAppServerProcess
         errors: [],
         skills: [
           { name: "frizz-stack", description: "Boot a disposable Frizz", enabled: true, path: `${cwd}/.agents/skills/frizz-stack/SKILL.md`, scope: "repo" },
+          { name: "agent-browser", description: "Drive a browser", enabled: true, path: "/home/x/.agents/skills/agent-browser/SKILL.md", scope: "user" },
+          { name: "imagegen", description: "Generate an image", enabled: true, path: "/home/x/.codex/skills/.system/imagegen/SKILL.md", scope: "system" },
+          { name: "from-the-future", description: "Resolved from a root frizz has no name for", enabled: true, path: "/elsewhere/SKILL.md", scope: "someFutureRoot" },
           { name: "switched-off", description: "Present on disk but disabled", enabled: false, path: `${cwd}/off/SKILL.md`, scope: "user" },
         ],
       })) } })
@@ -1021,7 +1024,14 @@ test("listSkills asks the app-server for the session cwd's skills and drops disa
   const h = harness()
   const binding = await h.bridge.startDisposableSession({ threadSlug: "skills-thread", sessionId: "skills-session", cwd: h.dir })
   const skills = await h.bridge.listSkills(binding.threadSlug, binding.sessionId)
-  assert.deepEqual(skills, [{ name: "frizz-stack", description: "Boot a disposable Frizz" }])
+  // Codex's own scope vocabulary, normalized: repo→project, user→user, system→builtin. A scope frizz
+  // has no mapping for keeps its row and loses only its label — a wrong label is worse than none.
+  assert.deepEqual(skills, [
+    { name: "frizz-stack", description: "Boot a disposable Frizz", source: "project" },
+    { name: "agent-browser", description: "Drive a browser", source: "user" },
+    { name: "imagegen", description: "Generate an image", source: "builtin" },
+    { name: "from-the-future", description: "Resolved from a root frizz has no name for", source: undefined },
+  ])
   const request = h.processes[0]!.clientRequests.find((message) => message.method === "skills/list")!
   assert.deepEqual(request.params, { cwds: [h.dir] })
   await assert.rejects(h.bridge.listSkills("unknown-thread", "unknown-session"), /bridge-owned session/)

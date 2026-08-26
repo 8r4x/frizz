@@ -62,6 +62,7 @@ import {
   ThreadProfileOptionsResult,
   ThreadSkillsInput,
   ThreadSkillsResult,
+  type ThreadSkill,
   SetThreadProfileInput,
   SetThreadProfileResult,
   DispatchPreferences,
@@ -1938,7 +1939,7 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         const row = ctx.storage.getSession(input.slug)
         if (!row) throw new Error(`thread ${input.slug} has no session to ask for skills`)
-        let skills: Array<{ name: string; description: string }>
+        let skills: ThreadSkill[]
         if (row.backend === "codex") {
           if (!isAppServerCodexRow(row) || !ctx.codexAppServer) {
             throw new Error("This Codex thread has no app-server session to ask for skills")

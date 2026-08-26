@@ -101,9 +101,12 @@ test("real SDK + fake executable: init owns the requested session, input streams
   })
   try {
     const control = await withTimeout(harness.handle.initializationResult(), "initialization result")
+    // VERBATIM, trailing "(project)" and all. The initialize mapping is the raw provider surface; the
+    // one place a redundant source suffix is dropped is listSkills, which is the only caller that also
+    // renders a source column beside it.
     assert.deepEqual(control.commands[0], {
       name: "review",
-      description: "Review changes",
+      description: "Review changes (project)",
       argumentHint: "<path>",
       aliases: ["inspect"],
     })
@@ -199,10 +202,41 @@ test("listSkills intersects the initialize command list with the init frame's sk
   const harness = startHarness("basic")
   try {
     await withTimeout(harness.handle.ready(), "session init")
-    // The fixture's initialize response carries TWO commands ("review", "compact") and its init frame
-    // names only "review" as a skill: the built-in stand-in must not surface as a skill.
+    // The fixture's initialize response carries THREE commands ("review", "compact", "explore") and
+    // its init frame names only "review" and "explore" as skills: the built-in stand-in must not
+    // surface as a skill. Each carries the source `get_context_usage` reported for it — "review" from
+    // a root frizz maps, "explore" from an invented one that must degrade to no label rather than a
+    // wrong one. "compact" has a source too and still must not appear.
     const skills = await withTimeout(harness.handle.listSkills(), "skill listing")
-    assert.deepEqual(skills, [{ name: "review", description: "Review changes" }])
+    assert.deepEqual(skills, [
+      // "review" arrives as "Review changes (project)" and loses the suffix, because the column is
+      // about to say the same thing. "explore" keeps "(dynamic workflow)": it is a parenthetical, not
+      // a source, and nothing frizz renders would contradict it.
+      { name: "review", description: "Review changes", source: "project" },
+      { name: "explore", description: "Explore the repository (dynamic workflow)", source: undefined },
+    ])
+    // The source map is memoized: a second listing must not re-ask for the context usage, which is a
+    // real ~1.2s round trip against a live CLI.
+    await withTimeout(harness.handle.listSkills(), "second skill listing")
+    assert.equal(readCapture(harness.capturePath).filter((row) => row.kind === "context-usage").length, 1)
+  } finally {
+    await harness.close()
+  }
+})
+
+test("listSkills still answers when the harness cannot report where its skills came from", { timeout: 10_000 }, async () => {
+  const harness = startHarness("context-usage-failure")
+  try {
+    await withTimeout(harness.handle.ready(), "session init")
+    // The source is decoration. Losing it must cost the labels and NOTHING else — a typeahead that
+    // fails shut here would read to the operator as a thread with no skills at all.
+    const skills = await withTimeout(harness.handle.listSkills(), "skill listing")
+    assert.deepEqual(skills, [
+      // With no source to render, "(project)" is the only thing telling the operator where this came
+      // from — so it stays. The suffix is only redundant next to a column that repeats it.
+      { name: "review", description: "Review changes (project)", source: undefined },
+      { name: "explore", description: "Explore the repository (dynamic workflow)", source: undefined },
+    ])
   } finally {
     await harness.close()
   }

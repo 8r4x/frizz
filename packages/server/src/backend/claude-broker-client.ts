@@ -3,6 +3,7 @@
 // auto-reconnects — both while the daemon is still binding right after spawn, and if the connection
 // drops — which is exactly what lets frizz reattach to a LIVE session after frizz itself restarts.
 import net from "node:net"
+import { ThreadSkillSource } from "@frizz/shared"
 import type {
   ClaudeDiagnostic,
   ClaudeInputMessage,
@@ -71,6 +72,10 @@ interface Options {
   cancelTimeoutMs?: number
   reloadTimeoutMs?: number
 }
+
+// Derived from the shared enum rather than re-spelled, so the router's strict zod and this guard can
+// never drift apart — which is the only way an out-of-vocabulary value could reach the wire check.
+const SKILL_SOURCES: ReadonlySet<string> = new Set(ThreadSkillSource.options)
 
 export function connectClaudeBroker(
   socketPath: string,
@@ -165,8 +170,12 @@ export function connectClaudeBroker(
           clearTimeout(entry.timer)
           if (typeof frame.error === "string" && frame.error) entry.fail(new Error(frame.error))
           // Keep only well-shaped rows: the daemon already bounds them, but a frame is still a frame.
+          // `source` is re-checked against the closed set rather than relayed: the router hands these
+          // straight to a strict zod enum, so an out-of-vocabulary value from a mismatched daemon would
+          // fail the WHOLE listing instead of costing one row its label.
           else entry.settle((Array.isArray(frame.skills) ? frame.skills : [])
-            .filter((s: unknown): s is ClaudeSkillInfo => typeof (s as ClaudeSkillInfo)?.name === "string" && typeof (s as ClaudeSkillInfo)?.description === "string"))
+            .filter((s: unknown): s is ClaudeSkillInfo => typeof (s as ClaudeSkillInfo)?.name === "string" && typeof (s as ClaudeSkillInfo)?.description === "string")
+            .map((s) => ({ name: s.name, description: s.description, source: SKILL_SOURCES.has(s.source as string) ? s.source : undefined })))
           break
         }
       }

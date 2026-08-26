@@ -2,6 +2,8 @@
 // the Anthropic SDK: callers depend on these bounded, versioned shapes rather than on an expansive
 // provider type union. The adapter is the sole translation boundary.
 
+import type { ThreadSkillSource } from "@frizz/shared"
+
 export const CLAUDE_AGENT_SDK_PROTOCOL_VERSION = 1 as const
 export const CLAUDE_AGENT_SDK_MAX_INPUT_BYTES = 64 * 1024
 export const CLAUDE_AGENT_SDK_MAX_JSON_BYTES = 64 * 1024
@@ -114,10 +116,13 @@ export const CLAUDE_BROKER_CAPABILITY_RENAME = "rename-v1"
 export const CLAUDE_BROKER_CAPABILITY_LIST_SKILLS = "list-skills-v1"
 
 // One invocable skill, as the harness reports it. `name` is what `/name` invokes; `description` is the
-// skill's own frontmatter line, for the composer typeahead to render.
+// skill's own frontmatter line, for the composer typeahead to render. `source` is where claude
+// resolved it from, normalized to the shared vocabulary — undefined when claude did not say, which the
+// typeahead renders as an unlabelled row.
 export interface ClaudeSkillInfo {
   name: string
   description: string
+  source?: ThreadSkillSource
 }
 
 // What a reload actually changed, bounded for the wire. Counts rather than full lists because the

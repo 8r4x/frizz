@@ -2467,9 +2467,17 @@ export type ThreadProfileOptionsResult = z.infer<typeof ThreadProfileOptionsResu
 // never a frizz-side scan of skill directories, which could only drift from what the session actually
 // loaded. `description` may be empty (Claude's init-frame names carry no descriptions for entries the
 // command list omits).
+//
+// `source` is where the harness resolved the skill FROM, normalized to one vocabulary so the typeahead
+// renders "project" the same whether Claude called it `projectSettings` or Codex called it `repo`. It
+// is OPTIONAL, and deliberately so: the promise is "show it if we know it", and a harness that reports
+// a scope frizz has no mapping for must degrade to an unlabelled row rather than to a wrong label.
+export const ThreadSkillSource = z.enum(["project", "user", "builtin", "plugin"])
+export type ThreadSkillSource = z.infer<typeof ThreadSkillSource>
 export const ThreadSkill = z.object({
   name: z.string().min(1).max(512),
   description: z.string().max(1024),
+  source: ThreadSkillSource.optional(),
 }).strict()
 export type ThreadSkill = z.infer<typeof ThreadSkill>
 
