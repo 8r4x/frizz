@@ -94,36 +94,108 @@ export async function ownerPubkeyFor(env: RelayEnv, name: string): Promise<strin
 }
 
 /** One board's Durable Object: it holds the socket and answers visitors from it. */
+/** What a socket is, once the Durable Object has forgotten everything else about it. */
+interface SocketRole {
+  role: "board" | "visitor"
+  /** The nested-session id, for a visitor. */
+  id?: string
+}
+
 export class Board {
   private readonly relay = new BoardSocket({
     setTimer: (fn, ms) => setTimeout(fn, ms),
     clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
   })
+  /**
+   * One adapter per live socket, and never a second for the same one.
+   *
+   * BoardSocket compares adapters by IDENTITY, so a freshly built object with the same methods matches
+   * nothing: detach would no-op and the board would read as connected forever after it had gone.
+   */
+  private readonly adapters = new WeakMap<WorkerWebSocket, { send: (data: string) => void; close: (code?: number, reason?: string) => void }>()
+  private restored = false
+
   constructor(private readonly state: DurableObjectState) {}
 
+  private adapterFor(ws: WorkerWebSocket) {
+    const existing = this.adapters.get(ws)
+    if (existing) return existing
+    const adapter = {
+      send: (data: string) => ws.send(data),
+      close: (code?: number, reason?: string) => ws.close(code, reason),
+    }
+    this.adapters.set(ws, adapter)
+    return adapter
+  }
+
+  private roleOf(ws: WorkerWebSocket): SocketRole | null {
+    try {
+      return (ws.deserializeAttachment() as SocketRole | null) ?? null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Pick up the sockets that outlived a hibernation.
+   *
+   * A woken Durable Object is a FRESH instance: `relay`'s pending requests and nested sessions are
+   * gone, even though the sockets themselves survived. So the board's socket is re-attached, and every
+   * visitor socket is closed — its session existed only in the memory that was just discarded, and a
+   * pane that looks live while typing into nothing is the worst of the available outcomes. Both ends
+   * already reconnect on their own.
+   */
+  private restore(): void {
+    if (this.restored) return
+    this.restored = true
+    for (const ws of this.state.getWebSockets()) {
+      const role = this.roleOf(ws)
+      if (role?.role === "board") this.relay.attach(this.adapterFor(ws))
+      else {
+        try {
+          ws.close(1012, "the relay restarted")
+        } catch {
+          // Already gone.
+        }
+      }
+    }
+  }
+
+  /** A frame from a socket this instance may never have seen accepted. */
+  webSocketMessage(ws: WorkerWebSocket, message: string | ArrayBuffer): void {
+    this.restore()
+    if (typeof message !== "string") return
+    const role = this.roleOf(ws)
+    if (role?.role === "board") this.relay.handleFrame(message)
+    else if (role?.role === "visitor" && role.id) this.relay.sendWebSocketMessage(role.id, message)
+  }
+
+  webSocketClose(ws: WorkerWebSocket): void {
+    this.restore()
+    const role = this.roleOf(ws)
+    if (role?.role === "board") this.relay.detach(this.adapterFor(ws))
+    else if (role?.role === "visitor" && role.id) this.relay.closeWebSocket(role.id)
+  }
+
+  webSocketError(ws: WorkerWebSocket): void {
+    this.webSocketClose(ws)
+  }
+
   async fetch(request: Request): Promise<Response> {
+    this.restore()
     const url = new URL(request.url)
 
     // The board dialling in.
     if (url.pathname === "/_relay/connect" && request.headers.get("upgrade") === "websocket") {
       const pair = new WebSocketPair()
       const server = pair[1]!
-      server.accept()
-      // ONE adapter object, attached and detached. BoardSocket compares by identity so a stale socket
-      // closing late cannot tear down its replacement — handing detach a freshly built object with the
-      // same methods therefore matches nothing, and the board stays "connected" forever after it has
-      // gone. Every visitor then waits out the full request timeout instead of being told it is down.
-      const adapter = {
-        send: (data: string) => server.send(data),
-        close: (code?: number, reason?: string) => server.close(code, reason),
-      }
-      this.relay.attach(adapter)
-      server.addEventListener("message", (event) => {
-        if (typeof event.data === "string") this.relay.handleFrame(event.data)
-      })
-      const drop = () => this.relay.detach(adapter)
-      server.addEventListener("close", drop)
-      server.addEventListener("error", drop)
+      // HIBERNATION, not `accept()`. A socket accepted the ordinary way is bound to the request that
+      // opened it, and production tears that context down: every connect threw "Network connection
+      // lost" and the board reconnected about twice a second, forever. `wrangler dev` does not
+      // reproduce it, which is why the whole local suite stayed green through it.
+      this.state.acceptWebSocket(server, ["board"])
+      server.serializeAttachment({ role: "board" } satisfies SocketRole)
+      this.relay.attach(this.adapterFor(server))
       return new Response(null, { status: 101, webSocket: pair[0]! })
     }
 
@@ -134,12 +206,8 @@ export class Board {
       if (!this.relay.connected) return new Response("This Frizz board is not running right now.", { status: 502 })
       const pair = new WebSocketPair()
       const visitor = pair[1]!
-      visitor.accept()
-      const adapter = {
-        send: (data: string) => visitor.send(data),
-        close: (code?: number, reason?: string) => visitor.close(code, reason),
-      }
-      const id = await this.relay.openWebSocket({ url: url.toString(), headers: [...request.headers] }, adapter)
+      this.state.acceptWebSocket(visitor, ["visitor"])
+      const id = await this.relay.openWebSocket({ url: url.toString(), headers: [...request.headers] }, this.adapterFor(visitor))
       if (!id) {
         // Refuse the upgrade outright rather than accepting a socket that will never carry anything.
         // A terminal pane that opens and stays silent is far harder to diagnose than one that fails.
@@ -150,12 +218,8 @@ export class Board {
         }
         return new Response("The board did not open a terminal.", { status: 502 })
       }
-      visitor.addEventListener("message", (event) => {
-        if (typeof event.data === "string") this.relay.sendWebSocketMessage(id, event.data)
-      })
-      const shut = () => this.relay.closeWebSocket(id)
-      visitor.addEventListener("close", shut)
-      visitor.addEventListener("error", shut)
+      // The id has to ride ON the socket: after a wake this instance has no map to look it up in.
+      visitor.serializeAttachment({ role: "visitor", id } satisfies SocketRole)
       return new Response(null, { status: 101, webSocket: pair[0]! })
     }
 

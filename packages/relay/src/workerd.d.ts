@@ -22,6 +22,14 @@ interface DurableObjectNamespace {
 
 interface DurableObjectState {
   readonly id: DurableObjectId
+  /**
+   * The HIBERNATION API. A socket accepted this way survives the request that opened it and survives
+   * the object being evicted; one accepted with `WebSocket.accept()` does neither, and production
+   * answers every such connect with "Network connection lost".
+   */
+  acceptWebSocket(ws: WorkerWebSocket, tags?: string[]): void
+  /** Every hibernatable socket this object still holds, optionally filtered by tag. */
+  getWebSockets(tag?: string): WorkerWebSocket[]
 }
 
 /** A message event as workerd delivers it: `data` is a string for a text frame. */
@@ -32,6 +40,9 @@ interface WorkerMessageEvent extends Event {
 /** workerd's WebSocket: the server half must be `accept()`ed before it will deliver events. */
 interface WorkerWebSocket extends EventTarget {
   accept(): void
+  /** Small JSON-able state carried WITH the socket, so a woken object can tell what it is. */
+  serializeAttachment(value: unknown): void
+  deserializeAttachment(): unknown
   send(data: string | ArrayBuffer): void
   close(code?: number, reason?: string): void
   addEventListener(type: "message", listener: (event: WorkerMessageEvent) => void): void
