@@ -11,6 +11,7 @@ import {
   normalizeHostname,
   promptForCloudName,
   readCloudConfig,
+  reconcileCloudConfig,
   isRelayConfig,
   readTunnelToken,
   REGISTRAR_IS_LIVE,
@@ -19,6 +20,7 @@ import {
   startTunnel,
   tunnelTokenPath,
   writeCloudConfig,
+  zoneClaimLabel,
 } from "./cloud.ts";
 
 // Claiming a NAME binds it to a GitHub account, which establishCloudConfig reads from the `gh` CLI.
@@ -303,9 +305,65 @@ test("a registrar that returns NO token means the name is served by the relay", 
   }
 });
 
-test("a config written before the relay existed keeps being served the way it works", async () => {
-  // An upgrade that silently changed a working board's transport is the worst kind of surprise.
+test("isRelayConfig reads the file and nothing else; the older shapes are not relay configs", async () => {
+  // Reconciling them is reconcileCloudConfig's job (below); the predicate must not guess.
   assert.equal(isRelayConfig({ hostname: "colin.frizz.sh", claim: "colin" }), false);
   assert.equal(isRelayConfig({ hostname: "colin.frizz.sh", claim: "colin", serve: "tunnel" }), false);
   assert.equal(isRelayConfig({ hostname: "b.example.com", tunnel: "b" }), false, "a hand-made tunnel is not relayed");
+});
+
+test("a hostname inside the zone stands for exactly one claim label", () => {
+  assert.equal(zoneClaimLabel("colin.frizz.sh"), "colin");
+  assert.equal(zoneClaimLabel("frizz.sh"), null, "the apex is not a name");
+  assert.equal(zoneClaimLabel("a.b.frizz.sh"), null, "the registrar never hands out a deeper name");
+  assert.equal(zoneClaimLabel("board.example.com"), null);
+  assert.equal(zoneClaimLabel("notfrizz.sh"), null);
+});
+
+// 2026-08-25: `frizz up` ran the hand-made tunnel for colin.frizz.sh faithfully, and the phone that
+// scanned the QR read "No Frizz board has claimed this name." — the relay's wildcard route had taken
+// the zone, and nothing in `up` would ever have claimed the name. Claiming is part of `up`.
+test("up claims a zone hostname that was saved as a hand-made tunnel, and serves it by relay", async () => {
+  const home = tempHome();
+  const server = await claimServer({ hostname: "colin.frizz.sh", leaseExpiresAt: 0, renewed: false });
+  const notices: string[] = [];
+  try {
+    const stale = { hostname: "colin.frizz.sh", tunnel: "colin", config: "/x/frizz.yml" };
+    const config = await reconcileCloudConfig(stale, 9393, home, (m) => notices.push(m), server.origin, fakeGithub);
+    assert.deepEqual(config, { hostname: "colin.frizz.sh", claim: "colin", serve: "relay" });
+    assert.equal(server.claims.length, 1, "the label is claimed through the same call a first launch makes");
+    assert.equal(server.claims[0]!.name, "colin");
+    assert.ok(notices.some((m) => m.includes("claiming colin")), notices.join("\n"));
+  } finally {
+    await server.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("up moves a claim issued in the tunnel era onto the relay", async () => {
+  const home = tempHome();
+  const server = await claimServer({ hostname: "colin.frizz.sh", leaseExpiresAt: 0, renewed: true });
+  try {
+    const config = await reconcileCloudConfig({ hostname: "colin.frizz.sh", claim: "colin", serve: "tunnel" }, 9393, home, undefined, server.origin, fakeGithub);
+    assert.deepEqual(config, { hostname: "colin.frizz.sh", claim: "colin", serve: "relay" });
+    assert.equal(server.claims[0]!.name, "colin");
+  } finally {
+    await server.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("reconciling leaves a relay claim and an operator's own hostname exactly as saved", async () => {
+  const home = tempHome();
+  const server = await claimServer();
+  try {
+    const relay = { hostname: "colin.frizz.sh", claim: "colin", serve: "relay" as const };
+    assert.equal(await reconcileCloudConfig(relay, 9393, home, undefined, server.origin, fakeGithub), relay);
+    const own = { hostname: "board.example.com", tunnel: "my-board" };
+    assert.equal(await reconcileCloudConfig(own, 9393, home, undefined, server.origin, fakeGithub), own);
+    assert.equal(server.claims.length, 0, "neither shape makes a claim call");
+  } finally {
+    await server.close();
+    rmSync(home, { recursive: true, force: true });
+  }
 });

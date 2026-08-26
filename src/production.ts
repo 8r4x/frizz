@@ -18,6 +18,7 @@ import {
   promptForCloudName,
   isRelayConfig,
   readCloudConfig,
+  reconcileCloudConfig,
   readTunnelToken,
   resolveRunToken,
   startRelay,
@@ -481,6 +482,18 @@ async function runSupervisor(port: number, token: string): Promise<never> {
     writeCloudConfig(cloudConfig);
     bind.publicOrigin = `https://${cloudConfig.hostname}`;
     justClaimed = true;
+  } else if (cloudConfig) {
+    // A saved config can be older than the way its name is served. Claiming is part of `up`, never
+    // a step of the operator's — see reconcileCloudConfig.
+    const reconciled = await reconcileCloudConfig(cloudConfig, port, homedir(), (message) => {
+      logger.info("relay", message);
+      console.log(`  ${message}`);
+    });
+    if (reconciled !== cloudConfig) {
+      cloudConfig = reconciled;
+      writeCloudConfig(cloudConfig);
+      justClaimed = true;
+    }
   }
 
   const supervisor = await startDevSupervisor({

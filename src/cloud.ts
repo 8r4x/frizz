@@ -80,12 +80,62 @@ export function isClaimedConfig(config: CloudConfig): boolean {
 /**
  * Is this board served through the relay rather than a tunnel of its own?
  *
- * A config written before the relay existed has no `serve`, and must keep being served the way it
- * already works — an upgrade that silently changed a working board's transport would be the worst
- * kind of surprise.
+ * A config written before the relay existed has no `serve`. Until 2026-08-25 that meant "keep serving
+ * it the way it already works" — but the relay's wildcard route now answers for EVERY name in the
+ * zone at Cloudflare's edge, so a tunnel behind such a name is unreachable however faithfully it is
+ * run. reconcileCloudConfig is what moves those configs over; this predicate only reads the file.
  */
 export function isRelayConfig(config: CloudConfig): boolean {
   return isClaimedConfig(config) && config.serve === "relay";
+}
+
+/** The zone the registrar hands names out in. Every hostname inside it is served by the relay. */
+export const CLAIM_ZONE = "frizz.sh";
+
+/**
+ * The claim label a hostname inside the zone stands for: `colin.frizz.sh` → `colin`. Null for a
+ * hostname outside the zone, the zone apex, or a deeper name the registrar never hands out.
+ */
+export function zoneClaimLabel(hostname: string): string | null {
+  const suffix = `.${CLAIM_ZONE}`;
+  if (!hostname.endsWith(suffix)) return null;
+  const label = hostname.slice(0, -suffix.length);
+  return label.length > 0 && !label.includes(".") ? label : null;
+}
+
+/**
+ * Bring a saved config in line with how its name is actually served today.
+ *
+ * Nobody claims a name by hand: `frizz up` is the whole procedure. So when the saved config names a
+ * host inside the zone but is not a relay claim — a tunnel written by hand before names could be
+ * claimed at all, or a claim issued while the registrar still provisioned tunnels — this claims the
+ * label now, through the same call a first launch makes, and hands back the relay config to save.
+ * The board then serves through the relay on this very launch. Before this, the launcher ran the old
+ * tunnel faithfully and the phone that scanned the QR read "No Frizz board has claimed this name."
+ * (2026-08-25), with no step anywhere that would ever have claimed it.
+ *
+ * A hostname outside the zone is the operator's own tunnel and is never touched; a relay config is
+ * returned as-is, and the caller renews its lease the usual way. Throws when the claim fails — a name
+ * somebody else holds, or a registrar that cannot be reached on a first claim — because starting a
+ * tunnel that nothing can reach is the failure this exists to end.
+ */
+export async function reconcileCloudConfig(
+  config: CloudConfig,
+  port: number,
+  home = homedir(),
+  onNotice?: (message: string) => void,
+  origin?: string,
+  github: GithubIdentity = githubCli,
+): Promise<CloudConfig> {
+  if (isRelayConfig(config)) return config;
+  const label = config.claim ?? zoneClaimLabel(config.hostname);
+  if (!label) return config;
+  onNotice?.(
+    isClaimedConfig(config)
+      ? `${config.hostname} is served by the Frizz relay now; moving this board off its tunnel`
+      : `${config.hostname} is inside ${CLAIM_ZONE}, where names are claimed, not tunnelled; claiming ${label}`,
+  );
+  return establishCloudConfig(label, port, home, origin, github);
 }
 
 export function cloudConfigPath(home = homedir()): string {
