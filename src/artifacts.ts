@@ -130,6 +130,13 @@ export interface BuildFrizzArtifactOptions {
   runCommand?: (args: string[], source: string) => void;
 }
 
+/**
+ * Run out of the captured snapshot, never imported: it carries the SNAPSHOT's worker-plugin list, which
+ * is the only one entitled to judge the snapshot's tree. See the script's own header for the update
+ * deadlock that came of asserting a running build's list against a newer checkout.
+ */
+const WORKER_PLUGIN_CLOSURE_SCRIPT = "scripts/assert-worker-plugin-closure.mjs";
+
 export interface FrizzSourceSnapshot {
   /** Temporary workspace root; remove this whole directory after the build. */
   dir: string;
@@ -576,13 +583,19 @@ function markSnapshotAsScanRoot(snapshot: string): void {
   mkdirSync(join(snapshot, ".git"), { recursive: true, mode: 0o700 });
 }
 
-/** Capture a coherent launch-owned source closure before any slow build command starts. */
+/**
+ * Capture a coherent launch-owned source closure before any slow build command starts.
+ *
+ * It deliberately does NOT assert the worker-plugin closure. THIS process's list describes THIS
+ * build's worker; `sourceDir` is a checkout that may already be newer, and during Update & Restart it
+ * reliably is. See scripts/assert-worker-plugin-closure.mjs, which buildFrizzArtifact runs out of the
+ * captured snapshot so the list and the tree come from the same place.
+ */
 export function captureFrizzSourceSnapshot(
   sourceDir: string,
   root = defaultArtifactRoot()
 ): FrizzSourceSnapshot {
   const source = canonicalSourceDir(sourceDir);
-  assertWorkerPluginClosure(source);
   mkdirSync(root, { recursive: true, mode: 0o700 });
   reapInterruptedSourceSnapshots(root);
   let lastFailure = "source changed during capture";
@@ -936,7 +949,13 @@ function ensureFrizzDependencyCell(source: string, root: string): FrizzDependenc
   }
 }
 
-/** Publish a completed staging directory; an identical concurrent publisher wins safely. */
+/**
+ * Publish a completed staging directory; an identical concurrent publisher wins safely.
+ *
+ * `workerPluginClosure: false` on the read-back, because this artifact was built from a checkout that
+ * may be newer than the process publishing it — see readFrizzArtifact's own note. Its closure was
+ * already asserted, moments ago, by the one list entitled to judge it: the snapshot's.
+ */
 export function publishFrizzArtifactStaging(
   staging: string,
   digest: string,
@@ -951,7 +970,7 @@ export function publishFrizzArtifactStaging(
     if (!renameLostPublishRace(error, dir)) throw error;
     rmSync(staging, { recursive: true, force: true });
   }
-  return readFrizzArtifact(digest, root);
+  return readFrizzArtifact(digest, root, { workerPluginClosure: false });
 }
 
 export function buildFrizzArtifact(
@@ -967,6 +986,11 @@ export function buildFrizzArtifact(
   const staging = join(root, `.staging-${process.pid}-${randomUUID()}`);
   const runCommand = options.runCommand ?? runArtifactCommand;
   try {
+    // First, and out of the SNAPSHOT: the worker-plugin closure is the snapshot's own opinion about
+    // what its worker needs, so only the snapshot can hold both halves of the question at once. It runs
+    // before the slow steps so a renamed hook costs a second rather than a web build.
+    options.onProgress?.("Checking the captured worker-plugin closure");
+    runCommand([WORKER_PLUGIN_CLOSURE_SCRIPT, source], source);
     // Vite/Rolldown transpiles TypeScript but does not typecheck it. Validate the coherent captured
     // snapshot — not the mutable checkout before capture — so an intermediate edit with a missing
     // import can never become a valid immutable artifact and fail later as a browser global.
@@ -1008,7 +1032,9 @@ export function buildFrizzArtifact(
       recursive: true,
       preserveTimestamps: true,
     });
-    assertWorkerPluginClosure(join(staging, "runtime"));
+    // Again, and on the tree that actually ships: the two cpSyncs above are what the closure describes,
+    // and the snapshot's own list is the only one entitled to say whether they landed whole.
+    runCommand([WORKER_PLUGIN_CLOSURE_SCRIPT, join(staging, "runtime")], source);
     cpSync(webSource, join(staging, "web"), {
       recursive: true,
       preserveTimestamps: true,
@@ -1027,8 +1053,10 @@ export function buildFrizzArtifact(
     });
     const dir = join(root, digest);
     if (existsSync(join(dir, "manifest.json"))) {
+      // Same digest means same source, so this is our own artifact under another builder's hand — and
+      // the closure question belongs to that source either way. Same reason as the publish read-back.
       rmSync(staging, { recursive: true, force: true });
-      return readFrizzArtifact(digest, root);
+      return readFrizzArtifact(digest, root, { workerPluginClosure: false });
     }
     const manifest: FrizzArtifactManifest = {
       version: 2,
@@ -1057,10 +1085,30 @@ export function buildFrizzArtifact(
   }
 }
 
+export interface ReadFrizzArtifactOptions {
+  /**
+   * Check the artifact against THIS build's WORKER_PLUGIN_REQUIRED_FILES. Default true, and right for
+   * every boot-path read: the launcher is selecting an artifact to serve from, and an old one that
+   * predates a widened closure has to be rebuilt rather than run.
+   *
+   * The BUILD path passes false, and the difference is who is entitled to answer. An artifact this
+   * process just built out of the checkout carries the CHECKOUT's worker, not this build's, so this
+   * build's list is not a fact about it — it is a stale opinion, and it can only ever produce a false
+   * failure. When source NARROWS the closure that false failure is total: on 2026-08-26 the running
+   * instance refused its own update, naming cc-worker/bin/browser-mcp.mjs, which `dafe4309` had just
+   * deleted along with the entry that required it. Update & Restart is the only control that moves an
+   * instance past a stale opinion, so nothing on that path may be gated on one — the same position
+   * promoteCurrentSourceArtifact takes on the artifact it replaces.
+   */
+  workerPluginClosure?: boolean;
+}
+
 export function readFrizzArtifact(
   digest: string,
-  root = defaultArtifactRoot()
+  root = defaultArtifactRoot(),
+  options: ReadFrizzArtifactOptions = {}
 ): FrizzArtifact {
+  const checkWorkerPluginClosure = options.workerPluginClosure ?? true;
   if (!/^[a-f0-9]{64}$/.test(digest))
     throw new Error("invalid Frizz artifact digest");
   const dir = join(root, digest);
@@ -1075,7 +1123,8 @@ export function readFrizzArtifact(
   }
   if (!validArtifactManifest(manifest, digest) ||
     (manifest.version === 2 && !manifest.dependencyCell) ||
-    !WORKER_PLUGIN_REQUIRED_FILES.every((file) => manifest.runtimeFiles[file]) ||
+    (checkWorkerPluginClosure &&
+      !WORKER_PLUGIN_REQUIRED_FILES.every((file) => manifest.runtimeFiles[file])) ||
     !existsSync(join(dir, "web")) ||
     !existsSync(join(dir, "runtime", "src", "index.js"))
   ) {
@@ -1087,7 +1136,7 @@ export function readFrizzArtifact(
   if (calculated !== digest && legacyArtifactDigest(manifest) !== digest)
     throw new Error(`Frizz artifact ${digest} failed root digest validation (calculated ${calculated})`);
   try {
-    assertWorkerPluginClosure(join(dir, "runtime"));
+    if (checkWorkerPluginClosure) assertWorkerPluginClosure(join(dir, "runtime"));
     const cell = manifest.dependencyCell
       ? readFrizzDependencyCell(manifest.dependencyCell, root)
       : undefined;

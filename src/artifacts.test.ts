@@ -79,7 +79,13 @@ function legacyFixtureDigest(manifest: Record<string, unknown>): string {
   }));
 }
 
-function fixture(root: string, content: string): string {
+/**
+ * `omit` models an artifact built from source that NARROWED the worker-plugin closure: the file is
+ * absent from the tree AND from the manifest, and the digest is computed over what remains, exactly as
+ * a build from that source would produce. Nothing is tampered with — this artifact is internally
+ * perfect and merely younger than the list THIS test process holds.
+ */
+function fixture(root: string, content: string, omit: readonly string[] = []): string {
   const digest = "0".repeat(64);
   const dir = join(root, digest);
   mkdirSync(join(dir, "web", "assets"), { recursive: true });
@@ -133,6 +139,10 @@ function fixture(root: string, content: string): string {
         "board/thread-update.mjs": hash("update"),
       },
     };
+  for (const file of omit) {
+    rmSync(join(dir, "runtime", file));
+    delete (manifest.runtimeFiles as Record<string, string>)[file];
+  }
   manifest.digest = fixtureDigest(manifest);
   const finalDir = join(root, manifest.digest);
   renameSync(dir, finalDir);
@@ -452,6 +462,70 @@ test("Update & Restart promotes even when the artifact it replaces no longer ver
   assert.equal(readStableArtifact(state, root)?.digest, built);
 });
 
+/**
+ * THE DEADLOCK, from the other direction. artifacts.test.ts already pins what happens when source
+ * WIDENS the closure — the artifact it replaces stops verifying and the update lands anyway. Narrowing
+ * had no such escape, and on 2026-08-26 it cost the maintainer their update: `dafe4309` deleted
+ * cc-worker/bin/browser-mcp.mjs together with the closure entry requiring it, correctly and in one
+ * commit, and every instance built before that refused to update — "Frizz worker plugin closure is
+ * missing cc-worker/bin/browser-mcp.mjs", naming a file the new source is right not to have.
+ *
+ * The building process is ALWAYS the older one during Update & Restart, so its list can only ever be
+ * a stale opinion about the checkout it is staging. Nothing on that path may be gated on it.
+ */
+test("an artifact built from source that NARROWED the closure still publishes and reads back", () => {
+  const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-narrowed-closure-"));
+  // The new source dropped this file and the entry that required it. THIS process has not caught up.
+  const dropped = "cc-worker/hooks/agent-bind.mjs";
+  assert.ok(WORKER_PLUGIN_REQUIRED_FILES.includes(dropped as (typeof WORKER_PLUGIN_REQUIRED_FILES)[number]));
+  const digest = fixture(root, "narrowed", [dropped]);
+
+  // The BOOT path is unchanged and still refuses it: there the launcher is choosing something to serve
+  // from, and this build's list is a fact about the worker this build dispatches.
+  assert.throws(() => readFrizzArtifact(digest, root), /failed manifest validation/);
+
+  // The BUILD path reads the same artifact back without complaint. Its closure was already asserted by
+  // the only list entitled to judge it — the snapshot's, through the source-owned script.
+  const read = readFrizzArtifact(digest, root, { workerPluginClosure: false });
+  assert.equal(read.digest, digest);
+  assert.equal(existsSync(join(read.runtimeDir, dropped)), false);
+});
+
+test("publishing a narrowed-closure staging tree is not gated on the publisher's own list", () => {
+  const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-narrowed-publish-"));
+  const dropped = "board/thread-update.mjs";
+  const digest = fixture(root, "narrowed-publish", [dropped]);
+  // Back to a staging directory, so this is the real publish path buildFrizzArtifact ends on.
+  const staging = join(root, ".staging-narrowed");
+  renameSync(join(root, digest), staging);
+
+  const published = publishFrizzArtifactStaging(staging, digest, root);
+  assert.equal(published.digest, digest);
+  assert.equal(existsSync(join(published.runtimeDir, dropped)), false);
+  // …and the same artifact is still rejected by a boot-path read, which is what forces the rebuild.
+  assert.throws(() => readFrizzArtifact(digest, root), /failed manifest validation/);
+});
+
+test("capturing a snapshot never judges the checkout's worker plugin by THIS build's list", () => {
+  const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-narrowed-capture-"));
+  const source = sourceFixture(root);
+  mkdirSync(join(source, "node_modules"));
+  // A checkout that narrowed the closure looks EXACTLY like this to a build that has not caught up:
+  // every listed file present but one. Capture used to assert here and refuse the whole update.
+  for (const file of WORKER_PLUGIN_REQUIRED_FILES.slice(1)) {
+    mkdirSync(dirname(join(source, file)), { recursive: true });
+    writeFileSync(join(source, file), "snapshot fixture\n");
+  }
+  const snapshot = captureFrizzSourceSnapshot(source, root);
+  try {
+    assert.equal(existsSync(join(snapshot.sourceDir, WORKER_PLUGIN_REQUIRED_FILES[0]!)), false);
+    assert.ok(existsSync(join(snapshot.sourceDir, WORKER_PLUGIN_REQUIRED_FILES[1]!)));
+  } finally {
+    rmSync(snapshot.dir, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("Update & Restart hands back the verified artifact it replaced as the rollback target", () => {
   const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-update-rollback-"));
   const state = join(root, "state");
@@ -566,24 +640,50 @@ test("a captured source snapshot is its own scan root, so an ancestor .gitignore
   }
 });
 
-test("artifact creation typechecks the coherent source snapshot before either build", () => {
+/**
+ * Two claims, and the first is the one that keeps an instance able to update itself.
+ *
+ * The worker-plugin closure is asserted by a SCRIPT RUN OUT OF THE SNAPSHOT, never by this build's
+ * imported list — during Update & Restart the running build is older than the checkout it is staging,
+ * so its own list is a stale opinion and can only produce a false failure. When source NARROWS the
+ * closure that false failure is total: on 2026-08-26 every instance built before `dafe4309` refused
+ * its own update, naming a file that commit had deliberately deleted. Both arguments are the
+ * snapshot, never the caller's `sourceDir` — the list and the tree have to come from one place.
+ *
+ * Then the typecheck, before either slow build, so an intermediate edit with a missing import can
+ * never become a valid immutable artifact and fail later as a browser global.
+ */
+test("artifact creation checks the snapshot's own worker-plugin closure, then typechecks it, before either build", () => {
   const root = mkdtempSync(join(tmpdir(), "frizz-artifacts-typecheck-order-"));
   const source = resolve(import.meta.dirname, "..");
   const calls: Array<{ args: string[]; source: string }> = [];
+  const failOn = (step: number) =>
+    assert.throws(
+      () =>
+        buildFrizzArtifact(source, root, {
+          runCommand: (args, snapshotSource) => {
+            calls.push({ args, source: snapshotSource });
+            if (calls.length >= step) throw new Error("build sentinel");
+          },
+        }),
+      /build sentinel/
+    );
 
-  assert.throws(
-    () =>
-      buildFrizzArtifact(source, root, {
-        runCommand: (args, snapshotSource) => {
-          calls.push({ args, source: snapshotSource });
-          throw new Error("typecheck sentinel");
-        },
-      }),
-    /typecheck sentinel/
-  );
-  assert.deepEqual(calls.map((call) => call.args), [["run", "typecheck"]]);
-  assert.match(calls[0]!.source, /\.source-snapshot-/);
-  assert.notEqual(calls[0]!.source, source);
+  failOn(1);
+  assert.deepEqual(calls.map((call) => call.args[0]), ["scripts/assert-worker-plugin-closure.mjs"]);
+  // The tree it is handed is the snapshot too, not the mutable checkout the caller named.
+  assert.equal(calls[0]!.args[1], calls[0]!.source);
+
+  calls.length = 0;
+  failOn(2);
+  assert.deepEqual(calls.map((call) => call.args), [
+    ["scripts/assert-worker-plugin-closure.mjs", calls[0]!.source],
+    ["run", "typecheck"],
+  ]);
+  for (const call of calls) {
+    assert.match(call.source, /\.source-snapshot-/);
+    assert.notEqual(call.source, source);
+  }
   assert.deepEqual(
     readdirSync(root).filter(
       (entry) =>

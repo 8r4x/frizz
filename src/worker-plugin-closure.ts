@@ -16,6 +16,16 @@
 // as `bin/browser-mcp.mjs` + `bin/browser-mcp-tools.json` did on 2026-08-26 with the browser mount
 // they served (packages/server/src/backend/types.ts).
 //
+// THIS LIST DESCRIBES THIS BUILD'S WORKER AND NOTHING ELSE, so never assert it against a tree built
+// from source that is not yours. Update & Restart is exactly that situation — the RUNNING build stages
+// the NEW checkout — and asserting there deadlocked the update the first time the list narrowed: the
+// same 2026-08-26 deletion above left every earlier instance refusing to update, naming a file the new
+// source was right not to have. The rule the build path follows now: the list travels with the tree.
+// `artifacts.ts` runs `scripts/assert-worker-plugin-closure.mjs` out of the captured SNAPSHOT rather
+// than importing this module, and skips the closure half of `readFrizzArtifact` for an artifact it
+// just built. Boot-path reads and prepack still import it directly, because there the list and the
+// tree come from one checkout.
+//
 // `scripts/*.mjs` imports this .ts directly, as publish-manifest.mjs already does with its own half.
 import { existsSync } from "node:fs";
 import { join } from "node:path";
