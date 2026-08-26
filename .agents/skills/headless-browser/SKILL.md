@@ -61,10 +61,19 @@ photograph it.
 > profile at `~/.cache/chrome-devtools-mcp/chrome-profile`. Shared-profile collisions then fail every
 > `new_page` with *"The browser is already running … Use --isolated"*.
 >
-> This repo pins both off in `.mcp.json` (`--headless --isolated`) and disables the argument-less plugin
-> build in `.claude/settings.json`, because `enabledPlugins` accepts no flags and so can only ever run
-> headful. **Do not re-enable that plugin, and do not launch `chrome-devtools-mcp` by hand without both
-> flags.** If the MCP is unavailable or collides anyway, fall straight to `shot.mjs` — don't fight it.
+> This repo pins both off in its own `.mcp.json` (`--headless --isolated`, on a pinned version) and disables
+> the argument-less plugin build in `.claude/settings.json`, because `enabledPlugins` accepts no flags and so
+> can only ever run headful. **Do not re-enable that plugin, and do not launch `chrome-devtools-mcp` by hand
+> without both flags.** If the MCP is unavailable or collides anyway, fall straight to `shot.mjs` — don't
+> fight it.
+>
+> **The `.mcp.json` is where the browser comes from — Frizz does not supply one.** Frizz mounted
+> chrome-devtools into every worker it dispatched, on both backends, until 2026-08-26; it now injects only
+> the `frizz` MCP server. So these tools are here because THIS repo configures them (`.mcp.json` +
+> `enabledMcpjsonServers` in `.claude/settings.json`), and a worker dispatched in a repo that configures
+> nothing has no browser at all. Anyone who wants one elsewhere adds it themselves — a project `.mcp.json`,
+> or `claude mcp add --scope user chrome-devtools -- npx -y chrome-devtools-mcp@<version> --headless
+> --isolated`.
 
 **Removing an injected style: hold the handle.** `page.addStyleTag()` returns an ElementHandle — remove
 THAT (`await tag.evaluate((el) => el.remove())`). Never sweep `querySelectorAll("style")` matching on

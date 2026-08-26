@@ -67,7 +67,7 @@ export interface CodexAppServerHostOptions {
   env: NodeJS.ProcessEnv
   clientInfo: Record<string, unknown>
   capabilities: Record<string, unknown>
-  /** Mounts the unified `frizz` MCP server into this app-server. Absent ⇒ chrome-devtools only, the
+  /** Mounts the unified `frizz` MCP server into this app-server. Absent ⇒ frizz mounts nothing, the
    *  same degradation the claude side has when the descriptor cannot be resolved. */
   frizzMcp?: FrizzMcp
   /** Test seam: override the forked daemon entry. */

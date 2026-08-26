@@ -53,8 +53,8 @@ export interface ClaudeBrokerConfig {
    *  follow-up cold-starts a daemon after the previous one died (the live-daemon reconnect never forks). */
   resume?: boolean
   /** The frizz WORKER ENVIRONMENT — the SDK equivalents of the argv path's --plugin-dir/--mcp-config
-   *  injection. Without these a broker worker is bare: no frizz sub-agent profiles, no frizz/chrome-devtools
-   *  MCP, no cc-worker hooks. `pluginDir` loads the local cc-worker plugin; `mcpServers`/`allowedTools` mount + pre-approve
+   *  injection. Without these a broker worker is bare: no frizz sub-agent profiles, no frizz MCP,
+   *  no cc-worker hooks. `pluginDir` loads the local cc-worker plugin; `mcpServers`/`allowedTools` mount + pre-approve
    *  the MCP servers; `workerEnv` carries the per-thread frizz vars the plugin hooks gate on (FRIZZ_THREAD,
    *  FRIZZ_PERM_DIR) — merged into the SDK env AFTER the ambient allowlist. */
   pluginDir?: string

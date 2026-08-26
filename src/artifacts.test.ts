@@ -104,8 +104,6 @@ function fixture(root: string, content: string): string {
   mkdirSync(join(dir, "runtime", "cc-worker", "scripts", "frizz"), { recursive: true });
   writeFileSync(join(dir, "runtime", "cc-worker", "bin", "frizz"), "board");
   writeFileSync(join(dir, "runtime", "cc-worker", "bin", "frizz-update"), "update");
-  writeFileSync(join(dir, "runtime", "cc-worker", "bin", "browser-mcp.mjs"), "proxy");
-  writeFileSync(join(dir, "runtime", "cc-worker", "bin", "browser-mcp-tools.json"), "schemas");
   writeFileSync(join(dir, "runtime", "board", "config.mjs"), "config");
   writeFileSync(join(dir, "runtime", "board", "agent-bindings.mjs"), "bindings");
   writeFileSync(join(dir, "runtime", "board", "index.mjs"), "index");
@@ -129,8 +127,6 @@ function fixture(root: string, content: string): string {
         "cc-worker/hooks/agent-bind.mjs": hash("bind"),
         "cc-worker/bin/frizz": hash("board"),
         "cc-worker/bin/frizz-update": hash("update"),
-        "cc-worker/bin/browser-mcp.mjs": hash("proxy"),
-        "cc-worker/bin/browser-mcp-tools.json": hash("schemas"),
         "board/config.mjs": hash("config"),
         "board/agent-bindings.mjs": hash("bindings"),
         "board/index.mjs": hash("index"),

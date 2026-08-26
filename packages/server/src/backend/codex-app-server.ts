@@ -948,8 +948,9 @@ export interface CodexAppServerBridgeOptions {
   host?: CodexAppServerHost
   /** Where the daemon's record/socket live. Required for the default daemon host. */
   stateDir?: string
-  /** Mounts the unified `frizz` MCP server into this project's app-server. Absent ⇒ chrome-devtools
-   *  only. MCP servers are PROCESS-level, so this is resolved once here rather than per thread. */
+  /** Mounts the unified `frizz` MCP server into this project's app-server. Absent ⇒ frizz mounts
+   *  nothing, and a worker sees only what the operator's own codex config configured. MCP servers are
+   *  PROCESS-level, so this is resolved once here rather than per thread. */
   frizzMcp?: FrizzMcp
   now?: () => Date
   id?: () => string

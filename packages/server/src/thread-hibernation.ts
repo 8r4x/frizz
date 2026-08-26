@@ -2,8 +2,10 @@
 //
 // A frizz worker is expensive at rest and free to restart. Measured on the maintainer's machine
 // 2026-08-19 (64 GB, 38 live worker threads, ALL 38 idle, 19 GB held): 504 MB per thread all-in —
-// a `claude` CLI at 289 MB, the chrome-devtools MCP pair it always mounts at 159 MB, the broker daemon
-// at 39 MB and the frizz MCP server at 17 MB. Seventeen of those threads had been idle for an hour or
+// a `claude` CLI at 289 MB, a chrome-devtools MCP pair at 159 MB, the broker daemon at 39 MB and the
+// frizz MCP server at 17 MB. That browser was frizz's own always-on mount, removed 2026-08-26: a
+// thread now carries only the MCP servers the PROJECT configured, so the same measurement in a repo
+// with no `.mcp.json` would read ~345 MB — still the largest reclaimable block on the machine. Seventeen of those threads had been idle for an hour or
 // more; the oldest for 19.5 hours, still holding its full 504 MB. Nothing in frizz ever collected them:
 // the broker daemon's own IDLE_EXIT_MS is six hours AND only fires when no client is attached, which
 // for a frizz-managed thread is never.

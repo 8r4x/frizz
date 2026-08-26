@@ -1,7 +1,4 @@
-import { existsSync } from "node:fs"
-import { join } from "node:path"
 import type { LimitWindow, PermissionMode } from "@frizz/shared"
-import { resolveWorkerPluginDir } from "../worker-plugin-dir.ts"
 import type { FenceView, SubAgentView, BgShellView, PendingAskData, TurnState } from "../tailer.ts"
 
 // A turn cut off by an exhausted SUBSCRIPTION window, as a backend's fold observed it. Carries only
@@ -267,105 +264,16 @@ export function frizzMcpEnv(mcp: FrizzMcp): Record<string, string> {
   }
 }
 
-// The ONE canonical Chrome DevTools MCP server spec both backends inject into every worker they
-// spawn — the runtime release gate requires driving a real browser, and neither backend can assume
-// the operator configured a browser MCP themselves. Claude mounts it via inline `--mcp-config` JSON
-// (+ a server-level `--allowedTools mcp__chrome-devtools` pre-approval) in dispatch.ts; codex mounts
-// it via `-c` TOML overrides (+ `default_tools_approval_mode="approve"`) on the APP-SERVER's argv in
-// codex-mcp.ts — process-level, because a per-thread override mounts nothing at all. Deriving both
-// from this constant is what keeps the two backends' browser tooling in lockstep — edit HERE, never in
-// one backend alone, and mount it through chromeDevtoolsMcpSpec() rather than reading the fields.
-// (The codex half was DESCRIBED here long before it was written: for a while this paragraph was the
-// only place it existed, and codex threads had no browser — read codex-mcp.ts.)
-// `--isolated` gives each worker a disposable browser profile (never the operator's own Chrome), and
-// `--headless` keeps the window off the operator's screen. BOTH are required and both default to
-// false upstream: this is the same pair `.mcp.json` pins for agents working in THIS repo, and the
-// same policy `.agents/skills/headless-browser` states in as many words — "NEVER put a browser window
-// on the maintainer's screen … a verification run must be invisible". That rule was written for agents
-// editing frizz and never reached the workers frizz DISPATCHES, which is how the 2026-07-28 complaint
-// ("it keeps opening tabs in my actual real Chrome") came back on 2026-08-06 from a worker doing
-// ordinary browser QA in someone else's repo. A worker shares the desktop exactly as an agent editing
-// this repo does, so it gets the same two flags. The args below are forwarded to the upstream server
-// byte-for-byte; the proxy in front of it never edits them.
-//
-// ── WHAT IS MOUNTED IS A LAZY PROXY, NOT THE SERVER ──────────────────────────────────────────────
-// `command` is node running frizz's own `cc-worker/bin/browser-mcp.mjs`, which answers `initialize`
-// and `tools/list` from a disk snapshot and spawns the real `chrome-devtools-mcp` only when a worker
-// makes its first `tools/call`. Read that file's header for the whole design. The two numbers behind
-// the change, measured on the maintainer's machine 2026-08-19 with 38 live workers: the eager
-// `npx -y chrome-devtools-mcp@latest` mount cost 6.07 GB over 78 processes (39 × 89 MB of real server
-// nobody had asked for a browser from, plus 39 × 70 MB of `npm exec` shim that execs the real one and
-// then idles forever), which was 32% of frizz's entire footprint. The proxy costs ~17 MB per worker,
-// the same as frizz-mcp.mjs, and the 70 MB shim is gone outright because the real server is exec'd as
-// `node <resolved bin>` with no npm in the picture at all.
-//
-// VERSION is PINNED rather than `@latest`. It is the tool-schema cache key, so a bump here is what
-// makes every worker re-harvest; `@latest` would have re-resolved against the registry on every single
-// spawn and could change the tool surface under a running board. To bump: edit `version`, then
-// `nub scripts/harvest-browser-mcp-tools.mjs` (a test fails if the committed snapshot and this pin
-// disagree).
-export const CHROME_DEVTOOLS_MCP = {
-  name: "chrome-devtools",
-  // Resolved under <worker plugin dir>/bin/, exactly like FRIZZ_MCP.script.
-  script: "browser-mcp.mjs",
-  package: "chrome-devtools-mcp",
-  version: "1.7.0",
-  args: [
-    "--experimentalPageIdRouting",
-    "--headless",
-    "--isolated",
-    "--no-usage-statistics",
-  ],
-} as const
-
-/** A stdio MCP server as both backends need to describe it. */
-export interface McpStdioSpec {
-  command: string
-  args: string[]
-  env?: Record<string, string>
-}
-
-/**
- * The chrome-devtools mount, built ONCE for both backends.
- *
- * Normally: node + the lazy proxy from the worker plugin, with the pinned package stamped into its env
- * so the version lives in this file alone.
- *
- * FALLBACK: when the worker plugin cannot be resolved there is no proxy on disk to run, so this
- * degrades to the old `npx -y chrome-devtools-mcp@<version>` mount rather than to no browser at all —
- * "a worker gets a browser out of the box on any machine" is the invariant this whole constant exists
- * to hold, and a worker whose plugin dir is missing is already degraded in five other ways
- * (workerPluginDir() shouts about it). Both `--headless` and `--isolated` still ride the fallback.
- */
-export function chromeDevtoolsMcpSpec(scriptPath: string | undefined, nodeBin: string): McpStdioSpec {
-  const args = [...CHROME_DEVTOOLS_MCP.args]
-  if (!scriptPath) return { command: "npx", args: ["-y", `${CHROME_DEVTOOLS_MCP.package}@${CHROME_DEVTOOLS_MCP.version}`, ...args] }
-  return {
-    command: nodeBin,
-    args: [scriptPath, ...args],
-    env: { FRIZZ_BROWSER_MCP_PACKAGE: `${CHROME_DEVTOOLS_MCP.package}@${CHROME_DEVTOOLS_MCP.version}` },
-  }
-}
-
-/**
- * The mount as production wants it. NEITHER parameter of chromeDevtoolsMcpSpec has a default, on
- * purpose: a default parameter is re-triggered by an EXPLICIT `undefined`, so a caller (or a test)
- * that meant "no plugin dir" would silently get the resolved one instead and pin the wrong branch.
- */
-export function chromeDevtoolsMcpMount(): McpStdioSpec {
-  return chromeDevtoolsMcpSpec(resolveBrowserMcpScript(), process.execPath)
-}
-
-/** The absolute path to the shipped proxy, or undefined when the worker plugin cannot be resolved. */
-export function resolveBrowserMcpScript(
-  moduleUrl = import.meta.url,
-  env: NodeJS.ProcessEnv = process.env,
-): string | undefined {
-  const pluginDir = resolveWorkerPluginDir(moduleUrl, env)
-  if (!pluginDir) return undefined
-  const scriptPath = join(pluginDir, "bin", CHROME_DEVTOOLS_MCP.script)
-  return existsSync(scriptPath) ? scriptPath : undefined
-}
+// Frizz mounts NO browser. The only MCP server it injects into a worker is the unified `frizz`
+// server above (claude: an inline `--mcp-config` in dispatch.ts; codex: `-c` TOML overrides on the
+// app-server argv in codex-mcp.ts). A `chrome-devtools` mount used to ride every dispatch on both
+// backends, together with a lazy proxy in `cc-worker/bin/` that answered `tools/list` from a
+// committed schema snapshot; all of it was removed 2026-08-26. Two reasons: its 29 tool schemas cost
+// ~6,400 prefix tokens on EVERY worker session, and most workers never open a page — and mounting a
+// browser nobody asked for is an opinion Frizz has no business holding. A project or an operator that
+// wants one brings it themselves, the same way they would in any other Claude Code or codex session:
+// a project `.mcp.json` (this repo has one, pinned `--headless --isolated`), or `claude mcp add
+// --scope user`. Do not re-add a mount here.
 
 // The environment EVERY frizz Claude worker gets, on EVERY spawn path. Kept as one record with one
 // spread per call site (the bridge's `workerEnv` for the broker daemon, the SDK's key allowlist, and

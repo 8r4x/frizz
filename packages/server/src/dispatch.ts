@@ -20,7 +20,7 @@ import { PERM_DIR_ENV, permRequestDir, type Project } from "./project.ts"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { BoardManager } from "./board.ts"
 import type { AgentBackend, BackendKind, BuiltCommand, FrizzMcp } from "./backend/types.ts"
-import { CHROME_DEVTOOLS_MCP, FRIZZ_MCP, WORKER_DISALLOWED_TOOLS, chromeDevtoolsMcpMount, claudeWorkerEnv, frizzMcpEnv } from "./backend/types.ts"
+import { FRIZZ_MCP, WORKER_DISALLOWED_TOOLS, claudeWorkerEnv, frizzMcpEnv } from "./backend/types.ts"
 // The lifted worker caps live beside the shared worker environment they belong to (backend/types.ts).
 // Re-exported here because this is where callers have always reached for them.
 export { WORKER_MAX_WEB_SEARCHES, WORKER_MAX_SUBAGENTS, WORKER_MAX_CONCURRENT_SUBAGENTS } from "./backend/types.ts"
@@ -494,13 +494,14 @@ export function resolveFrizzMcp(
   }
 }
 
-// Claude flags that mount the frizz-injected MCP servers via ONE inline `--mcp-config` JSON and
-// PRE-APPROVE their tools (`--allowedTools`) so a headless worker never blocks on a permission prompt
+// Claude flags that mount the frizz-injected MCP server via ONE inline `--mcp-config` JSON and
+// PRE-APPROVE its tools (`--allowedTools`) so a headless worker never blocks on a permission prompt
 // it has nobody to answer. The argv is exec'd with NO shell in between, so the JSON travels literally.
-// chrome-devtools is ALWAYS mounted (a worker gets a browser out of the box on any
-// machine — parity with the codex backend's `-c` injection, same CHROME_DEVTOOLS_MCP spec); the
-// server-level `mcp__chrome-devtools` rule pre-approves every tool it exposes. The unified `frizz`
-// server rides along when its descriptor resolved, pre-approved the same server-level way.
+// The unified `frizz` server is the ONLY server frizz mounts, and only when its descriptor resolved —
+// frizz injects no browser and nothing else (see backend/types.ts). Whatever the PROJECT or the
+// operator configured themselves still loads: `--mcp-config` ADDS to the discovered `.mcp.json` /
+// user-scope servers rather than replacing them, which is what `--strict-mcp-config` would do and why
+// frizz never passes it.
 export interface ClaudeMcpStdioConfig { command: string; args?: string[]; env?: Record<string, string> }
 export interface ClaudeMcpConfig { mcpServers: Record<string, ClaudeMcpStdioConfig>; allowedTools: string[] }
 
@@ -508,12 +509,8 @@ export interface ClaudeMcpConfig { mcpServers: Record<string, ClaudeMcpStdioConf
 // --allowedTools flags below) AND the broker SDK path (passed straight into query()'s mcpServers/
 // allowedTools). One source of truth so both forms mount the SAME servers with the SAME pre-approvals.
 export function claudeMcpConfig(mcp?: FrizzMcp): ClaudeMcpConfig {
-  const mcpServers: Record<string, ClaudeMcpStdioConfig> = {
-    // chromeDevtoolsMcpMount(), never the fields: it is the ONE builder both backends render, and it
-    // is what mounts frizz's lazy proxy instead of the real server (backend/types.ts).
-    [CHROME_DEVTOOLS_MCP.name]: chromeDevtoolsMcpMount(),
-  }
-  const allowedTools = [`mcp__${CHROME_DEVTOOLS_MCP.name}`]
+  const mcpServers: Record<string, ClaudeMcpStdioConfig> = {}
+  const allowedTools: string[] = []
   if (mcp) {
     // command is the ABSOLUTE node path (process.execPath — the node running the frizz server), NOT bare
     // "node": Claude spawns the MCP-server process itself, and a worker's PATH varies by launch context
@@ -532,28 +529,27 @@ export function claudeMcpConfig(mcp?: FrizzMcp): ClaudeMcpConfig {
     // project's own lock, unprefixed RPC), which is exactly right for one project on its own server.
     const env = frizzMcpEnv(mcp)
     mcpServers[FRIZZ_MCP.name] = { command: process.execPath, args: [mcp.scriptPath], env }
-    // Server-level, like chrome-devtools above: every tool the unified frizz server exposes (today
+    // SERVER-level, not per tool: every tool the unified frizz server exposes (today
     // `mcp__frizz__spawn_thread`) is pre-approved, so adding one never needs an allow-list edit.
     allowedTools.push(`mcp__${FRIZZ_MCP.name}`)
   }
   return { mcpServers, allowedTools }
 }
 
-// Claude flags that mount the frizz-injected MCP servers via ONE inline `--mcp-config` JSON and
-// PRE-APPROVE their tools (`--allowedTools`) so a headless worker never blocks on a permission prompt
-// it has nobody to answer. The argv is exec'd with NO shell in between, so the JSON travels literally.
-// chrome-devtools is ALWAYS mounted (a worker gets a browser out of the box on any
-// machine — parity with the codex backend's `-c` injection, same CHROME_DEVTOOLS_MCP spec); the
-// server-level `mcp__chrome-devtools` rule pre-approves every tool it exposes. The unified `frizz`
-// server rides along when its descriptor resolved, pre-approved the same server-level way.
+// The argv rendering of claudeMcpConfig above.
 export function claudeMcpFlags(mcp?: FrizzMcp): string[] {
   const { mcpServers, allowedTools } = claudeMcpConfig(mcp)
+  // NOTHING mounted ⇒ NO flags. This became reachable when the always-on browser mount was removed
+  // (a checkout whose worker plugin does not resolve has no frizz descriptor either), and an empty
+  // `--allowedTools=` is not the same as omitting it — it hands the CLI one rule that is the empty
+  // string. Emit neither flag rather than two empty ones.
+  if (Object.keys(mcpServers).length === 0) return []
   const config = JSON.stringify({ mcpServers })
   // ONE comma-joined `--allowedTools=` in EQUALS form: the flag is VARIADIC, so a space-separated
   // value with a positional right behind it (e.g. the minimal no-system-prompt argv, where the prompt
   // directly follows) would be swallowed as a second rule. The equals form binds exactly one token —
-  // immune to argv reordering. Verified live: `claude -p --allowedTools=mcp__chrome-devtools <prompt>`
-  // runs the tools unprompted with the prompt surviving as the positional.
+  // immune to argv reordering. Verified live: `claude -p --allowedTools=mcp__frizz <prompt>` runs the
+  // tools unprompted with the prompt surviving as the positional.
   return ["--mcp-config", config, `--allowedTools=${allowedTools.join(",")}`]
 }
 
@@ -615,10 +611,11 @@ export function buildClaudeCommand(opts: {
   return argv
 }
 
-// The frizz-worker plugin directory. The implementation moved to worker-plugin-dir.ts so that
-// backend/types.ts can resolve the plugin's bin/ too (the lazy browser-MCP proxy lives there) without
-// importing this module and closing an import cycle; re-exported here because this is where every
-// caller and every test has always reached for it.
+// The frizz-worker plugin directory. The implementation lives in worker-plugin-dir.ts: it moved there
+// so backend/types.ts could resolve the plugin's bin/ for the browser-MCP proxy without importing this
+// module and closing an import cycle. That mount is gone (2026-08-26) and nothing outside this file
+// imports the leaf any more, but the split is harmless and moving it back would churn every caller —
+// it is re-exported here because this is where every caller and every test has always reached for it.
 export { resolveWorkerPluginDir } from "./worker-plugin-dir.ts"
 
 // Whether the "no worker plugin" alarm has already sounded in this process — the condition is a

@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { codexMcpConfigArgs } from "./codex-mcp.ts"
-import { CHROME_DEVTOOLS_MCP, FRIZZ_MCP } from "./types.ts"
+import { FRIZZ_MCP } from "./types.ts"
 
 // These pin the SHAPE of the `-c` overrides. The shape is otherwise only observable by running a real
 // codex app-server (see _live_codex_mcp_inject.mts), so a refactor could silently stop mounting the
@@ -18,24 +18,17 @@ function values(args: string[]): string[] {
   return out
 }
 
-test("codexMcpConfigArgs: chrome-devtools is mounted even with no frizz descriptor", () => {
-  const vals = values(codexMcpConfigArgs(undefined, "/abs/node", "/abs/plugin/bin/browser-mcp.mjs"))
-  const chrome = vals.find((v) => v.startsWith(`mcp_servers.${CHROME_DEVTOOLS_MCP.name}=`))
-  assert.ok(chrome, "chrome-devtools override missing")
-  // The runtime release gate needs a browser on any machine; this must not be conditional.
-  // What is mounted is frizz's LAZY PROXY under the ABSOLUTE node path — never `npx`, whose `npm exec`
-  // shim was 70 MB per worker of pure waste and whose real server started whether or not the worker
-  // ever opened a page (backend/types.ts).
-  assert.match(chrome, /command="\/abs\/node"/)
-  assert.ok(chrome.includes(JSON.stringify("/abs/plugin/bin/browser-mcp.mjs")), "the proxy script must be argv[0]")
-  assert.ok(!chrome.includes("npx"), "npx must not survive anywhere in the codex mount")
-  for (const arg of CHROME_DEVTOOLS_MCP.args) assert.ok(chrome.includes(JSON.stringify(arg)), `missing ${arg}`)
-  // The version pin travels in the env, so backend/types.ts stays the only place it is written down.
-  assert.ok(
-    chrome.includes(`FRIZZ_BROWSER_MCP_PACKAGE="${CHROME_DEVTOOLS_MCP.package}@${CHROME_DEVTOOLS_MCP.version}"`),
-    "the pinned package must ride the mount env",
-  )
-  assert.ok(!vals.some((v) => v.startsWith(`mcp_servers.${FRIZZ_MCP.name}=`)), "frizz must not be mounted without a descriptor")
+test("codexMcpConfigArgs: with no frizz descriptor, frizz mounts NOTHING", () => {
+  const vals = values(codexMcpConfigArgs(undefined, "/abs/node"))
+  // A `chrome-devtools` override rode every app-server until 2026-08-26 — a browser nobody had asked
+  // for, whose tool schemas cost ~6,400 prefix tokens per worker. Frizz now injects the `frizz` server
+  // and nothing else, on BOTH backends; a project or operator that wants a browser configures it in
+  // `~/.codex/config.toml` themselves, and these overrides layer on top of that rather than replacing it.
+  assert.ok(!vals.some((v) => v.startsWith("mcp_servers.")), `frizz must mount no server: ${vals.join(" ")}`)
+  assert.ok(!vals.some((v) => v.includes("chrome-devtools")), "frizz must inject no browser")
+  // The approval override still rides along: it governs whatever MCP servers the OPERATOR configured,
+  // and a headless worker has nobody to click a prompt for those either.
+  assert.deepEqual(vals, ['default_tools_approval_mode="approve"'])
 })
 
 

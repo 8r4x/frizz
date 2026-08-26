@@ -1,8 +1,8 @@
-import { CHROME_DEVTOOLS_MCP, FRIZZ_MCP, chromeDevtoolsMcpSpec, frizzMcpEnv, resolveBrowserMcpScript, type FrizzMcp } from "./types.ts"
+import { FRIZZ_MCP, frizzMcpEnv, type FrizzMcp } from "./types.ts"
 
 // ---- Codex MCP injection -------------------------------------------------------------------------
-// The codex twin of dispatch.ts's `claudeMcpFlags`. Claude mounts frizz's MCP servers via one inline
-// `--mcp-config` JSON on the worker's argv; codex has no such flag, so they ride `-c` TOML overrides
+// The codex twin of dispatch.ts's `claudeMcpFlags`. Claude mounts frizz's MCP server via one inline
+// `--mcp-config` JSON on the worker's argv; codex has no such flag, so it rides a `-c` TOML override
 // on the APP-SERVER's argv instead.
 //
 // WHY THE APP-SERVER'S ARGV AND NOT THE PER-THREAD CONFIG BAG. `thread/start` takes an untyped
@@ -47,29 +47,19 @@ function serverTable(command: string, args: readonly string[], env?: Record<stri
 }
 
 /**
- * The `-c` overrides that mount frizz's MCP servers into a codex app-server.
+ * The `-c` overrides that mount frizz's MCP server into a codex app-server.
  *
- * chrome-devtools is ALWAYS mounted (a worker gets a browser out of the box on any
- * machine — rendered from chromeDevtoolsMcpSpec(), the same builder claude uses, which is what keeps
- * the two backends in lockstep). What that mounts is frizz's LAZY PROXY: one small node process per
- * app-server that answers `tools/list` from a disk snapshot and spawns the real `chrome-devtools-mcp`
- * on the first `tools/call`. The unified `frizz` server rides along when its descriptor resolved;
- * absent ⇒ the worker simply lacks those tools, exactly as on the claude side.
- *
- * `browserMcpScript` is injectable for the same reason `nodeBin` is: so a test can pin the rendered
- * TOML without depending on where the worker plugin happens to sit on the machine running it. Omitted
- * ⇒ resolved from the worker plugin; unresolvable ⇒ chromeDevtoolsMcpSpec degrades to a pinned npx
- * mount, which backend/browser-mcp.test.ts pins directly.
+ * The unified `frizz` server is the ONLY server frizz mounts, and only when its descriptor resolved;
+ * absent ⇒ the worker simply lacks those tools, exactly as on the claude side. Frizz injects no
+ * browser on EITHER backend (see types.ts) — a `chrome-devtools` mount rode every app-server until
+ * 2026-08-26. Whatever the operator configured themselves in `~/.codex/config.toml` still loads: these
+ * are overrides layered ON the config, not a replacement for it.
  *
  * Returns a flat argv fragment: ["-c", "…", "-c", "…"]. Pure and exported so a regression cannot
- * silently stop mounting them — the shape is unit-pinned rather than only observable by running codex.
+ * silently stop mounting it — the shape is unit-pinned rather than only observable by running codex.
  */
-export function codexMcpConfigArgs(frizzMcp?: FrizzMcp, nodeBin: string = process.execPath, browserMcpScript?: string): string[] {
-  const chrome = chromeDevtoolsMcpSpec(browserMcpScript ?? resolveBrowserMcpScript(), nodeBin)
-  const args: string[] = [
-    "-c",
-    `mcp_servers.${CHROME_DEVTOOLS_MCP.name}=${serverTable(chrome.command, chrome.args, chrome.env)}`,
-  ]
+export function codexMcpConfigArgs(frizzMcp?: FrizzMcp, nodeBin: string = process.execPath): string[] {
+  const args: string[] = []
   if (frizzMcp) {
     // The ABSOLUTE node path, never bare "node": the app-server spawns this itself and its PATH varies
     // by launch context (a GUI-launched app, a login-shell difference). The claude side pins the same

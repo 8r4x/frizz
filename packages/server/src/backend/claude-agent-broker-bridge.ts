@@ -27,9 +27,11 @@ import { FRIZZ_MCP, claudeWorkerEnv } from "./types.ts"
 
 type BrokerMcpServers = NonNullable<ClaudeBrokerConfig["mcpServers"]>
 
-// Stamp the calling thread's slug into the frizz MCP server's env, leaving every other mounted server
-// (chrome-devtools) untouched. Returns the input unchanged when there is no frizz mount, so a project
-// whose plugin dir did not resolve behaves exactly as before.
+// Stamp the calling thread's slug into the frizz MCP server's env, leaving any other mounted server
+// untouched. Frizz injects only the frizz server today (it mounted chrome-devtools alongside it until
+// 2026-08-26), so the map is usually a single entry — but the copy stays general, because a project's
+// own servers may reach this map through a future path. Returns the input unchanged when there is no
+// frizz mount, so a project whose plugin dir did not resolve behaves exactly as before.
 function withFrizzThreadSlug(servers: BrokerMcpServers | undefined, slug: string): BrokerMcpServers | undefined {
   const frizz = servers?.[FRIZZ_MCP.name]
   if (!frizz) return servers
@@ -62,7 +64,7 @@ export interface ClaudeBrokerBridgeDeps {
   env: Record<string, string>
   /** The frizz WORKER ENVIRONMENT — constant per project, applied on every fork so a dispatch AND a
    *  dead-daemon cold-resume both rebuild it. `pluginDir` loads the cc-worker plugin (frizz sub-agent
-   *  profiles + hooks); `mcpServers`/`allowedTools` mount + pre-approve the frizz + chrome-devtools MCP;
+   *  profiles + hooks); `mcpServers`/`allowedTools` mount + pre-approve the frizz MCP server;
    *  `permDir` is the per-project perm-marker dir the hooks write to (paired with the per-thread slug at
    *  attach time). Absent ⇒ a bare SDK worker (the pre-cutover behavior). */
   workerEnv?: {

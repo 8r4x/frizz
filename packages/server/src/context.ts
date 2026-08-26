@@ -748,7 +748,8 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         projectId: project.id,
         // The frizz worker environment — the SDK equivalent of the CLI argv's --plugin-dir / --mcp-config.
         // Computed ONCE here (constant per project) and applied on every broker fork so a broker worker
-        // gets the frizz sub-agent profiles, the frizz + chrome-devtools MCP, and the cc-worker hooks.
+        // gets the frizz sub-agent profiles, the frizz MCP server (the only one frizz mounts), and the
+        // cc-worker hooks. A project's own `.mcp.json` servers load on top of these, not through them.
         workerEnv: {
           pluginDir: workerPluginDir(),
           ...claudeMcpConfig(resolveFrizzMcp(frizzMcpTarget)),
@@ -960,9 +961,12 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   resources.scheduler = scheduler
   opts.startup?.afterPhase?.("wake scheduler")
 
-  // Reclaim the ~504 MB an IDLE broker thread holds — the `claude` CLI, the chrome-devtools MCP pair it
-  // always mounts, the broker daemon and the frizz MCP server — by retiring the daemon of a thread that
-  // has rested past the prompt-cache TTL and has nothing outstanding. It is not an end: the transcript
+  // Reclaim the memory an IDLE broker thread holds — the `claude` CLI, the broker daemon, the frizz MCP
+  // server, and whatever MCP servers the PROJECT itself configured — by retiring the daemon of a thread
+  // that has rested past the prompt-cache TTL and has nothing outstanding. The 504 MB figure that
+  // motivated this was measured 2026-08-19, when frizz auto-mounted chrome-devtools into every worker
+  // (159 MB of that total); frizz mounts no browser since 2026-08-26, so a thread in a project that
+  // brings none rests nearer ~345 MB and one that brings a browser is back at the old number. It is not an end: the transcript
   // is on disk and the next input (an operator message, a fired timer, a recurring prompt, a PR event —
   // all of which route through the bridge's followUp) cold-resumes it with `resume: true`. Above the TTL
   // that resume costs no extra tokens, because the cache is already gone.
