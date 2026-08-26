@@ -128,6 +128,8 @@ Options:
                          own port, deleted when this terminal closes; credentials (gh,
                          cloudflared, Claude, Codex, the machine's frizz.sh key) are shared
   --link                 print a fresh single-use access link for the running board
+  --sessions             list the devices signed in to the running board
+  --sign-out <id|all>    sign one device out, or every one of them
   --debug                stream the full event feed to the terminal instead of the compact readout
   -h, --help             show this help
 
