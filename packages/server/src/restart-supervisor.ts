@@ -243,29 +243,46 @@ export class RestartSupervisorProxy {
    * can never see (or reject) the real browser authority. Everything this class forwards has to be
    * judged here first.
    */
-  private readonly policy: LocalAuthorityPolicy
+  private policy: LocalAuthorityPolicy
+  /** The origin a tunnel or proxy serves this board at; undefined while loopback-only. Live: see setPublicOrigin. */
+  private publicOrigin: string | undefined
   /**
    * Codes and sessions for the public origin, or null when no public origin is declared (loopback-only
    * boards are never gated, so there is nothing to store).
    */
-  private readonly access: AccessStore | null
+  private readonly access: AccessStore
   /** Both halves of every live upgraded pair, so close() can actually finish. See close(). */
   private readonly upgradedSockets = new Set<import("node:stream").Duplex>()
 
   constructor(options: RestartSupervisorProxyOptions) {
     this.options = options
     this.host = options.host ?? LOOPBACK_BIND_HOST
-    this.access = options.publicOrigin
-      ? new AccessStore({
-          onConsumed: () => options.onCodeConsumed?.(),
-          ...(options.sessionKey ? { signingKey: options.sessionKey } : {}),
-          ...(options.sessionDirectory ? { sessions: options.sessionDirectory } : {}),
-        })
-      : null
-    this.policy = {
+    this.publicOrigin = options.publicOrigin
+    // Always built, even loopback-only: the origin can be set on a RUNNING board (the R pane), and a
+    // store that outlives any one origin is what keeps a phone signed in across a rename.
+    this.access = new AccessStore({
+      onConsumed: () => options.onCodeConsumed?.(),
+      ...(options.sessionKey ? { signingKey: options.sessionKey } : {}),
+      ...(options.sessionDirectory ? { sessions: options.sessionDirectory } : {}),
+    })
+    this.policy = this.buildPolicy()
+  }
+
+  /**
+   * Change the public origin on a running board — what the R pane does when the operator picks or
+   * clears a remote setup. Requests already in flight finish under the policy they started with; the
+   * next one is judged by the new origin. Sessions survive the change.
+   */
+  setPublicOrigin(origin: string | undefined): void {
+    this.publicOrigin = origin
+    this.policy = this.buildPolicy()
+  }
+
+  private buildPolicy(): LocalAuthorityPolicy {
+    return {
       exposed: bindHostIsExposed(this.host),
-      allowedHosts: options.allowedHosts ?? [],
-      ...(options.publicOrigin ? { publicOrigin: options.publicOrigin } : {}),
+      allowedHosts: this.options.allowedHosts ?? [],
+      ...(this.publicOrigin ? { publicOrigin: this.publicOrigin } : {}),
     }
   }
 
@@ -276,12 +293,12 @@ export class RestartSupervisorProxy {
    * asking at once, must not silently break the first QR somebody is still walking towards.
    */
   issueAccessCode(): AccessCode | null {
-    return this.access?.issue() ?? null
+    return this.publicOrigin ? this.access.issue() : null
   }
 
   /** The full URL to show as a link or a QR. */
   accessUrl(code: string): string | null {
-    const origin = this.options.publicOrigin
+    const origin = this.publicOrigin
     return origin ? `${origin}/?${ACCESS_CODE_PARAM}=${encodeURIComponent(code)}` : null
   }
 
@@ -454,7 +471,7 @@ export class RestartSupervisorProxy {
         res.end("Forbidden")
         return
       }
-      if (!this.access) {
+      if (!this.publicOrigin) {
         responseJson(res, 409, { error: "this board has no public origin, so nothing is signed in" })
         return
       }
@@ -551,7 +568,7 @@ export class RestartSupervisorProxy {
    * a tunnelled board stays bound to 127.0.0.1 while being reachable from the internet by name.
    */
   private arrivedPublicly(req: IncomingMessage): boolean {
-    const declared = this.options.publicOrigin
+    const declared = this.publicOrigin
     if (!declared) return false
     const host = parseLocalHost(req.headers.host, this.options.port, this.policy)
     return !!host && !LOOPBACK_HOSTNAMES.has(host.hostname)
@@ -572,7 +589,7 @@ export class RestartSupervisorProxy {
    * staying in somebody's URL bar.
    */
   private sessionAccepted(req: IncomingMessage): boolean {
-    if (!this.access) return true
+    if (!this.publicOrigin) return true
     return this.access.verifySession(readCookie(req.headers.cookie, SESSION_COOKIE))
   }
 
@@ -587,7 +604,7 @@ export class RestartSupervisorProxy {
 
     // The User-Agent is the only thing a board ever records about a visitor's browser, and it exists
     // so `frizz --sessions` can say "iPhone" instead of an opaque id nobody can match to a device.
-    const redeemed = this.access?.redeem(code, describeDevice(req.headers["user-agent"]))
+    const redeemed = this.access.redeem(code, describeDevice(req.headers["user-agent"]))
     if (!redeemed?.ok) {
       // Say WHICH failure. "This link was already used" and "no such link" send a person to very
       // different next actions, and the store keeps consumed codes precisely so we can tell them apart.

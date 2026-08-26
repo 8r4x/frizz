@@ -834,3 +834,37 @@ test("--link on a board with no public origin says so instead of minting a usele
     await current.close().catch(() => undefined)
   }
 })
+
+test("setPublicOrigin flips the gate on a running board, and clearing it flips it back", async () => {
+  // The R pane changes how a board is reached WITHOUT restarting it, so the proxy has to re-judge
+  // every later request by the new origin: a name that was refused as a stranger becomes the gated
+  // public front, and clearing the origin makes it a stranger again while loopback never notices.
+  const current = await child("only")
+  const port = await freePort()
+  const proxy = new RestartSupervisorProxy({ port, childPort: () => current.port, restart: async () => ({ state: "ready" }) })
+  try {
+    await proxy.listen()
+    const publicHeaders = { host: "colin.frizz.sh", origin: "https://colin.frizz.sh" }
+    const loopback = { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}` }
+    assert.equal(proxy.issueAccessCode(), null)
+    assert.equal((await proxied(port, "/", publicHeaders)).status, 403)
+
+    proxy.setPublicOrigin("https://colin.frizz.sh")
+    assert.equal((await proxied(port, "/", publicHeaders)).status, 401)
+    const minted = proxy.issueAccessCode()
+    assert.ok(minted)
+    const exchange = await proxied(port, `/?frizz_code=${minted.code}`, publicHeaders)
+    assert.equal(exchange.status, 302)
+    const session = String(exchange.headers?.["set-cookie"]).split(";")[0]!
+    assert.equal((await proxied(port, "/", { ...publicHeaders, cookie: session })).status, 200)
+    assert.equal((await proxied(port, "/", loopback)).status, 200)
+
+    proxy.setPublicOrigin(undefined)
+    assert.equal(proxy.issueAccessCode(), null)
+    assert.equal((await proxied(port, "/", { ...publicHeaders, cookie: session })).status, 403)
+    assert.equal((await proxied(port, "/", loopback)).status, 200)
+  } finally {
+    await proxy.close().catch(() => undefined)
+    await current.close()
+  }
+})

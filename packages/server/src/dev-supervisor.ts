@@ -166,6 +166,8 @@ export interface DevSupervisor {
   readonly port: number
   /** Mint a single-use access link for the public origin, or null when none is declared. */
   issueAccessLink(): { code: string; url: string; expiresAt: number } | null
+  /** Declare (or clear) the public origin on the running board; the gate follows at once. */
+  setPublicOrigin(origin: string | undefined): void
   readonly firstBoot: Promise<DevBoot>
   readonly stopRequested: Promise<void>
   currentBoot(): DevBoot | null
@@ -585,6 +587,10 @@ class Supervisor implements DevSupervisor {
   }
 
   /** Mint a single-use access link for the public origin, or null when none is declared. */
+  setPublicOrigin(origin: string | undefined): void {
+    this.publicProxy.setPublicOrigin(origin)
+  }
+
   issueAccessLink(): { code: string; url: string; expiresAt: number } | null {
     const code = this.publicProxy.issueAccessCode()
     if (!code) return null

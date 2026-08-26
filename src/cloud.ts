@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -54,10 +54,27 @@ export interface CloudConfig {
    * nothing per-name in DNS. This is what a claim gets now.
    * `tunnel` — the older path, where the registrar provisioned a Cloudflare tunnel per name.
    *
+   * `external` — the operator runs the transport (Tailscale Serve, a proxy, a tunnel started by hand)
+   * and Frizz runs nothing: it only knows the origin, gates it, and prints links for it.
+   *
    * Absent on an existing config means tunnel, so an upgrade does not silently change how a board that
    * already works is served.
    */
-  serve?: "relay" | "tunnel";
+  serve?: "relay" | "tunnel" | "external";
+  /** For an `external` config, which setup the R pane walked through — only a label for the readout. */
+  provider?: "tailscale" | "other";
+}
+
+/** A config Frizz serves by knowing the origin alone — nothing to start, nothing to renew. */
+export function isExternalConfig(config: CloudConfig): boolean {
+  return config.serve === "external";
+}
+
+/** The readout's name for how a board is reached, next to its public address. */
+export function describeCloudConfig(config: CloudConfig): string {
+  if (isClaimedConfig(config)) return "frizz.sh";
+  if (isExternalConfig(config)) return config.provider === "tailscale" ? "Tailscale" : "your proxy";
+  return "Cloudflare Tunnel";
 }
 
 /**
@@ -151,12 +168,14 @@ export function readCloudConfig(home = homedir()): CloudConfig | null {
     // launcher would arm the origin gate for an address with no tunnel behind it.
     const claimed = typeof parsed.claim === "string" && parsed.claim.length > 0;
     const named = typeof parsed.tunnel === "string" && parsed.tunnel.length > 0;
-    if (!claimed && !named) return null;
+    const external = parsed.serve === "external";
+    if (!claimed && !named && !external) return null;
     return {
       hostname: parsed.hostname,
       ...(named ? { tunnel: parsed.tunnel } : {}),
       ...(claimed ? { claim: parsed.claim } : {}),
-      ...(parsed.serve === "relay" || parsed.serve === "tunnel" ? { serve: parsed.serve } : {}),
+      ...(parsed.serve === "relay" || parsed.serve === "tunnel" || external ? { serve: parsed.serve } : {}),
+      ...(external && (parsed.provider === "tailscale" || parsed.provider === "other") ? { provider: parsed.provider } : {}),
       ...(parsed.config ? { config: parsed.config } : {}),
     };
   } catch {
@@ -188,6 +207,11 @@ export function writeTunnelToken(token: string, home = homedir()): void {
   const path = tunnelTokenPath(home);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${token}\n`, { mode: 0o600 });
+}
+
+/** Forget the saved setup: the next launch is loopback-only. Nothing else to undo — a claim lapses on its own. */
+export function deleteCloudConfig(home = homedir()): void {
+  rmSync(cloudConfigPath(home), { force: true });
 }
 
 export function writeCloudConfig(config: CloudConfig, home = homedir()): void {
