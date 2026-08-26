@@ -380,6 +380,9 @@ test("the lifted worker caps reach the process the broker actually forks", { tim
   const bridge = createClaudeAgentBrokerBridge({
     stateDir: dir, executablePath: exe,
     env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" },
+    // The compaction window rides the same composed environment as the caps, read from Settings at
+    // fork time — so the same startup capture proves it reaches the process (added 2026-08-26).
+    getSettings: () => ({ autoCompactWindow: 123_456 }),
   })
   const sessionId = randomUUID()
   const slug = "caps-thread"
@@ -400,6 +403,7 @@ test("the lifted worker caps reach the process the broker actually forks", { tim
     assert.equal(env.maxWebSearches, String(WORKER_MAX_WEB_SEARCHES), "the web-search lift reaches the worker")
     assert.equal(env.maxSubagents, String(WORKER_MAX_SUBAGENTS), "the sub-agent spawn lift reaches the worker")
     assert.equal(env.maxConcurrentSubagents, String(WORKER_MAX_CONCURRENT_SUBAGENTS), "the concurrency lift reaches the worker")
+    assert.equal(env.autoCompactWindow, "123456", "Settings.autoCompactWindow reaches the worker as CLAUDE_CODE_AUTO_COMPACT_WINDOW")
   } finally {
     bridge.releaseSession(slug, sessionId, "session-deleted")
     bridge.close()

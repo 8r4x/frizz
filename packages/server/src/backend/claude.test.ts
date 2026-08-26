@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { createClaudeBackend, parseClaudeLine } from "./claude.ts"
 import { newTailState, computeTurn } from "../tailer.ts"
 import { buildClaudeCommand, buildClaudeResumeCommand, claudeWorkerEnvironment, loadWorkerPrompt, WORKER_MAX_CONCURRENT_SUBAGENTS, WORKER_MAX_SUBAGENTS, WORKER_MAX_WEB_SEARCHES, workerPluginDir } from "../dispatch.ts"
-import { CLAUDE_WORKER_ENV } from "./types.ts"
+import { CLAUDE_WORKER_ENV, claudeCompactionEnv } from "./types.ts"
 
 // ---- parseClaudeLine: the normalized VIEW of a Claude JSONL line (codex-facing seam; NOT the
 // behavior-critical fold — that is foldLine → applyRecord, covered by tailer.test.ts). ----
@@ -280,4 +280,16 @@ test("parseClaudeLine's turn-end signal agrees with the authoritative fold (no d
     assert.equal(computeTurn(st, far) === "idle", c.idle, `fold idle verdict for ${c.line}`)
     assert.equal(hasTurnEnd, c.idle, `normalized turn-end agrees with fold for ${c.line}`)
   }
+})
+
+// Settings.autoCompactWindow reaches a worker as CLAUDE_CODE_AUTO_COMPACT_WINDOW — the one lever that
+// stops a `[1m]` worker from growing to 1M before it compacts (see the Settings schema). Unset, zero,
+// negative or fractional ⇒ nothing is passed, so the CLI keeps its own per-model default.
+test("claudeCompactionEnv: a positive integer window becomes CLAUDE_CODE_AUTO_COMPACT_WINDOW, anything else passes nothing", () => {
+  assert.deepEqual(claudeCompactionEnv({ autoCompactWindow: 500_000 }), { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "500000" })
+  assert.deepEqual(claudeCompactionEnv(undefined), {})
+  assert.deepEqual(claudeCompactionEnv({}), {})
+  assert.deepEqual(claudeCompactionEnv({ autoCompactWindow: 0 }), {})
+  assert.deepEqual(claudeCompactionEnv({ autoCompactWindow: -1 }), {})
+  assert.deepEqual(claudeCompactionEnv({ autoCompactWindow: 12.5 }), {})
 })

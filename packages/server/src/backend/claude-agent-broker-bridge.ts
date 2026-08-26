@@ -23,7 +23,7 @@ import {
   parseClaudeAskUserQuestion,
   type ClaudeAskSpec,
 } from "./claude-permission-interactions.ts"
-import { FRIZZ_MCP, claudeWorkerEnv } from "./types.ts"
+import { FRIZZ_MCP, claudeCompactionEnv, claudeWorkerEnv } from "./types.ts"
 
 type BrokerMcpServers = NonNullable<ClaudeBrokerConfig["mcpServers"]>
 
@@ -71,6 +71,10 @@ export interface ClaudeBrokerBridgeDeps {
     allowedTools?: string[]
     permDir?: string
   }
+  /** The live Settings, read at every fork so the auto-compact window (Settings.autoCompactWindow →
+   *  CLAUDE_CODE_AUTO_COMPACT_WINDOW) follows the drawer without a restart. Only the fork reads it: a
+   *  daemon already running keeps the value it was forked with. Absent ⇒ the CLI's own default. */
+  getSettings?: () => { autoCompactWindow?: number }
   /** The dashboard InteractionStore + this project's id. When present, a Claude tool-permission
    *  escalation (canUseTool, which under "auto" fires only for classifier-flagged risky calls) is
    *  journaled as an approval interaction and gated on the human's dashboard decision. Absent ⇒ the
@@ -476,6 +480,9 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
       // claudeWorkerEnv). Spread here rather than inherited, which is what gives these per-thread
       // values priority over anything in the environment frizz itself was launched with.
       ...claudeWorkerEnv(),
+      // The auto-compact ceiling, from Settings (500K by default). Without it a `[1m]` worker compacts
+      // only near 1M, re-sending up to 5x a TUI session's conversation on every turn past 200K.
+      ...claudeCompactionEnv(deps.getSettings?.()),
       ...(we?.permDir ? { FRIZZ_PERM_DIR: we.permDir } : {}),
       // The cc-worker plugin's PreToolUse hook DENIES AskUserQuestion, because without frizz in the
       // loop a blocking question freezes a headless worker where nobody can answer it. On the broker path

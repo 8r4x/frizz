@@ -523,39 +523,13 @@ test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting pa
     // The tail recap repeats the heuristic (not the scenario) for a worker skimming the end.
     assert.match(c, /Nor is a turn on a thread that still points at future work/)
   }
-  // The runtime re-grounding carries the same intent in one line (slim, not a second contract copy).
-  assert.match(SESSION_SEED, /```done[^;]*is a DISMISSAL \(its card files the thread away where nobody looks again\)/)
-  // The escape from `done` is now a QUESTION, not a bare rest — a fenceless rest stopped being an
-  // acceptable outcome on 2026-08-12 (scheduler SOURCE 9 corrects it).
-  assert.match(SESSION_SEED, /points at future work AT ALL[^;]*ask a ```question instead, and uncertain is not done/)
-  assert.match(SESSION_SEED, /ALWAYS SIGN OFF WITH A FENCE/)
-  // The fact a worker cannot discover on its own, and the one it most often gets wrong: its shells are
-  // watched AUTOMATICALLY, and the fence line is how it comes to REST meanwhile — not a registration.
-  assert.match(SESSION_SEED, /watched AUTOMATICALLY/)
-  // The seed teaches the LIVE fence grammar (YAML frontmatter, plural list keys — 2026-08-24). Its
-  // predecessors each looped a real worker: the zod exclude-api thread parked on `pr-watch:` lines the
-  // 2026-08-15 grammar had retired, so every park named nothing and the Goal bumped it seconds later.
-  assert.match(SESSION_SEED, /`shells: \[<id>\]`/)
-  assert.doesNotMatch(SESSION_SEED, /pr-watch|`watch: <id>`|human:\//, "retired fence spellings must not come back")
-  assert.match(SESSION_SEED, /because that artifact outlives the thread/)
-  // The seed carries the two 2026-08-16 wrong-`done` cases in one clause each — a worker that never
-  // scrolls the system prompt still gets the recommendation rule and the discovered-follow-up rule.
-  assert.match(SESSION_SEED, /follow-up work you DISCOVERED even when someone else will do it/)
-  assert.match(SESSION_SEED, /never a done card, because a draft you wrote but did not send is filed away with the thread/)
-  // The seed carries the 2026-08-18 demotion too — sub-agent first, ask second, a new card last.
-  assert.match(SESSION_SEED, /DO it first — dispatch a sub-agent, whose result comes BACK to you/)
-  assert.match(SESSION_SEED, /mcp__frizz__spawn_thread is the LAST resort/)
-  assert.doesNotMatch(SESSION_SEED, /gives it its own card and only THEN is done honest/)
-  assert.match(SESSION_SEED, /TWO SURFACES, not one message written twice/)
-  assert.match(SESSION_SEED, /if it is not worth a card it is not worth a sentence/)
-  assert.match(SESSION_SEED, /code LANDED on the mainline — an open PR is NOT done, park it on ```awaiting until it MERGES/)
-  assert.doesNotMatch(SESSION_SEED, /BARE REST[^\n]*quiet/i)
-  assert.doesNotMatch(SESSION_SEED, /```done \/ ```awaiting excuse/)
-  assert.match(SESSION_SEED, /real work is COMPLETE/)
-  // The seed now also carries the autonomy anchor — the single most-violated norm in practice
-  // (measured: 25% of threads opened with a permission-gate question). See workerPrompt.ts header.
-  assert.match(SESSION_SEED, /DECIDE rather than ask/)
-  assert.match(SESSION_SEED, /asking permission to do the work you were dispatched to do is not a question/)
+  // The SessionStart seed no longer restates any of this. It carried the fence protocol, the stop
+  // criterion and the autonomy rule in full (~1,100 tokens on every startup, resume, clear and compact)
+  // until 2026-08-26, when the maintainer had it trimmed: every line of it was already in the system
+  // prompt, which is re-applied on every resume and survives compaction. The seed is a pointer now —
+  // see "session-seed is a SLIM runtime pointer" below — so these rules are pinned on the contract alone.
+  assert.doesNotMatch(SESSION_SEED, /ALWAYS SIGN OFF WITH A FENCE/)
+  assert.doesNotMatch(SESSION_SEED, /DECIDE rather than ask/)
 })
 
 test("session-seed is a SLIM runtime pointer, not a fourth full contract copy", () => {

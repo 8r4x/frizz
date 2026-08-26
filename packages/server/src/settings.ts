@@ -79,6 +79,9 @@ export const defaultSettings = (): Settings => ({
   notifications: true,
   font: "sans",
   localFileOpener: "system",
+  // 500K tokens: half the 1M window every Claude worker is dispatched with. See the schema for why a
+  // worker left to compact at 1M is the biggest single reason a Frizz thread out-spends the TUI.
+  autoCompactWindow: 500_000,
   // Hidden until asked for — see the schema for why.
   projectRail: false,
 })

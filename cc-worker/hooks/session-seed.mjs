@@ -8,10 +8,9 @@
 // frontmatter, no status field — a worker SIGNALS through its final message (fences), and anything that
 // must outlive its context window is an arrangement it makes for itself. This hook injects, on every
 // session start (startup/resume/clear/compact):
-//   1. `core` — a runtime re-grounding + pointer, NOT a second copy of the contract: the full worker
-//      contract lives ONCE in the system prompt (workerPrompt.ts) the server injects at spawn. This
-//      carries only what a static system prompt can't: the runtime scratch-directory PATH + an essential
-//      signal-at-rest anchor + a pointer to the system-prompt contract.
+//   1. `core` — a runtime POINTER, not a copy of the contract: the full worker contract lives ONCE in
+//      the system prompt (workerPrompt.ts) the server injects at spawn. This carries only what a
+//      static system prompt can't: the runtime scratch-directory PATH, and a one-line pointer.
 //   2. the SCRATCH DIRECTORY — `.frizz/threads/<session_id>/`, a folder the worker may use as it likes.
 //   3. on `compact` — a short re-grounding (compaction drops the deep model + this orientation).
 //
@@ -57,21 +56,23 @@ const scratch = sid
   ? '.frizz/threads/' + sid + '/'
   : '.frizz/threads/<session-id>/';
 
-// A RUNTIME re-grounding + pointer, NOT a second copy of the contract. The full worker contract
-// (signal fences, scratch-directory rules, sub-agent rules, the question handback) lives
-// ONCE in the system prompt frizz injects at spawn (workerPrompt.ts / loadWorkerPrompt) — which is
-// re-applied on every resume and survives compaction. This hook adds only what a static system prompt
-// CANNOT carry: the runtime-derived scratch-directory PATH, an essential signal-at-rest anchor, and (below)
-// the compaction re-read nudge, gh guidance, and the defensive cc-orchestrator off-sentinel.
+// A RUNTIME pointer, NOT a copy of the contract. The full worker contract (signal fences,
+// scratch-directory rules, sub-agent rules, the question handback, the stop criterion) lives ONCE in
+// the system prompt frizz injects at spawn (workerPrompt.ts / loadWorkerPrompt) — re-applied on every
+// resume, and it survives compaction. This hook adds only what a static system prompt CANNOT carry:
+// the runtime-derived scratch-directory PATH, plus (below) the compaction re-read nudge and the
+// auth-gated gh guidance.
+//
+// It used to restate the fence protocol, the stop criterion and the autonomy rule in full — ~4.4 KB
+// (~1,100 tokens) on every startup, resume, clear AND compact, all of it already in the 42 KB system
+// prompt. Trimmed 2026-08-26 (maintainer: "Definitely trim the session seed hook if it's fully
+// repetitive") as part of cutting the per-session token overhead Frizz adds over a plain TUI session.
 const core =
-  '⟦frizz worker contract⟧ You are a frizz WORKER driving EXACTLY ONE effort. Your FULL operating contract — the end-of-turn signal fences, scratch-directory rules, sub-agent rules, and the question handback — lives in your SYSTEM PROMPT; follow it there (this is a runtime re-grounding, not a second copy). The human + the frizz app are the ORCHESTRATOR; you drive ONE effort and never scan the board or touch other efforts. There is no orchestrator mode and no fleet to run: doing the work yourself is the default, and you dispatch a sub-agent only when the work genuinely decomposes into independent prongs.\n' +
-  'SCRATCH DIRECTORY (OPTIONAL): `' + scratch + '` — a folder kept FOR YOU: any files you like, no format expected, nothing in it read automatically, and never a substitute for doing the work. A single direct task usually needs nothing. On a long effort write the doc you would want if you lost your context — the approach, what you rejected, the human\'s decisions — AS YOU GO, mid-work, then KEEP WORKING, and arm mcp__frizz__recurring_prompt with post_compaction: true and a prompt LINKING that file, because the arming is what brings it back. Give each sub-agent its OWN file rather than a shared one.\n' +
-  'DO NOT REST WHILE THE INSTRUCTION HAS PARTS LEFT — finish them in THIS turn; a milestone, a green test run and a long turn are none of them stopping points, and announcing the next step or writing it into a scratch file is not doing it.\n' +
-  'ALWAYS SIGN OFF WITH A FENCE, per the fence rules in your system prompt. A rest with NO fence is not a handoff — it is an item nobody can triage, and frizz will tell you so. ```done only when the effort\'s real work is COMPLETE (code LANDED on the mainline — an open PR is NOT done, park it on ```awaiting until it MERGES) and is a DISMISSAL (its card files the thread away where nobody looks again), so if the thread points at future work AT ALL — a pre-fix investigation, a live code-change discussion, follow-up work you DISCOVERED even when someone else will do it — ask a ```question instead, and uncertain is not done; a verdict that ends in something the HUMAN must now do (post this comment, merge or decline, pick one of these) is a ```question carrying your recommendation as option A, never a done card, because a draft you wrote but did not send is filed away with the thread; when your OWN mandate is complete and what is left is a separable effort, DO it first — dispatch a sub-agent, whose result comes BACK to you, so it lands on YOUR card — and ASK second; mcp__frizz__spawn_thread is the LAST resort, for work that genuinely cannot ride on your card, because a spawned thread reports only to the human and nothing it learns returns to you or its siblings; the ONE exception is a planning session whose plan file is fully written and persisted, because that artifact outlives the thread; ```awaiting parks your OWN background work — a shell, a sub-agent, an armed timer, a registered PR watcher — never CI/releases/merge progression (those stay ACTIVE), and never a person: waiting on a person is a ```question; ```question is the operator ask. Waiting on your own background shell? Your shells and sub-agents are watched AUTOMATICALLY — frizz wakes you when one finishes, fence or no fence. NAME it in the fence\'s YAML frontmatter anyway — plural keys taking lists (`shells: [<id>]`, `agents:`, `timers:`, `prs:`) plus a required `for:` duration, then `---` and your prose — and rest: that is what lets you stop without frizz asking you for a handoff, and what shows the human what you are waiting for. Frizz checks every name against what you actually have running. Keep the write-up SHORT: 1-3 sentences, then bullets starting with a **bolded verb phrase**. The fence and the prose above it are TWO SURFACES, not one message written twice — the card is the ledger of what shipped, the prose is only what a ledger cannot hold, and a sentence that would read the same in either belongs in exactly one. And a done message says what HAPPENED: delete every dangling "one thing to carry forward" or "a follow-up could" — do it, spawn it onto its own card, ask about it, or DROP it, and if it is not worth a card it is not worth a sentence.\n' +
-  'DECIDE rather than ask: anything derivable from the code, the conventions, or ordinary engineering judgment is YOURS to settle — asking permission to do the work you were dispatched to do is not a question, it is the job. Reserve the operator for the irreversible and the genuinely human-owned.';
+  '⟦frizz worker contract⟧ You are a frizz WORKER driving EXACTLY ONE effort. Your FULL operating contract — the end-of-turn signal fences (```done / ```awaiting / ```question), the scratch-directory rules, the sub-agent rules, the question handback and the stop criterion — lives in your SYSTEM PROMPT; follow it there. Always sign off with a fence.\n' +
+  'SCRATCH DIRECTORY (OPTIONAL): `' + scratch + '` — a folder kept FOR YOU, nothing in it read automatically, never a substitute for doing the work. Give each sub-agent its OWN file rather than a shared one.';
 
 const grounding =
-  '⟦frizz worker re-grounding (post-compaction)⟧ Context was just compacted. You are still the frizz worker for effort `' + thread + '` — read whatever you left yourself in `' + scratch + '` NOW to recover your working state and to-do list before asserting anything, and re-read any code before claiming how it is structured. Signal at rest through your FINAL MESSAGE, always with a fence — a fenceless rest is an item nobody can triage: ```done queues a checked completion until Archive and is a DISMISSAL — completed work only, and never when the thread still points at future work (a pre-fix investigation, a live code-change discussion); use a question or bare rest; ```awaiting parks only your own background work, an armed timer, or a registered PR watcher (which wakes on any new review/comment, bot or human) — named in YAML frontmatter with plural list keys (`shells:`/`agents:`/`timers:`/`prs:`) plus a `for:` duration; waiting on a person is a ```question; ```question is the explicit higher-priority operator ask. CI/releases/merge progression stay active through Monitor/background Bash.';
+  '⟦frizz worker re-grounding (post-compaction)⟧ Context was just compacted. You are still the frizz worker for effort `' + thread + '` — read whatever you left yourself in `' + scratch + '` NOW to recover your working state and to-do list before asserting anything, and re-read any code before claiming how it is structured. Your system prompt still carries the full contract; sign off with a fence as it says.';
 
 // AUTH-GATED gh guidance — teach the worker to use `gh` well, but ONLY when signed in.
 // Shell `gh auth status --active`: exit 0 = an active gh account is authenticated. The whole gate is

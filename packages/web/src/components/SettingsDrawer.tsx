@@ -19,6 +19,7 @@ import { CLAUDE_DISPATCH_PERMISSION_OPTIONS } from "../lib/options.ts"
 type NotifPerm = "default" | "granted" | "denied" | "unsupported"
 export const SETTINGS_HELP = {
   permissionMode: "The permission mode new Claude Code threads launch with. Auto runs safe actions and asks you to approve the risky ones in the thread. Bypass launches the worker with --dangerously-skip-permissions: it never asks, so nothing waits on you and nothing is checked either. Takes effect on the next thread you dispatch; to change a thread that already exists, use the picker beside its model in the prompt box. Codex threads always run with full workspace access and are unaffected.",
+  autoCompactWindow: "How large a new Claude thread's conversation may grow, in tokens, before Claude Code compacts it. Frizz launches every Claude thread with the 1M context window, so without a ceiling a long thread keeps re-sending everything it has read on every turn; 500K halves that at the cost of an earlier summary. Takes effect on the next thread you dispatch and on a thread that resumes after its worker exited; a thread whose worker is already running keeps its current ceiling.",
   font: "Changes the interface reading font for this browser.",
   localFileOpener: "Chooses how vetted local artifact links open. Markdown files open in Frizz's own reader (which carries an Open action that uses this setting), and image clicks always use the OS default viewer.",
   density: "How much of a diff shows before you ask for it, in this browser. Compact collapses every diff to its header row (click one to open it); Comfortable shows them in full. Applies immediately.",
@@ -321,8 +322,20 @@ const GH_PROMPT_TOKENS: { token: string; gloss: string }[] = [
   { token: "body", gloss: "description" },
 ]
 
-// "Claude" — what applies to Claude Code workers and nothing else. One band, one field: the launch
-// permission mode for NEW Claude workers. Only the two modes a headless worker can actually run in are
+// The compaction-window presets, in tokens. 200K is the plain (non-1M) model window; 1M is the whole
+// window Frizz dispatches with, i.e. "never compact early". The server default is 500K (settings.ts);
+// the constant here only names it for a stored blob that predates the field.
+const DEFAULT_AUTO_COMPACT_WINDOW = 500_000
+const AUTO_COMPACT_WINDOW_OPTIONS = [
+  { value: "200000", label: "200K tokens" },
+  { value: "350000", label: "350K tokens" },
+  { value: "500000", label: "500K tokens (default)" },
+  { value: "750000", label: "750K tokens" },
+  { value: "1000000", label: "1M tokens" },
+]
+
+// "Claude" — what applies to Claude Code workers and nothing else. Two fields: the launch permission
+// mode for NEW Claude workers, and their compaction window. Only the two modes a headless worker can actually run in are
 // offered (see CLAUDE_DISPATCH_PERMISSION_OPTIONS); the server's workerDispatchPermission enforces the
 // same floor, so a restrictive value left in an old DB can never reach a spawn. A stored mode outside
 // the two reads as the "Auto" floor — which is exactly what would be dispatched — rather than
@@ -347,6 +360,16 @@ function ClaudeSection({
           ariaLabel="Claude permission mode"
         />
         {draft.permissionMode === "bypassPermissions" && <BypassHint />}
+      </SettingsField>
+      <SettingsField label="Compaction window" help={SETTINGS_HELP.autoCompactWindow}>
+        <Select
+          variant="bordered"
+          value={String(draft.autoCompactWindow ?? DEFAULT_AUTO_COMPACT_WINDOW)}
+          onValueChange={(v) => setDraft({ ...draft, autoCompactWindow: Number(v) })}
+          options={AUTO_COMPACT_WINDOW_OPTIONS}
+          indicatorPosition="right"
+          ariaLabel="Claude compaction window"
+        />
       </SettingsField>
     </div>
   )

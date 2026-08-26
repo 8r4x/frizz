@@ -1995,6 +1995,14 @@ export const Settings = z.object({
   // Default action for a vetted non-image local path in agent markdown. Image clicks always use the
   // OS default viewer so screenshots retain their expected behavior.
   localFileOpener: LocalFileOpener.optional(),
+  // The token count at which a NEW Claude worker auto-compacts its conversation. Frizz requests the
+  // 1M context window on every dispatch (resolveClaudeLaunchModel), so without this a worker grows
+  // toward 1M before it ever compacts — and every turn past 200K re-sends up to 5x the conversation a
+  // 200K TUI session would, which is the single largest reason a Frizz thread spends quota faster than
+  // the TUI (measured 2026-08-26). Reaches the worker as CLAUDE_CODE_AUTO_COMPACT_WINDOW, which Claude
+  // Code caps to the model's real window. Optional so an old blob parses; defaultSettings pins 500_000
+  // (maintainer 2026-08-26: "a default compaction window of 500k by default").
+  autoCompactWindow: z.number().int().positive().optional(),
   // The GitHub batch-dispatch prompt template (the picker's per-item worker prompt). Optional: when
   // unset OR blank the server falls back to its exported DEFAULT_GITHUB_PROMPT. Substitution tokens
   // the server fills: {repo} {n} {title} {url} {labels} {body}. The leading `THREAD: <slug>` tag is

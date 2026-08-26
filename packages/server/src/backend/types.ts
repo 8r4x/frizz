@@ -522,6 +522,18 @@ export function claudeWorkerEnv(env: NodeJS.ProcessEnv = process.env): Record<st
   }
 }
 
+// The auto-compact ceiling a Claude worker runs under, from Settings. Claude Code reads
+// CLAUDE_CODE_AUTO_COMPACT_WINDOW as a token count and caps it to the model's real window, so a value
+// above a 200K model's window is harmless. Unset ⇒ nothing is passed and the CLI uses its own default
+// for the model — the whole 1M window on a `[1m]` model, which is exactly the growth this exists to
+// stop (Settings.autoCompactWindow explains the cost). Composed into the worker environment on every
+// fresh daemon fork; a daemon already running keeps the value it was forked with.
+export function claudeCompactionEnv(settings: { autoCompactWindow?: number } | undefined): Record<string, string> {
+  const window = settings?.autoCompactWindow
+  if (window === undefined || !Number.isInteger(window) || window <= 0) return {}
+  return { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(window) }
+}
+
 // Tools an ARGV-SPAWNED Claude worker never gets — the argv turns this into `--disallowedTools=…`.
 //
 // ARGV PATH ONLY, and the asymmetry is deliberate. A worker frizz launched as its own interactive
