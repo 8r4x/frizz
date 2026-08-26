@@ -60,10 +60,11 @@ ingress:
 
         <h2>Let Frizz own the tunnel</h2>
         <p>Run the two halves yourself, or hand the tunnel to Frizz as a child process:</p>
-        <pre class="term"><code><span class="prompt">$</span> npx frizz up
-Name for this board — a word claims &lt;name&gt;.frizz.sh, or paste a hostname you already run a tunnel for: board.example.com
-Name of the cloudflared tunnel serving board.example.com [board]: my-board</code></pre>
-        <p>A hostname with a dot in it is taken as yours, so Frizz asks which tunnel serves it rather than guessing from the first label. Both answers are remembered.</p>
+        <pre class="term"><code>  press R, choose <span class="prompt">Cloudflare Tunnel</span>
+
+  Hostname  board.example.com
+  Tunnel    my-board</code></pre>
+        <p>Frizz asks which tunnel serves the hostname rather than guessing from its first label — a tunnel is rarely named after its host. Both answers are remembered, and it checks that <code>cloudflared</code> is on this machine before accepting them.</p>
         <p>Running it under Frizz is worth preferring, because the two halves then share a lifetime. A tunnel that outlives its board serves Cloudflare error 1033 to anyone who visits; a board that outlives its tunnel is unreachable with nothing to say why.</p>
       </article>
     </main>

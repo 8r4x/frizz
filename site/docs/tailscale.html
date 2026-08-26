@@ -48,7 +48,10 @@
         <p><code>status</code> reports the URL it is serving, in the form <code>https://&lt;machine&gt;.&lt;tailnet&gt;.ts.net</code>. Take the origin from there rather than composing it by hand — the MagicDNS name is not something you choose.</p>
 
         <h2>Tell Frizz the origin</h2>
-        <pre class="term"><code><span class="prompt">$</span> npx frizz --public-origin https://your-machine.your-tailnet.ts.net</code></pre>
+        <pre class="term"><code>  press R, choose <span class="prompt">Tailscale</span>
+
+  Origin  https://your-machine.your-tailnet.ts.net</code></pre>
+        <p>Frizz reads your tailnet name while the pane is open, so the field is usually already filled in.</p>
         <p>Frizz checks that a request&#8217;s <code>Host</code> matches the origin it was given, so the value has to be the exact origin a browser sees — scheme included, no trailing slash.</p>
 
         <h2>Stop serving</h2>

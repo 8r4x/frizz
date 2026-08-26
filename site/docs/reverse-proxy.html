@@ -42,7 +42,9 @@
         <h1>Any reverse proxy</h1>
         <p class="lede">The rule is the same for Caddy, nginx, ngrok or anything else: terminate TLS wherever you like, proxy to the board&#8217;s loopback port, and pass the public origin to Frizz.</p>
 
-        <pre class="term"><code><span class="prompt">$</span> npx frizz --public-origin https://whatever-that-proxy-serves</code></pre>
+        <pre class="term"><code>  press R, choose <span class="prompt">Something else</span>
+
+  Origin  https://whatever-that-proxy-serves</code></pre>
 
         <p>Frizz checks that a request&#8217;s <code>Host</code> matches the origin it was given, so the value has to be the exact origin a browser sees — scheme included, no trailing slash.</p>
 

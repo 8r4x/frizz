@@ -39,15 +39,17 @@
     <main id="top">
       <article class="doc">
         <h1>Remote access</h1>
-        <p class="lede">Frizz binds <code>127.0.0.1</code> and has no login of its own. To reach a board from a phone or another machine, put something in front of it that does the authenticating, then tell Frizz which origin that something serves.</p>
+        <p class="lede">Frizz binds <code>127.0.0.1</code>. To reach a board from a phone or another machine, press <strong>R</strong> in the terminal running it and pick how it should be reached.</p>
 
-        <pre class="term"><code><span class="prompt">$</span> npx frizz --public-origin https://board.example.com</code></pre>
+        <pre class="term"><code>  Reach this board from anywhere
 
-        <p>Naming the origin does two things. Frizz accepts requests arriving as that exact origin, and it prints a <strong>single-use access link</strong> — as a QR code, so a phone can scan it off the terminal. Scanning trades the code for a session cookie, so the link itself stops working the moment it is used.</p>
+  <span class="prompt">❯</span> frizz.sh name
+    Cloudflare Tunnel
+    Tailscale
+    Something else
+    Off                 (current)</code></pre>
 
-        <pre class="term"><code><span class="prompt">$</span> npx frizz --link</code></pre>
-
-        <p>Press <code>L</code> in the board&#8217;s terminal for the same thing without leaving it.</p>
+        <p>The walkthrough checks what each route needs — a signed-in GitHub CLI, <code>cloudflared</code>, a tailnet — before it accepts your answer, and the choice is <strong>remembered</strong>, so a plain <code>npx frizz</code> serves it from then on. Whichever you pick, Frizz gates it the same way and prints a <strong>single-use sign-in link</strong> — as a QR code, so a phone can scan it off the terminal. Press <code>L</code> for a fresh one, or run <code>npx frizz --link</code> from another shell.</p>
 
         <blockquote class="callout"><p>Anything that gets <em>past</em> this gate can run shell commands as you. The gate is standing, not a formality: every request and every socket has to carry the session, so a device that has not redeemed a link is refused no matter what sits in front. What a tunnel or proxy adds is TLS and a hostname — the authentication is Frizz&#8217;s.</p></blockquote>
 
