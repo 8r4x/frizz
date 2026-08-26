@@ -361,8 +361,40 @@ function hasLiveSubAgents(t: ThreadView): boolean {
 // It does NOT re-spin finished threads. What the row reads as is a separate decision made downstream in
 // sessionIndicatorKind, and a shell-only rest gets the quiet pulsing dot there, never the spinner — the
 // 2026-07-22 worry (a dev server spinning its thread forever) is answered by the GLYPH.
+//
+// AND THE FLAG NO LONGER MEANS WHAT THE PARAGRAPH ABOVE SAYS, WHICH IS WHY THE TIMER CARVE-OUT EXISTS.
+// `awaitingBackground` was "its own dispatched work is still live" when this read it, and the sentence
+// that made that safe — deriveAwaitingBackground drops any fenced thread — stopped being true in three
+// steps: a parked PR watch (2026-08-13), a declared background park, and an ARMED TIMER (2026-08-24,
+// f50f9e60). The flag now means "at rest behind a declared wait the resting card should state", which
+// includes a park with NOTHING running behind it at all. See parkedOnArmedTimerAlone.
 function hasLiveOps(t: ThreadView): boolean {
-  return hasLiveSubAgents(t) || t.awaitingBackground === true
+  if (hasLiveSubAgents(t)) return true
+  return t.awaitingBackground === true && !parkedOnArmedTimerAlone(t)
+}
+
+// AN ARMED TIMER IS A PARK, NOT LIVE WORK — it is the archetypal Held row, and it was the one park that
+// could never reach the band. A `timers:` fence names a future wake and launches nothing, so when the
+// server widened `awaitingBackground` to cover it (f50f9e60, so the resting card could state the wait),
+// hasLiveOps read that through its old meaning and isHeld's very FIRST gate threw the thread into the
+// Active band — the band ARCHITECTURE.md reserves for rows with no queue card and something in flight,
+// against its own definition of Held: "a declared `human:` gate, a valid future `timer:`, a user
+// wall-clock snooze, or a limit pause frizz will auto-resume". Reported 2026-08-26 on a thread parked on
+// a Sept-2 timer: "showing up in a separate rail that isn't held".
+//
+// ALONE is the whole predicate. Anything else behind the same fence keeps the row visible and undimmed,
+// exactly as it is today: a live child or shell is own work in flight (maintainer 2026-07-10, "when an
+// agent is merely awaiting its own sub-agents, we should NOT dim it"), and a PR watcher is a handoff
+// that must never vanish into the dimmed band (see parkedAwaitingHint, maintainer 2026-07-22). Reading
+// raw `bgShells` is safe in that direction where it would not be in hasLiveOps: this is already gated on
+// the server's own verdict and only ever keeps a thread OUT of Held, so a stale shell costs a dimming,
+// never a disappearance — the same argument restingOnLiveBackgroundWork makes below.
+function parkedOnArmedTimerAlone(t: ThreadView): boolean {
+  if (t.awaitingBackground !== true) return false
+  const watches = t.watches ?? []
+  if (!watches.some((w) => w.kind === "timer" && w.state === "armed")) return false
+  if (hasLiveSubAgents(t) || (t.bgShells ?? []).some((s) => s.state === "running")) return false
+  return !watches.some((w) => w.kind === "github" && w.state === "armed")
 }
 
 // The wait kinds that truthfully earn the parked/hourglass presentation. A timer is only a park while
@@ -492,7 +524,9 @@ function restedQueueHandoff(t: ThreadView): boolean {
 //
 // Gated on `turn-idle`, never `exited`: a dead pane cannot be waiting on anything, and that parent must
 // keep its [!] stall mark rather than advertise live work behind a dot. `awaitingBackground` is server
-// truth and already excludes a fenced thread — see hasLiveOps for why a raw `bgShells` read would be wrong.
+// truth — see hasLiveOps for why a raw `bgShells` read would be wrong. (It once ALSO excluded every
+// fenced thread, which is no longer so: a parked PR watch, a declared background park and an armed timer
+// each set it on an ```awaiting fence. Nothing here depended on that; hasLiveOps did.)
 //
 // This is only HALF the dot's gate: whether any of that work is still MOVING is the next question, and
 // `restingOnLiveBackgroundWork` below answers it. The broad reading survives here because the `working`
@@ -532,6 +566,11 @@ function restingOnLiveBackgroundWork(t: ThreadView): boolean {
   // touched, so a timer park wore the bare-rest ellipsis — the mark reserved for "NOTHING it launched
   // still running". Only ARMED rows count: the board only synthesizes armed timer rows today, but a
   // fired or cancelled one, should it ever reach here, is settled — not motion — like a green PR below.
+  //
+  // A FENCED timer park no longer reaches this line at all: it is Held now (parkedOnArmedTimerAlone) and
+  // takes the hourglass two branches up, which is a strictly better mark than the dot. What still lands
+  // here is a timer armed WITHOUT an ```awaiting fence naming it — a thread that set an alarm and kept
+  // going, then came to rest — where the dot is exactly right: nothing is parked, but a wake is coming.
   if ((t.watches ?? []).some((w) => w.kind === "timer" && w.state === "armed")) return true
   return (t.watches ?? []).some(
     (w) => w.kind === "github" && w.state === "armed" && w.github?.checks === "running" && w.github.state === "open",
@@ -582,9 +621,10 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
   // Below the two DECLARED states on purpose. A worker that fenced ```done while a server it never
   // killed keeps running is a one-click dismissal, not live work (FRIZZ.md: "name it in the body and
   // fence anyway"), and a parked ```awaiting is the human's gate — either story outranks "something it
-  // launched is still going". In practice neither can collide with this at all, since
-  // deriveAwaitingBackground drops any fenced thread; the ordering states the intent rather than
-  // resolving a live conflict.
+  // launched is still going". The ordering is LOAD-BEARING now rather than merely declarative: it used
+  // to be unreachable because deriveAwaitingBackground dropped any fenced thread, and since a timer park
+  // sets the flag ON its ```awaiting fence (f50f9e60), a real production row reaches both — the fenced
+  // timer park, which takes "held" here and the dimmed band in sectionOf.
   if (restingOnLiveBackgroundWork(t)) return "background"
   // STALLED = this thread's PROCESS IS GONE with the work unfinished. That is exactly `canRetry`: an
   // OWNED (non-foreign) session row whose runtime is `exited`. It deliberately does NOT consult the

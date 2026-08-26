@@ -591,6 +591,54 @@ test("isHeld: an awaiting fence the server honoured is Held; anything it did not
   assert.equal(isHeld(thread({ runtime: "running", lastFence: awaitingShell })), false)
 })
 
+// THE SHAPE THE SERVER ACTUALLY EMITS — which is the one thing every isHeld fixture above leaves out,
+// and the reason this suite stayed green while the real board got it wrong. `awaitingBackground` is TRUE
+// on a parked ```awaiting fence: for a declared background park, for a registered PR watch (2026-08-13),
+// and for an ARMED TIMER (2026-08-24, f50f9e60). hasLiveOps read that widened flag through its old
+// meaning — "its own dispatched work is still live" — so isHeld's FIRST gate threw the one park
+// ARCHITECTURE.md names as Held, "a valid future `timer:`", straight into the Active band (maintainer
+// 2026-08-26, on a thread parked on a Sept-2 timer: "showing up in a separate rail that isn't held").
+// Every case here carries the flag exactly as board.ts sets it, so a future widening cannot re-break it.
+const armedTimerRow = {
+  id: "timer:t:tmr_a1b2c3", kind: "timer" as const, target: "tmr_a1b2c3", state: "armed" as const,
+  createdAt: "2026-08-25T22:33:31.777Z", timer: { fireAt: "2099-09-02T16:00:00.000Z", prompt: "generate the closed-August update" },
+}
+const armedPrRow = {
+  id: "github:t:o/r#1", kind: "github" as const, target: "o/r#1", state: "armed" as const,
+  createdAt: "2026-08-19T00:00:00.000Z",
+}
+test("isHeld: an armed-timer park is Held even though the server flags it awaitingBackground", () => {
+  const timerPark = thread({
+    kind: "session", state: "open", runtime: "turn-idle", needsYou: false,
+    awaitingBackground: true, lastFence: awaitingTimer, watches: [armedTimerRow],
+  })
+  // Nothing is running behind it — a wake with a known future instant is precisely what Held means.
+  assert.equal(isHeld(timerPark), true)
+  assert.equal(sectionOf(timerPark), "held")
+  // The glyph shares the predicate, so no hourglass can sit in the Active/Rested section.
+  assert.equal(sessionIndicatorKind(timerPark), "held")
+  // partitionActive splits the ACTIVE SECTION, so the band check has to go through sectionThreads —
+  // handing it the row directly would band a thread sectionOf never sent there.
+  const s = sectionThreads([timerPark])
+  assert.deepEqual(s.held.map((t) => t.id), [timerPark.id])
+  assert.deepEqual(partitionActive(s.active).running, [], "and it is gone from the Active band entirely")
+  // ALONE is the predicate: anything else behind the same fence keeps the row visible and undimmed.
+  assert.equal(isHeld({ ...timerPark, subAgents: liveSub }), false, "a live child is own work in flight")
+  assert.equal(isHeld({ ...timerPark, bgShells: liveShell }), false, "so is a running shell")
+  assert.equal(isHeld({ ...timerPark, watches: [armedTimerRow, armedPrRow] }), false, "a PR watcher stays a visible handoff")
+  // And the two OTHER parks the same flag describes are unmoved by this carve-out.
+  const shellPark = thread({
+    kind: "session", state: "open", runtime: "turn-idle", needsYou: false,
+    awaitingBackground: true, lastFence: awaitingShell, bgShells: liveShell,
+  })
+  assert.equal(isHeld(shellPark), false, "own live work is never dimmed (maintainer 2026-07-10)")
+  const prPark = thread({
+    kind: "session", state: "open", runtime: "turn-idle", needsYou: false,
+    awaitingBackground: true, lastFence: awaitingPr, watches: [armedPrRow],
+  })
+  assert.equal(isHeld(prPark), false, "a PR wait must never vanish into the dimmed band")
+})
+
 test("manual snooze: every parked queue reason is Held until the exact deadline", () => {
   const future = "2099-07-15T17:00:00.000Z"
   const elapsed = "2020-07-15T17:00:00.000Z"
