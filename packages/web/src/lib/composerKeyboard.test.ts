@@ -14,33 +14,31 @@ function key(overrides: Partial<ComposerKeyboardEvent> = {}): ComposerKeyboardEv
   }
 }
 
-// ONE submit convention (maintainer 2026-08-26): ⌘/Ctrl-Enter sends in every box, a plain Enter is
-// always a newline. These pin that the composer no longer sends on a bare Enter.
+// THREE ENTER KEYS (maintainer 2026-08-26): Enter = the ordinary send, Shift/Option-Enter = a
+// newline, ⌘/Ctrl-Enter = the forced send. These pin that the three stay disjoint in every box.
 
-test("composer submits only Command- or Ctrl-Enter when sending is allowed", () => {
-  assert.equal(shouldSubmitComposerEnter(key({ metaKey: true }), true), true)
-  assert.equal(shouldSubmitComposerEnter(key({ ctrlKey: true }), true), true)
-  assert.equal(shouldSubmitComposerEnter(key({ metaKey: true }), false), false, "empty, disabled, or busy composers leave the chord untouched")
+test("composer submits only a plain Enter when sending is allowed", () => {
+  assert.equal(shouldSubmitComposerEnter(key(), true), true)
+  assert.equal(shouldSubmitComposerEnter(key(), false), false, "empty, disabled, or busy composers leave Enter untouched")
 })
 
-test("composer plain Enter is a NEWLINE, never a send", () => {
-  assert.equal(shouldSubmitComposerEnter(key(), true), false)
-})
-
-test("composer Shift/Option variants preserve the textarea newline default", () => {
+test("composer Shift/Option-Enter preserve the textarea newline default", () => {
   assert.equal(shouldSubmitComposerEnter(key({ shiftKey: true }), true), false)
   assert.equal(shouldSubmitComposerEnter(key({ altKey: true }), true), false, "macOS Option-Enter reports altKey")
   assert.equal(shouldSubmitComposerEnter(key({ altKey: true, shiftKey: true }), true), false)
-  assert.equal(shouldSubmitComposerEnter(key({ metaKey: true, altKey: true }), true), false)
-  assert.equal(shouldSubmitComposerEnter(key({ metaKey: true, shiftKey: true }), true), false, "⌘-Shift-Enter belongs to interrupt-and-send")
+})
+
+test("composer plain send never takes the forced chord", () => {
+  assert.equal(shouldSubmitComposerEnter(key({ metaKey: true }), true), false)
+  assert.equal(shouldSubmitComposerEnter(key({ ctrlKey: true }), true), false)
 })
 
 test("composer never submits an IME composition confirmation", () => {
-  assert.equal(shouldSubmitComposerEnter(key({ metaKey: true, isComposing: true }), true), false)
-  assert.equal(shouldSubmitComposerEnter(key({ key: "Process", metaKey: true, isComposing: true }), true), false)
+  assert.equal(shouldSubmitComposerEnter(key({ isComposing: true }), true), false)
+  assert.equal(shouldSubmitComposerEnter(key({ key: "Process", isComposing: true }), true), false)
   // WebKit/Safari can confirm an IME candidate with isComposing=false but keyCode=229.
-  assert.equal(shouldSubmitComposerEnter(key({ metaKey: true, isComposing: false, keyCode: 229 }), true), false)
-  assert.equal(shouldSubmitComposerEnter(key({ metaKey: true, keyCode: 13 }), true), true, "a real Enter keyCode still submits")
+  assert.equal(shouldSubmitComposerEnter(key({ isComposing: false, keyCode: 229 }), true), false)
+  assert.equal(shouldSubmitComposerEnter(key({ keyCode: 13 }), true), true, "a real Enter keyCode still submits")
 })
 
 test("Option-Enter fallback is eligible only without Ctrl or Command", () => {
@@ -51,55 +49,52 @@ test("Option-Enter fallback is eligible only without Ctrl or Command", () => {
   assert.equal(shouldRestoreOptionEnterNewline(key({ altKey: true, isComposing: true })), false)
 })
 
-// ---- shouldInterruptSubmitComposerEnter — ⌘/Ctrl-SHIFT-Enter, "this can't wait" ----
-// The unshifted chord became the ordinary send when ⌘-Enter became the app-wide send key, so the
-// interrupt escalated to the shifted chord. These pin that it stays disjoint from BOTH the ⌘-Enter
-// send and the Option/Shift-Enter newline, so neither can accidentally preempt a running turn.
+// ---- shouldInterruptSubmitComposerEnter — ⌘/Ctrl-Enter, the FORCED send ----
+// Ctrl is ⌘'s Windows/Linux twin throughout the app, so both are the forced chord and neither is
+// ever a newline. The caller turns it into interrupt-and-send or a plain send; the predicate only
+// keeps it disjoint from the plain Enter and from the Shift/Option newlines.
 
-test("interrupt-send fires on Command- or Ctrl-Shift-Enter, and only when it is offered", () => {
-  assert.equal(shouldInterruptSubmitComposerEnter(key({ metaKey: true, shiftKey: true }), true), true)
-  assert.equal(shouldInterruptSubmitComposerEnter(key({ ctrlKey: true, shiftKey: true }), true), true)
-  assert.equal(shouldInterruptSubmitComposerEnter(key({ metaKey: true, shiftKey: true }), false), false,
-    "no running worker, no affordance — and then no second way to send either")
+test("forced send fires on Command- or Ctrl-Enter, gated like the ordinary send", () => {
+  assert.equal(shouldInterruptSubmitComposerEnter(key({ metaKey: true }), true), true)
+  assert.equal(shouldInterruptSubmitComposerEnter(key({ ctrlKey: true }), true), true)
+  assert.equal(shouldInterruptSubmitComposerEnter(key({ metaKey: true }), false), false, "nothing sendable, nothing forced")
 })
 
-test("interrupt-send never takes a keystroke the composer already owns", () => {
-  assert.equal(shouldInterruptSubmitComposerEnter(key(), true), false, "a plain Enter is a newline")
-  assert.equal(shouldInterruptSubmitComposerEnter(key({ metaKey: true }), true), false, "unshifted ⌘-Enter is the ordinary send")
-  assert.equal(shouldInterruptSubmitComposerEnter(key({ ctrlKey: true }), true), false)
+test("forced send never takes a keystroke the composer already owns", () => {
+  assert.equal(shouldInterruptSubmitComposerEnter(key(), true), false, "a plain Enter is the ordinary send")
   assert.equal(shouldInterruptSubmitComposerEnter(key({ shiftKey: true }), true), false, "Shift-Enter stays a newline")
   assert.equal(shouldInterruptSubmitComposerEnter(key({ altKey: true }), true), false, "Option-Enter stays a newline")
-  assert.equal(shouldInterruptSubmitComposerEnter(key({ metaKey: true, shiftKey: true, altKey: true }), true), false)
-  assert.equal(shouldInterruptSubmitComposerEnter(key({ key: "a", metaKey: true, shiftKey: true }), true), false)
+  assert.equal(shouldInterruptSubmitComposerEnter(key({ metaKey: true, shiftKey: true }), true), false)
+  assert.equal(shouldInterruptSubmitComposerEnter(key({ metaKey: true, altKey: true }), true), false)
+  assert.equal(shouldInterruptSubmitComposerEnter(key({ key: "a", metaKey: true }), true), false)
 })
 
-test("interrupt-send never fires on an IME confirmation", () => {
-  assert.equal(shouldInterruptSubmitComposerEnter(key({ metaKey: true, shiftKey: true, isComposing: true }), true), false)
-  assert.equal(shouldInterruptSubmitComposerEnter(key({ metaKey: true, shiftKey: true, keyCode: 229 }), true), false)
-  assert.equal(shouldInterruptSubmitComposerEnter(key({ metaKey: true, shiftKey: true, keyCode: 13 }), true), true)
+test("forced send never fires on an IME confirmation", () => {
+  assert.equal(shouldInterruptSubmitComposerEnter(key({ metaKey: true, isComposing: true }), true), false)
+  assert.equal(shouldInterruptSubmitComposerEnter(key({ metaKey: true, keyCode: 229 }), true), false)
+  assert.equal(shouldInterruptSubmitComposerEnter(key({ metaKey: true, keyCode: 13 }), true), true)
 })
 
-// ---- shouldSubmitStagedEnter — the ```question card's free-text box (and the card around it) ----
-// Same chord as the composer send; the caller owns the "anything staged to send" gate.
+// ---- shouldSubmitStagedEnter — the ```question card's inputs and the typed interaction form ----
+// Enter AND the forced chord both send (a waiting worker has nothing to interrupt, so "send now"
+// and "send" are one act); Shift/Option-Enter stay newlines. The caller owns the staged gate.
 
-test("a staged answer box takes a NEWLINE on every unmodified Enter", () => {
-  assert.equal(shouldSubmitStagedEnter(key()), false, "plain Enter must fall through to the textarea default")
-  assert.equal(shouldSubmitStagedEnter(key({ shiftKey: true })), false)
-  assert.equal(shouldSubmitStagedEnter(key({ altKey: true })), false, "macOS Option-Enter reports altKey")
-})
-
-test("a staged answer box submits on Command- or Ctrl-Enter", () => {
+test("a staged answer box submits on Enter and on Command- or Ctrl-Enter", () => {
+  assert.equal(shouldSubmitStagedEnter(key()), true)
   assert.equal(shouldSubmitStagedEnter(key({ metaKey: true })), true)
   assert.equal(shouldSubmitStagedEnter(key({ ctrlKey: true })), true)
-  // The shifted chord is interrupt-and-send in the composer; a staged box treats it as a newline so
-  // the same physical chord can never mean two different sends.
+})
+
+test("a staged answer box takes a NEWLINE on Shift- or Option-Enter", () => {
+  assert.equal(shouldSubmitStagedEnter(key({ shiftKey: true })), false)
+  assert.equal(shouldSubmitStagedEnter(key({ altKey: true })), false, "macOS Option-Enter reports altKey")
   assert.equal(shouldSubmitStagedEnter(key({ metaKey: true, shiftKey: true })), false)
 })
 
 test("a staged answer box never submits a non-Enter key or an IME confirmation", () => {
-  assert.equal(shouldSubmitStagedEnter(key({ key: "a", metaKey: true })), false)
-  assert.equal(shouldSubmitStagedEnter(key({ metaKey: true, isComposing: true })), false)
+  assert.equal(shouldSubmitStagedEnter(key({ key: "a" })), false)
+  assert.equal(shouldSubmitStagedEnter(key({ isComposing: true })), false)
   // WebKit/Safari can confirm an IME candidate with isComposing=false but keyCode=229.
-  assert.equal(shouldSubmitStagedEnter(key({ metaKey: true, keyCode: 229 })), false)
-  assert.equal(shouldSubmitStagedEnter(key({ metaKey: true, keyCode: 13 })), true)
+  assert.equal(shouldSubmitStagedEnter(key({ keyCode: 229 })), false)
+  assert.equal(shouldSubmitStagedEnter(key({ keyCode: 13 })), true)
 })

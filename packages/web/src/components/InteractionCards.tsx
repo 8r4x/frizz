@@ -517,11 +517,12 @@ function InteractionApprovalCard({
 
       <form
         onSubmit={onSubmit}
-        // The app-wide send convention (2026-08-26): ⌘/Ctrl-Enter submits the primary decision from
-        // any field, and a plain Enter never submits — so the implicit form submission a one-line
-        // input fires on Enter is suppressed. Enter on a button still activates the button (a click,
-        // not an implicit submission), so keyboard approval stays one keystroke.
+        // The three Enter keys every box shares (2026-08-26): Enter or ⌘/Ctrl-Enter submits the
+        // primary decision from any field — the multiline box included, where Shift/Option-Enter
+        // make the newline — replacing the one-line input's implicit form submission (which would
+        // otherwise double up with this). Enter on a button still activates the button.
         onKeyDown={(event) => {
+          if (event.target instanceof HTMLButtonElement) return
           if (shouldSubmitStagedEnter({
             key: event.key,
             altKey: event.altKey,
@@ -533,12 +534,6 @@ function InteractionApprovalCard({
           })) {
             event.preventDefault()
             if (delivery.actionsEnabled && primaryFormDecision) submitDecision(primaryFormDecision)
-            return
-          }
-          if (event.key === "Enter" && !event.metaKey && !event.ctrlKey
-            && event.target instanceof HTMLInputElement
-            && event.target.type !== "button" && event.target.type !== "submit") {
-            event.preventDefault()
           }
         }}
         className="min-w-0 px-4 py-3.5"

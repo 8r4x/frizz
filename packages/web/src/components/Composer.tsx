@@ -86,9 +86,10 @@ export function Composer({
   // renders and completes. Surfaces without a session to ask (the dispatch composer) omit it and the
   // whole affordance is inert.
   slashSuggest?: () => Promise<Array<{ name: string; description: string }>>
-  // INTERRUPT AND SEND, bound to ⌘/Ctrl-Shift-Enter (the unshifted chord is the ordinary send now
-  // that ⌘-Enter sends in every box). Set only while the thread's worker is mid-turn AND its
-  // runtime can be preempted; the caller owns that policy entirely.
+  // INTERRUPT AND SEND — what the FORCED chord (⌘/Ctrl-Enter) does while the thread's worker is
+  // mid-turn AND its runtime can be preempted; the caller owns that policy entirely. When it is not
+  // set, the same chord is an ordinary send, so ⌘-Enter never goes dead (three Enter keys everywhere:
+  // Enter sends, Shift/Option-Enter newlines, ⌘/Ctrl-Enter forces — maintainer 2026-08-26).
   //
   // KEYBOARD ONLY — there is deliberately no button here. It used to render a ⚡ in the rail, and the
   // bolt was the wrong picture of the thing (maintainer, 2026-08-03: "we need to drop the lightning
@@ -325,7 +326,7 @@ export function Composer({
   // key off `railAction`, and a truthy element that renders null would carve out an empty hole (the bug
   // GithubTrigger's `useGithubTriggerVisible` exists to prevent). Its only filler now is `leftAction`
   // (the dispatch composer's GitHub picker); interrupt-and-send gave up its button here and kept only
-  // ⌘/Ctrl-Shift-Enter — see the `onInterruptSubmit` prop doc.
+  // ⌘/Ctrl-Enter — see the `onInterruptSubmit` prop doc.
   const railAction = leftAction ?? null
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -381,22 +382,23 @@ export function Composer({
     // the prose WITHOUT the pending attachment, whose path then landed in the cleared composer and
     // silently rode along with the next unrelated message. Typing stays enabled during upload (the
     // commit re-derives from valueRef); only SENDING waits for the attachment to land.
-    if (shouldSubmitComposerEnter(keyboardEvent, hasContent && !busy && !uploading)) {
-      // Only ⌘/Ctrl-Enter submits — the app-wide send chord (maintainer 2026-08-26). A plain Enter,
-      // like every other Enter variant, retains the native textarea newline; IME confirmations
-      // cannot accidentally submit.
+    const canSend = hasContent && !busy && !uploading
+    if (shouldSubmitComposerEnter(keyboardEvent, canSend)) {
+      // A plain Enter is the ordinary send. Shift/Option-Enter and IME confirmations retain the
+      // native textarea behavior, so they cannot accidentally submit or lose their newline.
       e.preventDefault()
       e.stopPropagation()
       onSubmit()
       return
     }
-    // ⌘/Ctrl-SHIFT-Enter — same send, but it preempts what the worker is doing so the message is
-    // read now instead of when the current command finishes. Disjoint by construction from the
-    // ⌘-Enter send above and from the Option-Enter newline repair below.
-    if (shouldInterruptSubmitComposerEnter(keyboardEvent, Boolean(onInterruptSubmit) && hasContent && !busy && !uploading)) {
+    // ⌘/Ctrl-Enter — the FORCED send. With a worker mid-turn it preempts what the worker is doing so
+    // the message is read now instead of when the current command finishes; with nothing to
+    // interrupt it is the same send as Enter, so the chord always means "send now". Disjoint by
+    // construction from the plain-Enter send above and the Option-Enter newline repair below.
+    if (shouldInterruptSubmitComposerEnter(keyboardEvent, canSend)) {
       e.preventDefault()
       e.stopPropagation()
-      onInterruptSubmit!()
+      ;(onInterruptSubmit ?? onSubmit)()
       return
     }
     if (shouldRestoreOptionEnterNewline(keyboardEvent)) {
@@ -575,7 +577,7 @@ export function Composer({
         onClick={onSubmit}
         // `uploading` mirrors the Enter gate above: sending mid-upload dropped the pending attachment.
         disabled={!hasContent || busy || uploading}
-        title="Send (⌘⏎)"
+        title="Send (Enter · ⌘⏎ sends now)"
         aria-label="Send"
         className={`absolute bottom-2 ${RAIL_SEND_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg transition-all ${
           // Active = neutral-bright (light-on-dark) primary, NOT accent — yellow stays the focus motif.

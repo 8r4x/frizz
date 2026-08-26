@@ -273,7 +273,7 @@ export function useLiveAnswering(
     [followUp, scrollToBottom],
   )
   const sendAnswers = useCallback((scopeIdentity?: string) => {
-    // `scopeIdentity` is a message identity when the thread's per-message Send button (or a ⌘-Enter from
+    // `scopeIdentity` is a message identity when the thread's per-message Send button (or an Enter from
     // one of its blocks) fires; guard `typeof` because the queue card wires its button as onClick={sendAnswers}
     // and React would otherwise hand us a MouseEvent. Non-string → gather every open ask (queue path).
     const scope = typeof scopeIdentity === "string" ? scopeIdentity : undefined
@@ -345,7 +345,7 @@ export function useLiveAnswering(
         answerFor: (bi: number) => answerFor(ask.identity, bi),
         onChip: (bi: number, optIdx: number) => onChip(ask.identity, bi, optIdx),
         onText: (bi: number, text: string) => onText(ask.identity, bi, text),
-        // ⌘-Enter / the per-message Send button submits ONLY this message's blocks (scoped identity).
+        // Enter / the per-message Send button submits ONLY this message's blocks (scoped identity).
         onSubmit: () => sendAnswers(ask.identity),
         anyAnswered: ask.blocks.some((blk, i) => composeBlockAnswer(blk, answerFor(ask.identity, i)) !== ""),
         sending: followUp.pending,

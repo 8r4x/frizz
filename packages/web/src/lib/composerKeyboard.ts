@@ -13,14 +13,20 @@ export type ComposerKeyboardEvent = {
   keyCode?: number
 }
 
-// ONE submit convention, everywhere (maintainer 2026-08-26): ⌘/Ctrl-Enter is THE send key in every
-// box, and a plain Enter is always a newline. The composers used to send on a bare Enter while the
-// staged-answer box reserved ⌘-Enter — that split is gone; every prompt box now reads as a form
-// field. Alt and Shift are excluded so Option/Shift-Enter stay newlines and so the interrupt chord
-// below stays disjoint.
-function isSendChord(event: ComposerKeyboardEvent): boolean {
+// THREE ENTER KEYS, the same in every box (maintainer 2026-08-26: "an option for a new line, an
+// option for a regular enqueued message, an option for a forced sent message"):
+//
+//   Enter               → the ordinary send (queued behind the worker's current turn if it has one)
+//   Shift-Enter         → a newline (Option-Enter too — the browser default, repaired on macOS Chrome)
+//   ⌘/Ctrl-Enter        → the FORCED send: interrupt-and-send where a worker is mid-turn, otherwise
+//                         just a send
+//
+// Ctrl is ⌘'s Windows/Linux twin throughout the app (⌘K / Ctrl-K, ⌘I / Ctrl-I), so it is the forced
+// chord there and never a newline. The staged-answer box and the typed interaction form send on both
+// Enter and the forced chord — a question card exists while the worker waits, so there is nothing to
+// interrupt and "send now" and "send" are the same act.
+function isEnter(event: ComposerKeyboardEvent): boolean {
   return event.key === "Enter"
-    && (event.metaKey || event.ctrlKey)
     && !event.altKey
     && !event.shiftKey
     && !event.isComposing
@@ -28,42 +34,32 @@ function isSendChord(event: ComposerKeyboardEvent): boolean {
 }
 
 /**
- * Submit only a non-IME ⌘/Ctrl-Enter when the composer can actually send. Every other Enter —
- * plain, Shift, Option — falls through to the textarea's browser default and inserts a newline.
+ * Submit only an unmodified, non-IME Enter when the composer can actually send. Shift-Enter and
+ * Option-Enter fall through to the textarea's browser default and insert a newline; ⌘/Ctrl-Enter is
+ * the forced send (see shouldInterruptSubmitComposerEnter).
  */
 export function shouldSubmitComposerEnter(event: ComposerKeyboardEvent, canSubmit: boolean): boolean {
-  return canSubmit && isSendChord(event)
+  return canSubmit && isEnter(event) && !event.metaKey && !event.ctrlKey
 }
 
 /**
- * The staged-answer counterpart, for the free-text box inside a ```question card. Same chord as the
- * composer send — the two surfaces converged when ⌘-Enter became the app-wide send key — but kept as
- * its own named predicate because its gate is different: the card sends whatever answers are staged
- * (chips included), not this box's own content, so the caller owns the "anything to send" check.
+ * FORCED SEND — ⌘/Ctrl-Enter in a thread composer. The caller decides what "forced" means: with a
+ * worker mid-turn it is interrupt-and-send (the message is read now instead of when the current
+ * command finishes); with nothing to interrupt it is an ordinary send, so the chord never goes dead.
+ * `canSubmit` is the same gate as the ordinary send.
+ */
+export function shouldInterruptSubmitComposerEnter(event: ComposerKeyboardEvent, canSubmit: boolean): boolean {
+  return canSubmit && isEnter(event) && (event.metaKey || event.ctrlKey)
+}
+
+/**
+ * The staged-answer counterpart, for the free-text box inside a ```question card, the card around
+ * it, and the typed interaction form. Enter AND ⌘/Ctrl-Enter send (nothing there can be
+ * interrupted, so the two are one act); Shift/Option-Enter stay newlines. The caller owns the
+ * "anything staged to send" gate.
  */
 export function shouldSubmitStagedEnter(event: ComposerKeyboardEvent): boolean {
-  return isSendChord(event)
-}
-
-/**
- * INTERRUPT AND SEND — ⌘/Ctrl-SHIFT-Enter in a thread composer, offered only while the worker is
- * mid-turn.
- *
- * It lived on ⌘/Ctrl-Enter while a plain Enter was the ordinary send; when ⌘-Enter became the
- * app-wide send key (2026-08-26) the interrupt escalated to the shifted chord. Shift-Enter alone
- * keeps its newline (no meta/ctrl), and Option-Enter is untouched.
- *
- * `canInterrupt` is the caller's whole policy — no worker running, no affordance, and then this is a
- * no-op rather than a second way to send.
- */
-export function shouldInterruptSubmitComposerEnter(event: ComposerKeyboardEvent, canInterrupt: boolean): boolean {
-  return canInterrupt
-    && event.key === "Enter"
-    && (event.metaKey || event.ctrlKey)
-    && event.shiftKey
-    && !event.altKey
-    && !event.isComposing
-    && event.keyCode !== 229
+  return isEnter(event)
 }
 
 /**

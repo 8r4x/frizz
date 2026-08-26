@@ -16,6 +16,7 @@ import {
 } from "../lib/snooze.ts"
 import { showToast } from "../store.ts"
 import { prefs } from "../lib/prefs.ts"
+import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { Dialog } from "./ui/Dialog.tsx"
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Menu.tsx"
 
@@ -206,8 +207,17 @@ export function SnoozeButton({ thread, onSnoozed }: { thread: ThreadView; onSnoo
               setCustomError("")
             }}
             onKeyDown={(event) => {
-              // ⌘/Ctrl+Enter submits from inside the textarea, where a bare Enter has to stay a newline.
-              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+              // Enter (or ⌘/Ctrl-Enter) submits from inside the textarea; Shift/Option-Enter make the
+              // newline — the three Enter keys every box shares (2026-08-26).
+              if (shouldSubmitStagedEnter({
+                key: event.key,
+                altKey: event.altKey,
+                ctrlKey: event.ctrlKey,
+                metaKey: event.metaKey,
+                shiftKey: event.shiftKey,
+                isComposing: event.nativeEvent.isComposing,
+                keyCode: event.nativeEvent.keyCode,
+              })) {
                 event.preventDefault()
                 submitCustom()
               }

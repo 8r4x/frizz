@@ -8,6 +8,7 @@ import { rpc } from "../api/rpc.ts"
 import { formatAgo } from "../lib/durationLabels.ts"
 import { INK_TRIM_GOAL } from "../lib/iconRhythm.ts"
 import { showToast } from "../store.ts"
+import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { Popover, PopoverAnchor, PopoverContent } from "./ui/Popover.tsx"
 import { Switch } from "./ui/Switch.tsx"
 
@@ -545,8 +546,18 @@ function PromptPanel({ thread, armed }: {
         maxLength={RECURRING_PROMPT_MAX}
         onChange={(e) => setText(e.target.value)}
         onBlur={persist}
+        // Enter (or ⌘/Ctrl-Enter) saves; Shift/Option-Enter make a newline — the three Enter keys
+        // every box shares (2026-08-26). Blur saves too, so Enter is a convenience, not the gate.
         onKeyDown={(e) => {
-          if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+          if (shouldSubmitStagedEnter({
+            key: e.key,
+            altKey: e.altKey,
+            ctrlKey: e.ctrlKey,
+            metaKey: e.metaKey,
+            shiftKey: e.shiftKey,
+            isComposing: e.nativeEvent.isComposing,
+            keyCode: e.nativeEvent.keyCode,
+          })) {
             e.preventDefault()
             persist()
           }

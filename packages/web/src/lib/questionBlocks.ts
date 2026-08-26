@@ -31,7 +31,7 @@ export type MessageAnswering = {
   answerFor: (blockIdx: number) => BlockAnswer
   onChip: (blockIdx: number, optIdx: number, optText: string) => void
   onText: (blockIdx: number, text: string) => void
-  onSubmit: () => void // ⌘-Enter from any block input, or this message's Send button, composes + sends
+  onSubmit: () => void // Enter from any block input, or this message's Send button, composes + sends
   anyAnswered: boolean // at least one of THIS message's blocks is filled → its Send button is enabled
   sending: boolean // a send is in flight → disable this message's Send button
 }

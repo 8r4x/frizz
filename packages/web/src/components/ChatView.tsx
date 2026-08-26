@@ -536,7 +536,7 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
             ) : null}
             {/* No thread-level Send button anymore: each question-bearing message renders its OWN bottom
                 Send button (Message's showSendButton), scoped to just that message's blocks (each block's
-                ⌘-Enter also submits that message). Answering is now one message at a time by design. */}
+                Enter also submits that message). Answering is now one message at a time by design. */}
             {/* QUEUED (optimistic) messages pinned to the VERY BOTTOM — below the working/pending
                 indicators — until the server echoes them into the transcript (maintainer 2026-07-09:
                 "queued messages render underneath everything until they become un-queued and show up

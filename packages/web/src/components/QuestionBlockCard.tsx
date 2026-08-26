@@ -80,8 +80,8 @@ export function QuestionBlockCard({
   // as the answer is typed. Runs on every freetext change (incl. an external clear via a chip-click).
   const taRef = useRef<HTMLTextAreaElement>(null)
   // The options grid is the card's keyboard rest: a chip click parks focus here (see the chip's
-  // onClick) so the app-wide ⌘/Ctrl-Enter send works immediately after picking an option, without
-  // the free-text box having to hold focus. tabIndex=-1: reachable by script, skipped by Tab.
+  // onClick) so Enter sends the staged answers immediately after picking an option, without the
+  // free-text box having to hold focus. tabIndex=-1: reachable by script, skipped by Tab.
   const gridRef = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
     const ta = taRef.current
@@ -114,11 +114,13 @@ export function QuestionBlockCard({
         <div
           ref={gridRef}
           tabIndex={-1}
-          // ⌘/Ctrl-Enter sends the staged answers from anywhere inside the options grid — above all
+          // Enter (or ⌘/Ctrl-Enter) sends the staged answers from inside the options grid — above all
           // right after a chip click, which focuses the grid. The free-text box below handles the
-          // same chord itself and stops propagation, so this can never double-fire.
+          // same keys itself and stops propagation, so this can never double-fire. A Tab-focused
+          // chip button or a link inside a chip keeps its native Enter (select the option / follow
+          // the link): the send only fires when the grid ITSELF holds focus.
           onKeyDown={(e) => {
-            if (!interactive) return
+            if (!interactive || e.target !== e.currentTarget) return
             if (shouldSubmitStagedEnter({
               key: e.key,
               altKey: e.altKey,
@@ -156,10 +158,10 @@ export function QuestionBlockCard({
               disabled={!interactive}
               onClick={() => {
                 interactive?.onChip(i, opt)
-                // Park keyboard focus on the options grid, so the ⌘/Ctrl-Enter send lands right after
-                // the click (the grid's own onKeyDown above). MULTI with the note box focused is the
-                // one exception: chips and a color note coexist there, so the caret stays put — and
-                // that box handles the send chord itself anyway. For SINGLE this also blurs the
+                // Park keyboard focus on the options grid, so an Enter sends right after the click
+                // (the grid's own onKeyDown above). MULTI with the note box focused is the one
+                // exception: chips and a color note coexist there, so the caret stays put — and that
+                // box sends on Enter itself anyway. For SINGLE this also blurs the
                 // free-text input (its mousedown is prevented, so clicking a chip won't blur it),
                 // whose accent focus border would otherwise sit next to the chip's. Scoped to THIS
                 // block's own elements by ref, not by a data- tag: the queue card also renders a
@@ -196,8 +198,9 @@ export function QuestionBlockCard({
                   e.currentTarget.blur()
                   return
                 }
-                // Enter writes a NEWLINE here (the browser default); ⌘/Ctrl-Enter is the send —
-                // the app-wide convention since 2026-08-26. See shouldSubmitStagedEnter.
+                // Enter (or ⌘/Ctrl-Enter) sends the staged answers; Shift/Option-Enter write a
+                // NEWLINE (the browser default) — the three Enter keys every box shares since
+                // 2026-08-26. See shouldSubmitStagedEnter.
                 if (shouldSubmitStagedEnter({
                   key: e.key,
                   altKey: e.altKey,

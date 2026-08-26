@@ -1146,13 +1146,17 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
       data-queue-card-root={thread.id}
       data-queue-leaving={leaving}
       style={bottomScrollReserve ? { marginBottom: bottomScrollReserve } : undefined}
-      // ⌘/Ctrl-Enter from ANYWHERE on this card sends the staged answers, provided at least one
-      // block is answered — the card-level twin of the Send answers button below. Every input that
-      // owns the chord itself (a question block's grid/free-text box, the composer with content)
-      // stops propagation before it reaches here, so this only catches the chord at rest — focus on
-      // the empty composer, on a fence button, or anywhere else inside the card.
+      // Enter (or ⌘/Ctrl-Enter) from the card at rest sends the staged answers, provided at least
+      // one block is answered — the card-level twin of the Send answers button below. Every input
+      // that owns the key itself (a question block's grid/free-text box, the composer with content)
+      // stops propagation before it reaches here, so this catches it on the EMPTY composer and on
+      // the card body. Buttons and links keep their native Enter (activation), and a composer that
+      // still holds text keeps its own gate (busy, mid-upload) rather than sending something else.
       onKeyDown={(e) => {
         if (!anyAnswered) return
+        const t = e.target
+        if (t instanceof HTMLButtonElement || t instanceof HTMLAnchorElement) return
+        if (t instanceof HTMLTextAreaElement && t.value.trim()) return
         if (shouldSubmitStagedEnter({
           key: e.key,
           altKey: e.altKey,

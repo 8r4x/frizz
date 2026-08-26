@@ -99,7 +99,7 @@ export function MobileAnswerSheet({
               answer: answering.answerFor(block.bi),
               onChip: (optIdx, optText) => answering.onChip(block.bi, optIdx, optText),
               onText: (text) => answering.onText(block.bi, text),
-              // ⌘-Enter inside a step ADVANCES rather than sending, so the keyboard path and the button
+              // Enter inside a step ADVANCES rather than sending, so the keyboard path and the button
               // path cannot disagree about what "done with this question" means.
               onSubmit: () => (last ? submit() : setStep((s) => s + 1)),
             }}
