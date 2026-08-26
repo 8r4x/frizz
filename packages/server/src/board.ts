@@ -623,6 +623,10 @@ export function deriveNeedsYou(
   deliveryProcessGone = false,
   github: GithubStatusBook = {},
   registeredPrWatches: ReadonlySet<string> = new Set(),
+  // The scheduler's armed timer rows, so a TIMER park can take the event-snooze below exactly as a PR
+  // park does. Supplied by the caller for the same reason `registeredPrWatches` is: only it has the
+  // registry, and a declaration alone is not a wait (hasParkedTimerWatch).
+  armedTimerIds: ReadonlySet<string> = new Set(),
 ): boolean {
   // Snooze is explicit operator lifecycle state. It must be checked before provider/question/crash
   // gates so choosing Snooze from any queue card actually parks that card until its exact deadline.
@@ -730,7 +734,16 @@ export function deriveNeedsYou(
   // for the reason that flag exists: the CARD must still state the wait (deriveAwaitingBackground opts
   // out), or the drawer blanks at rest and reads as "the agent died".
   if (excuseLiveOwnWork && runtime !== "exited" && heldByRunningChecks(tele, github, registeredPrWatches)) return false
-  if (runtime !== "exited" && hasLiveOwnWork(tele) && tele?.lastFence?.kind !== "done") return !bgSnoozeArmed(row)
+  // A TIMER PARK TAKES THE SAME SNOOZE (2026-08-25). It queues like a PR park — a visible handoff, never
+  // an auto-park — and since 2026-08-24 it cards like one too, with the resting card's event-Snooze as
+  // its one control. But it is not "live own work" (nothing of the thread's is running; the clock is),
+  // so it fell straight past this line to the bare-rest handoff below, which never reads the snooze:
+  // the click was recorded (bg_snooze_rested_at set), the card stayed in the queue, and the client —
+  // reading `bgSnoozed` — un-hid the fence card above the still-showing resting card, so the same wait
+  // rendered twice on one queue card (maintainer 2026-08-25: "I already hit the snooze button… but it's
+  // still in the queue"). Checked against the registry, not the declaration: a fence naming a fired
+  // timer is a bare rest, and a bare rest is not snoozable.
+  if (runtime !== "exited" && (hasLiveOwnWork(tele) || hasParkedTimerWatch(tele, armedTimerIds)) && tele?.lastFence?.kind !== "done") return !bgSnoozeArmed(row)
   // A final ```done fence is a CHECKED completion handoff: show its success card in the queue until the
   // human explicitly Archives the thread. Like a question, merely viewing it does not resolve it. The
   // at-rest gate above prevents a stale fence from carding while a follow-up turn is still running.
@@ -818,7 +831,7 @@ export function deriveAwaitingBackground(
   // drawer and full-screen page for a healthy thread resting on its children or on a shell. Since
   // 2026-08-01 that covers a shell-only rest too — it now has NO queue card at all, so this card in the
   // drawer and on the standalone page is the only place that state is stated in words.
-  return deriveNeedsYou({ ...row, bg_snooze_rested_at: null }, tele, runtime, hasActionableInteraction, nowMs, limitPause, false, deliveryProcessGone)
+  return deriveNeedsYou({ ...row, bg_snooze_rested_at: null }, tele, runtime, hasActionableInteraction, nowMs, limitPause, false, deliveryProcessGone, {}, new Set(), armedTimerIds)
 }
 
 // A REGISTERED session thread's view (id = row.slug). Runtime via the shared deriveRuntime (transport-aware);
@@ -1061,7 +1074,7 @@ function sessionThreadView(
   const state = effectiveSessionState(row, registeredLegacyTerminal)
   const archived = state === "archived"
   const limitPause = resolveLimitPause(row, tele, nowMs)
-  const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches)
+  const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches, armedTimerIds)
   const awaitingBackground = archived ? false : deriveAwaitingBackground(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, deliveryProcessGone, github, registeredPrWatches, armedTimerIds)
   // A worker that exited with work still outstanding — a turn in flight, OR a sub-agent still reading
   // "running" (its parent is gone, so it cannot actually be live) — is a crash/stall, not a clean

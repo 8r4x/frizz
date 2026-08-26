@@ -14,7 +14,7 @@ import { collapseMiddleRuns, opensQueueSegment, queueCollapseSegments, segmentFo
 import { pairAllAnswers } from "../lib/answersMessage.ts"
 import { Message, PermPolicyDenialCard, PermPromptBanner, PendingAskCard, StickyUserBand, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText, lastAssistantIndex } from "./ChatView.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_TOP, CARD_ACTION_EXPLAINER, CARD_PRIMARY_ACTION } from "./TranscriptCard.tsx"
-import { AwaitingBackgroundCard } from "./AwaitingBackgroundCard.tsx"
+import { AwaitingBackgroundCard, showsRestingCard } from "./AwaitingBackgroundCard.tsx"
 import { agentCompletionCall } from "../lib/subAgentCompletion.ts"
 import { coalesceToolActivityMessages } from "../lib/toolActivity.ts"
 import { prefs } from "../lib/prefs.ts"
@@ -1444,8 +1444,14 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
             The gates above (pendingAsk / perm-prompt) stay pinned at the top: they
             exist precisely because the turn parked mid-tool_use and there IS no message to sit under.
             No priority guard needed here — deriveAwaitingBackground already returns false for every one
-            of those states (board.ts). */}
-        {thread.awaitingBackground && (
+            of those states (board.ts).
+            THE SAME PREDICATE THE FENCE CARD READS (showsRestingCard), not `awaitingBackground` alone.
+            The fence card renders nothing while this banner shows, and it decides that with
+            showsRestingCard — which also reads the event-snooze. Keying this banner on the bare flag let
+            the two disagree: a snoozed thread the server still queued (a timer park, until 2026-08-25)
+            drew the fence card AND this banner, the same wait twice on one card. With the shared predicate
+            a queued-while-snoozed thread shows the fence card alone, whatever the server does. */}
+        {showsRestingCard(thread) && (
           <div className="mt-4">
             <AwaitingBackgroundBanner thread={thread} onSnooze={dismissThisCard} onSnoozeFailed={cancelThisCard} />
           </div>

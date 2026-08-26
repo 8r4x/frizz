@@ -676,7 +676,17 @@ test("deriveAwaitingBackground: a timer park cards, checked against the armed re
     "a dead timer is not a wait",
   )
   // …and the thread still QUEUES — a timer park is a visible handoff, never an auto-park.
-  assert.equal(deriveNeedsYou(row({ rested_at: T0 }), timerPark, "turn-idle"), true, "the timer park still queues")
+  const armed = new Set(["tmr_1"])
+  assert.equal(deriveNeedsYou(row({ rested_at: T0 }), timerPark, "turn-idle", false, Date.parse(LATER), undefined, true, false, {}, new Set(), armed), true, "the timer park still queues")
+  // …and, queued like a PR park, it takes the resting card's event-Snooze like one: the click used to be
+  // recorded and ignored, leaving the card in the queue with the fence card un-hidden above it
+  // (2026-08-25). The snooze hides the QUEUE card only — the fact still cards.
+  const snoozed = row({ rested_at: T0, bg_snooze_rested_at: T0 })
+  assert.equal(deriveNeedsYou(snoozed, timerPark, "turn-idle", false, Date.parse(LATER), undefined, true, false, {}, new Set(), armed), false, "snoozed → out of the queue")
+  assert.equal(deriveAwaitingBackground(snoozed, timerPark, "turn-idle", false, Date.parse(LATER), undefined, false, {}, new Set(), armed), true, "…but the card still states the wait")
+  // A NEW rest re-surfaces it, and a dead timer is a bare rest, which the event-snooze never hides.
+  assert.equal(deriveNeedsYou(row({ rested_at: LATER, bg_snooze_rested_at: T0 }), timerPark, "turn-idle", false, Date.parse(LATER), undefined, true, false, {}, new Set(), armed), true, "a new rest re-surfaces the card")
+  assert.equal(deriveNeedsYou(snoozed, timerPark, "turn-idle", false, Date.parse(LATER), undefined, true, false, {}, new Set(), new Set()), true, "a dead timer is a bare rest — not snoozable")
 })
 
 test("deriveAwaitingBackground: the event-snooze hides the QUEUE card, never the fact", () => {
