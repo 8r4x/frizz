@@ -15,6 +15,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { declaredWaitIds, hasDeclaredBackgroundPark, hasDeclaredWait } from "./board.ts"
+import { unaccountedItems } from "./awaiting.ts"
 import { createScheduler } from "./scheduler.ts"
 import type { FenceView, SessionTelemetry } from "./tailer.ts"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -136,8 +137,21 @@ test("a pr-watch park cards but does NOT take the thread out of the queue", () =
     subAgents: [],
     lastFence: { kind: "awaiting", body: "PR up.", hints: [{ kind: "pr", value: "acme/app#1" }] },
   } as unknown as SessionTelemetry
-  assert.equal(hasDeclaredWait(prWatch, NOW), true, "it states a wait, so the card shows")
+  assert.equal(hasDeclaredWait(prWatch, NOW, new Set(), new Set(["acme/app#1"])), true, "it states a wait, so the card shows")
   assert.equal(hasDeclaredBackgroundPark(prWatch, NOW), false, "but it never excuses the queue")
+  // DECLARED AND REGISTERED, both (2026-08-26): with no watcher registered nothing will ever wake the
+  // thread, so the declaration alone is not a wait — same rule as a timer named against the registry.
+  assert.equal(hasDeclaredWait(prWatch, NOW), false, "unregistered → no wait")
+})
+
+// THE REGISTRY KEY IS NORMALIZED; THE FENCE IS WHATEVER THE WORKER WROTE. `watch_pr` accepts a URL and
+// stores `owner/repo#N`, so a raw string match called a URL-named registered PR unaccounted: bumped
+// "NOT REGISTERED", re-registered (idempotent), same fence re-written, bumped again — the loop the
+// grammar exists to end, driven by the correction itself.
+test("unaccountedItems: a registered PR named by URL is accounted", () => {
+  const live = { shells: new Set<string>(), agents: new Set<string>(), timers: new Set<string>(), prs: new Set(["acme/app#1"]) }
+  assert.deepEqual(unaccountedItems([{ kind: "pr", value: "https://github.com/acme/app/pull/1" }], live), [])
+  assert.equal(unaccountedItems([{ kind: "pr", value: "acme/app#2" }], live).length, 1, "a different PR is still unaccounted")
 })
 
 test("own background work does both — it cards AND it leaves the queue", () => {
@@ -152,7 +166,7 @@ test("own background work does both — it cards AND it leaves the queue", () =>
 // blocking call that starved its own notification, a timer written in the past. Each one left a thread
 // looking parked forever, and frizz said nothing.
 
-function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; restedAt?: string; body?: string; retired?: any[] } = {}) {
+function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; agents?: any[]; restedAt?: string; body?: string; retired?: any[] } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-park-"))
   const storage = createStorage(join(dir, "ui.db"))
   storage.setSetting("signoffNudge", "off") // isolate SOURCE 12 from the nudge
@@ -173,7 +187,7 @@ function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; restedAt
         turn: "idle",
         lastAssistantAt: restedAt,
         lastActivityAt: restedAt,
-        subAgents: [],
+        subAgents: opts.agents ?? [],
         bgShells: opts.shells ?? [],
         retiredShells: opts.retired ?? [],
         pendingQuestion: false,
@@ -536,6 +550,36 @@ test("a park whose work simply FINISHED is told to read the result, not that its
     assert.match(rows[0].message, /Do NOT relaunch the same work/)
     // …and it must NOT read as a broken fence, or the worker fixes something that was never wrong.
     assert.doesNotMatch(rows[0].message, /not running, so it is not a park/)
+  } finally { h.close() }
+})
+
+// FINISHED-not-MISSING holds for the other kinds too — it shipped shell-only. A sub-agent that RETURNED
+// reads `rested` in telemetry, and until 2026-08-26 a fence naming one got "NOT RUNNING (nothing by
+// that name)": the wrong-fence wording, aimed at a worker whose wait simply ended.
+test("a park on a sub-agent that RETURNED reads as finished, not as a wrong fence", async () => {
+  const h = parkHarness([{ kind: "agent", value: "toolu_A" }, { kind: "for", value: "2h" }], {
+    agents: [{ id: "toolu_A", label: "the reviewer", startedAt: AT, state: "rested" }],
+  })
+  try {
+    await h.s.tick()
+    const msg = h.queued()[0].message
+    assert.match(msg, /has FINISHED/)
+    assert.match(msg, /its result is waiting for you/)
+    assert.doesNotMatch(msg, /nothing by that name/)
+  } finally { h.close() }
+})
+
+// …and a timer that FIRED already delivered its wake as a user turn, so the truthful note points back
+// at the transcript — not at a "result", and not at a fence that was never wrong.
+test("a park on a timer that already FIRED says so, not the wrong-fence wording", async () => {
+  const h = parkHarness([{ kind: "timer", value: "tmr_fired1" }, { kind: "for", value: "2h" }])
+  try {
+    h.storage.armThreadTimer({ id: "tmr_fired1", slug: "parked", prompt: "re-check the deploy", fireAtMs: Date.now() - 60_000, createdAtMs: Date.now() - 120_000 })
+    h.storage.markThreadTimerFired("tmr_fired1", Date.now() - 30_000)
+    await h.s.tick()
+    const msg = h.queued()[0].message
+    assert.match(msg, /already FIRED — its wake was delivered/)
+    assert.doesNotMatch(msg, /nothing by that name/)
   } finally { h.close() }
 })
 

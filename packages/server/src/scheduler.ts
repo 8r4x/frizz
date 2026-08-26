@@ -1648,7 +1648,19 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       for (const sh of tele.retiredShells ?? []) {
         for (const h of [sh.taskId, sh.id, sh.label]) if (h) finishedHandles.add(h)
       }
-      const finishedItem = (i: { value: string }) => finishedHandles.has(i.value)
+      // FINISHED-not-MISSING holds for every kind, not only shells (it shipped shell-only). A sub-agent
+      // that RETURNED reads `rested` in telemetry, and a timer that FIRED keeps its settled row — frizz
+      // can tell all three apart from a typo'd id, and the note below spends that knowledge. `stale`
+      // stays out: it means "completion signal lost", which is genuinely ambiguous, not finished.
+      for (const a of tele.subAgents ?? []) {
+        if (a.state !== "rested") continue
+        for (const h of [a.id, a.label]) if (h) finishedHandles.add(h)
+      }
+      const firedTimers = new Set(
+        deps.storage.listThreadTimers(row.slug).filter((t) => t.state === "fired").map((t) => t.id),
+      )
+      const finishedItem = (i: { kind: string; value: string }) =>
+        finishedHandles.has(i.value) || (i.kind === "timer" && firedTimers.has(i.value))
       const status = park.items.map((i) => {
         const gone = dead.some((d) => d.kind === i.kind && d.value === i.value)
         // AN UNREGISTERED PR GETS ITS OWN NOTE, because "nothing by that name" is true but useless for
@@ -1660,6 +1672,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         // faithfully report that it has no PRs — true, and no help at all.
         const note = !gone
           ? "still running"
+          // A fired timer's "result" is the wake itself, already delivered as a user turn — so the
+          // note points back at the transcript rather than at a result that is not a thing.
+          : i.kind === "timer" && firedTimers.has(i.value)
+          ? "already FIRED — its wake was delivered; there is nothing left to wait on"
           : finishedItem(i)
           ? "FINISHED — its result is waiting for you"
           : i.kind === "pr"

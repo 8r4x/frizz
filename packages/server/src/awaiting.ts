@@ -84,7 +84,19 @@ const LIVE_SET: Record<AwaitingItemKind, keyof LiveActivity> = {
  *  parked. Three separate stalls in one day came from the old grammar having no equivalent (see the
  *  AwaitingHint doc block in @frizz/shared). */
 export function unaccountedItems(items: readonly AwaitingItem[], live: LiveActivity): AwaitingItem[] {
-  return items.filter((i) => !live[LIVE_SET[i.kind]].has(i.value))
+  return items.filter((i) => !live[LIVE_SET[i.kind]].has(liveKey(i)))
+}
+
+/** The value to test against the live set. A PR is the one kind whose registry key is NORMALIZED
+ *  (`owner/repo#N` — registeredPrWatchesOf) while the fence holds whatever the worker wrote, and
+ *  `watch_pr` itself advertises "owner/repo#123 or a PR URL". A raw string match called a registered
+ *  PR named by URL unaccounted, so the worker was bumped "NOT REGISTERED", re-registered (idempotent),
+ *  re-fenced the same spelling, and went round again. Every other kind's id is minted by frizz and
+ *  matches byte-for-byte or not at all. */
+function liveKey(i: AwaitingItem): string {
+  if (i.kind !== "pr") return i.value
+  const ref = parsePrRef(i.value)
+  return ref ? githubStatusKey(ref) : i.value
 }
 
 /** Is this a park frizz will honour — at least one item, every item live, and a usable `for:`?

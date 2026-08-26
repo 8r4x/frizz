@@ -636,15 +636,26 @@ test("deriveAwaitingBackground: true only when own-work rest is the SOLE reason 
   // A pr-watch PARK IS THE EXCEPTION (2026-08-13). Its fence card no longer offers a park action at all
   // (lib/awaitingPresentation), so this banner is the only place the wait is stated in words AND the only
   // place its snooze lives. Suppressing it would leave a titleless fence card with no control anywhere.
+  // DECLARED AND REGISTERED, both (2026-08-26): the declaration alone stopped counting, matching the
+  // timer park below and heldByRunningChecks — a `prs:` line with no watcher behind it produced a
+  // resting card with NOTHING in it (a prs: entry adds no watch row), while the fence card hid.
+  const registeredPr = new Set(["acme/app#1"])
   const prWatch = tele({ ...child, lastFence: { kind: "awaiting", body: "PR up.", hints: [{ kind: "pr", value: "acme/app#1" }] } })
-  assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), prWatch, "turn-idle"), true, "the pr-watch park cards here now")
+  assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), prWatch, "turn-idle", false, Date.parse(LATER), undefined, false, {}, registeredPr), true, "the pr-watch park cards here now")
   assert.equal(deriveNeedsYou(row({ rested_at: T0 }), prWatch, "turn-idle"), true, "…and the thread still queues")
   // …and it qualifies on the WATCHER ALONE, with no sub-agent or shell out — which is the common shape.
   const watcherOnly = tele({ lastActivityAt: LATER, lastFence: { kind: "awaiting", body: "PR up.", hints: [{ kind: "pr", value: "acme/app#1" }] } })
-  assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), watcherOnly, "turn-idle"), true, "a watcher is live own work")
+  assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), watcherOnly, "turn-idle", false, Date.parse(LATER), undefined, false, {}, registeredPr), true, "a watcher is live own work")
+  // A URL-form fence still matches its normalized registration — the same githubStatusKey read
+  // unaccountedItems uses, so the board and the scheduler agree about one spelling.
+  const urlForm = tele({ lastActivityAt: LATER, lastFence: { kind: "awaiting", body: "", hints: [{ kind: "pr", value: "https://github.com/acme/app/pull/1" }] } })
+  assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), urlForm, "turn-idle", false, Date.parse(LATER), undefined, false, {}, registeredPr), true, "a URL names the same watcher")
+  // Declared but NEVER REGISTERED → no watcher exists, nothing will wake it: not a wait, no card — the
+  // thread is a bare rest whose fence card (with its ref links) states the handoff instead.
+  assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), watcherOnly, "turn-idle", false, Date.parse(LATER)), false, "an unregistered declaration conjures no card")
   // An unparseable ref arms nothing, so it is not live work and must not conjure a card.
   const bogus = tele({ lastActivityAt: LATER, lastFence: { kind: "awaiting", body: "", hints: [{ kind: "pr", value: "the auth PR" }] } })
-  assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), bogus, "turn-idle"), false, "no parseable ref, no watcher")
+  assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), bogus, "turn-idle", false, Date.parse(LATER), undefined, false, {}, registeredPr), false, "no parseable ref, no watcher")
   // An EXITED parent with a 'running' child is a crash, not this card.
   assert.equal(deriveAwaitingBackground(row({ rested_at: T0 }), child, "exited"), false)
   // No live own work → not this card.

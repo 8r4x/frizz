@@ -383,9 +383,10 @@ export function hasDeclaredWait(
   tele: SessionTelemetry | undefined,
   nowMs: number,
   armedTimerIds: ReadonlySet<string> = new Set(),
+  registeredPrWatches: ReadonlySet<string> = new Set(),
 ): boolean {
   if (hasDeclaredBackgroundPark(tele, nowMs)) return true
-  if (tele?.lastFence?.kind === "awaiting" && hasParkedPrWatch(tele)) return true
+  if (tele?.lastFence?.kind === "awaiting" && hasParkedPrWatch(tele, registeredPrWatches)) return true
   // A TIMER PARK CARDS LIKE A PR PARK (maintainer 2026-08-24: the resting card "enumerates all of the
   // pull requests and the background shells … I don't understand why timer isn't represented in the same
   // way"). Until this limb existed a timer-only park had no resting card at all, so the fence card fell
@@ -445,7 +446,7 @@ function heldByRunningChecks(
   })
 }
 
-function hasLiveOwnWork(tele: SessionTelemetry | undefined): boolean {
+function hasLiveOwnWork(tele: SessionTelemetry | undefined, registeredPrWatches: ReadonlySet<string>): boolean {
   return Boolean(
     tele?.subAgents?.some((agent) => isDirectSubAgent(agent) && agent.state === "running") ||
     tele?.bgShells?.some((shell) => shell.state === "running") ||
@@ -455,15 +456,25 @@ function hasLiveOwnWork(tele: SessionTelemetry | undefined): boolean {
     // counting it — for that card's event-snooze, which is now the ONE control for hiding a parked
     // watcher (maintainer: "the user can just use the generic snooze card… now GitHub watchers can be
     // included in the ranks of those").
-    hasParkedPrWatch(tele),
+    hasParkedPrWatch(tele, registeredPrWatches),
   )
 }
 
-/** A standing PR park the scheduler will actually fire — the same parse `githubWatchViews`
- *  renders and the waker's own poller arms from, so "there is a watcher" means one thing everywhere. */
-function hasParkedPrWatch(tele: SessionTelemetry | undefined): boolean {
+/** A standing PR park the scheduler will actually fire. DECLARED AND REGISTERED, both — the rule
+ *  heldByRunningChecks and hasParkedTimerWatch already spell out: the declaration says the thread is
+ *  waiting, the registration is what will actually wake it. Until 2026-08-26 this read the declaration
+ *  alone, so a `prs:` line naming a PR the worker never registered with `mcp__frizz__watch_pr`
+ *  counted as a wait: the resting card showed with NOTHING in it (a `prs:` entry adds no watch row of
+ *  its own — see fenceWatchViews), the fence card hid itself behind it, and the ref — the one thing the
+ *  wait was about — rendered on no surface at all. Membership is by githubStatusKey, so a fence naming
+ *  the PR by URL still matches its normalized registration, exactly as unaccountedItems reads it. */
+function hasParkedPrWatch(tele: SessionTelemetry | undefined, registered: ReadonlySet<string>): boolean {
   if (tele?.lastFence?.kind !== "awaiting") return false
-  return tele.lastFence.hints.some((hint) => hint.kind === "pr" && parsePrRef(hint.value) !== undefined)
+  return tele.lastFence.hints.some((hint) => {
+    if (hint.kind !== "pr") return false
+    const ref = parsePrRef(hint.value)
+    return ref !== undefined && registered.has(githubStatusKey(ref))
+  })
 }
 
 // The awaiting-background event-snooze is armed for the CURRENT rest iff the captured rested_at still
@@ -743,7 +754,7 @@ export function deriveNeedsYou(
   // rendered twice on one queue card (maintainer 2026-08-25: "I already hit the snooze button… but it's
   // still in the queue"). Checked against the registry, not the declaration: a fence naming a fired
   // timer is a bare rest, and a bare rest is not snoozable.
-  if (runtime !== "exited" && (hasLiveOwnWork(tele) || hasParkedTimerWatch(tele, armedTimerIds)) && tele?.lastFence?.kind !== "done") return !bgSnoozeArmed(row)
+  if (runtime !== "exited" && (hasLiveOwnWork(tele, registeredPrWatches) || hasParkedTimerWatch(tele, armedTimerIds)) && tele?.lastFence?.kind !== "done") return !bgSnoozeArmed(row)
   // A final ```done fence is a CHECKED completion handoff: show its success card in the queue until the
   // human explicitly Archives the thread. Like a question, merely viewing it does not resolve it. The
   // at-rest gate above prevents a stale fence from carding while a follow-up turn is still running.
@@ -795,7 +806,7 @@ export function deriveAwaitingBackground(
   // DECLARED, not inferred. This card used to appear whenever the thread had anything running, which is
   // how it came to announce a wait on a dev server nobody tore down. It now states what the worker said
   // it is waiting on, and says nothing when the worker said nothing.
-  if (runtime !== "turn-idle" || !hasDeclaredWait(tele, nowMs, armedTimerIds)) return false
+  if (runtime !== "turn-idle" || !hasDeclaredWait(tele, nowMs, armedTimerIds, registeredPrWatches)) return false
   // Any hard human gate or completion signal outranks this reason → the thread cards as THAT, not here.
   if (hasActionableInteraction || tele?.pendingAsk || tele?.pendingQuestion) return false
   // A signal fence — ```done OR ```awaiting — is the worker's OWN explicit statement about why it
@@ -817,7 +828,7 @@ export function deriveAwaitingBackground(
   // suppressing this card would leave the thread stating its wait nowhere and offering no snooze.
   if (
     tele?.lastFence?.kind === "awaiting" &&
-    !hasParkedPrWatch(tele) &&
+    !hasParkedPrWatch(tele, registeredPrWatches) &&
     !hasDeclaredBackgroundPark(tele, nowMs) &&
     // A TIMER PARK IS THE SAME EXCEPTION AGAIN (2026-08-24): its fence has no park action either, so
     // suppressing this card left the wait stated nowhere but the fence's own machinery footer.
