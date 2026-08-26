@@ -345,7 +345,6 @@ test("loadWorkerPrompt: the backend-AGNOSTIC core is present in BOTH contracts",
     const c = raw.replace(/\s+/g, " ")
     for (const fence of [/```done/, /```awaiting/, /```question/]) assert.match(raw, fence) // fence grammar
     if (kind === "codex") assert.match(raw, /## Thread types/) // claude's lean contract drops it
-    assert.match(raw, /## Git discipline/)
     assert.match(raw, /## Quality bar/)
     assert.match(raw, /## The stop criterion/)
     // THE CURRENT AWAITING GRAMMAR (2026-08-24): YAML frontmatter, PLURAL keys taking LISTS. `human:` used

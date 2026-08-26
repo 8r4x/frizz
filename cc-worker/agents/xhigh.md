@@ -1,6 +1,6 @@
 ---
 name: xhigh
-description: Frizz sub-agent at xhigh effort. Set the model with the Agent tool's `model` parameter; omitted, the child inherits the worker's model.
+description: Effort xhigh. The model is the Agent tool's `model` parameter (omitted, it inherits the worker's).
 effort: xhigh
 ---
 
