@@ -54,7 +54,7 @@ import { StatusListView } from "./StatusListView.tsx"
 //   · NO COMPOSER ON THIS SCREEN. Starting a thread is the +; the reply box belongs to a thread.
 //   · AN ASK IS MARKED BY THE ACCENT "?" AND NOTHING ELSE — no card, no border, no tint.
 
-type Tab = "queue" | "held" | "done"
+type Tab = "queue" | "snoozed" | "done"
 
 const TAB_ICON = 21
 /** The rail's checkbox geometry (BoxSpinner's STATUS_BOX) as a ratio, so a mark keeps its SHAPE at any size. */
@@ -99,7 +99,7 @@ function DoneMark({ size = 18 }: { size?: number }) {
   )
 }
 
-function HeldMark({ size = 18 }: { size?: number }) {
+function SnoozedMark({ size = 18 }: { size?: number }) {
   return (
     <StatusBox size={size}>
       <Hourglass size={Math.round((size * 10) / 15)} className="text-muted/75" />
@@ -118,7 +118,7 @@ function ThreadMark({ kind }: { kind: SessionIndicatorKind }) {
     )
   }
   if (kind === "working" || kind === "background") return <PlayMark />
-  if (kind === "held") return <HeldMark />
+  if (kind === "snoozed") return <SnoozedMark />
   if (kind === "done" || kind === "archived") return <DoneMark />
   return <StatusBox />
 }
@@ -268,7 +268,7 @@ function MobileThreadRow({
   const gloss = t.lastFence?.kind === "awaiting" ? hintGloss(t.lastFence.hints) : null
   const subs = visibleChildOps(t.subAgents ?? [], "rail")
   return (
-    <div className={kind === "held" ? "opacity-60" : undefined}>
+    <div className={kind === "snoozed" ? "opacity-60" : undefined}>
       <SwipeRow
         open={openSwipe}
         onOpenChange={onOpenSwipe}
@@ -491,7 +491,7 @@ export function MobileBoard() {
   }, [sections.active])
   const askCount = queue.filter(needsAction).length
 
-  const rows = tab === "queue" ? queue : tab === "held" ? sections.held : sections.inactive
+  const rows = tab === "queue" ? queue : tab === "snoozed" ? sections.snoozed : sections.inactive
   const statusView = snap.view.startsWith("status:") ? snap.view.slice(7) : null
   const identity = projectIdentity(board)
 
@@ -542,7 +542,7 @@ export function MobileBoard() {
                 ? "Loading…"
                 : tab === "queue"
                   ? "Nothing in the queue. Tap + to start a thread."
-                  : tab === "held"
+                  : tab === "snoozed"
                     ? "Nothing held."
                     : "Nothing finished yet."
             }
@@ -587,11 +587,11 @@ export function MobileBoard() {
             icon={<PlayMark size={TAB_ICON} />}
           />
           <TabButton
-            active={tab === "held"}
-            label="Held"
-            count={sections.held.length}
-            onClick={() => setTab("held")}
-            icon={<HeldMark size={TAB_ICON} />}
+            active={tab === "snoozed"}
+            label="Snoozed"
+            count={sections.snoozed.length}
+            onClick={() => setTab("snoozed")}
+            icon={<SnoozedMark size={TAB_ICON} />}
           />
           <TabButton
             active={tab === "done"}

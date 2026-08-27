@@ -17,7 +17,7 @@ import "./styles.css"
 // hovering over the icon"), so they are single-line too now and their park rides the SPINNER's tooltip
 // as a second line under "Working".
 
-// Wall-clock targets computed at load so the rows always sit in the future (Held requires it).
+// Wall-clock targets computed at load so the rows always sit in the future (Snoozed requires it).
 const timerAt = (() => {
   const d = new Date()
   d.setHours(23, 9, 0, 0) // "today at 11:09 PM"
@@ -80,7 +80,7 @@ const limitThread = {
 } as unknown as ThreadView
 
 // Row F — a PR-watching thread (`prs:`) the human parked with the "PR watcher armed" card's Snooze. A
-// watch never parks itself, so this is how one reaches the Held band — as did a `human:` gate co-declared
+// watch never parks itself, so this is how one reaches the Snoozed band — as did a `human:` gate co-declared
 // beside the watch, until the 2026-08-15 grammar deleted that kind along with the `pr-watch:` spelling
 // this row was named for. Until 2026-08-03 it sat here under the same hourglass as A and B, saying nothing
 // about the PR that is actually going to wake it. It now wears GitHub's mark, and its tooltip leads
@@ -93,7 +93,7 @@ const watchThread = {
   lastFence: { kind: "awaiting", body: "PR is open and CI is green. Watching for review.", hints: [{ kind: "pr", value: "acme/app#391" }] },
 } as unknown as ThreadView
 
-// Row D — snoozed WHILE ITS OWN TURN RUNS. isHeld excuses a running thread, so the park has not taken
+// Row D — snoozed WHILE ITS OWN TURN RUNS. isSnoozed excuses a running thread, so the park has not taken
 // effect: the row keeps its spinner and stays in Active. It is the row that used to read "SNOOZED · …".
 const runningSnoozed = {
   ...base,
@@ -130,9 +130,9 @@ function HeldBand() {
   // Mirrors the real Sidebar HELD section markup (hr + label + count) so the visual context matches;
   // the ROWS are the real ThreadRow component under test.
   return (
-    <section aria-label="Held">
+    <section aria-label="Snoozed">
       <hr className="my-3 border-border/50" />
-      <SectionHeader label="Held" count={4} />
+      <SectionHeader label="Snoozed" count={4} />
       <ThreadRow t={timerThread} />
       <ThreadRow t={snoozeThread} />
       <ThreadRow t={watchThread} />

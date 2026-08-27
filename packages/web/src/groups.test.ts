@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import type { ThreadView } from "@frizz/shared"
-import { needsAction, queued, orderQueue, partitionActive, sectionOf, sectionThreads, isHeld, sessionIndicatorKind, offersRetry, titleIsProvisional, displayTitle, lastActiveLabelAt, SPINNING_UP_TITLE, UNTITLED_THREAD_TITLE } from "./groups.ts"
+import { needsAction, queued, orderQueue, partitionActive, sectionOf, sectionThreads, isSnoozed, sessionIndicatorKind, offersRetry, titleIsProvisional, displayTitle, lastActiveLabelAt, SPINNING_UP_TITLE, UNTITLED_THREAD_TITLE } from "./groups.ts"
 
 // Minimal ThreadView fixture — the same shape board-delta.test.ts uses, defaulting to a live/active
 // thread; each case overrides only the fields under test.
@@ -140,8 +140,8 @@ test("sessionIndicatorKind: bare queued rest stays rest while concrete input sta
   // A live SUB-AGENT is live work → "working", beating the future-timer held state.
   assert.equal(sessionIndicatorKind(thread({ runtime: "turn-idle", subAgents: liveSub, lastFence: awaitingTimer })), "working")
   // A live background SHELL is NOT live work by itself (2026-07-22 — `bgShells` is telemetry, and the
-  // server's awaitingBackground is what speaks for the thread): the future-timer wait shows through as "held".
-  assert.equal(sessionIndicatorKind(thread({ runtime: "turn-idle", bgShells: liveShell, lastFence: awaitingTimer })), "held")
+  // server's awaitingBackground is what speaks for the thread): the future-timer wait shows through as "snoozed".
+  assert.equal(sessionIndicatorKind(thread({ runtime: "turn-idle", bgShells: liveShell, lastFence: awaitingTimer })), "snoozed")
   assert.equal(sessionIndicatorKind(thread({ state: "archived", needsYou: true, runtime: "exited" })), "archived")
 })
 
@@ -153,7 +153,7 @@ test("sessionIndicatorKind: a rested QUEUED thread is at rest even with live sub
   assert.equal(sessionIndicatorKind(restedInQueue), "rest")
   // …and it stays in the undimmed Active section's RESTED band: only the glyph changed.
   assert.equal(sectionOf(restedInQueue), "active")
-  assert.equal(isHeld(restedInQueue), false)
+  assert.equal(isSnoozed(restedInQueue), false)
   assert.equal(partitionActive([restedInQueue]).rested.length, 1)
 
   // NOTHING else collapses into the ellipsis:
@@ -168,7 +168,7 @@ test("sessionIndicatorKind: a rested QUEUED thread is at rest even with live sub
   // • a done fence still reads as the completed handoff
   assert.equal(sessionIndicatorKind(thread({ ...restedInQueue, lastFence: { kind: "done", body: "shipped", hints: [] } })), "done")
   // • a parked wait keeps its hourglass (needsYou is false there — the server holds it out of the queue)
-  assert.equal(sessionIndicatorKind(thread({ ...restedInQueue, needsYou: false, subAgents: [], lastFence: awaitingShell })), "held")
+  assert.equal(sessionIndicatorKind(thread({ ...restedInQueue, needsYou: false, subAgents: [], lastFence: awaitingShell })), "snoozed")
   // • an EXITED parent with children still reading "running" is a stall, not a rest
   assert.equal(sessionIndicatorKind(thread({ ...restedInQueue, runtime: "exited" })), "stalled")
 })
@@ -301,19 +301,19 @@ const RETRY_CONTRACT: { name: string; over: Partial<ThreadView>; kind: string; r
   { name: "exited mid-ask — answered, not retried", over: { needsYou: true, crashed: true, humanBlocked: true, status: "needs-human", runtime: "exited" }, kind: "needs-input", retry: false },
   { name: "exited with a pending question", over: { needsYou: true, pendingQuestion: true, runtime: "exited" }, kind: "needs-input", retry: false },
   { name: "exited after a done fence — finished, not stopped", over: { runtime: "exited", lastFence: { kind: "done", body: "shipped", hints: [] } }, kind: "done", retry: false },
-  { name: "exited but snoozed — held, wakes on its own deadline", over: { runtime: "exited", snoozedUntil: "2999-01-01T00:00:00.000Z" }, kind: "held", retry: false },
+  { name: "exited but snoozed — held, wakes on its own deadline", over: { runtime: "exited", snoozedUntil: "2999-01-01T00:00:00.000Z" }, kind: "snoozed", retry: false },
   { name: "archived", over: { state: "archived", needsYou: true, crashed: true, runtime: "exited" }, kind: "archived", retry: false },
   { name: "foreign (read-only — nothing frizz can restart)", over: { foreign: true, crashed: true, needsYou: true, runtime: "exited" }, kind: "rest", retry: false },
   { name: "registry lost the row (runtime none — not reattachable)", over: { needsYou: true, crashed: true, runtime: "none" }, kind: "rest", retry: false },
   // ── HELD by a usage limit frizz will auto-resume: keeps the hourglass mark, but ALSO offers Retry ──
   // (maintainer 2026-07-23) — the one-click continue is a faster door to the in-drawer "Continue now".
-  { name: "held on a session limit (auto-resume) — retry without the [!]", over: { runtime: "exited", limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", autoResume: true } }, kind: "held", retry: true },
-  { name: "held on a weekly limit (auto-resume) — same one-click continue", over: { runtime: "exited", limitPause: { backend: "codex", window: "weekly", at: "2026-07-23T00:00:00.000Z", autoResume: true } }, kind: "held", retry: true },
+  { name: "held on a session limit (auto-resume) — retry without the [!]", over: { runtime: "exited", limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", autoResume: true } }, kind: "snoozed", retry: true },
+  { name: "held on a weekly limit (auto-resume) — same one-click continue", over: { runtime: "exited", limitPause: { backend: "codex", window: "weekly", at: "2026-07-23T00:00:00.000Z", autoResume: true } }, kind: "snoozed", retry: true },
   // A limit pause frizz will NOT auto-resume is not held — it fell through to the ordinary handoff, and
   // with its process exited it is a plain stall, already carrying Retry via the stalled branch.
   { name: "limit pause without auto-resume — plain stall, not a held park", over: { needsYou: true, runtime: "exited", limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", autoResume: false } }, kind: "stalled", retry: true },
   // A FOREIGN read-only session parked on a limit still reads as held, but is nothing frizz can restart.
-  { name: "foreign held on a limit — read-only, no retry", over: { foreign: true, runtime: "exited", limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", autoResume: true } }, kind: "held", retry: false },
+  { name: "foreign held on a limit — read-only, no retry", over: { foreign: true, runtime: "exited", limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", autoResume: true } }, kind: "snoozed", retry: false },
 ]
 
 test("offersRetry: the retry gate is the stalled state PLUS the auto-resume usage-limit park", () => {
@@ -334,7 +334,7 @@ test("every surface shares the ONE offersRetry derivation — the retry verb is 
   for (const { name, over } of RETRY_CONTRACT) {
     const t = thread({ kind: "session", ...over })
     const kind = sessionIndicatorKind(t)
-    const limitHeld = kind === "held" && t.foreign !== true && Boolean(t.limitPause?.autoResume)
+    const limitHeld = kind === "snoozed" && t.foreign !== true && Boolean(t.limitPause?.autoResume)
     assert.equal(
       offersRetry(t),
       kind === "stalled" || limitHeld,
@@ -343,8 +343,8 @@ test("every surface shares the ONE offersRetry derivation — the retry verb is 
   }
   // A held row parked by something OTHER than a limit frizz will auto-resume (a user snooze, a timer
   // wait) must NEVER offer Retry — those are intentional parks with no stall to recover.
-  assert.equal(offersRetry(thread({ kind: "session", runtime: "exited", snoozedUntil: "2999-01-01T00:00:00.000Z" })), false, "snooze-held: no retry")
-  assert.equal(sessionIndicatorKind(thread({ kind: "session", runtime: "exited", snoozedUntil: "2999-01-01T00:00:00.000Z" })), "held", "snooze-held: still held")
+  assert.equal(offersRetry(thread({ kind: "session", runtime: "exited", snoozedUntil: "2999-01-01T00:00:00.000Z" })), false, "snooze-snoozed: no retry")
+  assert.equal(sessionIndicatorKind(thread({ kind: "session", runtime: "exited", snoozedUntil: "2999-01-01T00:00:00.000Z" })), "snoozed", "snooze-snoozed: still held")
 })
 
 test("queued: legacy rows NEVER card (only session threads enter the queue)", () => {
@@ -453,7 +453,7 @@ test("sectionOf: running/needs-you land in the Active+Rested section; only truth
   assert.equal(sectionOf(thread({ kind: "session", state: "open", runtime: "turn-idle", lastFence: { kind: "done", body: "shipped", hints: [] } })), "active")
   // A hintless fence still reaches Held when the SERVER excused the thread — the client reads that
   // verdict rather than re-deriving it from hints it can no longer check (2026-08-15).
-  assert.equal(sectionOf(thread({ kind: "session", state: "open", runtime: "turn-idle", lastFence: { kind: "awaiting", body: "", hints: [] } })), "held")
+  assert.equal(sectionOf(thread({ kind: "session", state: "open", runtime: "turn-idle", lastFence: { kind: "awaiting", body: "", hints: [] } })), "snoozed")
   assert.equal(sectionOf(thread({ kind: "session", state: "open", needsYou: true, runtime: "turn-idle", lastFence: { kind: "awaiting", body: "", hints: [] } })), "active", "…and a queued one stays queued")
   // Archive wins over a lingering needsYou.
   assert.equal(sectionOf(thread({ kind: "session", state: "archived" })), "inactive")
@@ -560,7 +560,7 @@ test("sessionIndicatorKind: a parent resting on a live sub-agent keeps its spinn
   assert.equal(sessionIndicatorKind(thread({ kind: "session", state: "open", runtime: "exited", needsYou: true, subAgents: child })), "stalled")
 })
 
-// ---- isHeld: every rendered wait glyph belongs to the labeled dimmed Held band ----
+// ---- isSnoozed: every rendered wait glyph belongs to the labeled dimmed Held band ----
 
 const awaitingShell = { kind: "awaiting" as const, body: "", hints: [{ kind: "shell" as const, value: "bzvtnt3ig" }, { kind: "for" as const, value: "2h" }] }
 const awaitingPrWatch = { kind: "awaiting" as const, body: "", hints: [{ kind: "pr" as const, value: "owner/repo#12" }] }
@@ -576,30 +576,30 @@ const liveShell = [{ label: "Watch CI", startedAt: "2026-07-10T00:00:00.000Z", s
 // it names is still live, checked against telemetry and the registries the browser cannot see. The
 // server excuses an honoured park from the queue, so what the client has to do is trust that and put it
 // in the dimmed band, and NOT invent a second opinion from the hints.
-test("isHeld: an awaiting fence the server honoured is Held; anything it did not is not", () => {
+test("isSnoozed: an awaiting fence the server honoured is Held; anything it did not is not", () => {
   // Honoured ⇒ the server cleared needsYou, and the fence says the rest.
-  assert.equal(isHeld(thread({ runtime: "turn-idle", lastFence: awaitingShell })), true)
-  assert.equal(isHeld(thread({ runtime: "exited", lastFence: awaitingShell })), true)
+  assert.equal(isSnoozed(thread({ runtime: "turn-idle", lastFence: awaitingShell })), true)
+  assert.equal(isSnoozed(thread({ runtime: "exited", lastFence: awaitingShell })), true)
   // The FENCE alone, with no awaitingBackground behind it — a shape the server stopped emitting for a
   // PR park when it started flagging one (2026-08-13). A real PR park carries the flag and is NOT Held,
   // because a wait whose reviews may never arrive must stay visible: see parkedAwaitingHint, and the
   // prPark case in the armed-timer test below, which pins the shape board.ts actually sends.
-  assert.equal(isHeld(thread({ runtime: "turn-idle", lastFence: awaitingPrWatch })), true, "the client trusts the excusal, whatever the fence names")
+  assert.equal(isSnoozed(thread({ runtime: "turn-idle", lastFence: awaitingPrWatch })), true, "the client trusts the excusal, whatever the fence names")
   // NOT honoured ⇒ the server left it in the queue, and needsYou is what says so. The fence being
   // present changes nothing: an unverifiable declaration is not a park.
-  assert.equal(isHeld(thread({ runtime: "turn-idle", needsYou: true, lastFence: awaitingShell })), false, "queued means not held, fence or no fence")
+  assert.equal(isSnoozed(thread({ runtime: "turn-idle", needsYou: true, lastFence: awaitingShell })), false, "queued means not held, fence or no fence")
   // No fence at all is an ordinary rest.
-  assert.equal(isHeld(thread({ runtime: "turn-idle", lastFence: { kind: "awaiting", body: "", hints: [] } })), true, "the server still excused it — that is its call, not the client's")
-  assert.equal(isHeld(thread({ runtime: "turn-idle" })), false, "no fence, no park")
+  assert.equal(isSnoozed(thread({ runtime: "turn-idle", lastFence: { kind: "awaiting", body: "", hints: [] } })), true, "the server still excused it — that is its call, not the client's")
+  assert.equal(isSnoozed(thread({ runtime: "turn-idle" })), false, "no fence, no park")
   // Mid-turn work keeps spinning in Active whatever it declared.
-  assert.equal(isHeld(thread({ runtime: "running", lastFence: awaitingShell })), false)
+  assert.equal(isSnoozed(thread({ runtime: "running", lastFence: awaitingShell })), false)
 })
 
-// THE SHAPE THE SERVER ACTUALLY EMITS — which is the one thing every isHeld fixture above leaves out,
+// THE SHAPE THE SERVER ACTUALLY EMITS — which is the one thing every isSnoozed fixture above leaves out,
 // and the reason this suite stayed green while the real board got it wrong. `awaitingBackground` is TRUE
 // on a parked ```awaiting fence: for a declared background park, for a registered PR watch (2026-08-13),
 // and for an ARMED TIMER (2026-08-24, f50f9e60). hasLiveOps read that widened flag through its old
-// meaning — "its own dispatched work is still live" — so isHeld's FIRST gate threw the one park
+// meaning — "its own dispatched work is still live" — so isSnoozed's FIRST gate threw the one park
 // ARCHITECTURE.md names as Held, "a valid future `timer:`", straight into the Active band (maintainer
 // 2026-08-26, on a thread parked on a Sept-2 timer: "showing up in a separate rail that isn't held").
 // Every case here carries the flag exactly as board.ts sets it, so a future widening cannot re-break it.
@@ -611,76 +611,76 @@ const armedPrRow = {
   id: "github:t:o/r#1", kind: "github" as const, target: "o/r#1", state: "armed" as const,
   createdAt: "2026-08-19T00:00:00.000Z",
 }
-test("isHeld: an armed-timer park is Held even though the server flags it awaitingBackground", () => {
+test("isSnoozed: an armed-timer park is Held even though the server flags it awaitingBackground", () => {
   const timerPark = thread({
     kind: "session", state: "open", runtime: "turn-idle", needsYou: false,
     awaitingBackground: true, lastFence: awaitingTimer, watches: [armedTimerRow],
   })
   // Nothing is running behind it — a wake with a known future instant is precisely what Held means.
-  assert.equal(isHeld(timerPark), true)
-  assert.equal(sectionOf(timerPark), "held")
+  assert.equal(isSnoozed(timerPark), true)
+  assert.equal(sectionOf(timerPark), "snoozed")
   // The glyph shares the predicate, so no hourglass can sit in the Active/Rested section.
-  assert.equal(sessionIndicatorKind(timerPark), "held")
+  assert.equal(sessionIndicatorKind(timerPark), "snoozed")
   // partitionActive splits the ACTIVE SECTION, so the band check has to go through sectionThreads —
   // handing it the row directly would band a thread sectionOf never sent there.
   const s = sectionThreads([timerPark])
-  assert.deepEqual(s.held.map((t) => t.id), [timerPark.id])
+  assert.deepEqual(s.snoozed.map((t) => t.id), [timerPark.id])
   assert.deepEqual(partitionActive(s.active).running, [], "and it is gone from the Active band entirely")
   // ALONE is the predicate: anything else behind the same fence keeps the row visible and undimmed.
-  assert.equal(isHeld({ ...timerPark, subAgents: liveSub }), false, "a live child is own work in flight")
-  assert.equal(isHeld({ ...timerPark, bgShells: liveShell }), false, "so is a running shell")
-  assert.equal(isHeld({ ...timerPark, watches: [armedTimerRow, armedPrRow] }), false, "a PR watcher stays a visible handoff")
+  assert.equal(isSnoozed({ ...timerPark, subAgents: liveSub }), false, "a live child is own work in flight")
+  assert.equal(isSnoozed({ ...timerPark, bgShells: liveShell }), false, "so is a running shell")
+  assert.equal(isSnoozed({ ...timerPark, watches: [armedTimerRow, armedPrRow] }), false, "a PR watcher stays a visible handoff")
   // And the two OTHER parks the same flag describes are unmoved by this carve-out.
   const shellPark = thread({
     kind: "session", state: "open", runtime: "turn-idle", needsYou: false,
     awaitingBackground: true, lastFence: awaitingShell, bgShells: liveShell,
   })
-  assert.equal(isHeld(shellPark), false, "own live work is never dimmed (maintainer 2026-07-10)")
+  assert.equal(isSnoozed(shellPark), false, "own live work is never dimmed (maintainer 2026-07-10)")
   const prPark = thread({
     kind: "session", state: "open", runtime: "turn-idle", needsYou: false,
     awaitingBackground: true, lastFence: awaitingPr, watches: [armedPrRow],
   })
-  assert.equal(isHeld(prPark), false, "a PR wait must never vanish into the dimmed band")
+  assert.equal(isSnoozed(prPark), false, "a PR wait must never vanish into the dimmed band")
 })
 
 test("manual snooze: every parked queue reason is Held until the exact deadline", () => {
   const future = "2099-07-15T17:00:00.000Z"
   const elapsed = "2020-07-15T17:00:00.000Z"
   const snoozed = thread({ kind: "session", state: "open", runtime: "turn-idle", snoozedUntil: future, needsYou: false })
-  assert.equal(isHeld(snoozed), true)
-  assert.equal(sectionOf(snoozed), "held")
-  assert.equal(sessionIndicatorKind(snoozed), "held")
-  assert.equal(isHeld(thread({ ...snoozed, snoozedUntil: elapsed })), false)
+  assert.equal(isSnoozed(snoozed), true)
+  assert.equal(sectionOf(snoozed), "snoozed")
+  assert.equal(sessionIndicatorKind(snoozed), "snoozed")
+  assert.equal(isSnoozed(thread({ ...snoozed, snoozedUntil: elapsed })), false)
   assert.equal(sectionOf(thread({ ...snoozed, snoozedUntil: elapsed, needsYou: true })), "active")
   assert.equal(queued(thread({ ...snoozed, snoozedUntil: elapsed, needsYou: true })), true)
-  assert.equal(isHeld(thread({ ...snoozed, needsYou: true, pendingQuestion: true })), true)
-  assert.equal(sectionOf(thread({ ...snoozed, needsYou: true, pendingQuestion: true })), "held")
-  assert.equal(isHeld(thread({ ...snoozed, runtime: "perm-prompt", pendingAsk: { questions: [] } })), true)
-  assert.equal(isHeld(thread({ ...snoozed, runtime: "exited", crashed: true })), true)
-  assert.equal(isHeld(thread({ ...snoozed, runtime: "running" })), false, "snooze never relabels a turn still producing output")
+  assert.equal(isSnoozed(thread({ ...snoozed, needsYou: true, pendingQuestion: true })), true)
+  assert.equal(sectionOf(thread({ ...snoozed, needsYou: true, pendingQuestion: true })), "snoozed")
+  assert.equal(isSnoozed(thread({ ...snoozed, runtime: "perm-prompt", pendingAsk: { questions: [] } })), true)
+  assert.equal(isSnoozed(thread({ ...snoozed, runtime: "exited", crashed: true })), true)
+  assert.equal(isSnoozed(thread({ ...snoozed, runtime: "running" })), false, "snooze never relabels a turn still producing output")
 })
 
-test("isHeld: live work, mid-turn, settled, bare, archived, and non-timer blocked states are not held", () => {
+test("isSnoozed: live work, mid-turn, settled, bare, archived, and non-timer blocked states are not held", () => {
   // Awaiting its own live SUB-AGENT is live work, even with a stale wait fence — not held.
-  assert.equal(isHeld(thread({ runtime: "turn-idle", lastFence: awaitingShell, subAgents: liveSub })), false)
+  assert.equal(isSnoozed(thread({ runtime: "turn-idle", lastFence: awaitingShell, subAgents: liveSub })), false)
   // A background shell is NOT live work (2026-07-22), so it can't rescue a thread from a valid future
   // wait: awaitingTimer + only a bgShell → held (see the held test below for the paired assertion).
-  assert.equal(isHeld(thread({ runtime: "turn-idle", lastFence: awaitingTimer, bgShells: liveShell })), true)
+  assert.equal(isSnoozed(thread({ runtime: "turn-idle", lastFence: awaitingTimer, bgShells: liveShell })), true)
   // Mid-turn (still working) never awaits externally, even with a stale human fence.
-  assert.equal(isHeld(thread({ runtime: "running", lastFence: awaitingShell })), false)
+  assert.equal(isSnoozed(thread({ runtime: "running", lastFence: awaitingShell })), false)
   // A done fence or a bare rest is NOT awaiting-external (those read as done/idle).
-  assert.equal(isHeld(thread({ runtime: "turn-idle", lastFence: { kind: "done", body: "x", hints: [] } })), false)
-  assert.equal(isHeld(thread({ runtime: "turn-idle" })), false)
-  assert.equal(isHeld(thread({ runtime: "turn-idle", state: "archived", lastFence: awaitingTimer })), false)
-  assert.equal(isHeld(thread({ status: "blocked", mechanism: "threads", runtime: "turn-idle" })), false)
-  assert.equal(isHeld(thread({ needsYou: true, runtime: "exited", lastFence: awaitingTimer })), false, "attention beats a stale wait fence")
-  assert.equal(isHeld(thread({ pendingAsk: { questions: [] }, runtime: "turn-idle", lastFence: awaitingShell })), false)
+  assert.equal(isSnoozed(thread({ runtime: "turn-idle", lastFence: { kind: "done", body: "x", hints: [] } })), false)
+  assert.equal(isSnoozed(thread({ runtime: "turn-idle" })), false)
+  assert.equal(isSnoozed(thread({ runtime: "turn-idle", state: "archived", lastFence: awaitingTimer })), false)
+  assert.equal(isSnoozed(thread({ status: "blocked", mechanism: "threads", runtime: "turn-idle" })), false)
+  assert.equal(isSnoozed(thread({ needsYou: true, runtime: "exited", lastFence: awaitingTimer })), false, "attention beats a stale wait fence")
+  assert.equal(isSnoozed(thread({ pendingAsk: { questions: [] }, runtime: "turn-idle", lastFence: awaitingShell })), false)
 })
 
 test("sectionOf: human/future-timer waits and canonical timers are Held; machine waits stay out of Held", () => {
-  assert.equal(sectionOf(thread({ kind: "session", state: "open", runtime: "turn-idle", lastFence: awaitingShell })), "held")
-  assert.equal(sectionOf(thread({ kind: "session", state: "open", runtime: "turn-idle", lastFence: awaitingTimer })), "held")
-  assert.equal(sectionOf(thread({ kind: "session", state: "open", runtime: "turn-idle", lastFence: awaitingPr })), "held", "a PR park is a park like any other now")
+  assert.equal(sectionOf(thread({ kind: "session", state: "open", runtime: "turn-idle", lastFence: awaitingShell })), "snoozed")
+  assert.equal(sectionOf(thread({ kind: "session", state: "open", runtime: "turn-idle", lastFence: awaitingTimer })), "snoozed")
+  assert.equal(sectionOf(thread({ kind: "session", state: "open", runtime: "turn-idle", lastFence: awaitingPr })), "snoozed", "a PR park is a park like any other now")
   // The pre-session `blocked`+`revalidate` status was an absolute instant a worker wrote; it went with
   // the `timer:` grammar, so it no longer claims Held on its own.
   assert.equal(sectionOf(thread({ kind: "session", state: "open", status: "blocked", mechanism: "timer", revalidate: "2099-07-15T17:00:00Z", runtime: "turn-idle" })), "active")
@@ -688,7 +688,7 @@ test("sectionOf: human/future-timer waits and canonical timers are Held; machine
   // A live SUB-AGENT wins over a stale parked fence (live work → Active).
   assert.equal(sectionOf(thread({ kind: "session", state: "open", runtime: "turn-idle", lastFence: awaitingShell, subAgents: liveSub })), "active")
   // A background shell does NOT (2026-07-22): the future-timer wait shows through → Held.
-  assert.equal(sectionOf(thread({ kind: "session", state: "open", runtime: "turn-idle", lastFence: awaitingTimer, bgShells: liveShell })), "held")
+  assert.equal(sectionOf(thread({ kind: "session", state: "open", runtime: "turn-idle", lastFence: awaitingTimer, bgShells: liveShell })), "snoozed")
   // A fence the SERVER did not honour stays Active — and `needsYou` is how that verdict reaches the client.
   assert.equal(sectionOf(thread({ kind: "session", state: "open", runtime: "turn-idle", lastFence: { kind: "awaiting", body: "", hints: [] }, needsYou: true })), "active")
   assert.equal(sectionOf(thread({ kind: "session", state: "open", needsYou: true, runtime: "turn-idle", lastFence: { kind: "awaiting", body: "", hints: [] } })), "active")
@@ -715,7 +715,7 @@ test("sectionThreads: only human/future-timer waits partition into Held; live an
   // running row.
   assert.deepEqual(s.active.map((t) => t.id), ["sub-wait", "live-old"])
   // Held: every park the server honoured, newest first — the PR one among them.
-  assert.deepEqual(s.held.map((t) => t.id), ["human-new", "legacy-pr", "shell-wait", "timer-old"])
+  assert.deepEqual(s.snoozed.map((t) => t.id), ["human-new", "legacy-pr", "shell-wait", "timer-old"])
 })
 
 test("displayTitle: an explicit human title wins over stale backend AI-title and slug fallbacks", () => {
@@ -760,7 +760,7 @@ test("displayTitle: a machine-generated session slug is never presented as a suc
   )
 })
 
-test("a legacy session/hintless declared wait is never Held — at rest it is simply a rested/queued row", () => {
+test("a legacy session/hintless declared wait is never Snoozed — at rest it is simply a rested/queued row", () => {
   // A fence whose lines frizz cannot parse at all (the deleted `session:` kind) folds to NO hints, and a
   // thread the server left needing you is queued whatever it wrote.
   const sessWait = { kind: "awaiting" as const, body: "", hints: [] }
@@ -770,7 +770,7 @@ test("a legacy session/hintless declared wait is never Held — at rest it is si
   ])
   // The hintless-wait rest (wait-new) is a cue row, so it leads; live-old is running and files below it.
   assert.deepEqual(s.active.map((t) => t.id), ["wait-new", "live-old"])
-  assert.deepEqual(s.held.map((t) => t.id), [])
+  assert.deepEqual(s.snoozed.map((t) => t.id), [])
 })
 
 // ---- title placeholder: never show the machine-guessed dispatch title ----

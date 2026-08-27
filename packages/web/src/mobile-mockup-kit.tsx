@@ -17,7 +17,7 @@
 //     44px  minimum hit target, every control     (Apple HIG)
 //
 // Everything else is the app's own: the colour tokens, `--block-radius`, the Obsidian-style checkbox
-// status family, the accent-means-"awaiting you" law, and the Rested/Active/Held/Done band names.
+// status family, the accent-means-"awaiting you" law, and the Rested/Active/Snoozed/Done band names.
 import type { ReactNode } from "react"
 import { Check, ChevronRight } from "lucide-react"
 
@@ -583,7 +583,7 @@ export function SheetHeader({ title, leading, trailing }: { title: ReactNode; le
  * 49pt once, and the band you ARE reading gets the whole screen.
  *
  * THE ICONS ARE THE STATUS FAMILY ITSELF — the same rounded-rect checkbox the rail draws beside every
- * thread, with the same glyph inside it. The tab for Held is the mark a held row wears. So the tab bar
+ * thread, with the same glyph inside it. The tab for Snoozed is the mark a snoozed row wears. So the tab bar
  * doubles as the legend for the list above it, and there is no second visual language to learn.
  *
  * THE BADGE IS TWO DIFFERENT NUMBERS, and the colour is what says which. Muted = how many threads are

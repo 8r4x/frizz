@@ -218,7 +218,7 @@ export function sortThreads(threads: readonly ThreadView[]): ThreadView[] {
 }
 
 // Order a thread set by most-recent LAST-ACTIVE first (lastActiveAt), id-tiebroken. Used for the
-// running band and the Held/Inactive sections — surfaces where newest-on-top is always wanted (the
+// running band and the Snoozed/Inactive sections — surfaces where newest-on-top is always wanted (the
 // FIFO/LIFO preference governs only the queue/rested band via orderQueue). A running row keys off its
 // stable user-interaction time (lastActiveAt's churn guard), so live agent motion never reshuffles it;
 // an at-rest row keys off when it came to rest, matching its "Last active" label. New array; input
@@ -305,16 +305,16 @@ export function externalThreads(threads: readonly ThreadView[]): ThreadView[] {
 //                        live sub-agent/background shell/Monitor. Never dimmed as a band.
 //   • held             — open, AT REST behind ANY declared ```awaiting fence (or the canonical
 //                        blocked+timer status) AND no live background op. Its own DIMMED band between
-//                        the rested rows and Done. The glyph and section share isHeld(), so a row can
+//                        the rested rows and Done. The glyph and section share isSnoozed(), so a row can
 //                        never show a clock/hourglass while sitting in the Active/Rested section.
 //   • inactive         — state === "archived" (the only archiver is an explicit Archive / done-card
 //                        button). Rendered under the label DONE — the key and the label differ.
 //   • legacy           — kind !== "session": vestigial .frizz-file rows, hidden entirely (null).
 // A FOREIGN session row (a maintainer terminal — no registry row, so no state/needsYou) is dropped
 // entirely (never rows). Order within a section is interaction recency.
-export type SectionKey = "active" | "held" | "inactive"
+export type SectionKey = "active" | "snoozed" | "inactive"
 // Thread-derived buckets, in render order.
-export const SECTION_ORDER: readonly SectionKey[] = ["active", "held", "inactive"]
+export const SECTION_ORDER: readonly SectionKey[] = ["active", "snoozed", "inactive"]
 
 // A session process is "at rest" (off-turn) when the pane is idle or the session has exited — the gate
 // an awaiting excusal needs (a mid-turn worker is still working, never awaiting).
@@ -376,7 +376,7 @@ function hasLiveOps(t: ThreadView): boolean {
 // AN ARMED TIMER IS A PARK, NOT LIVE WORK — it is the archetypal Held row, and it was the one park that
 // could never reach the band. A `timers:` fence names a future wake and launches nothing, so when the
 // server widened `awaitingBackground` to cover it (f50f9e60, so the resting card could state the wait),
-// hasLiveOps read that through its old meaning and isHeld's very FIRST gate threw the thread into the
+// hasLiveOps read that through its old meaning and isSnoozed's very FIRST gate threw the thread into the
 // Active band — the band ARCHITECTURE.md reserves for rows with no queue card and something in flight,
 // against its own definition of Held: "a declared `human:` gate, a valid future `timer:`, a user
 // wall-clock snooze, or a limit pause frizz will auto-resume". Reported 2026-08-26 on a thread parked on
@@ -435,7 +435,7 @@ export function futureSnoozedUntil(
 // queue) if their turn is over, Active if it isn't — so they cannot hide work an agent should own
 // through an in-band watcher. A canonical blocked+timer status remains a compatibility path only when
 // it carries the same explicit future ISO instant. A live child/Monitor wins, and archived rows go Done.
-export function isHeld(t: ThreadView, nowMs = Date.now()): boolean {
+export function isSnoozed(t: ThreadView, nowMs = Date.now()): boolean {
   const userSnooze = futureSnoozedUntil(t, nowMs) !== undefined
   if (t.state === "archived" || hasLiveOps(t)) return false
   // A user-owned snooze deliberately wins over a concrete ask, permission prompt, or crash. Those
@@ -450,7 +450,7 @@ export function isHeld(t: ThreadView, nowMs = Date.now()): boolean {
   // A thread a usage limit cut off, which frizz is going to continue itself, has the same shape as an
   // ```awaiting timer: park — parked on the clock with a wake already armed. It belongs in the dimmed
   // Held band, not sitting among the rested rows as though the human could pick it up. Without that
-  // auto-resume promise there is no armed wake, so it is NOT held: it falls through to the queue as
+  // auto-resume promise there is no armed wake, so it is NOT snoozed: it falls through to the queue as
   // work only the human will restart.
   if (t.limitPause?.autoResume) return true
   // THE SERVER ALREADY DECIDED THIS, and the client must not re-derive it. A park is honoured only when
@@ -581,7 +581,7 @@ function restingOnLiveBackgroundWork(t: ThreadView): boolean {
 // an archived row at rest stays archived even if stale attention metadata lingers; a real human ask
 // stays a question after the worker exits; live work stays working; and a completed handoff stays a
 // check instead of being mislabelled as a crash merely because `needsYou` also puts it in the queue.
-export type SessionIndicatorKind = "archived" | "needs-input" | "working" | "background" | "done" | "stalled" | "held" | "rest"
+export type SessionIndicatorKind = "archived" | "needs-input" | "working" | "background" | "done" | "stalled" | "snoozed" | "rest"
 
 // NO RAIL MARK FOR AN ARMED STOP HOOK, and the reason is worth keeping because one shipped briefly
 // (2026-08-02, removed the same day — maintainer: "the whole point of a stop hook is that it means the
@@ -616,7 +616,7 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
   // below is its mark, and without this clause an event-snoozed one would still spin.
   if (activelyRunning && !restedQueueHandoff(t) && !restingOnBackgroundWork(t)) return "working"
 
-  if (isHeld(t)) return "held"
+  if (isSnoozed(t)) return "snoozed"
   if (t.lastFence?.kind === "done" && atRest(t)) return "done"
   // Below the two DECLARED states on purpose. A worker that fenced ```done while a server it never
   // killed keeps running is a one-click dismissal, not live work (FRIZZ.md: "name it in the body and
@@ -624,7 +624,7 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
   // launched is still going". The ordering is LOAD-BEARING now rather than merely declarative: it used
   // to be unreachable because deriveAwaitingBackground dropped any fenced thread, and since a timer park
   // sets the flag ON its ```awaiting fence (f50f9e60), a real production row reaches both — the fenced
-  // timer park, which takes "held" here and the dimmed band in sectionOf.
+  // timer park, which takes "snoozed" here and the dimmed band in sectionOf.
   if (restingOnLiveBackgroundWork(t)) return "background"
   // STALLED = this thread's PROCESS IS GONE with the work unfinished. That is exactly `canRetry`: an
   // OWNED (non-foreign) session row whose runtime is `exited`. It deliberately does NOT consult the
@@ -672,10 +672,10 @@ export function offersRetry(t: ThreadView): boolean {
   const kind = sessionIndicatorKind(t)
   if (kind === "stalled") return true
   // A usage-limit park frizz will auto-resume — the ONE held state with an obvious manual shortcut.
-  // Gated on the RESOLVED "held" kind (not raw isHeld) so a higher-priority state that stole the row
+  // Gated on the RESOLVED "snoozed" kind (not raw isSnoozed) so a higher-priority state that stole the row
   // — a fresh ask, live work — never sprouts a Retry, and on non-foreign so it stays a session frizz
   // can actually restart.
-  return kind === "held" && t.foreign !== true && Boolean(t.limitPause?.autoResume)
+  return kind === "snoozed" && t.foreign !== true && Boolean(t.limitPause?.autoResume)
 }
 
 export function sectionOf(t: ThreadView): SectionKey | null {
@@ -694,7 +694,7 @@ export function sectionOf(t: ThreadView): SectionKey | null {
   // Only truthful human/future-timer waiters split into the labeled, dimmed Held band. Everything else
   // open — running, needs-you, bare rest, done-fenced, awaiting-its-own-subs, or an awaiting
   // `session`/hintless wait — belongs to the Active/Rested section, which band decided downstream.
-  if (isHeld(t)) return "held"
+  if (isSnoozed(t)) return "snoozed"
   return "active"
 }
 
@@ -763,14 +763,14 @@ export function partitionActive(active: readonly ThreadView[]): { running: Threa
 // interaction recency.
 export type SectionedThreads = Record<SectionKey, ThreadView[]>
 export function sectionThreads(threads: readonly ThreadView[], direction: QueueDirection = "fifo"): SectionedThreads {
-  const out: SectionedThreads = { active: [], held: [], inactive: [] }
+  const out: SectionedThreads = { active: [], snoozed: [], inactive: [] }
   for (const t of threads) {
     if (t.kind === "session" && t.foreign === true) continue // foreign sessions never row (nor strip — dropped)
     const k = sectionOf(t)
     if (k) out[k].push(t)
   }
   out.active = orderActive(out.active, direction)
-  out.held = orderByInteraction(out.held)
+  out.snoozed = orderByInteraction(out.snoozed)
   out.inactive = orderByInteraction(out.inactive)
   return out
 }

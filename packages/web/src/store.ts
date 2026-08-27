@@ -94,7 +94,7 @@ export const store = proxy({
   // `external` is the External band — the human's own terminals. Collapsed by default like
   // Held/Done: nothing in it is frizz's work or waiting on the rail's reader, so the count is
   // the glance.
-  sidebarCollapsed: { active: false, held: true, inactive: true, external: true } as Record<"active" | "held" | "inactive" | "external", boolean>,
+  sidebarCollapsed: { active: false, snoozed: true, inactive: true, external: true } as Record<"active" | "snoozed" | "inactive" | "external", boolean>,
   // The SIDE-DRAWER STACK — arbitrary depth. `thread` layers are full thread views (the Open-thread
   // sheet); `doc` layers are the frizz-document markdown; `markdown` layers are the built-in reader for
   // a `.md` FILE on disk, opened from any link to one; `subagent` and `shell` layers are read-only

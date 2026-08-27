@@ -51,7 +51,7 @@ export function useArchivingAt(): Record<string, number> {
 }
 
 // THE overlay. Deliberately the same shape as optimisticallySteered: assert the FIELDS the server will
-// itself report, not a "hide this row" flag, so every existing pure predicate (sectionOf, isHeld,
+// itself report, not a "hide this row" flag, so every existing pure predicate (sectionOf, isSnoozed,
 // needsAction, sessionIndicatorKind) reaches the same conclusion from one rule and the row lands in
 // exactly the band truth will put it in.
 export function optimisticallyArchived(t: ThreadView, at: number | undefined, nowMs = Date.now()): ThreadView {

@@ -12,7 +12,7 @@
 // ── What is being designed ────────────────────────────────────────────────────────────────────────
 // The desktop app is three standing surfaces at once: a project rail, a thread rail, and a workpane,
 // with threads opening as right-hand drawers that stack. None of that survives 390pt. The phone gets
-// the same INFORMATION MODEL — Rested / Active / Held / Done, the accent meaning "awaiting you", the
+// the same INFORMATION MODEL — Rested / Active / Snoozed / Done, the accent meaning "awaiting you", the
 // checkbox status family — expressed as a two-level drill-down where every drawer becomes a sheet at a
 // detent, every rail row becomes a full-width list row, and the four bands become four tabs.
 //
@@ -209,16 +209,16 @@ function ChildOp({ kind, label, elapsed }: { kind: "agent" | "shell"; label: str
 // worth paying for is the answer to "does anything need me": a per-board state summary, and the accent
 // count of asks. Sorted by that count, so the answer is the top of the screen.
 const PROJECTS = [
-  { slug: "nub", label: "nubjs/nub", tint: "bg-[#e8b923] text-bg", initial: "N", path: "~/code/nub", asks: 2, active: 2, held: 1, when: "now" },
-  { slug: "zod", label: "colinhacks/zod", tint: "bg-[#4a9eff] text-bg", initial: "Z", path: "~/code/zod", asks: 1, active: 0, held: 2, when: "2h" },
-  { slug: "frizz", label: "colinhacks/frizz", tint: "bg-[#b47feb] text-bg", initial: "F", path: "~/Documents/projects/frizz", asks: 0, active: 3, held: 0, when: "12m" },
-  { slug: "acme-app", label: "acme/app", tint: "bg-[#4ac97e] text-bg", initial: "A", path: "~/work/acme/app", asks: 0, active: 0, held: 1, when: "yesterday" },
-  { slug: "pullfrog", label: "pullfrog/web", tint: "bg-[#6b7280] text-bg", initial: "P", path: "~/code/pullfrog", asks: 0, active: 0, held: 0, when: "3d" },
-  { slug: "sonner", label: "emilkowal/sonner", tint: "bg-[#33363c] text-fg", initial: "S", path: "~/code/sonner", asks: 0, active: 0, held: 0, when: "1w" },
+  { slug: "nub", label: "nubjs/nub", tint: "bg-[#e8b923] text-bg", initial: "N", path: "~/code/nub", asks: 2, active: 2, snoozed: 1, when: "now" },
+  { slug: "zod", label: "colinhacks/zod", tint: "bg-[#4a9eff] text-bg", initial: "Z", path: "~/code/zod", asks: 1, active: 0, snoozed: 2, when: "2h" },
+  { slug: "frizz", label: "colinhacks/frizz", tint: "bg-[#b47feb] text-bg", initial: "F", path: "~/Documents/projects/frizz", asks: 0, active: 3, snoozed: 0, when: "12m" },
+  { slug: "acme-app", label: "acme/app", tint: "bg-[#4ac97e] text-bg", initial: "A", path: "~/work/acme/app", asks: 0, active: 0, snoozed: 1, when: "yesterday" },
+  { slug: "pullfrog", label: "pullfrog/web", tint: "bg-[#6b7280] text-bg", initial: "P", path: "~/code/pullfrog", asks: 0, active: 0, snoozed: 0, when: "3d" },
+  { slug: "sonner", label: "emilkowal/sonner", tint: "bg-[#33363c] text-fg", initial: "S", path: "~/code/sonner", asks: 0, active: 0, snoozed: 0, when: "1w" },
 ]
 
 function ProjectRow({ p, last }: { p: (typeof PROJECTS)[number]; last?: boolean }) {
-  const quiet = p.asks === 0 && p.active === 0 && p.held === 0
+  const quiet = p.asks === 0 && p.active === 0 && p.snoozed === 0
   return (
     <div>
       <div className="flex items-center gap-3 py-2.5 pl-4 pr-3">
@@ -235,10 +235,10 @@ function ProjectRow({ p, last }: { p: (typeof PROJECTS)[number]; last?: boolean 
                   <span data-ink="meta-active">{p.active} active</span>
                 </span>
               )}
-              {p.held > 0 && (
+              {p.snoozed > 0 && (
                 <span className="flex shrink-0 items-baseline gap-1.5">
                   <Hourglass data-ink="meta-glass" size={11} style={capAlign(11)} className={`${CAP_ALIGN} ${INK.hourglass} text-muted/70`} />
-                  <span data-ink="meta-held">{p.held} held</span>
+                  <span data-ink="meta-snoozed">{p.snoozed} snoozed</span>
                 </span>
               )}
               <span className="min-w-0 truncate text-muted/55">{p.when}</span>
@@ -295,7 +295,7 @@ function HomeScreen() {
 
 // ══ 2–4 · the board ═════════════════════════════════════════════════════════════════════════════
 // THE PROJECT PAGE, as a tab view. The bands are the app's own, in the app's own words: Rested (the
-// cue) → Active (spinning, and nothing else) → Held → Done. On a phone they are four tabs rather than
+// cue) → Active (spinning, and nothing else) → Snoozed → Done. On a phone they are four tabs rather than
 // four stacked sections, so the band you are reading gets the whole screen instead of a quarter of it.
 //
 // The tab bar's icons ARE the status family, which makes it the legend for the list above it. The +
@@ -323,7 +323,7 @@ function boardTabs() {
     // The badge is the ASK count in accent when there is one, and the band count in muted otherwise —
     // see the note on TabBar. Yellow here always means "this many want you".
     { id: "queue", label: "Queue", icon: <PlayBox size={TAB_ICON} />, count: 3, asks: true },
-    { id: "held", label: "Held", icon: <StatusBox size={TAB_ICON}><Hourglass size={13} className="text-muted/75" /></StatusBox>, count: 2 },
+    { id: "snoozed", label: "Snoozed", icon: <StatusBox size={TAB_ICON}><Hourglass size={13} className="text-muted/75" /></StatusBox>, count: 2 },
     { id: "done", label: "Done", icon: <DoneBox size={TAB_ICON} />, count: 6 },
   ]
 }
@@ -489,10 +489,10 @@ function BoardQueueScreen() {
   )
 }
 
-/** Held — dimmed, and every row says what it is waiting for. */
+/** Snoozed — dimmed, and every row says what it is waiting for. */
 function BoardHeldScreen() {
   return (
-    <BoardShell tab="held">
+    <BoardShell tab="snoozed">
       <Group className="border-t-0">
         <ThreadRow
           dim
@@ -853,7 +853,7 @@ function SnoozeScreen() {
             <Row icon={<Timer size={16} className="text-muted" />} label="Pick a date and time…" chevron />
           </Group>
           <p className="m-0 px-4 text-[12.5px] leading-[17px] text-muted/70">
-            A snoozed thread moves to Held and wakes itself at the time you pick. Nothing stops running.
+            A snoozed thread moves to Snoozed and wakes itself at the time you pick. Nothing stops running.
           </p>
         </div>
       </SheetOver>
@@ -1026,7 +1026,7 @@ function EmptyScreen() {
       <TabBar
         tabs={[
           { id: "queue", label: "Queue", icon: <PlayBox size={TAB_ICON} />, count: 0 },
-          { id: "held", label: "Held", icon: <StatusBox size={TAB_ICON}><Hourglass size={13} className="text-muted/75" /></StatusBox>, count: 0 },
+          { id: "snoozed", label: "Snoozed", icon: <StatusBox size={TAB_ICON}><Hourglass size={13} className="text-muted/75" /></StatusBox>, count: 0 },
           { id: "done", label: "Done", icon: <DoneBox size={TAB_ICON} />, count: 0 },
         ]}
         active="queue"
@@ -1087,7 +1087,7 @@ function KitScreen() {
                 { mark: <AskBox />, label: "asks" },
                 { mark: <PlayBox />, label: "runs" },
                 { mark: <StatusBox />, label: "rests" },
-                { mark: <StatusBox><Hourglass size={11} className="text-muted/75" /></StatusBox>, label: "held" },
+                { mark: <StatusBox><Hourglass size={11} className="text-muted/75" /></StatusBox>, label: "snoozed" },
                 { mark: <DoneBox />, label: "done" },
               ].map((item) => (
                 <div key={item.label} className="flex flex-1 flex-col items-center gap-1.5">
@@ -1136,7 +1136,7 @@ function KitScreen() {
 const SCREENS: { id: string; title: string; note: string; render: () => ReactNode }[] = [
   { id: "home", title: "1 · Home", note: "Every project on the machine, sorted by what wants you. The accent count is the ask.", render: () => <HomeScreen /> },
   { id: "board", title: "2 · Board — Queue", note: "Everything not held or done, in one list, asks first. Full width; the accent ? is the only ask marking.", render: () => <BoardQueueScreen /> },
-  { id: "board-held", title: "3 · Board — Held", note: "Dimmed, and every row says what it is waiting for.", render: () => <BoardHeldScreen /> },
+  { id: "board-snoozed", title: "3 · Board — Snoozed", note: "Dimmed, and every row says what it is waiting for.", render: () => <BoardHeldScreen /> },
   { id: "thread", title: "4 · Thread", note: "The transcript, and the only surface with a composer. The ask is answered here, in context.", render: () => <ThreadScreen /> },
   { id: "answer", title: "5 · Answering", note: "One question at a time, in a sheet that slides up over the thread. The verb is Continue, not Send.", render: () => <AnswerScreen /> },
   { id: "actions", title: "6 · Thread actions", note: "A medium-detent sheet over a receded board.", render: () => <ActionsScreen /> },

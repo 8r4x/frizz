@@ -63,7 +63,7 @@ export function useSteeredAt(): Record<string, number> {
 // section, the running/rested band, the order within it — and a hint only the indicator consults
 // produces exactly the split the operator sees today: the row spins instantly while sitting among the
 // queue cards for seconds, then hops. Overlaying the fields instead lets every existing pure predicate
-// (isActivelyRunning, isHeld, sectionOf, orderActive, sessionIndicatorKind) reach the same conclusion
+// (isActivelyRunning, isSnoozed, sectionOf, orderActive, sessionIndicatorKind) reach the same conclusion
 // from ONE rule.
 //
 // Every field here is what the SERVER itself will report once the tailer sees the turn start, so the

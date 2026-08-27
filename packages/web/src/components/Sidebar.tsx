@@ -6,7 +6,7 @@ import type { BoardSnapshot, ThreadView } from "@frizz/shared"
 import { store, openThread, scrollToQueueCard, queueCardTargetY, pushSubAgentDrawer, QUEUE_CARD_VIEWPORT_TOP } from "../store.ts"
 import { useBoard, asThreads } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
-import { sectionThreads, externalThreads, orderByInteraction, partitionActive, needsAction, displayTitle, titleIsProvisional, isHeld, parkedAwaitingHint, sessionIndicatorKind, offersRetry, futureSnoozedUntil, lastActiveLabelAt } from "../groups.ts"
+import { sectionThreads, externalThreads, orderByInteraction, partitionActive, needsAction, displayTitle, titleIsProvisional, isSnoozed, parkedAwaitingHint, sessionIndicatorKind, offersRetry, futureSnoozedUntil, lastActiveLabelAt } from "../groups.ts"
 import { ageSpan, relativeAge } from "../lib/activityTime.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { BoxSpinner, STATUS_BOX } from "./BoxSpinner.tsx"
@@ -44,7 +44,7 @@ import type { ReactElement, ReactNode } from "react"
 // (you can't hide your queue or your live work); the <hr> between them is the whole distinction, so
 // never describe a rested row as active. A thread merely awaiting its OWN sub-agents is INTERNAL work
 // and stays spinning in Active undimmed; only external waiters drop into the dimmed band (groups.ts
-// isHeld).
+// isSnoozed).
 // Needs-you renders as the row INDICATOR + the queue; awaiting as the hint gloss.
 // Done = explicitly completed. Legacy .frizz rows do not render at all.
 //
@@ -87,7 +87,7 @@ export function Sidebar() {
   const externalSessions = orderByInteraction(externalThreads(all))
   const collapsed = snap.sidebarCollapsed
   const activeThreads = sections.active
-  const heldThreads = sections.held
+  const heldThreads = sections.snoozed
   const inactiveThreads = sections.inactive
   const railRef = useRef<HTMLDivElement>(null)
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -255,16 +255,16 @@ export function Sidebar() {
               2026-08-04): nothing here is waiting on the rail's reader right now, so it opens as a
               labeled count and expands on demand — the count is the glance. */}
           {heldThreads.length > 0 && (
-            <section aria-label="Held">
+            <section aria-label="Snoozed">
               <hr className="my-3 border-border/50" />
               {/* Same header component as Done so the bands can never visually drift. */}
               <SectionHeader
-                label="Held"
+                label="Snoozed"
                 count={heldThreads.length}
-                collapsed={collapsed.held}
-                onToggle={() => (store.sidebarCollapsed.held = !store.sidebarCollapsed.held)}
+                collapsed={collapsed.snoozed}
+                onToggle={() => (store.sidebarCollapsed.snoozed = !store.sidebarCollapsed.snoozed)}
               />
-              {!collapsed.held &&
+              {!collapsed.snoozed &&
                 heldThreads.map((t) => (
                   <div key={t.id}>
                     <ThreadRow t={t} active={activeId === t.id} onQueueNavigate={navigateToQueueCard} />
@@ -406,7 +406,7 @@ export const ThreadRow = memo(function ThreadRow({
   const foreign = !legacy && t.foreign === true
   // Held rows are uniformly grayed as a whole; provisional titles retain their local dim treatment.
   // A thread awaiting its OWN live sub-agent/Monitor is not Held and stays fully active.
-  const held = !legacy && isHeld(t)
+  const held = !legacy && isSnoozed(t)
   const dimLabel = !legacy && titleIsProvisional(t)
   // The rows with an obvious single next action carry that verb INLINE, instead of making you open the
   // thread to find it. offersRetry (groups.ts) picks them: a STALLED row (the [!] mark — process
@@ -734,7 +734,7 @@ export function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: s
   // concrete ask (which outranks the park in sessionIndicatorKind). Each keeps its live glyph — the park
   // has not taken effect yet and the rail must not claim otherwise — and gains a second line saying when
   // it will.
-  if (sessionIndicatorKind(t) === "held") return base
+  if (sessionIndicatorKind(t) === "snoozed") return base
   const snoozedUntil = futureSnoozedUntil(t)
   const parked = snoozedUntil ? formatUserSnooze(snoozedUntil, t.snoozePrompt) : null
   if (!parked) return base
@@ -782,7 +782,7 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     const tip = t.crashed === true ? "Stalled — the agent exited mid-turn" : "Stalled — the agent's process exited"
     return { node: <StatusBox accent><Glyph ch="!" /></StatusBox>, tip }
   }
-  if (kind === "held") {
+  if (kind === "snoozed") {
     const hourglass = <StatusBox><Hourglass size={9} className="text-muted/70" /></StatusBox>
     const github = <StatusBox><Github size={9} className="text-muted/70" /></StatusBox>
     // A held row whose fence names a PR (`prs:` since the 2026-08-24 YAML cutover; `pr:` and `pr-watch:`
@@ -839,7 +839,7 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
       : hk === "shell" || hk === "agent"
         ? <StatusBox><CircleDashed size={10} className="text-muted/70" /></StatusBox>
         : <StatusBox><Clock size={9} className="text-muted/70" /></StatusBox>
-    return { node: mark, tip: popover(t, "Held") }
+    return { node: mark, tip: popover(t, "Snoozed") }
   }
   // At rest (no fence, nothing pending) with the process still ALIVE — a worker that came to rest
   // WITHOUT declaring done or a machine-wait, and with NOTHING it launched still running (that is the

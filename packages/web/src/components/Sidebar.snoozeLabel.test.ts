@@ -47,7 +47,7 @@ test("a snoozed row never glosses its park inline, in any band", () => {
     // Held: the park has taken effect and the row is a single line already.
     ["a plain park at rest", { snoozedUntil: UNTIL }],
     ["a park with an armed bump", { snoozedUntil: UNTIL, snoozePrompt: "Check whether CI went green." }],
-    // NOT held — isHeld excuses a running thread and one with live sub-agents, so these stay in Active
+    // NOT held — isSnoozed excuses a running thread and one with live sub-agents, so these stay in Active
     // wearing their live glyph. They are exactly the rows the label used to sit on.
     ["a park on a running thread", { snoozedUntil: UNTIL, runtime: "running" }],
     [
