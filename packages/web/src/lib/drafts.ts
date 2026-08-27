@@ -90,6 +90,11 @@ export const draftKey = {
   adopt: (projectDir: string | undefined, slug: string) => `adopt:${projectDraftScope(projectDir)}:${encodeURIComponent(slug)}`,
   answer: (projectDir: string | undefined, slug: string, sessionId: string | undefined, messageId: string, block: number) => `answer:${projectDraftScope(projectDir)}:${encodeURIComponent(slug)}:${encodeURIComponent(sessionId ?? "unowned")}:${encodeURIComponent(messageId)}:${block}`,
   interaction: (projectDir: string | undefined, projectId: string, slug: string, sessionId: string, epoch: number, id: string, field: string) => `interaction:${projectDraftScope(projectDir)}:${encodeURIComponent(projectId)}:${encodeURIComponent(slug)}:${encodeURIComponent(sessionId)}:${epoch}:${encodeURIComponent(id)}:${encodeURIComponent(field)}`,
+  // A REGISTERED question's free-text box. Keyed by the question's own durable id and its node path in
+  // the follow-up tree — no session or epoch, because a registered question outlives the session that
+  // asked it (that is the whole point of it being a row), and a half-typed answer must survive the
+  // worker restarting under it.
+  question: (projectDir: string | undefined, slug: string, id: string, path: string) => `question:${projectDraftScope(projectDir)}:${encodeURIComponent(slug)}:${encodeURIComponent(id)}:${encodeURIComponent(path)}`,
   // There is no `settings:` key: the Settings drawer autosaves, so the server IS its draft store. A
   // sessionStorage mirror could only ever hold the ~500ms of typing the debounce has not written yet,
   // and it outlived the save — a stale entry that reappeared over the stored value on the next open.

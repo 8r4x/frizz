@@ -399,6 +399,159 @@ const UNWATCH = {
   },
 }
 
+// ---- `ask` / `unask`: a question the human owes an answer to, as a ROW ------------------------------
+
+// The question tree, generated rather than written three times over. MCP tool schemas are JSON Schema,
+// and a `$ref` cycle is the natural way to express a recursive shape — but client support for one is
+// uneven, and a schema a client silently drops is a tool a worker cannot call. ASK_MAX_DEPTH is 3, so
+// the nesting is INLINED to exactly that depth: `followUps` simply does not exist on the deepest level,
+// which makes the limit visible in the schema instead of being a refusal the worker meets at runtime.
+const ASK_MAX_DEPTH = 3
+/** @param {number} depth 1 = the root question. @returns {Record<string, unknown>} */
+function questionSchema(depth) {
+  const option = {
+    type: "object",
+    properties: {
+      label: { type: "string", description: "The choice itself, short — this is what the answer hands back to you." },
+      description: {
+        type: "string",
+        description:
+          "ONE LINE of trade-off. What this option costs, or why it is the one to take. An option list " +
+          "with no trade-offs asks the human to reconstruct your reasoning before they can choose.",
+      },
+      recommended: {
+        type: "boolean",
+        description:
+          "Mark the ONE option you would take, and put it first. At most one per question — a " +
+          "recommendation on two of three choices says nothing. IF YOU CAN MARK ONE, ASK YOURSELF WHY " +
+          "YOU ARE ASKING: you already know the answer, so implement it and say which way you went. " +
+          "This is for the fork you genuinely cannot take yourself.",
+      },
+      preview: {
+        type: "string",
+        description:
+          "Markdown revealed under this option when the human picks it — the diff it produces, the " +
+          "message that would be posted, the mockup. Use it when SEEING the outcome is what decides the " +
+          "question; skip it when the one-line trade-off already says everything.",
+      },
+      ...(depth < ASK_MAX_DEPTH
+        ? {
+            followUps: {
+              type: "array",
+              maxItems: 4,
+              description:
+                "Questions that become live ONLY if the human picks this option — the conditional " +
+                "branch. A branch nobody takes is never asked and never answered, so this is how you " +
+                "ask \"and if so, which?\" without asking it of somebody who said no. A `multi` " +
+                "question cannot carry these (several picked options would open several branches at " +
+                "once) and neither can a free-text one (there is no answer to branch on).",
+              items: questionSchema(depth + 1),
+            },
+          }
+        : {}),
+    },
+    required: ["label"],
+  }
+  return {
+    type: "object",
+    properties: {
+      question: {
+        type: "string",
+        description:
+          "THE QUESTION, on one line, in the human's own vocabulary. They have their original prompt " +
+          "and nothing else — not your plan, not your notes, not the names you coined while working. " +
+          "Lead with the behaviour, not the identifier. NO \"I\" AND NO \"you\": clicking an option is " +
+          "the HUMAN speaking, so first and second person flip between writer and reader. Name the " +
+          "actor outright instead.",
+      },
+      header: { type: "string", description: "A very short chip label for the card, 12 characters or so — \"Auth method\", \"Storage\"." },
+      kind: {
+        type: "string",
+        enum: ["question", "multi"],
+        description:
+          "`question` = pick ONE. `multi` = pick SEVERAL, for choices that are not mutually exclusive. " +
+          "A question with NO options at all is a free-text box, which is the right shape when you need " +
+          "a name, a value or a sentence rather than a decision between things you have enumerated.",
+      },
+      danger: {
+        type: "boolean",
+        description:
+          "The DESTRUCTIVE gate, and nothing softer: a force-push, a deletion, a history rewrite, a " +
+          "production rollback. It changes two things — the card wears the risk tone, and the human's " +
+          "x cannot dismiss it, because a generic close icon is not consent for something irreversible. " +
+          "Declining must therefore be one of your own options.",
+      },
+      options: {
+        type: "array",
+        maxItems: 8,
+        description: "Two to four is almost always right. Omit entirely for a free-text question.",
+        items: option,
+      },
+    },
+    required: ["question", "kind"],
+  }
+}
+
+const ASK = {
+  name: "ask",
+  description:
+    "ASK THE HUMAN SOMETHING YOU CANNOT DECIDE, as a ROW they still owe an answer to — not a fence in a " +
+    "message. It renders as an answerable card on the board and in the thread, and it STAYS there: it " +
+    "survives your turn ending, a compaction, a restart, and the transcript scrolling past. A fence has " +
+    "the lifetime of the message carrying it, which is why a question written into one is unanswerable " +
+    "an hour later.\n\n" +
+    "YOUR DEFAULT IS TO DECIDE, AND THIS TOOL DOES NOT CHANGE THAT. A reversible call costs minutes to " +
+    "redo; a round-trip to the human costs hours with the whole effort idle. Anything derivable from " +
+    "the code, the conventions or ordinary engineering judgement is yours: make it, say which way you " +
+    "went, and keep moving. THE TEST THAT CATCHES ALMOST EVERY BAD QUESTION: if you are about to mark " +
+    "one option `recommended`, you already know the answer — so implement it instead of asking.\n\n" +
+    "ASK WHEN A WRONG GUESS WOULD BE BOTH COSTLY AND HARD TO UNDO — something destructive or " +
+    "irreversible, an external-facing commitment, a security posture with real exposure, product or UX " +
+    "direction that is genuinely the human's taste to set. And ask when you KNOW the answer but cannot " +
+    "ACT on it: a merge, a publish, a spend, a comment that goes out under their name. Then the " +
+    "recommendation is the point, and it goes first.\n\n" +
+    "ASKING DOES NOT END YOUR TURN. A question waits on a person, so it carries no timeout and expires " +
+    "never — but you keep working. Do everything that does NOT depend on the answer first, and register " +
+    "the question at the moment you find it rather than saving it for the end.\n\n" +
+    "SEVERAL AT ONCE IS ONE CALL. The card sends every answer as a unit, so a second `ask` for a second " +
+    "question just makes the human send twice. Register them together.\n\n" +
+    "The answer comes back to you as its own wake, restating what was asked. Withdraw one you no longer " +
+    "need with `unask` — a question you have since answered yourself, still sitting on the human's " +
+    "board, is worse than never having asked it.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      questions: {
+        type: "array",
+        minItems: 1,
+        maxItems: 4,
+        description: "The questions to register, together. Each becomes its own card and its own row.",
+        items: questionSchema(1),
+      },
+    },
+    required: ["questions"],
+  },
+}
+
+const UNASK = {
+  name: "unask",
+  description:
+    "WITHDRAW A QUESTION you registered with `ask`, by its id. Its card disappears and the human is " +
+    "never asked.\n\n" +
+    "Use it the moment the question stops mattering: you worked out the answer yourself, the code moved " +
+    "and the fork is gone, or you are about to finish. A stale question on someone's board is worse " +
+    "than no question — they answer it, and the answer is about a decision that no longer exists.\n\n" +
+    "You do NOT need this for a question that gets answered; that settles itself and wakes you. " +
+    "Withdrawing is YOUR move and is never reported back to you as news.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      id: { type: "string", description: "The question id `ask` returned. Only your own thread's." },
+    },
+    required: ["id"],
+  },
+}
+
 // The unified server's tool registry: `tools/list` returns these and `tools/call` routes by name.
 // Adding a worker-facing frizz tool = one entry here + one handler in `HANDLERS` — never a second
 // MCP server, so every frizz tool stays under the same `mcp__frizz__*` namespace and the same
@@ -419,7 +572,7 @@ const ACTIVITY = {
   inputSchema: { type: "object", properties: {}, required: [] },
 }
 
-const TOOLS = [SPAWN_THREAD, RECURRING_PROMPT, TIMER, WATCH_PR, WATCH, UNWATCH, ACTIVITY]
+const TOOLS = [SPAWN_THREAD, RECURRING_PROMPT, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, ACTIVITY]
 
 /** @type {Record<string, (args: Record<string, unknown>) => Promise<string>>} */
 const HANDLERS = {
@@ -428,6 +581,8 @@ const HANDLERS = {
   [TIMER.name]: timer,
   [WATCH_PR.name]: watchPr,
   [WATCH.name]: watch,
+  [ASK.name]: ask,
+  [UNASK.name]: unask,
   [UNWATCH.name]: unwatch,
   [ACTIVITY.name]: activity,
 }
@@ -1032,6 +1187,54 @@ async function unwatch(args) {
     ? `Watch ${id} dropped. It is no longer holding your thread, and it will not wake you.`
     : `No ARMED watch ${id} on this thread — it was already settled, or the id is not one of yours.`
   return `${head}\n\n${armedWatchList(result)}`
+}
+
+/** Read back what the human still owes an answer on, so a worker never needs a second call to find out.
+ * @param {Record<string, unknown> | undefined} result @returns {string} */
+function openQuestionList(result) {
+  const open = Array.isArray(result?.open) ? result.open : []
+  if (!open.length) return "Nothing else is open on this thread — the human owes you no answer."
+  const lines = open.map((q) => `  ${q.id}  ${(q.spec?.question ?? "").split("\n")[0]}`)
+  return `Open on this thread now:\n${lines.join("\n")}`
+}
+
+/** The `ask` handler: register one or more questions the human owes an answer to.
+ * @param {Record<string, unknown>} args @returns {Promise<string>} */
+async function ask(args) {
+  const slug = threadSlug()
+  const questions = Array.isArray(args.questions) ? args.questions : []
+  if (!questions.length) throw new Error("`questions` is required — at least one question to register")
+  const result = (await callRpc("ask", { slug, questions }))?.result
+  const registered = Array.isArray(result?.registered) ? result.registered : []
+  const lines = registered.map((q) => `  ${q.id}  ${(q.spec?.question ?? "").split("\n")[0]}`)
+  const head = registered.length === 1
+    ? `Registered 1 question. It is on the human's board now and it will stay there until they answer it.`
+    : `Registered ${registered.length} questions. They are on the human's board now and they will stay ` +
+      "there until answered — the card sends every answer as one batch."
+  return (
+    `${head}\n${lines.join("\n")}\n\n` +
+    "KEEP WORKING. A question waits on a person, carries no timeout and does not end your turn — do " +
+    "everything that does not depend on the answer while it sits there. The answer arrives as its own " +
+    "wake, restating what was asked.\n\n" +
+    "WITHDRAW ONE THE MOMENT IT STOPS MATTERING (`unask`), above all if you work the answer out " +
+    `yourself.\n\n${openQuestionList(result)}`
+  )
+}
+
+/** The `unask` handler: withdraw one registered question by id.
+ * @param {Record<string, unknown>} args @returns {Promise<string>} */
+async function unask(args) {
+  const slug = threadSlug()
+  const id = typeof args.id === "string" ? args.id.trim() : ""
+  if (!id) throw new Error("`id` is required — take it from `ask`")
+  const result = (await callRpc("unask", { slug, id }))?.result
+  // A withdrawal that matched nothing is reported rather than swallowed: the id was wrong, the human
+  // already answered it, or it is another thread's — and a worker that believes it withdrew a question
+  // the human is still looking at will get an answer it has stopped expecting.
+  const head = result?.withdrawn
+    ? `Question ${id} withdrawn. Its card is gone and the human will not be asked.`
+    : `No OPEN question ${id} on this thread — it was already answered or dismissed, or the id is not one of yours.`
+  return `${head}\n\n${openQuestionList(result)}`
 }
 
 /** The `watch_pr` handler: register, withdraw, or read back this thread's PR watchers.

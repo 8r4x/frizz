@@ -1,0 +1,161 @@
+import { test } from "node:test"
+import assert from "node:assert/strict"
+import type { AskedQuestion } from "@frizz/shared"
+import type { BlockAnswer } from "./questionBlocks.ts"
+import { ROOT_PATH, childPath, liveQuestionNodes, nodeAnswered, registeredAnswer, toParsedQuestion } from "./registeredQuestion.ts"
+
+const blank: BlockAnswer = { chosen: null, chosenSet: [], text: "" }
+const pick = (i: number): BlockAnswer => ({ chosen: i, chosenSet: [], text: "" })
+const toggle = (...set: number[]): BlockAnswer => ({ chosen: null, chosenSet: set, text: "" })
+const typed = (text: string): BlockAnswer => ({ chosen: null, chosenSet: [], text })
+
+const STORE: AskedQuestion = {
+  question: "Where should the settings live?",
+  kind: "question",
+  options: [
+    { label: "SQLite", description: "transactional", recommended: true },
+    { label: "A JSON file", description: "zero deps" },
+  ],
+}
+
+// ---- toParsedQuestion ----
+
+test("options letter and join their trade-off exactly as a fence's option lines do", () => {
+  const { question, optionLabels } = toParsedQuestion(STORE)
+  assert.deepEqual(question.options, ["A. SQLite — transactional", "B. A JSON file — zero deps"])
+  // The RAW labels are what an answer submits — the letter and the trade-off are display only.
+  assert.deepEqual(optionLabels, ["SQLite", "A JSON file"])
+  assert.equal(question.recommendedIdx, 0)
+  assert.equal(question.contextMd, "Where should the settings live?")
+  assert.equal(question.danger, false)
+})
+
+test("an option with no description carries no dangling dash", () => {
+  const { question } = toParsedQuestion({ question: "Which?", kind: "question", options: [{ label: "One" }] })
+  assert.deepEqual(question.options, ["A. One"])
+})
+
+test("a question with no options is free text, and the card renders its box unconditionally", () => {
+  const { question, optionLabels } = toParsedQuestion({ question: "What should it be called?", kind: "question" })
+  assert.deepEqual(question.options, [])
+  assert.deepEqual(optionLabels, [])
+  assert.equal(question.recommendedIdx, null)
+})
+
+test("previews ride the options array, and are absent entirely when no option has one", () => {
+  const { question } = toParsedQuestion(STORE)
+  assert.equal(question.optionPreviews, undefined)
+  const withPreview = toParsedQuestion({ ...STORE, options: [{ label: "SQLite", preview: "```sql\nCREATE …\n```" }, { label: "JSON" }] })
+  assert.deepEqual(withPreview.question.optionPreviews, ["```sql\nCREATE …\n```", undefined])
+})
+
+// ---- the static tree ----
+
+const TREE: AskedQuestion = {
+  question: "Ship it?",
+  kind: "question",
+  options: [
+    {
+      label: "Yes",
+      followUps: [
+        { question: "Tag a release too?", kind: "question", options: [{ label: "Yes" }, { label: "No" }] },
+        { question: "Anything for the notes?", kind: "question" },
+      ],
+    },
+    { label: "No", followUps: [{ question: "What blocks it?", kind: "question" }] },
+  ],
+}
+
+test("only the root is live until an option is picked", () => {
+  const nodes = liveQuestionNodes(TREE, new Map([[ROOT_PATH, blank]]))
+  assert.deepEqual(nodes.map((n) => n.path), [ROOT_PATH])
+  assert.equal(nodes[0].depth, 1)
+})
+
+test("picking an option opens exactly ITS branch, depth-first", () => {
+  const nodes = liveQuestionNodes(TREE, new Map([[ROOT_PATH, pick(0)]]))
+  assert.deepEqual(nodes.map((n) => n.path), [ROOT_PATH, childPath(ROOT_PATH, 0, 0), childPath(ROOT_PATH, 0, 1)])
+  assert.deepEqual(nodes.map((n) => n.depth), [1, 2, 2])
+  // The OTHER option's follow-up is nowhere — a branch not taken is not a question anyone owes.
+  assert.equal(nodes.some((n) => n.spec.question === "What blocks it?"), false)
+})
+
+test("a branch opened two deep keeps counting", () => {
+  const deep: AskedQuestion = {
+    question: "One?", kind: "question",
+    options: [{ label: "Yes", followUps: [{ question: "Two?", kind: "question", options: [{ label: "Yes", followUps: [{ question: "Three?", kind: "question" }] }] }] }],
+  }
+  const answers = new Map([[ROOT_PATH, pick(0)], [childPath(ROOT_PATH, 0, 0), pick(0)]])
+  assert.deepEqual(liveQuestionNodes(deep, answers).map((n) => n.depth), [1, 2, 3])
+})
+
+test("typing free text OVERRIDES the chip, so it CLOSES the branch the chip had opened", () => {
+  const answers = new Map([[ROOT_PATH, { chosen: 0, chosenSet: [], text: "neither, actually" }]])
+  assert.deepEqual(liveQuestionNodes(TREE, answers).map((n) => n.path), [ROOT_PATH])
+})
+
+test("a multi question opens no branch — several picked options would open several at once", () => {
+  const multi: AskedQuestion = { ...TREE, kind: "multi" }
+  assert.deepEqual(liveQuestionNodes(multi, new Map([[ROOT_PATH, toggle(0, 1)]])).map((n) => n.path), [ROOT_PATH])
+})
+
+// ---- the answer payload ----
+
+test("an unanswered ROOT yields nothing at all, whatever is staged below it", () => {
+  const answers = new Map([[ROOT_PATH, blank], [childPath(ROOT_PATH, 0, 0), pick(1)]])
+  assert.equal(registeredAnswer({ id: "qst_1", spec: TREE }, answers), undefined)
+})
+
+test("the payload restates the question and carries the worker's OWN label, not the lettered chip", () => {
+  const built = registeredAnswer({ id: "qst_1", spec: STORE }, new Map([[ROOT_PATH, pick(0)]]))
+  assert.deepEqual(built, { questionId: "qst_1", question: "Where should the settings live?", chosen: ["SQLite"] })
+})
+
+test("a multi answer carries every toggled label in option order, plus any note", () => {
+  const multi: AskedQuestion = { question: "Which gates?", kind: "multi", options: [{ label: "lint" }, { label: "types" }, { label: "tests" }] }
+  const built = registeredAnswer({ id: "qst_2", spec: multi }, new Map([[ROOT_PATH, { chosen: null, chosenSet: [2, 0], text: "skip the flaky one" }]]))
+  assert.deepEqual(built, { questionId: "qst_2", question: "Which gates?", chosen: ["lint", "tests"], text: "skip the flaky one" })
+})
+
+test("free text alone answers a question that has options — it is the last option", () => {
+  const built = registeredAnswer({ id: "qst_3", spec: STORE }, new Map([[ROOT_PATH, typed("neither — use the keychain")]]))
+  assert.deepEqual(built, { questionId: "qst_3", question: "Where should the settings live?", chosen: [], text: "neither — use the keychain" })
+})
+
+test("the follow-ups of the branch TAKEN ride the payload; the other branch contributes nothing", () => {
+  const answers = new Map([
+    [ROOT_PATH, pick(0)],
+    [childPath(ROOT_PATH, 0, 0), pick(1)],
+    [childPath(ROOT_PATH, 0, 1), typed("mention the migration")],
+    // Staged earlier, then abandoned when the human changed the root answer. It is not live, so it must
+    // not reach the worker — an absent follow-up means "not asked", never "asked and skipped".
+    [childPath(ROOT_PATH, 1, 0), typed("the flaky test")],
+  ])
+  const built = registeredAnswer({ id: "qst_4", spec: TREE }, answers)
+  assert.deepEqual(built, {
+    questionId: "qst_4",
+    question: "Ship it?",
+    chosen: ["Yes"],
+    followUps: [
+      { questionId: "qst_4", question: "Tag a release too?", chosen: ["No"] },
+      { questionId: "qst_4", question: "Anything for the notes?", chosen: [], text: "mention the migration" },
+    ],
+  })
+})
+
+test("a live-but-BLANK follow-up still rides the payload — seeing it and skipping it is information", () => {
+  const built = registeredAnswer({ id: "qst_5", spec: TREE }, new Map([[ROOT_PATH, pick(1)]]))
+  assert.deepEqual(built?.followUps, [{ questionId: "qst_5", question: "What blocks it?", chosen: [] }])
+})
+
+// ---- nodeAnswered ----
+
+test("any one of a pick, a toggle or typed text is an answer; nothing is not", () => {
+  assert.equal(nodeAnswered(STORE, blank), false)
+  assert.equal(nodeAnswered(STORE, undefined), false)
+  assert.equal(nodeAnswered(STORE, pick(1)), true)
+  assert.equal(nodeAnswered(STORE, typed("  ")), false)
+  assert.equal(nodeAnswered(STORE, typed("x")), true)
+  assert.equal(nodeAnswered({ ...STORE, kind: "multi" }, toggle(0)), true)
+  assert.equal(nodeAnswered({ ...STORE, kind: "multi" }, pick(0)), false)
+})

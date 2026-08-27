@@ -14,7 +14,7 @@
 // It lives in its own module rather than in ChatView so BOTH producers can reach it: the interaction
 // surface (InteractionCards.tsx) is imported BY ChatView, so a question card defined inside ChatView
 // could only have been shared through a module cycle.
-import { Fragment, useId, useLayoutEffect, useMemo, useRef } from "react"
+import { Fragment, type ReactNode, useId, useLayoutEffect, useMemo, useRef } from "react"
 import { AlertTriangle, Check, HelpCircle, ListChecks } from "lucide-react"
 import { useInlineMarkdownHtml, useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
@@ -52,6 +52,8 @@ export function QuestionBlockCard({
   danger,
   interactive,
   wrap,
+  aside,
+  label,
 }: {
   /** Producer 1: the raw body of a ```question fence, parsed here. */
   raw?: string
@@ -61,6 +63,15 @@ export function QuestionBlockCard({
   danger?: boolean
   interactive?: BlockInteractive
   wrap?: boolean
+  /** A control for the card's TITLE ROW, immediately left of the kind glyph — the shared chrome's own
+   *  `aside` slot. Producer 3's × for dismissing a registered question rides here rather than being
+   *  absolutely positioned over the card, which put it on top of that glyph and half outside the
+   *  border. Absent for the two producers that have nothing to put there. */
+  aside?: ReactNode
+  /** Overrides the card's kind title. Producer 3 heads a FOLLOW-UP "Follow-up" rather than "Question":
+   *  a branch's cards are siblings in the DOM, and three cards all titled "Question" read as three
+   *  unrelated asks however far the second two are indented. Absent ⇒ the kind's own word. */
+  label?: string
 }) {
   const parsed = useMemo(
     () => question ?? parseQuestionBlock(raw ?? "", questionKind ?? "question", danger),
@@ -95,14 +106,14 @@ export function QuestionBlockCard({
   const KindIcon = isDanger ? AlertTriangle : isMulti ? ListChecks : HelpCircle
   // Sentence case, because the shared chrome renders this as a real TITLE now rather than as an
   // uppercased eyebrow — a lowercase "question" beside the card's glyph reads as a typo.
-  const kindLabel = isMulti ? "Select multiple" : "Question"
+  const kindLabel = label ?? (isMulti ? "Select multiple" : "Question")
   // `risk`, not `danger`: the neutral border with a red title. A destructive gate is a question nobody
   // has answered wrongly yet, not a thing that has broken, and it wore the same lit red border as a dead
   // sign-in until 2026-08-26 (maintainer: they "look way too scary"). The tag's CRITERIA are unchanged
   // and stay narrow — force-merge, deletion, history rewrite, prod rollback — so these should almost
   // never appear; what changed is how loudly one of them shouts.
   return (
-    <TranscriptCard tone={isDanger ? "risk" : "neutral"} icon={KindIcon} label={kindLabel}>
+    <TranscriptCard tone={isDanger ? "risk" : "neutral"} icon={KindIcon} label={kindLabel} aside={aside}>
       {/* FULL-strength, against the card's stepped-down description colour: this card's body is not a
           description of the title, it IS the ask, and the question must never read dimmer than the
           word "Question" above it. The colour rides a WRAPPER because `.card-md .md-body` inherits
@@ -176,6 +187,15 @@ export function QuestionBlockCard({
                 gridRef.current?.focus()
               }}
             />
+            {/* The option's PREVIEW — the diff, the mockup, the message that would actually be posted.
+                It is revealed by SELECTING the option rather than by hovering it: a staged-answer card
+                has no send-on-click, so picking an option is the cheap, reversible, keyboard-reachable
+                gesture, and a hover reveal would be unreachable on touch and gone the moment the
+                pointer moved to read it. Read-only cards show nothing — there is no selection to
+                reveal it with, and a settled question's preview is no longer a decision aid. */}
+            {parsed.optionPreviews?.[i] !== undefined && interactive && (isMulti ? chosenSet.includes(i) : chosen === i && !freetext.trim()) && (
+              <OptionPreview md={parsed.optionPreviews[i]!} wrap={wrap} />
+            )}
             </Fragment>
           ))}
           {/* The free-text answer IS the final option — but it SPANS THE FULL WIDTH (col-span-full)
@@ -262,6 +282,19 @@ function OptionHeading({ md, wrap }: { md: string; wrap?: boolean }) {
   return (
     <div className="mt-1 text-fg">
       <LinkedHtml className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} html={html} />
+    </div>
+  )
+}
+
+// An option's PREVIEW, revealed under it while it is selected. Indented behind a left rule so it reads
+// as belonging TO the option rather than as a fourth choice, and muted-but-legible: it is reference
+// material for a decision, not the decision. Its own component for the same reason OptionHeading is —
+// the markdown parse has to be memoized per preview, and a hook cannot be called inside the options map.
+function OptionPreview({ md, wrap }: { md: string; wrap?: boolean }) {
+  const html = useMarkdownHtml(md)
+  return (
+    <div data-question-preview className="ml-3 border-l border-border pl-3">
+      <LinkedHtml className={`md-body text-[11.5px] text-fg/75${wrap ? ` ${QUEUE_WRAP}` : ""}`} html={html} />
     </div>
   )
 }

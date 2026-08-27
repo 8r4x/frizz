@@ -27,6 +27,7 @@ import { AiRenameButton } from "./AiRenameButton.tsx"
 import { DispatchForm } from "./NewThreadModal.tsx"
 import { StatusRow } from "./StatusRow.tsx"
 import { InteractionStack } from "./InteractionCards.tsx"
+import { RegisteredQuestionStack } from "./RegisteredQuestionCards.tsx"
 import { QueueSubAgentLines, hasQueueSubAgentLines } from "./QueueSubAgentLines.tsx"
 import { WakeDivider } from "./WakeDivider.tsx"
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
@@ -1493,6 +1494,11 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
         )}
       </div>
 
+      {/* A REGISTERED question reads AFTER the tail, not above it — unlike a pending interaction, which
+          is a gate on a turn already in flight. The tail IS the context for the question, so the card
+          reads top to bottom: what happened, then what the worker needs decided, then the prompt box.
+          It carries its own Send answers verb, so it sits above the fence path's identical button. */}
+      <RegisteredQuestionStack thread={thread} className="shrink-0 px-5 pb-4 pt-0" />
       {/* Bottom of the card. Answerable question blocks add a "Send answers" action that composes the
           per-block answers into one reply — but the free-form composer stays PRESENT underneath it
           (maintainer 2026-07-22): answering the question is the primary path, not the only one, and
@@ -1524,8 +1530,10 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
         surface="queueComposer"
         className="shrink-0 px-5 pb-3 pt-0"
         // With an open ask the box is the deliberate escape hatch, so say so — otherwise "Reply to the
-        // agent…" reads as a second way to answer the question rather than a way around it.
-        placeholder={answerable ? "Or skip the questions and reply…" : "Reply to the agent…"}
+        // agent…" reads as a second way to answer the question rather than a way around it. A
+        // REGISTERED question counts: it is answered on this same card, so with one open the box is the
+        // same escape hatch it is for a fenced one.
+        placeholder={answerable || (thread.questions?.length ?? 0) > 0 ? "Or skip the questions and reply…" : "Reply to the agent…"}
         submitOverride={sendMessage}
         ops={
           <>

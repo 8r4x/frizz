@@ -547,6 +547,20 @@ decline, each a real choice the human can click). Tag the fence only to change h
 `question danger` for the genuinely irreversible (force-merge, deletion, history rewrite, prod
 rollback), `question multi` for select-several triage.
 
+**BETTER THAN A FENCED BLOCK — REGISTER THE QUESTION:** `mcp__frizz__ask` creates a ROW the human
+still owes an answer to, instead of a block inside a message. That is the difference that matters: a
+fence is answerable only while its message is on screen, so a question written into one is gone once
+the transcript scrolls or your context is compacted, while a registration is still there tomorrow. It
+takes `questions` — several at once, each with `question`, `kind` (`question` = pick one,
+`multi` = pick several, no options at all = free text), an optional `danger`, and `options` each
+carrying a `label`, a one-line `description`, an optional `recommended`, an optional `preview`
+(markdown the human sees when they pick it — the diff, the message that would be posted), and optional
+`followUps`: questions that become live ONLY if that option is taken, so you can ask "and if so,
+which?" without asking it of somebody who said no. **REGISTERING A QUESTION DOES NOT END YOUR TURN** —
+it carries no timeout and waits on a person, so keep doing everything that does not depend on the
+answer. The answer comes back as its own wake, restating what was asked. Withdraw one you no longer
+need with `mcp__frizz__unask`, above all when you work the answer out yourself.
+
 A ` ```question ` block IS the handback — do not also emit a `done`/`awaiting` fence. Answers arrive
 as your next user message, possibly as terse as "1: A, 2: B".
 

@@ -64,6 +64,7 @@ import { agentReading } from "../lib/agentReading.ts"
 import { ChildOpRow } from "./ChildOpRow.tsx"
 import { TRANSCRIPT_META_LABEL_CLASS, transcriptMetaChevronClass } from "../lib/transcriptMetaLabels.ts"
 import { InteractionStack } from "./InteractionCards.tsx"
+import { RegisteredQuestionStack } from "./RegisteredQuestionCards.tsx"
 // The shared card chrome and THE question card both live in their own modules now, so every
 // surface can render them without importing the thread view. QuestionBlockCard in particular is
 // shared with the native-AskUserQuestion path, which reaches it through InteractionCards.tsx —
@@ -388,6 +389,9 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
         className="px-6 pt-5"
         autoFocusFirst
       />
+      {/* A REGISTERED question sits with the pending interactions rather than in the transcript: both are
+          things the human still owes an answer to, and neither may scroll out of reach. */}
+      <RegisteredQuestionStack thread={thread} className="px-6 pt-5" />
       {q.transportFallback && (
         <div
           data-transcript-sync-fallback
@@ -1206,7 +1210,10 @@ function VirtualizedThreadTranscript({
           >
             {row.kind === "head-anchor" ? null
             : row.kind === "interactions" ? (
-              <InteractionStack thread={thread} className="px-6 pt-5" autoFocusFirst />
+              <>
+                <InteractionStack thread={thread} className="px-6 pt-5" autoFocusFirst />
+                <RegisteredQuestionStack thread={thread} className="px-6 pt-5" />
+              </>
             ) : row.kind === "transport-fallback" ? (
               transportFallback ? <div className="px-6 pt-3"><div
                 data-transcript-sync-fallback

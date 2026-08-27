@@ -64,7 +64,7 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     rpc.send({ jsonrpc: "2.0", method: "notifications/initialized" })
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
     const list = await rpc.next(2)
-    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "recurring_prompt", "timer", "watch_pr", "watch", "unwatch", "activity"])
+    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "recurring_prompt", "timer", "watch_pr", "watch", "unwatch", "ask", "unask", "activity"])
     for (const required of ["prompt", "model", "effort"]) {
       assert.ok(list.result.tools[0].inputSchema.required.includes(required))
     }
@@ -111,13 +111,29 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     assert.deepEqual(Object.keys(list.result.tools[4].inputSchema.properties).sort(), ["for", "kind", "target"])
     assert.deepEqual(list.result.tools[5].inputSchema.required, ["id"])
     assert.deepEqual(Object.keys(list.result.tools[5].inputSchema.properties), ["id"])
+    // `ask` / `unask` — the same two-verb shape, for the question half of the same redesign. What is
+    // worth pinning is the TREE: the question schema nests to exactly ASK_MAX_DEPTH and no further, so
+    // the deepest option carries no `followUps` key at all. A `$ref` cycle would have been the natural
+    // JSON Schema for a recursive shape, but client support for one is uneven and a schema a client
+    // drops is a tool a worker cannot call — so the bound is INLINE, and visible to whoever reads it.
+    const askQuestion = list.result.tools[6].inputSchema.properties.questions.items
+    assert.deepEqual(list.result.tools[6].inputSchema.required, ["questions"])
+    assert.deepEqual(askQuestion.required, ["question", "kind"])
+    assert.deepEqual(askQuestion.properties.kind.enum, ["question", "multi"])
+    const depth = (node: { properties: { options: { items: { properties: Record<string, unknown> } } } }): number => {
+      const followUps = node.properties.options.items.properties.followUps as { items: typeof node } | undefined
+      return followUps ? 1 + depth(followUps.items) : 1
+    }
+    assert.equal(depth(askQuestion), 3)
+    assert.deepEqual(list.result.tools[7].inputSchema.required, ["id"])
+    assert.deepEqual(Object.keys(list.result.tools[7].inputSchema.properties), ["id"])
     // `activity` READS every kind of background work with the ids a fence names them by, plus the
     // `wch_…` id of any watch holding one. It takes NOTHING: there is no thread parameter and no filter,
     // because the only correct answer is "everything you have running", and a worker that has lost its
     // ids cannot be trusted to name them.
-    assert.equal(list.result.tools.length, 7)
-    assert.deepEqual(list.result.tools[6].inputSchema.required, [])
-    assert.deepEqual(Object.keys(list.result.tools[6].inputSchema.properties), [])
+    assert.equal(list.result.tools.length, 9)
+    assert.deepEqual(list.result.tools[8].inputSchema.required, [])
+    assert.deepEqual(Object.keys(list.result.tools[8].inputSchema.properties), [])
 
     // An unregistered name is a protocol error, not a crash — the registry routes by name now.
     rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "spawn_frizz_thread", arguments: {} } })
@@ -827,6 +843,80 @@ test("`watch` and `unwatch` register and withdraw against the CALLING thread", a
     assert.equal(noId.result.isError, true)
     assert.match(noId.result.content[0].text, /`id` is required/)
     assert.equal(seen.length, before, "not one of the four reached the server")
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
+
+// `ask` / `unask` OVER THE REAL STDIO TRANSPORT, same standard as `watch` above. What matters most here
+// is that the TREE survives the trip: the nested `followUps` a worker writes must arrive at the RPC
+// intact, because the whole point of the static tree is that frizz decides which branch is live from
+// the answer rather than the worker asking twice.
+test("`ask` and `unask` register and withdraw the CALLING thread's questions, tree intact", async () => {
+  const seen: Array<{ url: string; body: any }> = []
+  const spec = {
+    question: "Land the parser refactor on `main`?",
+    kind: "question",
+    options: [
+      {
+        label: "Land it",
+        description: "every gate is green",
+        recommended: true,
+        followUps: [{ question: "Tag a release too?", kind: "question", options: [{ label: "Tag 0.9.0" }, { label: "Not yet" }] }],
+      },
+      { label: "Hold it" },
+    ],
+  }
+  const replies: any[] = [
+    { registered: [{ id: "qst_aaa111", spec, askedAt: "2026-08-27T00:00:00.000Z" }], open: [{ id: "qst_aaa111", spec, askedAt: "2026-08-27T00:00:00.000Z" }] },
+    { withdrawn: true, open: [] },
+  ]
+  const http = createServer((req, res) => {
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      seen.push({ url: req.url ?? "", body: JSON.parse(body) })
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ result: replies.shift() ?? null }))
+    })
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "asking-thread" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+
+    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "ask", arguments: { questions: [spec] } } })
+    const asked = await rpc.next(2)
+    assert.equal(asked.result.isError, undefined)
+    assert.deepEqual(seen[0], { url: "/_frizz/rpc/ask", body: { slug: "asking-thread", questions: [spec] } })
+    assert.match(asked.result.content[0].text, /Registered 1 question/)
+    assert.match(asked.result.content[0].text, /qst_aaa111 {2}Land the parser refactor on `main`\?/)
+    // THE STANDING INSTRUCTION, at the moment of temptation: asking does not end the turn. A worker
+    // that registers a question and then rests has stopped for an answer it was told not to wait for.
+    assert.match(asked.result.content[0].text, /KEEP WORKING/)
+
+    rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "unask", arguments: { id: "qst_aaa111" } } })
+    const withdrawn = await rpc.next(3)
+    assert.deepEqual(seen[1], { url: "/_frizz/rpc/unask", body: { slug: "asking-thread", id: "qst_aaa111" } })
+    assert.match(withdrawn.result.content[0].text, /Question qst_aaa111 withdrawn/)
+    assert.match(withdrawn.result.content[0].text, /Nothing else is open on this thread/)
+
+    // The refusals live in the HANDLER, not only in the schema.
+    const before = seen.length
+    rpc.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "ask", arguments: { questions: [] } } })
+    const empty = await rpc.next(4)
+    assert.equal(empty.result.isError, true)
+    assert.match(empty.result.content[0].text, /`questions` is required/)
+    rpc.send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "unask", arguments: {} } })
+    const noId = await rpc.next(5)
+    assert.equal(noId.result.isError, true)
+    assert.match(noId.result.content[0].text, /`id` is required/)
+    assert.equal(seen.length, before, "neither reached the server")
   } finally {
     rpc.kill()
     http.close()
