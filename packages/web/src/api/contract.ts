@@ -287,7 +287,7 @@ export interface Api {
   projectsReorder(input: { ids: string[] }): Promise<ProjectCard[]>
   // Queue size per OPEN project, keyed by project id — the rail's badges. A project with no board on
   // this server is absent (no honest count without one), which the rail draws as no badge rather than
-  // as zero. The server opens every registered project a few seconds after boot, so that is a transient
+  // as zero. The server opens every registered project within about a second of boot, so that is a transient
   // state and not the "you have not clicked into it yet" it used to be — see server/tenant-prime.ts.
   projectsQueueCounts(): Promise<Record<string, number>>
   // Opens the machine's native image picker ALREADY IN the project's directory, then stores what

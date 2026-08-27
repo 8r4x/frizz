@@ -870,7 +870,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
      *
      * In practice the background priming pass usually gets there first (tenant-prime.ts) — this stays
      * the path that opens a project registered since boot, and the one that guarantees a project is
-     * open by the time its first request is answered rather than a few seconds later.
+     * open by the time its first request is answered rather than a beat later.
      *
      * Undefined for an unknown slug or a project that will not open — the caller falls through to the
      * launching project's app, which answers 404 rather than leaking another project's data.

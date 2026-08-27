@@ -3128,7 +3128,7 @@ export function createRouter(ctx: AppContext) {
      * live board anyway.
      *
      * Every registered project IS opened, so absent is the exception rather than the rule: the server
-     * primes the ones the operator has not visited a few seconds after boot (tenant-prime.ts), which is
+     * primes the ones the operator has not visited within about a second of boot (tenant-prime.ts), which is
      * what stopped the badges from appearing only after you clicked into each square. What stays absent
      * is a project another live Frizz is serving, one whose directory is gone, and one that would not
      * open — plus every project for the first seconds of a boot, before the pass reaches it.

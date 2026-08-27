@@ -7,8 +7,8 @@
 //
 // It draws entirely from the registry index — one file read, no databases opened. Answering a list
 // request by opening forty projects is exactly the cost lazy activation exists to avoid, so a card
-// deliberately shows only what the index holds. (The server does open them all in the background a few
-// seconds after boot — server/tenant-prime.ts — but on its own clock, never on a request's.)
+// deliberately shows only what the index holds. (The server does open them all in the background about
+// a second after boot — server/tenant-prime.ts — but on its own clock, never on a request's.)
 import * as RadixDialog from "@radix-ui/react-dialog"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useState } from "react"
