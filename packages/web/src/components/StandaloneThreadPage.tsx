@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { seedBoard } from "../store.ts"
+import { useSnapshot } from "valtio"
+import { seedBoard, store } from "../store.ts"
 import { useBoard } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
 import { displayTitle } from "../groups.ts"
@@ -8,6 +9,7 @@ import { projectHref } from "../lib/base-path.ts"
 import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
 import { ThreadView } from "./ChatView.tsx"
 import { DrawerStack } from "./DrawerStack.tsx"
+import { FileViewerPanel } from "./FileViewerPanel.tsx"
 import { TooltipProvider } from "./Tooltip.tsx"
 import { Toaster } from "./Toaster.tsx"
 import { useQuery } from "@tanstack/react-query"
@@ -35,6 +37,23 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
     rpc.board().then(seedBoard).catch(() => {})
   }, [])
 
+  // SPLIT MODE for the file reader: while this page is mounted (and the window is wide enough for two
+  // real columns), a `.md` click renders beside the thread instead of as a sheet over it — see
+  // pushMarkdownDrawer. Tracked live so shrinking the window falls back to the drawer for later
+  // clicks; a panel already open stays (its layout degrades gracefully, and yanking it on resize
+  // would lose the reader's place).
+  useEffect(() => {
+    const wide = window.matchMedia("(min-width: 1000px)")
+    const apply = () => { store.splitFileViewer = wide.matches }
+    apply()
+    wide.addEventListener("change", apply)
+    return () => {
+      wide.removeEventListener("change", apply)
+      store.splitFileViewer = false
+      store.filePanel = null
+    }
+  }, [])
+
 
   const atRest = thread?.runtime === "turn-idle" || thread?.runtime === "exited" || thread?.runtime === "none"
   useEffect(() => {
@@ -54,20 +73,26 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
   return (
     <TooltipProvider>
       <div className="h-dvh min-h-0 bg-bg px-0 text-sm text-fg sm:px-5">
-        <main
-          data-standalone-thread
-          className="mx-auto flex h-full w-full max-w-[900px] min-w-0 flex-col overflow-hidden border-border bg-panel sm:border-x"
-        >
-          {route.kind === "loading" ? (
-            <div className="flex flex-1 items-center justify-center" role="status" aria-label="Loading thread">
-              <span className="block h-5 w-5 animate-spin rounded-full border-2 border-muted/50 border-t-transparent" />
-            </div>
-          ) : route.kind === "missing" ? (
-            <MissingThread slug={slug} />
-          ) : (
-            <ThreadView slug={slug} virtualized showReturnToQueue />
-          )}
-        </main>
+        {/* One centered flex pair: the thread column and the file-viewer slot. With no file open the
+            slot is 0 wide and this renders exactly the old single centered column; opening a file
+            animates the slot's width, which is what slides the thread over to the left. */}
+        <div className="mx-auto flex h-full w-full justify-center">
+          <main
+            data-standalone-thread
+            className="flex h-full w-full max-w-[900px] min-w-0 flex-col overflow-hidden border-border bg-panel sm:border-x"
+          >
+            {route.kind === "loading" ? (
+              <div className="flex flex-1 items-center justify-center" role="status" aria-label="Loading thread">
+                <span className="block h-5 w-5 animate-spin rounded-full border-2 border-muted/50 border-t-transparent" />
+              </div>
+            ) : route.kind === "missing" ? (
+              <MissingThread slug={slug} />
+            ) : (
+              <ThreadView slug={slug} virtualized showReturnToQueue />
+            )}
+          </main>
+          <FileViewerSlot slug={slug} />
+        </div>
         {/* The SAME drawer stack the queue mounts. Without it every drill-in this page renders — a
             sub-agent row, a background-shell row, the frizz-doc button, a `[…](/thread/<slug>)` link —
             pushed a layer onto the store that nothing displayed, so the click was simply dead. Mounted
@@ -77,6 +102,47 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
         <Toaster />
       </div>
     </TooltipProvider>
+  )
+}
+
+// The panel's width, shared by the animated slot and its fixed-width inner content. The inner stays
+// at FULL width for the whole slide so the panel's content never reflows mid-animation — the slot's
+// overflow-hidden clip is what reveals it.
+const FILE_PANEL_WIDTH = "min(44rem, 45vw)"
+
+// The width-animated slot the split file viewer lives in. Width 0 ⇄ panel width is the slide: the
+// flex pair recenters as it animates, which moves the thread column left exactly as the panel comes
+// in. The panel's CONTENT outlives the store entry by the ~200ms slide-out (`current`), so closing
+// animates the same edge instead of blanking the column and collapsing an empty gutter.
+function FileViewerSlot({ slug }: { slug: string }) {
+  const snap = useSnapshot(store)
+  const panel = snap.filePanel
+  const [current, setCurrent] = useState<string | null>(null)
+  useEffect(() => {
+    if (panel) {
+      setCurrent(panel.path)
+      return
+    }
+    const timer = window.setTimeout(() => setCurrent(null), 220)
+    return () => window.clearTimeout(timer)
+  }, [panel?.path, panel?.openedAt, panel])
+  return (
+    <aside
+      data-file-viewer-slot
+      aria-hidden={!panel}
+      className="h-full min-h-0 shrink-0 overflow-hidden transition-[width] duration-200 ease-out"
+      style={{ width: panel ? FILE_PANEL_WIDTH : 0 }}
+    >
+      {current && (
+        <div className="flex h-full min-h-0 flex-col sm:pl-5" style={{ width: FILE_PANEL_WIDTH }}>
+          <div className="flex h-full min-h-0 flex-col overflow-hidden border-border bg-panel sm:border-x">
+            {/* Keyed on the path so following a link inside the viewer resets the view toggle and
+                scroll to the new document's top. */}
+            <FileViewerPanel key={current} slug={slug} path={current} />
+          </div>
+        </div>
+      )}
+    </aside>
   )
 }
 

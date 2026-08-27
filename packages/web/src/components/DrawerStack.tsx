@@ -1,6 +1,6 @@
 import { useEffect } from "react"
 import { useSnapshot } from "valtio"
-import { closeGithubPicker, store, threadBySlug } from "../store.ts"
+import { closeFilePanel, closeGithubPicker, store, threadBySlug } from "../store.ts"
 import { useBoard } from "../hooks.ts"
 import { displayTitle } from "../groups.ts"
 import { closeDrawerAnimated, closeSettingsAnimated } from "../lib/overlays.ts"
@@ -60,6 +60,9 @@ export function DrawerStack() {
         const top = store.drawers[store.drawers.length - 1]
         if (!closeDrawerAnimated(top.id)) store.drawers.pop()
       }
+      // The /full page's split file viewer sits UNDER any drawer (it is part of the page, not an
+      // overlay), so it unwinds last. A no-op on the queue page, where filePanel is never set.
+      else if (store.filePanel) closeFilePanel()
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)

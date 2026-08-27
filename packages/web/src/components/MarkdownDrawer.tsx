@@ -23,12 +23,13 @@ import { SheetHeader } from "./ui/SheetHeader.tsx"
 // is browsable, each link stacking another reader over this one. Content is a file on disk written by
 // whoever wrote it, so it goes through the same allowlist sanitizer as every other prose surface.
 
-const FOOTER_STYLE = { paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }
+export const FOOTER_STYLE = { paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }
 
 // The desktop-opener escape hatch. Reading is the default now, but a file you want to EDIT still
 // belongs in the editor, and this is the only affordance left that gets it there. It honours the
-// `localFileOpener` setting, exactly as a click on the link used to.
-function OpenAction({ path }: { path: string }) {
+// `localFileOpener` setting, exactly as a click on the link used to. Exported because the /full
+// page's split FileViewerPanel is the same reader in a different frame and must not fork this.
+export function OpenAction({ path }: { path: string }) {
   const open = () => {
     rpc
       .openLocalFile({ path })
@@ -56,7 +57,7 @@ function OpenAction({ path }: { path: string }) {
 // The document's frontmatter, one muted line per entry with the key set in mono — the way a file
 // listing shows metadata, not the way a heading shows a title. Values are left as written: this is a
 // glance at what the file declares, not a YAML parser.
-function Frontmatter({ lines }: { lines: string[] }) {
+export function Frontmatter({ lines }: { lines: string[] }) {
   return (
     <div className="mb-4 rounded-md border border-border/60 bg-panel-2/40 px-3 py-2 text-[12px] leading-5 text-muted">
       {lines.map((line, i) => {

@@ -1,6 +1,7 @@
 import { proxy } from "valtio"
 import type { BoardSnapshot, ThreadView, BoardDelta } from "@frizz/shared"
 import { applyBoardDelta } from "@frizz/shared"
+import type { ComposerContextItem } from "./lib/composerContext.ts"
 import { closeDrawerAnimated, focusDrawer } from "./lib/overlays.ts"
 import { isPageScrollLocked, pageScrollY, requestScrollAfterUnlock } from "./lib/pageScrollLock.ts"
 import { resolveThreadRoute } from "./lib/threadRouteState.ts"
@@ -140,6 +141,21 @@ export const store = proxy({
   // Transient bottom-center toast (e.g. "Steer failed …" when an eager reply is rejected). `id` bumps per call so
   // repeat toasts re-trigger the fade. Rendered by <Toaster>; null when nothing is showing.
   toast: null as { id: number; text: string; spinner?: boolean; sticky?: boolean; duration?: number; link?: { label: string; slug: string } } | null,
+  // The /full page's SPLIT file viewer. True only while StandaloneThreadPage is mounted; while it is,
+  // a `.md` click renders BESIDE the thread (the thread column slides left) instead of as an overlay
+  // drawer — the whole point of /full is seeing the transcript, and a sheet over it defeated that.
+  // The queue page keeps the drawer: its main column is the queue, not the thread being read.
+  splitFileViewer: false,
+  // The file the split viewer is showing (canonical-ish path as clicked; the panel re-resolves via
+  // rpc.localMarkdown). One panel, not a stack: a link followed inside the viewer replaces the file,
+  // exactly like a single editor pane. `openedAt` bumps on re-open so the panel can react to a
+  // re-click of the same path.
+  filePanel: null as { path: string; openedAt: number } | null,
+  // SELECTED-CONTEXT items staged for a thread's next message (⌘I over a selection in the file
+  // viewer). Rendered as chips above the thread's composer — every surface showing that composer shows
+  // them — and serialized into the outgoing text on send. Session-scoped on purpose: unlike the typed
+  // draft these are quotes of files on disk, re-creatable in two keystrokes.
+  composerContext: {} as Record<string, ComposerContextItem[]>,
 })
 
 export function openNewThread(): void {
@@ -333,8 +349,62 @@ function flashQueueCard(slug: string, root: HTMLElement): void {
 // doc, an inline-code path that resolved to one, an attached `.md`. `path` is the absolute POSIX path
 // the server will re-gate; the basename is the header title. Deduped on path.
 export function pushMarkdownDrawer(path: string): void {
+  // On /full the reader is a SPLIT PANEL beside the thread, not a sheet over it — route every
+  // markdown open there while that page is mounted (links in the transcript AND links inside the
+  // panel itself, which replace the shown file rather than stacking).
+  if (store.splitFileViewer) {
+    openFilePanel(path)
+    return
+  }
   const base = path.split("/").filter(Boolean).pop() || path
   openOrRaiseDrawer({ kind: "markdown", slug: path, path, label: base })
+}
+
+// ── the /full split file viewer ──────────────────────────────────────────────────────────────────
+let filePanelSeq = 0
+
+export function openFilePanel(path: string): void {
+  store.filePanel = { path, openedAt: ++filePanelSeq }
+}
+
+export function closeFilePanel(): void {
+  store.filePanel = null
+}
+
+// ── selected-context items (⌘I in the file viewer) ───────────────────────────────────────────────
+let contextSeq = 0
+
+export function addContextItem(slug: string, item: Omit<ComposerContextItem, "id">): void {
+  const items = store.composerContext[slug] ?? (store.composerContext[slug] = [])
+  items.push({ ...item, id: ++contextSeq })
+}
+
+export function removeContextItem(slug: string, id: number): void {
+  const items = store.composerContext[slug]
+  if (items) store.composerContext[slug] = items.filter((item) => item.id !== id)
+}
+
+export function setContextComment(slug: string, id: number, comment: string): void {
+  const items = store.composerContext[slug]
+  // Replace the ELEMENT rather than assigning `item.comment` in place: the in-place write is real in
+  // the store but the chips' useSnapshot did not re-render on it (verified in a live stack — the
+  // comment marker never appeared while the store held the text), while array-level replacement
+  // notifies exactly like add/remove do.
+  if (items) store.composerContext[slug] = items.map((item) => (item.id === id ? { ...item, comment } : item))
+}
+
+// Take (and clear) a thread's staged items at send time. Returns plain copies so the caller can
+// restore them on a rejected send — the proxy entries themselves are gone from the store by then.
+export function takeContextItems(slug: string): ComposerContextItem[] {
+  const items = (store.composerContext[slug] ?? []).map((item) => ({ ...item }))
+  delete store.composerContext[slug]
+  return items
+}
+
+export function restoreContextItems(slug: string, items: ComposerContextItem[]): void {
+  if (!items.length) return
+  // Never clobber items staged while the failed send was in flight — put the old ones first.
+  store.composerContext[slug] = [...items, ...(store.composerContext[slug] ?? [])]
 }
 
 export function popDrawer(): void {
@@ -425,6 +495,8 @@ export function resetProjectState() {
   store.view = "todos"
   store.connection = "connecting"
   store.drawers = []
+  store.filePanel = null
+  store.composerContext = {}
   store.routeThreadSlug = null
   store.socketBoardFallback = null
   store.socketTranscriptFallbacks = {}

@@ -2,9 +2,11 @@ import { useMemo, useState, type ReactElement, type ReactNode } from "react"
 import { useSnapshot } from "valtio"
 import type { Backend, ThreadSkill } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
-import { store } from "../store.ts"
+import { restoreContextItems, store, takeContextItems } from "../store.ts"
+import { buildMessageWithContext } from "../lib/composerContext.ts"
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
 import { Composer } from "./Composer.tsx"
+import { ComposerContextChips } from "./ComposerContextChips.tsx"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { draftKey, draftStore, useDraft, useProjectDir } from "../lib/drafts.ts"
 import { parseAccountAlias } from "../lib/signIn.ts"
@@ -108,13 +110,20 @@ export function ThreadComposerBox({
       else setLogoutFor(backend)
       return
     }
+    // Staged ⌘I context items ride the send: serialized into the text (before any trailing
+    // attachment paths) and cleared with it — restored on a rejected send exactly like the draft.
+    const staged = takeContextItems(slug)
+    const outgoing = buildMessageWithContext(text, staged, projectDir)
     const callbacks: EagerFollowUpCallbacks = {
       onOptimistic: clearMessage,
       // Never clobber a newer draft typed while the request was in flight.
-      onRollback: () => { if (!draftStore.get(key)) setMessage(message) },
+      onRollback: () => {
+        if (!draftStore.get(key)) setMessage(message)
+        restoreContextItems(slug, staged)
+      },
     }
-    if (submitOverride) submitOverride(text, callbacks)
-    else followUp.submit(text, { ...callbacks, interrupt })
+    if (submitOverride) submitOverride(outgoing, callbacks)
+    else followUp.submit(outgoing, { ...callbacks, interrupt })
   }
 
   return (
@@ -125,6 +134,7 @@ export function ThreadComposerBox({
       {...(surface === "chatComposer" ? { "data-thread-action-bar": "" } : {})}
       className={className}
     >
+      <ComposerContextChips slug={slug} />
       <Composer
         id={id}
         surface={surface}
