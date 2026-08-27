@@ -1086,3 +1086,71 @@ test("opening a database adopts a pre-rebrand thread_name, and leaves a current 
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+// ---- thread_watch: a worker's registered wait on its own running work (2026-08-26) ----
+//
+// The registry that was retired on 2026-08-14 and is coming back for the reason its own retirement note
+// records: a fence has the LIFETIME of the message carrying it, so a worker must restate the same wait at
+// every rest or lose it. A row does not need restating. See plans/rest-by-registration.md.
+//
+// What makes a durable row safe this time is the two columns the old table lacked: a stored KIND, and a
+// REQUIRED expiry that cancels the row and wakes the thread rather than letting a registration outlive
+// its own relevance.
+test("a registered watch is idempotent by (thread, kind, target), and re-registering never moves its expiry", () => {
+  const s = store()
+  try {
+    const at = 1_700_000_000_000
+    const first = s.armThreadWatch({ id: "wch_1", slug: "t", kind: "shell", target: "bzvtnt3ig", createdAtMs: at, expiresAtMs: at + 3600_000 })
+    assert.equal(first.state, "armed")
+    assert.equal(first.expires_at, at + 3600_000)
+
+    // A worker woken by an expiry re-registers the same wait; a worker that simply calls twice must not
+    // leave two rows to drop. The EXISTING row comes back — replacing it would silently move an expiry
+    // the human may already be reading off the card.
+    const again = s.armThreadWatch({ id: "wch_2", slug: "t", kind: "shell", target: "bzvtnt3ig", createdAtMs: at + 5_000, expiresAtMs: at + 99_999_999 })
+    assert.equal(again.id, "wch_1", "the armed row is returned, not a second one")
+    assert.equal(again.expires_at, at + 3600_000, "and its expiry is untouched")
+    assert.equal(s.listThreadWatches("t", { armedOnly: true }).length, 1)
+
+    // The triple is the key, so the same target under a different KIND is a different wait — and so is
+    // the same target on another thread.
+    s.armThreadWatch({ id: "wch_3", slug: "t", kind: "agent", target: "bzvtnt3ig", createdAtMs: at, expiresAtMs: at + 3600_000 })
+    s.armThreadWatch({ id: "wch_4", slug: "other", kind: "shell", target: "bzvtnt3ig", createdAtMs: at, expiresAtMs: at + 3600_000 })
+    assert.deepEqual(s.listThreadWatches("t", { armedOnly: true }).map((w) => w.id), ["wch_1", "wch_3"])
+    assert.deepEqual(s.listThreadWatches("other", { armedOnly: true }).map((w) => w.id), ["wch_4"])
+  } finally {
+    s.close()
+  }
+})
+
+test("an elapsed watch is due, a dropped one is not, and one thread can never drop another's row", () => {
+  const s = store()
+  try {
+    const at = 1_700_000_000_000
+    s.armThreadWatch({ id: "wch_soon", slug: "t", kind: "shell", target: "a", createdAtMs: at, expiresAtMs: at + 60_000 })
+    s.armThreadWatch({ id: "wch_later", slug: "t", kind: "shell", target: "b", createdAtMs: at, expiresAtMs: at + 7200_000 })
+
+    assert.deepEqual(s.expiredThreadWatches(at + 30_000).map((w) => w.id), [], "nothing is due before its timeout")
+    assert.deepEqual(s.expiredThreadWatches(at + 60_000).map((w) => w.id), ["wch_soon"], "due AT the instant, not after it")
+
+    // The worker's own unwatch, scoped to its thread.
+    assert.equal(s.dropThreadWatch("other", "wch_later", at + 1_000), false, "another thread cannot drop it")
+    assert.equal(s.dropThreadWatch("t", "wch_later", at + 1_000), true)
+    assert.equal(s.dropThreadWatch("t", "wch_later", at + 2_000), false, "and dropping is not repeatable")
+    assert.deepEqual(s.expiredThreadWatches(at + 99_999_999).map((w) => w.id), ["wch_soon"], "a dropped row is never due")
+
+    // Dropping frees the triple, so the same wait can be registered again — the unique index is partial.
+    const rearmed = s.armThreadWatch({ id: "wch_again", slug: "t", kind: "shell", target: "b", createdAtMs: at + 3_000, expiresAtMs: at + 3600_000 })
+    assert.equal(rearmed.id, "wch_again")
+
+    // Settling records that the row is no longer a reason to wait; the runtime's own notification is what
+    // actually woke the thread, so this only closes the row.
+    assert.equal(s.settleThreadWatch("wch_soon", at + 4_000), true)
+    assert.equal(s.getThreadWatch("wch_soon")?.state, "settled")
+    assert.equal(s.settleThreadWatch("wch_soon", at + 5_000), false, "and only once")
+    assert.equal(s.settleThreadWatch("wch_again", at + 6_000, "expired"), true)
+    assert.equal(s.getThreadWatch("wch_again")?.state, "expired", "an elapsed timeout closes the row as expired, not settled")
+  } finally {
+    s.close()
+  }
+})
