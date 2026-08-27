@@ -103,7 +103,7 @@ test("a watched PR leads the list, because it names a thing rather than a shape"
 // the STATE, not onto the end of the tooltip — the end is the worker's paragraph, and a park line
 // landing inside it is the same running-together this shape exists to prevent.
 test("a snooze stacks under the state, never inside the worker's paragraph", () => {
-  // A row with live background work is excused from Held (hasLiveOps), so it keeps its own glyph and the
+  // A row with live background work is excused from Snoozed (hasLiveOps), so it keeps its own glyph and the
   // snooze has to be said in the popover — over a fence that still carries the worker's own prose.
   const t = thread([...WAIT], {
     awaitingBackground: true,

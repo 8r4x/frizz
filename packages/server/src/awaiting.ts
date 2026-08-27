@@ -26,7 +26,7 @@ export function parsePrRef(value: string): PrRef | undefined {
 
 // ---- THE PARK, READ OUT OF A FENCE AND CHECKED ----------------------------------------------------
 // One reader for the 2026-08-15 grammar, used by BOTH the scheduler (which bumps) and the board (which
-// decides Held), so the two can never disagree about whether a thread is parked.
+// decides Snoozed), so the two can never disagree about whether a thread is parked.
 
 export interface AwaitingItem {
   kind: AwaitingItemKind

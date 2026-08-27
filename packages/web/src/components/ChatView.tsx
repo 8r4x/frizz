@@ -3666,7 +3666,7 @@ function WatchedRef({ watch }: { watch: { ref: string; url: string | null } }) {
 // fence since the 2026-08-15 grammar, and the paragraph below describes the world it was written for.
 // The worker's ```awaiting fence already auto-arms the durable wake (a `timer: <instant>` fired at its
 // instant; a `pr-watch:` watcher woke on any new PR activity, bot or human — both spellings retired) AND
-// already files the thread into the dimmed Held band — this button lets the human EXPLICITLY commit a
+// already files the thread into the dimmed Snoozed band — this button lets the human EXPLICITLY commit a
 // USER-OWNED snooze on top, so the park carries a concrete wake time and is durable across fence
 // changes. It NEVER suppresses the auto-armed wake: a user snooze is a board-presentation concern
 // only (board.ts), independent of the scheduler. The button says only "Snooze"; its kind → title +
@@ -3824,7 +3824,7 @@ export function LimitPauseCard({ slug, sessionId, pause }: { slug: string; sessi
   const [continuing, setContinuing] = useState(false)
   const queryClient = useQueryClient()
   // "Continue now" is a manual override of the auto-resume — a turn-starting action exactly like a
-  // steer, so it takes the same eager path: the row leaves the Held band for Active and its bubble
+  // steer, so it takes the same eager path: the row leaves the Snoozed band for Active and its bubble
   // appears the instant it's clicked, rather than after the injection round-trip. `continuing` disables
   // only this button.
   const continueNow = () => {

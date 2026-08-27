@@ -1,21 +1,21 @@
 // THE SNOOZE IS TOOLTIP-ONLY ON THE RAIL. No sidebar row may spend a subtitle line on a park
 // ("SNOOZED · Today at 5:00 PM" / "BUMPS · …", removed 2026-08-03), and hovering the row's INDICATOR
-// must be enough to read when the thread wakes — on a Held row (the hourglass, which has said so for a
+// must be enough to read when the thread wakes — on a Snoozed row (the hourglass, which has said so for a
 // while) AND on the rows a park does not quiet: one whose own turn is running, and one still waiting on
 // a sub-agent it dispatched. Those two keep their live spinner and gain the park as a second tooltip
 // line, which is the whole point of the change: the row says what the thread is DOING, the tooltip says
 // when it goes away.
 //
-// Run against held-rows-fixture.html on a plain Vite dev server (fixtures are NOT servable through the
+// Run against snoozed-rows-fixture.html on a plain Vite dev server (fixtures are NOT servable through the
 // frizz stack — its Vite runs in middleware mode and falls back to index.html for every unknown path):
 //   (cd packages/web && npx vite --port 5418 --strictPort)
-//   nub scripts/verify-snooze-tooltip.mjs --url=http://localhost:5418/held-rows-fixture.html
+//   nub scripts/verify-snooze-tooltip.mjs --url=http://localhost:5418/snoozed-rows-fixture.html
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
 
 const args = process.argv.slice(2)
 const opt = (k, d) => { const hit = args.find((a) => a.startsWith(`--${k}=`)); return hit ? hit.slice(k.length + 3) : d }
-const url = opt("url", "http://localhost:5418/held-rows-fixture.html")
+const url = opt("url", "http://localhost:5418/snoozed-rows-fixture.html")
 const shots = opt("shots")
 
 // slug → what its tooltip must prove. `state` is the live line the glyph already carried; `park` is the

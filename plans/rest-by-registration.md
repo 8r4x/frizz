@@ -1,6 +1,6 @@
 # Rest by registration — replacing the awaiting fence with registered watchers and questions
 
-Status: design settled with the maintainer 2026-08-26, in a grilling session. Not implemented. Two forks remain open (see [Still open](#still-open)).
+Status: design settled with the maintainer 2026-08-26, in a grilling session. Implementation started the same day; see the checklist at the end for what has landed.
 
 Supersedes the question half of [`persistent-stacked-questions-design.md`](persistent-stacked-questions-design.md) (2026-07-13, never built). See [Relationship to the 2026-07-13 memo](#relationship-to-the-2026-07-13-memo) for which of its forks this answers and which it dissolves.
 
@@ -102,12 +102,26 @@ Frizz keeps **accepting** the `` ```awaiting `` fence during the transition and 
 | Policy 5 — dismissal delivery | **Neither listed option.** Not local-only, not a notify-and-wake: dismissals queue and flush on the next steer. |
 | Policy 7 — submission unit | **7B, the batch.** The card submits as a unit. The memo flags per-attempt recovery UI as mandatory under this choice; that cost is taken on deliberately. |
 | Policy 6 — rollout/backfill | Not revisited. |
-| Policy 8 — archive with open questions | **Open.** See below. |
-| Policy 9 — approval and danger dismissal | **Open.** See below. |
+| Policy 8 — archive with open questions | **Neither listed option.** Human archive overrides everything — it takes the questions and registrations with it. |
+| Policy 9 — approval and danger dismissal | **A.** No × on an approval or a danger-tagged question; ordinary kinds keep it. The danger *styling* is toned down as part of this work. |
 
-## Still open
+## Archive, and which questions the × reaches
 
-Two forks the 2026-07-13 memo raised that this session's decisions make live again, both created by choices made here rather than inherited:
+**Human archive overrides everything.** Archiving a thread is the human's absolute action: it takes pending questions and live registrations with it, with no Reopen dance and no refusal. Nothing the worker registered can hold an archive open — the gate on `done` binds the worker, not the human.
 
-1. **Archive with pending questions.** `done` is gated on them, but archiving is the human's own action and nothing gates it. The memo's recommendation was to retain the open questions, suppress their queue effect, and require Reopen before answering or dismissing.
-2. **Dismissing a danger-tagged or approval question.** The × is currently universal. The memo's recommendation was that non-danger question/multi kinds may be dismissed, while a non-danger *approval* and every *danger*-tagged kind require an explicit delivered Answer or Decline — a generic close icon being insufficient for something irreversible.
+**The × does not reach an approval or a danger-tagged question.** Those are answered or they stay pending; a generic close icon is not consent for something irreversible. Declining is a real option inside the question, not a dismissal of it. Ordinary question and multi-select kinds keep the ×.
+
+**Danger-tagged questions look too scary and get toned down as part of this work.** They should almost never appear — the contract already scopes the tag narrowly, to force-merge, deletion, history rewrite and prod rollback — so the criteria stay and the treatment changes. Today `QuestionBlockCard` passes `tone="danger"` straight to `TranscriptCard`, which is the same full-strength red the provider-fault and sign-in-required banners wear. A question that is merely irreversible is not an error, and it should not shout like one.
+
+## Implementation checklist
+
+In dependency order. Independent slices first, so each lands on its own.
+
+- [x] **Sub-agent liveness** — resolve the child transcript path from the sidecar index so `entryStale` always has a clock to run. Prerequisite for trusting auto-registration. (`5155ca7e`)
+- [x] **`Held` → `Snoozed`** — label and group key. (`aa0053da`, and the vocabulary sweep that followed it.)
+- [x] **Danger-question styling** — stop wearing the provider-fault red. (`3f0eab5c`, which split a `risk` tone off `danger`.)
+- [ ] **Registry tables + the five verbs** — `watch`, `unwatch`, `ask`, `unask`, `done`. The `thread_watch` table is back (`818eeeb3`); nothing reads it yet.
+- [ ] **Question rendering** — the static tree, the ×, submit-on-Send, the structured answer payload.
+- [ ] **Autonomous mode** — the thread-level switch, the refusing `ask`, the cancel-and-bump on flip.
+- [ ] **Board** — park derived from live registrations; the waiting card and its snooze.
+- [ ] **Contract + migration** — the fence keeps parsing and converts to registrations; the worker prompt stops teaching it.

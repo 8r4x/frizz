@@ -269,7 +269,7 @@ export function queued(t: ThreadView): boolean {
 // EXTERNAL SESSIONS — agent sessions discovered in the project's transcript dir that frizz did NOT
 // originate (the human's own terminals). They are NOT part of the four frizz bands and never can be
 // while they stay external: such a session writes no ```awaiting fence and has no lifecycle row, so
-// Held and Done have nothing to derive from (see the server's foreignThreadView). So they get their
+// Snoozed and Done have nothing to derive from (see the server's foreignThreadView). So they get their
 // own collapsible section at the bottom of the rail — one the reader can ignore wholesale.
 //
 // ONE NAME, TWO SPELLINGS, on purpose. The WIRE field is `foreign`, which is what the tailer has
@@ -356,7 +356,7 @@ function hasLiveSubAgents(t: ThreadView): boolean {
 // into the RESTED band, which is the queue-ordered band, with nothing behind it: the exact 2026-07-29
 // report, "showing up as a rested thread in my sidebar, yet there's no card for it". (An UNsnoozed
 // shell-only rest DOES card since 2026-08-04, and `needsYou` then bands it below the rule regardless —
-// see inActiveBand. This flag decides nothing for it beyond keeping it out of Held.)
+// see inActiveBand. This flag decides nothing for it beyond keeping it out of Snoozed.)
 //
 // It does NOT re-spin finished threads. What the row reads as is a separate decision made downstream in
 // sessionIndicatorKind, and a shell-only rest gets the quiet pulsing dot there, never the spinner — the
@@ -373,12 +373,12 @@ function hasLiveOps(t: ThreadView): boolean {
   return t.awaitingBackground === true && !parkedOnArmedTimerAlone(t)
 }
 
-// AN ARMED TIMER IS A PARK, NOT LIVE WORK — it is the archetypal Held row, and it was the one park that
+// AN ARMED TIMER IS A PARK, NOT LIVE WORK — it is the archetypal Snoozed row, and it was the one park that
 // could never reach the band. A `timers:` fence names a future wake and launches nothing, so when the
 // server widened `awaitingBackground` to cover it (f50f9e60, so the resting card could state the wait),
 // hasLiveOps read that through its old meaning and isSnoozed's very FIRST gate threw the thread into the
 // Active band — the band ARCHITECTURE.md reserves for rows with no queue card and something in flight,
-// against its own definition of Held: "a declared `human:` gate, a valid future `timer:`, a user
+// against its own definition of Snoozed: "a declared `human:` gate, a valid future `timer:`, a user
 // wall-clock snooze, or a limit pause frizz will auto-resume". Reported 2026-08-26 on a thread parked on
 // a Sept-2 timer: "showing up in a separate rail that isn't held".
 //
@@ -387,7 +387,7 @@ function hasLiveOps(t: ThreadView): boolean {
 // agent is merely awaiting its own sub-agents, we should NOT dim it"), and a PR watcher is a handoff
 // that must never vanish into the dimmed band (see parkedAwaitingHint, maintainer 2026-07-22). Reading
 // raw `bgShells` is safe in that direction where it would not be in hasLiveOps: this is already gated on
-// the server's own verdict and only ever keeps a thread OUT of Held, so a stale shell costs a dimming,
+// the server's own verdict and only ever keeps a thread OUT of Snoozed, so a stale shell costs a dimming,
 // never a disappearance — the same argument restingOnLiveBackgroundWork makes below.
 function parkedOnArmedTimerAlone(t: ThreadView): boolean {
   if (t.awaitingBackground !== true) return false
@@ -401,18 +401,18 @@ function parkedOnArmedTimerAlone(t: ThreadView): boolean {
 // its valid scheduler instant is still in the future; malformed or elapsed timer prose must not
 // advertise a durable future wake. Legacy machine waits (pr/ci/session) intentionally do not qualify.
 //
-// A PR WAIT IS DELIBERATELY ABSENT: the review/approval/comment watcher must NOT park in Held. A worker
+// A PR WAIT IS DELIBERATELY ABSENT: the review/approval/comment watcher must NOT park in Snoozed. A worker
 // that opens a PR and watches it stays a VISIBLE queue handoff (a PR whose reviews may never arrive must
 // not silently vanish into the dimmed band — maintainer 2026-07-22); the scheduler still polls and bumps
 // it, and the human opts into hiding it via the RESTING card's event-snooze, which drops the card until
 // the thread comes to a new rest (2026-08-13 — that card is where a parked watcher is now stated and
 // controlled; the awaiting card no longer offers a park action for it). Admitting one here would
-// re-introduce exactly the auto-Held danger this split was built to remove. (The key is `prs:` since the
+// re-introduce exactly the auto-Snoozed danger this split was built to remove. (The key is `prs:` since the
 // 2026-08-24 YAML cutover; both spellings this paragraph was written against — the singular `pr:`, and the
 // `pr-watch:` before it — are retired, see RETIRED_AWAITING_KINDS. The WIRE kind stays singular, which is
 // why the code below still reads `hint.kind === "pr"`.)
 // NOTHING HERE PARKS A THREAD ANY MORE (2026-08-15). This returned the two hint kinds that dimmed a
-// thread into Held on the worker's word alone: `human:`, which NOTHING EVER FIRED, and a future
+// thread into Snoozed on the worker's word alone: `human:`, which NOTHING EVER FIRED, and a future
 // `timer: <instant>`, one of which was published 5h55m in the PAST — it parsed, armed nothing, and left
 // its thread parked for 5.5 hours. Both kinds are deleted. A park is now a structural declaration the
 // SERVER checks against live telemetry and the registries (board.hasDeclaredBackgroundPark), which is
@@ -430,7 +430,7 @@ export function futureSnoozedUntil(
 }
 
 // HELD: one semantic predicate owns both classification and presentation. Only a specific external
-// human/review gate or a valid FUTURE timestamp belongs in the dimmed Held band. Legacy automated
+// human/review gate or a valid FUTURE timestamp belongs in the dimmed Snoozed band. Legacy automated
 // waits (pr/ci/session), malformed/elapsed timers, and hintless fences stay OUT of it — rested (in the
 // queue) if their turn is over, Active if it isn't — so they cannot hide work an agent should own
 // through an in-band watcher. A canonical blocked+timer status remains a compatibility path only when
@@ -441,7 +441,7 @@ export function isSnoozed(t: ThreadView, nowMs = Date.now()): boolean {
   // A user-owned snooze deliberately wins over a concrete ask, permission prompt, or crash. Those
   // states still exist in the transcript/runtime and re-enter Queue at the exact wake deadline; the
   // snooze merely parks their presentation until then. Mid-turn work keeps spinning in the Active band,
-  // while a provider permission prompt is itself parked and may therefore move to Held.
+  // while a provider permission prompt is itself parked and may therefore move to Snoozed.
   if (userSnooze) return t.runtime !== "running" && t.runtime !== "spawning"
   // Without an explicit user snooze, higher-priority attention states render ?, !, or a native
   // prompt—not a wait glyph—so a stale awaiting fence cannot demote them out of Queue.
@@ -449,7 +449,7 @@ export function isSnoozed(t: ThreadView, nowMs = Date.now()): boolean {
   if (!atRest(t)) return false
   // A thread a usage limit cut off, which frizz is going to continue itself, has the same shape as an
   // ```awaiting timer: park — parked on the clock with a wake already armed. It belongs in the dimmed
-  // Held band, not sitting among the rested rows as though the human could pick it up. Without that
+  // Snoozed band, not sitting among the rested rows as though the human could pick it up. Without that
   // auto-resume promise there is no armed wake, so it is NOT snoozed: it falls through to the queue as
   // work only the human will restart.
   if (t.limitPause?.autoResume) return true
@@ -567,7 +567,7 @@ function restingOnLiveBackgroundWork(t: ThreadView): boolean {
   // still running". Only ARMED rows count: the board only synthesizes armed timer rows today, but a
   // fired or cancelled one, should it ever reach here, is settled — not motion — like a green PR below.
   //
-  // A FENCED timer park no longer reaches this line at all: it is Held now (parkedOnArmedTimerAlone) and
+  // A FENCED timer park no longer reaches this line at all: it is Snoozed now (parkedOnArmedTimerAlone) and
   // takes the hourglass two branches up, which is a strictly better mark than the dot. What still lands
   // here is a timer armed WITHOUT an ```awaiting fence naming it — a thread that set an alarm and kept
   // going, then came to rest — where the dot is exactly right: nothing is parked, but a wake is coming.
@@ -653,7 +653,7 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
 //   • STALLED — the process is gone with the work unfinished (yellow [!]). The classic case.
 //   • HELD by a usage limit frizz will auto-resume (the hourglass, NOT [!]). A limit park is a genuine
 //     wait — frizz continues it itself once the window resets — so it keeps its held glyph and its
-//     dimmed Held band. But the operator with capacity elsewhere shouldn't have to wait, so it ALSO
+//     dimmed Snoozed band. But the operator with capacity elsewhere shouldn't have to wait, so it ALSO
 //     gets the one-click Retry: the same verb, message and RPC as a stall (retrySession sends the very
 //     "Continue exactly where you left off." the in-drawer LimitPauseCard already offers), just a
 //     faster door to it from the rail (maintainer 2026-07-23: held-on-a-limit rows want the same
@@ -691,7 +691,7 @@ export function sectionOf(t: ThreadView): SectionKey | null {
   // to Done only once it comes to rest still-archived. (A user BUMP un-archives it for good via
   // resume; this is the display safety net for a running-yet-archived session.)
   if (t.state === "archived" && !isActivelyRunning(t)) return "inactive"
-  // Only truthful human/future-timer waiters split into the labeled, dimmed Held band. Everything else
+  // Only truthful human/future-timer waiters split into the labeled, dimmed Snoozed band. Everything else
   // open — running, needs-you, bare rest, done-fenced, awaiting-its-own-subs, or an awaiting
   // `session`/hintless wait — belongs to the Active/Rested section, which band decided downstream.
   if (isSnoozed(t)) return "snoozed"
@@ -730,7 +730,7 @@ export function orderActive(threads: readonly ThreadView[], direction: QueueDire
 // upstream excusal remembering to band its own threads.
 //
 // It used to read `isActivelyRunning(t) && t.needsYou !== true`, which enforced only the first half. The
-// second half was left to the SERVER: a thread it excused from the queue was expected to be either Held
+// second half was left to the SERVER: a thread it excused from the queue was expected to be either Snoozed
 // or visibly alive (`awaitingBackground`, which is what puts a shell-only or CI-holding rest in this
 // band). Every excusal that forgot dropped its thread into the cue with nothing behind it — a row that
 // looks queued, has no card, and opens a DRAWER on click instead of scrolling to one. Reported
@@ -759,7 +759,7 @@ export function partitionActive(active: readonly ThreadView[]): { running: Threa
 }
 
 // Partition threads into the thread-derived sidebar sections. `active` is the Active+Rested section and
-// is banded by orderActive (spinning rows first, then the queue's own order); Held and Done are plain
+// is banded by orderActive (spinning rows first, then the queue's own order); Snoozed and Done are plain
 // interaction recency.
 export type SectionedThreads = Record<SectionKey, ThreadView[]>
 export function sectionThreads(threads: readonly ThreadView[], direction: QueueDirection = "fifo"): SectionedThreads {

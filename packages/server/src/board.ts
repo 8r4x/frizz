@@ -502,7 +502,7 @@ function bgSnoozeArmed(row: Pick<SessionRow, "bg_snooze_rested_at" | "rested_at"
 // two in lockstep.
 function hasParkedExternalWait(tele: SessionTelemetry | undefined, _nowMs: number): boolean {
   // NOTHING EXTERNAL PARKS A THREAD ANY MORE. This carried the two hint kinds that took a thread out of
-  // the queue on the worker's word alone: `human:`, which parked it in Held and which NOTHING EVER
+  // the queue on the worker's word alone: `human:`, which parked it in Snoozed and which NOTHING EVER
   // FIRED, and `timer: <instant>`, one of which was written 5h55m in the past and stalled its thread for
   // 5.5 hours. Both are deleted (see the AwaitingHint doc block in @frizz/shared): waiting on a person is
   // a ```question, and a timer is a registered row named by id like every other item. Parking is decided
@@ -600,7 +600,7 @@ export function fenceWatchViews(
 // call site). Every otherwise-unexcused owned/open thread enters Queue when its top-level worker comes
 // to rest. A user-owned snooze temporarily suppresses every queue reason—including a concrete ask,
 // permission prompt, or crash—then the exact deadline restores the still-current reason. Truthful
-// external waits place ordinary rest in Held without writing lifecycle state.
+// external waits place ordinary rest in Snoozed without writing lifecycle state.
 // A follow-up frizz has delivered but the transcript has not yet reflected: it lives in the delivery
 // ledger as `pending` (injected, no JSONL evidence yet), `enqueued` (positively receipted by Claude
 // Code's own queue) or `delivered` (the transport's receipt proved it went straight into a turn). All
@@ -823,7 +823,7 @@ export function deriveAwaitingBackground(
   // "it has background work running", so it wins: show the fence card ALONE, never both. This is the
   // PR-wait double-card fix (maintainer 2026-07-24): a PR-watching thread with a live sub-agent stays
   // queued (deriveNeedsYou keeps it, since a PR wait is a visible handoff) but cards as its fence rather
-  // than as this banner. A parked human/timer fence never reached here anyway (it's Held, not queued).
+  // than as this banner. A parked human/timer fence never reached here anyway (it's Snoozed, not queued).
   //
   // A PR PARK IS NOW THE EXCEPTION, and the exception is what makes it one card again rather than
   // two (maintainer 2026-08-13, choosing this): the awaiting card no longer offers a park action for

@@ -7,9 +7,9 @@
 //   expiry    — the send succeeds but the worker never writes a turn (a swallowed injection). The row
 //               must fall out of the running band on its own at STEER_OPTIMISM_MS, unprompted by any
 //               board push, because nothing else will repaint a quiet thread at the cap.
-//   held      — a SNOOZED (Held-band) row that gets steered must leave the dimmed band for the running
+//   snoozed      — a SNOOZED (Snoozed-band) row that gets steered must leave the dimmed band for the running
 //               band, exactly as the server re-derives it once the turn starts (isHeld excuses a
-//               running thread), and must fall back into Held when the hint expires.
+//               running thread), and must fall back into Snoozed when the hint expires.
 //
 //   node scripts/verify-steer-rail-edges.mjs <url> [outDir]
 import { mkdirSync } from "node:fs"
@@ -29,12 +29,12 @@ const PROBE = `(() => {
   if (!rail) return { ready: false }
   const rows = []
   let band = 'running'
-  const walk = (node, inHeld) => {
+  const walk = (node, inSnoozed) => {
     for (const child of node.children) {
-      if (child.tagName === 'HR' && !inHeld) { band = 'rested'; continue }
+      if (child.tagName === 'HR' && !inSnoozed) { band = 'rested'; continue }
       const row = child.querySelector?.(':scope > [data-sidebar-item]')
-      if (row) { rows.push({ id: row.dataset.sidebarItem, band: inHeld ? 'held' : band }); continue }
-      if (child.tagName === 'SECTION' && child.getAttribute('aria-label') === 'Held') walk(child, true)
+      if (row) { rows.push({ id: row.dataset.sidebarItem, band: inSnoozed ? 'snoozed' : band }); continue }
+      if (child.tagName === 'SECTION' && child.getAttribute('aria-label') === 'Snoozed') walk(child, true)
     }
   }
   walk(rail, false)
@@ -112,19 +112,19 @@ try {
     pass: expiryPeak === "running" && expirySettled.rows.find((r) => r.id === "worker-7")?.band === "rested",
   }
 
-  // ── held: a snoozed row steered must leave the dimmed band ──────────────────────────────────────
-  const heldSlug = "worker-3"
+  // ── snoozed: a snoozed row steered must leave the dimmed band ──────────────────────────────────────
+  const snoozedSlug = "worker-3"
   await api.mutate("setThreadSnooze", {
-    slug: heldSlug,
-    sessionId: sid(heldSlug),
+    slug: snoozedSlug,
+    sessionId: sid(snoozedSlug),
     until: new Date(Date.now() + 6 * 60 * 60_000).toISOString(),
   })
   await settle(2500)
-  const heldBefore = await bandOf(heldSlug)
-  await page.screenshot({ path: join(outDir, "23-held-before.png") })
-  // A Held row has no queue card, so its steer goes through the thread DRAWER's composer — tagged by
+  const snoozedBefore = await bandOf(snoozedSlug)
+  await page.screenshot({ path: join(outDir, "23-snoozed-before.png") })
+  // A Snoozed row has no queue card, so its steer goes through the thread DRAWER's composer — tagged by
   // its fixed-positioned drawer ancestor, since the workpane's queue cards share the placeholder.
-  await page.click(`[data-sidebar-item="${heldSlug}"] button`)
+  await page.click(`[data-sidebar-item="${snoozedSlug}"] button`)
   await settle(1500)
   const tagged = await page.evaluate(() => {
     const ta = [...document.querySelectorAll("textarea")].find((e) => e.closest(".fixed"))
@@ -132,25 +132,25 @@ try {
     ta.setAttribute("data-probe-composer", "1")
     return true
   })
-  if (!tagged) throw new Error("no drawer composer found for the held row")
+  if (!tagged) throw new Error("no drawer composer found for the snoozed row")
   const drawerComposer = "[data-probe-composer]"
   await page.click(drawerComposer)
   await page.type(drawerComposer, "picking this back up now")
   await page.keyboard.press("Enter")
   await settle(400)
-  const heldPeak = await bandOf(heldSlug)
-  await page.screenshot({ path: join(outDir, "24-held-steered.png") })
-  results.held = {
-    bandBefore: heldBefore,
-    bandWhileOptimistic: heldPeak,
-    pass: heldBefore === "held" && heldPeak === "running",
+  const snoozedPeak = await bandOf(snoozedSlug)
+  await page.screenshot({ path: join(outDir, "24-snoozed-steered.png") })
+  results.snoozed = {
+    bandBefore: snoozedBefore,
+    bandWhileOptimistic: snoozedPeak,
+    pass: snoozedBefore === "snoozed" && snoozedPeak === "running",
   }
 
 } finally {
   await browser.close()
   console.log(JSON.stringify({ ...results, pageErrors: errors }, null, 2))
-  const checks = ["rollback", "expiry", "held"]
+  const checks = ["rollback", "expiry", "snoozed"]
   const failed = checks.filter((k) => !results[k]?.pass)
   if (failed.length) { console.error("FAIL:", failed.join(", ")); process.exitCode = 1 }
-  else console.error("PASS: rollback, expiry, held")
+  else console.error("PASS: rollback, expiry, snoozed")
 }

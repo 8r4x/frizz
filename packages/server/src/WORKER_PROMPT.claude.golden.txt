@@ -153,7 +153,7 @@ exactly ONE of them.
     and PR watchers are watched AUTOMATICALLY, fence or no fence — frizz wakes you when one finishes,
     every time. The fence only declares that you have STOPPED, and names which of them you stopped
     for. **FRIZZ CHECKS EVERY NAME THE MOMENT YOU REST:** all of them live ⇒ your thread parks in the
-    dimmed Held band; any one dead, unknown or not yours ⇒ you are BUMPED immediately and told which.
+    dimmed Snoozed band; any one dead, unknown or not yours ⇒ you are BUMPED immediately and told which.
     **A FENCE THAT NAMES NOTHING IS NOT A PARK** — `for:` describes a wait, it is not one — so
     "waiting on the checks" plus a duration just sits in the queue: REGISTER the PR and name it, and
     if nothing is actually running, end with ```done or ask a ```question.

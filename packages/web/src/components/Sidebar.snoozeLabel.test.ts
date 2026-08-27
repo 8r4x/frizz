@@ -8,7 +8,7 @@ import { ThreadRow } from "./Sidebar.tsx"
 import { TooltipProvider } from "./Tooltip.tsx"
 
 // A SNOOZE IS TOOLTIP-ONLY ON THE RAIL, and so is everything else. No sidebar row spends a subtitle line
-// on a park — not the Held ones (single-line since the two-styles fix), and since 2026-08-03 not the ones
+// on a park — not the Snoozed ones (single-line since the two-styles fix), and since 2026-08-03 not the ones
 // a park does not quiet either: a running thread and one still waiting on a sub-agent kept an inline
 // "SNOOZED · Today at 5:00 PM" / "BUMPS · …" gloss, which spent the rail's scarcest real estate
 // restating what the hourglass beside it already signals ("hide the SNOOZED label from the sidebar … the
@@ -17,7 +17,7 @@ import { TooltipProvider } from "./Tooltip.tsx"
 //
 // This pins the ABSENCE. The tooltip half cannot be asserted here — Radix portals its content only once
 // open, so static markup never contains it — and is pinned by a real hover in
-// scripts/verify-snooze-tooltip.mjs against held-rows-fixture.html.
+// scripts/verify-snooze-tooltip.mjs against snoozed-rows-fixture.html.
 
 const base = {
   kind: "session",
@@ -44,7 +44,7 @@ function row(extra: Partial<ThreadView>) {
 
 test("a snoozed row never glosses its park inline, in any band", () => {
   const cases: [string, Partial<ThreadView>][] = [
-    // Held: the park has taken effect and the row is a single line already.
+    // Snoozed: the park has taken effect and the row is a single line already.
     ["a plain park at rest", { snoozedUntil: UNTIL }],
     ["a park with an armed bump", { snoozedUntil: UNTIL, snoozePrompt: "Check whether CI went green." }],
     // NOT held — isSnoozed excuses a running thread and one with live sub-agents, so these stay in Active

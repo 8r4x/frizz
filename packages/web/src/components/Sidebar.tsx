@@ -40,7 +40,7 @@ import type { ReactElement, ReactNode } from "react"
 // Sections: FOUR bands top→bottom, in the names ARCHITECTURE.md § Board nomenclature fixes — RESTED
 // (everything at rest = the queue's own rows, a.k.a. the cue), ACTIVE (the rows currently spinning),
 // then a labeled DIMMED HELD band (every declared clock/hourglass/timed wait), then DONE — each split
-// by a bare <hr>, and Held and Done both collapsible. Rested and Active are ONE uncollapsible <section>
+// by a bare <hr>, and Snoozed and Done both collapsible. Rested and Active are ONE uncollapsible <section>
 // (you can't hide your queue or your live work); the <hr> between them is the whole distinction, so
 // never describe a rested row as active. A thread merely awaiting its OWN sub-agents is INTERNAL work
 // and stays spinning in Active undimmed; only external waiters drop into the dimmed band (groups.ts
@@ -77,7 +77,7 @@ export function Sidebar() {
   const all = useOptimisticallyArchived(useOptimisticallySteered(asThreads(board?.threads ?? [])))
   const sections = sectionThreads(all, useSnapshot(prefs).queueOrder)
   // Its own partition, deliberately NOT a SectionKey: sectionThreads drops external rows entirely, and
-  // that stays true — an external session must never be able to land in Active, Held or Done by
+  // that stays true — an external session must never be able to land in Active, Snoozed or Done by
   // accident. This band is the only place they render, and they leave it by being STEERED, not by
   // being re-sorted.
   // Ordered by the SAME key the rest of the rail uses, so the rest-time column reads monotonically down
@@ -243,7 +243,7 @@ export function Sidebar() {
           ) : (
             // pl-5 matches ThreadRow's own content inset (its status-indicator column), so the
             // placeholder starts exactly where the rows it stands in for would — and lands within a
-            // pixel of the Held/Done labels, which clear the same width for their chevron. A
+            // pixel of the Snoozed/Done labels, which clear the same width for their chevron. A
             // bare px-1.5 left it hanging 14px out at the rail's raw edge, alone against everything.
             // "open", not "active": this stands in for the Active AND Rested bands together, and it
             // renders only when BOTH are empty. Saying "no active threads" over a hidden queue would be
@@ -298,7 +298,7 @@ export function Sidebar() {
               RESTED sessions are in it — the server drops a spinning one, because a session that is
               working is one the human already has open in its own window (maintainer 2026-08-19).
               Rows are read-only: ThreadActionBar swaps the composer for a plain "running in an external
-              terminal" line, and there is no queue card, no verb and no Held/Done to fall into. */}
+              terminal" line, and there is no queue card, no verb and no Snoozed/Done to fall into. */}
           {externalSessions.length > 0 && (
             <section aria-label="External">
               <hr className="my-3 border-border/50" />
@@ -308,10 +308,10 @@ export function Sidebar() {
                 collapsed={collapsed.external}
                 onToggle={() => (store.sidebarCollapsed.external = !store.sidebarCollapsed.external)}
               />
-              {/* The rest-time column is ON here, unlike Held and Done. Every row in this band is by
+              {/* The rest-time column is ON here, unlike Snoozed and Done. Every row in this band is by
                   definition at rest, so "how long ago" is the only thing that distinguishes them — it is
                   what tells you which terminal you wandered away from an hour ago and which one is from
-                  last Tuesday. Held rows carry their own hint gloss and Done rows are over; neither has
+                  last Tuesday. Snoozed rows carry their own hint gloss and Done rows are over; neither has
                   that problem. */}
               {!collapsed.external &&
                 externalSessions.map((t) => (
@@ -326,9 +326,9 @@ export function Sidebar() {
 }
 
 // A section header: an optional collapse caret, the label, and the count. ONE source of truth for
-// every band header (Held, Done) so they can never visually drift apart again. Every band in
+// every band header (Snoozed, Done) so they can never visually drift apart again. Every band in
 // the real rail is collapsible; omitting onToggle renders a static div with a caret-width spacer, so
-// a header without a toggle (the QA fixtures' Active/Held bands) still aligns with the rest.
+// a header without a toggle (the QA fixtures' Active/Snoozed bands) still aligns with the rest.
 export function SectionHeader({ label, count, collapsed, onToggle }: { label: string; count: number; collapsed?: boolean; onToggle?: () => void }) {
   const inner = (
     <>
@@ -404,9 +404,9 @@ export const ThreadRow = memo(function ThreadRow({
   restedAge?: boolean
 }) {
   const foreign = !legacy && t.foreign === true
-  // Held rows are uniformly grayed as a whole; provisional titles retain their local dim treatment.
-  // A thread awaiting its OWN live sub-agent/Monitor is not Held and stays fully active.
-  const held = !legacy && isSnoozed(t)
+  // Snoozed rows are uniformly grayed as a whole; provisional titles retain their local dim treatment.
+  // A thread awaiting its OWN live sub-agent/Monitor is not Snoozed and stays fully active.
+  const snoozed = !legacy && isSnoozed(t)
   const dimLabel = !legacy && titleIsProvisional(t)
   // The rows with an obvious single next action carry that verb INLINE, instead of making you open the
   // thread to find it. offersRetry (groups.ts) picks them: a STALLED row (the [!] mark — process
@@ -427,7 +427,7 @@ export const ThreadRow = memo(function ThreadRow({
   return (
     <div
       data-sidebar-item={t.id}
-      className={`group relative flex min-w-0 items-start rounded-md transition-[color,background-color,opacity] hover:bg-white/[0.04] ${legacy ? "opacity-80" : held ? "opacity-65 hover:opacity-90 focus-within:opacity-90" : ""}`}
+      className={`group relative flex min-w-0 items-start rounded-md transition-[color,background-color,opacity] hover:bg-white/[0.04] ${legacy ? "opacity-80" : snoozed ? "opacity-65 hover:opacity-90 focus-within:opacity-90" : ""}`}
     >
       {/* The reading position owns a real, in-row rail rather than borrowing the status-icon column.
           The marker spans the row's complete visual height, including wrapped titles and subtitles,
@@ -464,7 +464,7 @@ export const ThreadRow = memo(function ThreadRow({
               8px is ~2 word spaces at 13px, which reads as the title running into its own timestamp.
               12px is a gutter, and it costs the title 4px it does not miss. */}
           <span className="flex min-w-0 items-baseline gap-3">
-            <span className={`min-w-0 flex-1 break-words text-[13px] leading-[19px] ${dimLabel ? "text-fg/50" : held ? "text-fg/75" : "text-fg/90"}`}>
+            <span className={`min-w-0 flex-1 break-words text-[13px] leading-[19px] ${dimLabel ? "text-fg/50" : snoozed ? "text-fg/75" : "text-fg/90"}`}>
               <TitleWithTrailers title={displayTitle(t)}>
                 {!legacy && <ProviderMark backend={t.backend} className="ml-1" />}
                 {/* MEASURED 2026-08-19, the first time this tag ever rendered (it was written for a
@@ -729,7 +729,7 @@ export function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: s
   const base = sessionStateIndicatorFor(t)
   // The tooltip is now the ONLY place a snooze is legible on the rail (the subtitle no longer names it),
   // so it has to say so on every parked row — not just the ones the park actually quiets. The hourglass
-  // arm below already tells that story for a Held row. These are the rows a snooze does NOT silence:
+  // arm below already tells that story for a Snoozed row. These are the rows a snooze does NOT silence:
   // one whose own turn is running, one still waiting on a sub-agent it dispatched, and one holding a
   // concrete ask (which outranks the park in sessionIndicatorKind). Each keeps its live glyph — the park
   // has not taken effect yet and the rail must not claim otherwise — and gains a second line saying when
@@ -785,8 +785,8 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
   if (kind === "snoozed") {
     const hourglass = <StatusBox><Hourglass size={9} className="text-muted/70" /></StatusBox>
     const github = <StatusBox><Github size={9} className="text-muted/70" /></StatusBox>
-    // A held row whose fence names a PR (`prs:` since the 2026-08-24 YAML cutover; `pr:` and `pr-watch:`
-    // before it, both retired) is held FOR A PR, and the rail says so with GitHub's mark instead of the
+    // A snoozed row whose fence names a PR (`prs:` since the 2026-08-24 YAML cutover; `pr:` and `pr-watch:`
+    // before it, both retired) is snoozed FOR A PR, and the rail says so with GitHub's mark instead of the
     // hourglass. The hourglass means "parked on the clock", and for a watch the clock is only the
     // backstop: the scheduler polls the PR and CLEARS the park the moment new activity lands
     // (scheduler.ts, the clear-snooze-on-PR-wake), so what actually wakes this row is GitHub. A PR wait
@@ -796,12 +796,12 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     // beside the watch. (Until
     // 2026-08-13 the commonest source was the awaiting card's own "PR watcher armed" Snooze; that
     // control is gone, and the resting card's event-snooze that replaced it drops the queue card
-    // without parking the thread in Held.) All were previously indistinguishable from a plain timer park.
+    // without parking the thread in Snoozed.) All were previously indistinguishable from a plain timer park.
     const watched = t.lastFence?.kind === "awaiting" ? prWatchRefs(t.lastFence.hints) : []
-    const heldMark = watched.length > 0 ? github : hourglass
-    // A held row carries its whole "what it's held for" story HERE, in the popover — the rail row itself
+    const parkMark = watched.length > 0 ? github : hourglass
+    // A snoozed row carries its whole "what it is waiting for" story HERE, in the popover — the rail row itself
     // is a title and nothing else. The two time-based holds are ONE concept — a snooze (park until a wall-clock instant) — sharing the same
-    // heldMark + single-line layout. They differ only in WHO resolves the park at the deadline, which
+    // parkMark + single-line layout. They differ only in WHO resolves the park at the deadline, which
     // the tooltip wording marks as an `auto` variant of the same word rather than a separate idea:
     //   • a user snooze re-surfaces the CARD for you  → "Snoozed until <wake>"       (you act next)
     //   • an ```awaiting park naming a timer / blocked+timer status auto-resumes the agent → "Auto-snoozed until <wake>"
@@ -809,7 +809,7 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     // so formatUserSnooze reads it as the auto variant and names the follow-up it will send.
     const snoozedUntil = futureSnoozedUntil(t)
     if (snoozedUntil) {
-      return { node: heldMark, tip: popover(t, formatUserSnooze(snoozedUntil, t.snoozePrompt) ?? "Snoozed until a scheduled check") }
+      return { node: parkMark, tip: popover(t, formatUserSnooze(snoozedUntil, t.snoozePrompt) ?? "Snoozed until a scheduled check") }
     }
     // A usage-limit park is the third member of that same "held on the clock" family — frizz resolves
     // this one too, so it reads as an auto-snooze, named by what actually stopped the work.
@@ -825,8 +825,8 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     }
     // Reserve the park mark (hourglass, or GitHub when a watch is riding along) for intentional park
     // states: a durable GitHub review cursor, the thread's own live work, or a VALID scheduled instant.
-    // NO HINT KIND PARKS ON ITS OWN. `human:` and `timer: <instant>` each drew the Held mark from the
-    // worker's assertion alone; both are deleted (2026-08-15) and the server now decides Held from a
+    // NO HINT KIND PARKS ON ITS OWN. `human:` and `timer: <instant>` each drew the Snoozed mark from the
+    // worker's assertion alone; both are deleted (2026-08-15) and the server now decides Snoozed from a
     // checked declaration. What is left to draw is the SHAPE of the wait.
     const hk = t.lastFence.hints.find((h) => h.kind === "pr" || h.kind === "shell" || h.kind === "agent" || h.kind === "timer")?.kind
     // The tooltip's WORDS come from the fence itself (popover → awaitingWaitClause), which names the
@@ -849,7 +849,7 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
   // empty box and never a false check). We don't know the reason — the worker didn't fence — so: no
   // hint gloss (vs an ```awaiting fence, which names what it waits on AND dims + sinks the row). The
   // honest fix is the worker emitting ` ```awaiting ` when it's blocked on a machine.
-  // RESTED AND AWAITING lands here whenever the park is not Held — the fence declared a wait but frizz
+  // RESTED AND AWAITING lands here whenever the park is not Snoozed — the fence declared a wait but frizz
   // could not honour it (an item that is not running, no `for:`), so the row stays in the queue wearing
   // the ordinary at-rest mark. That row is exactly where the worker's own prose earns its place: the
   // glyph says "at rest" and the popover says what it thinks it is waiting for, which is the one thing

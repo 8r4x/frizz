@@ -73,7 +73,7 @@ test("a steered row sorts to the top of the running band, where server truth wil
   assert.deepEqual(orderActive([older, steered]).map((t) => t.id), ["t", "older"])
 })
 
-test("a steered row leaves the dimmed Held band, exactly as a real turn start would", () => {
+test("a steered row leaves the dimmed Snoozed band, exactly as a real turn start would", () => {
   const snoozed = queued({ needsYou: false, pendingQuestion: false, snoozedUntil: new Date(SENT + 6 * 3_600_000).toISOString() })
   assert.equal(isSnoozed(snoozed, SENT + 200), true)
   assert.equal(isSnoozed(optimisticallySteered(snoozed, SENT, SENT + 200), SENT + 200), false)

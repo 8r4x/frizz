@@ -62,7 +62,7 @@ test("a PR fence with a co-declared second item also wears GitHub's mark", () =>
   // This was the `human:`-gate case: the contract of the day told a worker to pair `human:` with
   // `pr-watch:` when a GitHub PR existed, and it was the `human:` hint that parked the thread. Both
   // kinds are retired; what the case still pins is that a fence naming a PR AND something else reaches
-  // Held wearing GitHub's mark, with no snooze at all.
+  // Snoozed wearing GitHub's mark, with no snooze at all.
   const html = row({
     lastFence: {
       kind: "awaiting",

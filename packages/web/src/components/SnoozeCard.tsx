@@ -1,6 +1,6 @@
 // THE SNOOZE, STATED WHERE THE TRANSCRIPT ENDS. A wall-clock snooze (`snoozedUntil`) was legible only
 // on hover — the rail hourglass's popover, the footer's presence glyph, the Wake button's title — so an
-// opened thread said nothing about WHY it was parked in Held or when it would come back (maintainer
+// opened thread said nothing about WHY it was parked in Snoozed or when it would come back (maintainer
 // 2026-08-24: "it doesn't say that it's been snoozed. It doesn't say when the snooze expires"). This
 // card sits at the bottom of the transcript, in the same runtime-status slot as the resting card, and
 // it reads as a COUNTDOWN (same maintainer, same day): the remaining time is the headline, ticking

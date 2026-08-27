@@ -621,7 +621,7 @@ export interface Storage {
   // compaction is an event rather than a deadline and every one of them fires.
   stampRecurringCompactFired(slug: string, armedAt: string, firedAt: string): boolean
   // Clears elapsed PROMPTLESS values atomically and returns the number changed. The board calls this at
-  // each refresh and at its exact wake timer so restart/reload cannot leave a stale Held marker behind.
+  // each refresh and at its exact wake timer so restart/reload cannot leave a stale Snoozed marker behind.
   // A snooze carrying a prompt survives its deadline until the scheduler has delivered its bump.
   clearExpiredSnoozes(now: string): number
   // Persist an EXPLICIT human title and LOCK it against every backend auto-title. The flag flips are

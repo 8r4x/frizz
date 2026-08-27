@@ -25,7 +25,7 @@ if (!url || !home) {
 mkdirSync(outDir, { recursive: true })
 
 // The rail probe, evaluated in page context on every sample. `band` keys on the Active section's one
-// DIRECT-child <hr> (Held/Done each nest theirs inside a wrapper), which is exactly the rule the
+// DIRECT-child <hr> (Snoozed/Done each nest theirs inside a wrapper), which is exactly the rule the
 // Sidebar renders by.
 const PROBE = `(() => {
   const rail = document.querySelector('[data-sidebar-rail]')

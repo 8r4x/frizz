@@ -88,11 +88,11 @@ export const store = proxy({
   // nothing about the dispatch tuple is captured here.
   showGithubPicker: false,
   // Left-sidebar section collapse (true = collapsed). Only Active leads expanded — it is the live
-  // work and has no header to collapse from. Held and Done start collapsed: each is a band
+  // work and has no header to collapse from. Snoozed and Done start collapsed: each is a band
   // whose header count already says how much is parked there, so the rail opens on what is running.
   // Session-scoped UI state (deliberately not persisted).
   // `external` is the External band — the human's own terminals. Collapsed by default like
-  // Held/Done: nothing in it is frizz's work or waiting on the rail's reader, so the count is
+  // Snoozed/Done: nothing in it is frizz's work or waiting on the rail's reader, so the count is
   // the glance.
   sidebarCollapsed: { active: false, snoozed: true, inactive: true, external: true } as Record<"active" | "snoozed" | "inactive" | "external", boolean>,
   // The SIDE-DRAWER STACK — arbitrary depth. `thread` layers are full thread views (the Open-thread
@@ -135,7 +135,7 @@ export const store = proxy({
   // a QUEUED thread already has its full card in the main column, so the URL belongs to that card,
   // not to a drawer over it — and on a cold load the board hasn't arrived, so `needsYou` is unknown.
   // The router parks the slug here and App resolves it the first render the board is authoritative
-  // (see resolveRoutedThread). Held slugs keep the address bar on /thread/<slug> meanwhile.
+  // (see resolveRoutedThread). Snoozed slugs keep the address bar on /thread/<slug> meanwhile.
   routeThreadSlug: null as string | null,
   // Transient bottom-center toast (e.g. "Steer failed …" when an eager reply is rejected). `id` bumps per call so
   // repeat toasts re-trigger the fade. Rendered by <Toaster>; null when nothing is showing.

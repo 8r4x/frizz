@@ -7,19 +7,19 @@
 // covers are the two that get parked anyway: one the human snoozed off the "PR watcher armed" card,
 // and one whose worker co-declared a `human:` gate beside the watch.
 //
-// Sidebar.heldWatch.test.ts pins the glyph on SSR markup; this pins it on the REAL rail, together with
+// Sidebar.snoozedWatch.test.ts pins the glyph on SSR markup; this pins it on the REAL rail, together with
 // the tooltip — which SSR cannot see at all, because Radix mounts the content only once it opens.
 //
-// Run against held-rows-fixture.html on a plain Vite dev server (fixtures are NOT servable through the
+// Run against snoozed-rows-fixture.html on a plain Vite dev server (fixtures are NOT servable through the
 // frizz stack — its Vite runs in middleware mode and falls back to index.html for every unknown path):
 //   (cd packages/web && nubx vite --port 5421 --strictPort)
-//   nub scripts/verify-held-watch-glyph.mjs --url=http://localhost:5421/held-rows-fixture.html
+//   nub scripts/verify-snoozed-watch-glyph.mjs --url=http://localhost:5421/snoozed-rows-fixture.html
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
 
 const args = process.argv.slice(2)
 const opt = (k, d) => { const hit = args.find((a) => a.startsWith(`--${k}=`)); return hit ? hit.slice(k.length + 3) : d }
-const url = opt("url", "http://localhost:5421/held-rows-fixture.html")
+const url = opt("url", "http://localhost:5421/snoozed-rows-fixture.html")
 const shots = opt("shots")
 
 // slug → the mark it must wear, and the fence clause its tooltip must carry. The popover is ONE
@@ -29,10 +29,10 @@ const CASES = [
   // The FIRST line only: frizz's own sentence. A fence's prose — its Markdown body, or a legacy
   // `reason:` — follows as its own paragraph, and this fixture's watch row carries one.
   { slug: "watch-the-resolver-pr", icon: "lucide-github", tip: /^Snoozed until .* — waiting on acme\/app#391\n/ },
-  // The other three Held rows are the control: a timer park, a plain user snooze, and a usage-limit
+  // The other three Snoozed rows are the control: a timer park, a plain user snooze, and a usage-limit
   // park. None of them is watching anything, so none may pick up the PR mark. The timer wears a CLOCK,
   // not the hourglass — the hourglass stopped being the generic park mark when the 2026-08-15 grammar
-  // made every kind name a live thing, and each park has worn its own shape since (Sidebar.heldWatch's
+  // made every kind name a live thing, and each park has worn its own shape since (Sidebar.snoozedWatch's
   // "each park wears its own shape"). This expectation was left behind by that change.
   { slug: "check-in-on-create-prs", icon: "lucide-clock", tip: null },
   { slug: "dependabot-nub-ecosystem", icon: "lucide-hourglass", tip: null },

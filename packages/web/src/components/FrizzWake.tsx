@@ -200,7 +200,7 @@ function TimerDivider({ wake, sourceId }: { wake: TimerWake; sourceId?: string }
 // the expired one, WHICH items are still outstanding — so the item list is the disclosure and the
 // instruction paragraph is dropped, exactly as the timer's agent-facing trailer is.
 // `Hourglass` deliberately, and it is NOT borrowed from the limit-resume line below: the hourglass is
-// already this app's mark for a parked thread — the rail's Held band wears it — so a park ending is
+// already this app's mark for a parked thread — the rail's Snoozed band wears it — so a park ending is
 // exactly what it should draw. The limit line is the one that shares it.
 function ParkDivider({ wake, sourceId }: { wake: ParkWake; sourceId?: string }) {
   const [open, setOpen] = useState(false)

@@ -7,7 +7,7 @@ import { store } from "./store.ts"
 import "./styles.css"
 
 // Browser QA for the BAND a declared park lands in, over the REAL <Sidebar/> and the real
-// sectionThreads — which is what held-rows-fixture cannot show, since that one hands SectionHeader and
+// sectionThreads — which is what snoozed-rows-fixture cannot show, since that one hands SectionHeader and
 // ThreadRow their rows already sorted. Every row here carries `awaitingBackground: true` the way
 // board.ts sets it on a parked ```awaiting fence, because that flag is the whole bug: hasLiveOps read it
 // as "its own dispatched work is still live", which stopped being what it means when a timer park
@@ -22,7 +22,7 @@ import "./styles.css"
 //
 // A is the row that MOVED. B and C are the two OTHER parks the same flag describes, and they are the
 // controls: the carve-out is `parkedOnArmedTimerAlone`, so anything else behind the fence keeps the row
-// out of Held exactly as before.
+// out of Snoozed exactly as before.
 
 // The timer's own instant is computed at load so the wake always sits in the future.
 const fireAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()

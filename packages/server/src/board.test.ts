@@ -866,7 +866,7 @@ test("deriveNeedsYou: manual snooze suppresses every queue reason until its exac
 //
 // This test used to pin the opposite: `human: Alice review` and a future `timer: <instant>` each
 // excused a rest, on the worker's word alone. Both were ways to stall silently. Nothing ever fired a
-// `human:` gate — it parked the thread in Held and waited for the operator to notice. And a `timer:`
+// `human:` gate — it parked the thread in Snoozed and waited for the operator to notice. And a `timer:`
 // was an absolute instant the worker computed: one was published 5h55m in the past, parsed fine, armed
 // nothing, and left its thread parked for 5.5 hours with no wake possible.
 //

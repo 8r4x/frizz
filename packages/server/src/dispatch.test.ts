@@ -354,7 +354,7 @@ test("loadWorkerPrompt: the backend-AGNOSTIC core is present in BOTH contracts",
     assert.match(raw, /## Quality bar/)
     assert.match(raw, /## The stop criterion/)
     // THE CURRENT AWAITING GRAMMAR (2026-08-24): YAML frontmatter, PLURAL keys taking LISTS. `human:` used
-    // to be pinned here; it is deleted, because it parked a thread in Held and nothing ever fired it.
+    // to be pinned here; it is deleted, because it parked a thread in Snoozed and nothing ever fired it.
     // Waiting on a person is a ```question now, and this asserts the contract says so rather than merely
     // omitting the old kind.
     assert.match(c, /shells: \[bzvtnt3ig\]/)

@@ -114,7 +114,7 @@ export function reopenArchivedThreadForFollowUp(
  *
  * This reverses the older rule that a follow-up preserved the park (maintainer 2026-08-03: "reprompting
  * a thread that snoozed should disable the snooze"). That rule read a snooze as a standing display
- * preference — shelve until Friday, and typing into the thread must not drag it out of Held. In practice
+ * preference — shelve until Friday, and typing into the thread must not drag it out of Snoozed. In practice
  * it does the opposite of what the operator wants: the turn you just sent runs in Active, then re-parks
  * the moment it rests, so the ANSWER to your own prompt drops back out of the queue unseen. A park says
  * "not now"; a follow-up says "now", and the later instruction wins.

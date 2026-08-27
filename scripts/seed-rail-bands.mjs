@@ -1,7 +1,7 @@
 // Seed a disposable adhoc stack with SIMULATED workers spread across all three rail bands — Active,
-// Held and Done — so the sidebar's band chrome (the collapse carets, the labels, the counts) can be
+// Snoozed and Done — so the sidebar's band chrome (the collapse carets, the labels, the counts) can be
 // judged in the REAL app rather than in a fixture that draws its own headers. Written 2026-08-04 for
-// the Held-band collapse; reusable for anything that changes how the rail's sections render.
+// the Snoozed-band collapse; reusable for anything that changes how the rail's sections render.
 //
 // Follows the seed-resting-thread.mjs recipe: a broker-runtime session row + a broker liveness record
 // + a JSONL the REAL tailer reads. `claude_runtime='broker'` is what makes deriveRuntime read the
