@@ -46,6 +46,7 @@ import { startTenantPrime, type TenantPrimeRun } from "./tenant-prime.ts"
 import { findProjectBySegment, listProjects } from "./project-registry.ts"
 import { backfillRegistry } from "./project-registry.ts"
 import { servedByAnotherProcess } from "./project-launch.ts"
+import { deleteProjectState, stopProjectWorkers } from "./project-teardown.ts"
 
 export const SERVER_SHUTDOWN_TIMEOUT_MS = 4_000
 export const SERVER_FORCE_EXIT_MS = 5_000
@@ -485,6 +486,26 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
   // the launching project's own context (built before the map is populated) sees the same live list.
   const activeTenants: NonNullable<AppContext["activeTenants"]> = () =>
     tenants.active().map(({ project: open, ctx: openCtx }) => ({ project: open, board: openCtx.board }))
+  /**
+   * Take one project apart while the rest keep serving — the resource half of deleting a project.
+   *
+   * It lives here rather than in the router because the tenant map does, and the ORDER is the reason
+   * it is one function: a worker is stopped through its own tenant's broker, so it has to go before
+   * the tenant closes, and `ui.db` has to be released before the directory holding it is unlinked.
+   *
+   * It refuses the launching project for the reason AppContext.launchProjectId spells out: this
+   * process publishes exactly one `server.lock`, that project's, and the boot phases below own its
+   * teardown. The router refuses it first with a message the operator can act on; this is the backstop.
+   */
+  const teardownProject: NonNullable<AppContext["teardownProject"]> = async (projectId, options) => {
+    if (projectId === project.id) return { closed: false, stoppedWorkers: 0 }
+    const open = tenants.get(projectId)
+    const stoppedWorkers = open && options?.stopWorkers ? await stopProjectWorkers(open) : 0
+    const closed = await tenants.deactivate(projectId)
+    // A project that never opened still has a state directory, so this is not conditional on `closed`.
+    if (options?.deleteState) deleteProjectState(projectId)
+    return { closed, stoppedWorkers }
+  }
   const tenants = createTenantMap<TenantSurfaces>({
     createContext: (contextOptions) => {
       if (contextOptions.project) assertNotServedElsewhere(contextOptions.project)
@@ -492,7 +513,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     },
     // serverLockPath is the LAUNCHING project's: it is the only `server.lock` this process publishes
     // (see "status publication"), so it is the only file a tenant's worker can read the port out of.
-    contextOptions: { claudeBin: opts.claudeBin, serverLockPath: serverLockPathFor(project), activeTenants },
+    contextOptions: { claudeBin: opts.claudeBin, serverLockPath: serverLockPathFor(project), activeTenants, teardownProject, launchProjectId: project.id },
     // Each project's app carries ITS OWN owner proof, so /health stays honest per project rather than
     // answering for whichever one happened to launch the server. The transports are per project for a
     // blunter reason: a socket is a live feed of ONE board, so sharing the launcher's would push its
@@ -783,6 +804,8 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
         project,
         serverLockPath: serverLockPathFor(project),
         activeTenants,
+        teardownProject,
+        launchProjectId: project.id,
         startup: {
           afterPhase: (p) => {
             bootProgress(`context: ${p}`)

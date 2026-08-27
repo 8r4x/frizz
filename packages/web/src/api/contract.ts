@@ -285,6 +285,11 @@ export interface Api {
   // The rail's manual order: the whole list of ids, because the client has just laid the squares out
   // and an index pair would have to be replayed against a server order that may already differ.
   projectsReorder(input: { ids: string[] }): Promise<ProjectCard[]>
+  // Delete a project: Frizz's record of it, never the folder it names. Without `deleteData` this only
+  // forgets the registry entry and closes the project, so adding the folder back restores the same
+  // board; with it, the project's live workers are stopped and everything Frizz holds for it is
+  // removed. The project Frizz is RUNNING from is refused — see the router.
+  projectRemove(input: { id: string; deleteData?: boolean }): Promise<{ removed: boolean; deletedData: boolean; stoppedWorkers: number }>
   // Queue size per OPEN project, keyed by project id — the rail's badges. A project with no board on
   // this server is absent (no honest count without one), which the rail draws as no badge rather than
   // as zero. The server opens every registered project within about a second of boot, so that is a transient
@@ -400,6 +405,7 @@ export const PROCEDURES = {
   projectPick: "mutation",
   projectAdd: "mutation",
   projectsReorder: "mutation",
+  projectRemove: "mutation",
   projectsQueueCounts: "query",
   projectIconPick: "mutation",
   projectIconSet: "mutation",

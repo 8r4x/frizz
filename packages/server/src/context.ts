@@ -177,6 +177,35 @@ export interface AppContext {
    * it. Absent under a test context or a one-project server, which read as "only this project".
    */
   activeTenants?: () => ReadonlyArray<{ project: Project; board: BoardManager }>
+  /**
+   * Take ONE project apart while every other project keeps serving — the resource half of deleting a
+   * project (router `projectRemove`). The registry half is a machine-level index file the router
+   * writes itself, which is why the two are split here rather than done in one place.
+   *
+   * It closes that project's transports, tailer, scheduler, board and storage and drops it from the
+   * tenant map. `stopWorkers` additionally kills its live worker daemons: they are DETACHED by design,
+   * so closing a tenant does not touch one — right for a shutdown, wrong for a delete, where a daemon
+   * left running against a state directory that is about to be unlinked writes into files nobody can
+   * see and can no longer be stopped from a UI whose board is gone. `deleteState` then removes
+   * `~/.frizz/projects/<id>/`, which is everything Frizz holds for it.
+   *
+   * `closed` is false when the project was not open here — which does not stop `deleteState`, since a
+   * project that failed to open still has a state directory. Supplied by the server, which owns the
+   * tenant map; absent under a test context or a one-project server.
+   */
+  teardownProject?: (
+    projectId: string,
+    options?: { stopWorkers?: boolean; deleteState?: boolean },
+  ) => Promise<{ closed: boolean; stoppedWorkers: number }>
+  /**
+   * The project this server was LAUNCHED from, which is the one project it cannot let go of.
+   *
+   * Its `<stateDir>/server.lock` is the only status file this process publishes, and every worker on
+   * the machine resolves the port out of it (`serverLockPathFor`, index.ts) — so removing that project
+   * is not one card disappearing, it is every live worker losing the server. Undefined under a test
+   * context, where there is no launcher to protect.
+   */
+  launchProjectId?: string
   // GitHub detection (installed/inRepo/nameWithOwner) resolved ONCE at boot via initGithub() — stable
   // for the process lifetime. `authed` is NOT cached here; the githubStatus query re-checks it live so
   // a mid-session `gh auth login` reflects immediately. Undefined until initGithub() resolves (the
@@ -214,6 +243,10 @@ export interface ContextOptions {
   serverLockPath?: string
   /** See AppContext.activeTenants — supplied by the server, which owns the tenant map. */
   activeTenants?: AppContext["activeTenants"]
+  /** See AppContext.teardownProject — supplied by the server, which owns the tenant map. */
+  teardownProject?: AppContext["teardownProject"]
+  /** See AppContext.launchProjectId — supplied by the server, which knows which project launched it. */
+  launchProjectId?: string
   /** Internal deterministic construction/rollback seam. */
   startup?: {
     afterPhase?: (phase: ContextStartupPhase) => void
@@ -1014,6 +1047,8 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     setDispatchPreference: (update, codexModels) =>
       setDispatchPreference(storage, getSettings(storage, home), home, update, codexModels),
     activeTenants: opts.activeTenants,
+    teardownProject: opts.teardownProject,
+    launchProjectId: opts.launchProjectId,
     claudeBin: opts.claudeBin,
     codexBin: opts.codexBin,
     loginUtility: createLoginUtility({ claudeBin: opts.claudeBin, codexBin: opts.codexBin, cwd: project.dir }),

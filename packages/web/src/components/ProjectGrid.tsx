@@ -10,15 +10,17 @@
 // deliberately shows only what the index holds. (The server does open them all in the background about
 // a second after boot — server/tenant-prime.ts — but on its own clock, never on a request's.)
 import * as RadixDialog from "@radix-ui/react-dialog"
+import * as RadixDropdown from "@radix-ui/react-dropdown-menu"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { useEffect, useState } from "react"
-import { ImagePlus } from "lucide-react"
+import { useEffect, useState, type ReactNode } from "react"
+import { Ellipsis, ImagePlus, Loader2 } from "lucide-react"
 import { Link, useNavigate } from "react-router"
 import type { ProjectCard } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { relativeAge } from "../lib/activityTime.ts"
 import { projectHref } from "../lib/base-path.ts"
 import { showToast } from "../store.ts"
+import { Dialog } from "./ui/Dialog.tsx"
 import { ProjectIconMenu, ProjectSquare } from "./ProjectRail.tsx"
 
 /**
@@ -47,6 +49,7 @@ const CARD_ICON = 38
 
 function Card({ project, home }: { project: ProjectCard; home: string | undefined }) {
   const opened = relativeAge(project.lastOpenedAt)
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
   return (
     // A relatively-positioned WRAPPER, not a bordered card of its own: the icon menu's trigger has to
     // sit OUTSIDE the <a> (a button nested in a link is invalid, and clicking it would navigate), so
@@ -57,7 +60,12 @@ function Card({ project, home }: { project: ProjectCard; home: string | undefine
     <div className="group/card relative">
       <Link
         to={projectHref(project.slug)}
-        className={`${CARD_BASE} ${MOBILE_ROW} flex-row items-center gap-3 border-border bg-panel group-hover/card:border-border-strong group-hover/card:bg-panel-2 ${
+        // `pr-10` overrides CARD_BASE's `px-4` on the right only, and it is reserved UNCONDITIONALLY
+        // rather than on hover: the overflow trigger sits over that strip, and three truncating lines
+        // that reflow the moment the pointer arrives read as the card flinching away from it. 40 is the
+        // trigger's own 36px footprint (28px box, 8px from the edge) plus 4px, so the truncated text
+        // never runs up against a box it cannot see.
+        className={`${CARD_BASE} ${MOBILE_ROW} flex-row items-center gap-3 border-border bg-panel pr-10 group-hover/card:border-border-strong group-hover/card:bg-panel-2 ${
           project.stale ? "opacity-60" : ""
         }`}
       >
@@ -109,7 +117,166 @@ function Card({ project, home }: { project: ProjectCard; home: string | undefine
           <ImagePlus size={16} strokeWidth={1.75} />
         </button>
       </ProjectIconMenu>
+      {/* THE OVERFLOW MENU — everything you can do to a project that is not "change its picture", which
+          has its own control on the square. It sits OUTSIDE the <a> for the same reason that one does:
+          a button nested in a link is invalid, and clicking it would navigate.
+          THE OFFSET IS INK, NOT BOX. The card's left inset is 17px — its 1px border plus `px-4` — and
+          the square is a filled tile whose ink IS its box, so that is what the eye reads there. The
+          ellipsis paints only 10 of the 15px glyph it draws at, centred in a 28px hit area, which is
+          9px of dead space a side (measured 2026-08-26). 8 + 9 = the same 17, so the two ends of the
+          card balance; `right-[5px]` had put it at 14 and the mark read as crowding the border. The
+          phone row (MOBILE_ROW) drops the side borders, so its inset is 16 and this is 7.
+          It is revealed by the CARD's hover rather than its own, because a control nobody can see until
+          they happen to cross nine pixels of empty box is a control nobody finds. */}
+      <ProjectMenu onDelete={() => setConfirmingDelete(true)}>
+        <button
+          type="button"
+          aria-label={`More actions for ${project.name}`}
+          className="absolute right-[8px] top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-muted opacity-0 outline-none transition-opacity hover:bg-panel-2 hover:text-fg focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-fg/60 group-hover/card:opacity-100 data-[state=open]:opacity-100 max-[700px]:right-[7px] max-[700px]:opacity-100"
+        >
+          <Ellipsis size={15} />
+        </button>
+      </ProjectMenu>
+      {confirmingDelete ? (
+        <DeleteProjectDialog project={project} home={home} onClose={() => setConfirmingDelete(false)} />
+      ) : null}
     </div>
+  )
+}
+
+/**
+ * A project's own menu. One item today, and the place the next one goes.
+ *
+ * Deliberately NOT folded into the icon menu: that menu's trigger is an image glyph laid over the
+ * project's square and labelled "change the icon", and hanging a delete off it would make the one
+ * irreversible action in this page reachable from a control that says it changes a picture.
+ *
+ * The item does NOT name the project, even though naming it would read better: a name here is a
+ * directory basename of any length, and this content has a min width and no max, so a long one would
+ * stretch the menu past the card it is anchored to. The card is the subject and the confirmation names
+ * it in full, so nothing is lost by leaving it out.
+ */
+function ProjectMenu({
+  onDelete,
+  children,
+}: {
+  onDelete: () => void
+  children: ReactNode
+}) {
+  return (
+    <RadixDropdown.Root>
+      <RadixDropdown.Trigger asChild>{children}</RadixDropdown.Trigger>
+      <RadixDropdown.Portal>
+        <RadixDropdown.Content
+          align="end"
+          sideOffset={6}
+          className="z-[220] min-w-[170px] rounded-lg border border-border bg-panel p-1 shadow-xl shadow-black/40"
+        >
+          <RadixDropdown.Item
+            className="cursor-default rounded px-2 py-1.5 text-[12.5px] text-red-400 outline-none data-[highlighted]:bg-red-500/10 data-[highlighted]:text-red-300"
+            onSelect={onDelete}
+          >
+            Delete project…
+          </RadixDropdown.Item>
+        </RadixDropdown.Content>
+      </RadixDropdown.Portal>
+    </RadixDropdown.Root>
+  )
+}
+
+/**
+ * The confirmation, and the one place the two levels of "delete" are spelled out.
+ *
+ * THE FOLDER IS NEVER TOUCHED, and saying so is the dialog's first job: "delete" beside a card that
+ * shows a path reads as "delete that directory" until something says otherwise. The second job is the
+ * checkbox, which is the whole difference between an act that is undone by adding the folder again and
+ * one that is not undone at all.
+ */
+function DeleteProjectDialog({
+  project,
+  home,
+  onClose,
+}: {
+  project: ProjectCard
+  home: string | undefined
+  onClose: () => void
+}) {
+  const [deleteData, setDeleteData] = useState(false)
+  const queryClient = useQueryClient()
+  const remove = useMutation({
+    mutationFn: () => rpc.projectRemove({ id: project.id, deleteData }),
+    onSuccess: (result) => {
+      void queryClient.invalidateQueries({ queryKey: ["projectsList"] })
+      // The worker count is the part the operator could not have known they were asking for, so it is
+      // reported rather than folded into a generic success.
+      showToast(
+        result.stoppedWorkers > 0
+          ? `Deleted ${project.name} — ${result.stoppedWorkers} ${result.stoppedWorkers === 1 ? "worker" : "workers"} stopped`
+          : `Deleted ${project.name}`,
+      )
+      onClose()
+    },
+  })
+  const error = remove.error instanceof Error ? remove.error.message : remove.error ? String(remove.error) : null
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => { if (!open && !remove.isPending) onClose() }}
+      title={`Delete ${project.name}?`}
+      className="w-[440px] max-w-[92vw]"
+      footer={
+        <>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={remove.isPending}
+            className="rounded-md px-3 py-1.5 text-[12px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-45"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => remove.mutate()}
+            disabled={remove.isPending}
+            className="flex items-center gap-1.5 rounded-md bg-red-500/90 px-3 py-1.5 text-[12.5px] font-medium text-white outline-none transition-opacity hover:opacity-90 disabled:opacity-60"
+          >
+            {remove.isPending && <Loader2 size={12} className="animate-spin" />}
+            {deleteData ? "Delete project and threads" : "Delete project"}
+          </button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-3 p-4 text-[12.5px] leading-relaxed text-muted">
+        <p>
+          Frizz forgets this project. The folder itself is not touched — nothing inside{" "}
+          <span className="font-mono text-[11.5px] text-fg/80">{shortPath(project.path, home)}</span> is
+          changed or removed.
+        </p>
+        <label className="flex cursor-pointer items-start gap-2 rounded-md border border-border bg-bg/30 px-2.5 py-2 text-fg/85">
+          <input
+            type="checkbox"
+            checked={deleteData}
+            onChange={(event) => setDeleteData(event.target.checked)}
+            // `mt-[3px]` sets the 13px box on the first line's CAP BAND rather than its line box — the
+            // same ink-over-box correction every mark beside text here gets. Measured 2026-08-26
+            // against a `1cap` probe on the label's own baseline, with the inline body font cleared so
+            // both settings are really exercised: 0.48px low in mono, 0.10px high in sans. Both are
+            // inside the instrument's ±0.75px floor, so there is nothing left to correct.
+            className="mt-[3px] accent-[var(--color-accent)]"
+          />
+          <span className="flex flex-col gap-0.5">
+            <span>Also delete its threads and history</span>
+            <span className="text-[11.5px] text-muted/80">
+              {deleteData
+                ? "Everything Frizz has stored for this project, and any workers still running are stopped. This cannot be undone."
+                : "Left off, its threads are kept — adding the folder again brings the board back."}
+            </span>
+          </span>
+        </label>
+        {error ? <p className="text-[11.5px] text-red-400">{error}</p> : null}
+      </div>
+    </Dialog>
   )
 }
 

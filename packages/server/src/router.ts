@@ -150,7 +150,7 @@ import type { SessionTelemetry } from "./tailer.ts"
 import { providerResumeCommand } from "./external-terminal.ts"
 import { backgroundShellLineCount, readBackgroundShellOutput } from "./background-shell-output.ts"
 import { projectRetiredBackgroundOps, retiredOpsFor } from "./transcript.ts"
-import { clearProjectIcon, customIconPath, ICON_SCAN_VERSION, listProjects, reorderProjects, setProjectIcon, type RegistryEntry } from "./project-registry.ts"
+import { clearProjectIcon, customIconPath, findById, forgetProject, ICON_SCAN_VERSION, listProjects, reorderProjects, setProjectIcon, type RegistryEntry } from "./project-registry.ts"
 import { basename, dirname } from "node:path"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { ProjectCard, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread } from "@frizz/shared"
@@ -3168,6 +3168,58 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         reorderProjects(input.ids)
         return listProjects().map((entry) => projectCard(entry, entry.stale))
+      },
+    }),
+
+    /**
+     * Delete a project — Frizz's record of it, never the folder it names.
+     *
+     * TWO LEVELS, and the difference is the whole design. The default forgets the registry entry and
+     * closes the tenant: the project leaves the grid and the rail, and everything it ever held is
+     * still sitting in `~/.frizz/projects/<id>/`, so adding the folder back restores the same board
+     * under the same id. `deleteData` is the irreversible one — it stops that project's live workers
+     * and removes that directory.
+     *
+     * WHAT IS NEVER TOUCHED is the project's own directory. Not its files, not its `.frizz/.id`.
+     * Frizz is an index over folders somebody else owns, and a "delete" that reached into a working
+     * tree would be a different product.
+     *
+     * THE LAUNCHING PROJECT IS REFUSED. This process publishes exactly one `server.lock` — that
+     * project's — and it is the address every worker daemon on the machine resolves the port out of
+     * (see AppContext.launchProjectId). Deleting it is not one card disappearing; it is every live
+     * worker losing the server. Forgetting it without deleting anything is refused for a smaller but
+     * still real reason: the tenant cannot be closed independently of the boot phases that own it, so
+     * the project would keep tailing, keep firing its timers and keep serving its board while the grid
+     * insisted it did not exist.
+     *
+     * Idempotent: an id the registry has already forgotten reports `removed: false` rather than
+     * failing, so a double-click and a stale tab both land softly.
+     */
+    projectRemove: mutation({
+      input: z.object({ id: z.string().min(1), deleteData: z.boolean().optional() }).strict(),
+      output: z.object({
+        removed: z.boolean(),
+        deletedData: z.boolean(),
+        /** Live worker daemons this actually killed — 0 unless `deleteData`. Reported, not guessed at. */
+        stoppedWorkers: z.number().int().nonnegative(),
+      }),
+      handler: async ({ input }) => {
+        const entry = findById(input.id)
+        if (!entry) return { removed: false, deletedData: false, stoppedWorkers: 0 }
+        // The message deliberately does NOT name the project: the confirmation's title already does,
+        // and naming it here reads "Frizz is running from frizz" in this very repository.
+        if (ctx.launchProjectId === entry.id) {
+          throw new Error("Frizz is serving from this project, so it cannot be deleted. Restart Frizz from another folder first.")
+        }
+        const deleteData = input.deleteData === true
+        // The resources go FIRST and in one call, because their order matters and the server owns it:
+        // a worker is stopped through its own tenant's broker, and `ui.db` is released before the
+        // directory holding it is unlinked (see AppContext.teardownProject).
+        const { stoppedWorkers } = (await ctx.teardownProject?.(entry.id, { stopWorkers: deleteData, deleteState: deleteData }))
+          ?? { closed: false, stoppedWorkers: 0 }
+        // The registry entry goes LAST, and deliberately: it is how anything finds this project again,
+        // so dropping it first would strand whatever the teardown above missed.
+        return { removed: forgetProject(entry.id), deletedData: deleteData, stoppedWorkers }
       },
     }),
 
