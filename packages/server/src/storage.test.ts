@@ -1087,6 +1087,62 @@ test("opening a database adopts a pre-rebrand thread_name, and leaves a current 
   }
 })
 
+// A database that ran the RETIRED thread_watch build (2026-08-14) carries an orphan table of that
+// shape. CREATE TABLE IF NOT EXISTS does not reshape it, so the index on (state, expires_at) threw
+// "no such column: expires_at" and createStorage never returned -- seven of the fifty-four project
+// databases on the maintainer's machine could not open at all. Opening IS the migration.
+test("opening a database drops a pre-retirement thread_watch, and leaves a current one alone", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-legacy-watch-"))
+  const path = join(dir, "ui.db")
+  try {
+    // The retired table, byte-for-byte as the 2026-08-14 build wrote it: different kinds, different
+    // states, a foreground column, and no expiry.
+    const raw = new Database(path)
+    raw.exec(`
+      CREATE TABLE thread_watch (
+        id          TEXT PRIMARY KEY,
+        thread_slug TEXT NOT NULL,
+        kind        TEXT NOT NULL CHECK (kind IN ('pr', 'ci', 'shell')),
+        target      TEXT NOT NULL,
+        state       TEXT NOT NULL CHECK (state IN ('armed', 'fired', 'dropped')),
+        created_at  INTEGER NOT NULL,
+        settled_at  INTEGER,
+        cursor      TEXT,
+        foreground  INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX thread_watch_armed ON thread_watch(state, kind);
+      CREATE INDEX thread_watch_slug ON thread_watch(thread_slug, state, created_at);
+      INSERT INTO thread_watch (id, thread_slug, kind, target, state, created_at)
+        VALUES ('old_1', 't', 'pr', 'owner/repo#1', 'fired', 1),
+               ('old_2', 't', 'shell', 'abc', 'dropped', 2);
+    `)
+    raw.close()
+
+    // Before the migration this threw rather than returning a store.
+    const upgraded = createStorage(path)
+    try {
+      const at = 1_700_000_000_000
+      const armed = upgraded.armThreadWatch({ id: "wch_1", slug: "t", kind: "agent", target: "abc", createdAtMs: at, expiresAtMs: at + 3600_000 })
+      assert.equal(armed.expires_at, at + 3600_000, "the returned table's required expiry is writable")
+      // 'agent' is a kind the retired CHECK constraint rejected, so this also proves the table is the
+      // new one rather than an orphan that merely gained a column.
+      assert.deepEqual(upgraded.listThreadWatches("t", { armedOnly: true }).map((w) => w.id), ["wch_1"])
+    } finally {
+      upgraded.close()
+    }
+
+    // Idempotent: the second open finds the current shape and leaves its rows alone.
+    const restarted = createStorage(path)
+    try {
+      assert.deepEqual(restarted.listThreadWatches("t", { armedOnly: true }).map((w) => w.id), ["wch_1"])
+    } finally {
+      restarted.close()
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 // ---- thread_watch: a worker's registered wait on its own running work (2026-08-26) ----
 //
 // The registry that was retired on 2026-08-14 and is coming back for the reason its own retirement note

@@ -808,6 +808,34 @@ export function createStorage(dbPath: string): Storage {
   db.pragma("busy_timeout = 5000")
   db.pragma("journal_mode = WAL")
 
+  // THE ORPHAN TABLE THAT OUTLIVED ITS OWN RETIREMENT NOTE (2026-08-27). thread_watch was retired on
+  // 2026-08-14 under the note kept below in the schema: "An old DB keeps the orphan table, which costs
+  // nothing and is safer than a migration to remove it." That was true for exactly as long as nothing
+  // reused the name. 818eeeb3 brought the table back with a DIFFERENT shape, and CREATE TABLE IF NOT
+  // EXISTS does not reshape a table that already exists -- so on any database that had run the retired
+  // build, the orphan survived the upgrade and the next statement in the schema block, the index on
+  // (state, expires_at), threw "no such column: expires_at".
+  //
+  // That is a STARTUP ABORT, not a degraded feature: createStorage throws, the control plane exits
+  // before ready, and the launcher reports only "Frizz did not become healthy". Seven of the fifty-four
+  // project databases on the maintainer's own machine could not open at all.
+  //
+  // DROPPED rather than rebuilt, because the shapes do not reconcile and no live state is lost. The old
+  // kinds ('pr', 'ci', 'shell') and states ('armed', 'fired', 'dropped') are not the new table's, so a
+  // preserved row could not satisfy its CHECK constraints; the required expires_at has no honest value
+  // to backfill; and nothing has read these rows since the day the feature was retired. Every row that
+  // survived on this machine was already terminal ('fired' or 'dropped') -- there was no armed wait
+  // anywhere to lose.
+  //
+  // FIRST, above the schema block, unlike the additive migrations below it: the statement that fails is
+  // INSIDE that block. Guarded on the missing column rather than on a version, so it fires exactly once
+  // per database, no-ops on a table that already has the column, and no-ops on a fresh database whose
+  // PRAGMA returns no rows at all.
+  const legacyWatchColumns = db.prepare("PRAGMA table_info(thread_watch)").all() as Array<{ name: string }>
+  if (legacyWatchColumns.length > 0 && !legacyWatchColumns.some((c) => c.name === "expires_at")) {
+    db.exec("DROP TABLE thread_watch")
+  }
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS session (
       slug        TEXT PRIMARY KEY,
@@ -953,7 +981,9 @@ export function createStorage(dbPath: string): Storage {
       state       TEXT NOT NULL CHECK (state IN ('armed', 'dropped', 'expired', 'settled')),
       created_at  INTEGER NOT NULL,
       -- REQUIRED at registration, unlike pr_watch's, which is nullable only to read an older row. There
-      -- are no older rows here.
+      -- are no older ROWS here -- but there was an older TABLE, which is not the same thing and cost a
+      -- startup abort to learn (2026-08-27). A NOT NULL column cannot be added to it by ALTER, so the
+      -- legacy table is dropped at the top of createStorage, before this block runs.
       expires_at  INTEGER NOT NULL,
       settled_at  INTEGER
     );
@@ -1024,8 +1054,13 @@ export function createStorage(dbPath: string): Storage {
     -- awaiting fence again, which is BOTH the park and the wake -- the scheduler matches the name against
     -- the thread's live shells and its retired-shell ring, so nothing needs registering and nothing can
     -- outlive the fence that declares it. The registry existed because a fence had no identity to drop;
-    -- the answer turned out to be that a park nobody has to drop needs none. An old DB keeps the orphan
-    -- table, which costs nothing and is safer than a migration to remove it.
+    -- the answer turned out to be that a park nobody has to drop needs none.
+    --
+    -- This note used to end "an old DB keeps the orphan table, which costs nothing and is safer than a
+    -- migration to remove it", and that was the sentence the 2026-08-27 startup abort was hiding behind:
+    -- it costs nothing only while nothing reuses the name, and the table came BACK. The drop that the
+    -- note talked the reader out of now runs at the top of createStorage. Retiring a table, not just a
+    -- column, is what leaves this trap behind -- an orphan is free until the name is claimed again.
     -- (No backticks in this comment: the whole schema is a template literal.)
   `)
   // THE COLUMN THAT OUTLIVED THE MULTIPLEXER (2026-08-19). This held the thread identity string
