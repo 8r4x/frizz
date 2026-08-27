@@ -2639,29 +2639,22 @@ export function createTailer(deps: TailerDeps): Tailer {
   // SUBAGENT_STALE_MS without an append (or no longer stats) — a liveness fallback for a completion we
   // missed. Before the path resolves (fresh dispatch) it stays "running" — it's just starting up.
   //
-  // KNOWN HOLE, deliberately left as-is (audited 2026-08-02). `outputFile` is parsed out of the launch
+  // THE ACK IS NOT THE ONLY WAY TO FIND THE FILE (2026-08-26). `outputFile` is parsed out of the launch
   // ack's PROSE (launchOutputFile), so a harness wording change silently un-resolves it — and with no
-  // path this returns false on EVERY clock, so such an entry can never go stale at all. That is
+  // path this returned false on EVERY clock, so such an entry could never go stale at all. That was
   // unbounded, and a child reading "running" forever also excuses its thread from the queue forever
-  // (board.ts hasLiveOwnWork). Measured across this machine's whole corpus: 61 of 4068 kept-alive
-  // dispatches (1.50%) resolved no output file, every one a `Spawned successfully … agent_id:
-  // <name>@<session>` mailbox ack whose key is snake_case where this parser reads `agentId:` — and all
-  // 61 sit in six session files last written 2026-07-08..13, so the shape is not in current use.
-  // Timing out on the DISPATCH instant instead was tried and reverted: it regresses
-  // tailer.descendants.test.ts, whose fixtures encode the case this would break — a direct child with no
-  // ack-named path whose own `subagents/agent-<id>.jsonl` IS being appended to, and which is therefore
-  // genuinely running. The right fix resolves the path from the SIDECAR INDEX (which already maps
-  // toolUseId → transcript for exactly these rows) rather than putting a clock on the dispatch; that is
-  // a liveness-resolution change worth doing on its own, with a live case to validate against.
+  // (board.ts hasLiveOwnWork). Measured across this machine's whole corpus when the hole was audited
+  // (2026-08-02): 61 of 4068 kept-alive dispatches (1.50%) resolved no output file, every one a
+  // `Spawned successfully … agent_id: <name>@<session>` mailbox ack whose key is snake_case where this
+  // parser reads `agentId:` — and all 61 sat in six session files last written 2026-07-08..13.
   //
-  // THE HOLE IS CLOSED (2026-08-26). The paragraph above described `outputFile` failing to resolve as
-  // unbounded — no path, no clock, so such a child could never go stale and parked its thread forever
-  // (board.hasLiveOwnWork). The fix is the one this comment already named: fall back to the SIDECAR
-  // INDEX, which maps dispatch tool_use id → the descendant's own `agent-<id>.jsonl` and is the same
-  // index the drawer and `subAgentDescendantTasks` already resolve through. Putting a clock on the
-  // DISPATCH instant instead stays wrong for the reason recorded above, and the case that reverted it —
-  // a direct child with no ack-named path whose own transcript IS being appended to — now resolves to
-  // that transcript and reads as running, which is what it is.
+  // So the path now falls back to the SIDECAR INDEX, which maps dispatch tool_use id → the descendant's
+  // own `agent-<id>.jsonl` and is the same index the drawer and `subAgentDescendantTasks` already
+  // resolve through. That was the fix this comment named while the hole stood, and it is the reason the
+  // OTHER candidate — a clock on the DISPATCH instant — was tried and reverted: it regresses
+  // tailer.descendants.test.ts, whose fixtures encode the case it breaks, a direct child with no
+  // ack-named path whose own transcript IS being appended to and which is therefore genuinely running.
+  // Through the sidecar that child resolves to its transcript and reads as running, which is what it is.
   //
   // Still biased to "running": a child whose path resolves nowhere at all keeps the old behaviour and
   // is never called stale on a guess. This only ever ADDS a clock where there was none.

@@ -11,7 +11,7 @@
 // states it plainly). This path may add resolutions; it may never invent one.
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createStorage } from "./storage.ts"
@@ -614,5 +614,47 @@ test("descendants: a sub-agent tree stranded in the PRE-RENAME bucket still reso
     assert.equal(f.tailer.subAgent(SLUG, "toolu_nobody"), undefined, "an id no sidecar claims still resolves to nothing")
   } finally {
     cleanup({ ...f, dir: f.root })
+  }
+})
+
+// ---- A DIRECT CHILD WITH NO ACK-NAMED PATH STILL HAS A CLOCK (2026-08-26) ----
+//
+// `outputFile` is parsed out of the launch ack's PROSE (launchOutputFile), so a harness wording change
+// silently un-resolves it — and `entryStale` used to return false on EVERY clock without one, meaning
+// such a child could never go stale and parked its thread forever (board.hasLiveOwnWork). Audited
+// 2026-08-02 and left in place; measured at 61 of 4068 dispatches (1.50%).
+//
+// The comment that recorded the hole also named the fix, and this is it: fall back to the SIDECAR INDEX,
+// which maps the dispatch tool_use id to the descendant's own `agent-<id>.jsonl`. This fixture is the
+// exact shape — its transcript dispatches `toolu_child` with no ack at all, so `outputFile` is unset and
+// the sidecar is the only thing that can place the file.
+//
+// It is also the case that reverted the OTHER candidate fix (a clock on the dispatch instant): a direct
+// child with no ack-named path whose own transcript IS being appended to is genuinely running, and must
+// keep reading that way. Both halves are asserted here.
+test("a direct child with no ack-named outputFile goes stale off its sidecar transcript, and stays running while that transcript is fresh", () => {
+  const f = fixture()
+  try {
+    const child = () => f.tailer.get(SLUG)?.subAgents.find((v) => v.id === "toolu_child")
+    // The transcript this fixture just wrote is seconds old, so the child is running — and the reading
+    // comes from the sidecar path, since nothing ever gave this dispatch an outputFile.
+    assert.equal(f.tailer.subAgent(SLUG, "toolu_child")?.outputFile, undefined, "the fixture's dispatch carries no launch ack")
+    assert.equal(child()?.state, "running", "a freshly-written child transcript reads as running")
+    assert.ok(child()?.lastActivityAt, "…and its last-activity instant resolves off the same path")
+
+    // Age the child's own transcript past SUBAGENT_STALE_MS. Before the sidecar fallback this changed
+    // nothing at all: with no path there was no clock, and the row read "running" forever.
+    const aged = new Date(Date.now() - 20 * 60_000)
+    utimesSync(join(f.subagents, "agent-aChild.jsonl"), aged, aged)
+    f.tailer.tick()
+    assert.equal(child()?.state, "stale", "20 minutes without an append is stale, via the sidecar path")
+
+    // This path may add a clock; it may never invent one. A child whose sidecar names no transcript at
+    // all keeps the old, deliberately-biased-to-running behaviour.
+    rmSync(join(f.subagents, "agent-aChild.meta.json"))
+    f.tailer.tick()
+    assert.equal(child()?.state, "running", "no sidecar, no clock — never stale on a guess")
+  } finally {
+    cleanup(f)
   }
 })
