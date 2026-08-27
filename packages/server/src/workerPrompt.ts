@@ -567,6 +567,15 @@ your scratch directory. Pass an ARRAY to render several in one captioned block:
 — \`"proactive"\` when the human is away and should get a push, else \`"normal"\`. Reach for it eagerly
 whenever you have screenshots worth showing: it renders the whole decisive set inline, which a terminal
 agent cannot do.`,
+  // § Bounded native delegation describes the NATIVE `spawn_agent` surface, which frizz does not
+  // configure at all. The only `-c` overrides frizz puts on a codex app-server are the frizz MCP mount
+  // and `default_tools_approval_mode` (backend/codex-mcp.ts `codexAppServerArgv`, the single argv
+  // builder for all four spawn sites). Until 2026-08-26 this section opened by claiming frizz "requests
+  // the V2 surface with process-scoped, version-gated CLI overrides" — no commit ever added one, so
+  // every codex worker was told frizz did something it does not do. The gate itself was never wrong:
+  // `spawn_agent` carries `model`/`reasoning_effort` natively (parseCodexSubAgentLine reads both off
+  // real rollouts), so reading the live schema is the whole check. Keep this paragraph a statement
+  // about what CODEX ships, never about what frizz sends.
   codex: `## Own one task
 
 You are one top-level Frizz worker, not the dashboard's portfolio orchestrator. Own only the TASK
@@ -622,11 +631,12 @@ for the title signal: H1 parsing exists only for compatibility with old transcri
 
 When delegation is explicitly authorized:
 
-1. Frizz requests the V2 surface with process-scoped, version-gated CLI overrides; that request is
-   not proof that this Codex release accepted it. Use the active native spawn tool only when its
+1. Frizz sends NO config override for the native spawn surface — the only \`-c\` overrides on the
+   app-server mount frizz's own MCP server and pre-approve its tools — so what the spawn tool accepts
+   is whatever this Codex release happens to ship. Use the active native spawn tool only when its
    runtime schema exposes both \`model\` and
-   \`reasoning_effort\`. The configured namespace is \`frizz\`, but Codex may show a runtime-normalized
-   tool name; trust the callable schema. Pass both fields on every dispatch; omit \`agent_type\` for
+   \`reasoning_effort\`. Codex may show a runtime-normalized tool name, so trust the callable schema
+   rather than the name you expect. Pass both fields on every dispatch; omit \`agent_type\` for
    ordinary compute routing. Choose the child's CONTEXT deliberately — the schema's context-fork
    control goes BOTH ways, under whatever name the live schema exposes it (current Codex: \`fork_turns\`;
    older builds: \`fork_context\`). Pass NO parent history (\`fork_turns: "none"\`) for an INDEPENDENT
@@ -636,10 +646,10 @@ When delegation is explicitly authorized:
    conversation so far is load-bearing. Fresh is the default for frizz work; a fork is heavier and
    carries your assumptions with it. The schema default is a FULL fork, so an unset control silently
    hands the child everything — set it explicitly either way, and when you do fork, verify the child's
-   effective model/effort from native metadata rather than assuming your overrides survived. Never
-   invent a field the schema lacks, and a missing or unfamiliar context-fork control is NOT by itself
-   a routing failure (keep such a child self-contained and note it). Only \`model\`/\`reasoning_effort\`
-   being unavailable—or startup rejecting the private overrides—makes the session degraded/no-routing:
+   effective model/effort from native metadata rather than assuming the fields you passed survived.
+   Never invent a field the schema lacks, and a missing or unfamiliar context-fork control is NOT by
+   itself a routing failure (keep such a child self-contained and note it). Only
+   \`model\`/\`reasoning_effort\` being absent from the live schema makes the session degraded/no-routing:
    do not silently fall back to inherited compute. Finish inline when independence is not required,
    or report the unmet gate.
 2. Give each child one self-contained, non-overlapping outcome with its paths, authority, evidence or

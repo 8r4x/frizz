@@ -288,7 +288,13 @@ test("loadWorkerPrompt(codex) carries codex's OWN session/wake + model/effort/sa
   assert.match(c, /persistent `exec_command` \/ `write_stdin` session/)
   assert.match(c, /Luna child is optional\nonly/)
   assert.match(c, /active native spawn tool/)
-  assert.match(c, /configured namespace is `frizz`/)
+  // Frizz mounts an MCP server and pre-approves its tools; it sends NO override for the native spawn
+  // surface. The prompt said the opposite until 2026-08-26 — it told every codex worker that frizz
+  // "requests the V2 surface with process-scoped, version-gated CLI overrides", and no commit ever
+  // added such an override (codexAppServerArgv is the single argv builder for all four spawn sites and
+  // pushes only the two `-c` values named here). Pin the disclaimer so the false premise cannot return.
+  assert.match(c, /Frizz sends NO config override for the native spawn surface/)
+  assert.match(c, /trust the callable schema/)
   assert.match(c, /context-fork control/)
   // Both directions must be teachable: fresh for clean-room/adversarial, fork when the child
   // genuinely continues the parent's reasoning. An unset control silently forks EVERYTHING.
