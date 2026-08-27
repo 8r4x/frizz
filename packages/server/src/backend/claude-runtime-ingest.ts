@@ -133,11 +133,19 @@ export interface ClaudeRuntimeIngest {
    */
   tasks(sessionId: string): readonly ClaudeRuntimeTask[]
   /**
-   * The context SIZE of the model this session is running, as the SDK reported it. Undefined until the
-   * session's first turn ENDS (the window rides `result` and nothing earlier), and undefined forever
-   * for a pre-broker/foreign row that has no broker at all. The numerator comes off disk on every assistant
-   * record, so this is the half that decides whether a Claude row has a readout — and an undefined
-   * here must render nothing, never a fabricated denominator.
+   * The context SIZE of the model this session is running. Undefined forever for a pre-broker/foreign
+   * row that has no broker at all. The numerator comes off disk on every assistant record, so this is
+   * the half that decides whether a Claude row has a readout — and an undefined here must render
+   * nothing, never a fabricated denominator.
+   *
+   * A SESSION'S OWN READING ARRIVES ONLY WHEN ITS FIRST TURN ENDS, because the window rides `result`
+   * and nothing earlier says it (see ClaudeResultEvent.modelContextWindows — not `init`, not the
+   * control-initialize capability list). That left every freshly dispatched thread with no readout for
+   * the whole of its first turn, which is exactly the thread an operator opens (maintainer 2026-08-26:
+   * "the context breakdown is often not visible in the drawer view, which I find quite odd"). So a
+   * session with no reading of its own BORROWS the window this process last saw for its own model
+   * alias — see `modelWindows`. Not a hardcoded table and not a guess: it is a number the provider
+   * reported, for this alias, on this account, and the session's own `result` overwrites it.
    */
   contextWindow(sessionId: string): number | undefined
   /** Forget a session (replaced or deleted) so a later same-slug dispatch starts clean. */
@@ -193,6 +201,16 @@ export function createClaudeRuntimeIngest(deps: ClaudeRuntimeIngestDeps): Claude
   // `claude-opus-5` are different windows under the same canonical model.
   const sessionModel = new Map<string, string>()
   const contextWindows = new Map<string, number>() // keyed by session id; the main model's window
+  // The window each model ALIAS was last seen to report, from any session in this process. It is what a
+  // session still inside its FIRST turn reads instead of nothing (see `contextWindow` above). Keyed on
+  // the alias `init` named rather than on a canonical model, because the alias is what decides the
+  // window: `claude-opus-5[1m]` and `claude-opus-5` are different rows, and the same alias names
+  // different windows on different SUBSCRIPTIONS — which is why this is a memory of what was measured
+  // here rather than a table anyone could write down.
+  //
+  // Deliberately NOT cleared by `release`: it describes a model, not a session, and forgetting it when
+  // one thread ends would put the next dispatch back to a blank readout.
+  const modelWindows = new Map<string, number>()
 
   // Which row of `modelUsage` describes the MAIN thread. The alias `init` named, when the result
   // carries it. Otherwise: a single-row table is unambiguous (no sub-agent billed anything), and a
@@ -324,7 +342,14 @@ export function createClaudeRuntimeIngest(deps: ClaudeRuntimeIngestDeps): Claude
       if (item.event.kind === "init") sessionModel.set(item.sessionId, item.event.model)
       if (item.event.kind === "result" && item.event.modelContextWindows) {
         const window = pickWindow(item.sessionId, item.event.modelContextWindows)
-        if (window !== undefined && window > 0) contextWindows.set(item.sessionId, window)
+        if (window !== undefined && window > 0) {
+          contextWindows.set(item.sessionId, window)
+          // Only a window picked BY ALIAS teaches the alias table. `pickWindow`'s single-row fallback
+          // resolves a thread's own denominator without proving which model it belongs to, and a wrong
+          // entry here would spread to every later session on that alias.
+          const alias = sessionModel.get(item.sessionId)
+          if (alias && item.event.modelContextWindows[alias] === window) modelWindows.set(alias, window)
+        }
       }
       if (signal === "running" && prior?.turn !== "running") {
         deps.receipts?.publish({ type: "claude.runtime.turn.started", slug: item.slug, sessionId: item.sessionId })
@@ -342,7 +367,12 @@ export function createClaudeRuntimeIngest(deps: ClaudeRuntimeIngestDeps): Claude
     onEvent(slug, sessionId, event) { worker.enqueue({ slug, sessionId, event }) },
     liveness: (sessionId) => live.get(sessionId),
     tasks: (sessionId) => [...(tasks.get(sessionId)?.values() ?? [])],
-    contextWindow: (sessionId) => contextWindows.get(sessionId),
+    contextWindow: (sessionId) => {
+      const own = contextWindows.get(sessionId)
+      if (own !== undefined) return own
+      const alias = sessionModel.get(sessionId)
+      return alias ? modelWindows.get(alias) : undefined
+    },
     release(sessionId) {
       live.delete(sessionId)
       tasks.delete(sessionId)
@@ -351,7 +381,7 @@ export function createClaudeRuntimeIngest(deps: ClaudeRuntimeIngestDeps): Claude
       deps.receipts?.publish({ type: "claude.runtime.session.released", sessionId })
     },
     drain: () => worker.drain(),
-    close() { worker.close(); live.clear(); tasks.clear(); sessionModel.clear(); contextWindows.clear() },
+    close() { worker.close(); live.clear(); tasks.clear(); sessionModel.clear(); contextWindows.clear(); modelWindows.clear() },
   }
 }
 

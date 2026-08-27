@@ -406,6 +406,49 @@ test("context window: a session joined mid-flight relearns its alias from the ne
   ingest.close()
 })
 
+// A FRESHLY DISPATCHED THREAD HAS NO WINDOW OF ITS OWN for the whole of its first turn — the SDK names
+// one only on `result` — so the context dial was blank on exactly the thread an operator opens
+// (maintainer 2026-08-26: "the context breakdown is often not visible in the drawer view, which I find
+// quite odd"). It reads the window this process last measured for its own alias instead.
+test("context window: a session still inside its first turn borrows the window measured for its alias", async () => {
+  const ingest = createClaudeRuntimeIngest({ nudge: () => {} })
+  const fresh = "s2"
+  // Nothing has been measured yet, so there is nothing to borrow and nothing is invented.
+  ingest.onEvent("t2", fresh, { ...initAs("claude-opus-5"), sessionId: fresh })
+  await ingest.drain()
+  assert.equal(ingest.contextWindow(fresh), undefined)
+  // Another session on the same alias finishes a turn.
+  ingest.onEvent("t", sessionId, initAs("claude-opus-5"))
+  ingest.onEvent("t", sessionId, resultBilling({ "claude-opus-5": 1_000_000 }))
+  await ingest.drain()
+  assert.equal(ingest.contextWindow(fresh), 1_000_000, "the fresh thread reads a window measured on its own alias")
+  // A DIFFERENT alias borrows nothing — the window is a property of the alias, not of the account.
+  const haiku = "s3"
+  ingest.onEvent("t3", haiku, { ...initAs("claude-haiku-4-5-20251001"), sessionId: haiku })
+  await ingest.drain()
+  assert.equal(ingest.contextWindow(haiku), undefined)
+  // The borrow never outranks a session's own reading.
+  ingest.onEvent("t2", fresh, { ...ev.result, sessionId: fresh, modelContextWindows: { "claude-opus-5": 200_000 } })
+  await ingest.drain()
+  assert.equal(ingest.contextWindow(fresh), 200_000)
+  ingest.close()
+})
+
+// `pickWindow`'s single-row fallback resolves a thread's OWN denominator without proving which model it
+// belongs to. Teaching the alias table from it would spread one unattributed reading to every later
+// session on that alias, so only a window picked BY ALIAS is remembered.
+test("context window: an unattributed single-row result is not learned as an alias's window", async () => {
+  const ingest = createClaudeRuntimeIngest({ nudge: () => {} })
+  ingest.onEvent("t", sessionId, resultBilling({ "claude-opus-5": 1_000_000 })) // no init ⇒ no alias
+  await ingest.drain()
+  assert.equal(ingest.contextWindow(sessionId), 1_000_000, "its own reading still resolves")
+  const other = "s9"
+  ingest.onEvent("t9", other, { ...initAs("claude-opus-5"), sessionId: other })
+  await ingest.drain()
+  assert.equal(ingest.contextWindow(other), undefined, "…but nothing was learned from it")
+  ingest.close()
+})
+
 test("context window: latched — a later result that omits the row does not blank the readout", async () => {
   const ingest = createClaudeRuntimeIngest({ nudge: () => {} })
   ingest.onEvent("t", sessionId, initAs("claude-opus-5"))

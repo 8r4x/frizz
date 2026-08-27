@@ -3,7 +3,7 @@ import { Plug } from "lucide-react"
 import type { ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
-import { INK_TRIM_PLUG } from "../lib/iconRhythm.ts"
+import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 import { Tooltip } from "./Tooltip.tsx"
 
 // Re-read this worker's plugin closure — hooks, skills, agent profiles, MCP servers — INTO the running
@@ -55,34 +55,37 @@ export function ReloadPluginsButton({ thread }: { thread: ThreadView }) {
         data-reload-plugins
         disabled={busy}
         aria-label="Reload plugins"
-        // Focus must not leave the composer: same discipline as every other footer verb.
+        // Focus must not leave a card's composer: same discipline as every other icon verb here.
         onMouseDown={(e) => e.preventDefault()}
         onClick={() => void reload()}
-        // Mirrors RestartWorkerButton — 24px square, borderless, fg/55 — because the two sit adjacent
-        // and are the same KIND of verb (maintenance, icon-only, no label). Any divergence here would
-        // read as a difference in importance that does not exist.
+        // Mirrors RestartWorkerButton — same box, same tone, same size relationship — because the two
+        // sit adjacent in the header's action strip and are the same KIND of verb (maintenance,
+        // icon-only, no label). Any divergence here would read as a difference in importance that does
+        // not exist. Both moved up out of the lifecycle footer on 2026-08-26; they took the strip's own
+        // chrome (lib/headerIcon.ts) and left the footer's ink trims behind with it.
+        //
         // PLUG, not a refresh arrow: the Restart button beside this one already wears `RefreshCw`,
         // and two adjacent icon-only verbs must not share a glyph vocabulary — the softer verb reading
         // as "reload" and the harder one as "refresh" would invert what the operator expects. The plug
         // names WHAT is being reloaded instead (maintainer, 2026-08-04: "should be a plug icon, not the
         // puzzle piece").
         //
-        // 13, not the strip's 12, and that ONE px is measured rather than taste. The plug is a narrow
-        // mark — 12 ink units wide in a 24 viewBox where `RefreshCw` spans 18 — so matching the sizes
-        // does NOT match the weights: painted ink (stroke length × painted stroke width) came out at
-        // 0.80× its neighbour's at 12 and 0.93× at 13, and 0.80 is the visible-deficit range. Both
-        // glyphs are symmetric about the viewBox centre, so ink centre and box centre coincide exactly
-        // (measured dy 0.00 at every size) and no vertical nudge applies. For the record the puzzle
-        // this replaces ran 1.34× — it OUT-weighed the restart verb, which the swap also fixes.
+        // 14px, the size EVERY other icon in this strip draws at, and that is a change of rule rather
+        // than of number. In the footer these two verbs were a cluster of two, so the plug was sized
+        // against `RefreshCw` alone for painted-ink parity (0.80× at a matched size, 0.93× one px over,
+        // hence 13 against 12). Here the family is five marks whose ink coverage already spans 3× — the
+        // document page is the densest thing on the row and the open arrow the sparsest — so coverage
+        // was never this strip's rule. Its rule is one lucide SIZE and one painted PEN
+        // (strokeWidth 2 × 14/24 = 1.167px), which is what puts a mark in family here.
         //
-        // The narrowness has a SPACING cost the 24px square hides, which is what `INK_TRIM_PLUG` pays:
-        // 8px of ink centred in a 24px box leaves ~8px of dead space a side, so on the strip's flat
-        // `gap-1.5` this mark sat 20.5px of clear space from the restart verb while the two pills
-        // beside them sat 5.78px apart. The trim collapses the layout box onto the ink so the footer's
-        // one gap governs this mark exactly as it governs a bordered pill (lib/iconRhythm.ts).
-        className={`flex size-6 items-center justify-center rounded-md text-fg/55 hover:bg-panel-2 hover:text-fg/80 disabled:opacity-50 ${INK_TRIM_PLUG}`}
+        // PLUG, not a refresh arrow: the Restart button beside this one already wears `RefreshCw`, and
+        // two adjacent icon-only verbs must not share a glyph vocabulary — the softer verb reading as
+        // "reload" and the harder one as "refresh" would invert what the operator expects. The plug
+        // names WHAT is being reloaded instead (maintainer, 2026-08-04: "should be a plug icon, not the
+        // puzzle piece"). For the record the puzzle it replaced ran 1.34× the restart verb's ink.
+        className={HEADER_ICON_CLASS}
       >
-        <Plug size={13} />
+        <Plug size={14} strokeWidth={2} />
       </button>
     </Tooltip>
   )

@@ -97,6 +97,11 @@ test("real SDK + fake executable: init owns the requested session, input streams
     OPENAI_API_KEY: undefined,
     AWS_SECRET_ACCESS_KEY: undefined,
     ARBITRARY_SECRET: undefined,
+    // The SAME hazard as the caps below, one variable later and from the OTHER direction: the bridge
+    // spreads claudeCompactionEnv(settings) into a real daemon's env, so a suite run INSIDE a
+    // dispatched frizz worker inherits CLAUDE_CODE_AUTO_COMPACT_WINDOW and captures it here, while a
+    // run on a plain box does not. Cleared, so the baseline is the same in both places.
+    CLAUDE_CODE_AUTO_COMPACT_WINDOW: undefined,
     ...claudeWorkerEnv({}),
   })
   try {

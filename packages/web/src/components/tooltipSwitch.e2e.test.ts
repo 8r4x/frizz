@@ -3,14 +3,17 @@ import test from "node:test"
 
 const baseUrl = process.env.FRIZZ_TOOLTIP_SWITCH_E2E_URL
 
-// The footer's icon verbs sit shoulder to shoulder, and the tooltip has to name the one you are
+// The two maintenance verbs sit shoulder to shoulder, and the tooltip has to name the one you are
 // actually pointing at. It did not: hovering Restart and then sliding onto the plug left the RESTART
 // label up while the pointer sat squarely on Reload plugins (maintainer 2026-08-06: "the popover
-// associated with the restart button continued to show up. It didn't switch over").
+// associated with the restart button continued to show up. It didn't switch over"). They were in the
+// lifecycle footer then and are in the thread header's action strip now (2026-08-26); the gesture and
+// the bug are properties of the pair, not of the surface, so this drives them wherever they live.
 //
-// The cause was NOT the thing it looks like. These two marks wear negative ink trims
-// (lib/iconRhythm.ts) that overlap their 24px hover squares by 3px, which is the obvious suspect and
-// the wrong one — the overlap is still 3px today and the bug is gone. Instrumenting the triggers
+// The cause was NOT the thing it looks like. In the footer these two marks wore negative ink trims
+// that overlapped their 24px hover squares by 3px, which was the obvious suspect and the wrong one —
+// the bug was gone with the overlap still there, and it is gone now with no overlap at all (the header
+// strip is untrimmed 28px squares). Instrumenting the triggers
 // showed the DOM doing everything right: `pointerleave` on Restart and `pointerenter` on the plug
 // both fired, at the same x. Radix was declining to switch, because `Tooltip.Provider` defaults to
 // HOVERABLE CONTENT and holds a tooltip open while the pointer is inside the grace polygon between
@@ -26,7 +29,7 @@ const baseUrl = process.env.FRIZZ_TOOLTIP_SWITCH_E2E_URL
 //   npx vite --port 5799 --strictPort   (in packages/web)
 //   FRIZZ_TOOLTIP_SWITCH_E2E_URL=http://localhost:5799 nub --test --test-force-exit \
 //     'packages/web/src/components/tooltipSwitch.e2e.test.ts'
-test("the footer tooltip names whichever icon verb the pointer is on, including the neighbour it slid from", {
+test("the tooltip names whichever icon verb the pointer is on, including the neighbour it slid from", {
   skip: !baseUrl,
   timeout: 60_000,
 }, async () => {
@@ -91,7 +94,7 @@ test("the footer tooltip names whichever icon verb the pointer is on, including 
     await moveTo(centres.restart)
     assert.deepEqual(await pointing(), { label: "Restart worker", open: 1 })
 
-    // Leaving the strip closes it rather than leaving a label stranded over the footer.
+    // Leaving the strip closes it rather than leaving a label stranded over the row.
     await moveTo({ x: 20, y: 20 })
     assert.equal((await pointing()).open, 0, "the tooltip closes when the pointer leaves the strip")
 

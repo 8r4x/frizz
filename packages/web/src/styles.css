@@ -227,6 +227,27 @@ html[data-font="sans"] {
 .card-icon-offset {
   translate: 0 var(--card-icon-offset);
 }
+/* The AI-rename REFRESH mark beside a thread title (AiRenameButton) — a 12px lucide `RotateCw` in a
+   24px hover square, optically centred on the 15px semibold title it belongs to. Third instance of the
+   same font-dependence as --icon-label-nudge and --card-icon-offset above, measured the same way
+   (svg ink centre against the title's cap band, on icon-rhythm-fixture.html, both settings): the mark
+   read 0.40px HIGH under system-ui and 2.10px LOW under the mono stack — over five times apart and of
+   opposite sign, so no single constant can serve both, which is exactly why this lives beside the font
+   switch. Residuals re-measured at ≤0.05px after. `translate`, not a margin, so the offset can never
+   grow the title row.
+
+   MEASURE THE BASELINE WITH A ZERO-SIZE INLINE PROBE inside the title's own box, never by deriving it
+   from the div's rect and the font's ascent/descent — that route reported 0.72/1.29 here, off by ~0.4px
+   in sans and ~0.8px in mono, which is most of the correction. */
+:root {
+  --title-refresh-offset: -2.1px;
+}
+html[data-font="sans"] {
+  --title-refresh-offset: 0.4px;
+}
+.title-refresh-offset {
+  translate: 0 var(--title-refresh-offset);
+}
 /* Markdown prose rendered INSIDE a .frizz-bash card (the SendMessage peer-message body) is PROSE, not
    code — so it must read in the app's prose font (mono by default, sans under the font experiment),
    matching the surrounding assistant messages. Re-assert the body-font rule here so the mono that

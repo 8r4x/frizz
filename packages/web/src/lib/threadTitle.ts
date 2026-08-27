@@ -21,24 +21,38 @@ export interface AiRenameAvailability {
   label: string
 }
 
-// Claude owns `/rename`; Codex does not. The client only pre-gates states it can know from the board—
-// the server re-captures the terminal composer at click time and rejects a hidden draft/modal safely.
+// Claude owns the provider-side re-title; Codex has no equivalent and must never be shown a fake
+// affordance for one.
+//
+// THE GATE IS LIVENESS, NOT IDLENESS. This required `runtime === "turn-idle"` until 2026-08-26, and
+// that requirement belonged to a mechanism that no longer exists: the verb used to TYPE `/rename` into
+// the session's terminal and scrape the answer back, so a turn in flight (or an open permission
+// prompt) owned the composer it needed. The RPC has gone through the broker's typed control channel
+// since 2026-08-24 — the same request shape as reload-plugins, stop-task and interrupt, none of which
+// waits for a turn to finish — so the old gate did nothing but make the button a silent no-op on
+// exactly the threads you are watching (maintainer 2026-08-26: "when you click it, it currently does
+// not do anything at all"). What it genuinely needs is a LIVE broker daemon to ask.
 export function aiRenameAvailability(thread: {
   kind?: "session" | "legacy"
   foreign?: boolean
   backend?: "claude" | "codex"
+  // A Claude row dispatched before the broker became the sole transport has no control channel, and
+  // the RPC refuses it outright — so it gets no button rather than one that throws. Unknown (an older
+  // server's board) is read as broker: the refusal is then the RPC's to make, with its own message.
+  claudeRuntime?: string
   runtime: "none" | "spawning" | "running" | "perm-prompt" | "turn-idle" | "exited"
-  pendingAsk?: unknown
 }): AiRenameAvailability {
   if (thread.kind !== "session" || thread.foreign || thread.backend === "codex") {
     return { show: false, enabled: false, label: "" }
   }
-  if (thread.runtime === "turn-idle") return { show: true, enabled: true, label: "Rename with Claude" }
-  if (thread.runtime === "perm-prompt" || thread.pendingAsk) {
-    return { show: true, enabled: false, label: "Resolve Claude's terminal prompt before renaming" }
+  if (thread.claudeRuntime !== undefined && thread.claudeRuntime !== "broker") {
+    return { show: false, enabled: false, label: "" }
   }
-  if (thread.runtime === "running" || thread.runtime === "spawning") {
-    return { show: true, enabled: false, label: "Rename with Claude when the current turn finishes" }
+  if (thread.runtime === "exited" || thread.runtime === "none") {
+    return { show: true, enabled: false, label: "Resume this Claude thread to rename it with Claude" }
   }
-  return { show: true, enabled: false, label: "Resume this Claude thread to use AI rename" }
+  if (thread.runtime === "spawning") {
+    return { show: true, enabled: false, label: "Rename with Claude once this thread has started" }
+  }
+  return { show: true, enabled: true, label: "Rename with Claude — a fresh title from the opening request" }
 }

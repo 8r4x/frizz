@@ -9,8 +9,9 @@ import { Tooltip } from "./Tooltip.tsx"
 // this component's only job is to render nothing when it is absent. There is deliberately no 0% dial,
 // no empty ring, no "—" placeholder: an absent reading must occupy no space at all, the same rule the
 // child row's working-duration follows. (Which threads have one, and why, is documented on
-// FoldState.contextWindow — the short version is that codex always does and a Claude thread does from
-// the end of its first turn.)
+// FoldState.contextWindow — the short version is that codex always does, and a Claude thread does from
+// its first assistant record, borrowing the window this frizz process last measured for its own model
+// alias until its own turn ends and names one.)
 //
 // SIZE IS INHERITED, NOT SET. The svg is sized in `em` and the arc colors come from `currentColor`, so
 // the footer's own text scale decides how big this is and what tone it takes — exactly the discipline
@@ -22,9 +23,13 @@ import { Tooltip } from "./Tooltip.tsx"
 // weight for this reading.
 //
 // So if you are here because a thread appears to have NO indicator: the surface is almost certainly not
-// the reason. All three surfaces render this same component, and the usual answer is that the thread has
-// no reading yet — a Claude row carries no denominator until its first turn ENDS, because the SDK names
-// the context window only on its `result` event. It is per-THREAD, never per-surface.
+// the reason. All three surfaces render this same component, and the answer is per-THREAD — the drawer
+// cannot show a reading the queue card would have shown. A Claude row is blank when frizz has no
+// denominator for it at all: nothing in this process has yet measured a window for that model alias,
+// and the thread has not finished a turn of its own. That was every freshly dispatched thread until
+// 2026-08-26 (maintainer: "the context breakdown is often not visible in the drawer view, which I find
+// quite odd") — see ClaudeRuntimeIngest.contextWindow for what closed it and why the borrow is a
+// measurement rather than a guess.
 
 // Geometry for a 16-unit viewBox donut. r + half the stroke is the OUTER edge, held at 7.5 so the ring
 // sits fully inside the box — thinning the stroke therefore RAISES r rather than shrinking the glyph.

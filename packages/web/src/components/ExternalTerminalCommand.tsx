@@ -5,6 +5,7 @@ import { rpc } from "../api/rpc.ts"
 import { copyTextToClipboard } from "../lib/clipboard.ts"
 import { createCopyCommandFeedback } from "../lib/copyCommandFeedback.ts"
 import { showToast } from "../store.ts"
+import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 import { Tooltip } from "./Tooltip.tsx"
 
 // The command is one of TWO genuinely different things, and pasting the wrong one wastes real time:
@@ -149,7 +150,13 @@ export function CopyTerminalCommandButton({ slug }: { slug: string }) {
         onClick={handleCopy}
         onPointerEnter={prefetch}
         onFocus={prefetch}
-        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg"
+        // The header action strip's own chrome (lib/headerIcon.ts), because that is the only strip this
+        // renders in — the thread header and the queue card's, immediately left of HeaderActions. It
+        // wore its own 24px square until 2026-08-26, one box size smaller than every mark beside it,
+        // which drew 15.75px of ink to its neighbour against 20.25 and 21.5 across the rest of the row
+        // (measured, `scripts/ink-gaps.mjs` --dsf=4, on a real drawer header). At 28px it lands at
+        // 19.75 and the strip reads as one rhythm.
+        className={HEADER_ICON_CLASS}
       >
         {copied
           ? <Check size={14} strokeWidth={2.2} className="text-fg" />

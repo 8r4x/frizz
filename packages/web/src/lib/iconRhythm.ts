@@ -38,20 +38,26 @@
  *  and read `deadLeft`/`deadRight` off each mark. `packages/web/icon-rhythm-fixture.html` renders the
  *  real footer and the real composer rail side by side for exactly this.
  *
- *  THE ORDER ABOVE IS HISTORY, not the shipping strip: on 2026-08-11 Reload plugins and Restart worker
- *  moved out of the right cluster and into the LEFT one, behind the context meter, which stays far left
- *  (maintainer, same day). The strip now reads meter · plug · restart · hourglass · heartbeat … snooze ·
- *  done. That re-order cost nothing to place, which is the property the trims buy — every mark's box is
- *  collapsed onto its own ink, so the container's one gap governs whatever sits beside whatever.
- *  Re-measured after the move: 11.84 / 12.50 / 12.00 / 12.00 across the left cluster and 12.00 from the
- *  snooze split button to Mark as done, against the 12px target.
+ *  THE ORDER ABOVE IS HISTORY, not the shipping strip, and TWO OF ITS MARKS HAVE LEFT. On 2026-08-11
+ *  Reload plugins and Restart worker moved out of the right cluster into the LEFT one, behind the
+ *  context meter (which stays far left, maintainer same day); on 2026-08-26 they left the footer
+ *  altogether for the header's action strip ("the restart worker button should be at the top. I just
+ *  realized it shouldn't be along the bottom"), and `INK_TRIM_PLUG` / `INK_TRIM_REFRESH` went with
+ *  them — deleted rather than kept, because that strip is uniform 28px squares on a flat `gap-0.5`
+ *  where every mark carries the same box and a trim would pull one verb out of the rhythm.
+ *  The footer now reads meter · hourglass · goal … snooze · done. Both re-orders cost nothing to place,
+ *  which is the property the trims buy — every mark's box is collapsed onto its own ink, so the
+ *  container's one gap governs whatever sits beside whatever. Measured after the 2026-08-11 move:
+ *  11.84 / 12.50 / 12.00 / 12.00 across the left cluster and 12.00 from the snooze split button to Mark
+ *  as done, against the 12px target.
  *
  *  One consequence worth knowing before you change which mark comes FIRST. The footer's `px-3` clears
  *  the leading mark's BOX, so what the eye reads as the left inset is that padding minus the mark's own
- *  dead space — and the trims are what make the two agree. The meter needs no trim (its ring reaches its
- *  own svg edge) and its ink lands 12.25px in; the plug, when it led the strip instead, put its box 4px
- *  from the edge and its ink at 12.5px. Either is within half a pixel of the 12px the right-hand pill
- *  keeps on the other side. An UNTRIMMED narrow glyph led there would sit a full dead-space width in. */
+ *  dead space — and the trims are what make the two agree. The meter, which leads it today, needs no
+ *  trim (its ring reaches its own svg edge) and its ink lands 12.25px in; the plug, when it led the
+ *  strip instead, put its box 4px from the edge and its ink at 12.5px. Either is within half a pixel of
+ *  the 12px the right-hand pill keeps on the other side. An UNTRIMMED narrow glyph led there would sit a
+ *  full dead-space width in. */
 
 /** The strip's one optical distance: 12px of clear space between any two marks, whatever they are.
  *
@@ -89,22 +95,6 @@ export const INK_TRIM_HOURGLASS = "-mx-1"
  *  RE-MEASURE, DON'T RE-GUESS, if the mark changes again: `nub scripts/ink-gaps.mjs
  *  http://localhost:<vite>/icon-rhythm-fixture.html "[data-pending-snooze],[data-recurring-prompt]"`. */
 export const INK_TRIM_GOAL = "-mx-[3px]"
-
-/** `ReloadPluginsButton` — lucide `Plug` at 13px in a 24px square, painting 8px of it.
- *
- *  SYMMETRIC, and that is a correction of the first attempt here. The instrument read this glyph's
- *  dead space as 8.5/7.5 and an asymmetric trim was cut to match — which then measured 13px of gap
- *  instead of 12, and re-reading the trimmed strip returned 7.5/8.5, the same asymmetry mirrored.
- *  A real 0.5px lean in a viewBox cannot swap sides when the element moves; a rasterisation phase can,
- *  and this glyph's stroke is faint enough at the extreme edge that a column falls in or out of the
- *  instrument's threshold depending on where the box lands on the device grid. So the 0.5px was the
- *  instrument, not the glyph, and 8/8 is the honest reading: it lands the gap at 11.5–12.0px, inside
- *  half a pixel of the target and well under anything an eye resolves. Rule of thumb this earned: on a
- *  thin stroke, distrust any asymmetry the size of one device pixel until it survives a move. */
-export const INK_TRIM_PLUG = "-mx-2"
-
-/** `RestartWorkerButton` — lucide `RefreshCw` at 12px (ink 10px) in a 24px square. */
-export const INK_TRIM_REFRESH = "-mx-[7px]"
 
 /** THE COMPOSER RAIL is the same rule solved for absolute offsets instead of a flex gap, so it cannot
  *  use `STRIP_INK_GAP`. Its three buttons are 28px squares pinned from the box's right edge, and the

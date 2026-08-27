@@ -2502,6 +2502,11 @@ export function createTailer(deps: TailerDeps): Tailer {
   // in-between ticks, and it lands in TailState (not a side map) so the durable tail cache carries it
   // across a frizz restart — otherwise every resting Claude thread would lose its readout on reload and
   // not get it back until its next turn finished. The tokens half needs none of this: it is on disk.
+  //
+  // The ingest may answer with a window BORROWED from another session on the same model alias, which is
+  // what gives a thread still inside its first turn a readout at all (see ClaudeRuntimeIngest.
+  // contextWindow). Latching that is deliberate and safe in both directions: it is the number this
+  // account measured for this alias, and this session's own `result` overwrites it the moment one lands.
   function applyRuntimeContextWindow(row: SessionRow, state: TailState): void {
     if (!deps.runtimeContextWindow || !isBrokerClaudeRow(row)) return
     const window = deps.runtimeContextWindow(row.session_id)
@@ -2648,18 +2653,39 @@ export function createTailer(deps: TailerDeps): Tailer {
   // genuinely running. The right fix resolves the path from the SIDECAR INDEX (which already maps
   // toolUseId → transcript for exactly these rows) rather than putting a clock on the dispatch; that is
   // a liveness-resolution change worth doing on its own, with a live case to validate against.
-  function entryStale(e: SubAgentEntry, nowMs: number): boolean {
-    if (!e.outputFile) return false
-    const m = mtimeMs(e.outputFile)
+  //
+  // THE HOLE IS CLOSED (2026-08-26). The paragraph above described `outputFile` failing to resolve as
+  // unbounded — no path, no clock, so such a child could never go stale and parked its thread forever
+  // (board.hasLiveOwnWork). The fix is the one this comment already named: fall back to the SIDECAR
+  // INDEX, which maps dispatch tool_use id → the descendant's own `agent-<id>.jsonl` and is the same
+  // index the drawer and `subAgentDescendantTasks` already resolve through. Putting a clock on the
+  // DISPATCH instant instead stays wrong for the reason recorded above, and the case that reverted it —
+  // a direct child with no ack-named path whose own transcript IS being appended to — now resolves to
+  // that transcript and reads as running, which is what it is.
+  //
+  // Still biased to "running": a child whose path resolves nowhere at all keeps the old behaviour and
+  // is never called stale on a guess. This only ever ADDS a clock where there was none.
+  function entryTranscript(state: TailState, e: SubAgentEntry): string | undefined {
+    if (e.outputFile) return e.outputFile
+    if (e.kind !== "agent") return undefined // a shell's output path is not a sidecar transcript
+    const meta = descendantSidecar(state, e.toolUseId)
+    return meta ? descendantTranscript(state, meta) : undefined
+  }
+
+  function entryStale(state: TailState, e: SubAgentEntry, nowMs: number): boolean {
+    const path = entryTranscript(state, e)
+    if (!path) return false
+    const m = mtimeMs(path)
     return m === undefined || nowMs - m > SUBAGENT_STALE_MS
   }
 
   // The child's last-append instant (its output file's mtime, the same stat entryStale reads), as ISO
   // for the surfaced view. Undefined before the path resolves or when the file no longer stats — the
   // caller then simply omits lastActivityAt (an absent reading is correct; a fabricated one is not).
-  function entryLastActivity(e: SubAgentEntry): string | undefined {
-    if (!e.outputFile) return undefined
-    const m = mtimeMs(e.outputFile)
+  function entryLastActivity(state: TailState, e: SubAgentEntry): string | undefined {
+    const path = entryTranscript(state, e)
+    if (!path) return undefined
+    const m = mtimeMs(path)
     return m === undefined ? undefined : new Date(m).toISOString()
   }
 
@@ -2675,14 +2701,14 @@ export function createTailer(deps: TailerDeps): Tailer {
     const out: SubAgentView[] = []
     for (const e of state.subAgents.values()) {
       if (e.kind !== "agent") continue
-      const lastActivityAt = entryLastActivity(e)
+      const lastActivityAt = entryLastActivity(state, e)
       // Each progress field is spread in only when the provider reported it, so a prose-only child's
       // view object is byte-identical to what it was before this existed.
       const p = e.progress
       out.push({
         label: e.label,
         startedAt: e.startedAt,
-        state: entryStale(e, nowMs) ? "stale" : "running",
+        state: entryStale(state, e, nowMs) ? "stale" : "running",
         subagentType: e.subagentType,
         id: e.toolUseId,
         ...(lastActivityAt ? { lastActivityAt } : {}),
@@ -2750,7 +2776,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     const out: BgShellView[] = []
     for (const e of state.subAgents.values()) {
       if (e.kind !== "shell") continue
-      const lastActivityAt = entryLastActivity(e)
+      const lastActivityAt = entryLastActivity(state, e)
       // `stoppable` is only HALF the answer here — "frizz holds a provider task handle for this shell".
       // board.ts ANDs it with the thread's transport before the × is offered (see BgShellView.stoppable).
       // Emitted only when a handle exists, so the row cannot advertise a control during the window
@@ -3140,7 +3166,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     if (live) return {
       outputFile: live.outputFile,
       ...(live.outputFormat ? { outputFormat: live.outputFormat } : {}),
-      state: entryStale(live, now()) ? "stale" : "running",
+      state: entryStale(state, live, now()) ? "stale" : "running",
       direct: live.kind === "agent",
       ...(live.taskId ? { taskId: live.taskId } : {}),
       startedAt: live.startedAt,

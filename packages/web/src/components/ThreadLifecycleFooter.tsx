@@ -11,8 +11,6 @@ import { formatSnoozeWake } from "../lib/snooze.ts"
 import { CHILD_ARROW, CHILD_ARROW_CLASS } from "../lib/childOps.ts"
 import { INK_TRIM_HOURGLASS, STRIP_INK_GAP } from "../lib/iconRhythm.ts"
 import { SnoozeButton } from "./SnoozeButton.tsx"
-import { RestartWorkerButton } from "./RestartWorkerButton.tsx"
-import { ReloadPluginsButton } from "./ReloadPluginsButton.tsx"
 import { ContextMeter } from "./ContextMeter.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { RecurringPromptControl } from "./RecurringPromptControl.tsx"
@@ -65,26 +63,19 @@ export function ThreadLifecycleFooter({
       // its two pills against 20.5px between its two icons on one uniform `gap-1.5`).
       className={`${sticky ? "z-20" : BLOCK_RADIUS_INNER_BOTTOM} flex min-h-10 shrink-0 flex-wrap items-center justify-end ${STRIP_INK_GAP} border-t border-border/70 bg-panel/95 px-3 pt-2 text-[12px] ${safeArea ? "pb-[max(0.5rem,env(safe-area-inset-bottom))]" : "pb-2"} backdrop-blur-sm`}
     >
-      {/* Bottom-LEFT cluster: the context reading, the two MAINTENANCE verbs, then the remaining
-          presence markers, held away from the lifecycle buttons by the one `mr-auto` on this group. The
-          readings render nothing when they have nothing to say — an empty flex box is zero-width, which
-          is what keeps the strip laid out as it was before any of this existed.
-          THE CONTEXT PIE STAYS FAR LEFT (maintainer, 2026-08-11), ahead of the verbs that joined this
-          cluster: it is the one mark you read rather than click, it is the thing you glance at to decide
-          whether to reach for the verbs beside it, and it has anchored this end of the strip since the
-          cluster existed. Whichever mark leads, its ink — not its box — is what the footer's `px-3`
-          should clear; every child here wears an `-mx` trim sized to its own dead space for exactly that
-          reason (lib/iconRhythm.ts), and the meter needs none because its ring reaches its own svg edge. */}
+      {/* Bottom-LEFT cluster: the context reading, then the presence markers, held away from the
+          lifecycle buttons by the one `mr-auto` on this group. The readings render nothing when they
+          have nothing to say — an empty flex box is zero-width, which is what keeps the strip laid out
+          as it was before any of this existed.
+          THE CONTEXT PIE STAYS FAR LEFT (maintainer, 2026-08-11) and now LEADS the cluster outright:
+          the two maintenance verbs that used to follow it — Reload plugins and Restart worker — moved
+          up into the header's action strip on 2026-08-26 (maintainer: "the restart worker button should
+          be at the top. I just realized it shouldn't be along the bottom"), taking their ink trims with
+          them. Whichever mark leads, its ink — not its box — is what the footer's `px-3` should clear;
+          every child here wears an `-mx` trim sized to its own dead space for exactly that reason
+          (lib/iconRhythm.ts), and the meter needs none because its ring reaches its own svg edge. */}
       <span className={`mr-auto flex items-center ${STRIP_INK_GAP}`}>
         <ContextMeter thread={thread} />
-        {/* Gated on the same `done` as the right-hand verbs: an archived thread offers no verbs at all
-            (threadLifecycleAvailability), and moving these across the strip must not change that. */}
-        {!available.done && (
-          <>
-            <ReloadPluginsButton thread={thread} />
-            <RestartWorkerButton thread={thread} />
-          </>
-        )}
         <PendingSnooze thread={thread} />
         <RecurringPromptControl thread={thread} />
       </span>

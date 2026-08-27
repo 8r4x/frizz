@@ -23,6 +23,7 @@ import { ThreadComposerBox } from "./ThreadComposerBox.tsx"
 import { BackgroundOpsStrip, ThreadSlugContext, QueueDismissContext } from "./ChatView.tsx"
 import { HeaderActions } from "./HeaderActions.tsx"
 import { ThreadLifecycleFooter } from "./ThreadLifecycleFooter.tsx"
+import { AiRenameButton } from "./AiRenameButton.tsx"
 import { DispatchForm } from "./NewThreadModal.tsx"
 import { StatusRow } from "./StatusRow.tsx"
 import { InteractionStack } from "./InteractionCards.tsx"
@@ -1188,10 +1189,13 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
           bottom corners (a rounded-top + border-b would read as squared/doubled edges inside the shell). */}
       <div ref={headerRef} className={`sticky top-0 z-10 flex items-center gap-2 bg-panel px-5 py-3.5 max-[800px]:top-10 ${collapsed ? BLOCK_RADIUS : `${BLOCK_RADIUS_TOP} border-b border-border/60`}`}>
         <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-1">
-            <div className="min-w-0 flex-1 truncate font-semibold text-[15px] leading-snug" title={displayTitle(thread)}>
+          {/* The title row is the refresh mark's hover zone — `min-w-0 shrink` on the name rather than
+              `flex-1`, so a short title does not push the mark to the far side of the card. */}
+          <div className="group/thread-title flex min-w-0 items-center gap-2">
+            <div className="min-w-0 shrink truncate font-semibold text-[15px] leading-snug" title={displayTitle(thread)}>
               {displayTitle(thread)}
             </div>
+            <AiRenameButton thread={thread} />
           </div>
           <LastActive at={lastActiveLabelAt(thread)} fallbackAt={thread.spawnedAt} className="mt-0.5 block truncate text-[11px] leading-tight text-muted/75" />
           {/* status_text is worker-authored frontmatter prose — only decision-relevant when the
@@ -1219,23 +1223,29 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
         {/* Every Frizz-owned card carries the copy-resume-command affordance: queue cards are at rest
             by default, so opening the same session in your own terminal is entirely safe (and both CLIs
             allow it live too). Foreign/legacy rows have no Frizz-owned provider session to resume. */}
-        {thread.kind === "session" && thread.foreign !== true && <CopyTerminalCommandButton slug={thread.id} />}
-        <HeaderActions
-          thread={thread}
-          collapsed={collapsed}
-          onCollapse={() => setCollapsed((c) => !c)}
-          openHref={standaloneThreadHref(thread.id)}
-          onDone={() =>
-            markComplete.mutate(undefined, {
-              onSuccess: () => onResolve(thread.id),
-              onError: () => setResolving(false),
-            })
-          }
-          doneBusy={markComplete.isPending}
-          onStatusMutate={() => setResolving(true)}
-          onStatusApplied={() => onResolve(thread.id)}
-          onStatusFailed={() => setResolving(false)}
-        />
+        {/* ONE control cluster, on the strip's own `gap-0.5` — not the header's `gap-2`, which spaces
+            the TITLE block from the controls and has no business spacing two icons against each other.
+            Left on the header gap this button drew 27px of ink to the icon beside it against 21.75 and
+            22.25 across the rest of the row (`scripts/ink-gaps.mjs` --dsf=4, on a real queue card). */}
+        <div className="flex shrink-0 items-center gap-0.5">
+          {thread.kind === "session" && thread.foreign !== true && <CopyTerminalCommandButton slug={thread.id} />}
+          <HeaderActions
+            thread={thread}
+            collapsed={collapsed}
+            onCollapse={() => setCollapsed((c) => !c)}
+            openHref={standaloneThreadHref(thread.id)}
+            onDone={() =>
+              markComplete.mutate(undefined, {
+                onSuccess: () => onResolve(thread.id),
+                onError: () => setResolving(false),
+              })
+            }
+            doneBusy={markComplete.isPending}
+            onStatusMutate={() => setResolving(true)}
+            onStatusApplied={() => onResolve(thread.id)}
+            onStatusFailed={() => setResolving(false)}
+          />
+        </div>
       </div>
 
       {collapsed ? null : (

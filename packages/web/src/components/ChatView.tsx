@@ -3,7 +3,7 @@ import { createPortal } from "react-dom"
 import { useSnapshot } from "valtio"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
-import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, ArrowUpRight, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, Sparkles, TerminalSquare, X, type LucideIcon } from "lucide-react"
+import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, ArrowUpRight, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, TerminalSquare, X, type LucideIcon } from "lucide-react"
 import { parseRecurringPrompt } from "@frizz/shared"
 import type { AwaitingHint, BgShellView, PendingAsk, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@frizz/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
@@ -44,11 +44,12 @@ import { AWAITING_FALLBACK_TITLE, AWAITING_PARK_BUTTON, awaitingForLabel, awaiti
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { prefs } from "../lib/prefs.ts"
 import { canAdoptThread } from "../lib/adoption.ts"
-import { THREAD_TITLE_MAX_LENGTH, aiRenameAvailability, manualThreadTitleSeed, threadTitleToCommit } from "../lib/threadTitle.ts"
+import { THREAD_TITLE_MAX_LENGTH, manualThreadTitleSeed, threadTitleToCommit } from "../lib/threadTitle.ts"
 import { THREAD_HEADER_CLASS, THREAD_HEADER_CONTROLS_CLASS, THREAD_HEADER_TITLE_CLASS } from "../lib/threadHeaderLayout.ts"
 import { ThreadActionBar } from "./ThreadActionBar.tsx"
 import { HeaderActions } from "./HeaderActions.tsx"
 import { ThreadLifecycleFooter, StateButton } from "./ThreadLifecycleFooter.tsx"
+import { AiRenameButton } from "./AiRenameButton.tsx"
 import { threadLifecycleAvailability } from "../lib/threadLifecycle.ts"
 import { Tooltip } from "./Tooltip.tsx"
 import { ToolDisclosureHeader } from "./ToolDisclosureHeader.ts"
@@ -1321,11 +1322,6 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
   const thread = threadBySlug(board, slug)
   const markComplete = useMutation({ mutationFn: () => rpc.markComplete({ slug }) })
   const renameTitle = useMutation({ mutationFn: (title: string) => rpc.renameThread({ slug, title }) })
-  const aiRenameTitle = useMutation({
-    mutationFn: () => rpc.aiRenameThread({ slug }),
-    onSuccess: ({ title }) => showToast(`Renamed to “${title}”`),
-    onError: (error) => showToast(error instanceof Error ? error.message : "Could not rename with Claude", { duration: 7000 }),
-  })
   const [editingTitle, setEditingTitle] = useState(false)
   const [titleDraft, setTitleDraft] = useState("")
   const titleInputRef = useRef<HTMLInputElement>(null)
@@ -1357,13 +1353,6 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
   const isForeign = thread.foreign === true
   const canRename = thread.kind === "session" && !isForeign
   const shownTitle = displayTitle(thread)
-  const aiRename = aiRenameAvailability(thread)
-  const aiRenameUnavailable = !aiRename.enabled || aiRenameTitle.isPending
-  const aiRenameLabel = aiRenameTitle.isPending
-    ? "Claude is generating a title…"
-    : aiRename.enabled && aiRenameTitle.error instanceof Error
-      ? aiRenameTitle.error.message
-      : aiRename.label
   function cancelRename(): void {
     setEditingTitle(false)
     setTitleDraft("")
@@ -1413,7 +1402,7 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
           <div className="min-w-0 flex-1 leading-tight">
           {/* Keep the title's display wrapper content-sized. Long names still truncate inside the
               remaining header width, but short names do not claim the whole row as a click target. */}
-          <div className="flex min-w-0 items-center gap-1">
+          <div className="group/thread-title flex min-w-0 items-center gap-2">
             {editingTitle ? (
               <input
                 ref={titleInputRef}
@@ -1438,7 +1427,7 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
                 type="button"
                 title="Edit title"
                 aria-label={`Edit thread title: ${shownTitle}`}
-                disabled={renameTitle.isPending || aiRenameTitle.isPending}
+                disabled={renameTitle.isPending}
                 onClick={() => {
                   setTitleDraft(manualThreadTitleSeed(shownTitle, thread.id))
                   setEditingTitle(true)
@@ -1452,29 +1441,7 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
                 {shownTitle}
               </div>
             )}
-            {aiRename.show && !editingTitle && (
-              <Tooltip label={aiRenameLabel}>
-                {/* aria-disabled (not native disabled) keeps the reason keyboard-focusable; the guarded
-                    click remains a no-op until the runtime is safe. */}
-                <button
-                  type="button"
-                  aria-label={aiRenameTitle.isPending ? "Renaming with Claude" : aiRename.enabled ? "Rename with Claude" : aiRename.label}
-                  title={aiRenameLabel}
-                  aria-busy={aiRenameTitle.isPending}
-                  aria-disabled={aiRenameUnavailable}
-                  onClick={() => {
-                    if (aiRenameUnavailable) return
-                    aiRenameTitle.reset()
-                    aiRenameTitle.mutate()
-                  }}
-                  className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md outline-none transition-colors ${
-                    aiRenameUnavailable ? "cursor-not-allowed opacity-40" : ""
-                  } ${aiRenameTitle.error ? "text-red-400 hover:bg-red-500/10" : "text-accent hover:bg-accent/10"}`}
-                >
-                  <Sparkles size={13} strokeWidth={2} className={aiRenameTitle.isPending ? "animate-pulse" : ""} />
-                </button>
-              </Tooltip>
-            )}
+            <AiRenameButton thread={thread} hidden={editingTitle} />
           </div>
           <LastActive at={lastActiveLabelAt(thread)} fallbackAt={thread.spawnedAt} className="mt-0.5 block truncate text-[11px] leading-tight text-muted/75" />
           </div>
@@ -1484,7 +1451,10 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
           clickable title and its activity stamp readable instead of competing with fixed-width
           tabs/actions, while the control row itself remains a single unbroken cluster. */}
       <div className={THREAD_HEADER_CONTROLS_CLASS}>
-        <div className="flex shrink-0 items-center">
+        {/* `gap-0.5` — the action strip's own distance, so the copy button and HeaderActions' icons
+            read as one row. With no gap at all this button sat 17.75px of ink from its neighbour where
+            the rest of the strip kept 20.25 and 21.5 (`scripts/ink-gaps.mjs` --dsf=4, real drawer). */}
+        <div className="flex shrink-0 items-center gap-0.5">
           {showTerminalCommand && <CopyTerminalCommandButton slug={slug} />}
           <HeaderActions
             thread={thread}

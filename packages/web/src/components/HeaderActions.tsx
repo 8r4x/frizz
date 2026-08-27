@@ -6,6 +6,9 @@ import { Tooltip } from "./Tooltip.tsx"
 import { MarkAsButton } from "./MarkAsButton.tsx"
 import { offersRetry } from "../groups.ts"
 import { retrySession } from "../lib/retrySession.ts"
+import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
+import { ReloadPluginsButton } from "./ReloadPluginsButton.tsx"
+import { RestartWorkerButton } from "./RestartWorkerButton.tsx"
 
 // The retry message + follow-up now live in lib/retrySession so the sidebar's hover-revealed Retry
 // shares this exact recovery path. Re-exported for existing importers.
@@ -18,8 +21,14 @@ export { STALLED_RETRY_MESSAGE } from "../lib/retrySession.ts"
 //     picks — the STALLED ones (the rail's yellow [!]) and the ones HELD on a usage limit frizz will
 //     auto-resume (the hourglass, offered the same one-click continue). Every surface that renders this
 //     component reads that same derivation, so the verb can never disagree between the card, the header
-//     and the rail. Other lifecycle verbs (Mark as done / Snooze) live in ThreadLifecycleFooter; rename
-//     lives next to the title in ThreadHeader.
+//     and the rail. It also carries the two live-process MAINTENANCE verbs — Reload plugins and Restart
+//     worker — which sat in the lifecycle footer until 2026-08-26 (maintainer: "the restart worker
+//     button should be at the top. I just realized it shouldn't be along the bottom"). They travel
+//     TOGETHER: the plug glyph was chosen only because it sits beside the restart refresh and must not
+//     share its vocabulary, so splitting them would orphan it. Each still gates itself (dev build,
+//     broker-backed Claude, live process), so both render nothing on most rows.
+//     Other lifecycle verbs (Mark as done / Snooze) live in ThreadLifecycleFooter; the AI rename
+//     refresh is revealed by the title's own hover, in both this component's surfaces.
 //   • SESSION (foreign): read-only. Only the doc/open NAVIGATION affordances — no kill/archive.
 //   • LEGACY (kind !== "session"): the vestigial Mark-as split button, exactly as before.
 export function HeaderActions({
@@ -59,6 +68,10 @@ export function HeaderActions({
           onClick={onCollapse}
         />
       )}
+      {/* Maintenance FIRST, because the strip runs least→most important left→right and these are the
+          two verbs you reach for about the worker rather than about the thread. */}
+      <ReloadPluginsButton thread={thread} />
+      <RestartWorkerButton thread={thread} />
       {onDoc && <IconBtn label="Frizz document" icon={FileText} size={14} onClick={onDoc} />}
       {/* The arrow is a REAL anchor to the standalone thread page, not a drawer trigger: a plain click
           lands the thread in a new tab immediately (maintainer 2026-08-03), and ⌘/middle-click,
@@ -115,11 +128,6 @@ function RetryButton({ slug }: { slug: string }) {
   )
 }
 
-// One class string for every control in this strip, so the link variant below can never drift from the
-// buttons it sits beside.
-const ICON_CONTROL_CLASS =
-  "flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:hover:bg-transparent disabled:hover:text-muted disabled:opacity-40"
-
 // A quiet icon button with an immediate dark tooltip. onMouseDown-preventDefault keeps DOM focus off the
 // button so a click never steals the keyboard from a card's composer. `busy` swaps in a spinner.
 function IconBtn({
@@ -135,7 +143,7 @@ function IconBtn({
         {...rest}
         aria-label={label}
         onMouseDown={(e) => e.preventDefault()}
-        className={ICON_CONTROL_CLASS}
+        className={HEADER_ICON_CLASS}
       >
         {busy ? <Loader2 size={size} strokeWidth={2} className="animate-spin" /> : <Icon size={size} strokeWidth={2} />}
       </button>
@@ -160,7 +168,7 @@ function IconLink({
         rel="noopener"
         aria-label={label}
         onMouseDown={(e) => e.preventDefault()}
-        className={ICON_CONTROL_CLASS}
+        className={HEADER_ICON_CLASS}
       >
         <Icon size={size} strokeWidth={2} />
       </a>

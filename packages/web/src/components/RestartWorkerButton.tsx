@@ -4,7 +4,7 @@ import { Loader2, RefreshCw } from "lucide-react"
 import type { ThreadView } from "@frizz/shared"
 import { restartWorker } from "../lib/restartWorker.ts"
 import { useDevFrizzBuild } from "../lib/devBuild.ts"
-import { INK_TRIM_REFRESH } from "../lib/iconRhythm.ts"
+import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 import { Tooltip } from "./Tooltip.tsx"
 
 // "Restart worker" — replace this thread's live `claude` process, keeping the conversation.
@@ -65,36 +65,30 @@ export function RestartWorkerButton({ thread }: { thread: ThreadView }) {
           setBusy(true)
           restartWorker(queryClient, thread.id).finally(() => setBusy(false))
         }}
-        // An ICON, not a labelled pill (maintainer, 2026-08-01: "It should just be a simple reload
-        // button, a simple update icon. It doesn't need to be a full button."). A borderless SQUARE
-        // rather than a bare glyph: the hover fill is what says "control", which is the job the pill's
-        // border used to do — an earlier pass shipped this as bare TEXT with no box at all and read as
-        // a static label, and that is the failure being avoided here, not the absence of a border.
+        // AN ICON IN THE HEADER'S ACTION STRIP, wearing that strip's own chrome (lib/headerIcon.ts) —
+        // never a labelled pill (maintainer, 2026-08-01: "It should just be a simple reload button, a
+        // simple update icon. It doesn't need to be a full button."). The hover fill is what says
+        // "control"; an earlier pass shipped this as bare TEXT with no box at all and read as a static
+        // label, which is the failure being avoided, not the absence of a border.
         //
-        // 24px square, mirroring this app's OWN icon-action size (lib/statusRow.ts: "the WCAG 2.2
-        // minimum pointer target, and the largest size that still reads as part of a 12px text strip
-        // rather than as chrome parked next to it"). The glyph stays at the strip's own 12px so the
-        // one verb WITHOUT a label does not out-weigh the two with them, and the tone sits a step
-        // below theirs (fg/55) to keep saying "maintenance verb". Ink measures 0.20px off the labels'
-        // cap band — under the ~0.3px floor where a nudge only blurs it, and tighter than the Check
-        // beside it (0.45px), so no vertical correction.
+        // IT SAT IN THE LIFECYCLE FOOTER UNTIL 2026-08-26 (maintainer: "the restart worker button
+        // should be at the top. I just realized it shouldn't be along the bottom"), at 24px and
+        // `text-fg/55` under a hand-measured `INK_TRIM_REFRESH` that collapsed its box onto its ink so
+        // one gap could space a strip of pills and bare glyphs alike. None of that came with it: this
+        // strip is uniform 28px squares on a flat `gap-0.5`, where every mark carries the same box, so
+        // the trim would now pull this one verb out of a rhythm it is already in.
         //
-        // The square is the HOVER TARGET, not the mark, and `INK_TRIM_REFRESH` is what keeps the two
-        // from being confused: 10px of ink in a 24px box carries 7px of dead space a side, so this
-        // button used to sit 13px of clear space from the Snooze pill while the pills sat 5.78px from
-        // each other. Sizing the box against the strip's rhythm was the old attempt at that (24px was
-        // picked over 28px for spending 12px rather than 14px to the pill) and it could never work —
-        // no square is small enough to space a 10px glyph like a bordered pill AND large enough to
-        // click. The trim separates the two questions: the box stays 24px, its layout footprint
-        // becomes the ink, and one gap spaces the whole strip (lib/iconRhythm.ts).
-        //
-        // Consequence worth knowing: the trims pull this box and the plug's into a ~2.5px overlap.
-        // Invisible, because only one of the two can ever paint a hover fill at a time, and the
-        // overlap is empty padding on both sides — the ink stays 12px apart. The later element in the
-        // DOM (this one) wins the pointer there.
-        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-fg/55 outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60 disabled:cursor-not-allowed disabled:opacity-45 ${INK_TRIM_REFRESH}`}
+        // THE ONE MARK IN THIS STRIP THAT NEEDS A HORIZONTAL CORRECTION, and it goes the opposite way
+        // to the footer's trims: `RefreshCw` paints 12 of its 14 box px where every other icon here
+        // paints 7–10.5, so its 28px square carries only 8px of dead space against the strip's 8.75–
+        // 10.5 — and the eye reads ink, so the two gaps either side of it CLOSED. Measured with
+        // `scripts/ink-gaps.mjs` on `icon-rhythm-fixture.html` (dsf 4), the strip's four ink gaps ran
+        // 21.75 / 19.75 / 18.75 / 21.25 before this margin and 21.75 / 21.75 / 20.75 / 21.25 after it.
+        // A POSITIVE margin, because the correction needed is more layout box, not less: the footer's
+        // `-mx` trims collapse a box onto a mark too small for it, and this is the same law inverted.
+        className={`${HEADER_ICON_CLASS} mx-[2px]`}
       >
-        {busy ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+        {busy ? <Loader2 size={14} strokeWidth={2} className="animate-spin" /> : <RefreshCw size={14} strokeWidth={2} />}
       </button>
     </Tooltip>
   )
