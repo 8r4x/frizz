@@ -64,7 +64,7 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     rpc.send({ jsonrpc: "2.0", method: "notifications/initialized" })
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
     const list = await rpc.next(2)
-    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "recurring_prompt", "timer", "watch_pr", "watch", "unwatch", "ask", "unask", "activity"])
+    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "recurring_prompt", "timer", "watch_pr", "watch", "unwatch", "ask", "unask", "done", "activity"])
     for (const required of ["prompt", "model", "effort"]) {
       assert.ok(list.result.tools[0].inputSchema.required.includes(required))
     }
@@ -127,13 +127,19 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     assert.equal(depth(askQuestion), 3)
     assert.deepEqual(list.result.tools[7].inputSchema.required, ["id"])
     assert.deepEqual(Object.keys(list.result.tools[7].inputSchema.properties), ["id"])
+    // `done` takes the write-up and NOTHING ELSE. Its one argument list is the assertion that matters:
+    // there is no `force`, and there is no second parameter for a worker to reach for when the gate
+    // refuses it — a bypass riding the gated call gets learned, and the gate degrades to a two-token
+    // tax (plans/rest-by-registration.md).
+    assert.deepEqual(list.result.tools[8].inputSchema.required, ["body"])
+    assert.deepEqual(Object.keys(list.result.tools[8].inputSchema.properties), ["body"])
     // `activity` READS every kind of background work with the ids a fence names them by, plus the
     // `wch_…` id of any watch holding one. It takes NOTHING: there is no thread parameter and no filter,
     // because the only correct answer is "everything you have running", and a worker that has lost its
     // ids cannot be trusted to name them.
-    assert.equal(list.result.tools.length, 9)
-    assert.deepEqual(list.result.tools[8].inputSchema.required, [])
-    assert.deepEqual(Object.keys(list.result.tools[8].inputSchema.properties), [])
+    assert.equal(list.result.tools.length, 10)
+    assert.deepEqual(list.result.tools[9].inputSchema.required, [])
+    assert.deepEqual(Object.keys(list.result.tools[9].inputSchema.properties), [])
 
     // An unregistered name is a protocol error, not a crash — the registry routes by name now.
     rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "spawn_frizz_thread", arguments: {} } })
@@ -917,6 +923,62 @@ test("`ask` and `unask` register and withdraw the CALLING thread's questions, tr
     assert.equal(noId.result.isError, true)
     assert.match(noId.result.content[0].text, /`id` is required/)
     assert.equal(seen.length, before, "neither reached the server")
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
+
+// `done` OVER THE REAL STDIO TRANSPORT. The refusal is the half worth pinning end to end: it is an
+// ordinary RESULT rather than an error (a gate doing its job is not a fault), and it has to name every
+// blocker by the id the worker resolves it with — otherwise the next move is a guess.
+test("`done` marks the CALLING thread finished, and reports a refusal as an actionable result", async () => {
+  const seen: Array<{ url: string; body: any }> = []
+  const replies: any[] = [
+    { done: false, blockingQuestions: [{ id: "qst_aaa111", question: "Ship it?" }], blockingWatches: [{ id: "wch_bbb222", what: "shell: nub --test (bzvtnt3ig)" }] },
+    { done: true, blockingQuestions: [], blockingWatches: [] },
+  ]
+  const http = createServer((req, res) => {
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      seen.push({ url: req.url ?? "", body: JSON.parse(body) })
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ result: replies.shift() ?? null }))
+    })
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "finishing-thread" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+
+    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "done", arguments: { body: "- **Fixed** the parser" } } })
+    const refused = await rpc.next(2)
+    assert.deepEqual(seen[0], { url: "/_frizz/rpc/markOwnDone", body: { slug: "finishing-thread", body: "- **Fixed** the parser" } })
+    // NOT an isError: the call reached the server and the server answered. A thrown fault would read as
+    // a broken tool and invite a retry, when what is needed is two other tool calls.
+    assert.equal(refused.result.isError, undefined)
+    assert.match(refused.result.content[0].text, /NOT marked done/)
+    assert.match(refused.result.content[0].text, /qst_aaa111 {2}Ship it\?/)
+    assert.match(refused.result.content[0].text, /wch_bbb222 {2}shell: nub --test \(bzvtnt3ig\)/)
+    assert.match(refused.result.content[0].text, /There is no force parameter/)
+
+    rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "done", arguments: { body: "- **Fixed** the parser" } } })
+    const marked = await rpc.next(3)
+    assert.match(marked.result.content[0].text, /Marked done/)
+    // Marking done is not dismissal — the card sits in the queue until the human archives it.
+    assert.match(marked.result.content[0].text, /NOTHING WAS CLOSED, HIDDEN OR ARCHIVED/)
+
+    const before = seen.length
+    rpc.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "done", arguments: {} } })
+    const noBody = await rpc.next(4)
+    assert.equal(noBody.result.isError, true)
+    assert.match(noBody.result.content[0].text, /`body` is required/)
+    assert.equal(seen.length, before, "it never reached the server")
   } finally {
     rpc.kill()
     http.close()

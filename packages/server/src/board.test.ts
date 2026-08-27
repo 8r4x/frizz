@@ -4,7 +4,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { InteractionRequest } from "@frizz/shared"
-import { appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, hasDeclaredWait, hasRegisteredBackgroundPark, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle, type RegisteredWatch } from "./board.ts"
+import { appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, hasDeclaredWait, hasRegisteredBackgroundPark, registeredDoneFence, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle, type RegisteredWatch } from "./board.ts"
 import { Bus } from "./bus.ts"
 import { createStorage } from "./storage.ts"
 import type { Project } from "./project.ts"
@@ -1896,4 +1896,45 @@ test("a registered question does NOT degrade a running thread to turn-idle", () 
   assert.equal(degradeIfAwaitingAnswer("running", false), "running")
   assert.equal(degradeIfAwaitingAnswer("running", true), "turn-idle")
   assert.equal(degradeIfAwaitingAnswer("turn-idle", true), "turn-idle")
+})
+
+// ---- A REGISTERED COMPLETION -----------------------------------------------------------------------
+//
+// `done` is a tool now, not a fence (plans/rest-by-registration.md), and a tool cannot write the
+// tailer's `lastFence` — that is derived from the transcript. So the row is PRESENTED as the fence it
+// replaces, which is what keeps the two from carding as two different endings while both are accepted.
+// The risk is not in the presentation, it is in the LIFETIME: a fence is superseded when the worker
+// writes again, and a row has to be spent by something.
+
+test("a registered done presents as the ```done fence it replaces", () => {
+  assert.deepEqual(registeredDoneFence({ body: "- **Fixed** it", doneAt: 1000 }, undefined), {
+    kind: "done", body: "- **Fixed** it", hints: [],
+  })
+})
+
+test("no row, no fence", () => {
+  assert.equal(registeredDoneFence(undefined, "2026-08-27T00:00:00.000Z"), undefined)
+})
+
+test("the human SENDING MORE WORK spends it — that is when a completion stops being true", () => {
+  const done = { body: "done", doneAt: Date.parse("2026-08-27T01:00:00.000Z") }
+  // Their last word came BEFORE the sign-off: the completion is the newer statement and it stands.
+  assert.equal(registeredDoneFence(done, "2026-08-27T00:59:00.000Z")?.kind, "done")
+  // Their last word came AFTER it: there is new work, so the thread is not finished any more. No sweep
+  // clears the row — it simply stops being honoured, which is also what makes reopening one free.
+  assert.equal(registeredDoneFence(done, "2026-08-27T01:00:01.000Z"), undefined)
+})
+
+test("a same-instant tie stands, because the two instants come off DIFFERENT clocks", () => {
+  // The row's instant is frizz's own Date.now(); the telemetry's is the transcript record's. A worker
+  // signing off on the turn a user record started is the ordinary case, not a reopening.
+  const at = Date.parse("2026-08-27T01:00:00.000Z")
+  assert.equal(registeredDoneFence({ body: "done", doneAt: at }, "2026-08-27T01:00:00.000Z")?.kind, "done")
+})
+
+test("an unparseable user instant cannot silently revoke a completion", () => {
+  // `Date.parse` returns NaN, and every comparison against NaN is false — so a naive `>` would have
+  // left the done standing by accident rather than on purpose. It stands ON PURPOSE: a timestamp frizz
+  // cannot read is not evidence that the human said anything.
+  assert.equal(registeredDoneFence({ body: "done", doneAt: 1000 }, "not-a-date")?.kind, "done")
 })

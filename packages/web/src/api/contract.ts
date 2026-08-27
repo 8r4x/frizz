@@ -89,6 +89,8 @@ import type {
   DropOwnWatchResult,
   AskInput,
   AskResult,
+  MarkOwnDoneInput,
+  MarkOwnDoneResult,
   UnaskInput,
   UnaskResult,
   AnswerQuestionsInput,
@@ -194,6 +196,9 @@ export interface Api {
   // drift gate alone; the two below ARE called from the browser — they are what the question card does.
   ask(input: AskInput): Promise<AskResult>
   unask(input: UnaskInput): Promise<UnaskResult>
+  // The worker's gated completion verb. Declared here for the drift gate's sake — the browser never
+  // calls it, exactly as it never calls `ask`.
+  markOwnDone(input: MarkOwnDoneInput): Promise<MarkOwnDoneResult>
   // The card's Send: every question it holds an answer for, in ONE call, because a per-question send
   // would half-wake a turn.
   answerQuestions(input: AnswerQuestionsInput): Promise<AnswerQuestionsResult>
@@ -356,6 +361,7 @@ export const PROCEDURES = {
   dropOwnWatch: "mutation",
   ask: "mutation",
   unask: "mutation",
+  markOwnDone: "mutation",
   answerQuestions: "mutation",
   dismissQuestions: "mutation",
   getOwnThreadRecurringPrompt: "mutation",

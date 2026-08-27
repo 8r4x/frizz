@@ -13,7 +13,7 @@ import type { Project } from "./project.ts"
 import { isHeadlessRow, isBrokerClaudeRow, sessionTitleLocked } from "./storage.ts"
 import type { Storage, SessionRow } from "./storage.ts"
 import { normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
-import type { Tailer, SessionTelemetry } from "./tailer.ts"
+import type { Tailer, SessionTelemetry, FenceView } from "./tailer.ts"
 import type { InteractionChange } from "./interaction-store.ts"
 import { frizzDirExists } from "./frizz.ts"
 import { githubStatusKey, parsePrRef, readAwaitingPark, readGithubStatusBook, GITHUB_STATUS_SETTING, type GithubStatusBook } from "./awaiting.ts"
@@ -1144,11 +1144,31 @@ export function resolveSessionTitle(
   }
 }
 
+/** A registered completion as the ```done fence it replaces, or undefined when it no longer stands.
+ *
+ *  ITS LIFETIME IS "NOTHING NEWER FROM THE HUMAN". A fence is superseded the moment the worker writes
+ *  again; a ROW cannot be, so something has to spend it — and the human SENDING MORE WORK is exactly
+ *  the moment a completion stops being true. Deciding that by comparing two timestamps means there is
+ *  no sweep to forget one, and no window where a thread that was reopened still cards as finished.
+ *
+ *  The comparison is `<=`, not `<`: the two instants come from different clocks (the row's is frizz's
+ *  own `Date.now()`, the telemetry's is the transcript record's), and a same-millisecond tie is the
+ *  worker signing off on the turn that user record started, which is the ordinary case. */
+export function registeredDoneFence(
+  done: { body: string; doneAt: number } | undefined,
+  lastUserAt: string | undefined,
+): FenceView | undefined {
+  if (!done) return undefined
+  const userAt = lastUserAt ? Date.parse(lastUserAt) : Number.NaN
+  if (Number.isFinite(userAt) && userAt > done.doneAt) return undefined
+  return { kind: "done", body: done.body, hints: [] }
+}
+
 function sessionThreadView(
   projectDir: string,
   storage: Storage,
   row: SessionRow,
-  tele: SessionTelemetry | undefined,
+  rawTele: SessionTelemetry | undefined,
   registeredLegacyTerminal: boolean,
   interactionPresence: { pending: boolean; needsUser: boolean },
   nowMs: number,
@@ -1160,6 +1180,20 @@ function sessionThreadView(
   // exactly the drift that once produced two cards disagreeing about one wait.
   github: GithubStatusBook = {},
 ): ThreadView {
+  // A REGISTERED completion is presented to everything below as the ```done fence it replaces — same
+  // shape, same three predicates, same card — so the two cannot render as two different endings while
+  // both are accepted. (plans/rest-by-registration.md: the fence keeps working through the migration.)
+  //
+  // ITS LIFETIME IS "NOTHING NEWER FROM THE HUMAN". A fence is superseded when the worker writes again;
+  // a row cannot be, so the human SENDING MORE WORK is what spends it, and that is exactly the moment a
+  // completion stops being true. Comparing timestamps here means there is no sweep to forget one, and
+  // no window where an archived-then-reopened thread cards as done on work nobody redid.
+  //
+  // Only ever LAYERED OVER real telemetry, never fabricated in its absence: an untailed thread has no
+  // runtime, no turn and no last activity, and half a SessionTelemetry carrying one fence would put
+  // every predicate below on a shape none of them was written for.
+  const done = registeredDoneFence(storage.getThreadDone(row.slug), rawTele?.lastUserAt)
+  const tele: SessionTelemetry | undefined = done && rawTele ? { ...rawTele, lastFence: done } : rawTele
   // The PRs this thread has actually REGISTERED, by `owner/repo#N` — what a `prs:` declaration is
   // checked against. Read per thread because the registry is per thread, unlike the status book above.
   const armedPrWatches = storage.listPrWatches(row.slug, { armedOnly: true }).map((w) => ({

@@ -88,6 +88,8 @@ import {
   DropOwnPrWatchInput,
   DropOwnPrWatchResult,
   ListOwnPrWatchesInput,
+  MarkOwnDoneInput,
+  MarkOwnDoneResult,
   OwnPrWatchesResult,
   PR_WATCH_MAX_ARMED,
   PR_WATCH_DEFAULT_FOR_MS,
@@ -2602,6 +2604,45 @@ export function createRouter(ctx: AppContext) {
         // wake, in the same message as any answers (questionAnswerMessage).
         if (dismissed.length > 0) ctx.board.refresh()
         return { dismissed, open: openQuestionViews(input.slug) }
+      },
+    }),
+
+    // ---- `done`: the completion verb, and the one call frizz can REFUSE --------------------------
+    markOwnDone: mutation({
+      input: MarkOwnDoneInput,
+      output: MarkOwnDoneResult,
+      handler: async ({ input }) => {
+        const row = ctx.storage.getSession(input.slug)
+        if (!row) throw new Error(`thread ${input.slug} is not registered`)
+        // THE GATE. A worker must resolve or drop what it REGISTERED before it can claim to be
+        // finished: an unanswered question dies with the done card, and a live wait means the thing it
+        // was waiting for has not happened yet. Both are refusals a fence could never make — a fence is
+        // a sentence in a message, so by the time anything could object the card has already rendered.
+        //
+        // REGISTRATIONS ONLY, deliberately. A background shell or a sub-agent the worker never
+        // registered does not block this: frizz cannot tell a build from a dev server, only the worker
+        // can, and the registration IS that judgement. Gating on raw liveness would make `done`
+        // unreachable for any thread that left a log tail running.
+        const blockingQuestions = ctx.storage.listThreadQuestions(input.slug, { openOnly: true }).flatMap((q) => {
+          const spec = parseQuestionSpec(q.spec)
+          return spec ? [{ id: q.id, question: spec.question }] : []
+        })
+        const blockingWatches = [
+          ...armedOwnWatchViews(input.slug).map((w) => ({
+            id: w.id,
+            what: `${w.kind === "agent" ? "sub-agent" : "shell"}: ${w.label ? `${w.label} (${w.target})` : w.target}`,
+          })),
+          ...armedPrWatchViews(input.slug).map((w) => ({ id: w.id, what: `pull request: ${w.target}` })),
+          ...ctx.storage
+            .listThreadTimers(input.slug, { armedOnly: true })
+            .map((t) => ({ id: t.id, what: `timer, fires ${new Date(t.fire_at).toISOString()}` })),
+        ]
+        if (blockingQuestions.length > 0 || blockingWatches.length > 0) {
+          return { done: false, blockingQuestions, blockingWatches }
+        }
+        ctx.storage.markThreadDone(input.slug, input.body, Date.now())
+        ctx.board.refresh()
+        return { done: true, blockingQuestions: [], blockingWatches: [] }
       },
     }),
 

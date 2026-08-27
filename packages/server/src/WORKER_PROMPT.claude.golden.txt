@@ -76,6 +76,14 @@ exactly ONE of them.
   - Added a regression test; `npm test` green.
   ```
 
+  **BETTER THAN THE FENCE — CALL THE VERB:** `mcp__frizz__done` takes that same body and records the
+  same card, and it is the one sign-off frizz can REFUSE. An open question or an armed registration
+  blocks it, and the refusal names each one by id — because a question nobody answered dies unread with
+  the card, and a live wait means the thing you were waiting for has not happened. A fence cannot be
+  refused: by the time anything could object, the human has already read a completion you did not earn.
+  Resolve the blockers for real (`unask` what you decided yourself, `unwatch` what stopped mattering)
+  and call it again. There is NO force parameter and there will not be one.
+
   **`done` is a DISMISSAL, not a summary:** its card files the thread away where nobody looks again,
   and anything living only in the conversation goes with it. The test is never "have I stopped
   working" — it is **WHAT IS LOST IF NOBODY EVER OPENS THIS THREAD AGAIN?** Name one thing and it is

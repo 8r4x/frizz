@@ -642,6 +642,16 @@ export interface Storage {
   /** The human's x. Distinct from `withdrawn` on purpose: the two states answer different questions
    *  about what happened, and the worker is told which. */
   dismissThreadQuestion(id: string, atMs: number): boolean
+  // ---- THE WORKER'S OWN COMPLETION ----------------------------------------------------------------
+  /** Record this thread as done, replacing any earlier record — a worker declaring itself done twice
+   *  has not finished two things. The GATE (open questions, live registrations) lives at the RPC, not
+   *  here: storage records what happened, it does not decide whether it was allowed. */
+  markThreadDone(slug: string, body: string, atMs: number): void
+  /** The thread's completion, or undefined. It is the CALLER's job to check `doneAt` against the newest
+   *  user record — a done row is spent by the human sending more work, and this returns it either way. */
+  getThreadDone(slug: string): { body: string; doneAt: number } | undefined
+  /** Forget it, so the thread is no longer done. */
+  clearThreadDone(slug: string): boolean
   // ---- THE BUILT-IN SIGN-OFF NUDGE ----------------------------------------------------------------
   // Count one delivered nudge against this thread. It only ever INCREMENTS — the count is cleared by
   // `resetSignoffNudges` when the thread signs off, and by nothing else. It used to reset whenever a
@@ -991,6 +1001,23 @@ export function createStorage(dbPath: string): Storage {
       ON thread_question(thread_slug, state, asked_at);
     CREATE INDEX IF NOT EXISTS thread_question_undelivered
       ON thread_question(state, delivered);
+
+    -- THE WORKER'S OWN COMPLETION, as a row (2026-08-27). The 'done' FENCE said the same thing and had
+    -- the same weakness every fence has: it is a sentence in a message, so nothing can refuse it. A
+    -- gate can refuse a TOOL CALL -- before the card renders -- while a fence can only be bumped after
+    -- the fact, by which time the human has already read a completion the worker did not earn.
+    --
+    -- ONE ROW PER THREAD, replaced on each call: a worker declaring itself done twice has not finished
+    -- two things. There is no state column and no settled_at, because a done row is spent by the human
+    -- SENDING MORE WORK rather than by anything frizz does -- board.ts compares done_at against the
+    -- newest user record and simply stops honouring an older one. That mirrors the fence exactly (the
+    -- next assistant message replaced it) without a sweep to forget one.
+    CREATE TABLE IF NOT EXISTS thread_done (
+      thread_slug TEXT PRIMARY KEY,
+      -- The markdown the card renders, the same body the fence carried between its backticks.
+      body        TEXT NOT NULL,
+      done_at     INTEGER NOT NULL
+    );
     -- The retirement note for the ORIGINAL thread_watch is kept below as the record of why it left, and
     -- of what had to change before it could come back.
     -- thread_watch WAS HERE and is retired (2026-08-14). A worker's wait is a 'watch:' line in its own
@@ -1820,6 +1847,13 @@ export function createStorage(dbPath: string): Storage {
     WHERE id = ? AND state = 'open'
   `)
   const delThreadQuestions = db.prepare("DELETE FROM thread_question WHERE thread_slug = ?")
+  const delThreadDone = db.prepare("DELETE FROM thread_done WHERE thread_slug = ?")
+  const markThreadDoneStmt = db.prepare(`
+    INSERT INTO thread_done (thread_slug, body, done_at) VALUES (?, ?, ?)
+    ON CONFLICT(thread_slug) DO UPDATE SET body = excluded.body, done_at = excluded.done_at
+  `)
+  const getThreadDoneStmt = db.prepare("SELECT body, done_at FROM thread_done WHERE thread_slug = ?")
+  const clearThreadDoneStmt = db.prepare("DELETE FROM thread_done WHERE thread_slug = ?")
   // Only a PROMPTLESS snooze expires here. One that carries a prompt still owes the thread a bump, and
   // the scheduler — not the board — clears it once that wake reaches a terminal state. Erasing it on
   // elapse (the board refreshes far more often than the waker ticks) would drop the follow-up entirely.
@@ -1889,6 +1923,7 @@ export function createStorage(dbPath: string): Storage {
     delPrWatches.run(existing.slug)
     delThreadWatches.run(existing.slug)
     delThreadQuestions.run(existing.slug)
+    delThreadDone.run(existing.slug)
     delSession.run(existing.slug)
     return existing
   }
@@ -2475,6 +2510,12 @@ export function createStorage(dbPath: string): Storage {
     markSettlementDelivered: (id) => markSettlementDeliveredStmt.run(id).changes === 1,
     withdrawThreadQuestion: (slug, id, atMs) => withdrawThreadQuestionStmt.run(atMs, id, slug).changes === 1,
     dismissThreadQuestion: (id, atMs) => dismissThreadQuestionStmt.run(atMs, id).changes === 1,
+    markThreadDone: (slug, body, atMs) => { markThreadDoneStmt.run(slug, body, atMs) },
+    getThreadDone: (slug) => {
+      const row = getThreadDoneStmt.get(slug) as { body: string; done_at: number } | undefined
+      return row ? { body: row.body, doneAt: row.done_at } : undefined
+    },
+    clearThreadDone: (slug) => clearThreadDoneStmt.run(slug).changes > 0,
     dropThreadWatch: (slug, id, settledAtMs) => dropThreadWatchStmt.run(settledAtMs, id, slug).changes === 1,
     settleThreadWatch: (id, settledAtMs, state = "settled") => settleThreadWatchStmt.run(state, settledAtMs, id).changes === 1,
     armThreadTimer: (timer) => void armTimerStmt.run(timer),

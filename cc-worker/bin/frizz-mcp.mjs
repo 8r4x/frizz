@@ -552,6 +552,45 @@ const UNASK = {
   },
 }
 
+const DONE = {
+  name: "done",
+  description:
+    "DECLARE THIS EFFORT FINISHED, with the write-up the human reads. Your thread cards as a checked " +
+    "success in their queue and stays there until they archive it — marking done is not dismissal, and " +
+    "it does not close, archive or hide anything.\n\n" +
+    "FRIZZ CAN REFUSE THIS, which is the whole reason it is a tool rather than a fence. An OPEN " +
+    "QUESTION or an ARMED REGISTRATION blocks it, and the refusal names each one by id: a question " +
+    "nobody answered dies with the card, and a live wait means the thing you were waiting for has not " +
+    "happened yet. Resolve them for real — answer it yourself and `unask`, or `unwatch` the wait you no " +
+    "longer need — then call again. There is no force parameter and there will not be one.\n\n" +
+    "IT ONLY COUNTS WHAT IS REGISTERED. A background shell or a sub-agent you never registered does " +
+    "not block this, because frizz cannot tell a build you are waiting on from a dev server you walked " +
+    "away from. That judgement is yours, and registering it is how you make it.\n\n" +
+    "DONE MEANS THE WORK LANDED, NOT THAT YOU STOPPED. Code committed to the project's mainline; a " +
+    "plan, doc or commissioned report written INTO A FILE. An open pull request is not done — the " +
+    "merge is. An investigation headed for a fix is not done — the fix is. And a verdict that ends in " +
+    "SOMEBODY SHOULD NOW DO SOMETHING (merge it, post this, pick one of these) is not done either: " +
+    "that is an `ask`, carrying your recommendation as the first option.\n\n" +
+    "THE TEST IS NEVER \"HAVE I STOPPED WORKING\". It is: WHAT IS LOST IF NOBODY EVER OPENS THIS " +
+    "THREAD AGAIN? Name one thing and you are not done. Uncertain is not done.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      body: {
+        type: "string",
+        description:
+          "THE CARD, as markdown. One to three sentences, then a bullet per deliverable, each opening " +
+          "with a bolded verb phrase naming what shipped and where. Backtick every path, identifier and " +
+          "command, and make file references real links. It is a LEDGER, not a summary: reasoning, " +
+          "caveats and anything the human must do belong in your final message instead, because a " +
+          "sentence that would read the same in both places belongs in exactly one of them. Nothing " +
+          "here may point vaguely forward — no \"a follow-up could…\". Do it, ask about it, or drop it.",
+      },
+    },
+    required: ["body"],
+  },
+}
+
 // The unified server's tool registry: `tools/list` returns these and `tools/call` routes by name.
 // Adding a worker-facing frizz tool = one entry here + one handler in `HANDLERS` — never a second
 // MCP server, so every frizz tool stays under the same `mcp__frizz__*` namespace and the same
@@ -572,7 +611,7 @@ const ACTIVITY = {
   inputSchema: { type: "object", properties: {}, required: [] },
 }
 
-const TOOLS = [SPAWN_THREAD, RECURRING_PROMPT, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, ACTIVITY]
+const TOOLS = [SPAWN_THREAD, RECURRING_PROMPT, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, ACTIVITY]
 
 /** @type {Record<string, (args: Record<string, unknown>) => Promise<string>>} */
 const HANDLERS = {
@@ -583,6 +622,7 @@ const HANDLERS = {
   [WATCH.name]: watch,
   [ASK.name]: ask,
   [UNASK.name]: unask,
+  [DONE.name]: done,
   [UNWATCH.name]: unwatch,
   [ACTIVITY.name]: activity,
 }
@@ -1235,6 +1275,43 @@ async function unask(args) {
     ? `Question ${id} withdrawn. Its card is gone and the human will not be asked.`
     : `No OPEN question ${id} on this thread — it was already answered or dismissed, or the id is not one of yours.`
   return `${head}\n\n${openQuestionList(result)}`
+}
+
+/** The `done` handler: declare the effort finished, or report exactly what refuses to let it.
+ * @param {Record<string, unknown>} args @returns {Promise<string>} */
+async function done(args) {
+  const slug = threadSlug()
+  const body = typeof args.body === "string" ? args.body.trim() : ""
+  if (!body) throw new Error("`body` is required — the write-up the human reads on the card")
+  const result = (await callRpc("markOwnDone", { slug, body }))?.result
+  if (result?.done) {
+    return (
+      "Marked done. Your thread cards as a checked success in the human's queue and stays there until " +
+      "they archive it.\n\nNOTHING WAS CLOSED, HIDDEN OR ARCHIVED — if there is more to say, say it in " +
+      "your final message; if more work appears, keep going and call this again."
+    )
+  }
+  // REFUSED, with everything that refuses it named by id, so the next move is a tool call and not a
+  // guess. Reported as an ordinary result rather than thrown: this is a gate doing its job, not a fault.
+  const questions = (result?.blockingQuestions ?? []).map((q) => `  ${q.id}  ${(q.question ?? "").split("\n")[0]}`)
+  const watches = (result?.blockingWatches ?? []).map((w) => `  ${w.id}  ${w.what}`)
+  const parts = ["NOT marked done. This thread still holds work open."]
+  if (questions.length) {
+    parts.push(
+      `${questions.length} question${questions.length === 1 ? "" : "s"} the human has not answered:\n${questions.join("\n")}\n` +
+      "Each one dies unread with a done card. Decide it yourself and withdraw it (`unask`), or leave it " +
+      "open and keep working until it is answered.",
+    )
+  }
+  if (watches.length) {
+    parts.push(
+      `${watches.length} registration${watches.length === 1 ? "" : "s"} still armed:\n${watches.join("\n")}\n` +
+      "A live wait means the thing you were waiting for has not happened. Wait for it, or drop the ones " +
+      "that stopped mattering (`unwatch`, or `watch_pr` with `action: \"drop\"`, or `timer` cancel).",
+    )
+  }
+  parts.push("There is no force parameter. Resolve them and call `done` again.")
+  return parts.join("\n\n")
 }
 
 /** The `watch_pr` handler: register, withdraw, or read back this thread's PR watchers.

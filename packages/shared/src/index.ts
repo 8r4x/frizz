@@ -1838,6 +1838,29 @@ export function questionAnswerMessage(answers: readonly QuestionAnswer[], dismis
   return `Answers to the questions you registered:\n${body}${tail}`
 }
 
+/** The worker's own completion. `body` is the markdown the card renders — the same thing the ```done
+ *  fence carried, minus the fence. */
+export const MarkOwnDoneInput = z.object({
+  slug: ThreadSlug,
+  body: z.string().trim().min(1).max(20_000),
+}).strict()
+export type MarkOwnDoneInput = z.infer<typeof MarkOwnDoneInput>
+
+/** What still holds the thread open, when something does. The call is REFUSED in that case and this is
+ *  the refusal's material: the worker is told exactly what to resolve, by id, so it can act rather than
+ *  guess. There is deliberately NO `force` flag anywhere in this contract — a bypass riding the gated
+ *  call gets learned (the first refusal teaches it, it is then passed pre-emptively) and the gate
+ *  degrades to a two-token tax. Any gate whose escape hatch is a parameter on the gated call is not a
+ *  gate; the escape hatches here are `unask` and `unwatch`, which are the worker deciding on purpose. */
+export const MarkOwnDoneResult = z.object({
+  done: z.boolean(),
+  /** Open questions, by id and question text. */
+  blockingQuestions: z.array(z.object({ id: z.string(), question: z.string() }).strict()),
+  /** Armed registrations, by id and what each names. Watches, PR watchers and timers alike. */
+  blockingWatches: z.array(z.object({ id: z.string(), what: z.string() }).strict()),
+}).strict()
+export type MarkOwnDoneResult = z.infer<typeof MarkOwnDoneResult>
+
 export const ListOwnPrWatchesInput = z.object({ slug: ThreadSlug }).strict()
 export type ListOwnPrWatchesInput = z.infer<typeof ListOwnPrWatchesInput>
 
