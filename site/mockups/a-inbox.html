@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>A — Inbox</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+/* DIRECTION A — "Inbox"
+   Thesis: Frizz is an inbox for agents. So the page is laid out like one: a narrow meta rail of
+   timestamps and status on the left, content on the right, and a single real question card as the
+   hero. Light and calm on purpose — every terminal tool is dark, and the job here is triage, not
+   hacking. Mono is demoted to a material (commands, ids) instead of the whole voice. */
+:root{
+  --paper:#F7F8FA; --panel:#FFFFFF; --ink:#14161A; --ink-2:#565C66; --ink-3:#8A919C;
+  --rule:#E3E6EB; --accent:#E8B923; --accent-ink:#7A5D00; --live:#1E9E6A;
+  --display:"Archivo",system-ui,sans-serif; --mono:"JetBrains Mono",ui-monospace,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.6 var(--display);-webkit-font-smoothing:antialiased}
+a{color:inherit}
+.wrap{max-width:1080px;margin:0 auto;padding:0 32px}
+
+/* the rail is the signature: every block is stamped like a message in a queue */
+.row{display:grid;grid-template-columns:132px 1fr;gap:32px;border-top:1px solid var(--rule)}
+.row:first-of-type{border-top:0}
+.meta{padding:40px 0 0;font:500 11px/1.5 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)}
+.meta .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--live);margin-right:7px;vertical-align:.12em}
+.body{padding:40px 0 56px}
+
+header{display:flex;align-items:center;gap:12px;padding:22px 0;border-bottom:1px solid var(--rule)}
+header img{width:22px;height:22px;border-radius:5px}
+header b{font-weight:600;letter-spacing:-.01em}
+header nav{margin-left:auto;display:flex;gap:22px;font-size:14px;color:var(--ink-2)}
+
+h1{font:600 60px/1.02 var(--display);letter-spacing:-.035em;margin:0 0 18px;max-width:15ch}
+h1 em{font-style:normal;color:var(--ink-3)}
+.sub{font-size:19px;line-height:1.5;color:var(--ink-2);max-width:46ch;margin:0 0 30px}
+h2{font:600 13px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3);margin:0 0 20px}
+p{margin:0 0 18px;color:var(--ink-2);max-width:56ch}
+
+.cmd{display:inline-flex;align-items:center;gap:14px;background:var(--ink);color:#fff;border-radius:10px;padding:14px 18px;font:500 15px var(--mono)}
+.cmd span{color:var(--accent)}
+.cmd button{margin-left:8px;border:0;background:rgba(255,255,255,.12);color:#fff;font:500 12px var(--mono);padding:6px 12px;border-radius:6px;cursor:pointer}
+
+/* the hero card — the actual artifact the product produces */
+.card{background:var(--panel);border:1px solid var(--rule);border-radius:14px;box-shadow:0 1px 2px rgba(20,22,26,.04),0 12px 32px -12px rgba(20,22,26,.14);overflow:hidden;max-width:620px}
+.card .top{display:flex;align-items:baseline;gap:10px;padding:18px 22px 0}
+.card .top b{font-weight:600;font-size:15px}
+.card .top i{font-style:normal;margin-left:auto;font:500 11px var(--mono);color:var(--ink-3)}
+.card .q{padding:8px 22px 16px;color:var(--ink-2);font-size:15px}
+.opt{display:flex;align-items:center;gap:14px;padding:13px 22px;border-top:1px solid var(--rule);font-size:15px;cursor:pointer}
+.opt:hover{background:#FBFCFD}
+.opt kbd{font:500 12px var(--mono);width:24px;height:24px;display:grid;place-items:center;border:1px solid var(--rule);border-bottom-width:2px;border-radius:6px;color:var(--ink-2);background:#fff}
+.opt .rec{margin-left:auto;font:500 10px var(--mono);letter-spacing:.08em;color:var(--accent-ink);background:#FDF6DF;border:1px solid #F2E3AE;padding:3px 8px;border-radius:20px}
+.card .foot{display:flex;gap:10px;padding:14px 22px;border-top:1px solid var(--rule);background:#FCFDFE}
+.card .foot .go{background:var(--ink);color:#fff;border:0;border-radius:8px;padding:9px 16px;font:500 13px var(--display);cursor:pointer}
+.card .foot .ghost{background:transparent;border:1px solid var(--rule);border-radius:8px;padding:9px 14px;font:500 13px var(--display);color:var(--ink-2);cursor:pointer}
+
+.shot{margin-top:26px;border:1px solid var(--rule);border-radius:12px;overflow:hidden;background:#fff}
+.shot img{display:block;width:100%}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:28px}
+.two h3{font:600 17px/1.3 var(--display);margin:0 0 8px;letter-spacing:-.01em}
+footer{border-top:1px solid var(--rule);padding:26px 0 60px;font-size:13px;color:var(--ink-3);display:flex;gap:20px}
+@media(max-width:820px){.row{grid-template-columns:1fr;gap:0}.meta{padding-top:32px}.body{padding-top:12px}h1{font-size:40px}.two{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <img src="../img/fff-tile.png" alt="" /><b>Frizz</b>
+    <nav><a href="#">Remote access</a><a href="#">GitHub</a><a href="#">npm</a></nav>
+  </header>
+
+  <div class="row">
+    <div class="meta"><span class="dot"></span>4 active</div>
+    <div class="body">
+      <h1>Your agents have questions. <em>Answer them in one place.</em></h1>
+      <p class="sub">Frizz runs many Claude Code and Codex agents at once. When one needs you, it becomes a card in a single queue — with lettered options and a keystroke to answer.</p>
+      <div class="cmd"><span>$</span>npx frizz<button>Copy</button></div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="meta">18 min ago<br />opus · high</div>
+    <div class="body">
+      <div class="card">
+        <div class="top"><b>Persist the settings store across restarts</b><i>WAITING</i></div>
+        <div class="q">Should the settings store use SQLite or a JSON file?</div>
+        <div class="opt"><kbd>A</kbd>SQLite — transactional, matches how sessions are already stored<span class="rec">RECOMMENDED</span></div>
+        <div class="opt"><kbd>B</kbd>JSON file — zero deps, human-editable</div>
+        <div class="opt"><kbd>C</kbd>Something else…</div>
+        <div class="foot"><button class="go">Send answer</button><button class="ghost">Snooze 1 day</button><button class="ghost">Mark as done</button></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="meta">The board</div>
+    <div class="body">
+      <h2>One tab, every project</h2>
+      <p>Threads you are waiting on sit at the top. Everything still running is below. Nothing appears just to be dismissed.</p>
+      <div class="shot"><img src="../img/board.png" alt="The Frizz board" /></div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="meta">Why</div>
+    <div class="body">
+      <div class="two">
+        <div><h3>Not a model</h3><p>Frizz drives the agents you already pay for, and stores nothing in the cloud.</p></div>
+        <div><h3>Not a terminal</h3><p>Reading four panes to find the one that stopped is the problem, not the interface.</p></div>
+      </div>
+    </div>
+  </div>
+
+  <footer><span>MIT</span><a href="#">GitHub</a><a href="#">npm</a></footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>B — Keystroke</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+/* DIRECTION B — "Keystroke"
+   Thesis: the whole product compresses to one gesture — an agent asks, you press a letter. So the page
+   is almost wordless and the signature is a real keyboard: three caps you can actually press, which
+   answer the card beside them. Dark like the app, but SPARSE — the current site is dark and dense, and
+   density is the complaint. Roughly forty words above the fold. */
+:root{
+  --bg:#0A0B0D; --panel:#141619; --line:#23262B; --fg:#F2F3F5; --fg-2:#9AA1AB;
+  --accent:#E8B923; --display:"Archivo",system-ui,sans-serif; --mono:"JetBrains Mono",ui-monospace,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 var(--display);-webkit-font-smoothing:antialiased;overflow-x:hidden}
+a{color:inherit;text-decoration:none}
+a:hover{color:var(--accent)}
+header{display:flex;align-items:center;gap:12px;padding:24px 40px;position:relative;z-index:3}
+header img{width:22px;height:22px;border-radius:5px}
+header b{font-weight:700;letter-spacing:-.01em}
+header nav{margin-left:auto;display:flex;gap:24px;font:500 13px var(--mono);color:var(--fg-2)}
+
+.hero{position:relative;padding:64px 40px 0}
+h1{font:700 clamp(52px,8.4vw,124px)/0.92 var(--display);letter-spacing:-.05em;margin:0;max-width:11ch}
+h1 .dim{color:#41464E}
+.lede{margin:30px 0 0;max-width:34ch;font-size:19px;line-height:1.5;color:var(--fg-2)}
+.cmd{margin-top:38px;display:inline-flex;align-items:center;gap:14px;border:1px solid var(--line);background:var(--panel);border-radius:12px;padding:15px 20px;font:500 16px var(--mono)}
+.cmd span{color:var(--accent)}
+
+/* SIGNATURE: three caps. press one and the card answers. */
+.keys{display:flex;gap:14px;margin-top:40px}
+.cap{width:74px;height:74px;border-radius:14px;background:linear-gradient(#20242A,#171A1E);border:1px solid #2C3138;border-bottom:4px solid #2C3138;
+  display:grid;place-items:center;font:500 26px var(--mono);color:var(--fg);cursor:pointer;transition:transform .08s ease,border-bottom-width .08s ease,color .12s;user-select:none}
+.cap:hover{color:var(--accent)}
+.cap:active,.cap.on{transform:translateY(3px);border-bottom-width:1px;color:var(--accent)}
+.cap small{display:block;font:400 10px var(--mono);color:var(--fg-2);margin-top:4px;letter-spacing:.06em}
+
+/* the card sits to the right and bleeds off the frame */
+.stage{position:absolute;top:88px;right:-140px;width:min(56vw,760px);border:1px solid var(--line);border-radius:16px;background:var(--panel);
+  box-shadow:0 40px 120px -40px #000;overflow:hidden}
+.stage .bar{display:flex;align-items:baseline;gap:10px;padding:18px 22px 0;font-size:15px;font-weight:600}
+.stage .bar i{font-style:normal;margin-left:auto;font:500 11px var(--mono);color:var(--fg-2)}
+.stage::after{content:"";position:absolute;inset:0 0 0 auto;width:120px;background:linear-gradient(90deg,transparent,var(--bg));pointer-events:none}
+.stage .q{padding:8px 22px 16px;color:var(--fg-2);font-size:15px}
+.opt{display:flex;align-items:center;gap:14px;padding:14px 22px;border-top:1px solid var(--line);font-size:15px;color:var(--fg-2);transition:background .15s,color .15s}
+.opt kbd{font:500 12px var(--mono);width:24px;height:24px;display:grid;place-items:center;border:1px solid var(--line);border-radius:6px}
+.opt.on{background:#1B1F24;color:var(--fg)}
+.opt.on kbd{border-color:var(--accent);color:var(--accent)}
+.answered{padding:14px 22px;border-top:1px solid var(--line);font:500 13px var(--mono);color:var(--accent);opacity:0;transition:opacity .2s}
+.answered.on{opacity:1}
+
+.strip{border-top:1px solid var(--line);margin-top:72px;padding:56px 40px;display:grid;grid-template-columns:repeat(3,1fr);gap:44px}
+.strip h3{font:700 15px/1.3 var(--display);margin:0 0 8px;letter-spacing:-.01em}
+.strip p{margin:0;color:var(--fg-2);font-size:15px}
+.strip .n{font:500 11px var(--mono);color:#41464E;letter-spacing:.1em;display:block;margin-bottom:14px}
+footer{padding:30px 40px 60px;color:#5A616B;font:500 12px var(--mono);display:flex;gap:22px;border-top:1px solid var(--line)}
+@media(max-width:1000px){.stage{position:static;width:100%;margin-top:48px;right:0}.hero{min-height:0;padding-bottom:20px}.strip{grid-template-columns:1fr}}
+@media(prefers-reduced-motion:reduce){.cap{transition:none}}
+</style>
+</head>
+<body>
+<header><img src="../img/fff-tile.png" alt="" /><b>Frizz</b>
+  <nav><a href="#">Remote access</a><a href="#">GitHub</a><a href="#">npm</a></nav>
+</header>
+
+<section class="hero">
+  <h1>Press one <span class="dim">letter.</span></h1>
+  <p class="lede">Run a dozen coding agents at once. When one needs you, it asks a real question with lettered options — and one keystroke sends it back to work.</p>
+  <div class="cmd"><span>$</span>npx frizz</div>
+
+  <div class="keys">
+    <div class="cap" data-k="0">A<small>SQLITE</small></div>
+    <div class="cap" data-k="1">B<small>JSON</small></div>
+    <div class="cap" data-k="2">C<small>OTHER</small></div>
+  </div>
+
+  <div class="stage">
+    <div class="bar">Persist the settings store across restarts<i>WAITING · 18M</i></div>
+    <div class="q">Should the settings store use SQLite or a JSON file?</div>
+    <div class="opt" data-o="0"><kbd>A</kbd>SQLite — transactional, matches how sessions are already stored</div>
+    <div class="opt" data-o="1"><kbd>B</kbd>JSON file — zero deps, human-editable</div>
+    <div class="opt" data-o="2"><kbd>C</kbd>Something else…</div>
+    <div class="answered">→ answered · thread resumed</div>
+  </div>
+</section>
+
+<section class="strip">
+  <div><span class="n">01</span><h3>One queue</h3><p>Every agent that needs you becomes one card. Nothing shows up just to be dismissed.</p></div>
+  <div><span class="n">02</span><h3>Every project</h3><p>One server serves every repo on the machine, each at its own URL.</p></div>
+  <div><span class="n">03</span><h3>Your keys</h3><p>Frizz drives the agents you already pay for. No account, no telemetry.</p></div>
+</section>
+
+<footer><span>MIT</span><span>GitHub</span><span>npm</span></footer>
+
+<script>
+  const caps = [...document.querySelectorAll(".cap")];
+  const opts = [...document.querySelectorAll(".opt")];
+  const done = document.querySelector(".answered");
+  const pick = (i) => {
+    caps.forEach((c, n) => c.classList.toggle("on", n === i));
+    opts.forEach((o, n) => o.classList.toggle("on", n === i));
+    done.classList.add("on");
+  };
+  caps.forEach((c, i) => { c.addEventListener("click", () => pick(i)); });
+  addEventListener("keydown", (e) => { const i = "abc".indexOf(e.key.toLowerCase()); if (i >= 0) pick(i); });
+</script>
+</body>
+</html>

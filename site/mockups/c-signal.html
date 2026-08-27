@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>C — Signal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+/* DIRECTION C — "Signal"
+   Thesis: the app already has a colour system nobody sees on the website — every project wears a
+   two-letter chip in its own colour down the left rail. So the page is built out of that: each block
+   is a project, stamped and colour-coded, and the queue is expressed as stacked blocks rather than
+   described in prose. Loud and flat where the current site is dim and uniform. No shadows, no
+   gradients, no rounded softness — the colour does all the work. */
+:root{
+  --ink:#111316; --paper:#FFFFFF; --mute:#6B7280; --line:#111316;
+  --ds:#1F6F4A; --aw:#7A8B2E; --aa:#3767B1; --fr:#B23B4C; --go:#E8B923;
+  --display:"Archivo",system-ui,sans-serif; --mono:"JetBrains Mono",ui-monospace,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.55 var(--display);-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}
+.bar nav a:hover{text-decoration:underline;text-underline-offset:3px}
+.bar{display:flex;align-items:center;gap:12px;padding:18px 28px;border-bottom:2px solid var(--line)}
+.bar img{width:22px;height:22px}
+.bar b{font-weight:800;letter-spacing:-.02em;font-size:18px}
+.bar nav{margin-left:auto;display:flex;gap:22px;font:500 12px var(--mono);text-transform:uppercase;letter-spacing:.08em}
+
+.hero{display:grid;grid-template-columns:1.15fr .85fr;border-bottom:2px solid var(--line)}
+.hero .left{padding:56px 28px 48px;border-right:2px solid var(--line)}
+h1{font:800 clamp(46px,6vw,86px)/0.95 var(--display);letter-spacing:-.045em;margin:0 0 22px}
+h1 mark{background:var(--go);padding:0 .12em;box-decoration-break:clone}
+.lede{font-size:19px;max-width:40ch;margin:0 0 30px;color:#2C3138}
+.cmd{display:inline-flex;align-items:center;gap:12px;border:2px solid var(--line);padding:13px 18px;font:500 16px var(--mono)}
+.cmd span{color:#9AA1AB}
+.hero .right{padding:0;display:grid;grid-template-rows:repeat(4,1fr)}
+/* SIGNATURE: the rail, blown up — each project a flat colour block, the way the app stamps them */
+.chip{display:flex;align-items:center;gap:16px;padding:0 26px;border-bottom:2px solid var(--line);color:#fff;font:500 14px var(--mono)}
+.chip:last-child{border-bottom:0}
+.chip b{font:800 20px var(--mono);letter-spacing:-.02em;width:44px}
+.chip i{font-style:normal;margin-left:auto;font-size:12px;opacity:.85}
+.c-ds{background:var(--ds)} .c-aw{background:var(--aw)} .c-aa{background:var(--aa)} .c-fr{background:var(--fr)}
+
+.band{display:grid;grid-template-columns:180px 1fr;border-bottom:2px solid var(--line)}
+.band .tag{border-right:2px solid var(--line);padding:34px 22px;font:500 12px var(--mono);text-transform:uppercase;letter-spacing:.1em;color:var(--mute)}
+.band .content{padding:34px 28px}
+.band h2{font:800 30px/1.1 var(--display);letter-spacing:-.03em;margin:0 0 12px}
+.band p{margin:0 0 16px;max-width:60ch;color:#2C3138}
+.q{border:2px solid var(--line);max-width:640px}
+.q .h{padding:16px 20px;border-bottom:2px solid var(--line);font-weight:700}
+.q .o{display:flex;gap:14px;padding:13px 20px;border-bottom:1px solid #E3E6EB;font-size:15px}
+.q .o:last-child{border-bottom:0}
+.q .o kbd{font:500 12px var(--mono);border:2px solid var(--line);width:24px;height:24px;display:grid;place-items:center}
+.q .o.pick{background:var(--go)}
+.shot{border:2px solid var(--line);margin-top:8px}
+.shot img{display:block;width:100%}
+.three{display:grid;grid-template-columns:repeat(3,1fr)}
+.three div{padding:26px;border-right:2px solid var(--line)}
+.three div:last-child{border-right:0}
+.three h3{font:800 16px var(--display);margin:0 0 6px}
+.three p{font-size:14px;color:var(--mute);margin:0}
+footer{padding:24px 28px 52px;font:500 12px var(--mono);text-transform:uppercase;letter-spacing:.08em;color:var(--mute);display:flex;gap:22px}
+@media(max-width:900px){.hero{grid-template-columns:1fr}.hero .left{border-right:0;border-bottom:2px solid var(--line)}.hero .right{grid-template-rows:none}.chip{padding:18px 26px}.band{grid-template-columns:1fr}.band .tag{border-right:0;border-bottom:2px solid var(--line);padding:16px 22px}.three{grid-template-columns:1fr}.three div{border-right:0;border-bottom:2px solid var(--line)}}
+</style>
+</head>
+<body>
+<div class="bar"><img src="../img/fff-tile.png" alt="" /><b>Frizz</b>
+  <nav><a href="#">Remote</a><a href="#">GitHub</a><a href="#">npm</a></nav>
+</div>
+
+<section class="hero">
+  <div class="left">
+    <h1>A dozen agents. <mark>One queue.</mark></h1>
+    <p class="lede">Frizz runs many Claude Code and Codex agents at once. Every agent that needs you becomes a card — with lettered options and a keystroke to answer.</p>
+    <div class="cmd"><span>$</span>npx frizz</div>
+  </div>
+  <div class="right">
+    <div class="chip c-ds"><b>DS</b>design-system<i>running</i></div>
+    <div class="chip c-aw"><b>AW</b>acme-web<i>running</i></div>
+    <div class="chip c-aa"><b>AA</b>analytics<i>rested</i></div>
+    <div class="chip c-fr"><b>FR</b>frizz<i>2 waiting</i></div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="tag">The question</div>
+  <div class="content">
+    <h2>It asks. You answer.</h2>
+    <p>A worker runs until it reaches something only you can settle, then asks — in your own vocabulary, with the tradeoffs spelled out.</p>
+    <div class="q">
+      <div class="h">Should the settings store use SQLite or a JSON file?</div>
+      <div class="o pick"><kbd>A</kbd>SQLite — transactional, matches how sessions are already stored</div>
+      <div class="o"><kbd>B</kbd>JSON file — zero deps, human-editable</div>
+      <div class="o"><kbd>C</kbd>Something else…</div>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="tag">The board</div>
+  <div class="content">
+    <h2>One tab, every project</h2>
+    <p>Threads waiting on you sit at the top. Everything still running is below.</p>
+    <div class="shot"><img src="../img/board.png" alt="The Frizz board" /></div>
+  </div>
+</section>
+
+<section class="three">
+  <div><h3>Not a model</h3><p>Drives the agents you already pay for.</p></div>
+  <div><h3>Not a cloud</h3><p>Local only. No account, no telemetry.</p></div>
+  <div><h3>Not a terminal</h3><p>Stop reading four panes to find the stopped one.</p></div>
+</section>
+
+<footer><span>MIT</span><span>GitHub</span><span>npm</span></footer>
+</body>
+</html>
