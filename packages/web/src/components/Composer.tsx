@@ -21,8 +21,8 @@ import { localImageUrl } from "../lib/markdownTargets.ts"
 // data- tag for per-card input targeting (TodosView queries [data-surface="queueComposer"]).
 // Upload a dropped/pasted/picked file and return its server-side absolute path. The path goes INTO the
 // message text: workers open it with their Read/file tool; the chat renders images via /local-image and
-// non-image files as an openable chip. The safe-tier allowlist (images + common docs/text/code) is
-// enforced server-side too — the /attach route is the trust gate.
+// non-image files as an openable chip. The shared extension allowlist (images, docs/text/code, office,
+// data and archive formats) is enforced server-side too — the /attach route is the trust gate.
 async function uploadAttachment(file: File, name: string): Promise<string | null> {
   // The project this upload is FOR, resolved before the file is read rather than after. `apiBase()`
   // answers for whatever the address bar says at the instant it is called, and reading a large file is
@@ -136,8 +136,8 @@ export function Composer({
   // path (returned by /attach) is appended to the message on its own line — images render as inline
   // blocks in the transcript, non-image docs as an openable chip, and the worker opens either with its
   // Read/file tool. An allowed file is any image by MIME (a pasted screenshot often has an empty/generic
-  // name — the MIME check preserves the original image-paste behavior) OR any safe-tier file by name
-  // (docs/text/code the picker's `accept` surfaces). The /attach route re-validates as the trust gate.
+  // name — the MIME check preserves the original image-paste behavior) OR any allowlisted file by name
+  // (everything the picker's `accept` surfaces). The /attach route re-validates as the trust gate.
   async function takeFiles(files: FileList | File[] | null) {
     if (!files) return
     // Serialize intake: the paperclip button is disabled while uploading, but drop/paste are not, so a
@@ -151,7 +151,7 @@ export function Composer({
     // from its actual MIME subtype. The old blanket `"pasted.png"` fallback stored a TIFF/JPEG paste
     // as lying .png bytes (broken thumbnail, misled worker Read). The name then goes through the SAME
     // shared allowlist the server enforces, so nothing uploads only to 400, and every rejection gets
-    // a toast instead of the old silent drop (dropping a .zip or unsupported image did nothing).
+    // a toast instead of the old silent drop (dropping an unsupported file or image did nothing).
     const named = [...files].map((f) => {
       const sub = f.type.startsWith("image/") ? f.type.slice("image/".length).toLowerCase() : ""
       const ext = sub === "jpeg" ? "jpg" : sub === "svg+xml" ? "svg" : sub
@@ -582,7 +582,7 @@ export function Composer({
       {railAction && <div className={`absolute bottom-2 ${RAIL_ACTION_OFFSET} flex items-center`}>{railAction}</div>}
       {/* Attach: a hidden file input driven by the paperclip. Sits in the right rail LEFT of the send
           button (and left of any railAction), so it never overlaps the mode/model footer or the send
-          affordance. Accept is the shared safe-tier allowlist; the /attach route re-validates. */}
+          affordance. Accept is the shared extension allowlist; the /attach route re-validates. */}
       <input
         ref={fileRef}
         type="file"
@@ -660,7 +660,13 @@ function AttachmentChip({
       ) : (
         <div className="flex h-11 w-11 flex-col items-center justify-center gap-0.5 rounded-md border border-border bg-panel-2 px-1">
           <FileText size={15} strokeWidth={2} className="shrink-0 text-muted" />
-          {ext && <span className="max-w-full truncate text-[8px] font-medium leading-none text-muted/80">{ext}</span>}
+          {/* `-mx-1` cancels the tile's px-1 for the LABEL only: the inset is there to give the icon
+              air, and spending it on the badge too left 34px of the tile's 44 for text. At 8px caps
+              that is ~5.5px a character, so a seven-letter extension clipped to "PARQ…" — measured
+              39px needed against 34px available, once .parquet/.sqlite3 became attachable. The icon
+              keeps its inset; the label now gets the full 42px and every extension up to seven
+              characters fits. */}
+          {ext && <span className="-mx-1 max-w-[calc(100%+0.5rem)] truncate text-[8px] font-medium leading-none text-muted/80">{ext}</span>}
         </div>
       )}
       <button

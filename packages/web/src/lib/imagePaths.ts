@@ -1,5 +1,5 @@
 // Split a prose markdown run into ordinary markdown chunks, standalone local-IMAGE-path lines, and
-// standalone local-FILE-path lines (the safe-tier documents), so the chat view can render an agent's
+// standalone local-FILE-path lines (the allowlisted documents), so the chat view can render an agent's
 // (or a just-attached) screenshot path as a block <img> and a document path as an openable file chip
 // instead of dead mono text. Only a line that is SOLELY an absolute path (optionally wrapped in
 // backticks) is promoted — an inline path inside a sentence stays prose, and a path INSIDE a fenced
@@ -28,8 +28,9 @@ const PATH_CHARS = String.raw`(?:[^\s\`]|[ ](?!/))+`
 // these mirror the server's /local-image content-type map, which is why svg is NOT here: svg is a
 // document chip, not an inline image). The whole (trimmed) line, optional surrounding backticks.
 const IMAGE_LINE = new RegExp(String.raw`^\s*\`?(/${PATH_CHARS}\.(?:png|jpe?g|gif|webp))\`?\s*$`, "i")
-// The same shape for a non-image safe-tier document (pdf/svg/text/code/…), built from the shared
-// allowlist so the two never drift. Matched only when the line is NOT already an image line.
+// The same shape for a non-image allowlisted document (pdf/svg/text/code, plus the office, data and
+// archive tiers), built from the shared allowlist so the two never drift. Matched only when the line
+// is NOT already an image line.
 const DOC_LINE = new RegExp(String.raw`^\s*\`?(/${PATH_CHARS}\.(?:${ATTACHMENT_DOC_EXTENSIONS.join("|")}))\`?\s*$`, "i")
 // A fenced-code delimiter line: ``` or ~~~ (3+), optionally indented, optionally with an info string.
 // Toggling on each such line keeps a standalone absolute path that lives INSIDE a code block (an agent

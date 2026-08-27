@@ -402,7 +402,7 @@ test("symlink to a real image resolves and renders → 200; a dangling symlink �
   assert.equal(resolveLocalImage(dangling).status, 404) // realpath throws on a dangling link → clean 404
 })
 
-test("/_frizz/attach accepts the safe tier, rejects office/extensionless/oversized, and writes a sanitized name", async () => {
+test("/_frizz/attach accepts the allowlist (docs, office, data, archives), rejects extensionless/unknown/oversized, and writes a sanitized name", async () => {
   const port = 49_231
   const stateDir = mkdtempSync(join(tmpdir(), "frizz-attach-"))
   const app = originTestApp(port, undefined, {}, stateDir)
@@ -423,16 +423,25 @@ test("/_frizz/attach accepts the safe tier, rejects office/extensionless/oversiz
   assert.ok(existsSync(pdfPath))
   assert.equal(readFileSync(pdfPath, "utf8"), "%PDF-1.4 hello")
 
-  // A text/code file and an image are both in the safe tier.
+  // A text/code file and an image are both allowed.
   assert.equal((await attach({ name: "notes.md", data: b64("# hi") })).status, 200)
   assert.equal((await attach({ name: "main.ts", data: b64("export {}") })).status, 200)
   assert.equal((await attach({ name: "shot.png", data: b64("\x89PNG") })).status, 200)
 
-  // Office formats are deliberately OUT of the safe tier; extension-less + unknown are rejected too.
-  assert.equal((await attach({ name: "sheet.xlsx", data: b64("x") })).status, 400)
-  assert.equal((await attach({ name: "doc.docx", data: b64("x") })).status, 400)
+  // Office, data and archive formats are allowed too — a worker installs openpyxl/duckdb/unzip and
+  // reads them. Refusing them only moved the conversion onto the person dropping the file.
+  assert.equal((await attach({ name: "sheet.xlsx", data: b64("x") })).status, 200)
+  assert.equal((await attach({ name: "doc.docx", data: b64("x") })).status, 200)
+  assert.equal((await attach({ name: "deck.pptx", data: b64("x") })).status, 200)
+  assert.equal((await attach({ name: "events.parquet", data: b64("x") })).status, 200)
+  assert.equal((await attach({ name: "app.sqlite3", data: b64("x") })).status, 200)
+  assert.equal((await attach({ name: "logs.tar.gz", data: b64("x") })).status, 200)
+  assert.equal((await attach({ name: "archive.zip", data: b64("x") })).status, 200)
+
+  // Extension-less and off-list types are still rejected — the allowlist is still an allowlist.
   assert.equal((await attach({ name: "README", data: b64("x") })).status, 400)
-  assert.equal((await attach({ name: "archive.zip", data: b64("x") })).status, 400)
+  assert.equal((await attach({ name: "installer.dmg", data: b64("x") })).status, 400)
+  assert.equal((await attach({ name: "tool.exe", data: b64("x") })).status, 400)
 
   // The base64 payload cap is enforced (ATTACHMENT_MAX_BASE64_CHARS = 25_000_000).
   assert.equal((await attach({ name: "big.pdf", data: "A".repeat(25_000_001) })).status, 400)

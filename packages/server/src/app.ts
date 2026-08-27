@@ -163,9 +163,10 @@ export function createApp(ctx: AppContext, options: AppOptions = {}) {
     })
   })
 
-  // Attachment intake for drag-and-dropped / pasted / picked files (images AND the safe-tier document
-  // set — see @frizz/shared ATTACHMENT_EXTENSIONS): the file lands on DISK (outside the repo, under
-  // the project's state dir) and the client inserts the returned absolute path into the message text.
+  // Attachment intake for drag-and-dropped / pasted / picked files (images AND every document, office,
+  // data and archive format in @frizz/shared ATTACHMENT_EXTENSIONS): the file lands on DISK (outside
+  // the repo, under the project's state dir) and the client inserts the returned absolute path into
+  // the message text.
   // Workers open it with their Read/file tool; the chat renders images via /local-image and non-image
   // files as an openable chip (both roots include the attachments dir). JSON base64 keeps the route
   // dependency-free. The extension allowlist + the char cap are the only trust gates; the on-disk name

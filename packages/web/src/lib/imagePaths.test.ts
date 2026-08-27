@@ -73,8 +73,13 @@ test("a standalone non-image doc path becomes a file part", () => {
   ])
 })
 
-test("common safe-tier doc/text/code extensions become file parts, case-insensitive", () => {
+test("common doc/text/code/office/data extensions become file parts, case-insensitive", () => {
   for (const p of ["/a/b.PDF", "/a/notes.txt", "/a/data.csv", "/a/x.json", "/a/y.md", "/a/z.log", "/a/s.ts", "/a/m.py", "/a/c.yaml"]) {
+    assert.deepEqual(splitProseAttachments(p), [{ kind: "file", path: p }])
+  }
+  // The office/data/archive tier promotes the same way. `.tar.gz` is the one with a compound suffix:
+  // the path chars are greedy, so the line still resolves against the final `gz`.
+  for (const p of ["/a/book.XLSX", "/a/report.docx", "/a/deck.pptx", "/a/events.parquet", "/a/app.sqlite3", "/a/logs.zip", "/a/logs.tar.gz"]) {
     assert.deepEqual(splitProseAttachments(p), [{ kind: "file", path: p }])
   }
 })
@@ -95,7 +100,7 @@ test("an inline path inside a sentence stays prose", () => {
 test("extension-less, unsupported, and relative paths stay prose", () => {
   assert.deepEqual(splitProseAttachments("/etc/hosts"), [{ kind: "md", text: "/etc/hosts" }])
   assert.deepEqual(splitProseAttachments("./rel/shot.png"), [{ kind: "md", text: "./rel/shot.png" }])
-  assert.deepEqual(splitProseAttachments("/a/archive.zip"), [{ kind: "md", text: "/a/archive.zip" }])
+  assert.deepEqual(splitProseAttachments("/a/installer.dmg"), [{ kind: "md", text: "/a/installer.dmg" }])
 })
 
 test("standalone paths INSIDE a fenced code block stay code, never chips", () => {
