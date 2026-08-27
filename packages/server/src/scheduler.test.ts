@@ -8,7 +8,7 @@ import { createStorage, type Storage, type SessionRow } from "./storage.ts"
 import { createScheduler, parsePrRef, ghPrViewArgs, evalRollup, parseGithubReviewActivities, isBotGithubActor, type GithubReviewActivity, type PrRef, type PrStatus } from "./scheduler.ts"
 import { createGithubReviewFetcher } from "./github-review.ts"
 import { createWakeDeliveryStore } from "./wake-store.ts"
-import type { Tailer, SessionTelemetry, FenceView, TurnState } from "./tailer.ts"
+import type { Tailer, SessionTelemetry, FenceView, TurnState, BgShellView } from "./tailer.ts"
 
 // ---- pure helpers ----
 
@@ -219,6 +219,89 @@ test("a fence arms NOTHING: an elapsed instant, a merged PR and a dead shell nev
   await s.tick()
   assert.deepEqual(h.resumes, [], "a wait nobody registered must never resume, however it is worded")
   assert.deepEqual(h.pr.calls, [], "and no fence line is worth a GitHub poll")
+})
+
+// ---- REGISTERED WATCHES: the expiry sweep and the finish sweep (2026-08-26) ----
+//
+// `mcp__frizz__watch` turns a wait from a line the worker restates at every rest into a row it creates
+// once (plans/rest-by-registration.md). Two settle conditions, and only ONE of them is news:
+//
+//   • EXPIRED → settled, and the worker TOLD. The expiry is the whole mechanism that stops a
+//     registration outliving its own relevance: the worker chose a duration once and is put back in
+//     front of that decision when it runs out. A wait that vanishes in silence is the same stall in a
+//     new costume — the worker would rest believing it is covered.
+//   • THE TARGET ENDED → settled SILENTLY. That is the wait completing, which is exactly what the
+//     worker asked to be woken for, and evalShellCompletions already delivers that wake off the retired
+//     shell itself. A second one here would be two notifications for one fact.
+
+const liveShell = (over: Partial<BgShellView> = {}): BgShellView => ({
+  label: "nub --test", startedAt: "2026-07-09T11:59:00.000Z", state: "running", id: "toolu_sh", taskId: "bzvtnt3ig", ...over,
+})
+
+function armWatch(h: Harness, slug: string, over: { id?: string; kind?: "shell" | "agent"; target?: string; expiresAtMs?: number } = {}) {
+  const id = over.id ?? "wch_1"
+  h.storage.armThreadWatch({
+    id, slug, kind: over.kind ?? "shell", target: over.target ?? "bzvtnt3ig",
+    createdAtMs: h.clock.ms, expiresAtMs: over.expiresAtMs ?? h.clock.ms + 2 * 3600_000,
+  })
+  return id
+}
+
+test("watch: an expired row is settled AND the worker is told, once", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("t"))
+  const id = armWatch(h, "t", { expiresAtMs: h.clock.ms + 30_000 })
+  h.tele.set("t", { ...tele(), bgShells: [liveShell()] })
+  const s = h.make()
+  await s.tick() // not due yet
+  assert.equal(h.resumes.length, 0)
+  assert.equal(h.storage.getThreadWatch(id)?.state, "armed")
+  h.clock.ms += 60_000
+  await s.tick()
+  await s.tick() // the row is settled → must not fire twice
+  assert.equal(h.resumes.length, 1)
+  assert.equal(h.storage.getThreadWatch(id)?.state, "expired")
+  assert.match(h.resumes[0].message, /Your watch on the background shell `bzvtnt3ig` has expired/)
+  // The re-registration instruction is the point of telling it at all: the worker re-decides rather
+  // than silently losing a wait it still holds.
+  assert.match(h.resumes[0].message, /register it again with `mcp__frizz__watch` and a fresh `for:`/)
+})
+
+test("watch: a row whose shell has finished is settled SILENTLY", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("t"))
+  const id = armWatch(h, "t")
+  h.tele.set("t", { ...tele(), bgShells: [liveShell()] })
+  const s = h.make()
+  await s.tick()
+  assert.equal(h.storage.getThreadWatch(id)?.state, "armed", "a live shell keeps its row armed")
+  // The shell ends. evalShellCompletions owns the wake for that fact; this pass only clears the row.
+  h.tele.set("t", tele())
+  await s.tick()
+  assert.equal(h.storage.getThreadWatch(id)?.state, "settled")
+  assert.deepEqual(h.resumes, [], "the finish is not this pass's news to deliver")
+})
+
+test("watch: NO TELEMETRY is not `not live` — a healthy row survives a thread frizz cannot read", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("t"))
+  const id = armWatch(h, "t")
+  // No entry in the telemetry map at all. Settling on that reading would cancel a healthy wait, which
+  // is the same rule probeShellAlive takes: an undefined verdict is never treated as dead.
+  const s = h.make()
+  await s.tick()
+  assert.equal(h.storage.getThreadWatch(id)?.state, "armed")
+})
+
+test("watch: an archived thread's row still settles, and wakes nobody", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("t", { state: "archived", archived: 1 }))
+  const id = armWatch(h, "t", { expiresAtMs: h.clock.ms - 1 })
+  h.tele.set("t", { ...tele(), bgShells: [liveShell()] })
+  const s = h.make()
+  await s.tick()
+  assert.equal(h.storage.getThreadWatch(id)?.state, "expired")
+  assert.deepEqual(h.resumes, [])
 })
 
 // ---- single-fire on a witnessed transition ----

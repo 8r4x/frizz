@@ -1150,6 +1150,11 @@ test("an elapsed watch is due, a dropped one is not, and one thread can never dr
     assert.equal(s.settleThreadWatch("wch_soon", at + 5_000), false, "and only once")
     assert.equal(s.settleThreadWatch("wch_again", at + 6_000, "expired"), true)
     assert.equal(s.getThreadWatch("wch_again")?.state, "expired", "an elapsed timeout closes the row as expired, not settled")
+
+    // The scheduler's MACHINE-WIDE sweep, which has to ask every armed row whether its work is still
+    // running. Only armed rows: the three closed above are settled business.
+    s.armThreadWatch({ id: "wch_x", slug: "other", kind: "agent", target: "c", createdAtMs: at, expiresAtMs: at + 3600_000 })
+    assert.deepEqual(s.armedThreadWatches().map((w) => w.id), ["wch_x"])
   } finally {
     s.close()
   }

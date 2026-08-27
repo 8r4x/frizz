@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_RETIRED_LEAD, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, formatGithubWakeSteer, type GithubWatchStatus, prWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
+import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_RETIRED_LEAD, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, formatGithubWakeSteer, type GithubWatchStatus, prWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
 import { GITHUB_STATUS_SETTING, parkExpiresAt, parkIsHonoured, readAwaitingPark, unaccountedItems, type LiveActivity } from "./awaiting.ts"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
@@ -762,6 +762,19 @@ function prWatchExpiredFenceId(watchId: string): string {
 function isPrWatchFenceId(fenceId: string): boolean {
   return fenceId.startsWith(`${PR_WATCH_FENCE_PREFIX}:`) || fenceId.startsWith(`${PR_WATCH_EXPIRED_FENCE_PREFIX}:`)
 }
+/** A REGISTERED WATCH that ran out of `for:` — the `thread_watch` twin of the PR expiry above, and a
+ *  separate namespace for the same reason: it is one-shot news about a row that is settled by the time
+ *  it is sent. There is no `watch:` REPORT prefix beside it, because a watch has no report to make —
+ *  evalShellCompletions already wakes a resting thread when its shell finishes, and a second wake for
+ *  the same fact would be the duplicate noise that pass exists to avoid. */
+const OWN_WATCH_EXPIRED_FENCE_PREFIX = "watch-expired"
+function ownWatchExpiredFenceId(watchId: string): string {
+  return `${OWN_WATCH_EXPIRED_FENCE_PREFIX}:${watchId}`
+}
+function isOwnWatchExpiredFenceId(fenceId: string): boolean {
+  return fenceId.startsWith(`${OWN_WATCH_EXPIRED_FENCE_PREFIX}:`)
+}
+
 /** How often a registered watcher re-reads GitHub, per PR. The fence poller's floor, for the same
  *  reason: this is somebody else's API and the answer changes on a human's timescale. */
 const PR_WATCH_POLL_MS = 60_000
@@ -1048,6 +1061,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     // this thread wrote, so no fence, rest or edit can supersede it either. Same reasoning as the shell
     // wake directly above, and the same bug if it is missing.
     if (isPrWatchFenceId(item.fenceId)) {
+      return tele.turn === "idle" ? "current-idle" : "current-busy"
+    }
+    // A REGISTERED WATCH's expiry is bound to a clock, not to anything the thread wrote — the row is
+    // already settled by the time this is enqueued, so no fence, rest or edit can make it untrue.
+    // Same reasoning as the two above, and the same silent never-delivered bug if it is missing.
+    if (isOwnWatchExpiredFenceId(item.fenceId)) {
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
     if (isSnoozeFenceId(item.fenceId)) {
@@ -2122,6 +2141,68 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   }
 
+  /** THE REGISTERED-WATCH REGISTRY PASS. Two settle conditions, and only one of them is news.
+   *
+   *  EXPIRED → settled + a wake. The expiry is the whole reason a registration cannot outlive its own
+   *  relevance: the worker chose a duration once, and when it runs out it is put back in front of that
+   *  decision rather than left parked on a wait it no longer holds. Told, because a wait that vanishes
+   *  silently is the same stall in a new costume — the worker would rest believing it is covered.
+   *
+   *  TARGET ENDED → settled, SILENTLY. This is the wait completing, which is exactly the thing the
+   *  worker asked to be woken for, and evalShellCompletions already delivers that wake off the retired
+   *  shell itself. A second one here would be two notifications for one fact. The board stops parking on
+   *  the row the moment the target stops resolving (hasRegisteredBackgroundPark), so settling it is
+   *  bookkeeping — it keeps the worker's own read-back from listing a wait that is over.
+   */
+  function evalOwnWatches(nowMs: number): void {
+    for (const w of deps.storage.expiredThreadWatches(nowMs)) {
+      const row = deps.storage.getSession(w.thread_slug)
+      deps.storage.settleThreadWatch(w.id, nowMs, "expired")
+      log(`waker: settled ${w.thread_slug} — watch ${w.id} expired (${w.kind}: ${w.target})`)
+      if (!row || row.state === "archived" || row.archived === 1) continue
+      const fenceId = ownWatchExpiredFenceId(w.id)
+      const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
+      if (outbox.get(deliveryId)) continue
+      const item = outbox.enqueue({
+        id: deliveryId,
+        slug: row.slug,
+        sessionId: row.session_id,
+        fenceId,
+        hintKey: fenceId,
+        message: withClock(ownWatchExpiredWakeMessage(w.kind, w.target), deps.tailer.get(row.slug)?.lastAssistantAt),
+        reason: `watch ${w.id} expired (${w.kind}: ${w.target})`,
+      }, nowMs).delivery
+      log(`waker: queued ${row.slug} — ${item.reason}`)
+      checkpoint("after-enqueue", item)
+    }
+    // The second condition. Read per thread rather than per row so one telemetry lookup covers a
+    // thread's whole armed set.
+    const bySlug = new Map<string, ReturnType<typeof deps.storage.expiredThreadWatches>>()
+    for (const w of deps.storage.armedThreadWatches()) {
+      const list = bySlug.get(w.thread_slug) ?? []
+      list.push(w)
+      bySlug.set(w.thread_slug, list)
+    }
+    for (const [slug, watches] of bySlug) {
+      const tele = deps.tailer.get(slug)
+      // NO TELEMETRY IS NOT "NOT LIVE". A thread whose transcript frizz cannot read right now says
+      // nothing about its shells, and settling on that reading would cancel a healthy wait — the same
+      // shape as `probeShellAlive`'s rule that an undefined verdict is never treated as dead.
+      if (!tele) continue
+      // The SAME liveness the park integrity pass reads, so a row cannot be settled here while the fence
+      // beside it still counts the identical handle as live. (It reads a hair wider than the board's
+      // rule — it counts a DESCENDANT sub-agent, where board.resolveLiveWatchTarget counts direct
+      // children only. Unreachable in practice: registration goes through the board's rule, so a
+      // descendant handle is refused before a row can exist for it.)
+      const live = liveActivityOf(tele, new Set(), new Set())
+      for (const w of watches) {
+        if (live[w.kind === "shell" ? "shells" : "agents"].has(w.target)) continue
+        deps.storage.settleThreadWatch(w.id, nowMs)
+        log(`waker: settled ${slug} — watch ${w.id} finished (${w.kind}: ${w.target})`)
+      }
+    }
+  }
+
   function evalTimers(nowMs: number): void {
     for (const timer of deps.storage.dueThreadTimers(nowMs)) {
       const row = deps.storage.getSession(timer.thread_slug)
@@ -2617,6 +2698,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     } catch (err) {
       if (err instanceof InjectedSchedulerCrash) throw err
       log(`waker: pr-watch registry pass failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    try {
+      evalOwnWatches(now())
+    } catch (err) {
+      if (err instanceof InjectedSchedulerCrash) throw err
+      log(`waker: watch registry pass failed: ${err instanceof Error ? err.message : String(err)}`)
     }
     try {
       evalShellCompletions(now())

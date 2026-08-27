@@ -1345,6 +1345,23 @@ export function prWatchExpiredWakeMessage(ref: string): string {
   )
 }
 
+/** The wake a REGISTERED WATCH sends when its `for:` runs out — the twin of prWatchExpiredWakeMessage
+ *  above, and here for the same reason: the scheduler mints it and nothing else may re-word it.
+ *
+ *  Expiry CANCELS the row rather than extending it, which is the whole mechanism that stops a
+ *  registration outliving its own relevance: the worker is put back in front of the decision it made
+ *  once, with the wait no longer standing, and re-registers only if it still means it. */
+export function ownWatchExpiredWakeMessage(kind: "shell" | "agent", target: string): string {
+  const what = kind === "agent" ? "sub-agent" : "background shell"
+  return (
+    `⏰ Your watch on the ${what} \`${target}\` has expired and is no longer armed — nothing about it ` +
+    `will wake you now, and it is no longer holding your thread out of the queue.\n\nIf you are still ` +
+    `waiting on it, register it again with \`mcp__frizz__watch\` and a fresh \`for:\`. If you are not, ` +
+    `and it was the only thing you were waiting on, end in a proper terminal state instead of parking ` +
+    `on it again.`
+  )
+}
+
 /** One park-integrity wake, read back out of its delivery. `items` is the status readout the message
  *  carried — the only part of the body a human has any use for, and the reason the divider can open. */
 export interface ParkWake {

@@ -592,6 +592,9 @@ export interface Storage {
   getThreadWatch(id: string): ThreadWatchRow | undefined
   /** Every armed watch whose timeout has elapsed — the scheduler cancels these and wakes their threads. */
   expiredThreadWatches(nowMs: number): ThreadWatchRow[]
+  /** Every armed watch on the machine, across threads — the scheduler's own sweep, which has to ask
+   *  each one whether the work it names is still running. */
+  armedThreadWatches(): ThreadWatchRow[]
   /** The worker's own unwatch. Scoped to the thread so one thread can never drop another's row. */
   dropThreadWatch(slug: string, id: string, settledAtMs: number): boolean
   /** The watched thing finished on its own — the runtime already woke the thread, so this only records
@@ -1689,6 +1692,9 @@ export function createStorage(dbPath: string): Storage {
     "SELECT * FROM thread_watch WHERE thread_slug = ? AND state = 'armed' ORDER BY created_at, id",
   )
   const threadWatchByIdStmt = db.prepare<[string], ThreadWatchRow>("SELECT * FROM thread_watch WHERE id = ?")
+  const armedThreadWatchesStmt = db.prepare<[], ThreadWatchRow>(
+    "SELECT * FROM thread_watch WHERE state = 'armed' ORDER BY created_at, id",
+  )
   const expiredThreadWatchesStmt = db.prepare<[number], ThreadWatchRow>(
     "SELECT * FROM thread_watch WHERE state = 'armed' AND expires_at <= ? ORDER BY expires_at, id",
   )
@@ -2341,6 +2347,7 @@ export function createStorage(dbPath: string): Storage {
       (opts?.armedOnly ? armedThreadWatchesBySlugStmt : threadWatchesBySlugStmt).all(slug),
     getThreadWatch: (id) => threadWatchByIdStmt.get(id),
     expiredThreadWatches: (nowMs) => expiredThreadWatchesStmt.all(nowMs),
+    armedThreadWatches: () => armedThreadWatchesStmt.all(),
     dropThreadWatch: (slug, id, settledAtMs) => dropThreadWatchStmt.run(settledAtMs, id, slug).changes === 1,
     settleThreadWatch: (id, settledAtMs, state = "settled") => settleThreadWatchStmt.run(state, settledAtMs, id).changes === 1,
     armThreadTimer: (timer) => void armTimerStmt.run(timer),
