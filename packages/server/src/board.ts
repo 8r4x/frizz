@@ -342,6 +342,40 @@ function liveWaitHandles(tele: SessionTelemetry | undefined): Set<string> {
   return handles
 }
 
+/** The same live handles as `liveWaitHandles`, but resolved rather than merely tested — for
+ *  `mcp__frizz__watch`, which has to answer three questions the fence's integrity check never asks:
+ *  does this handle name anything live, WHICH KIND is it, and what is the work called.
+ *
+ *  THE KIND IS RESOLVED, NOT TRUSTED. A shell handle and a sub-agent handle are both opaque runtime
+ *  strings — `toolu_…` on both sides, a free-text label on both sides — so nothing about the string
+ *  itself can tell them apart, and a validator that guessed from shape would guess wrong. Live telemetry
+ *  can answer it exactly, which is what lets `watch` refuse `kind: "shell"` on a sub-agent by NAME
+ *  ("that is a sub-agent") rather than by silently filing it under a Background shells heading — the
+ *  exact miss that put two sub-agents under that heading on 2026-08-26.
+ *
+ *  RUNNING ONLY, matching liveWaitHandles: registering a watch on work that has already finished would
+ *  park a thread on a wake that can never come. The worker is told so and moves on. */
+export function resolveLiveWatchTarget(
+  tele: SessionTelemetry | undefined,
+  target: string,
+): { kind: "shell" | "agent"; label?: string } | undefined {
+  const wanted = target.trim()
+  if (!wanted) return undefined
+  for (const shell of tele?.bgShells ?? []) {
+    if (shell.state !== "running") continue
+    if (shell.id === wanted || shell.taskId === wanted || shell.label === wanted) {
+      return { kind: "shell", ...(shell.label ? { label: shell.label } : {}) }
+    }
+  }
+  for (const agent of tele?.subAgents ?? []) {
+    if (!isDirectSubAgent(agent) || agent.state !== "running") continue
+    if (agent.id === wanted || agent.label === wanted) {
+      return { kind: "agent", ...(agent.label ? { label: agent.label } : {}) }
+    }
+  }
+  return undefined
+}
+
 /** Is this thread parked on its OWN BACKGROUND WORK, named in its fence and still live?
  *
  *  A PR WAIT is deliberately NOT this. It is also a declaration and it also cards — but whether

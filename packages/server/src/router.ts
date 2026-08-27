@@ -92,10 +92,16 @@ import {
   PR_WATCH_MAX_ARMED,
   PR_WATCH_DEFAULT_FOR_MS,
   type PrWatchView,
+  AddOwnWatchInput,
+  AddOwnWatchResult,
+  DropOwnWatchInput,
+  DropOwnWatchResult,
+  OWN_WATCH_MAX_ARMED,
+  type OwnWatchView,
   humanGapNote,
 } from "@frizz/shared"
 import { mayHaveLiveBackgroundWork, needsFreshProcessForLimit, type AppContext } from "./context.ts"
-import { appServerTurnStalled, resolveRecurringPrompt } from "./board.ts"
+import { appServerTurnStalled, resolveLiveWatchTarget, resolveRecurringPrompt } from "./board.ts"
 import { runThreadUpdate } from "./frizz.ts"
 import { repairThreadFile } from "./repair.ts"
 import { reopenArchivedThreadForFollowUp, resumeThread, wakeParkedThreadForFollowUp } from "./resume.ts"
@@ -731,6 +737,27 @@ export function createRouter(ctx: AppContext) {
         state: w.state,
         createdAt: new Date(w.created_at).toISOString(),
         ...(github[target] ? { github: github[target] } : {}),
+      }
+    })
+  }
+
+  // A thread's ARMED watches on its own running work, in the shape `watch`/`unwatch` read back.
+  //
+  // The LABEL is re-resolved from live telemetry on every read rather than stored beside the row. A
+  // stored label would be a copy of a name the runtime owns, and it would go stale the moment the op
+  // it names ends — leaving a read-back that confidently names work that is over. Re-resolving means
+  // the label is either current or absent, and absent is the honest answer.
+  function armedOwnWatchViews(slug: string): OwnWatchView[] {
+    const tele = ctx.tailer.get(slug)
+    return ctx.storage.listThreadWatches(slug, { armedOnly: true }).map((w) => {
+      const live = resolveLiveWatchTarget(tele, w.target)
+      return {
+        id: w.id,
+        kind: w.kind,
+        target: w.target,
+        ...(live?.label ? { label: live.label } : {}),
+        createdAt: new Date(w.created_at).toISOString(),
+        expiresAt: new Date(w.expires_at).toISOString(),
       }
     })
   }
@@ -2358,6 +2385,76 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
+    // ---- THE WORKER'S OWN WATCHES on its own running work (add / drop) --------------------------
+    // `mcp__frizz__watch` and `mcp__frizz__unwatch`. A wait stops being a line the worker restates in a
+    // fence at every rest and becomes a row it creates once — see plans/rest-by-registration.md. Same
+    // caller and therefore the same rules as the PR watchers above: slug-only, no thread parameter.
+    addOwnWatch: mutation({
+      input: AddOwnWatchInput,
+      output: AddOwnWatchResult,
+      handler: async ({ input }) => {
+        const row = ctx.storage.getSession(input.slug)
+        if (!row) throw new Error(`thread ${input.slug} is not registered`)
+        if (row.state === "archived" || row.archived === 1) {
+          throw new Error("Reopen this thread before registering a watch on it")
+        }
+        const target = input.target.trim()
+        // IDEMPOTENT ON (kind, target), and checked BEFORE liveness — the same order the PR watcher
+        // uses, for the same reason. Re-registering after a compaction is the common, careful case, and
+        // a re-arm must never be able to move an expiry the human is already reading.
+        const already = ctx.storage.listThreadWatches(input.slug, { armedOnly: true })
+          .find((w) => w.kind === input.kind && w.target === target)
+        if (already) {
+          return { id: already.id, kind: already.kind, target, alreadyArmed: true, watches: armedOwnWatchViews(input.slug) }
+        }
+        // REFUSED, not stored, on both counts below. A watch that can never fire is worse than no watch,
+        // because the worker rests believing it is covered.
+        const live = resolveLiveWatchTarget(ctx.tailer.get(input.slug), target)
+        if (!live) {
+          throw new Error(
+            `nothing running on this thread answers to \`${target}\` — a watch only ever names work that is ` +
+            "already live, and work that has already finished needs no watch at all. Call `activity` for the " +
+            "exact ids of everything you have running.",
+          )
+        }
+        // THE KIND IS RESOLVED FROM TELEMETRY, so a mismatch is NAMED rather than guessed at: the handles
+        // are opaque on both sides and shape could never have told them apart. This is the miss that filed
+        // two sub-agents under a "Background shells" heading on 2026-08-26.
+        if (live.kind !== input.kind) {
+          const said = input.kind === "agent" ? "sub-agent" : "background shell"
+          const is = live.kind === "agent" ? "sub-agent" : "background shell"
+          throw new Error(`\`${target}\` is a ${is}, not a ${said} — register it with \`kind: "${live.kind}"\`.`)
+        }
+        const armed = ctx.storage.listThreadWatches(input.slug, { armedOnly: true })
+        if (armed.length >= OWN_WATCH_MAX_ARMED) {
+          throw new Error(`this thread already holds ${armed.length} watches (the limit is ${OWN_WATCH_MAX_ARMED}) — drop one first`)
+        }
+        // REQUIRED, and unparseable is an ERROR — unlike the PR watcher's optional `for`, which is optional
+        // only for sessions whose MCP binary predates the field. This RPC has no such sessions.
+        const forMs = parseAwaitingDuration(input.for)
+        if (forMs === null) {
+          throw new Error(`\`for: ${input.for}\` is not a duration — give one like \`30m\`, \`2h\` or \`3d\` (max 24h)`)
+        }
+        const now = Date.now()
+        const id = `wch_${randomUUID().replace(/-/g, "").slice(0, 12)}`
+        ctx.storage.armThreadWatch({ id, slug: input.slug, kind: input.kind, target, createdAtMs: now, expiresAtMs: now + forMs })
+        ctx.board.refresh()
+        return { id, kind: input.kind, target, alreadyArmed: false, watches: armedOwnWatchViews(input.slug) }
+      },
+    }),
+
+    dropOwnWatch: mutation({
+      input: DropOwnWatchInput,
+      output: DropOwnWatchResult,
+      handler: async ({ input }) => {
+        // Scoped to the caller's own slug in storage, so an id belonging to another thread cannot be
+        // dropped even if a worker somehow learned it.
+        const dropped = ctx.storage.dropThreadWatch(input.slug, input.id, Date.now())
+        if (dropped) ctx.board.refresh()
+        return { dropped, watches: armedOwnWatchViews(input.slug) }
+      },
+    }),
+
     listOwnPrWatches: mutation({
       input: ListOwnPrWatchesInput,
       output: OwnPrWatchesResult,
@@ -2763,11 +2860,16 @@ export function createRouter(ctx: AppContext) {
      * How many threads are in each project's queue, keyed by project id — the rail's badges.
      *
      * MACHINE-WIDE, answered from the boards this process has OPEN. A queue count is a board fact:
-     * `needsYou` is derived from the tailer's live view of each session, so a project nobody has
-     * opened since boot has no honest count, and it is left out rather than guessed at or opened for
-     * the purpose (activating a project to badge it is exactly the cost lazy activation exists to
-     * avoid — see tenants.ts). Absent ⇒ no badge; the project the operator is looking at is always
-     * present, and the client draws THAT one from its own live board anyway.
+     * `needsYou` is derived from the tailer's live view of each session, so a project with no board
+     * here has no honest count, and it is left out rather than guessed at. Absent ⇒ no badge; the
+     * project the operator is looking at is always present, and the client draws THAT one from its own
+     * live board anyway.
+     *
+     * Every registered project IS opened, so absent is the exception rather than the rule: the server
+     * primes the ones the operator has not visited a few seconds after boot (tenant-prime.ts), which is
+     * what stopped the badges from appearing only after you clicked into each square. What stays absent
+     * is a project another live Frizz is serving, one whose directory is gone, and one that would not
+     * open — plus every project for the first seconds of a boot, before the pass reaches it.
      *
      * Kept OFF `projectsList` on purpose: that list is one registry-file read, cheap enough to be the
      * home page with forty projects, and this is a walk over live boards. The cached snapshot makes

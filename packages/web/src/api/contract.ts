@@ -83,6 +83,10 @@ import type {
   ThreadLocation,
   DirectoryPickResult,
   AddOwnPrWatchInput,
+  AddOwnWatchInput,
+  AddOwnWatchResult,
+  DropOwnWatchInput,
+  DropOwnWatchResult,
   AddOwnPrWatchResult,
   DropOwnPrWatchInput,
   DropOwnPrWatchResult,
@@ -174,6 +178,10 @@ export interface Api {
   addOwnPrWatch(input: AddOwnPrWatchInput): Promise<AddOwnPrWatchResult>
   dropOwnPrWatch(input: DropOwnPrWatchInput): Promise<DropOwnPrWatchResult>
   listOwnPrWatches(input: ListOwnPrWatchesInput): Promise<OwnPrWatchesResult>
+  // THE WORKER'S OWN WATCHES on its own running work, called by `mcp__frizz__watch` / `unwatch`. Same
+  // story as the PR watchers above: declared for the drift gate, never called from the browser.
+  addOwnWatch(input: AddOwnWatchInput): Promise<AddOwnWatchResult>
+  dropOwnWatch(input: DropOwnWatchInput): Promise<DropOwnWatchResult>
   // THE SUPERSEDED WORKER PROCEDURES, declared here only so the drift gate can see them. A worker's MCP
   // server outlives every frizz restart, so a session dispatched before the stop hook and the heartbeat
   // merged is still POSTing these names; the router aliases them onto the one recurring-prompt row
@@ -252,9 +260,10 @@ export interface Api {
   // The rail's manual order: the whole list of ids, because the client has just laid the squares out
   // and an index pair would have to be replayed against a server order that may already differ.
   projectsReorder(input: { ids: string[] }): Promise<ProjectCard[]>
-  // Queue size per OPEN project, keyed by project id — the rail's badges. A project this server has
-  // not opened since boot is absent (no honest count without its board), which the rail draws as no
-  // badge rather than as zero.
+  // Queue size per OPEN project, keyed by project id — the rail's badges. A project with no board on
+  // this server is absent (no honest count without one), which the rail draws as no badge rather than
+  // as zero. The server opens every registered project a few seconds after boot, so that is a transient
+  // state and not the "you have not clicked into it yet" it used to be — see server/tenant-prime.ts.
   projectsQueueCounts(): Promise<Record<string, number>>
   // Opens the machine's native image picker ALREADY IN the project's directory, then stores what
   // comes back. The browser input cannot be aimed anywhere, which is the whole reason this exists.
@@ -323,6 +332,8 @@ export const PROCEDURES = {
   addOwnPrWatch: "mutation",
   dropOwnPrWatch: "mutation",
   listOwnPrWatches: "mutation",
+  addOwnWatch: "mutation",
+  dropOwnWatch: "mutation",
   getOwnThreadRecurringPrompt: "mutation",
   setOwnThreadStopHook: "mutation",
   setOwnThreadHeartbeat: "mutation",

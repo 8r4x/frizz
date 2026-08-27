@@ -1524,6 +1524,82 @@ export const DropOwnPrWatchResult = z.object({
 }).strict()
 export type DropOwnPrWatchResult = z.infer<typeof DropOwnPrWatchResult>
 
+// ---- THE WORKER'S OWN WATCHES on its own running work (2026-08-26) -----------------------------------
+// `mcp__frizz__watch` / `mcp__frizz__unwatch`. See plans/rest-by-registration.md: a wait stops being a
+// line the worker restates at every rest and becomes a row it creates once.
+//
+// ONE VERB ACROSS KINDS, unlike the four narrow item kinds the fence grammar has. A shell and a sub-agent
+// are the same act — "bring me back when this finishes" — and splitting them into two tools would teach
+// two things where there is one. A PR keeps its own verb because it is not the same act: `watch_pr`
+// creates a REPEATING poll against a service frizz has to reach, and it can fail for reasons a runtime
+// handle never can (signed out, an SSO-gated org, no `gh`).
+export const OwnWatchKind = z.enum(["shell", "agent"])
+export type OwnWatchKind = z.infer<typeof OwnWatchKind>
+
+export const AddOwnWatchInput = z.object({
+  slug: ThreadSlug,
+  /** What KIND of thing the target is. Stored, and checked against the thread's live telemetry before the
+   *  row is written — see the note on `target`. */
+  kind: OwnWatchKind,
+  /** The handle the worker was shown: a runtime task id ("Command running in background with ID: …"), a
+   *  launch tool_use id, or the op's own label.
+   *
+   *  VALIDATED AGAINST LIVE TELEMETRY, NOT AGAINST ITS SHAPE. A PR ref is checkable by shape because
+   *  `owner/repo#123` looks like nothing else; a shell handle and a sub-agent handle are both opaque
+   *  runtime strings and overlap completely, so shape can only ever be a guess. What frizz CAN answer
+   *  exactly is whether this thread has a live shell — or a live sub-agent — answering to this handle, and
+   *  that is both the stronger check and the one that catches the real mistake: naming a sub-agent under
+   *  `kind: "shell"`, which is what put two sub-agents under a "Background shells" heading on 2026-08-26. */
+  target: z.string().trim().min(1).max(200),
+  /** REQUIRED, and a DURATION (`30m`, `2h`, `3d` — parseAwaitingDuration, capped at 24h).
+   *
+   *  No default and no wire-level optionality, unlike `AddOwnPrWatchInput.for`: that field is optional
+   *  only to keep working for sessions dispatched before it existed, and this RPC has no such sessions.
+   *  On elapse the row is CANCELLED and the thread woken to re-decide, which is what stops a registration
+   *  outliving its own relevance — the one thing an un-restated fence could never do wrong. */
+  for: z.string().trim().min(1).max(16),
+}).strict()
+export type AddOwnWatchInput = z.infer<typeof AddOwnWatchInput>
+
+export const OwnWatchView = z.object({
+  id: z.string(),
+  kind: OwnWatchKind,
+  target: z.string(),
+  /** The op's own label where the target resolved to one, so a read-back names the work rather than an
+   *  opaque handle. Absent when the target no longer resolves — the row still stands and names itself. */
+  label: z.string().optional(),
+  createdAt: z.string(),
+  expiresAt: z.string(),
+}).strict()
+export type OwnWatchView = z.infer<typeof OwnWatchView>
+
+export const AddOwnWatchResult = z.object({
+  id: z.string(),
+  kind: OwnWatchKind,
+  target: z.string(),
+  /** True when this exact (kind, target) was already watched, so the call registered nothing new and the
+   *  existing expiry stands. Re-registering after a wake or a compaction is the common, correct case. */
+  alreadyArmed: z.boolean(),
+  watches: z.array(OwnWatchView),
+}).strict()
+export type AddOwnWatchResult = z.infer<typeof AddOwnWatchResult>
+
+export const DropOwnWatchInput = z.object({
+  slug: ThreadSlug,
+  id: z.string().min(1).max(64),
+}).strict()
+export type DropOwnWatchInput = z.infer<typeof DropOwnWatchInput>
+
+export const DropOwnWatchResult = z.object({
+  dropped: z.boolean(),
+  watches: z.array(OwnWatchView),
+}).strict()
+export type DropOwnWatchResult = z.infer<typeof DropOwnWatchResult>
+
+/** How many watches one thread may hold at once. A bound, not an opinion — the same shape as
+ *  PR_WATCH_MAX_ARMED, and generous enough that no honest fan-out meets it. */
+export const OWN_WATCH_MAX_ARMED = 24
+
 export const ListOwnPrWatchesInput = z.object({ slug: ThreadSlug }).strict()
 export type ListOwnPrWatchesInput = z.infer<typeof ListOwnPrWatchesInput>
 
