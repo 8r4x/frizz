@@ -145,6 +145,37 @@ for (const [what, tele] of [
   })
 }
 
+// AND A REGISTRATION IS A SIGN-OFF TOO, which is the whole point of the five verbs: `done`, `ask` and
+// `watch` each record a ROW, and none of them can write the tailer's `lastFence`. Reading only the fence
+// nudged a worker for not writing the sentence it was told to replace with a tool call — the protocol
+// reminder teaching the OLD protocol, on exactly the threads that had adopted the new one.
+for (const [what, arrange] of [
+  ["a registered done", (st: ReturnType<typeof createStorage>, slug: string) => st.markThreadDone(slug, "- **Shipped** it", Date.now())],
+  ["a registered question", (st: ReturnType<typeof createStorage>, slug: string) =>
+    st.askThreadQuestion({ id: "qst_x", slug, spec: JSON.stringify({ question: "Which store?", kind: "question" }), askedAtMs: Date.now() })],
+  ["a registered watch", (st: ReturnType<typeof createStorage>, slug: string) =>
+    st.armThreadWatch({ id: "wch_x", slug, kind: "shell", target: "bzvtnt3ig", createdAtMs: Date.now(), expiresAtMs: Date.now() + 7_200_000 })],
+] as Array<[string, (st: ReturnType<typeof createStorage>, slug: string) => unknown]>) {
+  test(`${what} is already a sign-off, so nothing is injected`, async () => {
+    const h = nudger({})
+    try {
+      arrange(h.storage, h.slug)
+      await h.s.tick()
+      assert.deepEqual(h.nudges(), [])
+    } finally { h.close() }
+  })
+}
+
+// The failing control for the three above: with none of them recorded, this very thread IS nudged — so
+// they are what silenced it rather than something else about the fixture.
+test("…and with no fence and no registration, the same thread IS nudged", async () => {
+  const h = nudger({})
+  try {
+    await h.s.tick()
+    assert.equal(h.nudges().length, 1)
+  } finally { h.close() }
+})
+
 // A thread that is still working has not failed to sign off — it has not finished.
 test("a busy thread is never nudged", async () => {
   const h = nudger({ turn: "in-flight" })

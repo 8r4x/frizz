@@ -1578,7 +1578,19 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // back: signing off is the only event that proves the nudge worked, and the only one frizz cannot
       // cause by nudging. (Guarded on a non-zero count in storage, so this is a transition, not a write
       // on every tick.)
-      if (tele.lastFence || tele.pendingQuestion) {
+      //
+      // A REGISTRATION SAYS IT JUST AS LOUDLY, and since 2026-08-27 it is how a worker is meant to say
+      // it: `done` records a row, `ask` records a row, `watch` records a row, and none of the three can
+      // write the tailer's `lastFence`. Reading only the fence would nudge a worker for not writing a
+      // sentence it was told to replace with a tool call — which is the protocol reminder teaching the
+      // OLD protocol, on exactly the threads that adopted the new one.
+      if (
+        tele.lastFence ||
+        tele.pendingQuestion ||
+        registeredDoneFence(deps.storage.getThreadDone(row.slug), tele.lastUserAt) !== undefined ||
+        deps.storage.listThreadQuestions(row.slug, { openOnly: true }).length > 0 ||
+        deps.storage.listThreadWatches(row.slug, { armedOnly: true }).length > 0
+      ) {
         if ((row.signoff_nudges ?? 0) > 0) deps.storage.resetSignoffNudges(row.slug)
         continue
       }
