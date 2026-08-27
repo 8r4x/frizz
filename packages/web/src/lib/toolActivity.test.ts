@@ -287,6 +287,48 @@ test("a prose tool tail absorbs ordinary calls, and a background launch is what 
   assert.deepEqual(compact[2].message.tools.map((call) => call.name), ["Bash"])
 })
 
+// The WIRE shape: a message off the server carries every call twice, as separate objects — the flat
+// `tools` and the copy inside `parts` — because JSON gives them no shared identity. The helpers above
+// build both from ONE array, which is exactly the shape a real message never has.
+function wireMessage(message: ChatMessage): ChatMessage {
+  return JSON.parse(JSON.stringify(message)) as ChatMessage
+}
+
+test("a live run that opens on a pure tool batch is withheld whole, in the wire shape", () => {
+  const ask: ChatMessage = { sourceId: "ask", role: "user", text: "is it done?", tools: [], parts: [] }
+  const first = wireMessage(toolMessage("first", [tool("Bash", { desc: "Checking the drain state", status: "completed" })]))
+  const second = wireMessage(
+    toolMessage("second", [tool("Bash", { desc: "Reading current coverage", status: "completed" })], "2026-07-30T12:00:09.000Z"),
+  )
+
+  const compact = coalesceToolActivityMessages([ask, first, second])
+  assert.equal(liveToolActivityRun(compact)?.tools.length, 2)
+  // Before the fix this returned ["ask", "first"] with `first` still holding ONE flat call — the copy
+  // the identity filter could not see — so the drawer painted `Ran 1 tool call` directly above a
+  // shimmer reading `Ran 2 tool calls. Thinking…` (maintainer 2026-08-27).
+  assert.deepEqual(
+    historicalToolActivityMessages(compact).map((entry) => entry.message.sourceId),
+    ["ask"],
+    "the run's first call must not survive as its own digest above the shimmer",
+  )
+})
+
+test("a leading ordinary call folded up out of a dispatch batch leaves no flat copy behind, in the wire shape", () => {
+  const run = wireMessage(toolMessage("run", [tool("Read", { status: "completed" })]))
+  const mixed = wireMessage(toolMessage("mixed", [
+    tool("Grep", { status: "completed" }),
+    tool("Agent", { agentId: "call-agent", detail: "inspect renderer", status: "pending" }),
+  ]))
+
+  const compact = coalesceToolActivityMessages([run, mixed])
+  assert.deepEqual(compact.map((entry) => entry.message.tools.map((call) => call.name)), [["Read", "Grep"], ["Agent"]])
+  assert.deepEqual(
+    compact[1].message.parts?.map((part) => (part.kind === "tools" ? part.tools.map((call) => call.name) : "text")),
+    [["Agent"]],
+    "the flat list and the parts must describe the same calls",
+  )
+})
+
 test("the runtime gerund ends with its call; only the digest stays hidden across the inter-call gap", () => {
   const settled = toolMessage("settled", [tool("Read", { status: "completed" })])
   const pending = toolMessage("pending", [tool("Bash", { desc: "Running focused tests", status: "pending" })])

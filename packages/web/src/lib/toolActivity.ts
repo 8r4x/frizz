@@ -215,11 +215,26 @@ function messageToolPrefix(message: ChatMessage): TranscriptToolCall[] | null {
 }
 
 function withoutToolPrefix(message: ChatMessage, prefix: readonly TranscriptToolCall[]): ChatMessage {
-  const drop = new Set(prefix)
+  return withoutToolCalls(message, new Set(prefix))
+}
+
+// Strip a set of calls from a message, by call IDENTITY — the only key a run has, since a call carries
+// no id of its own on the client. Where the flat list comes from is the whole trick: a message off the
+// wire carries every call TWICE, as two separate objects — once in the flat `tools` and once inside
+// `parts` — and identity found in `parts` (where messageToolTail and messageToolPrefix look) never
+// matches the flat copy. Filtering the flat list by that identity left the run's FIRST call behind in
+// `tools` while `parts` emptied; the renderer, seeing no parts, fell back to the flat list and drew a
+// settled `Ran 1 tool call` directly above a shimmer already counting the same call (maintainer
+// 2026-08-27: "back-to-back tool calls like this are not supposed to happen"). Reproduced on a replayed
+// transcript: every run that OPENS on a pure tool batch — right under the human's ask — paid it, because
+// only a run opened by prose keeps a text part that hides the fallback. So when the message has parts,
+// the flat list is DERIVED from what survives in them; a part-less legacy message filters it directly.
+function withoutToolCalls(message: ChatMessage, drop: ReadonlySet<TranscriptToolCall>): ChatMessage {
+  if (!message.parts?.length) return { ...message, tools: message.tools.filter((tool) => !drop.has(tool)) }
   const parts = message.parts
-    ?.map((part) => (part.kind === "text" ? part : { kind: "tools" as const, tools: part.tools.filter((tool) => !drop.has(tool)) }))
+    .map((part) => (part.kind === "text" ? part : { kind: "tools" as const, tools: part.tools.filter((tool) => !drop.has(tool)) }))
     .filter((part) => part.kind === "text" || part.tools.length > 0)
-  return { ...message, tools: message.tools.filter((tool) => !drop.has(tool)), parts }
+  return { ...message, tools: parts.flatMap((part) => (part.kind === "tools" ? part.tools : [])), parts }
 }
 
 function appendToolTail(message: ChatMessage, tools: TranscriptToolCall[], at?: string): ChatMessage {
@@ -394,18 +409,15 @@ function withoutLiveToolTail(message: ChatMessage): ChatMessage {
   if (!tail) return message
 
   // `message.tools` is the flattened provider view while `parts` preserves exact render order.
-  // Remove the whole live run from both, by call identity — the tail can be the trailing slice of a
-  // part it shares with a dispatch card, so a whole-part match would miss it. A settled run is still
-  // LIVE HISTORY while the turn is running: revealing its digest during the inter-call gap makes the
-  // row jump to `Ran N` + a generic shimmer, only to disappear again when the next call lands.
+  // Remove the whole live run from both (withoutToolCalls), by call identity — the tail can be the
+  // trailing slice of a part it shares with a dispatch card, so a whole-part match would miss it. A
+  // settled run is still LIVE HISTORY while the turn is running: revealing its digest during the
+  // inter-call gap makes the row jump to `Ran N` + a generic shimmer, only to disappear again when the
+  // next call lands.
   // Deliberately NOT keyed on status, unlike the label (liveToolActivityTail) — the label switching to
   // `Thinking…` in that gap is a word changing inside one span, whereas revealing the digest here
   // moves rows.
-  const drop = new Set(tail)
-  const parts = message.parts
-    ?.map((part) => (part.kind === "text" ? part : { kind: "tools" as const, tools: part.tools.filter((tool) => !drop.has(tool)) }))
-    .filter((part) => part.kind === "text" || part.tools.length > 0)
-  return { ...message, tools: message.tools.filter((tool) => !drop.has(tool)), parts }
+  return withoutToolCalls(message, new Set(tail))
 }
 
 /**
