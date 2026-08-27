@@ -1919,3 +1919,44 @@ test("pr-watch: a failing status fetch is logged once with its reason, repeats a
   assert.match(recovered!, /3 identical repeats were suppressed/)
   assert.equal(h.resumes.length, 0, "a PR with nothing to report still wakes nobody")
 })
+
+test("question: on an AUTONOMOUS thread a cancellation wakes on its own — nothing else will carry it", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("t"))
+  askQ(h, "t", "qst_gone", "Which store?")
+  // The Goal is autonomous mode; there is no separate switch (see router.ask.test.ts). Its arming is
+  // what cancelled the question in the first place — this is the other half of that flip.
+  h.storage.setRecurringPromptBySlug("t", {
+    prompt: "Keep going. Make decisions autonomously.", stopHook: true, heartbeat: false,
+    postCompaction: false, intervalMs: null, armedAt: new Date(h.clock.ms).toISOString(),
+  })
+  h.tele.set("t", tele())
+  const s = h.make()
+
+  h.storage.dismissThreadQuestion("qst_gone", h.clock.ms)
+  await s.tick()
+  // "It rides the next steer" is a promise nothing keeps on a thread whose whole premise is that nobody
+  // is about to send it anything — so without this the worker would simply never learn that a question
+  // it is still waiting on has been taken away from it.
+  assert.equal(h.resumes.length, 1)
+  // And it is NOT worded as an answer: nobody replied, and telling an autonomous worker the human did
+  // would be the one thing worse than silence.
+  assert.match(h.resumes[0].message, /1 question you registered was CANCELLED without an answer/)
+  assert.doesNotMatch(h.resumes[0].message, /Answers to the questions you registered/)
+  assert.equal(h.storage.getThreadQuestion("qst_gone")?.delivered, 1)
+})
+
+test("question: an armed Goal with NO TEXT does not make a dismissal wake — there is no instruction", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("t"))
+  askQ(h, "t", "qst_gone", "Which store?")
+  h.storage.setRecurringPromptBySlug("t", {
+    prompt: null, stopHook: true, heartbeat: false, postCompaction: false, intervalMs: null,
+    armedAt: new Date(h.clock.ms).toISOString(),
+  })
+  h.tele.set("t", tele())
+  const s = h.make()
+  h.storage.dismissThreadQuestion("qst_gone", h.clock.ms)
+  await s.tick()
+  assert.equal(h.resumes.length, 0, "an empty Goal is not autonomy, so the ordinary rule holds")
+})

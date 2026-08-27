@@ -785,6 +785,45 @@ export function createRouter(ctx: AppContext) {
     return out
   }
 
+  /** Arming a Goal is the human (or the worker) saying "decide the rest yourself", so anything still
+   *  waiting on an answer is now the worker's to settle. Dismissing them here rather than leaving them
+   *  on the board is what stops a thread from being autonomous and blocked at the same time — a card
+   *  nobody will answer, on a thread nobody is watching.
+   *
+   *  A DANGER-TAGGED QUESTION SURVIVES IT, exactly as it survives the human's x. Autonomy is consent to
+   *  decide ordinary things; it is not consent to a force-push. `dismissThreadQuestion` is reached
+   *  through the same path the x uses, so the rule lives in one place.
+   *
+   *  Returns how many were cancelled, so the caller can say so. */
+  function cancelQuestionsForAutonomy(slug: string): number {
+    const now = Date.now()
+    let cancelled = 0
+    for (const q of ctx.storage.listThreadQuestions(slug, { openOnly: true })) {
+      if (parseQuestionSpec(q.spec)?.danger) continue
+      if (ctx.storage.dismissThreadQuestion(q.id, now)) cancelled++
+    }
+    return cancelled
+  }
+
+  /** Is this thread running AUTONOMOUSLY — told to keep going and decide for itself?
+   *
+   *  IT IS THE ARMED GOAL, and there is no separate switch. There WAS one: a `recurring_pause_on_questions`
+   *  column shown in the footer as "Autonomous mode", deleted 2026-08-16 because arming a Goal already IS
+   *  that consent (maintainer: "If somebody enables the stop hook goal, then that kind of implies to me
+   *  that they don't really want to answer any more questions"). Collecting it twice only bought a way to
+   *  get it wrong, and plans/rest-by-registration.md keeps that shape — one control, the prompt as its
+   *  payload — rather than restoring the switch.
+   *
+   *  THE REST TRIGGER SPECIFICALLY, not any armed prompt. Its whole semantic is "you stopped — is there
+   *  more?", which is the sentence that makes a worker keep going on its own. A heartbeat says "it has
+   *  been an hour" and a compaction prompt says "here is what you forgot"; neither tells anybody to
+   *  decide anything, so neither should silence a question. */
+  function autonomousGoal(row: SessionRow): string | undefined {
+    if (row.recurring_on_rest !== 1) return undefined
+    const prompt = row.recurring_prompt?.trim()
+    return prompt ? prompt : undefined
+  }
+
   function armedOwnWatchViews(slug: string): OwnWatchView[] {
     const tele = ctx.tailer.get(slug)
     return ctx.storage.listThreadWatches(slug, { armedOnly: true }).map((w) => {
@@ -2191,6 +2230,13 @@ export function createRouter(ctx: AppContext) {
         })) {
           throw new Error("This thread moved on; reopen it and try again")
         }
+        // TURNING IT ON CANCELS WHAT THE THREAD WAS WAITING TO BE TOLD. Checked as a TRANSITION, not as
+        // a state: every edit in the footer panel rewrites this whole row (the text, the three triggers
+        // and the cadence are one save), so re-firing on an unrelated cadence edit would quietly bin a
+        // question the worker registered a moment ago.
+        if (input.stopHook && input.prompt?.trim() && autonomousGoal(row) === undefined) {
+          cancelQuestionsForAutonomy(input.slug)
+        }
         ctx.board.refresh()
       },
     }),
@@ -2222,6 +2268,12 @@ export function createRouter(ctx: AppContext) {
           armedAt: new Date().toISOString(),
         })) {
           throw new Error(`thread ${input.slug} could not be updated`)
+        }
+        // Same transition, same consequence: a worker arming its own Goal has said it will decide the
+        // rest, and leaving its own questions on the human's board would be asking for answers it just
+        // announced it no longer needs.
+        if (input.stopHook && input.prompt?.trim() && autonomousGoal(row) === undefined) {
+          cancelQuestionsForAutonomy(input.slug)
         }
         ctx.board.refresh()
         return { replaced }
@@ -2527,6 +2579,20 @@ export function createRouter(ctx: AppContext) {
         if (!row) throw new Error(`thread ${input.slug} is not registered`)
         if (row.state === "archived" || row.archived === 1) {
           throw new Error("Reopen this thread before asking a question on it")
+        }
+        // AUTONOMOUS MODE REFUSES THE ASK, and the refusal lands at the exact moment of temptation —
+        // which no amount of contract text read hours earlier can do. The tool stays PRESENT rather than
+        // being hidden: a worker that wants to ask and finds nowhere to put it fakes a question in prose
+        // that nothing parses, and the human never sees it at all.
+        const goal = autonomousGoal(row)
+        if (goal) {
+          throw new Error(
+            "This thread is running autonomously — decide it yourself and proceed. Its standing " +
+            `instruction is:\n\n${goal}\n\nSay which way you went and why in your write-up, so the ` +
+            "human can course-correct. If the call is genuinely theirs — something destructive, " +
+            "irreversible, or an act you are not permitted to take — say so in your final message " +
+            "instead; a thread on autonomous mode is not a thread with no human reading it.",
+          )
         }
         // REFUSED, not stored, and named one fault at a time in the worker's own vocabulary — a shape
         // zod accepts can still be a question nobody can answer (a `multi` with no options renders as a

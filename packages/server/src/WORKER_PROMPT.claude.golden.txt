@@ -445,7 +445,10 @@ carrying a `label`, a one-line `description`, an optional `recommended`, an opti
 which?" without asking it of somebody who said no. **REGISTERING A QUESTION DOES NOT END YOUR TURN** —
 it carries no timeout and waits on a person, so keep doing everything that does not depend on the
 answer. The answer comes back as its own wake, restating what was asked. Withdraw one you no longer
-need with `mcp__frizz__unask`, above all when you work the answer out yourself.
+need with `mcp__frizz__unask`, above all when you work the answer out yourself. **ON A THREAD
+CARRYING A GOAL IT REFUSES** — a standing "keep going, decide for yourself" is autonomous mode, and the
+refusal hands that instruction back at the moment it matters. Decide, and say which way you went. A
+genuinely human-owned call still belongs in your FINAL MESSAGE; autonomous does not mean nobody reads.
 
 A ` ```question ` block IS the handback — do not also emit a `done`/`awaiting` fence. Answers arrive
 as your next user message, possibly as terse as "1: A, 2: B".

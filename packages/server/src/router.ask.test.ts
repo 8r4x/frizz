@@ -252,3 +252,129 @@ test("the answer message restates each question and carries the dismissals along
   assert.match(message, /2 other questions were DISMISSED without an answer/)
   assert.match(message, /Do not re-ask\./)
 })
+
+// ---- AUTONOMOUS MODE -------------------------------------------------------------------------------
+//
+// There is no autonomous-mode switch and there is not going to be one. A `recurring_pause_on_questions`
+// column shown in the footer as "Autonomous mode" was deleted 2026-08-16, on the grounds that arming a
+// Goal already IS that consent, and plans/rest-by-registration.md keeps that shape rather than restoring
+// it: ONE control, the prompt as its payload. So these tests are about an armed REST GOAL.
+
+const goal = (h: ReturnType<typeof harness>, slug: string, prompt = "Keep going. Make decisions autonomously.") =>
+  h.storage.setRecurringPromptBySlug(slug, {
+    prompt, stopHook: true, heartbeat: false, postCompaction: false, intervalMs: null,
+    armedAt: new Date().toISOString(),
+  })
+
+test("`ask` is REFUSED on an autonomous thread, and the refusal quotes the standing instruction", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    goal(h, "t", "Finish the migration. Decide the small things yourself.")
+    await assert.rejects(
+      () => h.router.ask.handler({ input: { slug: "t", questions: [simple()] } }),
+      (e: Error) => {
+        assert.match(e.message, /running autonomously — decide it yourself/)
+        // QUOTING THE PROMPT is the point: the refusal is the worker's only chance to see WHAT it was
+        // told, and a bare "you are autonomous" leaves it guessing at the scope of its own mandate.
+        assert.match(e.message, /Finish the migration\. Decide the small things yourself\./)
+        // And it names the way out that is NOT asking, so a genuinely human-owned call is not simply
+        // swallowed by the mode.
+        assert.match(e.message, /say so in your final message/)
+        return true
+      },
+    )
+    assert.deepEqual(h.storage.listThreadQuestions("t", { openOnly: true }), [])
+  } finally { h.close() }
+})
+
+test("the OTHER two triggers are not autonomy — neither tells anybody to decide anything", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    h.storage.setRecurringPromptBySlug("t", {
+      prompt: "Re-read the plan doc.", stopHook: false, heartbeat: true, postCompaction: true,
+      intervalMs: 3_600_000, armedAt: new Date().toISOString(),
+    })
+    const result = await h.router.ask.handler({ input: { slug: "t", questions: [simple()] } })
+    assert.equal(result.registered.length, 1)
+  } finally { h.close() }
+})
+
+test("an armed trigger with NO TEXT is not autonomy either — there is no instruction to obey", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    h.storage.setRecurringPromptBySlug("t", {
+      prompt: null, stopHook: true, heartbeat: false, postCompaction: false, intervalMs: null,
+      armedAt: new Date().toISOString(),
+    })
+    assert.equal((await h.router.ask.handler({ input: { slug: "t", questions: [simple()] } })).registered.length, 1)
+  } finally { h.close() }
+})
+
+test("arming a Goal CANCELS the questions already open — a thread cannot be autonomous and blocked", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    const asked = await h.router.ask.handler({ input: { slug: "t", questions: [simple("A?"), simple("B?")] } })
+    await h.router.setOwnThreadRecurringPrompt.handler({
+      input: { slug: "t", prompt: "Keep going.", stopHook: true, heartbeat: false, postCompaction: false },
+    })
+    assert.deepEqual(h.storage.listThreadQuestions("t", { openOnly: true }), [])
+    // CANCELLED, not withdrawn: the worker did not do this, so it is told — and it is told through the
+    // ordinary settlement queue, which is what carries it to a thread nobody is about to steer.
+    assert.deepEqual(
+      h.storage.undeliveredSettlements().map((q) => [q.id, q.state]).sort(),
+      asked.registered.map((q) => [q.id, "dismissed"]).sort(),
+    )
+  } finally { h.close() }
+})
+
+test("a DANGER question survives the flip, exactly as it survives the human's ×", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    const gate: AskedQuestion = {
+      question: "Force-push over the three commits?", kind: "question", danger: true,
+      options: [{ label: "Force-push" }, { label: "Stop", recommended: true }],
+    }
+    await h.router.ask.handler({ input: { slug: "t", questions: [simple("ordinary?"), gate] } })
+    await h.router.setOwnThreadRecurringPrompt.handler({
+      input: { slug: "t", prompt: "Keep going.", stopHook: true, heartbeat: false, postCompaction: false },
+    })
+    // Autonomy is consent to decide ORDINARY things. It is not consent to a force-push, and a mode flip
+    // is even weaker consent than the × the server already refuses on one of these.
+    assert.deepEqual(h.storage.listThreadQuestions("t", { openOnly: true }).map((q) => JSON.parse(q.spec).question), ["Force-push over the three commits?"])
+  } finally { h.close() }
+})
+
+test("an EDIT to an already-autonomous thread cancels nothing — it is a transition, not a state", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    goal(h, "t")
+    // The footer panel writes the whole row on every edit — text, all three triggers and the cadence are
+    // one save — so re-firing on a cadence tweak would quietly bin a question registered a moment ago.
+    // (Which is reachable: `ask` refuses on an autonomous thread, but the row can be written directly,
+    // and a question registered BEFORE the Goal was armed outlives a danger-tagged flip.)
+    h.storage.askThreadQuestion({ id: "qst_survivor", slug: "t", spec: JSON.stringify(simple()), askedAtMs: Date.now() })
+    await h.router.setOwnThreadRecurringPrompt.handler({
+      input: { slug: "t", prompt: "Keep going, but faster.", stopHook: true, heartbeat: false, postCompaction: false },
+    })
+    assert.deepEqual(h.storage.listThreadQuestions("t", { openOnly: true }).map((q) => q.id), ["qst_survivor"])
+  } finally { h.close() }
+})
+
+test("turning the Goal OFF cancels nothing — the human is back, and back to answering", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    goal(h, "t")
+    h.storage.askThreadQuestion({ id: "qst_kept", slug: "t", spec: JSON.stringify(simple()), askedAtMs: Date.now() })
+    await h.router.setOwnThreadRecurringPrompt.handler({
+      input: { slug: "t", prompt: null, stopHook: false, heartbeat: false, postCompaction: false },
+    })
+    assert.deepEqual(h.storage.listThreadQuestions("t", { openOnly: true }).map((q) => q.id), ["qst_kept"])
+  } finally { h.close() }
+})

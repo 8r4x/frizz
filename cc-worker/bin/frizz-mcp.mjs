@@ -517,7 +517,13 @@ const ASK = {
     "question just makes the human send twice. Register them together.\n\n" +
     "The answer comes back to you as its own wake, restating what was asked. Withdraw one you no longer " +
     "need with `unask` — a question you have since answered yourself, still sitting on the human's " +
-    "board, is worse than never having asked it.",
+    "board, is worse than never having asked it.\n\n" +
+    "ON AN AUTONOMOUS THREAD THIS REFUSES, and tells you the standing instruction you are working " +
+    "under. A thread carrying a rest Goal has already been told to keep going and decide for itself, " +
+    "so the refusal is that instruction arriving at the moment it matters. Decide, and say which way " +
+    "you went in your write-up. If the call is genuinely the human's — destructive, irreversible, or " +
+    "an act you are not permitted to take — put it in your FINAL MESSAGE instead of here; autonomous " +
+    "does not mean nobody is reading.",
   inputSchema: {
     type: "object",
     properties: {

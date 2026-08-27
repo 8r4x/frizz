@@ -1831,6 +1831,16 @@ export function questionAnswerMessage(answers: readonly QuestionAnswer[], dismis
     for (const child of a.followUps ?? []) lines.push(...render(child, depth + 1))
     return lines
   }
+  // NO ANSWERS AT ALL is its own message, not the answers one with an empty list. It reaches exactly one
+  // thread: an AUTONOMOUS one, whose questions were cancelled wholesale when its Goal was armed and
+  // which has no next steer for them to ride (scheduler.evalQuestionAnswers). Wording it as "answers"
+  // would tell that worker the human replied, when the whole point is that nobody is going to.
+  if (answers.length === 0) {
+    return (
+      `${dismissed.length} question${dismissed.length === 1 ? "" : "s"} you registered ${dismissed.length === 1 ? "was" : "were"} CANCELLED without an answer. ` +
+      `Decide ${dismissed.length === 1 ? "it" : "them"} yourself and carry on — say which way you went in your write-up. Do not re-ask.`
+    )
+  }
   const body = answers.flatMap((a) => render(a, 0)).join("\n")
   const tail = dismissed.length > 0
     ? `\n\n${dismissed.length} other question${dismissed.length === 1 ? " was" : "s were"} DISMISSED without an answer — decide ${dismissed.length === 1 ? "it" : "those"} yourself and carry on. Do not re-ask.`

@@ -2284,7 +2284,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         const parsed = safeAnswer(q.answer)
         if (parsed) answers.push(parsed)
       }
-      if (answers.length === 0) continue // dismissals alone wake nobody; they wait for an answer
+      // DISMISSALS ALONE WAKE NOBODY — UNLESS NOTHING ELSE WILL EVER CARRY THEM. The rule exists because
+      // a human dismissing questions is almost always dismissing several in a row and is sitting right
+      // there, so a wake per x would be a turn per click; they ride the next answer or the next steer.
+      //
+      // An AUTONOMOUS thread has neither. Its whole premise is that nobody is about to send it anything,
+      // and its questions get cancelled wholesale the moment the Goal is armed — so on that thread the
+      // "it rides the next steer" half of the rule is a promise nothing keeps, and the worker would
+      // simply never learn that questions it is still waiting on have been taken away from it.
+      if (answers.length === 0 && !(row.recurring_on_rest === 1 && row.recurring_prompt?.trim())) continue
       // One delivery per BATCH, keyed by the ids in it, so a second answer on the same thread is its own
       // piece of news rather than a duplicate deduped away.
       const fenceId = questionAnswerFenceId([...answers.map((a) => a.questionId), ...dismissed])
@@ -2297,7 +2305,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         fenceId,
         hintKey: fenceId,
         message: withClock(questionAnswerMessage(answers, dismissed), deps.tailer.get(row.slug)?.lastAssistantAt),
-        reason: `${answers.length} question answer(s)${dismissed.length ? ` + ${dismissed.length} dismissed` : ""}`,
+        reason: answers.length === 0
+          ? `${dismissed.length} question(s) cancelled — autonomous`
+          : `${answers.length} question answer(s)${dismissed.length ? ` + ${dismissed.length} dismissed` : ""}`,
       }, nowMs).delivery
       for (const q of rows) deps.storage.markSettlementDelivered(q.id)
       log(`waker: queued ${row.slug} — ${item.reason}`)
