@@ -2282,14 +2282,25 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         const tele = ctx.tailer.get(input.slug)
         const activity: OwnThreadActivityResult["activity"] = []
+        // The armed watches, keyed by every handle they could have been registered against, so an item
+        // below can name the `wch_…` id that holds it without a second lookup per row.
+        const watchOf = new Map<string, string>()
+        for (const w of ctx.storage.listThreadWatches(input.slug, { armedOnly: true })) watchOf.set(`${w.kind}:${w.target}`, w.id)
+        const watchFor = (kind: "shell" | "agent", handles: readonly (string | undefined)[]) => {
+          for (const h of handles) {
+            const hit = h ? watchOf.get(`${kind}:${h}`) : undefined
+            if (hit) return { watchId: hit }
+          }
+          return {}
+        }
         for (const sh of tele?.bgShells ?? []) {
           if (sh.state !== "running") continue
           const id = sh.taskId ?? sh.id
-          if (id) activity.push({ kind: "shell", id, label: sh.label, since: sh.startedAt })
+          if (id) activity.push({ kind: "shell", id, label: sh.label, since: sh.startedAt, ...watchFor("shell", [sh.taskId, sh.id, sh.label]) })
         }
         for (const a of tele?.subAgents ?? []) {
           if (a.state !== "running") continue
-          if (a.id) activity.push({ kind: "agent", id: a.id, label: a.label, since: a.startedAt })
+          if (a.id) activity.push({ kind: "agent", id: a.id, label: a.label, since: a.startedAt, ...watchFor("agent", [a.id, a.label]) })
         }
         for (const t of ctx.storage.listThreadTimers(input.slug, { armedOnly: true })) {
           activity.push({
@@ -2307,12 +2318,17 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
-    // THE WATCHER REGISTRY IS GONE (2026-08-14). `mcp__frizz__watch` and its four procedures are
-    // deleted rather than shimmed: a wait is now a `watch:` line in the worker's own ```awaiting fence,
-    // which is BOTH the park and the wake (scheduler `watchVerdict`), so there is nothing to register and
-    // nothing an alias could usefully do. A session dispatched before the change still holds the old MCP
-    // binary and will get a 404 from it — which is the honest answer, and the tool it should not be
-    // calling is the only casualty.
+    // THE WATCHER REGISTRY WAS DELETED ON 2026-08-14 AND CAME BACK ON 2026-08-26, under two narrow verbs
+    // rather than the four it had. It was removed because a wait had become a `watch:` line in the
+    // worker's own ```awaiting fence, which was BOTH the park and the wake — leaving nothing to register.
+    // The fence turned out to be the wrong object for a wait: it has the lifetime of the message carrying
+    // it, so the worker had to restate every wait at every rest, and it was wrong the moment anything
+    // changed. See plans/rest-by-registration.md, and addOwnWatch/dropOwnWatch below.
+    //
+    // The OLD procedure names are not aliased. A session dispatched before 2026-08-14 still holds an MCP
+    // binary naming them and gets a 404, which is the honest answer: its arguments do not fit this
+    // registry (there is no `for:` in them at all), so an alias would have to invent the one field that
+    // must not be guessed at.
 
     // ---- REGISTERED PR WATCHERS (add / drop / list) ---------------------------------------------
     // The worker's own PR watchers, from `mcp__frizz__watch_pr`. Same caller and therefore the same rules

@@ -2437,6 +2437,11 @@ export const ThreadActivityItem = z.object({
   since: z.string().optional(),
   /** A timer's fire instant, or a PR's expiry. Absent for shells and sub-agents. */
   until: z.string().optional(),
+  /** The `wch_…` id of the REGISTERED WATCH holding this item, when the worker armed one — so a readout
+   *  that exists to hand ids back also hands back the one `unwatch` takes. A separate ROW per watch was
+   *  the alternative and it would list the same shell twice, which is exactly the duplication that put
+   *  two sub-agents under a "Background shells" heading. */
+  watchId: z.string().optional(),
 }).strict()
 export type ThreadActivityItem = z.infer<typeof ThreadActivityItem>
 

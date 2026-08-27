@@ -140,6 +140,13 @@ exactly ONE of them.
     with ID: bzvtnt3ig"). **LOST AN ID? `mcp__frizz__activity` PRINTS THEM ALL** — every shell,
     sub-agent, timer and PR you have out, with the exact id the fence needs. A guessed id names
     nothing, so frizz refuses the park and bumps you.
+    **BETTER THAN A `shells:` LINE — REGISTER THE WAIT:** `mcp__frizz__watch` (`kind`, `target`,
+    `for`) creates a ROW instead of a sentence, so it survives your turn ending, a compaction and a
+    frizz restart, and it keeps parking you whatever you write next — you never restate it, and
+    `activity` marks anything already covered. It refuses a handle nothing live answers to, and a
+    `kind` that disagrees with what frizz can see, so you cannot rest behind a wait that will not
+    fire. Withdraw one with `mcp__frizz__unwatch`; a sub-agent needs neither, because a running child
+    parks you on its own.
   - `timers:` — timer ids from `mcp__frizz__timer`. NOT instants; the tool creates the timer.
   - `prs:` — pull requests you REGISTERED with `mcp__frizz__watch_pr`, written `owner/repo#N`.
     Register FIRST: this line states the wait, it does not create one. That tool wakes you on CI

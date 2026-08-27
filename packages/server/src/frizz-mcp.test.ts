@@ -64,7 +64,7 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     rpc.send({ jsonrpc: "2.0", method: "notifications/initialized" })
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
     const list = await rpc.next(2)
-    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "recurring_prompt", "timer", "watch_pr", "activity"])
+    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "recurring_prompt", "timer", "watch_pr", "watch", "unwatch", "activity"])
     for (const required of ["prompt", "model", "effort"]) {
       assert.ok(list.result.tools[0].inputSchema.required.includes(required))
     }
@@ -87,16 +87,8 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
       Object.keys(list.result.tools[2].inputSchema.properties).sort(),
       ["action", "at", "id", "in_seconds", "prompt"],
     )
-    // NO SHELL `watch` TOOL, and there never will be: a background shell is watched AUTOMATICALLY, so
-    // there is nothing for a worker to register. `watch_pr` exists because the opposite is true of a
-    // pull request — nothing watches one unless the worker says so. Same shape as its siblings: `action`
-    // alone is required, and NO thread parameter a model could aim elsewhere.
-    // `activity` READS the four kinds of background work with the ids an awaiting fence names them by.
-    // It takes NOTHING: there is no thread parameter and no filter, because the only correct answer is
-    // "everything you have running", and a worker that has lost its ids cannot be trusted to name them.
-    assert.equal(list.result.tools.length, 5)
-    assert.deepEqual(list.result.tools[4].inputSchema.required, [])
-    assert.deepEqual(Object.keys(list.result.tools[4].inputSchema.properties), [])
+    // `watch_pr` — same shape as its siblings: `action` alone is required, and NO thread parameter a
+    // model could aim elsewhere.
     assert.deepEqual(list.result.tools[3].inputSchema.required, ["action"])
     assert.deepEqual(list.result.tools[3].inputSchema.properties.action.enum, ["add", "list", "drop"])
     // `for` is REQUIRED for `add` (enforced in the handler, like its siblings): a PR watcher with no
@@ -105,6 +97,27 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
       Object.keys(list.result.tools[3].inputSchema.properties).sort(),
       ["action", "for", "id", "target"],
     )
+    // `watch` / `unwatch` — TWO VERBS, not one action-switch, because a worker reaching for `unwatch`
+    // should find `unwatch` (plans/rest-by-registration.md). This surface said "NO SHELL `watch` TOOL,
+    // and there never will be" until 2026-08-26: a background shell was watched through a `shells:` line
+    // in the ```awaiting fence, which is a DECLARATION with the lifetime of the message carrying it, so
+    // the worker had to restate every wait at every rest. Registration replaces that.
+    //
+    // ALL THREE ARGUMENTS ARE REQUIRED, unlike every action-switch above, where `action` alone can be:
+    // there is exactly one thing this call does, and none of the three has a defensible default — `for`
+    // least of all, because a duration frizz picked would be a wait nobody chose.
+    assert.deepEqual(list.result.tools[4].inputSchema.required, ["kind", "target", "for"])
+    assert.deepEqual(list.result.tools[4].inputSchema.properties.kind.enum, ["shell", "agent"])
+    assert.deepEqual(Object.keys(list.result.tools[4].inputSchema.properties).sort(), ["for", "kind", "target"])
+    assert.deepEqual(list.result.tools[5].inputSchema.required, ["id"])
+    assert.deepEqual(Object.keys(list.result.tools[5].inputSchema.properties), ["id"])
+    // `activity` READS every kind of background work with the ids a fence names them by, plus the
+    // `wch_…` id of any watch holding one. It takes NOTHING: there is no thread parameter and no filter,
+    // because the only correct answer is "everything you have running", and a worker that has lost its
+    // ids cannot be trusted to name them.
+    assert.equal(list.result.tools.length, 7)
+    assert.deepEqual(list.result.tools[6].inputSchema.required, [])
+    assert.deepEqual(Object.keys(list.result.tools[6].inputSchema.properties), [])
 
     // An unregistered name is a protocol error, not a crash — the registry routes by name now.
     rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "spawn_frizz_thread", arguments: {} } })
@@ -746,6 +759,79 @@ test("`recurring_prompt` refuses a cadence out of range without contacting the s
 
 
 
+
+// `watch` / `unwatch` OVER THE REAL STDIO TRANSPORT, same standard as `watch_pr` above and for the same
+// reason: `tools/list` proves a worker can SEE `mcp__frizz__watch`, and proves nothing about whether
+// calling it reaches the right procedure with the right shape.
+test("`watch` and `unwatch` register and withdraw against the CALLING thread", async () => {
+  const seen: Array<{ url: string; body: any }> = []
+  const armed = { id: "wch_abc123", kind: "shell", target: "bzvtnt3ig", label: "nub --test", createdAt: "2026-08-26T00:00:00.000Z", expiresAt: "2026-08-26T02:00:00.000Z" }
+  const replies: any[] = [
+    { id: "wch_abc123", kind: "shell", target: "bzvtnt3ig", alreadyArmed: false, watches: [armed] },
+    { dropped: true, watches: [] },
+  ]
+  const http = createServer((req, res) => {
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      seen.push({ url: req.url ?? "", body: JSON.parse(body) })
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ result: replies.shift() ?? null }))
+    })
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "watching-thread" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+
+    rpc.send({
+      jsonrpc: "2.0", id: 2, method: "tools/call",
+      params: { name: "watch", arguments: { kind: "shell", target: "bzvtnt3ig", for: "2h" } },
+    })
+    const added = await rpc.next(2)
+    assert.equal(added.result.isError, undefined)
+    assert.deepEqual(seen[0], { url: "/_frizz/rpc/addOwnWatch", body: { slug: "watching-thread", kind: "shell", target: "bzvtnt3ig", for: "2h" } })
+    assert.match(added.result.content[0].text, /Watching `bzvtnt3ig` as wch_abc123/)
+    // The read-back names the WORK, not just the handle: the label is frizz's live reading of what is
+    // running behind that id, so a worker listing its waits sees what they are.
+    assert.match(added.result.content[0].text, /wch_abc123 {2}shell: nub --test \(bzvtnt3ig\)/)
+    // And it says what happens at the expiry, because the cancel-and-re-decide is the whole mechanism
+    // that stops a registration outliving the reason it was made.
+    assert.match(added.result.content[0].text, /WHEN `for` RUNS OUT the row is CANCELLED/)
+
+    rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "unwatch", arguments: { id: "wch_abc123" } } })
+    const dropped = await rpc.next(3)
+    assert.deepEqual(seen[1], { url: "/_frizz/rpc/dropOwnWatch", body: { slug: "watching-thread", id: "wch_abc123" } })
+    assert.match(dropped.result.content[0].text, /Watch wch_abc123 dropped/)
+    assert.match(dropped.result.content[0].text, /No watches are armed on this thread/)
+
+    // THE REFUSALS, all in the HANDLER rather than only in the schema — a lenient client must not be
+    // able to register a wait that names nothing, or one with no expiry, and must not look like it did.
+    const before = seen.length
+    for (const [id, args, pattern] of [
+      [4, { kind: "shell", for: "2h" }, /`target` is required/],
+      [5, { kind: "shell", target: "bzvtnt3ig" }, /`for` is required/],
+      [6, { kind: "process", target: "bzvtnt3ig", for: "2h" }, /`kind` must be "shell" or "agent"/],
+    ] as const) {
+      rpc.send({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "watch", arguments: args } })
+      const refused = await rpc.next(id)
+      assert.equal(refused.result.isError, true)
+      assert.match(refused.result.content[0].text, pattern)
+    }
+    rpc.send({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "unwatch", arguments: {} } })
+    const noId = await rpc.next(7)
+    assert.equal(noId.result.isError, true)
+    assert.match(noId.result.content[0].text, /`id` is required/)
+    assert.equal(seen.length, before, "not one of the four reached the server")
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
 
 // `watch_pr` OVER THE REAL STDIO TRANSPORT, against a real http server standing in for frizz's RPC.
 //

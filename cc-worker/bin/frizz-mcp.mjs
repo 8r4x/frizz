@@ -315,6 +315,90 @@ const WATCH_PR = {
   },
 }
 
+// The registry that replaces a ```awaiting fence's `shells:` line: a wait the worker CREATES rather
+// than one it restates at every rest. Two tools rather than one action-switch, because they are two
+// verbs and a worker reaching for `unwatch` should find `unwatch`. See plans/rest-by-registration.md.
+const WATCH = {
+  name: "watch",
+  description:
+    "REGISTER A WAIT on something this thread already has running — a background shell, a sub-agent — " +
+    "and frizz holds your thread out of the queue until it finishes, then brings you back.\n\n" +
+    "IT IS THE WAIT, NOT A STATEMENT ABOUT ONE. A ```awaiting fence NAMES what you are waiting on and " +
+    "has the lifetime of the message carrying it, so it has to be rewritten at every single rest and is " +
+    "wrong the moment anything changes. This creates a ROW: it survives your turn ending, a compaction " +
+    "and a frizz restart, and it keeps holding your thread whatever you say next.\n\n" +
+    "`for` IS REQUIRED and it is a DURATION, never an instant. When it runs out the row is CANCELLED " +
+    "and you are woken to re-decide — that is deliberate, and it is what stops a wait outliving the " +
+    "reason you made it. Register again if you still mean it.\n\n" +
+    "THE TARGET IS CHECKED AGAINST WHAT IS ACTUALLY RUNNING, not against its shape. A handle nothing " +
+    "live answers to is REFUSED rather than stored, and so is a `kind` that disagrees with what frizz " +
+    "can see — a sub-agent registered as a shell is refused and told what it actually is. If you have " +
+    "lost an id (a compaction, a long turn), call `activity` rather than guessing.\n\n" +
+    "A SUB-AGENT ALREADY HOLDS YOUR THREAD without any registration, so the case this exists for is a " +
+    "background SHELL: frizz cannot tell a build you are waiting on from a dev server you started and " +
+    "moved on from, and only you know which it is.\n\n" +
+    "NEVER WATCH SOMETHING YOU INTEND TO OUTLIVE. A dev server, a log tail, a file watcher — those are " +
+    "things you started, not things you are waiting for, and registering one parks your thread on work " +
+    "that will never finish.\n\n" +
+    "REGISTERING IS IDEMPOTENT per (kind, target): asking twice returns the SAME id, says it was " +
+    "already armed, and leaves the original expiry alone — so re-registering after a compaction is safe " +
+    "and is the right instinct. Use `unwatch` to withdraw one. A PULL REQUEST is `watch_pr`, not this: " +
+    "that one polls GitHub and reports repeatedly.\n\n" +
+    "You can only ever watch work on your OWN thread.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      kind: {
+        type: "string",
+        enum: ["shell", "agent"],
+        description:
+          "What the target IS. Checked against live telemetry, not taken on trust — the two kinds of " +
+          "handle are both opaque runtime strings and look identical, so frizz answers this exactly " +
+          "rather than guessing, and refuses a mismatch by name.",
+      },
+      target: {
+        type: "string",
+        description:
+          "The handle you were shown. For a shell that is the runtime's own background-task id " +
+          "(\"Command running in background with ID: bzvtnt3ig\"); its launch tool_use id and its " +
+          "command label are accepted too. For a sub-agent it is the dispatch id or its description. " +
+          "`activity` prints all of them.",
+      },
+      for: {
+        type: "string",
+        description:
+          "REQUIRED. How long to hold the wait, as a DURATION — `30m`, `2h`, `3d` (max 24h). Never an " +
+          "instant, and there is no default: choose it for THIS wait. When it elapses the row is " +
+          "cancelled and you are woken to re-decide, so an over-long guess costs a wait that outlives " +
+          "its reason and a too-short one costs one extra turn.",
+      },
+    },
+    required: ["kind", "target", "for"],
+  },
+}
+
+const UNWATCH = {
+  name: "unwatch",
+  description:
+    "WITHDRAW A WATCH you registered with `watch`, by its id. It stops holding your thread out of the " +
+    "queue and it will not wake you.\n\n" +
+    "Use it the moment a wait stops mattering — you decided not to wait for that build after all, or " +
+    "you are about to end the thread. A watch you no longer care about still parks you, and a thread " +
+    "parked on a wait nobody is waiting for is invisible to the human.\n\n" +
+    "You do NOT need this when the work simply finishes: frizz settles the row itself and wakes you. " +
+    "`activity` prints the id of everything you hold.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      id: {
+        type: "string",
+        description: "The watch id `watch` returned (or that `activity` lists). Only your own thread's.",
+      },
+    },
+    required: ["id"],
+  },
+}
+
 // The unified server's tool registry: `tools/list` returns these and `tools/call` routes by name.
 // Adding a worker-facing frizz tool = one entry here + one handler in `HANDLERS` — never a second
 // MCP server, so every frizz tool stays under the same `mcp__frizz__*` namespace and the same
@@ -335,7 +419,7 @@ const ACTIVITY = {
   inputSchema: { type: "object", properties: {}, required: [] },
 }
 
-const TOOLS = [SPAWN_THREAD, RECURRING_PROMPT, TIMER, WATCH_PR, ACTIVITY]
+const TOOLS = [SPAWN_THREAD, RECURRING_PROMPT, TIMER, WATCH_PR, WATCH, UNWATCH, ACTIVITY]
 
 /** @type {Record<string, (args: Record<string, unknown>) => Promise<string>>} */
 const HANDLERS = {
@@ -343,6 +427,8 @@ const HANDLERS = {
   [RECURRING_PROMPT.name]: recurringPrompt,
   [TIMER.name]: timer,
   [WATCH_PR.name]: watchPr,
+  [WATCH.name]: watch,
+  [UNWATCH.name]: unwatch,
   [ACTIVITY.name]: activity,
 }
 
@@ -361,7 +447,10 @@ async function activity() {
   }
   const lines = items.map((i) => {
     const when = i.until ? `  (fires ${i.until})` : i.since ? `  (since ${i.since})` : ""
-    return `  ${i.kind}: ${i.id}${when}\n    ${i.label}`
+    // The `wch_…` id of the watch holding this item, where one is armed — this readout exists to hand a
+    // worker back the ids it lost, and that includes the one `unwatch` takes.
+    const held = i.watchId ? `  [watched as ${i.watchId}]` : ""
+    return `  ${i.kind}: ${i.id}${when}${held}\n    ${i.label}`
   })
   // A READY-TO-PASTE FENCE, not a description of one. The frontmatter is YAML since 2026-08-24 and its
   // keys are PLURAL sequences, so an id printed on its own line is no longer something a worker can copy
@@ -378,7 +467,9 @@ async function activity() {
     "PLURAL key per kind, taking a list — plus a required `for:` duration, and your handoff prose BELOW " +
     "the `---` (there is no `reason:` key).\n\nEverything above, as a fence:\n\n```awaiting\n" +
     `${block.join("\n")}\n  for: 2h\n  ---\n  <what you are waiting for, and what you will do when it lands>\n` +
-    "```\n\nDrop the lines you are not actually waiting on — a dev server you left running is not a wait."
+    "```\n\nDrop the lines you are not actually waiting on — a dev server you left running is not a wait." +
+    "\n\nBETTER THAN NAMING A SHELL IN THE FENCE: `watch` REGISTERS the wait, so it survives your turn " +
+    "ending and you never restate it. Anything already marked `[watched as …]` above needs no fence line."
   )
 }
 
@@ -889,6 +980,58 @@ function armedPrWatchList(result) {
     return `  ${w.id}  ${w.target}  —  ${state}${g && g.state === "open" && g.merge === "mergeable" ? ", mergeable" : ""}`
   })
   return `Watched on this thread now:\n${lines.join("\n")}`
+}
+
+/** The armed watches on this thread, as the read-back prints them. */
+function armedWatchList(result) {
+  const watches = Array.isArray(result?.watches) ? result.watches : []
+  if (!watches.length) return "No watches are armed on this thread — nothing here is holding it out of the queue."
+  const lines = watches.map((w) => {
+    const what = w.kind === "agent" ? "sub-agent" : "shell"
+    // The LABEL is frizz's live reading, not a copy stored at registration — so it names the work as it
+    // stands, and its ABSENCE means the target no longer resolves to anything running.
+    const name = w.label ? `${w.label} (${w.target})` : w.target
+    return `  ${w.id}  ${what}: ${name}  —  expires ${w.expiresAt}`
+  })
+  return `Armed on this thread now:\n${lines.join("\n")}`
+}
+
+/** The `watch` handler: register a wait on this thread's own running work.
+ * @param {Record<string, unknown>} args @returns {Promise<string>} */
+async function watch(args) {
+  const slug = threadSlug()
+  const kind = typeof args.kind === "string" ? args.kind.trim() : ""
+  if (kind !== "shell" && kind !== "agent") throw new Error("`kind` must be \"shell\" or \"agent\"")
+  const target = typeof args.target === "string" ? args.target.trim() : ""
+  if (!target) throw new Error("`target` is required — the handle you were shown; `activity` prints them all")
+  const forValue = typeof args.for === "string" ? args.for.trim() : ""
+  if (!forValue) throw new Error("`for` is required — a DURATION like `30m`, `2h` or `3d` (max 24h), never an instant")
+  const result = (await callRpc("addOwnWatch", { slug, kind, target, for: forValue }))?.result
+  const id = result?.id ?? "(unknown)"
+  const head = result?.alreadyArmed
+    ? `Already watching \`${target}\` as ${id} — nothing new was registered, and its original expiry stands.`
+    : `Watching \`${target}\` as ${id}. Your thread is held out of the queue until it finishes, and the ` +
+      "registration survives your turn ending, a compaction and a frizz restart."
+  return (
+    `${head}\n\nWHEN \`for\` RUNS OUT the row is CANCELLED and you are woken to re-decide — register ` +
+    `again if you still mean it.\n\nDROP IT the moment it stops mattering (\`unwatch\`, id \`${id}\`); ` +
+    `you do NOT need to when the work simply finishes.\n\n${armedWatchList(result)}`
+  )
+}
+
+/** The `unwatch` handler: withdraw one registered watch by id.
+ * @param {Record<string, unknown>} args @returns {Promise<string>} */
+async function unwatch(args) {
+  const slug = threadSlug()
+  const id = typeof args.id === "string" ? args.id.trim() : ""
+  if (!id) throw new Error("`id` is required — take it from `watch` or from `activity`")
+  const result = (await callRpc("dropOwnWatch", { slug, id }))?.result
+  // A drop that matched nothing is reported rather than swallowed: the id was wrong, already settled, or
+  // another thread's — and a worker that believes it withdrew a wait it still holds will rest on it.
+  const head = result?.dropped
+    ? `Watch ${id} dropped. It is no longer holding your thread, and it will not wake you.`
+    : `No ARMED watch ${id} on this thread — it was already settled, or the id is not one of yours.`
+  return `${head}\n\n${armedWatchList(result)}`
 }
 
 /** The `watch_pr` handler: register, withdraw, or read back this thread's PR watchers.
