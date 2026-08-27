@@ -1159,3 +1159,67 @@ test("an elapsed watch is due, a dropped one is not, and one thread can never dr
     s.close()
   }
 })
+
+// ---- thread_question: a worker's registered question for the human (2026-08-26) ----
+//
+// The other half of plans/rest-by-registration.md. What separates it from thread_watch is that it waits
+// on a PERSON: there is no expiry, so nothing but an answer, a withdrawal or a dismissal ever closes it.
+test("a question is registered, answered, and delivered as three separate facts", () => {
+  const s = store()
+  try {
+    const at = 1_700_000_000_000
+    const row = s.askThreadQuestion({ id: "q_1", slug: "t", spec: '{"text":"SQLite or JSON?"}', askedAtMs: at })
+    assert.deepEqual({ state: row.state, answer: row.answer, delivered: row.delivered }, { state: "open", answer: null, delivered: 0 })
+
+    // NEVER IDEMPOTENT, unlike a watch: two identically-worded questions are two things the human owes
+    // an answer to, and collapsing them would silently drop one.
+    s.askThreadQuestion({ id: "q_2", slug: "t", spec: '{"text":"SQLite or JSON?"}', askedAtMs: at + 1 })
+    assert.deepEqual(s.listThreadQuestions("t", { openOnly: true }).map((q) => q.id), ["q_1", "q_2"])
+
+    assert.equal(s.answerThreadQuestion("q_1", '{"q_1":"SQLite"}', at + 10), true)
+    assert.equal(s.answerThreadQuestion("q_1", '{"q_1":"JSON"}', at + 20), false, "an answered question cannot be answered twice")
+    assert.equal(s.getThreadQuestion("q_1")?.answer, '{"q_1":"SQLite"}')
+
+    // ANSWERING AND DELIVERING ARE SEPARATE, exactly as they are for a wake: an answer given while the
+    // worker's process was down has to survive the gap, or it is lost in the same silence the fenced
+    // question used to lose the QUESTION in.
+    assert.deepEqual(s.undeliveredAnswers().map((q) => q.id), ["q_1"])
+    assert.equal(s.markAnswerDelivered("q_1"), true)
+    assert.equal(s.markAnswerDelivered("q_1"), false, "and only once")
+    assert.deepEqual(s.undeliveredAnswers(), [])
+  } finally {
+    s.close()
+  }
+})
+
+test("withdrawn and dismissed are DIFFERENT settlements, and neither is deliverable", () => {
+  const s = store()
+  try {
+    const at = 1_700_000_000_000
+    s.askThreadQuestion({ id: "q_w", slug: "t", spec: "{}", askedAtMs: at })
+    s.askThreadQuestion({ id: "q_d", slug: "t", spec: "{}", askedAtMs: at + 1 })
+    s.askThreadQuestion({ id: "q_open", slug: "other", spec: "{}", askedAtMs: at + 2 })
+
+    // `unask` is the WORKER's, and thread-scoped so one thread can never withdraw another's question.
+    assert.equal(s.withdrawThreadQuestion("other", "q_w", at + 5), false)
+    assert.equal(s.withdrawThreadQuestion("t", "q_w", at + 5), true)
+    assert.equal(s.withdrawThreadQuestion("t", "q_w", at + 6), false, "and not repeatable")
+
+    // The human's x is NOT thread-scoped — it is the human's own action on their own board.
+    assert.equal(s.dismissThreadQuestion("q_d", at + 7), true)
+
+    // The two states answer different questions about what happened, and the worker is told which.
+    assert.equal(s.getThreadQuestion("q_w")?.state, "withdrawn")
+    assert.equal(s.getThreadQuestion("q_d")?.state, "dismissed")
+    // Neither settles with an answer, so neither is ever handed to the worker as one.
+    assert.deepEqual(s.undeliveredAnswers(), [])
+    assert.deepEqual(s.listThreadQuestions("t", { openOnly: true }), [])
+    // A settled question cannot be answered back into life.
+    assert.equal(s.answerThreadQuestion("q_w", '{"x":1}', at + 8), false)
+
+    // The machine-wide open set — what the `done` gate and the board both read.
+    assert.deepEqual(s.openThreadQuestions().map((q) => q.id), ["q_open"])
+  } finally {
+    s.close()
+  }
+})

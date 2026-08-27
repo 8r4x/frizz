@@ -417,6 +417,28 @@ export interface ThreadWatchRow {
   settled_at: number | null
 }
 
+/** A worker's registered QUESTION for the human — one row per ROOT question, its follow-up tree inside
+ *  `spec` (plans/rest-by-registration.md, 2026-08-26).
+ *
+ *  IT HAS NO EXPIRY, which is the one real difference from ThreadWatchRow. A watch waits on WORK, and
+ *  work ends; a question waits on a PERSON, and a person owes an answer until they give one. A question
+ *  that timed out would either re-ask as noise or silently drop something the human still owed. */
+export interface ThreadQuestionRow {
+  id: string
+  thread_slug: string
+  /** The question tree as JSON, validated at the RPC boundary and stored verbatim (AskedQuestion). */
+  spec: string
+  state: "open" | "answered" | "withdrawn" | "dismissed"
+  /** The structured answer as JSON — keyed by question id and restating each question's text, because
+   *  the worker never saw the id. Null until the human sends, and forever on a settled-unanswered row. */
+  answer: string | null
+  /** 0 until the worker has been handed the answer. Answering and DELIVERING are separate, exactly as
+   *  they are for a wake: an answer given while the worker's process was down must survive the gap. */
+  delivered: number
+  asked_at: number
+  settled_at: number | null
+}
+
 export interface Storage {
   db: Database
   interactions: InteractionStore
@@ -600,6 +622,24 @@ export interface Storage {
   /** The watched thing finished on its own — the runtime already woke the thread, so this only records
    *  that the row is no longer a reason to wait. */
   settleThreadWatch(id: string, settledAtMs: number, state?: "expired" | "settled"): boolean
+  // ---- THE WORKER'S REGISTERED QUESTIONS -----------------------------------------------------------
+  /** Register one root question. Never idempotent, unlike a watch: two identically-worded questions are
+   *  two things the human owes an answer to, and collapsing them would silently drop one. */
+  askThreadQuestion(q: { id: string; slug: string; spec: string; askedAtMs: number }): ThreadQuestionRow
+  listThreadQuestions(slug: string, opts?: { openOnly?: boolean }): ThreadQuestionRow[]
+  getThreadQuestion(id: string): ThreadQuestionRow | undefined
+  /** Every OPEN question on the machine — what the `done` gate and the board both read. */
+  openThreadQuestions(): ThreadQuestionRow[]
+  /** The human's answer. Stored, not delivered: `undeliveredAnswers` finds it again on the next pass. */
+  answerThreadQuestion(id: string, answer: string, atMs: number): boolean
+  /** Answered but not yet handed to the worker — the scheduler's delivery queue. */
+  undeliveredAnswers(): ThreadQuestionRow[]
+  markAnswerDelivered(id: string): boolean
+  /** The worker's own `unask`, thread-scoped so one thread can never withdraw another's question. */
+  withdrawThreadQuestion(slug: string, id: string, atMs: number): boolean
+  /** The human's x. Distinct from `withdrawn` on purpose: the two states answer different questions
+   *  about what happened, and the worker is told which. */
+  dismissThreadQuestion(id: string, atMs: number): boolean
   // ---- THE BUILT-IN SIGN-OFF NUDGE ----------------------------------------------------------------
   // Count one delivered nudge against this thread. It only ever INCREMENTS — the count is cleared by
   // `resetSignoffNudges` when the thread signs off, and by nothing else. It used to reset whenever a
@@ -913,6 +953,42 @@ export function createStorage(dbPath: string): Storage {
     -- a second row that has to be dropped twice. Partial, so a dropped row never blocks a re-arm.
     CREATE UNIQUE INDEX IF NOT EXISTS thread_watch_unique_armed
       ON thread_watch(thread_slug, kind, target) WHERE state = 'armed';
+    -- A worker's registered QUESTIONS for the human (2026-08-26). The other half of
+    -- plans/rest-by-registration.md, and the same argument as thread_watch directly above: a fenced
+    -- question block has the LIFETIME OF THE MESSAGE CARRYING IT, so the stop hook clobbers it, a
+    -- follow-up turn buries it, and the one copy the human owes an answer to is gone. A row is not.
+    --
+    -- ONE ROW PER ROOT QUESTION, not per ask CALL and not per node. The root is the unit the human
+    -- acts on: it is what the x dismisses and what unask withdraws, so it is what needs an id. An ask
+    -- naming three questions writes three rows; the follow-ups hanging off an option live inside this
+    -- row's spec column, because a branch nobody took is not a question anybody owes an answer to.
+    --
+    -- NO EXPIRY COLUMN, deliberately, and the one real difference from thread_watch. A watch waits on
+    -- work, which ends; a question waits on a PERSON, and a person owes an answer until they give one.
+    -- A timing-out question either re-asks as noise or silently drops something a human still owed.
+    CREATE TABLE IF NOT EXISTS thread_question (
+      id          TEXT PRIMARY KEY,
+      thread_slug TEXT NOT NULL,
+      -- The question TREE as the worker submitted it, validated at the RPC boundary and stored verbatim
+      -- (AskedQuestion in @frizz/shared). JSON rather than columns because the shape is recursive: an
+      -- option may carry follow-ups, three levels deep.
+      spec        TEXT NOT NULL,
+      state       TEXT NOT NULL CHECK (state IN ('open', 'answered', 'withdrawn', 'dismissed')),
+      -- The structured answer, keyed by question id and RESTATING each question's text, because the
+      -- worker never saw the id -- frizz minted it -- so an id alone cannot be correlated back. Null
+      -- until the human sends; null forever on a withdrawn or dismissed row.
+      answer      TEXT,
+      -- Has the worker been handed this answer yet? A question is answered by the human and DELIVERED
+      -- separately, exactly as a wake is: the row must survive the gap, or an answer given while the
+      -- worker's process was down is lost in the same silence the fence used to lose the question in.
+      delivered   INTEGER NOT NULL DEFAULT 0,
+      asked_at    INTEGER NOT NULL,
+      settled_at  INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS thread_question_slug
+      ON thread_question(thread_slug, state, asked_at);
+    CREATE INDEX IF NOT EXISTS thread_question_undelivered
+      ON thread_question(state, delivered);
     -- The retirement note for the ORIGINAL thread_watch is kept below as the record of why it left, and
     -- of what had to change before it could come back.
     -- thread_watch WAS HERE and is retired (2026-08-14). A worker's wait is a 'watch:' line in its own
@@ -1707,6 +1783,41 @@ export function createStorage(dbPath: string): Storage {
     WHERE id = ? AND state = 'armed'
   `)
   const delThreadWatches = db.prepare("DELETE FROM thread_watch WHERE thread_slug = ?")
+  const askThreadQuestionStmt = db.prepare(`
+    INSERT INTO thread_question (id, thread_slug, spec, state, answer, delivered, asked_at, settled_at)
+    VALUES (@id, @slug, @spec, 'open', NULL, 0, @askedAtMs, NULL)
+  `)
+  const threadQuestionsBySlugStmt = db.prepare<[string], ThreadQuestionRow>(
+    "SELECT * FROM thread_question WHERE thread_slug = ? ORDER BY asked_at, id",
+  )
+  const openThreadQuestionsBySlugStmt = db.prepare<[string], ThreadQuestionRow>(
+    "SELECT * FROM thread_question WHERE thread_slug = ? AND state = 'open' ORDER BY asked_at, id",
+  )
+  const threadQuestionByIdStmt = db.prepare<[string], ThreadQuestionRow>("SELECT * FROM thread_question WHERE id = ?")
+  const openThreadQuestionsStmt = db.prepare<[], ThreadQuestionRow>(
+    "SELECT * FROM thread_question WHERE state = 'open' ORDER BY asked_at, id",
+  )
+  const answerThreadQuestionStmt = db.prepare(`
+    UPDATE thread_question SET state = 'answered', answer = ?, settled_at = ?
+    WHERE id = ? AND state = 'open'
+  `)
+  // Answered but not yet handed over. `state = 'answered'` alone, never the dismissed/withdrawn rows:
+  // those settle without an answer and there is nothing to deliver.
+  const undeliveredAnswersStmt = db.prepare<[], ThreadQuestionRow>(
+    "SELECT * FROM thread_question WHERE state = 'answered' AND delivered = 0 ORDER BY settled_at, id",
+  )
+  const markAnswerDeliveredStmt = db.prepare(
+    "UPDATE thread_question SET delivered = 1 WHERE id = ? AND state = 'answered' AND delivered = 0",
+  )
+  const withdrawThreadQuestionStmt = db.prepare(`
+    UPDATE thread_question SET state = 'withdrawn', settled_at = ?
+    WHERE id = ? AND thread_slug = ? AND state = 'open'
+  `)
+  const dismissThreadQuestionStmt = db.prepare(`
+    UPDATE thread_question SET state = 'dismissed', settled_at = ?
+    WHERE id = ? AND state = 'open'
+  `)
+  const delThreadQuestions = db.prepare("DELETE FROM thread_question WHERE thread_slug = ?")
   // Only a PROMPTLESS snooze expires here. One that carries a prompt still owes the thread a bump, and
   // the scheduler — not the board — clears it once that wake reaches a terminal state. Erasing it on
   // elapse (the board refreshes far more often than the waker ticks) would drop the follow-up entirely.
@@ -1775,6 +1886,7 @@ export function createStorage(dbPath: string): Storage {
     // to wake, and the scheduler polls every armed row.
     delPrWatches.run(existing.slug)
     delThreadWatches.run(existing.slug)
+    delThreadQuestions.run(existing.slug)
     delSession.run(existing.slug)
     return existing
   }
@@ -2348,6 +2460,19 @@ export function createStorage(dbPath: string): Storage {
     getThreadWatch: (id) => threadWatchByIdStmt.get(id),
     expiredThreadWatches: (nowMs) => expiredThreadWatchesStmt.all(nowMs),
     armedThreadWatches: () => armedThreadWatchesStmt.all(),
+    askThreadQuestion: (q) => {
+      askThreadQuestionStmt.run(q)
+      return threadQuestionByIdStmt.get(q.id)!
+    },
+    listThreadQuestions: (slug, opts) =>
+      (opts?.openOnly ? openThreadQuestionsBySlugStmt : threadQuestionsBySlugStmt).all(slug),
+    getThreadQuestion: (id) => threadQuestionByIdStmt.get(id),
+    openThreadQuestions: () => openThreadQuestionsStmt.all(),
+    answerThreadQuestion: (id, answer, atMs) => answerThreadQuestionStmt.run(answer, atMs, id).changes === 1,
+    undeliveredAnswers: () => undeliveredAnswersStmt.all(),
+    markAnswerDelivered: (id) => markAnswerDeliveredStmt.run(id).changes === 1,
+    withdrawThreadQuestion: (slug, id, atMs) => withdrawThreadQuestionStmt.run(atMs, id, slug).changes === 1,
+    dismissThreadQuestion: (id, atMs) => dismissThreadQuestionStmt.run(atMs, id).changes === 1,
     dropThreadWatch: (slug, id, settledAtMs) => dropThreadWatchStmt.run(settledAtMs, id, slug).changes === 1,
     settleThreadWatch: (id, settledAtMs, state = "settled") => settleThreadWatchStmt.run(state, settledAtMs, id).changes === 1,
     armThreadTimer: (timer) => void armTimerStmt.run(timer),
