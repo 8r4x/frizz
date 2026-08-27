@@ -393,7 +393,12 @@ export function completionConfirmationHold(telemetry: SessionTelemetry | undefin
   // cap) — is far closer to finished/dead than to working, and counting it here contradicted the queue:
   // hasLiveBackgroundWork (board.ts) holds a thread out of the queue on `running` ONLY, so a stale-only
   // parent read as at-rest in the rail yet Mark-as-done warned it was busy. The two must agree, so match
-  // it — running only. (bgShells have no stale state; this narrows sub-agents, leaves shells unchanged.)
+  // it — running only. (The parenthetical here read "bgShells have no stale state; this narrows
+  // sub-agents, leaves shells unchanged" until 2026-08-27, and both halves have been false since
+  // `shellIsGone` landed: BgShellView.state is `running | stale`, so this filter drops a stale SHELL
+  // too — which is the behaviour that agrees with the queue, and the reason to say so accurately.
+  // `isDirectSubAgent` reads `depth ?? 1`, and a shell carries no depth, so it passes that half
+  // untouched — the narrowing a shell actually gets is the state check alone.)
   // The real orphan case that used to strand stale rows here now retires at its `stopped` recovery
   // notification (see trackCompletions), so those never reach this filter at all.
   // DIRECT children only, for the same reason hasLiveBackgroundWork reads only those: the two must
