@@ -5,6 +5,10 @@
 // (--patch, repeatable) + --append. Writes the project's .frizz/<slug>.md atomically,
 // preserving every byte outside the keys/regions it touches.
 //
+// SCOPE: frizz classic — it edits an EXISTING thread file and never creates one, so the server's
+// mark-as-done call is a no-op for a thread the Frizz app dispatched (those write no file). See
+// config.mjs § STATUS.
+//
 // Exposed as the `frizz-update` command (bin/frizz-update is on the Bash PATH while the
 // plugin is enabled). The project root is resolved from CLAUDE_PROJECT_DIR (exported to
 // bin/hook processes), matching how bin/frizz + index.mjs find the project's .frizz/.

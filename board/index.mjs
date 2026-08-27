@@ -9,6 +9,11 @@
  * `frizz-reminder` hook runs `--validate` every turn so malformed frontmatter surfaces
  * to the orchestrator immediately.
  *
+ * SCOPE: FRIZZ CLASSIC. Every thread here is a `.frizz/<slug>.md` file. A thread the Frizz APP
+ * dispatches writes no such file and therefore never appears in this board at all — its row, its
+ * status and its queue membership are all derived server-side (packages/server/src/board.ts). See
+ * config.mjs § STATUS for what still consumes this tool and why it is not the app's queue model.
+ *
  * Usage (the `frizz` command is the bin/ shim that runs this script against the
  * project's `.frizz/`, regardless of cwd or where the plugin is installed):
  *   frizz               # print the LIVE board (⚖ awaiting-you + active/planning/blocked; planned hidden)

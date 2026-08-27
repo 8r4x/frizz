@@ -254,6 +254,16 @@ export function frizzActive(projectDir, sessionId) {
  * written to disk going forward; legacy spellings (`todo`/`plan`/`enqueued`/`needs-decision`)
  * are accepted on read via {@link STATUS_ALIASES} + {@link normalizeStatus}, never written.
  *
+ * SCOPE — THIS GOVERNS `.frizz/<slug>.md` THREAD FILES, WHICH IS FRIZZ CLASSIC. A thread the Frizz
+ * APP dispatches writes no such file, so none of the machinery narrated below (the nag, the pulse,
+ * the Stop-hook pop, the `⚖ awaiting you` queue) runs for it: the server synthesizes its `status` as
+ * "active" and never reads it back, and its place in the board's queue comes from `deriveNeedsYou`
+ * in packages/server/src/board.ts — runtime telemetry and the worker's own fences, not a status
+ * below. So this enum does NOT answer "what puts a thread in the queue"; it answers that only for a
+ * file-backed row. It stays live because the server still shells out to index.mjs (dispatch) and
+ * thread-update.mjs (mark-as-done) for exactly those rows. Noted 2026-08-26 after an outside review
+ * read this vocabulary as the app's live queue model and reported it as such.
+ *
  * THE WAITING MODEL (2026-07-08, refining the 2026-07-01 unified model): "awaiting a human" is
  * now its OWN first-class status — `needs-human` — no longer an encoding of `blocked`. `blocked`
  * narrows to MACHINE-waits ONLY and REQUIRES a resolution-mechanism field. So the human(yellow)/
