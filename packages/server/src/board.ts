@@ -943,8 +943,10 @@ export function deriveAwaitingBackground(
   // Any hard human gate or completion signal outranks this reason → the thread cards as THAT, not here.
   // A REGISTERED question outranks this card for the same reason a fenced one does: at rest with both
   // outstanding the human should be looking at the QUESTION, which is the actionable thing, and two
-  // expanded surfaces compete for one glance. The watches are not lost — they collapse behind a count
-  // on the question card itself.
+  // expanded surfaces compete for one glance. The waits are not lost with it — BackgroundOpsStrip
+  // still lists every live shell, sub-agent and watcher under the prompt box, one compact line each
+  // (checked in a browser on registered-question-fixture.html?busy=1). That strip is where they live on
+  // an asking card; this card is where they live when there is nothing to ask.
   if (hasActionableInteraction || tele?.pendingAsk || tele?.pendingQuestion || openQuestions > 0) return false
   // A signal fence — ```done OR ```awaiting — is the worker's OWN explicit statement about why it
   // stopped, and it renders its own card in the transcript body. That is strictly more specific than

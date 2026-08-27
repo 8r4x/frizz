@@ -15,6 +15,8 @@ import "./styles.css"
 //   ?tree=1     — a root whose "Yes" carries two follow-ups. Pick A and watch them appear indented.
 //   ?danger=1   — the destructive gate: `risk` tone, and NO × (declining is an option INSIDE it).
 //   ?many=1     — three open questions at once, which is what the ONE shared "Send answers" is for.
+//   ?busy=1     — a question AND live background work, which is the case the memo calls out: the
+//                 question expands and the waits must not compete with it for the one glance.
 //   ?font=sans  — the other of the two fonts this app renders in; mono is the default and the wider.
 const params = new URLSearchParams(location.search)
 document.documentElement.dataset.font = params.get("font") === "sans" ? "sans" : "mono"
@@ -122,9 +124,15 @@ const thread = {
   foreign: false,
   backend: "claude",
   permissionMode: "default",
-  subAgents: [],
-  bgShells: [],
-  watches: [],
+  subAgents: params.get("busy") === "1"
+    ? [{ id: "agent-a", label: "Audit the parser for edge cases", subagentType: "frizz:high", startedAt: ago(4), state: "running" }]
+    : [],
+  bgShells: params.get("busy") === "1"
+    ? [{ id: "toolu_ci", taskId: "bzvtnt3ig", label: "gh run watch 1842", startedAt: ago(6), state: "running" }]
+    : [],
+  watches: params.get("busy") === "1"
+    ? [{ id: "wch_aaa", kind: "shell", target: "bzvtnt3ig", state: "armed", createdAt: ago(6) }]
+    : [],
   lastActivityAt: ago(1),
 } as unknown as ThreadViewModel
 
