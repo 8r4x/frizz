@@ -4,7 +4,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { InteractionRequest } from "@frizz/shared"
-import { appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle } from "./board.ts"
+import { appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, hasDeclaredWait, hasRegisteredBackgroundPark, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle, type RegisteredWatch } from "./board.ts"
 import { Bus } from "./bus.ts"
 import { createStorage } from "./storage.ts"
 import type { Project } from "./project.ts"
@@ -1780,4 +1780,89 @@ test("hints that are neither pr-watch nor watch never produce a row", () => {
 
 test("nothing registered and nothing declared, no rows", () => {
   assert.deepEqual(fenceWatchViews("t", undefined, FENCE_AT), [])
+})
+
+// ---- REGISTERED WATCHES (2026-08-26) ----
+//
+// The registry half of the same split, and the one the fence never had: a `thread_watch` row created by
+// `mcp__frizz__watch`. It follows the GITHUB/TIMER side — the row outlives the message that made it, so
+// it stands fence or no fence — and it parks the thread on its own, which is the whole point of
+// plans/rest-by-registration.md: a wait stops being a line the worker has to restate at every rest.
+const NOW = Date.parse(FENCE_AT) + 60_000 // a minute into the rest
+const registeredWatch = (over: Partial<RegisteredWatch> = {}): RegisteredWatch => ({
+  id: "wch_a1b2c3", kind: "shell", target: "bzvtnt3ig", createdAt: FENCE_AT, expiresAt: "2999-01-01T00:00:00.000Z", ...over,
+})
+
+test("a registered shell watch parks the thread with no fence at all", () => {
+  const live = tele({ bgShells: [LIVE_SHELL] })
+  assert.equal(hasRegisteredBackgroundPark(live, [registeredWatch()], NOW), true)
+  // …and it is a WAIT for every surface that asks, not just the queue rule.
+  assert.equal(hasDeclaredWait(live, NOW, new Set(), new Set(), [registeredWatch()]), true)
+  // The registration alone, with nothing behind it, is not a wait: a row whose work has ended describes
+  // a wake that can never come — the same rule a `shells:` name takes.
+  assert.equal(hasRegisteredBackgroundPark(tele(), [registeredWatch()], NOW), false)
+})
+
+test("ANY live registered watch parks, where a fence needs ALL of its names live", () => {
+  // The two rules differ because the objects do. A fence is one sentence about every name in it, so one
+  // dead name means the sentence has stopped describing reality. A registration is its own row, made at
+  // its own moment, and one settling says nothing about the others.
+  const live = tele({ bgShells: [LIVE_SHELL] })
+  const watches = [registeredWatch(), registeredWatch({ id: "wch_dead", target: "gone" })]
+  assert.equal(hasRegisteredBackgroundPark(live, watches, NOW), true)
+})
+
+test("an EXPIRED row stops parking on its own clock, without waiting for the scheduler", () => {
+  // The expiry is the ROW's, not the fence's blanket DECLARED_PARK_MAX_MS — one park duration for every
+  // wait, chosen by nobody, is the thing an un-restated fence could never get right. Settling the row is
+  // the scheduler's job; a read never mutates, so until then it simply stops parking.
+  const live = tele({ bgShells: [LIVE_SHELL] })
+  const expired = registeredWatch({ expiresAt: new Date(NOW - 1).toISOString() })
+  assert.equal(hasRegisteredBackgroundPark(live, [expired], NOW), false)
+  assert.equal(hasRegisteredBackgroundPark(live, [registeredWatch({ expiresAt: new Date(NOW + 1).toISOString() })], NOW), true)
+})
+
+test("a KIND that disagrees with live telemetry does not park", () => {
+  // The registration says shell; the handle resolves to a sub-agent. The RPC refuses that pairing at
+  // registration, so a row like this can only come from work that changed shape underneath it — and a
+  // park on a mis-kinded row is exactly the reading that filed two sub-agents under "Background shells".
+  const agentOnly = tele({ subAgents: [LIVE_AGENT] })
+  assert.equal(hasRegisteredBackgroundPark(agentOnly, [registeredWatch({ target: "toolu_agent" })], NOW), false)
+  assert.equal(hasRegisteredBackgroundPark(agentOnly, [registeredWatch({ kind: "agent", target: "toolu_agent" })], NOW), true)
+})
+
+test("a registered shell gets a strip row, and an agent registration gets none", () => {
+  const live = tele({ bgShells: [LIVE_SHELL], subAgents: [LIVE_AGENT] })
+  const views = fenceWatchViews("t", live, FENCE_AT, {}, [], [], [registeredWatch(), registeredWatch({ id: "wch_ag", kind: "agent", target: "toolu_agent" })])
+  // The sub-agent is already a row on every surface that draws this card, read straight off `subAgents`.
+  // A second row here would name it by its raw `toolu_…` id under a "Background shells" heading.
+  assert.deepEqual(views, [{
+    id: "shell:t:bzvtnt3ig",
+    kind: "shell",
+    target: "bzvtnt3ig",
+    state: "armed",
+    createdAt: FENCE_AT,
+  }])
+})
+
+test("a registered shell and a fence naming the same shell are ONE row", () => {
+  const live = { ...parked({ kind: "shell", value: "bzvtnt3ig" }), bgShells: [LIVE_SHELL] }
+  const views = fenceWatchViews("t", live, FENCE_AT, {}, [], [], [registeredWatch()])
+  assert.deepEqual(views.map((w) => w.target), ["bzvtnt3ig"])
+})
+
+test("a registration whose shell has ended yields no strip row, exactly as a dead fence name does", () => {
+  assert.deepEqual(fenceWatchViews("t", tele(), FENCE_AT, {}, [], [], [registeredWatch()]), [])
+})
+
+test("a registered park excuses the thread from the queue and still states itself on the card", () => {
+  const live = tele({ turn: "idle", bgShells: [LIVE_SHELL], lastAssistantAt: FENCE_AT })
+  const watches = [registeredWatch()]
+  // The QUEUE rule: there is nothing for the human to do until the shell reports.
+  assert.equal(deriveNeedsYou(row(), live, "turn-idle", false, NOW, undefined, true, false, {}, new Set(), new Set(), watches), false)
+  // The CARD must still say so — without the opt-out the drawer blanks at rest and reads as "the agent
+  // died", which is the failure that card exists to prevent.
+  assert.equal(deriveAwaitingBackground(row(), live, "turn-idle", false, NOW, undefined, false, {}, new Set(), new Set(), watches), true)
+  // With no registration the same thread is an ordinary bare rest, and queues.
+  assert.equal(deriveNeedsYou(row(), live, "turn-idle", false, NOW, undefined, true, false, {}, new Set(), new Set(), []), true)
 })

@@ -398,6 +398,42 @@ export function hasDeclaredBackgroundPark(
   return true
 }
 
+/** One armed `thread_watch` row, as the board reads it — the registry half of a wait, where
+ *  `declaredWaitIds` is the fence half. */
+export interface RegisteredWatch {
+  id: string
+  kind: "shell" | "agent"
+  target: string
+  createdAt: string
+  expiresAt: string
+}
+
+/** Is this thread parked on a wait it REGISTERED, rather than one it declared in a fence?
+ *
+ *  ANY live row parks, where the fence needs ALL of its names live. The two rules differ because the
+ *  objects do: a fence is one sentence about every name in it, so a single dead name means the whole
+ *  sentence has stopped describing reality. A registration is its own row with its own expiry, made at
+ *  its own moment, and one of them settling says nothing about the others.
+ *
+ *  THE TARGET MUST STILL RESOLVE LIVE, exactly as a `shells:` name must. The row is the worker's claim
+ *  that it is waiting; telemetry is whether there is anything left to wait for. Settling a row whose
+ *  work has ended is the scheduler's job — a read never mutates — so until it runs, a stale row simply
+ *  stops parking.
+ *
+ *  AND THE EXPIRY IS THE ROW'S OWN, not the fence's blanket DECLARED_PARK_MAX_MS. That was the one thing
+ *  an un-restated fence could never get right: one park duration for every wait, chosen by nobody. */
+export function hasRegisteredBackgroundPark(
+  tele: SessionTelemetry | undefined,
+  armedWatches: readonly RegisteredWatch[],
+  nowMs: number,
+): boolean {
+  return armedWatches.some((w) => {
+    const expiresAt = Date.parse(w.expiresAt)
+    if (Number.isFinite(expiresAt) && nowMs >= expiresAt) return false
+    return resolveLiveWatchTarget(tele, w.target)?.kind === w.kind
+  })
+}
+
 /** Is the fence parked on a TIMER that is actually armed? The declaration alone is not the wait — a
  *  `timers:` line naming a fired or cancelled row describes a wake that will never come, exactly the
  *  shell-that-died case one branch up — so the hint is checked against the registry, which is the same
@@ -418,8 +454,14 @@ export function hasDeclaredWait(
   nowMs: number,
   armedTimerIds: ReadonlySet<string> = new Set(),
   registeredPrWatches: ReadonlySet<string> = new Set(),
+  // This thread's ARMED `thread_watch` rows — the registry a `watch` call writes. Supplied by the caller
+  // for the same reason the two sets above are: only it has the storage handle.
+  armedWatches: readonly RegisteredWatch[] = [],
 ): boolean {
   if (hasDeclaredBackgroundPark(tele, nowMs)) return true
+  // A REGISTRATION IS A WAIT WITHOUT A FENCE. It is the same fact the `shells:` line states, made
+  // durable: it outlives the message that created it, so it survives the worker saying something else.
+  if (hasRegisteredBackgroundPark(tele, armedWatches, nowMs)) return true
   if (tele?.lastFence?.kind === "awaiting" && hasParkedPrWatch(tele, registeredPrWatches)) return true
   // A TIMER PARK CARDS LIKE A PR PARK (maintainer 2026-08-24: the resting card "enumerates all of the
   // pull requests and the background shells … I don't understand why timer isn't represented in the same
@@ -572,6 +614,15 @@ export function fenceWatchViews(
    *  Rows for the same reason the PR registrations above get them, fence or no fence: an armed timer
    *  WILL fire and wake the thread, so it is live work the strip must list. */
   armedTimers: readonly { id: string; prompt: string; fireAt: string; createdAt: string }[] = [],
+  /** This thread's ARMED `thread_watch` rows — a wait the worker REGISTERED rather than declared. Rows
+   *  for the same reason the two registries above get them: the row outlives the message that made it,
+   *  so it is live work the strip must list whether or not any fence still mentions it.
+   *
+   *  A `shell` row only. An `agent` registration adds none, exactly as an `agents:` fence entry adds
+   *  none (see the fence loop below): the sub-agent it names is already a row on every surface that
+   *  draws this card, and a second row named by its raw `toolu_…` id is what put two sub-agents under a
+   *  "Background shells" heading on 2026-08-26. */
+  armedWatches: readonly RegisteredWatch[] = [],
 ): ThreadView["watches"] {
   const seen = new Set<string>()
   const out: ThreadView["watches"] = []
@@ -602,6 +653,15 @@ export function fenceWatchViews(
       // inventing a verdict — an unpolled PR and a PR with no CI are different facts.
       ...(github[w.target] ? { github: github[w.target] } : {}),
     })
+  }
+  for (const w of armedWatches) {
+    if (w.kind !== "shell") continue
+    const target = w.target.trim()
+    // A registration whose work has ended is not a wait — the same rule the fence's names take, and the
+    // same rule hasRegisteredBackgroundPark parks on, so the strip and the park cannot disagree.
+    if (!target || seen.has(`shell:${target}`) || resolveLiveWatchTarget(tele, target)?.kind !== "shell") continue
+    seen.add(`shell:${target}`)
+    out.push({ id: `shell:${slug}:${target}`, kind: "shell" as const, target, state: "armed" as const, createdAt: w.createdAt })
   }
   if (tele?.lastFence?.kind !== "awaiting") return out
   // When the worker PARKED — what the strip's duration counts from. Falls back to the thread's last
@@ -681,6 +741,8 @@ export function deriveNeedsYou(
   // park does. Supplied by the caller for the same reason `registeredPrWatches` is: only it has the
   // registry, and a declaration alone is not a wait (hasParkedTimerWatch).
   armedTimerIds: ReadonlySet<string> = new Set(),
+  // This thread's ARMED `thread_watch` rows. Same reason as the two above — the caller holds storage.
+  armedWatches: readonly RegisteredWatch[] = [],
 ): boolean {
   // Snooze is explicit operator lifecycle state. It must be checked before provider/question/crash
   // gates so choosing Snooze from any queue card actually parks that card until its exact deadline.
@@ -782,7 +844,10 @@ export function deriveNeedsYou(
   // deriveAwaitingBackground opts out of it so the card can still state the fact. Without the opt-out the
   // card would be false for exactly the threads it exists to describe — the drawer and the full-screen
   // page would blank out at rest and read as "the agent died".
-  if (excuseLiveOwnWork && runtime !== "exited" && hasDeclaredBackgroundPark(tele, nowMs)) return false
+  //
+  // A REGISTERED park is the same rule with a durable row behind it instead of a sentence: it excuses
+  // the thread for as long as the row is armed and its target is live, whether or not any fence says so.
+  if (excuseLiveOwnWork && runtime !== "exited" && (hasDeclaredBackgroundPark(tele, nowMs) || hasRegisteredBackgroundPark(tele, armedWatches, nowMs))) return false
   // CI STILL RUNNING ON EVERY WATCHED PR. Ahead of the live-own-work line below, which would otherwise
   // queue the same thread on the strength of the watcher being armed at all. Rides `excuseLiveOwnWork`
   // for the reason that flag exists: the CARD must still state the wait (deriveAwaitingBackground opts
@@ -845,11 +910,12 @@ export function deriveAwaitingBackground(
   github: GithubStatusBook = {},
   registeredPrWatches: ReadonlySet<string> = new Set(),
   armedTimerIds: ReadonlySet<string> = new Set(),
+  armedWatches: readonly RegisteredWatch[] = [],
 ): boolean {
   // DECLARED, not inferred. This card used to appear whenever the thread had anything running, which is
   // how it came to announce a wait on a dev server nobody tore down. It now states what the worker said
   // it is waiting on, and says nothing when the worker said nothing.
-  if (runtime !== "turn-idle" || !hasDeclaredWait(tele, nowMs, armedTimerIds, registeredPrWatches)) return false
+  if (runtime !== "turn-idle" || !hasDeclaredWait(tele, nowMs, armedTimerIds, registeredPrWatches, armedWatches)) return false
   // Any hard human gate or completion signal outranks this reason → the thread cards as THAT, not here.
   if (hasActionableInteraction || tele?.pendingAsk || tele?.pendingQuestion) return false
   // A signal fence — ```done OR ```awaiting — is the worker's OWN explicit statement about why it
@@ -873,6 +939,9 @@ export function deriveAwaitingBackground(
     tele?.lastFence?.kind === "awaiting" &&
     !hasParkedPrWatch(tele, registeredPrWatches) &&
     !hasDeclaredBackgroundPark(tele, nowMs) &&
+    // A REGISTERED park is the same exception for the same reason. (A registration with no fence at all
+    // never reaches this branch — it is gated on an awaiting fence being the worker's last word.)
+    !hasRegisteredBackgroundPark(tele, armedWatches, nowMs) &&
     // A TIMER PARK IS THE SAME EXCEPTION AGAIN (2026-08-24): its fence has no park action either, so
     // suppressing this card left the wait stated nowhere but the fence's own machinery footer.
     !hasParkedTimerWatch(tele, armedTimerIds)
@@ -885,7 +954,7 @@ export function deriveAwaitingBackground(
   // drawer and full-screen page for a healthy thread resting on its children or on a shell. Since
   // 2026-08-01 that covers a shell-only rest too — it now has NO queue card at all, so this card in the
   // drawer and on the standalone page is the only place that state is stated in words.
-  return deriveNeedsYou({ ...row, bg_snooze_rested_at: null }, tele, runtime, hasActionableInteraction, nowMs, limitPause, false, deliveryProcessGone, {}, new Set(), armedTimerIds)
+  return deriveNeedsYou({ ...row, bg_snooze_rested_at: null }, tele, runtime, hasActionableInteraction, nowMs, limitPause, false, deliveryProcessGone, {}, new Set(), armedTimerIds, armedWatches)
 }
 
 // A REGISTERED session thread's view (id = row.slug). Runtime via the shared deriveRuntime (transport-aware);
@@ -1080,6 +1149,17 @@ function sessionThreadView(
     createdAt: new Date(t.created_at).toISOString(),
   }))
   const armedTimerIds = new Set(armedTimers.map((t) => t.id))
+  // This thread's ARMED WATCHES on its own running work — the `thread_watch` rows `mcp__frizz__watch`
+  // creates. Same per-thread read as the two registries above, and the same ms→ISO mapping as the
+  // worker's own read-back (router.armedOwnWatchViews), so the row, the strip and the tool cannot
+  // disagree about one wait.
+  const armedWatches: RegisteredWatch[] = storage.listThreadWatches(row.slug, { armedOnly: true }).map((w) => ({
+    id: w.id,
+    kind: w.kind,
+    target: w.target,
+    createdAt: new Date(w.created_at).toISOString(),
+    expiresAt: new Date(w.expires_at).toISOString(),
+  }))
   // A headless thread mid-turn with nobody driving it is a crash/stall, not a rest. For codex that is
   // an app-server that stopped advancing the rollout; for the broker it is a dead ownerless daemon (its
   // liveness is the daemon record, resolved live). Either way the (exited + in-flight) pair trips the
@@ -1128,8 +1208,8 @@ function sessionThreadView(
   const state = effectiveSessionState(row, registeredLegacyTerminal)
   const archived = state === "archived"
   const limitPause = resolveLimitPause(row, tele, nowMs)
-  const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches, armedTimerIds)
-  const awaitingBackground = archived ? false : deriveAwaitingBackground(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, deliveryProcessGone, github, registeredPrWatches, armedTimerIds)
+  const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches)
+  const awaitingBackground = archived ? false : deriveAwaitingBackground(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches)
   // A worker that exited with work still outstanding — a turn in flight, OR a sub-agent still reading
   // "running" (its parent is gone, so it cannot actually be live) — is a crash/stall, not a clean
   // handoff, so it cards as "stalled" not a bare "rest". Mirrors deriveNeedsYou's surfacing above.
@@ -1175,7 +1255,7 @@ function sessionThreadView(
     // become the github rows, `watch:` lines the shell rows — so this strip lists exactly what will
     // actually wake the thread, and the two cannot drift into claiming different things. There is no
     // registry behind either any more (`thread_watch`, retired 2026-08-14).
-    watches: fenceWatchViews(row.slug, tele, tele?.lastAssistantAt, github, armedPrWatches, armedTimers),
+    watches: fenceWatchViews(row.slug, tele, tele?.lastAssistantAt, github, armedPrWatches, armedTimers, armedWatches),
     pendingAsk: tele?.pendingAsk ? { questions: tele.pendingAsk.questions } : undefined,
     pendingQuestion: tele?.pendingQuestion ?? false,
     lastUserAt: tele?.lastUserAt,
