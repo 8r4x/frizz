@@ -29,7 +29,7 @@ import type { PaneIdentity } from "./adoption-recovery.ts"
 
 function harness() {
   const dir = mkdtempSync(join(tmpdir(), "frizz-title-lock-"))
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   const project: Project = { dir, id: "title-lock", name: "t", label: "o/t", stateDir: dir, cwdSlug: cwdSlug(dir) }
   const board = {
     snapshot: async () => ({}),

@@ -268,8 +268,10 @@ plugin directory. The published package does this for you.
 - Tests: `node --test`, colocated `*.test.ts`, minimal + contract-shaped.
 - Known gotcha: node-pty prebuilds lose the exec bit on `spawn-helper` (npm/pnpm strip it) —
   the server package postinstall re-chmods it. PTY code cannot run inside a sandboxed shell.
-- UI state (unread, lastReadAt, session registry, settings) lives in
-  `~/.frizz/projects/<projectId>/ui.db` (SQLite). An ordinary/main worktree's UUID remains the repo's
+- UI state (unread, lastReadAt, session registry, settings) lives in ONE SQLite file for the whole
+  machine, `~/.frizz/ui.db`, every row tagged with its project id (`packages/server/src/frizz-db.ts`;
+  one file per project under `~/.frizz/projects/<projectId>/ui.db` until 2026-08-27 — a leftover is
+  imported on the next boot and renamed `ui.db.imported`). An ordinary/main worktree's UUID remains the repo's
   `.git/config` key `frizz.id`; a linked worktree stores its own UUID at
   `<worktree-gitdir>/frizz.config`, preserving ordinary state while isolating sibling DB and lock
   namespaces. NEVER store UI state in the checkout's `.frizz/`.

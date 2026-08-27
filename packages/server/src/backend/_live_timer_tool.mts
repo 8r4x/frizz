@@ -32,7 +32,7 @@ const ok = (label: string, cond: boolean, detail = ""): void => {
 }
 
 const stateDir = mkdtempSync(join(tmpdir(), "timer-tool-"))
-const storage = createStorage(join(stateDir, "ui.db"))
+const storage = createStorage(join(stateDir, "ui.db"), "p")
 const now = new Date().toISOString()
 for (const slug of ["mine", "someone-else"]) {
   storage.upsertSession({

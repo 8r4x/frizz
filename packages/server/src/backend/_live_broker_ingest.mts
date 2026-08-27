@@ -33,7 +33,7 @@ let failures = 0
 const ok = (label: string, cond: boolean, detail = "") => { if (!cond) failures++; console.log(`${cond ? "PASS" : "FAIL"}  ${label}${detail ? ` — ${detail}` : ""}`) }
 
 const project: Project = { dir: cwd, id: "live", name: "live", label: "o/live", stateDir, cwdSlug: cwdSlug(cwd) }
-const storage = createStorage(join(stateDir, "ui.db"))
+const storage = createStorage(join(stateDir, "ui.db"), "p")
 const claudeBackend = createClaudeBackend({ claudeBin, logDir: defaultLogDir(project) })
 const backendFor = (kind?: string): AgentBackend => claudeBackend
 

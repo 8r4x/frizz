@@ -13,7 +13,7 @@ const T0 = "2026-07-28T10:00:00.000Z"
 
 function ledger(over: Partial<SessionRow> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-cancel-ledger-"))
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   storage.upsertSession({
     slug: "t", session_id: "s", thread_name: "frizz-t", spawned_at: T0, last_read_at: null,
     unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0, title: null,

@@ -646,7 +646,7 @@ test("Update & Restart hands the durable owner to a fresh supervisor without cop
   mkdirSync(stateDir, { recursive: true })
   // This is deliberately real SQLite state, including a persisted provider session and a queued
   // Codex input. The handoff must leave it in place rather than export/import a lossy snapshot.
-  const storage = createStorage(join(stateDir, "ui.db"))
+  const storage = createStorage(join(stateDir, "ui.db"), "p")
   storage.upsertSession({
     slug: "kept", session_id: "frizz-session", thread_name: "frizz-kept", spawned_at: new Date().toISOString(),
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0,
@@ -697,7 +697,7 @@ test("Update & Restart hands the durable owner to a fresh supervisor without cop
     const next = await eventually(() => successor?.currentBoot() ?? undefined, "successor control-plane boot")
     assert.ok(next && next.pid !== first.pid, "the successor booted a new disposable control-plane child")
     assert.equal(readFileSync(observed, "utf8"), "new-child")
-    const reopened = createStorage(join(stateDir, "ui.db"))
+    const reopened = createStorage(join(stateDir, "ui.db"), "p")
     const kept = reopened.getSession("kept")
     reopened.close()
     assert.deepEqual({ session: kept?.session_id, provider: kept?.agent_session_id, error: kept?.control_error }, {

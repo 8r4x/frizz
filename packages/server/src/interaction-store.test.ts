@@ -885,7 +885,7 @@ function sessionRow(over: Partial<SessionRow> = {}): SessionRow {
 
 test("session replacement and deletion cancel the old session's pending interactions atomically", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-interaction-session-"))
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   storage.upsertSession(sessionRow())
   const oldScope = { projectId: "project-1", threadSlug: "thread-1", sessionId: "session-1" }
   const replacementTarget = storage.interactions.create(request()).interaction
@@ -910,13 +910,13 @@ test("session replacement and deletion cancel the old session's pending interact
 test("interaction schema migration is additive/idempotent and refuses a newer incompatible journal", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-interaction-migrate-"))
   const path = join(dir, "ui.db")
-  const storage = createStorage(path)
+  const storage = createStorage(path, "p")
   const version = storage.db.prepare<[], { version: number }>(
     "SELECT version FROM interaction_journal_schema WHERE singleton = 1",
   ).get()?.version
   assert.equal(version, INTERACTION_DB_SCHEMA_VERSION)
   storage.close()
-  const reopened = createStorage(path)
+  const reopened = createStorage(path, "p")
   assert.equal(reopened.db.prepare("SELECT COUNT(*) AS count FROM interaction_journal").get() !== undefined, true)
   reopened.close()
 

@@ -52,7 +52,7 @@ function makeBridge(label: string) {
   let iid = 0
   const interactions = createInteractionStore(db, { now: () => new Date(), id: () => `i-${label}-${++iid}` })
   const bridge = new CodexAppServerBridge({
-    projectId: PROJECT, projectDir: root, stateDir: root, dbPath, interactions,
+    projectId: PROJECT, projectDir: root, stateDir: root, db, interactions,
     codexBin: CODEX_BIN, now: () => new Date(), requestTimeoutMs: 60_000,
     host: nativeListenCodexAppServerHost, // force the native transport regardless of env
     diagnostic: (e) => { const ev = (e as { event?: string }).event; if (ev !== "stderr") console.log(`    [diag:${label}]`, JSON.stringify(e)) },

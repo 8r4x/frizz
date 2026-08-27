@@ -67,7 +67,7 @@ export function createIntegrationHarness(): IntegrationHarness {
   const logDir = join(dir, "claude-logs")
   mkdirSync(logDir, { recursive: true })
   mkdirSync(join(dir, ".frizz"), { recursive: true })
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "integration")
   const bus = new Bus()
   const project: Project = { dir, id: "integration", name: "integration", label: "o/integration", stateDir: dir, cwdSlug: cwdSlug(dir) }
   const receipts = createReceiptBus<ClaudeRuntimeReceipt>()

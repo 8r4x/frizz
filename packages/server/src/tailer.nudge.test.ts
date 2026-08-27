@@ -24,7 +24,7 @@ const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 // resolution for what these tests are actually claiming: fifty events must not mean fifty ticks.
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), "frizz-nudge-"))
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   const reads = { n: 0 }
   const allSessions = storage.allSessions.bind(storage)
   storage.allSessions = ((...args: Parameters<typeof allSessions>) => {

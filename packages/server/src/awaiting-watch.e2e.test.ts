@@ -103,7 +103,7 @@ async function harness(target?: string) {
   const transcript = join(dir, `${SESSION}.jsonl`)
   const at = new Date(Date.now() - 60_000).toISOString()
   writeFileSync(transcript, launchRecords(at) + parkRecord(at, target))
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   // Frizz's own sign-off nudge fires on a FENCELESS rest; every rest here carries a fence, so it cannot
   // fire — but silence it anyway so a delivery count is unambiguous about what produced it.
   storage.setSetting("signoffNudge", "off")
@@ -232,7 +232,7 @@ test("a poll publishes a reading the BOARD can actually read, and the queue rule
     type: "assistant", timestamp: at, sessionId: SESSION, uuid: "p1",
     message: { role: "assistant", content: [{ type: "text", text: "PR is up.\n\n```awaiting\nprs: [acme/app#391]\nfor: 2h\n---\nWatching for review.\n```" }] },
   }))
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   storage.setSetting("signoffNudge", "off")
   storage.upsertSession({
     slug: SLUG, session_id: SESSION, thread_name: `frizz-${SLUG}`, spawned_at: at,
@@ -320,7 +320,7 @@ async function prHarness() {
     type: "assistant", timestamp: at, sessionId: SESSION, uuid: "p1",
     message: { role: "assistant", content: [{ type: "text", text: "PR is up." }] },
   }))
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   storage.setSetting("signoffNudge", "off")
   storage.upsertSession({
     slug: SLUG, session_id: SESSION, thread_name: `frizz-${SLUG}`, spawned_at: at,
@@ -599,7 +599,7 @@ test("a fence naming a timer that was never registered is corrected, off a real 
   const dir = mkdtempSync(join(tmpdir(), "frizz-stall-e2e-"))
   const at = new Date(Date.now() - 60_000).toISOString()
   writeFileSync(join(dir, `${SESSION}.jsonl`), stalledParkRecord(at))
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   storage.setSetting("signoffNudge", "off")
   storage.upsertSession({
     slug: SLUG, session_id: SESSION, thread_name: `frizz-${SLUG}`, spawned_at: at,

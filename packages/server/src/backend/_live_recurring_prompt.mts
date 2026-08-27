@@ -51,7 +51,7 @@ const lines = (): string[] =>
   existsSync(workFile) ? readFileSync(workFile, "utf8").trim().split("\n").filter(Boolean) : []
 
 const project: Project = { dir: cwd, id: "sp", name: "sp", label: "o/sp", stateDir, cwdSlug: cwdSlug(cwd) }
-const storage = createStorage(join(stateDir, "ui.db"))
+const storage = createStorage(join(stateDir, "ui.db"), "p")
 const claudeBackend = createClaudeBackend({ claudeBin, logDir: defaultLogDir(project) })
 const backendFor = (_kind?: string): AgentBackend => claudeBackend
 

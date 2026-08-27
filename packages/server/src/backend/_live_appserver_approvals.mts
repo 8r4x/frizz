@@ -38,7 +38,7 @@ const spawn: CodexAppServerSpawn = (binary, args, options) => {
 }
 const wire: unknown[] = []
 const bridge = new CodexAppServerBridge({
-  projectId: "live", projectDir: project, dbPath: join(dir, "ui.db"), interactions,
+  projectId: "live", projectDir: project, db, interactions,
   codexBin: CODEX_BIN, spawn, now: () => new Date(), id: () => `c-${++cid}`,
   requestTimeoutMs: 60_000,
   diagnostic: (e) => { wire.push(e); const ev = (e as { event?: string }).event; if (ev && ev !== "connected") console.log("[diag]", JSON.stringify(e)) },
@@ -111,7 +111,7 @@ async function waitTurnClear(ms = 180_000): Promise<void> {
     // `intended_sandbox` arrived as an additive ALTER, so every thread dispatched before it exists with
     // the column NULL — which is exactly what the incident row looked like. The old override returned
     // `{}` for those, handing the decision to config.toml (workspace-write + on-request).
-    db.prepare("UPDATE codex_app_server_session SET intended_sandbox = NULL, sandbox = NULL WHERE frizz_session_id = ?").run(sessionId)
+    db.prepare("UPDATE codex_app_server_session SET intended_sandbox = NULL, sandbox = NULL WHERE project_id = 'live' AND frizz_session_id = ?").run(sessionId)
     for (const child of children) { try { child.kill("SIGKILL") } catch {} }
     await sleep(1_500)
     const legacy = await bridge.resumeOwnedSession(slug, sessionId)

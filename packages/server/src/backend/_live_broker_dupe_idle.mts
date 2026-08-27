@@ -27,7 +27,7 @@ const cwd = realpathSync(mkdtempSync(join(tmpdir(), "bdupei-repo-")))
 execFileSync("git", ["init", "-q", cwd])
 
 const project: Project = { dir: cwd, id: "dupei", name: "dupei", label: "o/dupei", stateDir, cwdSlug: cwdSlug(cwd) }
-const storage = createStorage(join(stateDir, "ui.db"))
+const storage = createStorage(join(stateDir, "ui.db"), "p")
 const claudeBackend = createClaudeBackend({ claudeBin, logDir: defaultLogDir(project) })
 const backendFor = (): AgentBackend => claudeBackend
 

@@ -34,7 +34,7 @@ const project: Project = {
   dir: projectDir, id: "probe", name: "probe", label: "probe",
   stateDir: dbDir, cwdSlug: cwdSlug(projectDir),
 }
-const storage = createStorage(join(dbDir, "ui.db"))
+const storage = createStorage(join(dbDir, "ui.db"), "p")
 const backend = createClaudeBackend({ claudeBin: "claude", logDir: defaultLogDir(project) })
 const backendFor = (_kind?: string): AgentBackend => backend
 

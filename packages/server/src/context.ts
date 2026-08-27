@@ -11,6 +11,7 @@ import {
 import { Bus, Emitter } from "./bus.ts"
 import { resolveProject, permRequestDir, type Project } from "./project.ts"
 import { createStorage, isBrokerClaudeRow, isHeadlessRow, type Storage } from "./storage.ts"
+import type Database from "./sqlite.ts"
 import { getSettings, setSettings, resetSettings } from "./settings.ts"
 import { getDispatchPreferences, setDispatchPreference } from "./dispatch-preferences.ts"
 import { readQuota } from "./quota.ts"
@@ -241,6 +242,12 @@ export interface ContextOptions {
    * which is right for a one-project server and is all a pre-singleton build ever passed.
    */
   serverLockPath?: string
+  /**
+   * The unified database every project shares (frizz-db.ts), opened once by the server and closed by
+   * it after the last tenant. Omitted ⇒ this context opens a PRIVATE file at `<stateDir>/ui.db` and
+   * owns it — the shape a test wants, and one the next real boot folds in through the legacy import.
+   */
+  database?: Database
   /** See AppContext.activeTenants — supplied by the server, which owns the tenant map. */
   activeTenants?: AppContext["activeTenants"]
   /** See AppContext.teardownProject — supplied by the server, which owns the tenant map. */
@@ -573,8 +580,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   // it from the environment could move live workers onto another server mid-run.) The launcher/project
   // resolver still performs the crash-safe legacy migration exactly once and pins the result through
   // supervisor/child/reexec ownership.
-  const dbPath = join(project.stateDir, "ui.db")
-  const storage = createStorage(dbPath)
+  const storage = createStorage(opts.database ?? join(project.stateDir, "ui.db"), project.id)
   resources.storage = storage
   const bus = new Bus()
   const transcriptChange = new Emitter<string[]>()
@@ -701,7 +707,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         // Codex's MCP servers mount PROCESS-wide on the app-server, not per thread, so the descriptor
         // is resolved once here — the codex twin of the per-dispatch resolveFrizzMcp on the claude side.
         frizzMcp: resolveFrizzMcp(frizzMcpTarget),
-        dbPath,
+        db: storage.db,
         interactions: storage.interactions,
         codexBin: opts.codexBin,
         // Persist the bridge's lifecycle events so a mid-turn daemon death is diagnosable after the

@@ -36,7 +36,7 @@ function fakePaneIdentity(n = 1): PaneIdentity {
 // this harness contacts the live project socket or starts a real worker.
 function dispatcherHarness(settings = defaultSettings()) {
   const dir = tmp("frizz-dispatch-")
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   const project: Project = { dir, id: "id", name: "test", label: "o/test", stateDir: dir, cwdSlug: cwdSlug(dir) }
   const spawned: { slug: string; cmd: string[]; cwd: string; env?: Record<string, string>; promptText?: string; promptMode?: number }[] = []
   const board: BoardManager = {
@@ -107,7 +107,7 @@ function systemPromptOf(cmd: string[]): string {
 
 test("storage: session roundtrip + markRead + exited", () => {
   const dir = tmp("frizz-store-")
-  const s = createStorage(join(dir, "ui.db"))
+  const s = createStorage(join(dir, "ui.db"), "p")
   assert.equal(s.getSession("t"), undefined)
 
   s.upsertSession({
@@ -150,7 +150,7 @@ test("storage: session roundtrip + markRead + exited", () => {
 test("storage: transcript_id cache round-trips, survives restart, resets on re-dispatch, preserves on resume", () => {
   const dir = tmp("frizz-store-tid-")
   const dbPath = join(dir, "ui.db")
-  const s = createStorage(dbPath)
+  const s = createStorage(dbPath, "p")
   s.upsertSession({
     slug: "t", session_id: "sid-1", thread_name: "frizz-t", spawned_at: "2026-07-01T00:00:00.000Z",
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 0, title: null,
@@ -162,7 +162,7 @@ test("storage: transcript_id cache round-trips, survives restart, resets on re-d
   s.close()
 
   // Survives a server restart (persisted to disk, read back on reopen).
-  const s2 = createStorage(dbPath)
+  const s2 = createStorage(dbPath, "p")
   assert.equal(s2.getSession("t")?.transcript_id, "forked-id", "the cached id persists across restart")
 
   // A RESUME spreads the existing row (same session_id) → the cached discovery is preserved.
@@ -178,7 +178,7 @@ test("storage: transcript_id cache round-trips, survives restart, resets on re-d
 
 test("settings: defaults, roundtrip, merge-over-defaults", () => {
   const dir = tmp("frizz-settings-")
-  const s = createStorage(join(dir, "ui.db"))
+  const s = createStorage(join(dir, "ui.db"), "p")
   // The tmp dir doubles as the home: machine settings are real files, and a test that reads the
   // developer own ~/.frizz would both leak into its assertions and write to it.
   const def = getSettings(s, dir)
@@ -431,7 +431,7 @@ test("cwdSlug: replaces / and . with - (Claude Code project-log convention)", ()
 function codexDispatcherHarness(codexAppServer?: Partial<CodexAppServerBridge>) {
   const dir = tmp("frizz-dispatch-codex-")
   const codexHome = tmp("frizz-codexhome-")
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   const project: Project = { dir, id: "id", name: "test", label: "o/test", stateDir: dir, cwdSlug: cwdSlug(dir) }
   const spawned: {
     slug: string

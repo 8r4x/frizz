@@ -50,7 +50,7 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 const daemonPid = (): number | null => liveBrokerRecord(claudeBrokerRecordPath(stateDir, sessionId))?.daemonPid ?? null
 
 const project: Project = { dir: cwd, id: "rlp", name: "rlp", label: "o/rlp", stateDir, cwdSlug: cwdSlug(cwd) }
-const storage = createStorage(join(stateDir, "ui.db"))
+const storage = createStorage(join(stateDir, "ui.db"), "p")
 const claudeBackend = createClaudeBackend({ claudeBin, logDir: defaultLogDir(project) })
 const backendFor = (_kind?: string): AgentBackend => claudeBackend
 

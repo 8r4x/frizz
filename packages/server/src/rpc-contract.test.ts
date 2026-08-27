@@ -47,7 +47,7 @@ function realRouter() {
     stop: () => {},
     tick: () => {},
   }
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   const ctx = { project, storage, board, tailer } as unknown as AppContext
   // cleanup closes the db before removing the dir: Windows refuses to delete a file another handle
   // still has open, so the reverse order is an EPERM after the assertions have already passed.

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs"
 import { join } from "node:path"
+import type { ProjectScope } from "./project-scope.ts"
 import type Database from "./sqlite.ts"
 
 // ── The durable tail-state cache ───────────────────────────────────────────────────────────────────
@@ -220,12 +221,13 @@ interface CacheRow {
   state: string
 }
 
-export function createTailStateCache(db: Database, schema = foldSchemaDigest()): TailStateCache {
-  let usable = true
-  try {
-    db.exec(`
+/** The cache table, idempotent; frizz-db.ts creates it ahead of a legacy import. */
+export const TAIL_STATE_TABLES = ["tail_state"] as const
+export function ensureTailStateSchema(db: Database): void {
+  db.exec(`
       CREATE TABLE IF NOT EXISTS tail_state (
-        slug              TEXT PRIMARY KEY,
+        project_id        TEXT NOT NULL,
+        slug              TEXT NOT NULL,
         session_id        TEXT NOT NULL,
         native_session_id TEXT NOT NULL,
         runtime_generation INTEGER NOT NULL,
@@ -236,26 +238,34 @@ export function createTailStateCache(db: Database, schema = foldSchemaDigest()):
         ino               TEXT NOT NULL,
         content_digest    TEXT NOT NULL,
         fold_schema       TEXT NOT NULL,
-        state             TEXT NOT NULL
+        state             TEXT NOT NULL,
+        PRIMARY KEY (project_id, slug)
       );
     `)
+}
+
+export function createTailStateCache(scope: ProjectScope, schema = foldSchemaDigest()): TailStateCache {
+  const db = scope.db
+  let usable = true
+  try {
+    ensureTailStateSchema(db)
   } catch {
     usable = false
   }
 
-  const selectAll = (): CacheRow[] => db.prepare<[string], CacheRow>(
-    "SELECT * FROM tail_state WHERE fold_schema = ?",
+  const selectAll = (): CacheRow[] => scope.prepare<[string], CacheRow>(
+    "SELECT * FROM tail_state WHERE project_id = @project_id AND fold_schema = ?",
   ).all(schema)
 
   const upsert = usable
     ? (() => {
         try {
-          return db.prepare(`
-            INSERT INTO tail_state (slug, session_id, native_session_id, runtime_generation, path,
+          return scope.prepare(`
+            INSERT INTO tail_state (project_id, slug, session_id, native_session_id, runtime_generation, path,
                                     offset_bytes, size_bytes, mtime_ms, ino, content_digest, fold_schema, state)
-            VALUES (@slug, @session_id, @native_session_id, @runtime_generation, @path,
+            VALUES (@project_id, @slug, @session_id, @native_session_id, @runtime_generation, @path,
                     @offset_bytes, @size_bytes, @mtime_ms, @ino, @content_digest, @fold_schema, @state)
-            ON CONFLICT(slug) DO UPDATE SET
+            ON CONFLICT(project_id, slug) DO UPDATE SET
               session_id = excluded.session_id,
               native_session_id = excluded.native_session_id,
               runtime_generation = excluded.runtime_generation,
@@ -332,13 +342,13 @@ export function createTailStateCache(db: Database, schema = foldSchemaDigest()):
       if (!usable) return
       try {
         const stale: string[] = []
-        for (const row of db.prepare<[], { slug: string; fold_schema: string }>(
-          "SELECT slug, fold_schema FROM tail_state",
+        for (const row of scope.prepare<[], { slug: string; fold_schema: string }>(
+          "SELECT slug, fold_schema FROM tail_state WHERE project_id = @project_id",
         ).all()) {
           if (row.fold_schema !== schema || !liveSlugs.has(row.slug)) stale.push(row.slug)
         }
         if (stale.length === 0) return
-        const del = db.prepare("DELETE FROM tail_state WHERE slug = ?")
+        const del = scope.prepare("DELETE FROM tail_state WHERE project_id = @project_id AND slug = ?")
         const drop = db.transaction((slugs: string[]) => {
           for (const slug of slugs) del.run(slug)
         })

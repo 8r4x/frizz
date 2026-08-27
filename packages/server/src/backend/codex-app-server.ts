@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from "node:crypto"
 import { StringDecoder } from "node:string_decoder"
 import type { Readable, Writable } from "node:stream"
-import Database from "../sqlite.ts"
+import type Database from "../sqlite.ts"
+import { scopeDatabase, type ProjectScope } from "../project-scope.ts"
 import { inheritWorkerEnvironment } from "./worker-env.ts"
 import { z } from "zod"
 import {
@@ -786,6 +787,7 @@ class JsonlRpcConnection {
 
 interface BindingRow {
   frizz_session_id: string
+  project_id: string
   thread_slug: string
   codex_thread_id: string
   codex_session_id: string
@@ -829,6 +831,7 @@ interface BindingRow {
 
 const BindingRowSchema = z.object({
   frizz_session_id: Opaque,
+  project_id: z.string().min(1),
   thread_slug: ThreadSlug,
   codex_thread_id: Opaque,
   codex_session_id: Opaque,
@@ -849,7 +852,7 @@ const BindingRowSchema = z.object({
   intended_sandbox: z.string().max(64).nullable(),
 }).strict()
 const BridgeMetaRowSchema = z.object({
-  singleton: z.literal(1),
+  project_id: z.string().min(1),
   connection_epoch: z.number().int().nonnegative(),
   capability_revision: z.number().int().nonnegative(),
   protocol_fingerprint: z.string().max(1_024),
@@ -939,7 +942,9 @@ export interface StartCodexAppServerTurnInput {
 export interface CodexAppServerBridgeOptions {
   projectId: string
   projectDir: string
-  dbPath: string
+  /** The unified database (see project-scope.ts) — shared with every other store and every other
+   *  project. The bridge scopes its own rows to `projectId` and NEVER closes this connection. */
+  db: Database
   interactions: InteractionStore
   codexBin?: string
   /** Legacy/test seam: a direct child per connect. Ignored when `host` is given. */
@@ -1671,8 +1676,106 @@ function isAbsoluteBoundedPath(value: string): boolean {
   return value.startsWith("/") || /^[A-Za-z]:[\\/]/u.test(value)
 }
 
+/** The bridge's tables, in the order the unified-database importer copies them (frizz-db.ts). */
+export const CODEX_APP_SERVER_TABLES = ["codex_app_server_meta", "codex_app_server_session", "codex_app_server_delivery"] as const
+
+/**
+ * The bridge's schema, written COMPLETE and idempotent (2026-08-27). Every table carries `project_id`
+ * and one file holds every project — see project-scope.ts. The additive ALTER stack that used to
+ * follow the CREATEs (daemon_generation, auto-resume, sandbox, the `fray_session_id` rename) is gone
+ * from here: a database this code creates is born with every column, and a legacy per-project file
+ * gets those migrations from legacy-project-db.ts immediately before its rows are imported.
+ *
+ * The version marker is checked BEFORE any authority table is created, so a file written by a future
+ * schema is refused untouched. The required-columns assertion at the end is what catches a table that
+ * already existed with the wrong shape — CREATE TABLE IF NOT EXISTS silently keeps whatever is there.
+ */
+export function ensureCodexAppServerSchema(db: Database): void {
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS codex_app_server_schema (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        version   INTEGER NOT NULL
+      );
+      INSERT OR IGNORE INTO codex_app_server_schema (singleton, version)
+        VALUES (1, ${BRIDGE_DB_SCHEMA_VERSION});
+    `)
+  } catch {
+    throw new InteractionStoreError("schema-version", "Codex app-server bridge schema marker is invalid")
+  }
+  const schemaVersion = db.prepare<[], { version: number }>(
+    "SELECT version FROM codex_app_server_schema WHERE singleton = 1",
+  ).get()?.version
+  if (schemaVersion !== BRIDGE_DB_SCHEMA_VERSION) {
+    throw new InteractionStoreError("schema-version", `unsupported Codex app-server bridge schema ${String(schemaVersion)}`)
+  }
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS codex_app_server_meta (
+        project_id            TEXT PRIMARY KEY,
+        connection_epoch      INTEGER NOT NULL CHECK (connection_epoch >= 0),
+        capability_revision   INTEGER NOT NULL CHECK (capability_revision >= 0),
+        protocol_fingerprint  TEXT NOT NULL,
+        daemon_generation     TEXT NOT NULL DEFAULT ''
+      );
+
+      CREATE TABLE IF NOT EXISTS codex_app_server_session (
+        frizz_session_id      TEXT PRIMARY KEY,
+        project_id            TEXT NOT NULL,
+        thread_slug           TEXT NOT NULL,
+        codex_thread_id       TEXT NOT NULL,
+        codex_session_id      TEXT NOT NULL,
+        session_epoch         INTEGER NOT NULL CHECK (session_epoch >= 1),
+        capability_revision   INTEGER NOT NULL CHECK (capability_revision >= 1),
+        connection_epoch      INTEGER NOT NULL CHECK (connection_epoch >= 1),
+        current_turn_id       TEXT,
+        cwd                   TEXT NOT NULL,
+        ephemeral             INTEGER NOT NULL CHECK (ephemeral IN (0, 1)),
+        state                 TEXT NOT NULL CHECK (state IN ('active', 'detached')),
+        created_at            TEXT NOT NULL,
+        updated_at            TEXT NOT NULL,
+        auto_resumed_turn_id  TEXT,
+        auto_resume_count     INTEGER NOT NULL DEFAULT 0,
+        sandbox               TEXT,
+        intended_sandbox      TEXT,
+        UNIQUE (project_id, thread_slug),
+        UNIQUE (project_id, codex_thread_id)
+      );
+      CREATE INDEX IF NOT EXISTS codex_app_server_session_thread
+        ON codex_app_server_session (project_id, codex_thread_id, state);
+
+      CREATE TABLE IF NOT EXISTS codex_app_server_delivery (
+        delivery_id           TEXT PRIMARY KEY,
+        project_id            TEXT NOT NULL,
+        thread_slug           TEXT NOT NULL,
+        turn_id               TEXT NOT NULL,
+        mode                  TEXT NOT NULL CHECK (mode IN ('steer', 'start')),
+        created_at            TEXT NOT NULL
+      );
+    `)
+  } catch {
+    throw new InteractionStoreError("schema-version", "Codex app-server bridge schema could not be created safely")
+  }
+  const columns = (table: (typeof CODEX_APP_SERVER_TABLES)[number]) => new Set(
+    db.prepare<[], { name: string }>(`PRAGMA table_info(${table})`).all().map((column) => column.name),
+  )
+  const requiredMeta = ["project_id", "connection_epoch", "capability_revision", "protocol_fingerprint", "daemon_generation"]
+  const requiredSession = [
+    "frizz_session_id", "project_id", "thread_slug", "codex_thread_id", "codex_session_id", "session_epoch",
+    "capability_revision", "connection_epoch", "current_turn_id", "cwd", "ephemeral", "state",
+    "created_at", "updated_at", "auto_resumed_turn_id", "auto_resume_count", "sandbox", "intended_sandbox",
+  ]
+  const requiredDelivery = ["delivery_id", "project_id", "thread_slug", "turn_id", "mode", "created_at"]
+  if (requiredMeta.some((column) => !columns("codex_app_server_meta").has(column)) ||
+    requiredSession.some((column) => !columns("codex_app_server_session").has(column)) ||
+    requiredDelivery.some((column) => !columns("codex_app_server_delivery").has(column))) {
+    throw new InteractionStoreError("schema-version", "Codex app-server bridge schema is missing required columns")
+  }
+}
+
 export class CodexAppServerBridge {
   private readonly db: Database
+  private readonly scope: ProjectScope
   private readonly now: () => Date
   private readonly makeId: () => string
   private readonly host: CodexAppServerHost
@@ -1694,7 +1797,7 @@ export class CodexAppServerBridge {
   private connectionEpoch = 0
   private capabilityRevision = 0
   private closed = false
-  private dbClosed = false
+  private dbReleased = false
   private readonly options: CodexAppServerBridgeOptions
   private readonly startingSessions = new Set<string>()
   private readonly startingTurns = new Set<string>()
@@ -1733,135 +1836,17 @@ export class CodexAppServerBridge {
       hostKind === "direct" ? directChildHost(options.spawn!)
       : hostKind === "native" ? nativeListenCodexAppServerHost
       : daemonCodexAppServerHost)
-    this.db = new Database(options.dbPath)
-    this.db.pragma("journal_mode = WAL")
-    this.db.pragma("busy_timeout = 5000")
-    try {
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS codex_app_server_schema (
-          singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-          version   INTEGER NOT NULL
-        );
-        INSERT OR IGNORE INTO codex_app_server_schema (singleton, version)
-          VALUES (1, ${BRIDGE_DB_SCHEMA_VERSION});
-      `)
-    } catch {
-      this.db.close()
-      throw new InteractionStoreError("schema-version", "Codex app-server bridge schema marker is invalid")
-    }
-    const schemaVersion = this.db.prepare<[], { version: number }>(
-      "SELECT version FROM codex_app_server_schema WHERE singleton = 1",
-    ).get()?.version
-    if (schemaVersion !== BRIDGE_DB_SCHEMA_VERSION) {
-      this.db.close()
-      throw new InteractionStoreError("schema-version", `unsupported Codex app-server bridge schema ${String(schemaVersion)}`)
-    }
-    try {
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS codex_app_server_meta (
-          singleton             INTEGER PRIMARY KEY CHECK (singleton = 1),
-          connection_epoch      INTEGER NOT NULL CHECK (connection_epoch >= 0),
-          capability_revision   INTEGER NOT NULL CHECK (capability_revision >= 0),
-          protocol_fingerprint  TEXT NOT NULL,
-          daemon_generation     TEXT NOT NULL DEFAULT ''
-        );
-        INSERT OR IGNORE INTO codex_app_server_meta (
-          singleton, connection_epoch, capability_revision, protocol_fingerprint
-        ) VALUES (1, 0, 0, '');
-
-        CREATE TABLE IF NOT EXISTS codex_app_server_session (
-          frizz_session_id       TEXT PRIMARY KEY,
-          thread_slug           TEXT NOT NULL UNIQUE,
-          codex_thread_id       TEXT NOT NULL UNIQUE,
-          codex_session_id      TEXT NOT NULL,
-          session_epoch         INTEGER NOT NULL CHECK (session_epoch >= 1),
-          capability_revision   INTEGER NOT NULL CHECK (capability_revision >= 1),
-          connection_epoch      INTEGER NOT NULL CHECK (connection_epoch >= 1),
-          current_turn_id       TEXT,
-          cwd                   TEXT NOT NULL,
-          ephemeral             INTEGER NOT NULL CHECK (ephemeral IN (0, 1)),
-          state                 TEXT NOT NULL CHECK (state IN ('active', 'detached')),
-          created_at            TEXT NOT NULL,
-          updated_at            TEXT NOT NULL,
-          auto_resumed_turn_id  TEXT,
-          auto_resume_count     INTEGER NOT NULL DEFAULT 0,
-          sandbox               TEXT,
-          intended_sandbox      TEXT
-        );
-        CREATE INDEX IF NOT EXISTS codex_app_server_session_thread
-          ON codex_app_server_session (codex_thread_id, state);
-
-        CREATE TABLE IF NOT EXISTS codex_app_server_delivery (
-          delivery_id           TEXT PRIMARY KEY,
-          thread_slug           TEXT NOT NULL,
-          turn_id               TEXT NOT NULL,
-          mode                  TEXT NOT NULL CHECK (mode IN ('steer', 'start')),
-          created_at            TEXT NOT NULL
-        );
-      `)
-    } catch {
-      this.db.close()
-      throw new InteractionStoreError("schema-version", "Codex app-server bridge schema could not be migrated safely")
-    }
-    const columns = (table: "codex_app_server_meta" | "codex_app_server_session") => new Set(
-      this.db.prepare<[], { name: string }>(`PRAGMA table_info(${table})`).all().map((column) => column.name),
-    )
-    // Additive columns for daemon hosting + auto-resume. A database written by an older Frizz has the
-    // tables already, so CREATE TABLE IF NOT EXISTS above is a no-op for it — these ALTERs are what
-    // actually migrate it, and they must run before the required-column assertion below.
-    const addColumn = (table: "codex_app_server_meta" | "codex_app_server_session", column: string, decl: string): void => {
-      if (columns(table).has(column)) return
-      try { this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`) } catch {
-        this.db.close()
-        throw new InteractionStoreError("schema-version", `Codex app-server bridge could not add ${table}.${column}`)
-      }
-    }
-    // THE REBRAND LEFT THIS COLUMN BEHIND (2026-08-06). The rename swept the CREATE TABLE, so a
-    // database that first used the Codex bridge AFTER the rebrand has `frizz_session_id` and one that
-    // used it BEFORE still has `fray_session_id` — and the required-columns guard below turns that
-    // into a hard "schema is missing required columns" on open. Ten of this machine's sixteen project
-    // databases were in that state, which is to say: unopenable, with no way for the operator to tell
-    // why. Renaming is the whole fix; the column's contents were always frizz session ids.
-    //
-    // Runs before addColumn on purpose — otherwise addColumn would add an EMPTY frizz_session_id
-    // beside the populated fray_session_id and the rename would then fail on a duplicate name.
-    if (columns("codex_app_server_session").has("fray_session_id") &&
-      !columns("codex_app_server_session").has("frizz_session_id")) {
-      try {
-        this.db.exec("ALTER TABLE codex_app_server_session RENAME COLUMN fray_session_id TO frizz_session_id")
-      } catch {
-        this.db.close()
-        throw new InteractionStoreError("schema-version", "Codex app-server bridge could not adopt fray_session_id")
-      }
-    }
-    addColumn("codex_app_server_meta", "daemon_generation", "TEXT NOT NULL DEFAULT ''")
-    addColumn("codex_app_server_session", "auto_resumed_turn_id", "TEXT")
-    addColumn("codex_app_server_session", "auto_resume_count", "INTEGER NOT NULL DEFAULT 0")
-    addColumn("codex_app_server_session", "sandbox", "TEXT")
-    addColumn("codex_app_server_session", "intended_sandbox", "TEXT")
-
-    const requiredMeta = ["singleton", "connection_epoch", "capability_revision", "protocol_fingerprint", "daemon_generation"]
-    const requiredSession = [
-      "frizz_session_id", "thread_slug", "codex_thread_id", "codex_session_id", "session_epoch",
-      "capability_revision", "connection_epoch", "current_turn_id", "cwd", "ephemeral", "state",
-      "created_at", "updated_at", "auto_resumed_turn_id", "auto_resume_count", "sandbox", "intended_sandbox",
-    ]
-    if (requiredMeta.some((column) => !columns("codex_app_server_meta").has(column)) ||
-      requiredSession.some((column) => !columns("codex_app_server_session").has(column))) {
-      this.db.close()
-      throw new InteractionStoreError("schema-version", "Codex app-server bridge schema is missing required columns")
-    }
-    try {
-      this.db.exec(`
-        CREATE UNIQUE INDEX IF NOT EXISTS codex_app_server_session_slug_unique
-          ON codex_app_server_session (thread_slug);
-        CREATE UNIQUE INDEX IF NOT EXISTS codex_app_server_session_thread_unique
-          ON codex_app_server_session (codex_thread_id);
-      `)
-    } catch {
-      this.db.close()
-      throw new InteractionStoreError("corrupt-journal", "Codex app-server bridge ownership bindings are not unique")
-    }
+    this.db = options.db
+    this.scope = scopeDatabase(options.db, options.projectId)
+    ensureCodexAppServerSchema(this.db)
+    // One meta row per project, seeded on first use. Everything the handshake negotiates (the
+    // connection epoch, the capability revision, the daemon generation) lives in this row, so it must
+    // exist before the first connect reads it.
+    this.scope.prepare(`
+      INSERT OR IGNORE INTO codex_app_server_meta (
+        project_id, connection_epoch, capability_revision, protocol_fingerprint
+      ) VALUES (@project_id, 0, 0, '')
+    `).run()
     // A bridge that has just been constructed holds NO connection, so no binding it inherits from the
     // previous process can still be active. close()/handleDisconnect normally assert that, but a
     // SIGKILLed frizz runs neither — leaving rows claiming `active` at the last epoch, which every
@@ -1869,9 +1854,9 @@ export class CodexAppServerBridge {
     // here so the registry is honest before anything reads it. `current_turn_id` is deliberately left
     // in place: detach preserves it for diagnosis, and updateResumedBinding retires it — together with
     // the cards scoped to it — at the one edge that can do so coherently.
-    this.db.prepare(`
+    this.scope.prepare(`
       UPDATE codex_app_server_session SET state = 'detached', updated_at = ?
-      WHERE state = 'active'
+      WHERE project_id = @project_id AND state = 'active'
     `).run(this.now().toISOString())
   }
 
@@ -1890,7 +1875,7 @@ export class CodexAppServerBridge {
       if (this.bindingForScope(input.threadSlug, input.sessionId)) {
         throw new Error("Codex app-server session is already owned by this bridge")
       }
-      if (this.db.prepare("SELECT 1 FROM codex_app_server_session WHERE thread_slug = ? OR frizz_session_id = ?").get(input.threadSlug, input.sessionId)) {
+      if (this.scope.prepare("SELECT 1 FROM codex_app_server_session WHERE project_id = @project_id AND (thread_slug = ? OR frizz_session_id = ?)").get(input.threadSlug, input.sessionId)) {
         throw new Error("Codex app-server thread slug or session id is already bound")
       }
 
@@ -1912,12 +1897,12 @@ export class CodexAppServerBridge {
       }))
       if (response.thread.ephemeral !== ephemeral) throw new Error("Codex app-server returned an incompatible persistence mode")
       const at = this.now().toISOString()
-      this.db.prepare(`
+      this.scope.prepare(`
         INSERT INTO codex_app_server_session (
-          frizz_session_id, thread_slug, codex_thread_id, codex_session_id,
+          project_id, frizz_session_id, thread_slug, codex_thread_id, codex_session_id,
           session_epoch, capability_revision, connection_epoch, current_turn_id,
           cwd, ephemeral, state, created_at, updated_at, sandbox, intended_sandbox
-        ) VALUES (?, ?, ?, ?, 1, ?, ?, NULL, ?, ?, 'active', ?, ?, ?, ?)
+        ) VALUES (@project_id, ?, ?, ?, ?, 1, ?, ?, NULL, ?, ?, 'active', ?, ?, ?, ?)
       `).run(
         input.sessionId,
         input.threadSlug,
@@ -1989,7 +1974,7 @@ export class CodexAppServerBridge {
     try {
       const existing = this.bindingForScope(input.threadSlug, input.sessionId)
       if (existing) return bindingFromRow(existing)
-      if (this.db.prepare("SELECT 1 FROM codex_app_server_session WHERE thread_slug = ? OR frizz_session_id = ? OR codex_thread_id = ?")
+      if (this.scope.prepare("SELECT 1 FROM codex_app_server_session WHERE project_id = @project_id AND (thread_slug = ? OR frizz_session_id = ? OR codex_thread_id = ?)")
         .get(input.threadSlug, input.sessionId, input.codexThreadId)) {
         throw new Error("Codex app-server thread slug, session id, or rollout is already bound")
       }
@@ -2010,12 +1995,12 @@ export class CodexAppServerBridge {
         throw new Error("Codex app-server resumed a different or disposable thread")
       }
       const at = this.now().toISOString()
-      this.db.prepare(`
+      this.scope.prepare(`
         INSERT INTO codex_app_server_session (
-          frizz_session_id, thread_slug, codex_thread_id, codex_session_id,
+          project_id, frizz_session_id, thread_slug, codex_thread_id, codex_session_id,
           session_epoch, capability_revision, connection_epoch, current_turn_id,
           cwd, ephemeral, state, created_at, updated_at, sandbox, intended_sandbox
-        ) VALUES (?, ?, ?, ?, 1, ?, ?, NULL, ?, 0, 'active', ?, ?, ?, ?)
+        ) VALUES (@project_id, ?, ?, ?, ?, 1, ?, ?, NULL, ?, 0, 'active', ?, ?, ?, ?)
       `).run(
         input.sessionId,
         input.threadSlug,
@@ -2067,9 +2052,9 @@ export class CodexAppServerBridge {
         if (witnessed.current_turn_id !== null && witnessed.current_turn_id !== response.turn.id) {
           throw new Error("Codex app-server turn/start response disagreed with the witnessed turn")
         }
-        const changed = this.db.prepare(`
+        const changed = this.scope.prepare(`
           UPDATE codex_app_server_session SET current_turn_id = ?, updated_at = ?
-          WHERE frizz_session_id = ? AND thread_slug = ? AND connection_epoch = ? AND state = 'active'
+          WHERE project_id = @project_id AND frizz_session_id = ? AND thread_slug = ? AND connection_epoch = ? AND state = 'active'
             AND (current_turn_id IS NULL OR current_turn_id = ?)
         `).run(response.turn.id, this.now().toISOString(), input.sessionId, input.threadSlug, this.connectionEpoch, response.turn.id).changes
         if (changed !== 1) throw new Error("Codex app-server turn ownership changed during start")
@@ -2208,8 +2193,8 @@ export class CodexAppServerBridge {
     input: StartCodexAppServerTurnInput & { deliveryId?: string },
   ): Promise<{ turnId: string; mode: "steer" | "start"; deduped: boolean }> {
     if (input.deliveryId) {
-      const prior = this.db.prepare<[string], { turn_id: string; mode: string }>(
-        "SELECT turn_id, mode FROM codex_app_server_delivery WHERE delivery_id = ?",
+      const prior = this.scope.prepare<{ turn_id: string; mode: string }>(
+        "SELECT turn_id, mode FROM codex_app_server_delivery WHERE project_id = @project_id AND delivery_id = ?",
       ).get(input.deliveryId)
       if (prior) return { turnId: prior.turn_id, mode: prior.mode === "steer" ? "steer" : "start", deduped: true }
     }
@@ -2231,8 +2216,8 @@ export class CodexAppServerBridge {
       result = { turnId: (await this.startTurn(input)).turnId, mode: "start" }
     }
     if (input.deliveryId) {
-      this.db.prepare(
-        "INSERT OR IGNORE INTO codex_app_server_delivery (delivery_id, thread_slug, turn_id, mode, created_at) VALUES (?, ?, ?, ?, ?)",
+      this.scope.prepare(
+        "INSERT OR IGNORE INTO codex_app_server_delivery (project_id, delivery_id, thread_slug, turn_id, mode, created_at) VALUES (@project_id, ?, ?, ?, ?, ?)",
       ).run(input.deliveryId, input.threadSlug, result.turnId, result.mode, this.now().toISOString())
     }
     return { ...result, deduped: false }
@@ -2311,9 +2296,9 @@ export class CodexAppServerBridge {
    * pays for a codex process it will not use.
    */
   async warmUp(): Promise<void> {
-    if (this.closed || this.dbClosed) return
-    const bound = this.db.prepare<[], { n: number }>(
-      "SELECT COUNT(*) AS n FROM codex_app_server_session WHERE ephemeral = 0",
+    if (this.closed || this.dbReleased) return
+    const bound = this.scope.prepare<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM codex_app_server_session WHERE project_id = @project_id AND ephemeral = 0",
     ).get()?.n ?? 0
     if (bound === 0) return
     const releaseOperation = this.beginOperation()
@@ -2328,7 +2313,7 @@ export class CodexAppServerBridge {
   }
 
   binding(threadSlug: string, sessionId: string): CodexAppServerSessionBinding | undefined {
-    if (this.dbClosed) return undefined
+    if (this.dbReleased) return undefined
     const row = this.bindingForScope(threadSlug, sessionId)
     return row ? bindingFromRow(row) : undefined
   }
@@ -2338,7 +2323,7 @@ export class CodexAppServerBridge {
   // has never owned. `pendingTurnStarts` counts as a live turn: between `turn/start`'s request and its
   // response the turn is genuinely running, it just has no provider-issued id to persist yet.
   turnLiveness(threadSlug: string, sessionId: string): CodexAppServerTurnLiveness | undefined {
-    if (this.dbClosed) return undefined
+    if (this.dbReleased) return undefined
     const row = this.bindingForScope(threadSlug, sessionId)
     if (!row) return undefined
     const onThisConnection = row.state === "active" && row.connection_epoch === this.connectionEpoch
@@ -2373,7 +2358,7 @@ export class CodexAppServerBridge {
   }
 
   ownsInteraction(scope: InteractionSessionScope, interactionId: string): boolean {
-    if (this.closed || this.dbClosed || !this.connection) return false
+    if (this.closed || this.dbReleased || !this.connection) return false
     const delivery = this.options.interactions.providerDelivery(scope, interactionId)
     if (
       !delivery ||
@@ -2394,16 +2379,16 @@ export class CodexAppServerBridge {
     sessionId: string,
     reason: "session-replaced" | "session-deleted",
   ): boolean {
-    if (this.closed || this.dbClosed) return false
+    if (this.closed || this.dbReleased) return false
     const row = this.bindingForScope(threadSlug, sessionId)
     if (!row) return false
     const ownsCurrentProcess = row.connection_epoch === this.connectionEpoch || this.openingConnection !== null
     try {
       this.forgetCorrelatedFileItems(row.codex_thread_id)
       this.options.interactions.cancelForSession(threadSlug, sessionId, reason)
-      this.db.prepare(`
+      this.scope.prepare(`
         DELETE FROM codex_app_server_session
-        WHERE thread_slug = ? AND frizz_session_id = ?
+        WHERE project_id = @project_id AND thread_slug = ? AND frizz_session_id = ?
       `).run(threadSlug, sessionId)
     } finally {
       if (ownsCurrentProcess) this.disconnectOwnedProcess()
@@ -2436,12 +2421,12 @@ export class CodexAppServerBridge {
     this.forgetCorrelatedFileItems()
     let detachError: unknown
     try {
-      if (!this.dbClosed) {
+      if (!this.dbReleased) {
         // A clean Frizz shutdown may later resume a persisted native session, but no binding may stay
         // active against the process being killed. Preserve current_turn_id for witnessed replay/rebind.
-        this.db.prepare(`
+        this.scope.prepare(`
           UPDATE codex_app_server_session SET state = 'detached', updated_at = ?
-          WHERE state = 'active'
+          WHERE project_id = @project_id AND state = 'active'
         `).run(this.now().toISOString())
       }
     } catch (error) {
@@ -2470,16 +2455,16 @@ export class CodexAppServerBridge {
       // inbound dispatch is idle, then close the bridge connection. This is the authoritative edge.
       let finalDetachError: unknown
       try {
-        if (!this.dbClosed) {
-          this.db.prepare(`
+        if (!this.dbReleased) {
+          this.scope.prepare(`
             UPDATE codex_app_server_session SET state = 'detached', updated_at = ?
-            WHERE state = 'active'
+            WHERE project_id = @project_id AND state = 'active'
           `).run(this.now().toISOString())
         }
       } catch (error) {
         finalDetachError = error
       }
-      this.closeDatabase()
+      this.releaseDatabase()
       if (detachError ?? finalDetachError) throw detachError ?? finalDetachError
     })()
     // Legacy callers use close() synchronously. Observe the async drain here; lifecycle shutdown calls
@@ -2494,7 +2479,7 @@ export class CodexAppServerBridge {
   }
 
   private beginOperation(): () => void {
-    if (this.closed || this.dbClosed) throw new Error("Codex app-server bridge is closed")
+    if (this.closed || this.dbReleased) throw new Error("Codex app-server bridge is closed")
     this.activeOperations++
     let released = false
     return () => {
@@ -2513,20 +2498,21 @@ export class CodexAppServerBridge {
     return new Promise<void>((resolve) => this.operationWaiters.add(resolve))
   }
 
-  private closeDatabase(): void {
-    if (this.dbClosed) return
-    this.dbClosed = true
-    this.db.close()
+  /** The connection is shared with every other store (and every other project), so the bridge only
+   *  stops USING it — closing it is its owner's job. Every read after this returns nothing. */
+  private releaseDatabase(): void {
+    if (this.dbReleased) return
+    this.dbReleased = true
   }
 
   private disconnectOwnedProcess(): void {
-    if (this.dbClosed) return
+    if (this.dbReleased) return
     const epoch = this.connectionEpoch
     this.forgetCorrelatedFileItems()
     try {
-      this.db.prepare(`
+      this.scope.prepare(`
         UPDATE codex_app_server_session SET state = 'detached', updated_at = ?
-        WHERE state = 'active'
+        WHERE project_id = @project_id AND state = 'active'
       `).run(this.now().toISOString())
     } finally {
       if (this.connection) {
@@ -2543,15 +2529,15 @@ export class CodexAppServerBridge {
   }
 
   private bindingForScope(threadSlug: string, sessionId: string): BindingRow | undefined {
-    const row = this.db.prepare<[string, string], BindingRow>(`
-      SELECT * FROM codex_app_server_session WHERE thread_slug = ? AND frizz_session_id = ?
+    const row = this.scope.prepare<BindingRow>(`
+      SELECT * FROM codex_app_server_session WHERE project_id = @project_id AND thread_slug = ? AND frizz_session_id = ?
     `).get(threadSlug, sessionId)
     return row ? checkedBindingRow(row) : undefined
   }
 
   private bindingForCodexThread(threadId: string): BindingRow | undefined {
-    const row = this.db.prepare<[string], BindingRow>(`
-      SELECT * FROM codex_app_server_session WHERE codex_thread_id = ?
+    const row = this.scope.prepare<BindingRow>(`
+      SELECT * FROM codex_app_server_session WHERE project_id = @project_id AND codex_thread_id = ?
     `).get(threadId)
     return row ? checkedBindingRow(row) : undefined
   }
@@ -2647,8 +2633,8 @@ export class CodexAppServerBridge {
       }
       handshaking = false
       const negotiated = this.db.transaction(() => {
-        const rawMeta = this.db.prepare<[], unknown>(
-          "SELECT * FROM codex_app_server_meta WHERE singleton = 1",
+        const rawMeta = this.scope.prepare<Record<string, unknown>>(
+          "SELECT * FROM codex_app_server_meta WHERE project_id = @project_id",
         ).get()
         const parsedMeta = BridgeMetaRowSchema.safeParse(rawMeta)
         if (!parsedMeta.success) throw new InteractionStoreError("corrupt-journal", "Codex app-server bridge metadata is corrupt")
@@ -2668,10 +2654,10 @@ export class CodexAppServerBridge {
         const sameProcess = attachment.reattached
           && meta.daemon_generation === attachment.generation
           && attachment.droppedWhileDetached === 0
-        this.db.prepare(`
+        this.scope.prepare(`
           UPDATE codex_app_server_meta
           SET connection_epoch = ?, capability_revision = ?, protocol_fingerprint = ?, daemon_generation = ?
-          WHERE singleton = 1
+          WHERE project_id = @project_id
         `).run(connectionEpoch, capabilityRevision, PROTOCOL_FINGERPRINT, attachment.generation)
         return { connectionEpoch, capabilityRevision, sameProcess, previousGeneration: meta.daemon_generation }
       })()
@@ -2732,10 +2718,10 @@ export class CodexAppServerBridge {
     // rather than stranding an eager sandbox change until its own timeout. Resolving with `undefined`
     // makes setSandbox report `unconfirmed` — honest: we do not know that it took.
     this.releaseSettingsWaiters()
-    if (this.closed || this.dbClosed) return
-    this.db.prepare(`
+    if (this.closed || this.dbReleased) return
+    this.scope.prepare(`
       UPDATE codex_app_server_session SET state = 'detached', updated_at = ?
-      WHERE connection_epoch = ? AND state = 'active'
+      WHERE project_id = @project_id AND connection_epoch = ? AND state = 'active'
     `).run(this.now().toISOString(), epoch)
     this.options.diagnostic?.({ event: "disconnected", connectionEpoch: epoch, reason })
   }
@@ -2756,20 +2742,20 @@ export class CodexAppServerBridge {
    * turn would disturb it, and clearing the id would orphan the `turn/completed` still to come.
    */
   private async reconcileOwnedSessions(connection: JsonlRpcConnection, sameProcess: boolean): Promise<void> {
-    const rows = this.db.prepare<[], BindingRow>(`
+    const rows = this.scope.prepare<BindingRow>(`
       SELECT * FROM codex_app_server_session
-      WHERE state = 'active' OR (state = 'detached' AND current_turn_id IS NOT NULL)
+      WHERE project_id = @project_id AND (state = 'active' OR (state = 'detached' AND current_turn_id IS NOT NULL))
     `).all().map(checkedBindingRow)
     const detach = (row: BindingRow): void => {
-      this.db.prepare("UPDATE codex_app_server_session SET state = 'detached', updated_at = ? WHERE frizz_session_id = ?")
+      this.scope.prepare("UPDATE codex_app_server_session SET state = 'detached', updated_at = ? WHERE project_id = @project_id AND frizz_session_id = ?")
         .run(this.now().toISOString(), row.frizz_session_id)
     }
     for (const row of rows) {
       if (row.ephemeral === 1) { detach(row); continue }
       if (sameProcess) {
-        this.db.prepare(`
+        this.scope.prepare(`
           UPDATE codex_app_server_session SET state = 'active', connection_epoch = ?, updated_at = ?
-          WHERE frizz_session_id = ?
+          WHERE project_id = @project_id AND frizz_session_id = ?
         `).run(this.connectionEpoch, this.now().toISOString(), row.frizz_session_id)
         // The TURN survived our restart, but its in-flight approval did not: that request was issued on
         // the client connection we just lost, and its rpc id means nothing on this new socket. Nothing
@@ -2808,10 +2794,10 @@ export class CodexAppServerBridge {
           && row.capability_revision === this.capabilityRevision
           && resumedThreadHasLiveTurn(rawResponse)
         ) {
-          this.db.prepare(`
+          this.scope.prepare(`
             UPDATE codex_app_server_session SET
               codex_session_id = ?, connection_epoch = ?, state = 'active', updated_at = ?, sandbox = ?
-            WHERE frizz_session_id = ?
+            WHERE project_id = @project_id AND frizz_session_id = ?
           `).run(
             response.thread.sessionId,
             this.connectionEpoch,
@@ -2875,7 +2861,7 @@ export class CodexAppServerBridge {
     const pending = [...this.pendingAutoResume.values()]
     this.pendingAutoResume.clear()
     for (const { row, interruptedTurn } of pending) {
-      if (this.closed || this.dbClosed) return
+      if (this.closed || this.dbReleased) return
       if (row.auto_resumed_turn_id === interruptedTurn) continue
       if (row.auto_resume_count >= CodexAppServerBridge.MAX_AUTO_RESUMES) continue
       if (this.options.shouldAutoResume && !this.options.shouldAutoResume(row.thread_slug, row.frizz_session_id)) continue
@@ -2883,9 +2869,9 @@ export class CodexAppServerBridge {
       // case their message already IS the continuation and a nudge would be noise.
       const current = this.bindingForScope(row.thread_slug, row.frizz_session_id)
       if (!current || current.state !== "active" || current.current_turn_id !== null) continue
-      this.db.prepare(`
+      this.scope.prepare(`
         UPDATE codex_app_server_session SET auto_resumed_turn_id = ?, auto_resume_count = auto_resume_count + 1, updated_at = ?
-        WHERE frizz_session_id = ?
+        WHERE project_id = @project_id AND frizz_session_id = ?
       `).run(interruptedTurn, this.now().toISOString(), row.frizz_session_id)
       try {
         await this.startTurn({
@@ -2923,11 +2909,11 @@ export class CodexAppServerBridge {
     // one read that is right whether our override applied (cold resume from disk) or was ignored (a
     // rejoin of a thread the server still had loaded). Recording anything else would let setSandbox
     // report a false no-op success later. `null` when the server did not report one → "unknown".
-    this.db.prepare(`
+    this.scope.prepare(`
       UPDATE codex_app_server_session SET
         codex_session_id = ?, capability_revision = ?, connection_epoch = ?, state = 'active',
         current_turn_id = NULL, updated_at = ?, sandbox = ?
-      WHERE frizz_session_id = ? AND thread_slug = ? AND codex_thread_id = ?
+      WHERE project_id = @project_id AND frizz_session_id = ? AND thread_slug = ? AND codex_thread_id = ?
     `).run(
       codexSessionId,
       this.capabilityRevision,
@@ -2996,7 +2982,7 @@ export class CodexAppServerBridge {
    * rather than making a `backgroundTerminals/list` round trip per thread per tick.
    */
   backgroundExecs(threadSlug: string, sessionId: string): readonly LiveBackgroundExec[] {
-    if (this.closed || this.dbClosed) return []
+    if (this.closed || this.dbReleased) return []
     const binding = this.bindingForScope(threadSlug, sessionId)
     if (!binding) return []
     const byProcess = this.liveExecs.get(binding.codex_thread_id)
@@ -3095,7 +3081,7 @@ export class CodexAppServerBridge {
       // Record the INTENT before the wire call, and independently of whether it lands. Even a change
       // the app-server never confirms must survive to the next cold resume — that is the whole promise
       // behind "saved for the next resume", and frizz's own registry cannot hold it for a codex row.
-      this.db.prepare("UPDATE codex_app_server_session SET intended_sandbox = ?, updated_at = ? WHERE frizz_session_id = ? AND thread_slug = ?")
+      this.scope.prepare("UPDATE codex_app_server_session SET intended_sandbox = ?, updated_at = ? WHERE project_id = @project_id AND frizz_session_id = ? AND thread_slug = ?")
         .run(input.sandbox, this.now().toISOString(), input.sessionId, input.threadSlug)
       // Sampled BEFORE the update: whether the operator's change was made against a running turn is
       // what decides the wording, and the turn can end while we wait for the confirmation.
@@ -3179,9 +3165,9 @@ export class CodexAppServerBridge {
         }
         // A server request may race the turn/start response. The provider-issued turn id is the
         // authority; pin it before journaling rather than inventing a client-side id.
-        this.db.prepare(`
+        this.scope.prepare(`
           UPDATE codex_app_server_session SET current_turn_id = ?, updated_at = ?
-          WHERE frizz_session_id = ? AND connection_epoch = ? AND current_turn_id IS NULL
+          WHERE project_id = @project_id AND frizz_session_id = ? AND connection_epoch = ? AND current_turn_id IS NULL
         `).run(turnId, this.now().toISOString(), row.frizz_session_id, this.connectionEpoch)
         return this.bindingForCodexThread(threadId)!
       }
@@ -3681,7 +3667,7 @@ export class CodexAppServerBridge {
       // Keep the cache honest for EVERY thread, including ones changed by someone else's client.
       const binding = this.bindingForCodexThread(parsed.data.threadId)
       if (binding) {
-        this.db.prepare("UPDATE codex_app_server_session SET sandbox = ?, updated_at = ? WHERE codex_thread_id = ?")
+        this.scope.prepare("UPDATE codex_app_server_session SET sandbox = ?, updated_at = ? WHERE project_id = @project_id AND codex_thread_id = ?")
           .run(observed.sandbox ?? null, this.now().toISOString(), parsed.data.threadId)
       }
       for (const waiter of [...(this.settingsWaiters.get(parsed.data.threadId) ?? [])]) waiter(observed)
@@ -3698,9 +3684,9 @@ export class CodexAppServerBridge {
         return
       }
       if (!this.pendingTurnStarts.has(turnKey(binding))) return
-      this.db.prepare(`
+      this.scope.prepare(`
         UPDATE codex_app_server_session SET current_turn_id = ?, updated_at = ?
-        WHERE codex_thread_id = ? AND connection_epoch = ? AND current_turn_id IS NULL
+        WHERE project_id = @project_id AND codex_thread_id = ? AND connection_epoch = ? AND current_turn_id IS NULL
       `).run(parsed.data.turn.id, this.now().toISOString(), parsed.data.threadId, this.connectionEpoch)
       return
     }
@@ -3721,9 +3707,9 @@ export class CodexAppServerBridge {
       // A turn that reaches its own ending proves the thread is healthy again, so the restart-recovery
       // budget is restored. Without this reset a thread that had been nudged MAX_AUTO_RESUMES times
       // over its whole life could never be auto-recovered again, however long ago those were.
-      this.db.prepare(`
+      this.scope.prepare(`
         UPDATE codex_app_server_session SET current_turn_id = NULL, auto_resume_count = 0, updated_at = ?
-        WHERE codex_thread_id = ? AND connection_epoch = ? AND current_turn_id = ?
+        WHERE project_id = @project_id AND codex_thread_id = ? AND connection_epoch = ? AND current_turn_id = ?
       `).run(this.now().toISOString(), parsed.data.threadId, this.connectionEpoch, parsed.data.turn.id)
     }
   }

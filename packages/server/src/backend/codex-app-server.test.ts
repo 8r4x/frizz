@@ -266,7 +266,7 @@ function harness(
     const bridge = new CodexAppServerBridge({
       projectId: "project-1",
       projectDir: dir,
-      dbPath,
+      db,
       interactions,
       codexBin: "/opt/codex",
       spawn,
@@ -1181,7 +1181,7 @@ test("a fresh bridge inherits no active bindings: boot detaches what a SIGKILLed
   })
   const { turnId } = await h.bridge.startTurn({ threadSlug: binding.threadSlug, sessionId: binding.sessionId, text: "Work" })
   // Simulate SIGKILL: the process vanishes without close()/handleDisconnect ever running.
-  const abandoned = h.db.prepare("SELECT state, current_turn_id FROM codex_app_server_session WHERE thread_slug = ?")
+  const abandoned = h.db.prepare("SELECT state, current_turn_id FROM codex_app_server_session WHERE project_id = 'project-1' AND thread_slug = ?")
     .get(binding.threadSlug) as { state: string; current_turn_id: string | null }
   assert.equal(abandoned.state, "active")
   assert.equal(abandoned.current_turn_id, turnId)
@@ -1756,7 +1756,7 @@ test("shutdown re-detaches a binding written by an operation already past its RP
   await bridge.shutdown()
   const row = h.db.prepare<[], { state: string }>(`
     SELECT state FROM codex_app_server_session
-    WHERE thread_slug = 'closing-after-response'
+    WHERE project_id = 'project-1' AND thread_slug = 'closing-after-response'
   `).get()
   assert.equal(row?.state, "detached", "no operation can leave live native authority after shutdown")
   h.close()
@@ -1764,13 +1764,12 @@ test("shutdown re-detaches a binding written by an operation already past its RP
 
 test("registry replacement releases only its exact native binding, process requests, and delivery authority", async () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-codex-lifecycle-"))
-  const dbPath = join(dir, "ui.db")
-  const storage = createStorage(dbPath)
+  const storage = createStorage(join(dir, "ui.db"), "project-1")
   const processes: FakeAppServerProcess[] = []
   const bridge = new CodexAppServerBridge({
     projectId: "project-1",
     projectDir: dir,
-    dbPath,
+    db: storage.db,
     interactions: storage.interactions,
     spawn: () => {
       const process = new FakeAppServerProcess()
@@ -1872,60 +1871,11 @@ test("bridge close detaches persisted bindings and makes pending delivery rows n
   assert.equal(h.processes[0]!.killed, true)
   assert.equal(h.bridge.ownsInteraction(scope, pending.id), false)
   const persisted = h.db.prepare<[string], { state: string; current_turn_id: string | null }>(`
-    SELECT state, current_turn_id FROM codex_app_server_session WHERE frizz_session_id = ?
+    SELECT state, current_turn_id FROM codex_app_server_session WHERE project_id = 'project-1' AND frizz_session_id = ?
   `).get(binding.sessionId)
   assert.deepEqual(persisted, { state: "detached", current_turn_id: turnId })
   assert.equal(h.interactions.providerDelivery(scope, pending.id)?.state, "awaiting-user")
   h.close()
-})
-
-// THE REBRAND'S HARDEST-EDGED LEFTOVER. The rename swept the CREATE TABLE, so a database that first
-// used the Codex bridge before it kept `fray_session_id` — and the required-columns guard below turns
-// that into a hard "schema is missing required columns" on open. Ten of the sixteen project databases
-// on the maintainer's machine were in exactly that state: unopenable, with nothing saying why.
-test("bridge persistence adopts a pre-rebrand fray_session_id instead of refusing the database", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "frizz-codex-app-server-rebrand-"))
-  const dbPath = join(dir, "ui.db")
-
-  // Build the schema the current code writes, then put the one column back to its old name.
-  const seed = new Database(dbPath)
-  const seedInteractions = createInteractionStore(seed)
-  // `shutdown()`, not `close()`: close() returns the moment it has queued the drain, and the bridge's
-  // OWN handle on dbPath is not released until that drain reaches closeDatabase(). shutdown() awaits
-  // exactly that edge — which is what lets the rmSync below run on Windows, where a directory holding
-  // a file some handle still has open cannot be deleted at all.
-  await new CodexAppServerBridge({
-    projectId: "project-1",
-    projectDir: dir,
-    dbPath,
-    interactions: seedInteractions,
-    spawn: () => new FakeAppServerProcess(),
-  }).shutdown()
-  seedInteractions.dispose()
-  seed.close()
-
-  const legacy = new Database(dbPath)
-  legacy.exec("ALTER TABLE codex_app_server_session RENAME COLUMN frizz_session_id TO fray_session_id")
-  legacy.close()
-
-  const db = new Database(dbPath)
-  const interactions = createInteractionStore(db)
-  const bridge = new CodexAppServerBridge({
-    projectId: "project-1",
-    projectDir: dir,
-    dbPath,
-    interactions,
-    spawn: () => new FakeAppServerProcess(),
-  })
-  const columns = new Set(
-    db.prepare("PRAGMA table_info(codex_app_server_session)").all().map((c) => (c as { name: string }).name),
-  )
-  assert.ok(columns.has("frizz_session_id"), "the column was renamed, not re-added")
-  assert.equal(columns.has("fray_session_id"), false, "and the old name is gone")
-  await bridge.shutdown()
-  interactions.dispose()
-  db.close()
-  rmSync(dir, { recursive: true, force: true })
 })
 
 test("bridge persistence refuses malformed or future authority schemas before spawning Codex", () => {
@@ -1939,7 +1889,7 @@ test("bridge persistence refuses malformed or future authority schemas before sp
     () => new CodexAppServerBridge({
       projectId: "project-1",
       projectDir: dir,
-      dbPath,
+      db,
       interactions,
       spawn: () => {
         spawned = true
@@ -1963,7 +1913,7 @@ test("bridge persistence refuses malformed or future authority schemas before sp
     () => new CodexAppServerBridge({
       projectId: "project-1",
       projectDir: dir,
-      dbPath: futurePath,
+      db: futureDb,
       interactions: futureInteractions,
       spawn: () => {
         spawned = true
@@ -2002,7 +1952,7 @@ function scriptedHostHarness(script: () => { generation: string; reattached: boo
     const bridge = new CodexAppServerBridge({
       projectId: "project-1",
       projectDir: dir,
-      dbPath,
+      db,
       interactions,
       codexBin: "/opt/codex",
       host: async () => {
@@ -2184,7 +2134,7 @@ test("a cold resume with NO recorded intent still states full access + approvals
     sandbox: "danger-full-access",
   })
   // Exactly what a pre-migration row looks like: no intent recorded anywhere.
-  h.db.prepare("UPDATE codex_app_server_session SET intended_sandbox = NULL, sandbox = NULL WHERE frizz_session_id = ?")
+  h.db.prepare("UPDATE codex_app_server_session SET intended_sandbox = NULL, sandbox = NULL WHERE project_id = 'project-1' AND frizz_session_id = ?")
     .run(binding.sessionId)
   h.processes[0]!.disconnect()
   h.bridge.close()
@@ -2284,4 +2234,56 @@ test("selectCodexHostKind: the flag forces the transport, and never selects nati
   assert.equal(selectCodexHostKind("1", "linux", false), "native", "1 forces native where supported")
   assert.equal(selectCodexHostKind("true", "darwin", false), "native")
   assert.equal(selectCodexHostKind("1", "win32", false), "daemon", "native is never selected on win32, even forced")
+})
+
+// ONE DATABASE, EVERY PROJECT (2026-08-27). Two bridges for two projects share one connection and one
+// `codex_app_server_session` table, and a thread slug is only unique WITHIN a project — so the same
+// slug bound in both must yield two rows that neither bridge can see across the seam. A scope that
+// forgot to name the project on any statement would either refuse to prepare (project-scope.ts) or
+// let the second bridge find the first one's binding; this is the net for the second kind.
+test("two projects on one connection never see each other's bindings, even for the same thread slug", async () => {
+  const h = harness()
+  const other = new CodexAppServerBridge({
+    projectId: "project-2",
+    projectDir: h.dir,
+    db: h.db,
+    interactions: h.interactions,
+    codexBin: "/opt/codex",
+    spawn: () => new FakeAppServerProcess(),
+    requestTimeoutMs: 1_000,
+  })
+  try {
+    const mine = await h.bridge.startDisposableSession({
+      threadSlug: "shared-slug", sessionId: "session-in-project-1", cwd: h.dir, ephemeral: false,
+    })
+    const theirs = await other.startDisposableSession({
+      threadSlug: "shared-slug", sessionId: "session-in-project-2", cwd: h.dir, ephemeral: false,
+    })
+    assert.notEqual(mine.codexThreadId, theirs.codexThreadId)
+    assert.ok(h.bridge.binding("shared-slug", "session-in-project-1"))
+    assert.equal(h.bridge.binding("shared-slug", "session-in-project-2"), undefined)
+    assert.ok(other.binding("shared-slug", "session-in-project-2"))
+    assert.equal(other.binding("shared-slug", "session-in-project-1"), undefined)
+    const rows = h.db.prepare<[], { project_id: string; thread_slug: string }>(
+      "SELECT project_id, thread_slug FROM codex_app_server_session WHERE thread_slug = 'shared-slug' ORDER BY project_id",
+    ).all()
+    assert.deepEqual(rows, [
+      { project_id: "project-1", thread_slug: "shared-slug" },
+      { project_id: "project-2", thread_slug: "shared-slug" },
+    ])
+    // Each project negotiated its own meta row: two connects, two epochs of 1, not one epoch of 2.
+    const epochs = h.db.prepare<[], { project_id: string; connection_epoch: number }>(
+      "SELECT project_id, connection_epoch FROM codex_app_server_meta ORDER BY project_id",
+    ).all()
+    assert.deepEqual(epochs, [
+      { project_id: "project-1", connection_epoch: 1 },
+      { project_id: "project-2", connection_epoch: 1 },
+    ])
+    // Releasing in one project leaves the other's row alone.
+    assert.equal(other.releaseSession("shared-slug", "session-in-project-2", "session-deleted"), true)
+    assert.ok(h.bridge.binding("shared-slug", "session-in-project-1"))
+  } finally {
+    other.close()
+    h.close()
+  }
 })

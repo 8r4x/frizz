@@ -140,7 +140,7 @@ function row(slug: string): SessionRow {
 function harness(tailer: Tailer = noopTailer) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-router-permission-"))
   const project: Project = { dir, id: "router-permission", name: "test", label: "test", stateDir: dir, cwdSlug: "test" }
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   const snapshot: BoardSnapshot = {
     projectDir: dir,
     projectName: "test",
@@ -824,7 +824,7 @@ test("legacy teardown retains name behavior while an absent finalized owner is a
 })
 
 test("router teardown never downgrades a stale replaced row to reusable-name control", () => {
-  const storage = createStorage(join(mkdtempSync(join(tmpdir(), "frizz-router-aba-")), "ui.db"))
+  const storage = createStorage(join(mkdtempSync(join(tmpdir(), "frizz-router-aba-")), "ui.db"), "p")
   const slug = "router-stale-row"
   const stale = row(slug)
   storage.upsertSession(stale)
@@ -836,7 +836,7 @@ test("router teardown never downgrades a stale replaced row to reusable-name con
 })
 
 test("rowless reserved/spawned adoption claims fail closed without a name or exact kill", async () => {
-  const storage = createStorage(join(mkdtempSync(join(tmpdir(), "frizz-rowless-adopt-")), "ui.db"))
+  const storage = createStorage(join(mkdtempSync(join(tmpdir(), "frizz-rowless-adopt-")), "ui.db"), "p")
   const slug = "rowless-adoption"
   assert.equal(storage.reserveAdoptionClaim({
     slug,
@@ -883,7 +883,7 @@ test("rowless adoption claim blocks kill, dismiss-status, and forget RPC handler
 })
 
 test("stale forget loses to a finalized successor token and preserves its row and pane binding", async () => {
-  const storage = createStorage(join(mkdtempSync(join(tmpdir(), "frizz-forget-rotation-")), "ui.db"))
+  const storage = createStorage(join(mkdtempSync(join(tmpdir(), "frizz-forget-rotation-")), "ui.db"), "p")
   const slug = "forget-successor"
   const original = finalizedClaim(slug)
   const saved = row(slug)
@@ -1024,7 +1024,7 @@ test("stopping a Codex thread with no active turn is a no-op, not an error", asy
 
 test("a LEGACY pre-app-server Codex row keeps the registered-runtime terminator and never reaches the bridge", async () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-legacy-codex-stop-"))
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   const slug = "legacy-codex"
   // Dispatched pre-cutover: backend=codex but codex_runtime is NULL, so it really does own a pane and
   // is migrated only when a follow-up first touches it. followUp/setThreadPermission branch on the

@@ -70,7 +70,7 @@ function makeBridge(label: string) {
   let iid = 0, cid = 0
   const interactions = createInteractionStore(db, { now: () => new Date(), id: () => `i-${label}-${++iid}` })
   const bridge = new CodexAppServerBridge({
-    projectId: "repro", projectDir: dir, dbPath, interactions,
+    projectId: "repro", projectDir: dir, db, interactions,
     codexBin: CODEX_BIN, spawn, now: () => new Date(), id: () => `c-${label}-${++cid}`,
     requestTimeoutMs: 30_000,
     diagnostic: (e) => console.log(`    [diag:${label}]`, JSON.stringify(e)),

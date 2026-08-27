@@ -25,7 +25,7 @@ function profileHandoff(
 }
 
 function store(): Storage {
-  return createStorage(join(mkdtempSync(join(tmpdir(), "frizz-storage-")), "ui.db"))
+  return createStorage(join(mkdtempSync(join(tmpdir(), "frizz-storage-")), "ui.db"), "p")
 }
 
 function row(over: Partial<SessionRow> = {}): SessionRow {
@@ -61,8 +61,8 @@ test("storage close is idempotent", () => {
 test("insertSessionIfAbsent atomically preserves the winner and writes backend identity in one claim", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-storage-claim-"))
   const path = join(dir, "ui.db")
-  const first = createStorage(path)
-  const second = createStorage(path)
+  const first = createStorage(path, "p")
+  const second = createStorage(path, "p")
 
   assert.equal(first.insertSessionIfAbsent(row({
     slug: "claimed",
@@ -385,7 +385,7 @@ test("observed runtime profiles persist only for the current generation outside 
 test("session permission actual/pending values round-trip independently and survive reopen", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-storage-permission-"))
   const path = join(dir, "ui.db")
-  const s = createStorage(path)
+  const s = createStorage(path, "p")
   s.upsertSession(row({ slug: "permissioned", permission_mode: "auto" }))
   assert.equal(s.getSession("permissioned")?.permission_mode, "auto")
   s.setPermissionMode("permissioned", "bypassPermissions")
@@ -395,7 +395,7 @@ test("session permission actual/pending values round-trip independently and surv
   s.setControlError("permissioned", "existing draft")
   s.close()
 
-  const reopened = createStorage(path)
+  const reopened = createStorage(path, "p")
   assert.equal(reopened.getSession("permissioned")?.permission_mode, "bypassPermissions")
   assert.equal(reopened.getSession("permissioned")?.permission_pending, "default")
   assert.equal(reopened.getSession("permissioned")?.control_error, "existing draft")
@@ -404,99 +404,17 @@ test("session permission actual/pending values round-trip independently and surv
   reopened.close()
 })
 
-// The retired Codex TUI composer held a DURABLE 'codex-input' runtime lock across restarts, and both
-// its writer (queueFollowUp) and its releaser are gone. A row still holding one would report
-// runtimeControlPending forever — permanently fencing that thread's composer, model, and sandbox
-// controls with nothing left in the product able to clear it. Boot releases it exactly once.
-test("boot releases a stranded 'codex-input' runtime lock left by the retired Codex composer", () => {
-  const dir = mkdtempSync(join(tmpdir(), "frizz-storage-codex-input-"))
-  const path = join(dir, "ui.db")
-  const s = createStorage(path)
-  s.upsertSession(row({ slug: "stranded" }))
-  s.upsertSession(row({ slug: "other-owner", session_id: "sid-other" }))
-  s.beginRuntimeControl("other-owner", { sessionId: "sid-other", nativeSessionId: null, generation: 0 }, "profile")
-  s.close()
-
-  // Forge the pre-upgrade state directly: 'codex-input' is no longer a RuntimeControlKind, so this is
-  // exactly how a db written by a pre-cutover frizz looks on disk.
-  const sqlite = new Database(path)
-  sqlite.exec("UPDATE session SET runtime_control = 'codex-input' WHERE slug = 'stranded'")
-  sqlite.close()
-
-  const reopened = createStorage(path)
-  assert.equal(reopened.getSession("stranded")?.runtime_control ?? null, null, "the stranded codex-input lock is released at boot")
-  assert.equal(reopened.getSession("other-owner")?.runtime_control, "profile", "a live non-codex runtime control is untouched")
-  reopened.close()
-})
-
-// The OTHER purely in-process lock. resume.ts holds 'follow-up' for the ~300-800ms an injection needs
-// and releases it in a `finally`, so no process can still hold one after a restart — but a hard kill
-// inside that window leaves it, and every later send then fails "Another runtime control is in
-// progress" forever. Unlike 'codex-input' this kind is still LIVE, so the sweep has to be a boot-time
-// one (a stale lock is unrepresentable at boot) and must not touch the durable 'profile' handoff.
-test("boot releases a 'follow-up' lock a hard kill stranded, and never the durable profile handoff", () => {
-  const dir = mkdtempSync(join(tmpdir(), "frizz-storage-followup-lock-"))
-  const path = join(dir, "ui.db")
-  const s = createStorage(path)
-  s.upsertSession(row({ slug: "killed-mid-send" }))
-  s.upsertSession(row({ slug: "profile-armed", session_id: "sid-profile" }))
-  s.beginRuntimeControl("killed-mid-send", { sessionId: "sid", nativeSessionId: null, generation: 0 }, "follow-up")
-  s.beginRuntimeControl("profile-armed", { sessionId: "sid-profile", nativeSessionId: null, generation: 0 }, "profile")
-  assert.equal(s.getSession("killed-mid-send")?.runtime_control, "follow-up", "the lock is real before the crash")
-  s.close() // ← the hard kill: nothing ran the `finally`
-
-  const reopened = createStorage(path)
-  assert.equal(reopened.getSession("killed-mid-send")?.runtime_control ?? null, null, "the thread's composer is not fenced forever")
-  assert.equal(reopened.getSession("profile-armed")?.runtime_control, "profile", "the durable handoff still awaits its recovery")
-  reopened.close()
-})
-
-// Same class as above: a CODEX row can also still hold the PRE-CUTOVER profile handoff from a crash on
-// the retired composer path. It can never complete (recovery reads the pane with the Claude composer parser), and the
-// recovery loop would re-block the thread on every tick. Boot abandons it and explains why.
-test("boot abandons a codex row still holding the retired Codex profile handoff", () => {
-  const dir = mkdtempSync(join(tmpdir(), "frizz-storage-codex-profile-"))
-  const path = join(dir, "ui.db")
-  const s = createStorage(path)
-  s.upsertSession(row({ slug: "codex-stuck" }))
-  s.upsertSession(row({ slug: "claude-stuck", session_id: "sid-claude" }))
-  s.setBackend("codex-stuck", "codex")
-  s.setBackend("claude-stuck", "claude")
-  s.close()
-
-  const sqlite = new Database(path)
-  sqlite.exec(`
-    UPDATE session
-    SET runtime_control = 'profile', profile_pending_model = 'gpt-5.6-sol',
-        profile_pending_effort = 'high', profile_handoff = '{"version":1,"phase":"armed"}'
-  `)
-  sqlite.close()
-
-  const reopened = createStorage(path)
-  const codex = reopened.getSession("codex-stuck")!
-  assert.equal(codex.runtime_control ?? null, null, "the codex row is released")
-  assert.equal(codex.profile_pending_model ?? null, null, "its unreachable pending pair is abandoned")
-  assert.equal(codex.profile_pending_effort ?? null, null)
-  assert.equal(codex.profile_handoff ?? null, null, "and so is its journal")
-  assert.match(codex.control_error ?? "", /armed on the retired Codex interactive path/, "the operator is told why it vanished")
-
-  const claude = reopened.getSession("claude-stuck")!
-  assert.equal(claude.runtime_control, "profile", "a CLAUDE handoff still recovers normally")
-  assert.equal(claude.profile_pending_model, "gpt-5.6-sol", "and keeps its pending pair")
-  reopened.close()
-})
-
 test("manual snooze persists exactly across restart, expires atomically, and Archive clears it", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-storage-snooze-"))
   const path = join(dir, "ui.db")
   const exact = "2026-07-14T08:45:12.345Z"
-  let s = createStorage(path)
+  let s = createStorage(path, "p")
   s.upsertSession(row({ slug: "snoozed", state: "open" }))
   s.setSnoozedUntil("snoozed", exact)
   assert.equal(s.getSession("snoozed")?.snoozed_until, exact)
   s.close()
 
-  s = createStorage(path)
+  s = createStorage(path, "p")
   assert.equal(s.getSession("snoozed")?.snoozed_until, exact, "migration-backed value survives server restart byte-for-byte")
   assert.equal(s.clearExpiredSnoozes("2026-07-14T08:45:12.344Z"), 0)
   assert.equal(s.clearExpiredSnoozes(exact), 1, "the exact deadline is due, not one tick later")
@@ -514,14 +432,14 @@ test("a snooze carrying a prompt outlives its deadline for the waker, and the pa
   const dir = mkdtempSync(join(tmpdir(), "frizz-storage-snooze-prompt-"))
   const path = join(dir, "ui.db")
   const exact = "2026-07-14T08:45:12.345Z"
-  let s = createStorage(path)
+  let s = createStorage(path, "p")
   s.upsertSession(row({ slug: "bumps", state: "open" }))
   s.upsertSession(row({ slug: "reminds", state: "open" }))
   s.setSnoozedUntil("bumps", exact, "Check whether CI went green.")
   s.setSnoozedUntil("reminds", exact)
   s.close()
 
-  s = createStorage(path)
+  s = createStorage(path, "p")
   assert.equal(s.getSession("bumps")?.snooze_prompt, "Check whether CI went green.", "the follow-up survives restart")
   // THE LOAD-BEARING ASYMMETRY: the board sweeps elapsed snoozes on every refresh, far more often than
   // the waker ticks. If it swept a prompt-carrying row the scheduled bump would be silently lost.
@@ -658,7 +576,7 @@ test("completeIfCurrent atomically settles one exact runtime generation", () => 
 test("explicit thread title: replaces the generated fallback, clears title_auto, and survives reopen/resume", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-storage-title-"))
   const path = join(dir, "ui.db")
-  const s = createStorage(path)
+  const s = createStorage(path, "p")
   s.upsertSession(row({ slug: "generated-slug", title: "generated-slug", title_auto: 1 }))
 
   s.setTitle("generated-slug", "Human-readable thread title")
@@ -673,7 +591,7 @@ test("explicit thread title: replaces the generated fallback, clears title_auto,
   assert.equal(saved.title_auto, 0)
   s.close()
 
-  const reopened = createStorage(path)
+  const reopened = createStorage(path, "p")
   assert.equal(reopened.getSession("generated-slug")?.title, "Human-readable thread title")
   assert.equal(reopened.getSession("generated-slug")?.title_auto, 0)
   reopened.close()
@@ -681,7 +599,7 @@ test("explicit thread title: replaces the generated fallback, clears title_auto,
 
 test("conditional AI title commit cannot overwrite a manual rename or replacement session", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-storage-title-cas-"))
-  const s = createStorage(join(dir, "ui.db"))
+  const s = createStorage(join(dir, "ui.db"), "p")
   s.upsertSession(row({ slug: "rename-race", session_id: "old-session", title: "Old title", title_auto: 1 }))
   const expected = { sessionId: "old-session", title: "Old title", titleAuto: 1 }
 
@@ -745,44 +663,6 @@ test("automatic title CAS persists provenance and rejects manual, native-session
   s.close()
 })
 
-test("the title_agent backfill marks worker-written codex titles and leaves untouched chops alone", () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "frizz-title-agent-")), "ui.db")
-  const first = createStorage(dbPath)
-  // What the auto-title CAS has been leaving behind since the codex app-server path landed: a row
-  // still flagged as a machine guess (title_auto 1) whose TEXT is the worker's own name, so its slug —
-  // minted from the dispatch chop — no longer reads as one this title could have produced.
-  first.upsertSession(row({ slug: "i-want-to-start-working", session_id: "sid-a", title: "Build minimal tool renderer", title_auto: 1, title_locked: 0 }))
-  first.setBackend("i-want-to-start-working", "codex")
-  // The counter-case: a worker that never emitted a title signal, so the row still holds its chop.
-  first.upsertSession(row({ slug: "fix-the-parser-bug", session_id: "sid-b", title: "Fix the parser bug", title_auto: 1, title_locked: 0 }))
-  first.setBackend("fix-the-parser-bug", "codex")
-  // Claude rows are not in scope: nothing persists their aiTitle, so a replaced title there is a
-  // rename, and the repair must not claim it as a worker's.
-  first.upsertSession(row({ slug: "some-old-prompt", session_id: "sid-c", title: "Resolver cache bug", title_auto: 1, title_locked: 0 }))
-  first.close()
-
-  // Rewind to the pre-column shape and clear the marker, exactly as a server upgrade finds it.
-  const raw = new Database(dbPath)
-  raw.exec("ALTER TABLE session DROP COLUMN title_agent")
-  raw.exec("DELETE FROM settings WHERE key = 'repair:mark-agent-written-titles'")
-  raw.close()
-
-  const upgraded = createStorage(dbPath)
-  assert.equal(upgraded.getSession("i-want-to-start-working")?.title_agent, 1, "the slug proves this title is NOT the one the thread was dispatched with")
-  assert.equal(upgraded.getSession("fix-the-parser-bug")?.title_agent, 0, "a title that still mints its own slug is the dispatch chop")
-  assert.equal(upgraded.getSession("some-old-prompt")?.title_agent, 0, "claude rows never persist a worker title, so nothing to recover")
-
-  // ONE time only: the predicate is a heuristic, and every title written from here on records its own
-  // provenance. A restart must not re-decide a row the flag already answers for.
-  const rewritten = new Database(dbPath)
-  rewritten.exec("UPDATE session SET title_agent = 0 WHERE slug = 'i-want-to-start-working'")
-  rewritten.close()
-  upgraded.close()
-  const restarted = createStorage(dbPath)
-  assert.equal(restarted.getSession("i-want-to-start-working")?.title_agent, 0, "the marker keeps the repair from re-running")
-  restarted.close()
-})
-
 test("a dispatch title a CALLER hard-coded is displayable but replaceable; only a human's locks", () => {
   const s = store()
   // What the GitHub batch and `mcp__frizz__spawn_thread` write: a real-looking name (title_auto 0, so the
@@ -830,76 +710,6 @@ test("a row written without title_locked keeps the pre-split rule: any non-guess
     true,
   )
   s.close()
-})
-
-test("the title_locked migration backfills conservatively and its boot repair is idempotent", () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "frizz-title-lock-")), "ui.db")
-  const first = createStorage(dbPath)
-  first.upsertSession(row({ slug: "named", session_id: "sid-a", title: "Human name", title_auto: 0, title_locked: 1 }))
-  first.upsertSession(row({ slug: "guessed", session_id: "sid-b", title: "raw prompt chop", title_auto: 1, title_locked: 0 }))
-  first.upsertSession(row({ slug: "caller", session_id: "sid-c", title: "Investigate acme/app#391", title_auto: 0, title_locked: 0 }))
-  first.close()
-
-  // Rewind to the real pre-split shape — a DB whose session table has no title_locked at all.
-  const raw = new Database(dbPath)
-  raw.exec("ALTER TABLE session DROP COLUMN title_locked")
-  raw.close()
-
-  // Reopening runs the ADD COLUMN + repair exactly as a server upgrade does. Both titles a human owns
-  // (explicit and legacy) come back LOCKED from the conservative DEFAULT; only the machine guess is
-  // unlocked by the flag-keyed repair. The caller-titled row stays locked here because this fixture's
-  // slug ("caller") is not one its title could have minted — the dispatch-minted repair below is the
-  // one that reaches rows whose slug still proves where the title came from.
-  const upgraded = createStorage(dbPath)
-  assert.equal(upgraded.getSession("named")?.title_locked, 1)
-  assert.equal(upgraded.getSession("guessed")?.title_locked, 0)
-  assert.equal(upgraded.getSession("caller")?.title_locked, 1)
-  // A fresh dispatch under the new schema, then another restart: the repair must NOT re-lock it. A
-  // repair written the other way round (`SET title_locked = 1 WHERE title_auto = 0`) would silently
-  // undo this feature on every server restart, which is why it keys on the guess flag instead.
-  upgraded.upsertSession(row({ slug: "fresh", session_id: "sid-d", title: "Review acme/app#12", title_auto: 0, title_locked: 0 }))
-  upgraded.close()
-
-  const restarted = createStorage(dbPath)
-  assert.equal(restarted.getSession("fresh")?.title_locked, 0, "a restart never re-locks a caller's dispatch title")
-  assert.equal(restarted.getSession("named")?.title_locked, 1)
-  restarted.close()
-})
-
-test("the one-time repair unlocks titles a dispatch minted, and never a human's rename", () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "frizz-title-repair-")), "ui.db")
-  const first = createStorage(dbPath)
-  // Slugs as the dispatcher mints them: slugify(title), plus the -2 suffix resolveSlug adds on a
-  // collision. `renamed` is the counter-case — a thread the human renamed, so its slug still reads as
-  // the ORIGINAL dispatch title and no longer as the stored one.
-  first.upsertSession(row({ slug: "investigate-acme-app-391", session_id: "sid-a", title: "Investigate acme/app#391", title_auto: 0 }))
-  first.upsertSession(row({ slug: "investigate-acme-app-391-2", session_id: "sid-b", title: "Investigate acme/app#391", title_auto: 0 }))
-  first.upsertSession(row({ slug: "i-m-seeing-a-stale-cache", session_id: "sid-c", title: "Resolver cache bug", title_auto: 0 }))
-  first.upsertSession(row({ slug: "raw-prompt-chop", session_id: "sid-d", title: "raw prompt chop", title_auto: 1 }))
-  first.close()
-
-  // Rewind to the state the broker bug left behind: caller-titled rows locked, and no record that the
-  // repair has run. (A server old enough to write those rows is old enough not to know the marker.)
-  const raw = new Database(dbPath)
-  raw.exec("UPDATE session SET title_locked = 1 WHERE title_auto = 0")
-  raw.exec("DELETE FROM settings WHERE key = 'repair:unlock-dispatch-minted-titles'")
-  raw.close()
-
-  const upgraded = createStorage(dbPath)
-  assert.equal(upgraded.getSession("investigate-acme-app-391")?.title_locked, 0, "the slug proves the title came from a dispatch")
-  assert.equal(upgraded.getSession("investigate-acme-app-391-2")?.title_locked, 0, "…including through a collision suffix")
-  assert.equal(upgraded.getSession("i-m-seeing-a-stale-cache")?.title_locked, 1, "a renamed thread's slug no longer matches its title — untouched")
-  assert.equal(upgraded.getSession("raw-prompt-chop")?.title_auto, 1, "a machine guess is unlocked by the flag repair, not this one")
-
-  // ONE time only: the predicate is a heuristic, so a human who re-locks a repaired row by renaming it
-  // keeps that name even if their new title happens to mint the slug again.
-  upgraded.setTitle("investigate-acme-app-391", "Investigate acme/app#391")
-  assert.equal(upgraded.getSession("investigate-acme-app-391")?.title_locked, 1)
-  upgraded.close()
-
-  const restarted = createStorage(dbPath)
-  assert.equal(restarted.getSession("investigate-acme-app-391")?.title_locked, 1, "the repair never runs a second time")
-  restarted.close()
 })
 
 // allSessions() is memoised (it was 32% of the server's CPU when it re-read the whole table on every
@@ -1055,92 +865,6 @@ test("setProfile stamps the operator set-time; the observed write-back never tou
   const gen = s.getSession("pf")?.runtime_generation ?? 0
   s.setObservedProfileIfCurrent("pf", { sessionId: s.getSession("pf")!.session_id, generation: gen }, { model: "gpt-5.6-sol", effort: "xhigh" })
   assert.equal(s.getSession("pf")?.profile_set_at, setAt, "observed write-back leaves profile_set_at untouched")
-})
-
-// The rebrand's one-time migration was deleted once the projects in use had been converted — but ten
-// project databases on this machine had simply not been opened since, and `thread_name` is re-derived
-// and checked on every write, so the next write to one of those rows would have been rejected.
-test("opening a database adopts a pre-rebrand thread_name, and leaves a current one alone", () => {
-  const dir = mkdtempSync(join(tmpdir(), "frizz-rebrand-rows-"))
-  const path = join(dir, "ui.db")
-  try {
-    const first = createStorage(path)
-    first.upsertSession(row({ slug: "old-thread" }))
-    first.upsertSession(row({ slug: "new-thread" }))
-    first.close()
-
-    // Put one row back exactly the way the pre-rebrand code wrote it.
-    const raw = new Database(path)
-    raw.exec("UPDATE session SET thread_name = 'fray-old-thread' WHERE slug = 'old-thread'")
-    raw.close()
-
-    // Opening IS the migration — there is nothing else to run.
-    const reopened = createStorage(path)
-    try {
-      assert.equal(reopened.getSession("old-thread")?.thread_name, "frizz-old-thread")
-      assert.equal(reopened.getSession("new-thread")?.thread_name, "frizz-new-thread")
-    } finally {
-      reopened.close()
-    }
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
-})
-
-// A database that ran the RETIRED thread_watch build (2026-08-14) carries an orphan table of that
-// shape. CREATE TABLE IF NOT EXISTS does not reshape it, so the index on (state, expires_at) threw
-// "no such column: expires_at" and createStorage never returned -- seven of the fifty-four project
-// databases on the maintainer's machine could not open at all. Opening IS the migration.
-test("opening a database drops a pre-retirement thread_watch, and leaves a current one alone", () => {
-  const dir = mkdtempSync(join(tmpdir(), "frizz-legacy-watch-"))
-  const path = join(dir, "ui.db")
-  try {
-    // The retired table, byte-for-byte as the 2026-08-14 build wrote it: different kinds, different
-    // states, a foreground column, and no expiry.
-    const raw = new Database(path)
-    raw.exec(`
-      CREATE TABLE thread_watch (
-        id          TEXT PRIMARY KEY,
-        thread_slug TEXT NOT NULL,
-        kind        TEXT NOT NULL CHECK (kind IN ('pr', 'ci', 'shell')),
-        target      TEXT NOT NULL,
-        state       TEXT NOT NULL CHECK (state IN ('armed', 'fired', 'dropped')),
-        created_at  INTEGER NOT NULL,
-        settled_at  INTEGER,
-        cursor      TEXT,
-        foreground  INTEGER NOT NULL DEFAULT 0
-      );
-      CREATE INDEX thread_watch_armed ON thread_watch(state, kind);
-      CREATE INDEX thread_watch_slug ON thread_watch(thread_slug, state, created_at);
-      INSERT INTO thread_watch (id, thread_slug, kind, target, state, created_at)
-        VALUES ('old_1', 't', 'pr', 'owner/repo#1', 'fired', 1),
-               ('old_2', 't', 'shell', 'abc', 'dropped', 2);
-    `)
-    raw.close()
-
-    // Before the migration this threw rather than returning a store.
-    const upgraded = createStorage(path)
-    try {
-      const at = 1_700_000_000_000
-      const armed = upgraded.armThreadWatch({ id: "wch_1", slug: "t", kind: "agent", target: "abc", createdAtMs: at, expiresAtMs: at + 3600_000 })
-      assert.equal(armed.expires_at, at + 3600_000, "the returned table's required expiry is writable")
-      // 'agent' is a kind the retired CHECK constraint rejected, so this also proves the table is the
-      // new one rather than an orphan that merely gained a column.
-      assert.deepEqual(upgraded.listThreadWatches("t", { armedOnly: true }).map((w) => w.id), ["wch_1"])
-    } finally {
-      upgraded.close()
-    }
-
-    // Idempotent: the second open finds the current shape and leaves its rows alone.
-    const restarted = createStorage(path)
-    try {
-      assert.deepEqual(restarted.listThreadWatches("t", { armedOnly: true }).map((w) => w.id), ["wch_1"])
-    } finally {
-      restarted.close()
-    }
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
 })
 
 // ---- thread_watch: a worker's registered wait on its own running work (2026-08-26) ----

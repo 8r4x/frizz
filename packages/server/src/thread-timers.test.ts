@@ -24,7 +24,7 @@ const T0 = "2026-08-04T12:00:00.000Z"
 
 function fixture(tele: Partial<SessionTelemetry> = {}, opts: { now?: string; archived?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-timer-"))
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   // Frizz's built-in sign-off nudge (scheduler SOURCE 9) fires on any FENCELESS rest with no Goal stop
   // hook armed, which every thread in this harness is. Silenced so each test counts only the deliveries
   // it is about; the nudge has its own file.
@@ -61,7 +61,7 @@ function fixture(tele: Partial<SessionTelemetry> = {}, opts: { now?: string; arc
 
 test("storage: timers are many per thread, cancel is slug-scoped, and firing is one-way", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-timer-store-"))
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   // Frizz's built-in sign-off nudge (scheduler SOURCE 9) fires on any FENCELESS rest with no Goal stop
   // hook armed, which every thread in this harness is. Silenced so each test counts only the deliveries
   // it is about; the nudge has its own file.

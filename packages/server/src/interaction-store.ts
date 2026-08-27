@@ -507,16 +507,15 @@ export function serializeInteractionDiagnostic(value: unknown): string {
     : JSON.stringify({ interactionId: truncateUtf8(record.id, 128), lifecycle: record.lifecycle, diagnostic: "redacted" })
 }
 
-export function createInteractionStore(db: Database, options: InteractionStoreOptions = {}): InteractionStore {
-  const now = options.now ?? (() => new Date())
-  const makeId = options.id ?? randomUUID
-  const listeners = new Set<(change: InteractionChange) => void>()
-  const deferredChanges = new Map<string, InteractionChange>()
-  let deferredFlushScheduled = false
-  let disposed = false
-
-  db.pragma("foreign_keys = ON")
-  db.pragma("busy_timeout = 5000")
+/**
+ * The journal's tables, idempotent. Split out of createInteractionStore (2026-08-27) so the unified
+ * database can create them BEFORE a legacy project file is imported into it — a row can only be
+ * copied into a table that exists. The journal was project-scoped from the start (every table carries
+ * project_id), which is why it needed no other change for the one-file-every-project move.
+ */
+/** The journal's tables, for the importer and the project purge. */
+export const INTERACTION_TABLES = ["interaction_journal", "interaction_provider_delivery"] as const
+export function ensureInteractionSchema(db: Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS interaction_journal_schema (
       singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -524,12 +523,6 @@ export function createInteractionStore(db: Database, options: InteractionStoreOp
     );
     INSERT OR IGNORE INTO interaction_journal_schema (singleton, version) VALUES (1, ${INTERACTION_DB_SCHEMA_VERSION});
   `)
-
-  const initialVersion = db.prepare<[], { version: number }>("SELECT version FROM interaction_journal_schema WHERE singleton = 1").get()?.version
-  if (!Number.isInteger(initialVersion) || initialVersion! < 1 || initialVersion! > INTERACTION_DB_SCHEMA_VERSION) {
-    throw new InteractionStoreError("schema-version", `unsupported interaction journal schema version ${String(initialVersion)}`)
-  }
-
   db.exec(`
     CREATE TABLE IF NOT EXISTS interaction_journal (
       id                  TEXT PRIMARY KEY,
@@ -590,6 +583,24 @@ export function createInteractionStore(db: Database, options: InteractionStoreOp
     CREATE INDEX IF NOT EXISTS interaction_provider_delivery_logical
       ON interaction_provider_delivery (project_id, provider, logical_request_id);
   `)
+}
+
+export function createInteractionStore(db: Database, options: InteractionStoreOptions = {}): InteractionStore {
+  const now = options.now ?? (() => new Date())
+  const makeId = options.id ?? randomUUID
+  const listeners = new Set<(change: InteractionChange) => void>()
+  const deferredChanges = new Map<string, InteractionChange>()
+  let deferredFlushScheduled = false
+  let disposed = false
+
+  db.pragma("foreign_keys = ON")
+  db.pragma("busy_timeout = 5000")
+  ensureInteractionSchema(db)
+
+  const initialVersion = db.prepare<[], { version: number }>("SELECT version FROM interaction_journal_schema WHERE singleton = 1").get()?.version
+  if (!Number.isInteger(initialVersion) || initialVersion! < 1 || initialVersion! > INTERACTION_DB_SCHEMA_VERSION) {
+    throw new InteractionStoreError("schema-version", `unsupported interaction journal schema version ${String(initialVersion)}`)
+  }
 
   const tableColumns = (table: "interaction_journal" | "interaction_provider_delivery") => new Set(
     db.prepare<[], { name: string }>(`PRAGMA table_info(${table})`).all().map((column) => column.name),
@@ -616,8 +627,11 @@ export function createInteractionStore(db: Database, options: InteractionStoreOp
   }
   try {
     db.exec(`
-      CREATE UNIQUE INDEX IF NOT EXISTS interaction_provider_delivery_rpc_unique
-        ON interaction_provider_delivery (provider, connection_epoch, rpc_request_id_json);
+      -- Scoped by project (2026-08-27): every project's bridge numbers its own RPC requests from its
+      -- own connection epoch, so two projects in one database would otherwise collide on (1, 1).
+      DROP INDEX IF EXISTS interaction_provider_delivery_rpc_unique;
+      CREATE UNIQUE INDEX IF NOT EXISTS interaction_provider_delivery_rpc_unique_project
+        ON interaction_provider_delivery (project_id, provider, connection_epoch, rpc_request_id_json);
       CREATE UNIQUE INDEX IF NOT EXISTS interaction_provider_delivery_response_unique
         ON interaction_provider_delivery (project_id, response_id) WHERE response_id IS NOT NULL;
     `)

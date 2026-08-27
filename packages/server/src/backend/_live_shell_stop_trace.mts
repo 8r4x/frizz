@@ -45,7 +45,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const livePids = (): string[] => { try { return execFileSync("pgrep", ["-f", MARKER], { encoding: "utf8" }).trim().split("\n").filter(Boolean) } catch { return [] } }
 
 const project: Project = { dir: cwd, id: "live", name: "live", label: "o/live", stateDir, cwdSlug: cwdSlug(cwd) }
-const storage = createStorage(join(stateDir, "ui.db"))
+const storage = createStorage(join(stateDir, "ui.db"), "p")
 const claudeBackend = createClaudeBackend({ claudeBin, logDir: defaultLogDir(project) })
 
 let tailer!: Tailer

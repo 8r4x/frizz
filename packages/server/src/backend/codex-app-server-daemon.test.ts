@@ -367,7 +367,7 @@ function skewBridge(h: ReturnType<typeof versionedHarness>, diagnostics: unknown
     projectId: PROJECT,
     projectDir: h.stateDir,
     stateDir: h.stateDir,
-    dbPath: join(h.stateDir, "ui.db"),
+    db,
     interactions,
     codexBin: h.codexBin,
     requestTimeoutMs: 10_000,

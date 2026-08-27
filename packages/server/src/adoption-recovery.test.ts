@@ -122,7 +122,7 @@ class FakeRuntime implements AdoptionRecoveryRuntime {
 function fixture(slug: string) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-adoption-recovery-"))
   const dbPath = join(dir, "ui.db")
-  const storage = createStorage(dbPath)
+  const storage = createStorage(dbPath, "p")
   const attemptToken = randomUUID()
   const sessionId = randomUUID()
   assert.equal(storage.reserveAdoptionClaim({
@@ -150,7 +150,7 @@ function writeArtifacts(dir: string, sessionId: string): { scratch: string; stag
 
 test("adoption runtime binding rejects stale row snapshots before any legacy slug fallback", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-binding-aba-"))
-  const s = createStorage(join(dir, "ui.db"))
+  const s = createStorage(join(dir, "ui.db"), "p")
   const original = { ...sessionRow("binding-aba", "owner-a"), runtime_generation: 2 }
   s.upsertSession(original)
   assert.equal(adoptionRuntimeBinding(s, original).kind, "unbound")

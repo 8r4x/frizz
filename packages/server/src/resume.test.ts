@@ -127,7 +127,7 @@ function armRecovery(
 
 function harness(): { storage: Storage; board: BoardManager; dir: string } {
   const dir = tmpDir("frizz-resume-")
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   const board = createBoard(fakeProject(dir), storage, new Bus(), noopTailer, "test-boot")
   return { storage, board, dir }
 }
