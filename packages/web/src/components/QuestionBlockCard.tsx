@@ -96,8 +96,13 @@ export function QuestionBlockCard({
   // Sentence case, because the shared chrome renders this as a real TITLE now rather than as an
   // uppercased eyebrow — a lowercase "question" beside the card's glyph reads as a typo.
   const kindLabel = isMulti ? "Select multiple" : "Question"
+  // `risk`, not `danger`: the neutral border with a red title. A destructive gate is a question nobody
+  // has answered wrongly yet, not a thing that has broken, and it wore the same lit red border as a dead
+  // sign-in until 2026-08-26 (maintainer: they "look way too scary"). The tag's CRITERIA are unchanged
+  // and stay narrow — force-merge, deletion, history rewrite, prod rollback — so these should almost
+  // never appear; what changed is how loudly one of them shouts.
   return (
-    <TranscriptCard tone={isDanger ? "danger" : "neutral"} icon={KindIcon} label={kindLabel}>
+    <TranscriptCard tone={isDanger ? "risk" : "neutral"} icon={KindIcon} label={kindLabel}>
       {/* FULL-strength, against the card's stepped-down description colour: this card's body is not a
           description of the title, it IS the ask, and the question must never read dimmer than the
           word "Question" above it. The colour rides a WRAPPER because `.card-md .md-body` inherits

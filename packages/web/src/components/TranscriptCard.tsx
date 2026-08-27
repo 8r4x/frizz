@@ -40,12 +40,20 @@ export const QUEUE_WRAP = "[overflow-wrap:anywhere] [&_pre]:whitespace-pre-wrap 
 //   neutral   — a statement of fact (done, awaiting, a question)
 //   attention — the agent is BLOCKED on you, answerable only in your external terminal
 //   caution   — frizz paused itself and will continue on its own (a usage limit)
-//   danger    — something is broken or the action is irreversible (sign-in fault, a destructive gate)
+//   risk      — the ACTION is irreversible, but nothing is wrong (a destructive gate awaiting a choice)
+//   danger    — something is BROKEN (a sign-in fault)
 //
-// Only THREE border colors, though: `caution` keeps the neutral border and says its piece in an amber
-// title. Its amber and the accent gold sit ~15° apart on the wheel, so as two lit borders they were
-// indistinguishable — and a self-resolving pause must never compete for the eye with "your agent is
-// stuck waiting on you". Border = how loud; the title = what it is.
+// Only THREE border colors, though: `caution` and `risk` both keep the neutral border and say their
+// piece in the title alone. Caution's amber and the accent gold sit ~15° apart on the wheel, so as two
+// lit borders they were indistinguishable — and a self-resolving pause must never compete for the eye
+// with "your agent is stuck waiting on you". Border = how loud; the title = what it is.
+//
+// `risk` SPLIT OFF FROM `danger` on 2026-08-26 (maintainer: danger questions "look way too scary"),
+// applying that same law to the other end. A destructive gate and a dead sign-in were wearing one
+// full-strength red border, and they are not the same event: one is a question waiting on a choice
+// nobody has made wrongly yet, the other is a thing that has already failed. A question is a statement
+// of fact with a consequence, so it keeps the neutral border and turns its TITLE red. Danger stays loud
+// for what is actually broken.
 //
 // The tone color lands on the icon AND the title together, as shadcn's `[&>svg]:text-current` does:
 // they are one object — more so now that the glyph sits at the opposite end of the row, where a
@@ -84,11 +92,12 @@ export const BLOCK_RADIUS_TOP = "rounded-t-xl"
 // declaration is a syntax error and the corner silently falls back to square.)
 export const BLOCK_RADIUS_INNER_BOTTOM = "rounded-b-[calc(var(--block-radius)_-_1px)]"
 
-export type CardTone = "neutral" | "attention" | "caution" | "danger"
+export type CardTone = "neutral" | "attention" | "caution" | "risk" | "danger"
 const CARD_TONES: Record<CardTone, { border: string; head: string }> = {
   neutral: { border: "border-border-strong", head: "text-fg" },
   attention: { border: "border-accent/45", head: "text-accent" },
   caution: { border: "border-border-strong", head: "text-amber-400" },
+  risk: { border: "border-border-strong", head: "text-red-400" },
   danger: { border: "border-red-500/45", head: "text-red-400" },
 }
 
