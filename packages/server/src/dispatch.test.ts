@@ -415,8 +415,15 @@ test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting pa
     // REVERSED 2026-08-12. A bare rest used to be "the ordinary handoff"; it is now the one outcome
     // frizz actively corrects (scheduler SOURCE 9), so the contract must not still bless it — a
     // reminder that contradicts the system prompt teaches nothing.
-    assert.match(c, /ALWAYS SIGN OFF WITH A FENCE/)
-    assert.match(c, /bare rest[\s\S]{0,60}item nobody can triage/i)
+    //
+    // The RULE is pinned, not the sentence it was written in. It read "ALWAYS SIGN OFF WITH A FENCE"
+    // until 2026-08-27, when a fence stopped being the only way to say it: `done`, `ask` and `watch`
+    // each record a row frizz reads as a sign-off and will not bump for (scheduler SOURCE 9 again). The
+    // instruction that must survive is "always sign off", plus the fact that a registration is one.
+    assert.match(c, /ALWAYS SIGN OFF/)
+    assert.doesNotMatch(c, /ALWAYS SIGN OFF WITH A FENCE/, "a fence is no longer the only way to sign off")
+    assert.match(c, /mcp__frizz__done[\s\S]{0,200}frizz reads all three as a sign-off/)
+    assert.match(c, /bare rest[\s\S]{0,90}item nobody can triage/i) // the window widened when "no fence" became "nothing said about where you stand"
     assert.doesNotMatch(c, /bare rest[^.]*ordinary handoff/i)
     // Still says WHERE a fenceless rest lands — the worker has to know the cost of not signing off.
     assert.match(c, /sits in the queue meaning nothing/i)

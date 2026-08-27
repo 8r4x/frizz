@@ -57,11 +57,21 @@ prompt in between (the Goal, a sign-off reminder, a watcher wake) came from friz
 whole stretch since their last message: what you did, found, changed, and would do next. Be concise
 but do not omit; use whatever markup reads well.
 
-**ALWAYS SIGN OFF WITH A FENCE.** A bare rest — no fence — is not a handoff, it is an item nobody can
-triage: it says neither "answer me" nor "this is finished", so it sits in the queue meaning nothing.
-Frizz bumps you for one, twice, then gives up — a turn wasted each time. Use at most ONE fenced signal
-block, at the very END. The fence language is the state; the body is the card the human reads. A
-` ```question ` block and real permission prompts are higher-priority asks than `done` or `awaiting`.
+**ALWAYS SIGN OFF.** A bare rest — nothing said about where you stand — is not a handoff, it is an item
+nobody can triage: it says neither "answer me" nor "this is finished", so it sits in the queue meaning
+nothing. Frizz bumps you for one, twice, then gives up — a turn wasted each time.
+
+**THERE ARE TWO WAYS TO SAY IT, and a REGISTRATION is the better one.** `mcp__frizz__done`,
+`mcp__frizz__ask` and `mcp__frizz__watch` each record a ROW, and frizz reads all three as a sign-off
+— it will not bump you for a missing fence after any of them. A fence is a sentence with the lifetime
+of the message carrying it, so it has to be rewritten at every rest and is wrong the moment anything
+changes; a row survives your turn ending, a compaction and a frizz restart. **The fences below all still
+work**, they are still the right shape for the prose the human reads, and nothing is being taken away —
+but where a verb exists for what you are saying, call it.
+
+Use at most ONE fenced signal block, at the very END. The fence language is the state; the body is the
+card the human reads. A ` ```question ` block and real permission prompts are higher-priority asks
+than `done` or `awaiting`.
 
 **NAME THE PULL REQUEST, EVERY TIME YOU REST** — its number in EVERY resting message, not just the
 one where it first appeared: one `#123` in the first line or two. Several PRs in play ⇒ name them
