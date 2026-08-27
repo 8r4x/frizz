@@ -9,7 +9,7 @@
 // The project defaults to the frizz repo itself (a gh-authed repo, an empty board under the temp HOME).
 //
 // Usage:
-//   nub scripts/adhoc-stack.mjs [--port=4930] [--project=/abs/dir] [--claude-bin=/abs/bin] [--wakers] [--reaper] [--keep] [--home=/abs] [--seed]
+//   nub scripts/adhoc-stack.mjs [--port=4930] [--project=/abs/dir] [--claude-bin=/abs/bin] [--wakers] [--reaper] [--prime] [--keep] [--home=/abs] [--seed]
 //
 // It prints ONE json line to stdout: {"url","port","home","project"} once /health is green,
 // then stays up until SIGINT/SIGTERM, deleting the temp HOME on exit (unless --keep). Run it with Bash
@@ -64,6 +64,12 @@ if (!flag("wakers")) process.env.FRIZZ_WAKERS_OFF = "1"
 // enumerates ALL processes, not just this stack's). Off by default, exactly like the scheduler; pass
 // --reaper to arm it when verifying the reaper itself.
 if (!flag("reaper")) process.env.FRIZZ_ORPHAN_REAPER_OFF = "1"
+// The server OPENS every registered project a few seconds after boot, so the rail can badge them all
+// (tenant-prime.ts). Harmless under a sandbox HOME — the registry there holds only this stack's
+// projects — but `--home=$HOME` reuses the REAL registry, and priming would then put a second tailer
+// on every one of the maintainer's live boards. Off by default for the same reason the reaper is; pass
+// --prime when what you are verifying is the priming (a sandbox HOME, where it costs nothing).
+if (!flag("prime")) process.env.FRIZZ_TENANT_PRIME_OFF = "1"
 process.chdir(projectDir)
 
 // Optional: drop a tiny fixture note so the board isn't stone empty when eyeballing the shell. Off by

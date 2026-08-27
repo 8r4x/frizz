@@ -5,9 +5,10 @@
 // that stays mounted across a navigation (routes.tsx), which is what stops the rail rebuilding itself
 // every time you use it.
 //
-// It draws entirely from the registry index — one file read, no databases opened. Opening forty
-// projects to draw forty cards is exactly the cost lazy activation exists to avoid, so a card
-// deliberately shows only what the index holds. Visiting a card is what opens that project.
+// It draws entirely from the registry index — one file read, no databases opened. Answering a list
+// request by opening forty projects is exactly the cost lazy activation exists to avoid, so a card
+// deliberately shows only what the index holds. (The server does open them all in the background a few
+// seconds after boot — server/tenant-prime.ts — but on its own clock, never on a request's.)
 import * as RadixDialog from "@radix-ui/react-dialog"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useState } from "react"

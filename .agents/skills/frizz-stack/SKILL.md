@@ -26,6 +26,7 @@ real `~/.frizz` SQLite:
 - `PORT` → a unique high port (never fights the dev server on 5175)
 - `FRIZZ_WAKERS_OFF=1` → scheduler OFF by default; pass `--wakers` to arm it when testing wake delivery
 - the orphan reaper OFF by default, so a disposable stack never reaps the real machine's processes
+- tenant priming OFF by default (`FRIZZ_TENANT_PRIME_OFF=1`), so a stack run with `--home=$HOME` never puts a second tailer on the maintainer's live boards; pass `--prime` to arm it under a sandbox HOME
 
 Boot it in the **background** (never foreground — it stays up until killed) and read back its json line:
 
@@ -41,7 +42,7 @@ Redirect to a file and poll the file.
 
 Flags: `--port=N`, `--project=/abs/dir` (defaults to the frizz repo), `--also-project=/abs/dir`
 (repeatable — see §2), `--creds` (real credentials, needed for a real dispatch), `--wakers`, `--reaper`,
-`--keep`, `--home=/abs`, `--seed`.
+`--prime`, `--keep`, `--home=/abs`, `--seed`.
 
 `--home=/abs` reuses a sandbox a previous `--keep` run left behind, which is the only way to verify
 anything that happens at BOOT against state that already exists — a schema migration, a registry repair,

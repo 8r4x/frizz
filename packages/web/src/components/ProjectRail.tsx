@@ -417,8 +417,10 @@ function justDragged(): boolean {
  * server's cached snapshots (`projectsQueueCounts`, machine-wide, see lib/queryKeyScope.ts), because
  * the live feed is one socket per project and a rail that opened a socket per square would be forty
  * boards' worth of push for a number. Five seconds: a badge for a project you are not looking at is a
- * "go there" cue, not a live readout. A project this server has not opened since boot has no board and
- * therefore no count — it draws no badge, which is honest, rather than a zero, which is not.
+ * "go there" cue, not a live readout. A project with no board on the server has no count — it draws no
+ * badge, which is honest, rather than a zero, which is not. That is now a transient state: the server
+ * opens every registered project a few seconds after boot (server/tenant-prime.ts), which is what
+ * ended having to click into each square before its badge would appear.
  */
 function useQueueCounts(currentSlug: string | undefined, projects: readonly ProjectCard[]): (project: ProjectCard) => number | undefined {
   const polled = useQuery({

@@ -42,7 +42,8 @@ import { pidIsAlive } from "./project-identity.ts"
 import { createBootProgressPublisher } from "./boot-progress.ts"
 import { log as frizzLog } from "./logging.ts"
 import { createTenantMap } from "./tenants.ts"
-import { findProjectBySegment } from "./project-registry.ts"
+import { startTenantPrime, type TenantPrimeRun } from "./tenant-prime.ts"
+import { findProjectBySegment, listProjects } from "./project-registry.ts"
 import { backfillRegistry } from "./project-registry.ts"
 import { servedByAnotherProcess } from "./project-launch.ts"
 
@@ -449,6 +450,10 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
   // Named, incremental boot progress for whatever launcher is waiting on /health (boot-progress.ts).
   const bootProgress = createBootProgressPublisher(project.stateDir)
   let ctx: AppContext | undefined
+  // The background pass that opens the REST of the registered projects once this one is serving, so
+  // their queue badges and their schedulers exist without the operator clicking into each square.
+  // Started at the very end of boot; stopped and awaited by the "other projects" shutdown phase.
+  let tenantPrime: TenantPrimeRun | undefined
   // One process, N projects (tenants.ts). The launching project is adopted below once its own boot
   // phases have built it; anything opened later goes through activate(), which is where the
   // AppContext-seam error boundary lives.
@@ -616,6 +621,11 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
   // Every project opened BESIDES the launching one. The launching project is torn down by the phases
   // below — it was adopted into the map, so draining the map wholesale would close it twice.
   const cleanupExtraTenants = createRetryableCleanup(async () => {
+    // Settle the background priming pass FIRST (tenant-prime.ts). A project it opened after this drain
+    // would be a SQLite handle and a tailer nothing ever stops; stopping it cuts the wait between
+    // projects short, so this costs a boot-time shutdown nothing.
+    tenantPrime?.stop()
+    await tenantPrime?.done
     for (const { project: opened } of tenants.active()) {
       if (opened.id !== project.id) await tenants.deactivate(opened.id)
     }
@@ -855,8 +865,12 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
 
     /**
      * Route a `/_frizz/<slug>/…` request at the project that owns it, opening that project on first
-     * use. This is the lazy activation §4 settles on: a board nobody has visited costs nothing, and
-     * the first request for it pays the (now bounded) activation.
+     * use. This is the lazy activation §4 settles on: nothing is opened before something addresses it,
+     * and the first request for a board pays the (now bounded) activation.
+     *
+     * In practice the background priming pass usually gets there first (tenant-prime.ts) — this stays
+     * the path that opens a project registered since boot, and the one that guarantees a project is
+     * open by the time its first request is answered rather than a few seconds later.
      *
      * Undefined for an unknown slug or a project that will not open — the caller falls through to the
      * launching project's app, which answers 404 rather than leaking another project's data.
@@ -1055,6 +1069,20 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     await runtime.afterPhase?.("signal handlers")
     // The port is listening and /health answers: the launcher no longer needs the progress signal.
     bootProgress.done()
+
+    // …and now open the OTHER registered projects, in the background, so the rail can badge every
+    // square with its queue size instead of only the ones the operator has clicked into. Deliberately
+    // after bootProgress.done(): this must never be something a launcher waits on. See tenant-prime.ts
+    // for why opening them all is affordable, and for the serialization.
+    if (process.env.FRIZZ_TENANT_PRIME_OFF !== "1") {
+      tenantPrime = startTenantPrime({
+        list: () => listProjects(),
+        isOpen: (projectId) => tenants.get(projectId) !== undefined,
+        toProject: (entry) => projectFromRegistryEntry(entry),
+        activate: (candidate) => tenants.activate(candidate),
+        servedElsewhere: (candidate) => servedByAnotherProcess(candidate.stateDir, candidate.id),
+      })
+    }
 
     return { httpServer, ctx, port, close: beginClose, shutdownFence }
   } catch (startupError) {
