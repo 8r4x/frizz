@@ -121,11 +121,13 @@ export const SubAgentView = z.object({
   // clears itself when that work does. Every liveness reading keys on "running", so a rested row holds
   // nothing back: it does not block a rest, hold the queue, or gate Mark-as-done.
   state: z.enum(["running", "stale", "rested"]),
-  // The worker-profile cell (model+effort) from the dispatch's `subagent_type`. It is NO LONGER drawn as
-  // a tag on the child rows under the prompt box (maintainer 2026-07-27: the profile belongs to the
-  // prompt box's own control one line up, not repeated on every child line); the transcript's dispatch
-  // card still shows it, the sidebar rail carries it in the row tooltip, and the drill-in passes it to
-  // the drawer. Optional — absent on dispatches without it.
+  // The worker-profile cell (model+effort) for the dispatch — RESOLVED, not the raw `subagent_type`:
+  // an effort-only profile carries no model, so the server composes it from the call's own `model` or
+  // the dispatching turn's (server/subagent-profile.ts). It is NO LONGER drawn as a tag on the child
+  // rows under the prompt box (maintainer 2026-07-27: the profile belongs to the prompt box's own
+  // control one line up, not repeated on every child line); the transcript's dispatch card shows it,
+  // the sidebar rail carries it in the row tooltip, and the drill-in passes it to the drawer.
+  // Optional — absent when nothing about the child's runtime is known.
   subagentType: z.string().optional(),
   // The dispatch tool_use id (the stable correlation key: same id on the Agent tool_use block, the
   // completion <task-notification>, and the transcript AgentBlock). Optional — absent on a pre-restart
@@ -3643,7 +3645,10 @@ export const TranscriptToolCall = z.object({
   // `subagentType` the model+effort cell, and expanding reveals the (capped) dispatch `prompt`. All
   // optional so a pre-restart server / older transcript falls back to the plain `Agent(detail)` line.
   prompt: z.string().optional(), // the capped dispatch prompt (the AgentBlock's expanded body)
-  subagentType: z.string().optional(), // the dispatch's subagent_type verbatim (e.g. "frizz:frizz-opus-high")
+  // The RESOLVED model+effort cell (e.g. "frizz:opus-high"), not `subagent_type` verbatim: a modern
+  // profile is effort-only, so the server folds the call's `model` — or, when omitted, the model the
+  // dispatching turn itself ran at — back into the cell. See server/subagent-profile.ts.
+  subagentType: z.string().optional(),
   agentId: z.string().optional(), // the Agent tool_use id — the correlation key to the live tracked sub-agent
   // Terminal outcome of the dispatched sub-agent, back-filled when a matching completion
   // <task-notification> appears LATER in the transcript. Drives the AgentBlock header's finished state

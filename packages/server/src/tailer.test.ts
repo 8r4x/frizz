@@ -1007,7 +1007,7 @@ test("applyRecord: a BACKGROUND Agent dispatch registers a live sub-agent; foreg
   const e = s.subAgents.get("toolu_bg")
   assert.equal(e?.label, "Investigate issue 376")
   assert.equal(e?.startedAt, "2026-07-01T00:00:01.000Z")
-  assert.equal(e?.subagentType, "frizz:frizz-opus-high") // captured verbatim from input.subagent_type
+  assert.equal(e?.subagentType, "frizz:opus-high") // the RESOLVED profile cell, not input.subagent_type verbatim
   assert.equal(e?.outputFile, undefined) // not yet enriched
 })
 
@@ -1084,7 +1084,7 @@ test("tailer: surfaces running vs stale sub-agents (via injected mtime) and clea
 
   h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z") // <15min since child mtime → running
   t.tick() // prime
-  assert.deepEqual(t.get("t")?.subAgents, [{ label: "child", startedAt: "2026-07-01T00:00:01.000Z", state: "running", subagentType: "frizz:frizz-opus-high", id: "toolu_bg", lastActivityAt: "2026-07-01T00:00:02.000Z" }])
+  assert.deepEqual(t.get("t")?.subAgents, [{ label: "child", startedAt: "2026-07-01T00:00:01.000Z", state: "running", subagentType: "frizz:opus-high", id: "toolu_bg", lastActivityAt: "2026-07-01T00:00:02.000Z" }])
 
   h.clock.ms = Date.parse("2026-07-01T00:20:00.000Z") // >15min since child mtime (SUBAGENT_STALE_MS) → stale
   const before = h.changes.n

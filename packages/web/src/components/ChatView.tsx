@@ -53,6 +53,7 @@ import { AiRenameButton } from "./AiRenameButton.tsx"
 import { threadLifecycleAvailability } from "../lib/threadLifecycle.ts"
 import { Tooltip } from "./Tooltip.tsx"
 import { ToolDisclosureHeader } from "./ToolDisclosureHeader.ts"
+import { subAgentProfileCell } from "../lib/subAgentProfile.ts"
 import { FOREGROUND_MARK_AFTER_MS, foregroundToolIsRunning, hasRunningToolIndicator, isPendingForegroundTool, liveBackgroundOperationState } from "../lib/operationIndicators.ts"
 import { formatRuntimeElapsed, formatToolDuration } from "../lib/durationLabels.ts"
 import { githubRefUrl } from "../lib/githubRef.ts"
@@ -2513,9 +2514,14 @@ function ReadBlock({ detail, read, status, durationMs }: { detail?: string; read
 // `ChildOpRow` lines under the prompt box name the SAME running child, so they now read the same way,
 // in the same order: the liveness MARK first, then the kind ("Agent"), then the title, then the RUNTIME
 // right-justified at the far edge. What that cost, deliberately:
-//   • the "[subagent_type]" tag is GONE from the card — same ruling as the child lines two days earlier
-//     (the profile belongs to the prompt box's own control, not repeated on every dispatch). It still
-//     rides the drill-in payload, and stays readable in the title's tooltip;
+//   • the "[subagent_type]" tag went, on the same ruling as the child lines two days earlier — but it
+//     came BACK on 2026-08-27, as a resolved model+effort CELL rather than a raw profile name
+//     (maintainer: "subagent dispatch cards should always show effort & model visible"). The ruling it
+//     overturns was about repeating the PARENT's profile: a dispatch card names a different runtime
+//     from the one the prompt box is set to, and after the effort-only split (frizz:high, the model on
+//     the Agent tool's own parameter) the model was on no surface at all. The cell is resolved server
+//     side — see subagent-profile.ts — so the card, the drawer, the rail tooltip and the resting
+//     card's child line all read the same pair;
 //   • the state VERB is gone for the two nominal outcomes. A pulsing dot already says "running" and NO
 //     mark at all already says "not running any more", so "running 3 min" / "finished 35m" became a
 //     bare runtime. A NON-nominal outcome keeps its verb ("STOPPED · 4 MIN", "FAILED · 12 MIN"): a mark
@@ -2578,6 +2584,9 @@ export function AgentBlock({
   const running = live?.state === "running"
   const canDrill = !!(slug && agentId)
   const title = detail ?? "sub-agent"
+  // The child's runtime, in the same words the drawer's readout uses. Absent only when the provider
+  // recorded nothing at all about it — a legacy transcript, where the column silently collapses.
+  const profile = subAgentProfileCell(subagentType)
   // Drives the live runtime, on the same shared 30s tick the child rows use — so the dispatch card's
   // reading and the prompt-box line naming the same child never disagree about how long it has been up.
   const now = useNowMs()
@@ -2641,15 +2650,47 @@ export function AgentBlock({
         label={`${open ? "Collapse" : "Expand"} Agent dispatch: ${title}`}
         onToggle={() => setOpen((v) => !v)}
         meta={
-          reading && (
-            <ToolMetaReading
-              tone={reading.tone === "failed" ? "frizz-tool-failed" : "text-muted/55"}
-              title={reading.title}
-              label={reading.label}
-              duration={reading.duration}
-              // No indicator, ever. This slot is words only: the liveness mark leads the row and is the
-              // one place the card may claim a child is alive.
-            />
+          // THE READOUT: the child's PROFILE, then its RUNTIME — the order and the separator the resting
+          // card's own child line already uses ("opus-high · 23m", AwaitingBackgroundCard). Two spans and
+          // not one string, because only the runtime half changes tone: a failed child turns that half
+          // red, and the model it ran at did not fail.
+          //
+          // The profile sits HERE rather than beside the "Agent" label, where it was first put. Every
+          // tool card in the transcript — Bash, Read, Edit — starts its detail immediately after the kind
+          // label, so a variable-width cell in that position made the Agent card the one row whose title
+          // began somewhere else: `opus › high`, `sonnet › medium` and a legacy card with no cell at all
+          // each pushed it to a different x, and a column of them read with a ragged left edge. The
+          // right-hand slot already varies card to card, so it absorbs a second reading without moving
+          // anything the eye scans down.
+          (profile || reading) && (
+            <>
+              {profile && (
+                <span
+                  data-subagent-profile
+                  className="petite-caps frizz-tool-header-caps shrink-0 whitespace-nowrap text-[11.5px] leading-none text-muted/55"
+                  title={`Sub-agent profile: ${profile}`}
+                >
+                  {profile}
+                </span>
+              )}
+              {/* The separator sits at the PROFILE's tone, not a dimmer one of its own: it closes that
+                  segment, and drawn fainter than the reading's own "·" it read as the weaker break when
+                  it is the stronger one. `-mx-[2px]` is the OPTICAL trim: this dot is spaced by the
+                  row's flex gap while the reading's identical dot ("stopped · 41 min") is spaced by two
+                  text spaces, and the two rhythms did not agree — measured 8.91/8.26px of ink against
+                  the text one's 6.51/7.01. Trimmed, they read as one chain (6.9/6.3). */}
+              {profile && reading && <span aria-hidden className="petite-caps frizz-tool-header-caps -mx-[2px] shrink-0 text-[11.5px] leading-none text-muted/55">·</span>}
+              {reading && (
+                <ToolMetaReading
+                  tone={reading.tone === "failed" ? "frizz-tool-failed" : "text-muted/55"}
+                  title={reading.title}
+                  label={reading.label}
+                  duration={reading.duration}
+                  // No indicator, ever. This slot is words only: the liveness mark leads the row and is
+                  // the one place the card may claim a child is alive.
+                />
+              )}
+            </>
           )
         }
       >
@@ -2664,16 +2705,15 @@ export function AgentBlock({
           <button
             type="button"
             aria-label={`Open sub-agent transcript: ${title}`}
-            // The model+effort profile no longer renders, so the tooltip is where it stays readable —
-            // the same place the sidebar rail keeps it for the same reason.
-            title={subagentType ? `Open sub-agent transcript — ${subagentType}` : "Open sub-agent transcript"}
+            // The profile renders in the header now, so this tooltip is back to naming its own action.
+            title="Open sub-agent transcript"
             onClick={openDrawer}
             className="min-w-[4rem] flex-1 truncate text-left text-[11.5px] text-muted outline-none hover:underline hover:text-fg/80 focus-visible:underline focus-visible:text-fg/80"
           >
             {title}
           </button>
         ) : (
-          <span className="min-w-[4rem] flex-1 truncate text-[11.5px] text-muted" title={subagentType}>{title}</span>
+          <span className="min-w-[4rem] flex-1 truncate text-[11.5px] text-muted" title={title}>{title}</span>
         )}
       </ToolDisclosureHeader>
       <div id={bodyId} hidden={!open}>

@@ -36,6 +36,7 @@ import { isClaudeAuthErrorText, parseSignalFence } from "./tailer.ts"
 import { redactCredentialStructure, redactCredentialSyntax } from "./credential-redaction.ts"
 import { hasEscapingBackgroundJob } from "../../../cc-worker/hooks/bash-background.mjs"
 import { frizzTempDir } from "./frizz-paths.ts"
+import { dispatchProfileCell } from "./subagent-profile.ts"
 
 // Parse a session JSONL into a renderable conversation — mechanically, no AI. Same defensive
 // posture as the tailer: bad line → skip, unknown type → ignore, never throw. Assistant messages
@@ -933,7 +934,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
           pushTextPart(m, block.text)
           m.text = m.text ? `${m.text}\n\n${block.text}` : block.text
         } else if (block?.type === "tool_use") {
-          const calls = toolCalls(block)
+          const calls = toolCalls(block, { turnModel: msg.model, turnEffort: rec.effort })
           for (const call of calls) {
             call.status = "pending"
             pushToolPart(m, call)
@@ -1555,7 +1556,9 @@ function attachToolResults(
 // Expand one tool_use block into transcript tool calls. Usually one, but MultiEdit fans out to one
 // call per sub-edit so each renders as its own diff. Edit/Write/MultiEdit additionally carry a
 // structured `edit` payload (Write's old side is "" — the whole file is new).
-function toolCalls(block: any): TranscriptToolCall[] {
+// `turn` is the dispatching assistant record's own model + effort — what a sub-agent dispatched
+// without an explicit `model` inherits (see subagent-profile.ts). Only the Agent branch reads it.
+function toolCalls(block: any, turn: { turnModel?: string; turnEffort?: string } = {}): TranscriptToolCall[] {
   const name = redactToolPayload(String(block?.name ?? "tool"))
   const input = block?.input
   const detail = toolDetail(input)
@@ -1600,11 +1603,16 @@ function toolCalls(block: any): TranscriptToolCall[] {
       }]
     }
     // An Agent dispatch carrying a prompt renders as its own AgentBlock card (Bash/Read family): the
-    // description is the header one-liner, subagent_type the model+effort tag, the (capped) prompt the
-    // expandable body, and block.id the correlation key to the live tracked sub-agent + its drawer.
+    // description is the header one-liner, `subagentType` the resolved model+effort cell (composed from
+    // the profile, the call's own `model`, and this turn's — see subagent-profile.ts), the (capped)
+    // prompt the expandable body, and block.id the correlation key to the live child + its drawer.
     if (name === "Agent" && typeof input.prompt === "string" && input.prompt.trim()) {
       const description = typeof input.description === "string" && input.description.trim() ? redactToolPayload(input.description.trim()) : undefined
-      const subagentType = typeof input.subagent_type === "string" && input.subagent_type.trim() ? redactToolPayload(input.subagent_type.trim()) : undefined
+      const subagentType = dispatchProfileCell({
+        subagentType: typeof input.subagent_type === "string" ? redactToolPayload(input.subagent_type) : undefined,
+        model: typeof input.model === "string" ? redactToolPayload(input.model) : undefined,
+        ...turn,
+      })
       const agentId = typeof block.id === "string" ? block.id : undefined
       return [{ name, detail: description ?? detail, prompt: capAgentPrompt(input.prompt), subagentType, agentId }]
     }

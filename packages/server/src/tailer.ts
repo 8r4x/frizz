@@ -12,6 +12,7 @@ import { discoverTranscriptDir, discoverTranscriptId, DISCOVERY_GRACE_MS } from 
 import type { AgentBackend, FoldState, NormalizedEvent, NormalizedTail } from "./backend/types.ts"
 import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 import { normalizeObservedThreadModel, validateThreadProfile } from "./backend/thread-profiles.ts"
+import { dispatchProfileCell } from "./subagent-profile.ts"
 import { resolveRuntimeTurn, type ClaudeRuntimeTask } from "./backend/claude-runtime-ingest.ts"
 import { classifyLimitRecord } from "./backend/usage-limit.ts"
 import { claudeBrokerDiagnosticLogPath } from "./backend/claude-broker-diagnostics.ts"
@@ -617,6 +618,9 @@ interface Record {
   // NOTE: `Record` here is this module's own transcript-record interface, which SHADOWS the global
   // `Record<K,V>` utility type — so the usage bag is written as an index signature, not Record<…>.
   message?: { stop_reason?: string; content?: unknown; model?: string; usage?: { [key: string]: unknown } }
+  // The reasoning effort this turn ran at, stamped by claude alongside `message.model`. Read only by
+  // the sub-agent profile cell, for a dispatch whose own profile names no effort to inherit from.
+  effort?: string
 }
 
 // Narrow text conjunction for a Claude AUTH error (vs other API errors riding the same synthetic
@@ -891,15 +895,17 @@ function trackDispatches(state: TailState, rec: Record): void {
     // shell never gets a terminal record — so without this line every re-prime mints the row afresh
     // and it reads "running" forever. See FoldState.dismissedOps.
     if (state.dismissedOps.has(id)) continue
-    const input = (b.input ?? {}) as { description?: unknown; run_in_background?: unknown; subagent_type?: unknown; command?: unknown; summary?: unknown }
+    const input = (b.input ?? {}) as { description?: unknown; run_in_background?: unknown; subagent_type?: unknown; model?: unknown; command?: unknown; summary?: unknown }
     const startedAt = typeof rec.timestamp === "string" ? rec.timestamp : (state.lastActivityAt ?? "")
     const previous = state.subAgents.get(id)
     const outputFile = previous?.outputFile
     const desc = typeof input.description === "string" && input.description.trim() ? input.description.trim() : undefined
     if (b.name === "Agent") {
       if (input.run_in_background === false) continue // foreground (blocking) — visible via the spinner
-      // The worker-profile cell (model+effort), shown verbatim as a "[type]" tag — no stripping.
-      const subagentType = typeof input.subagent_type === "string" && input.subagent_type.trim() ? input.subagent_type.trim() : undefined
+      // The worker-profile cell (model+effort). Resolved rather than taken verbatim: an effort-only
+      // profile (`frizz:high`) carries no model, and the model it inherits is the one THIS record ran
+      // at — see subagent-profile.ts, which composes both halves into the one form every surface reads.
+      const subagentType = dispatchProfileCell({ subagentType: input.subagent_type, model: input.model, turnModel: rec.message?.model, turnEffort: rec.effort })
       state.subAgents.set(id, { kind: "agent", toolUseId: id, label: desc ?? "sub-agent", startedAt, subagentType, outputFile })
     } else if ((b.name === "Bash" && input.run_in_background === true) || b.name === "Monitor") {
       const command = typeof input.command === "string" ? input.command : previous?.command
