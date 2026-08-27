@@ -35,7 +35,7 @@ import { discoverTranscriptDir, discoverTranscriptId, DISCOVERY_GRACE_MS } from 
 import { isClaudeAuthErrorText, parseSignalFence } from "./tailer.ts"
 import { redactCredentialStructure, redactCredentialSyntax } from "./credential-redaction.ts"
 import { hasEscapingBackgroundJob } from "../../../cc-worker/hooks/bash-background.mjs"
-import { frizzTempDir } from "./frizz-paths.ts"
+import { frizzTempDir, isPromptAttachmentPath } from "./frizz-paths.ts"
 import { dispatchProfileCell } from "./subagent-profile.ts"
 
 // Parse a session JSONL into a renderable conversation — mechanically, no AI. Same defensive
@@ -965,7 +965,10 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
             }
           }
           if (typeof block.id === "string" && calls.length > 0) {
-            pendingTools.set(block.id, { calls, name: String(block.name ?? "tool"), at: rec.timestamp })
+            // A Read of a prompt attachment is flagged on the RAW input path (the card's `detail` is
+            // redacted and capped, so it is not the thing to test); the result branch reads the flag.
+            const promptAttachment = block.name === "Read" && typeof block.input?.file_path === "string" && isPromptAttachmentPath(block.input.file_path)
+            pendingTools.set(block.id, { calls, name: String(block.name ?? "tool"), at: rec.timestamp, ...(promptAttachment ? { promptAttachment } : {}) })
           }
         }
         // thinking blocks are deliberately not rendered
@@ -1375,9 +1378,10 @@ function persistSentFile(srcPath: string, idKey: string): string | undefined {
 // projection, so only a transcript projected after the fact (never a live one, which polls within a tick
 // of the call) can miss a rewrite — still strictly better than serving the live path. A missing,
 // unreadable, oversized, or magic-byte-mismatched file yields undefined → the card degrades to its plain
-// header, never a broken <img>.
+// header, never a broken <img>. So does a view of the human's own prompt attachment, on purpose: their
+// bubble already shows that picture, and the card would repeat it (isPromptAttachmentPath).
 function viewImageCall(path: string | undefined, idKey: string | undefined): TranscriptToolCall {
-  const image = path && idKey ? persistSentFile(path, idKey) : undefined // reads the REAL path
+  const image = path && idKey && !isPromptAttachmentPath(path) ? persistSentFile(path, idKey) : undefined // reads the REAL path
   return {
     name: "View image",
     detail: path ? redactToolPayload(path) : undefined, // the DISPLAYED path is redacted, as everywhere else
@@ -1399,7 +1403,10 @@ function toolResultText(content: any): string | null {
   return null
 }
 
-type PendingClaudeTool = { calls: TranscriptToolCall[]; name: string; at?: string }
+// `promptAttachment`: the call is a Read of a file the human attached to a prompt (see
+// isPromptAttachmentPath) — its image result is NOT lifted onto the card, because the human's own
+// bubble already shows that picture and the card would repeat it directly beneath.
+type PendingClaudeTool = { calls: TranscriptToolCall[]; name: string; at?: string; promptAttachment?: boolean }
 
 function elapsedBetween(start: unknown, end: unknown): number | undefined {
   const a = typeof start === "string" ? Date.parse(start) : NaN
@@ -1541,7 +1548,8 @@ function attachToolResults(
     // A screenshot / image tool_result (e.g. chrome-devtools `take_screenshot`) carries a base64 image
     // block instead of — or alongside — text. Decode it to a temp file (keyed by the tool_use id) so the
     // card can render it inline. `b.tool_use_id` is a verified string by the guard at the loop head.
-    const outputImage = status !== "failed" && status !== "cancelled" ? persistResultImage(b.content, b.tool_use_id) : undefined
+    // A Read of the human's own prompt attachment keeps its plain header instead (PendingClaudeTool).
+    const outputImage = status !== "failed" && status !== "cancelled" && !entry.promptAttachment ? persistResultImage(b.content, b.tool_use_id) : undefined
     for (const call of entry.calls) {
       call.status = status
       if (durationMs !== undefined) call.durationMs = durationMs

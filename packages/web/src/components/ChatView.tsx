@@ -2246,7 +2246,9 @@ function ToolCard({ name, detail, count, status, backgroundState, liveBackground
 
 // A tool whose result carried an image (chrome-devtools `take_screenshot`, a Read of a `.png`) rendered
 // as the picture itself, always — the maintainer's whole point is that a screenshot in the transcript
-// should just BE there (2026-08-02: "those should just be rendered … automatically"). So the frame IS
+// should just BE there (2026-08-02: "those should just be rendered … automatically"). The one Read the
+// server does NOT hand a picture is a Read of the human's own prompt attachment, whose bubble already
+// shows it (server/frizz-paths.ts isPromptAttachmentPath); that call keeps its plain header. So the frame IS
 // the card: the shared ImageFrame draws the outer border, the label bar (petite-caps tool name + target +
 // status, in the Bash/Read header language) rides inside it, and the picture sits centered in the mat.
 // No collapse — a picture is the one card body whose whole value is being visible without a click; the

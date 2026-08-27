@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { test } from "node:test"
-import { frizzPaths, legacyFrizzRoot, projectStateDir, serverAddressPathForStateDir } from "./frizz-paths.ts"
+import { frizzPaths, isPromptAttachmentPath, legacyFrizzRoot, projectStateDir, serverAddressPathForStateDir } from "./frizz-paths.ts"
 
 const never = () => false
 
@@ -154,4 +154,23 @@ test("the machine server address is ../.. from a project state dir, in whatever 
   // spells itself `\tmp\sandbox-home`, so a literal prefix would fail an address that never escaped.
   const sandboxed = serverAddressPathForStateDir(projectStateDir("p1", "/tmp/sandbox-home"))
   assert.ok(sandboxed.startsWith(join("/tmp/sandbox-home")), `sandboxed address escaped: ${sandboxed}`)
+})
+
+// The transcript keeps a picture OFF a Read of the human's own prompt attachment (their bubble shows it
+// already) and ON every other image read — so the predicate has to be exact about the tree shape.
+test("isPromptAttachmentPath matches only <data>/projects/<id>/attachments/…", () => {
+  const home = mkdtempSync(join(tmpdir(), "frizz-attach-"))
+  const data = frizzPaths({ home }).data
+  const attachments = join(data, "projects", "029a30af-f126-40e3-b04c-d80e74e3e090", "attachments")
+  assert.equal(isPromptAttachmentPath(join(attachments, "1787867365865-f12df6c2-Screenshot-2026-08-27-at-14-49-15.png"), home), true)
+  assert.equal(isPromptAttachmentPath(join(attachments, "nested", "shot.png"), home), true)
+  // A screenshot the worker took, a file elsewhere in the tree, the attachments dir itself, and a
+  // path that only ESCAPES into the tree via `..` all stay ordinary image reads.
+  assert.equal(isPromptAttachmentPath("/tmp/frizz-shots/out.png", home), false)
+  assert.equal(isPromptAttachmentPath(join(data, "projects", "p", "threads", "x.png"), home), false)
+  assert.equal(isPromptAttachmentPath(attachments, home), false)
+  assert.equal(isPromptAttachmentPath(join(data, "projects", "p", "attachments"), home), false)
+  assert.equal(isPromptAttachmentPath(join(data, "projects", "..", "projects", "p", "attachments", "a.png"), home), true)
+  assert.equal(isPromptAttachmentPath(join(data, "attachments", "a.png"), home), false)
+  rmSync(home, { recursive: true, force: true })
 })

@@ -1,10 +1,11 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { GITHUB_DISPATCH_UI_BOUNDARY, wakeDeliveryToken } from "@frizz/shared"
 import { pageProjectedTranscript, parseCodexTranscript, projectCodexTranscript } from "./transcript.ts"
+import { projectStateDir, resetFrizzRoots } from "./frizz-paths.ts"
 import { CODEX_FIRST_FINAL_TITLE_TRANSPORT, CODEX_LEGACY_FIRST_FINAL_TITLE_TRANSPORT } from "./backend/codex.ts"
 
 // ---- codex rollout → TranscriptMessage[] (the chat-drawer render path) ----
@@ -665,6 +666,36 @@ test("a direct view_image function_call renders the picture inline, never an '[i
   assert.match(call.outputImage!, /frizz-tool-images-[0-9a-f]{16}[/\\][0-9a-f]{32}\.png$/)
   // The cache copy holds the source bytes verbatim, so /local-image serves the real picture.
   assert.deepEqual(readFileSync(call.outputImage!), Buffer.from(PNG_1x1, "base64"))
+})
+
+// The one view_image that stays a plain header: the human's own prompt attachment, whose picture their
+// bubble already shows. Mirrors the Claude Read gate (transcript.test.ts). The file is REAL and readable
+// under a throwaway HOME (the memoized roots are reset around it), so the only thing that can leave
+// `outputImage` unset is the gate itself — a missing file would pass this vacuously.
+test("a view_image of a prompt attachment keeps its plain header instead of repeating the picture", () => {
+  const home = mkdtempSync(join(tmpdir(), "frizz-attach-home-"))
+  const savedHome = process.env.HOME
+  process.env.HOME = home
+  resetFrizzRoots()
+  try {
+    const dir = join(projectStateDir("029a30af-f126-40e3-b04c-d80e74e3e090"), "attachments")
+    mkdirSync(dir, { recursive: true })
+    const path = join(dir, "1787867365865-f12df6c2-Screenshot-2026-08-27-at-14-49-15.png")
+    writeFileSync(path, Buffer.from(PNG_1x1, "base64"))
+    const call = viewImageTool("vi-attachment", path)
+    assert.equal(call.name, "View image")
+    assert.equal(call.detail, path)
+    assert.equal(call.status, "completed")
+    assert.equal(call.outputImage, undefined, "the human's own attachment is not repeated on the card")
+    // Control under the SAME roots: the identical bytes anywhere else still render.
+    const elsewhere = join(home, "board.png")
+    writeFileSync(elsewhere, Buffer.from(PNG_1x1, "base64"))
+    assert.ok(viewImageTool("vi-attachment-control", elsewhere).outputImage, "a picture outside attachments/ still renders")
+  } finally {
+    process.env.HOME = savedHome
+    resetFrizzRoots()
+    rmSync(home, { recursive: true, force: true })
+  }
 })
 
 // WHY the card serves a COPY rather than the source path (/local-image would serve either — it is

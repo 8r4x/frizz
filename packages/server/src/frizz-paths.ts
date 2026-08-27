@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 
 // WHERE FRIZZ'S MACHINE-GLOBAL STATE LIVES.
 //
@@ -217,6 +217,23 @@ export function frizzTempDir(name: string, key?: string): string {
 /** `<data>/projects/<id>` — a project's own directory, and the value of `stateDir` everywhere. */
 export function projectStateDir(projectId: string, home?: string): string {
   return join(home ? frizzPaths({ home }).data : frizzRoots().data, "projects", projectId)
+}
+
+/**
+ * True for a file under `<data>/projects/<id>/attachments/` — something the human dropped onto a
+ * prompt. The composer already shows those inline in the human's own bubble, so a worker's `Read` (or
+ * Codex `view_image`) of one is the one image read whose picture the transcript should NOT repeat
+ * (maintainer 2026-08-27: "If this is something the user just attached, then we obviously don't need
+ * to re-render it redundantly"). Any other image the worker reads — a screenshot it took, a file it
+ * found on disk — still renders as its card. `home` is for tests; production resolves the memoized
+ * roots.
+ */
+export function isPromptAttachmentPath(path: string, home?: string): boolean {
+  const data = home ? frizzPaths({ home }).data : frizzRoots().data
+  const rel = relative(join(data, "projects"), resolve(path))
+  if (!rel || isAbsolute(rel)) return false
+  const parts = rel.split(sep)
+  return parts.length >= 3 && parts[0] !== ".." && parts[1] === "attachments"
 }
 
 /**

@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import { appendFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir, homedir } from "node:os"
 import { join } from "node:path"
+import { projectStateDir } from "./frizz-paths.ts"
 import { projectRetiredBackgroundOps, projectTranscriptPeerNames } from "./transcript.ts"
 import { relayMessage } from "./completion-relay.ts"
 import type { TranscriptMessage } from "@frizz/shared"
@@ -1480,6 +1481,43 @@ test("Claude generic JSON inputs redact quoted secrets and harmless killed prose
 // ---- screenshot / image tool results render inline (take_screenshot) ----
 // A minimal valid 1×1 PNG — decodes to real bytes so the persisted file is a genuine image.
 const PNG_1x1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+
+// A Read of the human's OWN prompt attachment keeps its plain header: the picture is already in their
+// bubble, and lifting it onto the card repeated it directly beneath (2026-08-27: "no need to auto-open
+// the images read from attachments in the transcript"). The control Read — the same image result from
+// any other path (a screenshot the worker took) — still renders, which is the behaviour this gate must
+// not erode.
+function imageRead(id: string, filePath: string): string {
+  return [
+    JSON.stringify({
+      type: "assistant",
+      timestamp: "2026-08-27T14:49:15.000Z",
+      message: { id: `m-${id}`, content: [{ type: "tool_use", id, name: "Read", input: { file_path: filePath } }] },
+    }),
+    JSON.stringify({
+      type: "user",
+      timestamp: "2026-08-27T14:49:15.113Z",
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: PNG_1x1 } }] }],
+      },
+    }),
+  ].join("\n")
+}
+
+test("a Read of a prompt attachment keeps its plain header; a Read of any other image still renders", () => {
+  const attachment = join(projectStateDir("029a30af-f126-40e3-b04c-d80e74e3e090"), "attachments", "1787867365865-f12df6c2-Screenshot-2026-08-27-at-14-49-15.png")
+  const [attached] = parseTranscript(imageRead("read-attachment", attachment))[0].tools
+  assert.equal(attached.name, "Read")
+  assert.equal(attached.detail, attachment)
+  assert.equal(attached.status, "completed")
+  assert.equal(attached.durationMs, 113)
+  assert.equal(attached.outputImage, undefined, "the human's own attachment is not repeated on the card")
+  assert.equal(attached.read, undefined, "an image result carries no text excerpt either")
+
+  const [shot] = parseTranscript(imageRead("read-screenshot", "/tmp/frizz-shots/board.png"))[0].tools
+  assert.match(shot.outputImage!, /frizz-tool-images-[0-9a-f]{16}[/\\][0-9a-f]{32}\.png$/, "a worker's own screenshot still renders")
+})
 
 test("a screenshot tool_result carrying a base64 image is decoded to a servable outputImage path", () => {
   const raw = [
