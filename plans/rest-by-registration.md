@@ -120,7 +120,8 @@ In dependency order. Independent slices first, so each lands on its own.
 - [x] **Sub-agent liveness** — resolve the child transcript path from the sidecar index so `entryStale` always has a clock to run. Prerequisite for trusting auto-registration. (`5155ca7e`)
 - [x] **`Held` → `Snoozed`** — label and group key. (`aa0053da`, and the vocabulary sweep that followed it.)
 - [x] **Danger-question styling** — stop wearing the provider-fault red. (`3f0eab5c`, which split a `risk` tone off `danger`.)
-- [ ] **Registry tables + the five verbs** — `watch`, `unwatch`, `ask`, `unask`, `done`. The `thread_watch` table is back (`818eeeb3`); nothing reads it yet.
+- [x] **`watch` / `unwatch`, end to end** — the `thread_watch` table (`818eeeb3`), the RPC (`70eb4123`), the board park (`c8bf63ef`), the waker's settle-and-expire sweep (`07f6dd90`), and the two worker-facing verbs (`2f4d84c2`). Verified against a real disposable stack rather than its parts: a real MCP child → real RPC → real SQLite → real board, with a real process holding the shell's output file.
+- [ ] **`ask` / `unask` / `done`** — the question registry and the gated completion verb. Land the store, the verbs and the RENDERING together: a question nothing displays is a worker asking into a void.
 - [ ] **Question rendering** — the static tree, the ×, submit-on-Send, the structured answer payload.
 - [ ] **Autonomous mode** — the thread-level switch, the refusing `ask`, the cancel-and-bump on flip.
 - [ ] **Board** — park derived from live registrations; the waiting card and its snooze.
