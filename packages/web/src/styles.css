@@ -118,9 +118,22 @@
    react-remove-scroll compensation, short-vs-long pages under a centered layout). With a zero-width
    scrollbar there is no gutter to reserve, drop, or compensate: gap math is 0 for everyone, always.
    Scrolling still works (trackpad/wheel/keys); inner surfaces (drawers, xterm) keep their own
-   scrollbars. */
+   scrollbars.
+
+   THE ROOT'S OWN overflow MUST STAY `visible`, and that is load-bearing rather than incidental. A
+   browser propagates the viewport's overflow from <html>, and only falls back to <body> when <html>
+   is visible in both axes — so an `overflow-y: scroll` here (which is what this rule used to carry,
+   for a permanent scrollbar the two zero-width declarations already deliver on their own) makes
+   `body{overflow:hidden}` apply to the BODY BOX instead. That turns <body> into a scroll container
+   whose scrollTop is pinned at 0, and every `position: sticky` descendant re-anchors to it: the
+   sidebar stopped sticking to the viewport and rendered at the top of the DOCUMENT, i.e. `scrollY`
+   pixels above the fold. Radix's react-remove-scroll locks the page exactly that way
+   (`body[data-scroll-locked]{overflow:hidden!important}`), so opening the "End this session?"
+   confirmation over a scrolled queue made the whole sidebar column vanish (measured 2026-08-26:
+   sidebar top 0 → -600 at scrollY 600, restored on close). With the root left visible the same
+   declaration propagates to the viewport, which locks the page AND leaves sticky anchored where it
+   belongs. */
 html {
-  overflow-y: scroll;
   scrollbar-width: none; /* Firefox */
 }
 html::-webkit-scrollbar {
