@@ -9,6 +9,9 @@ import type { SessionTelemetry } from "./tailer.ts"
 import type { LimitFault } from "./backend/types.ts"
 import { limitFaultResetKey, limitPauseIsStale, quotaWindowKeyFor, quotaWindowRecovered, textResetInstant } from "./backend/usage-limit.ts"
 import { createWakeDeliveryStore, type WakeDelivery } from "./wake-store.ts"
+// The board owns the registered-done lifetime rule, and the waker must read it by exactly the same rule
+// or the two disagree about whether a thread is finished.
+import { registeredDoneFence } from "./board.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
 import { completionsDueForRelay, relayMessage } from "./completion-relay.ts"
 import {
@@ -487,6 +490,21 @@ function saidDone(tele: Pick<SessionTelemetry, "lastFence" | "lastAssistantAllDo
   return tele.lastFence?.kind === "done" || tele.lastAssistantAllDone === true
 }
 
+/** The same question, asked of a thread rather than of a message — because since 2026-08-27 a worker
+ *  signs off by CALLING `done`, and a tool call cannot write the tailer's `lastFence`.
+ *
+ *  Without this the arrangement outlived the sign-off it was built to end: a worker that used the verb
+ *  instead of the fence kept being woken at every rest, forever, by a Goal it had explicitly finished
+ *  with. `registeredDoneFence` carries the same "nothing newer from the human" lifetime the board reads
+ *  it by, so the loop reopens on the human's next word exactly as the fence's version does. */
+function threadSaidDone(
+  storage: Storage,
+  slug: string,
+  tele: Pick<SessionTelemetry, "lastFence" | "lastAssistantAllDone" | "lastUserAt">,
+): boolean {
+  return saidDone(tele) || registeredDoneFence(storage.getThreadDone(slug), tele.lastUserAt) !== undefined
+}
+
 /** This thread's ARMED timer ids — the other registry a \`timer:\` line is checked against. */
 function armedTimerIdsOf(storage: Storage, slug: string): ReadonlySet<string> {
   return new Set(storage.listThreadTimers(slug, { armedOnly: true }).map((t) => t.id))
@@ -499,6 +517,8 @@ function armedTimerIdsOf(storage: Storage, slug: string): ReadonlySet<string> {
  *  A PENDING QUESTION IS NOT ONE OF THEM, since 2026-08-16 — see the header block. It was a third limb,
  *  switchable off by the panel's "Autonomous mode", and the switch and the limb went together. */
 function restMessageIsSignedOff(
+  storage: Storage,
+  slug: string,
   tele: Pick<SessionTelemetry, "lastFence" | "lastAssistantAllDone" | "bgShells" | "subAgents">,
   _registeredPrWatches: ReadonlySet<string> = new Set(),
   _armedTimerIds: ReadonlySet<string> = new Set(),
@@ -521,7 +541,7 @@ function restMessageIsSignedOff(
   // A worker that writes a garbage fence is therefore NOT left alone: it is bumped once per rest, by the
   // source whose message is about fences.
   if (tele.lastFence?.kind === "awaiting") return true
-  return saidDone(tele)
+  return threadSaidDone(storage, slug, tele)
 }
 
 /** What frizz can actually see running for this thread, in the shape `unaccountedItems` checks against.
@@ -1118,7 +1138,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (isStopHookFenceId(item.fenceId)) {
       const armed = armedRest(row)
       if (!armed || item.fenceId !== stopHookFenceId(armed.armedAt, tele.lastAssistantAt ?? "")) return "superseded"
-      if (restMessageIsSignedOff(tele, registeredPrWatchesOf(deps.storage, item.slug), armedTimerIdsOf(deps.storage, item.slug))) return "superseded"
+      if (restMessageIsSignedOff(deps.storage, item.slug, tele, registeredPrWatchesOf(deps.storage, item.slug), armedTimerIdsOf(deps.storage, item.slug))) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
     // A post-compaction delivery is bound to the generation AND to the exact compaction it was queued
@@ -2347,7 +2367,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // not stalled at all. Needs no stored state: the flag is folded off the FINAL assistant message,
       // so anything the thread says or receives afterwards reopens it.
       const beatTele = deps.tailer.get(row.slug)
-      if (beatTele && saidDone(beatTele)) continue
+      if (beatTele && threadSaidDone(deps.storage, row.slug, beatTele)) continue
       // NOTHING ELSE SILENCES A BEAT — not a pending question, not a rest fence. A beat asks "it has been
       // an hour", which neither of those answers. The operator's question hold used to reach here and was
       // deleted with the switch that armed it (2026-08-16, see the header block).
@@ -2450,7 +2470,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // `restMessageIsSignedOff` and the header block).
       // Per-rest, and that is what makes it free: every fact it reads rides the FINAL assistant message,
       // so the next word on the thread re-opens the trigger with nothing stored to clear.
-      if (restMessageIsSignedOff(tele, registeredPrWatchesOf(deps.storage, row.slug), armedTimerIdsOf(deps.storage, row.slug))) continue
+      if (restMessageIsSignedOff(deps.storage, row.slug, tele, registeredPrWatchesOf(deps.storage, row.slug), armedTimerIdsOf(deps.storage, row.slug))) continue
       const fenceId = stopHookFenceId(armed.armedAt, restedAt)
       const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
       // Terminal rows stay in the store, so this alone is what makes a rest bump EXACTLY once: the same

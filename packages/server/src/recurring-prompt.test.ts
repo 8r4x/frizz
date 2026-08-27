@@ -732,6 +732,34 @@ test("stop hook: dropping the question hold does NOT reopen the done fence or a 
   } finally { parked.close() }
 })
 
+// THE VERB IS THE FENCE'S EQUAL HERE, and it has to be. Since 2026-08-27 a worker signs off by calling
+// `mcp__frizz__done`, and a tool call cannot write the tailer's `lastFence` — so without the registry
+// read in `threadSaidDone` the arrangement outlived the sign-off it exists to end, and a worker that
+// used the verb instead of the fence was woken at every rest forever by a Goal it had finished with.
+test("stop hook: a REGISTERED done ends the arrangement exactly as the fence does", async () => {
+  const h = scheduler({ pendingQuestion: false }, { now: at("2026-08-02T00:00:05.000Z") })
+  try {
+    h.storage.markThreadDone(h.slug, "- **Shipped** it", Date.parse("2026-08-02T00:00:01.000Z"))
+    await h.s.tick()
+    assert.deepEqual(h.delivered, [], "a thread that CALLED done is as finished as one that fenced it")
+  } finally { h.close() }
+
+  // And it reopens on the human's next word, by the same "nothing newer from the human" rule the board
+  // reads it by — otherwise a completion would silence a thread the human has since sent more work to.
+  // The human spoke at :02 and the worker answered at :03, so this IS a rest — the ordering matters,
+  // because a thread whose LAST word is the human's is not resting and the trigger holds for that
+  // reason instead, which would have made this pass for the wrong one.
+  const reopened = scheduler(
+    { pendingQuestion: false, lastUserAt: "2026-08-02T00:00:02.000Z", lastAssistantAt: "2026-08-02T00:00:03.000Z", lastActivityAt: "2026-08-02T00:00:03.000Z" },
+    { now: at("2026-08-02T00:00:05.000Z") },
+  )
+  try {
+    reopened.storage.markThreadDone(reopened.slug, "- **Shipped** it", Date.parse("2026-08-02T00:00:01.000Z"))
+    await reopened.s.tick()
+    assert.equal(reopened.delivered.length, 1, "new work from the human spends the completion")
+  } finally { reopened.close() }
+})
+
 // The other three ways a thread waits on a human. None of them is a fence, none of them ever held the
 // stop hook by itself, and there is no longer a setting that makes any of them hold it.
 test("stop hook: a native ask, a permission prompt and a pending question all fire", async () => {
