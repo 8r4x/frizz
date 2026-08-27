@@ -52,6 +52,24 @@ function harness(overrides: Partial<Parameters<typeof connectRelay>[0]> = {}) {
       if (sockets.length === 0) throw new Error("connectRelay never opened a socket");
       return conn;
     },
+    /**
+     * The nth socket, waited for rather than assumed — the same rule as `start` above, and for the
+     * same reason: a retry timer calls `open()`, which SIGNS before it builds a socket, so the new
+     * socket is a signature away rather than a tick away.
+     *
+     * A bare `setTimeout(1)` between retries is what made the backoff test flaky (~1 run in 3). On a
+     * loaded runner the next socket had not appeared yet, so the test fired open/close at the socket it
+     * had ALREADY replaced: `dropped()` returns early for a stale socket, so nothing scheduled a retry,
+     * and the following `timers.pop()` ran that iteration's SETTLE timer instead — which resets the
+     * counter. It read as "the backoff never climbed: [0,1,0]", i.e. as a bug in the code under test.
+     */
+    async socketAt(index: number) {
+      const deadline = Date.now() + 5_000;
+      while (sockets.length <= index && Date.now() < deadline) await new Promise((r) => setTimeout(r, 1));
+      const socket = sockets[index];
+      if (!socket) throw new Error(`socket ${index} never opened`);
+      return socket;
+    },
   };
 }
 
@@ -158,12 +176,11 @@ test("a socket that opens and is dropped at once still backs off", async () => {
   const conn = await h.start(identity);
   try {
     for (let i = 0; i < 4; i++) {
-      const socket = h.sockets[h.sockets.length - 1]!;
+      const socket = await h.socketAt(i);
       socket.fire("open");
       socket.fire("close");
       // Run the reconnect timer, but never the settle timer — the connection never lasted.
       h.timers.pop()?.();
-      await new Promise((r) => setTimeout(r, 1));
     }
     assert.deepEqual(delays, [0, 1, 2, 3], `the backoff never climbed: ${JSON.stringify(delays)}`);
   } finally { conn.stop(); }
@@ -175,18 +192,18 @@ test("a connection that HOLDS resets the backoff, so a long-lived board starts f
   const h = harness({ backoff: (attempt) => { delays.push(attempt); return 1; } });
   const conn = await h.start(identity);
   try {
-    h.sockets[0]!.fire("open");
-    h.sockets[0]!.fire("close");
+    const first = await h.socketAt(0);
+    first.fire("open");
+    first.fire("close");
     h.timers.pop()?.();
-    await new Promise((r) => setTimeout(r, 1));
 
     // This one stays up: fire the settle timer before it drops.
-    h.sockets[1]!.fire("open");
+    const second = await h.socketAt(1);
+    second.fire("open");
     const settle = h.timers.pop();
     settle?.();
-    h.sockets[1]!.fire("close");
+    second.fire("close");
     h.timers.pop()?.();
-    await new Promise((r) => setTimeout(r, 1));
     assert.deepEqual(delays, [0, 0], `a connection that lasted did not reset the backoff: ${JSON.stringify(delays)}`);
   } finally { conn.stop(); }
 });
