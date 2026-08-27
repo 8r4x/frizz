@@ -2434,7 +2434,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     ? null
     : deps.tailCache ?? (() => {
         try {
-          return deps.storage.db ? createTailStateCache(deps.storage.db) : null
+          return deps.storage.scope ? createTailStateCache(deps.storage.scope) : null
         } catch {
           return null
         }

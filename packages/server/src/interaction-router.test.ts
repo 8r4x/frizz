@@ -74,7 +74,7 @@ function interaction(projectId = "project-owned") {
 function harness() {
   const dir = mkdtempSync(join(tmpdir(), "frizz-interaction-router-"))
   const project: Project = { dir, id: "project-owned", name: "test", label: "test", stateDir: dir, cwdSlug: "test" }
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   storage.upsertSession(session())
   const snapshot: BoardSnapshot = {
     projectDir: dir,

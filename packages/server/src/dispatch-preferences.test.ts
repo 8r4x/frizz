@@ -21,7 +21,7 @@ function sandbox(): { home: string; open: (name: string) => ReturnType<typeof cr
   return {
     home,
     open: (name) => {
-      const storage = createStorage(join(home, `${name}.db`))
+      const storage = createStorage(join(home, `${name}.db`), "p")
       opened.push(storage)
       return storage
     },
@@ -70,7 +70,7 @@ test("dispatch preferences persist provider-specific selections across a databas
   const box = sandbox()
   const path = join(box.home, "restart.db")
   const settings = defaultSettings()
-  let storage = createStorage(path)
+  let storage = createStorage(path, "p")
 
   setDispatchPreference(storage, settings, box.home, { field: "model", backend: "claude", value: "sonnet" })
   setDispatchPreference(storage, settings, box.home, { field: "effort", backend: "claude", value: "max" })
@@ -79,7 +79,7 @@ test("dispatch preferences persist provider-specific selections across a databas
   setDispatchPreference(storage, settings, box.home, { field: "backend", value: "claude" })
   storage.close()
 
-  storage = createStorage(path)
+  storage = createStorage(path, "p")
   assert.deepEqual(getDispatchPreferences(storage, settings, box.home), {
     backend: "claude",
     claude: { model: "sonnet", effort: "max", permissionMode: "bypassPermissions" },

@@ -16,8 +16,9 @@ import { log as frizzLog } from "./logging.ts"
 //
 // THE ERROR BOUNDARY LIVES HERE (§4 item 3). Per-subsystem guards are already good — tailer ticks,
 // board rebuilds, `fs.watch` setup and transcript discovery are each individually caught. What was
-// missing is a catch at the AppContext SEAM, so one project's corrupt `ui.db` or malformed `.frizz/`
-// cannot take down every other project in a shared process. `activate` therefore reports and returns
+// missing is a catch at the AppContext SEAM, so one project's malformed `.frizz/` (or, until the
+// unified database of 2026-08-27, its own corrupt `ui.db`) cannot take down every other project in a
+// shared process. `activate` therefore reports and returns
 // undefined rather than throwing: a project that will not open is one dead card, not an outage.
 
 export interface TenantMapOptions<App = unknown> {

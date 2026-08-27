@@ -155,9 +155,16 @@ class PreparedStatement<Row> implements Statement<Row> {
    * A name the caller never supplied throws, rather than binding NULL the way node:sqlite would.
    * See the file header: silently writing NULL where a value was expected is the one difference that
    * could quietly corrupt data instead of failing.
+   *
+   * A bag FOLLOWED BY positional values binds both (2026-08-27): node:sqlite's own signature is
+   * `run(namedParameters?, ...anonymousParameters)`, and `?` placeholders take the anonymous values in
+   * order no matter where the named ones sit in the text (measured on Node 26 before this shipped).
+   * better-sqlite3 accepted the same mix. It is what lets a project-scoped statement carry
+   * `project_id = @project_id` while its call sites keep passing their existing positional arguments —
+   * see project-scope.ts.
    */
   #bind(params: any[]): any[] {
-    if (params.length === 1 && this.#required.length > 0 && isNamedBagCandidate(params[0])) {
+    if (params.length >= 1 && this.#required.length > 0 && isNamedBagCandidate(params[0])) {
       const bag = params[0] as Record<string, unknown>
       const bound: Record<string, unknown> = {}
       for (const name of this.#required) {
@@ -169,7 +176,7 @@ class PreparedStatement<Row> implements Statement<Row> {
         const value = name in bag ? bag[name] : (bag[`@${name}`] ?? bag[`:${name}`] ?? bag[`$${name}`])
         bound[name] = value === undefined ? null : value
       }
-      return [bound]
+      return [bound, ...params.slice(1).map((value) => (value === undefined ? null : value))]
     }
     return params.map((value) => (value === undefined ? null : value))
   }

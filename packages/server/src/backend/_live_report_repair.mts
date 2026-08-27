@@ -54,7 +54,7 @@ const ok = (label: string, cond: boolean, detail = ""): void => {
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
 const project: Project = { dir: cwd, id: "rr", name: "rr", label: "o/rr", stateDir, cwdSlug: cwdSlug(cwd) }
-const storage = createStorage(join(stateDir, "ui.db"))
+const storage = createStorage(join(stateDir, "ui.db"), "p")
 const claudeBackend = createClaudeBackend({ claudeBin, logDir: defaultLogDir(project) })
 const backendFor = (_kind?: string): AgentBackend => claudeBackend
 

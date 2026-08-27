@@ -16,7 +16,7 @@ import { createScheduler } from "./scheduler.ts"
 
 function nudger(tele: Partial<SessionTelemetry>, opts: { setting?: string } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-signoff-"))
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   const slug = "resting"
   storage.upsertSession({
     slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
@@ -279,7 +279,7 @@ test("an auth-faulted thread is never re-prompted — the nudge cannot fix a sig
 // thread it just closed would reopen.
 test("a Goal and the reminder both queue for one rest, and a fence supersedes what is left", async () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-both-"))
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   const slug = "both"
   storage.upsertSession({
     slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),

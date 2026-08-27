@@ -3327,28 +3327,22 @@ export function createRouter(ctx: AppContext) {
      * yesterday reports "not found" today. It is not lost — it is one directory over, and this is how
      * the page finds it instead of blaming the operator.
      *
-     * Runs only on a miss, and opens each candidate database read-only for one indexed lookup.
+     * Runs only on a miss: one indexed lookup in the unified database, then the registry names the
+     * projects it found (2026-08-27 — until then this opened each project's own file read-only).
      */
     threadLocate: query({
       input: z.object({ slug: z.string().min(1) }),
       output: z.array(ThreadLocation),
       handler: async ({ input }) => {
+        const owners = new Set(
+          ctx.storage.db.prepare<[string], { project_id: string }>(
+            "SELECT DISTINCT project_id FROM session WHERE slug = ?",
+          ).all(input.slug).map((row) => row.project_id),
+        )
         const found: ThreadLocation[] = []
         for (const entry of listProjects()) {
-          if (entry.stale) continue
-          try {
-            // READ-ONLY, and a raw handle rather than createStorage: opening through the storage
-            // layer runs its migrations, and a lookup must never write to a project nobody opened.
-            const db = new Database(join(projectStateDir(entry.id), "ui.db"), { readonly: true })
-            try {
-              const hit = db.prepare("SELECT 1 FROM session WHERE slug = ? LIMIT 1").get(input.slug)
-              if (hit) found.push({ projectSlug: entry.slug, projectName: entry.name ?? entry.slug })
-            } finally {
-              db.close()
-            }
-          } catch {
-            // A project whose database will not open tells us nothing about this slug; keep looking.
-          }
+          if (entry.stale || !owners.has(entry.id)) continue
+          found.push({ projectSlug: entry.slug, projectName: entry.name ?? entry.slug })
         }
         return found
       },

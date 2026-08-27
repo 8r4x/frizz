@@ -1021,7 +1021,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const confirmGraceMs = Math.max(1, deps.confirmGraceMs ?? 60_000)
   const deliveryBatchSize = Math.max(0, deps.deliveryBatchSize ?? 50)
   const deliveryOwner = randomUUID()
-  const outbox = createWakeDeliveryStore(deps.storage.db)
+  const outbox = createWakeDeliveryStore(deps.storage.scope)
 
   const reviewFailures = new Map<string, { signature: string; loggedAt: number; suppressed: number }>()
   let timer: NodeJS.Timeout | null = null

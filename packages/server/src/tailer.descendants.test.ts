@@ -34,7 +34,7 @@ function assistant(content: unknown[]): string {
  */
 function fixture(runtimeTasks?: readonly ClaudeRuntimeTask[]) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-descendants-"))
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   const subagents = join(dir, SESSION, "subagents")
   mkdirSync(subagents, { recursive: true })
 
@@ -558,7 +558,7 @@ function strandedFixture() {
   const derived = join(root, "-Users-me-projects-frizz") // what frizz derives from the CURRENT path
   mkdirSync(born, { recursive: true })
   mkdirSync(derived, { recursive: true })
-  const storage = createStorage(join(root, "ui.db"))
+  const storage = createStorage(join(root, "ui.db"), "p")
   const subagents = join(born, SESSION, "subagents")
   mkdirSync(subagents, { recursive: true })
 

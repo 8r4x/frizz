@@ -90,7 +90,7 @@ function fold(path: string): Set<string> {
   const stateDir = mkdtempSync(join(tmpdir(), "rreplay-"))
   try {
     const project: Project = { dir: stateDir, id: "replay", name: "replay", label: "o/replay", stateDir, cwdSlug: cwdSlug(stateDir) }
-    const storage = createStorage(join(stateDir, "ui.db"))
+    const storage = createStorage(join(stateDir, "ui.db"), "p")
     // The BACKEND's logDir matters as much as the tailer's: `transcriptPath()` resolves the pinned
     // stem through it (tailer.ts ~3397). Pointed at the scratch dir it silently resolves to a file
     // that does not exist, the fold reads nothing, and every report reads as delivered.

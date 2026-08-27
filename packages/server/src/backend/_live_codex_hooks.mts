@@ -70,7 +70,7 @@ const spawn: CodexAppServerSpawn = (binary, args, options) =>
 const bridge = new CodexAppServerBridge({
   projectId: "live",
   projectDir: dir,
-  dbPath: join(dir, "ui.db"),
+  db,
   interactions,
   codexBin: CODEX_BIN,
   spawn,

@@ -49,7 +49,7 @@ const t0 = Date.now()
 const el = () => `t+${Math.round((Date.now() - t0) / 1000)}s`
 
 const project: Project = { dir: cwd, id: "live", name: "live", label: "o/live", stateDir, cwdSlug: cwdSlug(cwd) }
-const storage = createStorage(join(stateDir, "ui.db"))
+const storage = createStorage(join(stateDir, "ui.db"), "p")
 const claudeBackend = createClaudeBackend({ claudeBin, logDir: defaultLogDir(project) })
 const backendFor = (_kind?: string): AgentBackend => claudeBackend
 

@@ -29,7 +29,7 @@ function sandbox(): { home: string; open: (name: string) => ReturnType<typeof cr
   return {
     home,
     open: (name) => {
-      const storage = createStorage(join(home, `${name}.db`))
+      const storage = createStorage(join(home, `${name}.db`), "p")
       opened.push(storage)
       return storage
     },

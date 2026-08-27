@@ -79,7 +79,7 @@ test("evalRollup: empty → pending; all-complete → done; in-progress → pend
 // ---- scheduler harness ----
 
 function tmpStorage(): Storage {
-  return createStorage(join(mkdtempSync(join(tmpdir(), "frizz-sched-")), "ui.db"))
+  return createStorage(join(mkdtempSync(join(tmpdir(), "frizz-sched-")), "ui.db"), "p")
 }
 
 function row(slug: string, over: Partial<SessionRow> = {}): SessionRow {
@@ -917,7 +917,7 @@ test("hard crash after enqueue recovers the pending wake on restart", async () =
   h.clock.ms = target + 1
   await assert.rejects(scheduler.tick(), /simulated scheduler hard crash/)
 
-  const store = createWakeDeliveryStore(h.storage.db)
+  const store = createWakeDeliveryStore(h.storage.scope)
   assert.equal(store.list().length, 1)
   assert.equal(store.list()[0].state, "pending")
   assert.equal(store.list()[0].attempts, 0)
@@ -925,13 +925,13 @@ test("hard crash after enqueue recovers the pending wake on restart", async () =
 
   const dbPath = h.storage.db.name
   h.storage.close()
-  const reopened = createStorage(dbPath)
+  const reopened = createStorage(dbPath, "p")
   crash = false
   const restarted = h.make({ storage: reopened })
   await restarted.tick()
   await restarted.tick()
   assert.equal(h.resumes.length, 1)
-  assert.equal(createWakeDeliveryStore(reopened.db).list()[0].state, "delivered")
+  assert.equal(createWakeDeliveryStore(reopened.scope).list()[0].state, "delivered")
   reopened.close()
 })
 
@@ -950,14 +950,14 @@ test("hard crash after atomic claim leaves a lease; restart retries only after i
   h.clock.ms = target + 1
   await assert.rejects(scheduler.tick(), /simulated scheduler hard crash/)
 
-  const store = createWakeDeliveryStore(h.storage.db)
+  const store = createWakeDeliveryStore(h.storage.scope)
   assert.equal(store.list()[0].state, "leased")
   assert.equal(store.list()[0].attempts, 1)
   assert.equal(h.resumes.length, 0)
 
   const dbPath = h.storage.db.name
   h.storage.close()
-  const reopened = createStorage(dbPath)
+  const reopened = createStorage(dbPath, "p")
   crash = false
   const restarted = h.make({ storage: reopened, deliveryLeaseMs: 100, retryBaseMs: 10 })
   await restarted.tick()
@@ -965,7 +965,7 @@ test("hard crash after atomic claim leaves a lease; restart retries only after i
   h.clock.ms += 101
   await restarted.tick()
   assert.equal(h.resumes.length, 1)
-  const recovered = createWakeDeliveryStore(reopened.db).list()[0]
+  const recovered = createWakeDeliveryStore(reopened.scope).list()[0]
   assert.equal(recovered.state, "delivered")
   assert.equal(recovered.attempts, 2)
   reopened.close()
@@ -990,7 +990,7 @@ test("hard crash after successful delivery but before ack is confirmed by the st
   await assert.rejects(scheduler.tick(), /simulated scheduler hard crash/)
   assert.equal(h.resumes.length, 1)
 
-  const store = createWakeDeliveryStore(h.storage.db)
+  const store = createWakeDeliveryStore(h.storage.scope)
   assert.equal(store.list()[0].state, "leased")
   assert.equal(store.list()[0].attempts, 1)
   // The backend transcript consumed the exact idempotency token before the control plane restarted.
@@ -1002,12 +1002,12 @@ test("hard crash after successful delivery but before ack is confirmed by the st
   h.clock.ms += 101
   const dbPath = h.storage.db.name
   h.storage.close()
-  const reopened = createStorage(dbPath)
+  const reopened = createStorage(dbPath, "p")
   const restarted = h.make({ storage: reopened, deliveryLeaseMs: 100 })
   await restarted.tick()
   await restarted.tick()
   assert.equal(h.resumes.length, 1, "confirmed external delivery must not be duplicated")
-  const confirmed = createWakeDeliveryStore(reopened.db).list()[0]
+  const confirmed = createWakeDeliveryStore(reopened.scope).list()[0]
   assert.equal(confirmed.state, "delivered")
   assert.equal(confirmed.deliveredAt, h.clock.ms)
   reopened.close()
@@ -1033,11 +1033,11 @@ test("an ambiguous delivery error is not replayed when the transcript already co
   h.clock.ms = target + 1
   await scheduler.tick()
   assert.equal(calls, 1)
-  assert.equal(createWakeDeliveryStore(h.storage.db).list()[0].state, "leased")
+  assert.equal(createWakeDeliveryStore(h.storage.scope).list()[0].state, "leased")
 
   await h.make({ deliveryLeaseMs: 100 }).tick()
   assert.equal(calls, 1)
-  assert.equal(createWakeDeliveryStore(h.storage.db).list()[0].state, "delivered")
+  assert.equal(createWakeDeliveryStore(h.storage.scope).list()[0].state, "delivered")
 })
 
 test("hard crash after ack leaves an exact delivered terminal state and never replays", async () => {
@@ -1053,11 +1053,11 @@ test("hard crash after ack leaves an exact delivered terminal state and never re
   await assert.rejects(scheduler.tick(), /simulated scheduler hard crash/)
   assert.equal(h.resumes.length, 1)
 
-  const store = createWakeDeliveryStore(h.storage.db)
+  const store = createWakeDeliveryStore(h.storage.scope)
   assert.equal(store.list()[0].state, "delivered")
   const dbPath = h.storage.db.name
   h.storage.close()
-  const reopened = createStorage(dbPath)
+  const reopened = createStorage(dbPath, "p")
   await h.make({ storage: reopened }).tick()
   assert.equal(h.resumes.length, 1)
   reopened.close()
@@ -1086,7 +1086,7 @@ test("a pending wake whose timer is cancelled becomes superseded without deliver
   h.storage.cancelThreadTimer("human-won", id, h.clock.ms)
 
   await h.make().tick()
-  const item = createWakeDeliveryStore(h.storage.db).list()[0]
+  const item = createWakeDeliveryStore(h.storage.scope).list()[0]
   assert.equal(item.state, "superseded")
   assert.equal(h.resumes.length, 0)
 })
@@ -1122,7 +1122,7 @@ test("delivery failures use bounded exponential retry windows and terminate exha
   await scheduler.tick() // terminal exhaustion, never a fourth callback
   await scheduler.tick()
 
-  const item = createWakeDeliveryStore(h.storage.db).list()[0]
+  const item = createWakeDeliveryStore(h.storage.scope).list()[0]
   assert.equal(item.state, "exhausted")
   assert.equal(item.attempts, 3)
   assert.equal(item.lastError, "terminal unavailable 3")
@@ -1180,8 +1180,8 @@ test("attempt counts surface only where they inform: the failure, then the deliv
 test("two scheduler instances on separate SQLite connections atomically claim one wake", async () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-sched-concurrent-"))
   const path = join(dir, "ui.db")
-  const firstStorage = createStorage(path)
-  const secondStorage = createStorage(path)
+  const firstStorage = createStorage(path, "p")
+  const secondStorage = createStorage(path, "p")
   const telemetry = new Map<string, SessionTelemetry>()
   const clock = { ms: Date.parse("2026-07-09T12:00:00.000Z") }
   const target = clock.ms + 1_000
@@ -1226,7 +1226,7 @@ test("two scheduler instances on separate SQLite connections atomically claim on
   await Promise.all([firstTick, secondTick])
 
   assert.equal(new Set(deliveries).size, 1)
-  const items = createWakeDeliveryStore(secondStorage.db).list()
+  const items = createWakeDeliveryStore(secondStorage.scope).list()
   assert.equal(items.length, 1)
   assert.equal(items[0].state, "delivered")
   assert.equal(items[0].attempts, 1)
@@ -1285,7 +1285,7 @@ test("scheduler stop rejects new ticks and drains an in-flight delivery before s
   release()
   await Promise.all([tick, stopping])
   assert.equal(stopped, true)
-  assert.equal(createWakeDeliveryStore(h.storage.db).list()[0].state, "delivered")
+  assert.equal(createWakeDeliveryStore(h.storage.scope).list()[0].state, "delivered")
   h.storage.close()
 })
 
@@ -1546,7 +1546,7 @@ test("limit: a limit wake and a timer wake for the same session get distinct del
   await s.tick() // the limit resets and the timer comes due in the same pass
   assert.deepEqual(h.resumes.map((r) => r.slug), ["a", "a"], "one thread, both sources")
   assert.match(h.resumes[0].message, /usage limit/)
-  const ids = createWakeDeliveryStore(h.storage.db).list().map((d) => d.id)
+  const ids = createWakeDeliveryStore(h.storage.scope).list().map((d) => d.id)
   assert.equal(ids.length, 2, "both sources armed their own wake for this session")
   assert.equal(new Set(ids).size, ids.length, "no delivery-id collision between the two wake sources")
   h.storage.close()
@@ -1622,7 +1622,7 @@ test("snooze: waking now before delivery supersedes the queued bump", async () =
   h.tele.set("s", tele())
   await s.tick()
   assert.deepEqual(h.resumes, [], "the human already said something newer than the message we held")
-  assert.equal(createWakeDeliveryStore(h.storage.db).list()[0]?.state, "superseded")
+  assert.equal(createWakeDeliveryStore(h.storage.scope).list()[0]?.state, "superseded")
   h.storage.close()
 })
 
@@ -1686,7 +1686,7 @@ test("snooze: a snooze wake and a timer wake for the same session get distinct d
   await s.tick() // neither source is due yet
   h.clock.ms = target + 1000
   await s.tick()
-  const ids = createWakeDeliveryStore(h.storage.db).list().map((d) => d.id)
+  const ids = createWakeDeliveryStore(h.storage.scope).list().map((d) => d.id)
   assert.equal(new Set(ids).size, ids.length, "no delivery-id collision between the snooze and timer sources")
   assert.equal(ids.length, 2, "both sources armed their own wake for this session")
   h.storage.close()
@@ -1786,7 +1786,7 @@ function sentHarness(runtime: () => "alive" | "dead" | "unknown", over: Partial<
   const h = harness()
   const { target } = dueTimer(h, "sent")
   const s = h.make({ wakeRuntimeState: runtime, confirmGraceMs: 1_000, retryBaseMs: 100, retryMaxMs: 100, ...over })
-  const store = createWakeDeliveryStore(h.storage.db)
+  const store = createWakeDeliveryStore(h.storage.scope)
   return { h, s, target, store, row: () => store.list()[0] }
 }
 

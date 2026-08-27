@@ -54,7 +54,7 @@ const liveProcs = (): { pid: number; ppid: number; cmd: string }[] => {
 const livePids = (): number[] => liveProcs().map((p) => p.pid)
 
 const project: Project = { dir: cwd, id: "cxlive", name: "cxlive", label: "o/cxlive", stateDir, cwdSlug: cwdSlug(cwd) }
-const storage = createStorage(join(stateDir, "ui.db"))
+const storage = createStorage(join(stateDir, "ui.db"), "p")
 
 console.log(`[probe] state ${stateDir}`)
 console.log(`[probe] repo  ${cwd}`)
@@ -66,7 +66,7 @@ try {
   bridge = createCodexAppServerBridge({
     projectId: project.id,
     projectDir: cwd,
-    dbPath: join(stateDir, "codex-app-server.db"),
+    db: storage.db,
     stateDir,
     interactions: {
       // The probe approves nothing and needs nothing approved (the thread runs danger-full-access with

@@ -1843,7 +1843,7 @@ function harness(): Harness {
   // what the case put there.
   const dir = join(tmp("frizz-tail-"), "-a-project")
   mkdirSync(dir, { recursive: true })
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   const bus = new Bus()
   const events: ServerEvent[] = []
   bus.subscribe((e) => events.push(e))

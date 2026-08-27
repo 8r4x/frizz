@@ -168,7 +168,7 @@ test("own background work does both — it cards AND it leaves the queue", () =>
 
 function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; agents?: any[]; restedAt?: string; body?: string; retired?: any[] } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-park-"))
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   storage.setSetting("signoffNudge", "off") // isolate SOURCE 12 from the nudge
   const slug = "parked"
   const restedAt = opts.restedAt ?? new Date(Date.now() - 60_000).toISOString()
@@ -395,7 +395,7 @@ test("a nameless fence with nothing running is told it is not awaiting at all", 
 // that board had taken exactly one.
 function loopHarness(body: string) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-parkloop-"))
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   storage.setSetting("signoffNudge", "off")
   const slug = "looping"
   storage.upsertSession({

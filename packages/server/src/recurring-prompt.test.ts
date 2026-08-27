@@ -58,7 +58,7 @@ test("fold: the normalized event path derives ALLDONE from the final text too", 
 
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), "frizz-stophook-"))
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   const slug = "stophook-t"
   storage.upsertSession({
     slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
@@ -197,7 +197,7 @@ function scheduler(
   opts: { lastFiredAt?: string; now?: () => number } = {},
 ) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-hb-"))
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   const slug = "hooked"
   storage.upsertSession({
     slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
@@ -360,7 +360,7 @@ function heartbeatScheduler(
   opts: { intervalMs?: number; armedAt?: string; lastFiredAt?: string; now?: () => number; tailerMiss?: boolean } = {},
 ) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-beat-"))
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   const slug = "beating"
   storage.upsertSession({
     slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
@@ -555,7 +555,7 @@ function compactScheduler(
   opts: { armedAt?: string; now?: () => number } = {},
 ) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-compact-"))
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   const slug = "compacting"
   storage.upsertSession({
     slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),

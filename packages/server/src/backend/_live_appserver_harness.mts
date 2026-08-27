@@ -34,7 +34,7 @@ const interactions = createInteractionStore(db, { now: () => new Date(), id: () 
 const spawn: CodexAppServerSpawn = (binary, args, options) =>
   spawnChild(binary, [...args], { cwd: options.cwd, env: options.env, stdio: ["pipe", "pipe", "pipe"] })
 const bridge = new CodexAppServerBridge({
-  projectId: "live", projectDir: dir, dbPath: join(dir, "ui.db"), interactions,
+  projectId: "live", projectDir: dir, db, interactions,
   codexBin: CODEX_BIN, spawn, now: () => new Date(), id: () => `c-${++cid}`,
   requestTimeoutMs: 30_000, diagnostic: (e) => { if ((e as { event?: string }).event !== "connected") console.log("[diag]", JSON.stringify(e)) },
 })

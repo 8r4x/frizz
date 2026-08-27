@@ -1664,7 +1664,7 @@ function txHarness() {
   const slug = `-tmp-frizz-tx-test-${process.pid}-${Math.random().toString(36).slice(2, 8)}`
   const logDir = join(homedir(), ".claude", "projects", slug)
   mkdirSync(logDir, { recursive: true })
-  const store = createStorage(join(mkdtempSync(join(tmpdir(), "frizz-tx-")), "ui.db"))
+  const store = createStorage(join(mkdtempSync(join(tmpdir(), "frizz-tx-")), "ui.db"), "p")
   const project = { cwdSlug: slug } as unknown as Project
   const writeJsonl = (id: string, lines: string[]) => writeFileSync(join(logDir, `${id}.jsonl`), lines.map((l) => l + "\n").join(""))
   const cleanup = () => { try { rmSync(logDir, { recursive: true, force: true }) } catch { /* best-effort */ } }

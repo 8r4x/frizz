@@ -42,6 +42,7 @@ import { pidIsAlive } from "./project-identity.ts"
 import { createBootProgressPublisher } from "./boot-progress.ts"
 import { log as frizzLog } from "./logging.ts"
 import { createTenantMap } from "./tenants.ts"
+import { openFrizzDatabase, type FrizzDatabase, type OpenFrizzDatabaseOptions } from "./frizz-db.ts"
 import { startTenantPrime, type TenantPrimeRun } from "./tenant-prime.ts"
 import { findProjectBySegment, listProjects } from "./project-registry.ts"
 import { backfillRegistry } from "./project-registry.ts"
@@ -53,6 +54,7 @@ export const SERVER_FORCE_EXIT_MS = 5_000
 
 export type ServerStartupPhase =
   | "launch ownership"
+  | "database"
   | "context"
   | "GitHub initialization"
   | "application"
@@ -84,7 +86,9 @@ type ViteServer = import("vite").ViteDevServer
 
 /** Dependency seam for deterministic startup-rollback tests. Production callers must not set it. */
 export interface StartServerRuntime {
-  createContext(options: ContextOptions): AppContext | Promise<AppContext>
+  /** The unified database (frizz-db.ts); a rollback test substitutes an in-memory one. */
+  openDatabase(options: OpenFrizzDatabaseOptions): FrizzDatabase
+  createContext(options: ContextOptions): AppContext | Promise<AppContext>| Promise<AppContext>
   initGithub(ctx: AppContext): Promise<void>
   createApp(ctx: AppContext, options: AppOptions): ReturnType<typeof createApp>
   createTerminal(options: Parameters<typeof createTerminalServer>[0]): TerminalServer
@@ -112,6 +116,7 @@ export interface StartServerRuntime {
 }
 
 const defaultStartServerRuntime: StartServerRuntime = {
+  openDatabase: openFrizzDatabase,
   createContext,
   initGithub,
   createApp,
@@ -448,6 +453,10 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
   const effectiveOwnerToken = ownerToken ?? ownedLaunch!.token
 
   let startupPhase: ServerStartupPhase = "launch ownership"
+  // The one database every project shares (frizz-db.ts). Opened in its own boot phase before the
+  // launching context, handed to every tenant through contextOptions, and closed by the storage phase
+  // of shutdown — after the launching project's storage, which is the last tenant standing by then.
+  let frizzDb: FrizzDatabase | undefined
   // Named, incremental boot progress for whatever launcher is waiting on /health (boot-progress.ts).
   const bootProgress = createBootProgressPublisher(project.stateDir)
   let ctx: AppContext | undefined
@@ -502,8 +511,13 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     const open = tenants.get(projectId)
     const stoppedWorkers = open && options?.stopWorkers ? await stopProjectWorkers(open) : 0
     const closed = await tenants.deactivate(projectId)
-    // A project that never opened still has a state directory, so this is not conditional on `closed`.
-    if (options?.deleteState) deleteProjectState(projectId)
+    // A project that never opened still has rows and a state directory, so neither is conditional on
+    // `closed`. Rows first: the directory holds nothing the database refers to, and a purge that
+    // fails leaves a project the operator can still see and retry rather than a ghost with no files.
+    if (options?.deleteState) {
+      frizzDb?.purgeProject(projectId)
+      deleteProjectState(projectId)
+    }
     return { closed, stoppedWorkers }
   }
   const tenants = createTenantMap<TenantSurfaces>({
@@ -513,7 +527,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     },
     // serverLockPath is the LAUNCHING project's: it is the only `server.lock` this process publishes
     // (see "status publication"), so it is the only file a tenant's worker can read the port out of.
-    contextOptions: { claudeBin: opts.claudeBin, serverLockPath: serverLockPathFor(project), activeTenants, teardownProject, launchProjectId: project.id },
+    contextOptions: { claudeBin: opts.claudeBin, serverLockPath: serverLockPathFor(project), activeTenants, teardownProject, launchProjectId: project.id, get database() { return frizzDb?.db } },
     // Each project's app carries ITS OWN owner proof, so /health stays honest per project rather than
     // answering for whichever one happened to launch the server. The transports are per project for a
     // blunter reason: a socket is a live feed of ONE board, so sharing the launcher's would push its
@@ -659,7 +673,10 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
   const cleanupBridge = createRetryableCleanup(tenant.bridge)
   const cleanupVite = createRetryableCleanup(async () => { await vite?.close() })
   const cleanupGithub = createRetryableCleanup(async () => { await githubInit })
-  const cleanupStorage = createRetryableCleanup(tenant.storage)
+  const cleanupStorage = createRetryableCleanup(async () => {
+    await tenant.storage()
+    frizzDb?.close()
+  })
 
   const createLifecycleBarrier = (): ShutdownBarrier => createShutdownBarrier({
     timeoutMs: opts.shutdownTimeoutMs ?? SERVER_SHUTDOWN_TIMEOUT_MS,
@@ -797,11 +814,15 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
 
   try {
     await phase("launch ownership", () => undefined)
+    // Committed through the ledger callback, like the context below: an injected failure right after
+    // this phase throws before the assignment would run, and the rollback must still find the handle.
+    frizzDb = await phase("database", () => runtime.openDatabase({ stateDir: project.stateDir }), (value) => { frizzDb = value })
     ctx = await phase(
       "context",
       () => runtime.createContext({
         claudeBin: opts.claudeBin,
         project,
+        database: frizzDb!.db,
         serverLockPath: serverLockPathFor(project),
         activeTenants,
         teardownProject,

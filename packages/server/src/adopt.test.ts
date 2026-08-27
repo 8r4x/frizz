@@ -62,7 +62,7 @@ function harness(options: {
   preflightCodexBinary?: () => Promise<"present" | "missing" | "unknown">
 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-adopt-"))
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   const project: Project = {
     dir,
     id: "adopt-test",

@@ -1,12 +1,14 @@
 import Database from "./sqlite.ts"
 import { ThreadSlug, slugify, threadIdentityName } from "@frizz/shared"
 import { createInteractionStore, type InteractionStore } from "./interaction-store.ts"
+import { scopeDatabase, type ProjectScope } from "./project-scope.ts"
 import { log } from "./logging.ts"
 
-// The UI-state store (never .frizz/): session registry + settings. SQLite at
-// stateDir/ui.db, WAL for concurrent read while the watcher writes. Frizz thread files stay
-// the source of truth for STATUS; this DB holds only runtime overlay (which worker session
-// backs a thread, unread, last-read) and settings.
+// The UI-state store (never .frizz/): session registry + settings. ONE SQLite file for the whole
+// machine, `<data>/ui.db` (frizz-db.ts), every row tagged with its project and every statement here
+// scoped to one (project-scope.ts) — it was one file per project until 2026-08-27. WAL for concurrent
+// read while the watcher writes. Frizz thread files stay the source of truth for STATUS; this DB
+// holds only runtime overlay (which worker session backs a thread, unread, last-read) and settings.
 
 export interface SessionRow {
   slug: string
@@ -440,7 +442,11 @@ export interface ThreadQuestionRow {
 }
 
 export interface Storage {
+  /** The SHARED connection — raw, unscoped. Prefer `scope`; see project-scope.ts. */
   db: Database
+  /** Every statement bound to this project. What wake-store.ts and tail-cache.ts build on. */
+  scope: ProjectScope
+  projectId: string
   interactions: InteractionStore
   getSession(slug: string): SessionRow | undefined
   // Every registered row, newest schema first. The array and the rows in it are SHARED and CACHED
@@ -803,65 +809,110 @@ export type SessionLifecycleEvent =
   | { type: "replaced"; previous: SessionRow; current: SessionRow }
   | { type: "deleted"; previous: SessionRow }
 
-export function createStorage(dbPath: string): Storage {
-  const db = new Database(dbPath)
-  db.pragma("busy_timeout = 5000")
-  db.pragma("journal_mode = WAL")
-
-  // THE ORPHAN TABLE THAT OUTLIVED ITS OWN RETIREMENT NOTE (2026-08-27). thread_watch was retired on
-  // 2026-08-14 under the note kept below in the schema: "An old DB keeps the orphan table, which costs
-  // nothing and is safer than a migration to remove it." That was true for exactly as long as nothing
-  // reused the name. 818eeeb3 brought the table back with a DIFFERENT shape, and CREATE TABLE IF NOT
-  // EXISTS does not reshape a table that already exists -- so on any database that had run the retired
-  // build, the orphan survived the upgrade and the next statement in the schema block, the index on
-  // (state, expires_at), threw "no such column: expires_at".
-  //
-  // That is a STARTUP ABORT, not a degraded feature: createStorage throws, the control plane exits
-  // before ready, and the launcher reports only "Frizz did not become healthy". Seven of the fifty-four
-  // project databases on the maintainer's own machine could not open at all.
-  //
-  // DROPPED rather than rebuilt, because the shapes do not reconcile and no live state is lost. The old
-  // kinds ('pr', 'ci', 'shell') and states ('armed', 'fired', 'dropped') are not the new table's, so a
-  // preserved row could not satisfy its CHECK constraints; the required expires_at has no honest value
-  // to backfill; and nothing has read these rows since the day the feature was retired. Every row that
-  // survived on this machine was already terminal ('fired' or 'dropped') -- there was no armed wait
-  // anywhere to lose.
-  //
-  // FIRST, above the schema block, unlike the additive migrations below it: the statement that fails is
-  // INSIDE that block. Guarded on the missing column rather than on a version, so it fires exactly once
-  // per database, no-ops on a table that already has the column, and no-ops on a fresh database whose
-  // PRAGMA returns no rows at all.
-  const legacyWatchColumns = db.prepare("PRAGMA table_info(thread_watch)").all() as Array<{ name: string }>
-  if (legacyWatchColumns.length > 0 && !legacyWatchColumns.some((c) => c.name === "expires_at")) {
-    db.exec("DROP TABLE thread_watch")
-  }
-
-  db.exec(`
+/**
+ * Every table Frizz keeps for a project, in ONE database shared by every project (2026-08-27).
+ *
+ * Complete rather than additive: this schema is only ever created by this code, into a file this
+ * code owns, so there is no older shape to reconcile with and no ALTER stack to keep in order. A
+ * project's pre-unification file is read by `legacy-project-db.ts`, which still carries that stack,
+ * and imported row by row by `frizz-db.ts`. Every table's first column is `project_id`, every
+ * natural key is prefixed with it, and every index leads with it — a tenant only ever asks for its
+ * own rows (project-scope.ts), so that is the prefix every lookup has.
+ *
+ * `title_locked` defaults to 1 for the reason the old ADD COLUMN did: a writer that forgets the
+ * column fails safe, into a title that cannot be replaced rather than one silently overwritten.
+ */
+export const STORAGE_SCHEMA = `
     CREATE TABLE IF NOT EXISTS session (
-      slug        TEXT PRIMARY KEY,
+      project_id  TEXT NOT NULL,
+      slug        TEXT NOT NULL,
       session_id  TEXT NOT NULL,
-      thread_name   TEXT NOT NULL,
+      thread_name TEXT NOT NULL,
       spawned_at  TEXT NOT NULL,
       last_read_at TEXT,
       unread      INTEGER NOT NULL DEFAULT 0,
-      exited      INTEGER NOT NULL DEFAULT 0
+      exited      INTEGER NOT NULL DEFAULT 0,
+      archived    INTEGER NOT NULL DEFAULT 0,
+      title_auto  INTEGER NOT NULL DEFAULT 0,
+      title_locked INTEGER NOT NULL DEFAULT 1,
+      rested_at   TEXT,
+      title       TEXT,
+      state       TEXT,
+      snoozed_until TEXT,
+      snooze_prompt TEXT,
+      bg_snooze_rested_at TEXT,
+      meta        TEXT,
+      seen_at     TEXT,
+      transcript_id TEXT,
+      backend     TEXT NOT NULL DEFAULT 'claude',
+      agent_session_id TEXT,
+      model       TEXT,
+      effort      TEXT,
+      profile_pending_model TEXT,
+      profile_pending_effort TEXT,
+      profile_revision INTEGER NOT NULL DEFAULT 0,
+      profile_handoff TEXT,
+      permission_mode TEXT,
+      permission_pending TEXT,
+      permission_set_at TEXT,
+      profile_set_at TEXT,
+      control_error TEXT,
+      delivery_ledger TEXT,
+      runtime_generation INTEGER NOT NULL DEFAULT 0,
+      runtime_control TEXT,
+      runtime_control_revision INTEGER NOT NULL DEFAULT 0,
+      -- Codex transport discriminator: 'app-server' = a bridge-owned JSON-RPC session. NULL/'tmux' is
+      -- the pre-app-server legacy value, still readable on an imported row and never written again.
+      codex_runtime TEXT,
+      -- Claude transport discriminator: 'broker' = a session-broker-owned Agent SDK session; NULL/'tmux'
+      -- is the pre-broker legacy value, same story.
+      claude_runtime TEXT,
+      -- THE RECURRING PROMPT (scheduler.ts SOURCES 4, 5 and 7): one text, three independent triggers —
+      -- every time the thread rests, every N ms on a clock, and/or every time its context is compacted.
+      -- All flags 0 = off; there is no separate enable column, because another flag could only ever
+      -- contradict the ones that decide the behaviour.
+      recurring_prompt TEXT,
+      recurring_on_rest INTEGER NOT NULL DEFAULT 0,
+      recurring_on_schedule INTEGER NOT NULL DEFAULT 0,
+      recurring_on_compact INTEGER NOT NULL DEFAULT 0,
+      recurring_interval_ms INTEGER,
+      recurring_armed_at TEXT,
+      recurring_rest_fired_at TEXT,
+      recurring_schedule_fired_at TEXT,
+      recurring_compact_fired_at TEXT,
+      -- THE BUILT-IN SIGN-OFF NUDGE (scheduler SOURCE 9): how many times in a row frizz has told this
+      -- thread how to sign off without a fence appearing, and the last-nudged delivery id.
+      signoff_nudges INTEGER NOT NULL DEFAULT 0,
+      signoff_nudge_anchor TEXT,
+      -- Cleared by resetParkBumps when a park is actually HONOURED.
+      park_bumps INTEGER NOT NULL DEFAULT 0,
+      park_bump_anchor TEXT,
+      -- Title provenance for the CURRENT text: 1 = the worker's own title signal wrote it.
+      title_agent INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (project_id, slug)
     );
+    CREATE INDEX IF NOT EXISTS session_snoozed_until_idx ON session(project_id, snoozed_until);
     CREATE TABLE IF NOT EXISTS settings (
-      key   TEXT PRIMARY KEY,
-      value TEXT NOT NULL
+      project_id TEXT NOT NULL,
+      key   TEXT NOT NULL,
+      value TEXT NOT NULL,
+      PRIMARY KEY (project_id, key)
     );
     -- Forgotten-transcript graveyard: a transcript id (a session_id or a discovered transcript_id) whose
     -- registry row was hard-deleted via forgetSession. Foreign-discovery excludes these so a dismissed
     -- phantom can never re-surface as a read-only "foreign" thread on a later log-dir rescan.
     CREATE TABLE IF NOT EXISTS tombstone (
-      transcript_id TEXT PRIMARY KEY,
+      project_id    TEXT NOT NULL,
+      transcript_id TEXT NOT NULL,
       slug          TEXT NOT NULL,
-      forgotten_at  TEXT NOT NULL
+      forgotten_at  TEXT NOT NULL,
+      PRIMARY KEY (project_id, transcript_id)
     );
     CREATE TABLE IF NOT EXISTS adoption_claim (
-      slug                TEXT PRIMARY KEY,
-      attempt_token       TEXT NOT NULL UNIQUE,
-      session_id          TEXT NOT NULL UNIQUE,
+      project_id          TEXT NOT NULL,
+      slug                TEXT NOT NULL,
+      attempt_token       TEXT NOT NULL,
+      session_id          TEXT NOT NULL,
       state               TEXT NOT NULL CHECK (state IN ('reserved', 'spawned', 'recovering', 'finalized')),
       reserved_at_ms      INTEGER NOT NULL,
       lease_expires_at_ms INTEGER NOT NULL,
@@ -870,19 +921,24 @@ export function createStorage(dbPath: string): Storage {
       pane_pid            INTEGER,
       session_created     INTEGER,
       finalized_at_ms     INTEGER,
+      PRIMARY KEY (project_id, slug),
+      UNIQUE (project_id, attempt_token),
+      UNIQUE (project_id, session_id),
       CHECK (
         (pane_id IS NULL AND pane_pid IS NULL AND session_created IS NULL) OR
         (pane_id IS NOT NULL AND pane_pid IS NOT NULL AND session_created IS NOT NULL)
       )
     );
     CREATE TABLE IF NOT EXISTS adoption_retired_attempt (
-      attempt_token TEXT PRIMARY KEY,
+      project_id    TEXT NOT NULL,
+      attempt_token TEXT NOT NULL,
       slug          TEXT NOT NULL,
       session_id    TEXT NOT NULL,
-      retired_at_ms INTEGER NOT NULL
+      retired_at_ms INTEGER NOT NULL,
+      PRIMARY KEY (project_id, attempt_token)
     );
     CREATE INDEX IF NOT EXISTS adoption_retired_attempt_slug_idx
-      ON adoption_retired_attempt(slug);
+      ON adoption_retired_attempt(project_id, slug);
     -- A background op the operator RETIRED (the × on its row), by its dispatch tool_use id.
     --
     -- This has to be durable, and the reason is measured rather than defensive. Killing a background
@@ -897,11 +953,12 @@ export function createStorage(dbPath: string): Storage {
     -- Keyed by SESSION as well as slug: a re-dispatched slug is a different conversation whose ids
     -- come from a different transcript, and it must not inherit this one's retirements.
     CREATE TABLE IF NOT EXISTS retired_op (
+      project_id TEXT NOT NULL,
       slug       TEXT NOT NULL,
       session_id TEXT NOT NULL,
       op_id      TEXT NOT NULL,
       retired_at TEXT NOT NULL,
-      PRIMARY KEY (slug, session_id, op_id)
+      PRIMARY KEY (project_id, slug, session_id, op_id)
     );
     -- A worker's ONE-OFF TIMERS (scheduler SOURCE 6): text to hand back at one instant, once.
     --
@@ -918,6 +975,7 @@ export function createStorage(dbPath: string): Storage {
     -- that would otherwise dedupe it — or 'cancelled' when the worker withdraws it.
     CREATE TABLE IF NOT EXISTS thread_timer (
       id          TEXT PRIMARY KEY,
+      project_id  TEXT NOT NULL,
       thread_slug TEXT NOT NULL,
       prompt      TEXT NOT NULL,
       fire_at     INTEGER NOT NULL,
@@ -926,9 +984,9 @@ export function createStorage(dbPath: string): Storage {
       settled_at  INTEGER
     );
     CREATE INDEX IF NOT EXISTS thread_timer_due
-      ON thread_timer(state, fire_at);
+      ON thread_timer(project_id, state, fire_at);
     CREATE INDEX IF NOT EXISTS thread_timer_slug
-      ON thread_timer(thread_slug, state, fire_at);
+      ON thread_timer(project_id, thread_slug, state, fire_at);
     -- A worker's registered PR WATCHERS (2026-08-14). Registered by tool call, never by a fence: the
     -- fence states what a thread is waiting on, and watching is a separate, orthogonal thing that
     -- happens whether or not anything is written down (maintainer: "We should have a tool for this. The
@@ -938,6 +996,7 @@ export function createStorage(dbPath: string): Storage {
     -- it stays armed and carries a cursor; only a merge or a close settles it.
     CREATE TABLE IF NOT EXISTS pr_watch (
       id          TEXT PRIMARY KEY,
+      project_id  TEXT NOT NULL,
       thread_slug TEXT NOT NULL,
       owner       TEXT NOT NULL,
       repo        TEXT NOT NULL,
@@ -948,30 +1007,26 @@ export function createStorage(dbPath: string): Storage {
       cursor      TEXT,
       -- When this watcher stops polling by itself. REQUIRED at registration (2026-08-15): a PR nobody
       -- ever touches would otherwise be polled forever, and the thread parked on it would wait forever
-      -- with it. Nullable in the column only so an older row reads; the tool refuses to arm without one.
+      -- with it. Nullable in the column only so an imported older row reads; the tool refuses to arm
+      -- without one.
       expires_at  INTEGER
     );
     CREATE INDEX IF NOT EXISTS pr_watch_armed
-      ON pr_watch(state);
+      ON pr_watch(project_id, state);
     CREATE INDEX IF NOT EXISTS pr_watch_slug
-      ON pr_watch(thread_slug, state, created_at);
+      ON pr_watch(project_id, thread_slug, state, created_at);
     -- A worker's registered WATCHES on its own running work (2026-08-26). See
     -- plans/rest-by-registration.md: a wait stops being a line the worker re-writes at every rest and
     -- becomes a row it creates once, which the human sees in the queue and which wakes the thread itself.
     --
-    -- This is thread_watch RETURNING, and the note below says why it went away: "The registry existed
-    -- because a fence had no identity to drop; the answer turned out to be that a park nobody has to drop
-    -- needs none." What that traded away is the thing the maintainer now wants back -- a fence has the
-    -- LIFETIME of the message carrying it, so a worker must restate the same wait on every single rest or
-    -- lose it. A row does not need restating.
-    --
-    -- Two columns are the whole difference from the retired table, and both close the hole that made a
-    -- durable row dangerous. KIND is stored and checked against the target's own shape at registration,
-    -- so a PR ref can never arm as a shell. EXPIRES_AT is REQUIRED, chosen by the worker for this
-    -- particular wait: on elapse the row is cancelled and the thread woken, so a registration cannot
-    -- outlive its own relevance the way an un-restated fence never could.
+    -- KIND is stored and checked against the target's own shape at registration, so a PR ref can never
+    -- arm as a shell. EXPIRES_AT is REQUIRED, chosen by the worker for this particular wait: on elapse
+    -- the row is cancelled and the thread woken, so a registration cannot outlive its own relevance the
+    -- way an un-restated fence never could. (An earlier thread_watch, retired 2026-08-14 with different
+    -- kinds and no expiry, is dropped from a legacy file before import — see legacy-project-db.ts.)
     CREATE TABLE IF NOT EXISTS thread_watch (
       id          TEXT PRIMARY KEY,
+      project_id  TEXT NOT NULL,
       thread_slug TEXT NOT NULL,
       kind        TEXT NOT NULL CHECK (kind IN ('shell', 'agent')),
       -- The handle the worker was shown: a runtime task id, a launch tool_use id, or the op's label.
@@ -980,21 +1035,17 @@ export function createStorage(dbPath: string): Storage {
       target      TEXT NOT NULL,
       state       TEXT NOT NULL CHECK (state IN ('armed', 'dropped', 'expired', 'settled')),
       created_at  INTEGER NOT NULL,
-      -- REQUIRED at registration, unlike pr_watch's, which is nullable only to read an older row. There
-      -- are no older ROWS here -- but there was an older TABLE, which is not the same thing and cost a
-      -- startup abort to learn (2026-08-27). A NOT NULL column cannot be added to it by ALTER, so the
-      -- legacy table is dropped at the top of createStorage, before this block runs.
       expires_at  INTEGER NOT NULL,
       settled_at  INTEGER
     );
     CREATE INDEX IF NOT EXISTS thread_watch_due
-      ON thread_watch(state, expires_at);
+      ON thread_watch(project_id, state, expires_at);
     CREATE INDEX IF NOT EXISTS thread_watch_slug
-      ON thread_watch(thread_slug, state, created_at);
+      ON thread_watch(project_id, thread_slug, state, created_at);
     -- One armed watch per (thread, kind, target): re-registering the same wait is idempotent rather than
     -- a second row that has to be dropped twice. Partial, so a dropped row never blocks a re-arm.
     CREATE UNIQUE INDEX IF NOT EXISTS thread_watch_unique_armed
-      ON thread_watch(thread_slug, kind, target) WHERE state = 'armed';
+      ON thread_watch(project_id, thread_slug, kind, target) WHERE state = 'armed';
     -- A worker's registered QUESTIONS for the human (2026-08-26). The other half of
     -- plans/rest-by-registration.md, and the same argument as thread_watch directly above: a fenced
     -- question block has the LIFETIME OF THE MESSAGE CARRYING IT, so the stop hook clobbers it, a
@@ -1010,6 +1061,7 @@ export function createStorage(dbPath: string): Storage {
     -- A timing-out question either re-asks as noise or silently drops something a human still owed.
     CREATE TABLE IF NOT EXISTS thread_question (
       id          TEXT PRIMARY KEY,
+      project_id  TEXT NOT NULL,
       thread_slug TEXT NOT NULL,
       -- The question TREE as the worker submitted it, validated at the RPC boundary and stored verbatim
       -- (AskedQuestion in @frizz/shared). JSON rather than columns because the shape is recursive: an
@@ -1028,10 +1080,9 @@ export function createStorage(dbPath: string): Storage {
       settled_at  INTEGER
     );
     CREATE INDEX IF NOT EXISTS thread_question_slug
-      ON thread_question(thread_slug, state, asked_at);
+      ON thread_question(project_id, thread_slug, state, asked_at);
     CREATE INDEX IF NOT EXISTS thread_question_undelivered
-      ON thread_question(state, delivered);
-
+      ON thread_question(project_id, state, delivered);
     -- THE WORKER'S OWN COMPLETION, as a row (2026-08-27). The 'done' FENCE said the same thing and had
     -- the same weakness every fence has: it is a sentence in a message, so nothing can refuse it. A
     -- gate can refuse a TOOL CALL -- before the card renders -- while a fence can only be bumped after
@@ -1043,336 +1094,45 @@ export function createStorage(dbPath: string): Storage {
     -- newest user record and simply stops honouring an older one. That mirrors the fence exactly (the
     -- next assistant message replaced it) without a sweep to forget one.
     CREATE TABLE IF NOT EXISTS thread_done (
-      thread_slug TEXT PRIMARY KEY,
+      project_id  TEXT NOT NULL,
+      thread_slug TEXT NOT NULL,
       -- The markdown the card renders, the same body the fence carried between its backticks.
       body        TEXT NOT NULL,
-      done_at     INTEGER NOT NULL
+      done_at     INTEGER NOT NULL,
+      PRIMARY KEY (project_id, thread_slug)
     );
-    -- The retirement note for the ORIGINAL thread_watch is kept below as the record of why it left, and
-    -- of what had to change before it could come back.
-    -- thread_watch WAS HERE and is retired (2026-08-14). A worker's wait is a 'watch:' line in its own
-    -- awaiting fence again, which is BOTH the park and the wake -- the scheduler matches the name against
-    -- the thread's live shells and its retired-shell ring, so nothing needs registering and nothing can
-    -- outlive the fence that declares it. The registry existed because a fence had no identity to drop;
-    -- the answer turned out to be that a park nobody has to drop needs none.
-    --
-    -- This note used to end "an old DB keeps the orphan table, which costs nothing and is safer than a
-    -- migration to remove it", and that was the sentence the 2026-08-27 startup abort was hiding behind:
-    -- it costs nothing only while nothing reuses the name, and the table came BACK. The drop that the
-    -- note talked the reader out of now runs at the top of createStorage. Retiring a table, not just a
-    -- column, is what leaves this trap behind -- an orphan is free until the name is claimed again.
-    -- (No backticks in this comment: the whole schema is a template literal.)
-  `)
-  // THE COLUMN THAT OUTLIVED THE MULTIPLEXER (2026-08-19). This held the thread identity string
-  // `frizz-<slug>` and was called `tmux_name` for years after the last pane went away, which is most of
-  // why every reader kept concluding the agents still live in tmux. It is a plain rename: the VALUE was
-  // never a pane name, only a name that happened to be given to one.
-  //
-  // FIRST, above every statement below, because `CREATE TABLE IF NOT EXISTS` does not reshape a table
-  // that already exists — so on any database that has booted before, the column is still `tmux_name`
-  // here, and every later statement naming `thread_name` would fail against it. Idempotent by failing:
-  // once renamed there is no `tmux_name` left to rename, and a fresh database never had one.
-  try {
-    db.exec("ALTER TABLE session RENAME COLUMN tmux_name TO thread_name")
-  } catch {
-    // already renamed, or a database created with the new name
-  }
-  // THE COLUMNS THE CONFIRMATION RPC LEFT BEHIND (2026-08-24). These held one operator confirmation of
-  // one exact awaiting-fence generation, for a "Confirm snooze" affordance that armed a durable park.
-  // The 2026-08-15 grammar cut made every hint non-actionable, so nothing has been able to write them
-  // since; the scheduler half went in ccbe87e9 and the RPC, its compare-and-swap and its two clears go
-  // here. Dropped rather than left declared, because a column no writer can reach is one the next
-  // reader has to work out is dead.
-  //
-  // Same placement and the same idempotence as the rename above: SQLite throws "no such column" on the
-  // second run, so a database that has booted since this landed and one that never had the columns both
-  // no-op. Unlike the additive ADD COLUMNs below this DOES reshape the table, so an older server process
-  // holding the same file open would find its prepared statements invalid — the singleton launcher
-  // refuses a second server, which is what keeps that from happening.
-  for (const dead of ["awaiting_fence_id", "awaiting_confirmed_at"]) {
-    try {
-      db.exec(`ALTER TABLE session DROP COLUMN ${dead}`)
-    } catch {
-      // already dropped, or a database that never had it
-    }
-  }
-  // Best-effort inline migration for older DBs. Session-first/profile columns are nullable ADDs
-  // (except the existing boolean/backend defaults) — additive + idempotent, safe while another server
-  // process holds the db open (the live server never sees a shape it can't read).
-  for (const col of [
-    "archived INTEGER NOT NULL DEFAULT 0",
-    "title_auto INTEGER NOT NULL DEFAULT 0",
-    // Defaults LOCKED so the ADD COLUMN backfill is conservative: every row that predates the split
-    // keeps exactly its old behavior, and any write path that forgets the column fails safe (a title
-    // that can't be replaced, never one that's silently overwritten). The boot repair below then
-    // unlocks the machine-guessed ones.
-    "title_locked INTEGER NOT NULL DEFAULT 1",
-    "rested_at TEXT",
-    "title TEXT",
-    "state TEXT",
-    "snoozed_until TEXT",
-    "snooze_prompt TEXT",
-    "bg_snooze_rested_at TEXT",
-    "meta TEXT",
-    "seen_at TEXT",
-    "transcript_id TEXT",
-    "backend TEXT NOT NULL DEFAULT 'claude'",
-    "agent_session_id TEXT",
-    "model TEXT",
-    "effort TEXT",
-    "profile_pending_model TEXT",
-    "profile_pending_effort TEXT",
-    "profile_revision INTEGER NOT NULL DEFAULT 0",
-    "profile_handoff TEXT",
-    "permission_mode TEXT",
-    "permission_pending TEXT",
-    "permission_set_at TEXT",
-    "profile_set_at TEXT",
-    "control_error TEXT",
-    "delivery_ledger TEXT",
-    "runtime_generation INTEGER NOT NULL DEFAULT 0",
-    "runtime_control TEXT",
-    "runtime_control_revision INTEGER NOT NULL DEFAULT 0",
-    // Codex transport discriminator: 'app-server' = a bridge-owned JSON-RPC session (input via
-    // turn/start|steer, liveness from the bridge). NULL/'tmux' is the pre-app-server legacy value,
-    // still readable on an old database and never written again.
-    "codex_runtime TEXT",
-    // Claude transport discriminator: 'broker' = a session-broker-owned Agent SDK session (input via
-    // the bridge, liveness from it). NULL/'tmux' is the pre-broker legacy value, same story: readable,
-    // not creatable.
-    "claude_runtime TEXT",
-    // The legacy two-feature columns. Superseded 2026-08-03 by the `recurring_*` set below, which
-    // merged the stop hook and the heartbeat into ONE prompt with two triggers. They are still declared
-    // here (rather than dropped) for exactly one reason: the backfill further down reads them, and it
-    // must keep working on a database that has not booted since before the merge. Nothing WRITES them
-    // any more — if you find yourself adding a writer, you are re-forking the feature.
-    "heartbeat_prompt TEXT",
-    "heartbeat_interval_ms INTEGER",
-    "heartbeat_enabled INTEGER NOT NULL DEFAULT 0",
-    "heartbeat_armed_at TEXT",
-    "heartbeat_last_fired_at TEXT",
-    "stop_hook TEXT",
-    "stop_hook_enabled INTEGER NOT NULL DEFAULT 0",
-    "stop_hook_armed_at TEXT",
-    "stop_hook_last_fired_at TEXT",
-    // THE RECURRING PROMPT (scheduler.ts SOURCES 4, 5 and 7): one text, three independent triggers —
-    // every time the thread rests, every N ms on a clock, and/or every time its context is compacted.
-    // All flags 0 = off; there is no separate enable column, because another flag could only ever
-    // contradict the ones that decide the behaviour.
-    "recurring_prompt TEXT",
-    "recurring_on_rest INTEGER NOT NULL DEFAULT 0",
-    "recurring_on_schedule INTEGER NOT NULL DEFAULT 0",
-    "recurring_interval_ms INTEGER",
-    "recurring_armed_at TEXT",
-    "recurring_rest_fired_at TEXT",
-    "recurring_schedule_fired_at TEXT",
-    // The post-compaction trigger (2026-08-06). Added as its own ALTER rather than folded into the set
-    // above so a database armed before this release picks it up on the next boot with the flag off,
-    // which is the correct default: an existing prompt described the triggers its operator chose.
-    "recurring_on_compact INTEGER NOT NULL DEFAULT 0",
-    "recurring_compact_fired_at TEXT",
-    // NO `recurring_pause_on_questions` HERE ANY MORE. It held every trigger while the thread was waiting
-    // on the human and the footer showed it inverted as "Autonomous mode"; both were deleted 2026-08-16
-    // (see scheduler.ts, "WHAT A PENDING QUESTION DOES TO THE THREE TRIGGERS"). A database created before
-    // that release still carries the column — it is `NOT NULL DEFAULT 0`, so nothing needs to write it,
-    // and dropping it would cost a table rebuild to reclaim one inert integer per row.
-    // THE BUILT-IN SIGN-OFF NUDGE (scheduler SOURCE 9, 2026-08-12). How many times in a row frizz has
-    // told this thread how to sign off without a fence appearing. Cleared ONLY when the thread signs
-    // off — never by a user record, because frizz's own delivery is one. The second column holds the
-    // last-nudged delivery id, for diagnosis.
-    "signoff_nudges INTEGER NOT NULL DEFAULT 0",
-    "signoff_nudge_anchor TEXT",
-    // Cleared by `resetParkBumps` when a park is actually HONOURED — the one event that proves the
-    // correction landed, and the one frizz cannot cause by correcting.
-    "park_bumps INTEGER NOT NULL DEFAULT 0",
-    "park_bump_anchor TEXT",
-    // Title provenance for the CURRENT text (2026-08-07): 1 = the worker's own title signal wrote it,
-    // 0 = the dispatch seeded it. DEFAULT 0 is the conservative direction — an existing row is assumed
-    // to hold its dispatch chop until the repair below (or the next title signal) says otherwise.
-    "title_agent INTEGER NOT NULL DEFAULT 0",
-  ]) {
-    try {
-      db.exec(`ALTER TABLE session ADD COLUMN ${col}`)
-    } catch {
-      // column already exists
-    }
-  }
-  // A PR WATCHER'S EXPIRY (2026-08-15), on the same additive terms as the session columns above: the
-  // table is created with IF NOT EXISTS, so an existing database never sees the new column otherwise.
-  // Left NULL on an already-armed row — the poller treats "no expiry" as the old unbounded behaviour
-  // rather than settling a live watcher out from under a thread that is parked on it.
-  try {
-    db.exec("ALTER TABLE pr_watch ADD COLUMN expires_at INTEGER")
-  } catch {
-    // column already exists
-  }
-  // THE REBRAND LEFT THESE ROWS BEHIND (2026-08-06). `thread_name` is re-derived as
-  // `frizz-<slug>` and checked on EVERY write by validateSessionIdentity, so a row still holding
-  // `fray-<slug>` is a row whose next write is rejected. The one-time migration that fixed this was
-  // deleted once the projects in use had been converted — but ten project databases had simply not
-  // been opened since, carrying fourteen threads between them, and a project nobody opened for a week
-  // is exactly what a machine-wide project grid now invites you to open.
-  //
-  // It lives here rather than in a migration module because it is idempotent and self-limiting: the
-  // LIKE matches nothing once a database has been through it, so it costs one no-op scan per boot and
-  // there is nothing left to delete later.
-  try {
-    db.exec("UPDATE session SET thread_name = 'frizz-' || substr(thread_name, 6) WHERE thread_name LIKE 'fray-%'")
-  } catch {
-    // A pre-schema database, or one without the column yet. The ALTERs above own that case.
-  }
-  // ONE-SHOT ADOPTION of the pre-merge two-feature rows (2026-08-03). A thread that had a stop hook, a
-  // heartbeat, or both keeps working across the upgrade instead of silently going quiet.
-  //
-  // GUARDED ON `recurring_armed_at IS NULL`, which is what makes it safe to re-run on every boot: the
-  // moment a row has a recurring prompt of its own, this stops touching it. Without that guard it would
-  // resurrect a prompt the operator had since cleared, every single restart — the exact failure the
-  // 2026-08-02 adoption pass was deleted for.
-  //
-  // WHERE THE TEXT COMES FROM when both were armed with DIFFERENT words: the stop hook's wins. Merging
-  // is inherently lossy in that case (it is the one capability this merge removes), and the stop hook
-  // is the more likely to hold the real driving instruction — the heartbeat's tended to be a short
-  // "check X" reminder. The triggers and the cadence both carry over regardless, so the thread keeps
-  // firing on the same schedule it had.
-  try {
-    db.exec(`
-      UPDATE session SET
-        recurring_prompt = COALESCE(stop_hook, heartbeat_prompt),
-        recurring_on_rest = CASE WHEN stop_hook IS NOT NULL AND stop_hook_enabled = 1 THEN 1 ELSE 0 END,
-        recurring_on_schedule = CASE WHEN heartbeat_prompt IS NOT NULL AND heartbeat_enabled = 1 THEN 1 ELSE 0 END,
-        recurring_interval_ms = heartbeat_interval_ms,
-        -- The generation is the LATER of the two, so a delivery still in the outbox under either old
-        -- generation reads as superseded rather than landing against the merged row.
-        recurring_armed_at = CASE
-          WHEN stop_hook_armed_at IS NULL THEN heartbeat_armed_at
-          WHEN heartbeat_armed_at IS NULL THEN stop_hook_armed_at
-          WHEN stop_hook_armed_at > heartbeat_armed_at THEN stop_hook_armed_at
-          ELSE heartbeat_armed_at
-        END,
-        recurring_rest_fired_at = stop_hook_last_fired_at,
-        recurring_schedule_fired_at = heartbeat_last_fired_at
-      WHERE recurring_armed_at IS NULL
-        AND (stop_hook IS NOT NULL OR heartbeat_prompt IS NOT NULL)
-    `)
-  } catch {
-    // A database predating the legacy columns has nothing to adopt.
-  }
-  // One-time idempotent backfill: rows the user already archived under the boolean flag carry that
-  // into the new lifecycle column. Only fills NULLs — an explicit later state write always wins.
-  try {
-    db.exec("UPDATE session SET state = 'archived' WHERE archived = 1 AND state IS NULL")
-    // Unlock the machine-guessed titles the conservative DEFAULT 1 above just locked. Safe to re-run on
-    // EVERY boot — not merely at first migration — because every writer that locks a title also clears
-    // title_auto, so `title_locked = 1 AND title_auto = 1` is a state nothing can legitimately produce.
-    // (A boot repair that re-LOCKED instead would be the dangerous direction: it would silently re-lock
-    // each newly dispatched caller-titled row on the next restart.)
-    db.exec("UPDATE session SET title_locked = 0 WHERE title_auto = 1")
-    // ONE-TIME repair for titles locked by a BUG rather than by a human. From the broker's arrival
-    // (2026-07-24) until the fix that ships with this line, the Claude session-broker dispatch path
-    // omitted `title_locked` from its registry row, and an absent value on a caller-titled row
-    // normalises to LOCKED (see sessionTitleLocked — it fails safe, which here means failing into the
-    // bug). So every GitHub-batch and spawn_thread thread froze on its dispatch title
-    // (`Investigate acme/app#391`) while the worker's own, far better name was withheld forever.
-    // Rows that predate the title_auto/title_locked split carry the same shape, left locked by the
-    // deliberately conservative ADD COLUMN backfill above.
-    //
-    // A human's rename and a stuck dispatch title are indistinguishable by the flags alone, so this
-    // asks a sharper question: does the SLUG still read as one this exact title minted? Dispatch is
-    // the only writer that derives one from the other, and a rename rewrites the title while leaving
-    // the slug untouched — so a renamed thread fails the test, which is what keeps the repair off
-    // human names. It runs ONCE (settings marker) because, unlike the invariant-based repairs around
-    // it, that test is a heuristic: a human rename after the repair must be the last word.
-    const unlockedRepairKey = "repair:unlock-dispatch-minted-titles"
-    const repairDone = db.prepare<[string], { value: string }>("SELECT value FROM settings WHERE key = ?")
-      .get(unlockedRepairKey)
-    if (!repairDone) {
-      const unlockOne = db.prepare("UPDATE session SET title_locked = 0 WHERE slug = ? AND title_locked = 1")
-      const candidates = db.prepare<[], Pick<SessionRow, "slug" | "title">>(`
-        SELECT slug, title FROM session
-        WHERE title_locked = 1 AND title_auto = 0 AND title IS NOT NULL AND title <> ''
-      `).all()
-      for (const row of candidates) {
-        if (row.title && slugMintedFromTitle(row.slug, row.title)) unlockOne.run(row.slug)
-      }
-      db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
-        .run(unlockedRepairKey, new Date().toISOString())
-    }
-    // ONE-TIME backfill of `title_agent` for rows that predate the column. The auto-title CAS has been
-    // persisting the codex worker's own title into `title` since the app-server path landed, but until
-    // the column shipped nothing recorded that provenance — so once a codex thread's live telemetry
-    // went away (rest, archive, restart) the board had no way to tell that title from the dispatch
-    // chop and the display fell back to "Untitled thread" for ALL of them. On the maintainer's own
-    // board that was every codex thread on it, 29 of 29 (2026-08-07).
-    //
-    // Same sharper question the repair above asks, in the same direction: dispatch is the only writer
-    // that derives the slug and the title from each other, so a codex row whose slug no longer reads
-    // as one this title minted is a row whose title has been REPLACED since dispatch — and on an
-    // unlocked `title_auto = 1` row the only writer that can have done so is the auto-title CAS.
-    // ONCE (settings marker), because it is a heuristic: a row whose title genuinely is still its chop
-    // must be free to stay that way, and every title written from here on records its own provenance.
-    const agentTitleRepairKey = "repair:mark-agent-written-titles"
-    const agentRepairDone = db.prepare<[string], { value: string }>("SELECT value FROM settings WHERE key = ?")
-      .get(agentTitleRepairKey)
-    if (!agentRepairDone) {
-      const markOne = db.prepare("UPDATE session SET title_agent = 1 WHERE slug = ? AND title_agent = 0")
-      const candidates = db.prepare<[], Pick<SessionRow, "slug" | "title">>(`
-        SELECT slug, title FROM session
-        WHERE backend = 'codex' AND title_auto = 1 AND title_locked = 0
-          AND title IS NOT NULL AND title <> ''
-      `).all()
-      for (const row of candidates) {
-        if (row.title && !slugMintedFromTitle(row.slug, row.title)) markOne.run(row.slug)
-      }
-      db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
-        .run(agentTitleRepairKey, new Date().toISOString())
-    }
-    // The interactive Codex composer is gone, and with it every writer AND releaser of its durable
-    // 'codex-input' runtime lock. A row that still holds one was locked by the retired subsystem and
-    // nothing can ever clear it again: the board reports runtimeControlPending forever, which fences
-    // that thread's composer, model, and sandbox controls permanently. Release it once, at boot.
-    db.exec("UPDATE session SET runtime_control = NULL WHERE runtime_control = 'codex-input'")
-    // Same class, same reasoning, the OTHER purely in-process lock. `resume.ts` takes 'follow-up' for
-    // the ~300-800ms an injection needs and releases it in a `finally` — so no process can legitimately
-    // still hold one after a restart, and one left by a hard kill inside that window fences the thread's
-    // follow-ups permanently ("Another runtime control is in progress" on every later send, forever).
-    // Note what is NOT swept: 'profile' is DURABLE by design — profile_handoff rides with it and restart
-    // recovery must prove one exact runtime before clearing either (see the codex-only abandon above).
-    db.exec("UPDATE session SET runtime_control = NULL WHERE runtime_control = 'follow-up'")
-    // Same class, one step further: a CODEX row can also still hold the PROFILE handoff a pre-cutover
-    // crash left behind, from when a model/effort change was applied by relaunching an interactive
-    // worker. That handoff can never complete now — its recovery step reattached the worker's terminal
-    // and read it with the Claude composer parser, which a Codex worker never satisfied, and no such
-    // path exists at all any more — so the recovery loop re-blocks the thread on every tick forever.
-    // Abandon the pending pair and say why; codex takes model/effort per turn, so nothing is lost but
-    // the stuck arming.
-    db.exec(`
-      UPDATE session
-      SET runtime_control = NULL, profile_pending_model = NULL, profile_pending_effort = NULL,
-          profile_handoff = NULL,
-          control_error = 'A model/effort change armed on the retired Codex interactive path was abandoned; set it again.'
-      WHERE backend = 'codex' AND runtime_control = 'profile'
-    `)
-    // Heal every app-server codex row that was downgraded behind the operator's back. Until the fixes
-    // that ship with this line, a cold resume sent no sandbox/approval override, so the app-server
-    // applied the config.toml defaults (`workspace-write` + `on-request`) and the tailer then folded
-    // that observation back into permission_mode as if the operator had chosen it. `sandboxFor` reads
-    // this column, so the downgrade became self-perpetuating: the thread requested workspace-write on
-    // every later resume and stalled on an approval nobody was watching. Frizz workers are dispatched
-    // non-interactively (WORKER_DISPATCH_PERMISSION.codex) and the per-thread picker was removed from
-    // the UI, so there is no operator choice left for this rewrite to overwrite.
-    db.exec(`
-      UPDATE session SET permission_mode = 'bypassPermissions'
-      WHERE backend = 'codex' AND codex_runtime = 'app-server'
-        AND (permission_mode IS NULL OR permission_mode <> 'bypassPermissions')
-    `)
-  } catch {
-    // best-effort
-  }
-  db.exec("CREATE INDEX IF NOT EXISTS session_snoozed_until_idx ON session(snoozed_until)")
+`
 
-  // The interaction journal is an additive, independently-versioned schema in this same project DB.
-  // Construct it before session write statements: replacement/delete transactions below close any
-  // pending requests owned by the superseded session atomically with the registry mutation.
+/** Every table this module owns, for the importer and the project purge. */
+export const STORAGE_TABLES = [
+  "session", "settings", "tombstone", "adoption_claim", "adoption_retired_attempt", "retired_op",
+  "thread_timer", "pr_watch", "thread_watch", "thread_question", "thread_done",
+] as const
+
+/** Idempotent; run by every createStorage and by frizz-db.ts before an import. */
+export function ensureStorageSchema(db: Database): void {
+  db.exec(STORAGE_SCHEMA)
+}
+
+/**
+ * A project's view of the registry.
+ *
+ * `source` is either the SHARED connection (production: one file, every project — see frizz-db.ts),
+ * in which case `close()` releases only this project's listeners and leaves the connection to its
+ * owner, or a PATH (tests, and any caller that wants a private file), in which case the connection is
+ * this storage's own and `close()` closes it. Either way every statement below is prepared through the
+ * project scope, so it can only ever see `projectId`'s rows.
+ */
+export function createStorage(source: string | Database, projectId: string): Storage {
+  const owned = typeof source === "string"
+  const db = owned ? new Database(source) : source
+  if (owned) {
+    db.pragma("busy_timeout = 5000")
+    db.pragma("journal_mode = WAL")
+  }
+  ensureStorageSchema(db)
+  const scope = scopeDatabase(db, projectId)
+
   const interactions = createInteractionStore(db)
   const lifecycleListeners = new Set<(event: SessionLifecycleEvent) => void>()
   let closed = false
@@ -1380,8 +1140,8 @@ export function createStorage(dbPath: string): Storage {
     for (const listener of [...lifecycleListeners]) listener(event)
   }
 
-  const selOne = db.prepare<[string], SessionRow>("SELECT * FROM session WHERE slug = ?")
-  const selAll = db.prepare<[], SessionRow>("SELECT * FROM session")
+  const selOne = scope.prepare<[string], SessionRow>("SELECT * FROM session WHERE project_id = @project_id AND slug = ?")
+  const selAll = scope.prepare<[], SessionRow>("SELECT * FROM session WHERE project_id = @project_id")
 
   // ---- the whole-table read, memoised --------------------------------------------------------------
   // `allSessions()` is the single hottest operation in the server. It is not a background chore: the
@@ -1408,7 +1168,6 @@ export function createStorage(dbPath: string): Storage {
   //
   // The returned array is SHARED, hence `readonly SessionRow[]` on the interface — the compiler is what
   // keeps a caller from sorting or splicing the cache out from under the next one.
-  const totalChangesStmt = db.prepare<[], { changes: number }>("SELECT total_changes() AS changes")
   const dataVersionStmt = db.prepare<[], { data_version: number }>("PRAGMA data_version")
   let cachedSessions: SessionRow[] | null = null
   let cachedBySlug: Map<string, SessionRow> | null = null
@@ -1419,7 +1178,7 @@ export function createStorage(dbPath: string): Storage {
   // time; see the note above for why neither alone is enough.
   const cacheIsCurrent = (): boolean => {
     if (db.inTransaction) return false
-    const changes = totalChangesStmt.get()?.changes ?? -1
+    const changes = scope.writes()
     const dataVersion = dataVersionStmt.get()?.data_version ?? -1
     if (cachedSessions && changes === cachedAtChanges && dataVersion === cachedAtDataVersion) return true
     cachedSessions = null
@@ -1451,10 +1210,10 @@ export function createStorage(dbPath: string): Storage {
     if (!cachedBySlug) cachedBySlug = new Map(cachedSessions.map((row) => [row.slug, row]))
     return cachedBySlug.get(slug) ?? selOne.get(slug)
   }
-  const upsertStmt = db.prepare(`
-    INSERT INTO session (slug, session_id, thread_name, spawned_at, last_read_at, unread, exited, title_auto, title_locked, title, state, snoozed_until, snooze_prompt, meta, seen_at, transcript_id, model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff, permission_mode, permission_pending, control_error, runtime_generation, runtime_control, runtime_control_revision)
-    VALUES (@slug, @session_id, @thread_name, @spawned_at, @last_read_at, @unread, @exited, @title_auto, @title_locked, @title, @state, @snoozed_until, @snooze_prompt, @meta, @seen_at, @transcript_id, @model, @effort, @profile_pending_model, @profile_pending_effort, @profile_revision, @profile_handoff, @permission_mode, @permission_pending, @control_error, @runtime_generation, @runtime_control, @runtime_control_revision)
-    ON CONFLICT(slug) DO UPDATE SET
+  const upsertStmt = scope.prepare(`
+    INSERT INTO session (project_id, slug, session_id, thread_name, spawned_at, last_read_at, unread, exited, title_auto, title_locked, title, state, snoozed_until, snooze_prompt, meta, seen_at, transcript_id, model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff, permission_mode, permission_pending, control_error, runtime_generation, runtime_control, runtime_control_revision)
+    VALUES (@project_id, @slug, @session_id, @thread_name, @spawned_at, @last_read_at, @unread, @exited, @title_auto, @title_locked, @title, @state, @snoozed_until, @snooze_prompt, @meta, @seen_at, @transcript_id, @model, @effort, @profile_pending_model, @profile_pending_effort, @profile_revision, @profile_handoff, @permission_mode, @permission_pending, @control_error, @runtime_generation, @runtime_control, @runtime_control_revision)
+    ON CONFLICT(project_id, slug) DO UPDATE SET
       session_id = excluded.session_id,
       thread_name  = excluded.thread_name,
       spawned_at = excluded.spawned_at,
@@ -1493,9 +1252,9 @@ export function createStorage(dbPath: string): Storage {
       archived = 0,
       state = 'open'
   `)
-  const insertSessionIfAbsentStmt = db.prepare(`
+  const insertSessionIfAbsentStmt = scope.prepare(`
     INSERT INTO session (
-      slug, session_id, thread_name, spawned_at, last_read_at, unread, exited, archived, rested_at,
+      project_id, slug, session_id, thread_name, spawned_at, last_read_at, unread, exited, archived, rested_at,
       title_auto, title_locked, title, transcript_id, state, snoozed_until, snooze_prompt,
       meta, seen_at, backend, agent_session_id,
       model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff,
@@ -1503,7 +1262,7 @@ export function createStorage(dbPath: string): Storage {
       runtime_generation, runtime_control, runtime_control_revision
     )
     VALUES (
-      @slug, @session_id, @thread_name, @spawned_at, @last_read_at, @unread, @exited, @archived,
+      @project_id, @slug, @session_id, @thread_name, @spawned_at, @last_read_at, @unread, @exited, @archived,
       @rested_at, @title_auto, @title_locked, @title, @transcript_id, @state, @snoozed_until, @snooze_prompt,
       @meta, @seen_at,
       @backend, @agent_session_id, @model, @effort, @profile_pending_model,
@@ -1511,171 +1270,171 @@ export function createStorage(dbPath: string): Storage {
       @control_error, @runtime_generation, @runtime_control,
       @runtime_control_revision
     )
-    ON CONFLICT(slug) DO NOTHING
+    ON CONFLICT(project_id, slug) DO NOTHING
   `)
-  const selAdoptionClaim = db.prepare<[string], AdoptionClaimRow>(
-    "SELECT * FROM adoption_claim WHERE slug = ?",
+  const selAdoptionClaim = scope.prepare<[string], AdoptionClaimRow>(
+    "SELECT * FROM adoption_claim WHERE project_id = @project_id AND slug = ?",
   )
-  const selAllAdoptionClaims = db.prepare<[], AdoptionClaimRow>("SELECT * FROM adoption_claim")
-  const selAllRetiredAdoptionAttempts = db.prepare<[], RetiredAdoptionAttemptRow>(
-    "SELECT * FROM adoption_retired_attempt ORDER BY retired_at_ms, attempt_token",
+  const selAllAdoptionClaims = scope.prepare<[], AdoptionClaimRow>("SELECT * FROM adoption_claim WHERE project_id = @project_id")
+  const selAllRetiredAdoptionAttempts = scope.prepare<[], RetiredAdoptionAttemptRow>(
+    "SELECT * FROM adoption_retired_attempt WHERE project_id = @project_id ORDER BY retired_at_ms, attempt_token",
   )
-  const selRetiredAdoptionAttempt = db.prepare<[string], RetiredAdoptionAttemptRow>(
-    "SELECT * FROM adoption_retired_attempt WHERE attempt_token = ?",
+  const selRetiredAdoptionAttempt = scope.prepare<[string], RetiredAdoptionAttemptRow>(
+    "SELECT * FROM adoption_retired_attempt WHERE project_id = @project_id AND attempt_token = ?",
   )
-  const putRetiredAdoptionAttempt = db.prepare(`
-    INSERT OR IGNORE INTO adoption_retired_attempt (attempt_token, slug, session_id, retired_at_ms)
-    VALUES (?, ?, ?, ?)
+  const putRetiredAdoptionAttempt = scope.prepare(`
+    INSERT OR IGNORE INTO adoption_retired_attempt (project_id, attempt_token, slug, session_id, retired_at_ms)
+    VALUES (@project_id, ?, ?, ?, ?)
   `)
-  const reserveAdoptionClaimStmt = db.prepare(`
+  const reserveAdoptionClaimStmt = scope.prepare(`
     INSERT INTO adoption_claim (
-      slug, attempt_token, session_id, state, reserved_at_ms, lease_expires_at_ms,
+      project_id, slug, attempt_token, session_id, state, reserved_at_ms, lease_expires_at_ms,
       recovery_token, pane_id, pane_pid, session_created, finalized_at_ms
     )
-    SELECT @slug, @attempt_token, @session_id, 'reserved', @reserved_at_ms, @lease_expires_at_ms,
+    SELECT @project_id, @slug, @attempt_token, @session_id, 'reserved', @reserved_at_ms, @lease_expires_at_ms,
            NULL, NULL, NULL, NULL, NULL
-    WHERE NOT EXISTS (SELECT 1 FROM session WHERE slug = @slug)
+    WHERE NOT EXISTS (SELECT 1 FROM session WHERE project_id = @project_id AND slug = @slug)
       AND NOT EXISTS (
-        SELECT 1 FROM adoption_retired_attempt WHERE attempt_token = @attempt_token
+        SELECT 1 FROM adoption_retired_attempt WHERE project_id = @project_id AND attempt_token = @attempt_token
       )
     ON CONFLICT DO NOTHING
   `)
-  const recordAdoptionPaneStmt = db.prepare(`
+  const recordAdoptionPaneStmt = scope.prepare(`
     UPDATE adoption_claim
     SET state = 'spawned', pane_id = @pane_id, pane_pid = @pane_pid,
         session_created = @session_created, lease_expires_at_ms = @lease_expires_at_ms
-    WHERE slug = @slug AND attempt_token = @attempt_token
+    WHERE project_id = @project_id AND slug = @slug AND attempt_token = @attempt_token
       AND state IN ('reserved', 'spawned')
       AND (
         pane_id IS NULL OR
         (pane_id = @pane_id AND pane_pid = @pane_pid AND session_created = @session_created)
       )
   `)
-  const renewAdoptionSpawnFenceStmt = db.prepare(`
+  const renewAdoptionSpawnFenceStmt = scope.prepare(`
     UPDATE adoption_claim
     SET lease_expires_at_ms = ?
-    WHERE slug = ? AND attempt_token = ? AND state IN ('reserved', 'spawned')
+    WHERE project_id = @project_id AND slug = ? AND attempt_token = ? AND state IN ('reserved', 'spawned')
       AND recovery_token IS NULL
       AND NOT EXISTS (
         SELECT 1 FROM adoption_retired_attempt
-        WHERE attempt_token = adoption_claim.attempt_token
+        WHERE adoption_retired_attempt.project_id = adoption_claim.project_id AND attempt_token = adoption_claim.attempt_token
       )
   `)
-  const finalizeAdoptionClaimStmt = db.prepare(`
+  const finalizeAdoptionClaimStmt = scope.prepare(`
     UPDATE adoption_claim
     SET state = 'finalized', finalized_at_ms = ?, recovery_token = NULL
-    WHERE slug = ? AND attempt_token = ? AND session_id = ? AND state IN ('reserved', 'spawned')
+    WHERE project_id = @project_id AND slug = ? AND attempt_token = ? AND session_id = ? AND state IN ('reserved', 'spawned')
   `)
-  const rearmFinalizedAdoptionClaimStmt = db.prepare(`
+  const rearmFinalizedAdoptionClaimStmt = scope.prepare(`
     UPDATE adoption_claim
     SET attempt_token = @attempt_token, state = 'reserved', reserved_at_ms = @reserved_at_ms,
         lease_expires_at_ms = @lease_expires_at_ms, recovery_token = NULL,
         pane_id = NULL, pane_pid = NULL, session_created = NULL, finalized_at_ms = NULL
-    WHERE slug = @slug AND session_id = @session_id AND attempt_token = @previous_attempt_token
+    WHERE project_id = @project_id AND slug = @slug AND session_id = @session_id AND attempt_token = @previous_attempt_token
       AND state = 'finalized'
       AND EXISTS (
         SELECT 1 FROM session
-        WHERE session.slug = adoption_claim.slug AND session.session_id = adoption_claim.session_id
+        WHERE session.project_id = adoption_claim.project_id AND session.slug = adoption_claim.slug AND session.session_id = adoption_claim.session_id
       )
   `)
-  const finalizeAdoptionRespawnClaimStmt = db.prepare(`
+  const finalizeAdoptionRespawnClaimStmt = scope.prepare(`
     UPDATE adoption_claim
     SET state = 'finalized', finalized_at_ms = ?, recovery_token = NULL
-    WHERE slug = ? AND attempt_token = ? AND session_id = ? AND state IN ('reserved', 'spawned')
+    WHERE project_id = @project_id AND slug = ? AND attempt_token = ? AND session_id = ? AND state IN ('reserved', 'spawned')
       AND EXISTS (
         SELECT 1 FROM session
-        WHERE session.slug = adoption_claim.slug AND session.session_id = adoption_claim.session_id
+        WHERE session.project_id = adoption_claim.project_id AND session.slug = adoption_claim.slug AND session.session_id = adoption_claim.session_id
       )
   `)
-  const restoreAdoptionNoPaneStmt = db.prepare(`
+  const restoreAdoptionNoPaneStmt = scope.prepare(`
     UPDATE adoption_claim
     SET state = 'finalized', recovery_token = NULL,
         pane_id = NULL, pane_pid = NULL, session_created = NULL,
         finalized_at_ms = COALESCE(finalized_at_ms, reserved_at_ms)
-    WHERE slug = ? AND attempt_token = ? AND state IN ('reserved', 'spawned')
+    WHERE project_id = @project_id AND slug = ? AND attempt_token = ? AND state IN ('reserved', 'spawned')
       AND EXISTS (
         SELECT 1 FROM session
-        WHERE session.slug = adoption_claim.slug AND session.session_id = adoption_claim.session_id
+        WHERE session.project_id = adoption_claim.project_id AND session.slug = adoption_claim.slug AND session.session_id = adoption_claim.session_id
       )
   `)
-  const deleteAbandonedAdoptionClaimStmt = db.prepare(`
+  const deleteAbandonedAdoptionClaimStmt = scope.prepare(`
     DELETE FROM adoption_claim
-    WHERE slug = ? AND attempt_token = ? AND state IN ('reserved', 'spawned')
+    WHERE project_id = @project_id AND slug = ? AND attempt_token = ? AND state IN ('reserved', 'spawned')
   `)
-  const beginAdoptionRecoveryStmt = db.prepare(`
+  const beginAdoptionRecoveryStmt = scope.prepare(`
     UPDATE adoption_claim
     SET state = 'recovering', recovery_token = ?, lease_expires_at_ms = ?
-    WHERE slug = ? AND attempt_token = ? AND state != 'finalized' AND lease_expires_at_ms <= ?
+    WHERE project_id = @project_id AND slug = ? AND attempt_token = ? AND state != 'finalized' AND lease_expires_at_ms <= ?
   `)
-  const restoreRecoveredAdoptionNoPaneStmt = db.prepare(`
+  const restoreRecoveredAdoptionNoPaneStmt = scope.prepare(`
     UPDATE adoption_claim
     SET state = 'finalized', recovery_token = NULL,
         pane_id = NULL, pane_pid = NULL, session_created = NULL,
         finalized_at_ms = COALESCE(finalized_at_ms, reserved_at_ms)
-    WHERE slug = ? AND attempt_token = ? AND state = 'recovering' AND recovery_token = ?
+    WHERE project_id = @project_id AND slug = ? AND attempt_token = ? AND state = 'recovering' AND recovery_token = ?
       AND EXISTS (
         SELECT 1 FROM session
-        WHERE session.slug = adoption_claim.slug AND session.session_id = adoption_claim.session_id
+        WHERE session.project_id = adoption_claim.project_id AND session.slug = adoption_claim.slug AND session.session_id = adoption_claim.session_id
       )
   `)
-  const deleteRecoveredAdoptionClaimStmt = db.prepare(`
+  const deleteRecoveredAdoptionClaimStmt = scope.prepare(`
     DELETE FROM adoption_claim
-    WHERE slug = ? AND attempt_token = ? AND state = 'recovering' AND recovery_token = ?
+    WHERE project_id = @project_id AND slug = ? AND attempt_token = ? AND state = 'recovering' AND recovery_token = ?
   `)
-  const delFinalizedAdoptionClaim = db.prepare(`
-    DELETE FROM adoption_claim WHERE slug = ? AND session_id = ? AND state = 'finalized'
+  const delFinalizedAdoptionClaim = scope.prepare(`
+    DELETE FROM adoption_claim WHERE project_id = @project_id AND slug = ? AND session_id = ? AND state = 'finalized'
   `)
-  const retireFinalizedAdoptionClaimStmt = db.prepare(`
+  const retireFinalizedAdoptionClaimStmt = scope.prepare(`
     DELETE FROM adoption_claim
-    WHERE slug = ? AND session_id = ? AND attempt_token = ? AND state = 'finalized'
+    WHERE project_id = @project_id AND slug = ? AND session_id = ? AND attempt_token = ? AND state = 'finalized'
   `)
-  const readStmt = db.prepare("UPDATE session SET last_read_at = ?, unread = 0 WHERE slug = ?")
-  const unreadStmt = db.prepare("UPDATE session SET unread = ? WHERE slug = ?")
-  const unreadIfCurrentStmt = db.prepare(`
+  const readStmt = scope.prepare("UPDATE session SET last_read_at = ?, unread = 0 WHERE project_id = @project_id AND slug = ?")
+  const unreadStmt = scope.prepare("UPDATE session SET unread = ? WHERE project_id = @project_id AND slug = ?")
+  const unreadIfCurrentStmt = scope.prepare(`
     UPDATE session SET unread = ?
-    WHERE slug = ? AND session_id = ? AND runtime_generation = ?
+    WHERE project_id = @project_id AND slug = ? AND session_id = ? AND runtime_generation = ?
   `)
-  const exitedStmt = db.prepare("UPDATE session SET exited = ? WHERE slug = ?")
-  const exitedIfCurrentStmt = db.prepare(`
+  const exitedStmt = scope.prepare("UPDATE session SET exited = ? WHERE project_id = @project_id AND slug = ?")
+  const exitedIfCurrentStmt = scope.prepare(`
     UPDATE session SET exited = ?
-    WHERE slug = ? AND session_id = ? AND runtime_generation = ?
+    WHERE project_id = @project_id AND slug = ? AND session_id = ? AND runtime_generation = ?
   `)
-  const completeIfCurrentStmt = db.prepare(`
+  const completeIfCurrentStmt = scope.prepare(`
     UPDATE session
     SET exited = 1, state = 'archived', archived = 1, unread = 0, snoozed_until = NULL, snooze_prompt = NULL
-    WHERE slug = ? AND session_id = ? AND runtime_generation = ?
+    WHERE project_id = @project_id AND slug = ? AND session_id = ? AND runtime_generation = ?
   `)
-  const restedStmt = db.prepare("UPDATE session SET rested_at = ? WHERE slug = ?")
-  const restedIfCurrentStmt = db.prepare(`
+  const restedStmt = scope.prepare("UPDATE session SET rested_at = ? WHERE project_id = @project_id AND slug = ?")
+  const restedIfCurrentStmt = scope.prepare(`
     UPDATE session SET rested_at = ?
-    WHERE slug = ? AND session_id = ? AND runtime_generation = ?
+    WHERE project_id = @project_id AND slug = ? AND session_id = ? AND runtime_generation = ?
   `)
-  const seenStmt = db.prepare("UPDATE session SET seen_at = ? WHERE slug = ?")
-  const transcriptIdStmt = db.prepare("UPDATE session SET transcript_id = ? WHERE slug = ?")
-  const transcriptIdIfCurrentStmt = db.prepare(`
+  const seenStmt = scope.prepare("UPDATE session SET seen_at = ? WHERE project_id = @project_id AND slug = ?")
+  const transcriptIdStmt = scope.prepare("UPDATE session SET transcript_id = ? WHERE project_id = @project_id AND slug = ?")
+  const transcriptIdIfCurrentStmt = scope.prepare(`
     UPDATE session SET transcript_id = ?
-    WHERE slug = ? AND session_id = ? AND runtime_generation = ?
+    WHERE project_id = @project_id AND slug = ? AND session_id = ? AND runtime_generation = ?
   `)
-  const stateStmt = db.prepare(
-    "UPDATE session SET state = ?, archived = ?, unread = CASE WHEN ? = 1 THEN 0 ELSE unread END, snoozed_until = CASE WHEN ? = 1 THEN NULL ELSE snoozed_until END, snooze_prompt = CASE WHEN ? = 1 THEN NULL ELSE snooze_prompt END WHERE slug = ?",
+  const stateStmt = scope.prepare(
+    "UPDATE session SET state = ?, archived = ?, unread = CASE WHEN ? = 1 THEN 0 ELSE unread END, snoozed_until = CASE WHEN ? = 1 THEN NULL ELSE snoozed_until END, snooze_prompt = CASE WHEN ? = 1 THEN NULL ELSE snooze_prompt END WHERE project_id = @project_id AND slug = ?",
   )
-  const stateIfCurrentStmt = db.prepare(`
+  const stateIfCurrentStmt = scope.prepare(`
     UPDATE session SET state = ?, archived = ?,
       unread = CASE WHEN ? = 1 THEN 0 ELSE unread END,
       snoozed_until = CASE WHEN ? = 1 THEN NULL ELSE snoozed_until END,
       snooze_prompt = CASE WHEN ? = 1 THEN NULL ELSE snooze_prompt END
-    WHERE slug = ? AND session_id = ? AND runtime_generation = ?
+    WHERE project_id = @project_id AND slug = ? AND session_id = ? AND runtime_generation = ?
   `)
-  const snoozedUntilStmt = db.prepare("UPDATE session SET snoozed_until = ?, snooze_prompt = ? WHERE slug = ?")
+  const snoozedUntilStmt = scope.prepare("UPDATE session SET snoozed_until = ?, snooze_prompt = ? WHERE project_id = @project_id AND slug = ?")
   // The session-guarded park. Deliberately leaves snooze_prompt alone: it parks an instant without
   // arming a scheduled bump, so a caller that wants both writes both.
-  const snoozedUntilIfCurrentStmt = db.prepare(`
+  const snoozedUntilIfCurrentStmt = scope.prepare(`
     UPDATE session SET snoozed_until = ?
-    WHERE slug = ? AND session_id = ? AND runtime_generation = ?
+    WHERE project_id = @project_id AND slug = ? AND session_id = ? AND runtime_generation = ?
   `)
-  const bgSnoozeRestedAtIfCurrentStmt = db.prepare(`
+  const bgSnoozeRestedAtIfCurrentStmt = scope.prepare(`
     UPDATE session SET bg_snooze_rested_at = ?
-    WHERE slug = ? AND session_id = ? AND runtime_generation = ?
+    WHERE project_id = @project_id AND slug = ? AND session_id = ? AND runtime_generation = ?
   `)
   // Every SET expression here reads the ORIGINAL row (SQLite evaluates the whole SET list against the
   // pre-update values), which is what lets one statement decide whether this write is a new arming or
@@ -1734,191 +1493,191 @@ export function createStorage(dbPath: string): Storage {
       prompt, prompt,
     ] as const
   }
-  const recurringStmt = db.prepare(`UPDATE session SET ${RECURRING_SET}
-    WHERE slug = ? AND session_id = ? AND runtime_generation = ?`)
-  const recurringBySlugStmt = db.prepare(`UPDATE session SET ${RECURRING_SET} WHERE slug = ?`)
-  const recurringRestFiredStmt = db.prepare(`
+  const recurringStmt = scope.prepare(`UPDATE session SET ${RECURRING_SET}
+    WHERE project_id = @project_id AND slug = ? AND session_id = ? AND runtime_generation = ?`)
+  const recurringBySlugStmt = scope.prepare(`UPDATE session SET ${RECURRING_SET} WHERE project_id = @project_id AND slug = ?`)
+  const recurringRestFiredStmt = scope.prepare(`
     UPDATE session SET recurring_rest_fired_at = ?
-    WHERE slug = ? AND recurring_armed_at = ?
+    WHERE project_id = @project_id AND slug = ? AND recurring_armed_at = ?
   `)
-  const recurringScheduleFiredStmt = db.prepare(`
+  const recurringScheduleFiredStmt = scope.prepare(`
     UPDATE session SET recurring_schedule_fired_at = ?
-    WHERE slug = ? AND recurring_armed_at = ?
+    WHERE project_id = @project_id AND slug = ? AND recurring_armed_at = ?
   `)
-  const recurringCompactFiredStmt = db.prepare(`
+  const recurringCompactFiredStmt = scope.prepare(`
     UPDATE session SET recurring_compact_fired_at = ?
-    WHERE slug = ? AND recurring_armed_at = ?
+    WHERE project_id = @project_id AND slug = ? AND recurring_armed_at = ?
   `)
   // ---- ONE-OFF TIMERS ----------------------------------------------------------------------------
-  const armTimerStmt = db.prepare(`
-    INSERT INTO thread_timer (id, thread_slug, prompt, fire_at, state, created_at, settled_at)
-    VALUES (@id, @slug, @prompt, @fireAtMs, 'armed', @createdAtMs, NULL)
+  const armTimerStmt = scope.prepare(`
+    INSERT INTO thread_timer (project_id, id, thread_slug, prompt, fire_at, state, created_at, settled_at)
+    VALUES (@project_id, @id, @slug, @prompt, @fireAtMs, 'armed', @createdAtMs, NULL)
   `)
-  const timersBySlugStmt = db.prepare<[string], ThreadTimerRow>(
-    "SELECT * FROM thread_timer WHERE thread_slug = ? ORDER BY fire_at, id",
+  const timersBySlugStmt = scope.prepare<[string], ThreadTimerRow>(
+    "SELECT * FROM thread_timer WHERE project_id = @project_id AND thread_slug = ? ORDER BY fire_at, id",
   )
-  const armedTimersBySlugStmt = db.prepare<[string], ThreadTimerRow>(
-    "SELECT * FROM thread_timer WHERE thread_slug = ? AND state = 'armed' ORDER BY fire_at, id",
+  const armedTimersBySlugStmt = scope.prepare<[string], ThreadTimerRow>(
+    "SELECT * FROM thread_timer WHERE project_id = @project_id AND thread_slug = ? AND state = 'armed' ORDER BY fire_at, id",
   )
-  const timerByIdStmt = db.prepare<[string], ThreadTimerRow>("SELECT * FROM thread_timer WHERE id = ?")
-  const dueTimersStmt = db.prepare<[number], ThreadTimerRow>(
-    "SELECT * FROM thread_timer WHERE state = 'armed' AND fire_at <= ? ORDER BY fire_at, id",
+  const timerByIdStmt = scope.prepare<[string], ThreadTimerRow>("SELECT * FROM thread_timer WHERE project_id = @project_id AND id = ?")
+  const dueTimersStmt = scope.prepare<[number], ThreadTimerRow>(
+    "SELECT * FROM thread_timer WHERE project_id = @project_id AND state = 'armed' AND fire_at <= ? ORDER BY fire_at, id",
   )
-  const cancelTimerStmt = db.prepare(`
+  const cancelTimerStmt = scope.prepare(`
     UPDATE thread_timer SET state = 'cancelled', settled_at = ?
-    WHERE id = ? AND thread_slug = ? AND state = 'armed'
+    WHERE project_id = @project_id AND id = ? AND thread_slug = ? AND state = 'armed'
   `)
-  const fireTimerStmt = db.prepare(`
+  const fireTimerStmt = scope.prepare(`
     UPDATE thread_timer SET state = 'fired', settled_at = ?
-    WHERE id = ? AND state = 'armed'
+    WHERE project_id = @project_id AND id = ? AND state = 'armed'
   `)
-  const delThreadTimers = db.prepare("DELETE FROM thread_timer WHERE thread_slug = ?")
+  const delThreadTimers = scope.prepare("DELETE FROM thread_timer WHERE project_id = @project_id AND thread_slug = ?")
   // ONE statement decides reset-vs-increment, by reading the row's own anchor: SQLite evaluates the SET
   // list against the pre-update values, so a changed anchor restarts the count at 1 in the same write.
-  const countNudgeStmt = db.prepare(`
+  const countNudgeStmt = scope.prepare(`
     UPDATE session SET signoff_nudges = signoff_nudges + 1, signoff_nudge_anchor = ?
-    WHERE slug = ?
+    WHERE project_id = @project_id AND slug = ?
   `)
-  const resetNudgesStmt = db.prepare(`
+  const resetNudgesStmt = scope.prepare(`
     UPDATE session SET signoff_nudges = 0, signoff_nudge_anchor = NULL
-    WHERE slug = ? AND signoff_nudges > 0
+    WHERE project_id = @project_id AND slug = ? AND signoff_nudges > 0
   `)
-  const countParkBumpStmt = db.prepare(`
+  const countParkBumpStmt = scope.prepare(`
     UPDATE session SET park_bumps = park_bumps + 1, park_bump_anchor = ?
-    WHERE slug = ?
+    WHERE project_id = @project_id AND slug = ?
   `)
-  const resetParkBumpsStmt = db.prepare(`
+  const resetParkBumpsStmt = scope.prepare(`
     UPDATE session SET park_bumps = 0, park_bump_anchor = NULL
-    WHERE slug = ? AND park_bumps > 0
+    WHERE project_id = @project_id AND slug = ? AND park_bumps > 0
   `)
-  const armPrWatchStmt = db.prepare(`
-    INSERT INTO pr_watch (id, thread_slug, owner, repo, number, state, created_at, settled_at, cursor, expires_at)
-    VALUES (@id, @slug, @owner, @repo, @number, 'armed', @createdAtMs, NULL, NULL, @expiresAtMs)
+  const armPrWatchStmt = scope.prepare(`
+    INSERT INTO pr_watch (project_id, id, thread_slug, owner, repo, number, state, created_at, settled_at, cursor, expires_at)
+    VALUES (@project_id, @id, @slug, @owner, @repo, @number, 'armed', @createdAtMs, NULL, NULL, @expiresAtMs)
   `)
-  const expiredPrWatchesStmt = db.prepare<[number], PrWatchRow>(
-    "SELECT * FROM pr_watch WHERE state = 'armed' AND expires_at IS NOT NULL AND expires_at <= ? ORDER BY expires_at, id",
+  const expiredPrWatchesStmt = scope.prepare<[number], PrWatchRow>(
+    "SELECT * FROM pr_watch WHERE project_id = @project_id AND state = 'armed' AND expires_at IS NOT NULL AND expires_at <= ? ORDER BY expires_at, id",
   )
-  const prWatchesBySlugStmt = db.prepare<[string], PrWatchRow>(
-    "SELECT * FROM pr_watch WHERE thread_slug = ? ORDER BY created_at, id",
+  const prWatchesBySlugStmt = scope.prepare<[string], PrWatchRow>(
+    "SELECT * FROM pr_watch WHERE project_id = @project_id AND thread_slug = ? ORDER BY created_at, id",
   )
-  const armedPrWatchesBySlugStmt = db.prepare<[string], PrWatchRow>(
-    "SELECT * FROM pr_watch WHERE thread_slug = ? AND state = 'armed' ORDER BY created_at, id",
+  const armedPrWatchesBySlugStmt = scope.prepare<[string], PrWatchRow>(
+    "SELECT * FROM pr_watch WHERE project_id = @project_id AND thread_slug = ? AND state = 'armed' ORDER BY created_at, id",
   )
-  const prWatchByIdStmt = db.prepare<[string], PrWatchRow>("SELECT * FROM pr_watch WHERE id = ?")
-  const armedPrWatchesStmt = db.prepare<[], PrWatchRow>(
-    "SELECT * FROM pr_watch WHERE state = 'armed' ORDER BY created_at, id",
+  const prWatchByIdStmt = scope.prepare<[string], PrWatchRow>("SELECT * FROM pr_watch WHERE project_id = @project_id AND id = ?")
+  const armedPrWatchesStmt = scope.prepare<[], PrWatchRow>(
+    "SELECT * FROM pr_watch WHERE project_id = @project_id AND state = 'armed' ORDER BY created_at, id",
   )
-  const dropPrWatchStmt = db.prepare(`
+  const dropPrWatchStmt = scope.prepare(`
     UPDATE pr_watch SET state = 'dropped', settled_at = ?
-    WHERE id = ? AND thread_slug = ? AND state = 'armed'
+    WHERE project_id = @project_id AND id = ? AND thread_slug = ? AND state = 'armed'
   `)
-  const settlePrWatchStmt = db.prepare(`
+  const settlePrWatchStmt = scope.prepare(`
     UPDATE pr_watch SET state = 'settled', settled_at = ?
-    WHERE id = ? AND state = 'armed'
+    WHERE project_id = @project_id AND id = ? AND state = 'armed'
   `)
-  const prWatchCursorStmt = db.prepare("UPDATE pr_watch SET cursor = ? WHERE id = ? AND state = 'armed'")
-  const delPrWatches = db.prepare("DELETE FROM pr_watch WHERE thread_slug = ?")
-  const armThreadWatchStmt = db.prepare(`
-    INSERT INTO thread_watch (id, thread_slug, kind, target, state, created_at, expires_at, settled_at)
-    VALUES (@id, @slug, @kind, @target, 'armed', @createdAtMs, @expiresAtMs, NULL)
+  const prWatchCursorStmt = scope.prepare("UPDATE pr_watch SET cursor = ? WHERE project_id = @project_id AND id = ? AND state = 'armed'")
+  const delPrWatches = scope.prepare("DELETE FROM pr_watch WHERE project_id = @project_id AND thread_slug = ?")
+  const armThreadWatchStmt = scope.prepare(`
+    INSERT INTO thread_watch (project_id, id, thread_slug, kind, target, state, created_at, expires_at, settled_at)
+    VALUES (@project_id, @id, @slug, @kind, @target, 'armed', @createdAtMs, @expiresAtMs, NULL)
   `)
-  const armedThreadWatchStmt = db.prepare<[string, string, string], ThreadWatchRow>(
-    "SELECT * FROM thread_watch WHERE thread_slug = ? AND kind = ? AND target = ? AND state = 'armed'",
+  const armedThreadWatchStmt = scope.prepare<[string, string, string], ThreadWatchRow>(
+    "SELECT * FROM thread_watch WHERE project_id = @project_id AND thread_slug = ? AND kind = ? AND target = ? AND state = 'armed'",
   )
-  const threadWatchesBySlugStmt = db.prepare<[string], ThreadWatchRow>(
-    "SELECT * FROM thread_watch WHERE thread_slug = ? ORDER BY created_at, id",
+  const threadWatchesBySlugStmt = scope.prepare<[string], ThreadWatchRow>(
+    "SELECT * FROM thread_watch WHERE project_id = @project_id AND thread_slug = ? ORDER BY created_at, id",
   )
-  const armedThreadWatchesBySlugStmt = db.prepare<[string], ThreadWatchRow>(
-    "SELECT * FROM thread_watch WHERE thread_slug = ? AND state = 'armed' ORDER BY created_at, id",
+  const armedThreadWatchesBySlugStmt = scope.prepare<[string], ThreadWatchRow>(
+    "SELECT * FROM thread_watch WHERE project_id = @project_id AND thread_slug = ? AND state = 'armed' ORDER BY created_at, id",
   )
-  const threadWatchByIdStmt = db.prepare<[string], ThreadWatchRow>("SELECT * FROM thread_watch WHERE id = ?")
-  const armedThreadWatchesStmt = db.prepare<[], ThreadWatchRow>(
-    "SELECT * FROM thread_watch WHERE state = 'armed' ORDER BY created_at, id",
+  const threadWatchByIdStmt = scope.prepare<[string], ThreadWatchRow>("SELECT * FROM thread_watch WHERE project_id = @project_id AND id = ?")
+  const armedThreadWatchesStmt = scope.prepare<[], ThreadWatchRow>(
+    "SELECT * FROM thread_watch WHERE project_id = @project_id AND state = 'armed' ORDER BY created_at, id",
   )
-  const expiredThreadWatchesStmt = db.prepare<[number], ThreadWatchRow>(
-    "SELECT * FROM thread_watch WHERE state = 'armed' AND expires_at <= ? ORDER BY expires_at, id",
+  const expiredThreadWatchesStmt = scope.prepare<[number], ThreadWatchRow>(
+    "SELECT * FROM thread_watch WHERE project_id = @project_id AND state = 'armed' AND expires_at <= ? ORDER BY expires_at, id",
   )
-  const dropThreadWatchStmt = db.prepare(`
+  const dropThreadWatchStmt = scope.prepare(`
     UPDATE thread_watch SET state = 'dropped', settled_at = ?
-    WHERE id = ? AND thread_slug = ? AND state = 'armed'
+    WHERE project_id = @project_id AND id = ? AND thread_slug = ? AND state = 'armed'
   `)
-  const settleThreadWatchStmt = db.prepare(`
+  const settleThreadWatchStmt = scope.prepare(`
     UPDATE thread_watch SET state = ?, settled_at = ?
-    WHERE id = ? AND state = 'armed'
+    WHERE project_id = @project_id AND id = ? AND state = 'armed'
   `)
-  const delThreadWatches = db.prepare("DELETE FROM thread_watch WHERE thread_slug = ?")
-  const askThreadQuestionStmt = db.prepare(`
-    INSERT INTO thread_question (id, thread_slug, spec, state, answer, delivered, asked_at, settled_at)
-    VALUES (@id, @slug, @spec, 'open', NULL, 0, @askedAtMs, NULL)
+  const delThreadWatches = scope.prepare("DELETE FROM thread_watch WHERE project_id = @project_id AND thread_slug = ?")
+  const askThreadQuestionStmt = scope.prepare(`
+    INSERT INTO thread_question (project_id, id, thread_slug, spec, state, answer, delivered, asked_at, settled_at)
+    VALUES (@project_id, @id, @slug, @spec, 'open', NULL, 0, @askedAtMs, NULL)
   `)
-  const threadQuestionsBySlugStmt = db.prepare<[string], ThreadQuestionRow>(
-    "SELECT * FROM thread_question WHERE thread_slug = ? ORDER BY asked_at, id",
+  const threadQuestionsBySlugStmt = scope.prepare<[string], ThreadQuestionRow>(
+    "SELECT * FROM thread_question WHERE project_id = @project_id AND thread_slug = ? ORDER BY asked_at, id",
   )
-  const openThreadQuestionsBySlugStmt = db.prepare<[string], ThreadQuestionRow>(
-    "SELECT * FROM thread_question WHERE thread_slug = ? AND state = 'open' ORDER BY asked_at, id",
+  const openThreadQuestionsBySlugStmt = scope.prepare<[string], ThreadQuestionRow>(
+    "SELECT * FROM thread_question WHERE project_id = @project_id AND thread_slug = ? AND state = 'open' ORDER BY asked_at, id",
   )
-  const threadQuestionByIdStmt = db.prepare<[string], ThreadQuestionRow>("SELECT * FROM thread_question WHERE id = ?")
-  const openThreadQuestionsStmt = db.prepare<[], ThreadQuestionRow>(
-    "SELECT * FROM thread_question WHERE state = 'open' ORDER BY asked_at, id",
+  const threadQuestionByIdStmt = scope.prepare<[string], ThreadQuestionRow>("SELECT * FROM thread_question WHERE project_id = @project_id AND id = ?")
+  const openThreadQuestionsStmt = scope.prepare<[], ThreadQuestionRow>(
+    "SELECT * FROM thread_question WHERE project_id = @project_id AND state = 'open' ORDER BY asked_at, id",
   )
-  const answerThreadQuestionStmt = db.prepare(`
+  const answerThreadQuestionStmt = scope.prepare(`
     UPDATE thread_question SET state = 'answered', answer = ?, settled_at = ?
-    WHERE id = ? AND state = 'open'
+    WHERE project_id = @project_id AND id = ? AND state = 'open'
   `)
   // Settled but not yet told to the worker. ANSWERED and DISMISSED, never WITHDRAWN: a withdrawal is the
   // worker's own act, so telling it about one would be reading its own move back to it.
-  const undeliveredSettlementsStmt = db.prepare<[], ThreadQuestionRow>(
-    "SELECT * FROM thread_question WHERE state IN ('answered', 'dismissed') AND delivered = 0 ORDER BY settled_at, id",
+  const undeliveredSettlementsStmt = scope.prepare<[], ThreadQuestionRow>(
+    "SELECT * FROM thread_question WHERE project_id = @project_id AND state IN ('answered', 'dismissed') AND delivered = 0 ORDER BY settled_at, id",
   )
-  const markSettlementDeliveredStmt = db.prepare(
-    "UPDATE thread_question SET delivered = 1 WHERE id = ? AND delivered = 0",
+  const markSettlementDeliveredStmt = scope.prepare(
+    "UPDATE thread_question SET delivered = 1 WHERE project_id = @project_id AND id = ? AND delivered = 0",
   )
-  const withdrawThreadQuestionStmt = db.prepare(`
+  const withdrawThreadQuestionStmt = scope.prepare(`
     UPDATE thread_question SET state = 'withdrawn', settled_at = ?
-    WHERE id = ? AND thread_slug = ? AND state = 'open'
+    WHERE project_id = @project_id AND id = ? AND thread_slug = ? AND state = 'open'
   `)
-  const dismissThreadQuestionStmt = db.prepare(`
+  const dismissThreadQuestionStmt = scope.prepare(`
     UPDATE thread_question SET state = 'dismissed', settled_at = ?
-    WHERE id = ? AND state = 'open'
+    WHERE project_id = @project_id AND id = ? AND state = 'open'
   `)
-  const delThreadQuestions = db.prepare("DELETE FROM thread_question WHERE thread_slug = ?")
-  const delThreadDone = db.prepare("DELETE FROM thread_done WHERE thread_slug = ?")
-  const markThreadDoneStmt = db.prepare(`
-    INSERT INTO thread_done (thread_slug, body, done_at) VALUES (?, ?, ?)
-    ON CONFLICT(thread_slug) DO UPDATE SET body = excluded.body, done_at = excluded.done_at
+  const delThreadQuestions = scope.prepare("DELETE FROM thread_question WHERE project_id = @project_id AND thread_slug = ?")
+  const delThreadDone = scope.prepare("DELETE FROM thread_done WHERE project_id = @project_id AND thread_slug = ?")
+  const markThreadDoneStmt = scope.prepare(`
+    INSERT INTO thread_done (project_id, thread_slug, body, done_at) VALUES (@project_id, ?, ?, ?)
+    ON CONFLICT(project_id, thread_slug) DO UPDATE SET body = excluded.body, done_at = excluded.done_at
   `)
-  const getThreadDoneStmt = db.prepare("SELECT body, done_at FROM thread_done WHERE thread_slug = ?")
-  const clearThreadDoneStmt = db.prepare("DELETE FROM thread_done WHERE thread_slug = ?")
+  const getThreadDoneStmt = scope.prepare("SELECT body, done_at FROM thread_done WHERE project_id = @project_id AND thread_slug = ?")
+  const clearThreadDoneStmt = scope.prepare("DELETE FROM thread_done WHERE project_id = @project_id AND thread_slug = ?")
   // Only a PROMPTLESS snooze expires here. One that carries a prompt still owes the thread a bump, and
   // the scheduler — not the board — clears it once that wake reaches a terminal state. Erasing it on
   // elapse (the board refreshes far more often than the waker ticks) would drop the follow-up entirely.
-  const clearExpiredSnoozesStmt = db.prepare(`
+  const clearExpiredSnoozesStmt = scope.prepare(`
     UPDATE session SET snoozed_until = NULL
-    WHERE snoozed_until IS NOT NULL AND snoozed_until <= ? AND snooze_prompt IS NULL
+    WHERE project_id = @project_id AND snoozed_until IS NOT NULL AND snoozed_until <= ? AND snooze_prompt IS NULL
   `)
   // Both human-title writers LOCK as they write: the text, the "not a guess" flag, and the lock move in
   // one statement, so no concurrent tail tick can land a backend auto-title between them.
-  const titleStmt = db.prepare("UPDATE session SET title = ?, title_auto = 0, title_locked = 1, title_agent = 0 WHERE slug = ?")
-  const titleCasStmt = db.prepare(
-    "UPDATE session SET title = ?, title_auto = 0, title_locked = 1, title_agent = 0 WHERE slug = ? AND session_id = ? AND title IS ? AND title_auto = ?",
+  const titleStmt = scope.prepare("UPDATE session SET title = ?, title_auto = 0, title_locked = 1, title_agent = 0 WHERE project_id = @project_id AND slug = ?")
+  const titleCasStmt = scope.prepare(
+    "UPDATE session SET title = ?, title_auto = 0, title_locked = 1, title_agent = 0 WHERE project_id = @project_id AND slug = ? AND session_id = ? AND title IS ? AND title_auto = ?",
   )
   // Gated on the LOCK, not on title_auto: a caller-supplied dispatch title (`Investigate acme/app#391`,
   // a parent agent's guess) is unlocked, so the worker's own title supersedes it. title_auto is left
   // alone — the row's DISPLAY provenance is unchanged by which machine produced the current text.
   // `title_agent` IS moved, because it describes the text this statement is writing: the worker's own
   // name. It is what lets the display trust a persisted codex title once the live telemetry is gone.
-  const autoTitleCasStmt = db.prepare(`
+  const autoTitleCasStmt = scope.prepare(`
     UPDATE session SET title = ?, title_agent = 1
-    WHERE slug = ? AND session_id = ? AND agent_session_id IS ?
+    WHERE project_id = @project_id AND slug = ? AND session_id = ? AND agent_session_id IS ?
       AND runtime_generation = ? AND title_locked = 0
   `)
-  const delSession = db.prepare("DELETE FROM session WHERE slug = ?")
-  const putRetiredOp = db.prepare("INSERT OR IGNORE INTO retired_op (slug, session_id, op_id, retired_at) VALUES (?, ?, ?, ?)")
-  const getRetiredOps = db.prepare<[string, string], { op_id: string }>("SELECT op_id FROM retired_op WHERE slug = ? AND session_id = ?")
-  const delRetiredOps = db.prepare("DELETE FROM retired_op WHERE slug = ?")
-  const delRetiredOp = db.prepare("DELETE FROM retired_op WHERE slug = ? AND session_id = ? AND op_id = ?")
-  const putTomb = db.prepare("INSERT OR IGNORE INTO tombstone (transcript_id, slug, forgotten_at) VALUES (?, ?, ?)")
-  const allTombs = db.prepare<[], { transcript_id: string }>("SELECT transcript_id FROM tombstone")
+  const delSession = scope.prepare("DELETE FROM session WHERE project_id = @project_id AND slug = ?")
+  const putRetiredOp = scope.prepare("INSERT OR IGNORE INTO retired_op (project_id, slug, session_id, op_id, retired_at) VALUES (@project_id, ?, ?, ?, ?)")
+  const getRetiredOps = scope.prepare<[string, string], { op_id: string }>("SELECT op_id FROM retired_op WHERE project_id = @project_id AND slug = ? AND session_id = ?")
+  const delRetiredOps = scope.prepare("DELETE FROM retired_op WHERE project_id = @project_id AND slug = ?")
+  const delRetiredOp = scope.prepare("DELETE FROM retired_op WHERE project_id = @project_id AND slug = ? AND session_id = ? AND op_id = ?")
+  const putTomb = scope.prepare("INSERT OR IGNORE INTO tombstone (project_id, transcript_id, slug, forgotten_at) VALUES (@project_id, ?, ?, ?)")
+  const allTombs = scope.prepare<[], { transcript_id: string }>("SELECT transcript_id FROM tombstone WHERE project_id = @project_id")
   // Storage is constructed before the disabled app-server bridge, so this table may appear later in
   // the process. Resolve it lazily inside the same registry transaction. Detaching first makes a
   // matching native binding non-actionable even if the post-commit process cleanup is interrupted.
@@ -1928,10 +1687,10 @@ export function createStorage(dbPath: string): Storage {
       WHERE type = 'table' AND name = 'codex_app_server_session'
     `).get()
     if (!exists) return
-    db.prepare(`
+    scope.prepare(`
       UPDATE codex_app_server_session
       SET state = 'detached', current_turn_id = NULL, updated_at = ?
-      WHERE thread_slug = ? AND frizz_session_id = ?
+      WHERE project_id = @project_id AND thread_slug = ? AND frizz_session_id = ?
     `).run(at, threadSlug, sessionId)
   }
   const forgetOwnedRow = (existing: SessionRow): SessionRow => {
@@ -1990,121 +1749,121 @@ export function createStorage(dbPath: string): Storage {
       return forgetOwnedRow(existing)
     },
   )
-  const backendStmt = db.prepare("UPDATE session SET backend = ? WHERE slug = ?")
-  const agentSessionStmt = db.prepare("UPDATE session SET agent_session_id = ? WHERE slug = ?")
-  const codexRuntimeStmt = db.prepare("UPDATE session SET codex_runtime = ? WHERE slug = ?")
-  const claudeRuntimeStmt = db.prepare("UPDATE session SET claude_runtime = ? WHERE slug = ?")
+  const backendStmt = scope.prepare("UPDATE session SET backend = ? WHERE project_id = @project_id AND slug = ?")
+  const agentSessionStmt = scope.prepare("UPDATE session SET agent_session_id = ? WHERE project_id = @project_id AND slug = ?")
+  const codexRuntimeStmt = scope.prepare("UPDATE session SET codex_runtime = ? WHERE project_id = @project_id AND slug = ?")
+  const claudeRuntimeStmt = scope.prepare("UPDATE session SET claude_runtime = ? WHERE project_id = @project_id AND slug = ?")
   // Stamps profile_set_at alongside model/effort: the OPERATOR's set-time (the codex setThreadProfile
   // path), which the board uses to outrank an older observed turn_context so a just-picked model/effort
   // shows on the composer selector immediately (see resolveSessionProfile). Sibling of permissionModeStmt.
-  const profileStmt = db.prepare("UPDATE session SET model = ?, effort = ?, profile_set_at = ? WHERE slug = ?")
+  const profileStmt = scope.prepare("UPDATE session SET model = ?, effort = ?, profile_set_at = ? WHERE project_id = @project_id AND slug = ?")
   // Stamps permission_set_at alongside the mode: this is the OPERATOR's set-time, which the board uses
   // to outrank an older observed telemetry reading (see resolveSessionPermission). The tailer's
   // observed write-back uses observedPermissionIfCurrentStmt and deliberately does NOT touch it.
-  const permissionModeStmt = db.prepare("UPDATE session SET permission_mode = ?, permission_set_at = ? WHERE slug = ?")
-  const permissionPendingStmt = db.prepare("UPDATE session SET permission_pending = ? WHERE slug = ?")
-  const beginRuntimeControlStmt = db.prepare(`
+  const permissionModeStmt = scope.prepare("UPDATE session SET permission_mode = ?, permission_set_at = ? WHERE project_id = @project_id AND slug = ?")
+  const permissionPendingStmt = scope.prepare("UPDATE session SET permission_pending = ? WHERE project_id = @project_id AND slug = ?")
+  const beginRuntimeControlStmt = scope.prepare(`
     UPDATE session
     SET runtime_control = ?, runtime_control_revision = runtime_control_revision + 1
-    WHERE slug = ? AND session_id = ? AND agent_session_id IS ? AND runtime_generation = ?
+    WHERE project_id = @project_id AND slug = ? AND session_id = ? AND agent_session_id IS ? AND runtime_generation = ?
       AND runtime_control IS NULL AND permission_pending IS NULL
       AND profile_pending_model IS NULL AND profile_pending_effort IS NULL
   `)
-  const releaseRuntimeControlStmt = db.prepare(`
+  const releaseRuntimeControlStmt = scope.prepare(`
     UPDATE session SET runtime_control = NULL
-    WHERE slug = ? AND session_id = ? AND runtime_generation = ?
+    WHERE project_id = @project_id AND slug = ? AND session_id = ? AND runtime_generation = ?
       AND runtime_control = ? AND runtime_control_revision = ?
   `)
-  const profileTargetIfCurrentStmt = db.prepare(`
+  const profileTargetIfCurrentStmt = scope.prepare(`
     UPDATE session
     SET model = ?, effort = ?, profile_revision = profile_revision + 1, control_error = NULL
-    WHERE slug = ? AND session_id = ? AND agent_session_id IS ? AND runtime_generation = ?
+    WHERE project_id = @project_id AND slug = ? AND session_id = ? AND agent_session_id IS ? AND runtime_generation = ?
       AND runtime_control IS NULL AND permission_pending IS NULL
       AND profile_pending_model IS NULL AND profile_pending_effort IS NULL
   `)
-  const armProfileChangeStmt = db.prepare(`
+  const armProfileChangeStmt = scope.prepare(`
     UPDATE session
     SET profile_pending_model = ?, profile_pending_effort = ?,
         profile_revision = profile_revision + 1,
         profile_handoff = ?,
         runtime_control = 'profile', runtime_control_revision = runtime_control_revision + 1,
         control_error = NULL
-    WHERE slug = ? AND session_id = ? AND agent_session_id IS ? AND runtime_generation = ?
+    WHERE project_id = @project_id AND slug = ? AND session_id = ? AND agent_session_id IS ? AND runtime_generation = ?
       AND runtime_control IS NULL AND permission_pending IS NULL
       AND profile_pending_model IS NULL AND profile_pending_effort IS NULL
   `)
-  const checkpointProfileChangeStmt = db.prepare(`
+  const checkpointProfileChangeStmt = scope.prepare(`
     UPDATE session SET profile_handoff = ?, control_error = NULL
-    WHERE slug = ? AND session_id = ? AND agent_session_id IS ? AND runtime_generation = ?
+    WHERE project_id = @project_id AND slug = ? AND session_id = ? AND agent_session_id IS ? AND runtime_generation = ?
       AND profile_revision = ? AND runtime_control = 'profile' AND runtime_control_revision = ?
       AND profile_pending_model = ? AND profile_pending_effort = ? AND profile_handoff IS ?
   `)
-  const commitProfileChangeStmt = db.prepare(`
+  const commitProfileChangeStmt = scope.prepare(`
     UPDATE session
     SET model = ?, effort = ?, profile_pending_model = NULL, profile_pending_effort = NULL,
         profile_handoff = NULL, runtime_control = NULL, control_error = NULL
-    WHERE slug = ? AND session_id = ? AND agent_session_id IS ? AND runtime_generation = ?
+    WHERE project_id = @project_id AND slug = ? AND session_id = ? AND agent_session_id IS ? AND runtime_generation = ?
       AND profile_revision = ? AND runtime_control = 'profile' AND runtime_control_revision = ?
       AND profile_pending_model = ? AND profile_pending_effort = ? AND profile_handoff IS ?
   `)
-  const restoreProfileChangeStmt = db.prepare(`
+  const restoreProfileChangeStmt = scope.prepare(`
     UPDATE session
     SET model = ?, effort = ?, profile_pending_model = NULL, profile_pending_effort = NULL,
         profile_handoff = NULL, runtime_control = NULL, control_error = ?
-    WHERE slug = ? AND session_id = ? AND agent_session_id IS ? AND runtime_generation = ?
+    WHERE project_id = @project_id AND slug = ? AND session_id = ? AND agent_session_id IS ? AND runtime_generation = ?
       AND profile_revision = ? AND runtime_control = 'profile' AND runtime_control_revision = ?
       AND profile_pending_model = ? AND profile_pending_effort = ? AND profile_handoff IS ?
   `)
-  const blockProfileChangeStmt = db.prepare(`
+  const blockProfileChangeStmt = scope.prepare(`
     UPDATE session SET control_error = ?
-    WHERE slug = ? AND session_id = ? AND agent_session_id IS ? AND runtime_generation = ?
+    WHERE project_id = @project_id AND slug = ? AND session_id = ? AND agent_session_id IS ? AND runtime_generation = ?
       AND profile_revision = ? AND runtime_control = 'profile' AND runtime_control_revision = ?
       AND profile_pending_model = ? AND profile_pending_effort = ? AND profile_handoff IS ?
   `)
-  const failProfileChangeStmt = db.prepare(`
+  const failProfileChangeStmt = scope.prepare(`
     UPDATE session
     SET profile_pending_model = NULL, profile_pending_effort = NULL,
         profile_handoff = NULL, runtime_control = NULL, control_error = ?
-    WHERE slug = ? AND session_id = ? AND agent_session_id IS ? AND runtime_generation = ?
+    WHERE project_id = @project_id AND slug = ? AND session_id = ? AND agent_session_id IS ? AND runtime_generation = ?
       AND profile_revision = ? AND runtime_control = 'profile' AND runtime_control_revision = ?
       AND profile_pending_model = ? AND profile_pending_effort = ? AND profile_handoff IS ?
   `)
-  const observedProfileIfCurrentStmt = db.prepare(`
+  const observedProfileIfCurrentStmt = scope.prepare(`
     UPDATE session
     SET model = ?, effort = ?, profile_revision = profile_revision + 1
-    WHERE slug = ? AND session_id = ? AND runtime_generation = ?
+    WHERE project_id = @project_id AND slug = ? AND session_id = ? AND runtime_generation = ?
       AND runtime_control IS NULL AND profile_pending_model IS NULL AND profile_pending_effort IS NULL
       AND (model IS NOT ? OR effort IS NOT ?)
   `)
-  const beginRuntimeGenerationStmt = db.prepare(`
+  const beginRuntimeGenerationStmt = scope.prepare(`
     UPDATE session
     SET runtime_generation = runtime_generation + 1, spawned_at = ?, exited = 0
-    WHERE slug = ? AND session_id = ? AND runtime_generation = ? AND permission_pending IS ?
+    WHERE project_id = @project_id AND slug = ? AND session_id = ? AND runtime_generation = ? AND permission_pending IS ?
       AND runtime_control IS ?
   `)
-  const permissionStateIfCurrentStmt = db.prepare(`
+  const permissionStateIfCurrentStmt = scope.prepare(`
     UPDATE session
     SET exited = ?, permission_mode = ?, permission_pending = ?, control_error = ?,
         runtime_control = CASE
           WHEN ? IS NULL AND runtime_control = 'permission' THEN NULL
           ELSE runtime_control
         END
-    WHERE slug = ? AND session_id = ? AND runtime_generation = ? AND permission_pending IS ?
+    WHERE project_id = @project_id AND slug = ? AND session_id = ? AND runtime_generation = ? AND permission_pending IS ?
       AND runtime_control IS ?
   `)
-  const observedPermissionIfCurrentStmt = db.prepare(
-    "UPDATE session SET permission_mode = ? WHERE slug = ? AND session_id = ? AND runtime_generation = ? AND permission_mode IS NOT ?",
+  const observedPermissionIfCurrentStmt = scope.prepare(
+    "UPDATE session SET permission_mode = ? WHERE project_id = @project_id AND slug = ? AND session_id = ? AND runtime_generation = ? AND permission_mode IS NOT ?",
   )
-  const controlErrorIfCurrentStmt = db.prepare(
-    "UPDATE session SET control_error = ? WHERE slug = ? AND session_id = ? AND runtime_generation = ?",
+  const controlErrorIfCurrentStmt = scope.prepare(
+    "UPDATE session SET control_error = ? WHERE project_id = @project_id AND slug = ? AND session_id = ? AND runtime_generation = ?",
   )
-  const controlErrorStmt = db.prepare("UPDATE session SET control_error = ? WHERE slug = ?")
-  const deliveryLedgerStmt = db.prepare("UPDATE session SET delivery_ledger = ? WHERE slug = ?")
-  const getSet = db.prepare<[string], { value: string }>("SELECT value FROM settings WHERE key = ?")
-  const putSet = db.prepare(
-    "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+  const controlErrorStmt = scope.prepare("UPDATE session SET control_error = ? WHERE project_id = @project_id AND slug = ?")
+  const deliveryLedgerStmt = scope.prepare("UPDATE session SET delivery_ledger = ? WHERE project_id = @project_id AND slug = ?")
+  const getSet = scope.prepare<[string], { value: string }>("SELECT value FROM settings WHERE project_id = @project_id AND key = ?")
+  const putSet = scope.prepare(
+    "INSERT INTO settings (project_id, key, value) VALUES (@project_id, ?, ?) ON CONFLICT(project_id, key) DO UPDATE SET value = excluded.value",
   )
-  const delSet = db.prepare("DELETE FROM settings WHERE key = ?")
+  const delSet = scope.prepare("DELETE FROM settings WHERE project_id = @project_id AND key = ?")
 
   const normalizeSessionRow = (row: SessionRow) => ({
     ...row,
@@ -2368,6 +2127,8 @@ export function createStorage(dbPath: string): Storage {
 
   return {
     db,
+    scope,
+    projectId,
     interactions,
     // Databases created before the canonical guard may contain an overlong or otherwise unsafe id.
     // Keep those legacy/corrupt rows inert so boot reconciliation and pollers never feed them to
@@ -2770,7 +2531,8 @@ export function createStorage(dbPath: string): Storage {
       closed = true
       lifecycleListeners.clear()
       interactions.dispose()
-      db.close()
+      // A shared connection belongs to frizz-db.ts, which closes it once every tenant is gone.
+      if (owned) db.close()
     },
   }
 }

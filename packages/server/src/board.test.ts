@@ -304,7 +304,7 @@ test("board interaction presence cache follows the exact session and rechecks af
     stateDir: dir,
     cwdSlug: "fixture",
   }
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   storage.upsertSession(row({ slug: "typed", session_id: "session-a", thread_name: "frizz-typed" }))
   const tailer = {
     get: () => undefined,
@@ -412,7 +412,7 @@ test("board keeps provider delivery visible while ordinary resting-thread queue 
     tick: () => {},
   } satisfies Tailer
   const dbPath = join(dir, "ui.db")
-  let storage = createStorage(dbPath)
+  let storage = createStorage(dbPath, "p")
   storage.upsertSession(row({ slug: "provider", session_id: "provider-session", thread_name: "frizz-provider" }))
   let board = createBoard(project, storage, new Bus(), tailer, "provider-boot-1")
   let unsubscribe = storage.interactions.subscribe((change) => board.interactionChanged?.(change))
@@ -476,7 +476,7 @@ test("board keeps provider delivery visible while ordinary resting-thread queue 
     unsubscribe()
     await board.stop()
     storage.close()
-    storage = createStorage(dbPath)
+    storage = createStorage(dbPath, "p")
     board = createBoard(project, storage, new Bus(), tailer, "provider-boot-2")
     unsubscribe = storage.interactions.subscribe((change) => board.interactionChanged?.(change))
     assert.equal(current().pendingInteraction, true)
@@ -762,7 +762,7 @@ test("board: an EXITED parent resting on a 'running' sub-agent surfaces as a sta
   // human sees it instead of it silently dangling under stale child liveness.
   const dir = mkdtempSync(join(tmpdir(), "frizz-board-crash-bgwork-"))
   const project: Project = { dir, id: "board-crash-bgwork", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   storage.upsertSession(row({ slug: "dead-parent", thread_name: "frizz-dead-parent", seen_at: LATER }))
   // Sibling with an already-STALE child: it must still surface, but as a bare rest, NOT a stalled crash.
   storage.upsertSession(row({ slug: "dead-parent-stale", thread_name: "frizz-dead-parent-stale", seen_at: LATER }))
@@ -801,7 +801,7 @@ test("board: a codex app-server thread whose turn died with its app-server cards
   // between a thread that spins on `running` and never queues, and one the human actually sees.
   const dir = mkdtempSync(join(tmpdir(), "frizz-board-appserver-stall-"))
   const project: Project = { dir, id: "board-appserver-stall", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   for (const slug of ["stalled", "driving", "mirrored"]) {
     storage.upsertSession(row({ slug, session_id: `${slug}-s`, thread_name: `frizz-${slug}`, seen_at: LATER }))
     storage.setBackend(slug, "codex")
@@ -909,7 +909,7 @@ test("board arms the exact durable snooze deadline, clears it, and requeues ordi
     stateDir: dir,
     cwdSlug: "fixture",
   }
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   const until = new Date(Date.now() + 120).toISOString()
   storage.upsertSession(row({
     slug: "snooze-wake",
@@ -961,7 +961,7 @@ test("board immediately expires a snooze whose deadline passes between assembly 
     stateDir: dir,
     cwdSlug: "fixture",
   }
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   storage.upsertSession(row({
     slug: "snooze-race",
     session_id: "snooze-race-session",
@@ -1063,7 +1063,7 @@ test("deriveNeedsYou: a degraded ask-row cards — the pair is what puts it in t
 test("a rested broker thread whose daemon died holding live sub-agents surfaces instead of vanishing", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-board-deaddaemon-"))
   const project: Project = { dir, id: "project-dd", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   storage.upsertSession(row({ slug: "orphaned", session_id: "sess-orphaned", thread_name: "frizz-orphaned", rested_at: T0 }))
   storage.setBackend("orphaned", "claude")
   storage.setClaudeRuntime("orphaned", "broker")
@@ -1126,7 +1126,7 @@ test("a rested broker thread whose daemon died holding live sub-agents surfaces 
 test("a rested broker thread whose daemon died with NO outstanding work stays an ordinary rest", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-board-quietdaemon-"))
   const project: Project = { dir, id: "project-qd", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   storage.upsertSession(row({ slug: "quiet", session_id: "sess-quiet", thread_name: "frizz-quiet", rested_at: T0 }))
   storage.setBackend("quiet", "claude")
   storage.setClaudeRuntime("quiet", "broker")
@@ -1152,7 +1152,7 @@ test("a rested broker thread whose daemon died with NO outstanding work stays an
 test("a broker thread whose daemon died still holding a follow-up returns to the queue", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-board-deadsend-"))
   const project: Project = { dir, id: "project-ds", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   storage.upsertSession(row({ slug: "stranded", session_id: "sess-stranded", thread_name: "frizz-stranded", rested_at: T0 }))
   storage.setBackend("stranded", "claude")
   storage.setClaudeRuntime("stranded", "broker")
@@ -1177,7 +1177,7 @@ test("a broker thread whose daemon died still holding a follow-up returns to the
 test("a broker claude thread with no transcript reads as stalled, while a codex app-server thread does not", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-board-notranscript-"))
   const project: Project = { dir, id: "project-nt", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   storage.upsertSession(row({ slug: "broker", session_id: "sess-broker", thread_name: "frizz-broker" }))
   storage.setBackend("broker", "claude")
   storage.setClaudeRuntime("broker", "broker")
@@ -1267,7 +1267,7 @@ test("registered auto-titles stay in SQLite/transcript and never sync into a pla
     stateDir: dir,
     cwdSlug: "fixture",
   }
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   for (const slug of ["auto-regular", "auto-linked"]) {
     storage.upsertSession(row({
       slug,
@@ -1345,7 +1345,7 @@ test("board provenance excludes legacy files, keeps a foreign transcript read-on
     cwdSlug: "fixture",
   }
   const dbPath = join(dir, "ui.db")
-  let storage = createStorage(dbPath)
+  let storage = createStorage(dbPath, "p")
   storage.upsertSession(row({
     slug: "ui-claude",
     session_id: "claude-session",
@@ -1435,7 +1435,7 @@ test("board provenance excludes legacy files, keeps a foreign transcript read-on
     // required, and older state=NULL session rows remain owned and open.
     await board.stop()
     storage.close()
-    storage = createStorage(dbPath)
+    storage = createStorage(dbPath, "p")
     board = createBoard(project, storage, new Bus(), tailer, "provenance-boot-2")
     snapshot = await board.snapshot()
     assert.deepEqual(snapshot.threads.map((thread) => thread.id).sort(), [
@@ -1463,7 +1463,7 @@ test("an external row is named by its harness, else by the turn the conversation
   const dir = mkdtempSync(join(tmpdir(), "frizz-board-external-title-"))
   mkdirSync(join(dir, ".frizz"), { recursive: true })
   const project: Project = { dir, id: "p", name: "f", label: "f", stateDir: dir, cwdSlug: "f" }
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   const telemetry = new Map<string, SessionTelemetry>([
     // Claude records `ai-title`; codex's own name is read from its sidecar index and assigned onto the
     // same field by the tailer. Either way the harness's name wins outright.
@@ -1518,7 +1518,7 @@ test("the External band lists only RESTED foreign sessions, and drops one the mo
     stateDir: dir,
     cwdSlug: "fixture",
   }
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   const telemetry = new Map<string, SessionTelemetry>([
     ["rested-terminal", tele({ turn: "idle", aiTitle: "Debug a flaky test", lastAssistant: "done for now", lastAssistantAt: LATER })],
     ["spinning-terminal", tele({ turn: "in-flight", aiTitle: "Refactor the parser" })],
@@ -1583,7 +1583,7 @@ test("board stop drains a watcher setup that races shutdown and immediately unsu
     stateDir: dir,
     cwdSlug: "fixture",
   }
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   const tailer = {
     get: () => undefined,
     foreignIds: () => [],
@@ -1627,7 +1627,7 @@ test("board stop drains a watcher setup that races shutdown and immediately unsu
 test("board exposes a typed providerFault from tailer auth telemetry — category only, no raw text", async () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-board-auth-fault-"))
   const project: Project = { dir, id: "board-auth-fault", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   storage.upsertSession(row({ slug: "auth-fault", thread_name: "frizz-auth-fault", backend: "claude" }))
   const tailer = {
     get: (slug: string) => (slug === "auth-fault" ? tele({ authFault: "authentication_rejected" }) : undefined),

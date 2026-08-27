@@ -8,6 +8,7 @@ import { setImmediate as nextTurn } from "node:timers/promises"
 import { test, type TestContext } from "node:test"
 import { randomUUID } from "node:crypto"
 import { ContextStartupError, type AppContext } from "./context.ts"
+import { openFrizzDatabase } from "./frizz-db.ts"
 import {
   ServerStartupError,
   startServer,
@@ -96,9 +97,17 @@ function fixture(t: TestContext, controls: FixtureControls = {}) {
   }
   const contexts: ContextState[] = []
   const httpServers: FakeHttpServer[] = []
-  const closeCounts = { terminal: 0, appSocket: 0, vite: 0 }
+  const closeCounts = { terminal: 0, appSocket: 0, vite: 0, database: 0 }
+  let databasesOpened = 0
 
   const runtime: Partial<StartServerRuntime> = {
+    // In memory, and with no legacy scan: the fixture's state dir must never grow a real file, and
+    // the unwind has to close what the database phase opened exactly once.
+    openDatabase() {
+      databasesOpened++
+      const real = openFrizzDatabase({ path: ":memory:", importLegacy: false })
+      return { ...real, close: () => { closeCounts.database++; real.close() } }
+    },
     createContext() {
       const state: ContextState = {
         storageClosed: 0,
@@ -237,6 +246,7 @@ function fixture(t: TestContext, controls: FixtureControls = {}) {
     assert.equal(readProjectLaunchOwner(project.stateDir), null, "launch ownership is released")
     assert.equal(existsSync(join(project.stateDir, "server.lock")), false, "exact status is retired")
     assert.equal(existsSync(join(project.stateDir, "ui.db")), false, "the fake fixture never creates SQLite")
+    assert.equal(closeCounts.database, databasesOpened, "the opened database closes exactly once")
     for (const state of contexts) {
       assert.equal(state.storageClosed, 1, "created storage closes exactly once")
       assert.equal(state.subscriptionsStopped, 1, "created subscriptions stop exactly once")
@@ -252,6 +262,7 @@ function fixture(t: TestContext, controls: FixtureControls = {}) {
 
 const allPhases: ServerStartupPhase[] = [
   "launch ownership",
+  "database",
   "context",
   "GitHub initialization",
   "application",

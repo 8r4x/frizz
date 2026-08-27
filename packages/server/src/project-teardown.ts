@@ -48,11 +48,12 @@ export async function stopProjectWorkers(ctx: AppContext): Promise<number> {
 }
 
 /**
- * Delete everything Frizz holds for one project: `~/.frizz/projects/<id>/`.
+ * Delete everything Frizz holds ON DISK for one project: `~/.frizz/projects/<id>/`.
  *
- * ONE DIRECTORY IS THE WHOLE OF IT — `ui.db`, attachments, logs, permission markers, the broker's and
- * app-server's sockets and records. Nothing else on the machine is keyed by project id except the
- * registry index, which the caller forgets separately.
+ * ONE DIRECTORY IS THE FILES — attachments, logs, permission markers, the broker's and app-server's
+ * sockets and records, and the retired `ui.db.imported` if the project predates the unified
+ * database. The project's ROWS live in that database (frizz-db.ts) and are purged by the caller
+ * through `purgeProject`, before this runs; the registry index is forgotten separately too.
  *
  * THE PROJECT'S OWN FOLDER IS NEVER TOUCHED. Deleting a project deletes Frizz's record of it, not the
  * operator's code; `.frizz/.id` is left in the tree, so adding the folder back keeps the same id and

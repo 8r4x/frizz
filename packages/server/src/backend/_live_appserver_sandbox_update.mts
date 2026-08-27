@@ -46,7 +46,7 @@ let operatorSandbox: CodexSandboxMode = "read-only"
 
 let disconnects = 0
 const bridge = new CodexAppServerBridge({
-  projectId: "live-sandbox", projectDir: dir, dbPath: join(dir, "ui.db"), interactions,
+  projectId: "live-sandbox", projectDir: dir, db, interactions,
   codexBin: CODEX_BIN, spawn, now: () => new Date(), id: () => `c-${++cid}`,
   requestTimeoutMs: 30_000,
   sandboxFor: () => operatorSandbox,

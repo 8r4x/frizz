@@ -26,7 +26,7 @@ import type { Tailer } from "./tailer.ts"
 function harness(opts: { probe?: (ref: PrRef) => PrProbe } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-pr-watch-rpc-"))
   const project: Project = { dir, id: "prw", name: "test", label: "test", stateDir: dir, cwdSlug: "test" }
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   const snapshot: BoardSnapshot = { projectDir: dir, projectName: "test", projectLabel: "test", threads: [], errors: [], warnings: [] }
   let refreshes = 0
   const board: BoardManager = {

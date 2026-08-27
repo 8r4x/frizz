@@ -1,3 +1,4 @@
+import type { ProjectScope } from "./project-scope.ts"
 import type Database from "./sqlite.ts"
 
 export type WakeDeliveryState = "pending" | "leased" | "delivered" | "superseded" | "exhausted"
@@ -92,10 +93,13 @@ function delivery(row: WakeDeliveryRow): WakeDelivery {
   }
 }
 
-export function createWakeDeliveryStore(db: Database): WakeDeliveryStore {
+/** The outbox table, idempotent; frizz-db.ts creates it ahead of a legacy import. */
+export const WAKE_DELIVERY_TABLES = ["wake_delivery"] as const
+export function ensureWakeDeliverySchema(db: Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS wake_delivery (
       id              TEXT PRIMARY KEY,
+      project_id      TEXT NOT NULL,
       thread_slug     TEXT NOT NULL,
       session_id      TEXT NOT NULL,
       fence_id        TEXT NOT NULL,
@@ -113,66 +117,67 @@ export function createWakeDeliveryStore(db: Database): WakeDeliveryStore {
       delivered_at   INTEGER,
       terminal_at    INTEGER,
       sent_at        INTEGER,
-      UNIQUE(thread_slug, session_id, fence_id)
+      UNIQUE(project_id, thread_slug, session_id, fence_id)
     );
     CREATE INDEX IF NOT EXISTS wake_delivery_due
-      ON wake_delivery(state, next_attempt_at, created_at);
+      ON wake_delivery(project_id, state, next_attempt_at, created_at);
   `)
-  // `sent_at` arrived 2026-08-25 (the "delivered but never read" wake); a DB from before it gains the
-  // column in place, and every older row reads as never-sent, which is the old behaviour exactly.
-  const columns = db.prepare("PRAGMA table_info(wake_delivery)").all() as { name: string }[]
-  if (!columns.some((c) => c.name === "sent_at")) db.exec("ALTER TABLE wake_delivery ADD COLUMN sent_at INTEGER")
+}
 
-  const byId = db.prepare<[string], WakeDeliveryRow>("SELECT * FROM wake_delivery WHERE id = ?")
-  const all = db.prepare<[], WakeDeliveryRow>("SELECT * FROM wake_delivery ORDER BY created_at, id")
-  const open = db.prepare<[], WakeDeliveryRow>(
-    "SELECT * FROM wake_delivery WHERE state IN ('pending', 'leased') ORDER BY created_at, id",
+export function createWakeDeliveryStore(scope: ProjectScope): WakeDeliveryStore {
+  const db = scope.db
+  ensureWakeDeliverySchema(db)
+
+  const byId = scope.prepare<[string], WakeDeliveryRow>("SELECT * FROM wake_delivery WHERE project_id = @project_id AND id = ?")
+  const all = scope.prepare<[], WakeDeliveryRow>("SELECT * FROM wake_delivery WHERE project_id = @project_id ORDER BY created_at, id")
+  const open = scope.prepare<[], WakeDeliveryRow>(
+    "SELECT * FROM wake_delivery WHERE project_id = @project_id AND state IN ('pending', 'leased') ORDER BY created_at, id",
   )
-  const insert = db.prepare(`
+  const insert = scope.prepare(`
     INSERT INTO wake_delivery (
-      id, thread_slug, session_id, fence_id, hint_key, message, reason, state, attempts,
+      project_id, id, thread_slug, session_id, fence_id, hint_key, message, reason, state, attempts,
       next_attempt_at, lease_owner, lease_until, last_error, created_at, updated_at,
       delivered_at, terminal_at
     ) VALUES (
-      @id, @slug, @sessionId, @fenceId, @hintKey, @message, @reason, 'pending', 0,
+      @project_id, @id, @slug, @sessionId, @fenceId, @hintKey, @message, @reason, 'pending', 0,
       @now, NULL, NULL, NULL, @now, @now, NULL, NULL
     )
     ON CONFLICT DO NOTHING
   `)
-  const terminalCount = db.prepare<[], { count: number }>(
-    "SELECT COUNT(*) AS count FROM wake_delivery WHERE state IN ('delivered', 'superseded', 'exhausted')",
+  const terminalCount = scope.prepare<[], { count: number }>(
+    "SELECT COUNT(*) AS count FROM wake_delivery WHERE project_id = @project_id AND state IN ('delivered', 'superseded', 'exhausted')",
   )
-  const pruneTerminal = db.prepare(`
-    DELETE FROM wake_delivery WHERE id IN (
+  const pruneTerminal = scope.prepare(`
+    DELETE FROM wake_delivery WHERE project_id = @project_id AND id IN (
       SELECT id FROM wake_delivery
-      WHERE state IN ('delivered', 'superseded', 'exhausted')
+      WHERE project_id = @project_id AND state IN ('delivered', 'superseded', 'exhausted')
       ORDER BY terminal_at, created_at, id
       LIMIT ?
     )
   `)
-  const due = db.prepare<[number, number], WakeDeliveryRow>(`
+  const due = scope.prepare<[number, number], WakeDeliveryRow>(`
     SELECT * FROM wake_delivery
-    WHERE state = 'pending' AND next_attempt_at <= ? AND attempts < ?
+    WHERE project_id = @project_id AND state = 'pending' AND next_attempt_at <= ? AND attempts < ?
     ORDER BY next_attempt_at, created_at, id
     LIMIT 1
   `)
-  const claimStmt = db.prepare(`
+  const claimStmt = scope.prepare(`
     UPDATE wake_delivery SET
       state = 'leased', attempts = attempts + 1, lease_owner = @owner, lease_until = @leaseUntil,
       last_error = NULL, sent_at = NULL, updated_at = @now
-    WHERE id = @id AND state = 'pending' AND next_attempt_at <= @now AND attempts < @maxAttempts
+    WHERE project_id = @project_id AND id = @id AND state = 'pending' AND next_attempt_at <= @now AND attempts < @maxAttempts
   `)
-  const deferFailureStmt = db.prepare(`
+  const deferFailureStmt = scope.prepare(`
     UPDATE wake_delivery SET
       lease_until = @retryAt, last_error = @error, updated_at = @now
-    WHERE id = @id AND state = 'leased' AND lease_owner = @owner
+    WHERE project_id = @project_id AND id = @id AND state = 'leased' AND lease_owner = @owner
   `)
-  const markSentStmt = db.prepare(`
+  const markSentStmt = scope.prepare(`
     UPDATE wake_delivery SET
       sent_at = @now, lease_until = @confirmUntil, last_error = NULL, updated_at = @now
-    WHERE id = @id AND state = 'leased' AND lease_owner = @owner
+    WHERE project_id = @project_id AND id = @id AND state = 'leased' AND lease_owner = @owner
   `)
-  const recoverExpiredStmt = db.prepare(`
+  const recoverExpiredStmt = scope.prepare(`
     UPDATE wake_delivery SET
       state = CASE WHEN attempts >= @maxAttempts THEN 'exhausted' ELSE 'pending' END,
       next_attempt_at = @retryAt,
@@ -181,25 +186,25 @@ export function createWakeDeliveryStore(db: Database): WakeDeliveryStore {
       last_error = @error,
       updated_at = @now,
       terminal_at = CASE WHEN attempts >= @maxAttempts THEN @now ELSE NULL END
-    WHERE id = @id AND state = 'leased' AND lease_until <= @now
+    WHERE project_id = @project_id AND id = @id AND state = 'leased' AND lease_until <= @now
   `)
-  const acknowledgeStmt = db.prepare(`
+  const acknowledgeStmt = scope.prepare(`
     UPDATE wake_delivery SET
       state = 'delivered', lease_owner = NULL, lease_until = NULL, last_error = NULL,
       delivered_at = @now, terminal_at = @now, updated_at = @now
-    WHERE id = @id AND state = 'leased' AND lease_owner = @owner
+    WHERE project_id = @project_id AND id = @id AND state = 'leased' AND lease_owner = @owner
   `)
-  const confirmStmt = db.prepare(`
+  const confirmStmt = scope.prepare(`
     UPDATE wake_delivery SET
       state = 'delivered', lease_owner = NULL, lease_until = NULL, last_error = NULL,
       delivered_at = @now, terminal_at = @now, updated_at = @now
-    WHERE id = @id AND state IN ('pending', 'leased')
+    WHERE project_id = @project_id AND id = @id AND state IN ('pending', 'leased')
   `)
-  const supersedeStmt = db.prepare(`
+  const supersedeStmt = scope.prepare(`
     UPDATE wake_delivery SET
       state = 'superseded', lease_owner = NULL, lease_until = NULL, last_error = @reason,
       terminal_at = @now, updated_at = @now
-    WHERE id = @id AND state IN ('pending', 'leased')
+    WHERE project_id = @project_id AND id = @id AND state IN ('pending', 'leased')
   `)
 
   const enqueueTxn = db.transaction((input: WakeDeliveryInput, now: number) => {

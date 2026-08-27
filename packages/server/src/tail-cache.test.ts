@@ -36,7 +36,7 @@ interface Harness {
 
 function harness(): Harness {
   const dir = tmp("frizz-tailcache-")
-  const storage = createStorage(join(dir, "ui.db"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
   return { dir, storage, bus: new Bus(), path: (id) => join(dir, `${id}.jsonl`) }
 }
 
@@ -214,7 +214,7 @@ test("tail-cache: a different fold schema is ignored, and pruned", () => {
 
   // A boot whose fold implementation hashes differently must not read the old entries at all: their
   // derivation came from code that no longer exists.
-  const cache = createTailStateCache(h.storage.db, "a-different-fold-schema")
+  const cache = createTailStateCache(h.storage.scope, "a-different-fold-schema")
   assert.equal(cache.load().size, 0)
   const warm = boot(h, { tailCache: cache })
   assert.equal(warm?.lastAssistant, "answer")
