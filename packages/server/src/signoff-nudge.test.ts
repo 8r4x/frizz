@@ -14,7 +14,13 @@ import { createStorage, type SessionRow } from "./storage.ts"
 import type { SessionTelemetry, Tailer } from "./tailer.ts"
 import { createScheduler } from "./scheduler.ts"
 
-function nudger(tele: Partial<SessionTelemetry>, opts: { setting?: string } = {}) {
+// `runtime` is opt-in because it changes which delivery path the scheduler takes, and the difference is
+// load-bearing rather than cosmetic. With it absent — the shape every test below it was written in —
+// `deliverDue` cannot tell whether the worker is alive, so it falls through to the acknowledge-and-settle
+// path. In PRODUCTION the runtime is always knowable, so the sent-and-confirm-later path is the only one
+// that ever runs. A cap that is only spent on the path tests take is not a cap; see the two tests at the
+// bottom of this file.
+function nudger(tele: Partial<SessionTelemetry>, opts: { setting?: string; runtime?: "alive" | "dead" } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-signoff-"))
   const storage = createStorage(join(dir, "ui.db"))
   const slug = "resting"
@@ -38,6 +44,7 @@ function nudger(tele: Partial<SessionTelemetry>, opts: { setting?: string } = {}
       }),
     } as unknown as Tailer,
     resume: async (_slug, message) => { delivered.push(message) },
+    ...(opts.runtime ? { wakeRuntimeState: () => opts.runtime! } : {}),
     log: () => {},
   })
   // THE NUDGE'S OWN DELIVERIES. `delivered` is every wake the scheduler sent, and an awaiting fence
@@ -239,6 +246,68 @@ test("an auth-faulted thread is never re-prompted — the nudge cannot fix a sig
     assert.deepEqual(h.delivered, [])
   } finally { h.close() }
 })
+
+// ---- A FAILED TURN IS NOT A REST ------------------------------------------------------------------
+// The loop this file's cap was always meant to stop, reached anyway — twice over, and each half is
+// enough on its own. Measured in the field on two real threads before either was fixed: ~5,700 and
+// ~5,200 nudges to single sessions, one every ~10s (the scheduler's tick) without pause, until both
+// transcripts passed 80 MB and every turn failed with `400 invalid_request` because the conversation
+// had outgrown the model's context window. `signoff_nudges` read 0 on both rows throughout, against a
+// SIGNOFF_NUDGE_MAX of 2.
+//
+//   THE CAP WAS NEVER SPENT. Every wake to a live runtime leaves `deliverDue` at the sent-and-confirm
+//   branch, which did not settle the nudge, and the confirm that would have settled it later never ran:
+//   `deliveryContext` reads a signoff item as SUPERSEDED as soon as the agent's next assistant record
+//   lands, and superseding counts nothing. A synthetic API-error record IS an assistant record, so the
+//   failing turn that provoked the nudge is also what stopped the nudge being counted.
+//
+//   AND THE REST WAS NEVER REAL. That same record advances `lastAssistantAt`, so each failure minted a
+//   fresh rest instant, hence a fresh delivery id, defeating the per-rest dedupe as well.
+test("a nudge to a LIVE runtime is counted against the cap, not just one to an unknown one", async () => {
+  let spokeAt = "2026-08-12T00:01:00.000Z"
+  const h = nudger({
+    lastUserAt: "2026-08-12T00:00:00.000Z",
+    get lastAssistantAt() { return spokeAt },
+    get lastActivityAt() { return spokeAt },
+  } as Partial<SessionTelemetry>, { runtime: "alive" })
+  try {
+    for (let i = 2; i <= 6; i++) {
+      await h.s.tick()
+      spokeAt = `2026-08-12T00:0${i}:00.000Z`
+    }
+    assert.equal(h.delivered.length, 2, "five fenceless rests to a live worker still spend exactly the cap")
+    assert.equal(h.storage.getSession(h.slug)?.signoff_nudges, 2)
+  } finally { h.close() }
+})
+
+// The guard the cap should never have to be the last line of defence for. A thread failing every turn
+// cannot answer a reminder — nothing it writes reaches the model — and on a context-window 400 the
+// reminder is what keeps the conversation over the limit, so even the two the cap allows are two too
+// many. Both faults are pinned: the one frizz already classified, and the one it could not see at all.
+for (const [what, tele] of [
+  ["a terminal 400 the classifiers do not recognise", { apiFault: true }],
+  ["a rate limit, which also never reached the model", { apiFault: true, limitFault: { window: "5h", at: "2026-08-12T00:01:00.000Z" } }],
+] as Array<[string, Partial<SessionTelemetry>]>) {
+  test(`${what} is a failed turn, not a rest, so nothing is injected`, async () => {
+    let spokeAt = "2026-08-12T00:01:00.000Z"
+    const h = nudger({
+      lastUserAt: "2026-08-12T00:00:00.000Z",
+      get lastAssistantAt() { return spokeAt },
+      get lastActivityAt() { return spokeAt },
+      ...tele,
+    } as Partial<SessionTelemetry>, { runtime: "alive" })
+    try {
+      // Every tick is a fresh failed turn, which is exactly what defeated the per-rest dedupe: the
+      // error record is an assistant record, so it moves the rest instant every time.
+      for (let i = 2; i <= 21; i++) {
+        await h.s.tick()
+        spokeAt = `2026-08-12T00:${String(i).padStart(2, "0")}:00.000Z`
+      }
+      assert.deepEqual(h.delivered, [], "twenty consecutive failed turns produce no nudges at all")
+      assert.equal(h.storage.getSession(h.slug)?.signoff_nudges, 0)
+    } finally { h.close() }
+  })
+}
 
 // ---- THE TWO-DELIVERY INTERACTION -----------------------------------------------------------------
 // Separating the reminder from the Goal (2026-08-12) means a thread WITH a Goal now has two sources

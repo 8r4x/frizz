@@ -1732,6 +1732,17 @@ export function applyRecord(state: TailState, rec: Record): void {
     } else if (raw !== undefined) {
       state.authFault = undefined
     }
+    // The SAME channel read at its most general: this record is a failed turn, whatever category it
+    // falls into. The two classifiers around it are deliberately narrow, so an error that is neither an
+    // auth rejection nor a rate limit used to leave no trace at all — and a synthetic error record still
+    // advances `lastAssistantAt` above, which is what makes a permanently failing thread look to every
+    // consumer like an agent resting after a turn. Cleared by the next real assistant text, exactly as
+    // authFault is: a genuine response is proof the turn reached the model.
+    if (rec.isApiErrorMessage === true) {
+      state.apiFault = true
+    } else if (raw !== undefined) {
+      state.apiFault = undefined
+    }
     // Subscription usage-limit classifier (auto-resume): the SAME synthetic-record channel, keyed on
     // the structured `error:"rate_limit"` category rather than any text match. The limit is what cut
     // this turn off mid-work, so the fault standing on the tail IS "this agent was running when the
@@ -4601,7 +4612,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       // agent. The board reports both, and `boardRuntime` decides which one the row is allowed to draw.
       const pendingQuestion = s.lastAssistantHasQuestion
       const nowMs = now()
-      return { turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: s.lastAssistantAllDone, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, firstUserText: s.firstUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt }
+      return { turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: s.lastAssistantAllDone, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, firstUserText: s.firstUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, apiFault: s.apiFault, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt }
     },
     // The CURRENT fresh foreign session ids (mtime within FOREIGN_FRESH_MS, capped), mtime-desc. Kept
     // as the last scan's result — recomputed at most every FOREIGN_SCAN_EVERY ticks.

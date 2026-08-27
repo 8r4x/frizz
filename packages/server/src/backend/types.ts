@@ -105,6 +105,7 @@ export interface NormalizedTail {
   bgShells: BgShellView[] // codex: always [] (codex has no background-shell tool)
   pendingAsk?: PendingAskData // codex: undefined
   authFault?: "authentication_rejected" // runtime provider-auth rejection (see FoldState.authFault)
+  apiFault?: boolean // the final assistant record is a synthetic API-ERROR record (see FoldState.apiFault)
   limitFault?: LimitFault // subscription window exhausted mid-turn (see FoldState.limitFault)
   contextTokens?: number // tokens the last request carried (see FoldState.contextTokens)
   contextWindow?: number // the model's context size, provider-reported (see FoldState.contextWindow)
@@ -169,6 +170,16 @@ export interface FoldState {
   // proves the credential works). Only this typed category ever leaves the fold; raw error/terminal
   // text stays out of persisted state.
   authFault?: "authentication_rejected"
+  // THE TURN NEVER REACHED THE MODEL, whatever the reason. The GENERAL case of the two faults either
+  // side of it: set whenever the backend records a synthetic API-error response, cleared by the next
+  // real assistant text, on exactly authFault's lifecycle. It exists because the specific classifiers
+  // recognise only two categories — an auth rejection by its text, a usage limit by its structured
+  // `error:"rate_limit"` — so every OTHER API error (a 400 for a context window the conversation has
+  // outgrown, a 500, a transport failure) was indistinguishable from the agent taking a turn and
+  // resting. Anything that treats "the agent spoke last" as "the agent rested" needs this, or it
+  // re-prompts a thread whose every turn is failing. Boolean because the discipline of this fold is
+  // that raw provider text never leaves it, and no consumer needs more than the fact.
+  apiFault?: boolean
   // Subscription usage-limit pause (auto-resume). Set when the backend records a limit stop — for
   // Claude the synthetic record carrying the structured `error:"rate_limit"` category, never a text
   // match — and cleared by the next real assistant text OR any user record. That clearing rule is
