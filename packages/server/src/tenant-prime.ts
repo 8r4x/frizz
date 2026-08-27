@@ -25,19 +25,38 @@ import { log as frizzLog } from "./logging.ts"
 //     §4 settles it: timers, `awaiting` wakes, snooze expiry, PR watches and limit auto-resume must not
 //     go quiet for a project you are not looking at. Lazy activation left them dead until you opened it.
 //
-// The pass is SERIAL and spaced on purpose. Activations are cheap individually and the primes that
-// follow them are not free — each priming tailer wants ~200ms every ~1.2s until its board is folded —
-// so opening ten projects at once would hand the loop a burst nobody asked for while the operator is
-// still waiting for the page they DID ask for. One at a time, a beat apart, gets the badges up within
-// seconds and never spikes.
+// The pass is SERIAL, and the pacing is MEASURED rather than guessed. It shipped with a flat 3s head
+// start and a flat 1.5s between projects, which put the last square of an 11-project rail 18 seconds
+// after boot — and the maintainer rightly asked what the holdup was. Measured on an 11-project stack
+// (seven empty, two ~30-thread boards, one 800-thread board with 9.4MB of transcripts), cold tail
+// cache:
 //
-// It is best-effort throughout: a project that will not open is one missing badge, reported and stepped
-// over, never a failed boot.
+//     empty 11-17ms · 29 threads 37ms · 35 threads 41ms · 800 threads 220ms · TEN PROJECTS: 390ms
+//
+// The whole pass was 390ms of work behind 16,500ms of waiting. So the delays below are what it costs to
+// stay POLITE, and nothing else: one activation is the atomic block (11-220ms, the top end being
+// tailer.start's PRIME_BUDGET_MS ceiling), and the pause after it hands the loop back so a request that
+// arrived mid-pass is served now rather than after the remaining squares.
+//
+// The gap TRACKS THE LAST ACTIVATION, the way the tailer's own scheduleTick tracks its last tick: an
+// empty project costs a 25ms pause, a big one earns a 220ms breather, and nothing pathological can hold
+// the pass open for more than PRIME_MAX_GAP_MS. That 50% duty ceiling is also what phases the freshly
+// started tailers apart, which the flat gap was really for.
 
-/** Wait before opening the first extra project, so the launching project's own board renders first. */
-const PRIME_START_DELAY_MS = 3_000
-/** …and between projects, so N cold primes stagger instead of stacking. */
-const PRIME_GAP_MS = 1_500
+/**
+ * A head start for the launching project, whose board is the page the operator is actually waiting for.
+ * Long enough to matter on first paint, far too short to be a wait anyone sees.
+ */
+const PRIME_START_DELAY_MS = 250
+/** Floor on the pause between projects: even a 13ms activation yields the loop for a beat. */
+const PRIME_MIN_GAP_MS = 25
+/** …and the ceiling, so one slow activation cannot pace the whole rail. */
+const PRIME_MAX_GAP_MS = 250
+
+/** The pause after an activation that took `tookMs` — a 50% duty cycle, clamped at both ends. */
+function gapAfter(tookMs: number): number {
+  return Math.min(PRIME_MAX_GAP_MS, Math.max(PRIME_MIN_GAP_MS, tookMs))
+}
 
 /** The registry shape this needs — `listProjects()` entries, rail order. */
 export interface PrimeCandidate {
@@ -65,9 +84,12 @@ export interface TenantPrimeDeps {
    * still running beside the singleton — logs one line per project instead of an error and a stack.
    */
   servedElsewhere?: (project: Project) => number | undefined
+  /** Injected by tests, so a timing assertion is not a race against a loaded runner. */
+  monotonicNow?: () => number
   /** Injected by tests; the default is the interruptible timer `stop()` cuts short. */
   delay?: (ms: number) => Promise<void>
   startDelayMs?: number
+  /** Pins the pause between projects; the default TRACKS the last activation (see gapAfter). */
   gapMs?: number
   log?: (message: string) => void
 }
@@ -79,6 +101,8 @@ export interface TenantPrimeResult {
   skipped: string[]
   /** Tried and would not open — reported by the tenant seam, one dead card each. */
   failed: string[]
+  /** How long each of `opened` took, in ms, same order. Logged, and what the pacing is tuned against. */
+  tookMs: number[]
 }
 
 export interface TenantPrimeRun {
@@ -117,9 +141,11 @@ export function startTenantPrime(deps: TenantPrimeDeps): TenantPrimeRun {
   const delay = deps.delay ?? defaultDelay
 
   const run = async (): Promise<TenantPrimeResult> => {
-    const result: TenantPrimeResult = { opened: [], skipped: [], failed: [] }
+    const result: TenantPrimeResult = { opened: [], skipped: [], failed: [], tookMs: [] }
     await delay(deps.startDelayMs ?? PRIME_START_DELAY_MS)
-    let first = true
+    // How long the PREVIOUS activation took, which is the pause the next one waits. Undefined until the
+    // first project is open — so a run of skips (already-open, stale, served elsewhere) costs nothing.
+    let lastTookMs: number | undefined
     for (const entry of deps.list()) {
       if (stopped) break
       if (entry.stale || deps.isOpen(entry.id)) {
@@ -140,12 +166,19 @@ export function startTenantPrime(deps: TenantPrimeDeps): TenantPrimeRun {
         log(`${project.name} is served by another Frizz (pid ${other}) — leaving it closed here`)
         continue
       }
-      if (!first) await delay(deps.gapMs ?? PRIME_GAP_MS)
-      first = false
+      if (lastTookMs !== undefined) await delay(deps.gapMs ?? gapAfter(lastTookMs))
       if (stopped) break
       try {
-        if ((await deps.activate(project)) === undefined) result.failed.push(entry.id)
-        else result.opened.push(entry.id)
+        const startedAt = deps.monotonicNow?.() ?? performance.now()
+        const opened = await deps.activate(project)
+        const tookMs = Math.round((deps.monotonicNow?.() ?? performance.now()) - startedAt)
+        lastTookMs = tookMs
+        if (opened === undefined) result.failed.push(entry.id)
+        else {
+          result.opened.push(entry.id)
+          result.tookMs.push(tookMs)
+          log(`opened ${project.name} in ${tookMs}ms`)
+        }
       } catch (error) {
         // activate() is documented not to throw. Belt and braces: this pass is a floating promise, and
         // an unhandled rejection out of it would take down a server that is otherwise perfectly healthy.
@@ -160,7 +193,7 @@ export function startTenantPrime(deps: TenantPrimeDeps): TenantPrimeRun {
   return {
     done: run().catch((error) => {
       log(`priming pass failed: ${detail(error)}`)
-      return { opened: [], skipped: [], failed: [] }
+      return { opened: [], skipped: [], failed: [], tookMs: [] }
     }),
     stop: () => {
       stopped = true

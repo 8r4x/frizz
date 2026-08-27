@@ -133,6 +133,47 @@ test("stop() before the first project opens nothing at all", async () => {
   assert.deepEqual(result.opened, [])
 })
 
+test("the pause between projects tracks the last activation, clamped at both ends", async () => {
+  // The pacing is a 50% duty cycle on a measured cost, not a flat guess — an empty project (13ms here)
+  // costs the 25ms floor, a big board (800ms here) is capped at the 250ms ceiling, and a middling one
+  // is paid back exactly. The first project waits only the opening delay: there is nothing to be polite
+  // about yet.
+  const waits: number[] = []
+  let clock = 0
+  const costs = new Map([["a", 13], ["b", 90], ["c", 800]])
+  const result = await startTenantPrime({
+    list: () => [candidate("a"), candidate("b"), candidate("c")],
+    isOpen: () => false,
+    toProject: project,
+    activate: async (p) => {
+      clock += costs.get(p.id)!
+      return {}
+    },
+    monotonicNow: () => clock,
+    startDelayMs: 250,
+    delay: async (ms) => void waits.push(ms),
+    log: () => {},
+  }).done
+  assert.deepEqual(result.tookMs, [13, 90, 800])
+  assert.deepEqual(waits, [250, 25, 90])
+})
+
+test("a run of skips costs no pause at all — only an activation earns one", async () => {
+  const waits: number[] = []
+  const result = await startTenantPrime({
+    list: () => [candidate("open"), candidate("gone", { stale: true }), candidate("a")],
+    isOpen: (id) => id === "open",
+    toProject: project,
+    activate: async () => ({}),
+    monotonicNow: () => 0,
+    startDelayMs: 250,
+    delay: async (ms) => void waits.push(ms),
+    log: () => {},
+  }).done
+  assert.deepEqual(result.opened, ["a"])
+  assert.deepEqual(waits, [250], `a skip paced the pass: ${JSON.stringify(waits)}`)
+})
+
 test("the real timer is interruptible, so a shutdown during the opening wait settles at once", async () => {
   // No injected delay: this is the shipped wait, cut short by stop(). Without the interrupt the
   // shutdown phase would block for the full opening delay on every server that has just booted.
