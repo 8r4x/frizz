@@ -94,6 +94,19 @@ import {
   type PrWatchView,
   AddOwnWatchInput,
   AddOwnWatchResult,
+  AskInput,
+  AskResult,
+  UnaskInput,
+  UnaskResult,
+  AnswerQuestionsInput,
+  AnswerQuestionsResult,
+  DismissQuestionsInput,
+  DismissQuestionsResult,
+  AskedQuestionSchema,
+  askedQuestionFaults,
+  ASK_MAX_OPEN,
+  type AskedQuestion,
+  type RegisteredQuestionView,
   DropOwnWatchInput,
   DropOwnWatchResult,
   OWN_WATCH_MAX_ARMED,
@@ -747,6 +760,29 @@ export function createRouter(ctx: AppContext) {
   // stored label would be a copy of a name the runtime owns, and it would go stale the moment the op
   // it names ends — leaving a read-back that confidently names work that is over. Re-resolving means
   // the label is either current or absent, and absent is the honest answer.
+  // A stored question's spec, or undefined when the row predates a schema change or was written by
+  // hand. Undefined is rendered as "unreadable" rather than thrown: one bad row must not blank a card
+  // carrying three good ones.
+  function parseQuestionSpec(spec: string): AskedQuestion | undefined {
+    try {
+      const parsed = AskedQuestionSchema.safeParse(JSON.parse(spec))
+      return parsed.success ? parsed.data : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  // This thread's OPEN questions, in the shape the worker's read-back, the board and the card all use.
+  function openQuestionViews(slug: string): RegisteredQuestionView[] {
+    const out: RegisteredQuestionView[] = []
+    for (const q of ctx.storage.listThreadQuestions(slug, { openOnly: true })) {
+      const spec = parseQuestionSpec(q.spec)
+      if (!spec) continue
+      out.push({ id: q.id, spec, askedAt: new Date(q.asked_at).toISOString() })
+    }
+    return out
+  }
+
   function armedOwnWatchViews(slug: string): OwnWatchView[] {
     const tele = ctx.tailer.get(slug)
     return ctx.storage.listThreadWatches(slug, { armedOnly: true }).map((w) => {
@@ -2468,6 +2504,104 @@ export function createRouter(ctx: AppContext) {
         const dropped = ctx.storage.dropThreadWatch(input.slug, input.id, Date.now())
         if (dropped) ctx.board.refresh()
         return { dropped, watches: armedOwnWatchViews(input.slug) }
+      },
+    }),
+
+    // ---- THE WORKER'S REGISTERED QUESTIONS (ask / unask) + the human's answer -------------------
+    // `mcp__frizz__ask` and `mcp__frizz__unask`, plus the two the CARD calls. See
+    // plans/rest-by-registration.md: a question stops being a fenced block with the lifetime of the
+    // message carrying it and becomes a row that survives the worker saying anything else.
+    //
+    // NOT AN INTERACTION, deliberately. The typed `agent-question` interaction beside this one has the
+    // durability and the server-minted id — but it is created by a RUNTIME ADAPTER and never by an RPC,
+    // precisely so a model cannot mint one ("there is deliberately no public/provider-spoofable create
+    // RPC", above). `ask` IS a model-callable RPC, so it gets its own registry rather than a hole in
+    // that rule. The two converge again at the CARD, which reads both through one adapter.
+    ask: mutation({
+      input: AskInput,
+      output: AskResult,
+      handler: async ({ input }) => {
+        const row = ctx.storage.getSession(input.slug)
+        if (!row) throw new Error(`thread ${input.slug} is not registered`)
+        if (row.state === "archived" || row.archived === 1) {
+          throw new Error("Reopen this thread before asking a question on it")
+        }
+        // REFUSED, not stored, and named one fault at a time in the worker's own vocabulary — a shape
+        // zod accepts can still be a question nobody can answer (a `multi` with no options renders as a
+        // free-text box, silently).
+        const faults = input.questions.flatMap((q) => askedQuestionFaults(q))
+        if (faults.length > 0) throw new Error(faults.join("\n"))
+        const open = ctx.storage.listThreadQuestions(input.slug, { openOnly: true })
+        if (open.length + input.questions.length > ASK_MAX_OPEN) {
+          throw new Error(
+            `this thread already has ${open.length} unanswered question(s); the limit is ${ASK_MAX_OPEN}. ` +
+            "Withdraw the ones you no longer need answered with `unask`, or decide them yourself.",
+          )
+        }
+        const now = Date.now()
+        const registered = input.questions.map((spec) => {
+          const id = `qst_${randomUUID().replace(/-/g, "").slice(0, 12)}`
+          ctx.storage.askThreadQuestion({ id, slug: input.slug, spec: JSON.stringify(spec), askedAtMs: now })
+          return { id, spec, askedAt: new Date(now).toISOString() }
+        })
+        ctx.board.refresh()
+        return { registered, open: openQuestionViews(input.slug) }
+      },
+    }),
+
+    unask: mutation({
+      input: UnaskInput,
+      output: UnaskResult,
+      handler: async ({ input }) => {
+        // Slug-scoped in storage, so one thread can never withdraw another's question.
+        const withdrawn = ctx.storage.withdrawThreadQuestion(input.slug, input.id, Date.now())
+        if (withdrawn) ctx.board.refresh()
+        return { withdrawn, open: openQuestionViews(input.slug) }
+      },
+    }),
+
+    // ---- and the two the CARD calls -------------------------------------------------------------
+    answerQuestions: mutation({
+      input: AnswerQuestionsInput,
+      output: AnswerQuestionsResult,
+      handler: async ({ input }) => {
+        const now = Date.now()
+        const answered: string[] = []
+        for (const answer of input.answers) {
+          // Scoped by reading the row first: an id belonging to another thread answers nothing here.
+          const q = ctx.storage.getThreadQuestion(answer.questionId)
+          if (!q || q.thread_slug !== input.slug || q.state !== "open") continue
+          if (ctx.storage.answerThreadQuestion(answer.questionId, JSON.stringify(answer), now)) answered.push(answer.questionId)
+        }
+        // ANSWERING IS NOT DELIVERING. The row is stored answered-but-undelivered and the scheduler
+        // hands it over (evalQuestionAnswers), so an answer given while the worker's process is down
+        // survives the gap instead of being lost in the same silence the fence lost the question in.
+        if (answered.length > 0) ctx.board.refresh()
+        return { answered, open: openQuestionViews(input.slug) }
+      },
+    }),
+
+    dismissQuestions: mutation({
+      input: DismissQuestionsInput,
+      output: DismissQuestionsResult,
+      handler: async ({ input }) => {
+        const now = Date.now()
+        const dismissed: string[] = []
+        for (const id of input.ids) {
+          const q = ctx.storage.getThreadQuestion(id)
+          if (!q || q.thread_slug !== input.slug || q.state !== "open") continue
+          // A DANGER-TAGGED QUESTION CANNOT BE DISMISSED, and the refusal lives here rather than only in
+          // the card: a generic close icon is not consent for something irreversible, and declining is a
+          // real option INSIDE the question. Skipped rather than thrown — the card does not offer the x
+          // on one of these, so reaching this line at all means something other than the card called.
+          if (parseQuestionSpec(q.spec)?.danger) continue
+          if (ctx.storage.dismissThreadQuestion(id, now)) dismissed.push(id)
+        }
+        // NO WAKE. The human dismissing questions is almost always dismissing several in a row and is
+        // sitting right there, so a wake per x would be a turn per click. The worker is told at its next
+        // wake, in the same message as any answers (questionAnswerMessage).
+        if (dismissed.length > 0) ctx.board.refresh()
+        return { dismissed, open: openQuestionViews(input.slug) }
       },
     }),
 

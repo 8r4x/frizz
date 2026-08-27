@@ -18,7 +18,7 @@ const thread: ThreadView = {
   id: slug, title: "Confirm pullfrog pricing emails went out", status: "active", mechanism: null, humanBlocked: false,
   ready: false, dependsOn: [], externalDeps: [], agents: [], errors: [], warnings: [], runtime: "running",
   unread: false, archived: false, hasPlan: false, pendingQuestion: false, kind: "session", foreign: false,
-  backend: "claude", permissionMode: "default", subAgents: [], bgShells: [], watches: [],
+  backend: "claude", permissionMode: "default", subAgents: [], bgShells: [], watches: [], questions: [],
 }
 store.board = { projectDir: "/fixture/frizz", threads: [thread] } as BoardSnapshot
 

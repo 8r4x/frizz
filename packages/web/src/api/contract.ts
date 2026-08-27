@@ -87,6 +87,14 @@ import type {
   AddOwnWatchResult,
   DropOwnWatchInput,
   DropOwnWatchResult,
+  AskInput,
+  AskResult,
+  UnaskInput,
+  UnaskResult,
+  AnswerQuestionsInput,
+  AnswerQuestionsResult,
+  DismissQuestionsInput,
+  DismissQuestionsResult,
   AddOwnPrWatchResult,
   DropOwnPrWatchInput,
   DropOwnPrWatchResult,
@@ -182,6 +190,18 @@ export interface Api {
   // story as the PR watchers above: declared for the drift gate, never called from the browser.
   addOwnWatch(input: AddOwnWatchInput): Promise<AddOwnWatchResult>
   dropOwnWatch(input: DropOwnWatchInput): Promise<DropOwnWatchResult>
+  // THE WORKER'S REGISTERED QUESTIONS. `ask`/`unask` are the worker's and are declared here for the
+  // drift gate alone; the two below ARE called from the browser — they are what the question card does.
+  ask(input: AskInput): Promise<AskResult>
+  unask(input: UnaskInput): Promise<UnaskResult>
+  // The card's Send: every question it holds an answer for, in ONE call, because a per-question send
+  // would half-wake a turn.
+  answerQuestions(input: AnswerQuestionsInput): Promise<AnswerQuestionsResult>
+  // The card's ×. It never wakes the worker — the human dismissing questions is almost always
+  // dismissing several in a row, so a wake per click would be a turn per click; the worker is told at
+  // its next wake instead. Refused server-side for a danger-tagged question, which the card also does
+  // not offer it on.
+  dismissQuestions(input: DismissQuestionsInput): Promise<DismissQuestionsResult>
   // THE SUPERSEDED WORKER PROCEDURES, declared here only so the drift gate can see them. A worker's MCP
   // server outlives every frizz restart, so a session dispatched before the stop hook and the heartbeat
   // merged is still POSTing these names; the router aliases them onto the one recurring-prompt row
@@ -334,6 +354,10 @@ export const PROCEDURES = {
   listOwnPrWatches: "mutation",
   addOwnWatch: "mutation",
   dropOwnWatch: "mutation",
+  ask: "mutation",
+  unask: "mutation",
+  answerQuestions: "mutation",
+  dismissQuestions: "mutation",
   getOwnThreadRecurringPrompt: "mutation",
   setOwnThreadStopHook: "mutation",
   setOwnThreadHeartbeat: "mutation",

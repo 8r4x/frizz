@@ -51,6 +51,7 @@ const thread = (id: string, title: string): ThreadView => ({
   subAgents: [],
   bgShells: [],
   watches: [],
+  questions: [],
 })
 
 const timerIso = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString()

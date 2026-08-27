@@ -57,7 +57,7 @@ const baseThread = (id: string, title: string, subAgents: ThreadView["subAgents"
   foreign: false,
   subAgents,
   bgShells: [],
-  watches: [],
+  watches: [], questions: [],
 })
 
 // A fixed future instant, kept so the timer card renders with a plausible value.

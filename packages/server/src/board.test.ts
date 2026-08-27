@@ -1866,3 +1866,34 @@ test("a registered park excuses the thread from the queue and still states itsel
   // With no registration the same thread is an ordinary bare rest, and queues.
   assert.equal(deriveNeedsYou(row(), live, "turn-idle", false, NOW, undefined, true, false, {}, new Set(), new Set(), []), true)
 })
+
+// ---- REGISTERED QUESTIONS (2026-08-26) ----
+//
+// The queue half of the question registry. What it must NOT do is as important as what it does: a
+// registered question is a hard queue member, and it is deliberately NOT wired into
+// degradeIfAwaitingAnswer, which pins a RUNNING thread to turn-idle. That is right for a fence (the
+// question was the last thing said) and wrong for a row (the worker asked and kept working).
+test("an open registered question is a hard queue member, and outranks the awaiting card", () => {
+  const live = tele({ turn: "idle", bgShells: [LIVE_SHELL], lastAssistantAt: FENCE_AT })
+  const watches = [registeredWatch()]
+  // Without a question the registered park excuses the thread from the queue.
+  assert.equal(deriveNeedsYou(row(), live, "turn-idle", false, NOW, undefined, true, false, {}, new Set(), new Set(), watches, 0), false)
+  // WITH one, the human owes an answer — so it queues, park or no park.
+  assert.equal(deriveNeedsYou(row(), live, "turn-idle", false, NOW, undefined, true, false, {}, new Set(), new Set(), watches, 1), true)
+  // …and the awaiting card stands down, because at rest with both outstanding the human should be
+  // looking at the QUESTION. Two expanded surfaces compete for one glance; the watches collapse behind
+  // a count on the question card instead.
+  assert.equal(deriveAwaitingBackground(row(), live, "turn-idle", false, NOW, undefined, false, {}, new Set(), new Set(), watches, 1), false)
+  assert.equal(deriveAwaitingBackground(row(), live, "turn-idle", false, NOW, undefined, false, {}, new Set(), new Set(), watches, 0), true)
+})
+
+test("a registered question does NOT degrade a running thread to turn-idle", () => {
+  // degradeIfAwaitingAnswer exists for the FENCE: a ```question in the last assistant message means the
+  // worker stopped, so a stale `running` has to be corrected. A row makes no such claim — the worker
+  // registers and keeps going — and pinning it to turn-idle would stop its shimmer for as long as the
+  // question stood. The function still takes only the tailer's boolean; this pins that it was not
+  // widened to the registry along the way.
+  assert.equal(degradeIfAwaitingAnswer("running", false), "running")
+  assert.equal(degradeIfAwaitingAnswer("running", true), "turn-idle")
+  assert.equal(degradeIfAwaitingAnswer("turn-idle", true), "turn-idle")
+})

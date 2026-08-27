@@ -41,7 +41,7 @@ const thread: ThreadView = {
   foreign: false,
   subAgents: [],
   bgShells: [],
-  watches: [],
+  watches: [], questions: [],
 }
 
 function Fixture() {

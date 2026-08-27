@@ -94,7 +94,7 @@ const thread = {
   // removed on 2026-08-14 (it duplicated the rows under the prompt box), so the Goal is the last mark in
   // the cluster and there is no right-hand gap left to measure. Seeding a watcher here would now paint
   // nothing and quietly imply the fixture still covers a gap it cannot.
-  watches: [],
+  watches: [], questions: [],
 } as unknown as ThreadView
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })

@@ -25,6 +25,7 @@ function thread(id: string, over: Partial<ThreadView> = {}): ThreadView {
     subAgents: [],
     bgShells: [],
     watches: [],
+    questions: [],
     pendingQuestion: false,
     ...over,
   }

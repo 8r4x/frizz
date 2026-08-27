@@ -205,6 +205,7 @@ function harness(tailer: Tailer = noopTailer) {
       bgShells: [],
       watches: [],
       pendingQuestion: false,
+      questions: [],
       kind: "session",
       foreign: false,
     } satisfies ThreadView)

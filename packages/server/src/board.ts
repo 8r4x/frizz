@@ -7,7 +7,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import watcher from "@parcel/watcher"
 import type { BoardSnapshot, ThreadView, RuntimeState, ThreadRecurringPrompt } from "@frizz/shared"
-import { BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isDirectSubAgent, type PermissionMode as PermissionModeValue } from "@frizz/shared"
+import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isDirectSubAgent, type AskedQuestion, type PermissionMode as PermissionModeValue } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import type { Project } from "./project.ts"
 import { isHeadlessRow, isBrokerClaudeRow, sessionTitleLocked } from "./storage.ts"
@@ -398,6 +398,19 @@ export function hasDeclaredBackgroundPark(
   return true
 }
 
+/** A stored question's spec, or undefined when it no longer parses — a schema change, a hand-written
+ *  row. Undefined is DROPPED by every caller rather than thrown on: one unreadable row must not blank a
+ *  card carrying three good ones. Duplicated in router.ts for the worker's own read-back, which cannot
+ *  reach into the board. */
+export function safeQuestionSpec(spec: string): AskedQuestion | undefined {
+  try {
+    const parsed = AskedQuestionSchema.safeParse(JSON.parse(spec))
+    return parsed.success ? parsed.data : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** One armed `thread_watch` row, as the board reads it — the registry half of a wait, where
  *  `declaredWaitIds` is the fence half. */
 export interface RegisteredWatch {
@@ -743,6 +756,9 @@ export function deriveNeedsYou(
   armedTimerIds: ReadonlySet<string> = new Set(),
   // This thread's ARMED `thread_watch` rows. Same reason as the two above — the caller holds storage.
   armedWatches: readonly RegisteredWatch[] = [],
+  // How many REGISTERED questions this thread has open (thread_question). A count rather than the rows:
+  // the queue rule only asks whether there are any, and the rows themselves travel on the view.
+  openQuestions = 0,
 ): boolean {
   // Snooze is explicit operator lifecycle state. It must be checked before provider/question/crash
   // gates so choosing Snooze from any queue card actually parks that card until its exact deadline.
@@ -779,6 +795,13 @@ export function deriveNeedsYou(
   // needing input surface automatically and STAY until resolved). The tailer clears pendingQuestion the
   // moment a newer user message lands (an answer/steer supersedes the fence), which is what dequeues it.
   if (tele?.pendingQuestion) return true
+  // A REGISTERED question is the same hard queue member, and for a stronger reason: it does not depend
+  // on the worker having stayed quiet since it asked. The rows are the caller's because only it holds
+  // storage. Deliberately NOT wired into degradeIfAwaitingAnswer above — that degrades a RUNNING thread
+  // to turn-idle on the strength of the last message being a question, which is right for a fence and
+  // wrong for a row: a worker that registers a question KEEPS WORKING, and pinning it to turn-idle
+  // would stop its shimmer for as long as the question stood.
+  if (openQuestions > 0) return true
   // Declared/limit parks are STRONGER excusals than the awaiting-background card below, so they are
   // checked first: a worker that declared an awaiting-human fence, or is limit-paused with auto-resume
   // promised, stays held even if a child of its is still live (it explicitly said what it is waiting on).
@@ -911,13 +934,18 @@ export function deriveAwaitingBackground(
   registeredPrWatches: ReadonlySet<string> = new Set(),
   armedTimerIds: ReadonlySet<string> = new Set(),
   armedWatches: readonly RegisteredWatch[] = [],
+  openQuestions = 0,
 ): boolean {
   // DECLARED, not inferred. This card used to appear whenever the thread had anything running, which is
   // how it came to announce a wait on a dev server nobody tore down. It now states what the worker said
   // it is waiting on, and says nothing when the worker said nothing.
   if (runtime !== "turn-idle" || !hasDeclaredWait(tele, nowMs, armedTimerIds, registeredPrWatches, armedWatches)) return false
   // Any hard human gate or completion signal outranks this reason → the thread cards as THAT, not here.
-  if (hasActionableInteraction || tele?.pendingAsk || tele?.pendingQuestion) return false
+  // A REGISTERED question outranks this card for the same reason a fenced one does: at rest with both
+  // outstanding the human should be looking at the QUESTION, which is the actionable thing, and two
+  // expanded surfaces compete for one glance. The watches are not lost — they collapse behind a count
+  // on the question card itself.
+  if (hasActionableInteraction || tele?.pendingAsk || tele?.pendingQuestion || openQuestions > 0) return false
   // A signal fence — ```done OR ```awaiting — is the worker's OWN explicit statement about why it
   // stopped, and it renders its own card in the transcript body. That is strictly more specific than
   // "it has background work running", so it wins: show the fence card ALONE, never both. This is the
@@ -954,7 +982,7 @@ export function deriveAwaitingBackground(
   // drawer and full-screen page for a healthy thread resting on its children or on a shell. Since
   // 2026-08-01 that covers a shell-only rest too — it now has NO queue card at all, so this card in the
   // drawer and on the standalone page is the only place that state is stated in words.
-  return deriveNeedsYou({ ...row, bg_snooze_rested_at: null }, tele, runtime, hasActionableInteraction, nowMs, limitPause, false, deliveryProcessGone, {}, new Set(), armedTimerIds, armedWatches)
+  return deriveNeedsYou({ ...row, bg_snooze_rested_at: null }, tele, runtime, hasActionableInteraction, nowMs, limitPause, false, deliveryProcessGone, {}, new Set(), armedTimerIds, armedWatches, openQuestions)
 }
 
 // A REGISTERED session thread's view (id = row.slug). Runtime via the shared deriveRuntime (transport-aware);
@@ -1153,6 +1181,15 @@ function sessionThreadView(
   // creates. Same per-thread read as the two registries above, and the same ms→ISO mapping as the
   // worker's own read-back (router.armedOwnWatchViews), so the row, the strip and the tool cannot
   // disagree about one wait.
+  // This thread's OPEN REGISTERED QUESTIONS, carried whole rather than as a flag: the card renders from
+  // these instead of re-parsing the transcript's prose, which is what gives every question a STABLE id
+  // to be answered, withdrawn or dismissed BY. A row whose spec no longer parses is dropped rather than
+  // thrown on — one bad row must not blank a card carrying three good ones.
+  const questions: ThreadView["questions"] = []
+  for (const q of storage.listThreadQuestions(row.slug, { openOnly: true })) {
+    const spec = safeQuestionSpec(q.spec)
+    if (spec) questions.push({ id: q.id, spec, askedAt: new Date(q.asked_at).toISOString() })
+  }
   const armedWatches: RegisteredWatch[] = storage.listThreadWatches(row.slug, { armedOnly: true }).map((w) => ({
     id: w.id,
     kind: w.kind,
@@ -1208,8 +1245,8 @@ function sessionThreadView(
   const state = effectiveSessionState(row, registeredLegacyTerminal)
   const archived = state === "archived"
   const limitPause = resolveLimitPause(row, tele, nowMs)
-  const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches)
-  const awaitingBackground = archived ? false : deriveAwaitingBackground(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches)
+  const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, questions.length)
+  const awaitingBackground = archived ? false : deriveAwaitingBackground(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, questions.length)
   // A worker that exited with work still outstanding — a turn in flight, OR a sub-agent still reading
   // "running" (its parent is gone, so it cannot actually be live) — is a crash/stall, not a clean
   // handoff, so it cards as "stalled" not a bare "rest". Mirrors deriveNeedsYou's surfacing above.
@@ -1258,6 +1295,7 @@ function sessionThreadView(
     watches: fenceWatchViews(row.slug, tele, tele?.lastAssistantAt, github, armedPrWatches, armedTimers, armedWatches),
     pendingAsk: tele?.pendingAsk ? { questions: tele.pendingAsk.questions } : undefined,
     pendingQuestion: tele?.pendingQuestion ?? false,
+    questions,
     lastUserAt: tele?.lastUserAt,
     // Runtime provider-auth rejection (claude-auth plan): only the typed category travels — the raw
     // error/provider text never leaves the server. Drives the trusted sign-in recovery card in ChatView.
@@ -1389,6 +1427,7 @@ function foreignThreadView(sessionId: string, tele: SessionTelemetry, backend: "
     // ALWAYS false, and not for want of trying: this is `at rest with an unanswered ```question fence`,
     // and a session frizz did not dispatch has no fence to read.
     pendingQuestion: false,
+    questions: [],
     kind: "session",
     foreign: true,
     needsYou: false,

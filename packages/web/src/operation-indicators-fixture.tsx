@@ -67,6 +67,7 @@ const thread: ThreadView = {
     { label: "Monitor: PR checks", startedAt: "2026-07-14T09:30:00.000Z", state: "stale" },
   ],
   watches: [],
+  questions: [],
 }
 
 store.board = { threads: [thread] } as BoardSnapshot

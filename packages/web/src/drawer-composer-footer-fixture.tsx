@@ -35,6 +35,7 @@ const thread: ThreadView = {
   ],
   bgShells: [{ label: "Watch the production fixture build", startedAt: "2026-07-14T10:02:00.000Z", state: "running" }],
   watches: [],
+  questions: [],
 }
 
 store.board = { threads: [thread] } as BoardSnapshot

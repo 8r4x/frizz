@@ -1617,6 +1617,227 @@ export type DropOwnWatchResult = z.infer<typeof DropOwnWatchResult>
  *  PR_WATCH_MAX_ARMED, and generous enough that no honest fan-out meets it. */
 export const OWN_WATCH_MAX_ARMED = 24
 
+// ---- THE WORKER'S REGISTERED QUESTIONS (2026-08-26) ------------------------------------------------
+// `mcp__frizz__ask` / `mcp__frizz__unask`. See plans/rest-by-registration.md.
+//
+// WHY A ROW AND NOT A FENCE. A ```question block has the lifetime of the MESSAGE carrying it: the
+// tailer recomputes `pendingQuestion` from the latest assistant text on every assistant record
+// (`lastAssistantHasQuestion = hasQuestionBlock(raw)`, an assignment and not an OR), and clears it on
+// any human turn. So a worker that asks and then says one more sentence has silently un-asked, and a
+// steer that was not an answer discharges a question the human still owed. A row survives both.
+//
+// THE AUTHORING SHAPE, not the render shape. `ParsedQuestion` (web/lib/questionBlocks.ts) is what the
+// CARD consumes — flat, markdown-oriented, options as bare strings, because it is recovered by parsing
+// prose. This is what a worker WRITES, and an adapter maps it onto that same card, exactly as
+// lib/interactionQuestion.ts already does for a typed interaction. One card, three producers.
+//
+// THE VOCABULARY IS THE FENCE'S, deliberately: `kind` is QuestionKind (`question` | `multi`) and
+// `danger` is orthogonal to it, so nothing here invents a second name for a thing the renderer already
+// has a name for. A FREE-TEXT question is one with no options — which the card already renders, since
+// its "something else…" row is unconditional — rather than a third kind.
+export const AskQuestionKind = z.enum(["question", "multi"])
+export type AskQuestionKind = z.infer<typeof AskQuestionKind>
+
+export interface AskedOption {
+  label: string
+  description?: string
+  /** Marks the one option the worker recommends. At most one per question — a second is refused, since
+   *  "recommended" means nothing if it is on two of three choices. */
+  recommended?: boolean
+  /** Markdown shown when this option is focused: two diffs, two mockups, the message that would be
+   *  posted. The ONE input affordance beyond select/multi-select/free text, because it is the only one
+   *  that changes a decision rather than decorating it. */
+  preview?: string
+  /** Questions that become live only if the human picks THIS option — the static tree. A branch nobody
+   *  took returns nothing, so an unpicked follow-up is not a question anyone owes an answer to. */
+  followUps?: AskedQuestion[]
+}
+
+export interface AskedQuestion {
+  question: string
+  /** A very short chip label for the card's heading (<= 12 chars), as the fence's own convention. */
+  header?: string
+  kind: AskQuestionKind
+  /** The destructive gate — force-merge, deletion, history rewrite, prod rollback. It changes TWO
+   *  things: the card wears the `risk` tone, and the human's × cannot reach it. A generic close icon is
+   *  not consent for something irreversible; declining is an OPTION inside the question. */
+  danger?: boolean
+  /** Absent or empty ⇒ a free-text question. */
+  options?: AskedOption[]
+}
+
+/** How deep a follow-up tree may go. Three: a question, a follow-up on the option taken, and one more.
+ *  Past that the human is filling in a form rather than answering a question, and the worker should be
+ *  deciding the rest itself. */
+export const ASK_MAX_DEPTH = 3
+/** How many root questions one `ask` call may register, and how many a thread may hold open. A worker
+ *  with more than this outstanding is not asking, it is refusing to decide. */
+export const ASK_MAX_PER_CALL = 4
+export const ASK_MAX_OPEN = 12
+
+const AskedOptionSchema: z.ZodType<AskedOption> = z.lazy(() => z.object({
+  label: z.string().trim().min(1).max(120),
+  description: z.string().trim().max(400).optional(),
+  recommended: z.boolean().optional(),
+  preview: z.string().max(4000).optional(),
+  followUps: z.array(AskedQuestionSchema).max(ASK_MAX_PER_CALL).optional(),
+}).strict())
+
+export const AskedQuestionSchema: z.ZodType<AskedQuestion> = z.lazy(() => z.object({
+  question: z.string().trim().min(1).max(600),
+  header: z.string().trim().max(24).optional(),
+  kind: AskQuestionKind,
+  danger: z.boolean().optional(),
+  options: z.array(AskedOptionSchema).max(8).optional(),
+}).strict())
+
+/** The depth of a question tree, counting the root as 1. Separate from the schema because zod's `lazy`
+ *  cannot bound its own recursion — the RPC refuses on this, with a message naming the limit. */
+export function askedQuestionDepth(q: AskedQuestion): number {
+  let deepest = 1
+  for (const option of q.options ?? []) {
+    for (const child of option.followUps ?? []) deepest = Math.max(deepest, 1 + askedQuestionDepth(child))
+  }
+  return deepest
+}
+
+/** Every way a tree can be malformed beyond its shape, as prose the worker can act on. Empty ⇒ fine. */
+export function askedQuestionFaults(q: AskedQuestion): string[] {
+  const faults: string[] = []
+  const walk = (node: AskedQuestion, path: string) => {
+    const options = node.options ?? []
+    // A MULTI-SELECT WITH NO OPTIONS IS A FREE-TEXT BOX WEARING THE WRONG LABEL, and it renders as one —
+    // silently, so the worker never learns its `multi` did nothing.
+    if (node.kind === "multi" && options.length === 0) faults.push(`${path}: \`kind: "multi"\` needs options — a question with none is free text`)
+    if (options.filter((o) => o.recommended).length > 1) faults.push(`${path}: only ONE option may be \`recommended\` — a recommendation on two of three choices says nothing`)
+    // FOLLOW-UPS HANG OFF AN OPTION, so a free-text question cannot carry one: there is no answer to
+    // branch on. A worker wanting a second question should register a second ROOT.
+    for (const [i, option] of options.entries()) {
+      if ((option.followUps ?? []).length > 0 && node.kind === "multi") {
+        faults.push(`${path}: a \`multi\` option cannot carry follow-ups — several picked options would open several branches at once`)
+      }
+      for (const child of option.followUps ?? []) walk(child, `${path} → ${option.label}`)
+      void i
+    }
+  }
+  walk(q, "question")
+  if (askedQuestionDepth(q) > ASK_MAX_DEPTH) {
+    faults.push(`the follow-up tree is ${askedQuestionDepth(q)} levels deep; the limit is ${ASK_MAX_DEPTH} — past that you are asking the human to fill in a form`)
+  }
+  return faults
+}
+
+export const AskInput = z.object({
+  slug: ThreadSlug,
+  questions: z.array(AskedQuestionSchema).min(1).max(ASK_MAX_PER_CALL),
+}).strict()
+export type AskInput = z.infer<typeof AskInput>
+
+/** One registered question, as every reader sees it: the worker's read-back, the board, and the card. */
+export const RegisteredQuestionView = z.object({
+  /** Minted by frizz. The worker never chose it, which is why an answer RESTATES the question text —
+   *  an id alone cannot be correlated back to what was asked. */
+  id: z.string(),
+  spec: AskedQuestionSchema,
+  askedAt: z.string(),
+}).strict()
+export type RegisteredQuestionView = z.infer<typeof RegisteredQuestionView>
+
+export const AskResult = z.object({
+  registered: z.array(RegisteredQuestionView),
+  /** Everything still open on this thread afterwards, so a worker never needs a second call. */
+  open: z.array(RegisteredQuestionView),
+}).strict()
+export type AskResult = z.infer<typeof AskResult>
+
+export const UnaskInput = z.object({
+  slug: ThreadSlug,
+  id: z.string().min(1).max(64),
+}).strict()
+export type UnaskInput = z.infer<typeof UnaskInput>
+
+export const UnaskResult = z.object({
+  withdrawn: z.boolean(),
+  open: z.array(RegisteredQuestionView),
+}).strict()
+export type UnaskResult = z.infer<typeof UnaskResult>
+
+/** One question's answer, as the worker receives it.
+ *
+ *  IT RESTATES THE QUESTION. The worker never saw `questionId` — frizz minted it at registration — so
+ *  the id alone cannot be correlated back to anything the worker wrote. The text is what makes the
+ *  payload readable on its own, and it is why this is not simply `{id: choice}`. */
+export interface QuestionAnswer {
+  questionId: string
+  question: string
+  /** The labels the human picked — one for a `question`, any number for a `multi`, none for free text. */
+  chosen: string[]
+  /** What they typed, when they typed instead of (or as well as) picking. */
+  text?: string
+  /** Answers to the follow-ups under the option they took. A branch NOT taken contributes nothing: the
+   *  answered set plus the branch taken is the whole payload, so an absent follow-up means "not asked",
+   *  never "asked and skipped". */
+  followUps?: QuestionAnswer[]
+}
+
+const QuestionAnswerSchema: z.ZodType<QuestionAnswer> = z.lazy(() => z.object({
+  questionId: z.string().min(1).max(64),
+  question: z.string().min(1).max(600),
+  chosen: z.array(z.string().max(200)).max(8),
+  text: z.string().max(8000).optional(),
+  followUps: z.array(QuestionAnswerSchema).max(ASK_MAX_PER_CALL).optional(),
+}).strict())
+
+export const AnswerQuestionsInput = z.object({
+  slug: ThreadSlug,
+  /** SUBMITTED AS A UNIT. The card sends whatever was answered in one call, because a per-question send
+   *  would half-wake a turn: the worker would come back to a payload it cannot act on and would have to
+   *  ask again for the rest. */
+  answers: z.array(QuestionAnswerSchema).min(1).max(ASK_MAX_OPEN),
+}).strict()
+export type AnswerQuestionsInput = z.infer<typeof AnswerQuestionsInput>
+
+export const AnswerQuestionsResult = z.object({
+  /** The ids that were open and are now answered. An id that was already settled is silently absent
+   *  rather than an error: two browser tabs answering the same card is a race nobody should see. */
+  answered: z.array(z.string()),
+  open: z.array(RegisteredQuestionView),
+}).strict()
+export type AnswerQuestionsResult = z.infer<typeof AnswerQuestionsResult>
+
+export const DismissQuestionsInput = z.object({
+  slug: ThreadSlug,
+  ids: z.array(z.string().min(1).max(64)).min(1).max(ASK_MAX_OPEN),
+}).strict()
+export type DismissQuestionsInput = z.infer<typeof DismissQuestionsInput>
+
+export const DismissQuestionsResult = z.object({
+  dismissed: z.array(z.string()),
+  open: z.array(RegisteredQuestionView),
+}).strict()
+export type DismissQuestionsResult = z.infer<typeof DismissQuestionsResult>
+
+/** The answer as it reaches the worker — one message, composed here so the RPC, the delivery and any
+ *  read-back cannot word it three ways.
+ *
+ *  A DISMISSAL RIDES ALONG rather than waking anybody. The human dismissing questions is almost always
+ *  dismissing several in a row and is sitting right there, so each × marking the row and waking the
+ *  worker would be a turn per click. They are told at the next wake, in this same message. */
+export function questionAnswerMessage(answers: readonly QuestionAnswer[], dismissed: readonly string[] = []): string {
+  const render = (a: QuestionAnswer, depth: number): string[] => {
+    const pad = "  ".repeat(depth)
+    const said = [a.chosen.join(", "), a.text].filter(Boolean).join(" — ")
+    const lines = [`${pad}- “${a.question}” → ${said || "(no answer)"}`]
+    for (const child of a.followUps ?? []) lines.push(...render(child, depth + 1))
+    return lines
+  }
+  const body = answers.flatMap((a) => render(a, 0)).join("\n")
+  const tail = dismissed.length > 0
+    ? `\n\n${dismissed.length} other question${dismissed.length === 1 ? " was" : "s were"} DISMISSED without an answer — decide ${dismissed.length === 1 ? "it" : "those"} yourself and carry on. Do not re-ask.`
+    : ""
+  return `Answers to the questions you registered:\n${body}${tail}`
+}
+
 export const ListOwnPrWatchesInput = z.object({ slug: ThreadSlug }).strict()
 export type ListOwnPrWatchesInput = z.infer<typeof ListOwnPrWatchesInput>
 
@@ -1742,6 +1963,12 @@ export const ThreadView = z.object({
   // Derived safety net (tailer): at rest with an unanswered ```question the worker asked in chat but
   // never encoded as blocked. Defaults false so old snapshots/rows parse. Feeds needsAction.
   pendingQuestion: z.boolean().default(false),
+  // The worker's REGISTERED questions, still open (thread_question). Distinct from `pendingQuestion`
+  // beside it, and the difference is the whole point of the registry: that boolean is recomputed from
+  // the LATEST assistant text on every assistant record and cleared by any human turn, so it cannot
+  // outlive the message that carried it. These rows can, and they carry the question itself rather than
+  // merely asserting one exists — the card renders from this instead of re-parsing prose.
+  questions: z.array(RegisteredQuestionView).default([]),
   // ISO8601 of the newest REAL user interaction (answer/steer/dispatch) — the chronological listing
   // sort key. Optional; the listing falls back to spawnedAt when absent (a dispatch IS an interaction).
   lastUserAt: z.string().optional(),
