@@ -630,11 +630,13 @@ export interface Storage {
   getThreadQuestion(id: string): ThreadQuestionRow | undefined
   /** Every OPEN question on the machine — what the `done` gate and the board both read. */
   openThreadQuestions(): ThreadQuestionRow[]
-  /** The human's answer. Stored, not delivered: `undeliveredAnswers` finds it again on the next pass. */
+  /** The human's answer. Stored, not delivered: `undeliveredSettlements` finds it on the next pass. */
   answerThreadQuestion(id: string, answer: string, atMs: number): boolean
-  /** Answered but not yet handed to the worker — the scheduler's delivery queue. */
-  undeliveredAnswers(): ThreadQuestionRow[]
-  markAnswerDelivered(id: string): boolean
+  /** Settled but not yet told to the worker — the scheduler's delivery queue. Answers AND dismissals,
+   *  because a dismissal is news the worker needs ("decide it yourself") even though it wakes nobody on
+   *  its own: it rides the next answer's wake. A withdrawal is absent because the worker DID that. */
+  undeliveredSettlements(): ThreadQuestionRow[]
+  markSettlementDelivered(id: string): boolean
   /** The worker's own `unask`, thread-scoped so one thread can never withdraw another's question. */
   withdrawThreadQuestion(slug: string, id: string, atMs: number): boolean
   /** The human's x. Distinct from `withdrawn` on purpose: the two states answer different questions
@@ -1801,13 +1803,13 @@ export function createStorage(dbPath: string): Storage {
     UPDATE thread_question SET state = 'answered', answer = ?, settled_at = ?
     WHERE id = ? AND state = 'open'
   `)
-  // Answered but not yet handed over. `state = 'answered'` alone, never the dismissed/withdrawn rows:
-  // those settle without an answer and there is nothing to deliver.
-  const undeliveredAnswersStmt = db.prepare<[], ThreadQuestionRow>(
-    "SELECT * FROM thread_question WHERE state = 'answered' AND delivered = 0 ORDER BY settled_at, id",
+  // Settled but not yet told to the worker. ANSWERED and DISMISSED, never WITHDRAWN: a withdrawal is the
+  // worker's own act, so telling it about one would be reading its own move back to it.
+  const undeliveredSettlementsStmt = db.prepare<[], ThreadQuestionRow>(
+    "SELECT * FROM thread_question WHERE state IN ('answered', 'dismissed') AND delivered = 0 ORDER BY settled_at, id",
   )
-  const markAnswerDeliveredStmt = db.prepare(
-    "UPDATE thread_question SET delivered = 1 WHERE id = ? AND state = 'answered' AND delivered = 0",
+  const markSettlementDeliveredStmt = db.prepare(
+    "UPDATE thread_question SET delivered = 1 WHERE id = ? AND delivered = 0",
   )
   const withdrawThreadQuestionStmt = db.prepare(`
     UPDATE thread_question SET state = 'withdrawn', settled_at = ?
@@ -2469,8 +2471,8 @@ export function createStorage(dbPath: string): Storage {
     getThreadQuestion: (id) => threadQuestionByIdStmt.get(id),
     openThreadQuestions: () => openThreadQuestionsStmt.all(),
     answerThreadQuestion: (id, answer, atMs) => answerThreadQuestionStmt.run(answer, atMs, id).changes === 1,
-    undeliveredAnswers: () => undeliveredAnswersStmt.all(),
-    markAnswerDelivered: (id) => markAnswerDeliveredStmt.run(id).changes === 1,
+    undeliveredSettlements: () => undeliveredSettlementsStmt.all(),
+    markSettlementDelivered: (id) => markSettlementDeliveredStmt.run(id).changes === 1,
     withdrawThreadQuestion: (slug, id, atMs) => withdrawThreadQuestionStmt.run(atMs, id, slug).changes === 1,
     dismissThreadQuestion: (id, atMs) => dismissThreadQuestionStmt.run(atMs, id).changes === 1,
     dropThreadWatch: (slug, id, settledAtMs) => dropThreadWatchStmt.run(settledAtMs, id, slug).changes === 1,

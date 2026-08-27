@@ -1183,10 +1183,10 @@ test("a question is registered, answered, and delivered as three separate facts"
     // ANSWERING AND DELIVERING ARE SEPARATE, exactly as they are for a wake: an answer given while the
     // worker's process was down has to survive the gap, or it is lost in the same silence the fenced
     // question used to lose the QUESTION in.
-    assert.deepEqual(s.undeliveredAnswers().map((q) => q.id), ["q_1"])
-    assert.equal(s.markAnswerDelivered("q_1"), true)
-    assert.equal(s.markAnswerDelivered("q_1"), false, "and only once")
-    assert.deepEqual(s.undeliveredAnswers(), [])
+    assert.deepEqual(s.undeliveredSettlements().map((q) => q.id), ["q_1"])
+    assert.equal(s.markSettlementDelivered("q_1"), true)
+    assert.equal(s.markSettlementDelivered("q_1"), false, "and only once")
+    assert.deepEqual(s.undeliveredSettlements(), [])
   } finally {
     s.close()
   }
@@ -1211,8 +1211,9 @@ test("withdrawn and dismissed are DIFFERENT settlements, and neither is delivera
     // The two states answer different questions about what happened, and the worker is told which.
     assert.equal(s.getThreadQuestion("q_w")?.state, "withdrawn")
     assert.equal(s.getThreadQuestion("q_d")?.state, "dismissed")
-    // Neither settles with an answer, so neither is ever handed to the worker as one.
-    assert.deepEqual(s.undeliveredAnswers(), [])
+    // A WITHDRAWAL is never handed over — the worker did that itself, so telling it would be reading its
+    // own move back to it. A DISMISSAL is, because "the human decided not to answer" is news it needs.
+    assert.deepEqual(s.undeliveredSettlements().map((q) => q.id), ["q_d"])
     assert.deepEqual(s.listThreadQuestions("t", { openOnly: true }), [])
     // A settled question cannot be answered back into life.
     assert.equal(s.answerThreadQuestion("q_w", '{"x":1}', at + 8), false)

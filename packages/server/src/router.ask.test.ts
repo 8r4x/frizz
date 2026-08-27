@@ -198,7 +198,7 @@ test("answering stores the answer WITHOUT delivering it, and leaves the row for 
     assert.deepEqual(result.open, [])
     // ANSWERING IS NOT DELIVERING: an answer given while the worker's process was down has to survive
     // the gap, or it is lost in the same silence the fence used to lose the QUESTION in.
-    assert.deepEqual(h.storage.undeliveredAnswers().map((q) => q.id).sort(), [a.id, b.id].sort())
+    assert.deepEqual(h.storage.undeliveredSettlements().map((q) => q.id).sort(), [a.id, b.id].sort())
     assert.equal(h.storage.getThreadQuestion(a.id)?.delivered, 0)
 
     // An id belonging to another thread answers nothing, and an already-settled one is silently absent
@@ -231,8 +231,9 @@ test("the × dismisses an ordinary question and CANNOT reach a danger-tagged one
     assert.deepEqual(result.open.map((q) => q.id), [irreversible.id])
     assert.equal(h.storage.getThreadQuestion(ordinary.id)?.state, "dismissed")
     assert.equal(h.storage.getThreadQuestion(irreversible.id)?.state, "open")
-    // A dismissal settles WITHOUT an answer, so there is nothing to hand the worker.
-    assert.deepEqual(h.storage.undeliveredAnswers(), [])
+    // A dismissal carries no ANSWER, but it is still news the worker needs ("decide it yourself"), so it
+    // sits in the delivery queue — it just never wakes anybody on its own. It rides the next answer.
+    assert.deepEqual(h.storage.undeliveredSettlements().map((q) => [q.id, q.state, q.answer]), [[ordinary.id, "dismissed", null]])
   } finally { h.close() }
 })
 

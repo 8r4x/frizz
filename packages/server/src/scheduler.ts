@@ -1,9 +1,9 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_RETIRED_LEAD, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, formatGithubWakeSteer, type GithubWatchStatus, prWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
+import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_RETIRED_LEAD, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, questionAnswerMessage, type QuestionAnswer, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, formatGithubWakeSteer, type GithubWatchStatus, prWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
 import { GITHUB_STATUS_SETTING, parkExpiresAt, parkIsHonoured, readAwaitingPark, unaccountedItems, type LiveActivity } from "./awaiting.ts"
-import type { SessionRow, Storage } from "./storage.ts"
+import type { SessionRow, Storage, ThreadQuestionRow } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
 import type { SessionTelemetry } from "./tailer.ts"
 import type { LimitFault } from "./backend/types.ts"
@@ -775,6 +775,28 @@ function isOwnWatchExpiredFenceId(fenceId: string): boolean {
   return fenceId.startsWith(`${OWN_WATCH_EXPIRED_FENCE_PREFIX}:`)
 }
 
+/** A batch of question settlements handed over as one message. The ids are IN the key so a second
+ *  answer on the same thread is its own piece of news rather than a duplicate the outbox dedupes away. */
+const QUESTION_ANSWER_FENCE_PREFIX = "answers"
+function questionAnswerFenceId(ids: readonly string[]): string {
+  return `${QUESTION_ANSWER_FENCE_PREFIX}:${createHash("sha256").update([...ids].sort().join(",")).digest("hex").slice(0, 16)}`
+}
+function isQuestionAnswerFenceId(fenceId: string): boolean {
+  return fenceId.startsWith(`${QUESTION_ANSWER_FENCE_PREFIX}:`)
+}
+
+/** One stored answer, or undefined when the row no longer parses. Dropped rather than thrown on: one
+ *  unreadable row must not hold back a batch carrying three good ones. */
+function safeAnswer(raw: string | null): QuestionAnswer | undefined {
+  if (!raw) return undefined
+  try {
+    const parsed = JSON.parse(raw)
+    return typeof parsed?.questionId === "string" && typeof parsed?.question === "string" ? parsed as QuestionAnswer : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** How often a registered watcher re-reads GitHub, per PR. The fence poller's floor, for the same
  *  reason: this is somebody else's API and the answer changes on a human's timescale. */
 const PR_WATCH_POLL_MS = 60_000
@@ -1067,6 +1089,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     // already settled by the time this is enqueued, so no fence, rest or edit can make it untrue.
     // Same reasoning as the two above, and the same silent never-delivered bug if it is missing.
     if (isOwnWatchExpiredFenceId(item.fenceId)) {
+      return tele.turn === "idle" ? "current-idle" : "current-busy"
+    }
+    // AN ANSWER IS BOUND TO WHAT THE HUMAN SAID, not to anything the thread wrote, so no fence, rest or
+    // edit supersedes it. Same reasoning as the three above, and the same silent never-delivered bug if
+    // it is missing — this is the one delivery a worker is actually waiting on.
+    if (isQuestionAnswerFenceId(item.fenceId)) {
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
     if (isSnoozeFenceId(item.fenceId)) {
@@ -2203,6 +2231,60 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   }
 
+  /** THE ANSWER DELIVERY PASS. The human answered on the board; this is what puts it in front of the
+   *  worker, and it is a separate act from answering on purpose — an answer given while the worker's
+   *  process was down has to survive the gap, or it is lost in exactly the silence the fenced question
+   *  used to lose the QUESTION in.
+   *
+   *  ONLY AN ANSWER WAKES. A dismissal is real news ("decide it yourself") but it wakes nobody: the
+   *  human dismissing questions is almost always dismissing several in a row and is sitting right there,
+   *  so a wake per x would be a turn per click. Dismissals RIDE the next answer's message instead, and
+   *  a thread with nothing but dismissals simply keeps them queued — the worker sees them gone in its
+   *  own `ask` read-back.
+   *
+   *  Marked delivered at ENQUEUE, not at receipt, because the outbox is itself durable (wake_delivery in
+   *  SQLite) and owns retry from there. "Delivered" here means handed to the channel that cannot lose it.
+   */
+  function evalQuestionAnswers(nowMs: number): void {
+    const bySlug = new Map<string, ThreadQuestionRow[]>()
+    for (const q of deps.storage.undeliveredSettlements()) {
+      const list = bySlug.get(q.thread_slug) ?? []
+      list.push(q)
+      bySlug.set(q.thread_slug, list)
+    }
+    for (const [slug, rows] of bySlug) {
+      const row = deps.storage.getSession(slug)
+      // An archived thread is told nothing, and its rows stay undelivered: reopening it should still
+      // hand the worker what the human said, rather than having spent it on a thread nobody was reading.
+      if (!row || row.state === "archived" || row.archived === 1) continue
+      const answers: QuestionAnswer[] = []
+      const dismissed: string[] = []
+      for (const q of rows) {
+        if (q.state === "dismissed") { dismissed.push(q.id); continue }
+        const parsed = safeAnswer(q.answer)
+        if (parsed) answers.push(parsed)
+      }
+      if (answers.length === 0) continue // dismissals alone wake nobody; they wait for an answer
+      // One delivery per BATCH, keyed by the ids in it, so a second answer on the same thread is its own
+      // piece of news rather than a duplicate deduped away.
+      const fenceId = questionAnswerFenceId([...answers.map((a) => a.questionId), ...dismissed])
+      const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
+      if (outbox.get(deliveryId)) continue
+      const item = outbox.enqueue({
+        id: deliveryId,
+        slug: row.slug,
+        sessionId: row.session_id,
+        fenceId,
+        hintKey: fenceId,
+        message: withClock(questionAnswerMessage(answers, dismissed), deps.tailer.get(row.slug)?.lastAssistantAt),
+        reason: `${answers.length} question answer(s)${dismissed.length ? ` + ${dismissed.length} dismissed` : ""}`,
+      }, nowMs).delivery
+      for (const q of rows) deps.storage.markSettlementDelivered(q.id)
+      log(`waker: queued ${row.slug} — ${item.reason}`)
+      checkpoint("after-enqueue", item)
+    }
+  }
+
   function evalTimers(nowMs: number): void {
     for (const timer of deps.storage.dueThreadTimers(nowMs)) {
       const row = deps.storage.getSession(timer.thread_slug)
@@ -2698,6 +2780,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     } catch (err) {
       if (err instanceof InjectedSchedulerCrash) throw err
       log(`waker: pr-watch registry pass failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    try {
+      evalQuestionAnswers(now())
+    } catch (err) {
+      if (err instanceof InjectedSchedulerCrash) throw err
+      log(`waker: question-answer pass failed: ${err instanceof Error ? err.message : String(err)}`)
     }
     try {
       evalOwnWatches(now())

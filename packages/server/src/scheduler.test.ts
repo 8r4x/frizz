@@ -304,6 +304,72 @@ test("watch: an archived thread's row still settles, and wakes nobody", async ()
   assert.deepEqual(h.resumes, [])
 })
 
+// ---- REGISTERED QUESTIONS: handing the human's answer over (2026-08-26) ----
+//
+// Answering and DELIVERING are separate acts. The human answers on the board; this pass is what puts it
+// in front of the worker, and the gap between them is the whole reason the row exists — an answer given
+// while the worker's process was down has to survive it, or it is lost in exactly the silence the fenced
+// question used to lose the QUESTION in.
+function askQ(h: Harness, slug: string, id: string, question: string) {
+  h.storage.askThreadQuestion({ id, slug, spec: JSON.stringify({ question, kind: "question", options: [{ label: "A" }] }), askedAtMs: h.clock.ms })
+  return id
+}
+
+test("question: an answer is handed over once, and the row is not re-delivered", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("t"))
+  askQ(h, "t", "qst_1", "SQLite or a JSON file?")
+  h.tele.set("t", tele())
+  const s = h.make()
+  await s.tick()
+  assert.equal(h.resumes.length, 0, "an UNANSWERED question wakes nobody — it is the human's move")
+
+  h.storage.answerThreadQuestion("qst_1", JSON.stringify({ questionId: "qst_1", question: "SQLite or a JSON file?", chosen: ["SQLite"] }), h.clock.ms)
+  await s.tick()
+  await s.tick() // the row is delivered → must not go round again
+  assert.equal(h.resumes.length, 1)
+  assert.match(h.resumes[0].message, /Answers to the questions you registered:/)
+  // IT RESTATES THE QUESTION, because the worker never saw the id — frizz minted it.
+  assert.match(h.resumes[0].message, /“SQLite or a JSON file\?” → SQLite/)
+  assert.equal(h.storage.getThreadQuestion("qst_1")?.delivered, 1)
+})
+
+test("question: a dismissal rides an answer's message and never wakes anybody on its own", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("t"))
+  askQ(h, "t", "qst_keep", "Which store?")
+  askQ(h, "t", "qst_drop", "Name the flag?")
+  h.tele.set("t", tele())
+  const s = h.make()
+
+  // The human dismisses one. No wake: they are almost always dismissing several in a row and are
+  // sitting right there, so a wake per × would be a turn per click.
+  h.storage.dismissThreadQuestion("qst_drop", h.clock.ms)
+  await s.tick()
+  assert.equal(h.resumes.length, 0)
+  assert.equal(h.storage.getThreadQuestion("qst_drop")?.delivered, 0, "it stays queued for the next message")
+
+  h.storage.answerThreadQuestion("qst_keep", JSON.stringify({ questionId: "qst_keep", question: "Which store?", chosen: ["SQLite"] }), h.clock.ms)
+  await s.tick()
+  assert.equal(h.resumes.length, 1)
+  assert.match(h.resumes[0].message, /1 other question was DISMISSED without an answer/)
+  assert.equal(h.storage.getThreadQuestion("qst_drop")?.delivered, 1, "and rides along when one comes")
+})
+
+test("question: an archived thread keeps its answer rather than spending it", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("t", { state: "archived", archived: 1 }))
+  askQ(h, "t", "qst_1", "Which store?")
+  h.storage.answerThreadQuestion("qst_1", JSON.stringify({ questionId: "qst_1", question: "Which store?", chosen: ["SQLite"] }), h.clock.ms)
+  h.tele.set("t", tele())
+  const s = h.make()
+  await s.tick()
+  assert.equal(h.resumes.length, 0)
+  // Reopening should still hand the worker what the human said, not find it already spent on a thread
+  // nobody was reading.
+  assert.equal(h.storage.getThreadQuestion("qst_1")?.delivered, 0)
+})
+
 // ---- single-fire on a witnessed transition ----
 
 test("timer: fires exactly once on the witnessed crossing, with the prose in the steer", async () => {
