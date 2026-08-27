@@ -23,6 +23,7 @@ import { resolveFileLanguage } from "../lib/syntaxHighlight.ts"
 import { TodoBlock } from "./TodoBlock.tsx"
 import { splitQuestionBlocks, parseQuestionBlock, type QuestionKind, type BlockAnswer, type MessageAnswering } from "../lib/questionBlocks.ts"
 import { splitFenceBlocks, type FenceKind } from "../lib/fenceBlocks.ts"
+import { showsRegisteredDoneCard } from "../lib/registeredDone.ts"
 import { parseAnswersCard, pairAllAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
 import { FrizzWake } from "./FrizzWake.tsx"
 import { RecurringPromptLine } from "./RecurringPromptLine.tsx"
@@ -267,6 +268,10 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   // why) — pinned to the top of the pane via StickyUserBand so it stays visible while the agent's reply
   // scrolls under it. -1 when the transcript has no human turn yet.
   const lastUserIdx = useMemo(() => lastAskIndex(messages), [messages])
+  // A completion the worker REGISTERED rather than fenced: the last rung of the ladder below, drawn here
+  // because no message carries it (lib/registeredDone). Keyed on the final assistant message so a worker
+  // that also wrote the fence gets one card, from the message, not two.
+  const registeredDone = showsRegisteredDoneCard(thread, lastAgentIdx >= 0 ? presentationMessages[lastAgentIdx]?.text : undefined)
   // Client view pref: how (or whether) to pin the current ask to the pane top. `off` → no pin.
   const { stickyUserMessage } = useSnapshot(prefs)
   // Question-block interactivity in the thread view: EVERY ask stays answerable, wherever it sits —
@@ -493,7 +498,7 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
                 card through that predicate, and gating the slot on the bare flag opened it for a
                 bg-snoozed thread — every branch then rendered null and the slot was an empty gap at the
                 transcript's end (the gate-vs-renderer mismatch of 2026-08-25, one surface over). */}
-            {((thread?.providerFault && !thread.foreign) || (thread?.limitPause && !thread.foreign) || frozenAsk || thread?.runtime === "perm-prompt" || showWorking || showsSnoozeCard(thread) || showsRestingCard(thread)) && (
+            {((thread?.providerFault && !thread.foreign) || (thread?.limitPause && !thread.foreign) || frozenAsk || thread?.runtime === "perm-prompt" || showWorking || showsSnoozeCard(thread) || showsRestingCard(thread) || registeredDone) && (
               <VSpace h={
                 showWorking && !thread?.providerFault && !thread?.limitPause && !frozenAsk && thread?.runtime !== "perm-prompt"
                   ? workingIndicatorGap(activityMessages.map((entry) => entry.message))
@@ -531,6 +536,13 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
               // predicate is what keeps it off a thread that is not actually resting or that the human
               // has already parked — see showsRestingCard.
               <AwaitingBackgroundCard thread={thread!} />
+            ) : registeredDone ? (
+              // THE THREAD'S OWN ENDING, for a sign-off that came in as a tool call rather than a fence: the
+              // same card the fence draws (FenceCard), in the slot the fence would have occupied at the
+              // transcript's end. Last because `done` refuses while anything above could still be true — an
+              // open question or an armed watch blocks the verb — so a thread showing this is at rest with
+              // nothing left to wait on.
+              <FenceCard fenceKind="done" body={thread!.lastFence!.body} hints={[]} />
             ) : null}
             {/* SIBLING of the chain above, not a branch in it. Those are mutually exclusive because they
                 all describe the ONE thing currently blocking; a policy denial already happened and
@@ -699,6 +711,10 @@ function VirtualizedThreadTranscript({
     }))
   }, [activityMessages, lastAgentIdx])
   const lastUserIdx = useMemo(() => lastAskIndex(messages), [messages])
+  // A completion the worker REGISTERED rather than fenced: the last rung of the ladder below, drawn here
+  // because no message carries it (lib/registeredDone). Keyed on the final assistant message so a worker
+  // that also wrote the fence gets one card, from the message, not two.
+  const registeredDone = showsRegisteredDoneCard(thread, lastAgentIdx >= 0 ? messages[lastAgentIdx]?.text : undefined)
   const hasRuntimeStatus = Boolean(
     (thread?.providerFault && !thread.foreign)
       || (thread?.limitPause && !thread.foreign)
@@ -708,7 +724,8 @@ function VirtualizedThreadTranscript({
       || showsSnoozeCard(thread)
       // showsRestingCard, not the raw flag — see the non-virtualized gate; on the bare flag a bg-snoozed
       // thread grew an empty runtime-status ROW here (null in a padded div) at the transcript's end.
-      || showsRestingCard(thread),
+      || showsRestingCard(thread)
+      || registeredDone,
   )
   // Which rung of the runtime-status ladder (rendered below, hardest reading first) wins. Only its
   // Working… rung is a quiet meta row rather than a card, and only that rung joins the tight run —
@@ -1280,6 +1297,9 @@ function VirtualizedThreadTranscript({
                 ) : showsRestingCard(thread) ? (
                   // See the non-virtualized chain above: last branch, benign case, no Snooze here.
                   <AwaitingBackgroundCard thread={thread!} />
+                ) : registeredDone ? (
+                  // See the non-virtualized chain above: the registered sign-off's own card, last rung.
+                  <FenceCard fenceKind="done" body={thread!.lastFence!.body} hints={[]} />
                 ) : null}
                 {/* Sibling, not a branch — see the runtime-status block above. */}
                 {thread?.permPolicy ? (

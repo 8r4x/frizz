@@ -250,6 +250,9 @@ export interface FenceView {
   kind: "done" | "awaiting"
   body: string
   hints: AwaitingHint[]
+  // Set by the board alone, on the fence it synthesizes from a REGISTERED done (board.registeredDoneFence);
+  // the tailer never sets it, because everything it parses came from a message.
+  registered?: true
 }
 
 // Per-session derived telemetry surfaced to the board overlay. Structurally a NormalizedTail (the

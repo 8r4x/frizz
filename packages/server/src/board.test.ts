@@ -1908,7 +1908,7 @@ test("a registered question does NOT degrade a running thread to turn-idle", () 
 
 test("a registered done presents as the ```done fence it replaces", () => {
   assert.deepEqual(registeredDoneFence({ body: "- **Fixed** it", doneAt: 1000 }, undefined), {
-    kind: "done", body: "- **Fixed** it", hints: [],
+    kind: "done", body: "- **Fixed** it", hints: [], registered: true,
   })
 })
 

@@ -1163,7 +1163,10 @@ export function registeredDoneFence(
   if (!done) return undefined
   const userAt = lastUserAt ? Date.parse(lastUserAt) : Number.NaN
   if (Number.isFinite(userAt) && userAt > done.doneAt) return undefined
-  return { kind: "done", body: done.body, hints: [] }
+  // `registered` is the one thing the transcript needs that the fence it replaces never carried: a fenced
+  // done is drawn from the message that holds it, and this one is in no message, so the client draws it
+  // at the bottom of the thread itself (ChatView, showsRegisteredDoneCard). Every predicate ignores it.
+  return { kind: "done", body: done.body, hints: [], registered: true }
 }
 
 function sessionThreadView(

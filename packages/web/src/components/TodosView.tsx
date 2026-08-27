@@ -11,9 +11,10 @@ import { orderQueue, queued, displayTitle, lastActiveLabelAt } from "../groups.t
 import { useLiveAnswering } from "../lib/answering.ts"
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { hasQuestionBlock } from "../lib/questionBlocks.ts"
+import { showsRegisteredDoneCard } from "../lib/registeredDone.ts"
 import { collapseMiddleRuns, opensQueueSegment, queueCollapseSegments, segmentFolds, supersededAskIndices, survivesQueueCollapse } from "../lib/queueCollapse.ts"
 import { pairAllAnswers } from "../lib/answersMessage.ts"
-import { Message, PermPolicyDenialCard, PermPromptBanner, PendingAskCard, StickyUserBand, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText, lastAssistantIndex } from "./ChatView.tsx"
+import { FenceCard, Message, PermPolicyDenialCard, PermPromptBanner, PendingAskCard, StickyUserBand, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText, lastAssistantIndex } from "./ChatView.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_TOP, CARD_ACTION_EXPLAINER, CARD_PRIMARY_ACTION } from "./TranscriptCard.tsx"
 import { AwaitingBackgroundCard, showsRestingCard } from "./AwaitingBackgroundCard.tsx"
 import { agentCompletionCall } from "../lib/subAgentCompletion.ts"
@@ -1491,6 +1492,20 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
           <div className="mt-4">
             <AwaitingBackgroundBanner thread={thread} onSnooze={dismissThisCard} onSnoozeFailed={cancelThisCard} />
           </div>
+        )}
+        {/* A sign-off that came in as a TOOL CALL (mcp__frizz__done) is in no message, so the tail above
+            drew its prose and nothing else — the same gap the thread view had, one surface over. The card
+            is the one the fence draws (FenceCard, with its Mark-as-done through ThreadSlugContext), and
+            the same predicate keeps it off a thread whose final message already carries the fence. */}
+        {showsRegisteredDoneCard(thread, lastAgentIdx >= 0 ? messages[lastAgentIdx]?.text : undefined) && (
+          // STEP, not the banner's mt-4: this is the SAME card the fence path draws one STEP under the prose
+          // of the message it sits in, and the two must land at the same distance (measured 2026-08-27 on the
+          // seeded pair: 20.3px prose-ink to card-edge on the fence card, 22.3px here on mt-4 — 2px of drift
+          // between two cards that are supposed to be indistinguishable).
+          <>
+            <VSpace />
+            <FenceCard fenceKind="done" body={thread.lastFence!.body} hints={[]} wrap />
+          </>
         )}
       </div>
 

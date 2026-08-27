@@ -1933,6 +1933,12 @@ export const ThreadFence = z.object({
   kind: z.enum(["done", "awaiting"]),
   body: z.string(), // fence body minus hint lines, capped server-side; may be ""
   hints: z.array(AwaitingHint).default([]),
+  // Present only on a completion the worker REGISTERED (`mcp__frizz__done`, board.registeredDoneFence)
+  // rather than wrote as a ```done fence in its final message. The two are one fence to every predicate,
+  // but the TRANSCRIPT draws a fence card from the message text it parses — so a registered done, which
+  // is in no message, needs the client to know it must draw the card itself at the bottom of the thread
+  // (maintainer 2026-08-27: a thread that signed off by tool rested with no card at all).
+  registered: z.literal(true).optional(),
 })
 export type ThreadFence = z.infer<typeof ThreadFence>
 
