@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, renameSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
@@ -61,9 +61,11 @@ test("opening the unified database imports every legacy project file under its o
     assert.equal(opened.path, frizzDatabasePath(home))
     assert.deepEqual(opened.imported.map((i) => i.projectId), ["project-a", "project-b"])
     assert.ok(opened.imported.every((i) => i.rows > 0))
-    assert.equal(existsSync(a), false, "the legacy file is renamed once its rows are in")
-    assert.ok(existsSync(`${a}.imported`), "…and kept, never deleted")
-    assert.ok(existsSync(`${b}.imported`))
+    assert.ok(existsSync(a) && existsSync(b), "the legacy files stay exactly where an older build expects them")
+    assert.deepEqual(
+      opened.db.prepare<[], { project_id: string; source: string }>("SELECT project_id, source FROM imported_project ORDER BY project_id").all(),
+      [{ project_id: "project-a", source: a }, { project_id: "project-b", source: b }],
+    )
 
     const storageA = createStorage(opened.db, "project-a")
     const storageB = createStorage(opened.db, "project-b")
@@ -91,15 +93,34 @@ test("opening the unified database imports every legacy project file under its o
     opened.close()
   }
 
-  // The second open finds nothing to import and every row is still there.
+  // ROLLBACK, then upgrade again: an older build writes to the file it still finds; the next open of
+  // the unified database imports nothing (the ledger says so), keeps its own rows, and never merges
+  // the older build's writes — the marker is what keeps the copy one-shot.
+  const older = new Database(a)
+  older.prepare("INSERT INTO session (slug, session_id, thread_name, spawned_at) VALUES (?, ?, ?, ?)")
+    .run("written-on-rollback", "sess-rb", "frizz-written-on-rollback", "2026-08-28T00:00:00.000Z")
+  older.close()
   const again = openFrizzDatabase({ home })
   try {
     assert.deepEqual(again.imported, [])
     const storageA = createStorage(again.db, "project-a")
-    assert.equal(storageA.allSessions().length, 2)
+    assert.deepEqual(storageA.allSessions().map((r) => r.slug).sort(), ["only-in-a", "shared-slug"])
     storageA.close()
+    // Deleting the marker by hand is the documented way to re-import: idempotent on the keys, so the
+    // rows already here are untouched and only the new one arrives.
+    again.db.prepare("DELETE FROM imported_project WHERE project_id = ?").run("project-a")
   } finally {
     again.close()
+  }
+  const reimported = openFrizzDatabase({ home })
+  try {
+    assert.deepEqual(reimported.imported.map((i) => i.projectId), ["project-a"])
+    const storageA = createStorage(reimported.db, "project-a")
+    assert.deepEqual(storageA.allSessions().map((r) => r.slug).sort(), ["only-in-a", "shared-slug", "written-on-rollback"])
+    assert.equal(storageA.getSession("shared-slug")!.session_id, "sess-project-a-shared-slug")
+    storageA.close()
+  } finally {
+    reimported.close()
   }
 })
 
@@ -114,9 +135,13 @@ test("a legacy file that will not import is left in place and does not abort the
   const opened = openFrizzDatabase({ home })
   try {
     assert.deepEqual(opened.imported.map((i) => i.projectId), ["project-good"])
-    assert.ok(existsSync(`${good}.imported`))
-    assert.ok(existsSync(bad), "the unreadable file is left for the next boot, not renamed or deleted")
-    assert.equal(existsSync(`${bad}.imported`), false)
+    assert.ok(existsSync(good))
+    assert.ok(existsSync(bad), "the unreadable file is left for the next boot, never renamed or deleted")
+    assert.deepEqual(
+      opened.db.prepare<[], { project_id: string }>("SELECT project_id FROM imported_project").all().map((r) => r.project_id),
+      ["project-good"],
+      "an import that failed is not recorded, so the next boot retries it",
+    )
   } finally {
     opened.close()
   }
@@ -129,7 +154,7 @@ test("purging a project deletes its rows in every table and nobody else's", () =
   const opened = openFrizzDatabase({ home })
   try {
     opened.purgeProject("project-a")
-    for (const table of FRIZZ_DB_TABLES) {
+    for (const table of [...FRIZZ_DB_TABLES, "imported_project"]) {
       const count = (projectId: string) =>
         opened.db.prepare<[string], { n: number }>(`SELECT COUNT(*) AS n FROM ${table} WHERE project_id = ?`).get(projectId)!.n
       assert.equal(count("project-a"), 0, `${table} still holds project-a rows`)
@@ -178,6 +203,37 @@ test("the database location follows the launch project's state dir, and a non-ca
     assert.deepEqual(opened.imported, [])
     assert.equal(opened.path, join(stray, "ui.db"))
     assert.ok(existsSync(join(root, "other", "ui.db")), "a stray sibling file is never touched")
+  } finally {
+    opened.close()
+  }
+})
+
+// The first cut (a few hours on 2026-08-27) renamed each file to `ui.db.imported` after copying it,
+// and one real boot ran that way. A later open must put such a file back for an older build to find
+// and record it — never copy it again, because that would resurrect every thread forgotten since.
+test("a file the first cut renamed to ui.db.imported is restored and recorded, not re-imported", () => {
+  const home = mkdtempSync(join(tmpdir(), "frizz-db-renamed-"))
+  const path = writeLegacyProject(home, "project-a", ["kept", "forgotten-since"])
+  const first = openFrizzDatabase({ home })
+  first.db.prepare("DELETE FROM imported_project WHERE project_id = 'project-a'").run()
+  const storage = createStorage(first.db, "project-a")
+  storage.forgetSession("forgotten-since")
+  storage.close()
+  first.close()
+  renameSync(path, `${path}.imported`)
+
+  const opened = openFrizzDatabase({ home })
+  try {
+    assert.deepEqual(opened.imported, [], "nothing copied")
+    assert.ok(existsSync(path), "the file is back under its old name")
+    assert.equal(existsSync(`${path}.imported`), false)
+    assert.deepEqual(
+      opened.db.prepare<[], { project_id: string; rows: number }>("SELECT project_id, rows FROM imported_project").all(),
+      [{ project_id: "project-a", rows: 0 }],
+    )
+    const again = createStorage(opened.db, "project-a")
+    assert.deepEqual(again.allSessions().map((r) => r.slug), ["kept"], "the forgotten thread stays forgotten")
+    again.close()
   } finally {
     opened.close()
   }

@@ -20,14 +20,20 @@ import { WAKE_DELIVERY_TABLES, ensureWakeDeliverySchema } from "./wake-store.ts"
 // the one-server-per-repo era and should go. This module is the one file that replaced them: opened
 // ONCE per process at boot, handed to every tenant, and closed after the last tenant.
 //
-// THE IMPORT. On every open, each `<data>/projects/<id>/ui.db` still on disk is brought up to the
-// legacy stack's final shape (legacy-project-db.ts), ATTACHed, copied table by table into this file
-// under that project's id, and renamed to `ui.db.imported` — never deleted, so the pre-unification
-// state is one rename away for as long as the operator keeps the directory. Idempotent twice over:
-// every copy is INSERT OR IGNORE against the unified keys, so a crash between the commit and the
-// rename re-imports nothing on the next boot, and the rename is what makes the next boot skip the
-// file at all. A file that will not import is logged and LEFT IN PLACE, to be retried next boot;
-// it never aborts the open, because the other fifty-three projects were fine.
+// THE IMPORT. On every open, each `<data>/projects/<id>/ui.db` still on disk and not yet recorded in
+// `imported_project` is brought up to the legacy stack's final shape (legacy-project-db.ts),
+// ATTACHed, copied table by table into this file under that project's id, and recorded — in the
+// SAME transaction as the copy, so a crash leaves either both or neither. The file itself is LEFT
+// EXACTLY WHERE IT WAS, untouched beyond the legacy stack's own idempotent repairs. That is the
+// rollback story: an operator who steps back to an older build finds every project's file where that
+// build expects it, with every thread it had at the moment of the import, instead of an empty board.
+// (It was renamed `ui.db.imported` for a few hours on 2026-08-27; an older build would then have
+// created a fresh EMPTY file beside the backup, and the next upgrade would have imported the empty
+// one over the real one's name.) Writes made on the older build after the import are not merged
+// back — the marker keeps the copy one-shot, and a merge would resurrect threads forgotten here.
+// Deleting a project removes its marker with its rows; deleting the marker row by hand re-imports.
+// A file that will not import is logged and LEFT ALONE, to be retried next boot; it never aborts
+// the open, because the other fifty-three projects were fine.
 //
 // The column list is the INTERSECTION of the two tables' columns, minus project_id, which the copy
 // supplies. A column the legacy stack never grew is left at the unified default; a column the unified
@@ -36,7 +42,7 @@ import { WAKE_DELIVERY_TABLES, ensureWakeDeliverySchema } from "./wake-store.ts"
 export interface FrizzDatabase {
   readonly db: Database
   readonly path: string
-  /** Every legacy file imported on this open, by project id, with the rows copied. */
+  /** Every legacy file imported on THIS open, by project id, with the rows copied. */
   readonly imported: { projectId: string; rows: number }[]
   /** Delete every row a project has in every table — the database half of removing a project. */
   purgeProject(projectId: string): void
@@ -90,6 +96,15 @@ export function frizzDatabasePath(home?: string): string {
 
 /** Every schema owner's DDL, idempotent, in one place — the importer needs all of it up front. */
 export function ensureFrizzSchema(db: Database): void {
+  // The import ledger — see THE IMPORT above. One row per legacy file ever copied in.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS imported_project (
+      project_id  TEXT PRIMARY KEY,
+      source      TEXT NOT NULL,
+      rows        INTEGER NOT NULL,
+      imported_at TEXT NOT NULL
+    );
+  `)
   ensureStorageSchema(db)
   ensureWakeDeliverySchema(db)
   ensureTailStateSchema(db)
@@ -107,7 +122,30 @@ export function openFrizzDatabase(options: OpenFrizzDatabaseOptions = {}): Frizz
 
   const imported: { projectId: string; rows: number }[] = []
   if (options.importLegacy !== false && projectsDir !== undefined) {
+    const alreadyImported = new Set(
+      db.prepare<[], { project_id: string }>("SELECT project_id FROM imported_project").all().map((r) => r.project_id),
+    )
+    // THE FEW HOURS OF `ui.db.imported` (2026-08-27, 13:14–20:23 on the maintainer's machine): the
+    // first cut renamed a file after copying it, and one real boot ran that way before the ledger
+    // replaced it. A renamed file with nothing beside it is one that boot already copied — put it back
+    // where an older build looks for it and record it, so the scan below treats it as done rather
+    // than copying it a second time (which would resurrect every thread forgotten since).
+    for (const projectId of retiredLegacyProjectIds(projectsDir)) {
+      if (alreadyImported.has(projectId)) continue
+      const dir = join(projectsDir, projectId)
+      try {
+        renameSync(join(dir, "ui.db.imported"), join(dir, "ui.db"))
+        db.prepare("INSERT INTO imported_project (project_id, source, rows, imported_at) VALUES (?, ?, 0, ?)")
+          .run(projectId, join(dir, "ui.db"), new Date().toISOString())
+        alreadyImported.add(projectId)
+        frizzLog.info("frizz-db", `: restored ui.db.imported to ui.db and recorded it as imported`)
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        frizzLog.warn("frizz-db", `: could not restore ui.db.imported: `)
+      }
+    }
     for (const projectId of legacyProjectIds(projectsDir)) {
+      if (alreadyImported.has(projectId)) continue
       const legacyPath = join(projectsDir, projectId, "ui.db")
       try {
         const rows = importLegacyProject(db, projectId, legacyPath)
@@ -115,13 +153,13 @@ export function openFrizzDatabase(options: OpenFrizzDatabaseOptions = {}): Frizz
         frizzLog.info("frizz-db", `imported ${projectId} (${rows} rows) from ${legacyPath}`)
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error)
-        frizzLog.error("frizz-db", `${projectId}: could not import ${legacyPath}, left in place for the next boot: ${detail}`)
+        frizzLog.error("frizz-db", `${projectId}: could not import ${legacyPath}, will retry next boot: ${detail}`)
       }
     }
   }
 
   const purge = db.transaction((projectId: string) => {
-    for (const table of FRIZZ_DB_TABLES) {
+    for (const table of [...FRIZZ_DB_TABLES, "imported_project"]) {
       db.prepare(`DELETE FROM ${table} WHERE project_id = ?`).run(projectId)
     }
   })
@@ -140,13 +178,12 @@ export function openFrizzDatabase(options: OpenFrizzDatabaseOptions = {}): Frizz
   }
 }
 
-function legacyProjectIds(projectsDir: string): string[] {
+function projectIdsWithFile(projectsDir: string, file: string): string[] {
   if (!existsSync(projectsDir)) return []
   return readdirSync(projectsDir)
     .filter((name) => {
-      const file = join(projectsDir, name, "ui.db")
       try {
-        return statSync(file).isFile()
+        return statSync(join(projectsDir, name, file)).isFile()
       } catch {
         return false
       }
@@ -154,16 +191,25 @@ function legacyProjectIds(projectsDir: string): string[] {
     .sort()
 }
 
+function legacyProjectIds(projectsDir: string): string[] {
+  return projectIdsWithFile(projectsDir, "ui.db")
+}
+
+/** Projects holding only the first cut's `ui.db.imported` — see the note at the scan. */
+function retiredLegacyProjectIds(projectsDir: string): string[] {
+  return projectIdsWithFile(projectsDir, "ui.db.imported")
+    .filter((id) => !existsSync(join(projectsDir, id, "ui.db")))
+}
+
 function tableColumns(db: Database, schema: string, table: string): string[] {
   return db.prepare<[], { name: string }>(`PRAGMA ${schema}.table_info(${table})`).all().map((c) => c.name)
 }
 
 /**
- * Copy one legacy file's rows in, then retire the file. Returns the rows copied.
+ * Copy one legacy file's rows in and record it. Returns the rows copied.
  *
  * The legacy stack runs FIRST, on the file's own connection, and that connection closes before the
- * ATTACH: closing checkpoints the WAL, so the attached read sees every committed row and leaves no
- * `-wal`/`-shm` sidecar behind to rename.
+ * ATTACH: closing checkpoints the WAL, so the attached read sees every committed row.
  */
 function importLegacyProject(db: Database, projectId: string, legacyPath: string): number {
   const legacy = new Database(legacyPath)
@@ -190,11 +236,12 @@ function importLegacyProject(db: Database, projectId: string, legacyPath: string
           `INSERT OR IGNORE INTO main."${table}" (project_id, ${list}) SELECT ?, ${list} FROM legacy."${table}"`,
         ).run(projectId).changes
       }
+      db.prepare("INSERT INTO imported_project (project_id, source, rows, imported_at) VALUES (?, ?, ?, ?)")
+        .run(projectId, legacyPath, rows, new Date().toISOString())
     })
     copy.immediate()
   } finally {
     db.exec("DETACH DATABASE legacy")
   }
-  renameSync(legacyPath, `${legacyPath}.imported`)
   return rows
 }
