@@ -4,7 +4,11 @@ import { formatSnoozeWake } from "./snooze.ts"
 
 /** The awaiting card's TITLE when no hint is parkable — which, since the 2026-08-15 grammar dropped the
  *  last parkable kind, is EVERY awaiting fence (see awaitingParkAction). The card still wants the heading
- *  its `done` sibling has, it just has nothing to offer. */
+ *  its `done` sibling has, it just has nothing to offer.
+ *
+ *  A LAST RESORT, not the usual heading: a fence that named its own `title:` heads itself with that on
+ *  both surfaces (awaitingFenceTitle, honoured by the resting card's awaitingBackgroundLabel and by the
+ *  fence card's own parkTitle). This is what is left when the worker named none. */
 export const AWAITING_FALLBACK_TITLE = "Awaiting"
 
 /** The verb every park button wears. It is deliberately ONE word for every kind: the card's TITLE

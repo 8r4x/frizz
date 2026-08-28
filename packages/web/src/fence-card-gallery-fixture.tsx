@@ -120,6 +120,33 @@ const fences: { slug: string; label: string; kind: "done" | "awaiting"; body: st
   },
   { slug: "g-timer", label: "```awaiting · timer", kind: "awaiting", body: "Re-checking the rollout at the checkpoint.", hints: [{ kind: "timer", value: "tmr_a1b2c3" }, { kind: "for", value: "2h" }] },
   { slug: "g-pr", label: "```awaiting · prs", kind: "awaiting", body: "PR is open and CI is green. Watching for review.", hints: [{ kind: "pr", value: "acme/app#391" }] },
+  // THE WORKER NAMED ITS OWN HEADING. The resting card has honoured `title:` since 2026-08-26; this card
+  // did not, so a fence whose thread was not at rest — mid-turn, snoozed, or already past the fence —
+  // headed itself "Awaiting" and dropped the one line that says which wait this is.
+  {
+    slug: "g-titled",
+    label: "```awaiting · title + one pr",
+    kind: "awaiting",
+    body: "Waiting on the genuine CI run for #391 on head `85eca799`. Lint is green; the three TypeScript legs are still running.",
+    hints: [
+      { kind: "title", value: "Real CI run on the perf fix" },
+      { kind: "pr", value: "acme/app#391" },
+      { kind: "for", value: "12h" },
+    ],
+  },
+  // The worst title the cap allows: 40 unbreakable characters sharing the row with a shrink-0 PR ref.
+  // A code-authored kind never had one, which is why the header's wrap rule had never met it.
+  {
+    slug: "g-titled-unbreakable",
+    label: "```awaiting · title with no break opportunity",
+    kind: "awaiting",
+    body: "Holding on the branch build.",
+    hints: [
+      { kind: "title", value: "release/2026-08-27-hotfix-abcdefghijklmno" },
+      { kind: "pr", value: "acme/app#391" },
+      { kind: "for", value: "2h" },
+    ],
+  },
   // Several watches is a different SHAPE, not the same card with more data: one ref rides the title row
   // in the `aside` slot, so a fence carrying three gets a wrapped row of its own under the prose.
   {

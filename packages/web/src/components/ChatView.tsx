@@ -4,7 +4,7 @@ import { useSnapshot } from "valtio"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, ArrowUpRight, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, TerminalSquare, X, type LucideIcon } from "lucide-react"
-import { parseRecurringPrompt } from "@frizz/shared"
+import { awaitingFenceTitle, parseRecurringPrompt } from "@frizz/shared"
 import type { AwaitingHint, BgShellView, PendingAsk, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@frizz/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { useBackgroundShellLines, useBoard, useProjectDir, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
@@ -3642,8 +3642,16 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   // read as the button's verb when it was really the card's identity (maintainer 2026-07-24) — and why
   // the heading is now a STATE rather than the imperative "Arm watcher" that replaced it (2026-07-29).
   // With no parkable hint there's no action to name, so it falls back to a plain "Awaiting".
+  //
+  // THE WORKER'S OWN `title:` WINS, exactly as it does on the resting card (awaitingBackgroundLabel):
+  // only the worker knows what this particular wait IS, and "Awaiting" is true of every park and
+  // specific to none (maintainer 2026-08-26: "let's let the agent specify its own title for these
+  // awaiting cards"). That ruling landed on the resting card alone, so a fence whose thread is NOT at
+  // rest — mid-turn, event-snoozed, or already moved past the fence — dropped the title the worker
+  // wrote and headed itself "Awaiting" instead. The two surfaces render the same fence; they may not
+  // disagree about its name.
   const parkAction = awaitingParkAction(hints)
-  const parkTitle = parkAction?.title ?? AWAITING_FALLBACK_TITLE
+  const parkTitle = awaitingFenceTitle(hints) ?? parkAction?.title ?? AWAITING_FALLBACK_TITLE
   // A watch is active observation, not elapsed time. Keep the hourglass for a hold on the clock and give
   // a PR wait its own scanning mark; the scheduler-facing key itself stays out of the prose.
   const AwaitingIcon = hints.some((hint) => hint.kind === "pr") ? Radar : Hourglass
@@ -3674,7 +3682,11 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   const restingCardStatesIt = parkAction === null && fenceThread != null && showsRestingCard(fenceThread)
   if (restingCardStatesIt) return null
   return (
-    <TranscriptCard data-awaiting-fence icon={AwaitingIcon} label={parkTitle} aside={watched.length === 1 ? <WatchedRef watch={watched[0]} /> : undefined}>
+    // WRAPPED AT ANY CHARACTER, for the reason the resting card's heading already is: this label is
+    // worker-authored now, and the header's wrap-don't-truncate rule was written for code-authored
+    // kinds that carry no unbreakable token. A `title:` naming a branch, a URL or a base64 id is one,
+    // and here it shares the row with a PR ref in `aside`, which is shrink-0.
+    <TranscriptCard data-awaiting-fence icon={AwaitingIcon} label={<span className="[overflow-wrap:anywhere]">{parkTitle}</span>} aside={watched.length === 1 ? <WatchedRef watch={watched[0]} /> : undefined}>
       <LinkedHtml className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} html={awaitingHtml} />
       {(itemLabels.length > 0 || forLabel) && (
         // ONLY ON THIS BRANCH. When the resting card is showing it owns this entirely — a table grouped
