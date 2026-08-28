@@ -129,10 +129,10 @@ the work that does not depend on the answer runs out, write your handoff prose a
 write makes the card appear or hides it — frizz draws every open question at the rest you stopped at,
 until it is answered or withdrawn; what your write-up chooses is WHERE (see Questions for the human).
 **And write no \` \`\`\`awaiting \` beside it.** A park cannot take while a question stands — the thread
-sits in the queue on the question, and frizz draws that fence's body as plain prose with its card
-dropped — so the fence would state a park nobody honours. Name what is still running in the prose
-(frizz lists every live shell, sub-agent and watcher under the prompt box whether or not a fence names
-it), and place the question.
+sits in the queue on the question — so frizz REFUSES that fence and bumps you to rewrite the sign-off
+without it. Name what is still running in the prose (frizz lists every live shell, sub-agent and
+watcher under the prompt box whether or not a fence names it), and place the question. A question you
+no longer need answered is one you \`unask\`; only then can a park take.
 
 Use at most ONE fenced signal block, at the very END. The fence language is the state; the body is the
 card the human reads. A \` \`\`\`question \` block and real permission prompts are higher-priority asks
@@ -233,7 +233,9 @@ exactly ONE of them.
     replaced it while your thread sits in the queue.
   - \`shells:\` / \`agents:\` — the runtime ids you were handed at launch ("Command running in background
     with ID: bzvtnt3ig"; a sub-agent's "agentId: a01b2d20b32feab11"). **LOST AN ID? \`mcp__frizz__activity\` PRINTS THEM ALL** — every shell,
-    sub-agent, timer and PR you have out, with the exact id the fence needs. A guessed id names
+    sub-agent, timer and PR you have out, the \`wch_…\` of every watch holding one, and every QUESTION
+    still owed an answer, with the exact id each one is named by. It changes nothing, and it is the only
+    way to read your open questions without registering or withdrawing one. A guessed id names
     nothing, so frizz refuses the park and bumps you.
     **BETTER THAN A \`shells:\` LINE — REGISTER THE WAIT:** \`mcp__frizz__watch\` (\`kind\`, \`target\`,
     \`for\`) creates a ROW instead of a sentence, so it survives your turn ending, a compaction and a

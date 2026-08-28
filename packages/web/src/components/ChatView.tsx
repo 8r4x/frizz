@@ -849,9 +849,6 @@ function VirtualizedThreadTranscript({
     return rows.findIndex((row) => row.kind === "message" && row.messageIndex === lastUserIdx)
   }, [lastUserIdx, rows, stickyUserMessage])
 
-  // The virtualizer's total-size box. Its height IS getTotalSize(), so observing it catches every way
-  // the transcript can grow: a row inserted at its estimate, and each later measurement correction.
-  const contentRef = useRef<HTMLDivElement>(null)
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => transcriptRef.current,
@@ -890,47 +887,10 @@ function VirtualizedThreadTranscript({
     // got to — and leave real destinations (`scrollToEnd`, `scrollToIndex`) absolute. `adjustments` is
     // set only on the correction path, and is a per-call delta: virtual-core folds it into its cached
     // offset and resets it to 0 immediately after each call, so it never accumulates across calls.
-    //
-    // And grow the box BEFORE the write. virtual-core sizes the row (so getTotalSize() already includes
-    // the growth) and writes the correction, and only then notifies — which is when the total-size box's
-    // height is updated. In between, the scroller's range is still the OLD total, so a correction near
-    // the tail is clamped at the old max: replayed, one asked for +1,913px and landed +1,040px, and the
-    // reader's content shoved 913px down and stayed there. Writing the fresh total first gives the
-    // correction the range it needs; the notify then writes the same value again, which is a no-op.
     scrollToFn: (offset, { adjustments, behavior }, instance) => {
       const element = instance.scrollElement
       if (!element) return
-      if (adjustments !== undefined && contentRef.current) contentRef.current.style.height = `${instance.getTotalSize()}px`
       element.scrollTo({ top: adjustments === undefined ? offset : element.scrollTop + adjustments, behavior })
-    },
-    // THE FLASH FRAME — why scrolling back through a long thread looks like it re-renders under you.
-    //
-    // The correction above fixes WHERE the offset lands, not WHEN the rows follow it. virtual-core writes
-    // the compensation synchronously inside the ResizeObserver pass that measured the row, but the rows
-    // below it are positioned by React (`translateY(start)`), and the re-render that moves them is a
-    // plain setState from a non-React callback — a task that runs AFTER that frame paints. So one frame
-    // is painted with scrollTop shoved by the whole correction and the rows still where they were, and
-    // the next frame snaps them back. Replayed over a real transcript (verify-full-scroll-flash.mjs):
-    // 24 corrections in 300 frames of wheel, EVERY one painted, shoving the reader's content by 450px to
-    // 2,276px for a frame — the "crazy jitter" scrolling up, which the per-frame jitter probe never saw
-    // because it samples in rAF, after React has caught up.
-    //
-    // So move the rows in the same callback the correction fires from. `sync` is true only from the
-    // scroll listener, where the adapter has already flushed React synchronously; every other notify —
-    // above all a measurement — is the asynchronous one, and this writes the rows' fresh starts and the
-    // box's total straight into the DOM before the frame paints. React's own re-render then lands the
-    // identical values. The same `translateY` as the render, deliberately: the adapter's own
-    // `directDomUpdates` writes `translate3d`, which promotes every row to a compositor layer, and it
-    // writes the pinned row too, which breaks its `position: sticky` — that row is hoisted into flow, so
-    // it is skipped here by its marker.
-    onChange: (instance, sync) => {
-      if (sync) return
-      const content = contentRef.current
-      if (content) content.style.height = `${instance.getTotalSize()}px`
-      for (const item of instance.getVirtualItems()) {
-        const element = instance.elementsCache.get(item.key)
-        if (element instanceof HTMLElement && element.dataset.transcriptSticky !== "true") element.style.transform = `translateY(${item.start}px)`
-      }
     },
   })
   const [atEnd, setAtEnd] = useState(true)
@@ -939,6 +899,9 @@ function VirtualizedThreadTranscript({
   const followingTailRef = useRef(true)
   const tailHeightRef = useRef(-1)
   const readerScrollUntilRef = useRef(0)
+  // The virtualizer's total-size box. Its height IS getTotalSize(), so observing it catches every way
+  // the transcript can grow: a row inserted at its estimate, and each later measurement correction.
+  const contentRef = useRef<HTMLDivElement>(null)
   const tailReadyRef = useRef(false)
   const readerMovedRef = useRef(false)
   const nearTopLoadArmedRef = useRef(true)
@@ -3438,21 +3401,6 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
         // goes too, for the spacer reason above: FenceCard returning null would still leave its slot's
         // spacer standing between the prose and that card.
         if (fseg.fenceKind === "awaiting" && (m.fenceRefused || staleAwaiting || restingCardShown)) continue
-        // BESIDE AN OPEN REGISTERED QUESTION, A LIVE FENCE IS PROSE — its body, with the chrome dropped:
-        // no hourglass, no title, no wait table. A park cannot take while a question stands (deriveNeedsYou
-        // queues the thread on the question first), and the resting card already yields to it
-        // (deriveAwaitingBackground: at rest with both outstanding the human looks at the QUESTION, the
-        // monitors stay on the strip under the prompt box). This fence card did not yield, so a worker
-        // that registered a question, kept working, and then fenced its next rest drew a parked-looking
-        // card — hourglass, "BACKGROUND SHELLS" — stacked on top of the ask (maintainer 2026-08-28: "Weird
-        // that there's both an awaiting block and open questions"). The body stays because it IS the
-        // handoff: the worker writes its gate status into the fence, and dropping the block as a settled
-        // one is dropped would leave the rest saying nothing above the question. The fence and
-        // registration paths now render alike; the contract says not to write the fence there at all.
-        if (fseg.fenceKind === "awaiting" && (thread?.questions?.length ?? 0) > 0) {
-          push(<ProseHtml key={`${keyBase}-f${fi}`} md={fseg.body} wrap={dense} />)
-          continue
-        }
         push(
           <FenceCard
             key={`${keyBase}-f${fi}`}

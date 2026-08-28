@@ -7,7 +7,7 @@ import { projectStateDir } from "./frizz-paths.ts"
 import { projectRetiredBackgroundOps, projectTranscriptPeerNames } from "./transcript.ts"
 import { relayMessage } from "./completion-relay.ts"
 import type { TranscriptMessage } from "@frizz/shared"
-import { DISPATCH_TASK_BANNER_MARKER, formatGithubWakeSteer, GITHUB_DISPATCH_UI_BOUNDARY, humanGapNote, PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_RETIRED_LEAD, parseRecurringPrompt, restPromptMessage, wakeDeliveryToken, type GithubWakeSteer } from "@frizz/shared"
+import { DISPATCH_TASK_BANNER_MARKER, formatGithubWakeSteer, GITHUB_DISPATCH_UI_BOUNDARY, humanGapNote, PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, parseRecurringPrompt, restPromptMessage, wakeDeliveryToken, type GithubWakeSteer } from "@frizz/shared"
 import {
   coalescedQueuedKeys,
   createTranscriptFold,
@@ -190,6 +190,14 @@ test("a fence correction leaves the chat entirely, and the fence it refused stop
   const rested = msgs[msgs.length - 1]
   assert.equal(rested.text, refusedFence, "the worker's own words are untouched")
   assert.equal(rested.fenceRefused, true)
+})
+
+// The open-question refusal (2026-08-28) rides the same fold: the delivery never renders, and the fence
+// it refused stops drawing — which is the whole point, since drawing it beside the ask was the defect.
+test("an open-question correction leaves the chat and refuses its fence", () => {
+  const msgs = correctionTranscript(`${PARK_CORRECTION_QUESTION_LEAD}a question of yours was still OPEN, so frizz refused the park — a question outranks a wait, and this thread sits in the human's queue on it.\n\n- \`qst_6506c36d2f28\` — how should that flag be handled?`)
+  assert.equal(msgs.filter((m) => m.role === "user").length, 1)
+  assert.equal(msgs[msgs.length - 1].fenceRefused, true)
 })
 
 test("a retired-line-kind correction refuses its fence too, and an expired wake refuses nothing", () => {

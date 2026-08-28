@@ -1269,10 +1269,15 @@ export const SIGNOFF_NUDGE_MESSAGE = [
 // The scheduler draws the same line for its bump cap (`cause !== "expired"`).
 export const PARK_CORRECTION_NAMES_LEAD = "⚠️ Your ```awaiting fence names "
 export const PARK_CORRECTION_RETIRED_LEAD = "⛔ Your ```awaiting fence uses "
+/** The third refusal (2026-08-28): the fence was well-formed and everything it named was live, but a
+ *  REGISTERED QUESTION stood open on the thread. A question outranks a park everywhere else — the queue
+ *  rule, the resting card — so the fence is refused rather than drawn beside the ask (maintainer: "it
+ *  should not be allowed, basically"). */
+export const PARK_CORRECTION_QUESTION_LEAD = "⚠️ Your ```awaiting fence landed while "
 /** Is this delivered wake one of frizz's fence corrections? */
 export function isParkCorrection(text: string): boolean {
   const t = text.trimStart()
-  return t.startsWith(PARK_CORRECTION_NAMES_LEAD) || t.startsWith(PARK_CORRECTION_RETIRED_LEAD)
+  return t.startsWith(PARK_CORRECTION_NAMES_LEAD) || t.startsWith(PARK_CORRECTION_RETIRED_LEAD) || t.startsWith(PARK_CORRECTION_QUESTION_LEAD)
 }
 
 export function timerPromptMessage(prompt: string, fireAt: string): string {
@@ -2824,6 +2829,13 @@ export type ListOwnThreadActivityInput = z.infer<typeof ListOwnThreadActivityInp
 
 export const OwnThreadActivityResult = z.object({
   activity: z.array(ThreadActivityItem),
+  /** Every question still owed an answer. NOT a `ThreadActivityItem` and deliberately its own list: a
+   *  question is not running work, it waits on a PERSON, and there is no `questions:` key in the awaiting
+   *  fence for it to be written into. Until 2026-08-28 a worker could read its open questions back only
+   *  as a side effect of `ask` (which registers another) or `unask` (which withdraws one) — so the ids
+   *  that block `done` were readable only by mutating something (maintainer: "Is there a way for the
+   *  agent to read out the current set of watchers and questions?"). */
+  questions: z.array(RegisteredQuestionView).default([]),
 }).strict()
 export type OwnThreadActivityResult = z.infer<typeof OwnThreadActivityResult>
 

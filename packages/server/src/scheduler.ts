@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_RETIRED_LEAD, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, questionAnswerMessage, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, formatGithubWakeSteer, type GithubWatchStatus, prWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
+import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, questionAnswerMessage, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, formatGithubWakeSteer, type GithubWatchStatus, prWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
 import { GITHUB_STATUS_SETTING, parkExpiresAt, parkIsHonoured, readAwaitingPark, unaccountedItems, type LiveActivity } from "./awaiting.ts"
 import type { SessionRow, Storage, ThreadQuestionRow } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
@@ -830,6 +830,17 @@ function signoffFenceId(restedAt: string): string {
 }
 function isSignoffFenceId(fenceId: string): boolean {
   return fenceId.startsWith(`${SIGNOFF_FENCE_PREFIX}:`)
+}
+
+/** The question a `thread_question` row asks, as one short line for a correction's list — the worker
+ *  never saw the id frizz minted, so the id alone would not tell it which question is meant. */
+function questionLine(spec: string): string {
+  try {
+    const q = String((JSON.parse(spec) as { question?: unknown }).question ?? "").replace(/\s+/g, " ").trim()
+    return q.length > 120 ? `${q.slice(0, 117)}…` : q
+  } catch {
+    return "(unreadable question)"
+  }
 }
 
 /** SOURCE 12's delivery namespace — `park:<cause>:<the rest it corrects>`. The cause is in the key so a
@@ -1717,6 +1728,52 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // the error record's own text has already cleared `lastFence`, so this rarely binds; it is here so
       // the four passes that read "the agent spoke last" agree on what a failed turn is.)
       if (tele.authFault || tele.apiFault) continue
+
+      // AN OPEN QUESTION REFUSES THE PARK OUTRIGHT, before any look at what the fence names. A question
+      // outranks a wait everywhere else — deriveNeedsYou queues the thread on the open row before any
+      // park excusal, and the resting card yields to it (deriveAwaitingBackground) — so a fence here
+      // declares a park frizz will not honour, and the two used to render stacked: a parked-looking
+      // card, hourglass and shell table, above the ask (maintainer 2026-08-28: "Weird that there's both
+      // an awaiting block and open questions"; a first fix drew the fence as plain prose and was
+      // rejected the same day — "it should not be allowed, basically"). So it is refused like any
+      // other bad park: the correction folds out of the transcript, un-draws the fence (fenceRefused),
+      // and the worker rewrites its sign-off without it — prose plus the placed question, which is what
+      // the contract asks for. Counted against PARK_BUMP_MAX like the other corrections, because a
+      // worker whose contract froze before this rule cannot learn it, and keyed on the rest so one
+      // fence draws one bump. Checked BEFORE the honoured-park reset below on purpose: live names do
+      // not make this park honoured.
+      const openQuestions = deps.storage.listThreadQuestions(row.slug).filter((q) => q.state === "open")
+      if (openQuestions.length > 0) {
+        if ((row.park_bumps ?? 0) >= PARK_BUMP_MAX) continue
+        const fenceId = parkFenceId("question", spokeAt)
+        const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
+        if (outbox.get(deliveryId)) continue
+        const one = openQuestions.length === 1
+        const message = [
+          `${PARK_CORRECTION_QUESTION_LEAD}${one ? "a question of yours was" : "questions of yours were"} still OPEN, so frizz refused the park — a question outranks a wait, and this thread sits in the human's queue on ${one ? "it" : "them"}.`,
+          "",
+          ...openQuestions.map((q) => `- \`${q.id}\` — ${questionLine(q.spec)}`),
+          "",
+          "Never fence ```awaiting while a question stands. Rewrite your sign-off WITHOUT the fence: your",
+          "handoff prose, with each question placed by an empty two-line marker — ```question <its id> on",
+          "one line and ``` on the next. Your running work is watched and listed either way: a shell, a",
+          "sub-agent, a timer or a registered PR wakes you fence or no fence. A question you no longer need",
+          "answered is one you withdraw with `mcp__frizz__unask` — only then can a park take.",
+        ].join("\n")
+        const item = outbox.enqueue({
+          id: deliveryId,
+          slug: row.slug,
+          sessionId: row.session_id,
+          fenceId,
+          hintKey: fenceId,
+          message: `${message}\n\n${wakeTimeHeader(nowMs, spokeAt)}`,
+          reason: `awaiting fence beside ${openQuestions.length} open question(s)`,
+        }, nowMs).delivery
+        deps.storage.countParkBump(row.slug, fenceId)
+        log(`waker: queued ${row.slug} — ${item.reason}`)
+        checkpoint("after-enqueue", item)
+        continue
+      }
 
       const park = readAwaitingPark(tele.lastFence.hints)
       const live = liveActivityOf(
