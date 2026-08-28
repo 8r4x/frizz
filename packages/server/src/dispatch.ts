@@ -375,7 +375,16 @@ export function scratchpadOrientation(sessionId: string, kind: BackendKind = "cl
 // isn't a regular file, and a runaway/generated file is rejected by size rather than fully slurped.
 // The surviving content is then clipped to keep token/context cost bounded. Returns "" when
 // absent/oversized/non-regular/empty — the caller drops it from the composed extra-system-prompt.
-const FRIZZ_MD_MAX_CHARS = 12_000
+//
+// THE CLIP IS SILENT TO EVERYONE WHO MATTERS, so the cap has to clear a REAL file rather than look
+// prudent. At 12,000 it did not: this repo's own FRIZZ.md was 16,522 characters on 2026-08-28, so
+// every worker frizz dispatched here lost the last 4,522 — beginning exactly at "## Git: land on
+// local `main` — NEVER open a pull request", the rule CLAUDE.md calls the most-violated one in the
+// repo. The marker says `[FRIZZ.md truncated]`, and nobody reads their own system prompt to find it.
+// 24,000 characters is ~6k tokens, against a contract already several times that, and it clears the
+// real file with 45% headroom. `frizzConfigBlock injects this repo's own FRIZZ.md IN FULL` fails
+// LOUDLY the next time the file outgrows it, which is the actual guard — the number is only a number.
+const FRIZZ_MD_MAX_CHARS = 24_000
 const FRIZZ_MD_MAX_BYTES = 64 * 1024
 export function frizzConfigBlock(projectDir: string): string {
   const path = join(projectDir, "FRIZZ.md")

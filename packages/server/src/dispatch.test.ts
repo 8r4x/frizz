@@ -154,10 +154,27 @@ test("frizzConfigBlock: present FRIZZ.md is wrapped in an overrides-frizz-defaul
 
 test("frizzConfigBlock: an over-cap FRIZZ.md content is clipped with a truncation marker", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-md-clip-"))
-  writeFileSync(join(dir, "FRIZZ.md"), "x".repeat(50_000)) // > 12k chars, < 64KB → read then clipped
+  writeFileSync(join(dir, "FRIZZ.md"), "x".repeat(50_000)) // > 24k chars, < 64KB → read then clipped
   const block = frizzConfigBlock(dir)
   assert.match(block, /\[FRIZZ\.md truncated\]/)
-  assert.ok(block.length < 20_000, "the injected block must stay within the system-prompt budget")
+  assert.ok(block.length < 26_000, "the injected block must stay within the system-prompt budget")
+})
+
+// THE CAP HAS TO CLEAR A REAL FILE, not just look prudent, and the clip is silent to everyone who
+// matters: the marker lands in a system prompt nobody reads. At 12,000 this repo's own FRIZZ.md
+// (16,522 chars on 2026-08-28) lost its last 4,522 on EVERY dispatch — beginning at the "NEVER open a
+// pull request" section, which CLAUDE.md calls the most-violated rule in the repo. This test is the
+// guard; the constant is only a number.
+test("frizzConfigBlock injects this repo's own FRIZZ.md IN FULL — the cap clears the real file", () => {
+  const repoRoot = join(here, "..", "..", "..")
+  const body = readFileSync(join(repoRoot, "FRIZZ.md"), "utf8").trim()
+  const block = frizzConfigBlock(repoRoot)
+  assert.doesNotMatch(
+    block,
+    /\[FRIZZ\.md truncated\]/,
+    `FRIZZ.md is ${body.length} chars and no longer fits the injection cap — raise FRIZZ_MD_MAX_CHARS or trim the file, because workers are silently losing its tail`,
+  )
+  assert.ok(block.includes(body), "the whole file must reach the worker, never a prefix of it")
 })
 
 test("frizzConfigBlock: a runaway (>64KB) FRIZZ.md is rejected unread, not slurped", () => {
