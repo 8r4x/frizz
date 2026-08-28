@@ -38,7 +38,10 @@ export type MessageAnswering = {
 
 export type MessageSegment =
   | { kind: "prose"; text: string }
-  | { kind: "question"; text: string; questionKind: QuestionKind; danger: boolean }
+  // `registeredId` is set only when the info-string named one (```question qst_ab12cd34): the fence is
+  // then a PLACEMENT for that registered row — see lib/questionShadow — rather than a question of its
+  // own. Absent, not undefined, so a segment still deep-equals the plain shape it had before.
+  | { kind: "question"; text: string; questionKind: QuestionKind; danger: boolean; registeredId?: string }
 
 // Opening fence begins a line: ```question, an OPTIONAL info-string of one or more space-separated
 // tokens (e.g. ```question multi, ```question danger), then a newline;
@@ -54,10 +57,16 @@ const QUESTION_BLOCK = /^```question(?:[ \t]+([A-Za-z][^\r\n]*?))?[ \t]*\r?\n([\
 // with no recognized base token degrades to kind "question" — a never-break rule so a future, mistyped,
 // or RETIRED token can never turn a block into a parse failure. The retired `approval` rides exactly
 // that rule: a legacy ```question approval danger still parses as a danger-styled two-option question.
-function parseInfoString(info: string | undefined): { kind: QuestionKind; danger: boolean } {
+// A REGISTERED question's id, as `ask` mints and returns it. A worker puts one in the info string to say
+// "this fence is where that registration renders", which is placement by NAME rather than by matching
+// the prose — the fuzzy path stays for every worker that writes no id (lib/questionShadow).
+const REGISTERED_ID = /^qst_[a-z0-9]+$/
+
+function parseInfoString(info: string | undefined): { kind: QuestionKind; danger: boolean; registeredId?: string } {
   const tokens = (info ?? "").toLowerCase().split(/\s+/).filter(Boolean)
   const has = (t: string) => tokens.includes(t)
-  return { kind: has("multi") ? "multi" : "question", danger: has("danger") }
+  const registeredId = tokens.find((t) => REGISTERED_ID.test(t))
+  return { kind: has("multi") ? "multi" : "question", danger: has("danger"), ...(registeredId ? { registeredId } : {}) }
 }
 
 export function splitQuestionBlocks(text: string): MessageSegment[] {
@@ -76,8 +85,8 @@ export function splitQuestionBlocks(text: string): MessageSegment[] {
     }
     const prose = text.slice(lastIndex, m.index)
     if (prose.trim()) segments.push({ kind: "prose", text: prose })
-    const { kind, danger } = parseInfoString(m[1])
-    segments.push({ kind: "question", text: m[2], questionKind: kind, danger })
+    const { kind, danger, registeredId } = parseInfoString(m[1])
+    segments.push({ kind: "question", text: m[2], questionKind: kind, danger, ...(registeredId ? { registeredId } : {}) })
     lastIndex = m.index + m[0].length
   }
   const rest = text.slice(lastIndex)

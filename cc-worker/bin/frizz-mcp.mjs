@@ -513,9 +513,11 @@ const ASK = {
     "ASKING DOES NOT END YOUR TURN. A question waits on a person, so it carries no timeout and expires " +
     "never — but you keep working. Do everything that does NOT depend on the answer first, and register " +
     "the question at the moment you find it rather than saving it for the end.\n\n" +
-    "AND WHEN YOU DO STOP, THE OPEN QUESTION IS YOUR SIGN-OFF. Rest normally — your handoff prose, no " +
-    "fence, and nothing further to do to make the card appear. Frizz draws it at the rest you stopped " +
-    "at, on the thread and on the board, until it is answered or withdrawn.\n\n" +
+    "AND WHEN YOU DO STOP, THE OPEN QUESTION IS YOUR SIGN-OFF — rest normally. Frizz draws every open " +
+    "question at the rest you stopped at whether you mention it or not, so nothing you write can hide " +
+    "one. What your handoff chooses is WHERE: a ```question fence at the point the ask belongs renders " +
+    "the REGISTERED card in that slot instead of at the end, and naming the row in its info string — " +
+    "```question <the id returned below> — places it exactly rather than on a text match.\n\n" +
     "SEVERAL AT ONCE IS ONE CALL. The card sends every answer as a unit, so a second `ask` for a second " +
     "question just makes the human send twice. Register them together.\n\n" +
     "The answer comes back to you as its own wake, restating what was asked. Withdraw one you no longer " +

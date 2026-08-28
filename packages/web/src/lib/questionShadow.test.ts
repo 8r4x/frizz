@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { allFencesShadowed, fenceRestatesRegistered, registeredAtRest } from "./questionShadow.ts"
+import { allFencesShadowed, fenceRestatesRegistered, fenceStandsFor, placeQuestions, registeredAtRest } from "./questionShadow.ts"
+import { type MessageSegment, splitQuestionBlocks } from "./questionBlocks.ts"
 
 // The pair from the 2026-08-28 report, verbatim: the registration (a plain string — the `ask` schema
 // carries no markdown) and the fence the worker wrote sixteen seconds later, with `code`, a link and a
@@ -82,4 +83,58 @@ test("a question the human already replied past belongs to the rest it was asked
 test("a registration whose rest is above the loaded window maps to nothing", () => {
   const map = registeredAtRest(MESSAGES.slice(2), [{ ...QUESTION, askedAt: at(1) }])
   assert.equal(map.size, 0)
+})
+
+// ---- PLACEMENT ----
+// The worker writes the ask into the middle of its handoff; the registered card renders in that slot.
+
+const fenced = (body: string, info = "") => `\`\`\`question${info ? ` ${info}` : ""}\n${body}\n\`\`\``
+const questionSeg = (text: string, info = "") => {
+  const segs = splitQuestionBlocks(fenced(text, info)).filter((s) => s.kind === "question")
+  assert.equal(segs.length, 1, "the fixture must produce exactly one question segment")
+  return segs[0] as Extract<MessageSegment, { kind: "question" }>
+}
+
+test("fenceStandsFor matches by the info-string id, whatever the prose says", () => {
+  const seg = questionSeg("Something else entirely?\n\n- A. Yes\n- B. No", QUESTION.id)
+  assert.equal(fenceStandsFor(seg, [QUESTION]), QUESTION)
+  assert.equal(fenceStandsFor(seg, [{ ...QUESTION, id: "qst_000000000000" }]), undefined, "a different id names a different row")
+})
+
+test("fenceStandsFor falls back to the prose when the worker wrote no id", () => {
+  assert.equal(fenceStandsFor(questionSeg(FENCE), [QUESTION]), QUESTION)
+  assert.equal(fenceStandsFor(questionSeg("Which npm dist-tag?\n\n- A. latest\n- B. next"), [QUESTION]), undefined)
+})
+
+const HANDOFF = `Here is what landed, and one thing is still open.\n\n${fenced(FENCE)}\n\nThe rest of the write-up follows.`
+
+test("placeQuestions puts the rest's group in the message that stands for it, and clears its anchor", () => {
+  const messages = MESSAGES.map((m, i) => ({ ...m, text: i === 4 ? HANDOFF : "prose" }))
+  const { placed, placedAnchors } = placeQuestions(messages, [QUESTION])
+  assert.deepEqual([...placed.keys()], [4])
+  assert.deepEqual(placed.get(4), [QUESTION])
+  assert.ok(placedAnchors.has(4), "the anchor row must not draw it a second time")
+})
+
+test("the FIRST standing fence of the rest wins — one slot, because the stack sends as one batch", () => {
+  const messages = MESSAGES.map((m, i) => ({ ...m, text: i === 3 || i === 4 ? HANDOFF : "prose" }))
+  const { placed } = placeQuestions(messages, [QUESTION])
+  assert.deepEqual([...placed.keys()], [3])
+})
+
+test("a handoff that names none of its registrations places nothing — the anchor still draws them", () => {
+  const messages = MESSAGES.map((m) => ({ ...m, text: "Landed it. Nothing else to say." }))
+  const { placed, placedAnchors } = placeQuestions(messages, [QUESTION])
+  assert.equal(placed.size, 0)
+  assert.equal(placedAnchors.size, 0)
+})
+
+test("a fence one rest ABOVE the registration never places it", () => {
+  const messages = MESSAGES.map((m, i) => ({ ...m, text: i === 1 ? HANDOFF : "prose" }))
+  assert.equal(placeQuestions(messages, [QUESTION]).placed.size, 0)
+})
+
+test("a registration whose rest is above the loaded window places nothing", () => {
+  const messages = MESSAGES.slice(2).map((m) => ({ ...m, text: HANDOFF }))
+  assert.equal(placeQuestions(messages, [{ ...QUESTION, askedAt: at(1) }]).placed.size, 0)
 })

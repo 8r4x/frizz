@@ -27,7 +27,7 @@ import { showsRegisteredDoneCard } from "../lib/registeredDone.ts"
 import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { parseAnswersCard, pairAllAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
 import { questionsByAnchor } from "../lib/questionAnchor.ts"
-import { fenceRestatesRegistered, registeredAtRest } from "../lib/questionShadow.ts"
+import { fenceStandsFor, placeQuestions, registeredAtRest } from "../lib/questionShadow.ts"
 import { FrizzWake } from "./FrizzWake.tsx"
 import { RecurringPromptLine } from "./RecurringPromptLine.tsx"
 import { LinkifiedText } from "./LinkifiedText.tsx"
@@ -293,6 +293,9 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   const { answeringForMessage } = useLiveAnswering(slug, messages)
   // The registered questions at each message's rest, so a fence restating one folds into its card.
   const shadowedByMessage = useMemo(() => registeredAtRest(messages, thread?.questions ?? []), [messages, thread?.questions])
+  // Where each rest's registered group renders: in the slot of the first fence that stands for it, or
+  // — when the handoff names none of them — at the rest's anchor, exactly as before (lib/questionShadow).
+  const questionPlacement = useMemo(() => placeQuestions(messages, thread?.questions ?? []), [messages, thread?.questions])
 
   // (The SSE-mode lastActivityAt refetch effect that lived here moved into transcript-live.ts: the
   // manager applies the same activity-edge pull to EVERY observed transcript that the push channel
@@ -502,6 +505,8 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
                     staleAwaiting={lastAgentIdx >= 0 && messageIndex < lastAgentIdx}
                     restingCardShown={messageIndex === lastAgentIdx && restingShown}
                     shadowedBy={shadowedByMessage.get(messageIndex)}
+                    placedQuestions={questionPlacement.placed.get(messageIndex)}
+                    thread={thread}
                   />
                 )
                 return isSticky ? <StickyUserBand key={i}>{msg}</StickyUserBand> : msg
@@ -772,16 +777,22 @@ function VirtualizedThreadTranscript({
       && thread?.runtime !== "perm-prompt"
     return workingWins ? workingIndicatorGap(activityMessages.map((entry) => entry.message)) : STEP
   }, [activityMessages, showWorking, thread])
-  // EVERY OPEN QUESTION, placed at the rest it was asked at. `byRow` keys into `messageRows` (the
-  // coalesced list actually rendered, which drops messages the transcript does not draw), so the group
-  // hangs off the last row at or before its anchor; -1 means the rest is older than the loaded window and
-  // it goes above everything rather than back at the bottom, lying about being current. `tail` is the
-  // ordinary case — the worker asked and rested — and keeps the placement this had before.
+  // Where each rest's registered group renders: in the slot of the first fence that stands for it, or
+  // — when the handoff names none of them — at the rest's anchor, exactly as before (lib/questionShadow).
+  const questionPlacement = useMemo(() => placeQuestions(messages, thread?.questions ?? []), [messages, thread?.questions])
+  // EVERY OPEN QUESTION THE HANDOFF DID NOT PLACE, at the rest it was asked at. `byRow` keys into
+  // `messageRows` (the coalesced list actually rendered, which drops messages the transcript does not
+  // draw), so the group hangs off the last row at or before its anchor; -1 means the rest is older than
+  // the loaded window and it goes above everything rather than back at the bottom, lying about being
+  // current. `tail` is the ordinary case — the worker asked and rested — and keeps the placement this
+  // had before.
   const questionGroups = useMemo(() => {
     const tail: RegisteredQuestionView[] = []
     const byRow = new Map<number, RegisteredQuestionView[]>()
     const tailAnchor = messages.length - 1
     for (const [anchor, group] of questionsByAnchor(messages, thread?.questions ?? [])) {
+      // Placed inside a message of its own rest — the anchor row would draw it a second time.
+      if (questionPlacement.placedAnchors.has(anchor)) continue
       if (anchor >= tailAnchor) { tail.push(...group); continue }
       let rowIdx = -1
       for (let i = 0; i < messageRows.length; i++) {
@@ -793,7 +804,7 @@ function VirtualizedThreadTranscript({
       else byRow.set(rowIdx, [...group])
     }
     return { byRow, tail }
-  }, [messageRows, messages, thread?.questions])
+  }, [messageRows, messages, questionPlacement, thread?.questions])
   // The same rows, keyed by message index, for the fold: a fence restating a registration at its own
   // rest draws nothing (lib/questionShadow).
   const shadowedByMessage = useMemo(() => registeredAtRest(messages, thread?.questions ?? []), [messages, thread?.questions])
@@ -1392,6 +1403,8 @@ function VirtualizedThreadTranscript({
                   staleAwaiting={lastAgentIdx >= 0 && row.messageIndex < lastAgentIdx}
                   restingCardShown={row.messageIndex === lastAgentIdx && restingShown}
                   shadowedBy={shadowedByMessage.get(row.messageIndex)}
+                  placedQuestions={questionPlacement.placed.get(row.messageIndex)}
+                  thread={thread}
                 />
               </MessageRow>
             ) : row.kind === "runtime-status" ? (
@@ -3265,16 +3278,20 @@ function UserBubble({ text, rawText, queued, sticky, deliveryUnconfirmed, delive
 // Lifecycle controls never belong to a transcript message: every Done card stays presentation-only,
 // while the owning thread surface renders one stable footer.
 // `shadowedBy` is the registered questions standing at this message's REST (lib/questionShadow), so a
-// ```question fence that merely restates one of them draws nothing — the registered card, a few pixels
-// below, is the one the human answers. Undefined for every message at a rest with no registration,
-// which keeps the memo boundary intact.
+// ```question fence that merely restates one of them never draws its own card — the REGISTERED card is
+// the one the human answers, because answering it settles the row. Undefined for every message at a rest
+// with no registration, which keeps the memo boundary intact.
+// `placedQuestions` is that rest's group when THIS message is the one that places it: the registered
+// stack renders in the slot the first standing fence occupied, so the worker's setup paragraph still
+// points at the ask instead of at whatever the card jumped over. Absent → the group renders at the rest's
+// anchor as before, which is what a handoff that names none of its registrations still gets.
 // `restingCardShown` — the resting card at the transcript's tail is stating THIS message's ```awaiting
 // fence (showsRestingCard on the owning thread), so the fence block is skipped here exactly as a settled
 // one is. It has to be a skip at this level and not a null from FenceCard: the block list is interleaved
 // with explicit spacers, and a card that renders null still spent one — a 14px gap dangling under the
 // prose, above the resting card (maintainer 2026-08-28, with a screenshot of the gap). Only the last
 // agent message ever carries it, so the memo boundary holds for every other row.
-export const Message = memo(function Message({ m, answering, dense, paired, sticky, textOnly, showSendButton, staleAwaiting, shadowedBy, restingCardShown }: { m: ChatMessage; answering?: MessageAnswering; dense?: boolean; paired?: PairedAnswer[] | null; sticky?: boolean; textOnly?: boolean; showSendButton?: boolean; staleAwaiting?: boolean; shadowedBy?: readonly RegisteredQuestionView[]; restingCardShown?: boolean }) {
+export const Message = memo(function Message({ m, answering, dense, paired, sticky, textOnly, showSendButton, staleAwaiting, shadowedBy, placedQuestions, thread, restingCardShown }: { m: ChatMessage; answering?: MessageAnswering; dense?: boolean; paired?: PairedAnswer[] | null; sticky?: boolean; textOnly?: boolean; showSendButton?: boolean; staleAwaiting?: boolean; shadowedBy?: readonly RegisteredQuestionView[]; placedQuestions?: readonly RegisteredQuestionView[]; thread?: ThreadViewData; restingCardShown?: boolean }) {
   // ANSWERING ON A PHONE happens in a sheet, one question at a time (MobileAnswerSheet) — the cards in
   // the transcript stay READ-ONLY there, so the questions are still visible in the context that
   // produced them but a 44pt-thumb answer never has to land on a 24pt chip inside a scrolling message.
@@ -3350,6 +3367,8 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
     pictureEdges.push(edges)
   }
   const qi = { n: -1 }
+  // One placement slot per message: set the first time a standing fence claims it (see placedQuestions).
+  const placedSlot = { taken: false }
   // THIS message's open question blocks, in the order the answering controller numbers them. Only
   // populated when the message actually has a controller (i.e. its ask is still open).
   const askBlocks: { raw: string; kind: QuestionKind; danger: boolean; bi: number }[] = []
@@ -3413,10 +3432,19 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
         }
         qi.n += 1
         const bi = qi.n
-        // A fence restating a question REGISTERED at this rest is folded into the registered card (see
+        // A fence STANDING FOR a question registered at this rest is folded into the registered card (see
         // lib/questionShadow). The index still advances — the controller numbers every fence in the
         // flat text — so the blocks that do render keep their answer state.
-        if (shadowedBy && fenceRestatesRegistered(seg.text, shadowedBy)) continue
+        if (shadowedBy && fenceStandsFor(seg, shadowedBy) !== undefined) {
+          // …and the FIRST such fence is where the registered stack goes. One slot per rest, never one
+          // per fence: the stack sends every answer in a single call, so a second mount would put a
+          // second Send button on the same batch.
+          if (placedQuestions && placedQuestions.length > 0 && !placedSlot.taken) {
+            placedSlot.taken = true
+            push(<RegisteredQuestionStack key={`${keyBase}-${fi}-placed${si}`} thread={thread} questions={placedQuestions} showInFlight={false} />)
+          }
+          continue
+        }
         if (answering) askBlocks.push({ raw: seg.text, kind: seg.questionKind, danger: seg.danger, bi })
         // On a phone the card is a READING surface and the sheet is the answering one, so it renders
         // without an interactive controller even though this message has one.

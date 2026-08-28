@@ -971,18 +971,21 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   // WHERE EACH OPEN QUESTION SITS: at the rest it was asked at, keyed by index into the FULL message
   // list (the loop below carries that index as `globalIdx`). `tail` is the ordinary case — the worker
   // asked and rested — and keeps the placement this card has always had, above the composer.
+  const questionPlacement = useMemo(() => placeQuestions(messages, thread?.questions ?? []), [messages, thread?.questions])
   const questionAnchors = useMemo(() => {
     const tail: RegisteredQuestionView[] = []
     const byAnchor = new Map<number, RegisteredQuestionView[]>()
     const tailAnchor = messages.length - 1
     for (const [anchor, group] of questionsByAnchor(messages, thread?.questions ?? [])) {
+      // Placed inside a message of its own rest — drawing it here too would card it twice.
+      if (questionPlacement.placedAnchors.has(anchor)) continue
       if (anchor >= tailAnchor) { tail.push(...group); continue }
       const at = byAnchor.get(anchor)
       if (at) at.push(...group)
       else byAnchor.set(anchor, [...group])
     }
     return { byAnchor, tail }
-  }, [messages, thread?.questions])
+  }, [messages, questionPlacement, thread?.questions])
   // The registered questions at each message's rest, so a fence restating one folds into its card
   // (lib/questionShadow) — here exactly as on the thread page.
   const shadowedByMessage = useMemo(() => registeredAtRest(messages, thread?.questions ?? []), [messages, thread?.questions])
@@ -1479,7 +1482,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                   const textKey = m.sourceId ?? `legacy-${globalIdx}`
                   out.push(
                     <div key={textKey} data-transcript-source-id={textKey} className="flex flex-col">
-                      <Message m={m} dense textOnly answering={answeringForMessage(m)} paired={paired[globalIdx]} staleAwaiting={isStaleAwaiting(globalIdx)} restingCardShown={globalIdx === lastAgentIdx && restingShown} shadowedBy={shadowedByMessage.get(globalIdx)} />
+                      <Message m={m} dense textOnly answering={answeringForMessage(m)} paired={paired[globalIdx]} staleAwaiting={isStaleAwaiting(globalIdx)} restingCardShown={globalIdx === lastAgentIdx && restingShown} shadowedBy={shadowedByMessage.get(globalIdx)} placedQuestions={questionPlacement.placed.get(globalIdx)} thread={thread} />
                     </div>,
                   )
                   // Text-only → the row ends in prose (tool band dropped), so the next gap is a full STEP.
@@ -1503,6 +1506,8 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                     paired={paired[globalIdx]}
                     sticky={isSticky}
                     shadowedBy={shadowedByMessage.get(globalIdx)}
+                    placedQuestions={questionPlacement.placed.get(globalIdx)}
+                    thread={thread}
                   />
                 )
                 out.push(

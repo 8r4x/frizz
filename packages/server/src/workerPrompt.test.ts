@@ -36,16 +36,24 @@ test("the contract bounds the work to the task, not only the stopping", () => {
   }
 })
 
-// A question asked on BOTH surfaces at one rest draws two cards (2026-08-28, "Same question showing up
-// twice in a row"): the worker's fence was buried by a watcher's wake, it registered the question — the
-// right move — and then re-fenced it at sign-off because the contract called the fence the handback and
-// never said "not both". The transcript folds such a fence now, but the contract has to stop it at the
-// source: a fold is only ever as good as its text match.
-test("the contract forbids fencing a question that was registered", () => {
+// A question asked on BOTH surfaces at one rest drew two cards (2026-08-28, "Same question showing up
+// twice in a row"): the worker registered it — the right move — and then re-fenced it at sign-off,
+// because the contract called the fence the handback and never said "not both". For half a day the rule
+// was "never also fence it"; the maintainer reversed that the same afternoon ("it kind of makes sense to
+// me for the agent to decide where questions render in its own rest message"), so the fence is now the
+// PLACEMENT and lib/questionShadow renders the registered card in its slot. One card either way — what
+// the fence decides is where. The contract must teach the placement AND the withdrawal, because a
+// question left out of the write-up is still open and still gates `done`.
+test("the contract teaches a worker to PLACE its registered questions, or unask them", () => {
   for (const backend of ["claude", "codex"] as const) {
     const prompt = buildWorkerPrompt(backend)
-    assert.match(prompt, /A REGISTERED QUESTION IS NEVER ALSO FENCED/)
-    assert.match(prompt, /The registration IS\s+your sign-off/)
-    assert.match(prompt, /your final message carries NO question fence for it/)
+    assert.match(prompt, /PLACE EVERY OPEN QUESTION IN YOUR HANDOFF, OR `unask` IT/)
+    // The exact form, or a worker cannot write it: the id rides the fence's info string.
+    assert.match(prompt, /```question qst_ab12cd34/)
+    assert.match(prompt, /ONE card renders, and it is the\s+registered one/)
+    // Leaving one out is not how a worker drops it — that is what `unask` is for.
+    assert.match(prompt, /it is\s+one you `unask`/)
+    // And the old rule must be GONE, not merely contradicted somewhere further down.
+    assert.doesNotMatch(prompt, /A REGISTERED QUESTION IS NEVER ALSO FENCED/)
   }
 })

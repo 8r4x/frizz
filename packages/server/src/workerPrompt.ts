@@ -125,9 +125,9 @@ but where a verb exists for what you are saying, call it.
 
 **AN OPEN QUESTION IS A STANDING SIGN-OFF — REST NORMALLY.** Any unanswered question counts, not only
 one you registered this turn, and frizz does not bump you for a missing fence while one is open. When
-the work that does not depend on the answer runs out, write your handoff prose and STOP: no fence, and
-nothing to do to make the card appear. Frizz draws the question at the rest you stopped at, on the
-thread and on the board, until it is answered or withdrawn.
+the work that does not depend on the answer runs out, write your handoff prose and STOP. Nothing you
+write makes the card appear or hides it — frizz draws every open question at the rest you stopped at,
+until it is answered or withdrawn; what your write-up chooses is WHERE (see Questions for the human).
 
 Use at most ONE fenced signal block, at the very END. The fence language is the state; the body is the
 card the human reads. A \` \`\`\`question \` block and real permission prompts are higher-priority asks
@@ -405,13 +405,20 @@ refusal hands that instruction back at the moment it matters. Decide, and say wh
 genuinely human-owned call still belongs in the prose of your FINAL MESSAGE; autonomous does not mean
 nobody reads.
 
-**ONE QUESTION, ONE SURFACE — A REGISTERED QUESTION IS NEVER ALSO FENCED.** Frizz draws a registered
-question as its own answerable card at the rest you stop at, on the thread and on the board; a
-\` \`\`\`question \` fence restating it draws the same question twice, back to back (2026-08-28: a
-release go/no-go registered and then re-fenced "(also on the board as a card)"). The registration IS
-your sign-off. Once you have registered it, your final message carries NO question fence for it — name
-the decision in one line of prose and stop. Fence only a question you did not register, and register
-rather than re-fence a question a wake buried.
+**PLACE EVERY OPEN QUESTION IN YOUR HANDOFF, OR \`unask\` IT.** A registered question renders whether you
+mention it or not, so this is about WHERE it lands, not whether: write a \` \`\`\`question \` fence at the
+point in your write-up where the ask belongs — after the paragraph that sets it up, before the one that
+says what happens either way — and frizz renders the REGISTERED card in that slot instead of at the end.
+Name the row in the fence's info string, \` \`\`\`question qst_ab12cd34 \`, and the placement is exact; write
+the question again in the body and it is matched on the text. Either way ONE card renders, and it is the
+registered one, because answering that is what settles the row and un-gates \`done\`.
+
+Place them all. A question you no longer want answered is not one you leave out of the write-up — it is
+one you \`unask\`, which is the difference between deciding something yourself and quietly hoping nobody
+answers. Questions asked in one \`ask\` call render together, at your first fence for any of them: they
+send as one batch, so they cannot be scattered across the prose behind separate Send buttons.
+
+Fence a question you did NOT register only when you mean to ask it in the message itself.
 
 A \` \`\`\`question \` block IS the handback — do not also emit a \`done\`/\`awaiting\` fence. Answers arrive
 as your next user message, possibly as terse as "1: A, 2: B".`

@@ -640,3 +640,22 @@ test("heal: hasQuestionBlock and answerability agree on a healed message", () =>
   const text = "```question\nWhich?\n```\n- A. one\n- B. two"
   assert.equal(hasQuestionBlock(text), true)
 })
+
+test("an info-string `qst_…` token names the REGISTERED row this fence stands for", () => {
+  const a = splitQuestionBlocks("```question qst_6b9bdbe563fa\nCut 4.5.0 now?\n\n- A. Yes\n- B. No\n```")
+  assert.deepEqual(a, [{ kind: "question", text: "Cut 4.5.0 now?\n\n- A. Yes\n- B. No", questionKind: "question", danger: false, registeredId: "qst_6b9bdbe563fa" }])
+})
+
+test("the id rides beside the other tokens, and a fence without one carries no key at all", () => {
+  const withBoth = splitQuestionBlocks("```question multi qst_ab12cd34ef56\nWhich?\n- A. one\n- B. two\n```")
+  assert.deepEqual(withBoth, [{ kind: "question", text: "Which?\n- A. one\n- B. two", questionKind: "multi", danger: false, registeredId: "qst_ab12cd34ef56" }])
+  // Absent rather than undefined: a plain fence still deep-equals the shape it had before ids existed.
+  assert.deepEqual(splitQuestionBlocks("```question\nWhich?\n- A. one\n- B. two\n```"), [
+    { kind: "question", text: "Which?\n- A. one\n- B. two", questionKind: "question", danger: false },
+  ])
+})
+
+test("a token that only looks like an id is ignored, like every other unknown token", () => {
+  const a = splitQuestionBlocks("```question qst-not-an-id\nWhich?\n- A. one\n- B. two\n```")
+  assert.deepEqual(a, [{ kind: "question", text: "Which?\n- A. one\n- B. two", questionKind: "question", danger: false }])
+})
