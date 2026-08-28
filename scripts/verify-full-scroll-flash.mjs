@@ -1,26 +1,23 @@
-// Verify that scrolling BACK through a long thread on /thread/<slug>/full moves the content by exactly
-// what the reader asked for — no swallowed notches, no backward lurches.
+// Verify that a row-height correction while scrolling BACK through a long thread never PAINTS a frame
+// with the scroll offset corrected but the rows not yet moved.
 //
-// THE BUG THIS PINS. A row above the reader that has never been measured mounts at its ESTIMATE (108px
-// for a message row) and then corrects to its real height, which on a real thread is routinely 300-750px.
-// Each correction makes virtual-core compensate, and it writes that compensation as
-// `scrollTo(getScrollOffset() + delta)` — where `getScrollOffset()` is its OWN CACHED offset, refreshed
-// only when a scroll EVENT runs. Scroll events fire at the top of a frame and the ResizeObserver that
-// triggers the correction fires at the bottom of it, so everything the reader scrolled in between is
-// missing from that cached value and the write throws it away. The reader wheels and the transcript
-// does not move.
+// THE BUG THIS PINS. A row above the reader mounts at its ESTIMATE and corrects to its real height on a
+// ResizeObserver pass. virtual-core compensates by writing scrollTop inside that same pass — but the rows
+// below the corrected one are positioned by React (`translateY(start)`), and the re-render that moves
+// them is a plain `setState` from a non-React callback: a task that runs AFTER the frame paints. So the
+// frame between them is painted with the reader's content shoved by the whole correction (300-700px on
+// a real transcript), and the next frame snaps it back. That is the "re-rendering jitter" a reader sees
+// on every scroll-up through unmeasured history — and verify-full-scroll-jitter.mjs cannot see it,
+// because its per-frame samples read in rAF, after React has already caught up.
 //
-// The measurement is the reader's own invariant, not an internal one: scroll by a fixed step every frame
-// and one tracked row must travel by exactly that step every frame. A frame where it travels 0px is a
-// notch the transcript ate.
+// The probe hooks the scroller's own `scrollTo` (the app's scrollToFn writes through it) and measures a
+// tracked row's viewport position in a microtask right after the write — i.e. after the observer
+// callback has fully returned, in the state the browser is about to paint. A frame where the tracked row
+// sits somewhere other than where it was at the top of the frame, by more than the wheel step, is a flash.
 //
 // Usage — boot a disposable stack first (see .agents/skills/frizz-stack), then:
-//   node scripts/verify-full-scroll-jitter.mjs --home=… --url=… [--steps=200] [--step=40]
-//     [--source=/abs/real.jsonl] [--seed-lines=1200]
-//
-// `--source` replays a REAL transcript instead of the synthetic seed, the way
-// verify-full-replay-stability.mjs does — the shapes that actually break estimates (tool cards, code
-// blocks, screenshot results, sub-agent cards) are the ones a hand-built seed never produces.
+//   node scripts/verify-full-scroll-flash.mjs --home=… --url=… [--steps=300] [--step=40]
+//     [--source=/abs/real.jsonl] [--seed-lines=1200] [--label=…]
 import { execFileSync } from "node:child_process"
 import { existsSync, mkdirSync, writeFileSync, readFileSync, globSync } from "node:fs"
 import { basename, join } from "node:path"
@@ -32,11 +29,11 @@ const flags = Object.fromEntries(process.argv.slice(2).filter((a) => a.startsWit
 const { home, url } = flags
 const cwd = flags.cwd ?? process.cwd()
 const shotDir = flags.shots ?? tmpdir()
-const steps = Number(flags.steps ?? 200)
+const steps = Number(flags.steps ?? 300)
 const step = Number(flags.step ?? 40)
 const label = flags.label ?? "run"
 if (!home || !url) {
-  console.error("usage: node scripts/verify-full-scroll-jitter.mjs --home=… --url=…")
+  console.error("usage: node scripts/verify-full-scroll-flash.mjs --home=… --url=…")
   process.exit(1)
 }
 mkdirSync(shotDir, { recursive: true })
@@ -48,8 +45,8 @@ const db = existsSync(unifiedDb) ? unifiedDb : globSync(join(home, ".frizz/proje
 if (!db) throw new Error(`no ui.db under ${home}/.frizz`)
 const projectId = flags.projectId ?? basename(globSync(join(home, ".frizz/projects/*"))[0] ?? "")
 const hasProjectId = execFileSync("sqlite3", [db, "PRAGMA table_info(session)"], { encoding: "utf8" }).includes("|project_id|")
-const SLUG = "verify-scroll-jitter"
-const SESSION = "scrljit0-0000-4000-8000-000000000000"
+const SLUG = "verify-scroll-flash"
+const SESSION = "scrlfla0-0000-4000-8000-000000000000"
 const jsonlDir = join(home, ".claude", "projects", cwd.replace(/[/.]/g, "-"))
 mkdirSync(jsonlDir, { recursive: true })
 const jsonl = join(jsonlDir, `${SESSION}.jsonl`)
@@ -66,14 +63,10 @@ const assistant = (text, stop = null) => ({
 const prose = (paras, seedLabel) => Array.from({ length: paras }, (_, i) =>
   `**${seedLabel} ¶${i + 1}.** Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua, ut enim ad minim veniam quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.`).join("\n\n")
 
-// HEIGHT VARIANCE IS THE POINT. A transcript of uniform rows would let any estimate be right; the bug
-// only fires where the real height is far above the estimate, so the seed cycles one-liners against
-// multi-paragraph replies the way a real thread does. Kept under the 300-message projection cap so the
-// head trim (verify-full-window-slide.mjs) cannot confound the measurement.
+// Same seed as verify-full-scroll-jitter.mjs: height variance is the point, and a real transcript
+// (`--source`) has the shapes — tool cards, code blocks, screenshots — that blow the estimate the most.
 const seed = []
 if (flags.source) {
-  // Real records re-keyed onto this sandbox session; content, tool blocks and sidechain flags are left
-  // exactly as the worker wrote them.
   const raw = readFileSync(flags.source, "utf8").split("\n").filter((l) => l.trim().length > 0)
   for (const line of raw.slice(0, Number(flags["seed-lines"] ?? 1200))) {
     try {
@@ -93,7 +86,7 @@ if (flags.source) {
 }
 writeFileSync(jsonl, seed.map((r) => JSON.stringify(r)).join("\n") + "\n")
 execFileSync("sqlite3", [db, `INSERT OR REPLACE INTO session (${hasProjectId ? "project_id, " : ""}slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode)
-  VALUES (${hasProjectId ? `'${projectId}', ` : ""}'${SLUG}', '${SESSION}', 'frizz-${SLUG}', '${now()}', 'Scroll jitter', 'claude', 'opus', 'high', 'default')`])
+  VALUES (${hasProjectId ? `'${projectId}', ` : ""}'${SLUG}', '${SESSION}', 'frizz-${SLUG}', '${now()}', 'Scroll flash', 'claude', 'opus', 'high', 'default')`])
 const api = createRpcClient(url)
 
 let failures = 0
@@ -132,34 +125,60 @@ try {
     const scrollerTop = () => scroller.getBoundingClientRect().top
     const liveRows = () => Array.from(scroller.querySelectorAll("[data-transcript-row-key]")).filter((r) => r.dataset.transcriptSticky !== "true")
     const startedAt = scroller.scrollTop
-    const samples = []
     let key = null
-    let previousTop = null
-    let taken = 0
-    // Travel is the tracked row's own motion — NOT scrollTop, which a correction above the reader moves
-    // by the corrected row's whole growth (on a replayed real transcript, by more than the reader scrolls).
+    let frameTop = null
+    let corrections = 0
     let travelled = 0
-    // One scroll step per frame, and the tracked row's travel read at the top of the NEXT frame — so
-    // every sample is a painted frame, which is exactly what the reader perceives. `scrollBy` (not a
-    // synthesized wheel) because a synthesized WheelEvent does not scroll; the app's own reader-intent
-    // listeners are fed separately so the transcript classifies this as a gesture, not as growth.
+    let taken = 0
+    const flashes = []
+    const writes = []
+    // Heights by row key as of the top of the frame, so a flash can name the row that grew.
+    let heights = new Map()
+    const allRows = () => Array.from(scroller.querySelectorAll("[data-transcript-row-key]"))
+    const snapshotHeights = () => new Map(allRows().map((r) => [(r.dataset.transcriptSticky === "true" ? "STICKY " : "") + r.dataset.transcriptRowKey, Math.round(r.getBoundingClientRect().height)]))
+    const grownSince = (previous) => allRows().flatMap((r) => {
+      const k = (r.dataset.transcriptSticky === "true" ? "STICKY " : "") + r.dataset.transcriptRowKey
+      const h = Math.round(r.getBoundingClientRect().height)
+      const was = previous.get(k)
+      return was === undefined ? [`${k.slice(0, 24)}:new ${h}`] : was !== h ? [`${k.slice(0, 24)}:${was}→${h}`] : []
+    })
+    // The hook: every write the virtualizer makes through the app's scrollToFn lands here. The tracked
+    // row's position is read in a microtask, after the observer callback that wrote it has returned —
+    // the state the browser paints next.
+    const nativeScrollTo = Element.prototype.scrollTo
+    scroller.scrollTo = function (...args) {
+      const wasAt = this.scrollTop
+      nativeScrollTo.apply(this, args)
+      const wrote = Math.round(this.scrollTop - wasAt)
+      corrections++
+      const write = { frame: taken, wrote, asked: Math.round((args[0]?.top ?? args[1] ?? NaN) - wasAt), shove: null }
+      writes.push(write)
+      queueMicrotask(() => {
+        if (key === null || frameTop === null) return
+        const tracked = liveRows().find((r) => r.dataset.transcriptRowKey === key)
+        if (!tracked) return
+        const top = tracked.getBoundingClientRect().top - scrollerTop()
+        const shove = Math.round(top - frameTop)
+        write.shove = shove
+        // The reader's own step for this frame is at most `step`; anything beyond that is the correction
+        // painting on its own.
+        if (Math.abs(shove) > step + 6) flashes.push({ shove, wrote, scrollTop: Math.round(scroller.scrollTop), grew: grownSince(heights).slice(0, 6) })
+      })
+    }
     await new Promise((resolve) => {
       const frame = () => {
         const rows = liveRows()
-        const tracked = key ? rows.find((r) => r.dataset.transcriptRowKey === key) : null
+        let tracked = key ? rows.find((r) => r.dataset.transcriptRowKey === key) : null
+        // Travel is the tracked row's own motion between frames, read in rAF once React has caught up
+        // — NOT scrollTop, which a correction above the reader moves by the row's whole growth.
+        if (tracked && frameTop !== null) travelled += tracked.getBoundingClientRect().top - scrollerTop() - frameTop
         if (!tracked) {
-          // Re-pick whenever the tracked row leaves the render window. Mid-pane, so it survives a while.
           const middle = scrollerTop() + scroller.clientHeight * 0.5
-          const next = rows.find((r) => r.getBoundingClientRect().bottom > middle) ?? rows[0]
-          key = next?.dataset.transcriptRowKey ?? null
-          previousTop = next ? next.getBoundingClientRect().top - scrollerTop() : null
-          samples.push({ repick: true })
-        } else {
-          const top = tracked.getBoundingClientRect().top - scrollerTop()
-          samples.push({ moved: Math.round((top - previousTop) * 10) / 10, scrollTop: Math.round(scroller.scrollTop) })
-          travelled += top - previousTop
-          previousTop = top
+          tracked = rows.find((r) => r.getBoundingClientRect().bottom > middle) ?? rows[0]
+          key = tracked?.dataset.transcriptRowKey ?? null
         }
+        frameTop = tracked ? tracked.getBoundingClientRect().top - scrollerTop() : null
+        heights = snapshotHeights()
         scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -step, bubbles: true, cancelable: true }))
         Element.prototype.scrollBy.call(scroller, 0, -step)
         if (++taken >= steps || scroller.scrollTop <= 0) { resolve(); return }
@@ -167,32 +186,33 @@ try {
       }
       requestAnimationFrame(frame)
     })
-    const moves = samples.filter((s) => typeof s.moved === "number")
-    // A frame counts as jitter when the content did not travel the step the reader asked for. The 6px
-    // slack absorbs sub-pixel layout residue and the one-frame rounding of a fractional scrollTop.
-    const swallowed = moves.filter((s) => Math.abs(s.moved - step) > 6)
+    await new Promise((r) => setTimeout(r, 300))
+    delete scroller.scrollTo
     return {
       startedAt: Math.round(startedAt),
       endedAt: Math.round(scroller.scrollTop),
-      frames: moves.length,
+      frames: taken,
       travelled: Math.round(travelled),
-      repicks: samples.filter((s) => s.repick).length,
-      swallowed: swallowed.length,
-      worst: swallowed.slice().sort((a, b) => Math.abs(b.moved - step) - Math.abs(a.moved - step)).slice(0, 10).map((s) => ({ moved: s.moved, error: Math.round(s.moved - step), scrollTop: s.scrollTop })),
+      corrections,
+      writes,
+      flashes: flashes.length,
+      worst: flashes.slice().sort((a, b) => Math.abs(b.shove) - Math.abs(a.shove)).slice(0, 10),
     }
   }, { steps, step })
 
-  const rate = result.frames === 0 ? 1 : result.swallowed / result.frames
-  console.log(`${label}: ${result.swallowed}/${result.frames} frames swallowed (${(rate * 100).toFixed(1)}%), scrollTop ${result.startedAt} → ${result.endedAt}, ${result.repicks} re-picks`)
-  if (result.worst.length) console.log(`  worst: ${result.worst.map((w) => `${w.error > 0 ? "+" : ""}${w.error}px@${w.scrollTop}`).join(", ")}`)
+  console.log(`${label}: ${result.flashes} flash frames over ${result.frames} frames (${result.corrections} corrections), content travelled ${result.travelled}px, scrollTop ${result.startedAt} → ${result.endedAt}`)
+  if ("verbose" in flags) console.log(`  writes: ${result.writes.map((w) => `f${w.frame}:${w.wrote > 0 ? "+" : ""}${w.wrote}(asked ${w.asked > 0 ? "+" : ""}${w.asked}, shove ${w.shove})`).join(" ")}`)
+  if (result.worst.length) console.log(`  worst: ${result.worst.map((w) => `${w.shove > 0 ? "+" : ""}${w.shove}px@${w.scrollTop} (scrollTo wrote ${w.wrote > 0 ? "+" : ""}${w.wrote}; grew ${w.grew.join(" ")})`).join("\n         ")}`)
 
   check("the probe really travelled back through the transcript (not passing vacuously)",
-    result.frames >= steps * 0.8 && result.travelled > steps * step * 0.6,
+    result.frames >= steps * 0.8 && result.travelled > steps * step * 0.8,
     `frames=${result.frames} travelled=${result.travelled}px of ${steps * step} asked`)
-  check("scrolling back never swallows the reader's scroll",
-    rate <= 0.02, `${result.swallowed}/${result.frames} frames (${(rate * 100).toFixed(1)}%) moved by something other than ${step}px`)
+  check("the virtualizer actually corrected row heights along the way (the probe is exercised)",
+    result.corrections > 0, `corrections=${result.corrections}`)
+  check("no frame is painted with the correction applied but the rows not yet moved",
+    result.flashes === 0, `${result.flashes} flash frames`)
 
-  await page.screenshot({ path: join(shotDir, `scroll-jitter-${label}.png`) })
+  await page.screenshot({ path: join(shotDir, `scroll-flash-${label}.png`) })
   if (missing.length) console.log(`  404s (not failures): ${missing.slice(0, 5).join(", ")}`)
   check("no console or page errors", errors.filter((e) => !e.includes("status of 404")).length === 0, errors.slice(0, 3).join(" | "))
 } finally {

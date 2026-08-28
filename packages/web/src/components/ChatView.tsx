@@ -849,6 +849,9 @@ function VirtualizedThreadTranscript({
     return rows.findIndex((row) => row.kind === "message" && row.messageIndex === lastUserIdx)
   }, [lastUserIdx, rows, stickyUserMessage])
 
+  // The virtualizer's total-size box. Its height IS getTotalSize(), so observing it catches every way
+  // the transcript can grow: a row inserted at its estimate, and each later measurement correction.
+  const contentRef = useRef<HTMLDivElement>(null)
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => transcriptRef.current,
@@ -887,9 +890,17 @@ function VirtualizedThreadTranscript({
     // got to — and leave real destinations (`scrollToEnd`, `scrollToIndex`) absolute. `adjustments` is
     // set only on the correction path, and is a per-call delta: virtual-core folds it into its cached
     // offset and resets it to 0 immediately after each call, so it never accumulates across calls.
+    //
+    // And grow the box BEFORE the write. virtual-core sizes the row (so getTotalSize() already includes
+    // the growth) and writes the correction, and only then notifies — which is when the total-size box's
+    // height is updated. In between, the scroller's range is still the OLD total, so a correction near
+    // the tail is clamped at the old max: replayed, one asked for +1,913px and landed +1,040px, and the
+    // reader's content shoved 913px down and stayed there. Writing the fresh total first gives the
+    // correction the range it needs; the notify then writes the same value again, which is a no-op.
     scrollToFn: (offset, { adjustments, behavior }, instance) => {
       const element = instance.scrollElement
       if (!element) return
+      if (adjustments !== undefined && contentRef.current) contentRef.current.style.height = `${instance.getTotalSize()}px`
       element.scrollTo({ top: adjustments === undefined ? offset : element.scrollTop + adjustments, behavior })
     },
     // THE FLASH FRAME — why scrolling back through a long thread looks like it re-renders under you.
@@ -904,13 +915,23 @@ function VirtualizedThreadTranscript({
     // 2,276px for a frame — the "crazy jitter" scrolling up, which the per-frame jitter probe never saw
     // because it samples in rAF, after React has caught up.
     //
-    // With direct DOM updates the adapter writes each row's transform and the container's height itself,
-    // inside the same `onChange` the correction fires from, so the rows move in the frame the offset
-    // does; React then re-renders only when the visible range changes. The inline `translateY` below is
-    // still rendered so a row is positioned from its first paint. The hoisted pinned row is registered
-    // for measurement like any other, so the adapter would write a transform on it too — which would
-    // break its `position: sticky`; its `!transform-none` class outranks that inline write.
-    directDomUpdates: true,
+    // So move the rows in the same callback the correction fires from. `sync` is true only from the
+    // scroll listener, where the adapter has already flushed React synchronously; every other notify —
+    // above all a measurement — is the asynchronous one, and this writes the rows' fresh starts and the
+    // box's total straight into the DOM before the frame paints. React's own re-render then lands the
+    // identical values. The same `translateY` as the render, deliberately: the adapter's own
+    // `directDomUpdates` writes `translate3d`, which promotes every row to a compositor layer, and it
+    // writes the pinned row too, which breaks its `position: sticky` — that row is hoisted into flow, so
+    // it is skipped here by its marker.
+    onChange: (instance, sync) => {
+      if (sync) return
+      const content = contentRef.current
+      if (content) content.style.height = `${instance.getTotalSize()}px`
+      for (const item of instance.getVirtualItems()) {
+        const element = instance.elementsCache.get(item.key)
+        if (element instanceof HTMLElement && element.dataset.transcriptSticky !== "true") element.style.transform = `translateY(${item.start}px)`
+      }
+    },
   })
   const [atEnd, setAtEnd] = useState(true)
   // Tail-follow state, in refs because syncTailFollow runs from layout/observer/listener callbacks that
@@ -918,9 +939,6 @@ function VirtualizedThreadTranscript({
   const followingTailRef = useRef(true)
   const tailHeightRef = useRef(-1)
   const readerScrollUntilRef = useRef(0)
-  // The virtualizer's total-size box. Its height IS getTotalSize(), so observing it catches every way
-  // the transcript can grow: a row inserted at its estimate, and each later measurement correction.
-  const contentRef = useRef<HTMLDivElement>(null)
   const tailReadyRef = useRef(false)
   const readerMovedRef = useRef(false)
   const nearTopLoadArmedRef = useRef(true)
@@ -1270,16 +1288,10 @@ function VirtualizedThreadTranscript({
   // `measurementsCache` is the PUBLIC field holding what the private getMeasurements() returns; reading
   // it here is safe because getVirtualItems() above already forced the memoized measure pass this render.
   const stickyStart = stickyMessageRow ? virtualizer.measurementsCache[stickyRowIndex]?.start ?? 0 : 0
-  // The total-size box is both this component's settle observer target (contentRef) and the adapter's
-  // direct-update container (containerRef, which writes its height). One callback ref feeds both.
-  const contentAndContainerRef = useCallback((node: HTMLDivElement | null) => {
-    contentRef.current = node
-    virtualizer.containerRef(node)
-  }, [virtualizer])
 
   return (
     <div
-      ref={contentAndContainerRef}
+      ref={contentRef}
       data-virtualized-transcript
       data-virtual-row-count={virtualItems.length}
       className="relative w-full"
@@ -1310,7 +1322,7 @@ function VirtualizedThreadTranscript({
             data-transcript-row-key={stickyMessageRow.key}
             data-transcript-source-id={stickyMessageRow.message.sourceId}
             data-transcript-sticky="true"
-            className="group/ts pointer-events-none [&>*]:pointer-events-auto sticky top-0 z-[9] flex w-full flex-col pt-3 pb-1.5 !transform-none"
+            className="group/ts pointer-events-none [&>*]:pointer-events-auto sticky top-0 z-[9] flex w-full flex-col pt-3 pb-1.5"
           >
             {/* This wrapper is the reading's containing block, and it carries the `px-6` rather than the
                 band above it — because `MessageStamp` is positioned on BOTH axes (`top-full`,
