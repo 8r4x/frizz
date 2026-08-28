@@ -33,13 +33,22 @@ const pickKey = (id: string, path: string) => `${id}|${path}`
 
 export function RegisteredQuestionStack({
   thread,
+  questions: only,
+  showInFlight = true,
   className = "",
 }: {
   thread: ThreadView | undefined
+  // WHICH of the thread's open questions this mount draws. Every surface now places a question at the
+  // REST IT WAS ASKED AT rather than at the transcript's tail (lib/questionAnchor), so one thread can
+  // have several of these mounted at different depths — each handed its own group.
+  questions?: readonly RegisteredQuestionView[]
+  // The in-flight ANSWER belongs to the tail wherever the questions sit: it is the human's newest turn,
+  // and the delivered copy of it lands at the tail a second later. Only the tail mount draws it.
+  showInFlight?: boolean
   className?: string
 }) {
   const slug = thread?.id
-  const questions = thread?.questions ?? []
+  const questions = only ?? thread?.questions ?? []
   const projectDir = useProjectDir()
   const [picks, setPicks] = useState<Picks>(() => new Map())
   const [error, setError] = useState<string>()
@@ -101,7 +110,7 @@ export function RegisteredQuestionStack({
   // The board composes the bytes the delivery will carry, and this parses them with the reader the chat
   // uses on the landed turn — so the in-flight card and the real one are the SAME card and the swap is
   // invisible. Dimmed while it is in flight, exactly like an optimistic follow-up bubble.
-  const inFlight = thread?.answersInFlight ? parseAnswersCard(thread.answersInFlight) : null
+  const inFlight = showInFlight && thread?.answersInFlight ? parseAnswersCard(thread.answersInFlight) : null
   if (!slug || questions.length === 0) {
     if (!slug || !inFlight) return null
     return (

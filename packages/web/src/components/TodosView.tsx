@@ -1,7 +1,7 @@
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useSnapshot } from "valtio"
 import { ChevronsUpDown, Hourglass, Inbox } from "lucide-react"
-import type { ThreadView, BoardSnapshot, TranscriptMessage } from "@frizz/shared"
+import type { ThreadView, BoardSnapshot, RegisteredQuestionView, TranscriptMessage } from "@frizz/shared"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { queueCardTargetY, showToast } from "../store.ts"
 import { pageScrollY } from "../lib/pageScrollLock.ts"
@@ -15,6 +15,7 @@ import { showsRegisteredDoneCard } from "../lib/registeredDone.ts"
 import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { collapseMiddleRuns, opensQueueSegment, queueCollapseSegments, segmentFolds, supersededAskIndices, survivesQueueCollapse } from "../lib/queueCollapse.ts"
 import { pairAllAnswers } from "../lib/answersMessage.ts"
+import { questionsByAnchor } from "../lib/questionAnchor.ts"
 import { FenceCard, Message, PermPolicyDenialCard, PermPromptBanner, PendingAskCard, StickyUserBand, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText, lastAssistantIndex } from "./ChatView.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_TOP, CARD_ACTION_EXPLAINER, CARD_PRIMARY_ACTION } from "./TranscriptCard.tsx"
 import { AwaitingBackgroundCard, showsRestingCard } from "./AwaitingBackgroundCard.tsx"
@@ -961,6 +962,21 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
     () => coalesceToolActivityMessages(visible).map((entry) => ({ ...entry, messageIndex: entry.messageIndex + visibleStart })),
     [visible, visibleStart],
   )
+  // WHERE EACH OPEN QUESTION SITS: at the rest it was asked at, keyed by index into the FULL message
+  // list (the loop below carries that index as `globalIdx`). `tail` is the ordinary case — the worker
+  // asked and rested — and keeps the placement this card has always had, above the composer.
+  const questionAnchors = useMemo(() => {
+    const tail: RegisteredQuestionView[] = []
+    const byAnchor = new Map<number, RegisteredQuestionView[]>()
+    const tailAnchor = messages.length - 1
+    for (const [anchor, group] of questionsByAnchor(messages, thread?.questions ?? [])) {
+      if (anchor >= tailAnchor) { tail.push(...group); continue }
+      const at = byAnchor.get(anchor)
+      if (at) at.push(...group)
+      else byAnchor.set(anchor, [...group])
+    }
+    return { byAnchor, tail }
+  }, [messages, thread?.questions])
   const hasMore = visibleStart > 0 || q.data?.hasEarlier === true
 
   useLayoutEffect(() => {
@@ -1313,6 +1329,25 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
               const base = visibleStart
               const out: ReactNode[] = []
               let prevTailIsMeta: boolean | null = null
+              // A REGISTERED question renders at the rest it was ASKED at, not at the card's tail — the
+              // same rule the thread view follows (lib/questionAnchor). Pending groups are flushed after
+              // the first rendered row at or past their anchor, so a group whose anchor was a message this
+              // card does not draw (or one above the window) still lands above what came after it.
+              const pending = [...questionAnchors.byAnchor.entries()].sort((a, b) => a[0] - b[0])
+              const flushQuestions = (globalIdx: number) => {
+                while (pending.length > 0 && pending[0][0] <= globalIdx) {
+                  const [anchor, group] = pending.shift()!
+                  if (prevTailIsMeta !== null) out.push(<VSpace key={`qa-space-${anchor}`} h={STEP} />)
+                  out.push(
+                    <RegisteredQuestionStack key={`qa-${anchor}`} thread={thread} questions={group} showInFlight={false} />,
+                  )
+                  prevTailIsMeta = false
+                }
+              }
+              // A rest ABOVE this card's window — which is cut at the previous rest, so it is the common
+              // case for a question the human replied past — flushes FIRST. Anywhere later would put the
+              // card under the very messages it predates, which is the whole defect.
+              flushQuestions(base - 1)
               // Higher-level turn collapse, ONE FOLD PER RUN. Each segment is [what re-invoked the agent
               // → the prose it rested on]: its opening and closing prose render TEXT ONLY, and everything
               // else in the run — the fully-hidden middle messages, the tool bands batched into those two,
@@ -1434,6 +1469,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                   )
                   // Text-only → the row ends in prose (tool band dropped), so the next gap is a full STEP.
                   prevTailIsMeta = false
+                  flushQuestions(globalIdx)
                   return
                 }
                 if (prevTailIsMeta !== null) out.push(<VSpace key={`s${i}`} h={prevTailIsMeta && messageHeadIsMeta(m) ? 6 : STEP} />)
@@ -1464,6 +1500,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                   ),
                 )
                 prevTailIsMeta = messageTailIsMeta(m)
+                flushQuestions(globalIdx)
               })
               // Queued (optimistic) messages pinned to the bottom, same as the drawer.
               visible.forEach((m, i) => {
@@ -1520,7 +1557,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
           is a gate on a turn already in flight. The tail IS the context for the question, so the card
           reads top to bottom: what happened, then what the worker needs decided, then the prompt box.
           It carries its own Send answers verb, so it sits above the fence path's identical button. */}
-      <RegisteredQuestionStack thread={thread} className="shrink-0 px-5 pb-4 pt-0" />
+      <RegisteredQuestionStack thread={thread} questions={questionAnchors.tail} className="shrink-0 px-5 pb-4 pt-0" />
       {/* Bottom of the card. Answerable question blocks add a "Send answers" action that composes the
           per-block answers into one reply — but the free-form composer stays PRESENT underneath it
           (maintainer 2026-07-22): answering the question is the primary path, not the only one, and
