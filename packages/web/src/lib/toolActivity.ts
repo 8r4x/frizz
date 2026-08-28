@@ -397,11 +397,18 @@ export function liveRuntimeStartedAt(entries: readonly ToolActivityMessage[]): s
  * spanning minutes carries the instant the run FINISHED. A reader hovering a band asks when it started —
  * the same reading `liveRuntimeStartedAt` gives the runtime slot's clock, and the same precedence.
  *
- * Only a run that still has a tool tail can have walked its `at`, so everything else falls straight
- * through and reads its own instant.
+ * No tail check, and a tail check would be WRONG. While the turn runs, `historicalToolActivityMessages`
+ * strips the live tail off the run's opener — a prose-bearing opener survives that stripping with its
+ * walked-forward `at` intact but no tail left, so a guard would fail on exactly the entry it is meant
+ * to catch and the reading would rewind by the run's whole length the moment the turn settled (measured
+ * 2026-08-28 against the real module: a run opening 10:00 and folding batches through 10:09 read 10:09
+ * live, 10:00 settled). `runStartedAt` is set at `coalesceToolActivityMessages` on exactly the entries
+ * whose `at` can be walked, and equals `message.at` when nothing folds in, so the unguarded form is a
+ * no-op on every other row. (`liveRuntimeStartedAt` still needs its guard — it asks the different
+ * question of whether a run is live NOW.)
  */
 export function toolActivityStampAt(entry: ToolActivityMessage): string | undefined {
-  return messageToolTail(entry.message) ? entry.runStartedAt ?? entry.message.at : entry.message.at
+  return entry.runStartedAt ?? entry.message.at
 }
 
 function withoutLiveToolTail(message: ChatMessage): ChatMessage {
