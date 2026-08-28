@@ -4,7 +4,7 @@ import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ThreadView } from "@frizz/shared"
-import { ThreadRow } from "./Sidebar.tsx"
+import { ThreadRow, sessionIndicatorFor } from "./Sidebar.tsx"
 import { TooltipProvider } from "./Tooltip.tsx"
 
 // The HELD row's glyph when a PR is what the thread is actually waiting on (`prs:` since the 2026-08-24
@@ -112,4 +112,32 @@ test("a usage-limit park keeps the hourglass even when the fence carries a watch
   } as unknown as Partial<ThreadView>)
   assert.match(html, HOURGLASS)
   assert.doesNotMatch(html, GITHUB)
+})
+
+// THE RESTING CARD'S EVENT-SNOOZE reaches Snoozed too (groups.ts isSnoozed, 2026-08-28), and it has no
+// instant to name: the popover says what ends the park instead, in the words the card's own toast used.
+// The tooltip body is not in static markup (Radix mounts it on hover), so the tip is read off
+// sessionIndicatorFor, which is the same derivation the row renders.
+test("a PR-watching thread event-snoozed off its resting card wears GitHub's mark and names its wake", () => {
+  const t = {
+    bgSnoozed: true,
+    awaitingBackground: true,
+    lastFence: { kind: "awaiting", body: "Approved, CI green.", hints: [watch("acme/app#391")] },
+  } as Partial<ThreadView>
+  const html = row(t)
+  assert.match(html, GITHUB)
+  assert.doesNotMatch(html, HOURGLASS)
+  assert.equal(sessionIndicatorFor({ ...base, id: "watching-thread", ...t } as ThreadView).tip, "Snoozed until the background work returns — waiting on acme/app#391\n\nApproved, CI green.")
+})
+
+test("a shell-only rest event-snoozed off its resting card wears the shell's dashed circle, not the hourglass", () => {
+  const t = {
+    bgSnoozed: true,
+    awaitingBackground: true,
+    bgShells: [{ label: "vite dev", startedAt: "2026-08-28T00:00:00.000Z", state: "running", id: "s1" }],
+  } as Partial<ThreadView>
+  const html = row(t)
+  assert.match(html, /lucide-circle-dashed/)
+  assert.doesNotMatch(html, HOURGLASS)
+  assert.equal(sessionIndicatorFor({ ...base, id: "watching-thread", ...t } as ThreadView).tip, "Snoozed until the background work returns")
 })

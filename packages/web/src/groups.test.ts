@@ -251,9 +251,11 @@ test("partitionActive: NOTHING in the running band has a queue card, and every c
     thread({ ...base, id: "own-turn", runtime: "running", needsYou: false }),
     thread({ ...base, id: "spawning", runtime: "spawning", needsYou: false }),
     thread({ ...base, id: "rested-on-child", runtime: "turn-idle", needsYou: false, awaitingBackground: true, subAgents: liveSub }),
-    // Shell-only, EVENT-SNOOZED — the one shape that still bands here since shells re-queued on
-    // 2026-08-04. Its unsnoozed twin is `queued-on-shell` below.
-    thread({ ...base, id: "snoozed-on-shell", runtime: "turn-idle", needsYou: false, awaitingBackground: true, bgShells: liveShell }),
+    // Shell-only and EXCUSED from the queue with no card — the shape the server produced for an
+    // event-snoozed shell rest until 2026-08-28. An event-snoozed one now carries `bgSnoozed` and sections
+    // to Snoozed before partitionActive ever sees it; a cardless one that is NOT snoozed still bands here.
+    // Its queued twin is `queued-on-shell` below.
+    thread({ ...base, id: "excused-on-shell", runtime: "turn-idle", needsYou: false, awaitingBackground: true, bgShells: liveShell }),
     thread({ ...base, id: "queued-on-shell", runtime: "turn-idle", needsYou: true, awaitingBackground: true, bgShells: liveShell }),
     thread({ ...base, id: "bare-rest", runtime: "turn-idle", needsYou: true }),
     thread({ ...base, id: "asking", runtime: "turn-idle", needsYou: true, pendingQuestion: true }),
@@ -278,7 +280,7 @@ test("partitionActive: NOTHING in the running band has a queue card, and every c
   for (const t of rested) assert.equal(queued(t), true, `${t.id} sits in the cue with no queue card behind it`)
   // …and the rested-with-live-work rows are exactly the ones that made this worth pinning: the excused
   // child and the snoozed shell band on top, while the QUEUED shell sits below the rule with its card.
-  assert.deepEqual(running.map((t) => t.id), ["own-turn", "spawning", "rested-on-child", "snoozed-on-shell", "excused-at-rest"])
+  assert.deepEqual(running.map((t) => t.id), ["own-turn", "spawning", "rested-on-child", "excused-on-shell", "excused-at-rest"])
 })
 
 // ── THE STALLED/RETRY CONTRACT ────────────────────────────────────────────────────────────────────
@@ -926,4 +928,48 @@ test("sessionIndicatorKind: an armed timer park keeps the dot", () => {
   // Queued (unsnoozed), the mark still states the armed wake — exactly as a queued shell rest keeps its
   // dot while the BAND moves to the queue's own.
   assert.equal(sessionIndicatorKind(thread({ kind: "session", runtime: "turn-idle", awaitingBackground: true, needsYou: true, watches: [timerRow] })), "background")
+})
+
+// THE RESTING CARD'S EVENT-SNOOZE PARKS THE ROW IN SNOOZED. The click sets `bgSnoozed` and takes the queue
+// card away, but the server keeps `awaitingBackground` TRUE across it (the flag states what the thread
+// waits on; a snooze does not change that) — and isSnoozed's first gate read that flag through hasLiveOps,
+// so the snoozed row stayed in the Active band, undimmed, wearing an at-rest mark. Reported 2026-08-28 on
+// a thread parked on a green PR: "It's resting and snoozed, and for some reason it's in the actively
+// running rail instead of a snoozed rail".
+test("isSnoozed: an event-snoozed rest parks in Snoozed — behind a PR watch, a shell, or nothing fenced at all", () => {
+  const greenPr = thread({
+    kind: "session", state: "open", runtime: "turn-idle", needsYou: false, awaitingBackground: true, bgSnoozed: true,
+    lastFence: { kind: "awaiting", body: "Waiting on the merge.", hints: [{ kind: "pr", value: "o/r#1" }] },
+    watches: [{
+      id: "github:t:o/r#1", kind: "github", target: "o/r#1", state: "armed", createdAt: "2026-08-28T00:00:00.000Z",
+      github: { checks: "passing", running: 0, passed: 7, failed: 0, failing: [], merge: "mergeable", state: "open", polledAt: "2026-08-28T00:00:00.000Z" },
+    }],
+  })
+  assert.equal(isSnoozed(greenPr), true)
+  assert.equal(sectionOf(greenPr), "snoozed")
+  assert.equal(sessionIndicatorKind(greenPr), "snoozed", "the park mark, not the dot and not the ellipsis")
+  // A shell-only rest cards without a fence, and its snooze is the same click.
+  const shellOnly = thread({ kind: "session", state: "open", runtime: "turn-idle", needsYou: false, awaitingBackground: true, bgSnoozed: true, bgShells: [shell()] })
+  assert.equal(sectionOf(shellOnly), "snoozed")
+  assert.equal(sessionIndicatorKind(shellOnly), "snoozed")
+  // UNSNOOZED, the same two shapes read exactly as before: the queued one below the rule with its own
+  // mark, the excused-but-cardless one in the Active band.
+  assert.equal(sectionOf({ ...greenPr, bgSnoozed: undefined, needsYou: true }), "active")
+  assert.equal(sessionIndicatorKind({ ...greenPr, bgSnoozed: undefined, needsYou: true }), "rest")
+  assert.equal(sectionOf({ ...shellOnly, bgSnoozed: undefined }), "active")
+  assert.equal(sessionIndicatorKind({ ...shellOnly, bgSnoozed: undefined }), "background")
+})
+
+test("isSnoozed: the event-snooze yields to a live sub-agent, a queue reason, and a running turn", () => {
+  const base = { kind: "session" as const, state: "open" as const, runtime: "turn-idle" as const, needsYou: false, awaitingBackground: true, bgSnoozed: true, bgShells: [shell()] }
+  // A child's return re-invokes the parent within seconds: that row spins in Active, snooze or not
+  // (maintainer 2026-07-10: "when an agent is merely awaiting its own sub-agents, we should NOT dim it").
+  const withChild = thread({ ...base, subAgents: liveSub })
+  assert.equal(isSnoozed(withChild), false)
+  assert.equal(sessionIndicatorKind(withChild), "working")
+  // A stale `bgSnoozed` beside a fresh ask never hides the ask.
+  assert.equal(isSnoozed(thread({ ...base, needsYou: true, pendingQuestion: true })), false)
+  // And it never dims a turn that is actually in flight.
+  assert.equal(isSnoozed(thread({ ...base, runtime: "running" })), false)
+  assert.equal(sessionIndicatorKind(thread({ ...base, runtime: "running" })), "working")
 })

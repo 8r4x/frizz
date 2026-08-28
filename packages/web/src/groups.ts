@@ -351,12 +351,14 @@ function hasLiveSubAgents(t: ThreadView): boolean {
 // `awaitingBackground` is the ONE exception, and it is not `bgShells` by another name: it is SERVER
 // truth (board.deriveAwaitingBackground) meaning "at rest, its own dispatched work is still live, and
 // nothing harder outranks that". Reading it here is what keeps the bands honest for a thread with no
-// queue card behind it — the server excuses a rest on a live SUB-AGENT from the queue (2026-07-30), and
-// an event-snoozed shell-only rest is cardless too, so without this a live-but-cardless row would fall
-// into the RESTED band, which is the queue-ordered band, with nothing behind it: the exact 2026-07-29
-// report, "showing up as a rested thread in my sidebar, yet there's no card for it". (An UNsnoozed
-// shell-only rest DOES card since 2026-08-04, and `needsYou` then bands it below the rule regardless —
-// see inActiveBand. This flag decides nothing for it beyond keeping it out of Snoozed.)
+// queue card behind it — the server excuses a rest on a live SUB-AGENT from the queue (2026-07-30), so
+// without this a live-but-cardless row would fall into the RESTED band, which is the queue-ordered band,
+// with nothing behind it: the exact 2026-07-29 report, "showing up as a rested thread in my sidebar, yet
+// there's no card for it". (That report was an EVENT-SNOOZED shell-only rest, which is cardless too; since
+// 2026-08-28 that one parks in Snoozed instead — isSnoozed reads `bgSnoozed` ahead of this flag — so this
+// flag no longer bands it. An UNsnoozed shell-only rest DOES card since 2026-08-04, and `needsYou` then
+// bands it below the rule regardless — see inActiveBand. This flag decides nothing for it beyond keeping
+// it out of Snoozed.)
 //
 // It does NOT re-spin finished threads. What the row reads as is a separate decision made downstream in
 // sessionIndicatorKind, and a shell-only rest gets the quiet pulsing dot there, never the spinner — the
@@ -437,7 +439,20 @@ export function futureSnoozedUntil(
 // it carries the same explicit future ISO instant. A live child/Monitor wins, and archived rows go Done.
 export function isSnoozed(t: ThreadView, nowMs = Date.now()): boolean {
   const userSnooze = futureSnoozedUntil(t, nowMs) !== undefined
-  if (t.state === "archived" || hasLiveOps(t)) return false
+  if (t.state === "archived") return false
+  // THE RESTING CARD'S EVENT-SNOOZE IS A PARK THE HUMAN MADE, and it parks into Snoozed exactly as the
+  // wall-clock snooze does. It arrives as `bgSnoozed` (server truth: bg_snooze_rested_at equals the
+  // current rest) on a thread resting behind a shell, a PR watch or a timer — the three shapes whose
+  // queue card carries that snooze. Until 2026-08-28 the gate below read `hasLiveOps` alone, and that
+  // predicate reads `awaitingBackground`, which the server keeps TRUE across the snooze (the flag states
+  // what the thread waits on, and a snooze does not change that) — so the click took the card away and
+  // left the row in the Active band, undimmed, wearing an at-rest mark. Reported on a thread parked on a
+  // green PR (maintainer 2026-08-28: "It's resting and snoozed, and for some reason it's in the actively
+  // running rail instead of a snoozed rail"). A live SUB-AGENT still wins, as it does over every park:
+  // a child's return re-invokes the parent within seconds, so that row keeps spinning in Active
+  // (maintainer 2026-07-10, "when an agent is merely awaiting its own sub-agents, we should NOT dim it").
+  const eventSnooze = t.bgSnoozed === true && t.runtime === "turn-idle"
+  if (hasLiveSubAgents(t) || (hasLiveOps(t) && !eventSnooze)) return false
   // A user-owned snooze deliberately wins over a concrete ask, permission prompt, or crash. Those
   // states still exist in the transcript/runtime and re-enter Queue at the exact wake deadline; the
   // snooze merely parks their presentation until then. Mid-turn work keeps spinning in the Active band,
@@ -453,6 +468,9 @@ export function isSnoozed(t: ThreadView, nowMs = Date.now()): boolean {
   // auto-resume promise there is no armed wake, so it is NOT snoozed: it falls through to the queue as
   // work only the human will restart.
   if (t.limitPause?.autoResume) return true
+  // The event-snooze needs no fence behind it: a shell-only rest cards without one and its snooze is the
+  // same click. It expires by itself at the thread's next rest, which is the wake the human asked for.
+  if (eventSnooze) return true
   // THE SERVER ALREADY DECIDED THIS, and the client must not re-derive it. A park is honoured only when
   // every item the fence names is still live — checked against telemetry and the registries, which the
   // browser cannot see (board.hasDeclaredBackgroundPark). What reaches here is that verdict: the server
@@ -510,8 +528,9 @@ function restedQueueHandoff(t: ThreadView): boolean {
 // "if a thread has rested and the only thing remaining is background shells, we should put it into the
 // queue"), so `needsYou` drops its row below the rule into the rested band — and the dot stays, because
 // it is the one thing that tells that row apart from an ordinary bare rest at a glance. Snoozing the
-// card sends it back to the running band with the same dot, which is exactly what a snooze should look
-// like: still alive, no longer asking.
+// card parks it in the dimmed Snoozed band (isSnoozed reads `bgSnoozed`). Until 2026-08-28 the snooze
+// sent it back to the running band with the same dot — "still alive, no longer asking" — and the
+// maintainer read that as a row the snooze had not touched at all.
 //
 // A LIVE SUB-AGENT IS DELIBERATELY EXCLUDED (maintainer, same day: "this should not show up if there
 // are sub-agents"), and the two are genuinely different states rather than two flavours of one. A

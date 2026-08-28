@@ -809,10 +809,10 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     // never parks itself — parkedAwaitingHint excludes it so a watch stays a visible queue handoff — so
     // the rows that reach here are the ones parked ANYWAY: one the human snoozed on a wall clock, and,
     // until the 2026-08-15 grammar deleted the kind, one whose worker co-declared a `human:` gate
-    // beside the watch. (Until
-    // 2026-08-13 the commonest source was the awaiting card's own "PR watcher armed" Snooze; that
-    // control is gone, and the resting card's event-snooze that replaced it drops the queue card
-    // without parking the thread in Snoozed.) All were previously indistinguishable from a plain timer park.
+    // beside the watch — and, since 2026-08-28, one the human snoozed off the RESTING card (the
+    // event-snooze that replaced the awaiting card's own "PR watcher armed" Snooze on 2026-08-13; it
+    // dropped the queue card without parking the thread until isSnoozed learned to read `bgSnoozed`).
+    // All were previously indistinguishable from a plain timer park.
     const watched = t.lastFence?.kind === "awaiting" ? prWatchRefs(t.lastFence.hints) : []
     const parkMark = watched.length > 0 ? github : hourglass
     // A snoozed row carries its whole "what it is waiting for" story HERE, in the popover — the rail row itself
@@ -834,8 +834,15 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
       const at = t.limitPause.resumesAt ? formatAutoSnoozedUntil(new Date(t.limitPause.resumesAt * 1000).toISOString()) : null
       return { node: hourglass, tip: at ? `${at} — ${which} reached` : `Auto-snoozed until the ${which} resets` }
     }
+    // THE RESTING CARD'S EVENT-SNOOZE (isSnoozed, 2026-08-28). No instant to name: it expires by itself
+    // the moment the thread next comes to rest, which is when the work it hid has reported back — so
+    // the state reads the way the card's own toast did when it was clicked. A fence, when there is
+    // one, still supplies the clause and the glyph below; a shell-only rest has no fence, and its snooze
+    // wears the shell's dashed circle rather than the hourglass, because nothing here is on a clock.
+    const eventSnoozed = t.bgSnoozed === true ? "Snoozed until the background work returns" : null
     // Canonical blocked+timer status can arrive from an older/pre-session snapshot without a fence.
     if (t.lastFence?.kind !== "awaiting") {
+      if (eventSnoozed) return { node: <StatusBox><CircleDashed size={10} className="text-muted/70" /></StatusBox>, tip: eventSnoozed }
       const timed = typeof t.revalidate === "string" ? formatAutoSnoozedUntil(t.revalidate) : null
       return { node: hourglass, tip: timed ?? "Auto-snoozed until a scheduled check" }
     }
@@ -855,7 +862,7 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
       : hk === "shell" || hk === "agent"
         ? <StatusBox><CircleDashed size={10} className="text-muted/70" /></StatusBox>
         : <StatusBox><Clock size={9} className="text-muted/70" /></StatusBox>
-    return { node: mark, tip: popover(t, "Snoozed") }
+    return { node: mark, tip: popover(t, eventSnoozed ?? "Snoozed") }
   }
   // At rest (no fence, nothing pending) with the process still ALIVE — a worker that came to rest
   // WITHOUT declaring done or a machine-wait, and with NOTHING it launched still running (that is the
