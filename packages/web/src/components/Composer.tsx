@@ -56,6 +56,24 @@ const SKILL_SOURCE_LABEL: Record<NonNullable<ThreadSkill["source"]>, string> = {
   plugin: "plugin",
 }
 
+// The inline context row's grid (see the `context` prop). The chip is 20px tall so it sits inside a
+// 13px/leading-relaxed text line (21.125px) with a hair of air above and below. Two gaps, because a
+// pill paints its whole box and a letter does not: chip→chip is 6px of box AND of ink (the border is
+// the ink), while the prose's first glyph carries its own side bearing, so the text-side gap gives
+// that bearing back. Measured 2026-08-28 in the running app (scan of the first line at dsf 4): with
+// both at 6px the eye read 6.00px chip→chip against 7.00px chip→"H" in sans and 6.50px in mono; at 5px
+// the text side reads 6.00 / 5.50 — inside the ±0.75px noise floor of a bearing that differs per
+// letter anyway.
+export const CONTEXT_CHIP_HEIGHT = 20
+const CONTEXT_CHIP_GAP = 6
+const CONTEXT_TEXT_GAP = 5
+
+// Auto-grow: reset to auto, then snap to content height clamped at maxHeight.
+function snapHeight(el: HTMLTextAreaElement, maxHeight: number): void {
+  el.style.height = "auto"
+  el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`
+}
+
 export function Composer({
   value,
   onChange,
@@ -90,11 +108,16 @@ export function Composer({
   // Rendered INSIDE the box along its bottom edge (the dispatch form's inline mode/model/effort
   // readouts). The textarea auto-grows above it; the footer strip is always reserved.
   footer?: React.ReactNode
-  // STAGED CONTEXT, rendered INSIDE the box along its top edge, above the text — the ⌘I selection
-  // chips (ThreadComposerBox passes ComposerContextChips). Inside the border rather than a row above
-  // it, so the prompt reads as one unit: "these quotes, plus this text" (maintainer 2026-08-27:
-  // "they should be inline chips inside of the prompt box"). Renders nothing when there is nothing
-  // staged, so the box keeps its compact single-row shape.
+  // STAGED CONTEXT — the ⌘I selection chips (ThreadComposerBox passes ComposerContextChips) — laid
+  // INLINE with the text: the chips open the first line and the prose flows on after the last one,
+  // the way an @-mention token sits in a chat box. A row of pills above the text inside the border was
+  // tried first and read as a LABEL of the box, not as part of the message (maintainer 2026-08-27:
+  // "they should be inline chips inside of the prompt box"; 2026-08-28: "this is just rendering as a
+  // label"). A <textarea> cannot host inline elements, so the node renders in an overlay pinned to the
+  // textarea's text origin and the textarea gets a matching `text-indent` (first line only — exactly
+  // the line the chips occupy) plus enough extra top padding for any chip rows that wrapped above it.
+  // CONTRACT for the node: each chip is a `[data-context-chip]` element `CONTEXT_CHIP_HEIGHT` px tall;
+  // Composer owns the row (wrap, gaps, line pitch). Renders nothing when nothing is staged.
   context?: React.ReactNode
   // A small action rendered just LEFT of the send button (the dispatch composer's GitHub-picker icon).
   // Only surfaces that pass it get it; reply/queue composers omit it.
@@ -119,6 +142,7 @@ export function Composer({
   onInterruptSubmit?: () => void
 }) {
   const taRef = useRef<HTMLTextAreaElement>(null)
+  const contextRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const [dragging, setDragging] = useState(false)
   const [uploading, setUploading] = useState(false)
@@ -219,7 +243,7 @@ export function Composer({
     requestAnimationFrame(() => taRef.current?.focus())
   }
 
-  // Auto-grow: reset to auto, then snap to content height clamped at maxHeight. A first layout pass
+  // Auto-grow on every value change. A first layout pass
   // can precede font settlement or a narrow drawer's final width, leaving scrollHeight stale and the
   // last wrapped line hidden beneath the in-box controls. Recheck on the next frame and when fonts
   // settle so the textarea always owns enough height for its actual wrapped content.
@@ -228,8 +252,7 @@ export function Composer({
     const resize = () => {
       const el = taRef.current
       if (!el || !active) return
-      el.style.height = "auto"
-      el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`
+      snapHeight(el, maxHeight)
     }
     resize()
     const frame = requestAnimationFrame(resize)
@@ -261,6 +284,76 @@ export function Composer({
     // an open thread), and depending on the node itself tore down and rebuilt the ResizeObserver +
     // fonts.ready hook on every one of those renders for zero layout change.
   }, [value, maxHeight, Boolean(footer)])
+
+  // INLINE CONTEXT geometry. The overlay sits on the textarea's text origin (its paddings, read from
+  // the computed style so the rail reserve and the footer variant both stay honest) and shrinks to
+  // fit its chips up to the text column's width, so a long set wraps. The textarea then takes
+  // `text-indent` = the last chip's right edge + the text gap, and, when the chips wrapped, extra
+  // top padding = every row but the last, so the LAST row shares the first text line. Each chip row
+  // is pitched exactly one text line (row-gap = line − chip), which is what keeps that arithmetic in
+  // the line grid. Re-measured on any change under the overlay — a chip added, removed, or grown (the
+  // comment marker) — because once the row is wrapped at full width, a chip joining the LAST row
+  // changes neither the overlay's width nor its height, so a ResizeObserver alone would miss it; the
+  // resize path still covers a rewrap from the column narrowing.
+  useLayoutEffect(() => {
+    const el = taRef.current
+    const overlay = contextRef.current
+    if (!el) return
+    if (!overlay) {
+      el.style.textIndent = ""
+      el.style.paddingTop = ""
+      return
+    }
+    let frame: number | undefined
+    const measure = () => {
+      frame = undefined
+      const chips = overlay.querySelectorAll<HTMLElement>("[data-context-chip]")
+      el.style.paddingTop = ""
+      const cs = getComputedStyle(el)
+      const padTop = parseFloat(cs.paddingTop)
+      const line = parseFloat(cs.lineHeight)
+      overlay.style.left = cs.paddingLeft
+      overlay.style.maxWidth = `calc(100% - ${cs.paddingLeft} - ${cs.paddingRight})`
+      overlay.style.top = `${padTop + (line - CONTEXT_CHIP_HEIGHT) / 2}px`
+      overlay.style.rowGap = `${Math.max(0, line - CONTEXT_CHIP_HEIGHT)}px`
+      const last = chips[chips.length - 1]
+      if (!last) {
+        el.style.textIndent = ""
+      } else {
+        const box = overlay.getBoundingClientRect()
+        el.style.textIndent = `${Math.round(last.getBoundingClientRect().right - box.left + CONTEXT_TEXT_GAP)}px`
+        const above = Math.max(0, Math.round(box.height - CONTEXT_CHIP_HEIGHT))
+        if (above > 0) el.style.paddingTop = `${padTop + above}px`
+      }
+      snapHeight(el, maxHeight)
+    }
+    measure()
+    // Same Chromium loop rule as the width observer above: never write layout inside the callback.
+    const schedule = () => {
+      if (frame !== undefined) cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(measure)
+    }
+    const resizes = new ResizeObserver(schedule)
+    resizes.observe(overlay)
+    const mutations = new MutationObserver(schedule)
+    mutations.observe(overlay, { childList: true, subtree: true, characterData: true })
+    return () => {
+      if (frame !== undefined) cancelAnimationFrame(frame)
+      resizes.disconnect()
+      mutations.disconnect()
+    }
+  }, [Boolean(context), maxHeight, Boolean(footer)])
+
+  // A textarea at maxHeight SCROLLS, and the overlay is pinned to the box, not the text — so it rides
+  // along with the scroll and is clipped at its own top edge, exactly as the first line of prose is.
+  const syncContextScroll = () => {
+    const el = taRef.current
+    const overlay = contextRef.current
+    if (!el || !overlay) return
+    const y = el.scrollTop
+    overlay.style.transform = y > 0 ? `translateY(${-y}px)` : ""
+    overlay.style.clipPath = y > 0 ? `inset(${y}px 0 0 0)` : ""
+  }
 
   // The browser BLURS a focused element the instant it becomes `disabled`, so every `busy` window
   // evicts the caret and the user must re-click the box to keep typing. A focusout whose target is
@@ -523,10 +616,23 @@ export function Composer({
           ))}
         </div>
       )}
-      {context}
+      {context && (
+        // pointer-events off on the row so a click in the run-out beside the chips lands in the
+        // textarea; each chip switches them back on. Geometry (left/top/max-width/row-gap) is written
+        // by the inline-context effect from the textarea's computed style.
+        <div
+          ref={contextRef}
+          data-composer-context
+          className="pointer-events-none absolute z-[1] flex flex-wrap items-center"
+          style={{ columnGap: CONTEXT_CHIP_GAP }}
+        >
+          {context}
+        </div>
+      )}
       <textarea
         id={id}
         ref={taRef}
+        onScroll={context ? syncContextScroll : undefined}
         data-surface={surface}
         value={prose}
         autoFocus={autoFocus}
