@@ -295,7 +295,7 @@ test("a registrar that returns NO token means the name is served by the relay", 
   const home = tempHome();
   const server = await claimServer({ hostname: "colin.frizz.sh", leaseExpiresAt: 0, renewed: false });
   try {
-    const config = await establishCloudConfig("colin", 9393, home, server.origin);
+    const config = await establishCloudConfig("colin", 9393, home, server.origin, fakeGithub);
     assert.deepEqual(config, { hostname: "colin.frizz.sh", claim: "colin", serve: "relay" });
     assert.equal(readTunnelToken(home), null, "a relay board must cache no run token");
     assert.equal(isRelayConfig(config), true);
