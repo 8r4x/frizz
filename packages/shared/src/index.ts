@@ -331,9 +331,12 @@ export const PendingAsk = z.object({
 export type PendingAsk = z.infer<typeof PendingAsk>
 
 // ---- THE AWAITING FENCE ---------------------------------------------------------------------------
-// A worker ends every turn in exactly ONE of three terminal states: a ```question (it needs the human), a
-// ```awaiting park (it is waiting on work that is actually running), or ```done. This is that middle one,
-// and it is PURE STRUCTURE — a list of things frizz can look up, a duration, and one line of prose.
+// A worker ends every turn in ONE terminal state: it needs the human, it is waiting on work that is
+// actually running, or it is finished. Each is now said EITHER by a fence or by a registration — an
+// open `thread_question` row is a standing sign-off on its own, and so is an armed watch or a recorded
+// done, which is why a worker with a pending question rests normally and writes no fence at all. This
+// is the FENCE form of the middle one, and it is PURE STRUCTURE — a list of things frizz can look up,
+// a duration, and one line of prose.
 //
 //   shells: [<runtime task id>, …]   background shells it launched   → checked against live telemetry
 //   agents: [<runtime agent id>, …]  sub-agents it dispatched        → checked against live telemetry

@@ -96,6 +96,13 @@ verb itself, and use \`Running\` only when the thing you are doing is literally 
 //          "bare-rest instead" contradicted by ALWAYS SIGN OFF WITH A FENCE — which it broke the wrong
 //          way. § When the work is finished but the thread found more is that deadlock's resolution,
 //          and it is what finally connects spawn_thread to the `done` test.
+//
+// AN OPEN QUESTION IS A STANDING SIGN-OFF (maintainer 2026-08-28: "if there are pending questions, it
+// can just come to rest normally, right?"). The BEHAVIOUR was already this — evalSignoffNudges skips
+// whenever any thread_question row is open, not only one registered this turn — but the contract said
+// so only in § Questions for the human, which a worker reads when it ASKS, not when it STOPS. ALWAYS
+// SIGN OFF and "a bare rest is not a handoff" pushed the other way at exactly that moment, so the rule
+// is stated where the worker is standing when it needs it.
 const SIGNALS = `## End-of-turn signals — your final message IS the interface
 
 When you come to rest, your last message is the whole interface: the human reads it in a queue, hours
@@ -115,6 +122,12 @@ of the message carrying it, so it has to be rewritten at every rest and is wrong
 changes; a row survives your turn ending, a compaction and a frizz restart. **The fences below all still
 work**, they are still the right shape for the prose the human reads, and nothing is being taken away —
 but where a verb exists for what you are saying, call it.
+
+**AN OPEN QUESTION IS A STANDING SIGN-OFF — REST NORMALLY.** Any unanswered question counts, not only
+one you registered this turn, and frizz does not bump you for a missing fence while one is open. When
+the work that does not depend on the answer runs out, write your handoff prose and STOP: no fence, and
+nothing to do to make the card appear. Frizz draws the question at the rest you stopped at, on the
+thread and on the board, until it is answered or withdrawn.
 
 Use at most ONE fenced signal block, at the very END. The fence language is the state; the body is the
 card the human reads. A \` \`\`\`question \` block and real permission prompts are higher-priority asks

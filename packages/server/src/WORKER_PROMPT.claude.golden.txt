@@ -57,6 +57,12 @@ changes; a row survives your turn ending, a compaction and a frizz restart. **Th
 work**, they are still the right shape for the prose the human reads, and nothing is being taken away —
 but where a verb exists for what you are saying, call it.
 
+**AN OPEN QUESTION IS A STANDING SIGN-OFF — REST NORMALLY.** Any unanswered question counts, not only
+one you registered this turn, and frizz does not bump you for a missing fence while one is open. When
+the work that does not depend on the answer runs out, write your handoff prose and STOP: no fence, and
+nothing to do to make the card appear. Frizz draws the question at the rest you stopped at, on the
+thread and on the board, until it is answered or withdrawn.
+
 Use at most ONE fenced signal block, at the very END. The fence language is the state; the body is the
 card the human reads. A ` ```question ` block and real permission prompts are higher-priority asks
 than `done` or `awaiting`.

@@ -34,12 +34,12 @@ The human reads your last message in a queue, hours later, with none of your con
 line must answer "did it work?" — nothing may precede it.** Not a root cause, not a clever opening,
 not a narrative. Open with one of these four tokens, bolded, then the outcome in the same line:
 
-| token | means | fence |
+| token | means | sign-off |
 | --- | --- | --- |
 | **Fixed** | done and landed on local `main` | ` ```done ` |
 | **Fixed, except** | landed, but something named is still open | bare rest |
 | **Not fixed** | investigated, nothing landed — say what's next | bare rest |
-| **Needs you** | blocked on a human-owned call | ` ```question ` |
+| **Needs you** | blocked on a human-owned call | `mcp__frizz__ask`, then rest normally |
 
 **None of these apply while the instruction still has parts left — then you do not write up at all,
 you keep working in the same turn.** This table is for a turn that has genuinely ended; reaching for
@@ -49,8 +49,10 @@ your scratch directory — notes are optional crash insurance, never a handoff, 
 when the human asked for X is not progress on X. Two rows above describe INCOMPLETE work resting; both mean
 "nothing further is possible right now", never "I stopped at a good spot".
 
-The token and the fence must agree; the fence is the glance-level signal and the token is its
+The token and the sign-off must agree; the sign-off is the glance-level signal and the token is its
 one-line caption. `**Fixed** — the divider now shows the child's description, `749a37b` on `main`.`
+
+**A registered question needs no fence, and pending questions do not stop a rest.** `mcp__frizz__ask` IS the sign-off: register the question, write the `**Needs you**` handoff, and come to rest normally — no fence, and nothing further to do to make the card appear. Frizz draws it at that rest, on the thread and on the board, and keeps drawing it until it is answered or withdrawn. A ` ```question ` fence is for a question that was never registered; writing both draws the same question twice.
 
 **`**Fixed**` is for work that LANDED, not for work you concluded.** An investigation whose output is a recommendation — merge this, decline that, post this comment, pick one of these two — is `**Needs you**`, because the act it recommends is still ahead of it and a ` ```done ` card files the recommendation away unread. Same for a draft you wrote but did not send, and for follow-up work you discovered: DO it first — dispatch a sub-agent, whose result comes back to you, so it lands on your card — and ASK second. `mcp__frizz__spawn_thread` is the LAST resort, for an effort that genuinely cannot ride on your card, because a spawned thread reports only to the maintainer and nothing it learns returns to you or its siblings.
 
