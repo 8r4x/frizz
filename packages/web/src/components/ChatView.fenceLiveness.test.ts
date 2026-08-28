@@ -16,7 +16,7 @@ const renderText = () => {
 test("a fence that is not a live wait is skipped before it ever reaches a card", () => {
   assert.match(
     renderText(),
-    /if \(fseg\.fenceKind === "awaiting" && \(m\.fenceRefused \|\| staleAwaiting\)\) continue/,
+    /if \(fseg\.fenceKind === "awaiting" && \(m\.fenceRefused \|\| staleAwaiting \|\| restingCardShown\)\) continue/,
     "both non-live cases must be skipped, not rendered as an empty card",
   )
   // SKIPPED, not returned as null from the card: the block list is interleaved with explicit spacers, so
@@ -28,6 +28,38 @@ test("a fence that is not a live wait is skipped before it ever reaches a card",
   // …and `done` is untouched: a finished thread stays finished, whatever frizz thought of its last park
   // and however long ago it was written.
   assert.doesNotMatch(renderText(), /(fenceRefused|staleAwaiting)[^\n]*"done"/)
+})
+
+// A LIVE FENCE THE RESTING CARD STATES IS SKIPPED THE SAME WAY. FenceCard returns null when the thread is
+// at rest on the fence (the resting card opens on its body), but a null child is not a skipped block: the
+// block list is interleaved with spacers, so the slot still spent its 14px — a gap dangling under the
+// prose, above the resting card, on every rested awaiting thread (maintainer 2026-08-28, with a
+// screenshot). So the owning surfaces pass `restingCardShown` and the block never reaches the card.
+test("a fence the resting card states never reaches the card either", () => {
+  // Every surface that owns a thread passes the flag for the LAST agent message only — the one whose
+  // fence the resting card is about — so the memo boundary holds for every other row.
+  const chat = source
+  const todos = readFileSync(new URL("./TodosView.tsx", import.meta.url), "utf8")
+  assert.equal(chat.match(/restingCardShown=\{(?:row\.)?messageIndex === lastAgentIdx && restingShown\}/g)?.length, 2, "both thread-view columns pass it")
+  assert.equal(todos.match(/restingCardShown=\{globalIdx === lastAgentIdx && restingShown\}/g)?.length, 2, "both queue-card message paths pass it")
+  // …and the emptiness walk agrees, or a fence-only last message keeps its spacer and its rest divider.
+  const helper = source.match(/export function rendersNothingIn[\s\S]*?\n}/)?.[0]
+  assert.ok(helper, "rendersNothingIn must exist")
+  assert.match(helper, /restingCardShown = false/, "it takes the resting-card reason")
+  assert.match(helper, /entry\.messageIndex === lastAgentIdx\) stale\.add\(entry\.message\)/, "…and folds the last message in")
+  assert.equal(chat.match(/rendersNothingIn\([a-zA-Z]+, lastAgentIdx, restingShown\)/g)?.length, 3, "every rendersNothingIn call passes it")
+  assert.match(todos, /const hidesAwaiting = \(idx: number\) => isStaleAwaiting\(idx\) \|\| \(idx === lastAgentIdx && restingShown\)/)
+  assert.doesNotMatch(todos, /message(?:RendersNothing|HasRenderableText)\([a-z]+, isStaleAwaiting\(/, "the queue card's predicates take the union")
+})
+
+// THE TAIL MOUNTS WITH THE TRANSCRIPT, NOT BEFORE IT. The board lands first, so the queue card used to
+// paint its resting/done/rested card under the "Loading…" line and then shove it down ~1s later when the
+// messages mounted above it — the layout shift the maintainer refreshed into (2026-08-28).
+test("the queue card holds its tail cards until the transcript window has loaded", () => {
+  const todos = readFileSync(new URL("./TodosView.tsx", import.meta.url), "utf8")
+  assert.match(todos, /\{!q\.isLoading && showsRestingCard\(thread\) && \(/)
+  assert.match(todos, /\{!q\.isLoading && showsRegisteredDoneCard\(thread, /)
+  assert.match(todos, /\{!q\.isLoading && showsRestedCard\(thread, /)
 })
 
 // THE CARD NEVER LEARNS ABOUT STALENESS. It used to: a `stale` branch stripped the frame and printed the
