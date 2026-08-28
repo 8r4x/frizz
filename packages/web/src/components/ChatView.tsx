@@ -68,6 +68,7 @@ import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { agentCompletionCall, subAgentCompletionOutcome } from "../lib/subAgentCompletion.ts"
 import { agentReading } from "../lib/agentReading.ts"
 import { ChildOpRow } from "./ChildOpRow.tsx"
+import { MessageRow, MessageStamp } from "./MessageTimestamp.tsx"
 import { TRANSCRIPT_META_LABEL_CLASS, transcriptMetaChevronClass } from "../lib/transcriptMetaLabels.ts"
 import { InteractionStack } from "./InteractionCards.tsx"
 import { RegisteredQuestionStack } from "./RegisteredQuestionCards.tsx"
@@ -96,7 +97,7 @@ import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
 import { prependEarlierPage } from "../lib/transcriptPagination.ts"
 import { buildVirtualTranscriptMessageRows, earlierLoadGate, nextTailFollow, TAIL_FOLLOW_PX, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
 import { withoutRedundantRestDividers } from "../lib/restDividers.ts"
-import { coalesceToolActivityMessages, editedFileCount, historicalToolActivityMessages, isPictureTool, isToolActivityException, liveRuntimeStartedAt, liveToolActivityRun, liveToolActivityTail, settledToolActivityLabel, thinkingToolActivityLabel, toolActivityLabel } from "../lib/toolActivity.ts"
+import { coalesceToolActivityMessages, editedFileCount, historicalToolActivityMessages, isPictureTool, isToolActivityException, liveRuntimeStartedAt, liveToolActivityRun, liveToolActivityTail, settledToolActivityLabel, thinkingToolActivityLabel, toolActivityLabel, toolActivityStampAt } from "../lib/toolActivity.ts"
 import { CodexDirectiveCard, MermaidDiagram } from "./CodexRichOutput.tsx"
 import { META_CARD_STEP, PICTURE_STEP, STEP, USER_TAIL_EXTRA, VSpace } from "./rhythm.tsx"
 
@@ -660,7 +661,7 @@ type VirtualThreadRow =
   | { key: string; kind: "questions"; questions: RegisteredQuestionView[] }
   | { key: "transport-fallback"; kind: "transport-fallback" }
   | { key: string; kind: "earlier-history" }
-  | ({ kind: "message" } & VirtualTranscriptMessageRow)
+  | ({ kind: "message"; stampAt: string | undefined } & VirtualTranscriptMessageRow)
   | { key: "runtime-status"; kind: "runtime-status" }
   | { key: string; kind: "queued"; message: ChatMessage; messageIndex: number; gap: number }
 
@@ -728,10 +729,10 @@ function VirtualizedThreadTranscript({
       activityMessages.map((entry) => entry.message),
       rendersNothingIn(activityMessages, lastAgentIdx, restingShown),
       messageGap,
-    ).map((row) => ({
-      ...row,
-      messageIndex: activityMessages[row.messageIndex].messageIndex,
-    }))
+    ).map((row) => {
+      const entry = activityMessages[row.messageIndex]
+      return { ...row, messageIndex: entry.messageIndex, stampAt: toolActivityStampAt(entry) }
+    })
   }, [activityMessages, lastAgentIdx, restingShown])
   const lastUserIdx = useMemo(() => lastAskIndex(messages), [messages])
   // A completion the worker REGISTERED rather than fenced: the last rung of the ladder below, drawn here
@@ -1251,7 +1252,12 @@ function VirtualizedThreadTranscript({
               containing block and it could never stick. Do NOT also render a nested StickyUserBand —
               two stacked `sticky top-0` layers push the card down by the inner band's box (the 121px
               gap that let transcript content bleed above the "pinned" card). `[&>*]:pointer-events-auto`
-              re-enables the bubble (hover-to-expand) while the full-width band stays click-through. */}
+              re-enables the bubble (hover-to-expand) while the full-width band stays click-through.
+              `group/ts` is what lets the pinned ask carry its own hover reading: this row is hoisted out
+              of the absolute layer, so it never passes through MessageRow, and without it this would be
+              the ONE message with no timestamp — the ask the whole reply is answering. The reading's own
+              containing block is the wrapper below, not this band. It needs no `hover:z` lift of its
+              own; `z-[9]` already draws it over the scrolling rows. */}
           <div
             key={stickyMessageRow.key}
             ref={virtualizer.measureElement}
@@ -1259,15 +1265,34 @@ function VirtualizedThreadTranscript({
             data-transcript-row-key={stickyMessageRow.key}
             data-transcript-source-id={stickyMessageRow.message.sourceId}
             data-transcript-sticky="true"
-            className="pointer-events-none [&>*]:pointer-events-auto sticky top-0 z-[9] flex w-full flex-col px-6 pt-3 pb-1.5"
+            className="group/ts pointer-events-none [&>*]:pointer-events-auto sticky top-0 z-[9] flex w-full flex-col pt-3 pb-1.5"
           >
-            <Message
-              m={stickyMessageRow.message}
-              answering={answeringForMessage(stickyMessageRow.message)}
-              showSendButton
-              paired={paired[stickyMessageRow.messageIndex]}
-              sticky
-            />
+            {/* This wrapper is the reading's containing block, and it carries the `px-6` rather than the
+                band above it — because `MessageStamp` is positioned on BOTH axes (`top-full`,
+                `right-6`) and both resolve against the containing block's PADDING box. Whichever box
+                holds the reading has to match `MessageRow`'s on both, which this one does: it ends
+                where the message ends, and it is inset by the same 24px.
+
+                The band was the containing block once and got each axis wrong in turn (measured
+                2026-08-28, headless): with the band's `pb-1.5` below the reading it hung 6px lower
+                than every other row's and read as the row BELOW's; with `px-6` still on the band and
+                this wrapper nested inside it, `right-6` measured from an edge already 24px in and the
+                reading sat 48px from the transcript's edge instead of 24px. Both now read identically
+                to an ordinary row: −5px from its own message, 24px inset.
+
+                `!pointer-events-none` because the band's `[&>*]:pointer-events-auto` would otherwise
+                make this full-width wrapper swallow the click-through the band exists to preserve; its
+                own copy of that variant hands the bubble back. */}
+            <div className="!pointer-events-none relative flex w-full flex-col px-6 [&>*]:pointer-events-auto">
+              <Message
+                m={stickyMessageRow.message}
+                answering={answeringForMessage(stickyMessageRow.message)}
+                showSendButton
+                paired={paired[stickyMessageRow.messageIndex]}
+                sticky
+              />
+              <MessageStamp at={stickyMessageRow.message.at} />
+            </div>
           </div>
         </>
       )}
@@ -1282,7 +1307,23 @@ function VirtualizedThreadTranscript({
             data-index={virtualRow.index}
             data-transcript-row-key={row.key}
             data-transcript-source-id={row.kind === "message" ? row.message.sourceId : undefined}
-            className="absolute left-0 top-0 w-full"
+            // `hover:z-[1]` is what lets a row's hover-revealed timestamp (MessageRow) survive being
+            // drawn past this row's own bottom edge. Every row here is transform-positioned, so each
+            // is its OWN stacking context and a z-index INSIDE one cannot lift anything above the
+            // next row — among siblings at z-auto, the later one always wins. The reveal sits in the
+            // gap below its message, and that gap is as little as META_CARD_STEP (6px) against a
+            // 16px reading, so without this the reading is painted under the following row exactly
+            // on the tight rows where it overflows most.
+            //
+            // ONE, not the 20 this first shipped with. The pinned current-ask row thirty lines up is a
+            // SIBLING in this same container at `z-[9]`, and that 9 is the only thing holding it above
+            // the scrolling transcript. At 20 a hovered row painted OVER the pinned card — and since the
+            // band is click-through everywhere except its bubble, a pointer resting in its transparent
+            // strip hovered the row behind it, which then covered the bubble's own rectangle and
+            // swallowed hover-to-expand. 1 is both sufficient and 9-safe: a transform-positioned sibling
+            // participates in the parent as if `z-index: 0` whatever its DOM order, so any positive
+            // value beats it.
+            className="absolute left-0 top-0 w-full hover:z-[1]"
             style={{ transform: `translateY(${virtualRow.start}px)` }}
           >
             {row.kind === "head-anchor" ? null
@@ -1335,7 +1376,7 @@ function VirtualizedThreadTranscript({
                 )}
               </div>
             ) : row.kind === "message" ? (
-              <div className="flex flex-col px-6" style={{ paddingTop: row.gap }}>
+              <MessageRow at={row.stampAt} gap={row.gap}>
                 <Message
                   m={row.message}
                   answering={answeringForMessage(row.message)}
@@ -1345,7 +1386,7 @@ function VirtualizedThreadTranscript({
                   restingCardShown={row.messageIndex === lastAgentIdx && restingShown}
                   shadowedBy={shadowedByMessage.get(row.messageIndex)}
                 />
-              </div>
+              </MessageRow>
             ) : row.kind === "runtime-status" ? (
               <div className="px-6" style={{ paddingTop: runtimeStatusGap }}>
                 {thread?.providerFault && !thread.foreign ? (
@@ -1379,9 +1420,12 @@ function VirtualizedThreadTranscript({
                 ) : null}
               </div>
             ) : (
-              <div className="flex flex-col px-6" style={{ paddingTop: row.gap }}>
+              // The QUEUED branch. Its rows are built straight from `messages`, never through the
+              // tool-activity coalescer, so no run can have walked `at` forward and the message's own
+              // instant is the only reading there is.
+              <MessageRow at={row.message.at} gap={row.gap}>
                 <Message m={row.message} paired={paired[row.messageIndex]} />
-              </div>
+              </MessageRow>
             )}
           </div>
         )
