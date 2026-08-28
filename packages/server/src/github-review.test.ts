@@ -83,7 +83,7 @@ test("review fetcher asks for each item's permalink and carries it through to th
               reviews: { nodes: [{ id: "R1", url: "https://github.com/nubjs/nub/pull/587#pullrequestreview-1", state: "COMMENTED", submittedAt: "2026-07-29T15:46:04Z", author: { login: "pullfrog", __typename: "Bot" } }] },
               comments: {
                 nodes: [
-                  { id: "C1", url: "https://github.com/nubjs/nub/pull/587#issuecomment-1", createdAt: "2026-07-29T15:39:28Z", author: { login: "colinhacks", __typename: "User" } },
+                  { id: "C1", url: "https://github.com/nubjs/nub/pull/587#issuecomment-1", createdAt: "2026-07-29T15:39:28Z", body: "lgtm", author: { login: "colinhacks", __typename: "User" } },
                   // A shape surprise costs the steer its permalink, never the wake itself.
                   { id: "C2", createdAt: "2026-07-29T15:40:00Z", author: { login: "colinhacks", __typename: "User" } },
                 ],
@@ -98,13 +98,15 @@ test("review fetcher asks for each item's permalink and carries it through to th
   })
 
   const got = await fetcher(ref(587))
-  assert.match(body.query, /reviews\(last: 50\) \{ nodes \{ id url state submittedAt/)
-  assert.match(body.query, /comments\(last: 50\) \{ nodes \{ id url createdAt/)
+  // `body` (raw markdown, NOT bodyText — the noise filter's markers are HTML comments) rides both
+  // node sets and is omitted from the activity when empty, so the empty-body-review shape survives.
+  assert.match(body.query, /reviews\(last: 50\) \{ nodes \{ id url state submittedAt body/)
+  assert.match(body.query, /comments\(last: 50\) \{ nodes \{ id url createdAt body/)
   assert.deepEqual(got, {
     status: "ok",
     activity: [
       { id: "review:R1", actor: "pullfrog", actorType: "Bot", at: "2026-07-29T15:46:04Z", kind: "review", reviewState: "COMMENTED", url: "https://github.com/nubjs/nub/pull/587#pullrequestreview-1" },
-      { id: "comment:C1", actor: "colinhacks", actorType: "User", at: "2026-07-29T15:39:28Z", kind: "comment", url: "https://github.com/nubjs/nub/pull/587#issuecomment-1" },
+      { id: "comment:C1", actor: "colinhacks", actorType: "User", at: "2026-07-29T15:39:28Z", kind: "comment", url: "https://github.com/nubjs/nub/pull/587#issuecomment-1", body: "lgtm" },
       { id: "comment:C2", actor: "colinhacks", actorType: "User", at: "2026-07-29T15:40:00Z", kind: "comment" },
     ],
   })

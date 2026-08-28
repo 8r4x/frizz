@@ -543,6 +543,66 @@ test("pr-watch: a bot COMMENT wakes the watcher, and the steer names it as a bot
   assert.doesNotMatch(h.resumes[0].message, /👤/)
 })
 
+// The exclusion list (`pr-watch-noise.ts`): a deploy table, a changeset notice, a "trial ended"
+// banner is a poll result, never a wake. The muted id still lands in the cursor, so it is not
+// re-evaluated forever, and a real item arriving later still wakes on its own.
+test("pr-watch: muted bot noise does not wake — and does not block the human comment after it", async () => {
+  const h = harness()
+  h.watch("r", "acme/app#391")
+  const fenceAt = iso(h.clock.ms)
+  h.storage.upsertSession(row("r"))
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr", value: "acme/app#391" }])), lastActivityAt: fenceAt })
+  h.review.result = []
+  await h.make().tick()
+  assert.equal(h.resumes.length, 0)
+
+  // Vercel's deploy table: tier-1 actor, and the poll that finds ONLY it advances the cursor silently.
+  h.clock.ms += 10_000
+  const vercel: GithubReviewActivity = { id: "comment:vc", actor: "vercel", actorType: "Bot", at: iso(h.clock.ms), kind: "comment", body: "[vc]: #deploy-table" }
+  h.review.result = [vercel]
+  const s1 = h.make()
+  await s1.tick()
+  await s1.tick()
+  assert.equal(h.resumes.length, 0, "a deploy-preview comment is not a wake")
+
+  // A real comment lands next poll. The steer names it alone — the muted item is gone, not deferred.
+  h.clock.ms += 10_000
+  const at = iso(h.clock.ms)
+  h.review.result = [vercel, { id: "comment:hu", actor: "colinhacks", actorType: "User", at, kind: "comment", body: "please rebase" }]
+  const s2 = h.make()
+  await s2.tick()
+  await s2.tick()
+  assert.equal(h.resumes.length, 1, "the human comment wakes")
+  assert.match(h.resumes[0].message, /New GitHub comment on acme\/app#391 from @colinhacks/)
+  assert.doesNotMatch(h.resumes[0].message, /vercel/)
+})
+
+test("pr-watch: a burst mixing noise and signal counts and names only the signal", async () => {
+  const h = harness()
+  h.watch("r", "acme/app#391")
+  const fenceAt = iso(h.clock.ms)
+  h.storage.upsertSession(row("r"))
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr", value: "acme/app#391" }])), lastActivityAt: fenceAt })
+  h.review.result = []
+  await h.make().tick()
+  assert.equal(h.resumes.length, 0)
+
+  h.clock.ms += 10_000
+  const at = iso(h.clock.ms)
+  h.review.result = [
+    // CodeRabbit's FINDINGS review stays live even though its walkthrough comment (below) is muted.
+    { id: "review:cr", actor: "coderabbitai", actorType: "Bot", at, kind: "review", reviewState: "COMMENTED", body: "**Actionable comments posted: 2**" },
+    { id: "comment:walk", actor: "coderabbitai", actorType: "Bot", at: iso(h.clock.ms - 1000), kind: "comment", body: "<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n## Walkthrough" },
+    { id: "comment:cs", actor: "changeset-bot", actorType: "Bot", at: iso(h.clock.ms - 2000), kind: "comment", body: "🦋 Changeset detected" },
+  ]
+  const s = h.make()
+  await s.tick()
+  await s.tick()
+  assert.equal(h.resumes.length, 1)
+  assert.match(h.resumes[0].message, /New GitHub review comment on acme\/app#391 from @coderabbitai/, "one live item: the header is singular, not a 3-item burst")
+  assert.doesNotMatch(h.resumes[0].message, /changeset|Walkthrough/)
+})
+
 // A worker tracking a SET of PRs registers one watcher per PR, and the waker must poll EVERY one of
 // them — activity on any is the wake. Nothing pinned this, and in its absence a worker watching
 // 11 adoption PRs concluded (in writing, to the operator) that a watch "can't fan out across repos"
@@ -769,7 +829,9 @@ test("pr-watch: CHANGES_REQUESTED is named as a noun, so the steer stays a gramm
 // The steer is a NOTIFICATION that activity landed, never an instruction to change the PR's state.
 // "Re-open the PR and continue" meant "go read it", but a woken worker reads `gh pr reopen`: the real
 // wake on nubjs/nub#551 (a @vercel comment) burned a turn on the ambiguity, and the failure mode one
-// step past that is reopening a PR the maintainer closed deliberately.
+// step past that is reopening a PR the maintainer closed deliberately. (That @vercel comment could not
+// fire at all today — `pr-watch-noise.ts` mutes the actor — so the fixture is a review bot that stays
+// live; the wording rule it pins is the same for every steer.)
 test("pr-watch: the bump steer never reads as an instruction to mutate the PR", async () => {
   const h = harness()
   h.watch("r", "nubjs/nub#551")
@@ -781,14 +843,14 @@ test("pr-watch: the bump steer never reads as an instruction to mutate the PR", 
   assert.equal(h.resumes.length, 0)
 
   h.clock.ms += 10_000
-  h.review.result = [{ id: "comment:vercel", actor: "vercel", actorType: "Bot", at: iso(h.clock.ms), kind: "comment" }]
+  h.review.result = [{ id: "comment:greptile", actor: "greptile-apps", actorType: "Bot", at: iso(h.clock.ms), kind: "comment", body: "Found 2 issues in the diff." }]
   const s = h.make()
   await s.tick()
   await s.tick()
   assert.equal(h.resumes.length, 1)
   const message = h.resumes[0].message
   assert.match(message, /nubjs\/nub#551/)
-  assert.match(message, /@vercel/)
+  assert.match(message, /@greptile-apps/)
   assert.doesNotMatch(message, /re-?open/i, "the steer must not order the worker to reopen the PR")
   assert.doesNotMatch(message, /\b(close|merge|approve)\b/i, "nor any other PR state change")
 })

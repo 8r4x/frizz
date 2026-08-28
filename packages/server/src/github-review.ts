@@ -26,6 +26,10 @@ export interface GithubReviewActivity {
   // thread and re-litigating comments it already handled. Optional: a shape surprise degrades the
   // steer's precision, never the wake itself.
   url?: string
+  // The item's RAW markdown body, for the noise filter (`pr-watch-noise.ts`): its tier-2 markers are
+  // HTML comments, which `bodyText` strips. Reviews whose substance is inline comments have an empty
+  // body — that shape is load-bearing (an empty body is never noise), so absent and empty both parse.
+  body?: string
 }
 
 export type GithubReviewFailureKind =
@@ -125,6 +129,7 @@ export function parseGithubReviewActivities(raw: unknown): GithubReviewActivity[
       const at = typeof n[atKey] === "string" ? (n[atKey] as string) : undefined
       const reviewState = kind === "review" && typeof n.state === "string" ? n.state : undefined
       const url = typeof n.url === "string" && n.url ? n.url : undefined
+      const body = typeof n.body === "string" && n.body ? n.body : undefined
       out.push({
         id: `${kind}:${rawId}`,
         actor,
@@ -133,6 +138,7 @@ export function parseGithubReviewActivities(raw: unknown): GithubReviewActivity[
         kind,
         ...(reviewState ? { reviewState } : {}),
         ...(url ? { url } : {}),
+        ...(body ? { body } : {}),
       })
     }
   }
@@ -145,8 +151,10 @@ export function parseGithubReviewActivities(raw: unknown): GithubReviewActivity[
 // an app — Pullfrog, Copilot, CodeRabbit, Greptile — and the ones that post their findings as a
 // CONVERSATION COMMENT rather than a formal review were exactly what an actor-type filter swallowed.
 // Distinguishing "real" review from deploy/CI chatter by actor is not something this layer can do
-// correctly, and being asleep for a review is far more expensive than one spurious bump.
-export function isBotGithubActor(a: GithubReviewActivity): boolean {
+// correctly, and being asleep for a review is far more expensive than one spurious bump. The filter
+// that DOES exist (`pr-watch-noise.ts`) is the opposite shape: a measured allowlist-of-nothing —
+// named no-substance actors plus self-marked no-substance bodies — with humans never touched.
+export function isBotGithubActor(a: Pick<GithubReviewActivity, "actor" | "actorType">): boolean {
   return a.actorType?.toLowerCase() === "bot" || a.actor.toLowerCase().endsWith("[bot]")
 }
 
@@ -162,8 +170,8 @@ function buildQuery(refs: GithubReviewRef[]): { query: string; variables: Record
     fields.push(`
       ref${index}: repository(owner: $owner${index}, name: $repo${index}) {
         pullRequest(number: $number${index}) {
-          reviews(last: 50) { nodes { id url state submittedAt author { login __typename } } }
-          comments(last: 50) { nodes { id url createdAt author { login __typename } } }
+          reviews(last: 50) { nodes { id url state submittedAt body author { login __typename } } }
+          comments(last: 50) { nodes { id url createdAt body author { login __typename } } }
         }
       }`)
   })

@@ -21,6 +21,7 @@ import {
   type GithubReviewActivity,
   type GithubReviewFetchResult,
 } from "./github-review.ts"
+import { isNoisePrActivity } from "./pr-watch-noise.ts"
 
 const execFileAsync = promisify(execFile)
 
@@ -2109,8 +2110,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         const at = Date.parse(b.at ?? "") - Date.parse(a.at ?? "")
         return Number.isFinite(at) && at !== 0 ? at : b.id.localeCompare(a.id)
       })
+      // NOISE IS FILTERED HERE, after `seen` and before the steer: a deploy-preview table, a coverage
+      // badge, a "trial ended" banner is a poll result, never a wake (`pr-watch-noise.ts` — measured
+      // list, 2026-08-28). The cursor below folds in ALL of `acts`, muted included, so a muted item is
+      // never re-evaluated; and when a poll finds ONLY muted activity, `reviewSteer` stays undefined,
+      // so the existing "nothing to say, but the baseline moved" branch advances the cursor silently.
       const fresh = newestFirst.filter((a) => {
-        if (seen.has(a.id)) return false
+        if (seen.has(a.id) || isNoisePrActivity(a)) return false
         if (!firstPoll) return true
         const landed = Date.parse(a.at ?? "")
         return Number.isFinite(landed) && landed > w.created_at
