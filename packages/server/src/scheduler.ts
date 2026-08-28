@@ -1572,6 +1572,16 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // a fenceless rest and satisfies every guard above. Teaching it to sign off cannot help — it never
       // reached the model.
       if (tele.authFault) continue
+      // AND THE GENERAL CASE OF IT, which the auth guard above is one instance of. A FAILED TURN IS NOT A
+      // REST: a synthetic API-error record is written as an assistant record, so it advances the rest
+      // instant and satisfies every guard above, and a thread whose every turn fails therefore presents
+      // as an agent that keeps resting without a fence. The nudge cannot be answered — nothing the agent
+      // writes reaches the model — so it is pure burn, and on the error this matters most for it is
+      // WORSE than pure burn: a 400 for a conversation that has outgrown the model's context window is
+      // made permanent by anything that appends to the conversation, which is exactly what the nudge
+      // does. Observed unbounded in the field before the cap was fixed to bind at all; both fixes are
+      // needed, because the cap alone still spends two deliveries on a thread that can never use them.
+      if (tele.apiFault) continue
       // ANY fence means the thread already said where it stands — including `awaiting`, which is still
       // a legitimate sign-off until the registry replaces it. Nothing to teach, AND the allowance comes
       // back: signing off is the only event that proves the nudge worked, and the only one frizz cannot
@@ -2773,6 +2783,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (runtime !== "unknown") {
         const sentAt = now()
         if (outbox.markSent(item.id, deliveryOwner, sentAt, sentAt + confirmGraceMs)) {
+          // THE NUDGE'S CAP IS SPENT AT SEND, not at confirmation, and this branch is why the cap
+          // existed on paper only. Every wake to a live runtime leaves here, so the settle below was
+          // unreachable in production — and the confirm path this hands to cannot make up for it,
+          // because `deliveryContext` reads a signoff item as SUPERSEDED the instant the agent's next
+          // assistant record lands (an API-error record is one), and the superseded branch counts
+          // nothing. `signoff_nudges` therefore stayed 0 forever while SIGNOFF_NUDGE_MAX was 2.
+          // Counting here is also the honest anchor: the tokens are spent when the message is sent,
+          // and confirmation is exactly what a thread failing every turn can never supply.
+          settleSignoffNudge(item)
           log(`waker: sent ${item.slug} — ${item.reason}; confirming within ${Math.round(confirmGraceMs / 1000)}s`)
           checkpoint("after-delivery", item)
           continue

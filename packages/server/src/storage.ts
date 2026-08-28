@@ -663,7 +663,8 @@ export interface Storage {
   // `resetSignoffNudges` when the thread signs off, and by nothing else. It used to reset whenever a
   // supplied anchor changed, which was wrong twice over: anchored on the human's last word, frizz's own
   // delivery (a user record) reset it; anchored on the rest, every new rest reset it. Either way the cap
-  // never bit. `anchor` is kept as the last-nudged delivery id, for diagnosis only.
+  // never bit. `anchor` is the delivery id being counted, and counting the SAME one twice is a no-op —
+  // one rest yields one delivery id, so a repeat is always a double count rather than a second rest.
   countSignoffNudge(slug: string, anchor: string | null): void
   // Give the allowance back. Called when the thread SIGNS OFF — the only event that proves the nudge
   // worked, and the only one frizz cannot cause by nudging.
@@ -1532,11 +1533,15 @@ export function createStorage(source: string | Database, projectId: string): Sto
     WHERE project_id = @project_id AND id = ? AND state = 'armed'
   `)
   const delThreadTimers = scope.prepare("DELETE FROM thread_timer WHERE project_id = @project_id AND thread_slug = ?")
-  // ONE statement decides reset-vs-increment, by reading the row's own anchor: SQLite evaluates the SET
-  // list against the pre-update values, so a changed anchor restarts the count at 1 in the same write.
+  // IDEMPOTENT PER ANCHOR, which is what `settleSignoffNudge` has always claimed ("a retry of the same
+  // delivery cannot count twice while a genuinely new fenceless rest does") and what the statement did
+  // not do — it incremented unconditionally. That gap was harmless only while exactly one call site
+  // counted; a nudge is now counted when it is SENT, and the confirm path that runs later for the same
+  // item would otherwise count it a second time. `IS NOT` rather than `<>` so a NULL anchor (a fresh row,
+  // or one just cleared by `resetSignoffNudges`) still counts.
   const countNudgeStmt = scope.prepare(`
     UPDATE session SET signoff_nudges = signoff_nudges + 1, signoff_nudge_anchor = ?
-    WHERE project_id = @project_id AND slug = ?
+    WHERE project_id = @project_id AND slug = ? AND signoff_nudge_anchor IS NOT ?
   `)
   const resetNudgesStmt = scope.prepare(`
     UPDATE session SET signoff_nudges = 0, signoff_nudge_anchor = NULL
@@ -2265,7 +2270,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
       recurringStmt.run(...recurringArgs(write), slug, sessionId, generation).changes === 1,
     setRecurringPromptBySlug: (slug, write) =>
       recurringBySlugStmt.run(...recurringArgs(write), slug).changes === 1,
-    countSignoffNudge: (slug, anchor) => void countNudgeStmt.run(anchor, slug),
+    countSignoffNudge: (slug, anchor) => void countNudgeStmt.run(anchor, slug, anchor),
     resetSignoffNudges: (slug) => void resetNudgesStmt.run(slug),
     countParkBump: (slug, anchor) => void countParkBumpStmt.run(anchor, slug),
     resetParkBumps: (slug) => void resetParkBumpsStmt.run(slug),
