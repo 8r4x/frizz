@@ -179,23 +179,40 @@ export function RegisteredQuestionStack({
                 ) : undefined}
                 interactive={{
                   answer: answerFor(q, node.path),
-                  onChip: (optIdx) => setPicks((prev) => {
-                    const next = new Map(prev)
-                    const key = pickKey(q.id, node.path)
-                    const pick = next.get(key) ?? { chosen: null, chosenSet: [] }
-                    if (node.spec.kind === "multi") {
-                      const set = pick.chosenSet.includes(optIdx)
-                        ? pick.chosenSet.filter((v) => v !== optIdx)
-                        : [...pick.chosenSet, optIdx]
-                      next.set(key, { ...pick, chosenSet: set })
-                    } else {
-                      // SINGLE: picking a chip clears any typed override, mirroring both other producers.
-                      draftStore.set(draftKey.question(projectDir, slug, q.id, node.path), "")
-                      next.set(key, { ...pick, chosen: optIdx })
-                    }
-                    return next
-                  }),
-                  onText: (text) => draftStore.set(draftKey.question(projectDir, slug, q.id, node.path), text),
+                  onChip: (optIdx) => {
+                    // SINGLE: picking a chip clears any typed override, mirroring both other producers.
+                    // OUTSIDE the updater: the store write wakes this component's own draft
+                    // subscription, and React runs a queued updater during render — so from inside it
+                    // that write was a setState-in-render warning on every chip click after a keystroke.
+                    if (node.spec.kind !== "multi") draftStore.set(draftKey.question(projectDir, slug, q.id, node.path), "")
+                    setPicks((prev) => {
+                      const next = new Map(prev)
+                      const key = pickKey(q.id, node.path)
+                      const pick = next.get(key) ?? { chosen: null, chosenSet: [] }
+                      if (node.spec.kind === "multi") {
+                        const set = pick.chosenSet.includes(optIdx)
+                          ? pick.chosenSet.filter((v) => v !== optIdx)
+                          : [...pick.chosenSet, optIdx]
+                        next.set(key, { ...pick, chosenSet: set })
+                      } else {
+                        next.set(key, { ...pick, chosen: optIdx })
+                      }
+                      return next
+                    })
+                  },
+                  onText: (text) => {
+                    draftStore.set(draftKey.question(projectDir, slug, q.id, node.path), text)
+                    // SINGLE: the free-text box taking over — a keystroke OR just focusing it — drops the
+                    // chosen chip, as the fence producer does. The card's onFocus calls this with the
+                    // text unchanged for exactly that reason, so writing the draft alone left the chip
+                    // lit beside a focused box (maintainer 2026-08-28).
+                    if (node.spec.kind !== "multi") setPicks((prev) => {
+                      const key = pickKey(q.id, node.path)
+                      const pick = prev.get(key)
+                      if (!pick || pick.chosen === null) return prev
+                      return new Map(prev).set(key, { ...pick, chosen: null })
+                    })
+                  },
                   onSubmit: submit,
                 }}
               />

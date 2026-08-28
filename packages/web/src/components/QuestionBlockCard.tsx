@@ -25,6 +25,10 @@ import { QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 export interface BlockInteractive {
   answer: BlockAnswer
   onChip: (optIdx: number, optText: string) => void
+  /** The free-text box's content. CONTRACT for a single-select question: the producer must also drop
+   *  `answer.chosen` — the card calls this with the text UNCHANGED when the box takes focus, and that
+   *  call is what unselects the chip. Two producers wrote only the text and left the chip lit beside
+   *  a focused box until 2026-08-28. MULTI keeps its toggled set. */
   onText: (text: string) => void
   onSubmit: () => void
 }

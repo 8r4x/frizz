@@ -231,17 +231,29 @@ function InteractionQuestionCard({
           question={entry.question}
           interactive={delivery.actionsEnabled && !sent ? {
             answer: answers[index],
-            onChip: (optIdx) => setPicks((prev) => prev.map((pick, i) => {
-              if (i !== index) return pick
-              if (entry.question.kind === "multi") {
-                const set = pick.chosenSet.includes(optIdx) ? pick.chosenSet.filter((v) => v !== optIdx) : [...pick.chosenSet, optIdx]
-                return { ...pick, chosenSet: set }
-              }
+            onChip: (optIdx) => {
               // SINGLE: picking a chip clears any typed override, mirroring the fence card exactly.
-              setText(entry, "")
-              return { ...pick, chosen: optIdx }
-            })),
-            onText: (text) => setText(entry, text),
+              // OUTSIDE the updater — the store write wakes this component's own draft subscription,
+              // and a queued updater runs during render (see RegisteredQuestionCards).
+              if (entry.question.kind !== "multi") setText(entry, "")
+              setPicks((prev) => prev.map((pick, i) => {
+                if (i !== index) return pick
+                if (entry.question.kind === "multi") {
+                  const set = pick.chosenSet.includes(optIdx) ? pick.chosenSet.filter((v) => v !== optIdx) : [...pick.chosenSet, optIdx]
+                  return { ...pick, chosenSet: set }
+                }
+                return { ...pick, chosen: optIdx }
+              }))
+            },
+            onText: (text) => {
+              setText(entry, text)
+              // SINGLE: the free-text box taking over — a keystroke OR just focusing it — drops the
+              // chosen chip, as the fence producer does (the card's onFocus calls this with the text
+              // unchanged for exactly that reason).
+              if (entry.question.kind !== "multi") setPicks((prev) => (prev[index]?.chosen === null || prev[index] === undefined)
+                ? prev
+                : prev.map((pick, i) => (i === index ? { ...pick, chosen: null } : pick)))
+            },
             onSubmit: submit,
           } : undefined}
         />

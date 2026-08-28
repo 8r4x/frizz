@@ -84,7 +84,8 @@ function Live() {
           w.__chips!.push(i)
           setAnswer((a) => ({ ...a, chosen: i, text: "" }))
         },
-        onText: (text) => setAnswer((a) => ({ ...a, text })),
+        // SINGLE: the box taking over drops the pick — the contract every producer honours (BlockInteractive).
+        onText: (text) => setAnswer(() => ({ chosen: null, text })),
         onSubmit: () => {},
       }}
     />
