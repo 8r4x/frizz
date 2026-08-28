@@ -56,8 +56,8 @@ export function MessageStamp({ at }: { at: string | undefined }) {
       // than taste. At -0.5 the reading's ink sat 6.66px below its own message and 4.67px above the
       // next one — CLOSER TO THE MESSAGE IT DOES NOT BELONG TO, which is worse than no reading at all,
       // because a timestamp that reads as the next message's is confidently wrong. At -5px it sits
-      // 4.15px below its own message and 7.66px above the next, so proximity says plainly which one it
-      // belongs to; that holds in the mono face too (3.04 / 7.46).
+      // 3.65px below its own message and 7.66px above the next, so proximity says plainly which one it
+      // belongs to; that holds in the mono face too (3.04 / 7.96).
       //
       // Measured on the real component (`message-timestamp-verify-fixture.tsx`) at 13px prose in a 24px
       // line box, in BOTH fonts; re-measure if either type scale moves. The canvas probe runs ~1.5px
