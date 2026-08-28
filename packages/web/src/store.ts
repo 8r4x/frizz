@@ -25,11 +25,22 @@ export const QUEUE_CARD_VIEWPORT_TOP = 40
 // 2026-08-25 the slot also wrapped the inter-card hairline rule and its 40px margins; the rule is a
 // sibling of the slots now, see TodosView's queue list.)
 // Falls back to the slot itself for a slot that renders no root (fixtures, future card shapes).
-function queueCardRoot(slug: string): HTMLElement | null {
+function queueCardSlot(slug: string): HTMLElement | null {
   if (typeof document === "undefined") return null
-  const el = document.querySelector(`[data-queue-card="${CSS.escape(slug)}"]`)
+  return document.querySelector<HTMLElement>(`[data-queue-card="${CSS.escape(slug)}"]`)
+}
+function queueCardRoot(slug: string): HTMLElement | null {
+  const el = queueCardSlot(slug)
   if (!el) return null
-  return el.querySelector<HTMLElement>(`[data-queue-card-root="${CSS.escape(slug)}"]`) ?? (el as HTMLElement)
+  return el.querySelector<HTMLElement>(`[data-queue-card-root="${CSS.escape(slug)}"]`) ?? el
+}
+
+// Whether `slug` is the FIRST card in the queue — the topmost slot that isn't fading out. A fading
+// predecessor still holds its row for the exit's duration, but it is already gone from the reader's
+// point of view (and the dismissal landing runs after it unmounts), so it doesn't count.
+function isFirstQueueCard(slug: string): boolean {
+  const first = document.querySelector<HTMLElement>('[data-queue-card]:not([data-queue-leaving="true"])')
+  return first !== null && first === queueCardSlot(slug)
 }
 
 // Absolute scrollY that lands `slug`'s bordered card root at the standard viewport-top landing.
@@ -40,9 +51,16 @@ function queueCardRoot(slug: string): HTMLElement | null {
 // `pageScrollY()`, not `window.scrollY`: with a drawer open the page is scroll-LOCKED and window.scrollY
 // reads 0 while the body sits shifted at the real offset, which would put every landing short by
 // however far the reader had scrolled before opening the drawer.
+//
+// The FIRST card lands at the very top of the page instead. At rest its box sits 52px below the page
+// top (main's py-5 plus the queue column's py-8, measured 2026-08-28), so the standard landing is
+// scrollY 12: clearing a card whose successor headed the queue left the page scrollable by that sliver
+// (maintainer 2026-08-28: "it scrolls me like there's like 10 pixels that I could scroll up from where
+// it scrolls me to, and it's very annoying").
 export function queueCardTargetY(slug: string): number | null {
   const root = queueCardRoot(slug)
   if (!root) return null
+  if (isFirstQueueCard(slug)) return 0
   // matchMedia guarded: unit tests stub a minimal window without it (store.queue-navigation.test.ts).
   const navOffset = typeof window.matchMedia === "function" && window.matchMedia("(max-width: 800px)").matches ? 40 : 0
   return Math.max(0, pageScrollY() + root.getBoundingClientRect().top - QUEUE_CARD_VIEWPORT_TOP - navOffset)

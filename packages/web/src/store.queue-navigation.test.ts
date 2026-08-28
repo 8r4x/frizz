@@ -3,6 +3,10 @@ import test from "node:test"
 import { scrollToQueueCard, store } from "./store.ts"
 import { takeScrollAfterUnlock } from "./lib/pageScrollLock.ts"
 
+// How queueCardTargetY asks the document for the queue's FIRST card (the topmost slot not fading out).
+// The mocks below answer it with a distinct predecessor where the card under test must NOT be first.
+const FIRST_SLOT_SELECTOR = '[data-queue-card]:not([data-queue-leaving="true"])'
+
 test("sidebar queue navigation lands immediately at the card reading line", () => {
   const globals = globalThis as typeof globalThis & {
     window?: Window
@@ -23,10 +27,14 @@ test("sidebar queue navigation lands immediately at the card reading line", () =
       setAttribute: (name: string) => flashes.push(`+${name}`),
       removeAttribute: (name: string) => flashes.push(`-${name}`),
     }
+    const predecessor = {}
     globals.CSS = { escape: (value: string) => value } as typeof CSS
     globals.document = {
       body: { style: { position: "" } },
+      // A predecessor heads the queue, so this card takes the standard landing (a FIRST card lands at
+      // scrollY 0 instead — see the last test).
       querySelector: (selector: string) => {
+        if (selector === FIRST_SLOT_SELECTOR) return predecessor
         assert.equal(selector, '[data-queue-card="queued-thread"]')
         return card
       },
@@ -72,10 +80,11 @@ test("sidebar queue navigation uses an absolute reading-line target after a narr
       setAttribute: () => {},
       removeAttribute: () => {},
     }
+    const predecessor = {}
     globals.CSS = { escape: (value: string) => value } as typeof CSS
     globals.document = {
       body: { style: { position: "" } },
-      querySelector: () => card,
+      querySelector: (selector: string) => (selector === FIRST_SLOT_SELECTOR ? predecessor : card),
     } as unknown as Document
     globals.window = {
       scrollY: 5941,
@@ -110,11 +119,13 @@ test("a queued row clicked under an open drawer dismisses every layer and parks 
 
   try {
     const root = { getBoundingClientRect: () => ({ top: 400 }), setAttribute: () => {}, removeAttribute: () => {} }
+    const slot = { getBoundingClientRect: () => ({ top: 400 }), querySelector: () => root, setAttribute: () => {}, removeAttribute: () => {} }
+    const predecessor = {}
     globals.CSS = { escape: (value: string) => value } as typeof CSS
     globals.document = {
       // The page as App leaves it while an overlay is up: pinned at the reader's 1740px offset.
       body: { style: { position: "fixed", top: "-1740px" } },
-      querySelector: () => ({ getBoundingClientRect: () => ({ top: 400 }), querySelector: () => root, setAttribute: () => {}, removeAttribute: () => {} }),
+      querySelector: (selector: string) => (selector === FIRST_SLOT_SELECTOR ? predecessor : slot),
     } as unknown as Document
     globals.window = {
       scrollY: 0, // what a pinned body reports, whatever the reader's real offset
@@ -249,6 +260,51 @@ test("re-clicking a queued row inside the flash window replays the ring and resc
     events.length = 0
     assert.equal(scrollToQueueCard("re-clicked"), true)
     assert.deepEqual(events, ["clear", "set"])
+  } finally {
+    globals.window = previous.window
+    globals.document = previous.document
+    globals.CSS = previous.CSS
+  }
+})
+
+// The FIRST card lands at the very top of the page, not at the standard 40px landing: its box rests 52px
+// below the page top, so that landing is scrollY 12, which left the page scrollable by that sliver after
+// clearing a card whose successor headed the queue (maintainer 2026-08-28: "it scrolls me like there's
+// like 10 pixels that I could scroll up from where it scrolls me to, and it's very annoying"). A FADING
+// predecessor still holds its row but does not count — it is already gone from the reader's point of
+// view, and the dismissal landing runs once it has unmounted.
+test("the first card in the queue lands at scrollY 0, and a fading predecessor does not displace it", () => {
+  const globals = globalThis as typeof globalThis & { window?: Window; document?: Document; CSS?: typeof CSS }
+  const previous = { window: globals.window, document: globals.document, CSS: globals.CSS }
+  const scrolls: ScrollToOptions[] = []
+
+  try {
+    // Box top 52 at scrollY 0: the standard landing would be 12, leaving 12px of page above the fold.
+    const card = {
+      getBoundingClientRect: () => ({ top: 52 }),
+      querySelector: () => null,
+      setAttribute: () => {},
+      removeAttribute: () => {},
+    }
+    globals.CSS = { escape: (value: string) => value } as typeof CSS
+    globals.document = {
+      body: { style: { position: "" } },
+      querySelector: (selector: string) => {
+        // The `:not([data-queue-leaving="true"])` clause is what skips the fading predecessor; the
+        // document answers it with this card, as a real DOM would.
+        assert.equal(selector.includes(':not([data-queue-leaving="true"])') || selector === '[data-queue-card="first-thread"]', true, selector)
+        return card
+      },
+    } as unknown as Document
+    globals.window = {
+      scrollY: 12,
+      scrollTo: (options: ScrollToOptions) => scrolls.push(options),
+      clearTimeout: () => {},
+      setTimeout: () => 0,
+    } as unknown as Window
+
+    assert.equal(scrollToQueueCard("first-thread"), true)
+    assert.deepEqual(scrolls, [{ top: 0, left: 0, behavior: "auto" }])
   } finally {
     globals.window = previous.window
     globals.document = previous.document
