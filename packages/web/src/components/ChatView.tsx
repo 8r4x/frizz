@@ -89,7 +89,7 @@ import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
 import { prependEarlierPage } from "../lib/transcriptPagination.ts"
 import { buildVirtualTranscriptMessageRows, earlierLoadGate, nextTailFollow, TAIL_FOLLOW_PX, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
 import { withoutRedundantRestDividers } from "../lib/restDividers.ts"
-import { coalesceToolActivityMessages, editedFileCount, historicalToolActivityMessages, isPictureTool, isToolActivityException, liveRuntimeStartedAt, liveToolActivityRun, liveToolActivityTail, settledToolActivityLabel, thinkingToolActivityLabel, toolActivityLabel } from "../lib/toolActivity.ts"
+import { coalesceToolActivityMessages, editedFileCount, historicalToolActivityMessages, isPictureTool, isToolActivityException, liveRuntimeStartedAt, liveToolActivityRun, liveToolActivityTail, settledToolActivityLabel, thinkingToolActivityLabel, toolActivityLabel, toolActivityStampAt } from "../lib/toolActivity.ts"
 import { CodexDirectiveCard, MermaidDiagram } from "./CodexRichOutput.tsx"
 import { META_CARD_STEP, PICTURE_STEP, STEP, USER_TAIL_EXTRA, VSpace } from "./rhythm.tsx"
 
@@ -622,7 +622,7 @@ type VirtualThreadRow =
   | { key: "interactions"; kind: "interactions" }
   | { key: "transport-fallback"; kind: "transport-fallback" }
   | { key: string; kind: "earlier-history" }
-  | ({ kind: "message" } & VirtualTranscriptMessageRow)
+  | ({ kind: "message"; stampAt: string | undefined } & VirtualTranscriptMessageRow)
   | { key: "runtime-status"; kind: "runtime-status" }
   | { key: string; kind: "queued"; message: ChatMessage; messageIndex: number; gap: number }
 
@@ -688,10 +688,10 @@ function VirtualizedThreadTranscript({
       activityMessages.map((entry) => entry.message),
       rendersNothingIn(activityMessages, lastAgentIdx),
       messageGap,
-    ).map((row) => ({
-      ...row,
-      messageIndex: activityMessages[row.messageIndex].messageIndex,
-    }))
+    ).map((row) => {
+      const entry = activityMessages[row.messageIndex]
+      return { ...row, messageIndex: entry.messageIndex, stampAt: toolActivityStampAt(entry) }
+    })
   }, [activityMessages, lastAgentIdx])
   const lastUserIdx = useMemo(() => lastAskIndex(messages), [messages])
   const hasRuntimeStatus = Boolean(
@@ -1201,14 +1201,23 @@ function VirtualizedThreadTranscript({
             data-index={virtualRow.index}
             data-transcript-row-key={row.key}
             data-transcript-source-id={row.kind === "message" ? row.message.sourceId : undefined}
-            // `hover:z-20` is what lets a row's hover-revealed timestamp (MessageRow) survive being
+            // `hover:z-[1]` is what lets a row's hover-revealed timestamp (MessageRow) survive being
             // drawn past this row's own bottom edge. Every row here is transform-positioned, so each
             // is its OWN stacking context and a z-index INSIDE one cannot lift anything above the
             // next row — among siblings at z-auto, the later one always wins. The reveal sits in the
             // gap below its message, and that gap is as little as META_CARD_STEP (6px) against a
             // 16px reading, so without this the reading is painted under the following row exactly
             // on the tight rows where it overflows most.
-            className="absolute left-0 top-0 w-full hover:z-20"
+            //
+            // ONE, not the 20 this first shipped with. The pinned current-ask row thirty lines up is a
+            // SIBLING in this same container at `z-[9]`, and that 9 is the only thing holding it above
+            // the scrolling transcript. At 20 a hovered row painted OVER the pinned card — and since the
+            // band is click-through everywhere except its bubble, a pointer resting in its transparent
+            // strip hovered the row behind it, which then covered the bubble's own rectangle and
+            // swallowed hover-to-expand. 1 is both sufficient and 9-safe: a transform-positioned sibling
+            // participates in the parent as if `z-index: 0` whatever its DOM order, so any positive
+            // value beats it.
+            className="absolute left-0 top-0 w-full hover:z-[1]"
             style={{ transform: `translateY(${virtualRow.start}px)` }}
           >
             {row.kind === "head-anchor" ? null
@@ -1252,7 +1261,7 @@ function VirtualizedThreadTranscript({
                 )}
               </div>
             ) : row.kind === "message" ? (
-              <MessageRow at={row.message.at} gap={row.gap}>
+              <MessageRow at={row.stampAt} gap={row.gap}>
                 <Message
                   m={row.message}
                   answering={answeringForMessage(row.message)}
@@ -1288,6 +1297,9 @@ function VirtualizedThreadTranscript({
                 ) : null}
               </div>
             ) : (
+              // The QUEUED branch. Its rows are built straight from `messages`, never through the
+              // tool-activity coalescer, so no run can have walked `at` forward and the message's own
+              // instant is the only reading there is.
               <MessageRow at={row.message.at} gap={row.gap}>
                 <Message m={row.message} paired={paired[row.messageIndex]} />
               </MessageRow>

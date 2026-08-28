@@ -389,6 +389,21 @@ export function liveRuntimeStartedAt(entries: readonly ToolActivityMessage[]): s
   return messageToolTail(entry.message) ? entry.runStartedAt ?? entry.message.at : entry.message.at
 }
 
+/**
+ * The instant a transcript row should READ as, for the per-message hover timestamp.
+ *
+ * For an ordinary message that is just `message.at`. For a COALESCED tool run it is not: `appendToolTail`
+ * walks `at` forward to each newest batch as they fold in, so a settled "Ran 12 tool calls" digest
+ * spanning minutes carries the instant the run FINISHED. A reader hovering a band asks when it started —
+ * the same reading `liveRuntimeStartedAt` gives the runtime slot's clock, and the same precedence.
+ *
+ * Only a run that still has a tool tail can have walked its `at`, so everything else falls straight
+ * through and reads its own instant.
+ */
+export function toolActivityStampAt(entry: ToolActivityMessage): string | undefined {
+  return messageToolTail(entry.message) ? entry.runStartedAt ?? entry.message.at : entry.message.at
+}
+
 function withoutLiveToolTail(message: ChatMessage): ChatMessage {
   const tail = messageToolTail(message)
   if (!tail) return message

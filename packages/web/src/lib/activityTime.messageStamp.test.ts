@@ -21,8 +21,18 @@ test("omits the year within the current year and states it outside", () => {
   const now = new Date(2026, 7, 25, 14, 0, 0)
   const thisYear = messageStamp(new Date(2026, 0, 3, 9, 5, 0).toISOString(), now)!
   const lastYear = messageStamp(new Date(2025, 0, 3, 9, 5, 0).toISOString(), now)!
-  assert.ok(!thisYear.includes("2026"), `current year should be implicit: ${thisYear}`)
-  assert.ok(lastYear.includes("2025"), `a prior year must be stated: ${lastYear}`)
+  // DERIVE the glyph rather than spelling "2026" — the year is formatted in the runtime locale's own
+  // calendar, so a Gregorian literal is exactly the locale pin this file's header says it avoids. Under
+  // `LANG=th_TH.UTF-8` a 2025 instant renders as the Buddhist-era 2568 and `includes("2025")` fails
+  // while messageStamp behaves exactly as specified. CI resolves to en-US today; a contributor machine
+  // need not. `\p{Nd}` and not `\D`: under ar-SA the year is "٢٠٢٥" in Arabic-Indic digits, which an
+  // ASCII-only strip reduces to the empty string — and `includes("")` is vacuously true, so the test
+  // would pass while asserting nothing. Verified across en-US, th-TH, ar-SA, fa-IR, ja-JP, zh-CN,
+  // ko-KR, he-IL, hi-IN and de-DE: both assertions hold in every one.
+  const yearGlyph = (y: number) =>
+    (new Date(y, 0, 3).toLocaleDateString([], { year: "numeric" }).match(/\p{Nd}/gu) ?? []).join("")
+  assert.ok(!thisYear.includes(yearGlyph(2026)), `current year should be implicit: ${thisYear}`)
+  assert.ok(lastYear.includes(yearGlyph(2025)), `a prior year must be stated: ${lastYear}`)
 })
 
 test("a long-running thread's two ends never read the same", () => {
