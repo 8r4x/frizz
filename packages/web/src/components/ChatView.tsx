@@ -24,6 +24,7 @@ import { TodoBlock } from "./TodoBlock.tsx"
 import { splitQuestionBlocks, parseQuestionBlock, type QuestionKind, type BlockAnswer, type MessageAnswering } from "../lib/questionBlocks.ts"
 import { splitFenceBlocks, type FenceKind } from "../lib/fenceBlocks.ts"
 import { showsRegisteredDoneCard } from "../lib/registeredDone.ts"
+import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { parseAnswersCard, pairAllAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
 import { FrizzWake } from "./FrizzWake.tsx"
 import { RecurringPromptLine } from "./RecurringPromptLine.tsx"
@@ -272,6 +273,8 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   // because no message carries it (lib/registeredDone). Keyed on the final assistant message so a worker
   // that also wrote the fence gets one card, from the message, not two.
   const registeredDone = showsRegisteredDoneCard(thread, lastAgentIdx >= 0 ? presentationMessages[lastAgentIdx]?.text : undefined)
+  // The RESIDUAL rung: a rest that carries no other card at all (RestedCard). Same final-message key.
+  const restedCard = showsRestedCard(thread, lastAgentIdx >= 0 ? presentationMessages[lastAgentIdx]?.text : undefined)
   // Client view pref: how (or whether) to pin the current ask to the pane top. `off` → no pin.
   const { stickyUserMessage } = useSnapshot(prefs)
   // Question-block interactivity in the thread view: EVERY ask stays answerable, wherever it sits —
@@ -498,7 +501,7 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
                 card through that predicate, and gating the slot on the bare flag opened it for a
                 bg-snoozed thread — every branch then rendered null and the slot was an empty gap at the
                 transcript's end (the gate-vs-renderer mismatch of 2026-08-25, one surface over). */}
-            {((thread?.providerFault && !thread.foreign) || (thread?.limitPause && !thread.foreign) || frozenAsk || thread?.runtime === "perm-prompt" || showWorking || showsSnoozeCard(thread) || showsRestingCard(thread) || registeredDone) && (
+            {((thread?.providerFault && !thread.foreign) || (thread?.limitPause && !thread.foreign) || frozenAsk || thread?.runtime === "perm-prompt" || showWorking || showsSnoozeCard(thread) || showsRestingCard(thread) || registeredDone || restedCard) && (
               <VSpace h={
                 showWorking && !thread?.providerFault && !thread?.limitPause && !frozenAsk && thread?.runtime !== "perm-prompt"
                   ? workingIndicatorGap(activityMessages.map((entry) => entry.message))
@@ -543,6 +546,9 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
               // open question or an armed watch blocks the verb — so a thread showing this is at rest with
               // nothing left to wait on.
               <FenceCard fenceKind="done" body={thread!.lastFence!.body} hints={[]} />
+            ) : restedCard ? (
+              // NOTHING ELSE APPLIES, and the bottom of the thread still has to say so — see RestedCard.
+              <RestedCard thread={thread!} />
             ) : null}
             {/* SIBLING of the chain above, not a branch in it. Those are mutually exclusive because they
                 all describe the ONE thing currently blocking; a policy denial already happened and
@@ -715,6 +721,8 @@ function VirtualizedThreadTranscript({
   // because no message carries it (lib/registeredDone). Keyed on the final assistant message so a worker
   // that also wrote the fence gets one card, from the message, not two.
   const registeredDone = showsRegisteredDoneCard(thread, lastAgentIdx >= 0 ? messages[lastAgentIdx]?.text : undefined)
+  // The RESIDUAL rung: a rest that carries no other card at all (RestedCard). Same final-message key.
+  const restedCard = showsRestedCard(thread, lastAgentIdx >= 0 ? messages[lastAgentIdx]?.text : undefined)
   const hasRuntimeStatus = Boolean(
     (thread?.providerFault && !thread.foreign)
       || (thread?.limitPause && !thread.foreign)
@@ -725,7 +733,8 @@ function VirtualizedThreadTranscript({
       // showsRestingCard, not the raw flag — see the non-virtualized gate; on the bare flag a bg-snoozed
       // thread grew an empty runtime-status ROW here (null in a padded div) at the transcript's end.
       || showsRestingCard(thread)
-      || registeredDone,
+      || registeredDone
+      || restedCard,
   )
   // Which rung of the runtime-status ladder (rendered below, hardest reading first) wins. Only its
   // Working… rung is a quiet meta row rather than a card, and only that rung joins the tight run —
@@ -1300,6 +1309,9 @@ function VirtualizedThreadTranscript({
                 ) : registeredDone ? (
                   // See the non-virtualized chain above: the registered sign-off's own card, last rung.
                   <FenceCard fenceKind="done" body={thread!.lastFence!.body} hints={[]} />
+                ) : restedCard ? (
+                  // See the non-virtualized chain above: the residual rung.
+                  <RestedCard thread={thread!} />
                 ) : null}
                 {/* Sibling, not a branch — see the runtime-status block above. */}
                 {thread?.permPolicy ? (

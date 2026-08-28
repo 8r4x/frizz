@@ -35,6 +35,8 @@ function harness(tele?: Partial<SessionTelemetry>) {
   const ctx = {
     project, storage, board, tailer,
     getSettings: () => ({ permissionMode: "auto" }) as unknown as Settings,
+    // addOwnPrWatch probes the PR before arming; this harness is about the registry, so every ref reads.
+    probePr: async () => ({ ok: true as const }),
   } as unknown as AppContext
   return {
     storage, router: createRouter(ctx), refreshes: () => refreshes,
@@ -151,5 +153,40 @@ test("an unregistered thread is an error, not a silently recorded completion", a
       () => h.router.markOwnDone.handler({ input: { slug: "ghost", body: "done!" } }),
       /thread ghost is not registered/,
     )
+  } finally { h.close() }
+})
+
+// A REGISTRATION TRUMPS A DONE (maintainer 2026-08-27: "done always gets trumped by a watcher or a
+// question"). The gate stops a done landing on a live registration; these pin the other direction —
+// a registration landing on a recorded done unmarks it, at the verb, so the board can never hold a
+// finished thread that is also asking or waiting.
+test("a question registered after a done clears the done", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    await h.router.markOwnDone.handler({ input: { slug: "t", body: "- **Fixed** it" } })
+    assert.ok(h.storage.getThreadDone("t"))
+    await h.router.ask.handler({ input: { slug: "t", questions: [question] } })
+    assert.equal(h.storage.getThreadDone("t"), undefined)
+  } finally { h.close() }
+})
+
+test("a timer armed after a done clears the done", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    await h.router.markOwnDone.handler({ input: { slug: "t", body: "- **Fixed** it" } })
+    await h.router.setOwnThreadTimer.handler({ input: { slug: "t", prompt: "re-check the install", fireAt: new Date(Date.now() + 3_600_000).toISOString() } })
+    assert.equal(h.storage.getThreadDone("t"), undefined)
+  } finally { h.close() }
+})
+
+test("a PR watch registered after a done clears the done", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    await h.router.markOwnDone.handler({ input: { slug: "t", body: "- **Fixed** it" } })
+    await h.router.addOwnPrWatch.handler({ input: { slug: "t", target: "acme/app#391", for: "2h" } })
+    assert.equal(h.storage.getThreadDone("t"), undefined)
   } finally { h.close() }
 })

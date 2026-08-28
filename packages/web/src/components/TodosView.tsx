@@ -12,6 +12,7 @@ import { useLiveAnswering } from "../lib/answering.ts"
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { hasQuestionBlock } from "../lib/questionBlocks.ts"
 import { showsRegisteredDoneCard } from "../lib/registeredDone.ts"
+import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { collapseMiddleRuns, opensQueueSegment, queueCollapseSegments, segmentFolds, supersededAskIndices, survivesQueueCollapse } from "../lib/queueCollapse.ts"
 import { pairAllAnswers } from "../lib/answersMessage.ts"
 import { FenceCard, Message, PermPolicyDenialCard, PermPromptBanner, PendingAskCard, StickyUserBand, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText, lastAssistantIndex } from "./ChatView.tsx"
@@ -1506,6 +1507,12 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
             <VSpace />
             <FenceCard fenceKind="done" body={thread.lastFence!.body} hints={[]} wrap />
           </>
+        )}
+        {/* The residual rung, same as the thread view: a rest with no other card still states itself. */}
+        {showsRestedCard(thread, lastAgentIdx >= 0 ? messages[lastAgentIdx]?.text : undefined) && (
+          <div className="mt-4">
+            <RestedCard thread={thread} />
+          </div>
         )}
       </div>
 

@@ -4,7 +4,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { InteractionRequest } from "@frizz/shared"
-import { appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, hasDeclaredWait, hasRegisteredBackgroundPark, registeredDoneFence, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle, type RegisteredWatch } from "./board.ts"
+import { appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, hasDeclaredWait, hasParkedTimerWatch, hasRegisteredBackgroundPark, registeredDoneFence, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle, type RegisteredWatch } from "./board.ts"
 import { Bus } from "./bus.ts"
 import { createStorage } from "./storage.ts"
 import type { Project } from "./project.ts"
@@ -1937,4 +1937,20 @@ test("an unparseable user instant cannot silently revoke a completion", () => {
   // left the done standing by accident rather than on purpose. It stands ON PURPOSE: a timestamp frizz
   // cannot read is not evidence that the human said anything.
   assert.equal(registeredDoneFence({ body: "done", doneAt: 1000 }, "not-a-date")?.kind, "done")
+})
+
+// REGISTRATION-FIRST WAITS (2026-08-27). A PR watch or a timer used to count as a wait only when an
+// awaiting fence named it, so a worker that registered one and rested on prose fell through to the bare
+// rest and drew no card. With no fence the registration IS the wait; with a fence, the fence still has
+// to name an armed one (the declaration is the worker's statement, checked against the registry).
+test("an armed PR watch or timer with no fence is a declared wait; a fence must still name one", () => {
+  const idle = tele({ turn: "idle" })
+  assert.equal(hasDeclaredWait(idle, NOW, new Set(), new Set(["acme/app#1"]), []), true)
+  assert.equal(hasDeclaredWait(idle, NOW, new Set(["tmr_a1"]), new Set(), []), true)
+  assert.equal(hasDeclaredWait(idle, NOW, new Set(), new Set(), []), false)
+  // An awaiting fence that names shells only, beside an armed timer nobody declared: the fence rules.
+  const shellsOnly = parked({ kind: "shell", value: "bzvtnt3ig" })
+  assert.equal(hasParkedTimerWatch(shellsOnly, new Set(["tmr_a1"])), false)
+  assert.equal(hasParkedTimerWatch(parked({ kind: "timer", value: "tmr_a1" }), new Set(["tmr_a1"])), true)
+  assert.equal(hasParkedTimerWatch(idle, new Set(["tmr_a1"])), true)
 })

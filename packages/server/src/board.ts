@@ -455,7 +455,11 @@ export function hasParkedTimerWatch(
   tele: SessionTelemetry | undefined,
   armedTimerIds: ReadonlySet<string>,
 ): boolean {
-  if (tele?.lastFence?.kind !== "awaiting") return false
+  // REGISTRATION-FIRST (2026-08-27): with no awaiting fence to check the declaration against, the armed
+  // timer IS the wait — the row is what wakes the thread, fence or no fence, and a rest on it drew no
+  // card at all while the fence was required (the thread fell through to the bare rest). With a fence,
+  // the fence is the worker's statement and it has to name an armed one, as before.
+  if (tele?.lastFence?.kind !== "awaiting") return armedTimerIds.size > 0
   return tele.lastFence.hints.some((hint) => hint.kind === "timer" && armedTimerIds.has(hint.value.trim()))
 }
 
@@ -475,7 +479,7 @@ export function hasDeclaredWait(
   // A REGISTRATION IS A WAIT WITHOUT A FENCE. It is the same fact the `shells:` line states, made
   // durable: it outlives the message that created it, so it survives the worker saying something else.
   if (hasRegisteredBackgroundPark(tele, armedWatches, nowMs)) return true
-  if (tele?.lastFence?.kind === "awaiting" && hasParkedPrWatch(tele, registeredPrWatches)) return true
+  if (hasParkedPrWatch(tele, registeredPrWatches)) return true
   // A TIMER PARK CARDS LIKE A PR PARK (maintainer 2026-08-24: the resting card "enumerates all of the
   // pull requests and the background shells … I don't understand why timer isn't represented in the same
   // way"). Until this limb existed a timer-only park had no resting card at all, so the fence card fell
@@ -558,7 +562,8 @@ function hasLiveOwnWork(tele: SessionTelemetry | undefined, registeredPrWatches:
  *  wait was about — rendered on no surface at all. Membership is by githubStatusKey, so a fence naming
  *  the PR by URL still matches its normalized registration, exactly as unaccountedItems reads it. */
 function hasParkedPrWatch(tele: SessionTelemetry | undefined, registered: ReadonlySet<string>): boolean {
-  if (tele?.lastFence?.kind !== "awaiting") return false
+  // Registration-first, same as hasParkedTimerWatch: an armed PR watch with no fence is the wait itself.
+  if (tele?.lastFence?.kind !== "awaiting") return registered.size > 0
   return tele.lastFence.hints.some((hint) => {
     if (hint.kind !== "pr") return false
     const ref = parsePrRef(hint.value)
@@ -1197,8 +1202,6 @@ function sessionThreadView(
   // Only ever LAYERED OVER real telemetry, never fabricated in its absence: an untailed thread has no
   // runtime, no turn and no last activity, and half a SessionTelemetry carrying one fence would put
   // every predicate below on a shape none of them was written for.
-  const done = registeredDoneFence(storage.getThreadDone(row.slug), rawTele?.lastUserAt)
-  const tele: SessionTelemetry | undefined = done && rawTele ? { ...rawTele, lastFence: done } : rawTele
   // The PRs this thread has actually REGISTERED, by `owner/repo#N` — what a `prs:` declaration is
   // checked against. Read per thread because the registry is per thread, unlike the status book above.
   const armedPrWatches = storage.listPrWatches(row.slug, { armedOnly: true }).map((w) => ({
@@ -1236,6 +1239,14 @@ function sessionThreadView(
     createdAt: new Date(w.created_at).toISOString(),
     expiresAt: new Date(w.expires_at).toISOString(),
   }))
+  // …AND A LIVE REGISTRATION OUTRANKS IT (maintainer 2026-08-27: "done always gets trumped by a watcher
+  // or a question"). The registering verbs clear the row themselves (router: ask, addOwnWatch,
+  // addOwnPrWatch, setOwnThreadTimer) and `done` refuses while any is live, so this is the belt to
+  // those braces: whatever path leaves a done row beside an open question or an armed wait, the board
+  // presents the wait, never a finished thread that is also asking or waiting.
+  const supersededDone = questions.length > 0 || armedWatches.length > 0 || armedPrWatches.length > 0 || armedTimers.length > 0
+  const done = supersededDone ? undefined : registeredDoneFence(storage.getThreadDone(row.slug), rawTele?.lastUserAt)
+  const tele: SessionTelemetry | undefined = done && rawTele ? { ...rawTele, lastFence: done } : rawTele
   // A headless thread mid-turn with nobody driving it is a crash/stall, not a rest. For codex that is
   // an app-server that stopped advancing the rollout; for the broker it is a dead ownerless daemon (its
   // liveness is the daemon record, resolved live). Either way the (exited + in-flight) pair trips the

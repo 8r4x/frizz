@@ -2332,6 +2332,12 @@ export function createRouter(ctx: AppContext) {
           throw new Error(`this thread already has ${armed.length} armed timers (the limit is ${TIMER_MAX_ARMED}) — cancel one first`)
         }
         const id = `tmr_${randomUUID().replace(/-/g, "").slice(0, 12)}`
+        // A REGISTRATION TRUMPS A DONE (maintainer 2026-08-27: "done always gets trumped by a watcher or a
+        // question"). `done` refuses while any of these is live, so the only way both can exist is a
+        // worker that signed off and then armed something — and a thread with a wait ahead of it is not
+        // finished. Clearing the row here, at the registering verb, is what keeps the board from ever
+        // holding a done card and a live wait about the same rest.
+        ctx.storage.clearThreadDone(input.slug)
         ctx.storage.armThreadTimer({
           id,
           slug: input.slug,
@@ -2478,6 +2484,8 @@ export function createRouter(ctx: AppContext) {
         }
         const now = Date.now()
         const id = `prw_${randomUUID().replace(/-/g, "").slice(0, 12)}`
+        // A registration trumps a done — see setOwnThreadTimer.
+        ctx.storage.clearThreadDone(input.slug)
         ctx.storage.armPrWatch({ id, slug: input.slug, owner: ref.owner, repo: ref.repo, number: ref.number, createdAtMs: now, expiresAtMs: now + forMs })
         ctx.board.refresh()
         return { id, target, alreadyArmed: false, watches: armedPrWatchViews(input.slug) }
@@ -2548,6 +2556,8 @@ export function createRouter(ctx: AppContext) {
         }
         const now = Date.now()
         const id = `wch_${randomUUID().replace(/-/g, "").slice(0, 12)}`
+        // A registration trumps a done — see setOwnThreadTimer.
+        ctx.storage.clearThreadDone(input.slug)
         ctx.storage.armThreadWatch({ id, slug: input.slug, kind: input.kind, target, createdAtMs: now, expiresAtMs: now + forMs })
         ctx.board.refresh()
         return { id, kind: input.kind, target, alreadyArmed: false, watches: armedOwnWatchViews(input.slug) }
@@ -2614,6 +2624,8 @@ export function createRouter(ctx: AppContext) {
         const now = Date.now()
         const registered = input.questions.map((spec) => {
           const id = `qst_${randomUUID().replace(/-/g, "").slice(0, 12)}`
+          // A question trumps a done — see setOwnThreadTimer.
+          ctx.storage.clearThreadDone(input.slug)
           ctx.storage.askThreadQuestion({ id, slug: input.slug, spec: JSON.stringify(spec), askedAtMs: now })
           return { id, spec, askedAt: new Date(now).toISOString() }
         })
