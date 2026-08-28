@@ -1171,10 +1171,11 @@ function VirtualizedThreadTranscript({
               two stacked `sticky top-0` layers push the card down by the inner band's box (the 121px
               gap that let transcript content bleed above the "pinned" card). `[&>*]:pointer-events-auto`
               re-enables the bubble (hover-to-expand) while the full-width band stays click-through.
-              `group/ts` + `relative` are what let the pinned ask carry its own hover reading: this row
-              is hoisted out of the absolute layer, so it never passes through MessageRow, and without
-              them it would be the ONE message with no timestamp — the ask the whole reply is answering.
-              It needs no `hover:z` lift of its own; `z-[9]` already draws it over the scrolling rows. */}
+              `group/ts` is what lets the pinned ask carry its own hover reading: this row is hoisted out
+              of the absolute layer, so it never passes through MessageRow, and without it this would be
+              the ONE message with no timestamp — the ask the whole reply is answering. The reading's own
+              containing block is the wrapper below, not this band. It needs no `hover:z` lift of its
+              own; `z-[9]` already draws it over the scrolling rows. */}
           <div
             key={stickyMessageRow.key}
             ref={virtualizer.measureElement}
@@ -1184,14 +1185,26 @@ function VirtualizedThreadTranscript({
             data-transcript-sticky="true"
             className="group/ts pointer-events-none [&>*]:pointer-events-auto sticky top-0 z-[9] flex w-full flex-col px-6 pt-3 pb-1.5"
           >
-            <Message
-              m={stickyMessageRow.message}
-              answering={answeringForMessage(stickyMessageRow.message)}
-              showSendButton
-              paired={paired[stickyMessageRow.messageIndex]}
-              sticky
-            />
-            <MessageStamp at={stickyMessageRow.message.at} />
+            {/* The reading is `absolute top-full`, which resolves against its containing block's PADDING
+                box — so hanging it off the band directly put it 6px lower than every other row's, by
+                exactly this band's `pb-1.5`, and it read as belonging to the row BELOW (measured
+                2026-08-28: 1px under its own bubble and 3px over the next, against −5px/+3px on an
+                ordinary row). This wrapper ends where the message ends, like `MessageRow`'s own box,
+                so the one measured offset in MessageTimestamp is correct here without a second
+                constant to keep in sync. `!pointer-events-none` because the band's
+                `[&>*]:pointer-events-auto` would otherwise make this full-width wrapper swallow the
+                click-through the band exists to preserve; its own copy of that variant hands the
+                bubble back. */}
+            <div className="!pointer-events-none relative flex w-full flex-col [&>*]:pointer-events-auto">
+              <Message
+                m={stickyMessageRow.message}
+                answering={answeringForMessage(stickyMessageRow.message)}
+                showSendButton
+                paired={paired[stickyMessageRow.messageIndex]}
+                sticky
+              />
+              <MessageStamp at={stickyMessageRow.message.at} />
+            </div>
           </div>
         </>
       )}

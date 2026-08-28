@@ -12,8 +12,9 @@
 //
 //   nub exec vite build   then open the inlined bundle
 //   (a dev server needs listen(), which this sandbox refuses — hence the static build)
-//   ?hover=<n>  paints row n as if hovered, because a camera cannot hold a pointer
-//               (?hover=1 is the tight case — a reading lands in the NEXT row's gap, and row 2's is 6px)
+//   ?hover=<n>     paints row n as if hovered, because a camera cannot hold a pointer
+//                  (?hover=1 is the tight case — a reading lands in the NEXT row's gap, and row 2's is 6px)
+//   ?hover=band    the same for the pinned current-ask band, which is not a [data-verify-row]
 import { createRoot } from "react-dom/client"
 import { MessageRow, MessageStamp } from "./components/MessageTimestamp.tsx"
 import { messageStamp } from "./lib/activityTime.ts"
@@ -21,14 +22,20 @@ import "./styles.css"
 
 const params = new URLSearchParams(location.search)
 document.documentElement.dataset.font = params.get("font") === "mono" ? "mono" : "sans"
-const FORCED = params.has("hover") ? Number(params.get("hover")) : -1
+// `?hover=band` targets the pinned band, `?hover=<n>` an ordinary row. The band needs its own value
+// because it is not a `[data-verify-row]` — it is hoisted out of the absolute layer, which is the whole
+// point of it — and while it went unphotographable its reading sat 6px lower than every other row's
+// without anyone noticing (2026-08-28).
+const HOVER = params.get("hover")
+const FORCED = HOVER !== null && HOVER !== "band" ? Number(HOVER) : -1
 // The reveal is opacity-driven off a real `:hover`, and a camera cannot hold a pointer. Force the ONE
-// row under test from OUTSIDE the component — a stylesheet override on its row — rather than adding a
-// prop to `MessageRow` that exists only for photography. What renders is still the shipped element,
+// element under test from OUTSIDE the component — a stylesheet override on its row — rather than adding
+// a prop to `MessageRow` that exists only for photography. What renders is still the shipped element,
 // at the shipped opacity, in the shipped position.
-if (FORCED >= 0) {
+const forcedSelector = HOVER === "band" ? "[data-verify-band]" : FORCED >= 0 ? `[data-verify-row="${FORCED}"]` : null
+if (forcedSelector) {
   const style = document.createElement("style")
-  style.textContent = `[data-verify-row="${FORCED}"] time { opacity: 1 !important; }`
+  style.textContent = `${forcedSelector} time { opacity: 1 !important; }`
   document.head.appendChild(style)
 }
 
@@ -89,12 +96,18 @@ function Sheet() {
           rows is exercised against the band rather than asserted. */}
       <div className="relative overflow-y-auto rounded-lg border border-border/60 bg-bg" style={{ height: 260 }}>
         <div className="group/ts pointer-events-none [&>*]:pointer-events-auto sticky top-0 z-[9] flex w-full flex-col px-6 pt-3 pb-1.5" data-verify-band>
-          <div className="flex justify-end">
-            <div className="max-w-[85%] rounded-xl rounded-br-sm bg-user-bubble px-3.5 py-3 text-[14px] text-bg" data-verify-bubble>
-              The pinned current ask — it must keep its own hover while a row below is hovered.
+          {/* The inner wrapper is not decoration — it is the reading's containing block, and it must
+              mirror ChatView exactly or this fixture measures a shape that does not ship. `top-full`
+              resolves against the PADDING box, so hanging the reading off the band itself put it a
+              further `pb-1.5` (6px) down and it read as the NEXT row's. */}
+          <div className="!pointer-events-none relative flex w-full flex-col [&>*]:pointer-events-auto">
+            <div className="flex justify-end">
+              <div className="max-w-[85%] rounded-xl rounded-br-sm bg-user-bubble px-3.5 py-3 text-[14px] text-bg" data-verify-bubble>
+                The pinned current ask — it must keep its own hover while a row below is hovered.
+              </div>
             </div>
+            <MessageStamp at={ROWS[0].at} />
           </div>
-          <MessageStamp at={ROWS[0].at} />
         </div>
         <div className="relative w-full" style={{ height: top + 56 }}>
         {placed.map((r, i) => (

@@ -63,6 +63,7 @@ export function MessageStamp({ at }: { at: string | undefined }) {
       // line box, in BOTH fonts; re-measure if either type scale moves. The canvas probe runs ~1.5px
       // tight against the rendered picture, so read the RATIO rather than the absolute — under a user
       // bubble the reading tucks just beneath the bubble's own box edge.
+      //
       // `!pointer-events-none`, not the plain utility. On the PINNED band this element is a DIRECT
       // child of a wrapper carrying `[&>*]:pointer-events-auto` — the rule that re-enables the bubble's
       // hover-to-expand under a click-through band — and that arbitrary variant wins on specificity, so
