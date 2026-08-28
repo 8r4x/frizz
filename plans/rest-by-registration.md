@@ -83,6 +83,19 @@ The two liveness mechanisms are not comparable today:
 - **The snooze button rides the waiting card, not a card that is actively asking.** Its snooze is not a wall-clock one — it is "put this thread into the park band until something wakes it."
 - **`Held` is renamed `Snoozed`**, and survives for the human's own parks: a wall-clock snooze, an auto-resumed limit pause, and the indefinite snooze above. The worker-declared park was the only tenant this redesign removes. The rename moves the group key too, not just the label — `groups.ts` already carries the cost of a key that drifted from its label (the archived section keys on `"inactive"` while it reads "Done").
 
+### REJECTED: gating a question's rendering on an `awaiting` block that names its id
+
+Proposed 2026-08-28, declined the same day. The instinct behind it is right — a fence IS a message, so a reference from one would anchor the question exactly instead of inferring the anchor from `askedAt`. The gate itself reverses this memo, on four counts, any one of which is sufficient:
+
+- **A question nobody references is invisible, and `done` is gated on open questions.** The row goes on blocking completion while nothing draws it, so a worker that omits the reference deadlocks its own thread behind a blocker no human can see. That is the failure mode of the retired `human:` key, which parked a thread and fired nothing.
+- **It kills asking early.** A question registered mid-turn renders at the tail immediately, so the human can answer it while the worker keeps working — which the contract asks for outright (*"REGISTERING A QUESTION DOES NOT END YOUR TURN"*). A gate on a block written at rest holds every question until the worker stops.
+- **The fence is the wrong container.** Every name in it is checked against live telemetry the moment it lands, and a name that resolves to nothing BUMPS the worker; `for:` is required, and expiry cancels the park. A question resolves to no process, carries no timeout by design, and must never expire.
+- **It re-couples durability to prose.** A registration outlives a compaction, a restart and the transcript scrolling; a fence has the lifetime of the message carrying it. Gating the row on a message hands the row the message's lifetime back, which is the one property this memo exists to remove.
+
+Withdrawal already has a verb. `unask` retracts a question by an ACT; the gate would retract one by OMISSION, which is the unsafe half of that pair — a forgotten `unask` leaves a stale question standing, where a forgotten reference silently drops a live one.
+
+**If placement ever reads wrong again, the fix is server-side rather than authored.** Stamp the anchor when `ask` lands — the id of the thread's last transcript record — and render against that instead of comparing `askedAt` against message timestamps. It is exact, it needs nothing from the worker, it cannot be forgotten, and it closes the one case the timestamp rule cannot: a question whose rest is older than the loaded transcript window renders at the top of what is loaded rather than at its true position.
+
 ## Migration
 
 Frizz keeps **accepting** the `` ```awaiting `` fence during the transition and converts it to registrations — it already resolves the same three handles per shell — so workers whose contract is frozen at dispatch keep parking instead of being bumped at every rest. A `` ```done `` fence is accepted ungated for the same window. Both stop being *written* as contracts refresh, then get deleted.
@@ -97,7 +110,7 @@ Frizz keeps **accepting** the `` ```awaiting `` fence during the transition and 
 | --- | --- |
 | Fork 1 — authority | **A, and now the only option.** The client never mints anything; the server is authoritative by construction. |
 | Fork 2 — what marks a question addressed | **A.** Explicit answer or dismiss only, with dismiss first-class (the ×) and `unask` as the worker's own withdrawal. |
-| Fork 3 — stacking UX and navigation | **Partly.** Open questions collect and render together at rest rather than staying positional. Reaching an old question from the queue is not separately settled. |
+| Fork 3 — stacking UX and navigation | **Partly.** A question renders at the rest it was ASKED at (`da172fd2`), so a batch registered in one call stacks together and questions asked at different rests stay apart. Reaching an old question from the queue is not separately settled. |
 | Fork 4 — first-cut scope | **Obsolete.** There are no fenced markdown questions to scope; `ask` is the only path. |
 | Policy 5 — dismissal delivery | **Neither listed option.** Not local-only, not a notify-and-wake: dismissals queue and flush on the next steer. |
 | Policy 7 — submission unit | **7B, the batch.** The card submits as a unit. The memo flags per-attempt recovery UI as mandatory under this choice; that cost is taken on deliberately. |
