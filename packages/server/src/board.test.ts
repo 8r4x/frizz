@@ -3,10 +3,10 @@ import assert from "node:assert/strict"
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { InteractionRequest } from "@frizz/shared"
-import { appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, hasDeclaredWait, hasParkedTimerWatch, hasRegisteredBackgroundPark, registeredDoneFence, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle, type RegisteredWatch } from "./board.ts"
+import { questionAnswerMessage, type InteractionRequest } from "@frizz/shared"
+import { answersInFlight, appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, hasDeclaredWait, hasParkedTimerWatch, hasRegisteredBackgroundPark, registeredDoneFence, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle, type RegisteredWatch } from "./board.ts"
 import { Bus } from "./bus.ts"
-import { createStorage } from "./storage.ts"
+import { createStorage, type ThreadQuestionRow } from "./storage.ts"
 import type { Project } from "./project.ts"
 import type { SessionRow } from "./storage.ts"
 import type { SessionTelemetry, Tailer } from "./tailer.ts"
@@ -1896,6 +1896,60 @@ test("a registered question does NOT degrade a running thread to turn-idle", () 
   assert.equal(degradeIfAwaitingAnswer("running", false), "running")
   assert.equal(degradeIfAwaitingAnswer("running", true), "turn-idle")
   assert.equal(degradeIfAwaitingAnswer("turn-idle", true), "turn-idle")
+})
+
+// ---- THE ANSWER ALREADY SENT, NOT YET RECEIVED -----------------------------------------------------
+//
+// Answering stores the row; a wake hands it to the worker a moment later, deliberately — an answer given
+// while the worker's process was down has to survive the gap. But the gap is a HOLE ON SCREEN: the
+// question card goes the instant the answer is stored, and until the delivery lands nothing stands in
+// its place, so the thread drew the residual "Rested without a sign-off" card in it (maintainer
+// 2026-08-27). This is what fills it, and its whole subtlety is WHEN IT STOPS.
+
+const askedRow = (over: Partial<ThreadQuestionRow> = {}): ThreadQuestionRow => ({
+  id: "qst_1", thread_slug: "t", state: "answered", delivered: 0, asked_at: 1000, settled_at: 2000,
+  spec: JSON.stringify({ question: "SQLite or a JSON file?", kind: "question", options: [{ label: "SQLite" }] }),
+  answer: JSON.stringify({ questionId: "qst_1", question: "SQLite or a JSON file?", chosen: ["SQLite"] }),
+  ...over,
+})
+
+test("an answered row in flight composes the exact message the delivery will carry", () => {
+  // THE SAME BYTES, so the card drawn while it is in flight and the card drawn once it lands are the
+  // same card and the swap between them is invisible.
+  assert.equal(
+    answersInFlight([askedRow()], undefined),
+    questionAnswerMessage([{ questionId: "qst_1", question: "SQLite or a JSON file?", chosen: ["SQLite"] }]),
+  )
+})
+
+test("the WORKER RECEIVING it spends it — not the outbox claiming it", () => {
+  // `delivered` is set at ENQUEUE, a whole delivery ahead of the transcript, so keying on it would
+  // reopen the same hole a second wide. The newest user record is the honest test: frizz's delivery IS
+  // a user record, so the moment the worker has it, the card the transcript draws takes over.
+  assert.ok(answersInFlight([askedRow({ delivered: 1 })], new Date(1999).toISOString()), "enqueued is not received")
+  assert.equal(answersInFlight([askedRow()], new Date(2000).toISOString()), undefined, "the record landed")
+  assert.equal(answersInFlight([askedRow()], new Date(9000).toISOString()), undefined, "…and stays spent")
+})
+
+test("nothing in flight for a question nobody answered, or for a dismissal alone", () => {
+  assert.equal(answersInFlight([askedRow({ state: "open", settled_at: null, answer: null })], undefined), undefined)
+  assert.equal(answersInFlight([askedRow({ state: "withdrawn", answer: null })], undefined), undefined)
+  // A DISMISSAL WAKES NOBODY, so there is no arrival to bridge to — showing a card for one would leave
+  // it on screen until the next unrelated turn.
+  assert.equal(answersInFlight([askedRow({ state: "dismissed", answer: null })], undefined), undefined)
+})
+
+test("a dismissal RIDES an answer, and is named by its question rather than its id", () => {
+  const wire = answersInFlight([
+    askedRow(),
+    askedRow({ id: "qst_2", state: "dismissed", answer: null, spec: JSON.stringify({ question: "Name the flag?", kind: "question" }) }),
+  ], undefined)
+  assert.match(wire ?? "", /“Name the flag\?” → \(dismissed/)
+})
+
+test("one unreadable row never blanks the card the others earned", () => {
+  const wire = answersInFlight([askedRow(), askedRow({ id: "qst_2", answer: "{not json" })], undefined)
+  assert.match(wire ?? "", /“SQLite or a JSON file\?” → SQLite/)
 })
 
 // ---- A REGISTERED COMPLETION -----------------------------------------------------------------------

@@ -328,9 +328,13 @@ test("question: an answer is handed over once, and the row is not re-delivered",
   await s.tick()
   await s.tick() // the row is delivered → must not go round again
   assert.equal(h.resumes.length, 1)
-  assert.match(h.resumes[0].message, /Answers to the questions you registered:/)
+  // THE WIRE FORM IS THE ATTRIBUTION. This lands as a frizz WAKE, and a wake renders as frizz's own
+  // notification card unless the text is in the form the chat reads as the human's Answers card — which
+  // it checks first. Getting it wrong does not fail; the answer just stops being the human's words on
+  // screen (the 2026-08-27 regression).
+  assert.match(h.resumes[0].message, /^Answers to earlier questions:$/m)
   // IT RESTATES THE QUESTION, because the worker never saw the id — frizz minted it.
-  assert.match(h.resumes[0].message, /“SQLite or a JSON file\?” → SQLite/)
+  assert.match(h.resumes[0].message, /^1\. “SQLite or a JSON file\?” → SQLite$/m)
   assert.equal(h.storage.getThreadQuestion("qst_1")?.delivered, 1)
 })
 
@@ -352,7 +356,9 @@ test("question: a dismissal rides an answer's message and never wakes anybody on
   h.storage.answerThreadQuestion("qst_keep", JSON.stringify({ questionId: "qst_keep", question: "Which store?", chosen: ["SQLite"] }), h.clock.ms)
   await s.tick()
   assert.equal(h.resumes.length, 1)
-  assert.match(h.resumes[0].message, /1 other question was DISMISSED without an answer/)
+  // A ROW like any other, not a trailing paragraph: the reader treats any non-row line after a row as a
+  // continuation of THAT row's answer, so a tail would print inside the human's own answer chip.
+  assert.match(h.resumes[0].message, /^2\. “Name the flag\?” → \(dismissed — decide it yourself; do not re-ask\)$/m)
   assert.equal(h.storage.getThreadQuestion("qst_drop")?.delivered, 1, "and rides along when one comes")
 })
 

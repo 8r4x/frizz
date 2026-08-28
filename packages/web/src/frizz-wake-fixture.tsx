@@ -1,6 +1,6 @@
 import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { formatGithubWakeSteer, limitResumeSteer, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, prWatchWakeMessage, shellDoneMessage, timerPromptMessage } from "@frizz/shared"
+import { formatGithubWakeSteer, limitResumeSteer, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, prWatchWakeMessage, questionsCancelledWakeMessage, shellDoneMessage, timerPromptMessage } from "@frizz/shared"
 import type { ChatMessage } from "./hooks.ts"
 import { Message } from "./components/ChatView.tsx"
 import "./styles.css"
@@ -62,6 +62,13 @@ const messages: ChatMessage[] = [
   wake("w9", shellDoneMessage({ taskId: "bzvtnt3ig", label: "the churn suite", status: "completed" })),
   wake("w10", shellDoneMessage({ taskId: "b52kqwc13", label: "vite --port 5199 --strictPort", status: "failed" })),
   wake("w11", shellDoneMessage({ label: "Running the focused tests", status: "killed" })),
+  // QUESTIONS TAKEN AWAY RATHER THAN ANSWERED — the thread went autonomous while registrations were
+  // still open, so they were cancelled wholesale and nobody is coming. It is the ONE wake on the
+  // registered-question path frizz writes in its own voice, which is why it is here at all: its sibling,
+  // the human's ANSWER, is written in the answers wire form and never reaches this component (it draws
+  // as the human's own Answers card — see answers-card-fixture).
+  wake("wq1", questionsCancelledWakeMessage(1)),
+  wake("wq2", questionsCancelledWakeMessage(3)),
   // A USAGE WINDOW rolling over. The amber pause card it answers is the notable state and keeps its
   // card; this is one line saying the thread is going again.
   wake("w12", limitResumeSteer("weekly")),

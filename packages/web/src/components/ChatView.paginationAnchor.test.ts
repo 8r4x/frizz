@@ -7,6 +7,9 @@ const chatView = () => readFileSync(new URL("./ChatView.tsx", import.meta.url), 
 // module (so the GitHub wake card could wear it without a cycle). It is still one of the message roots
 // this file enumerates — scan it alongside ChatView rather than dropping it from the count.
 const wakeDivider = () => readFileSync(new URL("./WakeDivider.tsx", import.meta.url), "utf8")
+// …and so did the ANSWERS card, on 2026-08-27, so the registered-question surface could draw the
+// human's answer from the same component while it was still on its way to the worker.
+const answersCard = () => readFileSync(new URL("./AnswersCard.tsx", import.meta.url), "utf8")
 
 // The REGRESSION this pins: `data-transcript-source-id` is load-bearing for transcript pagination —
 // captureTranscriptViewportAnchor / restoreTranscriptViewportAnchor and the virtualized
@@ -38,9 +41,10 @@ test("a message root never joins the pagination-anchor attribute", () => {
 // query it to find message roots and read their geometry. Losing it in a later cleanup would take
 // those with it, so the count is pinned here.
 test("every rendered message variant still carries its own data-frizz-msg handle", () => {
-  const sources = [chatView(), wakeDivider()]
-  // assistant turn, user bubble, answers card, event line, reasoning block — plus the wake divider,
-  // now in WakeDivider.tsx.
+  const sources = [chatView(), wakeDivider(), answersCard()]
+  // assistant turn, user bubble, event line, reasoning block — plus the wake divider (WakeDivider.tsx)
+  // and the answers card, which moved to its own module on 2026-08-27 when the registered-question path
+  // needed to draw the human's answer while it was still in flight to the worker.
   const hosts = sources.reduce((n, source) => n + [...source.matchAll(/data-frizz-msg=\{(?:m\.)?sourceId\}/g)].length, 0)
   assert.equal(hosts, 6, "each rendered message variant must stamp its own sourceId")
 })

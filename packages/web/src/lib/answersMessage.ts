@@ -1,3 +1,4 @@
+import { ANSWER_FOLLOW_UP_MARKER, BURIED_ANSWERS_HEADER } from "@frizz/shared"
 import { splitQuestionBlocks, parseQuestionBlock, type MessageSegment } from "./questionBlocks.ts"
 
 // Detect + parse OUR OWN composed-answer format, so a user message that is a multi-block answer renders
@@ -18,9 +19,17 @@ import { splitQuestionBlocks, parseQuestionBlock, type MessageSegment } from "./
 //
 //   Answers to earlier questions:
 //   1. “<question>” → <answer>
+//   2. <child arrow> “<follow-up question>” → <answer>
 //
 // which carries its own questions inline and so needs no lookback pairing at all. `parseAnswersCard`
 // is the entry point that accepts either.
+//
+// THAT SECOND FORM HAS A THIRD WRITER, and it is the one this file's shape now has to serve: an answer to
+// a REGISTERED question (`mcp__frizz__ask`), composed on the SERVER by questionAnswerMessage because the
+// human may have answered while the worker's process was down. It arrives as a frizz WAKE rather than as
+// a message the browser sent, and the only thing that makes it read as the human's own answer instead of
+// a notification card is that it is written in this form (see Message, which checks for it first). The
+// marked rows are that path's: its questions can be a static TREE, which is flat on the wire.
 
 export interface ParsedAnswer {
   n: number
@@ -32,6 +41,11 @@ export interface ParsedAnswer {
 // (no question message found / count mismatch), in which case the card falls back to numbered rows.
 export interface PairedAnswer extends ParsedAnswer {
   question?: string
+  // A row the registered path marked with the child arrow: an answer to a FOLLOW-UP, a question that
+  // only became live because of the answer on the row above it. Rendered indented under its parent,
+  // which is the only place the tree survives — the wire form is flat, because an indented child line
+  // reads as a continuation of the previous answer (see questionAnswerMessage).
+  followUp?: true
 }
 
 const MARKER = /^(\d+)\.\s+(.*)$/
@@ -68,8 +82,12 @@ export function parseAnswersMessage(text: string): ParsedAnswer[] | null {
   return out
 }
 
-const BURIED_HEADER = "Answers to earlier questions:"
-const BURIED_ROW = /^(\d+)\.\s+[“"](.*?)[”"]\s+→\s+(.*)$/
+const BURIED_HEADER = BURIED_ANSWERS_HEADER
+// The optional child arrow is the FOLLOW-UP marker the registered path writes (questionAnswerMessage). It
+// sits OUTSIDE the quotes deliberately: inside them it would read as part of the question the worker
+// asked. Built from the shared token rather than written out — no web source may spell either down-right
+// arrow (subAgentArrow.test.ts), and this parser must read exactly what the server wrote.
+const BURIED_ROW = new RegExp(`^(\\d+)\\.\\s+(${ANSWER_FOLLOW_UP_MARKER}\\s+)?[“"](.*?)[”"]\\s+→\\s+(.*)$`)
 
 // Parse composeAnswerWire's SELF-DESCRIBING form — the one it emits when any answer in the batch targets
 // a BURIED ask (a question the agent scrolled past by continuing to work), where a bare "N." would be
@@ -98,8 +116,11 @@ export function parseBuriedAnswersMessage(text: string): PairedAnswer[] | null {
     const line = lines[i]
     const m = line.match(BURIED_ROW)
     if (m) {
-      const question = m[2].trim()
-      out.push(question ? { n: Number(m[1]), answer: m[3], question } : { n: Number(m[1]), answer: m[3] })
+      const question = m[3].trim()
+      const row: PairedAnswer = { n: Number(m[1]), answer: m[4] }
+      if (question) row.question = question
+      if (m[2]) row.followUp = true
+      out.push(row)
     } else if (out.length > 0) {
       const last = out[out.length - 1] // a multi-line answer's continuation — keep the break
       last.answer = last.answer ? `${last.answer}\n${line}` : line

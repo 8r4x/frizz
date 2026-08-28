@@ -18,6 +18,7 @@ import {
   splitWakeDeliveries,
   stripHumanGapNote,
   stripWakeDeliveryToken,
+  stripWakeTimeHeader,
   type GithubWakeSteer,
   type TranscriptMessage,
   type TranscriptPage,
@@ -185,6 +186,9 @@ function userDisplayText(text: string, first: boolean): string | undefined {
     projected = githubDispatchDisplayText(projected) ?? projected
   }
   projected = stripWakeDeliveryToken(projected)
+  // The token comes off FIRST and the clock second, because that is the order they were appended in
+  // (scheduler.withClock, then context's delivery token) and each is anchored to end-of-text.
+  projected = stripWakeTimeHeader(projected)
   projected = stripHumanGapNote(projected)
   return projected === text ? undefined : projected
 }

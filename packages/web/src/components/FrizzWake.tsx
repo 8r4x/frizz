@@ -29,8 +29,8 @@
 // shell has a body; and three marks on one row that all looked clickable (an underlined title, an
 // accent ref, the corner glyph) with no hierarchy between them.
 import { useId, useState } from "react"
-import { AlarmClock, Bell, Github, Hourglass, TerminalSquare } from "lucide-react"
-import { isGithubWakeBacklog, parseGithubWakeSteer, parseLimitResumeWake, parseParkWake, parsePrWatchExpiredWake, parsePrWatchWake, parseShellDoneWake, parseTimerWake, type GithubWakeSteer, type LimitWindow, type ParkWake, type PrWatchWake, type ShellDoneWake, type TimerWake } from "@frizz/shared"
+import { AlarmClock, Bell, Github, Hourglass, MessageCircleOff, TerminalSquare } from "lucide-react"
+import { isGithubWakeBacklog, parseGithubWakeSteer, parseLimitResumeWake, parseParkWake, parsePrWatchExpiredWake, parsePrWatchWake, parseQuestionsCancelledWake, parseShellDoneWake, parseTimerWake, type GithubWakeSteer, type LimitWindow, type ParkWake, type PrWatchWake, type ShellDoneWake, type TimerWake } from "@frizz/shared"
 import { CARD_BODY, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 import { VSpace } from "./rhythm.tsx"
 import { WakeDivider } from "./WakeDivider.tsx"
@@ -71,6 +71,11 @@ export function FrizzWake({ steer: served, text, sourceId, wrap }: { steer?: Git
   if (park) return <ParkDivider wake={park} sourceId={sourceId} />
   const lapsed = parsePrWatchExpiredWake(text)
   if (lapsed) return <PrWatchExpiredDivider watchRef={lapsed.ref} sourceId={sourceId} />
+  // The ONE wake on the registered-question path frizz writes in its own voice. Its sibling — the human's
+  // ANSWER — never reaches this component at all: it is written in the answers wire form, which Message
+  // recognizes and draws as the human's own card before it ever asks whether frizz delivered the turn.
+  const cancelled = parseQuestionsCancelledWake(text)
+  if (cancelled) return <QuestionsCancelledDivider count={cancelled.count} sourceId={sourceId} />
   // ONE DELIVERY, UP TO TWO PARTS. A poll that saw CI flip AND a comment land composes both into one
   // message (prWatchWakeMessage), and each is its own event, so each gets its own hairline. The status
   // part goes first because that is the order the scheduler wrote them in.
@@ -202,6 +207,18 @@ function TimerDivider({ wake, sourceId }: { wake: TimerWake; sourceId?: string }
 // `Hourglass` deliberately, and it is NOT borrowed from the limit-resume line below: the hourglass is
 // already this app's mark for a parked thread — the rail's Snoozed band wears it — so a park ending is
 // exactly what it should draw. The limit line is the one that shares it.
+// QUESTIONS TAKEN AWAY, not answered: the thread went autonomous while registrations were still open, so
+// they were cancelled wholesale and nobody is coming. One line, because that is the whole of the news and
+// the instruction that rides with it to the worker ("decide it yourself") is not addressed to the reader.
+function QuestionsCancelledDivider({ count, sourceId }: { count: number; sourceId?: string }) {
+  const label = `${count} question${count === 1 ? "" : "s"} cancelled — the worker decides ${count === 1 ? "it" : "them"} itself`
+  return (
+    <WakeDivider icon={MessageCircleOff} sourceId={sourceId} marker="event" ariaLabel={label}>
+      <span className="min-w-0 truncate">{label}</span>
+    </WakeDivider>
+  )
+}
+
 function ParkDivider({ wake, sourceId }: { wake: ParkWake; sourceId?: string }) {
   const [open, setOpen] = useState(false)
   const bodyId = useId()

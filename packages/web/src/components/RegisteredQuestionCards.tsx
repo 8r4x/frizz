@@ -16,7 +16,9 @@ import type { QuestionAnswer, RegisteredQuestionView, ThreadView } from "@frizz/
 import { rpc } from "../api/rpc.ts"
 import { draftKey, draftStore, useDraftValues, useProjectDir } from "../lib/drafts.ts"
 import type { BlockAnswer } from "../lib/questionBlocks.ts"
+import { parseAnswersCard } from "../lib/answersMessage.ts"
 import { ROOT_PATH, liveQuestionNodes, nodeAnswered, registeredAnswer } from "../lib/registeredQuestion.ts"
+import { AnswersCard } from "./AnswersCard.tsx"
 import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
 
 function errorText(error: unknown): string {
@@ -89,7 +91,25 @@ export function RegisteredQuestionStack({
     onError: (cause) => setError(errorText(cause)),
   })
 
-  if (!slug || questions.length === 0) return null
+  // THE ANSWER, ALREADY SENT AND NOT YET IN THE WORKER'S HANDS. Answering stores the row; a wake hands
+  // it over a moment later (deliberately — an answer given while the worker's process is down has to
+  // survive the gap). In between, the question card is gone and the delivered turn has not arrived, so
+  // this slot went EMPTY and the thread — at rest, with nothing registered any more — drew the residual
+  // "Rested without a sign-off" card in the hole (maintainer 2026-08-27: "a little card that, for like
+  // 5+ seconds, just says that the thread rested without a sign-off before it shows up my answer").
+  //
+  // The board composes the bytes the delivery will carry, and this parses them with the reader the chat
+  // uses on the landed turn — so the in-flight card and the real one are the SAME card and the swap is
+  // invisible. Dimmed while it is in flight, exactly like an optimistic follow-up bubble.
+  const inFlight = thread?.answersInFlight ? parseAnswersCard(thread.answersInFlight) : null
+  if (!slug || questions.length === 0) {
+    if (!slug || !inFlight) return null
+    return (
+      <section data-answers-in-flight aria-label="Your answer, on its way to the worker" className={`flex min-w-0 flex-col items-end ${className}`}>
+        <AnswersCard answers={inFlight} queued />
+      </section>
+    )
+  }
   const submit = () => {
     if (staged.length === 0 || send.isPending) return
     setError(undefined)

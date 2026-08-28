@@ -1,5 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { ANSWER_FOLLOW_UP_MARKER, BURIED_ANSWERS_HEADER, DISMISSED_ANSWER, questionAnswerMessage } from "@frizz/shared"
 import { parseAnswersMessage, parseBuriedAnswersMessage, parseAnswersCard, pairAnswersMessage, pairAllAnswers, type MsgLike } from "./answersMessage.ts"
 
 test("parses the multi-block composed-answer format into numbered rows", () => {
@@ -62,6 +63,31 @@ test("parses the buried form's quoted question and answer into card rows", () =>
   ])
 })
 
+test("a marked row is a FOLLOW-UP, and the marker never leaks into the question", () => {
+  // The REGISTERED path's tree, flat on the wire (questionAnswerMessage). The marker sits outside the
+  // quotes on purpose: inside them it would read as part of the question the worker asked, and it is the
+  // one thing that tells the card to indent the row under the answer that opened it.
+  const wire = [
+    BURIED_ANSWERS_HEADER,
+    "1. “SQLite or a JSON file?” → SQLite",
+    `2. ${ANSWER_FOLLOW_UP_MARKER} “Migrate the existing rows?” → Yes, at boot`,
+  ].join("\n")
+  assert.deepEqual(parseBuriedAnswersMessage(wire), [
+    { n: 1, answer: "SQLite", question: "SQLite or a JSON file?" },
+    { n: 2, answer: "Yes, at boot", question: "Migrate the existing rows?", followUp: true },
+  ])
+})
+
+test("a dismissed question is an ordinary row, so it can never land inside the answer above it", () => {
+  // The dismissal used to ride as a trailing paragraph. Any non-row line after a row is read as a
+  // CONTINUATION of that row's answer — so it printed inside the human's own chip.
+  const wire = `${BURIED_ANSWERS_HEADER}\n1. “Which store?” → SQLite\n2. “Name the flag?” → ${DISMISSED_ANSWER}`
+  const parsed = parseBuriedAnswersMessage(wire)
+  assert.equal(parsed?.length, 2)
+  assert.equal(parsed?.[0].answer, "SQLite", "the answer above it is untouched")
+  assert.equal(parsed?.[1].answer, DISMISSED_ANSWER)
+})
+
 test("an answer containing its own arrow keeps everything after the FIRST quote-arrow", () => {
   const parsed = parseBuriedAnswersMessage('Answers to earlier questions:\n1. “Which flow?” → A. draft → review → merge')
   assert.equal(parsed?.[0].question, "Which flow?")
@@ -83,6 +109,25 @@ test("an empty quoted question leaves the row unpaired (the numbered fallback, n
 test("CR-separated buried form parses (terminal-injected follow-up)", () => {
   const parsed = parseBuriedAnswersMessage('Answers to earlier questions:\r1. “Q?” → A')
   assert.deepEqual(parsed, [{ n: 1, answer: "A", question: "Q?" }])
+})
+
+test("the SERVER's composed answer round-trips through this reader — the one that decides it is the human's", () => {
+  // THE WHOLE POINT OF THE PAIRING. questionAnswerMessage composes the answer to a REGISTERED question,
+  // and it is delivered as a frizz WAKE — which the chat draws as frizz's own notification card unless
+  // this parser claims it first. It did not claim it until 2026-08-27, and the human's answer rendered as
+  // agent-facing prose in a Frizz card over their own words. Composer and reader are pinned to each other
+  // here because nothing else in the system compares them.
+  const wire = questionAnswerMessage([
+    {
+      questionId: "qst_a", question: "SQLite or a JSON file?", chosen: ["SQLite"], text: "and vacuum on boot",
+      followUps: [{ questionId: "qst_b", question: "Migrate the existing rows?", chosen: ["Yes, at boot"] }],
+    },
+  ], [{ question: "Ship the banner this week?" }])
+  assert.deepEqual(parseAnswersCard(wire), [
+    { n: 1, answer: "SQLite — and vacuum on boot", question: "SQLite or a JSON file?" },
+    { n: 2, answer: "Yes, at boot", question: "Migrate the existing rows?", followUp: true },
+    { n: 3, answer: DISMISSED_ANSWER, question: "Ship the banner this week?" },
+  ])
 })
 
 test("buried detection is strict: wrong header, or rows without the quote-arrow, → null", () => {

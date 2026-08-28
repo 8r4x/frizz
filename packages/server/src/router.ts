@@ -2661,7 +2661,17 @@ export function createRouter(ctx: AppContext) {
         // ANSWERING IS NOT DELIVERING. The row is stored answered-but-undelivered and the scheduler
         // hands it over (evalQuestionAnswers), so an answer given while the worker's process is down
         // survives the gap instead of being lost in the same silence the fence lost the question in.
-        if (answered.length > 0) ctx.board.refresh()
+        //
+        // BUT THE HUMAN IS RIGHT HERE, so the sweep runs NOW rather than up to a whole tick from now.
+        // Waiting for it cost a mean five seconds in which the question card was already gone and the
+        // answer had not arrived, and the thread — at rest, with nothing registered any more — drew the
+        // residual "Rested without a sign-off" card in the hole (maintainer 2026-08-27: "I get a little
+        // card that, for like 5+ seconds, just says that the thread rested without a sign-off before it
+        // shows up my answer"). The durable path is unchanged: this only skips the wait.
+        if (answered.length > 0) {
+          ctx.board.refresh()
+          ctx.scheduler.kick()
+        }
         return { answered, open: openQuestionViews(input.slug) }
       },
     }),

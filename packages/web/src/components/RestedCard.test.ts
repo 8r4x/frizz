@@ -24,6 +24,10 @@ test("every ending with a card of its own keeps this one off", () => {
   assert.equal(showsRestedCard({ ...bare, lastFence: { kind: "awaiting", body: "x", hints: [] } }, text), false)
   assert.equal(showsRestedCard({ ...bare, questions: [{ id: "q", spec: { question: "?", kind: "question" }, askedAt: bare.lastAssistantAt! }] }, text), false)
   assert.equal(showsRestedCard({ ...bare, pendingQuestion: true }, text), false)
+  // THE SECONDS AFTER AN ANSWER. The question row is settled, so `questions` is already empty, and the
+  // worker has not been handed the answer yet — so every OTHER rung is false and this one caught the
+  // hole: a card saying nobody signed anything off, over a human who had just answered.
+  assert.equal(showsRestedCard({ ...bare, answersInFlight: "Answers to earlier questions:\n1. “Q?” → A" }, text), false)
   assert.equal(showsRestedCard({ ...bare, awaitingBackground: true }, text), false)
   assert.equal(showsRestedCard({ ...bare, pendingInteraction: true }, text), false)
   assert.equal(showsRestedCard({ ...bare, limitPause: { window: "session", since: bare.lastAssistantAt! } as never }, text), false)

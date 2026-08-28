@@ -1,6 +1,6 @@
 import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import type { TranscriptMessage } from "@frizz/shared"
+import { questionAnswerMessage, type TranscriptMessage } from "@frizz/shared"
 import { Message } from "./components/ChatView.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import "./styles.css"
@@ -36,6 +36,24 @@ const buried = {
   parts: [],
 } as unknown as TranscriptMessage
 
+// A REGISTERED question's answer, as the SERVER composes it (questionAnswerMessage). Same wire form as
+// the buried one above and the same reader — but its questions can be a static TREE, so it is the one
+// shape that carries follow-up rows, and a dismissed question rides along as a row of its own. Built
+// from the composer rather than hand-typed: the whole defect this fixture now guards was the two drifting
+// apart, and a hand-written copy here would drift with them.
+const registered = {
+  sourceId: "u3",
+  role: "user",
+  text: questionAnswerMessage([
+    {
+      questionId: "qst_a", question: "Should the settings store use SQLite or a JSON file?", chosen: ["SQLite"],
+      followUps: [{ questionId: "qst_b", question: "Migrate the existing rows at boot?", chosen: ["Yes, at boot"] }],
+    },
+  ], [{ question: "What should the new importer flag be called?" }]),
+  tools: [],
+  parts: [],
+} as unknown as TranscriptMessage
+
 function Fixture() {
   return (
     <div className="mx-auto my-8 flex w-[min(560px,calc(100%-32px))] flex-col gap-6">
@@ -55,6 +73,18 @@ function Fixture() {
         <div className="mb-2 text-[11px] uppercase tracking-wide text-muted/70">Buried-ask answers (thread width)</div>
         <div className="flex flex-col rounded-lg border border-border bg-panel p-4">
           <Message m={buried} />
+        </div>
+      </div>
+      <div>
+        <div className="mb-2 text-[11px] uppercase tracking-wide text-muted/70">Registered-question answers, with a follow-up and a dismissal</div>
+        <div className="flex flex-col rounded-lg border border-border bg-panel p-4">
+          <Message m={registered} />
+        </div>
+      </div>
+      <div>
+        <div className="mb-2 text-[11px] uppercase tracking-wide text-muted/70">…the same one IN FLIGHT (the seconds before the worker has it)</div>
+        <div className="flex flex-col rounded-lg border border-border bg-panel p-4">
+          <Message m={{ ...registered, queued: true } as unknown as TranscriptMessage} />
         </div>
       </div>
       <div>

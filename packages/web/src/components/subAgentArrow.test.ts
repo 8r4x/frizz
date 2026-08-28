@@ -3,6 +3,7 @@ import { readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import test from "node:test"
+import { ANSWER_FOLLOW_UP_MARKER } from "@frizz/shared"
 
 // The "child of / branches from" affordance is ONE glyph: ⤷ (U+2937), established by the sidebar's
 // sub-agent rows and reused by the drawer's operation lines, the queue card's child lines and the
@@ -65,6 +66,15 @@ test("the banned U+21B3 arrow appears nowhere at all, not even in a comment", ()
     .filter((path) => path !== SELF && readFileSync(path, "utf8").includes(WRONG_ARROW))
     .map(relative)
   assert.deepEqual(offenders, [], `U+21B3 ↳ must not appear in web sources — the child arrow is U+2937 ⤷: ${offenders.join(", ")}`)
+})
+
+test("the answer wire's follow-up marker IS the child arrow — one glyph, two packages", () => {
+  // A ROW in an answers message is marked as a follow-up with this glyph, and the server writes it while
+  // the browser parses it, so the token has to live in @frizz/shared where both can reach it. That puts a
+  // second declaration of the same character outside the reach of the sweep above — hence this: the two
+  // are asserted equal rather than trusted to stay so. Drift here does not throw, it just stops the
+  // parser matching, and an unmatched row silently loses the human's answer to a raw prose bubble.
+  assert.equal(ANSWER_FOLLOW_UP_MARKER, CHILD_ARROW)
 })
 
 test("lib/childOps.ts holds the one child-arrow token, and it is U+2937", () => {

@@ -7,10 +7,10 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import watcher from "@parcel/watcher"
 import type { BoardSnapshot, ThreadView, RuntimeState, ThreadRecurringPrompt } from "@frizz/shared"
-import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isDirectSubAgent, type AskedQuestion, type PermissionMode as PermissionModeValue } from "@frizz/shared"
+import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isDirectSubAgent, questionAnswerMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import type { Project } from "./project.ts"
-import { isHeadlessRow, isBrokerClaudeRow, sessionTitleLocked } from "./storage.ts"
+import { isHeadlessRow, isBrokerClaudeRow, sessionTitleLocked, type ThreadQuestionRow } from "./storage.ts"
 import type { Storage, SessionRow } from "./storage.ts"
 import { normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
 import type { Tailer, SessionTelemetry, FenceView } from "./tailer.ts"
@@ -409,6 +409,53 @@ export function safeQuestionSpec(spec: string): AskedQuestion | undefined {
   } catch {
     return undefined
   }
+}
+
+/** A stored ANSWER, or undefined when it no longer parses. Same drop-don't-throw discipline as the spec
+ *  above, and shared with the scheduler so the delivery and the board can never read one row two ways. */
+export function safeQuestionAnswer(raw: string | null): QuestionAnswer | undefined {
+  if (!raw) return undefined
+  try {
+    const parsed = JSON.parse(raw)
+    return typeof parsed?.questionId === "string" && typeof parsed?.question === "string" ? parsed as QuestionAnswer : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** THE ANSWER THE HUMAN HAS ALREADY SENT, WHICH THE WORKER HAS NOT SEEN YET — as the exact message the
+ *  delivery will carry, so the card the chat draws while it is in flight and the card it draws once it
+ *  lands are built from the same bytes and the swap is invisible.
+ *
+ *  Answering and delivering are two acts on purpose: an answer given while the worker's process was down
+ *  has to survive the gap. But the gap is a HOLE ON SCREEN — the question card is gone the instant the
+ *  answer is stored, and until the wake lands there is nothing in its place, so a thread at rest with
+ *  nothing registered any more drew the residual "Rested without a sign-off" card in it (maintainer
+ *  2026-08-27). This is what fills it: the human's own answer, from the registry, at 50% until the worker
+ *  actually has it.
+ *
+ *  SPENT BY THE WORKER RECEIVING IT, not by the outbox claiming it. `delivered` is set at ENQUEUE, which
+ *  is a whole delivery ahead of the transcript, so keying on it would reopen the same hole a second
+ *  wide. The newest USER record is the honest test — frizz's delivery IS one — and it is the same test
+ *  `registeredDoneFence` uses for the same reason. A dismissal alone shows nothing: nobody is being
+ *  woken for it, so there is no arrival to bridge to. */
+export function answersInFlight(rows: readonly ThreadQuestionRow[], lastUserAt: string | undefined): string | undefined {
+  const userAt = lastUserAt ? Date.parse(lastUserAt) : Number.NaN
+  const answers: QuestionAnswer[] = []
+  const dismissed: QuestionDismissal[] = []
+  for (const q of rows) {
+    if (q.settled_at == null) continue
+    if (Number.isFinite(userAt) && userAt >= q.settled_at) continue
+    if (q.state === "dismissed") {
+      const spec = safeQuestionSpec(q.spec)
+      if (spec) dismissed.push({ question: spec.question })
+      continue
+    }
+    if (q.state !== "answered") continue
+    const parsed = safeQuestionAnswer(q.answer)
+    if (parsed) answers.push(parsed)
+  }
+  return answers.length > 0 ? questionAnswerMessage(answers, dismissed) : undefined
 }
 
 /** One armed `thread_watch` row, as the board reads it — the registry half of a wait, where
@@ -1227,11 +1274,16 @@ function sessionThreadView(
   // these instead of re-parsing the transcript's prose, which is what gives every question a STABLE id
   // to be answered, withdrawn or dismissed BY. A row whose spec no longer parses is dropped rather than
   // thrown on — one bad row must not blank a card carrying three good ones.
+  // ONE read of the thread's questions, both halves derived from it: the OPEN ones the card asks, and
+  // the just-answered ones still on their way to the worker (answersInFlight).
+  const questionRows = storage.listThreadQuestions(row.slug)
   const questions: ThreadView["questions"] = []
-  for (const q of storage.listThreadQuestions(row.slug, { openOnly: true })) {
+  for (const q of questionRows) {
+    if (q.state !== "open") continue
     const spec = safeQuestionSpec(q.spec)
     if (spec) questions.push({ id: q.id, spec, askedAt: new Date(q.asked_at).toISOString() })
   }
+  const inFlightAnswers = answersInFlight(questionRows, rawTele?.lastUserAt)
   const armedWatches: RegisteredWatch[] = storage.listThreadWatches(row.slug, { armedOnly: true }).map((w) => ({
     id: w.id,
     kind: w.kind,
@@ -1346,6 +1398,7 @@ function sessionThreadView(
     pendingAsk: tele?.pendingAsk ? { questions: tele.pendingAsk.questions } : undefined,
     pendingQuestion: tele?.pendingQuestion ?? false,
     questions,
+    answersInFlight: inFlightAnswers,
     lastUserAt: tele?.lastUserAt,
     // Runtime provider-auth rejection (claude-auth plan): only the typed category travels — the raw
     // error/provider text never leaves the server. Drives the trusted sign-in recovery card in ChatView.

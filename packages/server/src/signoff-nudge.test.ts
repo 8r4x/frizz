@@ -166,7 +166,22 @@ for (const [what, arrange] of [
   })
 }
 
-// The failing control for the three above: with none of them recorded, this very thread IS nudged — so
+// AND THE MOMENT THE HUMAN ANSWERS, EVERY GUARD ABOVE OPENS. The row leaves `open`, the done row is
+// still absent, no watch was ever armed — so on the next tick this thread looked exactly like one that
+// had rested saying nothing, and the nudge went out while the answer was still in the outbox. The
+// transcript read: the worker's rest, "FRIZZ ASKED FOR A SIGN-OFF", then the human's answer (maintainer
+// 2026-08-27, on that exact sequence). It also spent one of the two nudges this thread will ever get.
+test("an answered question ON ITS WAY to the worker is a sign-off too, until the worker has it", async () => {
+  const h = nudger({})
+  try {
+    h.storage.askThreadQuestion({ id: "qst_x", slug: h.slug, spec: JSON.stringify({ question: "Which store?", kind: "question" }), askedAtMs: Date.now() })
+    h.storage.answerThreadQuestion("qst_x", JSON.stringify({ questionId: "qst_x", question: "Which store?", chosen: ["SQLite"] }), Date.now())
+    await h.s.tick()
+    assert.deepEqual(h.nudges(), [], "answered, not yet delivered — the worker is about to be woken with it")
+  } finally { h.close() }
+})
+
+// The failing control for the four above: with none of them recorded, this very thread IS nudged — so
 // they are what silenced it rather than something else about the fixture.
 test("…and with no fence and no registration, the same thread IS nudged", async () => {
   const h = nudger({})

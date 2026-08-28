@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AskedQuestion, BoardSnapshot, Settings } from "@frizz/shared"
-import { ASK_MAX_OPEN, questionAnswerMessage } from "@frizz/shared"
+import { ASK_MAX_OPEN, BURIED_ANSWERS_HEADER, parseQuestionsCancelledWake, questionAnswerMessage, questionsCancelledWakeMessage } from "@frizz/shared"
 import type { BoardManager } from "./board.ts"
 import { createRouter } from "./router.ts"
 import { createStorage, type SessionRow } from "./storage.ts"
@@ -38,14 +38,20 @@ function harness() {
     get: () => undefined, foreignIds: () => [], subAgent: () => undefined,
     forget: () => {}, start: () => {}, stop: () => {}, tick: () => {},
   }
+  // The scheduler stub COUNTS kicks rather than ignoring them: answering must run the delivery sweep
+  // immediately, because the human is sitting right there and the next scheduled pass is up to a whole
+  // tick away — five seconds in which the question card is gone and the answer has not arrived.
+  let kicks = 0
+  const scheduler = { start: () => {}, stop: async () => {}, tick: async () => {}, kick: () => { kicks++ } }
   const ctx = {
-    project, storage, board, tailer,
+    project, storage, board, tailer, scheduler,
     getSettings: () => ({ permissionMode: "auto" }) as unknown as Settings,
   } as unknown as AppContext
   return {
     storage,
     router: createRouter(ctx),
     refreshes: () => refreshes,
+    kicks: () => kicks,
     close: () => { storage.close(); rmSync(dir, { recursive: true, force: true }) },
   }
 }
@@ -200,6 +206,10 @@ test("answering stores the answer WITHOUT delivering it, and leaves the row for 
     // the gap, or it is lost in the same silence the fence used to lose the QUESTION in.
     assert.deepEqual(h.storage.undeliveredSettlements().map((q) => q.id).sort(), [a.id, b.id].sort())
     assert.equal(h.storage.getThreadQuestion(a.id)?.delivered, 0)
+    // …BUT IT DOES NOT WAIT FOR THE NEXT TICK EITHER. The durable path is untouched; the sweep simply
+    // runs now, because the human is right here and up to ten seconds of "nothing happened" reads as a
+    // thread that rested without saying anything (maintainer 2026-08-27).
+    assert.equal(h.kicks(), 1, "answering runs the delivery sweep immediately")
 
     // An id belonging to another thread answers nothing, and an already-settled one is silently absent
     // rather than an error — two browser tabs answering the same card is a race nobody should see.
@@ -237,20 +247,41 @@ test("the × dismisses an ordinary question and CANNOT reach a danger-tagged one
   } finally { h.close() }
 })
 
-test("the answer message restates each question and carries the dismissals along", () => {
-  // The worker never saw an id, so `{id: choice}` would be unreadable to it. And a dismissal RIDES the
-  // next message rather than waking anybody: the human dismissing questions is almost always dismissing
-  // several in a row and is sitting right there, so a wake per × would be a turn per click.
+test("the answer message is written in the wire form the chat renders as the human's own Answers card", () => {
+  // THE FORMAT IS THE ATTRIBUTION. This message is delivered as a frizz WAKE, and the chat draws a wake
+  // as frizz's own notification card — UNLESS the text is in the one form `parseAnswersCard` reads, which
+  // it checks first. Getting it wrong does not fail: the answer simply stops being the human's words on
+  // screen and becomes agent-facing prose in a Frizz card over them (the 2026-08-27 regression).
+  //
+  // The worker never saw an id, so `{id: choice}` would be unreadable to it — each row quotes its own
+  // question, which is also what makes the card restate the question beside the answer. And a dismissal
+  // RIDES the next message rather than waking anybody: the human dismissing questions is almost always
+  // dismissing several in a row and is sitting right there, so a wake per × would be a turn per click.
   const message = questionAnswerMessage([
     {
       questionId: "qst_a", question: "SQLite or a JSON file?", chosen: ["SQLite"],
       followUps: [{ questionId: "qst_b", question: "Migrate the existing rows?", chosen: ["Yes, at boot"] }],
     },
-  ], ["qst_c", "qst_d"])
-  assert.match(message, /“SQLite or a JSON file\?” → SQLite/)
-  assert.match(message, /^ {2}- “Migrate the existing rows\?” → Yes, at boot$/m, "a follow-up is indented under the option that opened it")
-  assert.match(message, /2 other questions were DISMISSED without an answer/)
+  ], [{ question: "Ship the banner this week?" }])
+  assert.equal(message.split("\n")[0], BURIED_ANSWERS_HEADER)
+  assert.match(message, /^1\. “SQLite or a JSON file\?” → SQLite$/m)
+  // FLAT, not indented: the parser reads any non-row line as a continuation of the row above it, so an
+  // indented child would render inside its parent's answer chip. The ⤷ is what carries the nesting, and
+  // it sits OUTSIDE the quotes so it never reads as part of the question the worker asked.
+  assert.match(message, /^2\. ⤷ “Migrate the existing rows\?” → Yes, at boot$/m)
+  // A dismissal is a ROW for the same reason — a trailing paragraph is swallowed by the last answer.
+  assert.match(message, /^3\. “Ship the banner this week\?” → \(dismissed — decide it yourself; do not re-ask\)$/m)
+  assert.equal(message.split("\n").length, 4, "header + one row per node, nothing else")
+})
+
+test("nobody-is-coming is its own message, and NOT the answers form", () => {
+  // The autonomous thread whose questions were cancelled wholesale. Frizz is speaking here, not the
+  // human, so it must NOT wear the Answers card — the chat draws it as a hairline instead.
+  const message = questionsCancelledWakeMessage(2)
+  assert.doesNotMatch(message, new RegExp(BURIED_ANSWERS_HEADER))
+  assert.deepEqual(parseQuestionsCancelledWake(message), { count: 2 })
   assert.match(message, /Do not re-ask\./)
+  assert.equal(parseQuestionsCancelledWake("Answers to earlier questions:\n1. “Q” → A"), undefined)
 })
 
 // ---- AUTONOMOUS MODE -------------------------------------------------------------------------------

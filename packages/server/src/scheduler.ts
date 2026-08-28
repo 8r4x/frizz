@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_RETIRED_LEAD, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, questionAnswerMessage, type QuestionAnswer, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, formatGithubWakeSteer, type GithubWatchStatus, prWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
+import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_RETIRED_LEAD, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, questionAnswerMessage, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, formatGithubWakeSteer, type GithubWatchStatus, prWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
 import { GITHUB_STATUS_SETTING, parkExpiresAt, parkIsHonoured, readAwaitingPark, unaccountedItems, type LiveActivity } from "./awaiting.ts"
 import type { SessionRow, Storage, ThreadQuestionRow } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
@@ -11,7 +11,7 @@ import { limitFaultResetKey, limitPauseIsStale, quotaWindowKeyFor, quotaWindowRe
 import { createWakeDeliveryStore, type WakeDelivery } from "./wake-store.ts"
 // The board owns the registered-done lifetime rule, and the waker must read it by exactly the same rule
 // or the two disagree about whether a thread is finished.
-import { registeredDoneFence } from "./board.ts"
+import { answersInFlight, registeredDoneFence, safeQuestionAnswer, safeQuestionSpec } from "./board.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
 import { completionsDueForRelay, relayMessage } from "./completion-relay.ts"
 import {
@@ -805,18 +805,6 @@ function isQuestionAnswerFenceId(fenceId: string): boolean {
   return fenceId.startsWith(`${QUESTION_ANSWER_FENCE_PREFIX}:`)
 }
 
-/** One stored answer, or undefined when the row no longer parses. Dropped rather than thrown on: one
- *  unreadable row must not hold back a batch carrying three good ones. */
-function safeAnswer(raw: string | null): QuestionAnswer | undefined {
-  if (!raw) return undefined
-  try {
-    const parsed = JSON.parse(raw)
-    return typeof parsed?.questionId === "string" && typeof parsed?.question === "string" ? parsed as QuestionAnswer : undefined
-  } catch {
-    return undefined
-  }
-}
-
 /** How often a registered watcher re-reads GitHub, per PR. The fence poller's floor, for the same
  *  reason: this is somebody else's API and the answer changes on a human's timescale. */
 const PR_WATCH_POLL_MS = 60_000
@@ -996,6 +984,13 @@ export interface Scheduler {
   start(): void
   stop(): Promise<void>
   tick(): Promise<void> // exposed for tests + boot
+  /** RUN THE NEXT PASS NOW, for a caller that just created work the sweep would otherwise find up to a
+   *  whole `tickMs` later. Fire-and-forget: it never throws and never blocks the caller's response.
+   *
+   *  It is a no-op unless the scheduler was actually STARTED — a disposable stack boots with
+   *  FRIZZ_WAKERS_OFF and never calls `start()`, and a kick that ran the sweep anyway would deliver
+   *  wakes the operator explicitly turned off. `tick()` stays the unconditional one, for tests and boot. */
+  kick(): void
 }
 
 /** The FENCE key a wire kind is written as. The wire kinds stayed SINGULAR through the 2026-08-24 YAML
@@ -1584,11 +1579,20 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // write the tailer's `lastFence`. Reading only the fence would nudge a worker for not writing a
       // sentence it was told to replace with a tool call — which is the protocol reminder teaching the
       // OLD protocol, on exactly the threads that adopted the new one.
+      //
+      // AND AN ANSWER ON ITS WAY COUNTS TOO, which is the case this guard read wrong for a day. Every
+      // registration test above opens the INSTANT the human answers — the row leaves `open` and nothing
+      // has replaced it yet — so the very next tick nudged a worker for resting without a fence while its
+      // answer was still in the outbox. The transcript then read: the worker's rest, "FRIZZ ASKED FOR A
+      // SIGN-OFF", then the human's answer (maintainer 2026-08-27, on exactly that sequence). It also
+      // spent one of the two nudges this thread will ever get on a thread that had done nothing wrong.
+      const questionRows = deps.storage.listThreadQuestions(row.slug)
       if (
         tele.lastFence ||
         tele.pendingQuestion ||
         registeredDoneFence(deps.storage.getThreadDone(row.slug), tele.lastUserAt) !== undefined ||
-        deps.storage.listThreadQuestions(row.slug, { openOnly: true }).length > 0 ||
+        questionRows.some((q) => q.state === "open") ||
+        answersInFlight(questionRows, tele.lastUserAt) !== undefined ||
         deps.storage.listThreadWatches(row.slug, { armedOnly: true }).length > 0
       ) {
         if ((row.signoff_nudges ?? 0) > 0) deps.storage.resetSignoffNudges(row.slug)
@@ -2290,10 +2294,19 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // hand the worker what the human said, rather than having spent it on a thread nobody was reading.
       if (!row || row.state === "archived" || row.archived === 1) continue
       const answers: QuestionAnswer[] = []
-      const dismissed: string[] = []
+      const dismissed: QuestionDismissal[] = []
+      // The ids are kept alongside for the delivery key ONLY. The MESSAGE names each dismissed question
+      // by its text, because the worker never saw an id — frizz minted it — so a list of ids names
+      // nothing it can act on, and the human's card would have a blank row where the question goes.
+      const dismissedIds: string[] = []
       for (const q of rows) {
-        if (q.state === "dismissed") { dismissed.push(q.id); continue }
-        const parsed = safeAnswer(q.answer)
+        if (q.state === "dismissed") {
+          dismissedIds.push(q.id)
+          const spec = safeQuestionSpec(q.spec)
+          if (spec) dismissed.push({ question: spec.question })
+          continue
+        }
+        const parsed = safeQuestionAnswer(q.answer)
         if (parsed) answers.push(parsed)
       }
       // DISMISSALS ALONE WAKE NOBODY — UNLESS NOTHING ELSE WILL EVER CARRY THEM. The rule exists because
@@ -2305,9 +2318,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // "it rides the next steer" half of the rule is a promise nothing keeps, and the worker would
       // simply never learn that questions it is still waiting on have been taken away from it.
       if (answers.length === 0 && !(row.recurring_on_rest === 1 && row.recurring_prompt?.trim())) continue
+      // A dismissed row whose spec no longer parses is still real news: it leaves the delivery queue and
+      // counts toward the cancellation wake, it just cannot be quoted. Counting from `dismissedIds`
+      // rather than `dismissed` is what keeps that row from silently disappearing.
+      const cancelledCount = dismissedIds.length
       // One delivery per BATCH, keyed by the ids in it, so a second answer on the same thread is its own
       // piece of news rather than a duplicate deduped away.
-      const fenceId = questionAnswerFenceId([...answers.map((a) => a.questionId), ...dismissed])
+      const fenceId = questionAnswerFenceId([...answers.map((a) => a.questionId), ...dismissedIds])
       const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
       if (outbox.get(deliveryId)) continue
       const item = outbox.enqueue({
@@ -2316,10 +2333,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         sessionId: row.session_id,
         fenceId,
         hintKey: fenceId,
-        message: withClock(questionAnswerMessage(answers, dismissed), deps.tailer.get(row.slug)?.lastAssistantAt),
+        message: withClock(
+          answers.length === 0 ? questionsCancelledWakeMessage(cancelledCount) : questionAnswerMessage(answers, dismissed),
+          deps.tailer.get(row.slug)?.lastAssistantAt,
+        ),
         reason: answers.length === 0
-          ? `${dismissed.length} question(s) cancelled — autonomous`
-          : `${answers.length} question answer(s)${dismissed.length ? ` + ${dismissed.length} dismissed` : ""}`,
+          ? `${cancelledCount} question(s) cancelled — autonomous`
+          : `${answers.length} question answer(s)${cancelledCount ? ` + ${cancelledCount} dismissed` : ""}`,
       }, nowMs).delivery
       for (const q of rows) deps.storage.markSettlementDelivered(q.id)
       log(`waker: queued ${row.slug} — ${item.reason}`)
@@ -2888,5 +2908,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (draining) await draining
     },
     tick,
+    kick() {
+      if (stopped || !timer) return
+      void tick().catch((error) => log(`waker: kick failed: ${error instanceof Error ? error.message : String(error)}`))
+    },
   }
 }

@@ -29,6 +29,7 @@ import { parseAnswersCard, pairAllAnswers, type PairedAnswer } from "../lib/answ
 import { FrizzWake } from "./FrizzWake.tsx"
 import { RecurringPromptLine } from "./RecurringPromptLine.tsx"
 import { LinkifiedText } from "./LinkifiedText.tsx"
+import { AnswersCard } from "./AnswersCard.tsx"
 import { WakeDivider } from "./WakeDivider.tsx"
 import { useLiveAnswering, type LiveAnswering } from "../lib/answering.ts"
 import { useIsMobile } from "../lib/mobile.ts"
@@ -3399,42 +3400,6 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
 // and a second number can only COMPETE with whatever numbering the worker used inside the question text:
 // a batch answering a BURIED ask renumbers its rows from 1 (they may span several messages), so
 // answering questions 9–11 of an earlier ask rendered "1" against a question that reads "9. …".
-function AnswersCard({ answers, queued, sourceId }: { answers: PairedAnswer[]; queued?: boolean; sourceId?: string }) {
-  return (
-    <div data-frizz-msg={sourceId} data-answers-card className={`self-end flex w-full max-w-[85%] flex-col items-end ${queued ? "opacity-50" : ""}`}>
-      <div className={`w-full min-w-0 ${BLOCK_RADIUS} rounded-br-sm border border-border-strong bg-elevated p-4`}>
-        <CardHead icon={ListChecks} label="Answers" />
-        <CardContent>
-          <div className="flex flex-col gap-2.5">
-            {answers.map((a, i) => (
-              <div key={i} className="flex flex-col gap-1">
-                {a.question && (
-                  <div title={a.question} className="line-clamp-2 min-w-0 text-[11px] leading-snug text-muted">
-                    {a.question}
-                  </div>
-                )}
-                <div className="flex items-start gap-2">
-                  {!a.question && (
-                    <span className="mt-1.5 shrink-0 text-[10px] uppercase tabular-nums tracking-wide text-muted/70">{a.n}</span>
-                  )}
-                  {/* Neutral recessed chip — a SETTLED answer, not "awaiting you". The bright yellow accent
-                      is reserved solely for the awaiting-you motif (see styles.css); a past choice reads
-                      quiet: a darker inset panel with a soft left rule to still mark it as the reply. The
-                      12px is the family's CHIP scale (the question card's options), not its 13px body. */}
-                  <span className="min-w-0 flex-1 whitespace-pre-wrap [overflow-wrap:anywhere] rounded-md border border-border-strong border-l-2 border-l-accent/40 bg-bg/50 px-2.5 py-1.5 text-[12px] leading-snug text-fg">
-                    <LinkifiedText text={a.answer} />
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </div>
-    </div>
-  )
-}
-
-
 function ProseHtml({ md, wrap }: { md: string; wrap?: boolean }) {
   const html = useMarkdownHtml(md)
   const inner = useInnerHtml(html)

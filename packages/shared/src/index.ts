@@ -1853,35 +1853,90 @@ export const DismissQuestionsResult = z.object({
 }).strict()
 export type DismissQuestionsResult = z.infer<typeof DismissQuestionsResult>
 
+/** THE HEADER OF THE ONE WIRE FORMAT AN ANSWER TRAVELS IN, and the reason it is declared in shared
+ *  rather than beside either producer: two of them write this line — the fence path's `composeAnswerWire`
+ *  in the browser and `questionAnswerMessage` below — and ONE parser in the chat reads it
+ *  (`parseBuriedAnswersMessage`). A private copy in each of the three is three chances to drift, and the
+ *  failure is silent: the message still delivers, it just stops being the human's answer on screen. */
+export const BURIED_ANSWERS_HEADER = "Answers to earlier questions:"
+
+/** THE FOLLOW-UP MARKER on an answer row — U+2937, the app's one "branches from its parent" glyph
+ *  (`CHILD_ARROW` in the web's lib/childOps.ts, which every child surface shares; U+21B3 is banned there
+ *  outright, and the two are six pixels apart on screen). Declared here because the SERVER writes it and
+ *  the browser's parser reads it, so a literal on either side is a chance to drift. */
+export const ANSWER_FOLLOW_UP_MARKER = "⤷"
+
+/** What a DISMISSED question carries in place of an answer. One row like any other (see below), so it
+ *  reads to the human as what it is — a question sent on with nothing chosen — while still telling the
+ *  worker what to do with it. */
+export const DISMISSED_ANSWER = "(dismissed — decide it yourself; do not re-ask)"
+
+/** A question the human waved away, as the answer message needs it: the TEXT, never the id. The worker
+ *  never saw an id — frizz minted it — so a list of ids names nothing it can act on. */
+export interface QuestionDismissal {
+  question: string
+}
+
 /** The answer as it reaches the worker — one message, composed here so the RPC, the delivery and any
  *  read-back cannot word it three ways.
  *
+ *  IT IS THE HUMAN'S OWN TURN AND IT MUST READ AS ONE. The chat renders any user message in this wire
+ *  form as the structured Answers card — each question restated above the chip carrying what was chosen
+ *  or typed — and it checks for that form BEFORE it checks whether frizz delivered the message, so
+ *  matching the format is the whole of the attribution. Until 2026-08-27 this composed
+ *  `Answers to the questions you registered:` over `- ` bullets, which matched no parser: a registered
+ *  question's answer landed in the transcript as frizz's own notification card, full of agent-facing
+ *  prose, over the human's own words (maintainer: "Why did you regress how this looks when I answer a
+ *  question? They used to look good. It just showed it, reiterated the question as well as my selected
+ *  or typed answer", then, of the header: "Why would this show up in the UI?").
+ *
+ *  SO THE TREE IS FLATTENED — one numbered row per answered node, a follow-up marked `⤷` before its
+ *  quote. Indenting a child under its parent is what the fence form does NOT support: the parser reads
+ *  any line after a row that is not itself a row as a CONTINUATION of that row's answer, so an indented
+ *  follow-up renders inside its parent's answer chip. The rows stay in tree order, so the shape is still
+ *  legible; the marker is what says which is which.
+ *
  *  A DISMISSAL RIDES ALONG rather than waking anybody. The human dismissing questions is almost always
  *  dismissing several in a row and is sitting right there, so each × marking the row and waking the
- *  worker would be a turn per click. They are told at the next wake, in this same message. */
-export function questionAnswerMessage(answers: readonly QuestionAnswer[], dismissed: readonly string[] = []): string {
-  const render = (a: QuestionAnswer, depth: number): string[] => {
-    const pad = "  ".repeat(depth)
-    const said = [a.chosen.join(", "), a.text].filter(Boolean).join(" — ")
-    const lines = [`${pad}- “${a.question}” → ${said || "(no answer)"}`]
-    for (const child of a.followUps ?? []) lines.push(...render(child, depth + 1))
-    return lines
-  }
+ *  worker would be a turn per click. They are told at the next wake, in this same message — as ROWS, for
+ *  the same reason the follow-ups are: a trailing paragraph is swallowed into the last answer. */
+export function questionAnswerMessage(answers: readonly QuestionAnswer[], dismissed: readonly QuestionDismissal[] = []): string {
   // NO ANSWERS AT ALL is its own message, not the answers one with an empty list. It reaches exactly one
   // thread: an AUTONOMOUS one, whose questions were cancelled wholesale when its Goal was armed and
   // which has no next steer for them to ride (scheduler.evalQuestionAnswers). Wording it as "answers"
-  // would tell that worker the human replied, when the whole point is that nobody is going to.
-  if (answers.length === 0) {
-    return (
-      `${dismissed.length} question${dismissed.length === 1 ? "" : "s"} you registered ${dismissed.length === 1 ? "was" : "were"} CANCELLED without an answer. ` +
-      `Decide ${dismissed.length === 1 ? "it" : "them"} yourself and carry on — say which way you went in your write-up. Do not re-ask.`
-    )
+  // would tell that worker the human replied, when the whole point is that nobody is going to. Frizz is
+  // speaking here rather than the human, so the chat draws it as a hairline — see questionsCancelledWake.
+  if (answers.length === 0) return questionsCancelledWakeMessage(dismissed.length)
+  const rows: string[] = []
+  const push = (a: QuestionAnswer, followUp: boolean): void => {
+    const said = [a.chosen.join(", "), a.text].filter(Boolean).join(" — ")
+    rows.push(`${followUp ? `${ANSWER_FOLLOW_UP_MARKER} ` : ""}“${a.question}” → ${said || "(no answer)"}`)
+    for (const child of a.followUps ?? []) push(child, true)
   }
-  const body = answers.flatMap((a) => render(a, 0)).join("\n")
-  const tail = dismissed.length > 0
-    ? `\n\n${dismissed.length} other question${dismissed.length === 1 ? " was" : "s were"} DISMISSED without an answer — decide ${dismissed.length === 1 ? "it" : "those"} yourself and carry on. Do not re-ask.`
-    : ""
-  return `Answers to the questions you registered:\n${body}${tail}`
+  for (const a of answers) push(a, false)
+  for (const d of dismissed) rows.push(`“${d.question}” → ${DISMISSED_ANSWER}`)
+  return `${BURIED_ANSWERS_HEADER}\n${rows.map((row, i) => `${i + 1}. ${row}`).join("\n")}`
+}
+
+/** THE ONE WAKE ON THIS PATH FRIZZ WRITES IN ITS OWN VOICE, so it is the one the chat draws as a
+ *  hairline instead of a card (FrizzWake's rule: frizz's own news is a line, someone else's prose keeps
+ *  the card). It says nobody is coming — the thread went autonomous while questions were still open, so
+ *  they were cancelled wholesale and there is no next steer for them to ride. */
+export function questionsCancelledWakeMessage(count: number): string {
+  return (
+    `${count} question${count === 1 ? "" : "s"} you registered ${count === 1 ? "was" : "were"} CANCELLED without an answer. ` +
+    `Decide ${count === 1 ? "it" : "them"} yourself and carry on — say which way you went in your write-up. Do not re-ask.`
+  )
+}
+
+const QUESTIONS_CANCELLED_WAKE = /^(\d+) questions? you registered (?:was|were) CANCELLED without an answer\./
+
+/** The count, or undefined when this is not that message. Lives beside the producer for the reason every
+ *  parser in this file does: a wording change on one that forgets the other puts agent-facing prose back
+ *  in front of the human. */
+export function parseQuestionsCancelledWake(text: string): { count: number } | undefined {
+  const m = QUESTIONS_CANCELLED_WAKE.exec(text.trim())
+  return m ? { count: Number(m[1]) } : undefined
 }
 
 /** The worker's own completion. `body` is the markdown the card renders — the same thing the ```done
@@ -2044,6 +2099,12 @@ export const ThreadView = z.object({
   // outlive the message that carried it. These rows can, and they carry the question itself rather than
   // merely asserting one exists — the card renders from this instead of re-parsing prose.
   questions: z.array(RegisteredQuestionView).default([]),
+  /** The answer the human has already SENT that the worker has not received yet, as the exact message
+   *  the delivery will carry (board.answersInFlight → questionAnswerMessage). The chat parses it with
+   *  the same reader it uses on the delivered turn, so the in-flight card and the landed one are the
+   *  same card and the swap is invisible. Absent whenever there is nothing in flight, which is almost
+   *  always — it exists for the seconds between the human sending and the worker being handed it. */
+  answersInFlight: z.string().optional(),
   // ISO8601 of the newest REAL user interaction (answer/steer/dispatch) — the chronological listing
   // sort key. Optional; the listing falls back to spawnedAt when absent (a dispatch IS an interaction).
   lastUserAt: z.string().optional(),
@@ -2969,6 +3030,25 @@ export function wakeTimeHeader(nowMs: number, lastAssistantAt?: string | null): 
   const since = lastAssistantAt ? Date.parse(lastAssistantAt) : NaN
   const elapsed = Number.isFinite(since) && nowMs >= since ? ` — you last spoke ${formatElapsed(nowMs - since)} ago` : ""
   return `⏱ ${stamp}${elapsed}.`
+}
+
+// PRODUCER AND STRIPPER LIVE TOGETHER, the same pairing (and the same reason) as the human-gap note
+// below: the line above is written FOR THE WORKER — it has no clock of its own — and it rides on a
+// message the transcript then shows to a human, who has one. Rendered it is pure noise at the foot of
+// every wake card, and on the one wake that is the human's OWN words (an answer to a registered
+// question) it is worse than noise: the answers parser reads a trailing line as a continuation of the
+// last answer, so frizz's clock printed INSIDE the chip holding what the human chose. That exact defect
+// was reported for the gap note on 2026-08-25 ("the freaking time stamps are still showing up in my
+// question answers") and this is the same line arriving by the other door.
+//
+// Anchored to end-of-text on a line of its own and matched down to the wall clock, so prose that merely
+// quotes one — a bug report pasting the line — stays in the bubble. Stripping is a DISPLAY projection
+// only: the stored text keeps the stamp, which is the whole point of sending it.
+const WAKE_TIME_HEADER_TAIL = /\n+⏱ \d{4}-\d{2}-\d{2} \d{2}:\d{2}(?: — you last spoke [^\n]*? ago)?\.[ \t]*$/
+
+/** Display projection: a frizz wake without the clock line frizz appended for the worker. */
+export function stripWakeTimeHeader(text: string): string {
+  return text.replace(WAKE_TIME_HEADER_TAIL, "")
 }
 
 /** The gap the HUMAN left before replying, as a line frizz appends to their message.

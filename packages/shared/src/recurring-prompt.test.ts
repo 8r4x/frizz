@@ -3,7 +3,7 @@
 // wording delivered and the wording recognized have to agree, and nothing else in the system checks it.
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { ALLDONE_SENTINEL, DEFAULT_RECURRING_PROMPT, SetOwnThreadRecurringPromptInput, SetThreadRecurringPromptInput, saysAllDone, restPromptMessage, schedulePromptMessage, formatIntervalLabel, parseRecurringPrompt , humanGapNote, stripHumanGapNote, formatElapsed } from "./index.ts"
+import { ALLDONE_SENTINEL, DEFAULT_RECURRING_PROMPT, SetOwnThreadRecurringPromptInput, SetThreadRecurringPromptInput, saysAllDone, restPromptMessage, schedulePromptMessage, formatIntervalLabel, parseRecurringPrompt , humanGapNote, stripHumanGapNote, wakeTimeHeader, stripWakeTimeHeader, formatElapsed } from "./index.ts"
 
 // THE DEFAULT TEXT IS THE ONE GOAL MOST THREADS EVER RUN: the footer panel prefills an unarmed thread's
 // with it, so almost nobody types their own. Its BIAS is therefore a product decision rather than a
@@ -238,6 +238,28 @@ test("the gap note is stripped back off for display, and only when frizz wrote i
   const truncated = "ship it\n\n⏱ Frizz: the message above arrived 3h12m after your last one."
   assert.equal(stripHumanGapNote(truncated), truncated)
   assert.equal(stripHumanGapNote("ship it"), "ship it")
+})
+
+// THE SAME PAIRING, FOR THE OTHER CLOCK LINE. `wakeTimeHeader` is appended to EVERY wake for the worker's
+// benefit — it has no clock of its own — and every wake is recorded as a user turn, so left alone it
+// prints at the foot of the card a human reads. On the one wake that carries the human's OWN words (an
+// answer to a registered question) it is worse than clutter: the answers reader treats a trailing line as
+// a continuation of the last answer, so it lands INSIDE the chip holding what they chose.
+test("the wake clock line is stripped back off for display, and only when frizz wrote it", () => {
+  const spoke = "2026-08-27T06:00:00.000Z"
+  const header = wakeTimeHeader(Date.parse(spoke) + 249 * 60_000, spoke)
+  assert.match(header, /you last spoke/)
+
+  // ROUND TRIP: exactly how scheduler.withClock appends it, gone without a trace — with and without the
+  // elapsed clause, which is absent whenever the thread has no assistant record to measure from.
+  assert.equal(stripWakeTimeHeader(`Answers to earlier questions:\n1. “Q?” → A\n\n${header}`), "Answers to earlier questions:\n1. “Q?” → A")
+  assert.equal(stripWakeTimeHeader(`ship it\n\n${wakeTimeHeader(Date.parse(spoke))}`), "ship it")
+
+  // AND NOTHING ELSE: prose that merely quotes one, or a stamp mid-message, stays put.
+  const quoting = `why does "${header}" show up in my own messages?`
+  assert.equal(stripWakeTimeHeader(quoting), quoting)
+  assert.equal(stripWakeTimeHeader(`${header}\n\nship it`), `${header}\n\nship it`)
+  assert.equal(stripWakeTimeHeader("ship it"), "ship it")
 })
 
 test("formatElapsed reads in the units a human would say it in", () => {
