@@ -58,7 +58,8 @@ The two liveness mechanisms are not comparable today:
 - **A branch not taken returns nothing.** The answered set plus the branch taken is the whole payload.
 - **Input types are single-select, multi-select, free text, and per-option preview content.** Nothing further. Preview is the one addition that changes a decision — two diffs or two mockups side by side; a slider or date picker is novelty.
 - **The card submits as a unit on Send**, carrying whatever was answered. Nothing half-wakes a turn.
-- **The answer payload is structured, keyed by question id, and restates the question text.** The worker never saw the id — frizz minted it — so the id alone cannot be correlated back.
+- **The answer payload is structured, keyed by question id, and restates the question text.** The worker never saw the id — frizz minted it — so the id alone cannot be correlated back. (That premise has since narrowed. `ask` returns every id it mints, `activity` lists the open ones, and a placement marker names one — so a worker CAN correlate an id, and the restated text is redundancy rather than the only handle.)
+- **A worker can read its own open questions back, without registering or withdrawing one** (2026-08-28). `activity` was the readout for everything a worker has OUT — shells, sub-agents, timers, PR watchers, and the `wch_…` of every watch holding one — and questions were the one kind missing, so an id lost to a compaction was recoverable only by `ask`ing again or `unask`ing blind. It now lists them beside what is running (`listOwnThreadActivity` returns `questions`), which is what the placement marker needs: the marker is an id, and an id you cannot look up is an id you guess.
 - **The human can dismiss a question with an ×** on its card. Dismissals do **not** wake the worker: they queue and flush with the next steer, because a human dismissing questions is almost always dismissing several in a row and is right there anyway.
 
 ## `done`

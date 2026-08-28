@@ -1217,3 +1217,69 @@ test("a call landing in a restart window waits for the server instead of failing
     http.close()
   }
 })
+
+// THE QUESTIONS ARE READ OUT TOO, in their own section (maintainer 2026-08-28: "Is there a way for the
+// agent to read out the current set of watchers and questions?"). They must NOT reach the fence block:
+// a question waits on a person, and there is no `questions:` key in the awaiting grammar to hold one.
+test("`activity` reads the open questions back, with the ids a ```question fence places them by", async () => {
+  const http = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" })
+    res.end(JSON.stringify({ result: {
+      activity: [{ kind: "shell", id: "bzvtnt3ig", label: "Running the suite", since: "2026-08-28T09:00:00.000Z" }],
+      questions: [
+        { id: "qst_ab12cd34ef56", spec: { question: "Should the settings store use SQLite or a JSON file?", kind: "question" }, askedAt: "2026-08-28T09:05:00.000Z" },
+        { id: "qst_0011223344ff", spec: { question: "Which dist-tag should 4.5.0 publish under?", kind: "question" }, askedAt: "2026-08-28T09:05:00.000Z" },
+      ],
+    } }))
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "asking-thread" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "activity", arguments: {} } })
+    const text = (await rpc.next(2)).result.content[0].text
+    assert.match(text, /2 questions still owed an answer/)
+    for (const id of ["qst_ab12cd34ef56", "qst_0011223344ff"]) assert.match(text, new RegExp(id))
+    assert.match(text, /Should the settings store use SQLite or a JSON file\?/)
+    // The fence block names the SHELL and nothing else — no question id may appear inside it.
+    const fence = text.slice(text.indexOf("```awaiting"), text.indexOf("```\n\nDrop the lines"))
+    assert.match(fence, /shells: \[bzvtnt3ig\]/)
+    assert.doesNotMatch(fence, /qst_/, "a question is never named in an awaiting fence")
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
+
+// Nothing RUNNING but a question open is not the terminal state the empty readout describes: telling a
+// worker to end with ```done there points it straight at a call frizz will refuse.
+test("`activity` with only a question open does not send the worker to ```done", async () => {
+  const http = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" })
+    res.end(JSON.stringify({ result: { activity: [], questions: [
+      { id: "qst_ab12cd34ef56", spec: { question: "Cut 4.5.0 now?", kind: "question" }, askedAt: "2026-08-28T09:05:00.000Z" },
+    ] } }))
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "asking-thread" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "activity", arguments: {} } })
+    const text = (await rpc.next(2)).result.content[0].text
+    assert.match(text, /Nothing is RUNNING on this thread/)
+    assert.match(text, /1 question still owed an answer/)
+    assert.match(text, /qst_ab12cd34ef56/)
+    assert.doesNotMatch(text, /End with ```done/, "an open question blocks done — do not point at it")
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})

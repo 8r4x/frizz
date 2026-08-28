@@ -409,3 +409,52 @@ test("turning the Goal OFF cancels nothing — the human is back, and back to an
     assert.deepEqual(h.storage.listThreadQuestions("t", { openOnly: true }).map((q) => q.id), ["qst_kept"])
   } finally { h.close() }
 })
+
+// READING THE OPEN SET WITHOUT MUTATING ANYTHING (maintainer 2026-08-28: "Is there a way for the agent
+// to read out the current set of watchers and questions?"). It could not: `ask` returns the open set but
+// registers another question, and `unask` returns it but withdraws one — so the ids that block `done`,
+// and the id a ```question fence needs to PLACE a question in the handoff, were reachable only through a
+// mutation. `listOwnThreadActivity` is the read, and it is the same procedure that hands back the ids of
+// everything running.
+test("listOwnThreadActivity reads the open questions back — the only way to see them without asking or unasking", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    const { registered } = await h.router.ask.handler({ input: { slug: "t", questions: [simple(), simple("Which dist-tag should 4.5.0 publish under?")] } })
+    const out = await h.router.listOwnThreadActivity.handler({ input: { slug: "t" } })
+    assert.deepEqual(out.activity, [], "nothing is RUNNING — the questions are their own list, never fence items")
+    assert.deepEqual(out.questions.map((q) => q.id), registered.map((q) => q.id))
+    assert.deepEqual(out.questions.map((q) => q.spec.question), ["SQLite or a JSON file?", "Which dist-tag should 4.5.0 publish under?"])
+  } finally { h.close() }
+})
+
+test("an answered or withdrawn question leaves the readout — it lists what is still OWED", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    const { registered } = await h.router.ask.handler({ input: { slug: "t", questions: [simple(), simple("Second?")] } })
+    await h.router.unask.handler({ input: { slug: "t", id: registered[0].id } })
+    const afterUnask = await h.router.listOwnThreadActivity.handler({ input: { slug: "t" } })
+    assert.deepEqual(afterUnask.questions.map((q) => q.id), [registered[1].id])
+    await h.router.answerQuestions.handler({ input: { slug: "t", answers: [{ questionId: registered[1].id, question: "Second?", chosen: ["SQLite — transactional, matches how sessions are already stored"] }] } })
+    const afterAnswer = await h.router.listOwnThreadActivity.handler({ input: { slug: "t" } })
+    assert.deepEqual(afterAnswer.questions, [], "an answered question is no longer owed")
+  } finally { h.close() }
+})
+
+// A BATCH READS BACK IN THE ORDER IT WAS WRITTEN. Every question of one `ask` call shares one `asked_at`
+// — the router stamps a single `now` — so the tiebreak decides the order the human sees. It was the
+// random `qst_…` id until 2026-08-28, which shuffled the worker's own first/second on the card stack and
+// in the readout; it is now the insertion rowid.
+test("questions asked in ONE call keep their order — the tiebreak is insertion, not a random id", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    const asked = ["First?", "Second?", "Third?", "Fourth?"]
+    const { registered } = await h.router.ask.handler({ input: { slug: "t", questions: asked.map((q) => simple(q)) } })
+    assert.deepEqual(registered.map((q) => q.spec.question), asked)
+    const out = await h.router.listOwnThreadActivity.handler({ input: { slug: "t" } })
+    assert.deepEqual(out.questions.map((q) => q.spec.question), asked, "the readout must not shuffle a batch")
+    assert.deepEqual(out.questions.map((q) => q.id), registered.map((q) => q.id))
+  } finally { h.close() }
+})

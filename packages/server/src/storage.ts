@@ -1615,15 +1615,19 @@ export function createStorage(source: string | Database, projectId: string): Sto
     INSERT INTO thread_question (project_id, id, thread_slug, spec, state, answer, delivered, asked_at, settled_at)
     VALUES (@project_id, @id, @slug, @spec, 'open', NULL, 0, @askedAtMs, NULL)
   `)
+  // TIEBREAK ON ROWID, NOT ID. Every question of one `ask` call shares its `asked_at` — the router stamps
+  // one `now` for the batch — and `qst_…` is random, so ordering by id read a batch back SHUFFLED: the
+  // worker's own first/second was lost, on the card stack and in the `activity` readout alike. rowid is
+  // insertion order, which is the order the worker wrote them (2026-08-28).
   const threadQuestionsBySlugStmt = scope.prepare<[string], ThreadQuestionRow>(
-    "SELECT * FROM thread_question WHERE project_id = @project_id AND thread_slug = ? ORDER BY asked_at, id",
+    "SELECT * FROM thread_question WHERE project_id = @project_id AND thread_slug = ? ORDER BY asked_at, rowid",
   )
   const openThreadQuestionsBySlugStmt = scope.prepare<[string], ThreadQuestionRow>(
-    "SELECT * FROM thread_question WHERE project_id = @project_id AND thread_slug = ? AND state = 'open' ORDER BY asked_at, id",
+    "SELECT * FROM thread_question WHERE project_id = @project_id AND thread_slug = ? AND state = 'open' ORDER BY asked_at, rowid",
   )
   const threadQuestionByIdStmt = scope.prepare<[string], ThreadQuestionRow>("SELECT * FROM thread_question WHERE project_id = @project_id AND id = ?")
   const openThreadQuestionsStmt = scope.prepare<[], ThreadQuestionRow>(
-    "SELECT * FROM thread_question WHERE project_id = @project_id AND state = 'open' ORDER BY asked_at, id",
+    "SELECT * FROM thread_question WHERE project_id = @project_id AND state = 'open' ORDER BY asked_at, rowid",
   )
   const answerThreadQuestionStmt = scope.prepare(`
     UPDATE thread_question SET state = 'answered', answer = ?, settled_at = ?

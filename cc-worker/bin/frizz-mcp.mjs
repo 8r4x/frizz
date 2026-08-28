@@ -558,7 +558,7 @@ const UNASK = {
   inputSchema: {
     type: "object",
     properties: {
-      id: { type: "string", description: "The question id `ask` returned. Only your own thread's." },
+      id: { type: "string", description: "The question id `ask` returned, or that `activity` lists. Only your own thread's." },
     },
     required: ["id"],
   },
@@ -613,12 +613,16 @@ const MAX_INTERVAL_SECONDS = 24 * 60 * 60
 const ACTIVITY = {
   name: "activity",
   description:
-    "EVERYTHING YOU CURRENTLY HAVE RUNNING, with the id each one is named by — your background shells, " +
-    "your sub-agents, your armed timers, and the pull requests you registered.\n\n" +
+    "EVERYTHING YOU CURRENTLY HAVE OUT, with the id each one is named by — your background shells, your " +
+    "sub-agents, your armed timers, the pull requests you registered, the `wch_…` of every watch holding " +
+    "one of them, and every QUESTION still owed an answer.\n\n" +
     "WHY YOU NEED IT: an ```awaiting fence names what you are waiting on BY ID, and frizz checks every " +
     "one against what is actually live. A name that matches nothing is not a park — you are bumped and " +
-    "your thread queues. So if you have lost an id (a compaction, a long turn, a wake you did not " +
-    "expect), call this rather than guessing. Guessing is the failure this tool exists to remove.\n\n" +
+    "your thread queues. The same goes for the ids `unwatch` and `unask` take, and for the id you put in " +
+    "a ```question fence to PLACE a registered question in your handoff. So if you have lost one (a " +
+    "compaction, a long turn, a wake you did not expect), call this rather than guessing. Guessing is " +
+    "the failure this tool exists to remove — and it is the only way to read your open questions " +
+    "WITHOUT registering or withdrawing one.\n\n" +
     "It takes nothing and changes nothing. You can only ever read your OWN thread.",
   inputSchema: { type: "object", properties: {}, required: [] },
 }
@@ -644,12 +648,29 @@ const HANDLERS = {
 async function activity() {
   const result = (await callRpc("listOwnThreadActivity", { slug: threadSlug() }))?.result
   const items = Array.isArray(result?.activity) ? result.activity : []
+  const questions = Array.isArray(result?.questions) ? result.questions : []
+  // THE QUESTIONS ARE NOT PART OF THE FENCE, so they are printed in their own section and never fed to
+  // the fence builder below. A question waits on a person; there is no `questions:` key to write it into.
+  const askedBlock = questions.length === 0 ? "" : (
+    `\n\n${questions.length} question${questions.length === 1 ? "" : "s"} still owed an answer:\n\n` +
+    questions.map((q) => `  question: ${q.id}\n    ${String(q?.spec?.question ?? "").replace(/\s+/g, " ").slice(0, 160)}`).join("\n") +
+    "\n\nEach one blocks `done` until it is answered or withdrawn. Place it in your handoff with an " +
+    "EMPTY question fence naming its id — an opening ```question <id> line and a closing ``` line — or " +
+    "`unask` the ones you have since decided yourself. A question is never named in an ```awaiting fence."
+  )
   if (!items.length) {
+    if (questions.length > 0) {
+      return (
+        "Nothing is RUNNING on this thread — no background shells, no sub-agents, no armed timers, no " +
+        "registered PRs. So an ```awaiting fence would have nothing to name, and a fence naming nothing " +
+        "is not a park." + askedBlock
+      )
+    }
     return (
       "Nothing is running on this thread — no background shells, no sub-agents, no armed timers, no " +
-      "registered PRs.\n\nSo there is nothing to wait on: an ```awaiting fence would have nothing to " +
-      "name, and a fence naming nothing is not a park. End with ```done, or with a ```question if you " +
-      "need the human."
+      "registered PRs, and no open questions.\n\nSo there is nothing to wait on: an ```awaiting fence " +
+      "would have nothing to name, and a fence naming nothing is not a park. End with ```done, or with " +
+      "a ```question if you need the human."
     )
   }
   const lines = items.map((i) => {
@@ -676,7 +697,8 @@ async function activity() {
     `${block.join("\n")}\n  for: 2h\n  ---\n  <what you are waiting for, and what you will do when it lands>\n` +
     "```\n\nDrop the lines you are not actually waiting on — a dev server you left running is not a wait." +
     "\n\nBETTER THAN NAMING A SHELL IN THE FENCE: `watch` REGISTERS the wait, so it survives your turn " +
-    "ending and you never restate it. Anything already marked `[watched as …]` above needs no fence line."
+    "ending and you never restate it. Anything already marked `[watched as …]` above needs no fence line." +
+    askedBlock
   )
 }
 

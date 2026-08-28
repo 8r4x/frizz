@@ -2415,7 +2415,10 @@ export function createRouter(ctx: AppContext) {
             since: new Date(w.created_at).toISOString(),
           })
         }
-        return { activity }
+        // The WATCHES are already readable: each armed one rides its live item as `watchId`, and the
+        // scheduler settles a watch the tick its target stops being live, so an armed row always has an
+        // item to ride. The QUESTIONS had nowhere at all — hence their own list.
+        return { activity, questions: openQuestionViews(input.slug) }
       },
     }),
 
