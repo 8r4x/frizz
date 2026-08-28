@@ -76,20 +76,25 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
   return (
     <TooltipProvider>
       <div className="h-dvh min-h-0 bg-bg text-sm text-fg">
-        {/* THE FULLSCREEN LAYOUT (maintainer 2026-08-28: "truly fullscreen"): the thread column sits
-            LEFT-ALIGNED against the viewport edge and everything right of it is ONE side pane — the
-            operational rail, with the file viewer sliding in OVER it (see SidePane). No centering, no
-            outer gutters. The column keeps a reading-width ceiling; the page background beyond the rail
-            is the same gutter the board draws beside its own centered pair. A phone-width window still
-            gets the old single column: the rail and the viewer need the width they hide under.
+        {/* THE FULLSCREEN LAYOUT (maintainer 2026-08-28, second pass): the thread column and the
+            rail sit together as ONE CENTERED PAIR — "the combination of the agent pane and the
+            artifact readout should be centered on the page, and there should be some reasonable
+            maximum width on the agent pane" — with the file viewer fading in over the rail when a
+            file opens (see SidePane).
 
-            `flex-[3]` against the pane's `flex-1`: the column wins the free space (and caps at its
-            ceiling), so the pane closed is exactly the rail plus the leftover gutter, and the pane open
-            is at least the viewer's reading width, taking it from the column when the window is tight. */}
+            The two empty flex-1 GUTTERS are the whole centering mechanism, and they are also the
+            slack the viewer draws on. Closed, the pair is the thread (≤960px) plus the rail and the
+            gutters split what is left, so the pair sits centered. Open, the pane widens to the
+            viewer's reading width and the gutters give way first — the pair slides left as a unit,
+            the viewer spilling over the right gutter — and only when they are exhausted does the
+            thread column start to give. No measurement, no breakpoints: the flex algorithm does it.
+            A phone-width window still gets the old single column — the rail and the viewer need the
+            width they hide under. */}
         <div className="flex h-full w-full overflow-hidden">
+          <div className="hidden flex-1 md:block" aria-hidden="true" />
           <main
             data-standalone-thread
-            className="flex h-full w-full min-w-0 flex-[3] flex-col overflow-hidden border-border bg-panel sm:max-w-[960px] sm:border-r"
+            className="flex h-full w-full min-w-0 flex-col overflow-hidden border-border bg-panel sm:w-[960px] sm:border-x"
           >
             {route.kind === "loading" ? (
               <div className="flex flex-1 items-center justify-center" role="status" aria-label="Loading thread">
@@ -102,6 +107,7 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
             )}
           </main>
           {thread && <SidePane slug={slug} thread={thread} />}
+          <div className="hidden flex-1 md:block" aria-hidden="true" />
         </div>
         {/* The SAME drawer stack the queue mounts. Without it every drill-in this page renders — a
             sub-agent row, a background-shell row, the frizz-doc button, a `[…](/thread/<slug>)` link —
@@ -115,18 +121,18 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
   )
 }
 
-// The viewer's READING width — the least the side pane is allowed to be while a file is open. Wider
-// windows give it the whole pane, which is everything right of the thread column.
+// The viewer's READING width — the side pane's width while a file is open.
 const FILE_PANEL_WIDTH = "min(52rem, 45vw)"
 
 // THE SIDE PANE: the rail and the file viewer share the one region right of the thread column, and
-// the viewer SLIDES OVER the rail instead of opening beside it (maintainer 2026-08-28: "the right-side
-// pane should slide over … hide the artifact readout … then you have to press the X to see the
-// artifacts again"). Closed, the region is the rail plus whatever gutter is left; open, it is at
-// least the viewer's reading width (animated, so a tight window's thread column gives way as the pane
-// comes in). The rail stays MOUNTED under the pane — its live rows keep polling — but goes inert, so
-// nothing hidden can take focus or a click. The viewer's CONTENT outlives the store entry by the
-// ~200ms slide-out (`current`), so closing plays the same edge back instead of blanking the pane.
+// the viewer FADES AND SLIDES IN OVER the rail instead of opening beside it (maintainer 2026-08-28:
+// "the right-side pane should slide over … hide the artifact readout … press the X to see the
+// artifacts again", then: "fade in and slide left over top of the artifact rail"). Closed, the pane
+// IS the rail; open, it is the viewer's reading width, animated — the layout's gutters and then the
+// thread column supply the difference (see the layout comment above). The rail stays MOUNTED under
+// the pane — its live rows keep polling — but goes inert, so nothing hidden can take focus or a
+// click. The viewer's CONTENT outlives the store entry by the ~200ms slide-out (`current`), so
+// closing plays the same edge back instead of blanking the pane.
 function SidePane({ slug, thread }: { slug: string; thread: ThreadView }) {
   const snap = useSnapshot(store)
   const panel = snap.filePanel
@@ -142,8 +148,8 @@ function SidePane({ slug, thread }: { slug: string; thread: ThreadView }) {
   return (
     <div
       data-side-pane
-      className="relative hidden h-full min-h-0 min-w-0 flex-1 overflow-hidden transition-[min-width] duration-200 ease-out md:block"
-      style={{ minWidth: panel ? FILE_PANEL_WIDTH : RAIL_WIDTH }}
+      className="relative hidden h-full min-h-0 shrink-0 overflow-hidden transition-[width] duration-200 ease-out md:block"
+      style={{ width: panel ? FILE_PANEL_WIDTH : RAIL_WIDTH }}
     >
       <div inert={panel ? true : undefined} className="h-full min-h-0">
         <FocusRail thread={thread} />
@@ -151,7 +157,7 @@ function SidePane({ slug, thread }: { slug: string; thread: ThreadView }) {
       <aside
         data-file-viewer-slot
         aria-hidden={!panel}
-        className={`absolute inset-0 transition-transform duration-200 ease-out ${panel ? "translate-x-0" : "translate-x-full"}`}
+        className={`absolute inset-0 transition-[transform,opacity] duration-200 ease-out ${panel ? "translate-x-0 opacity-100" : "translate-x-full opacity-0"}`}
       >
         {current && (
           <div className="flex h-full min-h-0 flex-col overflow-hidden border-l border-border bg-panel">
