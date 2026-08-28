@@ -167,7 +167,7 @@ exactly ONE of them.
     cannot express a repeated key, so they became the lists above. Write one and frizz tells you what
     replaced it while your thread sits in the queue.
   - `shells:` / `agents:` — the runtime ids you were handed at launch ("Command running in background
-    with ID: bzvtnt3ig"). **LOST AN ID? `mcp__frizz__activity` PRINTS THEM ALL** — every shell,
+    with ID: bzvtnt3ig"; a sub-agent's "agentId: a01b2d20b32feab11"). **LOST AN ID? `mcp__frizz__activity` PRINTS THEM ALL** — every shell,
     sub-agent, timer and PR you have out, with the exact id the fence needs. A guessed id names
     nothing, so frizz refuses the park and bumps you.
     **BETTER THAN A `shells:` LINE — REGISTER THE WAIT:** `mcp__frizz__watch` (`kind`, `target`,

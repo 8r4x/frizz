@@ -546,9 +546,13 @@ function restMessageIsSignedOff(
 
 /** What frizz can actually see running for this thread, in the shape `unaccountedItems` checks against.
  *
- *  A shell answers to THREE handles and a sub-agent to two, because the fence names whichever string the
- *  worker was shown: the runtime task id it was handed ("Command running in background with ID:
- *  bzvtnt3ig"), the launch id, or the label it reads back in its own transcript. Refusing a
+ *  A shell and a sub-agent each answer to THREE handles, because the fence names whichever string the
+ *  worker was shown: the runtime id it was handed ("Command running in background with ID: bzvtnt3ig";
+ *  "agentId: a01b2d20b32feab11" in the Agent launch ack), the launch tool_use id, or the label it reads
+ *  back in its own transcript. The runtime id is the one a worker actually has — the tool_use id never
+ *  appears in its context — and until 2026-08-28 a sub-agent answered to only the latter two, so a
+ *  worker that named the id it was handed was bumped "nothing by that name", then re-fenced with the id
+ *  the correction printed and asked why there were two. Refusing a
  *  correct-but-label-shaped name would make the fence unusable for the case it exists for. */
 function liveActivityOf(
   tele: Pick<SessionTelemetry, "bgShells" | "subAgents">,
@@ -563,7 +567,7 @@ function liveActivityOf(
   const agents = new Set<string>()
   for (const a of tele.subAgents ?? []) {
     if (a.state !== "running") continue
-    for (const h of [a.id, a.label]) if (h) agents.add(h)
+    for (const h of [a.taskId, a.id, a.label]) if (h) agents.add(h)
   }
   return { shells, agents, timers: armedTimerIds, prs: registeredPrWatches }
 }
@@ -1632,7 +1636,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         // naturally reach for, and the one the fence's own integrity check matches on.
         message: withClock(signoffNudgeMessage({
           shells: (tele.bgShells ?? []).filter((sh) => sh.state === "running").map((sh) => ({ id: sh.taskId ?? sh.id, label: sh.label })),
-          subAgents: (tele.subAgents ?? []).filter((a) => a.state === "running").map((a) => ({ id: a.id, label: a.label })),
+          subAgents: (tele.subAgents ?? []).filter((a) => a.state === "running").map((a) => ({ id: a.taskId ?? a.id, label: a.label })),
           // The other two registries, so the nudge lists EVERY kind an awaiting fence can name rather
           // than the two the fold happens to know about — a worker told about half its work writes half
           // a fence, and the half it left out is not what gets it bumped.
@@ -1737,7 +1741,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // stays out: it means "completion signal lost", which is genuinely ambiguous, not finished.
       for (const a of tele.subAgents ?? []) {
         if (a.state !== "rested") continue
-        for (const h of [a.id, a.label]) if (h) finishedHandles.add(h)
+        for (const h of [a.taskId, a.id, a.label]) if (h) finishedHandles.add(h)
       }
       const firedTimers = new Set(
         deps.storage.listThreadTimers(row.slug).filter((t) => t.state === "fired").map((t) => t.id),
@@ -1846,7 +1850,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // list. `expired` is excluded: its status list already names every item, by definition still live.
       const ops = cause === "expired" ? [] : liveOpsLines({
         shells: (tele.bgShells ?? []).filter((sh) => sh.state === "running").map((sh) => ({ id: sh.taskId ?? sh.id, label: sh.label })),
-        subAgents: (tele.subAgents ?? []).filter((a) => a.state === "running").map((a) => ({ id: a.id, label: a.label })),
+        subAgents: (tele.subAgents ?? []).filter((a) => a.state === "running").map((a) => ({ id: a.taskId ?? a.id, label: a.label })),
         timers: deps.storage.listThreadTimers(row.slug, { armedOnly: true })
           .map((t) => ({ id: t.id, label: t.prompt.trim().replace(/\s+/g, " ").slice(0, 80) })),
         prs: deps.storage.listPrWatches(row.slug, { armedOnly: true })

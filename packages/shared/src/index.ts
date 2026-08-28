@@ -168,6 +168,12 @@ export const SubAgentView = z.object({
   // server that doesn't emit it yet → the drill-in drawer's entry point is simply not offered. Present
   // → the banner row / AgentBlock is clickable and resolves this exact child's transcript.
   id: z.string().optional(),
+  // The RUNTIME agent id — the `agentId: a01b2d20b32feab11` line of the Agent tool's launch ack, which
+  // is the only id the MODEL is ever shown for its child (the tool_use id above is invisible to it). So
+  // it is the string a worker writes in an `agents:` fence line or registers a `watch` against, exactly
+  // as BgShellView.taskId is for a shell. Every liveness reading accepts both. Absent for a codex row
+  // and for a Claude row between its tool_use and its launch ack.
+  taskId: z.string().optional(),
   // Can frizz actually END this child's work right now? Computed SERVER-side (board.ts, the one place
   // holding both the session row and the tailer's telemetry) and never re-derived by a client — the
   // same discipline as `steerable`, and for the same reason: the policy depends on the thread's

@@ -1084,7 +1084,7 @@ test("tailer: surfaces running vs stale sub-agents (via injected mtime) and clea
 
   h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z") // <15min since child mtime → running
   t.tick() // prime
-  assert.deepEqual(t.get("t")?.subAgents, [{ label: "child", startedAt: "2026-07-01T00:00:01.000Z", state: "running", subagentType: "frizz:opus-high", id: "toolu_bg", lastActivityAt: "2026-07-01T00:00:02.000Z" }])
+  assert.deepEqual(t.get("t")?.subAgents, [{ label: "child", startedAt: "2026-07-01T00:00:01.000Z", state: "running", subagentType: "frizz:opus-high", id: "toolu_bg", taskId: "abc123", lastActivityAt: "2026-07-01T00:00:02.000Z" }])
 
   h.clock.ms = Date.parse("2026-07-01T00:20:00.000Z") // >15min since child mtime (SUBAGENT_STALE_MS) → stale
   const before = h.changes.n

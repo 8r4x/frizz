@@ -336,7 +336,11 @@ function liveWaitHandles(tele: SessionTelemetry | undefined): Set<string> {
   }
   for (const agent of tele?.subAgents ?? []) {
     if (!isDirectSubAgent(agent) || agent.state !== "running") continue
+    // The same three, for the same reason: `taskId` is the `agentId` of the Agent launch ack — the only
+    // id the model is shown for its child. Until 2026-08-28 a sub-agent answered to two, and a worker that
+    // named the id it was handed was refused (thread review-and-babysit-zod-pr-6471).
     handles.add(agent.id)
+    if (agent.taskId) handles.add(agent.taskId)
     if (agent.label) handles.add(agent.label)
   }
   return handles
@@ -369,7 +373,7 @@ export function resolveLiveWatchTarget(
   }
   for (const agent of tele?.subAgents ?? []) {
     if (!isDirectSubAgent(agent) || agent.state !== "running") continue
-    if (agent.id === wanted || agent.label === wanted) {
+    if (agent.id === wanted || agent.taskId === wanted || agent.label === wanted) {
       return { kind: "agent", ...(agent.label ? { label: agent.label } : {}) }
     }
   }

@@ -222,6 +222,12 @@ export interface SubAgentView {
   state: "running" | "stale" | "rested"
   subagentType?: string // the dispatch's input.subagent_type verbatim (e.g. "frizz:frizz-opus-high"); absent when unset
   id: string // the dispatch tool_use id — the drill-in drawer's stable handle to this exact child
+  // The RUNTIME agent id (Claude's `agentId: a01b2d20b32feab11` in the Agent launch ack) — the handle the
+  // MODEL was shown, so the one a worker naturally writes in an `agents:` line or a `watch`. Absent until
+  // the launch ack (or the SDK's `task_started`) pairs it with the dispatch. Same contract as
+  // BgShellView.taskId, and the same bug when it was missing: a worker that named the id it was handed
+  // was told "NOT RUNNING (nothing by that name)" (thread review-and-babysit-zod-pr-6471, 2026-08-28).
+  taskId?: string
   lastActivityAt?: string // ISO8601 of the child transcript's last append (its output-file mtime)
   // ---- provider-reported progress (broker Claude rows only; see applyRuntimeTasks) ----
   // "there's not really any indication of what they're up to aside from starts and stops" — this is
@@ -2713,6 +2719,7 @@ export function createTailer(deps: TailerDeps): Tailer {
         state: entryStale(state, e, nowMs) ? "stale" : "running",
         subagentType: e.subagentType,
         id: e.toolUseId,
+        ...(e.taskId ? { taskId: e.taskId } : {}),
         ...(lastActivityAt ? { lastActivityAt } : {}),
         ...(p?.activity ? { activity: p.activity } : {}),
         ...(p?.activityDetail ? { activityDetail: p.activityDetail } : {}),
@@ -2745,6 +2752,7 @@ export function createTailer(deps: TailerDeps): Tailer {
         state: "rested",
         subagentType: dead.subagentType,
         id: dead.toolUseId,
+        ...(dead.taskId ? { taskId: dead.taskId } : {}),
         ...(lastActivityAt === undefined ? {} : { lastActivityAt: new Date(lastActivityAt).toISOString() }),
       })
       out.push(...subtree)

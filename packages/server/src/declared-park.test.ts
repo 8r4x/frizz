@@ -618,3 +618,59 @@ test("a park correction tells the worker what time it is and how long it has bee
     assert.ok(msg.trimEnd().endsWith("ago."), "the clock is frizz's footnote, not its headline")
   } finally { h.close() }
 })
+
+// THE RUNTIME AGENT ID IS THE ONE A WORKER ACTUALLY HAS. The Agent tool's launch ack hands the model
+// `agentId: a01b2d20b32feab11`; the dispatch tool_use id frizz keys the child by never appears in its
+// context. A shell has answered to its runtime handle (`taskId`) since 2026-08-14; a sub-agent answered
+// to only its tool_use id and label until 2026-08-28, when a worker that fenced the id it was handed was
+// bumped "NOT RUNNING (nothing by that name)", re-fenced with the `toolu_…` the correction printed, and
+// the maintainer asked why there were two ids (thread review-and-babysit-zod-pr-6471).
+test("a sub-agent answers to the runtime agentId the worker was handed, on every reading", () => {
+  const withAgent = { subAgents: [{ ...agent("reviewer", "toolu_9"), taskId: "a01b2d20b32feab11" }] }
+  assert.equal(hasDeclaredBackgroundPark(parked(["a01b2d20b32feab11"], withAgent), NOW), true)
+  assert.equal(hasDeclaredBackgroundPark(parked(["toolu_9"], withAgent), NOW), true, "the tool_use id still works")
+  // The waker's own live set, which is the reading that actually parks or bumps the thread.
+  assert.deepEqual(
+    unaccountedItems([{ kind: "agent", value: "a01b2d20b32feab11" }], {
+      shells: new Set(), agents: new Set(["a01b2d20b32feab11", "toolu_9", "reviewer"]), timers: new Set(), prs: new Set(),
+    }),
+    [],
+  )
+})
+
+test("a park naming a running sub-agent by its runtime agentId is HONOURED — no correction", async () => {
+  const h = parkHarness([{ kind: "agent", value: "a01b2d20b32feab11" }, { kind: "for", value: "45m" }], {
+    agents: [{ id: "toolu_A", taskId: "a01b2d20b32feab11", label: "the reviewer", startedAt: AT, state: "running" }],
+  })
+  try {
+    await h.s.tick()
+    assert.deepEqual(h.queued(), [], "the fence named live work by the id the worker was shown; nothing to correct")
+  } finally { h.close() }
+})
+
+test("a park on a RETURNED sub-agent named by its runtime agentId reads as finished, not as a wrong fence", async () => {
+  const h = parkHarness([{ kind: "agent", value: "a01b2d20b32feab11" }, { kind: "for", value: "2h" }], {
+    agents: [{ id: "toolu_A", taskId: "a01b2d20b32feab11", label: "the reviewer", startedAt: AT, state: "rested" }],
+  })
+  try {
+    await h.s.tick()
+    const msg = h.queued()[0].message
+    assert.match(msg, /has FINISHED/)
+    assert.doesNotMatch(msg, /nothing by that name/)
+  } finally { h.close() }
+})
+
+// …and the correction's own listing prints THAT id, so what frizz tells a worker to copy is the string it
+// already recognises from its ack — not a second id it has never seen, which is what produced "why are
+// there 2 ids?". The tool_use id remains accepted, since the listing printed it for two weeks.
+test("the correction lists a running sub-agent by its runtime agentId, not its tool_use id", async () => {
+  const h = parkHarness([{ kind: "agent", value: "bGHOST" }, { kind: "for", value: "2h" }], {
+    agents: [{ id: "toolu_A", taskId: "a01b2d20b32feab11", label: "the reviewer", startedAt: AT, state: "running" }],
+  })
+  try {
+    await h.s.tick()
+    const msg = h.queued()[0].message
+    assert.match(msg, /- `agent: a01b2d20b32feab11`  — the reviewer/)
+    assert.doesNotMatch(msg, /agent: toolu_A/)
+  } finally { h.close() }
+})

@@ -2401,7 +2401,7 @@ export function createRouter(ctx: AppContext) {
         }
         for (const a of tele?.subAgents ?? []) {
           if (a.state !== "running") continue
-          if (a.id) activity.push({ kind: "agent", id: a.id, label: a.label, since: a.startedAt, ...watchFor("agent", [a.id, a.label]) })
+          if (a.id) activity.push({ kind: "agent", id: a.taskId ?? a.id, label: a.label, since: a.startedAt, ...watchFor("agent", [a.taskId, a.id, a.label]) })
         }
         for (const t of ctx.storage.listThreadTimers(input.slug, { armedOnly: true })) {
           activity.push({

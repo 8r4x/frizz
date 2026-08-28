@@ -2008,3 +2008,17 @@ test("an armed PR watch or timer with no fence is a declared wait; a fence must 
   assert.equal(hasParkedTimerWatch(parked({ kind: "timer", value: "tmr_a1" }), new Set(["tmr_a1"])), true)
   assert.equal(hasParkedTimerWatch(idle, new Set(["tmr_a1"])), true)
 })
+
+// A `watch` names whichever handle the worker has. For a sub-agent that is the Agent launch ack's
+// `agentId` — the dispatch tool_use id never reaches the model — so the resolver must answer to it
+// exactly as it answers to a shell's `taskId` (see liveWaitHandles for the 2026-08-28 miss).
+test("resolveLiveWatchTarget: a sub-agent resolves by its runtime agentId as well as its tool_use id and label", async () => {
+  const { resolveLiveWatchTarget } = await import("./board.ts")
+  const tele = {
+    bgShells: [],
+    subAgents: [{ id: "toolu_A", taskId: "a01b2d20b32feab11", label: "the reviewer", startedAt: "2026-08-28T14:41:41.000Z", state: "running" }],
+  } as unknown as SessionTelemetry
+  assert.deepEqual(resolveLiveWatchTarget(tele, "a01b2d20b32feab11"), { kind: "agent", label: "the reviewer" })
+  assert.deepEqual(resolveLiveWatchTarget(tele, "toolu_A"), { kind: "agent", label: "the reviewer" })
+  assert.equal(resolveLiveWatchTarget(tele, "bGHOST"), undefined)
+})
