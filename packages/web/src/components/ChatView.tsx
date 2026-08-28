@@ -892,6 +892,25 @@ function VirtualizedThreadTranscript({
       if (!element) return
       element.scrollTo({ top: adjustments === undefined ? offset : element.scrollTop + adjustments, behavior })
     },
+    // THE FLASH FRAME — why scrolling back through a long thread looks like it re-renders under you.
+    //
+    // The correction above fixes WHERE the offset lands, not WHEN the rows follow it. virtual-core writes
+    // the compensation synchronously inside the ResizeObserver pass that measured the row, but the rows
+    // below it are positioned by React (`translateY(start)`), and the re-render that moves them is a
+    // plain setState from a non-React callback — a task that runs AFTER that frame paints. So one frame
+    // is painted with scrollTop shoved by the whole correction and the rows still where they were, and
+    // the next frame snaps them back. Replayed over a real transcript (verify-full-scroll-flash.mjs):
+    // 24 corrections in 300 frames of wheel, EVERY one painted, shoving the reader's content by 450px to
+    // 2,276px for a frame — the "crazy jitter" scrolling up, which the per-frame jitter probe never saw
+    // because it samples in rAF, after React has caught up.
+    //
+    // With direct DOM updates the adapter writes each row's transform and the container's height itself,
+    // inside the same `onChange` the correction fires from, so the rows move in the frame the offset
+    // does; React then re-renders only when the visible range changes. The inline `translateY` below is
+    // still rendered so a row is positioned from its first paint. The hoisted pinned row is registered
+    // for measurement like any other, so the adapter would write a transform on it too — which would
+    // break its `position: sticky`; its `!transform-none` class outranks that inline write.
+    directDomUpdates: true,
   })
   const [atEnd, setAtEnd] = useState(true)
   // Tail-follow state, in refs because syncTailFollow runs from layout/observer/listener callbacks that
@@ -1251,10 +1270,16 @@ function VirtualizedThreadTranscript({
   // `measurementsCache` is the PUBLIC field holding what the private getMeasurements() returns; reading
   // it here is safe because getVirtualItems() above already forced the memoized measure pass this render.
   const stickyStart = stickyMessageRow ? virtualizer.measurementsCache[stickyRowIndex]?.start ?? 0 : 0
+  // The total-size box is both this component's settle observer target (contentRef) and the adapter's
+  // direct-update container (containerRef, which writes its height). One callback ref feeds both.
+  const contentAndContainerRef = useCallback((node: HTMLDivElement | null) => {
+    contentRef.current = node
+    virtualizer.containerRef(node)
+  }, [virtualizer])
 
   return (
     <div
-      ref={contentRef}
+      ref={contentAndContainerRef}
       data-virtualized-transcript
       data-virtual-row-count={virtualItems.length}
       className="relative w-full"
@@ -1285,7 +1310,7 @@ function VirtualizedThreadTranscript({
             data-transcript-row-key={stickyMessageRow.key}
             data-transcript-source-id={stickyMessageRow.message.sourceId}
             data-transcript-sticky="true"
-            className="group/ts pointer-events-none [&>*]:pointer-events-auto sticky top-0 z-[9] flex w-full flex-col pt-3 pb-1.5"
+            className="group/ts pointer-events-none [&>*]:pointer-events-auto sticky top-0 z-[9] flex w-full flex-col pt-3 pb-1.5 !transform-none"
           >
             {/* This wrapper is the reading's containing block, and it carries the `px-6` rather than the
                 band above it — because `MessageStamp` is positioned on BOTH axes (`top-full`,
@@ -3401,6 +3426,21 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
         // goes too, for the spacer reason above: FenceCard returning null would still leave its slot's
         // spacer standing between the prose and that card.
         if (fseg.fenceKind === "awaiting" && (m.fenceRefused || staleAwaiting || restingCardShown)) continue
+        // BESIDE AN OPEN REGISTERED QUESTION, A LIVE FENCE IS PROSE — its body, with the chrome dropped:
+        // no hourglass, no title, no wait table. A park cannot take while a question stands (deriveNeedsYou
+        // queues the thread on the question first), and the resting card already yields to it
+        // (deriveAwaitingBackground: at rest with both outstanding the human looks at the QUESTION, the
+        // monitors stay on the strip under the prompt box). This fence card did not yield, so a worker
+        // that registered a question, kept working, and then fenced its next rest drew a parked-looking
+        // card — hourglass, "BACKGROUND SHELLS" — stacked on top of the ask (maintainer 2026-08-28: "Weird
+        // that there's both an awaiting block and open questions"). The body stays because it IS the
+        // handoff: the worker writes its gate status into the fence, and dropping the block as a settled
+        // one is dropped would leave the rest saying nothing above the question. The fence and
+        // registration paths now render alike; the contract says not to write the fence there at all.
+        if (fseg.fenceKind === "awaiting" && (thread?.questions?.length ?? 0) > 0) {
+          push(<ProseHtml key={`${keyBase}-f${fi}`} md={fseg.body} wrap={dense} />)
+          continue
+        }
         push(
           <FenceCard
             key={`${keyBase}-f${fi}`}

@@ -17,6 +17,10 @@ import "./styles.css"
 //   ?many=1     — three open questions at once, which is what the ONE shared "Send answers" is for.
 //   ?busy=1     — a question AND live background work, which is the case the memo calls out: the
 //                 question expands and the waits must not compete with it for the one glance.
+//   ?fence=1    — busy, AND the tail message carries a live ```awaiting fence naming the shell — the
+//                 shape of a worker that registered a question, kept working, and fenced its next rest.
+//                 The fence draws as prose here: no hourglass, no title, no shell table; the question
+//                 is the one card (maintainer 2026-08-28, with a screenshot of the two stacked).
 //   ?font=sans  — the other of the two fonts this app renders in; mono is the default and the wider.
 const params = new URLSearchParams(location.search)
 document.documentElement.dataset.font = params.get("font") === "sans" ? "sans" : "mono"
@@ -92,7 +96,21 @@ const questions = params.get("danger") === "1" ? [GATE]
   : params.get("many") === "1" ? [SETTINGS, TREE, GATES]
   : [SETTINGS]
 
-const tail = "Both stores work. The choice is yours because it is the one thing here that is hard to reverse once there is data in it."
+const busy = params.get("busy") === "1" || params.get("fence") === "1"
+const prose = "Both stores work. The choice is yours because it is the one thing here that is hard to reverse once there is data in it."
+const fence = [
+  "```awaiting",
+  "shells: [bzvtnt3ig]",
+  "for: 1h",
+  "title: Launcher gate + nub-cli suite",
+  "---",
+  "Still parked on the `nub-launcher` workspace gate and the full nub-cli integration suite. Push and PR against `main` follow once both are clean.",
+  "",
+  "- already green: root `clippy --all-targets --all-features` (0 warnings), `fmt` ×3, nub-core 440 tests",
+  "- the last edits are comment- and prose-only, so they cannot change the outcome of the gates running",
+  "```",
+].join("\n")
+const tail = params.get("fence") === "1" ? `${prose}\n\n${fence}` : prose
 const messages: TranscriptMessage[] = [
   { role: "user", text: "Add a settings store.", tools: [], parts: [{ kind: "text", text: "Add a settings store." }] },
   { role: "assistant", text: tail, tools: [], parts: [{ kind: "text", text: tail }] },
@@ -124,13 +142,13 @@ const thread = {
   foreign: false,
   backend: "claude",
   permissionMode: "default",
-  subAgents: params.get("busy") === "1"
+  subAgents: busy
     ? [{ id: "agent-a", label: "Audit the parser for edge cases", subagentType: "frizz:high", startedAt: ago(4), state: "running" }]
     : [],
-  bgShells: params.get("busy") === "1"
+  bgShells: busy
     ? [{ id: "toolu_ci", taskId: "bzvtnt3ig", label: "gh run watch 1842", startedAt: ago(6), state: "running" }]
     : [],
-  watches: params.get("busy") === "1"
+  watches: busy
     ? [{ id: "wch_aaa", kind: "shell", target: "bzvtnt3ig", state: "armed", createdAt: ago(6) }]
     : [],
   lastActivityAt: ago(1),

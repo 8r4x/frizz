@@ -52,6 +52,24 @@ test("a fence the resting card states never reaches the card either", () => {
   assert.doesNotMatch(todos, /message(?:RendersNothing|HasRenderableText)\([a-z]+, isStaleAwaiting\(/, "the queue card's predicates take the union")
 })
 
+// A LIVE FENCE BESIDE AN OPEN REGISTERED QUESTION IS PROSE. The resting card already yields to an open
+// question (server deriveAwaitingBackground), but the fence card in the message did not, so a worker that
+// registered a question, kept working and fenced its next rest drew a parked-looking card — hourglass,
+// shell table — on top of the ask (maintainer 2026-08-28: "Weird that there's both an awaiting block and
+// open questions"). The body is the handoff and stays; the chrome goes, and the question is the one card.
+test("a live fence beside an open registered question keeps its prose and loses its card", () => {
+  const render = renderText()
+  const asking = render.indexOf('fseg.fenceKind === "awaiting" && (thread?.questions?.length ?? 0) > 0')
+  assert.notEqual(asking, -1, "the branch keys on the thread's OPEN registered questions — the same count the server's resting-card gate reads")
+  // ORDER: a refused or settled fence draws nothing, question or not; a live one on an asking thread draws
+  // its prose; only a live one on a thread with nothing open reaches the card.
+  assert.ok(render.indexOf("restingCardShown)) continue") < asking, "the non-live skips come first")
+  const card = render.indexOf("<FenceCard")
+  assert.ok(asking < card, "…and the prose branch comes before the card")
+  assert.match(render.slice(asking, card), /<ProseHtml[^>]*md=\{fseg\.body\}/, "the fence's BODY renders through the ordinary prose sheet")
+  assert.match(render.slice(asking, card), /\n\s*continue\n/, "…and the block never reaches the card")
+})
+
 // THE TAIL MOUNTS WITH THE TRANSCRIPT, NOT BEFORE IT. The board lands first, so the queue card used to
 // paint its resting/done/rested card under the "Loading…" line and then shove it down ~1s later when the
 // messages mounted above it — the layout shift the maintainer refreshed into (2026-08-28).
