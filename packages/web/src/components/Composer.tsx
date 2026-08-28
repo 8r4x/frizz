@@ -68,6 +68,28 @@ export const CONTEXT_CHIP_HEIGHT = 20
 const CONTEXT_CHIP_GAP = 6
 const CONTEXT_TEXT_GAP = 5
 
+// Where the BASELINE of a line set in `source`'s font falls, as px from that line box's top. A
+// zero-height inline-block sits with its bottom on the baseline, so a hidden mirror line carrying one
+// reads the offset straight off the resolved font — whichever family the setting picked, and whatever
+// its ascent/descent turn out to be. Measured, not looked up, because those metrics are exactly what
+// differ between the two font settings (2026-08-28 readings in the comment at the call site).
+function baselineOffset(host: HTMLElement, source: CSSStyleDeclaration): number {
+  const mirror = document.createElement("div")
+  mirror.style.cssText = "position:absolute;top:0;left:0;visibility:hidden;pointer-events:none;white-space:nowrap"
+  mirror.style.fontFamily = source.fontFamily
+  mirror.style.fontSize = source.fontSize
+  mirror.style.fontWeight = source.fontWeight
+  mirror.style.lineHeight = source.lineHeight
+  mirror.textContent = "Hg"
+  const probe = document.createElement("span")
+  probe.style.cssText = "display:inline-block;width:0;height:0;vertical-align:baseline"
+  mirror.appendChild(probe)
+  host.appendChild(mirror)
+  const offset = probe.getBoundingClientRect().top - mirror.getBoundingClientRect().top
+  mirror.remove()
+  return offset
+}
+
 // Auto-grow: reset to auto, then snap to content height clamped at maxHeight.
 function snapHeight(el: HTMLTextAreaElement, maxHeight: number): void {
   el.style.height = "auto"
@@ -116,8 +138,10 @@ export function Composer({
   // label"). A <textarea> cannot host inline elements, so the node renders in an overlay pinned to the
   // textarea's text origin and the textarea gets a matching `text-indent` (first line only — exactly
   // the line the chips occupy) plus enough extra top padding for any chip rows that wrapped above it.
-  // CONTRACT for the node: each chip is a `[data-context-chip]` element `CONTEXT_CHIP_HEIGHT` px tall;
-  // Composer owns the row (wrap, gaps, line pitch). Renders nothing when nothing is staged.
+  // CONTRACT for the node: each chip is a `[data-context-chip]` element `CONTEXT_CHIP_HEIGHT` px tall
+  // whose text is a `[data-context-label]` and whose movable parts (label, ✕) are `[data-context-ink]`;
+  // Composer owns the row (wrap, gaps, line pitch) and puts each label on the prose's baseline,
+  // carrying the ✕ with it. Renders nothing when nothing is staged.
   context?: React.ReactNode
   // A small action rendered just LEFT of the send button (the dispatch composer's GitHub-picker icon).
   // Only surfaces that pass it get it; reply/queue composers omit it.
@@ -295,6 +319,16 @@ export function Composer({
   // comment marker) — because once the row is wrapped at full width, a chip joining the LAST row
   // changes neither the overlay's width nor its height, so a ResizeObserver alone would miss it; the
   // resize path still covers a rewrap from the column narrowing.
+  //
+  // VERTICAL: the pill is centred on the line box, which is the prose's cap band (0.06px off in
+  // both fonts) — but the eye reads inline text by BASELINE, and an 11px label centred in a 20px pill
+  // has its baseline 1.87px above the 13px prose's in sans and 0.87px in mono (dsf-8 ink scan,
+  // 2026-08-28: label digits' bottom 13.27 against the prose H's 15.14 / 14.14 from the line top —
+  // maintainer: "it doesn't feel vertically aligned with the plain text"). So each pill's ink — the
+  // label and the ✕ beside it, together, so the ✕ keeps sitting on the label's own middle — is
+  // translated down by the difference between the two baselines, both probed from the resolved
+  // fonts, which lands it at 0 under either setting (0.13px residual, both fonts) and needs no
+  // hand-fitted constant. The pill itself stays centred on the cap band.
   useLayoutEffect(() => {
     const el = taRef.current
     const overlay = contextRef.current
@@ -312,15 +346,29 @@ export function Composer({
       const cs = getComputedStyle(el)
       const padTop = parseFloat(cs.paddingTop)
       const line = parseFloat(cs.lineHeight)
+      const chipTop = padTop + (line - CONTEXT_CHIP_HEIGHT) / 2
       overlay.style.left = cs.paddingLeft
       overlay.style.maxWidth = `calc(100% - ${cs.paddingLeft} - ${cs.paddingRight})`
-      overlay.style.top = `${padTop + (line - CONTEXT_CHIP_HEIGHT) / 2}px`
+      overlay.style.top = `${chipTop}px`
       overlay.style.rowGap = `${Math.max(0, line - CONTEXT_CHIP_HEIGHT)}px`
       const last = chips[chips.length - 1]
       if (!last) {
         el.style.textIndent = ""
       } else {
         const box = overlay.getBoundingClientRect()
+        // Both baselines from the LINE top: the prose's straight from its probe, the label's as the
+        // pill's own offset into the line plus the label's offset into the pill plus its probe.
+        const proseBaseline = baselineOffset(overlay, cs)
+        for (const chip of chips) {
+          const label = chip.querySelector<HTMLElement>("[data-context-label]")
+          if (!label) continue
+          const ink = chip.querySelectorAll<HTMLElement>("[data-context-ink]")
+          for (const part of ink) part.style.transform = ""
+          const labelBaseline = (line - CONTEXT_CHIP_HEIGHT) / 2
+            + (label.getBoundingClientRect().top - chip.getBoundingClientRect().top)
+            + baselineOffset(overlay, getComputedStyle(label))
+          for (const part of ink) part.style.transform = `translateY(${(proseBaseline - labelBaseline).toFixed(2)}px)`
+        }
         el.style.textIndent = `${Math.round(last.getBoundingClientRect().right - box.left + CONTEXT_TEXT_GAP)}px`
         const above = Math.max(0, Math.round(box.height - CONTEXT_CHIP_HEIGHT))
         if (above > 0) el.style.paddingTop = `${padTop + above}px`

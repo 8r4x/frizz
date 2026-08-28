@@ -9,8 +9,9 @@ import { CONTEXT_CHIP_HEIGHT } from "./Composer.tsx"
 // The staged SELECTED-CONTEXT items for a thread, as chips INLINE in its prompt box: the pills open the
 // first line of the message and the typed prose runs on after them (the ⌘I flow — see FileViewerPanel
 // and lib/composerContext.ts). Composer owns the row — this renders one `[data-context-chip]` pill per
-// selection, `CONTEXT_CHIP_HEIGHT` tall, and Composer lays them on the text's first line and indents
-// the prose past the last one; see its `context` prop for why a row of pills above the text was
+// selection, `CONTEXT_CHIP_HEIGHT` tall, and Composer lays them on the text's first line, sets each
+// `[data-context-label]` on the prose's baseline and indents the prose past the last one; see its
+// `context` prop for why a row of pills above the text was
 // rejected. Each chip is the file's basename plus its line range. Clicking a chip pops a card above it
 // — the quoted text plus a comment box — so each item can carry a note the way a review comment does.
 // The set serializes into the next send and clears with it.
@@ -37,18 +38,22 @@ export function ComposerContextChips({ slug }: { slug: string }): ReactElement |
               isOpen ? "border-accent/60 bg-panel-2 text-fg" : "border-border bg-panel-2/50 text-fg/80 hover:bg-panel-2"
             }`}
           >
+            {/* Both buttons are the pill's INK: Composer translates them together so the label sits
+                on the prose's baseline and the ✕ stays beside it — see its inline-context effect. */}
             <button
               type="button"
+              data-context-ink
               onClick={() => setOpenId(isOpen ? null : item.id)}
               title={contextDisplayPath(item.path, projectDir)}
               className="flex min-w-0 items-center gap-1 outline-none"
             >
-              <span className="max-w-48 truncate font-mono-keep">{base}{lines}</span>
+              <span data-context-label className="max-w-48 truncate font-mono-keep">{base}{lines}</span>
               {/* The comment marker: only once a note exists, so a bare quote stays a bare chip. */}
               {item.comment?.trim() && <MessageSquare size={10} aria-hidden="true" className="shrink-0 text-muted" />}
             </button>
             <button
               type="button"
+              data-context-ink
               // Like every control beside a live input here: never blur the textarea on the click.
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
