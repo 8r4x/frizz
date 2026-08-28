@@ -481,8 +481,8 @@ export function setBoard(board: BoardSnapshot) {
  *
  * The rail switches projects WITHOUT a document load, which used to do this for free. Every field
  * here is per-project, and carrying any of it across is a visible bug rather than stale data: a
- * drawer would stay open over a board that has never heard of its thread, and the connection dot
- * would claim a live feed belonging to the project you just left.
+ * drawer would stay open over a board that has never heard of its thread, and the row above the
+ * prompt box would name — and link to — the repo you just left.
  *
  * Machine-wide state (the settings/notification mirror, the control-plane status, whether the palette
  * is open) is deliberately NOT touched — none of it changes when the project does.

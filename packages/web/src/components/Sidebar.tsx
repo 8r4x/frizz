@@ -203,8 +203,9 @@ export function Sidebar() {
             this same box CENTERED as the whole screen (App hides the sidebar); the first dispatch
             shunts it here to the left. */}
         <div className="mb-5 shrink-0 px-0.5">
-          {/* THE STATUS ROW rides the top of the prompt box: project identity at the left edge, the
-              settings/reload pair and both quota chips at the right. The quota chips did once float
+          {/* THE STATUS ROW rides the top of the prompt box: home, the settings/reload pair and both
+              quota chips at the left edge, the project — its GitHub mark and owner/repo, one link to
+              the repo — at the right. The quota chips did once float
               here on their own, then moved out to a fixed corner bar because quota is ACCOUNT-global
               rather than a property of this composer — which is still true, and is why they come back
               as part of a GLOBAL status row instead of as a composer decoration. */}

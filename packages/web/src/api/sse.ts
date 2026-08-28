@@ -113,7 +113,7 @@ function reconnect(immediate = false) {
 // incremental board, and SSE is one-directional (no in-band resync request), so the cleanest resync is
 // to drop and immediately re-open: the connect handshake re-sends the whole board with the current seq.
 // This is NOT a failure — the connection is healthy — so it deliberately skips the backoff/failure
-// counter; connect()'s "open" guard keeps the connection dot from flickering.
+// counter; connect()'s "open" guard keeps `store.connection` from flickering.
 function resync() {
   stream.reset()
   es?.close()

@@ -18,8 +18,13 @@ import "./styles.css"
 //                       headline used to hijack it and show the weekly figure instead.
 //   ?state=signedout  — Codex signed out, which now renders NO Codex chip at all
 //   ?state=longemail  — an account address past the popover's width, to check the truncation
-//   ?connection=closed|connecting  — the only states that paint a connection indicator at all
-//   ?identity=loading|unavailable
+//   ?identity=loading|unavailable|gitlab|local
+//                                  — gitlab: an owner/repo label with NO githubRepo (a non-GitHub
+//                                    origin), which must render as plain text: no mark, no link.
+//                                    local: a remote-less directory, same plain treatment.
+//   ?width=272                     — the column's width. 489 is the sidebar at a 1440px viewport; 272 is
+//                                    its floor in the tablet band, where "owner/repo" no longer fits
+//                                    beside two quota chips and has to truncate from the START.
 //   ?font=mono                     — this app renders in TWO type families (html[data-font], applied
 //                                    before first paint); a fixture that leaves it unset silently
 //                                    renders mono and hides half the answer.
@@ -85,21 +90,27 @@ const { StatusRow } = await import("./components/StatusRow.tsx")
 const { store } = await import("./store.ts")
 const identityMode = params.get("identity")
 
-// StatusRow reads identity and connection off the store itself, so the fixture seeds the store rather
+// StatusRow reads identity off the store itself, so the fixture seeds the store rather
 // than passing props — which is also the only way to exercise the real read path.
 store.board = (identityMode === "loading"
   ? null
-  : { projectLabel: identityMode === "unavailable" ? "frizz" : "colinhacks/frizz", threads: [] }) as never
-store.connection = (params.get("connection") ?? "open") as "open" | "connecting" | "closed"
+  : identityMode === "unavailable"
+    ? { projectLabel: "", threads: [] }
+    : identityMode === "local"
+      ? { projectLabel: "scratch-pad", threads: [] }
+      : identityMode === "gitlab"
+        ? { projectLabel: "colinhacks/frizz", threads: [] }
+        : { projectLabel: "colinhacks/frizz", githubRepo: "colinhacks/frizz", threads: [] }) as never
+const width = Number(params.get("width") ?? 489)
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
 
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={queryClient}>
     <main className="min-h-screen bg-bg p-6 text-fg">
-      {/* The sidebar column's real width at a 1440px viewport, so the row's split reads at the measure
-          it actually ships at. */}
-      <div className="w-[489px]">
+      {/* The sidebar column's real width at a 1440px viewport by default, so the row's split reads at the
+          measure it actually ships at; `?width=272` is the column's floor. */}
+      <div style={{ width }}>
         <StatusRow />
         <div className="rounded-xl border border-border bg-panel px-3 py-6 text-[13px] text-muted">
           A stand-in prompt box. The row's two ends land on THIS border.
