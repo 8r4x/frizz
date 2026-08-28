@@ -48,8 +48,9 @@ export function ComposerContextChips({ slug }: { slug: string }): ReactElement |
               className="flex min-w-0 items-center gap-1 outline-none"
             >
               <span data-context-label className="max-w-48 truncate font-mono-keep">{base}{lines}</span>
-              {/* The comment marker: only once a note exists, so a bare quote stays a bare chip. */}
-              {item.comment?.trim() && <MessageSquare size={10} aria-hidden="true" className="shrink-0 text-muted" />}
+              {/* The comment marker: only once a note exists, so a bare quote stays a bare chip. Same
+                  ink lift as the ✕ below — its 7.5px of ink read 1.0px under the cap band too. */}
+              {item.comment?.trim() && <MessageSquare size={10} aria-hidden="true" className="shrink-0 translate-y-[-0.09em] text-muted" />}
             </button>
             <button
               type="button"
@@ -68,7 +69,11 @@ export function ComposerContextChips({ slug }: { slug: string }): ReactElement |
               // 6.5px; ✕→right border 7.5px at -mr-0.5, 5.5px at -mr-1, 6.5px at -mr-[3px].
               className="shrink-0 rounded p-0.5 -mr-[3px] text-muted transition-colors hover:text-fg"
             >
-              <X size={10} strokeWidth={2.5} />
+              {/* Ink, not box: centred on its box the X's 5px of ink sat on the label's x-height band,
+                  1.0px below the cap/digit band the label's body reads at (probe 2026-08-28, both
+                  fonts: X ink mid 11.94 vs cap mid 10.93 from the chip top). -0.09em of 11px lifts
+                  it 0.99px; residual re-measured at 0.02px, both fonts. */}
+              <X size={10} strokeWidth={2.5} className="translate-y-[-0.09em]" />
             </button>
             {isOpen && (
               <ContextCard
