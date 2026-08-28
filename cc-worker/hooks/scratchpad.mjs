@@ -245,9 +245,9 @@ if (mode === 'session-start') {
       '⟦scratch directory⟧ Context was just ' + (input.source === 'compact' ? 'compacted' : 'lost') +
         '. You have files in your scratch directory `' + relPath + '`:\n' + describe(files) +
         '\n\nRead whichever of them bears on what you were doing BEFORE acting, and treat what you ' +
-        'wrote there as authoritative over anything the summary implies. If you have not already, arm ' +
-        'mcp__frizz__recurring_prompt with post_compaction: true and a prompt linking the one that ' +
-        'matters, so the next compaction hands it back to you without relying on this note.' +
+        'wrote there as authoritative over anything the summary implies. (A goal armed via ' +
+        'mcp__frizz__recurring_prompt with post_compaction: true can hand a link back at the next ' +
+        'compaction without relying on this note.)' +
         compactedNote,
     );
   } else if (lostContext) {
@@ -259,21 +259,19 @@ if (mode === 'session-start') {
         relPath + '` is EMPTY — you left yourself nothing to recover from. Do not search other ' +
         '`.frizz/threads/*/` directories for a substitute, and do not broadly reload repo docs or ' +
         'skills merely to reconstruct context. Recover from the retained compaction summary and any ' +
-        'task-specific handoff it directly names. If this effort is long enough to be compacted again, ' +
-        'write the account down this time — the problem, the approach and what you rejected, the ' +
-        "human's decisions, what is verified versus believed, the next action — and arm " +
-        'mcp__frizz__recurring_prompt with post_compaction: true and a prompt linking it.' +
+        'task-specific handoff it directly names. The directory is still available if you want notes ' +
+        'this time, and a goal armed via mcp__frizz__recurring_prompt with post_compaction: true can ' +
+        're-send a prompt linking them at the next compaction.' +
         compactedNote,
     );
   } else {
-    // A fresh start has lost nothing — teach the arrangement while there is still time to make it.
+    // A fresh start has lost nothing — say what is available and move on. The directory is offered,
+    // never prescribed (maintainer 2026-08-28: stop pushing the notes-plus-arming arrangement).
     parts.push(
       '⟦scratch directory⟧ `' + relPath + '` is yours: any files you like, no format expected, and ' +
-        'nothing in it is read automatically. On an effort long enough to be compacted, write the doc ' +
-        'you would want if you lost your context — the approach, what you rejected, the decisions the ' +
-        'human made, what is VERIFIED versus believed, the next action — then arm ' +
-        'mcp__frizz__recurring_prompt with post_compaction: true and a prompt that LINKS it. That ' +
-        'arming, not the file, is what makes it come back.',
+        'nothing in it is read automatically. Use it if you want it. If you ever want a note to come ' +
+        'back after a compaction, a goal armed via mcp__frizz__recurring_prompt with ' +
+        'post_compaction: true re-sends a prompt of your choosing — one that can link a file here.',
     );
   }
   emitJson(parts.join('\n\n'), 'SessionStart');
@@ -403,17 +401,15 @@ if (mode === 'nudge') {
   emitJson(
     mtimeMs
       ? '⟦scratch notes stale⟧ Your context has grown ~' + k + 'k tokens since you last wrote anything ' +
-          'in `' + relPath + '`. If this effort is long enough that losing your reasoning would hurt, ' +
-          'top it up in passing — the approach, what you rejected, the human\'s decisions, what is ' +
-          'verified versus believed — and make sure a post_compaction recurring prompt links it. This ' +
-          'is a background note, NOT a task and NOT a reason to pause: do not stop working to service ' +
-          'it, and never end a turn on it while the human\'s instruction still has parts left.'
+          'in `' + relPath + '`. Top the notes up in passing if you still want them current (a goal ' +
+          'armed with post_compaction: true can link them). This is a background note, NOT a task and ' +
+          'NOT a reason to pause: do not stop working to service it, and never end a turn on it while ' +
+          'the human\'s instruction still has parts left.'
       : '⟦scratch directory empty⟧ This session is ~' + k + 'k tokens deep and `' + relPath + '` is ' +
-          'empty. That is fine for a single direct task — notes are optional and writing them is not ' +
-          'doing the work. If this effort is long or branching, write down the approach and the ' +
-          'human\'s decisions and arm mcp__frizz__recurring_prompt with post_compaction: true linking ' +
-          'that file, or a compaction takes your reasoning with it. This is a background note, NOT a ' +
-          'task and NOT a reason to pause: keep going with what you were asked to do.',
+          'empty. That is fine — notes are optional and writing them is not doing the work. The ' +
+          'directory is available if you want notes, and mcp__frizz__recurring_prompt with ' +
+          'post_compaction: true can re-send a prompt linking them after a compaction. This is a ' +
+          'background note, NOT a task and NOT a reason to pause: keep going with what you were asked to do.',
     event,
   );
 }

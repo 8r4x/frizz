@@ -80,14 +80,16 @@ function additionalContext(stdout: string): string {
   return JSON.parse(stdout).hookSpecificOutput.additionalContext as string
 }
 
-test("a fresh startup teaches the ARRANGEMENT — the directory is useless without the arming", () => {
+test("a fresh startup offers the directory and names the goal capability without pushing it", () => {
   const dir = newProject()
   const ctx = additionalContext(runHook(dir, ["--mode=session-start"], { session_id: SID, source: "startup" }))
   assert.match(ctx, /⟦scratch directory⟧/)
   assert.match(ctx, /nothing in it is read automatically/)
-  // The whole point of the replacement: the file is inert until a post_compaction prompt links it.
+  // The capability stays NAMED — the worker can arm it — but it is offered, never prescribed
+  // (maintainer 2026-08-28: stop pushing the notes-plus-arming arrangement).
   assert.match(ctx, /post_compaction: true/)
-  assert.match(ctx, /That arming, not the file, is what makes it come back/)
+  assert.match(ctx, /Use it if you want it/)
+  assert.doesNotMatch(ctx, /then arm|write the doc/, "the arrangement is offered, never pushed")
 })
 
 test("after a compaction the hook NAMES the scratch files and never injects their content", () => {
@@ -106,7 +108,7 @@ test("after a compaction the hook NAMES the scratch files and never injects thei
   // re-growing this back into a content injection would restore exactly what was removed.
   assert.doesNotMatch(ctx, /UNMISTAKABLE-BODY-TEXT/, "a listing, never the content")
   assert.doesNotMatch(ctx, /scratchpad-state/, "frizz's own bookkeeping is not the worker's notes")
-  // And it teaches the guaranteed channel, since a pointer is skippable by construction.
+  // And it still names the post-compaction goal as an available capability.
   assert.match(ctx, /post_compaction: true/)
 })
 

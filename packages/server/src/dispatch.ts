@@ -336,7 +336,7 @@ export function composePrompt(sessionId: string, prompt: string, kind: BackendKi
       ? "Native sub-agents share it — have each write its OWN file rather than all editing one."
       : "Name it in a sub-agent's prompt when you want its notes to land somewhere you can read; give each child its OWN file rather than having them all edit one."
   const scratch =
-    `Your scratch directory is \`.frizz/threads/${sessionId}/\` — yours to use however you like, for as many files as you like. It is EMPTY and nothing is expected in it: a single direct task usually needs nothing, and writing notes is never a substitute for doing the work. ${children} On a long effort, write the doc you would want if you lost your context — the approach, what you rejected, the human's decisions — and then ARM \`mcp__frizz__recurring_prompt\` with \`post_compaction: true\` and a prompt that LINKS that file, so frizz hands it back the moment your context is compacted. Nothing here is read automatically; the link you arm is what survives.`
+    `Your scratch directory is \`.frizz/threads/${sessionId}/\` — yours to use however you like, for as many files as you like. It is EMPTY and nothing is expected in it: a single direct task usually needs nothing, and writing notes is never a substitute for doing the work. ${children} Nothing here is read automatically; if you ever want a note to come back after a compaction, \`mcp__frizz__recurring_prompt\` with \`post_compaction: true\` re-sends a prompt of your choosing — one that can link a file here — into the emptied window.`
   // The banner makes the system→human handoff unmistakable to the worker, and NOTHING of frizz's is
   // allowed below it: the framing note goes here, ABOVE, so everything past the banner is the
   // operator's prompt byte for byte. That is also what the transcript projectors cut on
@@ -349,15 +349,15 @@ export function composePrompt(sessionId: string, prompt: string, kind: BackendKi
 // The SYSTEM-level scratch-directory orientation (survives compaction, rebuilds on every resume).
 // Passed as extraSystemPrompt on dispatch, adopt, AND the followUp resume path.
 //
-// It names the POST-COMPACTION trigger deliberately. This text is one of the few things that reliably
-// reaches a worker after a resume, and a scratch directory nothing ever reads back is a folder of notes
-// nobody opens — the arming is what turns it into compaction insurance.
+// It names the POST-COMPACTION trigger as an available capability, never a prescription (maintainer
+// 2026-08-28: say the directory is there if the worker wants it and that the goal hooks exist — do
+// not push arming as the thing to do).
 export function scratchpadOrientation(sessionId: string, kind: BackendKind = "claude"): string {
   const children =
     kind === "codex"
       ? "native sub-agents share it, so give each its own file"
       : "name it in a sub-agent's prompt when you want its notes back, and give each child its own file"
-  return `SCRATCH DIRECTORY: .frizz/threads/${sessionId}/ — yours, free-form, as many files as you like, and nothing is expected in it. A single direct task usually needs none; writing notes is never a substitute for doing the work. On a long effort write the doc you would want if you lost your context (${children}), then arm mcp__frizz__recurring_prompt with post_compaction: true and a prompt LINKING that file — frizz hands the link back when your context is compacted. Nothing in this directory is read automatically.`
+  return `SCRATCH DIRECTORY: .frizz/threads/${sessionId}/ — yours, free-form, as many files as you like, and nothing is expected in it. A single direct task usually needs none; writing notes is never a substitute for doing the work (${children}). Nothing in this directory is read automatically; if you want a note back after a compaction, mcp__frizz__recurring_prompt with post_compaction: true re-sends a prompt of your choosing.`
 }
 
 // A project can ship a repo-committed `FRIZZ.md` at its root to steer frizz workers with its OWN

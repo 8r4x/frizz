@@ -632,8 +632,8 @@ test("composePrompt gives each backend's sub-agents their OWN file, never a shar
     // The merge contract is GONE, not reworded: one file per writer is what removed the hazard.
     assert.doesNotMatch(text, /merge/i, `${kind} must not reintroduce a shared-document merge contract`)
     assert.doesNotMatch(text, /blackboard/, `${kind} must not reintroduce the shared blackboard`)
-    // The arming is the whole compaction story now, so both must name it.
-    assert.match(text, /post_compaction: true/, `${kind} must teach the arming`)
+    // The post-compaction goal stays NAMED as a capability — offered, never pushed (2026-08-28).
+    assert.match(text, /post_compaction: true/, `${kind} must name the post-compaction capability`)
   }
   assert.ok(codex.endsWith("do the thing")) // the task still rides through, and rides through LAST
 })
@@ -718,8 +718,7 @@ test("scratchpadOrientation names the directory, the arming, and one file per su
   assert.match(codex, /native sub-agents share it, so give each its own file/)
 
   for (const [kind, text] of [["claude", claude], ["codex", codex]] as const) {
-    // Compaction recovery is the ARMING, not the folder — a worker told only about the folder writes
-    // notes nothing will ever hand back.
+    // The post-compaction trigger stays named as an available capability, never a prescription.
     assert.match(text, /post_compaction: true/, `${kind} must name the trigger`)
     assert.match(text, /Nothing in this directory is read automatically/, `${kind} must not imply an injection`)
     assert.doesNotMatch(text, /merge/i, `${kind} must not reintroduce the merge contract`)

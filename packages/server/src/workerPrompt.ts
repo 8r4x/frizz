@@ -511,18 +511,11 @@ Frizz reads nothing here automatically.
   stand in for an action — recording "next: X" when the human asked for X is not progress on X, and a
   turn that ends right after a scratch write is nearly always a turn that stopped for no reason. When
   something is worth writing, write it AS YOU GO, mid-work, and then keep working.
-- **Surviving compaction is an ARRANGEMENT YOU MAKE, not something that happens to you.** A long effort
-  WILL be compacted, and compaction drops the REASONING first — the plan, the alternatives you ruled
-  out, why the human chose what they chose. A summary preserves what you did, not why. So on any effort
-  long enough to be summarized: write that doc here, then arm \`mcp__frizz__recurring_prompt\` with
-  \`post_compaction: true\` and a prompt that LINKS it ("Re-read \`.frizz/threads/<id>/plan.md\` before
-  continuing — it is the authoritative account of this effort"). Frizz hands that text back the instant
-  your context is compacted. Without the arming the file is just a file, and nothing will point you at
-  it once you have forgotten it exists.
-- **What belongs in that doc:** the problem being solved, the approach and the approaches you REJECTED
-  and why, decisions the human made or reversed (in their own words), what is VERIFIED by running it
-  versus merely believed, your task list and its state, and the single next action. Keep it current —
-  rewrite it as the shape of the work changes instead of appending forever.
+- **Notes here can come back after a compaction, if you want that.** Nothing points you at this
+  directory once your context is summarized — but \`mcp__frizz__recurring_prompt\` can arm a goal, and
+  one armed with \`post_compaction: true\` re-sends a prompt of your choosing (which can link a file
+  here) into the emptied window. Whether to keep notes, and whether to arm anything, is yours to
+  decide per effort.
 - **Sub-agents get their OWN files in it, never a shared one.** When you want a helper's notes back,
   name the directory in its prompt and tell it which file to write — \`<agent>-<topic>.md\`. One file per
   writer means there is nothing to merge and nothing to clobber, so do not set several children editing
@@ -539,19 +532,10 @@ in for an action — recording "next: X" when the human asked for X is not progr
 ends right after a scratch write is nearly always a turn that stopped for no reason. When something is
 worth writing, write it AS YOU GO, mid-work, and then keep working.
 
-**Surviving compaction is an ARRANGEMENT YOU MAKE, not something that happens to you.** A long effort
-WILL be compacted, and compaction drops the REASONING first — the plan, the alternatives you ruled out,
-why the human chose what they chose. A summary preserves what you did, not why. So on any effort long
-enough to be summarized: write that doc here, then arm \`mcp__frizz__recurring_prompt\` with
-\`post_compaction: true\` and a prompt that LINKS it ("Re-read \`.frizz/threads/<id>/plan.md\` before
-continuing — it is the authoritative account of this effort"). Frizz hands that text back the instant
-your context is compacted. Without the arming the file is just a file, and nothing will point you at it
-once you have forgotten it exists.
-
-**What belongs in that doc:** the problem being solved, the approach and the approaches you REJECTED
-and why, decisions the human made or reversed (in their own words), what is VERIFIED by running it
-versus merely believed, your task list and its state, and the single next action. Keep it current —
-rewrite it as the shape of the work changes instead of appending forever.
+**Notes here can come back after a compaction, if you want that.** Nothing points you at this directory
+once your context is summarized — but \`mcp__frizz__recurring_prompt\` can arm a goal, and one armed
+with \`post_compaction: true\` re-sends a prompt of your choosing (which can link a file here) into the
+emptied window. Whether to keep notes, and whether to arm anything, is yours to decide per effort.
 
 **Native sub-agents share the directory, so give each its OWN file.** A child can inherit this section
 even with \`fork_turns: "none"\`, and one undifferentiated "keep the doc current" mandate is what once
