@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { frizzPaths } from "@frizz/server/frizz-paths";
 import {
   claimIdentityFromPrivateKey,
   exportClaimPrivateKey,
@@ -15,9 +16,16 @@ import {
  * exist without Frizz growing a login. Ownership moves the way an SSH key does: copy the file.
  */
 
-/** One key per machine, beside the rest of Frizz's user-level state. */
+/**
+ * One key per machine, beside the rest of Frizz's user-level state — which means the STATE ROOT
+ * frizz-paths.ts resolves, not a literal `~/.frizz`. It was the literal until 2026-08-28: on a machine
+ * that had never had a `~/.frizz` (every fresh install since the XDG split), the first claim created
+ * one, and from then on frizz-paths.ts read that directory's existence as "legacy install" and routed
+ * every root there — the registry, the projects and the database written under the XDG roots looked
+ * gone. A machine that already has `~/.frizz` resolves to the same file as before.
+ */
 export function claimIdentityPath(home = homedir()): string {
-  return join(home, ".frizz", "identity.key");
+  return join(frizzPaths({ home }).state, "identity.key");
 }
 
 /**

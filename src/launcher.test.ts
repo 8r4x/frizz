@@ -3,20 +3,9 @@ import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { createServer, type AddressInfo } from "node:net";
 import { createServer as createHttpServer } from "node:http";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  symlinkSync,
-  utimesSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync, lstatSync, readlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, sep } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
@@ -67,6 +56,7 @@ import {
   cleanupSandbox,
   prepareSandbox,
 } from "./launcher.ts";
+import { claimIdentityPath } from "./identity.ts";
 import { DEFAULT_PORT, DEFAULT_DEV_PORT } from "@frizz/shared";
 import { registerProject } from "@frizz/server/project-registry";
 
@@ -2485,6 +2475,31 @@ test("--sandbox parses, refuses the running-board queries, and prepares a dispos
   assert.equal(existsSync(sandbox.home), false);
 });
 
+// A fresh machine has no `~/.frizz`, and frizz-paths.ts reads that directory's EXISTENCE as "legacy
+// install, route every root here". Until 2026-08-28 this sharing created it on the real home just to
+// have somewhere to link the identity key from — so one sandbox launch on a fresh machine (or this
+// suite) silently moved every later launch off the XDG roots, and the registry, projects and database
+// written there looked gone.
+test("--sandbox never creates ~/.frizz on a real home that has none", () => {
+  const real = mkdtempSync(join(tmpdir(), "frizz-freshhome-"));
+  const env: NodeJS.ProcessEnv = {};
+  const cwd = process.cwd();
+  const sandbox = prepareSandbox(env, real);
+  try {
+    assert.equal(existsSync(join(real, ".frizz")), false, "the real home keeps its fresh-install roots");
+    assert.equal(existsSync(join(sandbox.home, ".frizz")), false, "and so does the sandbox");
+    // The key is still shared: a first claim from the sandbox writes through the link into the real
+    // home's state root, which is what makes it the machine's key rather than a throwaway.
+    assert.equal(lstatSync(claimIdentityPath(sandbox.home)).isSymbolicLink(), true);
+    assert.equal(readlinkSync(claimIdentityPath(sandbox.home)), claimIdentityPath(real));
+    assert.equal(existsSync(dirname(claimIdentityPath(real))), true);
+  } finally {
+    process.chdir(cwd);
+    rmSync(sandbox.home, { recursive: true, force: true });
+    rmSync(real, { recursive: true, force: true });
+  }
+});
+
 test("--sandbox shares credentials with the real home, but no state", () => {
   // A fake "real" home with the files the cloud screens read.
   const real = mkdtempSync(join(tmpdir(), "frizz-realhome-"));
@@ -2506,7 +2521,7 @@ test("--sandbox shares credentials with the real home, but no state", () => {
     assert.equal(readFileSync(join(sandbox.home, ".config", "gh", "hosts.yml"), "utf8"), "github.com:\n  user: ada\n");
     assert.equal(readFileSync(join(sandbox.home, ".cloudflared", "cert.pem"), "utf8"), "cert");
     assert.equal(readFileSync(join(sandbox.home, ".cloudflared", "0000-tunnel.json"), "utf8"), "{}");
-    assert.equal(readFileSync(join(sandbox.home, ".frizz", "identity.key"), "utf8"), "real-key");
+    assert.equal(readFileSync(claimIdentityPath(sandbox.home), "utf8"), "real-key");
     // State does not: the real remote setup and the real tunnel config stay where they are, and a
     // frizz.yml written in the sandbox lands in the sandbox.
     assert.equal(existsSync(join(sandbox.home, ".frizz", "cloud.json")), false);

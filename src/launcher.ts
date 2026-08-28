@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, hostname as osHostname, networkInterfaces, tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   acquireGlobalLaunchLock,
@@ -32,6 +32,7 @@ import {
 } from "@frizz/server/local-origin";
 import { readBootProgress } from "@frizz/server/boot-progress";
 import { frizzPaths, projectStateDir } from "@frizz/server/frizz-paths";
+import { claimIdentityPath } from "./identity.ts";
 import {
   discoverProjectRoot,
   ensureProjectIdFile,
@@ -347,10 +348,15 @@ function shareCredentials(realHome: string, home: string): void {
     }
   };
   // The claim identity: through a link even before it exists, so a first claim from the sandbox mints
-  // the REAL machine key rather than a throwaway one.
-  mkdirSync(join(realHome, ".frizz"), { recursive: true });
-  mkdirSync(join(home, ".frizz"), { recursive: true });
-  link(join(realHome, ".frizz", "identity.key"), join(home, ".frizz", "identity.key"));
+  // the REAL machine key rather than a throwaway one. Both ends are wherever identity.ts puts the key
+  // for that home — never a literal `~/.frizz`, which this used to create on the real home and which
+  // frizz-paths.ts reads as "legacy install, route everything here" (found by the Linux suite run of
+  // 2026-08-28: one sandbox launch on a fresh machine moved every later launch off the XDG roots).
+  const realKey = claimIdentityPath(realHome);
+  const sandboxKey = claimIdentityPath(home);
+  mkdirSync(dirname(realKey), { recursive: true });
+  mkdirSync(dirname(sandboxKey), { recursive: true });
+  link(realKey, sandboxKey);
   // gh keeps hosts.yml under its config dir; the dir itself is the unit gh reads and refreshes.
   if (existsSync(join(realHome, ".config", "gh"))) {
     mkdirSync(join(home, ".config"), { recursive: true });

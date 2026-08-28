@@ -226,7 +226,7 @@ export async function importClaimPublicKey(pubkey: string): Promise<CryptoKey | 
   }
 }
 
-/** PKCS#8 bytes, which is what the CLI writes to `~/.frizz/identity.key` at mode 0600. */
+/** PKCS#8 bytes, which is what the CLI writes to `identity.key` under its state root at mode 0600. */
 export async function exportClaimPrivateKey(key: CryptoKey): Promise<Bytes> {
   return new Uint8Array(await crypto.subtle.exportKey("pkcs8", key))
 }

@@ -10,7 +10,7 @@ reachable. Protect that property above anything else here.
 
 ## How a name is owned
 
-A name belongs to whoever holds an Ed25519 private key, kept at `~/.frizz/identity.key` on the
+A name belongs to whoever holds an Ed25519 private key, kept at `identity.key` under Frizz's state root (`~/.frizz/` on an install that has that directory, the platform's state directory otherwise) on the
 claiming machine. Every claim is signed; the signature covers the public key, so a request cannot be
 re-attributed by swapping it. Ownership moves between machines the way an SSH key does: copy the file.
 
