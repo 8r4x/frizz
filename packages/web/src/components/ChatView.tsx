@@ -61,7 +61,7 @@ import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { agentCompletionCall, subAgentCompletionOutcome } from "../lib/subAgentCompletion.ts"
 import { agentReading } from "../lib/agentReading.ts"
 import { ChildOpRow } from "./ChildOpRow.tsx"
-import { MessageRow } from "./MessageTimestamp.tsx"
+import { MessageRow, MessageStamp } from "./MessageTimestamp.tsx"
 import { TRANSCRIPT_META_LABEL_CLASS, transcriptMetaChevronClass } from "../lib/transcriptMetaLabels.ts"
 import { InteractionStack } from "./InteractionCards.tsx"
 // The shared card chrome and THE question card both live in their own modules now, so every
@@ -1170,7 +1170,11 @@ function VirtualizedThreadTranscript({
               containing block and it could never stick. Do NOT also render a nested StickyUserBand —
               two stacked `sticky top-0` layers push the card down by the inner band's box (the 121px
               gap that let transcript content bleed above the "pinned" card). `[&>*]:pointer-events-auto`
-              re-enables the bubble (hover-to-expand) while the full-width band stays click-through. */}
+              re-enables the bubble (hover-to-expand) while the full-width band stays click-through.
+              `group/ts` + `relative` are what let the pinned ask carry its own hover reading: this row
+              is hoisted out of the absolute layer, so it never passes through MessageRow, and without
+              them it would be the ONE message with no timestamp — the ask the whole reply is answering.
+              It needs no `hover:z` lift of its own; `z-[9]` already draws it over the scrolling rows. */}
           <div
             key={stickyMessageRow.key}
             ref={virtualizer.measureElement}
@@ -1178,7 +1182,7 @@ function VirtualizedThreadTranscript({
             data-transcript-row-key={stickyMessageRow.key}
             data-transcript-source-id={stickyMessageRow.message.sourceId}
             data-transcript-sticky="true"
-            className="pointer-events-none [&>*]:pointer-events-auto sticky top-0 z-[9] flex w-full flex-col px-6 pt-3 pb-1.5"
+            className="group/ts pointer-events-none [&>*]:pointer-events-auto sticky top-0 z-[9] flex w-full flex-col px-6 pt-3 pb-1.5"
           >
             <Message
               m={stickyMessageRow.message}
@@ -1187,6 +1191,7 @@ function VirtualizedThreadTranscript({
               paired={paired[stickyMessageRow.messageIndex]}
               sticky
             />
+            <MessageStamp at={stickyMessageRow.message.at} />
           </div>
         </>
       )}

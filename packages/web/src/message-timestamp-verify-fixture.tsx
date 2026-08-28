@@ -15,7 +15,7 @@
 //   ?hover=<n>  paints row n as if hovered, because a camera cannot hold a pointer
 //               (?hover=1 is the tight case — a reading lands in the NEXT row's gap, and row 2's is 6px)
 import { createRoot } from "react-dom/client"
-import { MessageRow } from "./components/MessageTimestamp.tsx"
+import { MessageRow, MessageStamp } from "./components/MessageTimestamp.tsx"
 import { messageStamp } from "./lib/activityTime.ts"
 import "./styles.css"
 
@@ -88,12 +88,13 @@ function Sheet() {
           9 then covers the bubble and swallows its hover-to-expand. Reproduced here so the value on the
           rows is exercised against the band rather than asserted. */}
       <div className="relative overflow-y-auto rounded-lg border border-border/60 bg-bg" style={{ height: 260 }}>
-        <div className="pointer-events-none [&>*]:pointer-events-auto sticky top-0 z-[9] flex w-full flex-col px-6 pt-3 pb-1.5" data-verify-band>
+        <div className="group/ts pointer-events-none [&>*]:pointer-events-auto sticky top-0 z-[9] flex w-full flex-col px-6 pt-3 pb-1.5" data-verify-band>
           <div className="flex justify-end">
             <div className="max-w-[85%] rounded-xl rounded-br-sm bg-user-bubble px-3.5 py-3 text-[14px] text-bg" data-verify-bubble>
               The pinned current ask — it must keep its own hover while a row below is hovered.
             </div>
           </div>
+          <MessageStamp at={ROWS[0].at} />
         </div>
         <div className="relative w-full" style={{ height: top + 56 }}>
         {placed.map((r, i) => (
