@@ -6,9 +6,9 @@ import { messageStamp } from "../lib/activityTime.ts"
 // minutes ago" speaks for the WHOLE thread, so with a dozen sessions open there was no way to tell when
 // any individual message came out (maintainer 2026-08-25).
 //
-// Chosen from a four-variant sheet (`src/message-timestamp-mockups-fixture.tsx`, and the no-build
-// `message-timestamp-demo.html` beside it) as the least invasive: a tooltip on the message body draws
-// OVER the transcript and hides the message above the one you are reading, a reserved gutter spends
+// Chosen from a four-variant sheet (`src/message-timestamp-mockups-fixture.tsx`) as the least
+// invasive: a tooltip on the message body draws OVER the transcript and hides the message above the
+// one you are reading, a reserved gutter spends
 // ~56px of prose width on every row forever for a reading that is blank almost always, and a hairline
 // rule borrows the wake dividers' chrome, which elsewhere means "something happened here".
 //
