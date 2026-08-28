@@ -2042,16 +2042,31 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const acts = activity.get(key)
       if (!st && !acts) continue // nothing fetched for this PR this tick
       const cursor = readPrWatchCursor(w.cursor)
+      // ONE UNDELIVERED REPORT PER WATCHER (2026-08-28). A report is not deliverable mid-turn, so a
+      // watcher whose PR kept moving while its thread worked minted one per poll and the outbox held
+      // them all: eleven went to one thread within two seconds the moment it rested (thread
+      // `yeah-we-definitely-don-t-do-enough`, 2026-08-27 00:53), three of them "CI FAILED" with job
+      // lists the later ones had already replaced — the same stale-second-wake shape as the Goal after
+      // the sign-off nudge (evalRestPrompts). While one report waits, this poll HOLDS THE CURSOR and
+      // mints nothing, so the report that follows delivery carries everything since the waiting one:
+      // nothing lost, nothing said twice. A merge or close is the exception, below — it supersedes the
+      // waiting report, because a worker that reads "CI failed" and then "merged" back to back starts
+      // fixing a PR that is gone.
+      const waiting = undeliveredPrWatchReport(row.slug, w.id)
 
       // A MERGED OR CLOSED PR ends the watch. Report it once, then settle: there is nothing further to
       // say, and an armed row on a finished PR is a poll that can never produce another wake.
       if (st && st.state !== "open") {
         deps.storage.settlePrWatch(w.id, nowMs)
+        if (waiting) outbox.supersede(waiting.id, nowMs, `replaced by the watcher's ${st.state} report`)
         enqueuePrWatchWake(row, w.id, nextReport(cursor), prWatchWakeMessage({
           target: key, merged: st.state === "merged", closed: st.state === "closed",
         }), `pr-watch ${key} ${st.state}`, nowMs)
         continue
       }
+      // The hold itself: nothing below runs — no report, and no cursor write, so the next poll after
+      // delivery measures against the waiting report's own baseline.
+      if (waiting) continue
 
       // CI reaching a TERMINAL verdict, and only on the transition to it. `running` and `none` are not
       // news; going from either to green or red is the whole reason CI is watched.
@@ -2152,6 +2167,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   function nextReport(cursor: { report?: number }): number {
     return (cursor.report ?? 0) + 1
   }
+  /** This watcher's report that is minted but not yet handed to the runtime — pending, or leased and
+   *  deferred behind a busy thread. A SENT report (leased with `sentAt`, awaiting confirmation) is not
+   *  one: the worker has it, and the next poll may say what happened since. */
+  function undeliveredPrWatchReport(slug: string, watchId: string): WakeDelivery | undefined {
+    const prefix = `${PR_WATCH_FENCE_PREFIX}:${watchId}:`
+    return outbox.listOpen().find((d) => d.slug === slug && d.sentAt === null && d.fenceId.startsWith(prefix))
+  }
 
   function enqueuePrWatchWake(
     row: SessionRow,
@@ -2207,11 +2229,27 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // perfect loop generator for anything that re-prompts. Same guard as SOURCES 5 and 9 — and its
       // general form: ANY failed turn is written as an assistant record, so it reads as a rest here too.
       if (tele.authFault || tele.apiFault) continue
+      // A THREAD THAT SAID DONE IS NOT WOKEN FOR A SHELL IT WALKED AWAY FROM (2026-08-28). The contract
+      // lets a worker sign off with a background process still running — a dev server, a poller it has
+      // moved on from — naming it in the body. Waking that thread when the process exits hands a
+      // finished worker news it declared it did not need, and it answers the only way it can: by saying
+      // done again — a second Done card, and a registered done is un-done by the wake's own user record
+      // until it does (registeredDoneFence reads the last user instant). SOURCES 4 and 5 already decline
+      // a done thread; this is the same guard. The one exception is a shell the worker REGISTERED a wait
+      // on (`mcp__frizz__watch`): a registration trumps a done on the board, so it trumps it here too —
+      // the wake is the thing it registered for. Matched by ROW, in any state but dropped, because
+      // evalOwnWatches has already settled that row silently by the time this pass runs (it runs first
+      // in the tick, and "target ended" is its silent case — the wake is this pass's to send). The
+      // human's next word re-opens the thread as ever, and by then the exit is folded into the turn
+      // that answers it.
+      const walkedAway = threadSaidDone(deps.storage, row.slug, tele)
+      const registeredShells = walkedAway ? deps.storage.listThreadWatches(row.slug).filter((w) => w.kind === "shell" && w.state !== "dropped") : []
       const restedAt = Date.parse(tele.lastAssistantAt ?? "")
       if (!Number.isFinite(restedAt)) continue
       for (const shell of tele.retiredShells ?? []) {
         const finishedAt = Date.parse(shell.finishedAt ?? "")
         if (!Number.isFinite(finishedAt) || finishedAt <= restedAt) continue
+        if (walkedAway && !registeredShells.some((w) => [shell.id, shell.taskId, shell.label].includes(w.target))) continue
         const fenceId = shellFenceId(shell.id)
         const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
         if (outbox.get(deliveryId)) continue // this shell has already had its one wake

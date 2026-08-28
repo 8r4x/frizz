@@ -1966,3 +1966,146 @@ test("question: an armed Goal with NO TEXT does not make a dismissal wake — th
   await s.tick()
   assert.equal(h.resumes.length, 0, "an empty Goal is not autonomy, so the ordinary rule holds")
 })
+
+// ---- ONE UNDELIVERED REPORT PER WATCHER (2026-08-28) ----
+//
+// A PR report is not deliverable mid-turn, so a watcher whose PR kept moving while its thread worked
+// minted one per poll and the outbox held them all — eleven were handed to one thread within two
+// seconds the moment it rested (`yeah-we-definitely-don-t-do-enough`, 2026-08-27 00:53), three of them
+// "CI FAILED" with job lists the later ones had already replaced. The same stale-second-wake shape as
+// the Goal after the sign-off nudge. Now a poll that finds a report still waiting mints nothing and
+// holds the cursor, so the report after delivery carries everything since.
+const reportsOf = (h: Harness, slug: string) => h.storage.db
+  .prepare("SELECT fence_id, state, sent_at FROM wake_delivery WHERE thread_slug = ? AND fence_id LIKE 'prwatch:%' ORDER BY created_at")
+  .all(slug) as { fence_id: string; state: string; sent_at: number | null }[]
+
+test("pr-watch: reports do not pile up behind a busy thread — one waits, the cursor holds, and the next carries everything since", async () => {
+  const h = harness()
+  h.watch("r", "acme/app#7")
+  h.storage.upsertSession(row("r"))
+  h.tele.set("r", { ...tele(undefined, "in-flight"), lastAssistantAt: iso(h.clock.ms) })
+  h.review.result = []
+  const s = h.make()
+  await s.tick() // the baseline poll
+  assert.equal(h.resumes.length, 0)
+
+  // alice comments while the thread is mid-turn: report #1 is minted and held.
+  h.clock.ms += 60_000
+  const c1: GithubReviewActivity = { id: "comment:c1", actor: "alice", at: iso(h.clock.ms), kind: "comment" }
+  h.review.result = [c1]
+  await s.tick()
+  assert.equal(h.resumes.length, 0, "not deliverable mid-turn")
+  assert.equal(reportsOf(h, "r").length, 1)
+
+  // bob comments while #1 still waits: NO second report — this is the pile-up — and the cursor stays
+  // where #1 left it, so bob is not lost either.
+  h.clock.ms += 60_000
+  const c2: GithubReviewActivity = { id: "comment:c2", actor: "bob", at: iso(h.clock.ms), kind: "comment" }
+  h.review.result = [c1, c2]
+  await s.tick()
+  assert.equal(reportsOf(h, "r").length, 1, "one undelivered report per watcher")
+  assert.equal(h.resumes.length, 0)
+
+  // The thread rests, parked on the PR as a PR-watching worker does: #1 goes out, and it says alice —
+  // what it knew when it was minted.
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr", value: "acme/app#7" }])), lastAssistantAt: iso(h.clock.ms) })
+  h.clock.ms += 60_000
+  await s.tick()
+  assert.equal(h.resumes.length, 1)
+  assert.match(h.resumes[0].message, /alice/)
+  assert.doesNotMatch(h.resumes[0].message, /bob/)
+
+  // The next poll reports what happened since #1 — bob, and only bob.
+  h.clock.ms += 60_000
+  await s.tick()
+  assert.equal(h.resumes.length, 2, "the held delta follows, as its own report")
+  assert.match(h.resumes[1].message, /bob/)
+  assert.doesNotMatch(h.resumes[1].message, /alice/, "nothing is said twice")
+  assert.equal(reportsOf(h, "r").length, 2)
+})
+
+test("pr-watch: a merge supersedes the report still waiting — the worker hears 'merged', not 'CI failed' then 'merged'", async () => {
+  const h = harness()
+  h.watch("r", "acme/app#7")
+  h.storage.upsertSession(row("r"))
+  h.tele.set("r", { ...tele(undefined, "in-flight"), lastAssistantAt: iso(h.clock.ms) })
+  h.review.result = []
+  h.pr.result = { state: "OPEN", mergedAt: null, rollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }], head: "abc" }
+  const s = h.make()
+  await s.tick() // baseline: CI green, nothing to say
+
+  // CI goes red mid-turn: report #1 minted and held.
+  h.clock.ms += 60_000
+  h.pr.result = { state: "OPEN", mergedAt: null, rollup: [{ name: "unit", status: "COMPLETED", conclusion: "FAILURE" }], head: "abc" }
+  await s.tick()
+  assert.equal(reportsOf(h, "r").length, 1)
+  assert.equal(reportsOf(h, "r")[0].state, "leased", "deferred behind the busy thread")
+
+  // The PR merges (someone else fixed and landed it). The red report is dead news.
+  h.clock.ms += 60_000
+  h.pr.result = { state: "MERGED", mergedAt: iso(h.clock.ms), rollup: [], head: "abc" }
+  await s.tick()
+  const states = reportsOf(h, "r").map((r) => r.state)
+  assert.deepEqual(states, ["superseded", "leased"], "the waiting CI report is superseded by the merge report")
+
+  // At rest the thread hears ONE thing.
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr", value: "acme/app#7" }])), lastAssistantAt: iso(h.clock.ms) })
+  h.clock.ms += 60_000
+  await s.tick()
+  await s.tick()
+  assert.equal(h.resumes.length, 1)
+  assert.match(h.resumes[0].message, /MERGED/)
+  assert.doesNotMatch(h.resumes[0].message, /CI FAILED/)
+})
+
+// ---- SOURCE 10 DOES NOT WAKE A THREAD THAT SAID DONE (2026-08-28) ----
+//
+// The contract lets a worker sign off with a background process still running, naming it in the body.
+// Waking that thread when the process exits hands it news it declared it did not need, and it answers
+// the only way it can — by saying done again: a second Done card, and a registered done un-done by the
+// wake's own user record until it does. SOURCES 4 and 5 already decline a done thread.
+const retiredShell = (finishedAt: string) => ({
+  id: "toolu_sh", taskId: "bzvtnt3ig", label: "dev server", status: "completed" as const, finishedAt,
+})
+
+test("shell: a thread that signed off done is not woken when a shell it walked away from exits — fenced or registered", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("d"))
+  const rested = iso(h.clock.ms)
+  const retired = retiredShell(iso(h.clock.ms + 5_000))
+  h.clock.ms += 10_000
+  const s = h.make()
+
+  // Fenced done.
+  h.tele.set("d", { ...tele({ kind: "done", body: "shipped", hints: [] }), lastAssistantAt: rested, retiredShells: [retired] })
+  await s.tick()
+  assert.deepEqual(h.resumes, [], "a fenced done is done")
+
+  // Registered done (`mcp__frizz__done`), the rest itself bare.
+  h.storage.markThreadDone("d", "shipped", Date.parse(rested) + 1)
+  h.tele.set("d", { ...tele(), lastAssistantAt: rested, retiredShells: [retired] })
+  await s.tick()
+  assert.deepEqual(h.resumes, [], "a registered done is done")
+
+  // CONTROL: the same rest with no sign-off at all is woken — the guard is the sign-off, not the shape.
+  // (A bare rest draws the sign-off nudge as well, its own news; only the shell's wake is counted.)
+  h.storage.clearThreadDone("d")
+  await s.tick()
+  const shellWakes = (h.resumes as { message: string }[]).filter((r) => /dev server|bzvtnt3ig/.test(r.message) && !/without a fence/.test(r.message))
+  assert.equal(shellWakes.length, 1)
+})
+
+test("shell: …unless the worker REGISTERED a wait on that shell — a registration trumps a done here as on the board", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("d"))
+  const rested = iso(h.clock.ms)
+  armWatch(h, "d") // kind shell, target bzvtnt3ig — the retired shell's runtime handle
+  const retired = retiredShell(iso(h.clock.ms + 5_000))
+  h.clock.ms += 10_000
+  h.tele.set("d", { ...tele({ kind: "done", body: "shipped, the build is still running", hints: [] }), lastAssistantAt: rested, retiredShells: [retired] })
+  // evalOwnWatches settles the row silently this same tick (its target ended); the wake is still owed.
+  await h.make().tick()
+  assert.equal(h.resumes.length, 1, "the wake is the thing it registered for")
+  assert.match(h.resumes[0].message, /dev server|bzvtnt3ig/)
+  assert.notEqual(h.storage.getThreadWatch("wch_1")?.state, "armed", "and the row was settled first, as ever")
+})
