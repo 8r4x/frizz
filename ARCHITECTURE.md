@@ -109,10 +109,7 @@ Invoking `nub --test` by hand is fine for one file, but it bypasses that check.
   is waiting and the tailer reads that. A broker thread's approvals arrive as typed permission
   requests over the control channel. The `perm-prompt` runtime rides the board snapshot
   with no notify and no unread — the sidebar's attention sort surfaces it.
-- **Human questions are ```question fenced blocks in the worker's final pre-rest message** — the
-  message is the medium; there is deliberately NO question tool, sidecar file, or RPC (two earlier
-  designs — a blocking MCP tool and a frizz-ask CLI + .questions/ sidecars — were built and
-  rejected: fragile timeouts / redundant state; the user chose fences). The block body is plain
+- **Human questions are REGISTERED rows (`mcp__frizz__ask`, a `thread_question` row, since 2026-08-27) or ```question fenced blocks in the worker's final pre-rest message** — the fence was the only medium until then (two earlier designs — a BLOCKING MCP tool and a frizz-ask CLI + .questions/ sidecars — were built and rejected: fragile timeouts / redundant state); `ask` is non-blocking, and the row outlives the message, a compaction and a restart, which is what the fence could not do (`plans/rest-by-registration.md`). Both reach the same card. A fence that RESTATES a question registered at the same rest draws nothing — the registered card wins, because answering it is what settles the row (web/src/lib/questionShadow.ts; 2026-08-28, one question drawn twice back to back). The fence body is plain
   markdown; a TRAILING `- A. …` option list + optional `Recommendation:` line are convention-parsed
   into choice chips (web/src/lib/questionBlocks.ts). A go/no-go is just a two-option question — the
   old ` ```question approval ` gate (one Approve button that sent on click) was dropped 2026-07-26;

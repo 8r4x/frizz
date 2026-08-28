@@ -8,7 +8,7 @@ import { pageScrollY } from "../lib/pageScrollLock.ts"
 import { rpc } from "../api/rpc.ts"
 import { useBoard, asThreads, useTranscript } from "../hooks.ts"
 import { orderQueue, queued, displayTitle, lastActiveLabelAt } from "../groups.ts"
-import { useLiveAnswering } from "../lib/answering.ts"
+import { tailAskIdx, useLiveAnswering } from "../lib/answering.ts"
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { hasQuestionBlock } from "../lib/questionBlocks.ts"
 import { showsRegisteredDoneCard } from "../lib/registeredDone.ts"
@@ -16,6 +16,7 @@ import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { collapseMiddleRuns, opensQueueSegment, queueCollapseSegments, segmentFolds, supersededAskIndices, survivesQueueCollapse } from "../lib/queueCollapse.ts"
 import { pairAllAnswers } from "../lib/answersMessage.ts"
 import { questionsByAnchor } from "../lib/questionAnchor.ts"
+import { allFencesShadowed, registeredAtRest } from "../lib/questionShadow.ts"
 import { FenceCard, Message, PermPolicyDenialCard, PermPromptBanner, PendingAskCard, StickyUserBand, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText, lastAssistantIndex } from "./ChatView.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_TOP, CARD_ACTION_EXPLAINER, CARD_PRIMARY_ACTION } from "./TranscriptCard.tsx"
 import { AwaitingBackgroundCard, showsRestingCard } from "./AwaitingBackgroundCard.tsx"
@@ -795,6 +796,11 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   // nothing — so the walk has to skip it rather than spend a step on an empty slot.
   const lastAgentIdx = useMemo(() => lastAssistantIndex(messages), [messages])
   const isStaleAwaiting = (idx: number) => lastAgentIdx >= 0 && idx < lastAgentIdx
+  // …and the LAST message's fence draws nothing either while the resting banner below states it (the
+  // banner opens on that fence's body). Message takes the two reasons as separate props; the emptiness
+  // predicates take their union, because a fence-only last message is then an empty slot.
+  const restingShown = showsRestingCard(thread)
+  const hidesAwaiting = (idx: number) => isStaleAwaiting(idx) || (idx === lastAgentIdx && restingShown)
   // Question↔answer pairing for "Answers:" user messages, precomputed over the FULL list (the lookback
   // may need messages above the visible window). Indexed by GLOBAL message index — the same one the
   // Message key uses. null at ordinary indices keeps the memoized Message's props stable.
@@ -831,7 +837,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
       if (messages[i].boundary !== "rest") continue
       for (let g = i + 1; g < messages.length; g++) {
         const after = messages[g]
-        if (after.queued || after.boundary === "rest" || messageRendersNothing(after, isStaleAwaiting(g))) continue
+        if (after.queued || after.boundary === "rest" || messageRendersNothing(after, hidesAwaiting(g))) continue
         return i + 1
       }
     }
@@ -883,7 +889,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   // The per-message facts the segment walk needs, evaluated here because they need the transcript schema
   // and this card's own render predicates. The walk itself is pure — see lib/queueCollapse.
   const collapseSteps = useMemo(() => messages.map((m, g) => {
-    if (!m || m.queued || messageRendersNothing(m, isStaleAwaiting(g))) return { skip: true }
+    if (!m || m.queued || messageRendersNothing(m, hidesAwaiting(g))) return { skip: true }
     // THE REST DIVIDER: dropped by the render loop outright, expanded or not (see below) — the card's own
     // premise, so it may not anchor a run's opening or closing prose and may not count as a hidden step,
     // since expanding reveals nothing where it stood. It is still the CUT: `closes` ends the run whose
@@ -895,9 +901,9 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
     const completion = agentCompletionCall(m)
     const tools = completion ? 0 : m.tools.length
     return {
-      text: messageHasRenderableText(m, isStaleAwaiting(g)),
+      text: messageHasRenderableText(m, hidesAwaiting(g)),
       tools,
-      countable: messageHasRenderableText(m, isStaleAwaiting(g)) || tools > 0 || completion !== undefined || m.kind !== undefined,
+      countable: messageHasRenderableText(m, hidesAwaiting(g)) || tools > 0 || completion !== undefined || m.kind !== undefined,
       // A middle message that survives the collapse keeps its own row (see the render loop) — counting it
       // as a hidden step would promise the expansion a message it already shows.
       survives: survivesQueueCollapse(m, g, supersededAsks),
@@ -977,6 +983,9 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
     }
     return { byAnchor, tail }
   }, [messages, thread?.questions])
+  // The registered questions at each message's rest, so a fence restating one folds into its card
+  // (lib/questionShadow) — here exactly as on the thread page.
+  const shadowedByMessage = useMemo(() => registeredAtRest(messages, thread?.questions ?? []), [messages, thread?.questions])
   const hasMore = visibleStart > 0 || q.data?.hasEarlier === true
 
   useLayoutEffect(() => {
@@ -1143,7 +1152,13 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   }, { scrollToBottom: false })
   // The card-level "Send answers" action shows for the standing ask (the common case) OR the moment the
   // human touches an OLDER question's chips — an answer you can stage but not send would be a dead end.
-  const showSendAnswers = answerable || anyAnswered
+  // Not for a standing ask whose every fence was folded into a registered card, though: that card
+  // carries its own Send answers, and a second button under it would send an empty reply.
+  const tailAskShadowed = useMemo(() => {
+    const idx = tailAskIdx(messages)
+    return idx !== -1 && allFencesShadowed(messages[idx].text, shadowedByMessage.get(idx) ?? [])
+  }, [messages, shadowedByMessage])
+  const showSendAnswers = (answerable && !tailAskShadowed) || anyAnswered
 
   // Dismiss THIS card through the same user-initiated auto-scroll exit the footer/header/answer paths
   // use, exposed to the in-transcript fence buttons (done Mark-as-done, awaiting park) via context so
@@ -1357,7 +1372,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
               const barEmitted = new Set<number>()
               coalescedVisible.forEach(({ message: m, messageIndex: globalIdx }, i) => {
                 if (m.queued) return
-                if (messageRendersNothing(m, isStaleAwaiting(globalIdx))) return
+                if (messageRendersNothing(m, hidesAwaiting(globalIdx))) return
                 // "Agent rested" is the queue card's own PREMISE, not news: every card here is a rested
                 // thread, the row states how long ago it rested, and the window is already cut at the
                 // previous rest — so the rule can only ever restate the frame around it (maintainer
@@ -1459,12 +1474,12 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                   }
                   // A first/last message that is pure batched tool calls (no prose) contributes no row —
                   // its calls are already folded into the divider — so skip it and leave no dangling spacer.
-                  if (!messageHasRenderableText(m, isStaleAwaiting(globalIdx))) return
+                  if (!messageHasRenderableText(m, hidesAwaiting(globalIdx))) return
                   if (prevTailIsMeta !== null) out.push(<VSpace key={`s${i}`} h={STEP} />)
                   const textKey = m.sourceId ?? `legacy-${globalIdx}`
                   out.push(
                     <div key={textKey} data-transcript-source-id={textKey} className="flex flex-col">
-                      <Message m={m} dense textOnly answering={answeringForMessage(m)} paired={paired[globalIdx]} staleAwaiting={isStaleAwaiting(globalIdx)} />
+                      <Message m={m} dense textOnly answering={answeringForMessage(m)} paired={paired[globalIdx]} staleAwaiting={isStaleAwaiting(globalIdx)} restingCardShown={globalIdx === lastAgentIdx && restingShown} shadowedBy={shadowedByMessage.get(globalIdx)} />
                     </div>,
                   )
                   // Text-only → the row ends in prose (tool band dropped), so the next gap is a full STEP.
@@ -1483,9 +1498,11 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                     m={m}
                     dense
                     staleAwaiting={isStaleAwaiting(globalIdx)}
+                    restingCardShown={globalIdx === lastAgentIdx && restingShown}
                     answering={answeringForMessage(m)}
                     paired={paired[globalIdx]}
                     sticky={isSticky}
+                    shadowedBy={shadowedByMessage.get(globalIdx)}
                   />
                 )
                 out.push(
@@ -1525,8 +1542,13 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
             showsRestingCard — which also reads the event-snooze. Keying this banner on the bare flag let
             the two disagree: a snoozed thread the server still queued (a timer park, until 2026-08-25)
             drew the fence card AND this banner, the same wait twice on one card. With the shared predicate
-            a queued-while-snoozed thread shows the fence card alone, whatever the server does. */}
-        {showsRestingCard(thread) && (
+            a queued-while-snoozed thread shows the fence card alone, whatever the server does.
+            NOT BEFORE THE TRANSCRIPT, though — none of the three tail cards below. The board lands before
+            the transcript window does, and drawing the tail under the "Loading…" line painted it in one
+            place and then shoved it ~1s later when the messages mounted above it: the card the human
+            was reading jumped, and the prose-to-card gap "appeared" (maintainer 2026-08-28, refreshing on
+            a rested card). The tail describes the END of the transcript, so it mounts with it. */}
+        {!q.isLoading && showsRestingCard(thread) && (
           <div className="mt-4">
             <AwaitingBackgroundBanner thread={thread} onSnooze={dismissThisCard} onSnoozeFailed={cancelThisCard} />
           </div>
@@ -1535,7 +1557,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
             drew its prose and nothing else — the same gap the thread view had, one surface over. The card
             is the one the fence draws (FenceCard, with its Mark-as-done through ThreadSlugContext), and
             the same predicate keeps it off a thread whose final message already carries the fence. */}
-        {showsRegisteredDoneCard(thread, lastAgentIdx >= 0 ? messages[lastAgentIdx]?.text : undefined) && (
+        {!q.isLoading && showsRegisteredDoneCard(thread, lastAgentIdx >= 0 ? messages[lastAgentIdx]?.text : undefined) && (
           // STEP, not the banner's mt-4: this is the SAME card the fence path draws one STEP under the prose
           // of the message it sits in, and the two must land at the same distance (measured 2026-08-27 on the
           // seeded pair: 20.3px prose-ink to card-edge on the fence card, 22.3px here on mt-4 — 2px of drift
@@ -1546,7 +1568,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
           </>
         )}
         {/* The residual rung, same as the thread view: a rest with no other card still states itself. */}
-        {showsRestedCard(thread, lastAgentIdx >= 0 ? messages[lastAgentIdx]?.text : undefined) && (
+        {!q.isLoading && showsRestedCard(thread, lastAgentIdx >= 0 ? messages[lastAgentIdx]?.text : undefined) && (
           <div className="mt-4">
             <RestedCard thread={thread} />
           </div>

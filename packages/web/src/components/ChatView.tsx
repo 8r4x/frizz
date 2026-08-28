@@ -27,6 +27,7 @@ import { showsRegisteredDoneCard } from "../lib/registeredDone.ts"
 import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { parseAnswersCard, pairAllAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
 import { questionsByAnchor } from "../lib/questionAnchor.ts"
+import { fenceRestatesRegistered, registeredAtRest } from "../lib/questionShadow.ts"
 import { FrizzWake } from "./FrizzWake.tsx"
 import { RecurringPromptLine } from "./RecurringPromptLine.tsx"
 import { LinkifiedText } from "./LinkifiedText.tsx"
@@ -258,10 +259,15 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   // …and the rest hairlines that only restate their own surroundings drop out here — see
   // isRedundantRestDivider. It runs LAST, on the coalesced list, so "the next thing the reader sees"
   // means the next thing this surface will actually draw.
+  //
+  // `restingShown` is the third reason a fence draws nothing (see rendersNothingIn): the resting card at
+  // the tail states the last message's wait, so that message's fence block is skipped — and a message
+  // that was ONLY the fence renders nothing, which the spacer walk has to know.
+  const restingShown = showsRestingCard(thread)
   const activityMessages = useMemo(() => {
     const entries = running ? historicalToolActivityMessages(coalescedActivityMessages) : coalescedActivityMessages
-    return withoutRedundantRestDividers(entries, rendersNothingIn(entries, lastAgentIdx))
-  }, [coalescedActivityMessages, running, lastAgentIdx])
+    return withoutRedundantRestDividers(entries, rendersNothingIn(entries, lastAgentIdx, restingShown))
+  }, [coalescedActivityMessages, running, lastAgentIdx, restingShown])
   const showWorking = running
   // Question↔answer pairing for "Answers:" user messages, precomputed at the LIST level (the lookback
   // needs the whole list; Message renders per-message). null — a stable primitive — at every ordinary
@@ -284,6 +290,8 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   // place. answeringForMessage wires each ask's chips AND its own bottom Send button (scoped to just
   // that message's blocks). The queue card runs the identical scope through the same controller.
   const { answeringForMessage } = useLiveAnswering(slug, messages)
+  // The registered questions at each message's rest, so a fence restating one folds into its card.
+  const shadowedByMessage = useMemo(() => registeredAtRest(messages, thread?.questions ?? []), [messages, thread?.questions])
 
   // (The SSE-mode lastActivityAt refetch effect that lived here moved into transcript-live.ts: the
   // manager applies the same activity-edge pull to EVERY observed transcript that the push channel
@@ -489,6 +497,8 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
                     paired={paired[messageIndex]}
                     sticky={isSticky}
                     staleAwaiting={lastAgentIdx >= 0 && messageIndex < lastAgentIdx}
+                    restingCardShown={messageIndex === lastAgentIdx && restingShown}
+                    shadowedBy={shadowedByMessage.get(messageIndex)}
                   />
                 )
                 return isSticky ? <StickyUserBand key={i}>{msg}</StickyUserBand> : msg
@@ -705,22 +715,24 @@ function VirtualizedThreadTranscript({
   const liveActivityLabel = liveToolActivity ? toolActivityLabel(liveToolActivity, projectDir) : undefined
   const liveRuntimeStart = running ? liveRuntimeStartedAt(coalescedActivityMessages) : undefined
   const lastAgentIdx = useMemo(() => lastAssistantIndex(messages), [messages])
-  // Redundant rest hairlines dropped exactly as in the drawer's copy above.
+  // Redundant rest hairlines dropped exactly as in the drawer's copy above, with the same third
+  // draws-nothing reason (the resting card stating the last message's fence).
+  const restingShown = showsRestingCard(thread)
   const activityMessages = useMemo(() => {
     const entries = running ? historicalToolActivityMessages(coalescedActivityMessages) : coalescedActivityMessages
-    return withoutRedundantRestDividers(entries, rendersNothingIn(entries, lastAgentIdx))
-  }, [coalescedActivityMessages, running, lastAgentIdx])
+    return withoutRedundantRestDividers(entries, rendersNothingIn(entries, lastAgentIdx, restingShown))
+  }, [coalescedActivityMessages, running, lastAgentIdx, restingShown])
   const showWorking = running
   const messageRows = useMemo(() => {
     return buildVirtualTranscriptMessageRows(
       activityMessages.map((entry) => entry.message),
-      rendersNothingIn(activityMessages, lastAgentIdx),
+      rendersNothingIn(activityMessages, lastAgentIdx, restingShown),
       messageGap,
     ).map((row) => ({
       ...row,
       messageIndex: activityMessages[row.messageIndex].messageIndex,
     }))
-  }, [activityMessages, lastAgentIdx])
+  }, [activityMessages, lastAgentIdx, restingShown])
   const lastUserIdx = useMemo(() => lastAskIndex(messages), [messages])
   // A completion the worker REGISTERED rather than fenced: the last rung of the ladder below, drawn here
   // because no message carries it (lib/registeredDone). Keyed on the final assistant message so a worker
@@ -774,6 +786,9 @@ function VirtualizedThreadTranscript({
     }
     return { byRow, tail }
   }, [messageRows, messages, thread?.questions])
+  // The same rows, keyed by message index, for the fold: a fence restating a registration at its own
+  // rest draws nothing (lib/questionShadow).
+  const shadowedByMessage = useMemo(() => registeredAtRest(messages, thread?.questions ?? []), [messages, thread?.questions])
 
   const rows = useMemo<VirtualThreadRow[]>(() => {
     const next: VirtualThreadRow[] = [{ key: "head-anchor", kind: "head-anchor" }]
@@ -1327,6 +1342,8 @@ function VirtualizedThreadTranscript({
                   showSendButton
                   paired={paired[row.messageIndex]}
                   staleAwaiting={lastAgentIdx >= 0 && row.messageIndex < lastAgentIdx}
+                  restingCardShown={row.messageIndex === lastAgentIdx && restingShown}
+                  shadowedBy={shadowedByMessage.get(row.messageIndex)}
                 />
               </div>
             ) : row.kind === "runtime-status" ? (
@@ -1716,16 +1733,24 @@ export function lastAssistantIndex(messages: readonly ChatMessage[]): number {
 // rather than on an index, because that is what the builder will hand back. It has to be the object from
 // THIS list — coalescing REPLACES a message when it absorbs a tool tail (appendToolTail), so identity is
 // stable only within one coalesced list, while the entry's `messageIndex` still points at the original.
+//
+// `restingCardShown` is the same cut from the other side: when the resting card at the tail states the
+// LAST message's wait (showsRestingCard), that message's fence draws nothing either — the card owns it —
+// so a fence-only last message is as empty as a settled one. Same set, one more member.
 export function rendersNothingIn<T extends { message: ChatMessage; messageIndex: number }>(
   entries: readonly T[],
   lastAgentIdx: number,
+  restingCardShown = false,
 ): (message: ChatMessage) => boolean {
   const stale = new WeakSet<ChatMessage>()
   if (lastAgentIdx >= 0) for (const entry of entries) if (entry.messageIndex < lastAgentIdx) stale.add(entry.message)
+  if (lastAgentIdx >= 0 && restingCardShown) for (const entry of entries) if (entry.messageIndex === lastAgentIdx) stale.add(entry.message)
   return (message) => messageRendersNothing(message, stale.has(message))
 }
 // Does this text draw NOTHING? Ordinarily that is "is it blank", but an ```awaiting fence that is not a
-// LIVE wait draws nothing either (see renderText) — and the contract invites a worker to reply with the
+// LIVE wait draws nothing either (see renderText) — and neither does a live one whose thread is at rest
+// on it, because the resting card below states it; callers fold that case into `staleAwaiting` too —
+// and the contract invites a worker to reply with the
 // fence ALONE, so a whole message can be one such fence and no prose. Left un-stripped it reports as
 // visible, which spends an adjacency spacer on an empty slot and saves a rest divider with nothing under
 // it. That was already true of a REFUSED fence; it became true of a SETTLED one when the settled body
@@ -3188,7 +3213,17 @@ function UserBubble({ text, rawText, queued, sticky, deliveryUnconfirmed, delive
 // undefined (a consumer that doesn't precompute, e.g. the sub-agent sheet) → internal unpaired fallback.
 // Lifecycle controls never belong to a transcript message: every Done card stays presentation-only,
 // while the owning thread surface renders one stable footer.
-export const Message = memo(function Message({ m, answering, dense, paired, sticky, textOnly, showSendButton, staleAwaiting }: { m: ChatMessage; answering?: MessageAnswering; dense?: boolean; paired?: PairedAnswer[] | null; sticky?: boolean; textOnly?: boolean; showSendButton?: boolean; staleAwaiting?: boolean }) {
+// `shadowedBy` is the registered questions standing at this message's REST (lib/questionShadow), so a
+// ```question fence that merely restates one of them draws nothing — the registered card, a few pixels
+// below, is the one the human answers. Undefined for every message at a rest with no registration,
+// which keeps the memo boundary intact.
+// `restingCardShown` — the resting card at the transcript's tail is stating THIS message's ```awaiting
+// fence (showsRestingCard on the owning thread), so the fence block is skipped here exactly as a settled
+// one is. It has to be a skip at this level and not a null from FenceCard: the block list is interleaved
+// with explicit spacers, and a card that renders null still spent one — a 14px gap dangling under the
+// prose, above the resting card (maintainer 2026-08-28, with a screenshot of the gap). Only the last
+// agent message ever carries it, so the memo boundary holds for every other row.
+export const Message = memo(function Message({ m, answering, dense, paired, sticky, textOnly, showSendButton, staleAwaiting, shadowedBy, restingCardShown }: { m: ChatMessage; answering?: MessageAnswering; dense?: boolean; paired?: PairedAnswer[] | null; sticky?: boolean; textOnly?: boolean; showSendButton?: boolean; staleAwaiting?: boolean; shadowedBy?: readonly RegisteredQuestionView[]; restingCardShown?: boolean }) {
   // ANSWERING ON A PHONE happens in a sheet, one question at a time (MobileAnswerSheet) — the cards in
   // the transcript stay READ-ONLY there, so the questions are still visible in the context that
   // produced them but a 44pt-thumb answer never has to land on a 24pt chip inside a scrolling message.
@@ -3293,7 +3328,12 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
         // card and not a message either.
         //
         // `done` is neither: a finished thread stays finished, and its card is the thread's own outcome.
-        if (fseg.fenceKind === "awaiting" && (m.fenceRefused || staleAwaiting)) continue
+        //
+        // STATED BY THE RESTING CARD — the third skip. A live fence whose thread is at rest on it is drawn
+        // by the resting card at the tail (AwaitingBackgroundCard opens on this very body), so this block
+        // goes too, for the spacer reason above: FenceCard returning null would still leave its slot's
+        // spacer standing between the prose and that card.
+        if (fseg.fenceKind === "awaiting" && (m.fenceRefused || staleAwaiting || restingCardShown)) continue
         push(
           <FenceCard
             key={`${keyBase}-f${fi}`}
@@ -3322,6 +3362,10 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
         }
         qi.n += 1
         const bi = qi.n
+        // A fence restating a question REGISTERED at this rest is folded into the registered card (see
+        // lib/questionShadow). The index still advances — the controller numbers every fence in the
+        // flat text — so the blocks that do render keep their answer state.
+        if (shadowedBy && fenceRestatesRegistered(seg.text, shadowedBy)) continue
         if (answering) askBlocks.push({ raw: seg.text, kind: seg.questionKind, danger: seg.danger, bi })
         // On a phone the card is a READING surface and the sheet is the answering one, so it renders
         // without an interactive controller even though this message has one.
@@ -3390,7 +3434,9 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
         </button>
       </div>,
     )
-  } else if (showSendButton && answering) {
+  } else if (showSendButton && answering && askBlocks.length > 0) {
+    // `askBlocks` can be empty with a controller present: every fence of this message was folded into
+    // a registered card, and that card carries its own Send answers.
     push(
       <div key="send-answers" className="flex justify-start">
         <button
@@ -3697,6 +3743,10 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   // Guarded on showsRestingCard, not on `awaitingBackground` alone: the card is suppressed while the
   // rest is event-snoozed (and for any non-idle runtime), and the fence must keep stating the wait
   // there or the transcript ends on nothing and reads as "the agent died".
+  //
+  // A FALLBACK, not the mechanism. Every transcript surface that owns a thread skips the fence BLOCK
+  // before it reaches here (Message's `restingCardShown`), because a null returned from this component
+  // still spends the block spacer above it. This guard only catches a caller that did not pass the flag.
   const restingCardStatesIt = parkAction === null && fenceThread != null && showsRestingCard(fenceThread)
   if (restingCardStatesIt) return null
   return (

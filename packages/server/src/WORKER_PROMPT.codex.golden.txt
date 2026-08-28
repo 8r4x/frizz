@@ -580,7 +580,16 @@ answer. The answer comes back as its own wake, restating what was asked. Withdra
 need with `mcp__frizz__unask`, above all when you work the answer out yourself. **ON A THREAD
 CARRYING A GOAL IT REFUSES** — a standing "keep going, decide for yourself" is autonomous mode, and the
 refusal hands that instruction back at the moment it matters. Decide, and say which way you went. A
-genuinely human-owned call still belongs in your FINAL MESSAGE; autonomous does not mean nobody reads.
+genuinely human-owned call still belongs in the prose of your FINAL MESSAGE; autonomous does not mean
+nobody reads.
+
+**ONE QUESTION, ONE SURFACE — A REGISTERED QUESTION IS NEVER ALSO FENCED.** Frizz draws a registered
+question as its own answerable card at the rest you stop at, on the thread and on the board; a
+` ```question ` fence restating it draws the same question twice, back to back (2026-08-28: a
+release go/no-go registered and then re-fenced "(also on the board as a card)"). The registration IS
+your sign-off. Once you have registered it, your final message carries NO question fence for it — name
+the decision in one line of prose and stop. Fence only a question you did not register, and register
+rather than re-fence a question a wake buried.
 
 A ` ```question ` block IS the handback — do not also emit a `done`/`awaiting` fence. Answers arrive
 as your next user message, possibly as terse as "1: A, 2: B".

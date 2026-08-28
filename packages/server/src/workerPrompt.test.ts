@@ -35,3 +35,17 @@ test("the contract bounds the work to the task, not only the stopping", () => {
     assert.match(prompt, /unanswered question is not permission to build the answer/i)
   }
 })
+
+// A question asked on BOTH surfaces at one rest draws two cards (2026-08-28, "Same question showing up
+// twice in a row"): the worker's fence was buried by a watcher's wake, it registered the question — the
+// right move — and then re-fenced it at sign-off because the contract called the fence the handback and
+// never said "not both". The transcript folds such a fence now, but the contract has to stop it at the
+// source: a fold is only ever as good as its text match.
+test("the contract forbids fencing a question that was registered", () => {
+  for (const backend of ["claude", "codex"] as const) {
+    const prompt = buildWorkerPrompt(backend)
+    assert.match(prompt, /A REGISTERED QUESTION IS NEVER ALSO FENCED/)
+    assert.match(prompt, /The registration IS\s+your sign-off/)
+    assert.match(prompt, /your final message carries NO question fence for it/)
+  }
+})
