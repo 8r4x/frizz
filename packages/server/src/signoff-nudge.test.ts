@@ -373,12 +373,16 @@ for (const [what, rec] of [
 }
 
 // ---- THE TWO-DELIVERY INTERACTION -----------------------------------------------------------------
-// Separating the reminder from the Goal (2026-08-12) means a thread WITH a Goal now has two sources
-// firing on one fenceless rest. That is only safe because of two properties, and both are worth pinning
-// now that they are load-bearing: the deliveries serialise, and a fence supersedes whatever is still
-// queued — otherwise an agent that signed off would be handed "keep going" straight afterwards and the
-// thread it just closed would reopen.
-test("a Goal and the reminder both queue for one rest, and a fence supersedes what is left", async () => {
+// Separating the reminder from the Goal (2026-08-12) means a thread WITH a Goal has two sources that
+// want one fenceless rest. Until 2026-08-28 both fired on it, as separate deliveries, on the reading
+// that "the deliveries serialise, and a fence supersedes whatever is still queued". They serialised in
+// the RUNTIME'S queue, not frizz's: both left in one tick, 5 ms apart, the worker answered the Goal with
+// a ```done fence, and then read "you rested without a fence" — the supersession check ran at send,
+// before that reply existed — and fenced again. Two Done cards on one thread (`wrong-agent-id-re-fencing`,
+// maintainer: "Redundant Dones"). So now ONE source takes a bare rest: the reminder, which mints first
+// and already sends a half-finished thread back to the work; the Goal stands down on that rest and takes
+// the bare rests the reminder does not (its cap spent — see the test after next).
+test("a Goal and the reminder are due for one rest: the reminder goes, the Goal stands down, and a fence ends it", async () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-both-"))
   const storage = createStorage(join(dir, "ui.db"), "p")
   const slug = "both"
@@ -409,21 +413,71 @@ test("a Goal and the reminder both queue for one rest, and a fence supersedes wh
   })
   try {
     await s.tick()
-    // Both fired for this rest: the operator's words AND frizz's protocol, as separate deliveries.
-    assert.equal(delivered.length, 2)
-    assert.ok(delivered.some((m) => m.startsWith("keep going")), "the Goal carries the operator's text")
-    assert.ok(delivered.some((m) => m.includes("without a fence")), "and the reminder is frizz's own")
-    // The reminder no longer carries the protocol twice — the trailer stopped duplicating it.
-    const goal = delivered.find((m) => m.startsWith("keep going"))!
-    assert.doesNotMatch(goal, /```question/)
+    // ONE wake for this rest — frizz's protocol, not the operator's words.
+    assert.equal(delivered.length, 1)
+    assert.match(delivered[0], /without a fence/, "the reminder is what a bare rest draws")
+    assert.doesNotMatch(delivered[0], /^keep going/, "and the Goal stands down on the rest the reminder took")
+    // Per REST, not per tick: the reminder is delivered now, and the Goal still does not take the rest
+    // it answered. (In production the reminder's own record closes the rest before this could matter;
+    // this pins the outbox-side hold that makes it true even when the tailer has not caught up.)
+    await s.tick()
+    await s.tick()
+    assert.equal(delivered.length, 1, "the Goal does not follow the reminder onto the same rest")
 
     // The agent signs off. Neither source may fire again for this thread, and anything still queued for
     // the old rest is superseded rather than delivered on top of a closed thread.
     fence = { kind: "done", body: "shipped it", hints: [] }
     await s.tick()
     await s.tick()
-    assert.equal(delivered.length, 2, "a signed-off thread is not re-prompted by either source")
+    assert.equal(delivered.length, 1, "a signed-off thread is not re-prompted by either source")
   } finally { void s.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+// THE FIELD SEQUENCE, END TO END, and the control that keeps the Goal a real trigger. Every rest here is
+// the AGENT'S (lastAssistantAt advances; frizz's own records are not modelled, which is the harder case
+// for the hold — see the previous test).
+test("the Goal takes only the bare rests the reminder does not, so a worker never reads 'you rested without a fence' after fencing", async () => {
+  let spokeAt = "2026-08-12T00:01:00.000Z"
+  let fence: SessionTelemetry["lastFence"]
+  const h = nudger({
+    lastUserAt: "2026-08-12T00:00:00.000Z",
+    get lastAssistantAt() { return spokeAt },
+    get lastActivityAt() { return spokeAt },
+    get lastFence() { return fence },
+  } as Partial<SessionTelemetry>)
+  const kinds = () => h.delivered.map((m) => m.startsWith("keep going") ? "goal" : m.includes("without a fence") ? "reminder" : "other")
+  try {
+    h.storage.setRecurringPromptBySlug(h.slug, {
+      prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false,
+      intervalMs: null, armedAt: "2026-08-12T00:00:00.000Z",
+    })
+    // Rest 1, bare (the field thread: its `ask` had just been refused). The reminder alone.
+    await h.s.tick()
+    assert.deepEqual(kinds(), ["reminder"])
+
+    // The worker answers it with a ```done fence — the reply that used to be followed by a stale
+    // "you rested without a fence". Nothing more reaches this thread, however many ticks run.
+    spokeAt = "2026-08-12T00:02:00.000Z"
+    fence = { kind: "done", body: "shipped it", hints: [] }
+    await h.s.tick()
+    await h.s.tick()
+    assert.deepEqual(kinds(), ["reminder"], "a fenced reply draws nothing — no Goal for the rest before it, none for this one")
+
+    // CONTROL: the same thread ignoring the protocol. The fence gave the reminder's allowance back, so
+    // two more bare rests draw it twice; the THIRD is one the reminder cannot take, and that is the
+    // Goal's — the operator's words do reach a worker that keeps resting bare.
+    fence = undefined
+    spokeAt = "2026-08-12T00:03:00.000Z"
+    await h.s.tick()
+    spokeAt = "2026-08-12T00:04:00.000Z"
+    await h.s.tick()
+    assert.deepEqual(kinds(), ["reminder", "reminder", "reminder"])
+    spokeAt = "2026-08-12T00:05:00.000Z"
+    await h.s.tick()
+    assert.deepEqual(kinds(), ["reminder", "reminder", "reminder", "goal"], "the reminder's cap is spent; the Goal takes the rest")
+    // The Goal's trailer does not carry the protocol — the reminder is the one place it lives.
+    assert.doesNotMatch(h.delivered[3], /```question/)
+  } finally { h.close() }
 })
 
 // ---- AND AN ARMED GOAL DOES NOT SWITCH IT OFF -----------------------------------------------------
@@ -442,7 +496,12 @@ test("a Goal and the reminder both queue for one rest, and a fence supersedes wh
 //   likely to be holding background work with no way to learn how to park on it. Measured over five
 //   consecutive bare rests with the suppression in: five Goal bumps, no reminder, the park never
 //   mentioned once.
-test("an armed Goal does not silence the reminder — both land on one rest", async () => {
+//
+// The 2026-08-28 hold runs the OTHER way — the Goal stands down on the rest the reminder takes — and
+// this test is also the guard against getting that direction wrong: Goal first with the reminder held
+// would starve the reminder on exactly the worker that rests bare after every Goal, which is the
+// measured five-rests-no-park above by another route.
+test("an armed Goal does not silence the reminder — the reminder is what lands on the rest", async () => {
   const h = nudger({})
   try {
     // The at-rest trigger driving, which is the exact row the reverted gate keyed on.
@@ -451,9 +510,9 @@ test("an armed Goal does not silence the reminder — both land on one rest", as
       intervalMs: null, armedAt: "2026-08-12T00:00:00.000Z",
     })
     await h.s.tick()
-    assert.ok(h.delivered.some((m) => m.startsWith("keep going")), "the Goal fires")
     const reminder = h.delivered.find((m) => m.includes("without a fence"))
-    assert.ok(reminder, "and so does the reminder")
+    assert.ok(reminder, "the reminder fires")
+    assert.ok(!h.delivered.some((m) => m.startsWith("keep going")), "and the Goal stands down on the rest it took")
     // The park is the thing the Goal's trailer cannot supply, so it is what the assertion is really
     // about. Matched on the FENCE rather than on whatever tool registers it, so a change to the
     // registration mechanism cannot silently turn this into a test of nothing.

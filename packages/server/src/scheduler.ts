@@ -1523,8 +1523,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // opens by sending a half-finished thread back to the work — and that suppressing it took the
   // ```awaiting park with it, which nothing else on that thread's deliveries names. That switch is gone
   // entirely now (2026-08-16), so re-deriving the exemption would silence this on EVERY thread with a Goal.
-  // The maintainer's 2026-08-12 call stands: keep it separate from the Goal, enabled all the time, and
-  // pay the one extra transcript record.
+  // The maintainer's 2026-08-12 call stands: keep it separate from the Goal, enabled all the time. (Until
+  // 2026-08-28 that meant paying one extra transcript record per rest, both going out together; the
+  // record turned out to arrive stale and draw a second ```done. Now the GOAL stands down on the rest
+  // this takes — evalRestPrompts — and this never stands down for the Goal.)
   //
   // It fires on a rest that carried NO FENCE AT ALL, and its message is the sign-off protocol itself.
   // The rules therefore arrive at the one moment they are about to be used, rather than 200k tokens
@@ -1622,8 +1624,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // to ride the Goal's at-rest trailer so a rest produced one delivery instead of two — but that
       // made the protocol a thing a thread only learned if an operator had armed a Goal, and put a copy
       // of it in the trailer, which is its own kind of repetition. It is frizz's own hook now: identical
-      // on every thread, whatever the operator has configured. The second delivery costs one transcript
-      // record, collapsed to a hairline by the chat.
+      // on every thread, whatever the operator has configured.
+      // THE GOAL YIELDS TO IT INSTEAD (2026-08-28). "The second delivery costs one transcript record"
+      // was the accounting here until then, and it was wrong: the two went out in one tick, 5 ms apart,
+      // the runtime queued the Goal's turn first, and this message — "you rested without a fence" —
+      // reached a worker that had just answered the Goal WITH one. It fenced again; two Done cards. The
+      // supersession check in `deliveryContext` exists for exactly that and could not fire, because it
+      // ran at send. So this pass mints first in the tick and SOURCE 5 declines the rest it took.
       // AND NO GOAL-SHAPED EXEMPTION HERE — see the SOURCE 9 header for the day it had one.
       // THE CONSECUTIVE CAP. It counts fenceless rests and is cleared ONLY by a fence (above) — never by
       // a user record, because frizz's own delivery is one, and anchoring on that let the nudge reset its
@@ -2544,6 +2551,21 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // Per-rest, and that is what makes it free: every fact it reads rides the FINAL assistant message,
       // so the next word on the thread re-opens the trigger with nothing stored to clear.
       if (restMessageIsSignedOff(deps.storage, row.slug, tele, registeredPrWatchesOf(deps.storage, row.slug), armedTimerIdsOf(deps.storage, row.slug))) continue
+      // THE REMINDER TOOK THIS REST (2026-08-28). SOURCE 9 mints before this pass runs, and a rest it
+      // claimed gets no Goal on top. The two used to go out in the same tick, 5 ms apart; the runtime
+      // queued the second behind the first's turn, so a worker that answered the Goal with a ```done
+      // fence then read "you rested without a fence" and fenced again — two Done cards for one sign-off
+      // (thread `wrong-agent-id-re-fencing`, maintainer: "Redundant Dones"). The reminder's own
+      // supersession check in `deliveryContext` could not catch it: it ran at send, before any reply
+      // existed. The reminder already opens by sending a half-finished thread back to the work, so the
+      // operator's words lose nothing on that rest; they reach the worker on the first bare rest the
+      // reminder does not take (its cap spent, or the setting off). A DELIVERED reminder holds this too,
+      // which is what makes it per-rest rather than per-tick — in production its record closes the rest
+      // anyway (`lastUserAt` moves past `restedAt`, above). Superseded means the worker moved on and
+      // exhausted means the runtime could not be reached; the Goal for that rest is dead or doomed alike,
+      // so neither holds it.
+      const reminder = outbox.get(wakeDeliveryId(row.slug, row.session_id, signoffFenceId(restedAt)))
+      if (reminder && reminder.state !== "superseded" && reminder.state !== "exhausted") continue
       const fenceId = stopHookFenceId(armed.armedAt, restedAt)
       const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
       // Terminal rows stay in the store, so this alone is what makes a rest bump EXACTLY once: the same
@@ -2856,6 +2878,18 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (err instanceof InjectedSchedulerCrash) throw err
       log(`waker: recurring-prompt schedule pass failed: ${err instanceof Error ? err.message : String(err)}`)
     }
+    // THE REMINDER MINTS BEFORE THE GOAL'S REST PASS (2026-08-28): SOURCE 5 stands down on a rest the
+    // reminder took, and it reads that off the outbox — so the reminder has to be there first. Before
+    // this the two went out in one tick, 5 ms apart, and the second arrived stale (see evalRestPrompts).
+    try {
+      evalSignoffNudges(now())
+      // SOURCE 12, beside the nudge because they are the same job from two directions: the nudge catches
+      // a rest that declared NOTHING, this catches one whose declaration stopped being true.
+      evalParkIntegrity(now())
+    } catch (err) {
+      if (err instanceof InjectedSchedulerCrash) throw err
+      log(`waker: sign-off nudge pass failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
     try {
       evalRestPrompts(now())
     } catch (err) {
@@ -2867,15 +2901,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     } catch (err) {
       if (err instanceof InjectedSchedulerCrash) throw err
       log(`waker: recurring-prompt compaction pass failed: ${err instanceof Error ? err.message : String(err)}`)
-    }
-    try {
-      evalSignoffNudges(now())
-      // SOURCE 12, beside the nudge because they are the same job from two directions: the nudge catches
-      // a rest that declared NOTHING, this catches one whose declaration stopped being true.
-      evalParkIntegrity(now())
-    } catch (err) {
-      if (err instanceof InjectedSchedulerCrash) throw err
-      log(`waker: sign-off nudge pass failed: ${err instanceof Error ? err.message : String(err)}`)
     }
     try {
       await evalPrWatches(now())
