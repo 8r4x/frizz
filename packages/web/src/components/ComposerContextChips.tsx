@@ -49,8 +49,8 @@ export function ComposerContextChips({ slug }: { slug: string }): ReactElement |
             >
               <span data-context-label className="max-w-48 truncate font-mono-keep">{base}{lines}</span>
               {/* The comment marker: only once a note exists, so a bare quote stays a bare chip. Same
-                  ink lift as the ✕ below — its 7.5px of ink read 1.0px under the cap band too. */}
-              {item.comment?.trim() && <MessageSquare size={10} aria-hidden="true" className="shrink-0 translate-y-[-0.09em] text-muted" />}
+                  ink placement as the ✕ below — on the label's lowercase body. */}
+              {item.comment?.trim() && <MessageSquare size={10} aria-hidden="true" className="shrink-0 translate-y-[0.045em] text-muted" />}
             </button>
             <button
               type="button"
@@ -69,11 +69,15 @@ export function ComposerContextChips({ slug }: { slug: string }): ReactElement |
               // 6.5px; ✕→right border 7.5px at -mr-0.5, 5.5px at -mr-1, 6.5px at -mr-[3px].
               className="shrink-0 rounded p-0.5 -mr-[3px] text-muted transition-colors hover:text-fg"
             >
-              {/* Ink, not box: centred on its box the X's 5px of ink sat on the label's x-height band,
-                  1.0px below the cap/digit band the label's body reads at (probe 2026-08-28, both
-                  fonts: X ink mid 11.94 vs cap mid 10.93 from the chip top). -0.09em of 11px lifts
-                  it 0.99px; residual re-measured at 0.02px, both fonts. */}
-              <X size={10} strokeWidth={2.5} className="translate-y-[-0.09em]" />
+              {/* Ink, not box, and RENDERED ink, not geometry: the eye centres a × on the lowercase
+                  body beside it (the math axis), and a geometry probe put it there — but the
+                  fractional transforms rasterize differently at the maintainer's dsf 2, where a pixel
+                  scan read the box-centred X 0.5px ABOVE the x-height centre (and a cap-band lift
+                  tried first, 1.5px above — maintainer 2026-08-28: "it's not right"). +0.045em of 11px
+                  is the +0.5px that lands it on the body at dsf 2 in both fonts (residual 0.00px);
+                  dsf 1 can only snap to ±0.5px and reads +0.5. Sweep: scan-dsf2.mjs in the thread's
+                  scratch dir. */}
+              <X size={10} strokeWidth={2.5} className="translate-y-[0.045em]" />
             </button>
             {isOpen && (
               <ContextCard
