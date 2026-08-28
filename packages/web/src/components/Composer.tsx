@@ -139,9 +139,9 @@ export function Composer({
   // textarea's text origin and the textarea gets a matching `text-indent` (first line only — exactly
   // the line the chips occupy) plus enough extra top padding for any chip rows that wrapped above it.
   // CONTRACT for the node: each chip is a `[data-context-chip]` element `CONTEXT_CHIP_HEIGHT` px tall
-  // whose text is a `[data-context-label]` and whose movable parts (label, ✕) are `[data-context-ink]`;
-  // Composer owns the row (wrap, gaps, line pitch) and puts each label on the prose's baseline,
-  // carrying the ✕ with it. Renders nothing when nothing is staged.
+  // whose text is a `[data-context-label]`; Composer owns the row (wrap, gaps, line pitch) and
+  // positions the PILLS so the centred label's baseline meets the prose's. Renders nothing when
+  // nothing is staged.
   context?: React.ReactNode
   // A small action rendered just LEFT of the send button (the dispatch composer's GitHub-picker icon).
   // Only surfaces that pass it get it; reply/queue composers omit it.
@@ -320,15 +320,17 @@ export function Composer({
   // changes neither the overlay's width nor its height, so a ResizeObserver alone would miss it; the
   // resize path still covers a rewrap from the column narrowing.
   //
-  // VERTICAL: the pill is centred on the line box, which is the prose's cap band (0.06px off in
-  // both fonts) — but the eye reads inline text by BASELINE, and an 11px label centred in a 20px pill
-  // has its baseline 1.87px above the 13px prose's in sans and 0.87px in mono (dsf-8 ink scan,
-  // 2026-08-28: label digits' bottom 13.27 against the prose H's 15.14 / 14.14 from the line top —
-  // maintainer: "it doesn't feel vertically aligned with the plain text"). So each pill's ink — the
-  // label and the ✕ beside it, together, so the ✕ keeps sitting on the label's own middle — is
-  // translated down by the difference between the two baselines, both probed from the resolved
-  // fonts, which lands it at 0 under either setting (0.13px residual, both fonts) and needs no
-  // hand-fitted constant. The pill itself stays centred on the cap band.
+  // VERTICAL: two constraints, one knob. The label must read as ONE LINE with the prose (the eye
+  // aligns inline text by baseline — an 11px label centred in a pill centred on the line floats
+  // 1.87px above the 13px prose's baseline in sans, 0.87px in mono; maintainer 2026-08-28: "it
+  // doesn't feel vertically aligned with the plain text"), and the label must sit CENTRED in its
+  // pill (translating the pill's ink down to fix the first broke the second; maintainer, later that
+  // day: "it needs to be vertically centered … within the fucking chip"). So the ink stays centred —
+  // plain items-center, no transforms — and the PILL'S position is the knob: the overlay's top is set
+  // so the centred label's baseline lands on the prose's, both probed from the resolved fonts. The
+  // pill runs ~1-2px below the line box's bottom (into the leading; the next line's ascenders start
+  // ~6px down, so nothing collides), which is the honest cost of wrapping an 11px label around a
+  // 13px line's baseline.
   useLayoutEffect(() => {
     const el = taRef.current
     const overlay = contextRef.current
@@ -346,29 +348,25 @@ export function Composer({
       const cs = getComputedStyle(el)
       const padTop = parseFloat(cs.paddingTop)
       const line = parseFloat(cs.lineHeight)
-      const chipTop = padTop + (line - CONTEXT_CHIP_HEIGHT) / 2
       overlay.style.left = cs.paddingLeft
       overlay.style.maxWidth = `calc(100% - ${cs.paddingLeft} - ${cs.paddingRight})`
-      overlay.style.top = `${chipTop}px`
+      // Centred on the line until a chip exists to probe; the real position lands below.
+      overlay.style.top = `${padTop + (line - CONTEXT_CHIP_HEIGHT) / 2}px`
       overlay.style.rowGap = `${Math.max(0, line - CONTEXT_CHIP_HEIGHT)}px`
       const last = chips[chips.length - 1]
       if (!last) {
         el.style.textIndent = ""
       } else {
-        const box = overlay.getBoundingClientRect()
-        // Both baselines from the LINE top: the prose's straight from its probe, the label's as the
-        // pill's own offset into the line plus the label's offset into the pill plus its probe.
-        const proseBaseline = baselineOffset(overlay, cs)
-        for (const chip of chips) {
-          const label = chip.querySelector<HTMLElement>("[data-context-label]")
-          if (!label) continue
-          const ink = chip.querySelectorAll<HTMLElement>("[data-context-ink]")
-          for (const part of ink) part.style.transform = ""
-          const labelBaseline = (line - CONTEXT_CHIP_HEIGHT) / 2
-            + (label.getBoundingClientRect().top - chip.getBoundingClientRect().top)
+        const label = chips[0].querySelector<HTMLElement>("[data-context-label]")
+        if (label) {
+          // Both baselines from the LINE top: the prose's straight from its probe; the label's as its
+          // centred offset into the pill plus its own probe. Their difference IS the pill's top.
+          const proseBaseline = baselineOffset(overlay, cs)
+          const labelBaselineInChip = (label.getBoundingClientRect().top - chips[0].getBoundingClientRect().top)
             + baselineOffset(overlay, getComputedStyle(label))
-          for (const part of ink) part.style.transform = `translateY(${(proseBaseline - labelBaseline).toFixed(2)}px)`
+          overlay.style.top = `${(padTop + proseBaseline - labelBaselineInChip).toFixed(2)}px`
         }
+        const box = overlay.getBoundingClientRect()
         el.style.textIndent = `${Math.round(last.getBoundingClientRect().right - box.left + CONTEXT_TEXT_GAP)}px`
         const above = Math.max(0, Math.round(box.height - CONTEXT_CHIP_HEIGHT))
         if (above > 0) el.style.paddingTop = `${padTop + above}px`

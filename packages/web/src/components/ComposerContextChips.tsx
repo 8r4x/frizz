@@ -38,11 +38,10 @@ export function ComposerContextChips({ slug }: { slug: string }): ReactElement |
               isOpen ? "border-accent/60 bg-panel-2 text-fg" : "border-border bg-panel-2/50 text-fg/80 hover:bg-panel-2"
             }`}
           >
-            {/* Both buttons are the pill's INK: Composer translates them together so the label sits
-                on the prose's baseline and the ✕ stays beside it — see its inline-context effect. */}
+            {/* The content sits CENTRED in the pill; Composer moves the whole pill so this label's
+                baseline meets the prose's — see its inline-context effect. */}
             <button
               type="button"
-              data-context-ink
               onClick={() => setOpenId(isOpen ? null : item.id)}
               title={contextDisplayPath(item.path, projectDir)}
               className="flex min-w-0 items-center gap-1 outline-none"
@@ -54,7 +53,6 @@ export function ComposerContextChips({ slug }: { slug: string }): ReactElement |
             </button>
             <button
               type="button"
-              data-context-ink
               // Like every control beside a live input here: never blur the textarea on the click.
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
