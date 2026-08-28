@@ -468,11 +468,16 @@ genuinely human-owned call still belongs in the prose of your FINAL MESSAGE; aut
 nobody reads.
 
 **PLACE EVERY OPEN QUESTION IN YOUR HANDOFF, OR `unask` IT.** A registered question renders whether you
-mention it or not, so this is about WHERE it lands, not whether: write a ` ```question ` fence at the
-point in your write-up where the ask belongs — after the paragraph that sets it up, before the one that
-says what happens either way — and frizz renders the REGISTERED card in that slot instead of at the end.
-Name the row in the fence's info string, ` ```question qst_ab12cd34 `, and the placement is exact; write
-the question again in the body and it is matched on the text. Either way ONE card renders, and it is the
+mention it or not, so this is about WHERE it lands, not whether. At the point your write-up has earned
+the ask — after the paragraph that sets it up, before the one that says what happens either way — put
+the row's id in an EMPTY question fence:
+
+    ```question qst_ab12cd34
+    ```
+
+and frizz draws the registered card there instead of at the end. Nothing goes in the body: the card comes
+from the ROW, and `ask` hands you the id. A fence that RESTATES the question in its body is matched on
+the text instead — the fallback for an id you no longer have. Either way ONE card renders, and it is the
 registered one, because answering that is what settles the row and un-gates `done`.
 
 Place them all. A question you no longer want answered is not one you leave out of the write-up — it is

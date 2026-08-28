@@ -515,9 +515,10 @@ const ASK = {
     "the question at the moment you find it rather than saving it for the end.\n\n" +
     "AND WHEN YOU DO STOP, THE OPEN QUESTION IS YOUR SIGN-OFF — rest normally. Frizz draws every open " +
     "question at the rest you stopped at whether you mention it or not, so nothing you write can hide " +
-    "one. What your handoff chooses is WHERE: a ```question fence at the point the ask belongs renders " +
-    "the REGISTERED card in that slot instead of at the end, and naming the row in its info string — " +
-    "```question <the id returned below> — places it exactly rather than on a text match.\n\n" +
+    "one. What your handoff chooses is WHERE: put the id this call returns in an EMPTY question fence " +
+    "at the point your write-up has earned the ask — an opening ```question <id> line and a closing " +
+    "``` line, nothing between them — and the registered card is drawn there instead of at the end. " +
+    "A fence that restates the question in its body is matched on the text instead.\n\n" +
     "SEVERAL AT ONCE IS ONE CALL. The card sends every answer as a unit, so a second `ask` for a second " +
     "question just makes the human send twice. Register them together.\n\n" +
     "The answer comes back to you as its own wake, restating what was asked. Withdraw one you no longer " +

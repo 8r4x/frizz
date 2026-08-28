@@ -50,7 +50,22 @@ export type MessageSegment =
 // parseInfoString below tokenizes it. The `m` flag anchors ^/$ to line boundaries; an unterminated
 // opener simply never matches, so a half-written block degrades to ordinary prose (markdown renders it
 // as a plain code block).
-const QUESTION_BLOCK = /^```question(?:[ \t]+([A-Za-z][^\r\n]*?))?[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*$/gm
+// THE BODY IS OPTIONAL ONLY FOR A PLACEMENT MARKER. A worker placing a question it already registered
+// has nothing to put in the body — the card is drawn from the ROW, and anything written here is thrown
+// away — so the empty two-line form is what it should be able to write:
+//
+//     ```question qst_ab12cd34
+//     ```
+//
+// Every other empty fence stays prose. The loop below drops an empty body that carries no id, so
+// ```question with nothing in it can never become a blank answerable card.
+//
+// The body group is LAZY-OPTIONAL (`??`), not optional. A greedy `?` tries to MATCH the group before it
+// tries to skip it, so an empty marker followed later in the message by a real ```question fence matched
+// from the marker's opener all the way to that fence's closer and swallowed everything between as its
+// body. `??` skips first, which is the empty marker, and only backtracks into the group when the line
+// after the opener is not the closer — i.e. for a fence that really does have a body.
+const QUESTION_BLOCK = /^```question(?:[ \t]+([A-Za-z][^\r\n]*?))?[ \t]*\r?\n(?:([\s\S]*?)\r?\n)??```[ \t]*$/gm
 
 // The tokens the info-string understands. `multi` is the only base-kind token left; `danger` is an
 // orthogonal styling flag. GRACEFUL DEGRADATION: unknown/extra tokens are ignored, and an info-string
@@ -83,10 +98,16 @@ export function splitQuestionBlocks(text: string): MessageSegment[] {
       QUESTION_BLOCK.lastIndex = m.index + 1 // rescan from just past the opener, never skip what it spanned
       continue
     }
+    const { kind, danger, registeredId } = parseInfoString(m[1])
+    // An empty body with no id names nothing and asks nothing — leave it in the prose run as the code
+    // block it is, and rescan from just past the opener so nothing it spanned is skipped.
+    if (m[2] === undefined && !registeredId) {
+      QUESTION_BLOCK.lastIndex = m.index + 1
+      continue
+    }
     const prose = text.slice(lastIndex, m.index)
     if (prose.trim()) segments.push({ kind: "prose", text: prose })
-    const { kind, danger, registeredId } = parseInfoString(m[1])
-    segments.push({ kind: "question", text: m[2], questionKind: kind, danger, ...(registeredId ? { registeredId } : {}) })
+    segments.push({ kind: "question", text: m[2] ?? "", questionKind: kind, danger, ...(registeredId ? { registeredId } : {}) })
     lastIndex = m.index + m[0].length
   }
   const rest = text.slice(lastIndex)
@@ -108,6 +129,10 @@ function healOrphanedOptions(segments: MessageSegment[]): MessageSegment[] {
     const q = segments[i]
     const p = segments[i + 1]
     if (q.kind !== "question" || p.kind !== "prose") continue
+    // A PLACEMENT MARKER has no body for options to be orphaned FROM — its card is drawn from the
+    // registered row and its body is discarded — so a lettered list after one is the message's own
+    // prose. Adopting it would delete that list from the transcript, silently.
+    if (q.registeredId && q.text.trim() === "") continue
     const parsed = parseQuestionBlock(q.text, q.questionKind, q.danger)
     // Which list the prose may legally continue: none absorbed unless the block is option-less (the
     // orphan list must OPEN at A/1) or its body ENDS with its option run (the orphan must continue it).

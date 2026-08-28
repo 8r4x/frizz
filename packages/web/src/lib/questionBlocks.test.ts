@@ -659,3 +659,48 @@ test("a token that only looks like an id is ignored, like every other unknown to
   const a = splitQuestionBlocks("```question qst-not-an-id\nWhich?\n- A. one\n- B. two\n```")
   assert.deepEqual(a, [{ kind: "question", text: "Which?\n- A. one\n- B. two", questionKind: "question", danger: false }])
 })
+
+// A worker PLACING a question it already registered has nothing to put in the body — the card comes
+// from the row — so the two-line marker is the form it should be able to write.
+test("a placement marker is two lines: the id in the info string and nothing in the body", () => {
+  const a = splitQuestionBlocks("Setup prose.\n\n```question qst_ab12cd34ef56\n```\n\nClosing prose.")
+  assert.deepEqual(a, [
+    { kind: "prose", text: "Setup prose.\n\n" },
+    { kind: "question", text: "", questionKind: "question", danger: false, registeredId: "qst_ab12cd34ef56" },
+    { kind: "prose", text: "\n\nClosing prose." },
+  ])
+})
+
+test("the same marker with a blank line in it parses identically — the shape a worker reaches for varies", () => {
+  const a = splitQuestionBlocks("```question qst_ab12cd34ef56\n\n```")
+  assert.deepEqual(a, [{ kind: "question", text: "", questionKind: "question", danger: false, registeredId: "qst_ab12cd34ef56" }])
+})
+
+test("an EMPTY fence with no id is left as prose — it names nothing, so it can never become a blank card", () => {
+  assert.deepEqual(splitQuestionBlocks("```question\n```"), [{ kind: "prose", text: "```question\n```" }])
+  assert.deepEqual(splitQuestionBlocks("```question multi\n```"), [{ kind: "prose", text: "```question multi\n```" }])
+})
+
+test("a marker never swallows the prose around it, and a real fence after one still parses", () => {
+  const a = splitQuestionBlocks("A.\n\n```question qst_aaaaaaaaaaaa\n```\n\nB.\n\n```question\nWhich?\n- A. one\n- B. two\n```")
+  assert.deepEqual(a.map((s) => s.kind), ["prose", "question", "prose", "question"])
+  assert.equal(a[1].kind === "question" && a[1].registeredId, "qst_aaaaaaaaaaaa")
+  assert.equal(a[3].kind === "question" && a[3].text, "Which?\n- A. one\n- B. two")
+})
+
+test("a lettered list after a placement marker is the message's own prose, never adopted into it", () => {
+  // The orphan-heal exists for a fence that closed early and left its options outside. A marker has no
+  // body to orphan them from, so adopting the list would delete it from the transcript with that body.
+  const a = splitQuestionBlocks("Setup.\n\n```question qst_aaaaaaaaaaaa\n```\n\n- A. the first step\n- B. the second step\n\nClosing.")
+  assert.deepEqual(a.map((s) => s.kind), ["prose", "question", "prose"])
+  assert.equal(a[1].kind === "question" && a[1].text, "")
+  assert.equal(a[2].kind === "prose" && a[2].text.includes("- A. the first step"), true)
+})
+
+test("a marker a worker QUOTES — showing the form, or pasting the contract's own indented sample — stays prose", () => {
+  const quoted = "Here is the form:\n\n````\n```question qst_aaaaaaaaaaaa\n```\n````\n\nThat is all."
+  assert.deepEqual(splitQuestionBlocks(quoted).map((s) => s.kind), ["prose"])
+  // The contract prints the sample indented by four spaces, which is a code block, not an opener.
+  const indented = "Here is the form:\n\n    ```question qst_aaaaaaaaaaaa\n    ```\n\nThat is all."
+  assert.deepEqual(splitQuestionBlocks(indented).map((s) => s.kind), ["prose"])
+})

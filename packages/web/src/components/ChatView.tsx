@@ -3442,6 +3442,10 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
           }
           continue
         }
+        // A PLACEMENT MARKER whose row is not standing here — answered, withdrawn, or a mistyped id —
+        // has nothing to draw, and its body is empty by construction. Skip it: the registered question,
+        // if there still is one, renders at its rest's anchor instead.
+        if (seg.registeredId && seg.text.trim() === "") continue
         if (answering) askBlocks.push({ raw: seg.text, kind: seg.questionKind, danger: seg.danger, bi })
         // On a phone the card is a READING surface and the sheet is the answering one, so it renders
         // without an interactive controller even though this message has one.
