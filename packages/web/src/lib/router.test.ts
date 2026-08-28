@@ -2,7 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import type { BoardSnapshot, ThreadView } from "@frizz/shared"
 import { markDrawerClosing, resolveRoutedThread, store } from "../store.ts"
-import { primeRoute, queueDestination } from "./router.ts"
+import { primeRoute, queueDestination, startRouter } from "./router.ts"
 
 function resetStore(): void {
   store.drawers = []
@@ -223,5 +223,38 @@ test("a routed slug this board does not have hands off to the /full page's recov
     assert.equal(store.drawers[0].slug, "present")
   } finally {
     globals.location = previous
+  }
+})
+
+// The fullscreen door clears the drawer stack and navigates to `/thread/<slug>/full` in one tick;
+// valtio delivers the store notification a microtask later, when the address bar already names the
+// fullscreen page. The board's store→URL sync must leave that URL alone — it pulled the page straight
+// back to the board before the guard (live, 2026-08-28).
+test("the store→URL sync never writes over the fullscreen page", async () => {
+  resetStore()
+  const globals = globalThis as typeof globalThis & { location?: Location }
+  const previous = globals.location
+  const navigated: string[] = []
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+  try {
+    globals.location = { pathname: "/thread/focus/full" } as unknown as Location
+    const stop = startRouter((path) => navigated.push(path))
+    store.drawers = [{ id: 1, kind: "thread", slug: "focus" } as never]
+    await settle()
+    store.drawers = []
+    await settle()
+    stop()
+    assert.deepEqual(navigated, [], "no write while the address bar names a /full page")
+
+    // CONTROL — the same writes on the board DO drive the URL, so the guard is the only difference.
+    globals.location = { pathname: "/" } as unknown as Location
+    const stopBoard = startRouter((path) => navigated.push(path))
+    store.drawers = [{ id: 2, kind: "thread", slug: "focus" } as never]
+    await settle()
+    stopBoard()
+    assert.deepEqual(navigated, ["/thread/focus"])
+  } finally {
+    globals.location = previous
+    resetStore()
   }
 })

@@ -72,6 +72,28 @@ export const MARKDOWN_READ_LIMIT = 1024 * 1024
 
 export type LocalMarkdownRead = { path: string; markdown: string; truncated: boolean }
 
+export type LocalTextRead = { path: string; text: string; truncated: boolean }
+
+/**
+ * A PROJECT file's source, for the fullscreen page's file viewer (the "edited files" rail, 2026-08-28).
+ *
+ * Deliberately NARROWER than every other local-file gate: `roots` here is the project directory alone,
+ * never home-and-below. This is the second route whose bytes enter the page (after the Markdown
+ * reader), and the files it exists for are the ones a worker just edited in the checkout — nothing
+ * under `~` needs to be readable through it. Binary is refused rather than rendered as noise: a NUL in
+ * the first 8 KiB is the classic tell and the viewer is a text surface. Same 1 MiB line-boundary
+ * truncation as the Markdown reader.
+ */
+export function readLocalTextFile(rawPath: string, roots: readonly string[]): LocalTextRead {
+  const path = resolveLocalFile(rawPath, roots)
+  const bytes = readFileSync(path)
+  if (bytes.subarray(0, 8192).includes(0)) throw new Error("Local file is not a text file")
+  if (bytes.length <= MARKDOWN_READ_LIMIT) return { path, text: bytes.toString("utf8"), truncated: false }
+  const head = bytes.subarray(0, MARKDOWN_READ_LIMIT)
+  const lastBreak = head.lastIndexOf(0x0a)
+  return { path, text: head.subarray(0, lastBreak > 0 ? lastBreak : head.length).toString("utf8"), truncated: true }
+}
+
 export function readLocalMarkdown(rawPath: string, roots: readonly string[]): LocalMarkdownRead {
   if (!MARKDOWN_FILE_EXT.test(rawPath.trim())) throw new Error("Local file is not a Markdown file")
   const path = resolveLocalFile(rawPath, roots)

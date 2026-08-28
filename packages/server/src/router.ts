@@ -130,7 +130,7 @@ import {
   projectTranscriptPageAgentLifecycles,
 } from "./transcript.ts"
 import { openExternalUrl } from "./open-external.ts"
-import { openLocalFile, readLocalMarkdown, resolveOpenableFile } from "./local-file.ts"
+import { openLocalFile, readLocalMarkdown, resolveOpenableFile, readLocalTextFile } from "./local-file.ts"
 import { openableFileRoots } from "./project.ts"
 import { ghInstalled, ghAuthed, ghRepo, gitGithubRemote, listItems, hydrateIssue, hydratePr, renderGithubPrompt, effectiveTemplate, DEFAULT_GITHUB_PROMPT } from "./github.ts"
 import { createGithubHovercardService } from "./github-hovercard.ts"
@@ -2908,6 +2908,14 @@ export function createRouter(ctx: AppContext) {
       input: z.object({ path: z.string().max(4096) }).strict(),
       output: z.object({ path: z.string(), markdown: z.string(), truncated: z.boolean() }),
       handler: async ({ input }) => readLocalMarkdown(input.path, openRoots),
+    }),
+
+    // A project file's SOURCE, for the fullscreen page's file viewer. Rooted at the project directory
+    // ONLY — see readLocalTextFile for why this gate is narrower than openRoots.
+    localFile: query({
+      input: z.object({ path: z.string().max(4096) }).strict(),
+      output: z.object({ path: z.string(), text: z.string(), truncated: z.boolean() }),
+      handler: async ({ input }) => readLocalTextFile(input.path, [ctx.project.dir]),
     }),
 
     // Batch-classify path REFERENCES (as they appear in inline code) → their canonical openable path, or

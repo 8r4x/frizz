@@ -1,5 +1,5 @@
 import { useEffect } from "react"
-import { Outlet, createBrowserRouter, useLocation, useParams } from "react-router"
+import { Outlet, createBrowserRouter, useLocation, useNavigate, useParams } from "react-router"
 import { App } from "./App.tsx"
 import { ProjectGrid } from "./components/ProjectGrid.tsx"
 import { ProjectRail, RAIL_INSET_CLASS } from "./components/ProjectRail.tsx"
@@ -7,7 +7,7 @@ import { StandaloneThreadPage } from "./components/StandaloneThreadPage.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { GithubHovercards } from "./components/GithubHovercards.tsx"
 import { Toaster } from "./components/Toaster.tsx"
-import { applyPath } from "./lib/router.ts"
+import { applyPath, registerNavigate } from "./lib/router.ts"
 import { innerPath } from "./lib/base-path.ts"
 import { feedIsBoundTo, rebindProject } from "./api/socket.ts"
 import { resetProjectState } from "./store.ts"
@@ -42,6 +42,7 @@ import { useProjectRailVisible } from "./lib/projectRail.ts"
 export const PROJECT_PATH = "/project/:slug"
 
 function RootLayout() {
+  useRegisterNavigate()
   // ONE decision drives the column AND the space reserved for it. They were separate — the rail was
   // conditional while every page kept an unconditional `pl-[57px]` — so turning the rail off left a
   // 57px lane of nothing down the left of every board. A hidden rail has to be gone from the layout,
@@ -137,9 +138,21 @@ function useRouteToStore() {
   }, [location.pathname])
 }
 
+// Hands react-router's navigate to lib/router's module-level `spaNavigate`, for the leaves that must
+// change the URL without router context (see registerNavigate). Both shells call it: each is the root
+// of its own tree, and the fullscreen page has no RootLayout above it.
+function useRegisterNavigate(): void {
+  const navigate = useNavigate()
+  useEffect(() => {
+    registerNavigate((path, options) => navigate(path, options))
+    return () => registerNavigate(null)
+  }, [navigate])
+}
+
 /** The focused single-thread page. Deliberately OUTSIDE the layout: it has no rail, and should not. */
 function StandaloneRoute() {
   const { thread, slug } = useParams()
+  useRegisterNavigate()
   useProjectBinding(slug)
   return (
     <>

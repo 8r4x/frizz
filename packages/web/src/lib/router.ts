@@ -1,6 +1,7 @@
 import { subscribe } from "valtio"
 import { store, topThreadSlug, closeDrawersById } from "../store.ts"
 import { innerPath, outerPath, projectHref } from "./base-path.ts"
+import { parseStandaloneThreadPath } from "./standaloneThreadRoute.ts"
 
 // URL ⇄ state sync, SPA-style. Paths: `/` (the unified queue — the only page), `/thread/<slug>`
 // (the queue with that thread open in the drawer STACK's topmost thread layer — there is no
@@ -116,11 +117,35 @@ export function primeRoute(path = location.pathname): void {
  * which drives `useRouteToStore`, which calls `applyPath` — the same function the old popstate
  * handler called, reached the same way every other navigation reaches it.
  */
+// THE APP'S NAVIGATOR, reachable without router context. react-router's `useNavigate` is a hook, and
+// the components that need to change the URL in place — the fullscreen door on a sidebar row, the
+// back arrow on the fullscreen page — render in unit tests and fixtures with no <Router> above them,
+// where the hook throws. The route tree registers its navigate here (routes.tsx, both shells) and
+// leaves call there; with nothing registered (a bare test render) it falls back to a document load,
+// which is what the underlying <a href> would have done anyway.
+let registeredNavigate: ((path: string, options?: { replace?: boolean }) => void) | null = null
+
+export function registerNavigate(navigate: ((path: string, options?: { replace?: boolean }) => void) | null): void {
+  registeredNavigate = navigate
+}
+
+export function spaNavigate(path: string, options?: { replace?: boolean }): void {
+  if (registeredNavigate) registeredNavigate(path, options)
+  else if (typeof location !== "undefined") location.assign(path)
+}
+
 export function startRouter(navigate: (path: string, options: { replace: boolean }) => void): () => void {
   // Boot: adopt whatever the address bar says (deep link / reload restores the state).
   primeRoute()
 
   return subscribe(store, () => {
+    // The fullscreen page is NOT the board's URL to write. Its route lives outside RootLayout, but
+    // valtio delivers this notification a microtask late: the fullscreen door clears the drawer stack
+    // and navigates in the same tick, so by the time this runs the address bar already says
+    // `/thread/<slug>/full` and the board shell is on its way out — and without this guard the
+    // "unwind" below navigated straight back to the board (caught live, 2026-08-28: a plain click
+    // on the door left the URL exactly where it was).
+    if (parseStandaloneThreadPath(innerPath()) !== null) return
     const path = queueDestination(currentPath())
     if (path === location.pathname) return
     // A NEW topmost thread pushes history; unwinding or non-thread transitions replace. `startsWith`

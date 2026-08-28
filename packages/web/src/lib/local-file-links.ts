@@ -1,5 +1,5 @@
 import { rpc } from "../api/rpc.ts"
-import { pushMarkdownDrawer, showToast } from "../store.ts"
+import { openFilePanel, pushMarkdownDrawer, showToast, store } from "../store.ts"
 import { copyTextToClipboard } from "./clipboard.ts"
 import { isLocalMarkdownFile } from "./markdownTargets.ts"
 
@@ -72,6 +72,13 @@ function imageFailureHandler(): (event: Event) => void {
 export function openLocalPath(path: string, image = false): void {
   if (!image && isLocalMarkdownFile(path)) {
     pushMarkdownDrawer(path)
+    return
+  }
+  // On the fullscreen page every non-image file opens in the split viewer too (source view; the
+  // server admits project files only), because a reader beside the transcript beats being thrown out
+  // to an editor for a look. Outside it — the board — the desktop opener remains the answer for code.
+  if (!image && store.splitFileViewer) {
+    openFilePanel(path)
     return
   }
   void open(path, image)

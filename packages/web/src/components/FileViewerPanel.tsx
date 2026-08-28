@@ -6,7 +6,7 @@ import { useInnerHtml } from "../lib/innerHtml.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { splitFrontmatter } from "../lib/frontmatter.ts"
-import { localFileDir } from "../lib/markdownTargets.ts"
+import { isLocalMarkdownFile, localFileDir } from "../lib/markdownTargets.ts"
 import { locateInSource } from "../lib/composerContext.ts"
 import { Frontmatter, FOOTER_STYLE, OpenAction } from "./MarkdownDrawer.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
@@ -17,7 +17,7 @@ import { SheetHeader } from "./ui/SheetHeader.tsx"
 //
 //   · a Rendered ⇄ Source toggle (the source view shows the file verbatim, frontmatter included);
 //   · ⌘I over a selection in EITHER view stages that selection as a context item on the thread's
-//     composer (chips above the box, each with an optional comment — see lib/composerContext.ts).
+//     composer (chips inline in the box, each with an optional comment — see lib/composerContext.ts).
 //
 // Line numbers for a source-view selection are exact (character offsets against the raw text); for a
 // rendered-view selection they are best-effort (whitespace-insensitive unique match), because the
@@ -54,13 +54,23 @@ function lineOfOffset(raw: string, offset: number): number {
 }
 
 export function FileViewerPanel({ slug, path }: { slug: string; path: string }) {
-  const body = useQuery({ queryKey: ["localMarkdown", path], queryFn: () => rpc.localMarkdown({ path }) })
+  // Markdown reads through the reader gate (home-and-below, `.md` only) and renders; anything else
+  // reads through the narrower project-only text gate and is source, full stop.
+  const markdown = isLocalMarkdownFile(path)
+  const body = useQuery({
+    queryKey: [markdown ? "localMarkdown" : "localFile", path],
+    queryFn: async () => {
+      if (markdown) return rpc.localMarkdown({ path })
+      const read = await rpc.localFile({ path })
+      return { path: read.path, markdown: read.text, truncated: read.truncated }
+    },
+  })
   // Canonical path from the server (symlinks resolved) — the base for relative links, the label, and
   // the path stamped on context items, exactly as in MarkdownDrawer.
   const resolved = body.data?.path ?? path
   const raw = body.data?.markdown ?? ""
-  const { front, body: source } = splitFrontmatter(raw)
-  const [view, setView] = useState<"rendered" | "source">("rendered")
+  const { front, body: source } = splitFrontmatter(markdown ? raw : "")
+  const [view, setView] = useState<"rendered" | "source">(markdown ? "rendered" : "source")
   const html = useMarkdownHtml(source, { baseDir: localFileDir(resolved), asDocument: true })
   const inner = useInnerHtml(html)
   const renderedRef = useRef<HTMLDivElement>(null)
@@ -113,8 +123,9 @@ export function FileViewerPanel({ slug, path }: { slug: string; path: string }) 
         onClose={closeFilePanel}
         actions={
           // The active segment's fill must contrast the HEADER it sits on (bg-panel) — an earlier
-          // bg-panel fill was invisible there and the state read only from text brightness.
-          <div className="flex shrink-0 items-center gap-0.5 rounded-md border border-border-strong p-0.5 text-[11px] font-medium" role="group" aria-label="File view">
+          // bg-panel fill was invisible there and the state read only from text brightness. A
+          // non-markdown file has no rendered form, so it gets no toggle.
+          !markdown ? null : <div className="flex shrink-0 items-center gap-0.5 rounded-md border border-border-strong p-0.5 text-[11px] font-medium" role="group" aria-label="File view">
             {(["rendered", "source"] as const).map((mode) => (
               <button
                 key={mode}
@@ -136,7 +147,7 @@ export function FileViewerPanel({ slug, path }: { slug: string; path: string }) 
           <div className="text-[13px] text-red-400/90">Couldn’t read this file: {(body.error as Error).message}</div>
         ) : view === "source" ? (
           raw ? (
-            <pre ref={sourceRef} className="whitespace-pre-wrap break-words font-mono-keep text-[12px] leading-5 text-fg/90">{raw}</pre>
+            <pre ref={sourceRef} className="whitespace-pre-wrap break-words font-mono-keep text-[12px] leading-5 text-fg/90" style={{ tabSize: 2 }}>{raw}</pre>
           ) : (
             <div className="text-[13px] text-muted">This file is empty.</div>
           )

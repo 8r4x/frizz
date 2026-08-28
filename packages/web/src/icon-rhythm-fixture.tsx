@@ -127,7 +127,7 @@ function Fixture() {
                     collapsed={false}
                     onCollapse={() => {}}
                     onDoc={() => {}}
-                    openHref="#"
+                    expand
                     onDone={() => {}}
                   />
                 </div>

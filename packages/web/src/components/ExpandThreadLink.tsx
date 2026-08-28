@@ -1,0 +1,45 @@
+import type { MouseEvent } from "react"
+import { Maximize2 } from "lucide-react"
+import { store } from "../store.ts"
+import { spaNavigate } from "../lib/router.ts"
+import { isPlainLeftClick, standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
+import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
+import { Tooltip } from "./Tooltip.tsx"
+
+// THE FULLSCREEN DOOR — one affordance, three surfaces (the sidebar row on hover, the queue card's
+// action strip, the drawer header), all opening the thread's `/full` page. It replaced the ↗
+// "Open in new tab" arrow on 2026-08-28: the maintainer wants the fullscreen view to be the ordinary
+// way to focus on a thread, in THIS tab, with the address bar following — and a new tab only on the
+// gestures a browser already reserves for that.
+//
+// A real anchor, so ⌘/middle/right-click and "copy link address" need no code; a plain left click is
+// intercepted into a react-router navigation (through lib/router's registered navigator, so this
+// needs no router context and renders in a bare test). `/full` lives in the same router as the board (routes.tsx),
+// so this is a route change, not a document load — and the drawer stack is cleared first, because the
+// fullscreen page mounts the same DrawerStack and would otherwise paint the thread's own sheet over
+// itself.
+export function ExpandThreadLink({ slug, size = 14, className, label = "Open fullscreen" }: { slug: string; size?: number; className?: string; label?: string }) {
+  const href = standaloneThreadHref(slug)
+  function onClick(event: MouseEvent<HTMLAnchorElement>) {
+    // Never let the click reach the row/card underneath: the sidebar row would ALSO open its drawer.
+    event.stopPropagation()
+    if (!isPlainLeftClick(event)) return
+    event.preventDefault()
+    store.drawers = []
+    spaNavigate(href)
+  }
+  return (
+    <Tooltip label={label}>
+      <a
+        href={href}
+        aria-label={label}
+        data-expand-thread={slug}
+        onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
+        onClick={onClick}
+        className={className ?? HEADER_ICON_CLASS}
+      >
+        <Maximize2 size={size} />
+      </a>
+    </Tooltip>
+  )
+}

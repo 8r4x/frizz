@@ -1,6 +1,6 @@
 import { useState, type ComponentType } from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { ArrowUpRight, ChevronsDownUp, ChevronsUpDown, FileText, Loader2, RotateCcw } from "lucide-react"
+import { ChevronsDownUp, ChevronsUpDown, FileText, Loader2, RotateCcw } from "lucide-react"
 import type { ThreadView } from "@frizz/shared"
 import { Tooltip } from "./Tooltip.tsx"
 import { MarkAsButton } from "./MarkAsButton.tsx"
@@ -9,6 +9,7 @@ import { retrySession } from "../lib/retrySession.ts"
 import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 import { ReloadPluginsButton } from "./ReloadPluginsButton.tsx"
 import { RestartWorkerButton } from "./RestartWorkerButton.tsx"
+import { ExpandThreadLink } from "./ExpandThreadLink.tsx"
 
 // The retry message + follow-up now live in lib/retrySession so the sidebar's hover-revealed Retry
 // shares this exact recovery path. Re-exported for existing importers.
@@ -33,7 +34,7 @@ export { STALLED_RETRY_MESSAGE } from "../lib/retrySession.ts"
 //   • LEGACY (kind !== "session"): the vestigial Mark-as split button, exactly as before.
 export function HeaderActions({
   thread,
-  openHref,
+  expand,
   onDoc,
   onDone,
   onCollapse,
@@ -44,7 +45,7 @@ export function HeaderActions({
   onStatusFailed,
 }: {
   thread: ThreadView
-  openHref?: string // present only on queue cards → shows the Open-in-new-tab arrow (a real link)
+  expand?: boolean // queue cards only → the fullscreen door (ExpandThreadLink); the drawer header mounts its own
   onDoc?: () => void // present only on the thread header → shows the frizz-document icon
   onDone: () => void // legacy Mark-as "done" path (parent-owned mutation)
   onCollapse?: () => void // queue cards → collapse/expand the card body to just its header
@@ -73,11 +74,10 @@ export function HeaderActions({
       <ReloadPluginsButton thread={thread} />
       <RestartWorkerButton thread={thread} />
       {onDoc && <IconBtn label="Frizz document" icon={FileText} size={14} onClick={onDoc} />}
-      {/* The arrow is a REAL anchor to the standalone thread page, not a drawer trigger: a plain click
-          lands the thread in a new tab immediately (maintainer 2026-08-03), and ⌘/middle-click,
-          "copy link address" and the browser's own affordances all work because it is a link. The same
-          arrow in the thread header (ChatView) means the same thing. */}
-      {openHref && <IconLink label="Open in new tab" icon={ArrowUpRight} size={14} href={openHref} />}
+      {/* The fullscreen door — a real anchor to the thread's `/full` page that navigates IN PLACE on a
+          plain click and leaves ⌘/middle/right-click to the browser. It replaced the ↗ "Open in new
+          tab" arrow on 2026-08-28; the drawer header (ChatView) mounts the same component. */}
+      {expand && <ExpandThreadLink slug={thread.id} />}
       {isSession ? (
         // A STALLED session (process gone, work unfinished) or one HELD on an auto-resume usage limit
         // leads with recovery — Retry is the only exit/wait-state verb here; clearing a finished row is
@@ -151,27 +151,3 @@ function IconBtn({
   )
 }
 
-// The same control as an ANCHOR. It has to be a real `<a href target="_blank">` — a scripted
-// window.open() is what popup blockers eat, and only a link gives you ⌘-click, middle-click and
-// copy-link. Same focus-stealing guard as IconBtn: a card's composer keeps the keyboard.
-function IconLink({
-  label,
-  icon: Icon,
-  size,
-  href,
-}: { label: string; icon: ComponentType<{ size?: number; strokeWidth?: number }>; size: number; href: string }) {
-  return (
-    <Tooltip label={label}>
-      <a
-        href={href}
-        target="_blank"
-        rel="noopener"
-        aria-label={label}
-        onMouseDown={(e) => e.preventDefault()}
-        className={HEADER_ICON_CLASS}
-      >
-        <Icon size={size} strokeWidth={2} />
-      </a>
-    </Tooltip>
-  )
-}

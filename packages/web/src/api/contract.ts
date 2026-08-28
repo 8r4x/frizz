@@ -241,6 +241,7 @@ export interface Api {
   // A disk-local Markdown file's source, for the built-in reader drawer. Openable-root gated and
   // extension-locked server-side; `truncated` marks a file cut at the read ceiling.
   localMarkdown(input: { path: string }): Promise<{ path: string; markdown: string; truncated: boolean }>
+  localFile(input: { path: string }): Promise<{ path: string; text: string; truncated: boolean }>
   // Classify path references (as they appear in inline code) → canonical openable path, or null when the
   // candidate doesn't resolve to a real file under the server's openable roots. Drives clickable inline code.
   resolveLocalPaths(input: { paths: string[] }): Promise<{ resolved: { input: string; path: string | null }[] }>
@@ -384,6 +385,7 @@ export const PROCEDURES = {
   openExternal: "mutation",
   openLocalFile: "mutation",
   localMarkdown: "query",
+  localFile: "query",
   resolveLocalPaths: "query",
   markComplete: "mutation",
   setThreadStatus: "mutation",

@@ -42,13 +42,26 @@ test("a stalled row carries a hover-revealed retry button, right-justified", () 
   const html = row(STALLED)
   assert.match(html, /data-sidebar-retry="stalled-thread"/, "the stalled row exposes the retry control")
   assert.match(html, /aria-label="Retry exited session"/, "…with an accessible name")
-  const btn = html.slice(html.indexOf("data-sidebar-retry"))
-  assert.match(btn, /absolute right-1\.5/, "it is pinned to the row's right edge")
+  // The button lives in the row's HOVER GROUP (2026-08-28: it shares the right edge with the
+  // fullscreen door), so the pinning and the reveal are the GROUP's classes; the button keeps its size
+  // and tone. The group is the nearest preceding `absolute` element.
+  const at = html.indexOf("data-sidebar-retry")
+  const group = html.slice(html.lastIndexOf("absolute right-1.5", at), at)
+  assert.match(group, /absolute right-1\.5 top-1/, "it is pinned to the row's right edge, on the title's first line")
+  assert.match(group, /\bhidden\b/, "hidden until the row is pointed at")
+  assert.match(group, /group-hover:flex/, "…and revealed on row hover")
+  assert.match(group, /group-focus-within:flex/, "…and reachable from the keyboard via the row's focus")
+  assert.match(group, /data-expand-thread="stalled-thread"/, "the fullscreen door sits beside it in the same group")
+  const btn = html.slice(at)
   assert.match(btn, /h-\[19px\]/, "sized to the title's first line — never taller than the row")
   assert.match(btn, /text-muted/, "a quiet grey icon, not an accent box")
-  assert.match(btn, /\bhidden\b/, "hidden until the row is pointed at")
-  assert.match(btn, /group-hover:flex/, "…and revealed on row hover")
-  assert.match(btn, /group-focus-within:flex/, "…and reachable from the keyboard via the row's focus")
+})
+
+test("every row carries the fullscreen door in its hover group, as a real link to /full", () => {
+  const html = row({ runtime: "running" })
+  assert.match(html, /data-expand-thread="stalled-thread"/, "the door is present on a running row too")
+  assert.match(html, /href="\/thread\/stalled-thread\/full"/, "…as an anchor, so ⌘/middle/right-click open a new tab natively")
+  assert.doesNotMatch(html, /data-sidebar-retry/, "a healthy running row offers no Retry beside it")
 })
 
 test("the older exited+needsYou snapshot shape (no `crashed` field) still gets the button", () => {

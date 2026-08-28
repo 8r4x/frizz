@@ -11,6 +11,7 @@ import { ageSpan, relativeAge } from "../lib/activityTime.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { BoxSpinner, STATUS_BOX } from "./BoxSpinner.tsx"
 import { ChildOpRow } from "./ChildOpRow.tsx"
+import { ExpandThreadLink } from "./ExpandThreadLink.tsx"
 import { visibleChildOps } from "../lib/childOps.ts"
 import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { MarkAsButton } from "./MarkAsButton.tsx"
@@ -58,6 +59,11 @@ import type { ReactElement, ReactNode } from "react"
  * board is still loading for a project this browser has seen populated (lib/sidebarPresence.ts), so
  * the workpane sits where it will end up instead of jumping when the real sidebar mounts.
  */
+// A row's hover-revealed icon action: sized to the title's FIRST line (h-[19px]; the group's top-1
+// matches the row's pt-1) so it never exceeds the row height. An opaque `bg-panel` backing on the
+// group keeps the title's last words from bleeding through the overlay.
+const ROW_ACTION_CLASS = "flex h-[19px] w-[19px] items-center justify-center rounded text-muted/70 outline-none transition-colors hover:bg-panel-2 hover:text-fg"
+
 export const SIDEBAR_COLUMN_CLASS =
   "sticky top-0 self-start h-screen w-[clamp(272px,34vw,680px)] shrink-0 flex flex-col justify-center max-[800px]:static max-[800px]:h-auto max-[800px]:w-full max-[800px]:justify-start max-[800px]:pt-16"
 
@@ -495,7 +501,7 @@ export const ThreadRow = memo(function ThreadRow({
                 it the two would collide — a 19px opaque button landing halfway across "20 seconds",
                 which reads as a rendering fault rather than an affordance. The label gives way to it
                 on hover instead: the button is why you pointed at the row. */}
-            {restedAge && <RestedAge t={t} yieldsToRetry={canRestart} />}
+            {restedAge && <RestedAge t={t} yieldsToRetry />}
           </span>
         </span>
       </button>
@@ -510,7 +516,17 @@ export const ThreadRow = memo(function ThreadRow({
           pinned to the row's right edge, over the title's first line (it OVERLAYS rather than taking
           layout, so pointing at a row never reflows its wrapped title). `group-focus-within` keeps it
           reachable from the keyboard: focus the row button and the next Tab lands here. */}
-      {canRestart && <RowRetryButton slug={t.id} />}
+      {/* THE ROW'S HOVER ACTIONS, pinned to the right edge over the title's first line — exactly where
+          the cue's rest time sits, which yields to them on hover (maintainer 2026-08-28: the expand icon
+          "should replace where the current time rest duration currently is"). Every row gets the
+          fullscreen door; a stalled/held row gets Retry beside it, rightmost, because recovery is the
+          verb the row is pointing at. */}
+      {!legacy && (
+        <div className="absolute right-1.5 top-1 hidden items-center gap-0.5 rounded bg-panel group-hover:flex group-focus-within:flex">
+          <ExpandThreadLink slug={t.id} size={12} className={ROW_ACTION_CLASS} />
+          {canRestart && <RowRetryButton slug={t.id} />}
+        </div>
+      )}
       {/* Live children render as SIBLING rows under this one, not inside it — see SubAgentRows, which
           the rail's three sections mount directly after each ThreadRow (maintainer 2026-07-09: render
           running sub-agents in the sidebar). They replaced an old one-line summary suffix that used to
@@ -579,10 +595,9 @@ function RowRetryButton({ slug }: { slug: string }) {
           setBusy(true)
           retrySession(queryClient, slug).finally(() => setBusy(false))
         }}
-        // Sized to the title's FIRST line (h-[19px], top-1 matches the row's pt-1) so it never exceeds
-        // the row height. Quiet grey, no border/accent — the muted-icon idiom of the header actions. An
-        // opaque `bg-panel` backing keeps the title's last words from bleeding through the overlay.
-        className="absolute right-1.5 top-1 hidden h-[19px] w-[19px] items-center justify-center rounded bg-panel text-muted/70 outline-none transition-colors group-hover:flex group-focus-within:flex hover:bg-panel-2 hover:text-fg disabled:opacity-50"
+        // One of the row's hover actions (see the group in ThreadRow): sized to the title's first line,
+        // quiet grey, no border/accent — the muted-icon idiom of the header actions.
+        className={`${ROW_ACTION_CLASS} disabled:opacity-50`}
       >
         {busy ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
       </button>

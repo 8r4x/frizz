@@ -3,7 +3,7 @@ import { createPortal } from "react-dom"
 import { useSnapshot } from "valtio"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
-import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, ArrowUpRight, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, TerminalSquare, X, type LucideIcon } from "lucide-react"
+import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, TerminalSquare, X, type LucideIcon } from "lucide-react"
 import { awaitingFenceTitle, parseRecurringPrompt } from "@frizz/shared"
 import type { AwaitingHint, BgShellView, PendingAsk, RegisteredQuestionView, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@frizz/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
@@ -93,7 +93,9 @@ import { LastActive } from "./LastActive.tsx"
 import { CopyTerminalCommandButton, useCopyTerminalCommand } from "./ExternalTerminalCommand.tsx"
 import { SignInModal } from "./SignInModal.tsx"
 import { PROVIDER_LABEL } from "../lib/signIn.ts"
-import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
+import { isPlainLeftClick } from "../lib/standaloneThreadRoute.ts"
+import { ExpandThreadLink } from "./ExpandThreadLink.tsx"
+import { spaNavigate } from "../lib/router.ts"
 import { prependEarlierPage } from "../lib/transcriptPagination.ts"
 import { buildVirtualTranscriptMessageRows, earlierLoadGate, nextTailFollow, TAIL_FOLLOW_PX, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
 import { withoutRedundantRestDividers } from "../lib/restDividers.ts"
@@ -1555,6 +1557,11 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
                 href={queueDestination("/")}
                 aria-label="Return to queue"
                 data-standalone-return
+                onClick={(event) => {
+                  if (!isPlainLeftClick(event)) return
+                  event.preventDefault()
+                  spaNavigate(queueDestination("/"))
+                }}
                 className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
               >
                 <ArrowLeft size={14} />
@@ -1625,19 +1632,9 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
             doneBusy={markComplete.isPending}
             onStatusApplied={onStatusApplied}
           />
-          {onClose && (
-            <Tooltip label="Open in new tab">
-              <a
-                href={standaloneThreadHref(slug)}
-                target="_blank"
-                rel="noopener"
-                aria-label="Open in new tab"
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
-              >
-                <ArrowUpRight size={14} />
-              </a>
-            </Tooltip>
-          )}
+          {/* The fullscreen door, drawer header edition — same component as the queue card's, so the two
+              cannot drift. Only where there is a drawer to leave: the /full page is already there. */}
+          {onClose && <ExpandThreadLink slug={slug} />}
         </div>
         {/* Close-X for the DRAWER context (onClose passed by ThreadSheet) — parity with the Settings,
             sub-agent, and Doc drawers, all of which carry a corner "Close". Wired to the SAME animated

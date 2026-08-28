@@ -16,7 +16,7 @@ import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { collapseMiddleRuns, opensQueueSegment, queueCollapseSegments, segmentFolds, supersededAskIndices, survivesQueueCollapse } from "../lib/queueCollapse.ts"
 import { pairAllAnswers } from "../lib/answersMessage.ts"
 import { questionsByAnchor } from "../lib/questionAnchor.ts"
-import { allFencesShadowed, registeredAtRest } from "../lib/questionShadow.ts"
+import { allFencesShadowed, placeQuestions, registeredAtRest } from "../lib/questionShadow.ts"
 import { FenceCard, Message, PermPolicyDenialCard, PermPromptBanner, PendingAskCard, StickyUserBand, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText, lastAssistantIndex } from "./ChatView.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_TOP, CARD_ACTION_EXPLAINER, CARD_PRIMARY_ACTION } from "./TranscriptCard.tsx"
 import { AwaitingBackgroundCard, showsRestingCard } from "./AwaitingBackgroundCard.tsx"
@@ -36,7 +36,6 @@ import { QueueSubAgentLines, hasQueueSubAgentLines } from "./QueueSubAgentLines.
 import { WakeDivider } from "./WakeDivider.tsx"
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { LastActive } from "./LastActive.tsx"
-import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
 import { CopyTerminalCommandButton, useCopyTerminalCommand } from "./ExternalTerminalCommand.tsx"
 import {
   captureTranscriptViewportAnchor,
@@ -1270,7 +1269,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
             thread={thread}
             collapsed={collapsed}
             onCollapse={() => setCollapsed((c) => !c)}
-            openHref={standaloneThreadHref(thread.id)}
+            expand
             onDone={() =>
               markComplete.mutate(undefined, {
                 onSuccess: () => onResolve(thread.id),
