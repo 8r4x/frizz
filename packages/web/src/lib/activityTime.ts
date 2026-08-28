@@ -52,3 +52,33 @@ export function ageSpan(at: string | undefined, nowMs = Date.now()): string | nu
   const years = Math.floor(days / 365)
   return `${years} ${years === 1 ? "year" : "years"}`
 }
+
+/**
+ * A message's own instant, for the transcript's hover reveal: `Aug 25, 10:31 AM`.
+ *
+ * The DATE is unconditional, and that is the point of the reading. A frizz thread is not a chat you
+ * read in one sitting — a worker can be parked on a PR watcher for days, so two adjacent messages
+ * routinely sit on different dates and a bare `10:31 AM` cannot tell you which (maintainer 2026-08-25:
+ * "it should also include the date, not just the time, because some of these runs can go for a very,
+ * very long time"). Showing the date only when the message is NOT from today would be terser, but it
+ * encodes the day in an ABSENCE — `10:31 AM` means today only if you know the rule — and this reading
+ * is one the reader deliberately went and got, so it can afford six characters to have no rule at all.
+ *
+ * The YEAR is conditional, because that one really is safe to omit: a thread crossing a new year is
+ * rare enough that spending four characters on every reading to cover it is the wrong trade, and its
+ * absence is not ambiguous the way a missing date is — `Aug 25` in August 2026 is this August.
+ *
+ * Deliberately NOT relative ("3 hours ago"). The board already speaks in relative ages everywhere —
+ * the rail's rest column, `LastActive`, the child-op rows — and this exists precisely because those
+ * cannot answer "when exactly did this come out". An absolute reading also never needs to tick, so it
+ * does not join `useNowMs`.
+ */
+export function messageStamp(at: string | undefined, now: Date = new Date()): string | null {
+  const ms = at ? Date.parse(at) : NaN
+  if (!Number.isFinite(ms)) return null
+  const when = new Date(ms)
+  const date = when.toLocaleDateString([], when.getFullYear() === now.getFullYear()
+    ? { month: "short", day: "numeric" }
+    : { year: "numeric", month: "short", day: "numeric" })
+  return `${date}, ${when.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+}

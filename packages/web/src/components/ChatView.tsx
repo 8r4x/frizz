@@ -61,6 +61,7 @@ import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { agentCompletionCall, subAgentCompletionOutcome } from "../lib/subAgentCompletion.ts"
 import { agentReading } from "../lib/agentReading.ts"
 import { ChildOpRow } from "./ChildOpRow.tsx"
+import { MessageRow } from "./MessageTimestamp.tsx"
 import { TRANSCRIPT_META_LABEL_CLASS, transcriptMetaChevronClass } from "../lib/transcriptMetaLabels.ts"
 import { InteractionStack } from "./InteractionCards.tsx"
 // The shared card chrome and THE question card both live in their own modules now, so every
@@ -1200,7 +1201,14 @@ function VirtualizedThreadTranscript({
             data-index={virtualRow.index}
             data-transcript-row-key={row.key}
             data-transcript-source-id={row.kind === "message" ? row.message.sourceId : undefined}
-            className="absolute left-0 top-0 w-full"
+            // `hover:z-20` is what lets a row's hover-revealed timestamp (MessageRow) survive being
+            // drawn past this row's own bottom edge. Every row here is transform-positioned, so each
+            // is its OWN stacking context and a z-index INSIDE one cannot lift anything above the
+            // next row — among siblings at z-auto, the later one always wins. The reveal sits in the
+            // gap below its message, and that gap is as little as META_CARD_STEP (6px) against a
+            // 16px reading, so without this the reading is painted under the following row exactly
+            // on the tight rows where it overflows most.
+            className="absolute left-0 top-0 w-full hover:z-20"
             style={{ transform: `translateY(${virtualRow.start}px)` }}
           >
             {row.kind === "head-anchor" ? null
@@ -1244,7 +1252,7 @@ function VirtualizedThreadTranscript({
                 )}
               </div>
             ) : row.kind === "message" ? (
-              <div className="flex flex-col px-6" style={{ paddingTop: row.gap }}>
+              <MessageRow at={row.message.at} gap={row.gap}>
                 <Message
                   m={row.message}
                   answering={answeringForMessage(row.message)}
@@ -1252,7 +1260,7 @@ function VirtualizedThreadTranscript({
                   paired={paired[row.messageIndex]}
                   staleAwaiting={lastAgentIdx >= 0 && row.messageIndex < lastAgentIdx}
                 />
-              </div>
+              </MessageRow>
             ) : row.kind === "runtime-status" ? (
               <div className="px-6" style={{ paddingTop: runtimeStatusGap }}>
                 {thread?.providerFault && !thread.foreign ? (
@@ -1280,9 +1288,9 @@ function VirtualizedThreadTranscript({
                 ) : null}
               </div>
             ) : (
-              <div className="flex flex-col px-6" style={{ paddingTop: row.gap }}>
+              <MessageRow at={row.message.at} gap={row.gap}>
                 <Message m={row.message} paired={paired[row.messageIndex]} />
-              </div>
+              </MessageRow>
             )}
           </div>
         )
