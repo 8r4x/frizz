@@ -306,6 +306,8 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   // state (not a ref) so the portal renders as soon as the node mounts.
   const [jumpOverlay, setJumpOverlay] = useState<HTMLDivElement | null>(null)
   const count = q.data?.messages.length ?? 0
+  // The thread view's tail is held until the transcript window has loaded — see the eager branch below.
+  const tailReady = !q.isLoading
   // The EAGER (non-virtualized) fallback's own tail follow. No production surface reaches it — both
   // ThreadView callers virtualize, and this branch only renders when `count === 0` besides — but it shares
   // the SAME `[overflow-anchor:none]` scroller, so its band must not disagree with the virtualized path's:
@@ -514,7 +516,12 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
                 card through that predicate, and gating the slot on the bare flag opened it for a
                 bg-snoozed thread — every branch then rendered null and the slot was an empty gap at the
                 transcript's end (the gate-vs-renderer mismatch of 2026-08-25, one surface over). */}
-            {((thread?.providerFault && !thread.foreign) || (thread?.limitPause && !thread.foreign) || frozenAsk || thread?.runtime === "perm-prompt" || showWorking || showsSnoozeCard(thread) || showsRestingCard(thread) || registeredDone || restedCard) && (
+            {/* AND NOT BEFORE THE TRANSCRIPT. This branch is what renders while the window is still loading
+                (count === 0 on both production callers), so without the hold it drew the whole chain — the
+                resting card above all — alone at the top of an empty pane and then replaced it with the
+                transcript a beat later: the tail describes the END of the transcript and mounts with it,
+                exactly as the queue card holds its tail (TodosView). */}
+            {tailReady && ((thread?.providerFault && !thread.foreign) || (thread?.limitPause && !thread.foreign) || frozenAsk || thread?.runtime === "perm-prompt" || showWorking || showsSnoozeCard(thread) || showsRestingCard(thread) || registeredDone || restedCard) && (
               <VSpace h={
                 showWorking && !thread?.providerFault && !thread?.limitPause && !frozenAsk && thread?.runtime !== "perm-prompt"
                   ? workingIndicatorGap(activityMessages.map((entry) => entry.message))
@@ -526,7 +533,7 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
                 are NOT surfaced here anymore: they live in the anchored ops strip (below), which is
                 visible even mid-turn. A provider auth fault outranks everything: nothing else in the
                 thread can make progress until the credential is restored. */}
-            {thread?.providerFault && !thread.foreign ? (
+            {!tailReady ? null : thread?.providerFault && !thread.foreign ? (
               <ProviderFaultCard
                 slug={slug}
                 sessionId={thread.sessionId}
